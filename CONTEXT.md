@@ -1,7 +1,7 @@
 # Workhorse
 
 Workhorse is a durable task queue for PostgreSQL, with TypeScript, Python, Go, Rust, Ruby, Java,
-and Kotlin workers on one SQL protocol. This glossary names the product terms that public material
+Kotlin, and C# workers on one SQL protocol. This glossary names the product terms that public material
 and implementation work use consistently.
 
 ## Language
@@ -122,8 +122,8 @@ protocols the installed schema serves. A release ships it; the operator applies 
 _Avoid_: Cleanup migration, breaking migration, down migration
 
 **Release train**:
-The staged publication of Python, npm, Go, Rust, Ruby, and JVM artifacts from one source commit
-within one controlled release window.
+The staged publication of Python, npm, Go, Rust, Ruby, JVM, and .NET artifacts from one source
+commit within one controlled release window.
 _Avoid_: Simultaneous release, coordinated release
 
 **Telemetry provider**:

@@ -332,9 +332,9 @@ const operatingNote = (
 
 const dashboardNote = (
   <>
-    TypeScript, Python, Go, Rust, Ruby, Java, and Kotlin embed the same packaged dashboard through
-    their native HTTP interfaces. Each host needs a database connection, with no worker runtime or
-    extra service.
+    TypeScript, Python, Go, Rust, Ruby, Java, Kotlin, and C# embed the same packaged dashboard
+    through their native HTTP interfaces. Each host needs a database connection, with no worker
+    runtime or extra service.
   </>
 );
 
@@ -381,6 +381,12 @@ const dashboardTabs: readonly CodeTab[] = [
     file: "Dashboard.kt",
     note: dashboardNote,
     snippet: landingSupplementalSnippets.operateDashboard.kotlin,
+  },
+  {
+    label: "csharp",
+    file: "Dashboard.cs",
+    note: dashboardNote,
+    snippet: landingSupplementalSnippets.operateDashboard.csharp,
   },
 ];
 
@@ -431,6 +437,12 @@ const healthTabs: readonly CodeTab[] = [
     note: operatingNote,
     snippet: landingSupplementalSnippets.operateHealth.kotlin,
   },
+  {
+    label: "health cs",
+    file: "Monitor.cs",
+    note: operatingNote,
+    snippet: landingSupplementalSnippets.operateHealth.csharp,
+  },
 ];
 
 const fleetTabs: readonly CodeTab[] = [
@@ -475,6 +487,12 @@ const fleetTabs: readonly CodeTab[] = [
     file: "PauseFleet.kt",
     note: operatingNote,
     snippet: landingSupplementalSnippets.operateFleet.kotlin,
+  },
+  {
+    label: "fleet cs",
+    file: "PauseFleet.cs",
+    note: operatingNote,
+    snippet: landingSupplementalSnippets.operateFleet.csharp,
   },
 ];
 
@@ -528,6 +546,11 @@ const deployTabs: readonly CodeTab[] = [
     file: "Worker.kt",
     snippet: landingSupplementalSnippets.deploy.kotlin,
   },
+  {
+    label: "csharp",
+    file: "Worker.cs",
+    snippet: landingSupplementalSnippets.deploy.csharp,
+  },
 ];
 
 /**
@@ -557,7 +580,7 @@ const packages = [
 
 function FeatureSection({ feature, index }: { feature: Feature; index: number }) {
   const baseFile = feature.file.replace(/\.ts$/, "");
-  // A Java or Kotlin file takes the name of its class: `settle-order` becomes `SettleOrder`.
+  // A Java, Kotlin, or C# file takes the name of its class: `settle-order` becomes `SettleOrder`.
   const classFile = baseFile.replace(/(^|-)([a-z])/g, (_match, _dash, letter: string) =>
     letter.toUpperCase(),
   );
@@ -569,7 +592,8 @@ function FeatureSection({ feature, index }: { feature: Feature; index: number })
     "rust" in snippets &&
     "ruby" in snippets &&
     "java" in snippets &&
-    "kotlin" in snippets
+    "kotlin" in snippets &&
+    "csharp" in snippets
       ? [
           { label: "python", file: `${baseFile}.py`, snippet: snippets.python },
           { label: "go", file: `${baseFile}.go`, snippet: snippets.go },
@@ -577,6 +601,7 @@ function FeatureSection({ feature, index }: { feature: Feature; index: number })
           { label: "ruby", file: `${baseFile.replaceAll("-", "_")}.rb`, snippet: snippets.ruby },
           { label: "java", file: `${classFile}.java`, snippet: snippets.java },
           { label: "kotlin", file: `${classFile}.kt`, snippet: snippets.kotlin },
+          { label: "csharp", file: `${classFile}.cs`, snippet: snippets.csharp },
         ]
       : []),
   ];
@@ -1066,7 +1091,7 @@ function HomePage() {
                 One config file is a production worker.
               </h2>
               <p className="mt-3 text-pretty text-[16px] leading-relaxed text-fd-muted-foreground">
-                TypeScript, Python, Go, Rust, Ruby, Java, and Kotlin connect process signals to
+                TypeScript, Python, Go, Rust, Ruby, Java, Kotlin, and C# connect process signals to
                 bounded drain and fleet registration. Active handlers finish before the supervisor
                 replaces the process.
               </p>

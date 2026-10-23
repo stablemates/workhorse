@@ -7,7 +7,7 @@ This quickstart shows the main property of Workhorse: a task continues after its
 about five minutes, you enqueue a task and run it. Then you stop the worker while a task runs, and
 another run finishes the task.
 
-Choose TypeScript, Python, Go, Rust, Ruby, Java, or Kotlin for the application code. The schema
+Choose TypeScript, Python, Go, Rust, Ruby, Java, Kotlin, or C# for the application code. The schema
 installation uses the Workhorse CLI, which runs on Node.js. Each language also needs a PostgreSQL
 connection string.
 
@@ -15,7 +15,7 @@ connection string.
 
 Install the package for the language of your application.
 
-<Tabs items={["TypeScript", "Python", "Go", "Rust", "Ruby", "Java", "Kotlin"]}>
+<Tabs items={["TypeScript", "Python", "Go", "Rust", "Ruby", "Java", "Kotlin", "C#"]}>
   <Tab value="TypeScript">
 
     ```bash
@@ -88,6 +88,17 @@ Install the package for the language of your application.
     runs on Node.js.
 
   </Tab>
+  <Tab value="C#">
+
+    The .NET SDK has four packages: `Workhorse`, `Workhorse.Hosting`,
+    `Workhorse.EntityFrameworkCore`, and `Workhorse.AspNetCore`. This quickstart uses only
+    `Workhorse`. NuGet does not serve the packages yet, so this step gives no install command.
+    [Installation](/docs/installation) tells more.
+
+    Your application never installs the schema. A deployment step installs it once, and that step
+    runs on Node.js.
+
+  </Tab>
 </Tabs>
 
 ## 2. Install the schema
@@ -102,14 +113,15 @@ A TypeScript project runs the binary that it already has as a dependency:
 npm exec --no -- workhorse schema install
 ```
 
-A Python, Go, Rust, Ruby, Java, or Kotlin project has no `node_modules` that holds the binary. Thus,
-the command gives the version. Use the same version as the SDK that you installed in step 1:
+A Python, Go, Rust, Ruby, Java, Kotlin, or .NET project has no `node_modules` that holds the binary.
+Thus, the command gives the version. Use the same version as the SDK that you installed in step 1:
 
 ```bash
 npx --package @stablemates/workhorse@0.9.0 workhorse schema install
 ```
 
-This step runs on Node.js, also when the application uses Python, Go, Rust, Ruby, Java, or Kotlin.
+This step runs on Node.js, also when the application uses Python, Go, Rust, Ruby, Java, Kotlin, or
+C#.
 [Installation](/docs/installation) tells why the two commands are different.
 [Compatibility](/docs/compatibility) gives the supported versions.
 
@@ -130,7 +142,7 @@ Run this one time, as a deployment step. Runtime code must not install the schem
 A `Queue` accepts work. A `Worker` runs the work with the handler for its task type. This example
 puts the two in one file, so you can see the full lifecycle.
 
-<Tabs items={["TypeScript", "Python", "Go", "Rust", "Ruby", "Java", "Kotlin"]}>
+<Tabs items={["TypeScript", "Python", "Go", "Rust", "Ruby", "Java", "Kotlin", "C#"]}>
   <Tab value="TypeScript">
     ```ts
     import { Admin, Pool, Queue, Worker } from "@stablemates/workhorse";
@@ -341,6 +353,33 @@ puts the two in one file, so you can see the full lifecycle.
     println("${task?.state()} ${task?.result()}")
     ```
   </Tab>
+  <Tab value="C#">
+    ```csharp
+    public sealed record WelcomeEmail(string To);
+
+    public sealed record Delivery(string DeliveredTo);
+
+    public static async Task<TaskDetail?> RunTaskAsync(string connectionString)
+    {
+        // A connection string, such as "Host=localhost;Database=app;Username=app"
+        await using var dataSource = NpgsqlDataSource.Create(connectionString);
+        var queue = new Queue(dataSource);
+        var enqueued = await queue.EnqueueAsync("email.welcome", new WelcomeEmail("ada@example.com"));
+
+        await using (var worker = new Worker(dataSource, new WorkerOptions { Queues = ["default"] }))
+        {
+            worker.Handle<WelcomeEmail, Delivery>(
+                "email.welcome",
+                (context, payload) => Task.FromResult(new Delivery(payload.To)));
+            await worker.RunOnceAsync(); // one claim-and-run pass; production calls RunAsync(stoppingToken)
+        }
+
+        var task = await new Admin(dataSource).GetTaskAsync(enqueued.TaskId);
+        Console.WriteLine($"{task?.State} {task?.Result}");
+        return task;
+    }
+    ```
+  </Tab>
 </Tabs>
 
 The worker records the state `succeeded`. Then each example reads the durable outcome. The outcome is
@@ -427,7 +466,7 @@ a handler starts again from the top. The checkpoints that you name do not run ag
 In a real application, you usually enqueue a task together with a business write. Give your open
 transaction as the last argument. The task then commits or rolls back with your business write.
 
-<Tabs items={["TypeScript", "Python", "Go", "Rust", "Ruby", "Java", "Kotlin"]}>
+<Tabs items={["TypeScript", "Python", "Go", "Rust", "Ruby", "Java", "Kotlin", "C#"]}>
   <Tab value="TypeScript">
     ```ts
     const client = await pool.connect();
@@ -559,6 +598,23 @@ transaction as the last argument. The task then commits or rolls back with your 
           throw error
         }
       }
+    }
+    ```
+  </Tab>
+  <Tab value="C#">
+    ```csharp
+    public static async Task CreateOrderAsync(NpgsqlDataSource dataSource, Queue queue, string orderId)
+    {
+        await using var connection = await dataSource.OpenConnectionAsync();
+        await using var transaction = await connection.BeginTransactionAsync();
+        await using (var insert = new NpgsqlCommand("INSERT INTO orders (id) VALUES ($1)", connection))
+        {
+            insert.Parameters.AddWithValue(orderId);
+            await insert.ExecuteNonQueryAsync();
+        }
+
+        await queue.Using(connection).EnqueueAsync("order.fulfill", new { orderId });
+        await transaction.CommitAsync();
     }
     ```
   </Tab>

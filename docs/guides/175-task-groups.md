@@ -82,15 +82,16 @@ cancel. A canceled group is `sealed` until it finishes, and it accepts no task.
 
 **Calls**
 
-| SDK        | Create and seal in one transaction                | Create an open group       | Callbacks                                            |
-| ---------- | ------------------------------------------------- | -------------------------- | ---------------------------------------------------- |
-| TypeScript | `Queue.taskGroup`                                 | `Queue.createTaskGroup`    | `onFinish`, `onSuccess`, `onFailure`                 |
-| Python     | `Queue.task_group`, a `with` block                | `Queue.create_task_group`  | `on_finish`, `on_success`, `on_failure`              |
-| Go         | `Queue.TaskGroup`                                 | `Queue.CreateTaskGroup`    | `OnFinish`, `OnSuccess`, `OnFailure`                 |
-| Rust       | `Queue::task_group`, with a list                  | `Queue::create_task_group` | `on_finish`, `on_success`, `on_failure`              |
-| Ruby       | `Queue#task_group`, a block                       | `Queue#create_task_group`  | `on_finish:`, `on_success:`, `on_failure:`           |
-| Java       | `Queue.taskGroup`, a `Consumer<TaskGroupBuilder>` | `Queue.createTaskGroup`    | `TaskGroupCallbacks(onFinish, onSuccess, onFailure)` |
-| Kotlin     | `taskGroupSuspend`, a block                       | `createTaskGroupSuspend`   | `TaskGroupCallbacks(onFinish, onSuccess, onFailure)` |
+| SDK        | Create and seal in one transaction                    | Create an open group         | Callbacks                                               |
+| ---------- | ----------------------------------------------------- | ---------------------------- | ------------------------------------------------------- |
+| TypeScript | `Queue.taskGroup`                                     | `Queue.createTaskGroup`      | `onFinish`, `onSuccess`, `onFailure`                    |
+| Python     | `Queue.task_group`, a `with` block                    | `Queue.create_task_group`    | `on_finish`, `on_success`, `on_failure`                 |
+| Go         | `Queue.TaskGroup`                                     | `Queue.CreateTaskGroup`      | `OnFinish`, `OnSuccess`, `OnFailure`                    |
+| Rust       | `Queue::task_group`, with a list                      | `Queue::create_task_group`   | `on_finish`, `on_success`, `on_failure`                 |
+| Ruby       | `Queue#task_group`, a block                           | `Queue#create_task_group`    | `on_finish:`, `on_success:`, `on_failure:`              |
+| Java       | `Queue.taskGroup`, a `Consumer<TaskGroupBuilder>`     | `Queue.createTaskGroup`      | `TaskGroupCallbacks(onFinish, onSuccess, onFailure)`    |
+| Kotlin     | `taskGroupSuspend`, a block                           | `createTaskGroupSuspend`     | `TaskGroupCallbacks(onFinish, onSuccess, onFailure)`    |
+| C#         | `Queue.TaskGroupAsync`, an `Action<TaskGroupBuilder>` | `Queue.CreateTaskGroupAsync` | `TaskGroupCallbacks { OnFinish, OnSuccess, OnFailure }` |
 
 **Callbacks.** `create_task_group_v1` rejects a callback request with `idempotency`, `debounce`, or
 `throttle`. It enqueues each callback request one time in a subtransaction and rolls it back, so a
@@ -110,7 +111,7 @@ then `on_success` or `on_failure`, each in a subtransaction:
 | Tasks in one add call     | 1,000   |
 | Callbacks of each kind    | 1       |
 
-More detail: [Task groups: Lifecycle](../architecture/task-groups.md#lifecycle), [Task groups: Create and callbacks](../architecture/task-groups.md#create-and-callbacks), [Task groups: SDK calls](../architecture/task-groups.md#sdk-calls), [Task groups: Limits](../architecture/task-groups.md#limits), and [Schema and SQL protocol: JVM queue](../architecture/schema-and-protocol.md#jvm-queue).
+More detail: [Task groups: Lifecycle](../architecture/task-groups.md#lifecycle), [Task groups: Create and callbacks](../architecture/task-groups.md#create-and-callbacks), [Task groups: SDK calls](../architecture/task-groups.md#sdk-calls), [Task groups: Limits](../architecture/task-groups.md#limits), [Schema and SQL protocol: JVM queue](../architecture/schema-and-protocol.md#jvm-queue), and [Schema and SQL protocol: .NET queue](../architecture/schema-and-protocol.md#net-queue).
 
 </details>
 
@@ -156,16 +157,20 @@ finished changes nothing.
 **`seal_task_group_v1`** changes `open` to `sealed`. If no member task is pending, the same call
 finishes the group.
 
-| SDK          | `P1008`                                            | `P1009`                                                          |
-| ------------ | -------------------------------------------------- | ---------------------------------------------------------------- |
-| TypeScript   | `TaskGroupClosedError`                             | `TaskGroupLimitExceededError`                                    |
-| Python       | `TaskGroupClosedError`                             | `TaskGroupLimitExceededError`                                    |
-| Go           | `*TaskGroupClosedError` wraps `ErrTaskGroupClosed` | `*TaskGroupLimitExceededError` wraps `ErrTaskGroupLimitExceeded` |
-| Rust         | `Error::TaskGroupClosed`                           | `Error::TaskGroupLimitExceeded`                                  |
-| Ruby         | `TaskGroupClosedError`                             | `TaskGroupLimitExceededError`                                    |
-| Java, Kotlin | `TaskGroupClosedException`                         | `TaskGroupLimitExceededException`                                |
+| SDK          | `P1008`                                                           | `P1009`                                                                              |
+| ------------ | ----------------------------------------------------------------- | ------------------------------------------------------------------------------------ |
+| TypeScript   | `TaskGroupClosedError`                                            | `TaskGroupLimitExceededError`                                                        |
+| Python       | `TaskGroupClosedError`                                            | `TaskGroupLimitExceededError`                                                        |
+| Go           | `*TaskGroupClosedError` wraps `ErrTaskGroupClosed`                | `*TaskGroupLimitExceededError` wraps `ErrTaskGroupLimitExceeded`                     |
+| Rust         | `Error::TaskGroupClosed`                                          | `Error::TaskGroupLimitExceeded`                                                      |
+| Ruby         | `TaskGroupClosedError`                                            | `TaskGroupLimitExceededError`                                                        |
+| Java, Kotlin | `TaskGroupClosedException`                                        | `TaskGroupLimitExceededException`                                                    |
+| C#           | `TaskGroupClosedException`, with `GroupId`, `State`, and `Reason` | `TaskGroupLimitExceededException`, with `GroupId`, `Limit`, `Total`, and `Requested` |
 
-More detail: [Task groups: Lifecycle](../architecture/task-groups.md#lifecycle), [Task groups: Add](../architecture/task-groups.md#add), [Task groups: Errors](../architecture/task-groups.md#errors), [Task groups: SDK calls](../architecture/task-groups.md#sdk-calls), and [Schema and SQL protocol: JVM queue](../architecture/schema-and-protocol.md#jvm-queue).
+In C#, both exceptions derive from `DiagnosedException`. `DiagnosedException.Details` and the typed
+fields arrive with the default Npgsql settings.
+
+More detail: [Task groups: Lifecycle](../architecture/task-groups.md#lifecycle), [Task groups: Add](../architecture/task-groups.md#add), [Task groups: Errors](../architecture/task-groups.md#errors), [Task groups: SDK calls](../architecture/task-groups.md#sdk-calls), [Schema and SQL protocol: JVM queue](../architecture/schema-and-protocol.md#jvm-queue), [Schema and SQL protocol: .NET queue](../architecture/schema-and-protocol.md#net-queue), and [Schema and SQL protocol: .NET errors](../architecture/schema-and-protocol.md#net-errors).
 
 </details>
 
@@ -203,13 +208,14 @@ and the outcome that the group counted. An app outside a handler uses `Queue.get
 | Ruby       | `context.task_group.get`             | `get_task_group`, `list_task_group_members`          |
 | Java       | `HandlerContext.taskGroup().get()`   | `getTaskGroup`, `listTaskGroupMembers`               |
 | Kotlin     | `ctx.taskGroup.get()`                | `getTaskGroupSuspend`, `listTaskGroupMembersSuspend` |
+| C#         | `context.TaskGroup.GetAsync()`       | `GetTaskGroupAsync`, `ListTaskGroupMembersAsync`     |
 
 - `Queue` and `Admin` both have the reads by group. `Admin` also lists the events of a group.
 - `task_group_for_task_v1` gives the handler read. It runs one time for each handler activation.
 - `list_task_group_members_v1` returns at most 1,000 members after a position.
 - For a group that is not finished, the counts are the sums of its counter shards.
 
-More detail: [Task groups: Reads](../architecture/task-groups.md#reads), [Task groups: SDK calls](../architecture/task-groups.md#sdk-calls), and [Schema and SQL protocol: JVM handler context](../architecture/schema-and-protocol.md#jvm-handler-context).
+More detail: [Task groups: Reads](../architecture/task-groups.md#reads), [Task groups: SDK calls](../architecture/task-groups.md#sdk-calls), [Schema and SQL protocol: JVM handler context](../architecture/schema-and-protocol.md#jvm-handler-context), and [Schema and SQL protocol: .NET handler context](../architecture/schema-and-protocol.md#net-handler-context).
 
 </details>
 
@@ -248,6 +254,7 @@ needs a different queue, name that queue on the request.
 | Ruby       | `context.task_group.add(requests)`         | The queue of the member task     |
 | Java       | `HandlerContext.taskGroup().add(requests)` | The queue of the member task     |
 | Kotlin     | `ctx.taskGroup.add(requests)`              | The queue of the member task     |
+| C#         | `context.TaskGroup.AddAsync(requests)`     | The queue of the member task     |
 
 `add_task_group_members_v1` takes the member task, the worker, and the fence token. It refuses the
 add with `P1008` and the reason `not_running_member` when they do not name an `active` member of
@@ -257,7 +264,7 @@ the runtime row of the member task first, so it cannot deadlock with the complet
 The batch context of every SDK also has the read and the add for each task in the
 batch, with the same lease check and the same queue rule.
 
-More detail: [Task groups: Add](../architecture/task-groups.md#add), [Task groups: Queue of a request with no queue](../architecture/task-groups.md#queue-of-a-request-with-no-queue), [Task groups: Batch handlers](../architecture/task-groups.md#batch-handlers), and [Schema and SQL protocol: JVM handler context](../architecture/schema-and-protocol.md#jvm-handler-context).
+More detail: [Task groups: Add](../architecture/task-groups.md#add), [Task groups: Queue of a request with no queue](../architecture/task-groups.md#queue-of-a-request-with-no-queue), [Task groups: Batch handlers](../architecture/task-groups.md#batch-handlers), [Schema and SQL protocol: JVM handler context](../architecture/schema-and-protocol.md#jvm-handler-context), and [Schema and SQL protocol: .NET handler context](../architecture/schema-and-protocol.md#net-handler-context).
 
 </details>
 
@@ -295,20 +302,21 @@ member task as `canceled`, and the group can finish.
    once. An active member task gets a cancel request.
 4. It writes the `canceled` event, and it finishes the group if no member task is pending.
 
-| SDK        | Call                                    |
-| ---------- | --------------------------------------- |
-| TypeScript | `Admin.cancelTaskGroup(groupId, audit)` |
-| Python     | `Admin.cancel_task_group`               |
-| Go         | `Admin.CancelTaskGroup`                 |
-| Rust       | `Admin::cancel_task_group`              |
-| Ruby       | `Admin#cancel_task_group`               |
-| Java       | `Admin.cancelTaskGroup(groupId, audit)` |
-| Kotlin     | `Admin.cancelTaskGroupSuspend`          |
+| SDK        | Call                                         |
+| ---------- | -------------------------------------------- |
+| TypeScript | `Admin.cancelTaskGroup(groupId, audit)`      |
+| Python     | `Admin.cancel_task_group`                    |
+| Go         | `Admin.CancelTaskGroup`                      |
+| Rust       | `Admin::cancel_task_group`                   |
+| Ruby       | `Admin#cancel_task_group`                    |
+| Java       | `Admin.cancelTaskGroup(groupId, audit)`      |
+| Kotlin     | `Admin.cancelTaskGroupSuspend`               |
+| C#         | `Admin.CancelTaskGroupAsync(groupId, audit)` |
 
 **Purge.** `purge_queue_internal_v1` counts each purged member task that is not terminal as
 `canceled`, in the same transaction.
 
-More detail: [Task groups: Cancel](../architecture/task-groups.md#cancel), [Task groups: Purge](../architecture/task-groups.md#purge), [Task groups: SDK calls](../architecture/task-groups.md#sdk-calls), and [Schema and SQL protocol: JVM admin](../architecture/schema-and-protocol.md#jvm-admin).
+More detail: [Task groups: Cancel](../architecture/task-groups.md#cancel), [Task groups: Purge](../architecture/task-groups.md#purge), [Task groups: SDK calls](../architecture/task-groups.md#sdk-calls), [Schema and SQL protocol: JVM admin](../architecture/schema-and-protocol.md#jvm-admin), and [Schema and SQL protocol: .NET admin](../architecture/schema-and-protocol.md#net-admin).
 
 </details>
 
@@ -336,10 +344,10 @@ reason.
 - A page of groups or of member tasks holds 25, 50, or 100 entries. The default is 50.
 - The detail shows at most 100 events. `eventsTruncated` is true when the group has older events.
 - The detail offers the cancel only when the dashboard can change state. A TypeScript host also
-  needs `DashboardTaskController.cancelTaskGroup`. The Go, Python, Rust, Ruby, and Java hosts need
-  only a host that is not read-only.
+  needs `DashboardTaskController.cancelTaskGroup`. The Go, Python, Rust, Ruby, Java, and .NET hosts
+  need only a host that is not read-only.
 
-More detail: [Dashboard: Task groups page](../architecture/dashboard.md#task-groups-page).
+More detail: [Dashboard: Task groups page](../architecture/dashboard.md#task-groups-page) and [Dashboard: .NET backend](../architecture/dashboard.md#net-backend).
 
 </details>
 
@@ -374,7 +382,12 @@ For `P1010`, Go returns `*TaskGroupMembershipConflictError`, which wraps
 Kotlin throw `FastTierUnsupportedException` for `P1007` and `TaskGroupMembershipConflictException`
 for `P1010`.
 
-More detail: [Task groups: Add](../architecture/task-groups.md#add), [Task groups: Errors](../architecture/task-groups.md#errors), [Task groups: SDK calls](../architecture/task-groups.md#sdk-calls), and [Schema and SQL protocol: JVM queue](../architecture/schema-and-protocol.md#jvm-queue).
+C# throws `FastTierUnsupportedException`, with `Queue`, `Feature`, and `Ordinal`, for `P1007`. It
+throws `TaskGroupMembershipConflictException`, with `GroupId`, `TaskId`, `MemberOf`, and `Ordinal`,
+for `P1010`. These typed fields and `DiagnosedException.Details` arrive with the default Npgsql
+settings.
+
+More detail: [Task groups: Add](../architecture/task-groups.md#add), [Task groups: Errors](../architecture/task-groups.md#errors), [Task groups: SDK calls](../architecture/task-groups.md#sdk-calls), [Schema and SQL protocol: JVM queue](../architecture/schema-and-protocol.md#jvm-queue), and [Schema and SQL protocol: .NET errors](../architecture/schema-and-protocol.md#net-errors).
 
 </details>
 

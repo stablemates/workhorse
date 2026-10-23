@@ -15,4 +15,10 @@
     <Project Path="tests/Workhorse.Tests/Workhorse.Tests.csproj" />
     <Project Path="tests/Workhorse.AspNetCore.Tests/Workhorse.AspNetCore.Tests.csproj" />
   </Folder>
+  <Folder Name="/examples/">
+    <Project Path="examples/Workhorse.Examples/Workhorse.Examples.csproj" />
+    <Project Path="examples/Workhorse.Examples.Tests/Workhorse.Examples.Tests.csproj" />
+    <Project Path="examples/Workhorse.Examples.Programs/Workhorse.Examples.Programs.csproj" />
+    <Project Path="examples/Workhorse.Examples.Programs.Tests/Workhorse.Examples.Programs.Tests.csproj" />
+  </Folder>
 </Solution>

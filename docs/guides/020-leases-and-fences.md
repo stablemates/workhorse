@@ -138,8 +138,8 @@ the supported minimum.
 After the handler returns, the worker must still check the result and write the completion. This
 write can wait for a connection from a busy pool. In TypeScript, Python, and Go, the worker renews
 the lease until this write is complete. Thus, Workhorse does not give a finished task to another
-worker. A Rust task stops its heartbeats when its handler returns. A Ruby or JVM task keeps its
-heartbeats while the worker checks the result. It stops them before the worker writes the final
+worker. A Rust task stops its heartbeats when its handler returns. A Ruby, JVM, or .NET task keeps
+its heartbeats while the worker checks the result. It stops them before the worker writes the final
 transition.
 
 ## Keep the lease while another transaction holds the task
@@ -216,10 +216,10 @@ of 50 ms, a timed-out round leaves about 0 ms of margin. Near the 8 ms minimum o
 statement, renewal depends on the host load and the driver. The worker does not reject settings
 that do not meet the rule.
 
-**Smallest supported interval.** The smallest supported interval is 100 ms, in all six SDKs. Its
-round deadline is 75 ms. Below 100 ms, the worker accepts the interval and its behavior does not
-change. On a loaded host, each round can then miss its deadline, and the worker can renew no
-lease.
+**Smallest supported interval.** The smallest supported interval is 100 ms, in the TypeScript,
+Python, Go, Rust, Ruby, and JVM SDKs. Its round deadline is 75 ms. Below 100 ms, the worker accepts
+the interval and its behavior does not change. On a loaded host, each round can then miss its
+deadline, and the worker can renew no lease.
 
 A round on the reserved connection sends one transaction for every worker on the pool. Its one
 `heartbeat_pool_v1` statement calls `heartbeat_many_v2` for each batch of up to 100 leases of one
@@ -252,11 +252,12 @@ moments come before the database renews, so the local countdown never ends after
 | Rust         | The `watchdog` timer in `Inner::execute` (`CancelReason::LeaseLost`)                  |
 | Ruby         | The `workhorse-expiration-<task ID>` thread of the attempt (`:lease_lost`)            |
 | Java, Kotlin | The `workhorse-expiration-<task ID>` virtual thread (`CancellationReason.LEASE_LOST`) |
+| .NET         | The lease watchdog task of the attempt (`CancelReason.LeaseLost`)                     |
 
 The Rust worker matches each heartbeat result to the fence token of the claim. If a suspended task
 resumes while an old round is returning, that round cannot renew or cancel the resumed handler.
 
-More detail: [Task lifecycle: Heartbeat](../architecture/lifecycle.md#heartbeat), [Task lifecycle: Pool renewal](../architecture/lifecycle.md#pool-renewal), [Task lifecycle: Heartbeat round deadline](../architecture/lifecycle.md#heartbeat-round-deadline), [Task lifecycle: Supported heartbeat interval](../architecture/lifecycle.md#supported-heartbeat-interval), and [Task lifecycle: Heartbeat schedule](../architecture/lifecycle.md#heartbeat-schedule).
+More detail: [Task lifecycle: Heartbeat](../architecture/lifecycle.md#heartbeat), [Task lifecycle: Pool renewal](../architecture/lifecycle.md#pool-renewal), [Task lifecycle: Heartbeat round deadline](../architecture/lifecycle.md#heartbeat-round-deadline), [Task lifecycle: Supported heartbeat interval](../architecture/lifecycle.md#supported-heartbeat-interval), [Task lifecycle: Heartbeat schedule](../architecture/lifecycle.md#heartbeat-schedule), and [Schema and SQL protocol: .NET worker](../architecture/schema-and-protocol.md#net-worker).
 
 </details>
 

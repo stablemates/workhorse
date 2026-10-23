@@ -12,7 +12,7 @@ does it.
 ## Check the requirements
 
 Each SDK runs on standard PostgreSQL and needs no extension. The schema CLI runs on Node.js during
-deployment. This is also true when the application uses Python, Go, Rust, Ruby, Java, or Kotlin.
+deployment. This is also true when the application uses Python, Go, Rust, Ruby, Java, Kotlin, or C#.
 [Compatibility](/docs/compatibility) gives each supported version. No other page gives them.
 
 Choose the runtime of your application:
@@ -25,6 +25,8 @@ Choose the runtime of your application:
   Active Record.
 - Java and Kotlin run on PgJDBC through a `DataSource`. A Spring Boot application can use the
   starter.
+- .NET runs on Npgsql through an `NpgsqlDataSource`. A Generic Host application can use
+  `Workhorse.Hosting`.
 
 If the PostgreSQL version is not supported, `installSchema` refuses it before it starts. The error
 gives the version of the server. Thus, you do not get a syntax error halfway through the
@@ -35,7 +37,7 @@ installation.
 Each SDK is a package for the language of your application. Install the SDK. Each package includes
 its default PostgreSQL driver.
 
-<Tabs items={["TypeScript", "Python", "Go", "Rust", "Ruby", "Java", "Kotlin"]}>
+<Tabs items={["TypeScript", "Python", "Go", "Rust", "Ruby", "Java", "Kotlin", "C#"]}>
   <Tab value="TypeScript">
 
     ```bash
@@ -119,6 +121,21 @@ its default PostgreSQL driver.
     PgJDBC versions that they support.
 
   </Tab>
+  <Tab value="C#">
+
+    The .NET SDK has four packages. `Workhorse` has the queue, the worker, and `Admin`.
+    `Workhorse.Hosting` adds dependency injection, options, a hosted worker, and a health check.
+    `Workhorse.EntityFrameworkCore` gives a queue the connection and the transaction of an EF Core
+    `DbContext`. `Workhorse.AspNetCore` puts the dashboard backend in an ASP.NET Core application.
+
+    NuGet does not serve the packages yet, so this page gives no install command for them.
+    [Compatibility](/docs/compatibility) gives the .NET, Npgsql, EF Core, and ASP.NET Core versions
+    that they support.
+
+    Your application never installs the schema. A deployment step installs it once, and that step
+    runs on Node.js.
+
+  </Tab>
 </Tabs>
 
 Add a database adapter only if the process uses that integration. The adapters are
@@ -165,8 +182,8 @@ The `--no` option makes this command safe. The command runs the `workhorse` bina
 `pnpm exec workhorse …`. If it is Yarn, use `yarn workhorse …`. The project has only one version of
 the tool, so the versions cannot become different.
 
-A Python, Go, Rust, Ruby, Java, or Kotlin project has no `node_modules` that holds the binary. Thus,
-the command gives the package and the version:
+A Python, Go, Rust, Ruby, Java, Kotlin, or .NET project has no `node_modules` that holds the binary.
+Thus, the command gives the package and the version:
 
 ```bash
 npx --package @stablemates/workhorse@0.9.0 workhorse schema install
@@ -287,9 +304,9 @@ because inside a major line a migration only adds.
 
 ## Create a development database without Node.js
 
-The schema tool is available only on npm. Thus, a Python, Go, Rust, Ruby, Java, or Kotlin developer
-has no local command that creates the database. In its place, each `vX.Y.Z` tag attaches the
-clean-install file `schema.sql` to its GitHub release. Do these steps:
+The schema tool is available only on npm. Thus, a Python, Go, Rust, Ruby, Java, Kotlin, or .NET
+developer has no local command that creates the database. In its place, each `vX.Y.Z` tag attaches
+the clean-install file `schema.sql` to its GitHub release. Do these steps:
 
 1. Download the file from the release of the version that your application uses.
 2. Apply the file with `psql`.
@@ -314,7 +331,7 @@ An application process or a worker process must check the schema. It must not in
 Thus, no long-running process needs the permission to create database objects. Each SDK has the
 check.
 
-<Tabs items={["TypeScript", "Python", "Go", "Rust", "Ruby", "Java", "Kotlin"]}>
+<Tabs items={["TypeScript", "Python", "Go", "Rust", "Ruby", "Java", "Kotlin", "C#"]}>
   <Tab value="TypeScript">
 
     ```ts
@@ -406,6 +423,18 @@ check.
     ```
 
     A refusal is a `CompatibilityException`, whose `code()` names the reason.
+
+  </Tab>
+  <Tab value="C#">
+
+    Build a `Queue` or an `Admin`, and call `AssertCompatibleAsync()`.
+
+    ```csharp
+    var queue = new Queue(dataSource);
+    await queue.AssertCompatibleAsync();
+    ```
+
+    A refusal is a `CompatibilityException`, whose `Code` names the reason.
 
   </Tab>
 </Tabs>

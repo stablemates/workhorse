@@ -69,13 +69,14 @@ than compact JSON.
 
 The SDKs measure the same text:
 
-| SDK        | Measurement                                                                                                                                                                                                                                             | Shortcut that skips the exact measure                            | Oversized result                                                                                                                                                                                                       |
-| ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| TypeScript | `Queue` and worker use `jsonbTextBytes` in `typescript/core/src/queue/enqueue-contracts.ts`                                                                                                                                                             | Twice the compact UTF-8 length fits and the JSON has no exponent | —                                                                                                                                                                                                                      |
-| Go         | `jsonbTextBytes` in `go/value_size.go`, for a handler result                                                                                                                                                                                            | Same way as TypeScript                                           | Fails the attempt with `TaskValueSizeLimitError` before any completion statement. The retry policy applies and `Worker.Run` keeps running.                                                                             |
-| Python     | `jsonb_text_bytes` in `python/src/workhorse/_contracts.py`, for handler results                                                                                                                                                                         | Twice the compact ASCII length fits and the JSON has no exponent | `_encode_result` in `python/src/workhorse/worker.py` raises `TaskValueSizeLimitError`. It raises `ValueError` for a `NaN` or infinite number. Both fail the attempt through `fail_v1` before any completion statement. |
-| Ruby       | Encodes the result once and passes the text to `Worker#check_result_size` in `ruby/lib/stablemates/workhorse/worker.rb` before any completion statement; otherwise measures with `Values.jsonb_text_bytes` in `ruby/lib/stablemates/workhorse/types.rb` | Twice the compact UTF-8 length fits and the JSON has no exponent | Raises `ValueSizeLimitError` with `task_type`, `part` set to `"result"`, `actual_bytes`, and `max_bytes`. The worker settles it through the ordinary fenced failure and retry path and keeps running.                  |
-| Rust       | `jsonb_text_bytes` in `rust/src/worker/value_size.rs`, for every handler result                                                                                                                                                                         | None                                                             | `Worker` fails the attempt with `TaskValueSizeLimitError` through `fail_with_state` before any completion statement. The retry policy and `retry_delay` apply, on both tiers.                                          |
+| SDK        | Measurement                                                                                                                                                                                                                                             | Shortcut that skips the exact measure                            | Oversized result                                                                                                                                                                                                                |
+| ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| TypeScript | `Queue` and worker use `jsonbTextBytes` in `typescript/core/src/queue/enqueue-contracts.ts`                                                                                                                                                             | Twice the compact UTF-8 length fits and the JSON has no exponent | —                                                                                                                                                                                                                               |
+| Go         | `jsonbTextBytes` in `go/value_size.go`, for a handler result                                                                                                                                                                                            | Same way as TypeScript                                           | Fails the attempt with `TaskValueSizeLimitError` before any completion statement. The retry policy applies and `Worker.Run` keeps running.                                                                                      |
+| Python     | `jsonb_text_bytes` in `python/src/workhorse/_contracts.py`, for handler results                                                                                                                                                                         | Twice the compact ASCII length fits and the JSON has no exponent | `_encode_result` in `python/src/workhorse/worker.py` raises `TaskValueSizeLimitError`. It raises `ValueError` for a `NaN` or infinite number. Both fail the attempt through `fail_v1` before any completion statement.          |
+| Ruby       | Encodes the result once and passes the text to `Worker#check_result_size` in `ruby/lib/stablemates/workhorse/worker.rb` before any completion statement; otherwise measures with `Values.jsonb_text_bytes` in `ruby/lib/stablemates/workhorse/types.rb` | Twice the compact UTF-8 length fits and the JSON has no exponent | Raises `ValueSizeLimitError` with `task_type`, `part` set to `"result"`, `actual_bytes`, and `max_bytes`. The worker settles it through the ordinary fenced failure and retry path and keeps running.                           |
+| Rust       | `jsonb_text_bytes` in `rust/src/worker/value_size.rs`, for every handler result                                                                                                                                                                         | None                                                             | `Worker` fails the attempt with `TaskValueSizeLimitError` through `fail_with_state` before any completion statement. The retry policy and `retry_delay` apply, on both tiers.                                                   |
+| .NET       | `JsonbSize.Of` in `dotnet/src/Workhorse/Internal/Json/JsonbSize.cs`, called by `Worker.EncodeResultAsync` for every handler result                                                                                                                      | None                                                             | Throws `ValueSizeLimitException` with `TaskType`, `Part` set to `"result"`, `ActualBytes`, and `MaxBytes` before any completion statement. The worker settles it through the ordinary failure and retry path and keeps running. |
 
 The Ruby behavior holds on both tiers and for each task in a completion batch.
 
@@ -95,13 +96,14 @@ A handler result must also be a value jsonb can represent. `complete_v1` and
 
 Each worker scans the encoded result before any completion statement:
 
-| SDK        | Full scan                                                                 | Cheap first check          | Error name      |
-| ---------- | ------------------------------------------------------------------------- | -------------------------- | --------------- |
-| Go         | `hasUnstorableEscape` in `go/value_size.go`                               | `mayHoldUnstorableEscape`  | `Error`         |
-| Python     | `_has_unstorable_escape` in `python/src/workhorse/worker.py`              | `_UNSTORABLE_ESCAPE_START` | `ValueError`    |
-| TypeScript | `hasUnstorableEscape` in `typescript/core/src/queue/enqueue-contracts.ts` | `mayHoldUnstorableEscape`  | `TypeError`     |
-| Ruby       | `unstorable_escape?` in `ruby/lib/stablemates/workhorse/worker.rb`        | `UNSTORABLE_ESCAPE_START`  | `ArgumentError` |
-| Rust       | `holds_nul` in `rust/src/worker/execute.rs`                               | None                       | `Error`         |
+| SDK        | Full scan                                                                 | Cheap first check          | Error name          |
+| ---------- | ------------------------------------------------------------------------- | -------------------------- | ------------------- |
+| Go         | `hasUnstorableEscape` in `go/value_size.go`                               | `mayHoldUnstorableEscape`  | `Error`             |
+| Python     | `_has_unstorable_escape` in `python/src/workhorse/worker.py`              | `_UNSTORABLE_ESCAPE_START` | `ValueError`        |
+| TypeScript | `hasUnstorableEscape` in `typescript/core/src/queue/enqueue-contracts.ts` | `mayHoldUnstorableEscape`  | `TypeError`         |
+| Ruby       | `unstorable_escape?` in `ruby/lib/stablemates/workhorse/worker.rb`        | `UNSTORABLE_ESCAPE_START`  | `ArgumentError`     |
+| Rust       | `holds_nul` in `rust/src/worker/execute.rs`                               | None                       | `Error`             |
+| .NET       | `HoldsNul` in `dotnet/src/Workhorse/Worker.Execution.cs`                  | None                       | `ArgumentException` |
 
 The cheap first check looks for `\u0000` or an escape that starts `\ud` or `\uD`. Only a result
 holding one gets the full scan, so other escaped text costs one pass. A high surrogate escape counts
@@ -109,6 +111,10 @@ as paired only when a low surrogate escape follows immediately.
 
 A Rust `String` cannot hold an unpaired surrogate. The Rust worker therefore checks the result
 `Value` only for NUL in any string or key.
+
+The .NET `JsonCodec` refuses a lone surrogate when it encodes a result, with an `ArgumentException`.
+The .NET worker therefore checks the encoded result only for NUL in any string or key. Its message
+is `<task type> result contains a NUL character, which PostgreSQL jsonb cannot store`.
 
 A refused result fails the attempt through `fail_v1` before any completion statement, with this
 message:
@@ -123,7 +129,7 @@ The message carries no part of the value, so `fail_v1` can store it.
 - The worker keeps running.
 - On the fast tier, the refused member never joins the completion batch.
 
-Any other error from a completion statement still stops the Go, Python, TypeScript, and Ruby
+Any other error from a completion statement still stops the Go, Python, TypeScript, Ruby, and .NET
 workers.
 
 #### Redaction keys
@@ -224,9 +230,10 @@ Every language runs the same fixture table.
 
 A contract compares the decimal of each number, not its binary double. The decimal is the text
 that the SDK writes to PostgreSQL. For a double, it is the shortest decimal that reads back as the
-same double, which `JSON.stringify`, Python `repr`, Ruby `Float#to_s`, and Java `Double.toString`
-give. `type` with `integer`, `minimum`, `maximum`, `exclusiveMinimum`, `exclusiveMaximum`,
-`multipleOf`, `const`, `enum`, and `uniqueItems` compare these decimals exactly (ADR 0039).
+same double, which `JSON.stringify`, Python `repr`, Ruby `Float#to_s`, Java `Double.toString`, and
+C# `System.Text.Json` give. `type` with `integer`, `minimum`, `maximum`, `exclusiveMinimum`,
+`exclusiveMaximum`, `multipleOf`, `const`, `enum`, and `uniqueItems` compare these decimals exactly
+(ADR 0039).
 
 | SDK        | Exact integer      | Exact fraction | Decimal comparison                                                                               |
 | ---------- | ------------------ | -------------- | ------------------------------------------------------------------------------------------------ |
@@ -236,6 +243,7 @@ give. `type` with `integer`, `minimum`, `maximum`, `exclusiveMinimum`, `exclusiv
 | Rust       | `i64` and `u64`    | no             | `compile_contract_schema` replaces the bounds, `multipleOf`, `const`, `enum`, and `uniqueItems`. |
 | Ruby       | yes                | no             | `ContractSchema` compares a Float through `Rational(Float#to_s)`.                                |
 | JVM        | yes                | `BigDecimal`   | `ContractSchema` compares a `BigDecimal` of each number.                                         |
+| .NET       | yes                | yes            | `ContractSchema` compares an `ExactNumber` that keeps every digit of each number token.          |
 
 A value that an SDK cannot hold never reaches its validator. A schema number is different: each
 SDK reads a stored schema from its jsonb text and keeps every schema number exact, also a number
@@ -249,6 +257,7 @@ that its own values cannot hold. The `serde_json` `arbitrary_precision` feature 
 | Rust       | The SDK selects `schema::text`. `compile_stored_contract_schema` keeps each number token.                           |
 | Ruby       | `Contracts.parse_schema` reads a fraction a Float cannot hold as a Rational.                                        |
 | JVM        | `Contracts.storedSchema` reads the column with `Json.parseSchema`.                                                  |
+| .NET       | `ContractStore` reads the column as text. `JsonTree` reads each number token as an `ExactNumber`.                   |
 
 The TypeScript, Python, and Rust drivers parse `jsonb` into doubles, so these SDKs wrap
 `get_contract_definition_v1` in a statement that selects `schema::text`. In Rust, a schema object
@@ -729,6 +738,7 @@ The retried statements are:
 | Go         | `queryFencedWrite`                                                                | `fencedWriteDeadlockAttempts`    |
 | Python     | `fenced_write_rows` and `async_fenced_write_rows` in `workhorse/_fenced_write.py` | `FENCED_WRITE_DEADLOCK_ATTEMPTS` |
 | Rust       | `fenced_rows`                                                                     | `FENCED_WRITE_DEADLOCK_ATTEMPTS` |
+| .NET       | `Sql.FencedRowsAsync`                                                             | `FencedWriteDeadlockAttempts`    |
 
 - A deadlock aborts a caller-owned transaction, so a resend inside one fails with SQLSTATE `25P02`.
   The helper then raises the original `40P01` instead.
@@ -1051,6 +1061,7 @@ rule.
 | Rust       | `child_request` in `rust/src/children.rs`, from `parent.queue`                                                 |
 | Ruby       | `Queue#serialize_child_request` in `ruby/lib/stablemates/workhorse/queue.rb`                                   |
 | JVM        | `Queue.serializeChildRequest` in `jvm/workhorse/src/main/java/run/workhorse/Queue.java`, from `parent.queue()` |
+| .NET       | `Queue.ChildInput` in `dotnet/src/Workhorse/Queue.Durable.cs`, from `parent.Queue`                             |
 
 TypeScript `Queue.createChild`, `Queue.createChildren`, and `Queue.createChildrenAll` take a claimed
 parent task, so they follow the same rule.
@@ -1064,8 +1075,9 @@ On `conflict`, the rebuild that [Contract versions on replay](#contract-versions
 describes also reads the `queue_name` of each stored child through `get_task`. A rebuilt request
 with no queue takes the queue of the stored child with the same name. TypeScript also requires the
 same type, as it does for the contract version. The parent task then joins its child. A request
-that names a queue keeps that queue, so a changed queue remains a `ChildConflictError`. All six
+that names a queue keeps that queue, so a changed queue remains a `ChildConflictError`. All seven
 SDKs do this rebuild. The JVM reads the stored queues in `TaskContext.acceptedContractVersions`.
+.NET reads them in `DurableContext.AcceptedContractVersionsAsync` in `Worker.Durable.cs`.
 
 #### Creating a child set
 
@@ -1761,6 +1773,27 @@ In Go:
 - A duplicate also returns the handler context's cause once that context ends, because the operation
   can ignore cancellation.
 
+In C#, `HandlerContext.CheckpointAsync(name, options, operation)` and
+`BatchHandlerContext.CheckpointAsync` compare inputs as TypeScript does. `CheckpointOptions.Input`
+holds the input. These are the .NET details:
+
+1. `Checkpoints.InputFingerprint(input)` computes the same digest. Object keys sort by UTF-16 code
+   units, and each number uses the ECMAScript form of its IEEE 754 double.
+2. The worker encodes the input with its own `JsonSerializerOptions` first. An overload of
+   `Checkpoints.InputFingerprint` takes the options. An option that changes the JSON text, such as a
+   naming policy, changes the fingerprint.
+3. A value that is not JSON, a non-finite number, a lone surrogate, or a number larger than 2^53 - 1
+   in magnitude throws an `ArgumentException`. The operation does not run.
+4. A call without `CheckpointOptions` gives no fingerprint. A `null` `Input` gives the fingerprint
+   of the JSON null.
+5. A different stored fingerprint, an overlapping call with a different fingerprint, or the
+   `input_conflict` status throws `CheckpointInputConflictException`, and the operation does not
+   run.
+
+The .NET `CheckpointInputConflictException` is a subclass of `ConflictException`. It carries
+`Name`, `StoredFingerprint`, and `RequestedFingerprint`. `TaskCheckpoint.InputFingerprint` returns
+the stored fingerprint, or `null`.
+
 A checkpoint does not make external effects exactly once. A process can disappear after an external
 system commits but before the checkpoint transaction commits.
 
@@ -1769,9 +1802,9 @@ system commits but before the checkpoint transaction commits.
 A checkpoint value can hold at most 1 MiB (1,048,576 bytes) of the canonical JSONB text
 representation of PostgreSQL. That gives every language client one authoritative definition.
 
-The TypeScript and Rust clients reject a value that holds `NaN` or an infinity at any depth before
-they write. TypeScript throws a `TypeError`, and Rust returns a `HandlerError`. `JSON.stringify` and
-`serde_json` would store such a number as `null`.
+The TypeScript, Rust, and .NET clients reject a value that holds `NaN` or an infinity at any depth
+before they write. TypeScript throws a `TypeError`, Rust returns a `HandlerError`, and .NET throws
+an `ArgumentException`. `JSON.stringify` and `serde_json` would store such a number as `null`.
 
 Checkpoints intentionally have no independent retirement path. If Workhorse deleted a completed
 name while it retained a retryable task, the code of that checkpoint could run again. Checkpoints
@@ -1805,20 +1838,23 @@ it separate from immutable payload, checkpoint, and outcome fields.
 - Accepted changes increment a monotonic revision and replace attempt, fence, worker, and
   update-time provenance.
 - An identical value changes nothing.
-- The TypeScript and Rust clients reject a value that holds `NaN` or an infinity at any depth before
-  they write, as they do for checkpoints. TypeScript throws a `TypeError`, and Rust returns
-  `Error::InvalidArgument`.
+- The TypeScript, Rust, and .NET clients reject a value that holds `NaN` or an infinity at any depth
+  before they write, as they do for checkpoints. TypeScript throws a `TypeError`, Rust returns
+  `Error::InvalidArgument`, and .NET throws an `ArgumentException`.
 
 #### Handler API
 
-| SDK        | Read           | Write          |
-| ---------- | -------------- | -------------- |
-| TypeScript | `getProgress`  | `setProgress`  |
-| Python     | `get_progress` | `set_progress` |
-| Go         | `GetProgress`  | `SetProgress`  |
+| SDK        | Read               | Write              |
+| ---------- | ------------------ | ------------------ |
+| TypeScript | `getProgress`      | `setProgress`      |
+| Python     | `get_progress`     | `set_progress`     |
+| Go         | `GetProgress`      | `SetProgress`      |
+| .NET       | `GetProgressAsync` | `SetProgressAsync` |
 
 - Stale writes raise each SDK's `ProgressLeaseLostError`.
 - Changed writes inside the cadence limit raise `ProgressRateLimitError` with the remaining delay.
+- In .NET, a stale write throws `LeaseLostException`, and a write inside the cadence limit throws
+  `ProgressRateLimitedException` with `RetryAfter`.
 
 #### Limits and lifetime
 
@@ -3368,6 +3404,7 @@ PostgreSQL-owned `paused` flag:
 | Go         | `WorkerOptions.RegistryInterval`   | `WorkerOptions.DisableRegistry`   |
 | Rust       | `WorkerOptions::registry_interval` | `WorkerOptions::disable_registry` |
 | Ruby       | `registry_interval:`               | `disable_registry: true`          |
+| .NET       | `WorkerOptions.RegistryInterval`   | `WorkerOptions.DisableRegistry`   |
 
 Each interval defaults to 5 seconds. The dashboard shows the reported process values read-only,
 because changing them requires a deployment.
@@ -3379,8 +3416,8 @@ because changing them requires a deployment.
 - All three are nullable. A caller can call the SQL protocol directly. A client that reports nothing
   is a fact to record rather than a caller to reject.
 - Each SDK stamps its own values, and no caller supplies them. TypeScript reports `typescript`,
-  Python reports `python`, Go reports `go`, Rust reports `rust`, and Ruby reports `ruby`, each with
-  its published package version.
+  Python reports `python`, Go reports `go`, Rust reports `rust`, Ruby reports `ruby`, and .NET
+  reports `csharp`, each with its published package version.
 - `sdk_language` holds 1 through 40 characters, and `sdk_version` holds 1 through 64.
 - `client_protocol_version` is 1 or greater.
 - A refresh overwrites all three rather than merging. A downgraded worker therefore stops claiming a

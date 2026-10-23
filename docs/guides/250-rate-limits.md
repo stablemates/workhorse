@@ -174,6 +174,9 @@ In Python, use `Queue.sync_rate_limit_policies` or `AsyncQueue.sync_rate_limit_p
 connection that your application owns. `Queue.list_rate_limit_policies` and
 `AsyncQueue.list_rate_limit_policies` return the stored definitions.
 
+In C#, use `Queue.SyncRateLimitPoliciesAsync`. `Queue.ListRateLimitPoliciesAsync` returns the stored
+definitions.
+
 Use the same queue name when you enqueue. If the traffic of a caller needs its own bucket, set
 `concurrencyKey` to that caller.
 
@@ -188,8 +191,9 @@ with a full burst.
 | TypeScript | `Queue.syncRateLimitPolicies(namespace, definitions, { prune })`                                   | `Queue.listRateLimitPolicies(queueNames)`                                   |
 | Python     | `Queue.sync_rate_limit_policies(namespace, definitions, prune=True)`, and the same on `AsyncQueue` | `Queue.list_rate_limit_policies(queue_names)`, and the same on `AsyncQueue` |
 | Go         | `Queue.SyncRateLimitPolicies(ctx, namespace, definitions, options...)`                             | `Queue.ListRateLimitPolicies(ctx, queueNames)`                              |
+| .NET       | `Queue.SyncRateLimitPoliciesAsync(namespace, definitions, prune)`                                  | `Queue.ListRateLimitPoliciesAsync(queues)`                                  |
 
-- All three wrap `sync_rate_limit_policies_v1(namespace, definitions, prune)`.
+- Every SDK wraps `sync_rate_limit_policies_v1(namespace, definitions, prune)`.
 - A definition contains only `queue`, `rate`, and optional `perKey`.
 - One call accepts at most 10,000 unique queues.
 - The call rejects a queue that another namespace owns.
@@ -202,7 +206,7 @@ with a full burst.
 - A listing has no implicit result cap. An omitted or empty list of names reads every policy.
 - A fast-tier queue rejects a rate-limit policy with `P1007`.
 
-More detail: [Data model: Synchronization](../architecture/data-model.md#synchronization-1).
+More detail: [Data model: Synchronization](../architecture/data-model.md#synchronization-1) and [Schema and SQL protocol: .NET queue](../architecture/schema-and-protocol.md#net-queue).
 
 </details>
 

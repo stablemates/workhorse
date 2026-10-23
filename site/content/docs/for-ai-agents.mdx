@@ -134,8 +134,8 @@ TypeScript project runs the binary of its own dependency:
 npm exec --no -- workhorse schema install
 ```
 
-A Python, Go, Rust, Ruby, Java, or Kotlin project has no Node.js dependencies. It names the version
-in the command. This version must be equal to the SDK version of the application:
+A Python, Go, Rust, Ruby, Java, Kotlin, or .NET project has no Node.js dependencies. It names the
+version in the command. This version must be equal to the SDK version of the application:
 
 ```bash
 npx --package @stablemates/workhorse@0.9.0 workhorse schema install
@@ -146,7 +146,8 @@ names the Node.js version. The application does not need Node.js.
 
 When the application starts, assert compatibility. Use `assertSchemaCompatible` in TypeScript,
 `assert_schema_compatible` in Python, `AssertSchemaCompatible` in Go, or `assert_compatible` in Rust
-and Ruby. Java and Kotlin call the compatibility assertion of their queue.
+and Ruby. Java and Kotlin call the compatibility assertion of their queue. C# calls the asynchronous
+compatibility assertion of its queue.
 
 Install the SDK of the application language:
 
@@ -164,6 +165,9 @@ The Ruby SDK also needs the `connection_pool` gem.
 Maven Central serves the three JVM artifacts from `0.9.0`. The JVM SDK has no install command
 here. Its README names the three artifacts and their supported versions.
 
+[Installation](/docs/installation.md) names the four packages of the .NET SDK. NuGet does not serve
+them yet, so the .NET SDK has no install command here.
+
 ### Enqueue in the transaction of your application data
 
 Enqueue the task in the same transaction that writes the application data. Then you do not need an
@@ -176,6 +180,7 @@ outbox. Each language gets the transaction in a different way:
 - Java passes the open JDBC connection as the first argument of the enqueue call. Kotlin gives the
   connection to the suspend wrapper by name. A Spring Boot application enqueues inside its
   transactional method.
+- C# gets a queue for the open Npgsql connection from the Using method of its queue.
 
 ### Register a handler
 
@@ -189,6 +194,7 @@ continuous method:
 - `Stablemates::Workhorse.run_worker_process(worker)` in Ruby.
 - The process helper of the core in Java and Kotlin, or the Spring Boot starter with its worker
   switch on.
+- The asynchronous run method of the worker in C#, or the hosted worker of the .NET hosting package.
 
 ### Set the failure policy when you enqueue
 
@@ -248,7 +254,7 @@ Each example does these steps:
 3. It runs a worker. The handler puts the external send in a checkpoint.
 4. It reads the stored result of the task.
 
-<Tabs items={["TypeScript", "Python", "Go", "Rust", "Ruby", "Java", "Kotlin"]}>
+<Tabs items={["TypeScript", "Python", "Go", "Rust", "Ruby", "Java", "Kotlin", "C#"]}>
   <Tab value="TypeScript">
     ```ts verify
     import { Admin, Pool, Queue, Worker } from "@stablemates/workhorse";
@@ -653,12 +659,71 @@ Each example does these steps:
     }
     ```
   </Tab>
+  <Tab value="C#">
+    ```csharp
+    public sealed record OrderCreated(string OrderId);
+
+    public sealed record OrderProcessed(string ProcessedOrderId, string Receipt);
+
+    public static Task<string> SendConfirmationEmailAsync(string orderId) =>
+        Task.FromResult($"receipt-for-{orderId}");
+
+    public static async Task<TaskDetail?> IntegrateAsync(string connectionString)
+    {
+        // A connection string, such as "Host=localhost;Database=app;Username=app"
+        await using var dataSource = NpgsqlDataSource.Create(connectionString);
+        var queue = new Queue(dataSource);
+
+        Guid taskId;
+        await using (var connection = await dataSource.OpenConnectionAsync())
+        await using (var transaction = await connection.BeginTransactionAsync())
+        {
+            await using (var insert = new NpgsqlCommand(
+                "INSERT INTO orders (id, status) VALUES ($1, $2)", connection))
+            {
+                insert.Parameters.AddWithValue("order-42");
+                insert.Parameters.AddWithValue("new");
+                await insert.ExecuteNonQueryAsync();
+            }
+
+            var enqueued = await queue.Using(connection).EnqueueAsync(
+                "order.created",
+                new OrderCreated("order-42"),
+                new EnqueueOptions
+                {
+                    MaxAttempts = 5,
+                    RetryPolicy = RetryPolicy.Fixed(TimeSpan.FromSeconds(1)),
+                });
+            taskId = enqueued.TaskId;
+            await transaction.CommitAsync();
+        }
+
+        await using (var worker = new Worker(dataSource, new WorkerOptions { PollingOnly = true }))
+        {
+            worker.Handle<OrderCreated, OrderProcessed>("order.created", async (context, order) =>
+            {
+                // After Workhorse saves the receipt, a replay reuses it and skips the send.
+                var receipt = await context.CheckpointAsync(
+                    "confirmation-email",
+                    _ => SendConfirmationEmailAsync(order.OrderId));
+                return new OrderProcessed(order.OrderId, receipt);
+            });
+            await worker.RunOnceAsync(); // Production workers call RunAsync(stoppingToken).
+        }
+
+        var task = await new Admin(dataSource).GetTaskAsync(taskId);
+        Console.WriteLine($"{task?.State} {task?.Result}");
+        return task;
+    }
+    ```
+  </Tab>
 </Tabs>
 
 Expect two differences between the languages. Go's `RetryPolicy` is a `map[string]any`, but
-TypeScript has a typed union. Python uses a mapping, Rust a JSON object, and Ruby a Hash. Thus, only
-TypeScript rejects a malformed policy when it compiles. Each language has a schema compatibility
-assertion, as the section about the schema install names.
+TypeScript has a typed union. Python uses a mapping, Rust a JSON object, and Ruby a Hash. C# makes
+the policy with a typed factory method. Thus, only TypeScript and C# reject a malformed policy when
+they compile. Each language has a schema compatibility assertion, as the section about the schema
+install names.
 
 ## Confirm that the task is complete
 
@@ -727,6 +792,7 @@ page, because the compilation of its programs is a stronger check.
 | Rust       | The fence must equal a `docs:start` region in `rust/examples/`, which `cargo clippy --all-targets` compiles.        |
 | Ruby       | The fence must equal a `docs:start` region in `ruby/examples/`, which a documentation spec runs against PostgreSQL. |
 | Java, Kotlin | The fence must equal a `docs:start` region in `jvm/examples/src/main/`, which `pnpm jvm:build` compiles and `pnpm jvm:test` runs against PostgreSQL. |
+| C# | The fence must equal a `docs:start` region in `dotnet/examples/Workhorse.Examples/`, which `pnpm dotnet:build` compiles and `pnpm dotnet:test` runs against PostgreSQL. |
 
 More detail: [ADR 0049: Decision](https://github.com/stablemates/workhorse/blob/main/docs/decisions/0049-publish-one-agent-documentation-layer.md#decision).
 

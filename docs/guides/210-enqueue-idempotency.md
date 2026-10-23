@@ -211,7 +211,10 @@ transaction fails too. The error shows the existing task and the fields that are
 | `storedRequestDigest`   | SHA-256 of the stored fingerprint.               |
 | `rejectedRequestDigest` | SHA-256 of the rejected fingerprint.             |
 
-More detail: [Data model: Fingerprint and replay](../architecture/data-model.md#fingerprint-and-replay).
+The C# client throws `EnqueueIdempotencyConflictException`. Its `Details` dictionary holds the
+same fields. `DiagnosedException.Details` gets these fields with the default Npgsql settings.
+
+More detail: [Data model: Fingerprint and replay](../architecture/data-model.md#fingerprint-and-replay) and [Schema and SQL protocol: .NET errors](../architecture/schema-and-protocol.md#net-errors).
 
 </details>
 

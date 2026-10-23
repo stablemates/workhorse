@@ -154,6 +154,11 @@ If the handler throws `ctx.signal.reason`, the worker confirms the cancellation.
 also aborted for a [deadline or an execution timeout](140-deadlines-and-timeouts.md). Each case has
 a different reason. Thus, one pattern stops the handler in all three cases.
 
+A C# handler checks `context.CancellationToken`, and it gives the token to each call that accepts
+one. `HandlerContext.CancelReason` is beside the token and gives the reason. The worker sets the
+reason before it cancels the token. A durable method of the context takes no token. Only the
+operation of a checkpoint receives the token of the handler.
+
 Cancellation does not undo effects that the handler started. In the example, the parts that the
 handler uploaded before 20 s stay uploaded. These effects are
 [at-least-once](030-delivery-guarantees.md). Make each effect safe if it occurs more than one time.

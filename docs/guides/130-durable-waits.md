@@ -49,15 +49,16 @@ await ctx.checkpoint("follow-up", () => mailer.followUp(payload.to));
 <details>
 <summary>Reference: wait API and limits</summary>
 
-| SDK                                               | Duration                   | Absolute time                |
-| ------------------------------------------------- | -------------------------- | ---------------------------- |
-| TypeScript `HandlerContext`                       | `sleep(name, durationMs)`  | `sleepUntil(name, wakeAt)`   |
-| Python `HandlerContext` and `AsyncHandlerContext` | `sleep(name, duration_ms)` | `sleep_until(name, wake_at)` |
-| Go `HandlerContext`                               | `Sleep(name, duration)`    | `SleepUntil(name, wakeAt)`   |
-| Rust handler context                              | `sleep(name, duration)`    | `sleep_until(name, wake_at)` |
-| Ruby handler context                              | `sleep(name, seconds)`     | `sleep_until(name, wake_at)` |
-| Java `HandlerContext`                             | `sleep(name, duration)`    | `sleepUntil(name, time)`     |
-| Kotlin `SuspendHandlerContext`                    | `sleep(name, duration)`    | `sleepUntil(name, time)`     |
+| SDK                                               | Duration                     | Absolute time                 |
+| ------------------------------------------------- | ---------------------------- | ----------------------------- |
+| TypeScript `HandlerContext`                       | `sleep(name, durationMs)`    | `sleepUntil(name, wakeAt)`    |
+| Python `HandlerContext` and `AsyncHandlerContext` | `sleep(name, duration_ms)`   | `sleep_until(name, wake_at)`  |
+| Go `HandlerContext`                               | `Sleep(name, duration)`      | `SleepUntil(name, wakeAt)`    |
+| Rust handler context                              | `sleep(name, duration)`      | `sleep_until(name, wake_at)`  |
+| Ruby handler context                              | `sleep(name, seconds)`       | `sleep_until(name, wake_at)`  |
+| Java `HandlerContext`                             | `sleep(name, duration)`      | `sleepUntil(name, time)`      |
+| Kotlin `SuspendHandlerContext`                    | `sleep(name, duration)`      | `sleepUntil(name, time)`      |
+| C# `HandlerContext`                               | `SleepAsync(name, duration)` | `SleepUntilAsync(name, time)` |
 
 | Limit                                      | Value                                                |
 | ------------------------------------------ | ---------------------------------------------------- |
@@ -80,7 +81,7 @@ makes a waiting task ready.
 A [fast-tier queue](305-fast-tier.md) rejects durable waits. That tier keeps no durable execution
 state.
 
-More detail: [Task lifecycle: Scheduling a timer wait](../architecture/lifecycle.md#scheduling-a-timer-wait), [Schema and SQL protocol: JVM handler context](../architecture/schema-and-protocol.md#jvm-handler-context), and [Schema and SQL protocol: Kotlin handler context](../architecture/schema-and-protocol.md#kotlin-handler-context).
+More detail: [Task lifecycle: Scheduling a timer wait](../architecture/lifecycle.md#scheduling-a-timer-wait), [Schema and SQL protocol: JVM handler context](../architecture/schema-and-protocol.md#jvm-handler-context), [Schema and SQL protocol: Kotlin handler context](../architecture/schema-and-protocol.md#kotlin-handler-context), and [Schema and SQL protocol: .NET handler context](../architecture/schema-and-protocol.md#net-handler-context).
 
 </details>
 
@@ -108,6 +109,10 @@ To stop the handler, `ctx.sleep` and `ctx.sleepUntil` throw a control signal. Do
 signal. If the handler catches it and returns, the worker still applies the recorded wait. The
 worker also logs a warning. But Workhorse cannot undo the code that ran after the catch.
 
+In C#, the control signal is an internal exception that derives from `OperationCanceledException`.
+Thus `finally` blocks and `using` declarations run. A C# handler that catches the exception and
+returns still suspends.
+
 <details>
 <summary>Reference: suspension and a swallowed signal</summary>
 
@@ -122,7 +127,13 @@ If the handler catches the signal and returns, the worker applies the recorded s
 `workhorse.handler.signal_swallowed` at warning severity, with
 `workhorse.handler.outcome = suspended`.
 
-More detail: [Task lifecycle: Worker suspension](../architecture/lifecycle.md#worker-suspension).
+The .NET worker sets `HandlerContext.CancelReason` to `CancelReason.Suspended` and cancels
+`HandlerContext.CancellationToken`. Then it throws an internal exception that derives from
+`OperationCanceledException`, so `finally` blocks and `using` declarations run. After the handler
+returns or throws, the worker submits the recorded suspension. It ignores the result or the
+exception of the handler.
+
+More detail: [Task lifecycle: Worker suspension](../architecture/lifecycle.md#worker-suspension) and [Schema and SQL protocol: .NET suspension](../architecture/schema-and-protocol.md#net-suspension).
 
 </details>
 
@@ -263,19 +274,25 @@ await ctx.checkpoint("welcome", () => mailer.welcome(payload.to, template), {
 Each SDK gives the input of a checkpoint. The fingerprint function returns the fingerprint
 that the call stores.
 
-| SDK        | Call with an input                                                                 | Fingerprint function                            | Stored fingerprint                  |
-| ---------- | ---------------------------------------------------------------------------------- | ----------------------------------------------- | ----------------------------------- |
-| TypeScript | `HandlerContext.checkpoint(name, operation, { input })`                            | `checkpointInputFingerprint(input)`             | `TaskCheckpoint.inputFingerprint`   |
-| Rust       | `HandlerContext::checkpoint_with_input(name, &input, op)`                          | `checkpoint_input_fingerprint(&input)`          | `TaskCheckpoint::input_fingerprint` |
-| Ruby       | `HandlerContext#checkpoint(name, input:) { … }`                                    | `Workhorse.checkpoint_input_fingerprint(input)` | `TaskCheckpoint#input_fingerprint`  |
-| Python     | `HandlerContext.checkpoint(name, operation, input=…)`                              | `checkpoint_input_fingerprint(input)`           | `TaskCheckpoint.input_fingerprint`  |
-| Go         | `HandlerContext.Checkpoint(name, operation, CheckpointOptions{Input: input})`      | `CheckpointInputFingerprint(input)`             | `TaskCheckpoint.InputFingerprint`   |
-| Java       | `HandlerContext.checkpoint(name, type, CheckpointOptions.input(input), operation)` | `Checkpoints.inputFingerprint(input)`           | `TaskCheckpoint.inputFingerprint()` |
-| Kotlin     | `checkpoint<T>(name, CheckpointOptions.input(input)) { … }`                        | `Checkpoints.inputFingerprint(input)`           | `TaskCheckpoint.inputFingerprint()` |
+| SDK        | Call with an input                                                                         | Fingerprint function                            | Stored fingerprint                  |
+| ---------- | ------------------------------------------------------------------------------------------ | ----------------------------------------------- | ----------------------------------- |
+| TypeScript | `HandlerContext.checkpoint(name, operation, { input })`                                    | `checkpointInputFingerprint(input)`             | `TaskCheckpoint.inputFingerprint`   |
+| Rust       | `HandlerContext::checkpoint_with_input(name, &input, op)`                                  | `checkpoint_input_fingerprint(&input)`          | `TaskCheckpoint::input_fingerprint` |
+| Ruby       | `HandlerContext#checkpoint(name, input:) { … }`                                            | `Workhorse.checkpoint_input_fingerprint(input)` | `TaskCheckpoint#input_fingerprint`  |
+| Python     | `HandlerContext.checkpoint(name, operation, input=…)`                                      | `checkpoint_input_fingerprint(input)`           | `TaskCheckpoint.input_fingerprint`  |
+| Go         | `HandlerContext.Checkpoint(name, operation, CheckpointOptions{Input: input})`              | `CheckpointInputFingerprint(input)`             | `TaskCheckpoint.InputFingerprint`   |
+| Java       | `HandlerContext.checkpoint(name, type, CheckpointOptions.input(input), operation)`         | `Checkpoints.inputFingerprint(input)`           | `TaskCheckpoint.inputFingerprint()` |
+| Kotlin     | `checkpoint<T>(name, CheckpointOptions.input(input)) { … }`                                | `Checkpoints.inputFingerprint(input)`           | `TaskCheckpoint.inputFingerprint()` |
+| C#         | `HandlerContext.CheckpointAsync(name, new CheckpointOptions { Input = input }, operation)` | `Checkpoints.InputFingerprint(input)`           | `TaskCheckpoint.InputFingerprint`   |
 
 The fingerprint is the SHA-256 digest of the RFC 8785 canonical JSON of the input, as 64 lowercase
 hexadecimal characters. Key order does not change it. Each SDK gives the same digest for the same
 input.
+
+In .NET, the checkpoint call encodes the input with the `JsonSerializerOptions` of the worker.
+`Checkpoints.InputFingerprint(input, options)` takes the options to use. A serializer naming policy
+changes the JSON text, so it changes the fingerprint. If a deployment changes the naming policy of
+the worker, a replay of a checkpoint with an input throws `CheckpointInputConflictException`.
 
 Each SDK refuses the same inputs with its error for an invalid argument, and the operation does not
 run:
@@ -294,7 +311,7 @@ run:
 Overlapping calls with one name compare their inputs in the same way. The stored fingerprint is
 null for a checkpoint without an input.
 
-More detail: [Data model: `task_checkpoint`](../architecture/data-model.md#task_checkpoint), [Schema and SQL protocol: JVM handler context](../architecture/schema-and-protocol.md#jvm-handler-context), and [Schema and SQL protocol: Kotlin handler context](../architecture/schema-and-protocol.md#kotlin-handler-context).
+More detail: [Data model: `task_checkpoint`](../architecture/data-model.md#task_checkpoint), [Schema and SQL protocol: JVM handler context](../architecture/schema-and-protocol.md#jvm-handler-context), [Schema and SQL protocol: Kotlin handler context](../architecture/schema-and-protocol.md#kotlin-handler-context), [Schema and SQL protocol: .NET handler context](../architecture/schema-and-protocol.md#net-handler-context), and [Schema and SQL protocol: .NET values and JSON](../architecture/schema-and-protocol.md#net-values-and-json).
 
 </details>
 

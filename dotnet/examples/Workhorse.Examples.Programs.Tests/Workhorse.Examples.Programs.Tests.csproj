@@ -1,0 +1,26 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!--
+    Starts each scenario program of Workhorse.Examples.Programs in a child process against a
+    scratch PostgreSQL database. `pnpm dotnet:test` starts this executable last, as
+    scripts/dotnet-test.ts lists them.
+  -->
+  <PropertyGroup>
+    <IsPackable>false</IsPackable>
+    <IsTestProject>true</IsTestProject>
+    <OutputType>Exe</OutputType>
+    <RootNamespace>Workhorse.Examples.Programs.Tests</RootNamespace>
+    <!-- Test code needs no public documentation, and xUnit finds public test classes by reflection. -->
+    <NoWarn>$(NoWarn);CS1591;CA1515;CA1707</NoWarn>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../Workhorse.Examples.Programs/Workhorse.Examples.Programs.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <Compile Include="../../tests/Workhorse.Tests/Testing/ScratchDatabase.cs" Link="Testing/ScratchDatabase.cs" />
+    <AssemblyMetadata Include="WorkhorseSchema" Value="$([System.IO.Path]::GetFullPath('$(MSBuildThisFileDirectory)../../../sql/schema/current.sql'))" />
+  </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="xunit.v3" />
+    <Using Include="Xunit" />
+  </ItemGroup>
+</Project>

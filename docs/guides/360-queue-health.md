@@ -41,7 +41,7 @@ snapshot is from the same instant. The snapshot gives this instant as `capturedA
 - Python `Queue.health()` and `AsyncQueue.health()`.
 
 The Rust and Ruby clients call it through `queue.health()` and `queue.health`. Java calls
-`Queue.health()`, and Kotlin calls `healthSuspend()`.
+`Queue.health()`, and Kotlin calls `healthSuspend()`. C# calls `Queue.HealthAsync()`.
 
 One MVCC snapshot covers the verified schema version, state counts, and dispatch depths. It also
 covers dependency, child, deadline, timeout, promotion, concurrency, rate-limit, rollup, and
@@ -211,12 +211,13 @@ Promotion and expired-lease recovery are the two phases of the worker tick, `tic
 
 **Clients.** TypeScript `Queue.health()` returns a typed `QueueHealth` object. Go, Python, and Rust
 return the document as a map type named `QueueHealth`. Ruby returns it as a `Hash`. Java returns a
-`QueueHealth` record whose `snapshot()` holds the document as one map.
+`QueueHealth` record whose `snapshot()` holds the document as one map. C# returns a `QueueHealth`
+record whose `Snapshot` holds the document as one `IReadOnlyDictionary<string, JsonElement>`.
 
 **CLI.** `workhorse health --json` writes the same `QueueHealth` object. `workhorse health` exits 2
 when the level is not `healthy`, with or without `--json`.
 
-More detail: [Task lifecycle: Health verdict](../architecture/lifecycle.md#health-verdict), [Task lifecycle: Health snapshot](../architecture/lifecycle.md#health-snapshot), [Task lifecycle: Maintenance cadence](../architecture/lifecycle.md#maintenance-cadence), and [Schema and SQL protocol: JVM queue](../architecture/schema-and-protocol.md#jvm-queue).
+More detail: [Task lifecycle: Health verdict](../architecture/lifecycle.md#health-verdict), [Task lifecycle: Health snapshot](../architecture/lifecycle.md#health-snapshot), [Task lifecycle: Maintenance cadence](../architecture/lifecycle.md#maintenance-cadence), [Schema and SQL protocol: JVM queue](../architecture/schema-and-protocol.md#jvm-queue), and [Schema and SQL protocol: .NET queue](../architecture/schema-and-protocol.md#net-queue).
 
 </details>
 
@@ -264,6 +265,43 @@ reason and does not have to find which process set the budget.
 thresholds.
 
 More detail: [Task lifecycle: Health policy](../architecture/lifecycle.md#health-policy).
+
+</details>
+
+## Report Workhorse to a .NET health check
+
+A .NET host reports the health of its process through health checks. The `Workhorse.Hosting`
+package adds a health check named `workhorse`. It tells if this process can use Workhorse. It does
+not tell if the queue does its work on time, as `Queue.health()` does.
+
+**Example.** A .NET worker process serves the queue `billing`. The orchestrator of the process reads
+its health endpoint.
+
+1. At start, the process adds the check with `AddHealthChecks().AddWorkhorse()`.
+2. The database is available and the schema is compatible, so the check reports `Healthy`.
+3. Later, a migration installs a schema that is too new for the client. The next check reports
+   `Unhealthy`.
+4. The orchestrator reports the process as unhealthy, with the description of the check.
+
+Thus, the check reports the state of the connection, the schema, and the hosted worker of one
+process. Use `Queue.health()` for the verdict about the queue.
+
+<details>
+<summary>Reference: the .NET health check</summary>
+
+`IHealthChecksBuilder.AddWorkhorse()` registers the check `workhorse`. Each run opens a new
+connection and runs the compatibility query. The check reports the failure status of the
+registration, `Unhealthy` by default, in these conditions:
+
+1. The database is unavailable.
+2. The schema is not compatible with the client.
+3. The hosted worker stopped without a stop request.
+4. The hosted worker abandoned handlers at shutdown.
+
+The last two conditions apply only in a process that calls `AddWorkhorseWorker`. The result data holds
+`state`, and while a worker runs, also `workerId`, `queues`, and `paused`.
+
+More detail: [Schema and SQL protocol: .NET hosting](../architecture/schema-and-protocol.md#net-hosting).
 
 </details>
 

@@ -4,8 +4,8 @@ This page is part of the [Workhorse architecture reference](../architecture.md).
 version, the migration plan and runner, and SQL protocol conformance.
 
 Workhorse is a durable queue in PostgreSQL. Its lifecycle transitions that correctness depends on
-are in versioned SQL functions. The TypeScript, Python, Go, Rust, Ruby, and JVM `Queue`, `Admin`,
-and `Worker` stay thin protocol clients.
+are in versioned SQL functions. The TypeScript, Python, Go, Rust, Ruby, JVM, and .NET `Queue`,
+`Admin`, and `Worker` stay thin protocol clients.
 
 ## Schema versions and migrations
 
@@ -231,7 +231,8 @@ functions:
 ### Runtime fixtures
 
 `protocol/v1/runtime.json` defines worker behavior above the SQL protocol. The TypeScript suite runs
-every fixture through `Worker`. Python, Go, Rust, Ruby, and JVM runtimes must run the same fixtures.
+every fixture through `Worker`. Python, Go, Rust, Ruby, JVM, and .NET runtimes must run the same
+fixtures.
 
 | Fixture      | Pins                                                                                                                                                                                                 |
 | ------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -247,7 +248,7 @@ executor that only counts empty polls fails on every run instead of once under l
 
 ### Durable replay conflicts
 
-All six SDK workers settle durable replay conflicts through `fail_v1` with `p_retry_delay_ms = -1`.
+All seven SDK workers settle durable replay conflicts through `fail_v1` with `p_retry_delay_ms = -1`.
 Schema version 54 reserves that override for terminal failure, even when
 `current_attempt < max_attempts`. Earlier schemas read the terminal override as an immediate retry.
 Thus workers require schema version 54 or newer. The current floor, 76, includes it.
@@ -273,8 +274,9 @@ only when the call gives an input. `protocol/v1/runtime.json` does not pin it.
 
 A worker also treats a conflict that the handler wraps in its own error as terminal. Each SDK
 follows the cause chain of its language, so Python and Ruby also count an implicit cause.
-TypeScript, Python, Ruby, Rust, and the JVM read the cause chain to a depth of 16 errors, including
-the outer error. Go uses `errors.As`, which reads the whole chain. The failure envelope then
+TypeScript, Python, Ruby, Rust, the JVM, and .NET read the cause chain to a depth of 16 errors,
+including the outer error. .NET follows `InnerException`, so it reads the first inner exception of
+an `AggregateException`. Go uses `errors.As`, which reads the whole chain. The failure envelope then
 records the name of the conflict. Its fields `message` and `stack` stay those of the outer error.
 
 - Go identifies wrapped conflicts with `errors.As` and keeps their class names.
@@ -3310,6 +3312,693 @@ with a reified payload type. It passes the full type of `P` to the `Type` form o
 A suspend handler runs in a coroutine on a dispatcher over a virtual-thread executor. A token
 cancellation cancels the coroutine `Job`, and the handler thread waits until the coroutine ends.
 
+## .NET SDK
+
+The .NET SDK has four NuGet packages from one solution under `dotnet/`, as
+[ADR 0107](../decisions/0107-shape-the-dotnet-sdk-as-a-csharp-core-with-hosting-ef-core-and-asp-net-core-packages.md)
+decides. Each package targets `net10.0`, and the four packages share the train version.
+
+| Package ID                      | Root namespace                  | Contents                                                                    |
+| ------------------------------- | ------------------------------- | --------------------------------------------------------------------------- |
+| `Workhorse`                     | `Workhorse`                     | `Queue`, `Admin`, `Worker`, `HandlerContext`, the exceptions, and telemetry |
+| `Workhorse.Hosting`             | `Workhorse.Hosting`             | Dependency injection, options binding, the hosted worker, and health        |
+| `Workhorse.EntityFrameworkCore` | `Workhorse.EntityFrameworkCore` | `GetWorkhorseConnection`, the EF Core transaction accessor                  |
+| `Workhorse.AspNetCore`          | `Workhorse.AspNetCore`          | `MapWorkhorseDashboard`, the embedded dashboard backend                     |
+
+The core depends on `Npgsql` 10.0.3 or newer and on `Microsoft.Extensions.Logging.Abstractions`.
+`Workhorse.Hosting` adds the `Microsoft.Extensions.*` hosting, options, and health check
+abstractions at 10.0.0 or newer. `Workhorse.EntityFrameworkCore` adds
+`Microsoft.EntityFrameworkCore.Relational` 10.0.0 or newer. `Workhorse.AspNetCore` uses the shared
+framework `Microsoft.AspNetCore.App` 10 or newer. No range has an upper bound.
+
+Each extension method is in the namespace of its package. No shipped assembly gives
+`InternalsVisibleTo` to another shipped assembly, so each satellite package uses only the public
+surface of the core. The core keeps the generated `SqlCatalogue`, the contract validator, the JSON codec,
+the canonical JSON writer, the heartbeat, and the listener `internal`. `api/dotnet.txt` records the
+public surface, and `pnpm dotnet-api:check` compares the built assemblies with it.
+
+Every public record is a `sealed record` with `init` properties and no positional parameters. A
+public method has no optional parameter except a last `CancellationToken cancellationToken =
+default`. A closed result family, such as `BatchHandlerOutcome` or `TaskTimelineEntry`, is an
+abstract type that only the SDK derives from.
+
+A duration is a `TimeSpan`, a point in time is a `DateTimeOffset`, a task ID is a `Guid`, and a fence
+token is a `long`. The SDK converts each `DateTimeOffset` with `ToUniversalTime()` before it binds
+it, and reads each `timestamptz` column with offset zero. No public signature takes a `DateTime`.
+
+### .NET connections
+
+Every statement runs on an `NpgsqlConnection`. The SDK never changes session state on a connection
+that the caller owns. It sets no `search_path`, no isolation level, and no transaction.
+
+`Queue` and `Admin` take an `NpgsqlDataSource`. Each instance has two forms.
+
+- **The source form** is the instance from the constructor. For each call, the SDK opens a
+  connection from the data source, runs the statement without a transaction, and disposes the
+  connection. The SDK opens the connection inside a suppressed `TransactionScope`, so an ambient
+  `System.Transactions` scope never enlists it.
+- **The caller form** is the instance that `Using(NpgsqlConnection connection)` returns. It has the
+  same methods, and it runs each call on that connection. Npgsql runs each command inside the open
+  transaction of the connection, so the call joins the caller's transaction. The SDK never opens,
+  closes, begins, commits, or rolls back on that connection.
+
+`Using` runs no statement. If the connection is not open, the first call throws
+`InvalidOperationException` with the text `The caller connection must be open`.
+
+The caller form passes the caller's `CancellationToken` to Npgsql. If the caller cancels the token
+while a statement runs, Npgsql sends a PostgreSQL cancel request. PostgreSQL then fails the
+statement and aborts the caller's transaction, and the call throws `OperationCanceledException`.
+The caller must roll back that transaction. The source form has no caller transaction, so a
+cancellation fails only its own statement.
+
+The constructors of `Queue`, `Admin`, and `Worker` refuse two data sources:
+
+| Condition                                                               | Exception                   |
+| ----------------------------------------------------------------------- | --------------------------- |
+| The connection string sets `Multiplexing=true`                          | `ArgumentException`         |
+| The process turned on the `Npgsql.EnableLegacyTimestampBehavior` switch | `InvalidOperationException` |
+
+Each `Queue` and each `Admin` instance caches its compatibility check once for its data source, and
+once for each caller connection. A `ConditionalWeakTable` holds the caller results, so the cache
+compares connections by reference and keeps none alive. The cache keeps a refusal, but not a driver
+error. `AssertCompatibleAsync()` runs the check at once.
+
+| Condition                                                            | `CompatibilityException.Code`                    |
+| -------------------------------------------------------------------- | ------------------------------------------------ |
+| SQLSTATE `42P01` or `3F000`                                          | `SchemaNotInstalled`                             |
+| Schema version below the floor                                       | `SchemaTooOld`                                   |
+| Client protocol below or above the protocols it speaks               | `ClientProtocolTooOld` or `ClientProtocolTooNew` |
+| The schema serves no protocol of the client, and the client is older | `SchemaTooNew`                                   |
+| The schema serves no protocol of the client otherwise                | `SchemaTooOld`                                   |
+
+The exception text is `workhorse compatibility check refused: ` and the code in lowercase with
+hyphens, such as `schema-too-old`.
+
+The worker connections follow
+[ADR 0071](../decisions/0071-give-every-worker-a-pool-and-a-dedicated-heartbeat-connection.md):
+
+- Each claim and each other statement opens a connection from the data source for its own duration.
+- The pool identity is the exact `NpgsqlDataSource` reference. A `ConditionalWeakTable` holds the
+  shared heartbeat and listener of each data source, so it keeps no data source alive. The worker
+  does not unwrap a data source.
+- Every worker on one data source shares one listener connection and one heartbeat connection.
+- The `Worker` constructor reads `Max Pool Size` from the connection string. If the size is below 3
+  and `SharedHeartbeats` is `false`, it throws `ArgumentException`. With `Pooling=false` the size is
+  unknown, and the readiness check is the only check.
+- `SharedHeartbeats = true` is the ADR 0071 opt-out. Heartbeat rounds then open a connection for each
+  round, and the worker reserves none. Under the opt-out, the listener starts only when the pool
+  size is known and at least 2. Otherwise the worker logs `workhorse.worker.polling_only` and polls.
+
+The startup budget is the larger of `Heartbeat` and 5 seconds. The reservation and the readiness
+check share this one budget. In order:
+
+1. The worker reserves the heartbeat connection. A checkout opens it with `OpenConnectionAsync` and
+   a token that the budget cancels, so the pool `Timeout` is never the bound.
+2. The worker subscribes to the shared listener. It waits until the listener holds its connection
+   or listens, for at most the time that the budget has left. This wait does not count against the
+   budget.
+3. The worker opens one ordinary connection, runs the compatibility query, and disposes the
+   connection. This is the readiness check.
+
+If the reservation or the readiness check does not end within the budget, `RunAsync` throws
+`WorkerStartupException`. Its text names the budget in milliseconds and the `SharedHeartbeats`
+opt-out. A worker that listens needs at least 3 connections: the listener, the heartbeat, and one
+statement. A worker that does not listen needs at least 2. A worker with `SharedHeartbeats` runs its
+compatibility check without the startup budget.
+
+The heartbeat and the listener each run on a dedicated background thread, and they use the
+synchronous Npgsql API. Thus a thread pool that blocking handlers starve cannot delay a lease
+renewal.
+
+- **Rounds.** A round waits only inside its round bound. The bound is three quarters of the shortest heartbeat
+  interval, and at least the smaller of 50 milliseconds and that interval. With the default 10 second
+  heartbeat, the bound is 7.5 seconds. If the statement does not end by then, the worker marks the
+  heartbeat connection as lost, closes the claim gate, and starts a replacement. A new thread serves
+  the replacement. A cleanup task calls `NpgsqlCommand.Cancel()` and disposes of the old connection,
+  and nothing waits for it.
+- **Recovery.** A failed checkout runs again after a backoff. The backoff starts at 100 milliseconds
+  and doubles. It stops at the shortest heartbeat interval, or at 1 second when no interval applies. A
+  connection that arrives after its token was cancelled gets one owner, which disposes of it.
+- **Claims.** While the heartbeat holds no connection, the worker starts no claim. Each run has its
+  own claim gate, which is open while the run's own reservation holds a usable connection. The gate
+  closes when the run ends, or when the stop abandons the run's claims.
+
+The listener waits with `NpgsqlConnection.Wait` in slices of 100 milliseconds. After one quiet poll
+interval, it runs `SELECT 1`, bounded by the poll interval. If a wait or a query fails, it gives up
+the connection, calls the `NotificationError` event of each worker, and connects again. The
+reconnect backoff starts at 100 milliseconds, doubles, and stops at 5 seconds, with a jitter of 10
+percent. After it listens again, the listener wakes every worker once. The workers poll meanwhile.
+
+If a claim fails with SQLSTATE `0A000` because the connection does not use read committed
+isolation, the SDK throws `IsolationLevelException`, which names the isolation level. The worker
+logs `workhorse.worker.claim_isolation`, and claims again after the poll interval.
+
+### .NET queue
+
+`new Queue(NpgsqlDataSource)` and `new Queue(NpgsqlDataSource, QueueOptions)` build a queue.
+`QueueOptions` holds `DefaultQueue`, default `"default"`, and `Json`, default `null` for the SDK
+default options. Each method is asynchronous and takes a last `CancellationToken`.
+
+| Kind        | Methods                                                                                                                          |
+| ----------- | -------------------------------------------------------------------------------------------------------------------------------- |
+| Enqueue     | `EnqueueAsync<TPayload>`, `EnqueueManyAsync`                                                                                     |
+| Delivery    | `CancelAsync`, `SendSignalAsync<TPayload>`, `CompleteHumanWaitAsync<TResult>`, `HealthAsync`                                     |
+| Task groups | `CreateTaskGroupAsync`, `TaskGroupAsync`, `AddToTaskGroupAsync`, `SealTaskGroupAsync`, `GetTaskGroupAsync`, `FindTaskGroupAsync` |
+| Task groups | `ListTaskGroupMembersAsync`                                                                                                      |
+| Definitions | `SyncSchedulesAsync`, `SyncConcurrencyPoliciesAsync`, `SyncRateLimitPoliciesAsync`, `SyncBudgetsAsync`, `SyncContractsAsync`     |
+| Lists       | `ListConcurrencyPoliciesAsync`, `ListRateLimitPoliciesAsync`, `ListBudgetsAsync`                                                 |
+
+`EnqueueOptions` holds the options of one enqueue. Each property is optional.
+
+| Property                   | Accepts                                                                                     |
+| -------------------------- | ------------------------------------------------------------------------------------------- |
+| `Queue`                    | At most 256 UTF-8 bytes. `null` is the default queue.                                       |
+| `Priority`                 | 0 through 100. `null` is 0.                                                                 |
+| `RunAt`                    | A `DateTimeOffset`. A request without it runs now.                                          |
+| `Deadline`                 | A `DateTimeOffset`.                                                                         |
+| `ExecutionTimeout`         | A `TimeSpan` of 0 through 31,536,000,000 ms. `null` or zero sets no timeout.                |
+| `MaxAttempts`              | 1 through 100. `null` or 0 is 25.                                                           |
+| `ConcurrencyKey`, `Budget` | At most 256 UTF-8 bytes each.                                                               |
+| `Tags`                     | At most 20 tags of 1 through 100 characters.                                                |
+| `Idempotency`              | `Key` of 1 through 512 UTF-8 bytes, `Scope` default `default`, `Ttl` default one day.       |
+| `Debounce`, `Throttle`     | `Key` of 1 through 512 UTF-8 bytes and `Window` of 1 ms through 365 days.                   |
+| `Dependencies`             | 1 through 100 unique `PrerequisiteTaskIds`, and `OnSuccess`, `OnFailure`, `OnCancellation`. |
+| `RetryPolicy`              | `RetryPolicy.Fixed`, `RetryPolicy.Exponential`, or `RetryPolicy.DecorrelatedJitter`.        |
+
+A request takes at most one of idempotency, debounce, and throttle. Debounce takes no `RunAt`.
+Debounce and throttle take no dependencies. An invalid option throws `ArgumentException` before any
+statement.
+
+`EnqueueManyAsync` takes at most 1,000 requests. An empty list returns an empty list and runs no
+statement. `EnqueueAsync` returns an `EnqueueResult` with `TaskId`, `Outcome`, and `Reason`.
+`Outcome` is an `EnqueueOutcome`: `Accepted`, `Replayed`, `Replaced`, `NonReplaceable`, or
+`Coalesced`. `Reason` is set only for `NonReplaceable`: `IncompatibleKeyMode`, `NotPending`, or
+`WindowElapsedPending`.
+
+`SendSignalAsync(taskId, name, payload, idempotencyKey, requestedBy)` and
+`CompleteHumanWaitAsync(taskId, name, result, idempotencyKey, requestedBy)` check their arguments
+before any statement:
+
+- The name has 1 through 200 characters without surrounding whitespace.
+- The value encodes to at most 65,536 bytes of JSON.
+- The idempotency key has 1 through 512 UTF-8 bytes.
+- `requestedBy` has 1 through 200 characters.
+
+A changed request under a stored key throws `SignalIdempotencyConflictException` or
+`HumanWaitIdempotencyConflictException`.
+
+`Queue.TaskGroupAsync(callbacks, build)` creates, adds, and seals a group in one statement. `build`
+is an `Action<TaskGroupBuilder>`, and `TaskGroupBuilder.Add` adds one member task.
+`TaskGroupCallbacks` holds three nullable `EnqueueRequest` callbacks: `OnFinish`, `OnSuccess`, and
+`OnFailure`. A callback takes no idempotency, debounce, or throttle. `AddToTaskGroupAsync` takes at
+most 1,000 requests and no debounce or throttle.
+
+`HealthAsync()` calls `queue_health_v1` with a rejection window of one day. It returns
+`QueueHealth`, whose `Snapshot` is an `IReadOnlyDictionary<string, JsonElement>`.
+
+The `Sync` methods take a namespace and the definitions. The overload without `prune` prunes. A list
+method with a filter takes an `IReadOnlyCollection<string>`, and an empty collection reads every
+row. `SyncContractsAsync(IReadOnlyDictionary<string, TaskTypeContracts>)` synchronizes payload
+contracts by task type. On a `contract_mismatch` outcome, an enqueue reloads the contracts of the
+named types and runs the statement one more time. If the second run also mismatches, it throws
+`ContractPolicyChangedException`.
+
+The core validates a payload contract with its own internal validator. A payload that its current
+contract rejects throws `ContractValidationException` before any write.
+
+### .NET admin
+
+`new Admin(NpgsqlDataSource)` and `new Admin(NpgsqlDataSource, AdminOptions)` build the operator
+client. `AdminOptions` has no property. `Admin` returns each JSON value as a `JsonElement`. SQL
+`NULL` is `null`, and JSON `null` is an element of kind `JsonValueKind.Null`. A read of one item
+returns `null` when it finds nothing.
+
+| Kind     | Methods                                                                                                                                   |
+| -------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
+| Reads    | `ListTasksAsync`, `GetTaskAsync`, `GetTaskTimelineAsync`, `ListDeadLettersAsync`, `GetCheckpointAsync`, `ListCheckpointsAsync`            |
+| Reads    | `GetProgressAsync`, `GetWaitAsync`, `ListWaitsAsync`, `ListSignalWaitsAsync`, `ListHumanWaitsAsync`, `ListWorkersAsync`                   |
+| Reads    | `GetTaskGroupAsync`, `ListTaskGroupMembersAsync`, `ListTaskGroupEventsAsync`, `ListTaskGroupDriftAsync`                                   |
+| Controls | `RedriveAsync`, `RedriveManyAsync`, `SetWorkerPausedAsync`, `PauseQueueAsync`, `ResumeQueueAsync`, `PurgeQueueAsync`, `SetQueueTierAsync` |
+| Controls | `CancelTaskGroupAsync`, `RepairTaskGroupDriftAsync`, `SetQueueHistoryAsync`                                                               |
+
+Each control except `SetQueueHistoryAsync` takes an `AdminAudit` with the `required` properties
+`Actor`, `Reason`, and `RequestId`. If a field is not valid, `Admin` throws `ArgumentException`
+before any statement.
+
+| `AdminAudit` property | Accepts                     |
+| --------------------- | --------------------------- |
+| `Actor`               | 1 through 200 code points   |
+| `Reason`              | 1 through 2,000 code points |
+| `RequestId`           | 1 through 512 UTF-8 bytes   |
+
+| Read                                                   | Default limit | Accepted limit   |
+| ------------------------------------------------------ | ------------- | ---------------- |
+| `ListTasksAsync`, `GetTaskTimelineAsync`               | 100           | 1 through 1,000  |
+| `ListDeadLettersAsync`, `RedriveManyAsync`             | 100           | 1 through 1,000  |
+| `ListSignalWaitsAsync`, `ListHumanWaitsAsync`          | 100           | 1 through 1,000  |
+| `ListTaskGroupMembersAsync`                            | 100           | 1 through 1,000  |
+| `ListTaskGroupEventsAsync`                             | 1,000         | 1 through 1,000  |
+| `ListTaskGroupDriftAsync`, `RepairTaskGroupDriftAsync` | 1,000         | 1 through 10,000 |
+
+`Admin` has no health method, because `Queue.HealthAsync` reads the same snapshot.
+
+### .NET worker
+
+`new Worker(NpgsqlDataSource, WorkerOptions)` builds a worker. The constructor copies and validates
+the options, so a later change to the `WorkerOptions` object has no effect. An invalid option throws
+`ArgumentException` or `ArgumentOutOfRangeException`. Durations round to whole milliseconds.
+
+| Property                     | Default                                                                                                      | Accepts                                        |
+| ---------------------------- | ------------------------------------------------------------------------------------------------------------ | ---------------------------------------------- |
+| `Queues`                     | `["default"]`                                                                                                | Non-empty names                                |
+| `WorkerId`                   | The host name, the process ID, and a random suffix                                                           | A non-empty string                             |
+| `Concurrency`                | 1                                                                                                            | 1 through 100                                  |
+| `Cohorts`                    | 0, which selects 1 below concurrency 8, and otherwise concurrency divided by 8, rounded up, from 2 through 8 | 1 through `Concurrency`                        |
+| `Lease`                      | 30 seconds                                                                                                   | 100 milliseconds through 1 day                 |
+| `Heartbeat`                  | `null`, which selects the larger of 100 milliseconds and a third of the lease                                | 1 millisecond and more, shorter than the lease |
+| `PollInterval`               | `null`: 5 seconds with a listener; 250 milliseconds, doubling toward 5 seconds, without one                  | 1 millisecond and more                         |
+| `MaintenanceInterval`        | 1 second                                                                                                     | 100 milliseconds and more                      |
+| `MaintenanceRoutineInterval` | 60 seconds                                                                                                   | 100 milliseconds and more                      |
+| `RegistryInterval`           | 5 seconds                                                                                                    | 100 milliseconds and more                      |
+| `ScheduleNamespaces`         | Empty                                                                                                        | Non-empty names                                |
+| `ScheduleCatchupLimit`       | 100                                                                                                          | 1 through 10,000                               |
+| `ShutdownGrace`              | 25 seconds                                                                                                   | 0 through 1 day                                |
+
+Each upper bound of "and more" is `int.MaxValue` milliseconds. `DisableRegistry = true` turns off
+the worker registry. `SharedHeartbeats = true` makes each heartbeat round open its own connection.
+`PollingOnly = true` opens no listener. `RetryDelay` is a delegate over the attempt and the
+`ClaimedTask` that returns a `TimeSpan?`. The worker clamps the delay to 0 through 2,147,483,647
+milliseconds, and `null` keeps the persisted policy. `Json` sets the JSON options of payloads and
+results. `LoggerFactory` sets the `ILoggerFactory`, and `null` logs nothing.
+
+Three methods register a handler:
+
+- `Handle<TPayload, TResult>(taskType, Func<HandlerContext, TPayload, Task<TResult>>)`.
+- `Handle<TPayload>(taskType, Func<HandlerContext, TPayload, Task>)`, whose result is JSON `null`.
+- `Handle<TPayload>(ITaskHandler<TPayload>)`, which reads `TaskType` from the handler.
+
+A handler registers before the first run. A call after the first run throws
+`InvalidOperationException`. A second registration of a task type replaces the first. The type
+parameter carries the full payload type, including its type arguments. The worker releases a claimed
+task that has no handler through `release_owned_v1`, and it logs `workhorse.handler.missing`.
+
+#### .NET handler threads
+
+The worker starts each claimed task with `Task.Run`, so each handler runs on the .NET thread pool.
+A synchronous prefix in a handler does not block dispatch. Slot accounting bounds the claimed tasks
+to `Concurrency`. The worker keeps overlapping batched claims in flight, and one claim waits for a
+quarter of the slots. Thus at most four claims are in flight.
+
+The heartbeat thread is named `workhorse-heartbeats`, the thread of its held connection is named
+`workhorse-heartbeat-connection`, and the listener thread is named `workhorse-listener`. Each is a
+background thread, so a thread that does not end in time does not keep the process alive.
+
+A handler that blocks a thread-pool thread can starve the pool, and the pool adds threads slowly.
+The heartbeat stays safe on its own thread, but dispatch and other handlers slow down. A blocking
+handler should await its I/O.
+
+.NET has no global interpreter lock, so CPU-bound handlers run in parallel in one process. The SDK
+has no process supervisor.
+
+#### .NET running and stopping
+
+- `RunAsync(stoppingToken)` claims until the token is cancelled, and then drains.
+- `RunOnceAsync()` claims until a claim returns no task with a handler, and then drains. It opens no
+  listener, and it runs a maintenance pass before it claims when the maintenance interval elapsed. It
+  returns `true` only when it ran a task whose type has a handler.
+- `DisposeAsync()` stops the worker and waits for the run to drain. It never throws the error of the
+  run.
+- `IsRunning` is `true` from the start of `RunAsync` or `RunOnceAsync` until it returns or throws,
+  including the drain. A second run while one runs throws `InvalidOperationException`.
+- `Pause()` and `Resume()` change a local pause. `IsPaused` is also `true` while an operator pause
+  holds. The worker reads the operator pause from `register_worker_v1` at each registry refresh.
+
+A long-running worker starts its first claim beside its startup maintenance pass, as
+[ADR 0078](../decisions/0078-start-a-long-running-workers-first-claim-beside-its-startup-maintenance-pass.md)
+requires. The worker registers with `sdk_language` `csharp`. It reads `sdk_version` from the
+`AssemblyInformationalVersionAttribute` of the core, which holds the train version. The registry
+refresh interval defaults to 5 seconds. A failed registry write logs
+`workhorse.worker.registration_failed` and raises the `RegistrationError` event, and the run
+continues. A maintenance failure ends the run, and `RunAsync` throws it after the drain.
+
+After the token is cancelled, the worker shuts down in this order:
+
+1. It claims nothing new. It waits for the claims in flight until the shutdown deadline.
+2. It closes its listener subscription. The shared listener gives its connection back to the pool
+   when the last worker on the data source leaves.
+3. It writes a draining registration, and waits up to `ShutdownGrace` for running handlers.
+4. A task that the thread pool never started goes back to its queue through `release_owned_v1`,
+   which charges no attempt.
+5. The worker sets `CancelReason.Shutdown` and cancels the token of each running handler.
+6. It waits the 250 millisecond unwind window.
+7. It abandons each handler that still runs, and stops renewing its lease. The lease then expires.
+8. It gives up its heartbeat reservation and deregisters the worker.
+9. `RunAsync` throws `ShutdownIncompleteException` if it abandoned a handler. `Abandoned` is the
+   count.
+
+The default `ShutdownGrace` is 25 seconds. The total stop time is `ShutdownGrace` plus the 250
+millisecond unwind window. With the defaults,
+that is 25.25 seconds, which fits inside the 30 second default `HostOptions.ShutdownTimeout`. Every
+wait after the grace ends by then. Cancellation is cooperative: the worker never aborts a thread.
+The worker installs no signal handler. The Generic Host is the process entry point, as the
+[.NET hosting](#net-hosting) section describes. A program without a host calls `RunAsync` with a
+token that it cancels itself.
+
+#### .NET failure settlement
+
+No handler exception leaves `RunAsync`. Thus a `BackgroundService` that awaits it does not stop the
+host for a handler fault.
+
+- An exception from a handler fails the attempt through `fail_v1`. The failure name is the type name
+  of the exception without a generic arity suffix. If that name holds a character of
+  `forbiddenNameCharacters`, such as `<`, the name is `Exception`. The `message` field is
+  `exception.Message`, and the stack is `exception.ToString()`, which holds each inner exception.
+- The worker replaces each NUL and each lone surrogate in the `message` and `stack` fields with U+FFFD.
+  Redaction follows the `RedactErrorDetails` of the claimed task.
+- A `ConflictException` fails the task with no further attempt, through `fail_v1` with a retry delay
+  of -1. The worker also finds a conflict that a wrapper holds. It follows `InnerException` to a
+  depth of 16 exceptions, including the outer exception. The envelope `name` is then the name of the
+  conflict, and `message` and `stack` stay those of the outer exception.
+- During a shutdown, an `OperationCanceledException` of the handler's own token, or a
+  `CancelledException` with `CancelReason.Shutdown`, releases the task through `release_owned_v1`.
+  The worker reads the inner exceptions to a depth of 16. An unrelated cancellation fails the
+  attempt.
+- A `LeaseLostException` settles nothing, because the fence already refuses the write.
+- Before it completes a task, the worker checks the result. A NUL character fails the attempt with
+  `<task type> result contains a NUL character, which PostgreSQL jsonb cannot store`. A result that
+  the result schema of the payload contract refuses throws `ContractValidationException`. A result
+  over the `ResultMaxBytes` of the task throws `ValueSizeLimitException`. The retry policy applies to
+  each.
+
+.NET has no exception type that a program must not catch. So no handler exception ends the run,
+and a batch handler exception fails each task in its batch. `RunAsync` throws only for a fault of the worker itself, after the drain:
+
+- a failed maintenance pass;
+- a `WorkerStartupException` or a `CompatibilityException`;
+- a failed statement of the worker;
+- `ShutdownIncompleteException`.
+
+### .NET batch handlers
+
+Two methods register a batch handler:
+
+- `HandleBatch<TPayload>(taskType, BatchOptions, Func<IReadOnlyList<BatchHandlerItem<TPayload>>,
+  CancellationToken, Task<IReadOnlyList<BatchHandlerOutcome>>>)`.
+- `HandleBatch<TPayload>(IBatchHandler<TPayload>, BatchOptions)`, which reads `TaskType` from the
+  handler.
+
+`BatchOptions` has two `required` properties. `HandleBatch` checks them when it registers the
+handler.
+
+- `MaxSize` is 1 through 100, and at most `Concurrency`. A value out of range throws
+  `ArgumentOutOfRangeException`.
+- `Linger` is a `TimeSpan` of 0 through 60 seconds in whole milliseconds. Another value throws
+  `ArgumentException`.
+
+The worker groups the waiting tasks of one type by queue. It orders a batch by descending priority,
+and then by claim order. A full batch dispatches at once. Otherwise the linger deadline of the first
+waiting task dispatches it. During a drain, a lingering task stops when every admitted task of its
+type and queue has arrived. The worker checks again every 50 ms.
+
+Each `BatchHandlerItem` holds the `Payload` and its own `BatchHandlerContext`. The handler returns
+one outcome for each item, in item order: `new BatchSucceeded(result)` or `new BatchFailed(error)`.
+`BatchFailed` refuses a `null` error.
+
+- A thrown exception fails every task in the batch with that exception.
+- A `null` list, a list of the wrong length, or a `null` element fails every task with a
+  `WorkhorseException` that names the problem.
+- The worker cancels the batch token after it cancels the token of every member. If the handler then
+  throws an `OperationCanceledException` of the batch token, each member settles as if its own token
+  was cancelled.
+- Every task in the batch still settles under its own lease and fence.
+
+The worker records `record_batch_dispatch_v1` before the call, and `record_batch_failure_v1` after a
+whole-batch failure. A failed evidence write logs `workhorse.handler.batch_evidence_failed`.
+
+`BatchHandlerContext` exposes `Task`, `CancellationToken`, `CancelReason`, `GetCheckpointAsync`, both
+`CheckpointAsync` forms, `GetProgressAsync`, `SetProgressAsync`, and `TaskGroup`. It has no wait or
+child method. Each member of a batch has its own context, so each write is fenced on the lease of
+that member.
+
+### .NET hosting
+
+`Workhorse.Hosting` connects the SDK to a Generic Host application. The Generic Host is the process
+entry point of .NET: its `ConsoleLifetime` handles `SIGINT`, `SIGQUIT`, and `SIGTERM`, and stops the
+hosted worker, which drains. Thus the core has no process helper.
+
+| Method                                                         | Registers                                                                                           |
+| -------------------------------------------------------------- | --------------------------------------------------------------------------------------------------- |
+| `IServiceCollection.AddWorkhorse(IConfiguration)`              | `Queue` and `Admin` singletons, and `QueueOptions` and `WorkerOptions` from the `Workhorse` section |
+| `IServiceCollection.AddWorkhorseWorker(configure)`             | The hosted worker, a `BackgroundService`. `configure` receives a `WorkerHandlers`                   |
+| `IServiceCollection.AddWorkhorseHandler<THandler, TPayload>()` | `THandler` as a scoped service and as a handler of the hosted worker                                |
+| `IHealthChecksBuilder.AddWorkhorse()`                          | The `workhorse` health check                                                                        |
+
+`AddWorkhorse` resolves an `NpgsqlDataSource` from the container, for example one that
+`AddNpgsqlDataSource` registered. `Workhorse:DataSourceKey` selects a keyed data source. If the
+container has no matching data source, the first resolution throws `InvalidOperationException`. A
+`Queue` or `Admin` that the application registers first stays. `AddWorkhorseWorker` throws
+`InvalidOperationException` when `AddWorkhorse` did not come first.
+
+A process runs a worker only when it calls `AddWorkhorseWorker`. No configuration key turns the
+worker on or off. If handlers are registered and no worker is, the host logs
+`workhorse.hosting.no_worker` once at startup.
+
+`WorkerHandlers.Handle` registers a delegate handler, and `WorkerHandlers.Configure(Action<IServiceProvider,
+Worker>)` runs code on the worker before its first run. The hosted worker applies the
+`AddWorkhorseHandler` handlers first, and then the `WorkerHandlers` registrations. So a delegate
+handler replaces a service handler of the same task type.
+
+For each attempt of a service handler, the worker creates an `AsyncServiceScope` and resolves the
+handler in it. The scope ends when the handler's task completes, before the worker writes the
+settlement. So a handler can take a scoped service, such as a `DbContext`. At startup, the worker
+resolves each handler once in its own scope to read `TaskType`.
+
+The hosted worker calls `Worker.RunAsync(stoppingToken)` in `ExecuteAsync`. At startup it logs
+`workhorse.hosting.shutdown_timeout` once if `HostOptions.ShutdownTimeout` is less than
+`ShutdownGrace` plus the 250 millisecond unwind window. Keep `HostOptions.ShutdownTimeout` above
+that sum. The default 30 second timeout is above the default 25.25 seconds.
+
+| Run outcome                       | Action                                                                                                          |
+| --------------------------------- | --------------------------------------------------------------------------------------------------------------- |
+| `RunAsync` throws                 | Logs `workhorse.hosting.worker_failed`, sets `Environment.ExitCode` to 1, and throws the error again            |
+| `RunAsync` returns without a stop | Logs `workhorse.hosting.worker_ended`, sets `Environment.ExitCode` to 1, and throws `InvalidOperationException` |
+| `RunAsync` returns after a stop   | Nothing                                                                                                         |
+
+The default `BackgroundServiceExceptionBehavior.StopHost` then stops the host, and the process exits
+with a failure status.
+
+The `workhorse` health check opens a new connection and runs the compatibility query on it. It
+reports the failure status of its registration, `Unhealthy` by default, in these cases:
+
+- The database is unavailable.
+- The schema is not compatible.
+- The hosted worker stopped without a stop request.
+- The hosted worker abandoned a handler at shutdown.
+
+The `Workhorse:*` configuration keys and their defaults:
+
+| Key                                           | Type        | Default       |
+| --------------------------------------------- | ----------- | ------------- |
+| `Workhorse:DataSourceKey`                     | `string?`   | `null`        |
+| `Workhorse:Queue:DefaultQueue`                | `string`    | `"default"`   |
+| `Workhorse:Worker:Queues`                     | `string[]`  | `["default"]` |
+| `Workhorse:Worker:WorkerId`                   | `string?`   | `null`        |
+| `Workhorse:Worker:Concurrency`                | `int`       | 1             |
+| `Workhorse:Worker:Cohorts`                    | `int`       | 0             |
+| `Workhorse:Worker:Lease`                      | `TimeSpan`  | `00:00:30`    |
+| `Workhorse:Worker:Heartbeat`                  | `TimeSpan?` | `null`        |
+| `Workhorse:Worker:PollInterval`               | `TimeSpan?` | `null`        |
+| `Workhorse:Worker:PollingOnly`                | `bool`      | `false`       |
+| `Workhorse:Worker:MaintenanceInterval`        | `TimeSpan`  | `00:00:01`    |
+| `Workhorse:Worker:MaintenanceRoutineInterval` | `TimeSpan`  | `00:01:00`    |
+| `Workhorse:Worker:RegistryInterval`           | `TimeSpan`  | `00:00:05`    |
+| `Workhorse:Worker:DisableRegistry`            | `bool`      | `false`       |
+| `Workhorse:Worker:ScheduleNamespaces`         | `string[]`  | `[]`          |
+| `Workhorse:Worker:ScheduleCatchupLimit`       | `int`       | 100           |
+| `Workhorse:Worker:ShutdownGrace`              | `TimeSpan`  | `00:00:25`    |
+| `Workhorse:Worker:SharedHeartbeats`           | `bool`      | `false`       |
+
+A configured list key replaces its default list. `api/dotnet.txt` records each key in its last
+section.
+
+### .NET EF Core transactions
+
+`Workhorse.EntityFrameworkCore` lets an enqueue join a `DbContext` transaction.
+`DatabaseFacade.GetWorkhorseConnection()` returns `database.GetDbConnection()` as an
+`NpgsqlConnection`. It throws `InvalidOperationException` if the provider is not Npgsql, or if the
+connection is not open. A `DbContext` with a current transaction always has an open connection.
+
+The caller passes the connection to `Queue.Using`:
+
+1. The caller begins a transaction with `db.Database.BeginTransactionAsync`.
+2. It saves its own rows with `SaveChangesAsync`.
+3. It calls `queue.Using(db.Database.GetWorkhorseConnection()).EnqueueAsync(...)`.
+4. It commits with `transaction.CommitAsync`.
+
+Npgsql runs the enqueue inside the transaction that EF Core opened. So the task commits and rolls
+back with the rows of the caller. The caller-form cancellation rule of
+[.NET connections](#net-connections) applies.
+
+### .NET telemetry
+
+The core emits through `System.Diagnostics.ActivitySource` and `System.Diagnostics.Metrics.Meter`.
+Both use the instrumentation name `workhorse` and the SDK version. The core has no OpenTelemetry
+package dependency. Without a listener, the source starts no span and an instrument records
+nothing. An application that uses OpenTelemetry calls `AddSource("workhorse")` and
+`AddMeter("workhorse")`.
+
+`Queue` starts a `workhorse.enqueue` span. It injects the W3C trace context of that span through
+`DistributedContextPropagator.Current`, and stores it with each task. It stores no context larger
+than 1,024 bytes, and no context without `traceparent`. The worker extracts the context and starts
+its handler span with the enqueue as parent. The worker emits the `workhorse.claim`,
+`workhorse.handler`, `workhorse.complete`, `workhorse.retry`, `workhorse.maintenance`, and
+`workhorse.recovery` spans. Each span, attribute, and instrument name is in `api/telemetry.txt`.
+
+The worker logs through `ILogger` from `Microsoft.Extensions.Logging.Abstractions`. The queue writes no
+log.
+Each log record has an event name, such as `workhorse.worker.started` or
+`workhorse.task.release_failed`. A worker without `WorkerOptions.LoggerFactory` gets `NullLoggerFactory`, so it logs nothing.
+
+### .NET values and JSON
+
+Payloads, results, checkpoints, wait values, and progress are JSON values. The core reads and
+writes them with `System.Text.Json`. `QueueOptions.Json` and `WorkerOptions.Json` take a
+`JsonSerializerOptions`. The default is `JsonSerializerDefaults.Web` with `NumberHandling` set to
+`JsonNumberHandling.Strict`. So the SDK writes camelCase names, reads names without case, and never
+reads a number from a string. A typed value is a type parameter, and an untyped value is a
+`JsonElement`.
+
+The SDK writes with a copy of the caller's options that adds internal converters. Each refusal is an
+`ArgumentException` before the writer sees the value.
+
+- A non-finite `double`, `float`, or `Half` is refused. The SDK never writes such a value as a
+  string.
+- Options whose `NumberHandling` includes `AllowNamedFloatingPointLiterals` are refused.
+- A lone surrogate in a string, a `char`, a dictionary key, or a property name is refused.
+- A `JsonNode`, `JsonElement`, or `JsonDocument` value is checked at every depth.
+
+A `[JsonNumberHandling]` attribute on a property keeps these checks: the SDK binds finite-number
+converters for the handling that the attribute selects. A property attribute that selects its own
+converter, such as `[JsonConverter]`, bypasses these converters. Such a converter must not write a
+non-finite number.
+
+A JSON integer beyond 2^53 - 1 survives a .NET round trip as a `long` or a `decimal`. It still
+rounds in a TypeScript or Go worker. `BigInteger` is not a supported payload type.
+
+A payload contract validates the JSON text, not the .NET object. Two option sets that write the same
+JSON text give the same result. A naming policy changes the JSON text. So it changes each checkpoint
+input fingerprint, and it can change the result of a payload contract.
+
+`Checkpoints.InputFingerprint<T>(input)` and `Checkpoints.InputFingerprint<T>(input,
+JsonSerializerOptions)` return the SHA-256 digest of the RFC 8785 canonical JSON of a checkpoint
+input. The one-argument overload uses the SDK default options. The two-argument overload throws
+`ArgumentNullException` for `null` options. Each throws `ArgumentException` for a value that is not
+JSON, or for a number of more than 2^53 - 1 in magnitude. Trimming and Native AOT are not supported.
+
+### .NET handler context
+
+`HandlerContext` holds the durable calls. `Task`, `CancellationToken`, `CancelReason`, and
+`TaskGroup` make no protocol call. The worker sets `CancelReason` before it cancels the token, so a
+token callback always reads a reason. `CancelReason` is `Requested`, `DeadlineExceeded`,
+`ExecutionTimeout`, `LeaseLost`, `Suspended`, or `Shutdown`.
+
+| Call                                                                                                | Behavior                                                                                                                          |
+| --------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
+| `GetCheckpointAsync(name)`                                                                          | Returns the stored `TaskCheckpoint`, or `null` when none exists.                                                                  |
+| `CheckpointAsync<T>(name, operation)` and `CheckpointAsync<T>(name, options, operation)`            | Returns the stored value, or runs the operation and saves its result through `save_checkpoint_v2`. `null` is stored and replayed. |
+| `SetProgressAsync<T>(value)`                                                                        | Calls `update_progress_v1` and returns the stored `TaskProgress`.                                                                 |
+| `GetProgressAsync()`                                                                                | Returns the latest `TaskProgress`, or `null` before any report.                                                                   |
+| `SleepAsync(name, duration)`                                                                        | Accepts a `TimeSpan` of 1 millisecond through 365 days. Calls `schedule_wait_v1`.                                                 |
+| `SleepUntilAsync(name, time)`                                                                       | Accepts a `DateTimeOffset` at most 365 days ahead, truncated to milliseconds. Calls `schedule_wait_v1`.                           |
+| `WaitForSignalAsync<T>(name, timeout)` and `WaitForHumanAsync<TContext, T>(name, context, timeout)` | Take a `TimeSpan?` timeout from 1 millisecond through 7 days. `null` selects 7 days, or an earlier task deadline.                 |
+| `RunChildAsync<TPayload, T>(name, taskType, payload, options)`                                      | Takes `EnqueueOptions` less idempotency, debounce, throttle, and dependencies, and calls `create_child_v2`.                       |
+| `RunChildrenAsync(children)` and `RunChildrenAllAsync(children)`                                    | Take at most 100 `ChildRequest` values with unique names, and call `create_children_v1` with mode `settled` or `all_success`.     |
+
+A durable method takes no `CancellationToken`. Its statement runs to its end also when the worker
+cancels the handler, and only the stop-path deadline can cancel it. Only the checkpoint operation
+receives the handler's token. An exception from the operation passes through unchanged, and the
+context saves nothing. `CheckpointOptions.Input` gives a checkpoint its input, and a `null` input is
+the JSON value `null`. Only a call without options has no input.
+
+`RunChildrenAsync` maps each name to a `ChildOutcome`, whose `Status` is `ChildStatus.Succeeded`,
+`Failed`, or `Canceled`. `RunChildrenAllAsync` maps each name to its result as a `JsonElement`. If
+the child queue is omitted, it is the queue of the parent task. `TaskGroup.GetAsync()` and
+`TaskGroup.AddAsync(requests)` read and add to the group of the task.
+
+- A checkpoint, wait, or child name contains 1 through 200 Unicode code points. An invalid name
+  throws `ArgumentException` before the operation runs and before any statement.
+- Signal and human wait names also have no leading or trailing whitespace or NUL.
+- The human context encodes to at most 65,536 bytes of JSON.
+- A child set of more than 100 children throws `LimitExceededException`. Duplicate child names throw
+  `ArgumentException`.
+- On a fast-tier queue, each durable write throws `FastTierUnsupportedException` before any
+  statement. The name check runs first.
+
+Concurrent calls with one name share the write of the first call. A request that does not match
+throws `ConflictException`. If both calls of a checkpoint have an input, different fingerprints
+throw `CheckpointInputConflictException`.
+
+#### .NET errors
+
+Every exception that the SDK throws derives from `WorkhorseException : Exception`, except the
+standard argument exceptions, `InvalidOperationException`, and `OperationCanceledException`. The set
+mirrors the Ruby errors type for type, with names that end in `Exception`.
+
+| Status or condition | Exception                                                          |
+| ------------------- | ------------------------------------------------------------------ |
+| `stale`             | `LeaseLostException`                                               |
+| `conflict`          | `ConflictException`                                                |
+| `input_conflict`    | `CheckpointInputConflictException`, a `ConflictException`          |
+| `already_waiting`   | `AlreadyWaitingException`                                          |
+| `limit_exceeded`    | `LimitExceededException`                                           |
+| `rate_limited`      | `ProgressRateLimitedException`, whose `RetryAfter` is a `TimeSpan` |
+| `result_too_large`  | `ChildResultLimitExceededException`                                |
+| Undefined status    | `UnexpectedStatusException`                                        |
+
+Before each durable write, the context checks the cancellation reason. If the reason is `LeaseLost`,
+it throws `LeaseLostException`. For any other reason, it throws `CancelledException`. Reads and
+checkpoint replays return without that check.
+
+The SDK maps an `NpgsqlException` to a `WorkhorseException` by SQLSTATE.
+
+| SQLSTATE             | Exception                                                                                   |
+| -------------------- | ------------------------------------------------------------------------------------------- |
+| `P1001`              | `EnqueueIdempotencyConflictException`                                                       |
+| `P1002`              | `RedriveIdempotencyConflictException`                                                       |
+| `P1003`              | `DependencyCycleException`                                                                  |
+| `P1005`              | `DependencyLimitExceededException`                                                          |
+| `P1006`              | `PurgeIdempotencyConflictException`                                                         |
+| `P1007`              | `FastTierUnsupportedException`, with `Queue`, `Feature`, and `Ordinal`                      |
+| `P1008`              | `TaskGroupClosedException`, with `GroupId`, `Reason`, and `State`                           |
+| `P1009`              | `TaskGroupLimitExceededException`, with `GroupId`, `Limit`, `Requested`, and `Total`        |
+| `P1010`              | `TaskGroupMembershipConflictException`, with `GroupId`, `MemberOf`, `TaskId`, and `Ordinal` |
+| `0A000` from a claim | `IsolationLevelException`, which names the isolation level                                  |
+| Any other            | `DatabaseException`, with `SqlState` and the original as `InnerException`                   |
+
+The exceptions for `P1001`, `P1002`, `P1003`, `P1005`, `P1006`, `P1008`, `P1009`, and `P1010` derive
+from `DiagnosedException`. Its `Details` holds the decoded JSON object of the diagnostic details.
+
+`DiagnosedException.Details` and the typed fields arrive with the default Npgsql settings. Npgsql
+hides DETAIL unless the connection string asks for it. But each raise of `P1001` to `P1010`, except
+`P1004`, also sets HINT to the same JSON text as DETAIL. `SqlStates.Translate` reads DETAIL first.
+If DETAIL is not a JSON object, it reads HINT. On a schema before version 77, the typed fields keep
+their fallback values: `FastTierUnsupportedException.Queue` and `.Feature` are `unknown`, and
+`Details` is empty. The exception keeps its type
+([Diagnostic details in DETAIL and HINT](#diagnostic-details-in-detail-and-hint)).
+
+#### .NET suspension
+
+A `scheduled` sleep, a `waiting` signal or human wait, and a `created` child suspend the handler.
+The context submits `suspended_for_wait` or `suspended_for_child` to the attempt arbiter. It sets
+`CancelReason.Suspended`, cancels the token, and throws the internal `SuspensionException`.
+
+`SuspensionException` derives from `OperationCanceledException`, so `finally` blocks and `using`
+declarations run. .NET has no exception type that `catch (Exception)` does not catch. So after the
+handler returns or throws, the worker reads the arbiter, not the exception. If the handler caught the
+suspension and then returned or threw, the worker ignores the result. It logs
+`workhorse.handler.signal_swallowed` at `Warning`. `SuspensionException` is not part of the public
+surface.
+
 ## Documentation and release checks
 
 These checks test the README files, the documentation examples, and the install commands.
@@ -3322,6 +4011,11 @@ Go pgx claim from `go/go.mod`. It derives the Rust claim from `rust-version` in 
 It requires that the TypeScript, Python, Go, and Rust README code blocks are exact excerpts of their
 release-tested quickstart files. `pnpm check` runs this focused test before the repository test
 suite.
+
+The test derives the .NET claim from `TargetFramework` in `dotnet/Directory.Build.props`. It requires
+that each C# fence of `dotnet/README.md` is an excerpt of
+`dotnet/examples/Workhorse.Examples/Readme/ReadmeExamples.cs`, without the indentation of each line.
+`Workhorse.Examples.Tests` runs those regions against PostgreSQL.
 
 ### TypeScript documentation examples
 
@@ -3365,6 +4059,7 @@ product:
 | `go/README.md`                                                                                                                | `go` and `schemaPinned`                                                                              |
 | `go/examples/README.md`                                                                                                       | `go`                                                                                                 |
 | `rust/README.md`                                                                                                              | `rust` and `schemaPinned`                                                                            |
+| `dotnet/README.md`                                                                                                            | `schemaPinned`                                                                                       |
 | `site/content/docs/installation.mdx`, `quickstart.mdx`, and `for-ai-agents.mdx`                                               | The four language commands and both schema commands; `installation.mdx` also states `schemaDownload` |
 | `site/content/docs/api.mdx`                                                                                                   | Both schema commands                                                                                 |
 

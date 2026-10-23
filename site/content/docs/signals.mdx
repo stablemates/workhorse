@@ -26,7 +26,7 @@ it. The handler waits for a signal named `approval`. The review service answers 
 
 <Diagram name="signals-wait" alt="A signal wait frees the worker until the payload arrives" />
 
-<Tabs items={["TypeScript", "Python", "Go", "Rust", "Ruby", "Java", "Kotlin"]}>
+<Tabs items={["TypeScript", "Python", "Go", "Rust", "Ruby", "Java", "Kotlin", "C#"]}>
   <Tab value="TypeScript">
     ```ts
     const approval = await ctx.waitForSignal<{ approved: boolean }>("approval");
@@ -83,6 +83,15 @@ it. The handler waits for a signal named `approval`. The review service answers 
     if (approval["approved"] == true) publishOrder()
     ```
   </Tab>
+  <Tab value="C#">
+    ```csharp
+    var approval = await context.WaitForSignalAsync<Approval>("approval", null);
+    if (approval.Approved)
+    {
+        await PublishOrderAsync();
+    }
+    ```
+  </Tab>
 </Tabs>
 
 Thus, `HandlerContext.waitForSignal` records a named wait and releases the lease. When the payload
@@ -100,15 +109,16 @@ lifetime, pass `ExternalWaitOptions`.
 <details>
 <summary>Reference: declaring a signal wait</summary>
 
-| SDK        | Handler call                                                                     |
-| ---------- | -------------------------------------------------------------------------------- |
-| TypeScript | `HandlerContext.waitForSignal(name, { timeoutMs })`                              |
-| Python     | `wait_for_signal(name, *, timeout_ms=None)`                                      |
-| Go         | `HandlerContext.WaitForSignal(name, ...ExternalWaitOptions)`                     |
-| Rust       | `wait_for_signal(name, timeout)`, with `Some(duration)` or `None`                |
-| Ruby       | `wait_for_signal(name, timeout:)`, with `timeout:` in seconds                    |
-| Java       | `HandlerContext.waitForSignal(name, type, timeout)`, with a `Duration` or `null` |
-| Kotlin     | `waitForSignal<T>(name, timeout)`, with a `Duration` or `null`                   |
+| SDK        | Handler call                                                                       |
+| ---------- | ---------------------------------------------------------------------------------- |
+| TypeScript | `HandlerContext.waitForSignal(name, { timeoutMs })`                                |
+| Python     | `wait_for_signal(name, *, timeout_ms=None)`                                        |
+| Go         | `HandlerContext.WaitForSignal(name, ...ExternalWaitOptions)`                       |
+| Rust       | `wait_for_signal(name, timeout)`, with `Some(duration)` or `None`                  |
+| Ruby       | `wait_for_signal(name, timeout:)`, with `timeout:` in seconds                      |
+| Java       | `HandlerContext.waitForSignal(name, type, timeout)`, with a `Duration` or `null`   |
+| Kotlin     | `waitForSignal<T>(name, timeout)`, with a `Duration` or `null`                     |
+| C#         | `HandlerContext.WaitForSignalAsync<T>(name, timeout)`, with a `TimeSpan` or `null` |
 
 | Limit                               | Value                                              |
 | ----------------------------------- | -------------------------------------------------- |
@@ -130,7 +140,7 @@ lifetime, pass `ExternalWaitOptions`.
 - The parked runtime row is `scheduled`, outside the ready and active indexes, with `wait_name` set.
 - A [fast-tier queue](/docs/fast-tier) rejects signal waits with `FastTierUnsupportedError`.
 
-More detail: [Data model: Declaring a signal wait](https://github.com/stablemates/workhorse/blob/main/docs/architecture/data-model.md#declaring-a-signal-wait), [Schema and SQL protocol: JVM handler context](https://github.com/stablemates/workhorse/blob/main/docs/architecture/schema-and-protocol.md#jvm-handler-context), and [Schema and SQL protocol: Kotlin handler context](https://github.com/stablemates/workhorse/blob/main/docs/architecture/schema-and-protocol.md#kotlin-handler-context).
+More detail: [Data model: Declaring a signal wait](https://github.com/stablemates/workhorse/blob/main/docs/architecture/data-model.md#declaring-a-signal-wait), [Schema and SQL protocol: JVM handler context](https://github.com/stablemates/workhorse/blob/main/docs/architecture/schema-and-protocol.md#jvm-handler-context), [Schema and SQL protocol: Kotlin handler context](https://github.com/stablemates/workhorse/blob/main/docs/architecture/schema-and-protocol.md#kotlin-handler-context), and [Schema and SQL protocol: .NET handler context](https://github.com/stablemates/workhorse/blob/main/docs/architecture/schema-and-protocol.md#net-handler-context).
 
 </details>
 
@@ -292,7 +302,8 @@ continue after its event is no longer important.
 
 Python handlers give `timeout_ms` for the same limit. Rust handlers give `Some(duration)` as the
 timeout. Ruby handlers give `timeout:` as a number of seconds. Java and Kotlin handlers give a
-`java.time.Duration`, or `null` for the longest wait.
+`java.time.Duration`, or `null` for the longest wait. C# handlers give a `TimeSpan`, or `null` for
+the longest wait.
 
 [Cancellation](/docs/cancellation) also ends the wait, and a late delivery returns `stale`. The
 signal record stays as long as its task, under the [retention](/docs/maintenance) rules.

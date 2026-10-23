@@ -312,7 +312,7 @@
       "kind": "text",
       "hub": true,
       "workhorse": {
-        "value": "TypeScript, Python, Go, Rust, Ruby, Java, Kotlin",
+        "value": "TypeScript, Python, Go, Rust, Ruby, Java, Kotlin, C#",
         "source": "docs/parity.md",
         "page": "/docs/installation"
       }

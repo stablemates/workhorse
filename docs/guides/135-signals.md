@@ -51,15 +51,16 @@ lifetime, pass `ExternalWaitOptions`.
 <details>
 <summary>Reference: declaring a signal wait</summary>
 
-| SDK        | Handler call                                                                     |
-| ---------- | -------------------------------------------------------------------------------- |
-| TypeScript | `HandlerContext.waitForSignal(name, { timeoutMs })`                              |
-| Python     | `wait_for_signal(name, *, timeout_ms=None)`                                      |
-| Go         | `HandlerContext.WaitForSignal(name, ...ExternalWaitOptions)`                     |
-| Rust       | `wait_for_signal(name, timeout)`, with `Some(duration)` or `None`                |
-| Ruby       | `wait_for_signal(name, timeout:)`, with `timeout:` in seconds                    |
-| Java       | `HandlerContext.waitForSignal(name, type, timeout)`, with a `Duration` or `null` |
-| Kotlin     | `waitForSignal<T>(name, timeout)`, with a `Duration` or `null`                   |
+| SDK        | Handler call                                                                       |
+| ---------- | ---------------------------------------------------------------------------------- |
+| TypeScript | `HandlerContext.waitForSignal(name, { timeoutMs })`                                |
+| Python     | `wait_for_signal(name, *, timeout_ms=None)`                                        |
+| Go         | `HandlerContext.WaitForSignal(name, ...ExternalWaitOptions)`                       |
+| Rust       | `wait_for_signal(name, timeout)`, with `Some(duration)` or `None`                  |
+| Ruby       | `wait_for_signal(name, timeout:)`, with `timeout:` in seconds                      |
+| Java       | `HandlerContext.waitForSignal(name, type, timeout)`, with a `Duration` or `null`   |
+| Kotlin     | `waitForSignal<T>(name, timeout)`, with a `Duration` or `null`                     |
+| C#         | `HandlerContext.WaitForSignalAsync<T>(name, timeout)`, with a `TimeSpan` or `null` |
 
 | Limit                               | Value                                              |
 | ----------------------------------- | -------------------------------------------------- |
@@ -81,7 +82,7 @@ lifetime, pass `ExternalWaitOptions`.
 - The parked runtime row is `scheduled`, outside the ready and active indexes, with `wait_name` set.
 - A [fast-tier queue](305-fast-tier.md) rejects signal waits with `FastTierUnsupportedError`.
 
-More detail: [Data model: Declaring a signal wait](../architecture/data-model.md#declaring-a-signal-wait), [Schema and SQL protocol: JVM handler context](../architecture/schema-and-protocol.md#jvm-handler-context), and [Schema and SQL protocol: Kotlin handler context](../architecture/schema-and-protocol.md#kotlin-handler-context).
+More detail: [Data model: Declaring a signal wait](../architecture/data-model.md#declaring-a-signal-wait), [Schema and SQL protocol: JVM handler context](../architecture/schema-and-protocol.md#jvm-handler-context), [Schema and SQL protocol: Kotlin handler context](../architecture/schema-and-protocol.md#kotlin-handler-context), and [Schema and SQL protocol: .NET handler context](../architecture/schema-and-protocol.md#net-handler-context).
 
 </details>
 
@@ -249,7 +250,8 @@ wait can continue after its event is no longer important.
 
 Python handlers give `timeout_ms` for the same limit. Rust handlers give `Some(duration)` as the
 timeout. Ruby handlers give `timeout:` as a number of seconds. Java and Kotlin handlers give a
-`java.time.Duration`, or `null` for the longest wait.
+`java.time.Duration`, or `null` for the longest wait. C# handlers give a `TimeSpan`, or `null` for
+the longest wait.
 
 [Cancellation](120-cancellation.md) also ends the wait, and a late delivery returns `stale`. The
 signal record stays as long as its task, under the [retention](330-retention.md) rules.

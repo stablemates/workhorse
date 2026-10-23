@@ -27,7 +27,7 @@ To add a payload contract:
 2. Put the document in `QueueOptions.contracts` when you create the queue.
 3. Call `queue.syncContracts()` when your application starts.
 
-<Tabs items={["TypeScript", "Python", "Go", "Rust", "Ruby", "Java", "Kotlin"]}>
+<Tabs items={["TypeScript", "Python", "Go", "Rust", "Ruby", "Java", "Kotlin", "C#"]}>
   <Tab value="TypeScript">
     ```ts
     const contracts = {
@@ -148,6 +148,27 @@ To add a payload contract:
     queue.syncContractsSuspend(contracts)
     ```
   </Tab>
+  <Tab value="C#">
+    ```csharp
+    var contracts = new Dictionary<string, TaskTypeContracts>
+    {
+        ["mail.send"] = new TaskTypeContracts
+        {
+            CurrentVersion = "mail-current",
+            Versions = new Dictionary<string, TaskContractVersion>
+            {
+                ["mail-current"] = new TaskContractVersion
+                {
+                    PayloadSchema = JsonElement.Parse("""{"type": "object", "required": ["recipient"]}"""),
+                    ResultSchema = JsonElement.Parse("""{"type": "object"}"""),
+                    SensitivePayloadKeys = ["accessToken"],
+                },
+            },
+        },
+    };
+    await queue.SyncContractsAsync(contracts);
+    ```
+  </Tab>
 </Tabs>
 
 Step 3 saves the rules in PostgreSQL. Then all parts of your application use the same rules. A new
@@ -155,6 +176,10 @@ task uses the version that `currentVersion` names, and the task keeps that versi
 
 The error shows the task type and the version. It also shows if the payload or the result failed.
 The error does not contain the bad data.
+
+In .NET, a payload contract validates the JSON text that the serializer writes, not the .NET object.
+Thus, a serializer option that changes the text, such as a naming policy, can change the result. The
+default options write camelCase names.
 
 <details>
 <summary>Reference: contract definitions</summary>
@@ -181,15 +206,19 @@ The error does not contain the bad data.
 | `sensitiveResultKeys`  | Optional. Top-level result keys hidden from reads.  |
 
 **Synchronization.** TypeScript calls `queue.syncContracts()`. Python, Rust, and Ruby call
-`sync_contracts`, and Go calls `SyncContracts`. Java calls `Queue.syncContracts`, and Kotlin calls
-`syncContractsSuspend`. `sync_contract_definitions_v1` inserts immutable
-`(task_type, version)` rows into `contract_definition`.
+`sync_contracts`, and Go calls `SyncContracts`. Java calls `Queue.syncContracts`, Kotlin calls
+`syncContractsSuspend`, and C# calls `Queue.SyncContractsAsync`. `sync_contract_definitions_v1`
+inserts immutable `(task_type, version)` rows into `contract_definition`.
 
 **Validation errors.** `TaskContractValidationError` carries the task type, the contract version,
 and whether the payload or the result failed. It keeps neither the value nor the library
-diagnostic.
+diagnostic. In C#, `ContractValidationException` carries them in `TaskType`, `Version`, and `Part`.
 
-More detail: [Data model: Contract definitions and policy](https://github.com/stablemates/workhorse/blob/main/docs/architecture/data-model.md#contract-definitions-and-policy) and [Schema and SQL protocol: JVM queue](https://github.com/stablemates/workhorse/blob/main/docs/architecture/schema-and-protocol.md#jvm-queue).
+**.NET values.** The C# validator reads the JSON text, not the .NET object. Two option sets that
+write the same text give the same result. A naming policy changes the text, so it can change the
+result.
+
+More detail: [Data model: Contract definitions and policy](https://github.com/stablemates/workhorse/blob/main/docs/architecture/data-model.md#contract-definitions-and-policy), [Schema and SQL protocol: JVM queue](https://github.com/stablemates/workhorse/blob/main/docs/architecture/schema-and-protocol.md#jvm-queue), [Schema and SQL protocol: .NET queue](https://github.com/stablemates/workhorse/blob/main/docs/architecture/schema-and-protocol.md#net-queue), and [Schema and SQL protocol: .NET values and JSON](https://github.com/stablemates/workhorse/blob/main/docs/architecture/schema-and-protocol.md#net-values-and-json).
 
 </details>
 
@@ -301,14 +330,17 @@ the same text.
 - `complete_v1` checks the persisted result limit before it deletes the active runtime.
 - An oversized value raises `TaskValueSizeLimitError` with the actual and allowed byte counts.
 - An oversized result raises `TaskValueSizeLimitError` in the TypeScript, Go, Python, and Rust
-  workers, `ValueSizeLimitError` in the Ruby worker, and `ValueSizeLimitException` in the Java
-  worker. The retry policy applies.
+  workers, `ValueSizeLimitError` in the Ruby worker, and `ValueSizeLimitException` in the Java and
+  .NET workers. The retry policy applies.
 - In Python, a `NaN` or infinite number in a result raises `ValueError`.
+- In .NET, a non-finite `double`, `float`, or `Half` in a payload or a result raises
+  `ArgumentException`.
 
 **Unstorable results.** jsonb refuses `\u0000` (SQLSTATE `22P05`) and an unpaired UTF-16 surrogate
 escape (SQLSTATE `22P02`). The Go, Python, TypeScript, and Ruby workers check for both. The Rust
 worker checks for NUL only, because a Rust `String` cannot hold an unpaired surrogate. The Java
-worker also checks for both, with its own error text. A refused
+worker also checks for both, with its own error text. The .NET worker checks for NUL with its own
+error text, and its serializer refuses an unpaired surrogate with `ArgumentException`. A refused
 result fails the attempt through `fail_v1` with this message:
 
 `<task type> result contains a NUL character or an unpaired surrogate, which PostgreSQL jsonb cannot store`
@@ -316,7 +348,7 @@ result fails the attempt through `fail_v1` with this message:
 The message carries no part of the value. On the fast tier, the refused result never joins the
 completion batch, so the other results in the batch still complete.
 
-More detail: [Data model: Value size limits](https://github.com/stablemates/workhorse/blob/main/docs/architecture/data-model.md#value-size-limits), [Data model: Results jsonb cannot store](https://github.com/stablemates/workhorse/blob/main/docs/architecture/data-model.md#results-jsonb-cannot-store), and [Schema and SQL protocol: JVM failure settlement](https://github.com/stablemates/workhorse/blob/main/docs/architecture/schema-and-protocol.md#jvm-failure-settlement).
+More detail: [Data model: Value size limits](https://github.com/stablemates/workhorse/blob/main/docs/architecture/data-model.md#value-size-limits), [Data model: Results jsonb cannot store](https://github.com/stablemates/workhorse/blob/main/docs/architecture/data-model.md#results-jsonb-cannot-store), [Schema and SQL protocol: JVM failure settlement](https://github.com/stablemates/workhorse/blob/main/docs/architecture/schema-and-protocol.md#jvm-failure-settlement), [Schema and SQL protocol: .NET failure settlement](https://github.com/stablemates/workhorse/blob/main/docs/architecture/schema-and-protocol.md#net-failure-settlement), and [Schema and SQL protocol: .NET values and JSON](https://github.com/stablemates/workhorse/blob/main/docs/architecture/schema-and-protocol.md#net-values-and-json).
 
 </details>
 
@@ -358,10 +390,9 @@ More detail: [Data model: Redaction keys](https://github.com/stablemates/workhor
 
 ## Use only the permitted schema features
 
-Workhorse has SDKs for TypeScript, Python, Go, Rust, Ruby, Java, and Kotlin. All SDKs must get the
-same answer for
-the same data. Some JSON Schema features give different answers in different languages, so
-Workhorse does not permit them:
+Workhorse has SDKs for TypeScript, Python, Go, Rust, Ruby, Java, Kotlin, and .NET. All SDKs must get
+the same answer for the same data. Some JSON Schema features give different answers in different
+languages, so Workhorse does not permit them:
 
 - `pattern` and `patternProperties`. Each language reads text patterns differently. Check the text
   format in your handler.
@@ -418,14 +449,17 @@ could give different answers for the same payload.
 Workhorse compares the decimal of each number, as PostgreSQL stores it. It does not compare the
 binary value in memory.
 
-If your language holds a number exactly, Workhorse compares all of its digits. Go and Java can hold
-`12345678901234567.01`, so that value fails `"type": "integer"`. A TypeScript number is a double, so
-TypeScript cannot hold that value. Python, Ruby, and Rust hold large integers exactly, but they
-keep a fraction as a double.
+If your language holds a number exactly, Workhorse compares all of its digits. Go, Java, and C# can
+hold `12345678901234567.01`, so that value fails `"type": "integer"`. A TypeScript number is a
+double, so TypeScript cannot hold that value. Python, Ruby, and Rust hold large integers exactly,
+but they keep a fraction as a double.
 
 A number in the schema keeps all of its digits in every SDK. Another SDK can store `"maximum":
 9007199254740995`, which a double cannot hold. A TypeScript worker still compares its result with
 that exact constant.
+
+In C#, a property attribute can select its own converter. Such a converter must not write a
+non-finite number, such as `double.NaN`. The checks of the SDK do not see its output.
 
 <details>
 <summary>Reference: number comparison</summary>
@@ -445,11 +479,16 @@ shortest decimal that reads back as the same double. These keywords compare the 
 | Rust       | `i64` and `u64`    | no             |
 | Ruby       | yes                | no             |
 | JVM        | yes                | `BigDecimal`   |
+| .NET       | `long`, `decimal`  | `decimal`      |
 
 **Stored schema numbers.** Each SDK reads a stored schema from its jsonb text and keeps each
 schema number exact, also a number that its own values cannot hold.
 
-More detail: [Data model: Contract number comparison](https://github.com/stablemates/workhorse/blob/main/docs/architecture/data-model.md#contract-number-comparison).
+**.NET attributes.** The SDK refuses a non-finite `double`, `float`, or `Half` through converters in
+its copy of the serializer options. A `[JsonNumberHandling]` attribute keeps those checks. A
+property attribute that selects its own converter, such as `[JsonConverter]`, bypasses them.
+
+More detail: [Data model: Contract number comparison](https://github.com/stablemates/workhorse/blob/main/docs/architecture/data-model.md#contract-number-comparison) and [Schema and SQL protocol: .NET values and JSON](https://github.com/stablemates/workhorse/blob/main/docs/architecture/schema-and-protocol.md#net-values-and-json).
 
 </details>
 

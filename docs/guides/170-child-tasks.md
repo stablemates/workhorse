@@ -59,15 +59,16 @@ of work to children, use a child set. The next section describes child sets.
 
 **SDK calls**
 
-| SDK        | Call                                                                    |
-| ---------- | ----------------------------------------------------------------------- |
-| TypeScript | `HandlerContext.runChild(name, type, payload, options)`                 |
-| Python     | `HandlerContext.run_child(name, type, payload, options)`                |
-| Go         | `HandlerContext.RunChild(name, taskType, payload, options...)`          |
-| Rust       | `HandlerContext::run_child(name, task_type, payload, options)`          |
-| Ruby       | `run_child(name, task_type, payload, **enqueue_options)`                |
-| Java       | `HandlerContext.runChild(name, taskType, payload, options, resultType)` |
-| Kotlin     | `runChild<T>(name, taskType, payload, options)`                         |
+| SDK        | Call                                                                          |
+| ---------- | ----------------------------------------------------------------------------- |
+| TypeScript | `HandlerContext.runChild(name, type, payload, options)`                       |
+| Python     | `HandlerContext.run_child(name, type, payload, options)`                      |
+| Go         | `HandlerContext.RunChild(name, taskType, payload, options...)`                |
+| Rust       | `HandlerContext::run_child(name, task_type, payload, options)`                |
+| Ruby       | `run_child(name, task_type, payload, **enqueue_options)`                      |
+| Java       | `HandlerContext.runChild(name, taskType, payload, options, resultType)`       |
+| Kotlin     | `runChild<T>(name, taskType, payload, options)`                               |
+| C#         | `HandlerContext.RunChildAsync<TPayload, T>(name, taskType, payload, options)` |
 
 **`create_child_v2(parent_task_id, worker_id, fence_token, child_name, request)`**
 
@@ -94,7 +95,7 @@ A rollback removes the child, the link, the dependency, the events, and the susp
 **Events.** `child_created` on the parent, `parent_linked` on the child, and the first
 `child_joined` on the parent.
 
-More detail: [Data model: runChild lifecycle](../architecture/data-model.md#runchild-lifecycle), [Data model: Columns and constraints](../architecture/data-model.md#columns-and-constraints), [Data model: Queue of a child request with no queue](../architecture/data-model.md#queue-of-a-child-request-with-no-queue), [Schema and SQL protocol: JVM handler context](../architecture/schema-and-protocol.md#jvm-handler-context), and [Schema and SQL protocol: Kotlin handler context](../architecture/schema-and-protocol.md#kotlin-handler-context).
+More detail: [Data model: runChild lifecycle](../architecture/data-model.md#runchild-lifecycle), [Data model: Columns and constraints](../architecture/data-model.md#columns-and-constraints), [Data model: Queue of a child request with no queue](../architecture/data-model.md#queue-of-a-child-request-with-no-queue), [Schema and SQL protocol: JVM handler context](../architecture/schema-and-protocol.md#jvm-handler-context), [Schema and SQL protocol: Kotlin handler context](../architecture/schema-and-protocol.md#kotlin-handler-context), and [Schema and SQL protocol: .NET handler context](../architecture/schema-and-protocol.md#net-handler-context).
 
 </details>
 
@@ -145,17 +146,19 @@ Each outcome has one of three statuses: `succeeded` with a result, `failed` with
 | Rust         | `run_children`                  | `run_children_all`                        |
 | Ruby         | `run_children`                  | `run_children_all`                        |
 | Java, Kotlin | `runChildren`                   | `runChildrenAll`                          |
+| C#           | `RunChildrenAsync`              | `RunChildrenAllAsync`                     |
 
 **Outcome types in mode `settled`**
 
-| SDK          | Request            | Returned value                               | Outcome values                                                                |
-| ------------ | ------------------ | -------------------------------------------- | ----------------------------------------------------------------------------- |
-| TypeScript   | `ChildTaskRequest` | An object from each name to a `ChildOutcome` | `{ status, result }` or `{ status, error }`                                   |
-| Python       | `ChildTaskRequest` | A dict from each name to a `ChildOutcome`    | `ChildSucceeded`, `ChildFailed`, or `ChildCanceled`                           |
-| Go           | `ChildTaskRequest` | Named `ChildResult` values in request order  | `ChildSucceeded`, `ChildFailed`, or `ChildCanceled`; a type switch covers all |
-| Rust         | `ChildTaskRequest` | A map from each name to a `ChildOutcome`     | The `Succeeded`, `Failed`, and `Canceled` variants                            |
-| Ruby         | `ChildTaskRequest` | A Hash from each name to a `ChildOutcome`    | `status` is `:succeeded`, `:failed`, or `:canceled`                           |
-| Java, Kotlin | `ChildRequest`     | A `Map` from each name to a `ChildOutcome`   | `status` is `ChildStatus.SUCCEEDED`, `FAILED`, or `CANCELED`                  |
+| SDK          | Request            | Returned value                                              | Outcome values                                                                |
+| ------------ | ------------------ | ----------------------------------------------------------- | ----------------------------------------------------------------------------- |
+| TypeScript   | `ChildTaskRequest` | An object from each name to a `ChildOutcome`                | `{ status, result }` or `{ status, error }`                                   |
+| Python       | `ChildTaskRequest` | A dict from each name to a `ChildOutcome`                   | `ChildSucceeded`, `ChildFailed`, or `ChildCanceled`                           |
+| Go           | `ChildTaskRequest` | Named `ChildResult` values in request order                 | `ChildSucceeded`, `ChildFailed`, or `ChildCanceled`; a type switch covers all |
+| Rust         | `ChildTaskRequest` | A map from each name to a `ChildOutcome`                    | The `Succeeded`, `Failed`, and `Canceled` variants                            |
+| Ruby         | `ChildTaskRequest` | A Hash from each name to a `ChildOutcome`                   | `status` is `:succeeded`, `:failed`, or `:canceled`                           |
+| Java, Kotlin | `ChildRequest`     | A `Map` from each name to a `ChildOutcome`                  | `status` is `ChildStatus.SUCCEEDED`, `FAILED`, or `CANCELED`                  |
+| C#           | `ChildRequest`     | An `IReadOnlyDictionary` from each name to a `ChildOutcome` | `Status` is `ChildStatus.Succeeded`, `Failed`, or `Canceled`                  |
 
 Every set method keeps the declared names.
 
@@ -189,7 +192,7 @@ to 1,048,576 bytes. An oversized join returns `result_too_large` and raises
 
 **Events.** `children_created` and `children_joined` each append once per set.
 
-More detail: [Data model: Join modes](../architecture/data-model.md#join-modes), [Data model: Creating a child set](../architecture/data-model.md#creating-a-child-set), [Data model: Columns and constraints](../architecture/data-model.md#columns-and-constraints), and [Schema and SQL protocol: JVM handler context](../architecture/schema-and-protocol.md#jvm-handler-context).
+More detail: [Data model: Join modes](../architecture/data-model.md#join-modes), [Data model: Creating a child set](../architecture/data-model.md#creating-a-child-set), [Data model: Columns and constraints](../architecture/data-model.md#columns-and-constraints), [Schema and SQL protocol: JVM handler context](../architecture/schema-and-protocol.md#jvm-handler-context), and [Schema and SQL protocol: .NET handler context](../architecture/schema-and-protocol.md#net-handler-context).
 
 </details>
 
@@ -278,7 +281,7 @@ names the stored and the requested child.
 
 **Errors**
 
-| Meaning                 | TypeScript, Python, Go          | Rust                              | Ruby                            | Java, Kotlin                        |
+| Meaning                 | TypeScript, Python, Go          | Rust                              | Ruby                            | Java, Kotlin, C#                    |
 | ----------------------- | ------------------------------- | --------------------------------- | ------------------------------- | ----------------------------------- |
 | Changed replay          | `ChildConflictError`            | `Error::Conflict`                 | `ConflictError`                 | `ConflictException`                 |
 | Child limit             | `ChildLimitExceededError`       | `Error::LimitExceeded`            | `LimitExceededError`            | `LimitExceededException`            |
@@ -288,7 +291,7 @@ names the stored and the requested child.
 `ChildConflictError` is a terminal replay conflict. The worker fails the parent through `fail_v1`
 and keeps the current attempt. A child-limit refusal follows the parent's retry policy.
 
-More detail: [Data model: Renamed replay of a single child](../architecture/data-model.md#renamed-replay-of-a-single-child), [Data model: Cancellation and errors](../architecture/data-model.md#cancellation-and-errors), and [Schema and SQL protocol: JVM errors](../architecture/schema-and-protocol.md#jvm-errors).
+More detail: [Data model: Renamed replay of a single child](../architecture/data-model.md#renamed-replay-of-a-single-child), [Data model: Cancellation and errors](../architecture/data-model.md#cancellation-and-errors), [Schema and SQL protocol: JVM errors](../architecture/schema-and-protocol.md#jvm-errors), and [Schema and SQL protocol: .NET errors](../architecture/schema-and-protocol.md#net-errors).
 
 </details>
 
@@ -423,12 +426,12 @@ stamping.
 | TypeScript, Python, Go | `TaskContractValidationError` |
 | Ruby                   | `ContractValidationError`     |
 | Rust                   | `Error::ContractValidation`   |
-| Java, Kotlin           | `ContractValidationException` |
+| Java, Kotlin, C#       | `ContractValidationException` |
 
 TypeScript `runChild`, `runChildren`, and `runChildrenAll` validate and stamp each child's current
 contract through `EnqueueContractsModule.taskAcceptance`.
 
-More detail: [Data model: Contract versions on replay](../architecture/data-model.md#contract-versions-on-replay), [Schema and SQL protocol: JVM errors](../architecture/schema-and-protocol.md#jvm-errors), and [Schema and SQL protocol: JVM argument validation](../architecture/schema-and-protocol.md#jvm-argument-validation).
+More detail: [Data model: Contract versions on replay](../architecture/data-model.md#contract-versions-on-replay), [Schema and SQL protocol: JVM errors](../architecture/schema-and-protocol.md#jvm-errors), [Schema and SQL protocol: JVM argument validation](../architecture/schema-and-protocol.md#jvm-argument-validation), and [Schema and SQL protocol: .NET errors](../architecture/schema-and-protocol.md#net-errors).
 
 </details>
 

@@ -7,9 +7,9 @@ Hangfire is a background job library for .NET. It keeps its jobs in a storage da
 Server. It has a free open source edition and two paid package sets, Hangfire Pro and Hangfire Ace.
 
 Workhorse is a durable task queue that keeps its work in PostgreSQL. It enqueues a task in your
-transaction, continues a task after a worker crash, and runs workers in seven languages. Workhorse
-has no .NET SDK. This page compares the two products, row by row, and tells you when Hangfire is
-the better choice.
+transaction, continues a task after a worker crash, and runs workers in eight languages, including
+C#. This page compares the two products, row by row, and tells you when Hangfire is the better
+choice.
 
 ## Compare Workhorse and Hangfire
 
@@ -18,9 +18,9 @@ recovery from a stopped server, cooperative cancellation, and a free dashboard. 
 a job can wait for another job, and an operator can run a failed job again. They differ in five
 areas:
 
-- **Languages.** A Hangfire job is a .NET method call that Hangfire serializes. Workhorse has
-  workers in TypeScript, Python, Go, Rust, Ruby, Java, and Kotlin, and no .NET SDK. Thus a .NET
-  application cannot run Workhorse workers in its own code.
+- **Languages.** A Hangfire job is a .NET method call that Hangfire serializes. A Workhorse task
+  is a task type and a JSON payload. Workers in TypeScript, Python, Go, Rust, Ruby, Java, Kotlin,
+  and C# can run it. Thus a .NET application and a worker in another language can use one queue.
 - **Databases.** Hangfire keeps jobs in SQL Server, or in Redis with the paid Hangfire Pro. The
   storage is an abstraction, so other packages can implement it. Workhorse needs PostgreSQL.
 - **Enqueue in a transaction.** With Workhorse, a task and your data commit in one PostgreSQL
@@ -45,9 +45,8 @@ the page that explains the feature.
 
 Hangfire is the better choice in these cases:
 
-- Your application and your jobs are in .NET. Workhorse has no .NET SDK.
+- Your jobs are .NET method calls, and you do not want to define a payload for each job.
 - Your application uses SQL Server, not PostgreSQL. Workhorse needs PostgreSQL.
-- You want the dashboard to run inside your .NET application.
 - Your team already uses Hangfire Pro or Hangfire Ace.
 
 Workhorse is the better choice in these cases:
@@ -64,9 +63,9 @@ idempotent.
 
 ## Move from Hangfire
 
-A move from Hangfire changes the language of your workers, because Workhorse has no .NET SDK. Write
-each handler again in one of the seven Workhorse languages. If your jobs are in SQL Server, the move
-also changes the database to PostgreSQL.
+A move from Hangfire can keep your workers in .NET. Write each job again as a handler of the .NET
+SDK, with a payload type for its arguments. If your jobs are in SQL Server, the move also changes
+the database to PostgreSQL.
 
 Move one job type at a time. Keep the Hangfire servers running until their queues are empty. The
 [migration guide](/docs/migrate) gives the full procedure and a table of equivalent parts.
@@ -99,7 +98,8 @@ var chargeId = BackgroundJob.Enqueue<OrderJobs>(x => x.Charge(order.Id));
 BackgroundJob.ContinueJobWith<OrderJobs>(chargeId, x => x.SendReceipt(order.Id));
 ```
 
-After the move, with Workhorse in TypeScript:
+After the move, with Workhorse in TypeScript. The C# tabs of [Enqueue](/docs/enqueue) show the same
+options in the .NET SDK.
 
 ```ts
 await client.query("BEGIN");

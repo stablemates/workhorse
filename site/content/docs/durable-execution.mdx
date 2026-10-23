@@ -27,7 +27,7 @@ and waits.
 Thus, a checkpoint runs its operation one time and stores the result. Each later run returns the
 stored result.
 
-<Tabs items={["TypeScript", "Python", "Go", "Rust", "Ruby", "Java", "Kotlin"]}>
+<Tabs items={["TypeScript", "Python", "Go", "Rust", "Ruby", "Java", "Kotlin", "C#"]}>
   <Tab value="TypeScript">
     ```ts
     const charge = await ctx.checkpoint("charge", () =>
@@ -98,6 +98,14 @@ stored result.
       ctx.checkpoint<Map<String, Any?>>("shipment") { logistics.createShipment(orderId, charge) }
     ```
   </Tab>
+  <Tab value="C#">
+    ```csharp
+    var charge = await context.CheckpointAsync(
+        "charge", ct => payments.ChargeAsync(orderId, $"charge:{orderId}", ct));
+    var shipment = await context.CheckpointAsync(
+        "shipment", ct => logistics.CreateShipmentAsync(orderId, charge, ct));
+    ```
+  </Tab>
 </Tabs>
 
 A checkpoint stores its result only after its operation finishes. If the process stops after the
@@ -159,7 +167,7 @@ Thus, a durable wait releases the worker until its time comes. Each wait has a n
 the name tells Workhorse that the wait ended and that the handler can continue. Use `ctx.sleep` to
 wait for a duration. Use `ctx.sleepUntil` to wait until a specified time.
 
-<Tabs items={["TypeScript", "Python", "Go", "Rust", "Ruby", "Java", "Kotlin"]}>
+<Tabs items={["TypeScript", "Python", "Go", "Rust", "Ruby", "Java", "Kotlin", "C#"]}>
   <Tab value="TypeScript">
     ```ts
     await ctx.checkpoint("welcome", () => mailer.welcome(payload.to));
@@ -213,20 +221,28 @@ wait for a duration. Use `ctx.sleepUntil` to wait until a specified time.
     ctx.checkpoint<Map<String, Any?>>("follow-up") { mailer.followUp(to) }
     ```
   </Tab>
+  <Tab value="C#">
+    ```csharp
+    await context.CheckpointAsync("welcome", ct => mailer.WelcomeAsync(to, ct));
+    await context.SleepUntilAsync("follow-up-window", followUpAt);
+    await context.CheckpointAsync("follow-up", ct => mailer.FollowUpAsync(to, ct));
+    ```
+  </Tab>
 </Tabs>
 
 <details>
 <summary>Reference: wait API and limits</summary>
 
-| SDK                                               | Duration                   | Absolute time                |
-| ------------------------------------------------- | -------------------------- | ---------------------------- |
-| TypeScript `HandlerContext`                       | `sleep(name, durationMs)`  | `sleepUntil(name, wakeAt)`   |
-| Python `HandlerContext` and `AsyncHandlerContext` | `sleep(name, duration_ms)` | `sleep_until(name, wake_at)` |
-| Go `HandlerContext`                               | `Sleep(name, duration)`    | `SleepUntil(name, wakeAt)`   |
-| Rust handler context                              | `sleep(name, duration)`    | `sleep_until(name, wake_at)` |
-| Ruby handler context                              | `sleep(name, seconds)`     | `sleep_until(name, wake_at)` |
-| Java `HandlerContext`                             | `sleep(name, duration)`    | `sleepUntil(name, time)`     |
-| Kotlin `SuspendHandlerContext`                    | `sleep(name, duration)`    | `sleepUntil(name, time)`     |
+| SDK                                               | Duration                     | Absolute time                 |
+| ------------------------------------------------- | ---------------------------- | ----------------------------- |
+| TypeScript `HandlerContext`                       | `sleep(name, durationMs)`    | `sleepUntil(name, wakeAt)`    |
+| Python `HandlerContext` and `AsyncHandlerContext` | `sleep(name, duration_ms)`   | `sleep_until(name, wake_at)`  |
+| Go `HandlerContext`                               | `Sleep(name, duration)`      | `SleepUntil(name, wakeAt)`    |
+| Rust handler context                              | `sleep(name, duration)`      | `sleep_until(name, wake_at)`  |
+| Ruby handler context                              | `sleep(name, seconds)`       | `sleep_until(name, wake_at)`  |
+| Java `HandlerContext`                             | `sleep(name, duration)`      | `sleepUntil(name, time)`      |
+| Kotlin `SuspendHandlerContext`                    | `sleep(name, duration)`      | `sleepUntil(name, time)`      |
+| C# `HandlerContext`                               | `SleepAsync(name, duration)` | `SleepUntilAsync(name, time)` |
 
 | Limit                                      | Value                                                |
 | ------------------------------------------ | ---------------------------------------------------- |
@@ -249,7 +265,7 @@ makes a waiting task ready.
 A [fast-tier queue](/docs/fast-tier) rejects durable waits. That tier keeps no durable execution
 state.
 
-More detail: [Task lifecycle: Scheduling a timer wait](https://github.com/stablemates/workhorse/blob/main/docs/architecture/lifecycle.md#scheduling-a-timer-wait), [Schema and SQL protocol: JVM handler context](https://github.com/stablemates/workhorse/blob/main/docs/architecture/schema-and-protocol.md#jvm-handler-context), and [Schema and SQL protocol: Kotlin handler context](https://github.com/stablemates/workhorse/blob/main/docs/architecture/schema-and-protocol.md#kotlin-handler-context).
+More detail: [Task lifecycle: Scheduling a timer wait](https://github.com/stablemates/workhorse/blob/main/docs/architecture/lifecycle.md#scheduling-a-timer-wait), [Schema and SQL protocol: JVM handler context](https://github.com/stablemates/workhorse/blob/main/docs/architecture/schema-and-protocol.md#jvm-handler-context), [Schema and SQL protocol: Kotlin handler context](https://github.com/stablemates/workhorse/blob/main/docs/architecture/schema-and-protocol.md#kotlin-handler-context), and [Schema and SQL protocol: .NET handler context](https://github.com/stablemates/workhorse/blob/main/docs/architecture/schema-and-protocol.md#net-handler-context).
 
 </details>
 
@@ -277,6 +293,10 @@ To stop the handler, `ctx.sleep` and `ctx.sleepUntil` throw a control signal. Do
 signal. If the handler catches it and returns, the worker still applies the recorded wait. The
 worker also logs a warning. But Workhorse cannot undo the code that ran after the catch.
 
+In C#, the control signal is an internal exception that derives from `OperationCanceledException`.
+Thus `finally` blocks and `using` declarations run. A C# handler that catches the exception and
+returns still suspends.
+
 <details>
 <summary>Reference: suspension and a swallowed signal</summary>
 
@@ -291,7 +311,13 @@ If the handler catches the signal and returns, the worker applies the recorded s
 `workhorse.handler.signal_swallowed` at warning severity, with
 `workhorse.handler.outcome = suspended`.
 
-More detail: [Task lifecycle: Worker suspension](https://github.com/stablemates/workhorse/blob/main/docs/architecture/lifecycle.md#worker-suspension).
+The .NET worker sets `HandlerContext.CancelReason` to `CancelReason.Suspended` and cancels
+`HandlerContext.CancellationToken`. Then it throws an internal exception that derives from
+`OperationCanceledException`, so `finally` blocks and `using` declarations run. After the handler
+returns or throws, the worker submits the recorded suspension. It ignores the result or the
+exception of the handler.
+
+More detail: [Task lifecycle: Worker suspension](https://github.com/stablemates/workhorse/blob/main/docs/architecture/lifecycle.md#worker-suspension) and [Schema and SQL protocol: .NET suspension](https://github.com/stablemates/workhorse/blob/main/docs/architecture/schema-and-protocol.md#net-suspension).
 
 </details>
 
@@ -432,19 +458,25 @@ await ctx.checkpoint("welcome", () => mailer.welcome(payload.to, template), {
 Each SDK gives the input of a checkpoint. The fingerprint function returns the fingerprint
 that the call stores.
 
-| SDK        | Call with an input                                                                 | Fingerprint function                            | Stored fingerprint                  |
-| ---------- | ---------------------------------------------------------------------------------- | ----------------------------------------------- | ----------------------------------- |
-| TypeScript | `HandlerContext.checkpoint(name, operation, { input })`                            | `checkpointInputFingerprint(input)`             | `TaskCheckpoint.inputFingerprint`   |
-| Rust       | `HandlerContext::checkpoint_with_input(name, &input, op)`                          | `checkpoint_input_fingerprint(&input)`          | `TaskCheckpoint::input_fingerprint` |
-| Ruby       | `HandlerContext#checkpoint(name, input:) { … }`                                    | `Workhorse.checkpoint_input_fingerprint(input)` | `TaskCheckpoint#input_fingerprint`  |
-| Python     | `HandlerContext.checkpoint(name, operation, input=…)`                              | `checkpoint_input_fingerprint(input)`           | `TaskCheckpoint.input_fingerprint`  |
-| Go         | `HandlerContext.Checkpoint(name, operation, CheckpointOptions{Input: input})`      | `CheckpointInputFingerprint(input)`             | `TaskCheckpoint.InputFingerprint`   |
-| Java       | `HandlerContext.checkpoint(name, type, CheckpointOptions.input(input), operation)` | `Checkpoints.inputFingerprint(input)`           | `TaskCheckpoint.inputFingerprint()` |
-| Kotlin     | `checkpoint<T>(name, CheckpointOptions.input(input)) { … }`                        | `Checkpoints.inputFingerprint(input)`           | `TaskCheckpoint.inputFingerprint()` |
+| SDK        | Call with an input                                                                         | Fingerprint function                            | Stored fingerprint                  |
+| ---------- | ------------------------------------------------------------------------------------------ | ----------------------------------------------- | ----------------------------------- |
+| TypeScript | `HandlerContext.checkpoint(name, operation, { input })`                                    | `checkpointInputFingerprint(input)`             | `TaskCheckpoint.inputFingerprint`   |
+| Rust       | `HandlerContext::checkpoint_with_input(name, &input, op)`                                  | `checkpoint_input_fingerprint(&input)`          | `TaskCheckpoint::input_fingerprint` |
+| Ruby       | `HandlerContext#checkpoint(name, input:) { … }`                                            | `Workhorse.checkpoint_input_fingerprint(input)` | `TaskCheckpoint#input_fingerprint`  |
+| Python     | `HandlerContext.checkpoint(name, operation, input=…)`                                      | `checkpoint_input_fingerprint(input)`           | `TaskCheckpoint.input_fingerprint`  |
+| Go         | `HandlerContext.Checkpoint(name, operation, CheckpointOptions{Input: input})`              | `CheckpointInputFingerprint(input)`             | `TaskCheckpoint.InputFingerprint`   |
+| Java       | `HandlerContext.checkpoint(name, type, CheckpointOptions.input(input), operation)`         | `Checkpoints.inputFingerprint(input)`           | `TaskCheckpoint.inputFingerprint()` |
+| Kotlin     | `checkpoint<T>(name, CheckpointOptions.input(input)) { … }`                                | `Checkpoints.inputFingerprint(input)`           | `TaskCheckpoint.inputFingerprint()` |
+| C#         | `HandlerContext.CheckpointAsync(name, new CheckpointOptions { Input = input }, operation)` | `Checkpoints.InputFingerprint(input)`           | `TaskCheckpoint.InputFingerprint`   |
 
 The fingerprint is the SHA-256 digest of the RFC 8785 canonical JSON of the input, as 64 lowercase
 hexadecimal characters. Key order does not change it. Each SDK gives the same digest for the same
 input.
+
+In .NET, the checkpoint call encodes the input with the `JsonSerializerOptions` of the worker.
+`Checkpoints.InputFingerprint(input, options)` takes the options to use. A serializer naming policy
+changes the JSON text, so it changes the fingerprint. If a deployment changes the naming policy of
+the worker, a replay of a checkpoint with an input throws `CheckpointInputConflictException`.
 
 Each SDK refuses the same inputs with its error for an invalid argument, and the operation does not
 run:
@@ -463,7 +495,7 @@ run:
 Overlapping calls with one name compare their inputs in the same way. The stored fingerprint is
 null for a checkpoint without an input.
 
-More detail: [Data model: `task_checkpoint`](https://github.com/stablemates/workhorse/blob/main/docs/architecture/data-model.md#task_checkpoint), [Schema and SQL protocol: JVM handler context](https://github.com/stablemates/workhorse/blob/main/docs/architecture/schema-and-protocol.md#jvm-handler-context), and [Schema and SQL protocol: Kotlin handler context](https://github.com/stablemates/workhorse/blob/main/docs/architecture/schema-and-protocol.md#kotlin-handler-context).
+More detail: [Data model: `task_checkpoint`](https://github.com/stablemates/workhorse/blob/main/docs/architecture/data-model.md#task_checkpoint), [Schema and SQL protocol: JVM handler context](https://github.com/stablemates/workhorse/blob/main/docs/architecture/schema-and-protocol.md#jvm-handler-context), [Schema and SQL protocol: Kotlin handler context](https://github.com/stablemates/workhorse/blob/main/docs/architecture/schema-and-protocol.md#kotlin-handler-context), [Schema and SQL protocol: .NET handler context](https://github.com/stablemates/workhorse/blob/main/docs/architecture/schema-and-protocol.md#net-handler-context), and [Schema and SQL protocol: .NET values and JSON](https://github.com/stablemates/workhorse/blob/main/docs/architecture/schema-and-protocol.md#net-values-and-json).
 
 </details>
 
@@ -544,7 +576,7 @@ and each delivery is idempotent. A network retry cannot resume the task two time
 [Signals](/docs/signals) and [Human waits](/docs/human-waits) for the timeout and authorization
 rules.
 
-<Tabs items={["TypeScript", "Python", "Go", "Rust", "Ruby", "Java", "Kotlin"]}>
+<Tabs items={["TypeScript", "Python", "Go", "Rust", "Ruby", "Java", "Kotlin", "C#"]}>
   <Tab value="TypeScript">
     ```ts
     const event = await ctx.waitForSignal<{ id: string }>("provider-event");
@@ -593,6 +625,13 @@ rules.
     ```kotlin
     val event = ctx.waitForSignal<Map<String, Any?>>("provider-event")
     val review = ctx.waitForHuman<Any?>("operator-review", mapOf("eventId" to event["id"]))
+    ```
+  </Tab>
+  <Tab value="C#">
+    ```csharp
+    var providerEvent = await context.WaitForSignalAsync<ProviderEvent>("provider-event", null);
+    var review = await context.WaitForHumanAsync<object, Review>(
+        "operator-review", new { eventId = providerEvent.Id }, null);
     ```
   </Tab>
 </Tabs>

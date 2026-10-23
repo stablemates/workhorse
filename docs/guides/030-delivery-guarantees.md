@@ -131,6 +131,7 @@ does not call the operation.
 | Python     | `HandlerContext.checkpoint` and `AsyncHandlerContext.checkpoint` |
 | Go         | `HandlerContext.Checkpoint`                                      |
 | Rust       | `HandlerContext::checkpoint`                                     |
+| .NET       | `HandlerContext.CheckpointAsync`                                 |
 
 | Limit            | Value                                                        |
 | ---------------- | ------------------------------------------------------------ |
@@ -150,7 +151,7 @@ does not call the operation.
   Overlapping calls for one name in one handler share the first call's result or error.
 - A checkpoint has no separate retirement path. It is deleted only with its task.
 
-More detail: [Data model: Key and write rules](../architecture/data-model.md#key-and-write-rules) and [Data model: Size and lifetime](../architecture/data-model.md#size-and-lifetime).
+More detail: [Data model: Key and write rules](../architecture/data-model.md#key-and-write-rules), [Data model: Size and lifetime](../architecture/data-model.md#size-and-lifetime), and [Schema and SQL protocol: .NET handler context](../architecture/schema-and-protocol.md#net-handler-context).
 
 </details>
 

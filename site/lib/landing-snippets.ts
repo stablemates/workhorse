@@ -30,6 +30,11 @@
  * `LandingExamplesTest`, `LandingKotlinExamplesTest`, and
  * `LandingProcessExamplesTest` in jvm/examples/src/test run each region against
  * PostgreSQL.
+ * Every C# snippet is a copy of one `landing-*-csharp` region in
+ * dotnet/examples/Workhorse.Examples/Landing/Landing.cs, which
+ * `pnpm dotnet:build` compiles. `LandingExamplesTests` in
+ * dotnet/examples/Workhorse.Examples.Tests/Landing runs each region against
+ * PostgreSQL.
  * `scripts/check-language-examples.ts` fails when a copy and its region differ.
  * `scripts/landing-retry-policies-integration.test.ts` gives the retry policy
  * of every snippet to PostgreSQL, so a key that the database refuses fails in
@@ -162,6 +167,19 @@ end`,
       }
     }
   WorkerProcess.runWorkerProcess(worker)
+}`,
+
+  heroCSharp: `public sealed record Welcome(string To);
+
+public static async Task RunAsync(NpgsqlDataSource dataSource, CancellationToken stoppingToken)
+{
+    await new Queue(dataSource).EnqueueAsync("email.welcome", new { to = "ada@example.com" }, stoppingToken);
+
+    await using var worker = new Worker(dataSource, new WorkerOptions { Concurrency = 4 });
+    worker.Handle(
+        "email.welcome",
+        (HandlerContext context, Welcome welcome) => Task.FromResult(new { deliveredTo = welcome.To }));
+    await worker.RunAsync(stoppingToken);
 }`,
   languageTypeScript: `import { Pool, Queue } from "@stablemates/workhorse";
 
@@ -330,6 +348,23 @@ end`,
       .enqueueSuspend("order.confirm", mapOf("orderId" to orderId), connection = connection)
     connection.commit()
   }
+}`,
+
+  enqueueCSharp: `public static async Task CreateOrderAsync(NpgsqlDataSource dataSource, string orderId, long total)
+{
+    await using var connection = await dataSource.OpenConnectionAsync();
+    await using var transaction = await connection.BeginTransactionAsync();
+    await using (var insert = new NpgsqlCommand(
+        "INSERT INTO orders (id, total) VALUES (@id, @total)", connection, transaction))
+    {
+        insert.Parameters.AddWithValue("id", orderId);
+        insert.Parameters.AddWithValue("total", total);
+        await insert.ExecuteNonQueryAsync();
+    }
+
+    // Same transaction: the task exists exactly when the order does.
+    await new Queue(dataSource).Using(connection).EnqueueAsync("order.confirm", new { orderId });
+    await transaction.CommitAsync();
 }`,
   checkpoints: `worker.handle("invoice.issue", async (payload, ctx) => {
   // After Workhorse stores a checkpoint result, later runs return it.
@@ -514,6 +549,30 @@ fun WorkerScope.registerInvoice() {
     mapOf("chargeId" to charge["id"])
   }
 }`,
+
+  checkpointsCSharp: `public sealed record Invoice(long Amount, string Email);
+
+public sealed record Charge(string Id);
+
+public sealed record Pdf(string ChargeId);
+
+public static Task<Charge> ChargeCardAsync(long amount) => Task.FromResult(new Charge($"ch_{amount}"));
+
+public static Task<Pdf> RenderInvoiceAsync(string chargeId) => Task.FromResult(new Pdf(chargeId));
+
+public static void RegisterInvoice(Worker worker)
+{
+    worker.Handle("invoice.issue", async (HandlerContext context, Invoice invoice) =>
+    {
+        // After Workhorse stores a checkpoint result, later runs return it.
+        var charge = await context.CheckpointAsync("charge", _ => ChargeCardAsync(invoice.Amount));
+
+        var pdf = await context.CheckpointAsync("render", _ => RenderInvoiceAsync(charge.Id));
+
+        Console.WriteLine($"email {invoice.Email} {pdf}");
+        return new { chargeId = charge.Id };
+    });
+}`,
   sleep: `worker.handle("order.settle", async (payload, ctx) => {
   const order = await ctx.checkpoint("place", () =>
     placeOrder(payload),
@@ -630,6 +689,23 @@ fun WorkerScope.registerSettlement() {
 
     mapOf("settled" to order["orderId"])
   }
+}`,
+
+  sleepCSharp: `public sealed record Order(string OrderId);
+
+public static Task<Order> PlaceOrderAsync(Order payload) => Task.FromResult(new Order(payload.OrderId));
+
+public static void RegisterSettlement(Worker worker)
+{
+    worker.Handle("order.settle", async (HandlerContext context, Order payload) =>
+    {
+        var order = await context.CheckpointAsync("place", _ => PlaceOrderAsync(payload));
+
+        // Slot released here. The process can restart, deploy, or die.
+        await context.SleepAsync("settlement-window", TimeSpan.FromHours(1));
+
+        return new { settled = order.OrderId };
+    });
 }`,
   retries: `await queue.enqueue(
   "match.reminder",
@@ -777,6 +853,23 @@ end`,
       )
       .build(),
   )`,
+
+  retriesCSharp: `public static Task<EnqueueResult> RemindAsync(Queue queue, string matchId, DateTimeOffset kickoff) =>
+    queue.EnqueueAsync(
+        "match.reminder",
+        new { matchId },
+        new EnqueueOptions
+        {
+            // Pointless after kickoff, whatever else happens.
+            Deadline = kickoff,
+            // Any single attempt is stuck after 30 seconds.
+            ExecutionTimeout = TimeSpan.FromSeconds(30),
+            MaxAttempts = 5,
+            RetryPolicy = RetryPolicy.Exponential(
+                initialDelay: TimeSpan.FromSeconds(1),
+                multiplier: 2,
+                maxDelay: TimeSpan.FromSeconds(60)),
+        });`,
   idempotency: `const taskId = await queue.enqueue(
   "invoice.capture",
   { invoiceId: "inv-1" },
@@ -877,6 +970,22 @@ suspend fun capture(queue: Queue): EnqueueResult =
       .idempotency(Idempotency("capture:inv-1", "tenant-42", Duration.ofDays(1)))
       .build(),
   )`,
+
+  idempotencyCSharp: `// A retried webhook gets the same TaskId back instead of a second capture.
+public static Task<EnqueueResult> CaptureAsync(Queue queue) =>
+    queue.EnqueueAsync(
+        "invoice.capture",
+        new { invoiceId = "inv-1" },
+        new EnqueueOptions
+        {
+            Queue = "billing",
+            Idempotency = new Idempotency
+            {
+                Key = "capture:inv-1",
+                Scope = "tenant-42",
+                Ttl = TimeSpan.FromDays(1),
+            },
+        });`,
   schedules: `// Run on every deployment with the complete list.
 await queue.syncSchedules(
   "billing",
@@ -1023,6 +1132,22 @@ end`,
   // Any worker in the namespace fires due schedules itself.
   val worker = workhorseWorker(dataSource) { scheduleNamespaces = listOf("billing") }
   WorkerProcess.runWorkerProcess(worker)
+}`,
+
+  schedulesCSharp: `public static async Task RunAsync(NpgsqlDataSource dataSource, CancellationToken stoppingToken)
+{
+    // Run on every deployment with the complete list.
+    var schedule = new ScheduleDefinition
+    {
+        Name = "nightly-invoice-run",
+        Schedule = "0 2 * * *",
+        Task = new ScheduledTask { TaskType = "invoices.generate", Payload = new { } },
+    };
+    await new Queue(dataSource).SyncSchedulesAsync("billing", [schedule], prune: true, stoppingToken);
+
+    // Any worker in the namespace fires due schedules itself.
+    await using var worker = new Worker(dataSource, new WorkerOptions { ScheduleNamespaces = ["billing"] });
+    await worker.RunAsync(stoppingToken);
 }`,
   flowControl: `await queue.syncConcurrencyPolicies("workers", [
   // At most 20 mail tasks active; at most 2 per tenant.
@@ -1192,6 +1317,25 @@ end`,
     mapOf("messageId" to messageId),
     EnqueueOptions.builder().queue("mail").concurrencyKey("tenant:$tenantId").build(),
   )
+}`,
+
+  flowControlCSharp: `public static async Task ConfigureAsync(Queue queue, string messageId, string tenantId)
+{
+    // At most 20 mail tasks active; at most 2 per tenant.
+    var mail = new ConcurrencyPolicyDefinition { Queue = "mail", MaxActive = 20, MaxActivePerKey = 2 };
+    await queue.SyncConcurrencyPoliciesAsync("workers", [mail], prune: false);
+
+    var provider = new RateLimitPolicyDefinition
+    {
+        Queue = "provider-api",
+        Rate = new RateLimit { Limit = 100, Interval = TimeSpan.FromSeconds(1), Burst = 200 },
+    };
+    await queue.SyncRateLimitPoliciesAsync("workers", [provider], prune: false);
+
+    await queue.EnqueueAsync(
+        "mail.send",
+        new { messageId },
+        new EnqueueOptions { Queue = "mail", ConcurrencyKey = $"tenant:{tenantId}" });
 }`,
   dependencies: `const inventoryId = await queue.enqueue(
   "inventory.reserve",
@@ -1381,6 +1525,36 @@ fun WorkerScope.registerFulfillment() {
     mapOf("receipt" to receipt)
   }
 }`,
+
+  dependenciesCSharp: `public static async Task ConfirmAsync(Queue queue, string orderId)
+{
+    var order = new { orderId };
+    var inventory = await queue.EnqueueAsync("inventory.reserve", order);
+
+    var dependencies = new Dependencies
+    {
+        PrerequisiteTaskIds = [inventory.TaskId],
+        OnSuccess = DependencyPolicy.Release,
+        OnFailure = DependencyPolicy.Cancel,
+        OnCancellation = DependencyPolicy.Cancel,
+    };
+    await queue.EnqueueAsync("order.confirm", order, new EnqueueOptions { Dependencies = dependencies });
+}
+
+public sealed record Fulfillment(string Id);
+
+public sealed record Capture(string OrderId);
+
+public static void RegisterFulfillment(Worker worker)
+{
+    worker.Handle("order.fulfill", async (HandlerContext context, Fulfillment order) =>
+    {
+        var options = new EnqueueOptions { Queue = "payments" };
+        var receipt = await context.RunChildAsync<Capture, JsonElement>(
+            "charge", "payment.capture", new Capture(order.Id), options);
+        return new { receipt };
+    });
+}`,
   coalescing: `const options = {
   debounce: {
     key: documentId,
@@ -1517,6 +1691,21 @@ end`,
       options,
     )
   println("\${first.outcome()} \${latest.outcome()}")
+}`,
+
+  coalescingCSharp: `public static async Task ReindexAsync(Queue queue, string documentId, TimeSpan quietPeriod)
+{
+    var debounce = new Debounce
+    {
+        Key = documentId,
+        Window = quietPeriod,
+        Schedule = DebounceSchedule.Reset,
+        Scope = "search-index",
+    };
+    var options = new EnqueueOptions { Debounce = debounce };
+    var first = await queue.EnqueueAsync("search.reindex", new { documentId, revision = 1 }, options);
+    var latest = await queue.EnqueueAsync("search.reindex", new { documentId, revision = 2 }, options);
+    Console.WriteLine($"{first.Outcome} {latest.Outcome}");
 }`,
   externalWaits: `worker.handle("release.publish", async (release, ctx) => {
   const scan = await ctx.waitForSignal("security-scan");
@@ -1698,6 +1887,29 @@ suspend fun deliverScan(queue: Queue, taskId: UUID, result: Any?, deliveryId: St
     requestedBy = "security-scanner",
   )
 }`,
+
+  externalWaitsCSharp: `public sealed record Release(string Id);
+
+public sealed record ApprovalRequest(string ReleaseId, JsonElement Scan);
+
+public sealed record Review(bool Approved);
+
+public static void RegisterRelease(Worker worker)
+{
+    worker.Handle("release.publish", async (HandlerContext context, Release release) =>
+    {
+        var scan = await context.WaitForSignalAsync<JsonElement>("security-scan", timeout: null);
+
+        var request = new ApprovalRequest(release.Id, scan);
+        var review = await context.WaitForHumanAsync<ApprovalRequest, Review>(
+            "release-approval", request, timeout: null);
+
+        return new { published = review.Approved };
+    });
+}
+
+public static Task DeliverScanAsync(Queue queue, Guid taskId, object result, string deliveryId) =>
+    queue.SendSignalAsync(taskId, "security-scan", result, deliveryId, "security-scanner");`,
   batchHandlers: `worker.handleBatch(
   "email.send",
   { maxSize: batchSize, lingerMs: batchLingerMs },
@@ -1787,6 +1999,15 @@ end`,
   handleBatch<Any?>("email.send", BatchOptions(batchSize, linger)) { items ->
     items.map { item -> BatchSucceeded(item.payload()) }
   }
+}`,
+
+  batchHandlersCSharp: `public static void RegisterEmailBatch(Worker worker, int batchSize, TimeSpan linger)
+{
+    worker.HandleBatch<JsonElement>(
+        "email.send",
+        new BatchOptions { MaxSize = batchSize, Linger = linger },
+        (items, cancellationToken) => Task.FromResult<IReadOnlyList<BatchHandlerOutcome>>(
+            [.. items.Select(item => new BatchSucceeded(item.Payload))]));
 }`,
   cancellation: `worker.handle("rows.export", async (payload, ctx) => {
   for (const row of payload.rows) {
@@ -1924,6 +2145,30 @@ suspend fun cancelExport(queue: Queue, taskId: UUID) {
     reason = "customer withdrew the request",
   )
 }`,
+
+  cancellationCSharp: `public static Task UploadAsync(string row, CancellationToken cancellationToken)
+{
+    Console.WriteLine($"upload {row}");
+    return Task.CompletedTask;
+}
+
+public static async Task ConfigureExportAsync(Queue queue, Worker worker, Guid taskId)
+{
+    worker.Handle("rows.export", async (HandlerContext context, string[] rows) =>
+    {
+        foreach (var row in rows)
+        {
+            context.CancellationToken.ThrowIfCancellationRequested();
+            await UploadAsync(row, context.CancellationToken);
+        }
+
+        return new { stopped = false };
+    });
+
+    await queue.CancelAsync(
+        taskId,
+        new CancelOptions { RequestedBy = "operator@example.com", Reason = "customer withdrew the request" });
+}`,
   deadLetters: `const admin = new Admin(pool);
 const page = await admin.listDeadLetters({
   queue: "billing",
@@ -2052,6 +2297,23 @@ end`,
       )
     admin.redriveSuspend(failure.taskId(), audit)
   }
+}`,
+
+  deadLettersCSharp: `public static async Task RedriveBillingAsync(Admin admin)
+{
+    var query = new DeadLetterQuery { Queue = "billing", ErrorName = "CardDeclined", Limit = 100 };
+    var page = await admin.ListDeadLettersAsync(query);
+
+    foreach (var failure in page.Items)
+    {
+        var audit = new AdminAudit
+        {
+            Actor = "operator@example.com",
+            Reason = "provider incident resolved",
+            RequestId = $"incident-2026-08-03:{failure.TaskId}",
+        };
+        await admin.RedriveAsync(failure.TaskId, audit);
+    }
 }`,
   operateDashboard: `import { createDashboardHost } from "@stablemates/workhorse-dashboard/server";
 
@@ -2191,6 +2453,23 @@ fun mount(dataSource: DataSource, servletContext: ServletContext) {
     .addFilter("workhorse-dashboard", dashboard)
     .addMappingForUrlPatterns(EnumSet.of(DispatcherType.REQUEST), false, "/workhorse/*")
 }`,
+
+  operateDashboardCSharp: `public static void Mount(IEndpointRouteBuilder endpoints, NpgsqlDataSource dataSource)
+{
+    endpoints.MapWorkhorseDashboard("/workhorse", new DashboardOptions
+    {
+        DataSource = dataSource,
+        Authorize = context =>
+        {
+            // The application's own authentication sets context.User.
+            var user = context.User;
+            var actor = user.IsInRole("admin") ? user.Identity?.Name : null;
+            return ValueTask.FromResult(actor is not null
+                ? DashboardAuthorization.Principal(actor, claims: null)
+                : DashboardAuthorization.Deny());
+        },
+    });
+}`,
   operateHealth: `const admin = new Admin(pool);
 const health = await admin.health();
 
@@ -2312,6 +2591,25 @@ end`,
   val live = Admin(ConnectionSource.of(dataSource)).listTasksSuspend(query)
   println(live.items().size)
 }`,
+
+  operateHealthCSharp: `public static async Task InspectAsync(NpgsqlDataSource dataSource)
+{
+    var health = await new Queue(dataSource).HealthAsync();
+    if (health.Snapshot.TryGetValue("status", out var status)
+        && status.GetProperty("level").GetString() != "healthy")
+    {
+        Console.WriteLine(status.GetProperty("reasons"));
+    }
+
+    // Cross-state listing on a dedicated projection: reading it never slows dispatch down.
+    var query = new TaskQuery { States = [TaskState.Active, TaskState.Scheduled], Limit = 100 };
+    var live = await new Admin(dataSource).ListTasksAsync(query);
+    Console.WriteLine(live.Items.Count);
+}
+
+// A Generic Host reports the same database and schema check on its health endpoint.
+public static void AddHealthCheck(IServiceCollection services) =>
+    services.AddHealthChecks().AddWorkhorse();`,
   operateFleet: `const admin = new Admin(pool);
 for (const entry of await admin.listWorkers()) {
   if (entry.queue !== "billing") continue;
@@ -2433,6 +2731,26 @@ end`,
       )
     admin.setWorkerPausedSuspend(entry.workerId(), true, audit)
   }
+}`,
+
+  operateFleetCSharp: `public static async Task PauseBillingAsync(NpgsqlDataSource dataSource)
+{
+    var admin = new Admin(dataSource);
+    foreach (var entry in await admin.ListWorkersAsync())
+    {
+        if (entry.Queue != "billing")
+        {
+            continue;
+        }
+
+        var audit = new AdminAudit
+        {
+            Actor = "operator@example.com",
+            Reason = "rolling deploy",
+            RequestId = $"deploy-2026-08-23:{entry.WorkerId}",
+        };
+        await admin.SetWorkerPausedAsync(entry.WorkerId, paused: true, audit);
+    }
 }`,
   ormDrizzle: `import { createDrizzleAdapter } from "@stablemates/workhorse-drizzle";
 import { drizzle } from "drizzle-orm/node-postgres";
@@ -2647,6 +2965,32 @@ end`,
     }
   WorkerProcess.runWorkerProcess(worker)
 }`,
+
+  deployCSharp: `public sealed record Email(string To);
+
+public static async Task RunAsync(string[] args, CancellationToken cancellationToken)
+{
+    var builder = Host.CreateApplicationBuilder(args);
+
+    // The application supplies the pool. ConnectionStrings:Workhorse holds an Npgsql connection string.
+    var connectionString = builder.Configuration.GetConnectionString("Workhorse")
+        ?? throw new InvalidOperationException("ConnectionStrings:Workhorse is not set");
+    builder.Services.AddSingleton(_ => NpgsqlDataSource.Create(connectionString));
+
+    builder.Services.AddWorkhorse(builder.Configuration);
+    builder.Services.Configure<WorkerOptions>(options =>
+    {
+        options.Queues = ["email"];
+        options.Concurrency = 8;
+        // Bounded graceful drain when the host stops on SIGTERM.
+        options.ShutdownGrace = TimeSpan.FromSeconds(25);
+    });
+    builder.Services.AddWorkhorseWorker(worker => worker.Handle(
+        "email.send",
+        (HandlerContext context, Email email) => Task.FromResult(new { sent = email.To })));
+
+    await builder.Build().RunAsync(cancellationToken);
+}`,
 } as const;
 
 export type LandingSnippetId = keyof typeof landingSnippets;
@@ -2661,6 +3005,7 @@ export const landingFeatureSnippets = {
     ruby: "enqueueRuby",
     java: "enqueueJava",
     kotlin: "enqueueKotlin",
+    csharp: "enqueueCSharp",
   },
   checkpoints: {
     typescript: "checkpoints",
@@ -2670,6 +3015,7 @@ export const landingFeatureSnippets = {
     ruby: "checkpointsRuby",
     java: "checkpointsJava",
     kotlin: "checkpointsKotlin",
+    csharp: "checkpointsCSharp",
   },
   sleep: {
     typescript: "sleep",
@@ -2679,6 +3025,7 @@ export const landingFeatureSnippets = {
     ruby: "sleepRuby",
     java: "sleepJava",
     kotlin: "sleepKotlin",
+    csharp: "sleepCSharp",
   },
   retries: {
     typescript: "retries",
@@ -2688,6 +3035,7 @@ export const landingFeatureSnippets = {
     ruby: "retriesRuby",
     java: "retriesJava",
     kotlin: "retriesKotlin",
+    csharp: "retriesCSharp",
   },
   idempotency: {
     typescript: "idempotency",
@@ -2697,6 +3045,7 @@ export const landingFeatureSnippets = {
     ruby: "idempotencyRuby",
     java: "idempotencyJava",
     kotlin: "idempotencyKotlin",
+    csharp: "idempotencyCSharp",
   },
   schedules: {
     typescript: "schedules",
@@ -2706,6 +3055,7 @@ export const landingFeatureSnippets = {
     ruby: "schedulesRuby",
     java: "schedulesJava",
     kotlin: "schedulesKotlin",
+    csharp: "schedulesCSharp",
   },
   flowControl: {
     typescript: "flowControl",
@@ -2715,6 +3065,7 @@ export const landingFeatureSnippets = {
     ruby: "flowControlRuby",
     java: "flowControlJava",
     kotlin: "flowControlKotlin",
+    csharp: "flowControlCSharp",
   },
   dependencies: {
     typescript: "dependencies",
@@ -2724,6 +3075,7 @@ export const landingFeatureSnippets = {
     ruby: "dependenciesRuby",
     java: "dependenciesJava",
     kotlin: "dependenciesKotlin",
+    csharp: "dependenciesCSharp",
   },
   coalescing: {
     typescript: "coalescing",
@@ -2733,6 +3085,7 @@ export const landingFeatureSnippets = {
     ruby: "coalescingRuby",
     java: "coalescingJava",
     kotlin: "coalescingKotlin",
+    csharp: "coalescingCSharp",
   },
   externalWaits: {
     typescript: "externalWaits",
@@ -2742,6 +3095,7 @@ export const landingFeatureSnippets = {
     ruby: "externalWaitsRuby",
     java: "externalWaitsJava",
     kotlin: "externalWaitsKotlin",
+    csharp: "externalWaitsCSharp",
   },
   batchHandlers: {
     typescript: "batchHandlers",
@@ -2751,6 +3105,7 @@ export const landingFeatureSnippets = {
     ruby: "batchHandlersRuby",
     java: "batchHandlersJava",
     kotlin: "batchHandlersKotlin",
+    csharp: "batchHandlersCSharp",
   },
   cancellation: {
     typescript: "cancellation",
@@ -2760,6 +3115,7 @@ export const landingFeatureSnippets = {
     ruby: "cancellationRuby",
     java: "cancellationJava",
     kotlin: "cancellationKotlin",
+    csharp: "cancellationCSharp",
   },
   deadLetters: {
     typescript: "deadLetters",
@@ -2769,6 +3125,7 @@ export const landingFeatureSnippets = {
     ruby: "deadLettersRuby",
     java: "deadLettersJava",
     kotlin: "deadLettersKotlin",
+    csharp: "deadLettersCSharp",
   },
 } as const satisfies Record<
   string,
@@ -2781,6 +3138,7 @@ export const landingFeatureSnippets = {
       ruby: LandingSnippetId;
       java: LandingSnippetId;
       kotlin: LandingSnippetId;
+      csharp: LandingSnippetId;
     }
 >;
 
@@ -2796,6 +3154,7 @@ export const landingSupplementalSnippets = {
     ruby: "heroRuby",
     java: "heroJava",
     kotlin: "heroKotlin",
+    csharp: "heroCSharp",
   },
   operateDashboard: {
     typescript: "operateDashboard",
@@ -2805,6 +3164,7 @@ export const landingSupplementalSnippets = {
     ruby: "operateDashboardRuby",
     java: "operateDashboardJava",
     kotlin: "operateDashboardKotlin",
+    csharp: "operateDashboardCSharp",
   },
   operateHealth: {
     typescript: "operateHealth",
@@ -2814,6 +3174,7 @@ export const landingSupplementalSnippets = {
     ruby: "operateHealthRuby",
     java: "operateHealthJava",
     kotlin: "operateHealthKotlin",
+    csharp: "operateHealthCSharp",
   },
   operateFleet: {
     typescript: "operateFleet",
@@ -2823,6 +3184,7 @@ export const landingSupplementalSnippets = {
     ruby: "operateFleetRuby",
     java: "operateFleetJava",
     kotlin: "operateFleetKotlin",
+    csharp: "operateFleetCSharp",
   },
   deploy: {
     typescript: "deploy",
@@ -2832,6 +3194,7 @@ export const landingSupplementalSnippets = {
     ruby: "deployRuby",
     java: "deployJava",
     kotlin: "deployKotlin",
+    csharp: "deployCSharp",
   },
 } as const satisfies Record<
   string,
@@ -2843,12 +3206,13 @@ export const landingSupplementalSnippets = {
     ruby: LandingSnippetId;
     java: LandingSnippetId;
     kotlin: LandingSnippetId;
+    csharp: LandingSnippetId;
   }
 >;
 
 /** Shiki language overrides for snippets that are not TypeScript. */
 export const landingSnippetLanguages: Partial<
-  Record<LandingSnippetId, "python" | "go" | "rust" | "ruby" | "java" | "kotlin" | "ts">
+  Record<LandingSnippetId, "python" | "go" | "rust" | "ruby" | "java" | "kotlin" | "csharp" | "ts">
 > = {
   heroPython: "python",
   heroGo: "go",
@@ -2856,6 +3220,7 @@ export const landingSnippetLanguages: Partial<
   heroRuby: "ruby",
   heroJava: "java",
   heroKotlin: "kotlin",
+  heroCSharp: "csharp",
   languagePython: "python",
   languageGo: "go",
   enqueuePython: "python",
@@ -2864,100 +3229,117 @@ export const landingSnippetLanguages: Partial<
   enqueueRuby: "ruby",
   enqueueJava: "java",
   enqueueKotlin: "kotlin",
+  enqueueCSharp: "csharp",
   checkpointsPython: "python",
   checkpointsGo: "go",
   checkpointsRust: "rust",
   checkpointsRuby: "ruby",
   checkpointsJava: "java",
   checkpointsKotlin: "kotlin",
+  checkpointsCSharp: "csharp",
   sleepPython: "python",
   sleepGo: "go",
   sleepRust: "rust",
   sleepRuby: "ruby",
   sleepJava: "java",
   sleepKotlin: "kotlin",
+  sleepCSharp: "csharp",
   retriesPython: "python",
   retriesGo: "go",
   retriesRust: "rust",
   retriesRuby: "ruby",
   retriesJava: "java",
   retriesKotlin: "kotlin",
+  retriesCSharp: "csharp",
   idempotencyPython: "python",
   idempotencyGo: "go",
   idempotencyRust: "rust",
   idempotencyRuby: "ruby",
   idempotencyJava: "java",
   idempotencyKotlin: "kotlin",
+  idempotencyCSharp: "csharp",
   schedulesPython: "python",
   schedulesGo: "go",
   schedulesRust: "rust",
   schedulesRuby: "ruby",
   schedulesJava: "java",
   schedulesKotlin: "kotlin",
+  schedulesCSharp: "csharp",
   flowControlPython: "python",
   flowControlGo: "go",
   flowControlRust: "rust",
   flowControlRuby: "ruby",
   flowControlJava: "java",
   flowControlKotlin: "kotlin",
+  flowControlCSharp: "csharp",
   dependenciesPython: "python",
   dependenciesGo: "go",
   dependenciesRust: "rust",
   dependenciesRuby: "ruby",
   dependenciesJava: "java",
   dependenciesKotlin: "kotlin",
+  dependenciesCSharp: "csharp",
   coalescingPython: "python",
   coalescingGo: "go",
   coalescingRust: "rust",
   coalescingRuby: "ruby",
   coalescingJava: "java",
   coalescingKotlin: "kotlin",
+  coalescingCSharp: "csharp",
   externalWaitsPython: "python",
   externalWaitsGo: "go",
   externalWaitsRust: "rust",
   externalWaitsRuby: "ruby",
   externalWaitsJava: "java",
   externalWaitsKotlin: "kotlin",
+  externalWaitsCSharp: "csharp",
   batchHandlersPython: "python",
   batchHandlersGo: "go",
   batchHandlersRust: "rust",
   batchHandlersRuby: "ruby",
   batchHandlersJava: "java",
   batchHandlersKotlin: "kotlin",
+  batchHandlersCSharp: "csharp",
   cancellationPython: "python",
   cancellationGo: "go",
   cancellationRust: "rust",
   cancellationRuby: "ruby",
   cancellationJava: "java",
   cancellationKotlin: "kotlin",
+  cancellationCSharp: "csharp",
   deadLettersPython: "python",
   deadLettersGo: "go",
   deadLettersRust: "rust",
   deadLettersRuby: "ruby",
   deadLettersJava: "java",
   deadLettersKotlin: "kotlin",
+  deadLettersCSharp: "csharp",
   operateDashboardPython: "python",
   operateDashboardGo: "go",
   operateDashboardRust: "rust",
   operateDashboardRuby: "ruby",
   operateDashboardJava: "java",
   operateDashboardKotlin: "kotlin",
+  operateDashboardCSharp: "csharp",
   operateHealthPython: "python",
   operateHealthGo: "go",
   operateHealthRust: "rust",
   operateHealthRuby: "ruby",
   operateHealthJava: "java",
   operateHealthKotlin: "kotlin",
+  operateHealthCSharp: "csharp",
   operateFleetPython: "python",
   operateFleetGo: "go",
   operateFleetRust: "rust",
   operateFleetRuby: "ruby",
   operateFleetJava: "java",
   operateFleetKotlin: "kotlin",
+  operateFleetCSharp: "csharp",
   deployPython: "python",
   deployGo: "go",
   deployRust: "rust",
   deployRuby: "ruby",
   deployJava: "java",
   deployKotlin: "kotlin",
+  deployCSharp: "csharp",
 };

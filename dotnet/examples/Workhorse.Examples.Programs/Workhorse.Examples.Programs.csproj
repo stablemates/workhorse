@@ -1,0 +1,22 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!--
+    The C# scenario programs (SM-1628), as jvm/examples/programs holds the JVM ones. Each file in
+    Scenarios/ is one scenario of the examples coverage file in docs/. Program.cs starts the scenario that
+    its first argument names. Each program reads WORKHORSE_DATABASE_URL. This project is never
+    packed.
+  -->
+  <PropertyGroup>
+    <IsPackable>false</IsPackable>
+    <OutputType>Exe</OutputType>
+    <RootNamespace>Workhorse.Examples.Programs</RootNamespace>
+    <!-- Program code, as the snippets of Workhorse.Examples: no member documentation, no ConfigureAwait. -->
+    <NoWarn>$(NoWarn);CS1591;CA2007</NoWarn>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../../src/Workhorse/Workhorse.csproj" />
+    <ProjectReference Include="../../src/Workhorse.Hosting/Workhorse.Hosting.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Extensions.Hosting" />
+  </ItemGroup>
+</Project>

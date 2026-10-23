@@ -15,6 +15,8 @@ import { pathToFileURL } from "node:url";
 export const DOTNET_TEST_PROJECTS = [
   "dotnet/tests/Workhorse.Tests",
   "dotnet/tests/Workhorse.AspNetCore.Tests",
+  "dotnet/examples/Workhorse.Examples.Tests",
+  "dotnet/examples/Workhorse.Examples.Programs.Tests",
 ] as const;
 
 const repository = path.resolve(import.meta.dirname, "..");

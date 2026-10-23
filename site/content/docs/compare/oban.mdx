@@ -1,6 +1,6 @@
 ---
 title: "Workhorse compared with Oban"
-description: "Oban vs Workhorse: an Elixir task queue on a SQL database, and a PostgreSQL task queue with workers in seven languages. Compare their features and editions, find when Oban is the better choice, and move a job to Workhorse."
+description: "Oban vs Workhorse: an Elixir task queue on a SQL database, and a PostgreSQL task queue with workers in eight languages. Compare their features and editions, find when Oban is the better choice, and move a job to Workhorse."
 ---
 
 Oban is a task queue for Elixir that keeps its work in PostgreSQL, MySQL, or SQLite. It has a free
@@ -16,7 +16,7 @@ The two products share the base of a database queue: transactional enqueue, dela
 priorities, refusal of duplicate jobs, retries, and a free dashboard. They differ in five areas:
 
 - **Languages.** Oban runs jobs in Elixir. A separate package, oban-py, runs jobs in Python.
-  Workhorse has workers in seven languages, and Elixir is not one of them. Thus a move from Oban to
+  Workhorse has workers in eight languages, and Elixir is not one of them. Thus a move from Oban to
   Workhorse changes the language of your Elixir workers.
 - **Editions.** Oban keeps some features in Oban Pro. Limits across all nodes, rate limits, task
   dependencies, and batches with callbacks need Oban Pro. Workhorse has these features in its

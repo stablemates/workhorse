@@ -1,0 +1,31 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!--
+    The C# snippets of the documentation (SM-1628). Each `// docs:start <name>` region is one
+    snippet. The language example check of the site build requires every ```csharp fence in the
+    guides, the site pages, and the READMEs to equal a dedented region, and every region to appear
+    in one fence or landing snippet. `pnpm dotnet:build` compiles the regions, `pnpm dotnet:lint` formats
+    them, and Workhorse.Examples.Tests runs them against PostgreSQL. This project is never packed.
+  -->
+  <PropertyGroup>
+    <IsPackable>false</IsPackable>
+    <RootNamespace>Workhorse.Examples</RootNamespace>
+    <!--
+      A snippet reads as application code. Application code does not document its members, and it
+      awaits without ConfigureAwait(false), because ASP.NET Core and the Generic Host have no
+      SynchronizationContext. CA1515 asks to make the snippet classes internal, but the tests in
+      another assembly create them.
+    -->
+    <NoWarn>$(NoWarn);CS1591;CA2007;CA1515</NoWarn>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../../src/Workhorse/Workhorse.csproj" />
+    <ProjectReference Include="../../src/Workhorse.Hosting/Workhorse.Hosting.csproj" />
+    <ProjectReference Include="../../src/Workhorse.EntityFrameworkCore/Workhorse.EntityFrameworkCore.csproj" />
+    <ProjectReference Include="../../src/Workhorse.AspNetCore/Workhorse.AspNetCore.csproj" />
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+  </ItemGroup>
+  <ItemGroup>
+    <!-- Microsoft.AspNetCore.App brings the Generic Host. The EF Core snippet uses the Npgsql provider. -->
+    <PackageReference Include="Npgsql.EntityFrameworkCore.PostgreSQL" />
+  </ItemGroup>
+</Project>

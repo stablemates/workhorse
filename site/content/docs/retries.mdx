@@ -34,7 +34,7 @@ The waits become longer because each failure shows that the provider needs more 
 
 To set the budget, give `maxAttempts` when you enqueue the task.
 
-<Tabs items={["TypeScript", "Python", "Go", "Rust", "Ruby", "Java", "Kotlin"]}>
+<Tabs items={["TypeScript", "Python", "Go", "Rust", "Ruby", "Java", "Kotlin", "C#"]}>
   <Tab value="TypeScript">
     ```ts
     await queue.enqueue("provider.sync", { accountId }, { maxAttempts: 5 });
@@ -89,6 +89,14 @@ To set the budget, give `maxAttempts` when you enqueue the task.
     )
     ```
   </Tab>
+  <Tab value="C#">
+    ```csharp
+    await queue.EnqueueAsync(
+        "provider.sync",
+        new { accountId },
+        new EnqueueOptions { MaxAttempts = 5 });
+    ```
+  </Tab>
 </Tabs>
 
 PostgreSQL checks the budget on each failure. A worker setting can change the delay, but it cannot
@@ -139,7 +147,7 @@ Workhorse stores the policy with the task. A policy has one of three types:
 - **Decorrelated jitter.** The delay is random in a range. The range becomes larger after each
   failure, to a maximum.
 
-<Tabs items={["TypeScript", "Python", "Go", "Rust", "Ruby", "Java", "Kotlin"]}>
+<Tabs items={["TypeScript", "Python", "Go", "Rust", "Ruby", "Java", "Kotlin", "C#"]}>
   <Tab value="TypeScript">
     ```ts
     const jitter = { type: "decorrelated-jitter", baseDelayMs: 1_000, maxDelayMs: 60_000 };
@@ -205,6 +213,17 @@ Workhorse stores the policy with the task. A policy has one of three types:
       mapOf("accountId" to accountId),
       EnqueueOptions.builder().retryPolicy(jitter).maxAttempts(5).build(),
     )
+    ```
+  </Tab>
+  <Tab value="C#">
+    ```csharp
+    var jitter = RetryPolicy.DecorrelatedJitter(
+        baseDelay: TimeSpan.FromSeconds(1),
+        maxDelay: TimeSpan.FromSeconds(60));
+    await queue.EnqueueAsync(
+        "provider.sync",
+        new { accountId },
+        new EnqueueOptions { RetryPolicy = jitter, MaxAttempts = 5 });
     ```
   </Tab>
 </Tabs>

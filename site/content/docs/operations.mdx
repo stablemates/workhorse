@@ -368,8 +368,8 @@ More detail: [Data model: Rollup cadence](https://github.com/stablemates/workhor
 Telemetry is the traces, logs, and metrics that a process sends to a monitoring backend. Workhorse
 sends its telemetry through the standard OpenTelemetry APIs of each language. Your application
 selects the SDK, the log handler, and the backend. Telemetry does not change the behavior of the
-queue. TypeScript, Python, Go, Rust, Ruby, Java, and Kotlin workers use the same span and metric
-names. Thus, one set of dashboards can show a fleet with workers in several languages.
+queue. TypeScript, Python, Go, Rust, Ruby, Java, Kotlin, and C# workers use the same span and
+metric names. Thus, one set of dashboards can show a fleet with workers in several languages.
 
 A telemetry provider is the one destination in a process for Workhorse traces, metrics, and logs.
 If no provider is registered, Workhorse discards these records. The queue and the worker operate
@@ -411,6 +411,10 @@ The other languages connect to OpenTelemetry in their own way:
 - **Ruby.** The gem does not depend on OpenTelemetry. If the application loads `opentelemetry-api`,
   the gem emits spans and propagates trace context. If the application also loads
   `opentelemetry-metrics-api`, the gem records metrics.
+- **.NET.** The SDK emits through the `ActivitySource` and the `Meter` of the runtime. Both are named
+  `workhorse`, and the SDK depends on no OpenTelemetry package. An application that uses the
+  OpenTelemetry SDK for .NET calls `AddSource("workhorse")` and `AddMeter("workhorse")`. Without a
+  listener, the SDK starts no span and records no measurement.
 
 <details>
 <summary>Reference: TypeScript provider registration</summary>
@@ -431,6 +435,23 @@ function.
   import.
 
 More detail: [Telemetry: Telemetry provider contract](https://github.com/stablemates/workhorse/blob/main/docs/architecture/telemetry.md#telemetry-provider-contract) and [Telemetry: OpenTelemetry adapter](https://github.com/stablemates/workhorse/blob/main/docs/architecture/telemetry.md#opentelemetry-adapter).
+
+</details>
+
+<details>
+<summary>Reference: .NET instrumentation</summary>
+
+- The `ActivitySource` and the `Meter` both use the instrumentation name `workhorse` and the SDK
+  version.
+- The application calls `AddSource("workhorse")` on its tracer provider and `AddMeter("workhorse")`
+  on its meter provider.
+- The SDK uses `Counter<T>` and `Histogram<T>` from `System.Diagnostics.Metrics`.
+- The enqueue injects W3C trace context through `DistributedContextPropagator.Current`. The worker
+  extracts it and starts the handler span with the enqueue as its parent.
+- The worker logs through the `ILoggerFactory` in `WorkerOptions.LoggerFactory`. Without one, it
+  uses `NullLoggerFactory`.
+
+More detail: [Schema and SQL protocol: .NET telemetry](https://github.com/stablemates/workhorse/blob/main/docs/architecture/schema-and-protocol.md#net-telemetry).
 
 </details>
 
@@ -458,7 +479,7 @@ with a run time 10 minutes later. A worker in another process runs the task.
 In your backend, one trace shows the HTTP request, the enqueue, and the handler run. The handler ran
 10 minutes later in another process.
 
-The TypeScript and Java queues make an enqueue span and store its context. Python, Go, Rust, and
+The TypeScript, Java, and .NET queues make an enqueue span and store its context. Python, Go, Rust, and
 Ruby queues store the active context of the caller. Each worker can restore the two forms, and all
 workers use the same span names. Thus, one trace can include workers in different languages. The Go
 host installs its own providers, and the library adds no SDK or exporter.
@@ -475,7 +496,8 @@ difficult to limit and to remove.
 
 - Each language enforces 1,024 bytes before enqueue: TypeScript `MAX_TRACE_CONTEXT_BYTES`, Python
   `_telemetry.MAX_TRACE_CONTEXT_BYTES`, Go `maxTraceContextBytes`, Ruby
-  `Telemetry::MAX_TRACE_CONTEXT_BYTES`, and Java `Telemetry.MAX_TRACE_CONTEXT_BYTES`. Rust checks
+  `Telemetry::MAX_TRACE_CONTEXT_BYTES`, Java `Telemetry.MAX_TRACE_CONTEXT_BYTES`, and .NET
+  `MaxTraceContextBytes`. Rust checks
   the same limit inline.
 - The column is separate from `task.payload` and excluded from operator projections.
 - An idempotent replay keeps the first accepted context.
@@ -496,9 +518,10 @@ names:
 - Python and Ruby workers: `workhorse.claim`, `workhorse.handler`, `workhorse.retry`,
   `workhorse.complete`, `workhorse.recovery`, and `workhorse.maintenance`.
 - The Java queue and worker: the same six spans and `workhorse.enqueue`.
+- The .NET queue and worker: the same six spans and `workhorse.enqueue`.
 - The Go and Rust workers: only `workhorse.handler`.
 
-More detail: [Telemetry: Trace context propagation](https://github.com/stablemates/workhorse/blob/main/docs/architecture/telemetry.md#trace-context-propagation), [Telemetry: TypeScript spans](https://github.com/stablemates/workhorse/blob/main/docs/architecture/telemetry.md#typescript-spans), [Telemetry: Python spans](https://github.com/stablemates/workhorse/blob/main/docs/architecture/telemetry.md#python-spans), [Telemetry: Go spans](https://github.com/stablemates/workhorse/blob/main/docs/architecture/telemetry.md#go-spans), [Telemetry: Rust spans](https://github.com/stablemates/workhorse/blob/main/docs/architecture/telemetry.md#rust-spans), [Telemetry: Ruby spans](https://github.com/stablemates/workhorse/blob/main/docs/architecture/telemetry.md#ruby-spans), [Telemetry: JVM spans](https://github.com/stablemates/workhorse/blob/main/docs/architecture/telemetry.md#jvm-spans), and [Schema and SQL protocol: JVM telemetry](https://github.com/stablemates/workhorse/blob/main/docs/architecture/schema-and-protocol.md#jvm-telemetry).
+More detail: [Telemetry: Trace context propagation](https://github.com/stablemates/workhorse/blob/main/docs/architecture/telemetry.md#trace-context-propagation), [Telemetry: TypeScript spans](https://github.com/stablemates/workhorse/blob/main/docs/architecture/telemetry.md#typescript-spans), [Telemetry: Python spans](https://github.com/stablemates/workhorse/blob/main/docs/architecture/telemetry.md#python-spans), [Telemetry: Go spans](https://github.com/stablemates/workhorse/blob/main/docs/architecture/telemetry.md#go-spans), [Telemetry: Rust spans](https://github.com/stablemates/workhorse/blob/main/docs/architecture/telemetry.md#rust-spans), [Telemetry: Ruby spans](https://github.com/stablemates/workhorse/blob/main/docs/architecture/telemetry.md#ruby-spans), [Telemetry: JVM spans](https://github.com/stablemates/workhorse/blob/main/docs/architecture/telemetry.md#jvm-spans), [Schema and SQL protocol: JVM telemetry](https://github.com/stablemates/workhorse/blob/main/docs/architecture/schema-and-protocol.md#jvm-telemetry), and [Schema and SQL protocol: .NET telemetry](https://github.com/stablemates/workhorse/blob/main/docs/architecture/schema-and-protocol.md#net-telemetry).
 
 </details>
 
@@ -531,6 +554,9 @@ Go applications give an `*slog.Logger` in `WorkerOptions.Logger`. The Go worker 
 event names and attributes as the JavaScript worker. This applies to handler boundaries, claims,
 settlements, rejected heartbeats, recovery, and batch dispatch.
 
+.NET applications give an `ILoggerFactory` in `WorkerOptions.LoggerFactory`. In a Generic Host,
+`Workhorse.Hosting` takes the logger factory of the host.
+
 <details>
 <summary>Reference: log severities and content</summary>
 
@@ -550,7 +576,9 @@ progress and checkpoint values.
 **Go.** A nil `WorkerOptions.Logger` uses a disabled handler, so routine records do not reach the
 process default logger.
 
-More detail: [Telemetry: Structured logs](https://github.com/stablemates/workhorse/blob/main/docs/architecture/telemetry.md#structured-logs).
+**.NET.** A null `WorkerOptions.LoggerFactory` uses `NullLoggerFactory`, so the worker logs nothing.
+
+More detail: [Telemetry: Structured logs](https://github.com/stablemates/workhorse/blob/main/docs/architecture/telemetry.md#structured-logs) and [Schema and SQL protocol: .NET telemetry](https://github.com/stablemates/workhorse/blob/main/docs/architecture/schema-and-protocol.md#net-telemetry).
 
 </details>
 
@@ -653,7 +681,8 @@ The Rust worker records the metrics of the worker when its `opentelemetry` featu
 the same worker metrics as the Go worker. It does not record schedule firing or routines.
 
 The Ruby and JVM workers record the same metrics as the Python worker. The JVM worker is the Java
-worker, which the Kotlin module and the Spring Boot starter also run.
+worker, which the Kotlin module and the Spring Boot starter also run. The .NET worker records the
+same metrics as the Python worker, and also `workhorse.maintenance.drift`.
 
 Execution metrics use the queue, the task type, and the outcome as attributes. They never use a
 task ID, a payload, a worker ID, or an error message. These values have no stable bound. As metric
@@ -663,18 +692,18 @@ use traces.
 <details>
 <summary>Reference: runtime instruments by runtime</summary>
 
-| Instrument                                                     | TypeScript | Python | Go  | Rust | Ruby | JVM |
-| -------------------------------------------------------------- | ---------- | ------ | --- | ---- | ---- | --- |
-| `workhorse.tasks.enqueued`, `workhorse.tasks.enqueue.outcomes` | Yes        | No     | No  | No   | No   | No  |
-| `workhorse.tasks.claimed`, `.completed`, `.failed`, `.retried` | Yes        | Yes    | Yes | Yes  | Yes  | Yes |
-| `workhorse.tasks.cancellation`, `workhorse.tasks.redrive`      | Yes        | No     | No  | No   | No   | No  |
-| `workhorse.claim.duration`                                     | Yes        | Yes    | Yes | Yes  | Yes  | Yes |
-| `workhorse.handler.*` (five instruments)                       | Yes        | Yes    | Yes | Yes  | Yes  | Yes |
-| `workhorse.worker.heartbeat.failure`                           | Yes        | Yes    | Yes | Yes  | Yes  | Yes |
-| `workhorse.leases.expired`                                     | Yes        | Yes    | Yes | Yes  | Yes  | Yes |
-| `workhorse.schedule.fired`, `workhorse.schedule.lag`           | Yes        | Yes    | No  | No   | Yes  | Yes |
-| `workhorse.maintenance.runs`, `.rows`, `.duration`, `.errors`  | Yes        | Yes    | No  | No   | Yes  | Yes |
-| `workhorse.maintenance.drift`                                  | Yes        | No     | No  | No   | No   | No  |
+| Instrument                                                     | TypeScript | Python | Go  | Rust | Ruby | JVM | .NET |
+| -------------------------------------------------------------- | ---------- | ------ | --- | ---- | ---- | --- | ---- |
+| `workhorse.tasks.enqueued`, `workhorse.tasks.enqueue.outcomes` | Yes        | No     | No  | No   | No   | No  | No   |
+| `workhorse.tasks.claimed`, `.completed`, `.failed`, `.retried` | Yes        | Yes    | Yes | Yes  | Yes  | Yes | Yes  |
+| `workhorse.tasks.cancellation`, `workhorse.tasks.redrive`      | Yes        | No     | No  | No   | No   | No  | No   |
+| `workhorse.claim.duration`                                     | Yes        | Yes    | Yes | Yes  | Yes  | Yes | Yes  |
+| `workhorse.handler.*` (five instruments)                       | Yes        | Yes    | Yes | Yes  | Yes  | Yes | Yes  |
+| `workhorse.worker.heartbeat.failure`                           | Yes        | Yes    | Yes | Yes  | Yes  | Yes | Yes  |
+| `workhorse.leases.expired`                                     | Yes        | Yes    | Yes | Yes  | Yes  | Yes | Yes  |
+| `workhorse.schedule.fired`, `workhorse.schedule.lag`           | Yes        | Yes    | No  | No   | Yes  | Yes | Yes  |
+| `workhorse.maintenance.runs`, `.rows`, `.duration`, `.errors`  | Yes        | Yes    | No  | No   | Yes  | Yes | Yes  |
+| `workhorse.maintenance.drift`                                  | Yes        | No     | No  | No   | No   | No  | Yes  |
 
 The five handler instruments are `workhorse.handler.executions`, `workhorse.handler.duration`,
 `workhorse.handler.runtime`, `workhorse.handler.batch.size`, and `workhorse.handler.batch.linger`.
@@ -690,9 +719,10 @@ both, as the TypeScript fallback does.
 Rust recovery counts one retry for each queue and type that its result lists. It counts a retry
 that the result does not list with `unknown` for both, as the other workers do.
 
-The JVM column covers Java, Kotlin, and the Spring Boot starter.
+The JVM column covers Java, Kotlin, and the Spring Boot starter. The .NET column covers every
+.NET package.
 
-More detail: [Telemetry: Synchronous instruments](https://github.com/stablemates/workhorse/blob/main/docs/architecture/telemetry.md#synchronous-instruments), [Telemetry: Go worker metrics](https://github.com/stablemates/workhorse/blob/main/docs/architecture/telemetry.md#go-worker-metrics), [Telemetry: Rust worker metrics](https://github.com/stablemates/workhorse/blob/main/docs/architecture/telemetry.md#rust-worker-metrics), [Telemetry: Ruby worker metrics](https://github.com/stablemates/workhorse/blob/main/docs/architecture/telemetry.md#ruby-worker-metrics), [Telemetry: JVM worker metrics](https://github.com/stablemates/workhorse/blob/main/docs/architecture/telemetry.md#jvm-worker-metrics), and [Telemetry: Python worker metrics](https://github.com/stablemates/workhorse/blob/main/docs/architecture/telemetry.md#python-worker-metrics).
+More detail: [Telemetry: Synchronous instruments](https://github.com/stablemates/workhorse/blob/main/docs/architecture/telemetry.md#synchronous-instruments), [Telemetry: Go worker metrics](https://github.com/stablemates/workhorse/blob/main/docs/architecture/telemetry.md#go-worker-metrics), [Telemetry: Rust worker metrics](https://github.com/stablemates/workhorse/blob/main/docs/architecture/telemetry.md#rust-worker-metrics), [Telemetry: Ruby worker metrics](https://github.com/stablemates/workhorse/blob/main/docs/architecture/telemetry.md#ruby-worker-metrics), [Telemetry: JVM worker metrics](https://github.com/stablemates/workhorse/blob/main/docs/architecture/telemetry.md#jvm-worker-metrics), [Telemetry: Python worker metrics](https://github.com/stablemates/workhorse/blob/main/docs/architecture/telemetry.md#python-worker-metrics), and [Schema and SQL protocol: .NET telemetry](https://github.com/stablemates/workhorse/blob/main/docs/architecture/schema-and-protocol.md#net-telemetry).
 
 </details>
 
@@ -961,7 +991,7 @@ operator wants the worker to stop claiming tasks during the investigation.
 4. A deploy starts the process again. The new process registers as a new instance, and the worker
    runs again.
 
-<Tabs items={["TypeScript", "Python", "Go", "Rust", "Ruby", "Java", "Kotlin"]}>
+<Tabs items={["TypeScript", "Python", "Go", "Rust", "Ruby", "Java", "Kotlin", "C#"]}>
   <Tab value="TypeScript">
     ```ts
     const admin = new Admin(pool);
@@ -1033,6 +1063,16 @@ operator wants the worker to stop claiming tasks during the investigation.
         true,
         AdminAudit(actor.email, "investigating slow provider", incidentId),
       )
+    ```
+  </Tab>
+  <Tab value="C#">
+    ```csharp
+    var admin = new Admin(dataSource);
+    var workers = await admin.ListWorkersAsync();
+    var result = await admin.SetWorkerPausedAsync(
+        "billing-worker-1",
+        paused: true,
+        new AdminAudit { Actor = actor.Email, Reason = "investigating slow provider", RequestId = incidentId });
     ```
   </Tab>
 </Tabs>

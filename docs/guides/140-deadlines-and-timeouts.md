@@ -50,14 +50,15 @@ copy the old deadline, because it is in the past. A copy makes the new task fail
 <details>
 <summary>Reference: deadline</summary>
 
-| SDK          | Option                                     | Rule                                    |
-| ------------ | ------------------------------------------ | --------------------------------------- |
-| TypeScript   | `EnqueueOptions.deadline: Date`            | A finite absolute timestamp             |
-| Python       | `deadline: datetime`                       | A finite absolute timestamp             |
-| Go           | `EnqueueOptions.Deadline`                  | A finite absolute timestamp             |
-| Rust         | `EnqueueOptions.deadline`                  | A finite absolute timestamp             |
-| Ruby         | `deadline:`                                | A finite absolute timestamp             |
-| Java, Kotlin | `EnqueueOptions.Builder.deadline(Instant)` | An `Instant`, truncated to milliseconds |
+| SDK          | Option                                     | Rule                                          |
+| ------------ | ------------------------------------------ | --------------------------------------------- |
+| TypeScript   | `EnqueueOptions.deadline: Date`            | A finite absolute timestamp                   |
+| Python       | `deadline: datetime`                       | A finite absolute timestamp                   |
+| Go           | `EnqueueOptions.Deadline`                  | A finite absolute timestamp                   |
+| Rust         | `EnqueueOptions.deadline`                  | A finite absolute timestamp                   |
+| Ruby         | `deadline:`                                | A finite absolute timestamp                   |
+| Java, Kotlin | `EnqueueOptions.Builder.deadline(Instant)` | An `Instant`, truncated to milliseconds       |
+| C#           | `EnqueueOptions.Deadline`                  | A `DateTimeOffset`, truncated to milliseconds |
 
 The deadline is optional. Workhorse stores it as `deadline_at`.
 
@@ -78,7 +79,7 @@ If a cancellation was requested first, it writes a `canceled` outcome instead, w
 
 `redrive_v1` clears the old absolute deadline.
 
-More detail: [Task lifecycle: Deadlines and execution timeouts](../architecture/lifecycle.md#deadlines-and-execution-timeouts), [Data model: redrive_v1](../architecture/data-model.md#redrive_v1), and [Schema and SQL protocol: JVM queue](../architecture/schema-and-protocol.md#jvm-queue).
+More detail: [Task lifecycle: Deadlines and execution timeouts](../architecture/lifecycle.md#deadlines-and-execution-timeouts), [Data model: redrive_v1](../architecture/data-model.md#redrive_v1), [Schema and SQL protocol: JVM queue](../architecture/schema-and-protocol.md#jvm-queue), and [Schema and SQL protocol: .NET queue](../architecture/schema-and-protocol.md#net-queue).
 
 </details>
 
@@ -130,14 +131,15 @@ differently from a thrown error. Thus, an operator can see if a handler was slow
 <details>
 <summary>Reference: execution timeout</summary>
 
-| SDK          | Option                                              | Rule                                              |
-| ------------ | --------------------------------------------------- | ------------------------------------------------- |
-| TypeScript   | `EnqueueOptions.executionTimeoutMs`                 | An integer from 1 to 31,536,000,000 ms            |
-| Python       | `execution_timeout_ms`                              | An integer from 1 to 31,536,000,000 ms            |
-| Go           | `EnqueueOptions.ExecutionTimeoutMS`                 | The same budget                                   |
-| Rust         | `execution_timeout_ms`                              | The same budget                                   |
-| Ruby         | `execution_timeout:`                                | The same budget, in seconds                       |
-| Java, Kotlin | `EnqueueOptions.Builder.executionTimeout(Duration)` | A `Duration` up to 31,536,000,000 ms; 0 sets none |
+| SDK          | Option                                              | Rule                                                           |
+| ------------ | --------------------------------------------------- | -------------------------------------------------------------- |
+| TypeScript   | `EnqueueOptions.executionTimeoutMs`                 | An integer from 1 to 31,536,000,000 ms                         |
+| Python       | `execution_timeout_ms`                              | An integer from 1 to 31,536,000,000 ms                         |
+| Go           | `EnqueueOptions.ExecutionTimeoutMS`                 | The same budget                                                |
+| Rust         | `execution_timeout_ms`                              | The same budget                                                |
+| Ruby         | `execution_timeout:`                                | The same budget, in seconds                                    |
+| Java, Kotlin | `EnqueueOptions.Builder.executionTimeout(Duration)` | A `Duration` up to 31,536,000,000 ms; 0 sets none              |
+| C#           | `EnqueueOptions.ExecutionTimeout`                   | A `TimeSpan` up to 31,536,000,000 ms; `null` or zero sets none |
 
 The timeout is optional.
 
@@ -160,7 +162,7 @@ The timeout is optional.
 When the deadline and the timeout have both passed, the earlier one settles the attempt. On a tie,
 the deadline wins.
 
-More detail: [Task lifecycle: Deadlines and execution timeouts](../architecture/lifecycle.md#deadlines-and-execution-timeouts), [Data model: Retry delay selection](../architecture/data-model.md#retry-delay-selection), and [Schema and SQL protocol: JVM queue](../architecture/schema-and-protocol.md#jvm-queue).
+More detail: [Task lifecycle: Deadlines and execution timeouts](../architecture/lifecycle.md#deadlines-and-execution-timeouts), [Data model: Retry delay selection](../architecture/data-model.md#retry-delay-selection), [Schema and SQL protocol: JVM queue](../architecture/schema-and-protocol.md#jvm-queue), and [Schema and SQL protocol: .NET queue](../architecture/schema-and-protocol.md#net-queue).
 
 </details>
 
@@ -172,7 +174,8 @@ whole task ends at the deadline. The deadline applies even if attempts are left.
 Set `deadline` with `executionTimeoutMs` in TypeScript. Set `deadline` with `execution_timeout_ms`
 in Python or Rust. Set `Deadline` with `ExecutionTimeoutMS` in Go. Set `deadline:` with
 `execution_timeout:` in Ruby. The Ruby timeout is in seconds. Set `deadline` with `executionTimeout`
-on `EnqueueOptions.builder()` in Java and Kotlin.
+on `EnqueueOptions.builder()` in Java and Kotlin. Set `Deadline` with `ExecutionTimeout` on
+`EnqueueOptions` in C#.
 
 ## Keep each handler short
 

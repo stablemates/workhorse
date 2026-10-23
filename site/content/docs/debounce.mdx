@@ -27,7 +27,7 @@ Three requests make one task, and the task uses the latest revision. Each reques
 
 To use debounce, give a `debounce` key and a window when you enqueue the task.
 
-<Tabs items={["TypeScript", "Python", "Go", "Rust", "Ruby", "Java", "Kotlin"]}>
+<Tabs items={["TypeScript", "Python", "Go", "Rust", "Ruby", "Java", "Kotlin", "C#"]}>
   <Tab value="TypeScript">
     ```ts
     const result = await queue.enqueueWithResult("search.reindex", { documentId, revision }, {
@@ -104,6 +104,23 @@ To use debounce, give a `debounce` key and a window when you enqueue the task.
       )
     ```
   </Tab>
+  <Tab value="C#">
+    ```csharp
+    var result = await queue.EnqueueAsync(
+        "search.reindex",
+        new { documentId, revision },
+        new EnqueueOptions
+        {
+            Debounce = new Debounce
+            {
+                Key = documentId,
+                Window = quietPeriod,
+                Schedule = DebounceSchedule.Reset,
+                Scope = "search-index",
+            },
+        });
+    ```
+  </Tab>
 </Tabs>
 
 If two app servers send a request with the same key at the same time, PostgreSQL runs the requests
@@ -138,6 +155,9 @@ a `reason`.
 
 In Ruby, `result.reason` is `:incompatible_key_mode`, `:not_pending`, or `:window_elapsed_pending`
 for a `:non_replaceable` result, and `nil` for every other outcome.
+
+In C#, `result.Reason` is `IncompatibleKeyMode`, `NotPending`, or `WindowElapsedPending` of
+`EnqueueNonReplaceableReason` for a `NonReplaceable` result, and `null` for every other outcome.
 
 **Concurrency.** `enqueue_debounce_v1` takes a transaction advisory lock on the scope and key.
 Concurrent requests for one key run one at a time.

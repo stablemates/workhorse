@@ -350,14 +350,15 @@ try {
   // above the built size, so it catches the pipeline losing its transformer
   // rather than ordinary growth.
   // For SM-1480, the Java and Kotlin tabs of SM-1464 give a landing page of 618400 bytes.
-  // The ceiling is about 5% above that size, rounded up to a multiple of 5000 bytes.
+  // For SM-1628, the C# tabs give a landing page of 698845 bytes. The ceiling is about 5% above
+  // that size, rounded up to a multiple of 5000 bytes.
   if (landingHtml.includes("--shiki-light:")) {
     throw new Error(
       "The landing page ships per-token inline colours again; gen-code-theme.ts and the highlighting transformers have come apart",
     );
   }
   const landingBytes = Buffer.byteLength(landingHtml, "utf8");
-  if (landingBytes > 650_000) {
+  if (landingBytes > 735_000) {
     throw new Error(`The landing page grew to ${landingBytes} bytes, past its shape`);
   }
 

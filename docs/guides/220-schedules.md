@@ -86,7 +86,8 @@ so your code controls the schedules.
 | `task.retryPolicy`    | Optional. Normalized like an enqueue retry policy.       |
 | `options.prune`       | Optional. Default `true`.                                |
 
-Python exposes `sync_schedules`, and Go exposes `SyncSchedules`.
+Python exposes `sync_schedules`, Go exposes `SyncSchedules`, and .NET exposes
+`Queue.SyncSchedulesAsync`.
 
 **Synchronization.** The SDK first validates each payload against the current payload contract of
 its task type. `sync_schedule_definitions_v2` then validates every definition before it writes any
@@ -99,7 +100,7 @@ them into the task, so a later deploy cannot reinterpret an existing definition.
   cron expression, timezone, or catch-up policy changed. A `skip` definition that a deploy enables
   again starts there too.
 
-More detail: [Data model: Synchronization](../architecture/data-model.md#synchronization-3).
+More detail: [Data model: Synchronization](../architecture/data-model.md#synchronization-3) and [Schema and SQL protocol: .NET queue](../architecture/schema-and-protocol.md#net-queue).
 
 </details>
 
@@ -115,7 +116,7 @@ More detail: [Data model: Synchronization](../architecture/data-model.md#synchro
 
 Workhorse has no scheduler process. A worker evaluates the namespaces that you list, as part of its
 maintenance. To make a TypeScript worker offer a namespace, set `scheduleNamespaces`. Python workers
-use `schedule_namespaces`, and Go workers use `WorkerOptions.ScheduleNamespaces`.
+use `schedule_namespaces`, and Go and .NET workers use `WorkerOptions.ScheduleNamespaces`.
 
 ```ts
 const worker = new Worker(queue, { scheduleNamespaces: ["billing-production"] });
@@ -138,11 +139,12 @@ A worker offers no namespace by default, so it fires no schedule.
 | TypeScript | `scheduleNamespaces`               |
 | Python     | `schedule_namespaces`              |
 | Go         | `WorkerOptions.ScheduleNamespaces` |
+| .NET       | `WorkerOptions.ScheduleNamespaces` |
 
 Every runtime calls `fire_due_schedules_v2` on its maintenance cadence, with a null `now`. The
 catch-up limit is also a worker option, as the catch-up reference shows.
 
-More detail: [Data model: Namespace locking](../architecture/data-model.md#namespace-locking).
+More detail: [Data model: Namespace locking](../architecture/data-model.md#namespace-locking) and [Schema and SQL protocol: .NET worker](../architecture/schema-and-protocol.md#net-worker).
 
 </details>
 
@@ -195,10 +197,11 @@ limit advances the position only to its last occurrence.
 | TypeScript | `ScheduleDefinition.catchupPolicy`  | `scheduleCatchupLimit`               |
 | Python     | `ScheduleDefinition.catchup_policy` | `schedule_catchup_limit`             |
 | Go         | `ScheduleDefinition.CatchupPolicy`  | `WorkerOptions.ScheduleCatchupLimit` |
+| .NET       | `ScheduleDefinition.CatchupPolicy`  | `WorkerOptions.ScheduleCatchupLimit` |
 
 The policy defaults to `skip`. The limit accepts 1 to 10,000 and defaults to 100.
 
-More detail: [Data model: Firing due schedules](../architecture/data-model.md#firing-due-schedules) and [Data model: SDK options](../architecture/data-model.md#sdk-options).
+More detail: [Data model: Firing due schedules](../architecture/data-model.md#firing-due-schedules), [Data model: SDK options](../architecture/data-model.md#sdk-options), and [Schema and SQL protocol: .NET worker](../architecture/schema-and-protocol.md#net-worker).
 
 </details>
 

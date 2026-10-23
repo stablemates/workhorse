@@ -130,10 +130,12 @@ A change to any of these before the window closes raises `EnqueueIdempotencyConf
 - payload and result size limits, or sensitive keys;
 - `windowMs`.
 
+In C#, the error is `EnqueueIdempotencyConflictException`.
+
 The task state does not matter. A request is `coalesced` while the kept task is `ready`,
 `scheduled`, `active`, or finished. Throttle controls acceptance, not execution.
 
-More detail: [Task lifecycle: Repeat before expiry](../architecture/lifecycle.md#repeat-before-expiry).
+More detail: [Task lifecycle: Repeat before expiry](../architecture/lifecycle.md#repeat-before-expiry) and [Schema and SQL protocol: .NET errors](../architecture/schema-and-protocol.md#net-errors).
 
 </details>
 

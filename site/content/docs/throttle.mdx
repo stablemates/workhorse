@@ -30,7 +30,7 @@ the task that opened the window.
 
 To use throttle, give a `throttle` key and a window when you enqueue the task.
 
-<Tabs items={["TypeScript", "Python", "Go", "Rust", "Ruby", "Java", "Kotlin"]}>
+<Tabs items={["TypeScript", "Python", "Go", "Rust", "Ruby", "Java", "Kotlin", "C#"]}>
   <Tab value="TypeScript">
     ```ts
     const result = await queue.enqueueWithResult("email.digest", { accountId }, {
@@ -100,6 +100,17 @@ To use throttle, give a `throttle` key and a window when you enqueue the task.
         mapOf("accountId" to accountId),
         EnqueueOptions.builder().throttle(Throttle(accountId, digestWindow, "digest")).build(),
       )
+    ```
+  </Tab>
+  <Tab value="C#">
+    ```csharp
+    var result = await queue.EnqueueAsync(
+        "email.digest",
+        new { accountId },
+        new EnqueueOptions
+        {
+            Throttle = new Throttle { Key = accountId, Window = digestWindow, Scope = "digest" },
+        });
     ```
   </Tab>
 </Tabs>
@@ -186,10 +197,12 @@ A change to any of these before the window closes raises `EnqueueIdempotencyConf
 - payload and result size limits, or sensitive keys;
 - `windowMs`.
 
+In C#, the error is `EnqueueIdempotencyConflictException`.
+
 The task state does not matter. A request is `coalesced` while the kept task is `ready`,
 `scheduled`, `active`, or finished. Throttle controls acceptance, not execution.
 
-More detail: [Task lifecycle: Repeat before expiry](https://github.com/stablemates/workhorse/blob/main/docs/architecture/lifecycle.md#repeat-before-expiry).
+More detail: [Task lifecycle: Repeat before expiry](https://github.com/stablemates/workhorse/blob/main/docs/architecture/lifecycle.md#repeat-before-expiry) and [Schema and SQL protocol: .NET errors](https://github.com/stablemates/workhorse/blob/main/docs/architecture/schema-and-protocol.md#net-errors).
 
 </details>
 

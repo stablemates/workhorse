@@ -88,7 +88,9 @@ For example, if the order service runs on MySQL, stop. Report the reason, and do
 
 The TypeScript, Python, Go, and Rust compatibility checks return the same five refusal codes. Ruby
 returns the same codes as symbols with underscores, for example `:schema_too_old`. Java and Kotlin
-return them as `CompatibilityException.Code` values, for example `SCHEMA_TOO_OLD`.
+return them as `CompatibilityException.Code` values, for example `SCHEMA_TOO_OLD`. The .NET SDK
+returns them as `CompatibilityCode` values in `CompatibilityException.Code`, for example
+`SchemaTooOld`.
 
 | Code                      | Meaning                                                              |
 | ------------------------- | -------------------------------------------------------------------- |
@@ -106,8 +108,9 @@ return them as `CompatibilityException.Code` values, for example `SCHEMA_TOO_OLD
 | Rust, Ruby | `assert_compatible`         |
 | Java       | `Queue.assertCompatible()`  |
 | Kotlin     | `assertCompatibleSuspend()` |
+| C#         | `AssertCompatibleAsync()`   |
 
-More detail: [Schema and SQL protocol: Schema compatibility checks](../architecture/schema-and-protocol.md#schema-compatibility-checks) and [Schema and SQL protocol: JVM connection sources](../architecture/schema-and-protocol.md#jvm-connection-sources).
+More detail: [Schema and SQL protocol: Schema compatibility checks](../architecture/schema-and-protocol.md#schema-compatibility-checks), [Schema and SQL protocol: JVM connection sources](../architecture/schema-and-protocol.md#jvm-connection-sources), and [Schema and SQL protocol: .NET errors](../architecture/schema-and-protocol.md#net-errors).
 
 </details>
 
@@ -141,8 +144,8 @@ TypeScript project runs the binary of its own dependency:
 npm exec --no -- workhorse schema install
 ```
 
-A Python, Go, Rust, Ruby, Java, or Kotlin project has no Node.js dependencies. It names the version
-in the command. This version must be equal to the SDK version of the application:
+A Python, Go, Rust, Ruby, Java, Kotlin, or .NET project has no Node.js dependencies. It names the
+version in the command. This version must be equal to the SDK version of the application:
 
 ```bash
 npx --package @stablemates/workhorse@0.9.0 workhorse schema install
@@ -153,7 +156,8 @@ names the Node.js version. The application does not need Node.js.
 
 When the application starts, assert compatibility. Use `assertSchemaCompatible` in TypeScript,
 `assert_schema_compatible` in Python, `AssertSchemaCompatible` in Go, or `assert_compatible` in Rust
-and Ruby. Java and Kotlin call the compatibility assertion of their queue.
+and Ruby. Java and Kotlin call the compatibility assertion of their queue. C# calls the asynchronous
+compatibility assertion of its queue.
 
 Install the SDK of the application language:
 
@@ -171,6 +175,9 @@ The Ruby SDK also needs the `connection_pool` gem.
 Maven Central serves the three JVM artifacts from `0.9.0`. The JVM SDK has no install command
 here. Its README names the three artifacts and their supported versions.
 
+[Installation](https://workhorse.run/docs/installation.md) names the four packages of the .NET SDK.
+NuGet does not serve them yet, so the .NET SDK has no install command here.
+
 ### Enqueue in the transaction of your application data
 
 Enqueue the task in the same transaction that writes the application data. Then you do not need an
@@ -183,6 +190,7 @@ outbox. Each language gets the transaction in a different way:
 - Java passes the open JDBC connection as the first argument of the enqueue call. Kotlin gives the
   connection to the suspend wrapper by name. A Spring Boot application enqueues inside its
   transactional method.
+- C# gets a queue for the open Npgsql connection from the Using method of its queue.
 
 ### Register a handler
 
@@ -196,6 +204,7 @@ continuous method:
 - `Stablemates::Workhorse.run_worker_process(worker)` in Ruby.
 - The process helper of the core in Java and Kotlin, or the Spring Boot starter with its worker
   switch on.
+- The asynchronous run method of the worker in C#, or the hosted worker of the .NET hosting package.
 
 ### Set the failure policy when you enqueue
 
@@ -219,6 +228,9 @@ remain.
 - **Java and Kotlin.** Call `Queue.assertCompatible()` at startup. Pass the open `Connection` as the
   first argument of `Queue.enqueue`, or call it inside a Spring `@Transactional` method. Run the
   worker with `WorkerProcess.runWorkerProcess(worker)`.
+- **C#.** Call `Queue.AssertCompatibleAsync()` at startup. Pass the open `NpgsqlConnection` to
+  `Queue.Using`, or get it from `DbContext.Database` with `GetWorkhorseConnection`. Run the worker
+  with `worker.RunAsync(stoppingToken)`, or register the hosted worker with `AddWorkhorseWorker`.
 
 | Failure option       | Bounds                                               |
 | -------------------- | ---------------------------------------------------- |
@@ -227,7 +239,7 @@ remain.
 | `deadline`           | The whole task. When it passes, the task ends.       |
 | `executionTimeoutMs` | One attempt. The task retries while attempts remain. |
 
-More detail: [Task lifecycle](../architecture/lifecycle.md), [Schema and SQL protocol: JVM worker processes](../architecture/schema-and-protocol.md#jvm-worker-processes), [Schema and SQL protocol: JVM connection sources](../architecture/schema-and-protocol.md#jvm-connection-sources), and [Schema and SQL protocol: Spring Boot starter](../architecture/schema-and-protocol.md#spring-boot-starter).
+More detail: [Task lifecycle](../architecture/lifecycle.md), [Schema and SQL protocol: JVM worker processes](../architecture/schema-and-protocol.md#jvm-worker-processes), [Schema and SQL protocol: JVM connection sources](../architecture/schema-and-protocol.md#jvm-connection-sources), [Schema and SQL protocol: Spring Boot starter](../architecture/schema-and-protocol.md#spring-boot-starter), [Schema and SQL protocol: .NET connections](../architecture/schema-and-protocol.md#net-connections), [Schema and SQL protocol: .NET running and stopping](../architecture/schema-and-protocol.md#net-running-and-stopping), and [Schema and SQL protocol: .NET hosting](../architecture/schema-and-protocol.md#net-hosting).
 
 </details>
 
@@ -262,9 +274,10 @@ The site page [`/docs/for-ai-agents.md`](https://workhorse.run/docs/for-ai-agent
 program for each language.
 
 Expect two differences between the languages. Go's `RetryPolicy` is a `map[string]any`, but
-TypeScript has a typed union. Python uses a mapping, Rust a JSON object, and Ruby a Hash. Thus, only
-TypeScript rejects a malformed policy when it compiles. Each language has a schema compatibility
-assertion, as the section about the schema install names.
+TypeScript has a typed union. Python uses a mapping, Rust a JSON object, and Ruby a Hash. C# makes
+the policy with a typed factory method. Thus, only TypeScript and C# reject a malformed policy when
+they compile. Each language has a schema compatibility assertion, as the section about the schema
+install names.
 
 ## Confirm that the task is complete
 
@@ -289,24 +302,26 @@ missing worker.
 | Rust, Ruby | Construct the `Queue` over the open transaction.                     |
 | Java       | Pass the open `Connection` as the first argument of `enqueue`.       |
 | Kotlin     | Pass the open `Connection` as `connection` to `enqueueSuspend`.      |
+| C#         | Call `Queue.Using` with the open `NpgsqlConnection`.                 |
 
 **Checkpoint and read-back**
 
-| Language   | Checkpoint                                  | Read the task back |
-| ---------- | ------------------------------------------- | ------------------ |
-| TypeScript | `context.checkpoint(name, operation)`       | `Admin.getTask`    |
-| Python     | `context.checkpoint(name, operation)`       | `Admin.get_task`   |
-| Go         | `handler.Checkpoint(name, operation)`       | `Admin.GetTask`    |
-| Rust       | `context.checkpoint(name, operation)`       | `Admin::get_task`  |
-| Ruby       | `context.checkpoint(name) { … }`            | `Admin#get_task`   |
-| Java       | `context.checkpoint(name, type, operation)` | `Admin.getTask`    |
-| Kotlin     | `context.checkpoint<T>(name) { … }`         | `getTaskSuspend`   |
+| Language   | Checkpoint                                  | Read the task back   |
+| ---------- | ------------------------------------------- | -------------------- |
+| TypeScript | `context.checkpoint(name, operation)`       | `Admin.getTask`      |
+| Python     | `context.checkpoint(name, operation)`       | `Admin.get_task`     |
+| Go         | `handler.Checkpoint(name, operation)`       | `Admin.GetTask`      |
+| Rust       | `context.checkpoint(name, operation)`       | `Admin::get_task`    |
+| Ruby       | `context.checkpoint(name) { … }`            | `Admin#get_task`     |
+| Java       | `context.checkpoint(name, type, operation)` | `Admin.getTask`      |
+| Kotlin     | `context.checkpoint<T>(name) { … }`         | `getTaskSuspend`     |
+| C#         | `context.CheckpointAsync(name, operation)`  | `Admin.GetTaskAsync` |
 
 **Failure policy.** `maxAttempts` and `retryPolicy` set the retry budget. `deadline` ends the whole
 task when it passes. `executionTimeoutMs` ends one attempt; the task then retries under its policy
 while attempts remain.
 
-More detail: [Task lifecycle: Enqueue](../architecture/lifecycle.md#enqueue), [Schema and SQL protocol: JVM handler context](../architecture/schema-and-protocol.md#jvm-handler-context), [Schema and SQL protocol: JVM connection sources](../architecture/schema-and-protocol.md#jvm-connection-sources), [Schema and SQL protocol: Kotlin handler context](../architecture/schema-and-protocol.md#kotlin-handler-context), and [Schema and SQL protocol: Kotlin module](../architecture/schema-and-protocol.md#kotlin-module).
+More detail: [Task lifecycle: Enqueue](../architecture/lifecycle.md#enqueue), [Schema and SQL protocol: JVM handler context](../architecture/schema-and-protocol.md#jvm-handler-context), [Schema and SQL protocol: JVM connection sources](../architecture/schema-and-protocol.md#jvm-connection-sources), [Schema and SQL protocol: Kotlin handler context](../architecture/schema-and-protocol.md#kotlin-handler-context), [Schema and SQL protocol: Kotlin module](../architecture/schema-and-protocol.md#kotlin-module), [Schema and SQL protocol: .NET connections](../architecture/schema-and-protocol.md#net-connections), [Schema and SQL protocol: .NET handler context](../architecture/schema-and-protocol.md#net-handler-context), and [Schema and SQL protocol: .NET admin](../architecture/schema-and-protocol.md#net-admin).
 
 </details>
 
@@ -329,14 +344,15 @@ page, because the compilation of its programs is a stronger check.
 <details>
 <summary>Reference: example checks</summary>
 
-| Language     | Check                                                                                                                                                |
-| ------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
-| TypeScript   | `tsc` type-checks the `ts verify` fence.                                                                                                             |
-| Python       | `ruff format --check` and `mypy` check the `python verify` fence.                                                                                    |
-| Go           | `gofmt` and the Go compiler check the `go verify` fence.                                                                                             |
-| Rust         | The fence must equal a `docs:start` region in `rust/examples/`, which `cargo clippy --all-targets` compiles.                                         |
-| Ruby         | The fence must equal a `docs:start` region in `ruby/examples/`, which a documentation spec runs against PostgreSQL.                                  |
-| Java, Kotlin | The fence must equal a `docs:start` region in `jvm/examples/src/main/`, which `pnpm jvm:build` compiles and `pnpm jvm:test` runs against PostgreSQL. |
+| Language     | Check                                                                                                                                                                   |
+| ------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| TypeScript   | `tsc` type-checks the `ts verify` fence.                                                                                                                                |
+| Python       | `ruff format --check` and `mypy` check the `python verify` fence.                                                                                                       |
+| Go           | `gofmt` and the Go compiler check the `go verify` fence.                                                                                                                |
+| Rust         | The fence must equal a `docs:start` region in `rust/examples/`, which `cargo clippy --all-targets` compiles.                                                            |
+| Ruby         | The fence must equal a `docs:start` region in `ruby/examples/`, which a documentation spec runs against PostgreSQL.                                                     |
+| Java, Kotlin | The fence must equal a `docs:start` region in `jvm/examples/src/main/`, which `pnpm jvm:build` compiles and `pnpm jvm:test` runs against PostgreSQL.                    |
+| C#           | The fence must equal a `docs:start` region in `dotnet/examples/Workhorse.Examples/`, which `pnpm dotnet:build` compiles and `pnpm dotnet:test` runs against PostgreSQL. |
 
 `site/scripts/check-language-examples.ts` runs these checks. Its `crossSdkGuidePaths` list, the
 feature-page name sweep, does not include `for-ai-agents.mdx`.

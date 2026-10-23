@@ -350,12 +350,16 @@ code can handle the error without matching database text.
   which carries `taskId`, `limit`, and `max`.
 - PostgreSQL raises a cycle with SQLSTATE `P1003`. `Queue` throws `DependencyCycleError`, which
   carries `dependentTaskId`, `prerequisiteTaskId`, `cycleTaskIds`, and `truncated`.
+- The C# `Queue` throws `DependencyLimitExceededException` and `DependencyCycleException`. Their
+  `Details` holds the same fields. `DiagnosedException.Details` gets the fields with the default
+  Npgsql settings.
 - One request names at most 100 prerequisites (`MAX_TASK_DEPENDENCIES`). The TypeScript SDK
-  rejects a longer list with a `RangeError` before it queries.
+  rejects a longer list with a `RangeError` before it queries. The C# SDK rejects it with an
+  `ArgumentException` before it queries.
 - `prune_released_dependencies_v1` removes a released edge after its dependent has a terminal
   outcome.
 
-More detail: [Data model: Columns and bounds](../architecture/data-model.md#columns-and-bounds) and [Data model: Edge validation](../architecture/data-model.md#edge-validation).
+More detail: [Data model: Columns and bounds](../architecture/data-model.md#columns-and-bounds), [Data model: Edge validation](../architecture/data-model.md#edge-validation), and [Schema and SQL protocol: .NET errors](../architecture/schema-and-protocol.md#net-errors).
 
 </details>
 
