@@ -3357,11 +3357,14 @@ async fn a_stop_with_a_full_pool_finishes_within_the_grace() {
     drop(held);
 }
 
-/// Whether a statement waits for a lock on `workhorse.worker_registry`.
+/// Whether a statement in this database waits for a lock on `workhorse.worker_registry`. A
+/// relation OID is unique only in its database, so another database on the server can have a
+/// relation with the same OID.
 async fn registry_lock_waits(observer: &Client) -> bool {
     let waiting: i64 = observer
         .query_one(
             "SELECT count(*) FROM pg_locks WHERE NOT granted \
+             AND database = (SELECT oid FROM pg_database WHERE datname = current_database()) \
              AND relation = 'workhorse.worker_registry'::regclass",
             &[],
         )
@@ -3475,11 +3478,14 @@ async fn hold_draining_refreshes(observer: &Client) {
         .unwrap();
 }
 
-/// Whether a statement waits for the advisory lock `DRAINING_REFRESH_HOLD`.
+/// Whether a statement in this database waits for the advisory lock `DRAINING_REFRESH_HOLD`. An
+/// advisory key is scoped to its database, and a run of this test from another checkout on the same
+/// server uses the same key.
 async fn draining_refresh_held(observer: &Client) -> bool {
     let waiting: i64 = observer
         .query_one(
             "SELECT count(*) FROM pg_locks WHERE locktype = 'advisory' AND NOT granted \
+             AND database = (SELECT oid FROM pg_database WHERE datname = current_database()) \
              AND objid = $1::bigint::oid",
             &[&DRAINING_REFRESH_HOLD],
         )
