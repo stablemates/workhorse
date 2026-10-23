@@ -17,6 +17,7 @@ import {
 import { Fragment, useState } from "react";
 import { useConfirmationActivity } from "../dropdown-activity.js";
 import { statusColor } from "../status-colors.js";
+import { StatusText } from "../status-badge.js";
 import { HelpButton } from "../components/help-button.js";
 import { EmptyState, PageHeader } from "../components/task-list.js";
 import { formatDuration, formatExact, formatRelative } from "../preferences.js";
@@ -361,15 +362,18 @@ export function CronPage({
                                     : statusColor(maintenanceStatus)
                                 }
                                 variant="light"
-                                role="status"
                                 tabIndex={0}
-                                aria-label={`Status: ${maintenanceStatus}`}
                               >
-                                {maintenanceStatus === "scheduled"
-                                  ? "OK"
-                                  : maintenanceStatus === "incomplete"
-                                    ? "Partial"
-                                    : "Due"}
+                                <StatusText
+                                  text={
+                                    maintenanceStatus === "scheduled"
+                                      ? "OK"
+                                      : maintenanceStatus === "incomplete"
+                                        ? "Partial"
+                                        : "Due"
+                                  }
+                                  label={`Status: ${maintenanceStatus}`}
+                                />
                               </Badge>
                             </Tooltip>
                           )}

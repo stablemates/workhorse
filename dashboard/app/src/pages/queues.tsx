@@ -25,6 +25,8 @@ import {
 } from "../concurrency-policy.js";
 import { describeRateLimit, describeRateThrottle, rateLimitCappedFootnote } from "../rate-limit.js";
 import { BudgetsTable, budgetCappedFootnote } from "../budgets-table.js";
+import { ExplainedValue } from "../components/explained-value.js";
+import { warningTextColor } from "../status-colors.js";
 import {
   describeQueueTier,
   queueTierActions,
@@ -185,9 +187,9 @@ export function QueuesPage({
                         />
                       </Table.Td>
                       <Table.Td>
-                        <Text size="sm" title={tier.title} aria-label={`Tier: ${tier.title}`}>
+                        <ExplainedValue size="sm" explanation={tier.title}>
                           {tier.label}
-                        </Text>
+                        </ExplainedValue>
                         {tier.historyLabel === null ? null : (
                           <Text c="dimmed" size="xs">
                             {tier.historyLabel}
@@ -198,35 +200,33 @@ export function QueuesPage({
                       <Table.Td ta="right">{formatCount(queue.ready)}</Table.Td>
                       <Table.Td ta="right">{formatCount(queue.active)}</Table.Td>
                       <Table.Td ta="right">
-                        <Text size="sm" title={limit.title} aria-label={`Limit: ${limit.title}`}>
+                        <ExplainedValue size="sm" explanation={limit.title}>
                           {limit.label}
-                        </Text>
+                        </ExplainedValue>
                         {keys.label === null ? null : (
-                          <Text
-                            c={keys.saturated ? "yellow.8" : "dimmed"}
+                          <ExplainedValue
+                            c={keys.saturated ? warningTextColor : "dimmed"}
                             size="xs"
-                            title={keys.title}
-                            aria-label={`Per key: ${keys.title}`}
+                            explanation={keys.title}
                           >
                             {keys.label}
-                          </Text>
+                          </ExplainedValue>
                         )}
                       </Table.Td>
                       <Table.Td ta="right">
-                        <Text
+                        <ExplainedValue
                           size="sm"
-                          c={blocked.blocking ? "yellow.8" : undefined}
+                          c={blocked.blocking ? warningTextColor : undefined}
                           fw={blocked.blocking ? 650 : undefined}
-                          title={blocked.title}
-                          aria-label={`Blocked: ${blocked.title}`}
+                          explanation={blocked.title}
                         >
                           {blocked.label}
-                        </Text>
+                        </ExplainedValue>
                       </Table.Td>
                       <Table.Td ta="right">
-                        <Text size="sm" title={rate.title} aria-label={`Start rate: ${rate.title}`}>
+                        <ExplainedValue size="sm" explanation={rate.title}>
                           {rate.label}
-                        </Text>
+                        </ExplainedValue>
                         {rate.keyedLabel === null ? null : (
                           <Text c="dimmed" size="xs">
                             {rate.keyedLabel}
@@ -234,15 +234,14 @@ export function QueuesPage({
                         )}
                       </Table.Td>
                       <Table.Td ta="right">
-                        <Text
+                        <ExplainedValue
                           size="sm"
-                          c={throttled.throttling ? "yellow.8" : undefined}
+                          c={throttled.throttling ? warningTextColor : undefined}
                           fw={throttled.throttling ? 650 : undefined}
-                          title={throttled.title}
-                          aria-label={`Rate-limited: ${throttled.title}`}
+                          explanation={throttled.title}
                         >
                           {throttled.label}
-                        </Text>
+                        </ExplainedValue>
                       </Table.Td>
                       <Table.Td
                         ta="right"

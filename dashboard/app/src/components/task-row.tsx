@@ -15,6 +15,7 @@ import {
 } from "./task-list.js";
 import { formatExact, formatRelative } from "../preferences.js";
 import { sameStructure } from "../render-identity.js";
+import { warningTextColor } from "../status-colors.js";
 
 export interface TaskListRowProps {
   task: DashboardTaskRow;
@@ -119,7 +120,7 @@ export const TaskListRow = memo(function TaskListRow({
       <Table.Td className="task-table__col--attempt" ta="right">
         <Text
           size="sm"
-          c={task.attempt > 1 ? "yellow.8" : undefined}
+          c={task.attempt > 1 ? warningTextColor : undefined}
           fw={task.attempt > 1 ? 600 : undefined}
         >
           {task.attempt}/{task.maxAttempts}

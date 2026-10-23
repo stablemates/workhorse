@@ -42,6 +42,7 @@ import {
 import { SystemOutcomeChart, systemWindows } from "../core.js";
 import { BudgetsTable, budgetCappedFootnote } from "../budgets-table.js";
 import { HelpButton } from "../components/help-button.js";
+import { dangerTextColor, warningTextColor } from "../status-colors.js";
 import { SystemHealthChecks } from "../components/system-health-checks.js";
 import { taskDisplayName } from "../components/task-list.js";
 import { presentStorageRelation, retentionCategoryLabels } from "../presentation-policy.js";
@@ -259,7 +260,10 @@ export function SystemPage({
                         </Table.Td>
                         <Table.Td ta="right">{formatCount(type.attempts)}</Table.Td>
                         <Table.Td ta="right">
-                          <Text c={type.errorRate >= 0.05 ? "red.7" : "yellow.8"} size="sm">
+                          <Text
+                            c={type.errorRate >= 0.05 ? dangerTextColor : warningTextColor}
+                            size="sm"
+                          >
                             {formatPercent(type.errorRate)}
                           </Text>
                         </Table.Td>

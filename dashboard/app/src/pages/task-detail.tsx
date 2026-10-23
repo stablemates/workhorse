@@ -104,11 +104,7 @@ export function TaskDetailDrawer({
       id="task-detail-drawer"
       opened={taskDrawerOpened(selectedTaskId)}
       onClose={closeTaskDetail}
-      title={
-        <Text component="h2" fw={600} size="lg" my={0}>
-          Task details
-        </Text>
-      }
+      title="Task details"
       position="right"
       closeButtonProps={{
         id: "task-detail-drawer-close",

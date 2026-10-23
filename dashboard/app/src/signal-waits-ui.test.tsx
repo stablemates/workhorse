@@ -48,14 +48,15 @@ describe("dashboard signal waits", () => {
       );
 
       expect(html.match(/mantine-Badge-root/g)).toHaveLength(1);
-      expect(html).toContain(`aria-label="${label}"`);
+      expect(html).toContain(`>${label}<`);
+      expect(html).not.toContain('role="status"');
       expect(html).toContain(`--mantine-color-${color}-light`);
       expect(html).toContain(
         kind === "durable"
           ? ">Durable wait<"
           : `>Waiting for ${kind === "signal" ? "signal" : "decision"}<`,
       );
-      expect(html).not.toContain('aria-label="Status: scheduled"');
+      expect(html).not.toContain(">Status: scheduled<");
     },
   );
 

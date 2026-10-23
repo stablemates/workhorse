@@ -587,6 +587,7 @@ type DashboardDemoTools
 interface DashboardNotification
 function DashboardNotifications
 interface DashboardProps
+type DashboardThemePreference
 type TaskDetailNavigation
 interface TaskLocationState
 type TaskPageSize
@@ -3005,6 +3006,8 @@ interface DashboardTasksPage {
 
 type DashboardTerminalState = "succeeded" | "failed" | "canceled";
 
+type DashboardThemePreference = DashboardColorScheme | "system";
+
 interface DashboardWorkerController {
   setWorkerPaused?: (workerId: string, paused: boolean, audit: DashboardAuditContext) => Promise<{
     paused: boolean;
@@ -5364,8 +5367,12 @@ interface TelemetryRecorder {
 type TelemetrySpanKind = "internal" | "consumer";
 
 interface ThemeContextValue {
+  /** The color scheme the dashboard shows now. */
   scheme: DashboardColorScheme;
+  /** Selects a fixed color scheme. It is the same as `setPreference` with that scheme. */
   setScheme: (scheme: DashboardColorScheme) => void;
+  preference: DashboardThemePreference;
+  setPreference: (preference: DashboardThemePreference) => void;
 }
 
 interface Throttle {

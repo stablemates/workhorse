@@ -1,20 +1,27 @@
 import type { ReactNode } from "react";
-import { Badge, Tooltip } from "@mantine/core";
+import { Badge, Tooltip, VisuallyHidden } from "@mantine/core";
 
 import { statusColor } from "./status-colors.js";
+
+/**
+ * Text that a screen reader reads in place of the visible text. A status label is static text,
+ * not a live region: a list shows many labels, and a refresh must not announce each row. A
+ * generic element has no accessible name, so the label is hidden text and not an `aria-label`.
+ */
+export function StatusText({ text, label }: { text: ReactNode; label: string }) {
+  return (
+    <>
+      <span aria-hidden="true">{text}</span>
+      <VisuallyHidden>{label}</VisuallyHidden>
+    </>
+  );
+}
 
 /** A state label whose accessible meaning does not depend on its decorative color. */
 export function StatusBadge({ state }: { state: string }) {
   return (
-    <Badge
-      color={statusColor(state)}
-      variant="light"
-      tt="capitalize"
-      role="status"
-      aria-label={`Status: ${state}`}
-      style={{ flexShrink: 0 }}
-    >
-      {state}
+    <Badge color={statusColor(state)} variant="light" tt="capitalize" style={{ flexShrink: 0 }}>
+      <StatusText text={state} label={`Status: ${state}`} />
     </Badge>
   );
 }
@@ -43,12 +50,10 @@ export function StatusLabel({
       tt="uppercase"
       w="max-content"
       styles={{ root: { justifyContent: "flex-start", textAlign: "left", flexShrink: 0 } }}
-      role="status"
       tabIndex={children ? 0 : undefined}
-      aria-label={label}
       onClick={children ? (event) => event.stopPropagation() : undefined}
     >
-      {text}
+      <StatusText text={text} label={label} />
     </Badge>
   );
   if (!children) return badge;

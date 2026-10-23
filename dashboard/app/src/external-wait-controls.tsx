@@ -1,4 +1,5 @@
 import { Accordion, Alert, Button, Code, Group, Stack, Text, Textarea } from "@mantine/core";
+import { dangerTextColor } from "./status-colors.js";
 
 export function SignalPayloadEditor({
   ariaLabel,
@@ -138,12 +139,8 @@ export function ExternalWaitDeadline({
   overdue: boolean;
 }) {
   return (
-    <Text
-      c={overdue ? "red" : "dimmed"}
-      size="xs"
-      role="status"
-      aria-label={`${overdue ? "Overdue. " : ""}Deadline ${deadline}`}
-    >
+    // Static text: the visible words state the deadline and the overdue state.
+    <Text c={overdue ? dangerTextColor : "dimmed"} size="xs">
       {overdue ? "Overdue · " : null}Deadline {deadline}
     </Text>
   );

@@ -1,5 +1,5 @@
 import { taskStatusColors } from "../status-colors.js";
-import { StatusLabel } from "../status-badge.js";
+import { StatusLabel, StatusText } from "../status-badge.js";
 import type {
   DashboardCancellationRequest,
   DashboardTaskRow,
@@ -113,11 +113,12 @@ export function CancelRequestedBadge({
       leftSection={<Prohibit size={11} weight="bold" />}
       tt="none"
       title={`${described.exact} Requested ${formatExact(cancellation.requestedAt)}.`}
-      role="status"
-      aria-label={`Cancellation requested. ${described.exact}`}
       style={{ flexShrink: 0 }}
     >
-      Cancellation requested
+      <StatusText
+        text="Cancellation requested"
+        label={`Cancellation requested. ${described.exact}`}
+      />
     </Badge>
   );
 }
@@ -144,9 +145,10 @@ export function TaskStatusDetail({ task }: { task: DashboardTaskRow }) {
     exactTime = formatExact(task.finishedAt);
   }
   if (!detail) return null;
+  // The detail shows in the status tooltip, so it keeps the tooltip text color. A page text
+  // color, such as the danger color, has low contrast on the inverted tooltip background.
   return (
     <Text
-      c={task.state === "failed" ? "red.7" : "dimmed"}
       size="xs"
       style={{ overflowWrap: "anywhere" }}
       title={[detail, exactTime].filter(Boolean).join(" · ")}
@@ -166,15 +168,8 @@ export function TaskBlockedBy({ task }: { task: DashboardTaskRow }) {
   }
   return (
     <Stack gap={2}>
-      <Badge
-        size="xs"
-        variant="light"
-        color="yellow"
-        tt="none"
-        role="status"
-        aria-label="Task blocked: prerequisite pending"
-      >
-        Prerequisite pending
+      <Badge size="xs" variant="light" color="yellow" tt="none">
+        <StatusText text="Prerequisite pending" label="Task blocked: prerequisite pending" />
       </Badge>
       <Text size="xs" c="dimmed" lineClamp={1}>
         <Code fz="xs">{task.prerequisiteTaskIds.join(", ")}</Code>
@@ -263,11 +258,12 @@ export function TaskWaitBadge({ task }: { task: DashboardTaskRow }) {
         leftSection={<Lightning size={11} weight="bold" />}
         tt="none"
         title={`Waiting for signal ${task.signalWait.name} · deadline ${formatExact(task.signalWait.deadlineAt)}`}
-        role="status"
-        aria-label={`Waiting for signal ${task.signalWait.name}`}
         style={{ flexShrink: 0 }}
       >
-        Waiting for signal: {task.signalWait.name}
+        <StatusText
+          text={`Waiting for signal: ${task.signalWait.name}`}
+          label={`Waiting for signal ${task.signalWait.name}`}
+        />
       </Badge>
     );
   }
@@ -280,11 +276,12 @@ export function TaskWaitBadge({ task }: { task: DashboardTaskRow }) {
         leftSection={<UserFocus size={11} weight="bold" />}
         tt="none"
         title={`Waiting for decision ${task.humanWait.name} · deadline ${formatExact(task.humanWait.deadlineAt)}`}
-        role="status"
-        aria-label={`Waiting for decision ${task.humanWait.name}`}
         style={{ flexShrink: 0 }}
       >
-        Waiting for decision: {task.humanWait.name}
+        <StatusText
+          text={`Waiting for decision: ${task.humanWait.name}`}
+          label={`Waiting for decision ${task.humanWait.name}`}
+        />
       </Badge>
     );
   }
@@ -297,11 +294,12 @@ export function TaskWaitBadge({ task }: { task: DashboardTaskRow }) {
       leftSection={<Clock size={11} weight="bold" />}
       tt="none"
       title={`Durable wait ${scheduledWait.name} · not before ${formatExact(scheduledWait.wakeAt)}`}
-      role="status"
-      aria-label={`${due ? "Waking" : "Sleeping"} at durable wait ${scheduledWait.name}`}
       style={{ flexShrink: 0 }}
     >
-      {due ? "Waking" : "Sleeping"}
+      <StatusText
+        text={due ? "Waking" : "Sleeping"}
+        label={`${due ? "Waking" : "Sleeping"} at durable wait ${scheduledWait.name}`}
+      />
     </Badge>
   );
 }

@@ -111,11 +111,11 @@ describe("task listing identity", () => {
     );
   });
 
-  it("announces task state without relying on badge color", async () => {
+  it("states task state without relying on badge color", async () => {
     const { StatusBadge } = await import("./status-badge.js");
     const html = render(StatusBadge, { state: "failed" });
 
-    expect(html).toContain('role="status"');
-    expect(html).toContain('aria-label="Status: failed"');
+    expect(html).toContain(">Status: failed<");
+    expect(html).not.toContain('role="status"');
   });
 });

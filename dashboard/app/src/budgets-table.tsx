@@ -6,7 +6,9 @@ import {
   describeBudgetLimit,
   describeBudgetRate,
 } from "./budget.js";
+import { ExplainedValue } from "./components/explained-value.js";
 import { HelpButton } from "./components/help-button.js";
+import { warningTextColor } from "./status-colors.js";
 
 export { budgetCappedFootnote };
 
@@ -73,25 +75,24 @@ export function BudgetsTable({ budgets }: { budgets: readonly DashboardBudgetSum
                     </Text>
                   </Table.Td>
                   <Table.Td ta="right">
-                    <Text size="sm" title={limit.title} aria-label={`Active: ${limit.title}`}>
+                    <ExplainedValue size="sm" explanation={limit.title}>
                       {limit.label}
-                    </Text>
+                    </ExplainedValue>
                   </Table.Td>
                   <Table.Td ta="right">
-                    <Text size="sm" title={rate.title} aria-label={`Start rate: ${rate.title}`}>
+                    <ExplainedValue size="sm" explanation={rate.title}>
                       {rate.label}
-                    </Text>
+                    </ExplainedValue>
                   </Table.Td>
                   <Table.Td ta="right">
-                    <Text
+                    <ExplainedValue
                       size="sm"
-                      c={blocked.blocking ? "yellow.8" : undefined}
+                      c={blocked.blocking ? warningTextColor : undefined}
                       fw={blocked.blocking ? 650 : undefined}
-                      title={blocked.title}
-                      aria-label={`Blocked: ${blocked.title}`}
+                      explanation={blocked.title}
                     >
                       {blocked.label}
-                    </Text>
+                    </ExplainedValue>
                   </Table.Td>
                 </Table.Tr>
               );

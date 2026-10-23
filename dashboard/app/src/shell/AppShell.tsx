@@ -701,15 +701,11 @@ export function DashboardContent({
         id="event-detail-drawer"
         opened={selectedEventId !== null}
         onClose={closeEventDetail}
-        title={
-          <Text component="h2" fw={600} size="lg" my={0}>
-            Event details
-          </Text>
-        }
+        title="Event details"
         position="right"
         closeButtonProps={{ "aria-label": "Close event details" }}
         {...eventDetailDrawerProps}
-        classNames={{ content: "task-drawer__content" }}
+        classNames={{ content: "task-drawer__content", title: "task-drawer__title" }}
       >
         {eventDetailError ? (
           <Text c="red" size="sm">
