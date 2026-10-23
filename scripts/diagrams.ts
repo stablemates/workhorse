@@ -204,7 +204,7 @@ import { workerSlots, workerSlotsNarrow } from "./workers-diagram.js";
 import { throttleWindow, throttleWindowNarrow } from "./throttle-diagram.js";
 import { enqueueOutcomes, enqueueOutcomesNarrow } from "./transactional-enqueue-diagram.js";
 
-/** Every diagram that `pnpm diagrams:generate` writes to `site/public/diagrams/`. */
+/** Every diagram that `pnpm diagrams:generate` writes to `site/diagrams/` and `site/public/diagrams/`. */
 export const diagrams = [
   readmeOverview,
   readmeOverviewNarrow,

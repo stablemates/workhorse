@@ -1,5 +1,5 @@
 /**
- * Primitives for the documentation diagrams under `site/public/diagrams/`.
+ * Primitives for the documentation diagrams under `site/diagrams/`.
  *
  * The tokens come from `site/src/styles/global.css`, so a diagram matches the site in both color
  * schemes. Each diagram is plain SVG with Geist and Geist Mono text. `generate-diagrams.ts` renders

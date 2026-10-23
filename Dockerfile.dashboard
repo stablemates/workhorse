@@ -68,8 +68,19 @@ FROM node:24-alpine@sha256:44fce696f38ba8c987c4db89954051000bbd05ffd8d8659ba15ed
 
 ENV NODE_ENV=production
 WORKDIR /opt/workhorse
-COPY --from=production-dependencies --chown=node:node /opt/workhorse/ ./
+# root owns the packages and their dependencies, and the node user can only read them, so a
+# compromised process cannot replace the code that the next restart loads (SM-1667). The dashboard
+# writes no file.
+COPY --from=production-dependencies /opt/workhorse/ ./
 
 USER node
+# The image build stops here if the node user can write any file under /opt/workhorse, or cannot
+# load the dashboard command. BusyBox find has no `-writable`, so a file fails the check when node
+# owns it, its group is node, or anyone can write it.
+RUN set -eu \
+  && node -e 'import("@stablemates/workhorse").then(() => import("@stablemates/workhorse-dashboard-server"))' \
+  && if touch /opt/workhorse/.write-probe 2>/dev/null; then echo "The node user can write /opt/workhorse" >&2; exit 1; fi \
+  && writable="$(find /opt/workhorse ! -type l \( -user node -o -group node -o -perm -0002 \) -print)" \
+  && if [ -n "$writable" ]; then echo "The node user can write application files:" >&2; echo "$writable" >&2; exit 1; fi
 EXPOSE 3000
 CMD ["node", "node_modules/@stablemates/workhorse/dist/src/cli/workhorse.js", "dashboard", "--host", "0.0.0.0", "--port", "3000"]

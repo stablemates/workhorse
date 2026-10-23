@@ -41,6 +41,21 @@ Neither published image runs as root. The demo image runs as the `node` user. Th
 on nginx-unprivileged, whose master process runs as UID 101 and listens on 8080; a deployment that
 publishes the site on 80 or 443 does that at the edge, not in the container.
 
+The `node` user of the demo image cannot change the application code. root owns these paths, and
+the `node` user can only read and run them:
+
+- `/opt/workhorse-demo`, which holds the server, the TypeScript workers, and their dependencies;
+- `/opt/workhorse-python` and `/opt/workhorse-python-worker.py`;
+- `/opt/workhorse-ruby`;
+- `/usr/local/bin/workhorse-go-demo-worker` and `/usr/local/bin/workhorse-rust-demo-worker`.
+
+The `node` user writes only to the log directory, `/opt/workhorse-demo/logs`, which
+`WORKHORSE_DEMO_LOG_DIRECTORY` names. If a deployment mounts a volume there, or points that variable
+at another path, the `node` user must be able to write it. The image build runs a check as the
+`node` user before it finishes. The check fails when that user can write any other file in the paths
+above. It also fails when that user cannot write the log directory or cannot load a worker's SDK. The site image copies its
+files as root too, so the nginx user cannot change them.
+
 Both builds cap each Node process at a 2 GiB heap. V8 otherwise sizes a heap from a fixed default,
 not from the machine. Concurrent compilers on a small build machine can then ask for more memory
 than it has. If a build genuinely needs more, raise `NODE_OPTIONS` at build time. Only the build
@@ -59,6 +74,32 @@ and slower, not different.
 
 The demo image installs Python runtime dependencies from the committed `python/uv.lock`. Update that
 lock with uv whenever `python/pyproject.toml` changes; the image build rejects a stale lock.
+
+The demo image uses one Python interpreter for the dependency build and for the worker. The
+`ALPINE_PYTHON_VERSION` argument at the top of `Dockerfile` pins the exact Alpine `python3` package,
+for example `3.14.8-r0`. The `python-build` stage starts from the runtime stage's base image and
+installs that package, and uv installs the dependencies with it. Thus a compiled dependency, such as
+`rpds-py` under `jsonschema`, always matches the interpreter that imports it. The runtime stage
+installs the same package.
+
+Before the build finishes, a check confirms that `python3` reports the pinned version and imports
+`workhorse._contracts`. The check runs on each architecture that the build produces.
+
+Alpine keeps only the newest build of each package in its repository. When Alpine publishes a new
+Python build, `apk add` cannot find the pinned version, and the image build stops with
+`unable to select packages`. That failure means the pin is old. It does not mean that the deployed
+demo is broken, because the running image does not change. To update the pin:
+
+1. Run `docker run --rm <the node:24-alpine base image with its digest> sh -c 'apk update -q && apk policy python3'`.
+2. Copy the version that the command prints into `ARG ALPINE_PYTHON_VERSION` in `Dockerfile`.
+3. If the minor version changes, confirm that `python/uv.lock` has wheels for it, for example for `rpds-py`.
+4. Build the image.
+5. Commit the new pin.
+
+A new digest of the base image can move to a new Alpine branch. Then the pin must also move, in the
+same commit. The other runtime packages, `libpq`, `ruby`, and `ruby-bundler`, are not pinned. They
+come from the Alpine branch of the pinned base image digest. The `ruby-build` stage installs its gems
+on the same base, so its Ruby matches the runtime Ruby.
 
 The demo image runs its Ruby worker on the Alpine `ruby` and `ruby-bundler` packages of the runtime
 stage's base. The `ruby-build` stage starts from that same base image, so its gems match the Ruby that
@@ -81,6 +122,31 @@ HTML. Every negotiated response carries `Vary: Accept`, and a 404 answers in the
 client asked for. If a CDN or cache sits in front of the site, it must honour `Vary` and must not
 strip the header, or a browser can receive a cached twin. After a deploy that changes negotiation,
 the operator must purge that cache.
+
+The site origin compresses its text responses with gzip: HTML, Markdown, CSS, JavaScript, JSON,
+SVG, plain text, and XML of at least 256 bytes. Each response of those types carries
+`Vary: Accept-Encoding`, also when the client does not accept gzip. A cache in front of the site
+must honour it. The origin states a `Cache-Control` policy for each path:
+
+| Path                                                               | `Cache-Control`                       |
+| ------------------------------------------------------------------ | ------------------------------------- |
+| `/assets/`, the content-hashed build output                        | `public, max-age=31536000, immutable` |
+| An image outside `/assets/`, such as `/diagrams/` and `/brand/`    | `public, max-age=3600`                |
+| A page, a Markdown twin, a 404 body, `/api/`, and other text files | `no-cache`                            |
+| A `406` response and `/up`                                         | `no-store`                            |
+| A redirect                                                         | `public, max-age=3600`                |
+
+An image keeps its URL when it changes, so a deploy that changes an image reaches every reader within
+one hour. A `no-cache` response can stay in a cache, but the cache must revalidate it with the origin
+before each use. An image is one representation, so it carries no `Vary: Accept`. A page and its
+twin keep `Vary: Accept`.
+
+The site image copies only the images that the site uses. `site/public` also holds diagram PNGs and
+screenshots that only the repository's Markdown shows, because GitHub reads them from the repository
+path. After the site build, `Dockerfile.site` runs `scripts/site-public-assets.ts --prune`, which
+removes them from the build output. The step fails if a built page names an image that it would
+remove. The diagram SVGs, which are the source of the PNGs, are in `site/diagrams`, outside the
+published directory.
 
 The site origin sends three security headers on every response, including its errors, its redirects
 and its cached assets: `X-Content-Type-Options: nosniff`, a `Content-Security-Policy` that names
