@@ -3651,7 +3651,8 @@ After the token is cancelled, the worker shuts down in this order:
    which charges no attempt.
 5. The worker sets `CancelReason.Shutdown` and cancels the token of each running handler.
 6. It waits the 250 millisecond unwind window.
-7. It abandons each handler that still runs, and stops renewing its lease. The lease then expires.
+7. It abandons each handler that still runs, and stops renewing its lease. The lease then expires,
+   unless a release or a settlement of that attempt still finishes.
 8. It gives up its heartbeat reservation and deregisters the worker.
 9. `RunAsync` throws `ShutdownIncompleteException` if it abandoned a handler. `Abandoned` is the
    count.
@@ -3660,6 +3661,16 @@ The default `ShutdownGrace` is 25 seconds. The total stop time is `ShutdownGrace
 millisecond unwind window. With the defaults,
 that is 25.25 seconds, which fits inside the 30 second default `HostOptions.ShutdownTimeout`. Every
 wait after the grace ends by then. Cancellation is cooperative: the worker never aborts a thread.
+
+The stop does not cancel a release or a settlement that still runs at the end of the unwind window.
+The statement can finish after `RunAsync` returns, and its task then goes back or completes at once.
+The worker's own statements use the run's statement token, never the handler's token. A timer
+requests its cancellation at the latest local lease end of the attempts still in flight at the end
+of the drain. If a statement still waits for a pool connection or a lock then, the cancellation ends
+it, and the task stays `active` until recovery. Nothing on the stop path waits for that timer
+([ADR 0107](../decisions/0107-shape-the-dotnet-sdk-as-a-csharp-core-with-hosting-ef-core-and-asp-net-core-packages.md)
+amendment of 2026-10-22).
+
 The worker installs no signal handler. The Generic Host is the process entry point, as the
 [.NET hosting](#net-hosting) section describes. A program without a host calls `RunAsync` with a
 token that it cancels itself.

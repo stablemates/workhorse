@@ -50,8 +50,10 @@ public sealed partial class Worker
         internal ConcurrentQueue<ClaimResult> Results { get; } = new();
 
         /// <summary>
-        /// Cancelled at the end of the stop. The settlements of the run's attempts use it, never the
-        /// handler's token (ADR 0107, "Cancellation and statements").
+        /// The token of the run's own statements, never the handler's token (ADR 0107, "Cancellation
+        /// and statements"). The stop does not cancel it. A settlement that outlives the unwind window
+        /// runs to its end, as in Java. The token cancels at the latest local lease end of the
+        /// attempts still in flight. That local end comes no later than the end that PostgreSQL records.
         /// </summary>
         internal CancellationTokenSource StopPath { get; } = new();
 
@@ -240,6 +242,7 @@ public sealed partial class Worker
         _draining = false;
         bool claimedAny;
         int abandoned;
+        long statementsEnd;
         try
         {
             await StepAsync(() => RegistryStep(() => RefreshRegistrationAsync(force: true, run.Generation)), run, "registration").ConfigureAwait(false);
@@ -276,7 +279,7 @@ public sealed partial class Worker
                 _draining = true;
                 await JoinUntilAsync(RegistryStep(() => RefreshRegistrationAsync(force: true, run.Generation)), run.Deadline, "draining registration")
                     .ConfigureAwait(false);
-                abandoned = await DrainAsync(run, run.Deadline, end).ConfigureAwait(false);
+                (abandoned, statementsEnd) = await DrainAsync(run, run.Deadline, end).ConfigureAwait(false);
             }
             finally
             {
@@ -287,9 +290,11 @@ public sealed partial class Worker
             // recreate the row of a stopped worker.
             var stoppedInstance = _instanceId;
             await JoinUntilAsync(RegistryStep(() => DeregisterAsync(run.Generation, stoppedInstance)), end, "deregistration").ConfigureAwait(false);
-            // The cancellation can contact PostgreSQL's cancel endpoint for a settlement that still
-            // waits, so its wait ends with the total stop time too, and nothing waits for it after.
-            await JoinUntilAsync(run.StopPath.CancelAsync(), end, "settlement cancellation").ConfigureAwait(false);
+            // A settlement or a release that still runs can finish on its own, so the task goes back
+            // or completes at once. The run's token cancels at the latest lease end of the attempts
+            // that were in flight. A timer cancels it on the thread pool. The cancellation can contact
+            // PostgreSQL's cancel endpoint, and nothing on the stop path waits for it.
+            run.StopPath.CancelAfter(Monotonic.Span(statementsEnd - Monotonic.Now()));
             WorkerLog.Stopped(_logger, _queueText, abandoned);
         }
 
@@ -785,9 +790,10 @@ public sealed partial class Worker
     /// <summary>
     /// Waits until the shutdown deadline, cancels what still runs with
     /// <see cref="CancelReason.Shutdown"/>, and gives it one unwind window. Returns the number of
-    /// handlers abandoned after that window.
+    /// handlers abandoned after that window. It also returns the latest lease end of the attempts
+    /// whose statements can still run: the abandoned attempts and the unstarted releases.
     /// </summary>
-    private async Task<int> DrainAsync(RunState run, long deadline, long end)
+    private async Task<(int Abandoned, long StatementsEnd)> DrainAsync(RunState run, long deadline, long end)
     {
         // A lingering batch cannot grow once claims stop, so it runs as soon as its members arrive.
         FlushBatches();
@@ -832,6 +838,12 @@ public sealed partial class Worker
         }
 
         var abandoned = 0;
+        var statementsEnd = Monotonic.Now();
+        foreach (var task in unstarted)
+        {
+            statementsEnd = Later(statementsEnd, LeaseEnd(task));
+        }
+
         foreach (var task in _active.Keys)
         {
             abandoned++;
@@ -839,6 +851,7 @@ public sealed partial class Worker
             // later reads the flag after that, so one of the two sides always stops the renewal.
             task.Abandoned = true;
             task.Ownership?.Abandon();
+            statementsEnd = Later(statementsEnd, LeaseEnd(task));
         }
 
         if (releases is not null)
@@ -846,8 +859,26 @@ public sealed partial class Worker
             await JoinUntilAsync(releases, end, "unstarted release").ConfigureAwait(false);
         }
 
-        return abandoned;
+        return (abandoned, statementsEnd);
     }
+
+    /// <summary>
+    /// The local end of an attempt's lease, once nothing renews it. An attempt without an ownership
+    /// was never renewed, so its lease ends one lease after its claim. The local end comes before the
+    /// end that PostgreSQL records, because a renewal counts from the moment its round left.
+    /// </summary>
+    private long LeaseEnd(Active task)
+    {
+        if (task.Ownership is not { } ownership)
+        {
+            return task.Claimed.StartedAt + Monotonic.Millis(_leaseMs);
+        }
+
+        var now = Monotonic.Now();
+        return now + Math.Max(0, ownership.LeaseRemaining(now));
+    }
+
+    private static long Later(long first, long second) => second - first > 0 ? second : first;
 
     private async Task WaitUntilIdleAsync(long deadline)
     {

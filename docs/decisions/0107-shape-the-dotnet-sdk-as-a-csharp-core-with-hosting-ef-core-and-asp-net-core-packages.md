@@ -1531,3 +1531,70 @@ Rejected alternatives:
 - Accepting the constructor form of `BatchOptions` in an amendment. One public record would then
   follow different rules from every other record.
 - Keeping the outcome family open. The worker can settle only the outcomes that it knows.
+
+## Amendment: a late settlement finishes, and the lease end bounds it (2026-10-22)
+
+At the end of the shutdown grace, the worker cancels each handler that still runs and waits one
+unwind window. A release or a settlement can still run when that window ends. SM-1682 found that
+C# then cancelled the statement, but Java lets it finish. SM-1685 compares the reference SDKs and
+records this decision.
+
+**Example.**
+
+1. A worker stops with one handler still running at the end of the grace.
+2. The worker cancels the handler, and the handler's release statement starts.
+3. The release does not finish inside the 250 ms unwind window. `RunAsync` throws
+   `ShutdownIncompleteException(1)`.
+4. Before this amendment, the worker cancelled the run's statement token after the deregistration.
+   PostgreSQL rolled the release back, so the task stayed `active` until its lease expired.
+5. Now the release finishes after `RunAsync` returns, and the task is `ready` at once.
+
+The same token carries every settlement of the run, so a slow completion was also rolled back. The
+handler had finished, but the task ran again after its lease expired.
+
+### The reference behaviors
+
+| SDK        | A release that still runs when the unwind window ends                                                                      |
+| ---------- | -------------------------------------------------------------------------------------------------------------------------- |
+| TypeScript | No window. `stop()` cancels no handler, and `run()` waits for every settlement. The process runner exits at its timeout.   |
+| Python     | No window. `run()` joins every handler thread. The process runner exits at its timeout.                                    |
+| Rust       | `abort_all` drops the future, and tokio-postgres sends no cancel request. A statement that PostgreSQL already got commits. |
+| Java       | Nothing waits for it, and nothing cancels it. It finishes after `run` returns.                                             |
+| C#, before | Nothing waits for it, but the stop cancels it. The task stays `active` until its lease expires.                            |
+
+### The rules
+
+This amendment changes the "Cancellation and statements" bullet of the Concurrency section. The
+statements of the worker and the durable context use a token that the stop does not cancel. These
+rules apply:
+
+1. The stop does not wait for a settlement or a release that outlives the unwind window, and it does
+   not cancel it. The statement finishes after `RunAsync` returns, as in Java.
+2. The token cancels at the latest local lease end of the attempts that are still in flight when
+   the drain ends. These are the abandoned attempts and the releases of tasks that no handler
+   started. An attempt with no lease ownership counts one lease from its claim.
+3. The local lease end is a conservative bound. A renewal counts from the moment its round left, so
+   the local end comes before the end that PostgreSQL records. After PostgreSQL's end, the fence of
+   a statement cannot succeed. Between the two ends, the timer can cancel a statement whose fence
+   PostgreSQL still accepts. The lease then expires, as before this amendment.
+4. A timer cancels the token. So the cancellation, which can contact PostgreSQL's cancel endpoint,
+   runs on the thread pool, and nothing on the stop path waits for it.
+
+Rule 8 of the ADR 0071 amendment of 2026-10-21 still holds. It bounds each wait on the stop path,
+and the stop no longer waits for the cancellation. The lease bound applies also when the pool
+`Timeout` or the `CommandTimeout` is 0. Without it, a statement that waits could keep a pool
+connection for the life of the process. For example, a host can stop one worker and start another
+on the same data source.
+
+### Rejected options
+
+- **Keep the cancellation at the end of the stop.** A slow completion is rolled back, and the
+  finished work runs again. A late task waits up to one lease longer than in Java.
+- **Let the statement finish with no bound.** A statement that waits for a pool connection with
+  `Timeout=0` could keep a connection for the life of the process. A statement that does not end
+  could do the same.
+- **A token for each attempt.** A fast-tier completion flush and a batch settlement each carry
+  several attempts in one statement, so one token for the run covers them. The cost is small. An
+  attempt whose handler returned during the grace stopped its renewal then. Its statement can thus
+  run at most one grace and one unwind window past its own lease end. Its fence fails, and it keeps
+  only its connection for that time.

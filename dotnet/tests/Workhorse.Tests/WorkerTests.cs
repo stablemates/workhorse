@@ -162,9 +162,9 @@ public sealed class WorkerTests(ScratchDatabase database)
     {
         // After the grace, the cancelled handler has one unwind window of 250 ms to release its task.
         // On a loaded host, that release or the settlement of the finishing task can take longer. The
-        // stop then abandons that attempt and throws, and the stop path cancels the late statement
-        // (SM-1682, as SM-1543 and SM-1155). Such an attempt shows nothing about the drain, so the
-        // test runs it again.
+        // stop then abandons that attempt and throws, and the late statement finishes after the run
+        // returns (SM-1682, as SM-1543 and SM-1155; SM-1685). Such an attempt shows nothing about
+        // the drain, so the test runs it again.
         for (var attempt = 1; attempt <= DrainAttempts; attempt++)
         {
             if (await DrainOnceAsync())
