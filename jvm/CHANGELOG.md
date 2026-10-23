@@ -41,6 +41,16 @@ adds.
 
 ### Fixes
 
+- **A declared pool size caps the default cohorts.** A `DataSource` reports no pool size. Before
+  this change, the worker ignored `poolMaxSize` when it chose its default cohorts. A worker with
+  concurrency 64 and `poolMaxSize(4)` used 8 cohorts on 2 free connections.
+
+  Now the worker caps its default cohorts at the declared size, minus 1 for the listener and minus
+  1 for the heartbeat connection. Thus that worker uses 2 cohorts. `pollingOnly(true)` reserves no
+  listener connection, and `sharedHeartbeats(true)` reserves no heartbeat connection, as in the
+  other SDKs. Without `poolMaxSize`, the default is not capped. An explicit `cohorts` is never
+  capped (SM-1668).
+
 - **A throwing reporter listener is logged once in each interval.** Before this change, a
   `RuntimeException` from `onRegistrationError` ended the registry thread. The exception then went
   to the uncaught exception handler of that thread on each failed refresh. The worker discarded a

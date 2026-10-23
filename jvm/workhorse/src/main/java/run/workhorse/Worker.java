@@ -339,7 +339,10 @@ public final class Worker implements AutoCloseable {
     this.concurrency = builder.concurrency;
     // A claim waits for a quarter of the slots, so at most four claims are in flight.
     this.refillBatch = (concurrency + 3) / 4;
-    this.cohorts = builder.cohorts != null ? builder.cohorts : defaultCohorts(concurrency);
+    this.cohorts =
+        builder.cohorts != null
+            ? builder.cohorts
+            : defaultCohorts(concurrency, spareConnections(builder));
     if (cohorts > concurrency) {
       throw new IllegalArgumentException("cohorts must be between 1 and concurrency");
     }
@@ -449,11 +452,27 @@ public final class Worker implements AutoCloseable {
   }
 
   /**
-   * The cohorts of a worker without the option: one below concurrency 8, and otherwise one for each
-   * 8 slots, from 2 to 8. A {@code DataSource} reports no pool size, so the pool does not lower it.
+   * The cohorts of a worker without the option (ADR 0076): one below concurrency 8, and otherwise
+   * one for each 8 slots, from 2 to 8. With a declared pool size, the count is then capped at the
+   * spare connections, and never below 1. Without one, the count is not capped.
    */
-  static int defaultCohorts(int concurrency) {
-    return concurrency < 8 ? 1 : Math.clamp((concurrency + 7) / 8, 2, 8);
+  static int defaultCohorts(int concurrency, @Nullable Integer spareConnections) {
+    int cohorts = concurrency < 8 ? 1 : Math.clamp((concurrency + 7) / 8, 2, 8);
+    return spareConnections == null ? cohorts : Math.clamp(spareConnections, 1, cohorts);
+  }
+
+  /**
+   * The pooled connections that stay for cohorts after the listener and the heartbeat connection
+   * take theirs, or {@code null} without a declared {@code poolMaxSize}. A {@code DataSource}
+   * reports no pool size, so only a declared size can cap the default cohorts (SM-1668).
+   */
+  private static @Nullable Integer spareConnections(Builder builder) {
+    Integer size = builder.poolMaxSize;
+    if (size == null) {
+      return null;
+    }
+    boolean listens = !builder.pollingOnly && lendsListener(builder.sharedHeartbeats, size);
+    return size - (listens ? 1 : 0) - (builder.sharedHeartbeats ? 0 : 1);
   }
 
   // ---------------------------------------------------------------------------------------------
@@ -1394,6 +1413,10 @@ public final class Worker implements AutoCloseable {
    * readiness check proves the headroom.
    */
   private boolean poolLendsListener() {
+    return lendsListener(sharedHeartbeats, poolMaxSize);
+  }
+
+  private static boolean lendsListener(boolean sharedHeartbeats, @Nullable Integer poolMaxSize) {
     return !sharedHeartbeats || (poolMaxSize != null && poolMaxSize >= 2);
   }
 
@@ -4678,8 +4701,9 @@ public final class Worker implements AutoCloseable {
      * DataSource} does not report it. The worker trusts the value and never probes the pool. With
      * {@code sharedHeartbeats(true)}, the worker starts the shared listener only when the declared
      * size is at least 2, and otherwise polls. Without the opt-out, {@link #build()} refuses a
-     * declared size below 3. If an operator makes the pool smaller than the declared size, the
-     * listener can hold the last connection. The default is unset, which means an unknown size.
+     * declared size below 3. The declared size also caps the default {@link #cohorts}. If an
+     * operator makes the pool smaller than the declared size, the listener can hold the last
+     * connection. The default is unset, which means an unknown size.
      */
     public Builder poolMaxSize(int size) {
       if (size < 1) {
@@ -4692,7 +4716,9 @@ public final class Worker implements AutoCloseable {
     /**
      * The slot cohorts of fast-tier dispatch (ADR 0076), from 1 to the concurrency. Each cohort can
      * have one fused completion statement in flight for each queue. The default is 1 below
-     * concurrency 8, and otherwise one cohort for each 8 slots, from 2 to 8.
+     * concurrency 8, and otherwise one cohort for each 8 slots, from 2 to 8. With a declared {@link
+     * #poolMaxSize}, the default is capped at the connections that stay after the listener and the
+     * heartbeat connection, and never below 1. An explicit count is never capped.
      */
     public Builder cohorts(int cohorts) {
       if (cohorts < 1 || cohorts > 100) {
