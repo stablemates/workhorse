@@ -158,14 +158,9 @@ async function insertFastRuntime(
 
 describe("scan cost bounds", () => {
   beforeAll(async () => database.setup());
-  beforeEach(async () => {
-    // Reset keeps maintenance_state, so a lease scan an earlier test ran would space this one's.
-    await database.reset();
-    await database.pool.query(
-      `UPDATE workhorse.maintenance_state SET lease_recovery_started_at = NULL
-        WHERE routine_name = 'tick'`,
-    );
-  });
+  // The reset also clears lease_recovery_started_at, so a lease scan of an earlier test does not
+  // space the scan of this test.
+  beforeEach(async () => database.reset());
   afterAll(async () => database.teardown());
 
   describe("expired-lease scan spacing", () => {

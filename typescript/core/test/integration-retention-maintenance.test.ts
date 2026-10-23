@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { setTimeout as sleep } from "node:timers/promises";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { installSchema, Queue, type RetentionPolicyDefinition, Worker } from "../src/index.js";
 import { createIntegrationTestContext } from "./support/integration.js";
 
@@ -13,15 +13,6 @@ const {
   adminAudit,
   createFailedTask,
 } = createIntegrationTestContext(import.meta.url);
-
-// The shared reset keeps maintenance_state, and each prune_terminal_tasks_v1 call flips the tier
-// that goes first. Without this reset, a test inherits the parity that earlier tests leave.
-beforeEach(async () => {
-  await pool.query(
-    `UPDATE workhorse.maintenance_state SET terminal_prune_fast_first = false
-      WHERE routine_name = 'terminal_storage'`,
-  );
-});
 
 const stored = async () =>
   (
@@ -357,12 +348,6 @@ describe("retention maintenance", () => {
       scheduleOccurrenceRetentionDays: 14,
     });
     await queue.syncMaintenancePolicy({ timezone: "UTC", historyRetentionLocalTime: "00:00" });
-    // Terminal cleanup flips terminal_prune_fast_first, which the per-test reset keeps. A later
-    // test depends on that flag (SM-1716), so this pass must not run terminal cleanup.
-    await pool.query(
-      `UPDATE workhorse.maintenance_state SET last_completed_at = clock_timestamp()
-        WHERE routine_name = 'terminal_storage'`,
-    );
     const worker = new Worker(queue, { workerId: "fast-clock-worker" });
 
     // Only Date moves. The worker's intervals use the monotonic clock, so the pass still runs.

@@ -93,13 +93,14 @@ export function createDatabaseTestHarness(
           ],
         ],
       );
-      if (result.rows.length > 0) {
-        await truncateWithoutDeadlock(
-          pool,
-          options.resetLockWaitMs ?? 30_000,
-          `TRUNCATE ${result.rows.map((row) => row.table_name).join(", ")} RESTART IDENTITY CASCADE`,
-        );
-      }
+      await truncateWithoutDeadlock(pool, options.resetLockWaitMs ?? 30_000, [
+        ...(result.rows.length > 0
+          ? [
+              `TRUNCATE ${result.rows.map((row) => row.table_name).join(", ")} RESTART IDENTITY CASCADE`,
+            ]
+          : []),
+        maintenanceStateReset,
+      ]);
     },
     async teardown() {
       if (options.poolOwner !== "caller") await pool.end();
@@ -109,7 +110,29 @@ export function createDatabaseTestHarness(
 }
 
 /**
- * Run the TRUNCATE of the reset without a deadlock with a session that an earlier test left.
+ * The reset keeps the maintenance_state rows, so this statement returns each column that a routine
+ * writes to its install value. Otherwise a test inherits state from earlier tests in the file, for
+ * example the tier order of terminal cleanup (SM-1717). A policy sync after the reset can also
+ * write these rows. The forced syncs of createIntegrationTestContext keep the install values, and
+ * integration-shared-reset.test.ts fails if they stop doing so.
+ */
+const maintenanceStateReset = `UPDATE workhorse.maintenance_state SET
+  last_started_at = NULL,
+  last_completed_at = NULL,
+  last_completed_local_date = NULL,
+  history_retained_before = CASE WHEN routine_name = 'history_retention'
+    THEN date_trunc('day', clock_timestamp() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC'
+      - interval '14 days'
+    ELSE NULL END,
+  terminal_prune_dependency_starved = false,
+  terminal_prune_fast_first = false,
+  terminal_cleanup_backlog_since = NULL,
+  lease_recovery_started_at = NULL,
+  updated_at = clock_timestamp()`;
+
+/**
+ * Run the statements of the reset, a TRUNCATE first, without a deadlock with a session that an
+ * earlier test left.
  *
  * TRUNCATE takes an AccessExclusiveLock on each table in list order. A worker statement locks
  * `task` and `task_runtime` first, and an earlier table of that list after them. Thus the two
@@ -121,7 +144,7 @@ export function createDatabaseTestHarness(
 async function truncateWithoutDeadlock(
   pool: Pool,
   lockWaitMs: number,
-  truncate: string,
+  statements: readonly string[],
 ): Promise<void> {
   const client = await pool.connect();
   try {
@@ -135,7 +158,7 @@ async function truncateWithoutDeadlock(
       await client.query("BEGIN");
       try {
         await client.query(`SET LOCAL lock_timeout = ${lockTimeoutMs}`);
-        await client.query(truncate);
+        for (const statement of statements) await client.query(statement);
         await client.query("COMMIT");
         return;
       } catch (error) {
