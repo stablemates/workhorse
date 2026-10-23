@@ -3,6 +3,8 @@ import {
   cancelResultAppliesTo,
   clearPendingCancel,
   createLatestRequestGuard,
+  taskDetailFocusLost,
+  taskDetailKeepsShownDetail,
   taskDrawerBody,
   taskDrawerCloseOnEscape,
   taskDrawerFocusChange,
@@ -91,6 +93,65 @@ describe("task detail drawer", () => {
         taskDetailError: "boom",
       }),
     ).toBe("error");
+  });
+
+  it("keeps the detail on screen when a reload of the same task fails", () => {
+    // The error shows above the detail, which says which facts can be old, instead of
+    // unmounting the detail the operator was reading.
+    expect(
+      taskDrawerBody({
+        selectedTaskId: "task-3",
+        selectedTask: { id: "task-3" },
+        taskDetailError: "502 Bad Gateway",
+      }),
+    ).toBe("detail");
+  });
+});
+
+describe("task detail reload", () => {
+  it("keeps the shown detail mounted when the same task reloads", () => {
+    // Retry, Run now, and a delivered signal reload the task on screen. Emptying the drawer
+    // first scrolled it to the top, lost field text, and dropped focus to the body.
+    expect(taskDetailKeepsShownDetail("task-1", "task-1")).toBe(true);
+  });
+
+  it("empties the drawer for another task, so old detail never shows under a new heading", () => {
+    expect(taskDetailKeepsShownDetail("task-1", "task-2")).toBe(false);
+    expect(taskDetailKeepsShownDetail(null, "task-1")).toBe(false);
+  });
+
+  it("still lets only the newest request write when the selection changes during a reload", () => {
+    const guard = createLatestRequestGuard();
+    const reloadOfA = guard.begin();
+    // The operator opens task B before the reload of task A answers.
+    expect(taskDetailKeepsShownDetail("task-a", "task-b")).toBe(false);
+    const loadOfB = guard.begin();
+    expect(guard.current(reloadOfA)).toBe(false);
+    expect(guard.current(loadOfB)).toBe(true);
+  });
+});
+
+describe("task detail focus recovery", () => {
+  const lost = {
+    focusedTaskId: "task-1",
+    focusedControlConnected: false,
+    focusOnBody: true,
+    selectedTaskId: "task-1",
+  };
+
+  it("moves focus to the task heading when a reload removed the focused control", () => {
+    expect(taskDetailFocusLost(lost)).toBe(true);
+  });
+
+  it("leaves focus alone when the control is still there or focus went somewhere real", () => {
+    expect(taskDetailFocusLost({ ...lost, focusedControlConnected: true })).toBe(false);
+    expect(taskDetailFocusLost({ ...lost, focusOnBody: false })).toBe(false);
+    expect(taskDetailFocusLost({ ...lost, focusedTaskId: null })).toBe(false);
+  });
+
+  it("leaves a task switch to the shell, which moves focus to the drawer close button", () => {
+    expect(taskDetailFocusLost({ ...lost, selectedTaskId: "task-2" })).toBe(false);
+    expect(taskDetailFocusLost({ ...lost, selectedTaskId: null })).toBe(false);
   });
 });
 

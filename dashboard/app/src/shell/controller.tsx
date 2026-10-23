@@ -34,7 +34,12 @@ import type {
   DashboardSystemWindow,
   DashboardTaskCounts,
 } from "@stablemates/workhorse-dashboard-server/wire";
-import { createLatestRequestGuard, taskDrawerOpened, taskDrawerSync } from "../task-drawer.js";
+import {
+  createLatestRequestGuard,
+  taskDetailKeepsShownDetail,
+  taskDrawerOpened,
+  taskDrawerSync,
+} from "../task-drawer.js";
 import {
   defaultEventsLocation,
   eventsListingKey,
@@ -53,7 +58,7 @@ import {
 import { notifyDashboard, notifyEnqueueTest, notifyFailure } from "../notifications.js";
 import type { MaintenancePolicyDefinition, MaintenancePolicySetting } from "@stablemates/workhorse";
 import { requestRunNow, type RunNowFeedback } from "../run-now.js";
-import { Button, Center, Loader, Stack, Text } from "@mantine/core";
+import { Button, Center, Loader, Stack, Text, VisuallyHidden } from "@mantine/core";
 import { WarningCircle } from "@phosphor-icons/react";
 import {
   DemoTaskKind,
@@ -68,7 +73,12 @@ import {
   taskHref,
   useDashboardClient,
 } from "../core.js";
-import { readyLoadState, readyTaskCounts } from "../render-identity.js";
+import {
+  failedLoadState,
+  readyLoadState,
+  readyTaskCounts,
+  startedLoadState,
+} from "../render-identity.js";
 import { subscribeTimeZone } from "../preferences.js";
 import type { DemoTaskOptions } from "../pages/tasks.js";
 import { seekDashboardTaskPage } from "../task-page-seek.js";
@@ -123,6 +133,44 @@ export function routeTitle(route: PageRoute): string {
   if (route === "/workers") return "workers";
   if (route === "/settings") return "settings";
   return "current tasks";
+}
+/** The page name, as the navigation shows it. */
+export function routeHeading(route: PageRoute): string {
+  if (route === "/events") return "Events";
+  if (route === "/groups") return "Task groups";
+  if (route === "/cron") return "Schedules";
+  if (route === "/queues") return "Queues";
+  if (route === "/system") return "System health";
+  if (route === "/workers") return "Workers";
+  if (route === "/settings") return "Settings";
+  return "Tasks";
+}
+/** The document title names the page, so browser tabs and history entries tell pages apart. */
+export function documentTitle(route: PageRoute): string {
+  return `${routeHeading(route)} · Workhorse`;
+}
+/**
+ * Pages that draw no visible page heading.
+ *
+ * Focus moves to the page heading after navigation, so the shell gives these pages a heading that
+ * only assistive technology reads.
+ */
+const routesWithoutPageHeading = new Set<PageRoute>(["/tasks", "/events"]);
+/**
+ * The route that the page area shows, or null while it shows the loading screen.
+ *
+ * Right after navigation the page area can still show the previous page for one render. Focus
+ * placement waits until this names the route in the URL, so it does not focus a heading that is
+ * about to go.
+ */
+export function pageContentRoute(
+  loadState: LoadState,
+  loading: boolean,
+  route: PageRoute,
+): PageRoute | null {
+  if (loading && (!loadState.data || loadState.data.route !== route)) return null;
+  if (loadState.status === "error") return loadState.route;
+  return loadState.data?.route ?? null;
 }
 export function useDashboardController(
   auditActor: string,
@@ -248,6 +296,20 @@ export function useDashboardController(
     storeValue(refreshStorageKey, value);
   }, []);
   const requestId = useRef(0);
+  /**
+   * The request that the page data on screen answers, and when it last succeeded.
+   *
+   * A failed load keeps the page only when the data on screen answers that same request. Data
+   * for another listing, another window, or another route is not usable for it.
+   */
+  const loadedPage = useRef<{ key: string; refreshedAt: string } | null>(null);
+  /**
+   * The operator's page load that is still in progress, if any.
+   *
+   * A stale page keeps its state while the operator retries, so the refresh control reads the
+   * request from here to show its spinner.
+   */
+  const [foregroundRequest, setForegroundRequest] = useState<number | null>(null);
   const shouldDiscardBackgroundRefresh = refreshController.shouldDiscardBackground;
 
   const navigate = useCallback(
@@ -292,6 +354,16 @@ export function useDashboardController(
    * listing parameters instead of on the location object.
    */
   const { route } = location;
+  // Declared before the title effect, so it records the host's title before the first change.
+  useEffect(() => {
+    const hostTitle = document.title;
+    return () => {
+      document.title = hostTitle;
+    };
+  }, []);
+  useEffect(() => {
+    document.title = documentTitle(route);
+  }, [route]);
   const listingKey = taskListingKey(location);
   const listingRef = useRef(location);
   listingRef.current = location;
@@ -324,12 +396,17 @@ export function useDashboardController(
       // report must not be read as an answer about the cursor now in the URL.
       const requestedListing = listingRef.current;
       if (!background) {
-        setLoadState((current) => ({
-          status: "loading",
-          data: current.data,
-          error: null,
-        }));
+        setForegroundRequest(activeRequest);
+        const sameRequest = loadedPage.current?.key === key;
+        setLoadState((current) => startedLoadState(current, sameRequest));
       }
+      // Every outcome ends this request's spinner, including an answer that a newer request
+      // made too late to write.
+      const settleForeground = () => {
+        if (!background) {
+          setForegroundRequest((current) => (current === activeRequest ? null : current));
+        }
+      };
       try {
         const data = await refreshRequests.run(
           key,
@@ -423,6 +500,7 @@ export function useDashboardController(
           !background,
         );
         return () => {
+          settleForeground();
           if (activeRequest !== requestId.current) return;
           if (shouldDiscardBackgroundRefresh(background)) return;
           /**
@@ -433,6 +511,7 @@ export function useDashboardController(
            * `setState` bails out instead, so an unchanged poll commits nothing.
            */
           setLoadState((current) => readyLoadState(current, data));
+          loadedPage.current = { key, refreshedAt: new Date().toISOString() };
           /**
            * Release a cursor this answer proved spent.
            *
@@ -451,13 +530,13 @@ export function useDashboardController(
         };
       } catch (cause) {
         return () => {
+          settleForeground();
           if (activeRequest !== requestId.current) return;
           if (shouldDiscardBackgroundRefresh(background)) return;
-          setLoadState((current) => ({
-            status: "error",
-            data: current.data,
-            error: cause instanceof Error ? cause.message : "Workhorse could not load this page",
-          }));
+          const error =
+            cause instanceof Error ? cause.message : "Workhorse could not load this page";
+          const retained = loadedPage.current?.key === key ? loadedPage.current : null;
+          setLoadState((current) => failedLoadState(current, { route, error }, retained));
         };
       }
       // `listingKey` is the dependency the task listing actually has; the values themselves are
@@ -773,8 +852,10 @@ export function useDashboardController(
       // Claim the drawer before the await, so a later click wins even if this request
       // resolves after it.
       const ticket = taskDetailRequests.current.begin();
+      // A reload of the task on screen keeps its detail mounted, so the drawer keeps its scroll
+      // position, its field text, and keyboard focus. Only another task empties the drawer.
+      if (!taskDetailKeepsShownDetail(selectedTaskIdRef.current, id)) setSelectedTask(null);
       selectedTaskIdRef.current = id;
-      setSelectedTask(null);
       setTaskDetailError(null);
       try {
         const detail = await client.taskDetail({ id });
@@ -1020,12 +1101,14 @@ export function useDashboardController(
   useEffect(() => pollingClock.setPaused(autoRefreshPaused), [autoRefreshPaused, pollingClock]);
   useEffect(() => () => pollingClock.stop(), [pollingClock]);
 
-  const connected = loadState.status !== "error" && loadState.data !== null;
-  const loading = loadState.status === "loading";
+  const connected =
+    loadState.status !== "error" && loadState.status !== "stale" && loadState.data !== null;
+  const loading = loadState.status === "loading" || foregroundRequest !== null;
   const selectedEvent = inspectedEvent?.id === selectedEventId ? inspectedEvent : null;
 
+  const shownRoute = pageContentRoute(loadState, loading, location.route);
   let content: ReactNode;
-  if (loading && (!loadState.data || loadState.data.route !== location.route)) {
+  if (shownRoute === null) {
     content = (
       <Center mih="60vh">
         <Stack align="center" gap="sm">
@@ -1041,7 +1124,9 @@ export function useDashboardController(
       <Center mih="60vh">
         <Stack align="center" gap="sm">
           <WarningCircle size={28} color="var(--mantine-color-red-6)" />
-          <Text fw={600}>Workhorse could not load this page.</Text>
+          <Text component="h1" fw={600} size="md" my={0}>
+            Workhorse could not load this page.
+          </Text>
           <Text c="dimmed" size="sm">
             {loadState.error}
           </Text>
@@ -1161,6 +1246,18 @@ export function useDashboardController(
         {content}
       </Suspense>
     );
+    if (
+      loadState.status !== "error" &&
+      shownRoute === location.route &&
+      routesWithoutPageHeading.has(location.route)
+    ) {
+      content = (
+        <>
+          <VisuallyHidden component="h1">{routeHeading(location.route)}</VisuallyHidden>
+          {content}
+        </>
+      );
+    }
   }
 
   return {
@@ -1170,6 +1267,7 @@ export function useDashboardController(
     loadState,
     connected,
     loading,
+    shownRoute,
     loadPage,
     refreshInterval,
     autoRefreshPaused,

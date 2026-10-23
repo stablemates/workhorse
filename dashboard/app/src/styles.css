@@ -703,3 +703,26 @@ html[data-mantine-color-scheme="dark"] .mantine-Badge-root[data-variant="light"]
     row-gap: var(--mantine-spacing-xs);
   }
 }
+
+/* The skip link stays out of view until a keyboard user moves focus to it. */
+.dashboard-skip-link {
+  position: fixed;
+  top: var(--mantine-spacing-xs);
+  left: var(--mantine-spacing-xs);
+  z-index: 1000;
+  padding: var(--mantine-spacing-xs) var(--mantine-spacing-sm);
+  border: 1px solid var(--mantine-color-default-border);
+  border-radius: var(--mantine-radius-sm);
+  background: var(--mantine-color-body);
+  color: var(--mantine-color-text);
+  transform: translateY(-200%);
+}
+
+.dashboard-skip-link:focus {
+  transform: none;
+}
+
+/* The skip link moves focus to the page area from a script; the page itself is not a control. */
+.dashboard-main:focus {
+  outline: none;
+}

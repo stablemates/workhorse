@@ -32,8 +32,17 @@ import {
 } from "../components/task-detail-durability.js";
 import { SignalTaskPanel } from "../components/signal-task.js";
 import type { useDashboardController } from "../shell/controller.js";
-import { taskDrawerOpened, taskDrawerViewportProps } from "../task-drawer.js";
+import {
+  taskDetailFocusLost,
+  taskDrawerBody,
+  taskDrawerOpened,
+  taskDrawerViewportProps,
+} from "../task-drawer.js";
 import { formatCount } from "../count-format.js";
+import { useLayoutEffect, useRef, type FocusEvent } from "react";
+
+/** The task heading: it names the task and stays mounted while the task reloads. */
+const taskOverviewHeadingId = "task-overview-heading";
 
 type DashboardController = ReturnType<typeof useDashboardController>;
 
@@ -60,6 +69,35 @@ export function TaskDetailDrawer({
     inspectTask,
     closeTaskDetail,
   } = controller;
+  const body = taskDrawerBody({ selectedTaskId, selectedTask, taskDetailError });
+  /** The last control in the detail that held focus, and the task it belongs to. */
+  const focusedControl = useRef<{ taskId: string; element: Element } | null>(null);
+  const trackFocus = (event: FocusEvent<HTMLElement>) => {
+    if (selectedTask) {
+      focusedControl.current = { taskId: selectedTask.identity.id, element: event.target };
+    }
+  };
+  // Runs after each render, because any reload can remove the control that holds focus.
+  useLayoutEffect(() => {
+    const focused = focusedControl.current;
+    if (!focused || focused.element.isConnected) return;
+    focusedControl.current = null;
+    const active = document.activeElement;
+    if (
+      !taskDetailFocusLost({
+        focusedTaskId: focused.taskId,
+        focusedControlConnected: false,
+        focusOnBody: active === null || active === document.body,
+        selectedTaskId,
+      })
+    ) {
+      return;
+    }
+    (
+      document.getElementById(taskOverviewHeadingId) ??
+      document.getElementById("task-detail-drawer-close")
+    )?.focus();
+  });
 
   return (
     <ResizableTaskDrawer
@@ -82,19 +120,24 @@ export function TaskDetailDrawer({
       classNames={{ content: "task-drawer__content" }}
     >
       {taskDetailError ? (
-        <Text c="red" size="sm">
-          {taskDetailError}
+        <Text c="red" size="sm" mb={body === "detail" ? "md" : undefined}>
+          {body === "detail"
+            ? `Workhorse could not reload this task. The detail below can be out of date. ${taskDetailError}`
+            : taskDetailError}
         </Text>
-      ) : selectedTask ? (
-        <TaskDetailContent
-          auditActor={auditActor}
-          controller={controller}
-          task={selectedTask}
-          taskLinkHref={taskLinkHref}
-          onOpenTask={inspectTask}
-          reload={reloadSelectedTask}
-        />
-      ) : (
+      ) : null}
+      {body === "detail" && selectedTask ? (
+        <Box onFocusCapture={trackFocus}>
+          <TaskDetailContent
+            auditActor={auditActor}
+            controller={controller}
+            task={selectedTask}
+            taskLinkHref={taskLinkHref}
+            onOpenTask={inspectTask}
+            reload={reloadSelectedTask}
+          />
+        </Box>
+      ) : body === "error" ? null : (
         <Center mih={200}>
           <Loader size="sm" />
         </Center>
@@ -123,13 +166,16 @@ function TaskDetailContent({
       {/* The overview answers "what task is this, and under which rules does it run?" as one
           aligned label/value grid, so every policy and limit reads from the same column instead
           of each line wrapping at its own offset. */}
-      <Box component="section" aria-labelledby="task-overview-heading">
+      <Box component="section" aria-labelledby={taskOverviewHeadingId}>
         <Group justify="space-between" align="flex-start" wrap="nowrap" gap="sm">
           <Box style={{ minWidth: 0, flex: 1 }}>
             <Group gap="xs" wrap="nowrap" align="center">
               <Text
-                id="task-overview-heading"
+                id={taskOverviewHeadingId}
                 component="h3"
+                // Focus target when an action removes the control that held focus. It takes
+                // focus from a script only, so it does not join the tab order.
+                tabIndex={-1}
                 fw={700}
                 size="lg"
                 my={0}
