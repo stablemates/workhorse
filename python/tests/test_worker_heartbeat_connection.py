@@ -341,7 +341,8 @@ def test_a_dispatch_pass_leaves_promotion_and_recovery_to_the_tick(
 
 # A failing round must not end an attempt, so these leases outlive the whole test.
 RETRY_LEASE_MS = 30_000
-RETRY_HEARTBEAT_MS = 50
+# 100 ms is the smallest supported heartbeat interval.
+RETRY_HEARTBEAT_MS = 100
 # The watchdog lease is short enough to lapse inside the test, and long enough for several rounds.
 WATCHDOG_LEASE_MS = 1_000
 WATCHDOG_HEARTBEAT_MS = 100
