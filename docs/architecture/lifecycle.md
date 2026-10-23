@@ -847,6 +847,11 @@ running handlers minus the reserved slots.
 - The loop waits for the first finished handler, returned claim, or wake. It never awaits a claim
   inline.
 
+When `dispatchLoop` starts a handler or a claim, it attaches exactly one settlement reaction to its
+promise. That reaction puts the settlement in a queue and wakes the loop. The loop observes the
+queue in arrival order and never races the pending promises. Thus a handler that runs for hours
+does not collect one reaction for each short task that runs next to it.
+
 A Go `Worker` can run again after `Run` returned `ErrShutdownIncomplete`. The handlers that an
 ended run abandoned still run, and each one keeps its slot until it returns. The free slots of the
 new run thus also exclude the handlers of every ended run, so the handlers of all runs stay within
@@ -858,6 +863,11 @@ free now, so the loop never waits for a slot, and its stop stays inside its dead
 A claim counts as empty if it returns no row, or only rows of unhandled types that it releases
 through `release_owned_v1`. After an empty claim, the loop starts no claim until the poll deadline
 or until a dispatch wake that is newer than that claim.
+
+The TypeScript worker measures the poll deadline, the `maintenanceIntervalMs` and
+`maintenanceRoutinePollMs` cadences, and the `registryIntervalMs` refresh on `monotonicNow()`.
+Thus, if the wall clock of the worker steps forward or backward, these intervals do not change.
+Telemetry timestamps, such as `observedAt`, stay wall-clock times.
 
 The notification claim delay of `NOTIFICATION_CLAIM_DELAY_MS` applies only while
 `consecutiveEmptyClaims` is above zero. It spreads idle workers and does not slow a busy worker. A

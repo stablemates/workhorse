@@ -629,6 +629,8 @@ export class Worker {
   public readonly concurrency: number;
   /** Slot cohorts for fast-tier dispatch. One cohort keeps every slot in one group. */
   public readonly cohorts: number;
+  // When the last tick, routine poll and registration refresh ran, on the monotonic clock. A step of
+  // the wall clock then cannot stop or hurry them (SM-1656).
   private lastTickAt = Number.NEGATIVE_INFINITY;
   private lastMaintenanceRoutinePollAt = Number.NEGATIVE_INFINITY;
   /**
@@ -1814,7 +1816,7 @@ export class Worker {
    */
   private async refreshRegistration(force = false): Promise<void> {
     if (this.registryIntervalMs === 0) return;
-    const nowMs = Date.now();
+    const nowMs = monotonicNow();
     if (!force && nowMs - this.lastRegistryRefreshAt < this.registryIntervalMs) return;
     this.lastRegistryRefreshAt = nowMs;
 
@@ -1906,7 +1908,7 @@ export class Worker {
 
   private async runMaintenance(): Promise<void> {
     await this.refreshRegistration();
-    const nowMs = Date.now();
+    const nowMs = monotonicNow();
     if (nowMs - this.lastTickAt >= this.maintenanceIntervalMs) {
       this.recordMaintenanceDrift(nowMs, this.lastTickAt, this.maintenanceIntervalMs, "tick");
       const tick = await this.queue.tick();
@@ -2197,11 +2199,17 @@ export class Worker {
       (_, cohort) =>
         Math.floor(this.concurrency / cohorts) + (cohort < this.concurrency % cohorts ? 1 : 0),
     );
-    const active = new Map<number, Promise<DispatchSettlement>>();
+    // The ids of the executions and claims in flight. Each one has exactly one settlement reaction,
+    // which puts its settlement in `settled`. The loop never races the promises themselves: a race
+    // on each iteration would add a reaction to every pending promise, and a handler that runs for
+    // hours would keep one reaction for each iteration until it ends (SM-1653).
+    const active = new Set<number>();
     const executionTasks = new Map<number, ClaimedTask>();
     const executionCohorts = new Map<number, number>();
     const handedOver = new Set<ClaimedTask>();
-    const claims = new Map<number, Promise<ClaimSettlement>>();
+    const claims = new Set<number>();
+    // Settlements that the loop has not observed yet, in the order they arrived.
+    const settled: Array<DispatchSettlement | ClaimSettlement> = [];
     let reserved = 0;
     // Per-cohort counterparts of `active`, `handedOver` and `reserved`, and the plain claims in
     // flight for each cohort. A claim for the whole worker counts toward no cohort.
@@ -2210,15 +2218,21 @@ export class Worker {
     const cohortReserved = cohortCapacity.map(() => 0);
     const cohortClaims = cohortCapacity.map(() => 0);
     let wholeClaims = 0;
-    // Resolves the loop's current wait when a fused completion settles outside any tracked promise.
+    // Resolves the loop's current wait when a settlement arrives, or when a fused completion settles
+    // outside any tracked promise. Each wait makes a new promise, so no promise collects reactions.
     let wakeLoop: (() => void) | undefined;
+    const deliver = (event: DispatchSettlement | ClaimSettlement): void => {
+      settled.push(event);
+      wakeLoop?.();
+    };
     let nextExecutionId = 0;
     let nextClaimId = 0;
     let firstFailure: { executionId: number; reason: unknown } | undefined;
     let claimError: { error: unknown } | undefined;
-    // Set by a claim that found nothing to run. No claim starts until its deadline or a wake. A
-    // release wait follows a claim that released every task it claimed. Each release notifies the
-    // queue, so a wake does not end that wait: only its deadline, a stop, or a pause does.
+    // Set by a claim that found nothing to run. No claim starts until its deadline, a monotonicNow()
+    // value, or a wake. A release wait follows a claim that released every task it claimed. Each
+    // release notifies the queue, so a wake does not end that wait: only its deadline, a stop, or a
+    // pause does.
     let emptyWait: { deadline: number; wakeVersion: number; release?: true } | undefined;
 
     const cohortFree = (cohort: number): number =>
@@ -2260,13 +2274,11 @@ export class Worker {
       executionCohorts.set(executionId, cohort);
       cohortActive[cohort]! += 1;
       this.taskCohorts.set(task, cohort);
-      active.set(
-        executionId,
-        this.startExecution(task).then((settlement) => ({
-          kind: "execution" as const,
-          executionId,
-          settlement,
-        })),
+      active.add(executionId);
+      void this.startExecution(task).then(
+        (settlement) => deliver({ kind: "execution", executionId, settlement }),
+        (reason: unknown) =>
+          deliver({ kind: "execution", executionId, settlement: { status: "rejected", reason } }),
       );
     };
     const startClaim = (limit: number, cohort?: number, cohortLimit = 0): void => {
@@ -2284,31 +2296,17 @@ export class Worker {
       const delayed = this.notificationClaimDelayPending && this.consecutiveEmptyClaims > 0;
       this.notificationClaimDelayPending = false;
       const wakeVersion = this.dispatchWakeVersion;
-      claims.set(
-        claimId,
-        (async (): Promise<ClaimSettlement> => {
-          if (delayed) {
-            await sleep(Math.random() * NOTIFICATION_CLAIM_DELAY_MS);
-            if (shouldStop() || this.paused || !this.heartbeatGateOpen()) {
-              return {
-                kind: "claim",
-                claimId,
-                limit,
-                cohort,
-                cohortLimit,
-                wakeVersion,
-                attempt: null,
-              };
-            }
-          }
-          // A cohort claim takes only its cohort's share from a fast-tier queue.
-          const attempt = await this.claimNextMany(
-            limit,
-            cohort === undefined ? limit : cohortLimit,
-          );
-          return { kind: "claim", claimId, limit, cohort, cohortLimit, wakeVersion, attempt };
-        })(),
-      );
+      claims.add(claimId);
+      const settle = (attempt: ClaimAttempt | null): void =>
+        deliver({ kind: "claim", claimId, limit, cohort, cohortLimit, wakeVersion, attempt });
+      void (async (): Promise<ClaimAttempt | null> => {
+        if (delayed) {
+          await sleep(Math.random() * NOTIFICATION_CLAIM_DELAY_MS);
+          if (shouldStop() || this.paused || !this.heartbeatGateOpen()) return null;
+        }
+        // A cohort claim takes only its cohort's share from a fast-tier queue.
+        return this.claimNextMany(limit, cohort === undefined ? limit : cohortLimit);
+      })().then(settle, (error: unknown) => settle({ claimed: [], error }));
     };
     const settleClaim = ({
       claimId,
@@ -2343,10 +2341,10 @@ export class Worker {
       }
       this.consecutiveEmptyClaims += 1;
       if (attempt.claimed.length === 0) {
-        emptyWait ??= { deadline: Date.now() + this.nextDispatchPollMs(), wakeVersion };
+        emptyWait ??= { deadline: monotonicNow() + this.nextDispatchPollMs(), wakeVersion };
       } else if (!emptyWait?.release) {
         emptyWait = {
-          deadline: Date.now() + this.nextDispatchPollMs(),
+          deadline: monotonicNow() + this.nextDispatchPollMs(),
           wakeVersion,
           release: true,
         };
@@ -2398,24 +2396,37 @@ export class Worker {
           } else if (claimed?.length === 0 && this.queueNames.length === 1) {
             // Another queue may still have work, so only a single-queue worker backs off here.
             this.consecutiveEmptyClaims += 1;
-            emptyWait ??= { deadline: Date.now() + this.nextDispatchPollMs(), wakeVersion };
+            emptyWait ??= { deadline: monotonicNow() + this.nextDispatchPollMs(), wakeVersion };
           }
           wakeLoop?.();
         },
       };
     };
-    const nextEvent = async (wakeMs?: number, wakeVersion?: number): Promise<void> => {
-      const pending: Array<Promise<DispatchSettlement | ClaimSettlement | null>> = [
-        ...active.values(),
-        ...claims.values(),
-        new Promise<null>((resolve) => {
-          wakeLoop = () => resolve(null);
-        }),
-      ];
-      if (wakeMs !== undefined) {
-        pending.push(this.waitForDispatchWake(wakeMs, signal, wakeVersion).then(() => null));
+    // Resolves at the next settlement or wake. With `wakeMs`, it also resolves at the dispatch
+    // wake or after `wakeMs`. It makes new promises for each wait and cancels its timer at the end,
+    // so a wait that ends early leaves nothing behind.
+    const waitForEvent = async (wakeMs?: number, wakeVersion?: number): Promise<void> => {
+      const woken = new Promise<void>((resolve) => {
+        wakeLoop = resolve;
+      });
+      if (wakeMs === undefined) {
+        await woken;
+        return;
       }
-      const event = await Promise.race(pending);
+      const ended = new AbortController();
+      try {
+        await Promise.race([
+          woken,
+          this.waitForDispatchWake(wakeMs, signal, wakeVersion, ended.signal),
+        ]);
+      } finally {
+        ended.abort();
+      }
+    };
+    // Observes the oldest settlement. With none waiting, it first waits for one or for a wake.
+    const nextEvent = async (wakeMs?: number, wakeVersion?: number): Promise<void> => {
+      if (settled.length === 0) await waitForEvent(wakeMs, wakeVersion);
+      const event = settled.shift();
       if (event?.kind === "execution") observe(event);
       else if (event?.kind === "claim") settleClaim(event);
     };
@@ -2436,7 +2447,7 @@ export class Worker {
         continue;
       }
       if (emptyWait) {
-        const remainingMs = emptyWait.deadline - Date.now();
+        const remainingMs = emptyWait.deadline - monotonicNow();
         const woken = !emptyWait.release && this.dispatchWakeVersion !== emptyWait.wakeVersion;
         if (remainingMs <= 0 || woken) {
           emptyWait = undefined;
@@ -2466,10 +2477,20 @@ export class Worker {
     }
 
     this.reserveCompletionClaim = undefined;
-    while (claims.size > 0) settleClaim(await Promise.race(claims.values()));
+    // Claims settle first, so each task they claimed is active before the executions drain. An
+    // execution settlement that arrives meanwhile waits in `settled`.
+    while (claims.size > 0) {
+      const index = settled.findIndex((event) => event.kind === "claim");
+      if (index === -1) await waitForEvent();
+      else settleClaim(settled.splice(index, 1)[0] as ClaimSettlement);
+    }
     // An execution settles its fused completion before it ends, so every task that completion
     // claimed is already active when the execution's own settlement arrives.
-    while (active.size > 0) observe(await Promise.race(active.values()));
+    while (active.size > 0) {
+      const event = settled.shift();
+      if (event === undefined) await waitForEvent();
+      else if (event.kind === "execution") observe(event);
+    }
     if (firstFailure) throw firstFailure.reason;
     if (claimError !== undefined) throw claimError.error;
   }
@@ -2564,14 +2585,16 @@ export class Worker {
     await sleep(durationMs, undefined, { signal: waitSignal }).catch(() => undefined);
   }
 
+  // `ended` aborts when the caller stops waiting for another reason, so the timer does not stay.
   private async waitForDispatchWake(
     durationMs: number,
-    signal?: AbortSignal,
-    observedWakeVersion = this.dispatchWakeVersion,
+    signal: AbortSignal | undefined,
+    observedWakeVersion: number | undefined,
+    ended: AbortSignal,
   ): Promise<void> {
     const wakeSignal = this.dispatchWakeController.signal;
-    if (this.dispatchWakeVersion !== observedWakeVersion) return;
-    const waitSignal = signal ? AbortSignal.any([wakeSignal, signal]) : wakeSignal;
+    if (this.dispatchWakeVersion !== (observedWakeVersion ?? this.dispatchWakeVersion)) return;
+    const waitSignal = AbortSignal.any(signal ? [wakeSignal, signal, ended] : [wakeSignal, ended]);
     await sleep(durationMs, undefined, { signal: waitSignal }).catch(() => undefined);
   }
 

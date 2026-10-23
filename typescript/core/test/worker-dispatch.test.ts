@@ -596,3 +596,162 @@ describe("worker dispatch", () => {
     expect(new Set(fake.completions.map((claim) => claim.cohort))).toEqual(new Set([0, 1]));
   });
 });
+
+// SM-1653: the loop raced every handler promise on each iteration, and each race added a reaction
+// to every pending promise. One long handler then kept one reaction for each short task beside it.
+describe("worker dispatch memory", () => {
+  it("adds no reaction to a long handler for each short task beside it", async () => {
+    // Promise.race calls the `then` of each input, so a patched `then` counts the reactions that
+    // each promise collects. A WeakMap keeps the count from holding the promise.
+    const reactions = new WeakMap<object, number>();
+    let mostReactions = 0;
+    const then = Promise.prototype.then;
+
+    let supplied = 0;
+    const fake = fakeQueue({
+      answer: (limit) => {
+        if (supplied === 0) {
+          supplied = 1;
+          return [claimedTask("long", "long")];
+        }
+        const batch = tasks(`short-${supplied}`, Math.min(limit, 201 - supplied));
+        supplied += batch.length;
+        return batch;
+      },
+    });
+    const long = deferred<void>();
+    const worker = new Worker(fake.queue, { concurrency: 2, registryIntervalMs: 0, pollMs: 10 })
+      .handle("long", async () => {
+        await long.promise;
+        return null;
+      })
+      .handle("dispatch", async () => null);
+
+    const counted = function (
+      this: Promise<unknown>,
+      ...callbacks: Parameters<Promise<unknown>["then"]>
+    ) {
+      const count = (reactions.get(this) ?? 0) + 1;
+      reactions.set(this, count);
+      mostReactions = Math.max(mostReactions, count);
+      return Reflect.apply(then, this, callbacks) as Promise<never>;
+    };
+    // A vitest spy calls `then` itself, so the test patches and restores the method by hand.
+    // oxlint-disable-next-line no-extend-native, unicorn/no-thenable -- the test restores it below.
+    Promise.prototype.then = counted as typeof then;
+    let running: Promise<void> | undefined;
+    try {
+      try {
+        running = worker.run();
+        while (fake.completed.length < 200) await sleep(5);
+      } finally {
+        // oxlint-disable-next-line no-extend-native, unicorn/no-thenable -- restores the original.
+        Promise.prototype.then = then;
+      }
+      // Before SM-1653, the long handler's promise collected one reaction for each short task.
+      expect(mostReactions).toBeLessThan(10);
+    } finally {
+      worker.stop();
+      long.resolve();
+      await running;
+    }
+    expect(fake.completed).toContain("long");
+  });
+});
+
+// Moves Date.now() by `offsetMs` from the real wall clock. The timers do not move.
+function stepWallClock(offsetMs: number): void {
+  const realNow = Date.now.bind(Date);
+  vi.spyOn(Date, "now").mockImplementation(() => realNow() + offsetMs);
+}
+
+// SM-1656: maintenance, registration, and the empty-claim wait measured elapsed time on the wall
+// clock. A clock step back stopped them, and a step forward ended a wait early.
+describe("worker dispatch under a wall clock step", () => {
+  it("keeps its tick, routine poll, registration and claim cadence after the clock steps back", async () => {
+    const fake = fakeQueue({ answer: () => [] });
+    let ticks = 0;
+    let routinePolls = 0;
+    let registrations = 0;
+    const queue = {
+      ...fake.queue,
+      tick: async () => {
+        ticks += 1;
+        return [];
+      },
+      runMaintenance: async () => {
+        routinePolls += 1;
+        return [];
+      },
+      registerWorker: async () => {
+        registrations += 1;
+        return { paused: false };
+      },
+      deregisterWorker: async () => {},
+    } as unknown as WorkerQueueApi;
+    const worker = new Worker(queue, {
+      concurrency: 2,
+      maintenanceIntervalMs: 100,
+      maintenanceRoutinePollMs: 100,
+      registryIntervalMs: 100,
+      pollMs: 50,
+    }).handle("dispatch", async () => null);
+    const running = worker.run();
+    try {
+      await vi.waitFor(() => {
+        expect(ticks).toBeGreaterThan(0);
+        expect(routinePolls).toBeGreaterThan(0);
+        expect(registrations).toBeGreaterThan(0);
+      });
+      await fake.claimsReceived(1);
+
+      stepWallClock(-10 * 60_000);
+      const before = { ticks, routinePolls, registrations, claims: fake.limits.length };
+      await sleep(600);
+      expect(ticks).toBeGreaterThan(before.ticks + 1);
+      expect(routinePolls).toBeGreaterThan(before.routinePolls + 1);
+      expect(registrations).toBeGreaterThan(before.registrations + 1);
+      expect(fake.limits.length).toBeGreaterThan(before.claims + 1);
+    } finally {
+      vi.restoreAllMocks();
+      worker.stop();
+      await running;
+    }
+  });
+
+  it("keeps a release wait through a notification after the clock steps forward", async () => {
+    const fake = fakeQueue();
+    let notify: (() => void) | undefined;
+    const queue = {
+      ...fake.queue,
+      subscribeToTaskNotifications: async (_queue: string, onNotification: () => void) => {
+        notify = onNotification;
+        return { close: async () => {} };
+      },
+    } as unknown as WorkerQueueApi;
+    const worker = new Worker(queue, {
+      concurrency: 2,
+      registryIntervalMs: 0,
+      pollMs: 60_000,
+    }).handle("dispatch", async () => null);
+    const running = worker.run();
+    try {
+      await fake.claimsReceived(1);
+      fake.held[0]!.answer.resolve([claimedTask("unknown-1", "no-handler")]);
+      await settle();
+      expect(fake.released).toEqual(["unknown-1"]);
+
+      // The notification wakes the loop, which checks the wait again. The step must not end it.
+      stepWallClock(10 * 60_000);
+      notify?.();
+      await sleep(100);
+      expect(fake.limits).toHaveLength(1);
+    } finally {
+      vi.restoreAllMocks();
+      worker.stop();
+      // An early claim must not keep the stop waiting.
+      for (const claim of fake.held) claim.answer.resolve([]);
+      await running;
+    }
+  });
+});

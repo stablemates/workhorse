@@ -1337,7 +1337,8 @@ describe("worker registry", () => {
         error: null,
       },
     ];
-    const now = vi.spyOn(Date, "now").mockReturnValue(0);
+    // The worker measures its maintenance cadence on monotonicNow(), which reads performance.now().
+    const now = vi.spyOn(performance, "now").mockReturnValue(0);
     const tick = vi.spyOn(queue, "tick").mockResolvedValue(tickResults);
     const prepareHistoryPartitions = vi
       .spyOn(queue, "prepareHistoryPartitions")
@@ -1817,7 +1818,8 @@ describe("worker registry", () => {
       { phase: "promote", rowsAffected: 0, durationMs: 0, skippedLock: true, error: null },
       { phase: "recover", rowsAffected: 0, durationMs: 0, skippedLock: true, error: null },
     ];
-    const now = vi.spyOn(Date, "now").mockReturnValue(0);
+    // The worker measures its maintenance cadence on monotonicNow(), which reads performance.now().
+    const now = vi.spyOn(performance, "now").mockReturnValue(0);
     const tick = vi.spyOn(queue, "tick").mockResolvedValue(skippedTick);
     const prepareHistoryPartitions = vi
       .spyOn(queue, "prepareHistoryPartitions")
