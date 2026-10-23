@@ -71,6 +71,8 @@ class Round:
     started_at: float
     task_ids: list[str]
     deadline: float
+    # The number of leases in each batch of the round.
+    batch_sizes: list[int] = field(default_factory=list)
 
 
 @dataclass
@@ -104,12 +106,14 @@ class FakeRounds:
         worker._heartbeat_rows = self.heartbeat_rows  # type: ignore[method-assign]
 
     def heartbeat_rows(
-        self, parameters: Sequence[object], deadline: float
+        self, batches: Sequence[Sequence[Mapping[str, object]]], deadline: float
     ) -> list[Mapping[str, object]]:
-        task_ids = [lease["taskId"] for lease in json.loads(str(parameters[1]))]
+        task_ids = [str(lease["taskId"]) for batch in batches for lease in batch]
         with self._lock:
             index = len(self.rounds)
-            self.rounds.append(Round(monotonic(), task_ids, deadline))
+            self.rounds.append(
+                Round(monotonic(), task_ids, deadline, [len(batch) for batch in batches])
+            )
             self.in_flight += 1
             self.most_in_flight = max(self.most_in_flight, self.in_flight)
         try:
@@ -365,12 +369,19 @@ class FakeConnection:
             self.statements.append(statement.psycopg)
         if statement is ROUND_TIMEOUTS:
             return [{}]
-        task_ids = [lease["taskId"] for lease in json.loads(str(parameters[1]))]
+        batches = json.loads(str(parameters[0]))
+        task_ids = [lease["taskId"] for batch in batches for lease in batch["leases"]]
         with self._lock:
             index = len(self.rounds)
-            self.rounds.append(Round(monotonic(), task_ids, 0.0))
+            self.rounds.append(
+                Round(monotonic(), task_ids, 0.0, [len(batch["leases"]) for batch in batches])
+            )
         statuses = self._respond(index, task_ids)
-        return [{"task_id": task_id, "status": statuses[task_id]} for task_id in task_ids]
+        return [
+            {"batch": ordinal, "task_id": lease["taskId"], "status": statuses[lease["taskId"]]}
+            for ordinal, batch in enumerate(batches, start=1)
+            for lease in batch["leases"]
+        ]
 
     def close(self) -> None:
         self.closed = True
@@ -381,7 +392,7 @@ class FakeConnection:
 
     def heartbeats(self) -> int:
         with self._lock:
-            return self.statements.count(_STATEMENTS.heartbeat_many.psycopg)
+            return self.statements.count(_STATEMENTS.heartbeat_pool.psycopg)
 
 
 class BoundedWorker:
@@ -473,21 +484,29 @@ def test_a_bounded_busy_retry_with_enough_time_runs() -> None:
     assert held.statuses[0] == "accepted"
 
 
-def test_a_round_sends_at_most_100_leases_in_each_statement() -> None:
+def test_a_round_sends_at_most_100_leases_in_each_batch_of_the_one_statement() -> None:
     # A fused completion claim registers its tasks before the completing attempts unregister, so a
-    # round can hold more leases than the concurrency limit. One statement accepts at most 100.
-    worker = _worker()
-    rounds = FakeRounds(worker, lambda _index, task_ids: dict.fromkeys(task_ids, "accepted"))
-    leases = [_register(worker, Lease(f"task-{index:03}")) for index in range(150)]
+    # round can hold more leases than the concurrency limit. One batch holds at most 100, and one
+    # statement in one transaction carries every batch of the round.
+    bounded = BoundedWorker(lambda _index, task_ids: dict.fromkeys(task_ids, "accepted"))
+    worker = bounded.worker
+    # The first round starts one interval after the first lease, so it carries every lease.
+    leases = [_register(worker, Lease(f"task-{index:03}")) for index in range(151)]
     try:
-        # The worker delivers the statuses after the last statement of the round returns.
         eventually(lambda: all(lease.statuses for lease in leases), "no round renewed every lease")
-        statements = rounds.snapshot()
     finally:
         _stop(worker, *leases)
 
-    assert max(len(statement.task_ids) for statement in statements) <= 100
-    assert sorted(task for statement in statements[:2] for task in statement.task_ids) == [
-        lease.task_id for lease in leases
+    (connection,) = bounded.opened
+    first = connection.snapshot()[0]
+    assert first.batch_sizes == [100, 51]
+    assert sorted(first.task_ids) == sorted(lease.task_id for lease in leases)
+    # The round sent one transaction with one heartbeat statement.
+    first_commit = connection.statements.index("COMMIT")
+    assert connection.statements[: first_commit + 1] == [
+        "BEGIN",
+        ROUND_TIMEOUTS.psycopg,
+        _STATEMENTS.heartbeat_pool.psycopg,
+        "COMMIT",
     ]
     assert all(lease.statuses and lease.statuses[0] == "accepted" for lease in leases)

@@ -18,6 +18,7 @@ from uuid import uuid4
 import asyncpg
 import psycopg
 import pytest
+from delayed_proxy import delayed_database_url
 from psycopg_pool import AsyncConnectionPool, ConnectionPool
 
 from workhorse import (
@@ -96,23 +97,33 @@ def reserved_backends(database_url: str, application_name: str) -> tuple[set[int
 
 
 @contextmanager
-def sync_pool(database_url: str, size: int, application_name: str) -> Iterator[ConnectionPool]:
+def sync_pool(
+    database_url: str, size: int, application_name: str, options: str = ""
+) -> Iterator[ConnectionPool]:
     with ConnectionPool(
         database_url,
         min_size=0,
         max_size=size,
-        kwargs={"autocommit": True, "application_name": application_name},
+        kwargs={"autocommit": True, "application_name": application_name, "options": options},
     ) as pool:
         yield pool
 
 
-async def async_pool(database_url: str, domain: str, size: int, application_name: str) -> Any:
+async def async_pool(
+    database_url: str,
+    domain: str,
+    size: int,
+    application_name: str,
+    settings: dict[str, str] | None = None,
+) -> Any:
+    settings = settings or {}
     if domain == "psycopg":
+        options = " ".join(f"-c {name}={value}" for name, value in settings.items())
         pool: AsyncConnectionPool[Any] = AsyncConnectionPool(
             database_url,
             min_size=0,
             max_size=size,
-            kwargs={"autocommit": True, "application_name": application_name},
+            kwargs={"autocommit": True, "application_name": application_name, "options": options},
             open=False,
         )
         await pool.open()
@@ -121,7 +132,7 @@ async def async_pool(database_url: str, domain: str, size: int, application_name
         database_url,
         min_size=0,
         max_size=size,
-        server_settings={"application_name": application_name},
+        server_settings={"application_name": application_name, **settings},
     )
 
 
@@ -678,3 +689,162 @@ async def test_an_asyncpg_worker_on_another_event_loop_refuses_to_start(database
 
     assert isinstance(error, RuntimeError)
     assert "another event loop" in str(error)
+
+
+# SM-1633: on a slow network the transactions of the heartbeat connection decide whether every
+# worker on a small pool renews its leases. The rounds of all workers share one transaction, so
+# the round trips of a round do not grow with the count of workers.
+SLOW_WORKERS = 8
+SLOW_CONCURRENCY = 2
+SLOW_POOL_SIZE = 6
+SLOW_LEASE_MS = 3_000
+SLOW_HEARTBEAT_MS = 1_000
+# Longer than the lease, so only renewals keep it.
+SLOW_HANDLER_SECONDS = 4.0
+SLOW_ROUND_TRIP_SECONDS = 0.08
+# Two waves fill every slot, so each worker claims and refills.
+SLOW_TASKS = 2 * SLOW_WORKERS * SLOW_CONCURRENCY
+# The test measures the network, not the disk. Other test databases on the same server can make a
+# WAL flush wait for seconds, so a COMMIT of the workers does not wait for its flush.
+SLOW_SETTINGS = {"synchronous_commit": "off"}
+
+
+def slow_options(queue: str, index: int) -> dict[str, Any]:
+    return worker_options(
+        queue,
+        index,
+        concurrency=SLOW_CONCURRENCY,
+        heartbeat_ms=SLOW_HEARTBEAT_MS,
+        lease_ms=SLOW_LEASE_MS,
+        poll_ms=200,
+    )
+
+
+def enqueue_retryable(database_url: str, queue: str, count: int) -> list[str]:
+    """Enqueue tasks that a lost lease gives a second attempt, so the test can see the loss."""
+    with psycopg.connect(database_url) as connection:
+        tasks = [
+            Queue(connection, default_queue=queue).enqueue(
+                TASK_TYPE, {}, EnqueueOptions(max_attempts=3)
+            )
+            for _ in range(count)
+        ]
+        connection.commit()
+    return tasks
+
+
+def succeeded_in(database_url: str, queue: str) -> int:
+    with psycopg.connect(database_url, autocommit=True) as observer:
+        row = observer.execute(
+            "SELECT count(*) FROM workhorse.task t "
+            "JOIN workhorse.task_outcome r ON r.task_id = t.id "
+            "WHERE t.queue_name = %s AND r.state = 'succeeded'",
+            (queue,),
+        ).fetchone()
+    assert row is not None
+    return int(row[0])
+
+
+def assert_every_lease_kept(database_url: str, queue: str, tasks: list[str]) -> None:
+    with psycopg.connect(database_url, autocommit=True) as observer:
+        expired = observer.execute(
+            "SELECT count(*) FROM workhorse.attempt_history h "
+            "JOIN workhorse.task t ON t.id = h.task_id "
+            "WHERE t.queue_name = %s AND h.outcome = 'lease_expired'",
+            (queue,),
+        ).fetchone()
+        attempts = observer.execute(
+            "SELECT count(*), max(r.current_attempt) FROM workhorse.task t "
+            "JOIN workhorse.task_outcome r ON r.task_id = t.id "
+            "WHERE t.queue_name = %s AND r.state = 'succeeded'",
+            (queue,),
+        ).fetchone()
+    assert expired == (0,), "a lease expired"
+    assert attempts == (len(tasks), 1), "a task did not succeed with one attempt"
+
+
+# asyncpg is not in this test. On a new asyncpg connection a claim needs many more round trips
+# (the connection start, the type reads, and a preparation), so at 80 ms a first claim can take
+# about 2 s. The local lease window starts when the claim goes out, and the first renewal comes
+# one interval after the attempt starts, so the window can end before any heartbeat round runs.
+@pytest.mark.parametrize("domain", ["sync", "psycopg"])
+def test_many_workers_on_a_small_pool_keep_every_lease_when_each_round_trip_takes_80_ms(
+    database_url: str, domain: str
+) -> None:
+    queue = f"slow-{domain}-{uuid4().hex[:8]}"
+    tasks = enqueue_retryable(database_url, queue, SLOW_TASKS)
+    with delayed_database_url(database_url, SLOW_ROUND_TRIP_SECONDS) as slow_url:
+        if domain == "sync":
+            errors = run_slow_sync_workers(slow_url, database_url, queue)
+        else:
+            errors = asyncio.run(run_slow_async_workers(slow_url, database_url, domain, queue))
+
+    assert errors == []
+    assert_every_lease_kept(database_url, queue, tasks)
+
+
+def run_slow_sync_workers(slow_url: str, database_url: str, queue: str) -> list[BaseException]:
+    def handler(_payload: Any, _context: HandlerContext) -> dict[str, bool]:
+        sleep(SLOW_HANDLER_SECONDS)
+        return {"ok": True}
+
+    errors: list[BaseException] = []
+    options = " ".join(f"-c {name}={value}" for name, value in SLOW_SETTINGS.items())
+    with sync_pool(slow_url, SLOW_POOL_SIZE, queue, options) as pool:
+        running = [
+            Worker(pool, **slow_options(queue, index)).handle(TASK_TYPE, handler)
+            for index in range(SLOW_WORKERS)
+        ]
+
+        def run(worker: Worker) -> None:
+            try:
+                worker.run()
+            except BaseException as error:
+                errors.append(error)
+
+        threads = [threading.Thread(target=run, args=(worker,)) for worker in running]
+        for thread in threads:
+            thread.start()
+        try:
+            with suppress(AssertionError):
+                wait_until(lambda: succeeded_in(database_url, queue) == SLOW_TASKS, 60, "")
+        finally:
+            for worker in running:
+                worker.stop()
+            for thread in threads:
+                thread.join(STOP_GRACE_SECONDS)
+        assert not any(thread.is_alive() for thread in threads), "a worker did not stop in time"
+    return errors
+
+
+async def run_slow_async_workers(
+    slow_url: str, database_url: str, domain: str, queue: str
+) -> list[BaseException]:
+    async def handler(_payload: Any, _context: AsyncHandlerContext) -> dict[str, bool]:
+        await asyncio.sleep(SLOW_HANDLER_SECONDS)
+        return {"ok": True}
+
+    pool = await async_pool(slow_url, domain, SLOW_POOL_SIZE, queue, SLOW_SETTINGS)
+    runs: list[asyncio.Task[None]] = []
+    try:
+        running = [
+            async_worker(pool, domain, **slow_options(queue, index)).handle(TASK_TYPE, handler)
+            for index in range(SLOW_WORKERS)
+        ]
+        runs = [asyncio.create_task(worker.run()) for worker in running]
+        try:
+            deadline = monotonic() + 60
+            while monotonic() < deadline:
+                if await asyncio.to_thread(succeeded_in, database_url, queue) == SLOW_TASKS:
+                    break
+                await asyncio.sleep(0.1)
+        finally:
+            for worker in running:
+                worker.stop()
+            done, _pending = await asyncio.wait(runs, timeout=STOP_GRACE_SECONDS)
+        assert len(done) == len(runs), "a worker did not stop in time"
+        return [error for run in runs if (error := run.exception()) is not None]
+    finally:
+        for run in runs:
+            run.cancel()
+        await close_async_pool(pool)

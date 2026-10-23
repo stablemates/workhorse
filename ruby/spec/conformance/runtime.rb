@@ -1010,13 +1010,15 @@ module Conformance
       pool&.shutdown(&:close)
     end
 
-    # Makes each heartbeat_many_v2 call on +connection+ wait until +released+ is set. The call
-    # waits before it reaches PostgreSQL, so it holds no row lock while it waits. A dedicated
-    # heartbeat sends with send_query_params, and a shared heartbeat with exec_params.
+    # Makes each heartbeat statement on +connection+ wait until +released+ is set. The call waits
+    # before it reaches PostgreSQL, so it holds no row lock while it waits. A dedicated heartbeat
+    # sends heartbeat_pool_v1 with send_query_params, and a shared heartbeat sends
+    # heartbeat_many_v2 with exec_params.
     def hold_heartbeats(connection, released)
+      heartbeats = [W::SqlCatalogue::HEARTBEAT_MANY_V2, W::SqlCatalogue::HEARTBEAT_POOL_V1]
       %i[exec_params send_query_params].each do |name|
         connection.define_singleton_method(name) do |sql, *rest|
-          raise "a held heartbeat was never released" if sql == W::SqlCatalogue::HEARTBEAT_MANY_V2 && !released.wait(5)
+          raise "a held heartbeat was never released" if heartbeats.include?(sql) && !released.wait(5)
 
           super(sql, *rest)
         end

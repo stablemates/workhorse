@@ -756,10 +756,13 @@ connection that the pool's `HeartbeatReservation` holds
 renewal.
 
 - A Psycopg heartbeat connection must use `autocommit=True`. Otherwise the worker refuses to start.
-- A round takes the connection for itself, so the rounds of the workers on one pool run one after
-  another, in the order in which they ask for it. The wait for the connection counts against the
-  round deadline.
-- A round whose turn comes with less than a quarter of its time left skips without a statement. It
+- The rounds of the workers on one pool share one transaction (`HeartbeatGroup`). A round that
+  finds no transaction leads one. Immediately before the heartbeat statement, the leader takes every
+  waiting round whose deadline is not earlier than its own. When the transaction ends, the waiting
+  round with the earliest deadline leads the next one
+  ([Pool renewal](lifecycle.md#pool-renewal)). The wait counts against the round deadline.
+- A leader whose turn on the connection comes with less than a quarter of its time left skips
+  without a statement. The quarter is measured from the time that the round had when it started. It
   renews nothing, and the connection stays usable for the next round.
 - A round holds the connection until its deadline plus 1,000 ms. After that, the reservation stops
   waiting for it and opens a replacement, and the round closes the connection when it returns.

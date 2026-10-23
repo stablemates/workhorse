@@ -243,7 +243,7 @@ func TestANewHeartbeatHolderWaitsUntilThePoolNoLongerCountsTheReleasedConnection
 }
 
 // A round fails and discards the heartbeat connection, and the close of that connection blocks. The
-// replacement connection must renew at once: the round slot cannot wait for the close. The released
+// replacement connection must renew at once: the next transaction cannot wait for the close. The released
 // connection still settles only after the close ends.
 func TestAReplacementHeartbeatConnectionRenewsWhileTheDiscardedOneCloses(t *testing.T) {
 	var blockClose atomic.Bool

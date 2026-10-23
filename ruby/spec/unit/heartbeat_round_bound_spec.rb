@@ -18,23 +18,22 @@ RSpec.describe "Worker heartbeat round bound" do
   end
 end
 
-RSpec.describe "Worker heartbeat statement order" do
+RSpec.describe "Worker heartbeat batches" do
   heartbeat_class = Stablemates::Workhorse::Worker.const_get(:Heartbeat)
   member = Struct.new(:worker_id, :name)
-  members = [member.new("a", 1), member.new("b", 2), member.new("a", 3)]
 
-  it "starts each dedicated round with the next worker, so no worker is always last" do
-    heartbeat = heartbeat_class.new(nil, dedicated: true)
-    firsts = Array.new(4) { heartbeat.send(:ordered_groups, members).first.first }
-    expect(firsts).to eq(%w[a b a b])
-    expect(heartbeat.send(:ordered_groups, members).to_h.transform_values { |group| group.map(&:name) })
-      .to eq("a" => [1, 3], "b" => [2])
+  it "puts the members of each worker in batches of at most 100 leases" do
+    members = Array.new(250) { |index| member.new("a", index) } + [member.new("b", 250)]
+    batches = heartbeat_class.new(nil, dedicated: true).send(:batches, members)
+    expect(batches.map { |worker_id, group| [worker_id, group.size] }).to eq([["a", 100], ["a", 100], ["a", 50], ["b", 1]])
   end
 
-  it "keeps the order of a borrowing heartbeat, which sends every statement" do
-    heartbeat = heartbeat_class.new(nil, dedicated: false)
-    firsts = Array.new(3) { heartbeat.send(:ordered_groups, members).first.first }
-    expect(firsts).to eq(%w[a a a])
+  # SM-1633: the heartbeat statement and each idle gap get one quarter of the time that remains, and
+  # one quarter is kept for the settings statement and COMMIT.
+  it "gives the heartbeat statement and each idle gap one quarter, and at least 1 ms" do
+    heartbeat = heartbeat_class.new(nil, dedicated: true)
+    expect([0.45, 0.1, 0.008, 0.003].map { |remaining| heartbeat.send(:round_timeouts, remaining) })
+      .to eq([%w[112 112], %w[25 25], %w[2 2], %w[1 1]])
   end
 end
 
@@ -131,20 +130,48 @@ RSpec.describe "Worker heartbeat round expiry" do
     expect(first.closed?).to be(true)
   end
 
-  it "stops a round at a statement that expires cleanly, and keeps the results of the earlier statements" do
-    # The second settings statement of the round, for the second worker, is slow.
-    connection = FakeHeartbeatConnection.new { |kind, count| (kind == :settings && count == 1) ? 0.2 : 0 }
+  # SM-1633: one transaction renews every worker on the pool, with one batch for each worker.
+  it "renews the leases of every worker in one heartbeat statement in one transaction" do
+    connection = FakeHeartbeatConnection.new
     pool = FakeHeartbeatPool.new([connection])
     heartbeat = heartbeat_class.new(pool, dedicated: true)
     @unregister = %w[a b c].each_with_index.map { |worker_id, index| heartbeat.register(member(worker_id, index + 1, interval, renewals)) }
-    wait_until { renewals.size >= 4 }
-    expect(rounds_of(connection).first(2)).to eq([%i[begin settings heartbeat commit], %i[begin settings rollback]])
-    # The first round sent no statement for the third worker. The next round sends all three.
-    first_round = connection.sent.take_while { |entry| entry[0] != :rollback }
-    expect(first_round.filter_map { |kind, worker_id| worker_id if kind == :heartbeat }).to eq(["a"])
-    expect(renewals.first).to eq("a")
-    expect(renewals.drop(1).first(3)).to contain_exactly("a", "b", "c")
+    wait_until { renewals.size >= 3 }
+    expect(rounds_of(connection).first).to eq(%i[begin settings heartbeat commit])
+    workers = connection.sent.find { |kind, _| kind == :heartbeat }[1]
+    expect(workers).to contain_exactly("a", "b", "c")
+    expect(renewals.first(3)).to contain_exactly("a", "b", "c")
+    expect(pool.discarded).to be_empty
+  end
+
+  it "renews no lease of a round that expires at its settings statement, and renews every worker in the next round" do
+    connection = FakeHeartbeatConnection.new { |kind, count| (kind == :settings && count.zero?) ? 0.2 : 0 }
+    pool = FakeHeartbeatPool.new([connection])
+    heartbeat = heartbeat_class.new(pool, dedicated: true)
+    @unregister = %w[a b c].each_with_index.map { |worker_id, index| heartbeat.register(member(worker_id, index + 1, interval, renewals)) }
+    wait_until { renewals.size >= 3 }
+    expect(rounds_of(connection).first(2)).to eq([%i[begin settings rollback], %i[begin settings heartbeat commit]])
+    expect(renewals.first(3)).to contain_exactly("a", "b", "c")
     expect(pool.lent).to eq([connection])
     expect(pool.discarded).to be_empty
+  end
+
+  it "renews no lease of a round whose COMMIT fails, and discards the connection" do
+    failing = Class.new(FakeHeartbeatConnection) do
+      def send_query_params(sql, *rest)
+        super
+        raise PG::ConnectionBad, "injected" if sql == "COMMIT" && sent.count { |entry| entry[0] == :commit } == 1
+      end
+    end
+    first = failing.new
+    second = FakeHeartbeatConnection.new
+    pool = FakeHeartbeatPool.new([first, second])
+    heartbeat = heartbeat_class.new(pool, dedicated: true)
+    @unregister = %w[a b].each_with_index.map { |worker_id, index| heartbeat.register(member(worker_id, index + 1, interval, renewals)) }
+    wait_until { renewals.size >= 2 }
+    expect(rounds_of(first)).to eq([%i[begin settings heartbeat commit]])
+    expect(pool.discarded).to eq([first])
+    expect(rounds_of(second).first).to eq(%i[begin settings heartbeat commit])
+    expect(renewals.first(2)).to contain_exactly("a", "b")
   end
 end

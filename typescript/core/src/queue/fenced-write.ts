@@ -12,7 +12,7 @@ import type { Queryable } from "../types.js";
  * The concurrency policy sync is sent through the same helper. Its prune can deadlock with a release
  * over several capped queues, and a resend writes the same complete desired set.
  */
-const FENCED_WRITE_DEADLOCK_ATTEMPTS = 3;
+export const FENCED_WRITE_DEADLOCK_ATTEMPTS = 3;
 
 /**
  * Send one fenced write, resending it when PostgreSQL aborts it as a deadlock victim.

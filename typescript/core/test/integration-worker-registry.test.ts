@@ -8,7 +8,9 @@ import {
   Queue,
   Worker,
 } from "../src/index.js";
+import type { ClaimedTask } from "../src/index.js";
 import { WORKHORSE_VERSION } from "../src/version.js";
+import { workerHeartbeatReservation } from "../src/worker-internal.js";
 // `InjectedCrashError` is worker test support, not published API, so it comes from the source module.
 import { InjectedCrashError } from "../src/worker.js";
 import { Pool } from "pg";
@@ -38,6 +40,28 @@ const heartbeatBackends = async (): Promise<number[]> => {
   );
   return backends.rows.map((row) => row.pid);
 };
+
+/**
+ * Record the leases of each heartbeat round that a worker on `queue` sends through its reserved
+ * connection. `mock.calls[n][0]` holds the tasks of round n.
+ */
+function spyOnReservedHeartbeats() {
+  const rounds = vi.fn<(tasks: readonly ClaimedTask[]) => void>();
+  const reserve = queue[workerHeartbeatReservation].bind(queue);
+  const reservation = vi
+    .spyOn(queue, workerHeartbeatReservation)
+    .mockImplementation((intervalMs) => {
+      const channel = reserve(intervalMs);
+      if (channel === undefined) return channel;
+      const heartbeatMany = channel.heartbeatMany.bind(channel);
+      channel.heartbeatMany = (tasks, ...rest) => {
+        rounds(tasks);
+        return heartbeatMany(tasks, ...rest);
+      };
+      return channel;
+    });
+  return Object.assign(rounds, { mockRestore: () => reservation.mockRestore() });
+}
 
 // A heartbeat round on the reserved connection must end within heartbeatRoundBoundMs. Below 50 ms,
 // that bound is the interval itself. On a loaded host, the four round trips of a round need more
@@ -683,8 +707,8 @@ describe("worker registry", () => {
     const ids = await Promise.all(
       [1, 2, 3].map((sequence) => queue.enqueue("paused-concurrency", { sequence })),
     );
-    // Rounds run on a Queue bound to the reserved heartbeat connection, so observe the prototype.
-    const heartbeat = vi.spyOn(Queue.prototype, "heartbeatMany");
+    // Rounds go to the reserved heartbeat connection, so observe its channel.
+    const heartbeat = spyOnReservedHeartbeats();
     const worker = new Worker(queue, {
       workerId: "paused-concurrency-worker",
       concurrency: 2,
@@ -841,8 +865,8 @@ describe("worker registry", () => {
       ids.push(await queue.enqueue("signal-abort-drain", { sequence }));
     }
     const claim = vi.spyOn(queue, "claimMany");
-    // Rounds run on a Queue bound to the reserved heartbeat connection, so observe the prototype.
-    const heartbeat = vi.spyOn(Queue.prototype, "heartbeatMany");
+    // Rounds go to the reserved heartbeat connection, so observe its channel.
+    const heartbeat = spyOnReservedHeartbeats();
     const worker = new Worker(queue, {
       workerId: "signal-abort-drain-worker",
       concurrency: 2,

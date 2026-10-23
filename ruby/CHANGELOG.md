@@ -5,6 +5,16 @@ other SDKs carry, because every tag names one release of all of them.
 
 ## Unreleased
 
+### Workers on one pool renew their leases in one transaction
+
+On the dedicated heartbeat connection, a round sent one transaction for each worker and each 100
+leases. Each transaction needs at least 3 round trips to PostgreSQL. With 8 workers on one pool and
+80 ms for each round trip, workers lost leases while PostgreSQL still answered (SM-1631). Now the heartbeat thread of the pool sends one transaction for each round, with one `heartbeat_pool_v1` statement for every worker and every 100 leases. The
+transaction locks the task rows of every worker in it until its `COMMIT`. A round renews all of its
+leases or none. The settings statement now sets `statement_timeout` and
+`idle_in_transaction_session_timeout` each to one quarter of the time that remains, not to one half
+and one eighth. The statement needs no schema change. The `shared_heartbeats` opt-out does not change (SM-1633).
+
 ### The dashboard sets the tier and the history of a queue
 
 The Rack dashboard answers two new mutations, `setQueueTier` and `setQueueHistory`. `setQueueTier`

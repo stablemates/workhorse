@@ -106,7 +106,7 @@ func (executor *claimLimitExecutor) Query(_ context.Context, _ string, arguments
 func TestFusedCompletionClaimsNothingWithoutTheHeartbeatConnection(t *testing.T) {
 	worker := newDefaultWorker(t, WorkerOptions{})
 	worker.sharedHeartbeats = false
-	connection := &heartbeatConnection{pool: worker.pool, slot: make(chan struct{}, 1)}
+	connection := &heartbeatConnection{pool: worker.pool}
 	worker.heartbeatLease = &heartbeatConnectionLease{pool: worker.pool, connection: connection}
 	executor := &claimLimitExecutor{}
 
@@ -150,7 +150,7 @@ func TestAGatedFusedCompletionDoesNotCountAsAnEmptyClaim(t *testing.T) {
 	harness := startDispatchOn(t, WorkerOptions{Concurrency: 2, PollInterval: time.Minute}, false, fastTierQueue)
 	worker := harness.worker
 	worker.sharedHeartbeats = false
-	connection := &heartbeatConnection{pool: worker.pool, slot: make(chan struct{}, 1)}
+	connection := &heartbeatConnection{pool: worker.pool}
 	worker.heartbeatMu.Lock()
 	worker.heartbeatLease = &heartbeatConnectionLease{pool: worker.pool, connection: connection}
 	worker.heartbeatMu.Unlock()
@@ -206,7 +206,7 @@ func (executor *statementCounter) Query(context.Context, string, ...any) ([]Row,
 func TestAClaimSendsNoStatementWhileTheGateIsClosed(t *testing.T) {
 	worker := newDefaultWorker(t, WorkerOptions{})
 	worker.sharedHeartbeats = false
-	connection := &heartbeatConnection{pool: worker.pool, slot: make(chan struct{}, 1)}
+	connection := &heartbeatConnection{pool: worker.pool}
 	worker.heartbeatLease = &heartbeatConnectionLease{pool: worker.pool, connection: connection}
 	executor := &statementCounter{}
 
@@ -245,7 +245,7 @@ func gatedWorker(t *testing.T) (*Worker, *heartbeatConnection) {
 	t.Helper()
 	worker := newDefaultWorker(t, WorkerOptions{})
 	worker.sharedHeartbeats = false
-	connection := &heartbeatConnection{pool: worker.pool, slot: make(chan struct{}, 1), conn: new(pgxpool.Conn)}
+	connection := &heartbeatConnection{pool: worker.pool, conn: new(pgxpool.Conn)}
 	worker.heartbeatLease = &heartbeatConnectionLease{pool: worker.pool, connection: connection}
 	return worker, connection
 }

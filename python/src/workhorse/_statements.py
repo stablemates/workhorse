@@ -127,6 +127,10 @@ SQL_STATEMENTS: dict[str, tuple[str, str]] = {
         "SELECT task_id::text AS task_id, status FROM workhorse.heartbeat_many_v2(%s::text, %s::jsonb) ORDER BY ordinal",
         "SELECT task_id::text AS task_id, status FROM workhorse.heartbeat_many_v2($1::text, $2::jsonb) ORDER BY ordinal",
     ),
+    "heartbeat_pool_v1": (
+        "SELECT batch.ordinal::integer AS batch, lease.task_id::text AS task_id, lease.status FROM jsonb_array_elements(%s::jsonb) WITH ORDINALITY AS batch(item, ordinal) CROSS JOIN LATERAL workhorse.heartbeat_many_v2(batch.item->>'workerId', batch.item->'leases') AS lease ORDER BY batch.ordinal, lease.ordinal",
+        "SELECT batch.ordinal::integer AS batch, lease.task_id::text AS task_id, lease.status FROM jsonb_array_elements($1::jsonb) WITH ORDINALITY AS batch(item, ordinal) CROSS JOIN LATERAL workhorse.heartbeat_many_v2(batch.item->>'workerId', batch.item->'leases') AS lease ORDER BY batch.ordinal, lease.ordinal",
+    ),
     "heartbeat_v1": (
         "SELECT workhorse.heartbeat_v1(%s::uuid, %s::text, %s::bigint, %s::integer) AS status",
         "SELECT workhorse.heartbeat_v1($1::uuid, $2::text, $3::bigint, $4::integer) AS status",
@@ -693,6 +697,7 @@ class StatementRegistry:
     fire_due_schedules: DriverStatement
     get_contract: DriverStatement
     heartbeat_many: DriverStatement
+    heartbeat_pool: DriverStatement
     list_checkpoints: DriverStatement
     list_concurrency_policies: DriverStatement
     list_progress: DriverStatement
@@ -736,6 +741,7 @@ STATEMENTS = StatementRegistry(
     fire_due_schedules=_statement("fire_due_schedules_v2"),
     get_contract=_statement("get_contract_definition_v1"),
     heartbeat_many=_statement("heartbeat_many_v2"),
+    heartbeat_pool=_statement("heartbeat_pool_v1"),
     list_checkpoints=_statement("list_checkpoints"),
     list_concurrency_policies=_statement("list_concurrency_policies"),
     list_progress=_statement("list_progress"),

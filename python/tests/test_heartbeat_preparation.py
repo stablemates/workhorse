@@ -69,6 +69,9 @@ class Server:
                 raise error
         if "set_config" in sql:
             return [("statement",), ("idle",)], [tuple(parameters)]
+        if "heartbeat_pool" in sql or "jsonb_array_elements" in sql:
+            # One row for the first batch of heartbeat_pool_v1.
+            return [("batch",), ("ok",)], [(1, True)]
         return [("ok",)], [(True,)]
 
 
@@ -233,6 +236,17 @@ def test_a_slow_preparation_does_not_extend_the_server_deadline_of_a_round(
     # PostgreSQL ends the heartbeat and both idle gaps by the deadline.
     server_end = set_at + (int(str(statement_ms)) + 2 * int(str(idle_ms))) / 1000
     assert server_end <= deadline
+
+
+def test_the_heartbeat_and_each_idle_gap_get_one_quarter_of_the_time_left() -> None:
+    # Each idle gap must hold one round trip. A slow network can take more than one eighth.
+    assert worker_module._round_timeouts(1_000) == ("250", "250")
+    assert worker_module._round_timeouts(750.9) == ("187", "187")
+    # Each budget is at least 1 ms, also below 4 ms.
+    assert worker_module._round_timeouts(3) == ("1", "1")
+    # At the minimum before the settings statement, the budgets fit in three quarters.
+    statement_ms, idle_ms = worker_module._round_timeouts(worker_module._MINIMUM_ROUND_REMAINING_MS)
+    assert int(statement_ms) + 2 * int(idle_ms) <= 3 * worker_module._MINIMUM_ROUND_REMAINING_MS / 4
 
 
 def test_asyncpg_prepares_the_heartbeat_statement_once_on_each_connection(
@@ -414,10 +428,12 @@ class _Pool:
 
 
 def run_round(worker: worker_module.Worker, deadline: float) -> Any:
-    heartbeat_round = worker_module._HeartbeatRound(deadline)
+    heartbeat_round = worker_module._HeartbeatRound(
+        deadline, [{"workerId": "worker", "leases": []}]
+    )
     reservation = worker._reservation
     assert reservation is not None
-    worker._run_heartbeat_round(heartbeat_round, ("worker", "[]"), reservation)
+    worker._run_heartbeat_round(heartbeat_round, reservation)
     return heartbeat_round.result
 
 
@@ -450,9 +466,9 @@ def test_a_round_that_expires_before_its_heartbeat_keeps_the_connection(server: 
     renewed = run_round(worker, server.now + ROUND_BOUND_SECONDS)
 
     # The next round sends its heartbeat on the same connection.
-    assert renewed.result() == [{"ok": True}]
+    assert renewed.result() == [{"batch": 1, "ok": True}]
     assert connections.opened == [connection]
-    assert sent(server)[-2:] == [worker_module._STATEMENTS.heartbeat_many.psycopg, "COMMIT"]
+    assert sent(server)[-2:] == [worker_module._STATEMENTS.heartbeat_pool.psycopg, "COMMIT"]
     assert not connection.closed and connections.returned == []
 
 

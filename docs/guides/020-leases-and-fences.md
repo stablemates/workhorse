@@ -221,10 +221,11 @@ round deadline is 75 ms. Below 100 ms, the worker accepts the interval and its b
 change. On a loaded host, each round can then miss its deadline, and the worker can renew no
 lease.
 
-A round on the reserved connection sends `heartbeat_many_v2` in its own
-transaction. Before the statement, the round sets `statement_timeout` to one half of the time left
-before its deadline, and `idle_in_transaction_session_timeout` to one eighth of it. The worker counts
-the renewals only after `COMMIT` succeeds. No setting bounds `COMMIT`.
+A round on the reserved connection sends one transaction for every worker on the pool. Its one
+`heartbeat_pool_v1` statement calls `heartbeat_many_v2` for each batch of up to 100 leases of one
+worker. Before the statement, the round sets `statement_timeout` and
+`idle_in_transaction_session_timeout` each to one quarter of the time left before its deadline. The
+worker counts the renewals only after `COMMIT` succeeds. No setting bounds `COMMIT`.
 
 **Statuses** (`heartbeat_v1`, `heartbeat_v2`, and `heartbeat_many_v2`)
 
@@ -255,7 +256,7 @@ moments come before the database renews, so the local countdown never ends after
 The Rust worker matches each heartbeat result to the fence token of the claim. If a suspended task
 resumes while an old round is returning, that round cannot renew or cancel the resumed handler.
 
-More detail: [Task lifecycle: Heartbeat](../architecture/lifecycle.md#heartbeat), [Task lifecycle: Heartbeat round deadline](../architecture/lifecycle.md#heartbeat-round-deadline), [Task lifecycle: Supported heartbeat interval](../architecture/lifecycle.md#supported-heartbeat-interval), and [Task lifecycle: Heartbeat schedule](../architecture/lifecycle.md#heartbeat-schedule).
+More detail: [Task lifecycle: Heartbeat](../architecture/lifecycle.md#heartbeat), [Task lifecycle: Pool renewal](../architecture/lifecycle.md#pool-renewal), [Task lifecycle: Heartbeat round deadline](../architecture/lifecycle.md#heartbeat-round-deadline), [Task lifecycle: Supported heartbeat interval](../architecture/lifecycle.md#supported-heartbeat-interval), and [Task lifecycle: Heartbeat schedule](../architecture/lifecycle.md#heartbeat-schedule).
 
 </details>
 

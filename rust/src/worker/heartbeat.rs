@@ -2,7 +2,8 @@
 //!
 //! Every worker on one pool identity sends its rounds on one shared heartbeat connection
 //! (`shared::HeartbeatConnection`), which the first worker reserves before handlers can exhaust
-//! the pool. The rounds of the workers wait for each other on it. A round that fails or outlives
+//! the pool. Each worker keeps its own schedule, and the rounds that wait for the connection share
+//! one transaction and one `heartbeat_pool_v1` statement. A transaction that fails or outlives
 //! its deadline discards that connection, and the keeper of the connection takes a replacement at
 //! once. A round that expires before it sends its heartbeat statement rolls back and keeps the
 //! connection, because no statement of it can still run. Server timeouts end the round's heartbeat
@@ -20,7 +21,7 @@ use tokio::sync::{mpsc, Notify};
 use tokio::time::{timeout_at, Instant};
 use uuid::Uuid;
 
-use super::{random_fraction, Inner, OwnershipStatus};
+use super::{random_fraction, shared, Inner, OwnershipStatus};
 use crate::fenced_write::fenced_rows;
 use crate::sql_catalogue_generated as sql;
 use crate::telemetry::{Attribute, Counter};
@@ -191,10 +192,15 @@ impl Heartbeats {
     }
 }
 
-/// Sets both server timeouts for the current transaction only. `SET LOCAL` cannot take a bind
-/// parameter, and `set_config(..., true)` has the same scope.
-const ROUND_TIMEOUTS: &str = "SELECT set_config('statement_timeout', $1, true), \
-    set_config('idle_in_transaction_session_timeout', $2, true)";
+/// Starts the transaction of a round and sets both server timeouts for it only, in one message
+/// and one round trip. `SET LOCAL` cannot take a bind parameter, so the budgets, which are whole
+/// numbers of milliseconds, go into the text. `set_config(..., true)` has the scope of `SET LOCAL`.
+fn begin_with_timeouts(statement_ms: &str, idle_ms: &str) -> String {
+    format!(
+        "BEGIN; SELECT set_config('statement_timeout', '{statement_ms}', true), \
+         set_config('idle_in_transaction_session_timeout', '{idle_ms}', true)"
+    )
+}
 
 /// A round with less time than this left fails before it sends its heartbeat. At this size every
 /// budget of `round_timeouts` is at least 1 ms, and the budgets still fit in the time left.
@@ -226,14 +232,23 @@ impl From<tokio_postgres::Error> for BoundedRoundError {
 /// PostgreSQL measures `statement_timeout` for each statement and
 /// `idle_in_transaction_session_timeout` for each idle gap, and restarts both every time. While the
 /// round can hold a row lock, it has one idle gap before the heartbeat, the heartbeat, and one idle
-/// gap before `COMMIT`. So the heartbeat gets one half, each gap one eighth, and the last quarter is
-/// kept for `COMMIT`. No setting bounds `COMMIT` itself.
+/// gap before `COMMIT`. So the heartbeat gets one quarter, each gap one quarter, and the last quarter
+/// is kept for the settings statement and `COMMIT`. No setting bounds `COMMIT` itself.
 fn round_timeouts(remaining: Duration) -> (String, String) {
-    let milliseconds = remaining.as_millis();
-    ((milliseconds / 2).max(1).to_string(), (milliseconds / 8).max(1).to_string())
+    let quarter = (remaining.as_millis() / 4).max(1).to_string();
+    (quarter.clone(), quarter)
 }
 
-/// Sends the heartbeat in its own transaction, with server timeouts that fit before `deadline`.
+/// The most leases in one batch of `heartbeat_pool_v1`, the limit of `heartbeat_many_v2`.
+const BATCH_LEASES: usize = 100;
+
+/// Sends one `heartbeat_pool_v1` statement in its own transaction, with server timeouts that fit
+/// before `deadline`. The statement carries the batches of the lead and of every round that joins
+/// it just before the statement (`shared::Lead::join`).
+///
+/// `BEGIN` and the settings statement go in one message, as the JVM SDK folds `BEGIN` into its
+/// first statement. So the budgets come from the time left before `BEGIN`, and the quarter that
+/// the settings statement can use also covers `BEGIN`.
 ///
 /// Dropping a connection does not stop its statement: PostgreSQL notices a closed client only when
 /// it next writes to it. So the server must end a round that the client stopped waiting for. The
@@ -243,37 +258,48 @@ fn round_timeouts(remaining: Duration) -> (String, String) {
 /// deadlock aborts the transaction, so it fails the round, and the next round sends again.
 ///
 /// A round that expires before its heartbeat statement returns `BoundedRoundError::Expired`. If
-/// it has not sent `BEGIN`, it sends nothing. Otherwise it rolls back first.
+/// it has not sent `BEGIN`, it sends nothing. Otherwise it rolls back first. No round has joined
+/// it then. A round that the caller drops while its transaction is open leaves it to the caller,
+/// which discards the connection (`Holding`).
 async fn server_bounded_rows(
-    connection: &mut deadpool_postgres::Object,
+    connection: &deadpool_postgres::Object,
     deadline: Instant,
-    params: &[&(dyn tokio_postgres::types::ToSql + Sync)],
+    lead: &mut shared::Lead<'_>,
 ) -> Result<Vec<tokio_postgres::Row>, BoundedRoundError> {
-    if deadline.saturating_duration_since(Instant::now()) < MINIMUM_REMAINING {
-        return Err(BoundedRoundError::Expired);
-    }
-    let transaction = connection.transaction().await?;
-    // tokio-postgres prepares a statement in its own cycle, and PostgreSQL restarts the statement
-    // timer at the end of that cycle. Preparing first keeps that cycle out of the heartbeat's budget.
-    let heartbeat = transaction.prepare(sql::HEARTBEAT_MANY_V2).await?;
-    let set_at = Instant::now();
-    let remaining = deadline.saturating_duration_since(set_at);
+    let begun_at = Instant::now();
+    let remaining = deadline.saturating_duration_since(begun_at);
     if remaining < MINIMUM_REMAINING {
-        return roll_back_expired(transaction, deadline).await;
+        return Err(BoundedRoundError::Expired);
     }
     let (statement_ms, idle_ms) = round_timeouts(remaining);
     #[cfg(test)]
     if let Ok(delay) = tests::SETTINGS_DELAY.try_with(|delay| *delay) {
         tokio::time::sleep(delay).await;
     }
-    transaction.execute(ROUND_TIMEOUTS, &[&statement_ms, &idle_ms]).await?;
-    // The budgets fit only if the settings statement used at most the quarter kept for `COMMIT`.
-    if set_at.elapsed() > remaining / 4 {
-        return roll_back_expired(transaction, deadline).await;
+    // tokio-postgres prepares a statement in its own cycle, and PostgreSQL restarts the statement
+    // timer at the end of that cycle, so the prepare stays out of the heartbeat's budget. The
+    // connection keeps the statement, so only the first round on a connection prepares it, in the
+    // same round trip as `BEGIN`.
+    let begin = begin_with_timeouts(&statement_ms, &idle_ms);
+    let ((), heartbeat) = tokio::try_join!(
+        connection.batch_execute(&begin),
+        connection.prepare_cached(sql::HEARTBEAT_POOL_V1)
+    )?;
+    // The budgets fit only if `BEGIN` and the settings used at most the quarter kept for `COMMIT`.
+    if begun_at.elapsed() > remaining / 4 {
+        return roll_back_expired(connection, deadline).await;
     }
-    let rows = transaction.query(&heartbeat, params).await?;
-    // Dropping the transaction without this commit rolls it back.
-    transaction.commit().await?;
+    // The payload is encoded here, not in the driver, so its time counts before the deadline check.
+    // The driver then only copies the encoded text.
+    let payload = serde_json::value::to_raw_value(&lead.join()).map_err(|error| {
+        Error::invalid(format!("the heartbeat payload did not encode: {error}"))
+    })?;
+    // The payload counts against the deadline, so the statement goes out only in time.
+    if Instant::now() >= deadline {
+        return roll_back_expired(connection, deadline).await;
+    }
+    let rows = connection.query(&heartbeat, &[&tokio_postgres::types::Json(&*payload)]).await?;
+    connection.batch_execute("COMMIT").await?;
     // A `COMMIT` that ends after the deadline does not count as a renewal.
     if Instant::now() >= deadline {
         return Err(Error::invalid("heartbeat round reached its deadline after the commit").into());
@@ -285,10 +311,9 @@ async fn server_bounded_rows(
 ///
 /// The `ROLLBACK` must not start after `deadline`, and the caller bounds its wait by the same
 /// deadline. If the `ROLLBACK` cannot start, fails, or does not return in time, the round fails as
-/// any other round, and the caller discards the connection. Dropping a `Transaction` only queues a
-/// `ROLLBACK`, so this function waits for it.
+/// any other round, and the caller discards the connection.
 async fn roll_back_expired(
-    transaction: deadpool_postgres::Transaction<'_>,
+    connection: &deadpool_postgres::Object,
     deadline: Instant,
 ) -> Result<Vec<tokio_postgres::Row>, BoundedRoundError> {
     if Instant::now() >= deadline {
@@ -296,8 +321,44 @@ async fn roll_back_expired(
             Error::invalid("heartbeat round reached its deadline before the statement").into()
         );
     }
-    transaction.rollback().await?;
+    connection.batch_execute("ROLLBACK").await?;
     Err(BoundedRoundError::Expired)
+}
+
+/// The heartbeat connection that one transaction holds. If the round is dropped before it
+/// settles, a transaction can still be open on the connection, so the drop discards it.
+struct Holding<'a> {
+    heartbeat: &'a shared::HeartbeatConnection,
+    reserved: tokio::sync::MutexGuard<'a, Option<deadpool_postgres::Object>>,
+    settled: bool,
+}
+
+impl Holding<'_> {
+    /// Ends the hold. A failed round discards the connection, because a statement of it can
+    /// still run.
+    fn settle(mut self, failed: bool) {
+        if failed {
+            self.heartbeat.discard(&mut self.reserved);
+        }
+        self.heartbeat.finish(&mut self.reserved);
+        self.settled = true;
+    }
+}
+
+impl Drop for Holding<'_> {
+    fn drop(&mut self) {
+        if !self.settled {
+            self.heartbeat.discard(&mut self.reserved);
+        }
+    }
+}
+
+/// The batch position, the task ID, and the status of one row of `heartbeat_pool_v1`.
+fn pool_row(row: &tokio_postgres::Row) -> Result<(usize, String, String), Error> {
+    let batch: i32 = row.try_get("batch")?;
+    let batch = usize::try_from(batch)
+        .map_err(|_| Error::invalid("PostgreSQL returned an invalid heartbeat batch"))?;
+    Ok((batch, row.try_get("task_id")?, row.try_get("status")?))
 }
 
 /// The deadline of one heartbeat round for `interval`. It is three quarters of the interval, so
@@ -442,7 +503,7 @@ impl Inner {
         Ok(self.deliver_heartbeats(members, &statuses, sent_at))
     }
 
-    /// Runs the heartbeat statement for `members` and reads each lease's status by task ID.
+    /// Sends the heartbeat statement for `members` and reads each lease's status by task ID.
     async fn send_heartbeats(
         &self,
         members: &[Sent],
@@ -456,55 +517,80 @@ impl Inner {
             }
         }
         let lease_ms = self.options.lease_duration.as_millis() as u64;
-        let payload = json!(members
-            .iter()
-            .map(|sent| json!({"taskId": sent.task, "fenceToken": sent.fence.to_string(), "leaseMs": lease_ms}))
-            .collect::<Vec<_>>());
-        let params: [&(dyn tokio_postgres::types::ToSql + Sync); 2] = [&self.worker_id, &payload];
+        let lease = |sent: &Sent| {
+            let fence = sent.fence.to_string();
+            json!({"taskId": sent.task, "fenceToken": fence, "leaseMs": lease_ms})
+        };
         // A shared round borrows like any other worker statement. A round on the reserved
         // connection is bounded by `deadline`, on the client and on the server, so a statement
         // stalled on it cannot hold the next round.
-        let expired = || Error::invalid("heartbeat round exceeded its deadline");
         let rows = if self.options.shared_heartbeats {
-            fenced_rows(&self.statements(), sql::HEARTBEAT_MANY_V2, &params).await?
+            let payload = json!(members.iter().map(lease).collect::<Vec<_>>());
+            let params: [&(dyn tokio_postgres::types::ToSql + Sync); 2] =
+                [&self.worker_id, &payload];
+            let rows = fenced_rows(&self.statements(), sql::HEARTBEAT_MANY_V2, &params).await?;
+            let mut leases = Vec::with_capacity(rows.len());
+            for row in &rows {
+                leases.push((row.try_get("task_id")?, row.try_get("status")?));
+            }
+            leases
         } else {
-            let heartbeat = self
-                .heartbeat_connection()
-                .ok_or_else(|| Error::invalid("worker holds no heartbeat connection"))?;
-            // One deadline bounds the whole round: the wait for the rounds of the other workers on
-            // the pool, the wait for a replacement connection, and the transaction.
-            let mut reserved =
-                timeout_at(deadline, heartbeat.lock()).await.map_err(|_| expired())?;
-            let round = timeout_at(deadline, async {
-                let Some(connection) = reserved.as_mut() else {
-                    return Err(Error::invalid("the heartbeat connection closed").into());
-                };
-                server_bounded_rows(connection, deadline, &params).await
-            })
-            .await
-            .unwrap_or_else(|_| Err(BoundedRoundError::Failed(expired())));
-            let rows = match round {
-                Ok(rows) => Ok(rows),
-                // No statement of the round can still run, so the next round uses the connection.
-                Err(BoundedRoundError::Expired) => {
-                    Err(Error::invalid("heartbeat round reached its deadline before the statement"))
-                }
-                Err(BoundedRoundError::Failed(error)) => {
-                    // A failed round discards the connection instead of returning it to the pool.
-                    heartbeat.discard(&mut reserved);
-                    Err(error)
-                }
-            };
-            heartbeat.finish(&mut reserved);
-            rows?
+            // Each batch holds at most `BATCH_LEASES` leases of this worker.
+            let batches = members
+                .chunks(BATCH_LEASES)
+                .map(|chunk| {
+                    let leases: Vec<_> = chunk.iter().map(lease).collect();
+                    json!({"workerId": self.worker_id, "leases": leases})
+                })
+                .collect();
+            self.reserved_round(batches, deadline).await?
         };
         let mut statuses = HashMap::with_capacity(rows.len());
-        for row in &rows {
-            let task: String = row.try_get("task_id")?;
-            let status: String = row.try_get("status")?;
+        for (task, status) in rows {
             statuses.insert(task, LeaseStatus::parse(Some(&status))?);
         }
         Ok(statuses)
+    }
+
+    /// Renews `batches` on the shared heartbeat connection, in one transaction with the rounds of
+    /// the other workers on the pool (`shared::HeartbeatConnection::turn`). One deadline bounds the
+    /// whole round: the wait for the transaction of the other rounds, the wait for a replacement
+    /// connection, and the transaction.
+    async fn reserved_round(
+        &self,
+        batches: Vec<serde_json::Value>,
+        deadline: Instant,
+    ) -> Result<shared::RoundRows, Error> {
+        let heartbeat = self
+            .heartbeat_connection()
+            .ok_or_else(|| Error::invalid("worker holds no heartbeat connection"))?;
+        let mut lead = match heartbeat.turn(batches, deadline).await? {
+            shared::Turn::Joined(rows) => return rows,
+            shared::Turn::Lead(lead) => lead,
+        };
+        let expired = || Error::invalid("heartbeat round exceeded its deadline");
+        let reserved = timeout_at(deadline, heartbeat.lock()).await.map_err(|_| expired())?;
+        let holding = Holding { heartbeat: &heartbeat, reserved, settled: false };
+        let round = timeout_at(deadline, async {
+            let Some(connection) = holding.reserved.as_ref() else {
+                return Err(Error::invalid("the heartbeat connection closed").into());
+            };
+            server_bounded_rows(connection, deadline, &mut lead).await
+        })
+        .await
+        .unwrap_or_else(|_| Err(BoundedRoundError::Failed(expired())));
+        // A failed round discards the connection instead of returning it to the pool.
+        let failed = matches!(round, Err(BoundedRoundError::Failed(_)));
+        let rows: Result<Vec<_>, Error> = match round {
+            Ok(rows) => rows.iter().map(pool_row).collect(),
+            // No statement of the round can still run, so the next round uses the connection.
+            Err(BoundedRoundError::Expired) => {
+                Err(Error::invalid("heartbeat round reached its deadline before the statement"))
+            }
+            Err(BoundedRoundError::Failed(error)) => Err(error),
+        };
+        holding.settle(failed);
+        lead.answer(rows)
     }
 
     /// Delivers a completed round only to the same registrations that sent it, and returns the
@@ -726,6 +812,24 @@ mod tests {
         // With the defaults, one timed-out round leaves a renewal margin.
         let lease = Duration::from_secs(30);
         assert!(2 * (lease / 3) + heartbeat_round_bound_for(lease / 3) < lease);
+    }
+
+    // The heartbeat statement and each idle gap get one quarter of the time left, and one quarter
+    // stays for the settings statement and COMMIT. Each budget is at least 1 ms.
+    #[test]
+    fn each_server_budget_is_one_quarter_of_the_time_left() {
+        let budgets = |milliseconds| round_timeouts(Duration::from_millis(milliseconds));
+        assert_eq!(budgets(750), ("187".into(), "187".into()));
+        assert_eq!(budgets(1_000), ("250".into(), "250".into()));
+        assert_eq!(budgets(MINIMUM_REMAINING.as_millis() as u64), ("2".into(), "2".into()));
+        assert_eq!(budgets(3), ("1".into(), "1".into()));
+        assert_eq!(budgets(0), ("1".into(), "1".into()));
+        // The heartbeat and both idle gaps end within three quarters of the time left.
+        for milliseconds in [8, 9, 11, 100, 7_500] {
+            let (statement, idle) = budgets(milliseconds);
+            let used = statement.parse::<u64>().unwrap() + 2 * idle.parse::<u64>().unwrap();
+            assert!(used <= milliseconds * 3 / 4, "{milliseconds} ms gave {used} ms");
+        }
     }
 
     #[test]

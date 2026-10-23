@@ -266,6 +266,10 @@ does not start. A Java `DataSource` does not state its size. On the JVM, you can
 with `poolMaxSize`, and the worker refuses a declared size that is too small. Without a declared
 size, the startup check is the only check.
 
+The workers on one pool renew their leases together, in one transaction for each round. A round thus
+needs the same number of round trips to PostgreSQL for one worker or for many workers. That
+transaction locks the task rows of every worker in the round until it commits.
+
 Every worker checks the pool when it starts. Within its startup budget, the worker first gets the
 heartbeat connection. Then it borrows one more connection for a short check, and returns it at
 once. If the pool cannot give these connections in time, the worker does not start. Its error names
@@ -334,13 +338,16 @@ claim at once.
 A TypeScript `WorkerQueueApi` that is not a `Queue` is not checked.
 
 **Bounded rounds.** The TypeScript worker bounds each round on the reserved connection by
-`heartbeatRoundMs`, a deadline of at most `heartbeatMs`. The round sends `heartbeat_many_v2` in its
-own transaction, and transaction-local server timeouts make PostgreSQL end the heartbeat by the same
-deadline. A round that fails destroys the connection, and asks the pool for a new one when it ends.
+`heartbeatRoundMs`, a deadline of at most `heartbeatMs`. The round sends `BEGIN`, a settings
+statement, one `heartbeat_pool_v1` statement, and `COMMIT`. Transaction-local server timeouts make
+PostgreSQL end the heartbeat by the same deadline. The rounds of the workers on the pool share that
+transaction: a round that waits for the connection joins the next transaction, with the batches of
+every other waiting round. The other languages send the same transaction on their dedicated
+heartbeat connection. A round that fails destroys the connection, and asks the pool for a new one when it ends.
 The connect thus starts before the next round. If it is still pending when the next round starts,
 that round waits for it, and the rest of the wait counts against the deadline of that round.
 
-More detail: [Overview: Connection budgets per language](../architecture/overview.md#connection-budgets-per-language), [Task lifecycle: Heartbeat connection](../architecture/lifecycle.md#heartbeat-connection), [Task lifecycle: Heartbeat readiness](../architecture/lifecycle.md#heartbeat-readiness), [Task lifecycle: Heartbeat round deadline](../architecture/lifecycle.md#heartbeat-round-deadline), [Schema and SQL protocol: Shared pool connections](../architecture/schema-and-protocol.md#shared-pool-connections), and [Schema and SQL protocol: JVM connections](../architecture/schema-and-protocol.md#jvm-connections).
+More detail: [Overview: Connection budgets per language](../architecture/overview.md#connection-budgets-per-language), [Task lifecycle: Heartbeat connection](../architecture/lifecycle.md#heartbeat-connection), [Task lifecycle: Heartbeat readiness](../architecture/lifecycle.md#heartbeat-readiness), [Task lifecycle: Pool renewal](../architecture/lifecycle.md#pool-renewal), [Task lifecycle: Heartbeat round deadline](../architecture/lifecycle.md#heartbeat-round-deadline), [Schema and SQL protocol: Shared pool connections](../architecture/schema-and-protocol.md#shared-pool-connections), and [Schema and SQL protocol: JVM connections](../architecture/schema-and-protocol.md#jvm-connections).
 
 </details>
 

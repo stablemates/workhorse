@@ -801,6 +801,14 @@ final class RuntimeFixtures {
     }
   }
 
+  /**
+   * Whether {@code call} renews leases. A worker with shared heartbeats sends {@code
+   * heartbeat_many_v2}. The dedicated heartbeat of a pool sends {@code heartbeat_pool_v1}.
+   */
+  private static boolean heartbeat(Intercept.Call call) {
+    return call.is(SqlCatalogue.HEARTBEAT_MANY_V2) || call.is(SqlCatalogue.HEARTBEAT_POOL_V1);
+  }
+
   private static int size(Object lock, List<?> list) {
     synchronized (lock) {
       return list.size();
@@ -909,8 +917,7 @@ final class RuntimeFixtures {
         new Intercept.Hook() {
           @Override
           public void before(Intercept.Call call) throws InterruptedException {
-            if (call.is(SqlCatalogue.HEARTBEAT_MANY_V2)
-                && !recoveryEnded.await(5, TimeUnit.SECONDS)) {
+            if (heartbeat(call) && !recoveryEnded.await(5, TimeUnit.SECONDS)) {
               throw new IllegalStateException("a held heartbeat was never released");
             }
           }

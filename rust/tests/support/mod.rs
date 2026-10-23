@@ -233,3 +233,61 @@ pub fn worker(database: &ScratchDatabase, queue: &str) -> workhorse::Worker {
     };
     workhorse::Worker::new(pool, options).unwrap()
 }
+
+/// Connection settings for `database` through a TCP proxy that delays each chunk from the client
+/// to PostgreSQL by `delay`. The chunks keep their order, and the answers of PostgreSQL pass at
+/// once. Thus PostgreSQL sees an idle gap of `delay` before each statement, and each round trip
+/// takes `delay` longer. The proxy runs until the test runtime ends.
+pub async fn delaying_proxy(database: &ScratchDatabase, delay: Duration) -> Config {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let upstream: Config = database.url().parse().expect("scratch database URL");
+    let Host::Tcp(host) = &upstream.get_hosts()[0] else {
+        panic!("the test database must be reachable over TCP");
+    };
+    let address = (host.clone(), upstream.get_ports()[0]);
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let mut config = Config::new();
+    config.host("127.0.0.1").port(listener.local_addr().unwrap().port());
+    config.user(upstream.get_user().expect("scratch database user"));
+    config.dbname(upstream.get_dbname().expect("scratch database name"));
+    if let Some(password) = upstream.get_password() {
+        config.password(password);
+    }
+    tokio::spawn(async move {
+        while let Ok((client, _)) = listener.accept().await {
+            let address = address.clone();
+            tokio::spawn(async move {
+                let Ok(server) = tokio::net::TcpStream::connect(address).await else { return };
+                let _ = client.set_nodelay(true);
+                let _ = server.set_nodelay(true);
+                let (mut client_reader, mut client_writer) = client.into_split();
+                let (mut server_reader, mut server_writer) = server.into_split();
+                tokio::spawn(async move {
+                    let _ = tokio::io::copy(&mut server_reader, &mut client_writer).await;
+                });
+                let (chunks, mut delayed) =
+                    tokio::sync::mpsc::unbounded_channel::<(tokio::time::Instant, Vec<u8>)>();
+                tokio::spawn(async move {
+                    while let Some((due, chunk)) = delayed.recv().await {
+                        tokio::time::sleep_until(due).await;
+                        if server_writer.write_all(&chunk).await.is_err() {
+                            return;
+                        }
+                    }
+                });
+                let mut buffer = vec![0; 16 * 1024];
+                loop {
+                    let read = match client_reader.read(&mut buffer).await {
+                        Ok(0) | Err(_) => return,
+                        Ok(read) => read,
+                    };
+                    let due = tokio::time::Instant::now() + delay;
+                    if chunks.send((due, buffer[..read].to_vec())).is_err() {
+                        return;
+                    }
+                }
+            });
+        }
+    });
+    config
+}

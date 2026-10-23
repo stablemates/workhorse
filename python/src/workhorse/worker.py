@@ -8,7 +8,7 @@ import socket
 import traceback
 from bisect import insort
 from collections.abc import Callable, Mapping, Sequence
-from concurrent.futures import Future, TimeoutError as FutureTimeoutError
+from concurrent.futures import Future, InvalidStateError, TimeoutError as FutureTimeoutError
 from contextlib import nullcontext, suppress
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
@@ -168,7 +168,8 @@ _HubSource = Callable[[], tuple["_PoolHub | None", Callable[[], None]]]
 # A round with less time than this left fails before it sends its heartbeat. At this size every
 # budget of _round_timeouts is at least 1 ms, and the budgets still fit in the time left.
 _MINIMUM_ROUND_REMAINING_SECONDS = _MINIMUM_ROUND_REMAINING_MS / 1000
-# heartbeat_many_v2 raises an error for more leases than this in one statement.
+# heartbeat_many_v2 raises an error for more leases than this in one call. heartbeat_pool_v1 calls
+# it once for each batch, so a batch holds at most this many leases.
 _HEARTBEAT_STATEMENT_LEASE_LIMIT = 100
 
 
@@ -178,10 +179,12 @@ def _round_timeouts(remaining_ms: float) -> tuple[str, str]:
     PostgreSQL measures `statement_timeout` for each statement and
     `idle_in_transaction_session_timeout` for each idle gap, and restarts both every time. While
     the round can hold a row lock, it has one idle gap before the heartbeat, the heartbeat, and one
-    idle gap before COMMIT. So the heartbeat gets one half, each gap one eighth, and the last
-    quarter is kept for COMMIT. No setting bounds COMMIT itself.
+    idle gap before COMMIT. So the heartbeat gets one quarter, each gap one quarter, and the last
+    quarter is kept for COMMIT and the settings statement. No setting bounds COMMIT itself. A gap
+    of one quarter holds a full round trip on a slow network.
     """
-    return str(max(1, int(remaining_ms // 2))), str(max(1, int(remaining_ms // 8)))
+    quarter = str(max(1, int(remaining_ms // 4)))
+    return quarter, quarter
 
 
 class _HeartbeatRoundExpired(TimeoutError):
@@ -207,12 +210,21 @@ class _ServerBoundedExecutor:
     goes out after the deadline; a rollback that cannot go out leaves the round to discard the
     connection. A round that expires before its heartbeat statement and rolls back by the deadline
     raises `_HeartbeatRoundExpiredCleanly`, so the round keeps the connection.
+
+    `parameters_at_send` gives the parameters of the statement just before it goes out, after the
+    settings statement. The parameters of `rows` then do not count.
     """
 
-    def __init__(self, executor: _SyncRowExecutor, deadline: float) -> None:
+    def __init__(
+        self,
+        executor: _SyncRowExecutor,
+        deadline: float,
+        parameters_at_send: Callable[[], Sequence[object]] | None = None,
+    ) -> None:
         self._executor = executor
         self._commands = cast(Any, executor)
         self._deadline = deadline
+        self._parameters_at_send = parameters_at_send
         # True while a transaction of this executor can still be open on the server. A deadlock
         # resend sends the round again on the same executor.
         self._open = False
@@ -246,6 +258,10 @@ class _ServerBoundedExecutor:
             # COMMIT.
             if (monotonic() - set_at) * 1000 > remaining_ms / 4:
                 raise _HeartbeatRoundExpired("heartbeat round settings took too long")
+            if self._parameters_at_send is not None:
+                parameters = self._parameters_at_send()
+                # The payload counts against the deadline, so the statement goes out only in time.
+                self._require_time()
             heartbeat_sent = True
             rows = self._executor.rows(statement, parameters)
             self._require_time()
@@ -281,10 +297,15 @@ class _ServerBoundedExecutor:
 
 class _HeartbeatRound:
     """One heartbeat round on the shared heartbeat connection. The first of finish and abandon
-    wins."""
+    wins.
 
-    def __init__(self, deadline: float) -> None:
+    `batches` holds the batches of one worker for `heartbeat_pool_v1`: each is
+    ``{"workerId": ..., "leases": [...]}`` with at most `_HEARTBEAT_STATEMENT_LEASE_LIMIT` leases.
+    """
+
+    def __init__(self, deadline: float, batches: Sequence[Mapping[str, object]] = ()) -> None:
         self.deadline = deadline
+        self.batches = list(batches)
         self.result: Future[list[Mapping[str, object]]] = Future()
         self._lock = Lock()
         self._state: Literal["running", "finished", "abandoned"] = "running"
@@ -304,6 +325,87 @@ class _HeartbeatRound:
                 return False
             self._state = "abandoned"
             return True
+
+
+def _settle_heartbeat_round(
+    heartbeat_round: _HeartbeatRound,
+    rows: list[Mapping[str, object]] | None = None,
+    error: BaseException | None = None,
+) -> None:
+    """Deliver the result of a round once. A round that its heartbeat thread abandoned gets no
+    renewal."""
+    if error is not None:
+        heartbeat_round.finish()
+        with suppress(InvalidStateError):
+            heartbeat_round.result.set_exception(error)
+    elif heartbeat_round.finish():
+        with suppress(InvalidStateError):
+            heartbeat_round.result.set_result(rows if rows is not None else [])
+
+
+def _lead_heartbeat_transaction(
+    leader: _HeartbeatRound, reservation: _HeartbeatReservation, minimum: float
+) -> None:
+    """Send one transaction for `leader` and for every round that joins it, and settle each round.
+
+    The leader takes the shared connection, and the budgets of the transaction come from its
+    deadline. Just before the heartbeat statement goes out, every waiting round whose deadline is
+    not earlier joins. One `heartbeat_pool_v1` statement then carries the batches of all these
+    rounds, the leader's first. Each round gets the rows of its own batches, or the error of the
+    transaction: the transaction renews all leases of the rounds, or none.
+    """
+    connection = reservation.take(leader.deadline, minimum)
+    if connection is None:
+        raise _HeartbeatRoundExpiredCleanly("no heartbeat connection was free in time")
+    executor, _close = connection
+    rounds: list[_HeartbeatRound] = [leader]
+    # The round of each batch in the statement, in statement order.
+    owners: list[_HeartbeatRound] = []
+    payload: list[str] = []
+
+    def parameters_at_send() -> Sequence[object]:
+        # A deadlock resend sends the same rounds again, so the rounds join only once.
+        if not payload:
+            rounds.extend(cast(list[_HeartbeatRound], reservation.group.join(leader)))
+            batches: list[Mapping[str, object]] = []
+            for heartbeat_round in rounds:
+                batches.extend(heartbeat_round.batches)
+                owners.extend([heartbeat_round] * len(heartbeat_round.batches))
+            payload.append(json.dumps(batches, separators=(",", ":")))
+        return (payload[0],)
+
+    try:
+        rows = _fenced_write_rows(
+            _ServerBoundedExecutor(executor, leader.deadline, parameters_at_send),
+            _STATEMENTS.heartbeat_pool,
+            (),
+        )
+    except _HeartbeatRoundExpiredCleanly as error:
+        # No statement of the transaction runs on the server, so the next round can use the
+        # connection. Every round of the transaction still failed and renews nothing.
+        reservation.put_back(connection)
+        for heartbeat_round in rounds:
+            _settle_heartbeat_round(heartbeat_round, error=error)
+        return
+    except BaseException as error:
+        for heartbeat_round in rounds[1:]:
+            _settle_heartbeat_round(heartbeat_round, error=error)
+        # The reservation replaces the connection at once rather than reuse it in an unknown
+        # state. Closing the driver connection first ends any open transaction on the server, so
+        # the pool cannot commit it when the connection goes back.
+        reservation.lose(connection)
+        raise
+    # Each joined deadline is not earlier than the leader's, and COMMIT ended before the
+    # leader's deadline, so the renewals count for every round.
+    answers: dict[_HeartbeatRound, list[Mapping[str, object]]] = {
+        heartbeat_round: [] for heartbeat_round in rounds
+    }
+    for row in rows:
+        answers[owners[int(cast(int, row["batch"])) - 1]].append(row)
+    # The results go first, so a close that blocks cannot hold a heartbeat thread.
+    for heartbeat_round in rounds:
+        _settle_heartbeat_round(heartbeat_round, rows=answers[heartbeat_round])
+    reservation.put_back(connection)
 
 
 Handler = Callable[[Any, HandlerContext], Json]
@@ -1686,24 +1788,17 @@ class Worker:
             else:
                 next_at = sent_at + self.heartbeat_ms / 1000
             try:
-                # One statement accepts at most _HEARTBEAT_STATEMENT_LEASE_LIMIT leases. A fused
+                # One batch holds at most _HEARTBEAT_STATEMENT_LEASE_LIMIT leases. A fused
                 # completion claim registers its tasks before the completing attempts unregister,
-                # so a round can hold more leases than the concurrency limit. If a later statement
-                # fails, the round fails, and the earlier statements renew nothing locally.
-                rows = [
-                    row
-                    for start in range(0, len(leases), _HEARTBEAT_STATEMENT_LEASE_LIMIT)
-                    for row in self._heartbeat_rows(
-                        (
-                            self.worker_id,
-                            json.dumps(
-                                leases[start : start + _HEARTBEAT_STATEMENT_LEASE_LIMIT],
-                                separators=(",", ":"),
-                            ),
-                        ),
-                        deadline,
-                    )
-                ]
+                # so a round can hold more leases than the concurrency limit. If a batch fails,
+                # the round fails, and no batch renews anything locally.
+                rows = self._heartbeat_rows(
+                    [
+                        leases[start : start + _HEARTBEAT_STATEMENT_LEASE_LIMIT]
+                        for start in range(0, len(leases), _HEARTBEAT_STATEMENT_LEASE_LIMIT)
+                    ],
+                    deadline,
+                )
             except Exception:
                 # A failed round proves nothing about ownership, so every task keeps running and
                 # the next regular round retries. Each attempt's lease watchdog ends it once its
@@ -1759,20 +1854,33 @@ class Worker:
                     member.cancellation._cancel(error)
 
     def _heartbeat_rows(
-        self, parameters: Sequence[object], deadline: float
+        self, batches: Sequence[Sequence[Mapping[str, object]]], deadline: float
     ) -> list[Mapping[str, object]]:
+        """Renew the leases of `batches`, and return one row for each lease that has an answer."""
         if not self._dedicated_heartbeats:
-            return _fenced_write_rows(self._executor, _STATEMENTS.heartbeat_many, parameters)
+            # Each batch is its own autocommit statement on a pool connection.
+            return [
+                row
+                for batch in batches
+                for row in _fenced_write_rows(
+                    self._executor,
+                    _STATEMENTS.heartbeat_many,
+                    (self.worker_id, json.dumps(batch, separators=(",", ":"))),
+                )
+            ]
         reservation = self._reservation
         if reservation is None:
             raise _HeartbeatRoundExpired("the worker holds no heartbeat reservation")
         # One deadline bounds the whole round on the shared connection: the wait for it and the
         # transaction. The round runs on its own thread, so this thread stops waiting at the
         # deadline even when the driver does not.
-        heartbeat_round = _HeartbeatRound(deadline)
+        heartbeat_round = _HeartbeatRound(
+            deadline,
+            [{"workerId": self.worker_id, "leases": list(batch)} for batch in batches],
+        )
         Thread(
             target=self._run_heartbeat_round,
-            args=(heartbeat_round, parameters, reservation),
+            args=(heartbeat_round, reservation),
             name="workhorse-heartbeat-round",
             daemon=True,
         ).start()
@@ -1785,49 +1893,29 @@ class Worker:
             return heartbeat_round.result.result()
 
     def _run_heartbeat_round(
-        self,
-        heartbeat_round: _HeartbeatRound,
-        parameters: Sequence[object],
-        reservation: _HeartbeatReservation,
+        self, heartbeat_round: _HeartbeatRound, reservation: _HeartbeatReservation
     ) -> None:
         try:
-            # The round takes the shared connection for itself, so no other round uses it meanwhile.
-            # Rounds of the workers on one pool thus run one after another.
             # A round needs at least a quarter of its time to send its statements. With less, it
             # skips cleanly rather than expire during a statement and discard the connection
             # that every worker on the pool shares.
             minimum = max(0.0, heartbeat_round.deadline - monotonic()) / 4
-            connection = reservation.take(heartbeat_round.deadline, minimum)
-            if connection is None:
-                raise _HeartbeatRoundExpiredCleanly("no heartbeat connection was free in time")
-            executor, _close = connection
-            try:
-                rows = _fenced_write_rows(
-                    _ServerBoundedExecutor(executor, heartbeat_round.deadline),
-                    _STATEMENTS.heartbeat_many,
-                    parameters,
-                )
-            except _HeartbeatRoundExpiredCleanly as error:
-                # No statement of the round runs on the server, so the next round can use the
-                # connection. The round still failed and renews nothing.
-                reservation.put_back(connection)
-                heartbeat_round.finish()
-                heartbeat_round.result.set_exception(error)
+            # The rounds of all workers on the pool share the transactions on the connection. A
+            # joined round gets its result from the leader of its transaction.
+            group = reservation.group
+            turn = group.wait(heartbeat_round)
+            if turn == "joined":
                 return
-            except BaseException:
-                # The reservation replaces the connection at once rather than reuse it in an
-                # unknown state. Closing the driver connection first ends any open transaction on
-                # the server, so the pool cannot commit it when the connection goes back.
-                reservation.lose(connection)
-                raise
-            # When the heartbeat thread stopped waiting, nothing counts this renewal. The result
-            # goes first, so a close that blocks cannot hold the heartbeat thread.
-            if heartbeat_round.finish():
-                heartbeat_round.result.set_result(rows)
-            reservation.put_back(connection)
+            if turn == "expired":
+                raise _HeartbeatRoundExpiredCleanly(
+                    "the heartbeat connection was busy until the deadline"
+                )
+            try:
+                _lead_heartbeat_transaction(heartbeat_round, reservation, minimum)
+            finally:
+                group.finish(heartbeat_round)
         except BaseException as error:
-            heartbeat_round.finish()
-            heartbeat_round.result.set_exception(error)
+            _settle_heartbeat_round(heartbeat_round, error=error)
 
     def _expire_owned_task(self, task: ClaimedTask, parent_context: object) -> object:
         expiration = _require_lifecycle_row(

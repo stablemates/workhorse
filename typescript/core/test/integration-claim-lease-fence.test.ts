@@ -12,6 +12,7 @@ import {
   type WorkerMaintenanceTelemetry,
 } from "../src/index.js";
 import { SQL_STATEMENTS } from "../src/queue/sql-catalogue.generated.js";
+import { workerHeartbeatReservation } from "../src/worker-internal.js";
 import { createIntegrationTestContext } from "./support/integration.js";
 
 const { databaseUrl, deferred, pool, queue, waitForDatabaseCondition, admin, adminAudit } =
@@ -67,6 +68,47 @@ describe("claim lease fence", () => {
     expect(statuses.size).toBe(151);
     expect(statuses.get(owned!.id)).toBe("accepted");
     expect(unknown.every((task) => statuses.get(task.id) === "stale")).toBe(true);
+  });
+
+  it("sends a reserved round of more than 100 leases as batches of at most 100 in one statement", async () => {
+    const workerId = `heartbeat-pool-split-${randomUUID()}`;
+    const [id] = await queue.enqueueMany([{ type: "heartbeat-pool-split", payload: null }]);
+    const owned = await queue.claim(workerId, { leaseMs: 5_000 });
+    expect(owned?.id).toBe(id);
+    const unknown = Array.from({ length: 150 }, () => ({ ...owned!, id: randomUUID() }));
+    const channel = queue[workerHeartbeatReservation](1_000)!;
+    const sent: unknown[][] = [];
+    const connect = vi.spyOn(pool, "connect");
+    try {
+      connect.mockImplementation((async () => {
+        const client = await (Pool.prototype.connect as () => Promise<PoolClient>).call(pool);
+        const original = client.query.bind(client) as (...args: unknown[]) => Promise<unknown>;
+        // The pool lends this client again later and passes a callback, so every argument goes on.
+        Object.assign(client, {
+          query: (...args: unknown[]) => {
+            if (args[0] === SQL_STATEMENTS["heartbeat_pool_v1"]) sent.push(args[1] as unknown[]);
+            return original(...args);
+          },
+        });
+        return client;
+      }) as unknown as typeof pool.connect);
+      const statuses = await channel.heartbeatMany([...unknown, owned!], workerId, 5_000, 1_000);
+      expect(statuses.size).toBe(151);
+      expect(statuses.get(owned!.id)).toBe("accepted");
+      expect(unknown.every((task) => statuses.get(task.id) === "stale")).toBe(true);
+    } finally {
+      connect.mockRestore();
+      await channel.close();
+    }
+    expect(sent).toHaveLength(1);
+    const batches = JSON.parse(sent[0]![0] as string) as Array<{
+      workerId: string;
+      leases: unknown[];
+    }>;
+    expect(batches.map((batch) => [batch.workerId, batch.leases.length])).toEqual([
+      [workerId, 100],
+      [workerId, 51],
+    ]);
   });
 
   it("preserves strict priority through promotion and retry under competing claims", async () => {

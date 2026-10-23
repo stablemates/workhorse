@@ -17,6 +17,9 @@
 - **Amended:** 2026-10-22 (SM-1585): under the opt-out, a worker starts a pool-fed listener only when
   it knows a pool maximum size of at least 2, from the pool's report or the caller's declaration. An
   unknown size means polling.
+- **Amended:** 2026-10-22 (SM-1633): on the dedicated heartbeat connection, one transaction renews
+  every worker of a round. The amendment at the end of this record states the round shape and its
+  effect on row locks.
 
 ## Context
 
@@ -507,3 +510,90 @@ recorded. A second failure fails the acceptance.
   the JVM baseline shows.
 - **Resume claims after a fixed time without a heartbeat connection.** Rejected: the worker could
   then take leases that it cannot renew.
+
+## Amendment: one heartbeat transaction for every worker of a round (2026-10-22)
+
+Rule 1 of the 2026-10-21 amendment gives each pool identity one shared heartbeat connection. Before
+this amendment, a round on that connection sent one transaction for each worker and each 100
+leases. Each transaction needs at least 3 round trips: the settings statement with `BEGIN`,
+`heartbeat_many_v2`, and `COMMIT`. The round trips of a round thus grew with the number of workers.
+
+**Example.** Eight JVM workers share a pool of 6. The lease is 3 s, the interval 1 s, and the round
+bound 750 ms. A test proxy adds 80 ms before each statement and each `COMMIT` (SM-1631).
+
+1. A round needs 8 transactions of 3 round trips, so at least 1,920 ms.
+2. The round bound lets only a part of the transactions out in each round.
+3. A later transaction sets its idle budget from the small time that is left, and PostgreSQL ends
+   the session at the idle gap.
+4. In one run, 87 leases expired, while PostgreSQL answered every statement in less than 0.5 s.
+
+SM-1631 also measured a smaller fix: fair turns and a fixed share of the round for each later
+statement. It held up to about 35 ms for each round trip when the test ran alone, and not in a full
+parallel test run. Each worker transaction pays its own `COMMIT`, and a `COMMIT` under load took 90
+to 190 ms.
+
+### The rules
+
+1. On the dedicated heartbeat connection, a round sends one transaction: `BEGIN`, the settings
+   statement, one `heartbeat_pool_v1` statement, and `COMMIT`. The statement covers every worker of
+   the round and every 100 leases of each worker. It calls `heartbeat_many_v2` once for each batch,
+   so it needs no migration.
+2. The transaction holds the row locks of every worker in the round until its `COMMIT`. Before this
+   amendment, the rows of one worker stayed locked only until the `COMMIT` of its own transaction.
+   The server timeouts of the round still end the transaction by the round deadline, except for a
+   `COMMIT` that PostgreSQL has already started.
+3. A round is all or nothing. If the statement or `COMMIT` fails, the round renews no lease, and
+   every worker of the round handles one failed round.
+4. The settings statement sets `statement_timeout` and `idle_in_transaction_session_timeout` each to
+   one quarter of the time that remains, and keeps one quarter for `COMMIT`. Before this amendment,
+   the shares were one half and one eighth. An idle gap is about one round trip, so one eighth of
+   the time that remains was too short at 80 ms for each round trip.
+5. Rule 1 of the 2026-10-21 amendment stays: each SDK keeps its scheduler. Ruby and JVM have one
+   heartbeat thread for each pool, so their round already holds every worker. In TypeScript, Go,
+   Python, and Rust, each worker keeps its own scheduler, and the waiting rounds share the
+   transaction. The round that finds no transaction leads one. Immediately before it sends the
+   heartbeat statement, it takes every waiting round whose deadline is not earlier than its own.
+   When the transaction ends, the waiting round with the earliest deadline leads the next one. So a
+   round waits for at most the transaction that is in flight when it arrives.
+6. The shared heartbeats opt-out does not change. Its rounds borrow a connection for each
+   `heartbeat_many_v2` statement, with no transaction. Go is the exception: under
+   `SharedHeartbeats`, it sends each statement in a bounded transaction of its own, as before.
+
+### Why the rules have this form
+
+**One statement, not a statement for each worker in one transaction.** One statement keeps the
+round at the same number of round trips for any number of workers. A transaction with one
+statement for each worker still has one round trip for each worker.
+
+**A catalogue statement, not a new SQL function.** `heartbeat_many_v2` already has the lock steps,
+the statuses, and the 100-lease limit that ADR 0105 defines. A `LATERAL` call keeps them for each
+batch. The statement is additive and needs no change to the schema floor.
+
+**The leader takes only rounds with a later or equal deadline.** The server timeouts come from the
+deadline of the leader. A round with an earlier deadline could see PostgreSQL renew its leases after
+it stopped waiting. That is the case that the server timeouts exist to prevent.
+
+**Longer row locks.** A settlement of a task in the round waits for the `COMMIT` of the whole round,
+not only of its worker. The round ends by its bound, and the lock steps use `SKIP LOCKED`. So a
+heartbeat does not wait for a settlement that already holds the row, apart from the update-chain
+wait that ADR 0105 records. One round can delay a settlement by up to one round bound, as one worker
+transaction could before.
+
+### Consequences of this amendment
+
+- The round trips of a round no longer grow with the number of workers on the pool.
+- A failure of one statement fails the round of every worker in it. Each attempt keeps its own
+  watchdog, so one failed round does not end a lease.
+- The connection budget of rules 1 to 11 does not change.
+- `docs/architecture/lifecycle.md` (Pool renewal, Heartbeat round deadline) states the round in each
+  SDK. Each SDK changelog states the change.
+
+### Alternatives considered in this amendment
+
+- **Fair turns and a fixed share for each statement (SM-1631, option 2).** Rejected: each worker
+  transaction still pays its own `COMMIT`, and the fix lost leases in a full parallel test run.
+- **A new SQL function that takes every worker.** Rejected: a migration with the same lock steps and
+  statuses as `heartbeat_many_v2` adds a second function to keep in step, and gives nothing that the
+  `LATERAL` call does not give.
+- **One coordinator thread for each pool in every SDK.** Rejected: rule 1 lets each SDK keep its
+  scheduler, and the shared transaction gives the same round trips.

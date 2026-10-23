@@ -138,6 +138,9 @@ module Stablemates
       # `heartbeat_many_v2` (protocol)
       HEARTBEAT_MANY_V2 = 'SELECT task_id::text AS task_id, status FROM workhorse.heartbeat_many_v2($1::text, $2::jsonb) ORDER BY ordinal'
 
+      # `heartbeat_pool_v1` (protocol)
+      HEARTBEAT_POOL_V1 = 'SELECT batch.ordinal::integer AS batch, lease.task_id::text AS task_id, lease.status FROM jsonb_array_elements($1::jsonb) WITH ORDINALITY AS batch(item, ordinal) CROSS JOIN LATERAL workhorse.heartbeat_many_v2(batch.item->>\'workerId\', batch.item->\'leases\') AS lease ORDER BY batch.ordinal, lease.ordinal'
+
       # `heartbeat_v1` (protocol)
       HEARTBEAT_V1 = 'SELECT workhorse.heartbeat_v1($1::uuid, $2::text, $3::bigint, $4::integer) AS status'
 

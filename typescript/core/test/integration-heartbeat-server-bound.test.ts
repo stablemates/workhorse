@@ -64,11 +64,13 @@ async function expiresAt(taskId: string): Promise<Date> {
  */
 function recordingPool(delay: (text: string) => number) {
   const statements: string[] = [];
-  return {
+  const recording = {
     statements,
+    connects: 0,
     pool: {
       options: { max: 10 },
       async connect(): Promise<PoolClient> {
+        recording.connects += 1;
         const client = await pool.connect();
         const query = client.query.bind(client) as (...args: unknown[]) => Promise<unknown>;
         const release = client.release.bind(client);
@@ -90,6 +92,7 @@ function recordingPool(delay: (text: string) => number) {
       },
     },
   };
+  return recording;
 }
 
 describe("heartbeat server bound", () => {
@@ -99,27 +102,24 @@ describe("heartbeat server bound", () => {
       slowSettings && text.includes("set_config") ? 400 : 0,
     );
     const connection = new ReservedConnection(recording.pool);
-    const backend = () =>
-      connection.run(
-        async (client) =>
-          (await client.query<{ pid: number }>("SELECT pg_backend_pid() AS pid")).rows[0]!.pid,
-        1_000,
-      );
+    // A transaction with no batch sends the whole round and renews nothing.
+    const round = () => connection.renew(1_000, () => []);
     try {
-      const before = await backend();
+      await round();
       const sentBefore = recording.statements.length;
       // The settings statement uses more than the quarter of the round kept for COMMIT, but the
       // round still has time to roll back.
       slowSettings = true;
-      await expect(backend()).rejects.toThrow(/before its heartbeat/);
+      await expect(round()).rejects.toThrow(/before its heartbeat/);
       slowSettings = false;
       expect(recording.statements.slice(sentBefore)).toEqual([
         "BEGIN",
         expect.stringContaining("set_config"),
         "ROLLBACK",
       ]);
-      // The next round uses the same backend, so the worker kept the connection.
-      expect(await backend()).toBe(before);
+      // The next round uses the same connection, so the worker kept it.
+      await round();
+      expect(recording.connects).toBe(1);
     } finally {
       await connection.close();
     }
@@ -134,7 +134,7 @@ describe("heartbeat server bound", () => {
       const claimedUntil = await expiresAt(id);
       const commit = await blockHeartbeats();
       try {
-        // PostgreSQL ends the statement first, at half of the round's time.
+        // PostgreSQL ends the statement first, at a quarter of the round's time.
         const started = performance.now();
         await expect(
           channel.heartbeatMany([task!], "bound-round-worker", 30_000, HEARTBEAT_MS),

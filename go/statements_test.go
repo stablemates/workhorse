@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -28,9 +29,10 @@ type protocolManifest struct {
 		Contract string `json:"contract"`
 	} `json:"views"`
 	Statements []struct {
-		Name     string `json:"name"`
-		Arity    int    `json:"arity"`
-		Contract string `json:"contract"`
+		Name       string   `json:"name"`
+		Arity      int      `json:"arity"`
+		Contract   string   `json:"contract"`
+		Catalogues []string `json:"catalogues"`
 	} `json:"statements"`
 }
 
@@ -174,6 +176,17 @@ func TestStatementRegistryMatchesProtocolManifest(t *testing.T) {
 	}
 	for _, view := range manifest.Views {
 		addManifestStatement(t, want, view.Name, view.Contract)
+	}
+	// A protocol statement that is no function or view, such as heartbeat_pool_v1, is also in the
+	// registry.
+	for _, statement := range manifest.Statements {
+		if _, listed := want[statement.Name]; listed || !slices.Contains(statement.Catalogues, "protocol") {
+			continue
+		}
+		addManifestStatement(t, want, statement.Name, statement.Contract)
+		if got := statementArity(protocolStatementRegistry[statement.Name], placeholder); got != statement.Arity {
+			t.Errorf("%s: manifest arity is %d, registered SQL uses %d parameters", statement.Name, statement.Arity, got)
+		}
 	}
 
 	for name, contract := range want {

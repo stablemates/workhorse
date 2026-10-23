@@ -2883,16 +2883,19 @@ func (worker *Worker) refreshOwnershipMany(members []*heartbeatMember, deadline 
 	return busy
 }
 
-// heartbeatStatementLeaseLimit is the most leases that one heartbeat statement accepts.
-// heartbeat_many_v2 raises an error above it. A round can hold more members than the concurrency
-// limit, because a fused completion claim registers its tasks before the completing attempts
-// unregister.
+// heartbeatStatementLeaseLimit is the most leases that one heartbeat_many_v2 call accepts: one
+// statement on the pool, or one batch of a shared heartbeat_pool_v1 statement. heartbeat_many_v2
+// raises an error above it. A round can hold more members than the concurrency limit, because a fused
+// completion claim registers its tasks before the completing attempts unregister.
 const heartbeatStatementLeaseLimit = 100
 
-// queryHeartbeatRound sends the heartbeat statements of one round for members and returns the
-// status of each member, in the order of members. It sends the leases in task ID order, at most
-// heartbeatStatementLeaseLimit in each statement. The round ends by deadline, on the client and on
-// the server, so a statement that stalls cannot hold the batch past the next round.
+// queryHeartbeatRound sends the heartbeats of one round for members and returns the status of each
+// member, in the order of members. It sends the leases in task ID order, in batches of at most
+// heartbeatStatementLeaseLimit. On the shared heartbeat connection, every batch goes into one
+// heartbeat_pool_v1 statement, which can also carry the rounds of other workers on the pool. Under
+// the shared heartbeats opt-out, each batch is its own heartbeat_many_v2 statement on a pooled
+// connection. The round ends by deadline, on the client and on the server, so a statement that
+// stalls cannot hold the batch past the next round.
 func (worker *Worker) queryHeartbeatRound(
 	members []*heartbeatMember, deadline time.Time,
 ) ([]ownershipStatus, error) {
@@ -2901,9 +2904,13 @@ func (worker *Worker) queryHeartbeatRound(
 		FenceToken string `json:"fenceToken"`
 		LeaseMS    int    `json:"leaseMs"`
 	}
+	type batch struct {
+		WorkerID string          `json:"workerId"`
+		Leases   json.RawMessage `json:"leases"`
+	}
 	leaseMS := int(worker.leaseDuration / time.Millisecond)
-	// Task ID order matches the order a batched completion locks its rows in. Each statement
-	// returns its rows in input order, so position maps a row back to its member.
+	// Task ID order matches the order a batched completion locks its rows in. Each batch returns
+	// its rows in input order, so position maps a row back to its member.
 	order := make([]int, len(members))
 	for index := range order {
 		order[index] = index
@@ -2912,6 +2919,7 @@ func (worker *Worker) queryHeartbeatRound(
 		return strings.Compare(members[left].task.ID, members[right].task.ID)
 	})
 	var payloads []string
+	var batches []heartbeatBatch
 	for chunk := range slices.Chunk(order, heartbeatStatementLeaseLimit) {
 		requests := make([]lease, 0, len(chunk))
 		for _, index := range chunk {
@@ -2926,12 +2934,51 @@ func (worker *Worker) queryHeartbeatRound(
 			return nil, err
 		}
 		payloads = append(payloads, string(payload))
+		object, err := json.Marshal(batch{WorkerID: worker.workerID, Leases: payload})
+		if err != nil {
+			return nil, err
+		}
+		batches = append(batches, heartbeatBatch{object: object, size: len(chunk)})
 	}
 	roundContext := context.WithoutCancel(members[0].ctx)
 	worker.heartbeatMu.Lock()
 	reserved := worker.heartbeatLease
 	worker.heartbeatMu.Unlock()
 	statuses := make([]ownershipStatus, len(members))
+	// route applies the rows of one batch to the members that the batch sent.
+	route := func(chunkIndex int, rows []Row) error {
+		chunk := order[chunkIndex*heartbeatStatementLeaseLimit:]
+		chunk = chunk[:min(len(chunk), heartbeatStatementLeaseLimit)]
+		if len(rows) != len(chunk) {
+			return errors.New(invalidOwnershipResultMessage)
+		}
+		for position, row := range rows {
+			member := members[chunk[position]]
+			if stringValue(row[rowTaskIDField]) != member.task.ID {
+				return errors.New(invalidOwnershipResultMessage)
+			}
+			status, err := parseHeartbeatStatusRow(row)
+			if err != nil {
+				return err
+			}
+			statuses[chunk[position]] = status
+		}
+		return nil
+	}
+	// Serialization counts against the deadline.
+	if reserved != nil {
+		// The round is all or nothing: its rows arrive only after COMMIT succeeded by the deadline.
+		rowsByBatch, err := reserved.renew(roundContext, time.Until(deadline), batches)
+		if err != nil {
+			return nil, err
+		}
+		for chunkIndex, rows := range rowsByBatch {
+			if err := route(chunkIndex, rows); err != nil {
+				return nil, err
+			}
+		}
+		return statuses, nil
+	}
 	round := func(ctx context.Context, executor Executor) error {
 		// Each statement commits on its own. If a later statement fails, the round fails, and
 		// the renewals of the earlier statements do not count locally.
@@ -2946,36 +2993,15 @@ func (worker *Worker) queryHeartbeatRound(
 			if err != nil {
 				return err
 			}
-			chunk := order[chunkIndex*heartbeatStatementLeaseLimit:]
-			chunk = chunk[:min(len(chunk), heartbeatStatementLeaseLimit)]
-			if len(rows) != len(chunk) {
-				return errors.New(invalidOwnershipResultMessage)
-			}
-			for position, row := range rows {
-				member := members[chunk[position]]
-				if stringValue(row[rowTaskIDField]) != member.task.ID {
-					return errors.New(invalidOwnershipResultMessage)
-				}
-				status, parseErr := parseHeartbeatStatusRow(row)
-				if parseErr != nil {
-					return parseErr
-				}
-				statuses[chunk[position]] = status
+			if err := route(chunkIndex, rows); err != nil {
+				return err
 			}
 		}
 		return nil
 	}
-	// Serialization counts against the deadline.
-	bound := time.Until(deadline)
-	var err error
-	if reserved == nil {
-		queryContext, cancel := context.WithDeadline(roundContext, deadline)
-		err = runBoundedOnPool(queryContext, worker.pool, round)
-		cancel()
-	} else {
-		err = reserved.run(roundContext, bound, round)
-	}
-	if err != nil {
+	queryContext, cancel := context.WithDeadline(roundContext, deadline)
+	defer cancel()
+	if err := runBoundedOnPool(queryContext, worker.pool, round); err != nil {
 		return nil, err
 	}
 	return statuses, nil

@@ -263,6 +263,10 @@ does not start. A Java `DataSource` does not state its size. On the JVM, you can
 with `poolMaxSize`, and the worker refuses a declared size that is too small. Without a declared
 size, the startup check is the only check.
 
+The workers on one pool renew their leases together, in one transaction for each round. A round thus
+needs the same number of round trips to PostgreSQL for one worker or for many workers. That
+transaction locks the task rows of every worker in the round until it commits.
+
 Every worker checks the pool when it starts. Within its startup budget, the worker first gets the
 heartbeat connection. Then it borrows one more connection for a short check, and returns it at
 once. If the pool cannot give these connections in time, the worker does not start. Its error names

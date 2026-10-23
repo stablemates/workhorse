@@ -277,6 +277,14 @@ public final class SqlCatalogue {
           2,
           new int[] {1, 2});
 
+  /** {@code heartbeat_pool_v1} (protocol). */
+  public static final Statement HEARTBEAT_POOL_V1 =
+      new Statement(
+          "heartbeat_pool_v1",
+          "SELECT batch.ordinal::integer AS batch, lease.task_id::text AS task_id, lease.status FROM jsonb_array_elements(?::jsonb) WITH ORDINALITY AS batch(item, ordinal) CROSS JOIN LATERAL workhorse.heartbeat_many_v2(batch.item->>'workerId', batch.item->'leases') AS lease ORDER BY batch.ordinal, lease.ordinal",
+          1,
+          new int[] {1});
+
   /** {@code heartbeat_v1} (protocol). */
   public static final Statement HEARTBEAT_V1 =
       new Statement(
@@ -1385,6 +1393,7 @@ public final class SqlCatalogue {
           GET_PROGRESS,
           GET_WAIT,
           HEARTBEAT_MANY_V2,
+          HEARTBEAT_POOL_V1,
           HEARTBEAT_V1,
           HEARTBEAT_V2,
           LIST_CHECKPOINT,

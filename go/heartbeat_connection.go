@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -22,11 +24,12 @@ const minimumRoundRemaining = 8 * time.Millisecond
 // PostgreSQL measures statement_timeout for each statement and idle_in_transaction_session_timeout
 // for each idle gap, and restarts both every time. While the round can hold a row lock, it has one
 // idle gap before the heartbeat, the heartbeat, and one idle gap before COMMIT. So the heartbeat gets
-// one half, each gap one eighth, and the last quarter is kept for COMMIT. No setting bounds COMMIT
-// itself.
+// one quarter, each gap one quarter, and the last quarter is kept for COMMIT and the settings
+// statement. No setting bounds COMMIT itself.
 func roundTimeouts(remaining time.Duration) (statement string, idle string) {
 	milliseconds := remaining.Milliseconds()
-	return strconv.FormatInt(max(1, milliseconds/2), 10), strconv.FormatInt(max(1, milliseconds/8), 10)
+	quarter := strconv.FormatInt(max(1, milliseconds/4), 10)
+	return quarter, quarter
 }
 
 var errHeartbeatRoundExpired = errors.New(heartbeatRoundExpiredMessage)
@@ -65,6 +68,16 @@ func (executor serverBoundedExecutor) Query(
 	statement string,
 	arguments ...any,
 ) ([]Row, error) {
+	return executor.query(ctx, statement, func() []any { return arguments })
+}
+
+// query is Query with the arguments from argumentsFor, which runs after the settings statement and
+// right before the statement is sent. A shared round takes the rounds that join it there.
+func (executor serverBoundedExecutor) query(
+	ctx context.Context,
+	statement string,
+	argumentsFor func() []any,
+) ([]Row, error) {
 	deadline, ok := ctx.Deadline()
 	if !ok {
 		return nil, errors.New(heartbeatRoundWithoutDeadlineMessage)
@@ -84,8 +97,12 @@ func (executor serverBoundedExecutor) Query(
 	defer func() { _ = tx.Rollback(ctx) }()
 	// pgx prepares a statement in its own cycle on first use, and PostgreSQL restarts the statement
 	// timer at the end of that cycle. Preparing first keeps that cycle out of the heartbeat's budget.
-	if _, err := tx.Prepare(ctx, statement, statement); err != nil {
-		return nil, err
+	// The settings statement is prepared here too, so that its first use on a connection does not
+	// count against the quarter that the settings statement may use.
+	for _, prepared := range []string{statement, roundTimeoutsStatement} {
+		if _, err := tx.Prepare(ctx, prepared, prepared); err != nil {
+			return nil, err
+		}
 	}
 	setAt := time.Now()
 	remaining := deadline.Sub(setAt)
@@ -98,6 +115,11 @@ func (executor serverBoundedExecutor) Query(
 	}
 	// The budgets fit only if the settings statement used at most the quarter kept for COMMIT.
 	if time.Since(setAt) > remaining/4 {
+		return nil, rollBackBeforeHeartbeat(ctx, tx)
+	}
+	arguments := argumentsFor()
+	// The payload counts against the deadline, so the statement goes out only in time.
+	if !time.Now().Before(deadline) {
 		return nil, rollBackBeforeHeartbeat(ctx, tx)
 	}
 	rows, err := NewPGXExecutor(tx).Query(ctx, statement, arguments...)
@@ -159,9 +181,14 @@ func runBoundedOnPool(
 // Handlers that hold every other pooled connection cannot delay a heartbeat queued behind them,
 // because the heartbeat never waits for the shared pool. A round that outlives its bound closes the
 // connection, so the pool discards it instead of lending it again, and server timeouts end its
-// heartbeat and its idle waits by the same deadline (serverBoundedExecutor). The bound covers the wait for the slot,
-// the wait for the connection, and the transaction. The timeouts are transaction-scoped, so the
-// connection stays safe behind a transaction-mode pooler.
+// heartbeat and its idle waits by the same deadline (serverBoundedExecutor). The bound covers the wait
+// for the transaction in flight, the wait for the connection, and the transaction. The timeouts are
+// transaction-scoped, so the connection stays safe behind a transaction-mode pooler.
+//
+// One PostgreSQL session runs one transaction at a time, and every worker on the pool sends its
+// rounds here. So the rounds that wait share one transaction (renew): the round that finds no
+// transaction in flight leads one, and the waiting rounds whose deadline is not earlier join its
+// heartbeat statement.
 //
 // Only one acquisition loop asks the pool for the connection (acquireUntilHeld), with one Acquire in
 // flight. A round or a startup that needs the connection waits for that loop until its own deadline,
@@ -179,13 +206,15 @@ type heartbeatConnection struct {
 	pool *pgxpool.Pool
 	// acquire is pool.Acquire outside tests.
 	acquire func(context.Context) (*pgxpool.Conn, error)
-	// slot serializes rounds, because one PostgreSQL session runs one transaction at a time and
-	// every worker on this pool sends its rounds here. A round waits for it only until its bound.
-	slot   chan struct{}
-	mu     sync.Mutex
-	conn   *pgxpool.Conn
-	rounds int
-	closed bool
+	mu      sync.Mutex
+	// leading is true while a round leads a transaction on the connection, until it hands off.
+	leading bool
+	// waiting holds the rounds that wait for the transaction in flight. A round waits only until its
+	// bound.
+	waiting []*heartbeatRequest
+	conn    *pgxpool.Conn
+	rounds  int
+	closed  bool
 	// held closes when the loop stores a connection. A discard replaces it with an open channel, so a
 	// waiter sees only a connection that arrived after the discard.
 	held chan struct{}
@@ -230,7 +259,6 @@ func newHeartbeatConnection(
 	return &heartbeatConnection{
 		pool:          pool,
 		acquire:       pool.Acquire,
-		slot:          make(chan struct{}, 1),
 		held:          make(chan struct{}),
 		interval:      interval,
 		lifetime:      lifetime,
@@ -345,6 +373,12 @@ func (connection *heartbeatConnection) acquireUntilHeld() {
 	delay := heartbeatReacquireInitialDelay
 	for {
 		acquired, err := connection.acquire(connection.lifetime)
+		if err == nil {
+			if err = connection.prepare(acquired); err != nil {
+				closeAndRemove(connection.pool, acquired)
+				acquired = nil
+			}
+		}
 		connection.mu.Lock()
 		if connection.closed {
 			connection.mu.Unlock()
@@ -379,6 +413,28 @@ func (connection *heartbeatConnection) acquireUntilHeld() {
 	}
 }
 
+// prepare prepares the statements of a heartbeat round on a connection that the loop acquired, so
+// the first round on it spends no round trip on them. Each takes one round trip on a new session,
+// and a round that pays them can reach its deadline before its heartbeat. The wait is bounded by
+// max(interval, minimumStartupBudget), as the startup budget is, and by the lifetime of the
+// connection. A bound of one interval is too short: with an interval of 100 ms and a round trip of
+// 50 ms or more, the two preparations never fit, and the pool never gets a heartbeat connection. A
+// round does not wait for the preparation past its own deadline, as it does not wait for the open.
+func (connection *heartbeatConnection) prepare(acquired *pgxpool.Conn) error {
+	connection.mu.Lock()
+	bound := max(connection.interval, minimumStartupBudget)
+	connection.mu.Unlock()
+	ctx, cancel := context.WithTimeout(connection.lifetime, bound)
+	defer cancel()
+	statements := []string{protocolStatementRegistry[heartbeatPoolStatementName], roundTimeoutsStatement}
+	for _, statement := range statements {
+		if _, err := acquired.Conn().Prepare(ctx, statement, statement); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // endAcquiring ends the acquisition loop after the last holder released. It closes a connection
 // that arrived late and removes it from the pool (closeAndRemove), then settles.
 func (connection *heartbeatConnection) endAcquiring(acquired *pgxpool.Conn) {
@@ -411,10 +467,8 @@ func (connection *heartbeatConnection) shorten(interval time.Duration) {
 	connection.interval = min(connection.interval, interval)
 }
 
-// run executes one bounded round on the reserved connection. A round that fails discards the
-// connection, and the acquisition loop starts at once, so the next round starts from a healthy one.
-// A round that expired before its heartbeat statement and left the connection clean keeps it, so
-// the next round uses it. This keeps the connection that handlers cannot take (ADR 0071).
+// run executes one bounded round alone on the reserved connection. It waits for the transaction in
+// flight like a heartbeat round, but no other round joins it.
 func (connection *heartbeatConnection) run(
 	ctx context.Context,
 	bound time.Duration,
@@ -422,12 +476,28 @@ func (connection *heartbeatConnection) run(
 ) error {
 	roundContext, cancel := context.WithTimeout(ctx, bound)
 	defer cancel()
-	select {
-	case connection.slot <- struct{}{}:
-	case <-roundContext.Done():
-		return roundContext.Err()
+	deadline, _ := roundContext.Deadline()
+	request := &heartbeatRequest{deadline: deadline, lead: make(chan struct{})}
+	if _, _, err := connection.enter(roundContext, request); err != nil {
+		return err
 	}
-	defer func() { <-connection.slot }()
+	defer connection.handOff()
+	return connection.lead(roundContext, round)
+}
+
+// lead runs round as the leader of one transaction on the reserved connection. A round that fails
+// discards the connection, and the acquisition loop starts at once, so the next round starts from a
+// healthy one. A round that expired before its heartbeat statement and left the connection clean
+// keeps it, so the next round uses it. This keeps the connection that handlers cannot take (ADR
+// 0071).
+func (connection *heartbeatConnection) lead(
+	roundContext context.Context,
+	round func(context.Context, Executor) error,
+) error {
+	// A round can become the leader after its deadline. It then sends nothing.
+	if err := roundContext.Err(); err != nil {
+		return err
+	}
 	if err := connection.startRound(); err != nil {
 		return err
 	}
@@ -444,6 +514,239 @@ func (connection *heartbeatConnection) run(
 		return err
 	}
 	return nil
+}
+
+// heartbeatBatch is the leases of one worker in a heartbeat_pool_v1 statement.
+type heartbeatBatch struct {
+	// object is the JSON batch object: {"workerId": ..., "leases": [...]}.
+	object []byte
+	// size is the number of leases, at most heartbeatStatementLeaseLimit.
+	size int
+}
+
+// heartbeatRequest is one round that waits for the reserved connection.
+type heartbeatRequest struct {
+	deadline time.Time
+	// batches is nil for a round that runs alone (run). Only a round with batches joins another one.
+	batches []heartbeatBatch
+	// lead closes when the round leads the next transaction.
+	lead chan struct{}
+	// result gets the outcome of the transaction that the round joined.
+	result chan heartbeatResult
+}
+
+// heartbeatResult is the outcome of a shared transaction for one round that joined it: the rows of
+// each of its batches, or the failure of the transaction.
+type heartbeatResult struct {
+	rows [][]Row
+	err  error
+}
+
+// enter returns when request leads a transaction on the connection, or when the transaction that
+// request joined has ended. joined is true in the second case, and result is that outcome. A round
+// that finds no transaction in flight leads at once. If ctx ends while request waits, enter returns
+// the error of ctx, and the round sent nothing.
+func (connection *heartbeatConnection) enter(
+	ctx context.Context,
+	request *heartbeatRequest,
+) (result heartbeatResult, joined bool, err error) {
+	connection.mu.Lock()
+	if !connection.leading {
+		connection.leading = true
+		connection.mu.Unlock()
+		return heartbeatResult{}, false, nil
+	}
+	connection.waiting = append(connection.waiting, request)
+	connection.mu.Unlock()
+	select {
+	case <-request.lead:
+		return heartbeatResult{}, false, nil
+	case result := <-request.result:
+		return result, true, nil
+	case <-ctx.Done():
+	}
+	connection.mu.Lock()
+	if index := slices.Index(connection.waiting, request); index >= 0 {
+		connection.waiting = slices.Delete(connection.waiting, index, index+1)
+		connection.mu.Unlock()
+		return heartbeatResult{}, false, ctx.Err()
+	}
+	connection.mu.Unlock()
+	// A leader took the request before its deadline: the request leads now, or it joined a
+	// transaction that ends by a deadline that is not later than its own.
+	select {
+	case <-request.lead:
+		return heartbeatResult{}, false, nil
+	case result := <-request.result:
+		return result, true, nil
+	}
+}
+
+// handOff ends the turn of the leader. The waiting round with the earliest deadline leads the next
+// transaction, and the others can join it.
+func (connection *heartbeatConnection) handOff() {
+	connection.mu.Lock()
+	defer connection.mu.Unlock()
+	if len(connection.waiting) == 0 {
+		connection.leading = false
+		return
+	}
+	next := 0
+	for index, request := range connection.waiting {
+		if request.deadline.Before(connection.waiting[next].deadline) {
+			next = index
+		}
+	}
+	request := connection.waiting[next]
+	connection.waiting = slices.Delete(connection.waiting, next, next+1)
+	close(request.lead)
+}
+
+// join takes every waiting round with batches whose deadline is not earlier than deadline. Those
+// rounds join the transaction of the leader whose deadline is deadline.
+func (connection *heartbeatConnection) join(deadline time.Time) []*heartbeatRequest {
+	connection.mu.Lock()
+	defer connection.mu.Unlock()
+	var joined []*heartbeatRequest
+	kept := connection.waiting[:0]
+	for _, request := range connection.waiting {
+		if request.batches != nil && !request.deadline.Before(deadline) {
+			joined = append(joined, request)
+		} else {
+			kept = append(kept, request)
+		}
+	}
+	clear(connection.waiting[len(kept):])
+	connection.waiting = kept
+	return joined
+}
+
+// renew sends batches in one heartbeat_pool_v1 statement on the reserved connection, bounded by
+// bound, and returns the rows of each batch in the order of batches.
+//
+// If no transaction is in flight, the round leads one. Just before its heartbeat statement, the
+// leader takes every waiting round whose deadline is not earlier than its own, and their batches
+// follow its own in the statement. Each round that joined gets its own rows after COMMIT, or the
+// failure of the transaction. A round that cannot join waits, and when the transaction ends, the
+// waiting round with the earliest deadline leads the next one.
+func (connection *heartbeatConnection) renew(
+	ctx context.Context,
+	bound time.Duration,
+	batches []heartbeatBatch,
+) ([][]Row, error) {
+	roundContext, cancel := context.WithTimeout(ctx, bound)
+	defer cancel()
+	deadline, _ := roundContext.Deadline()
+	request := &heartbeatRequest{
+		deadline: deadline,
+		batches:  batches,
+		lead:     make(chan struct{}),
+		result:   make(chan heartbeatResult, 1),
+	}
+	result, joined, err := connection.enter(roundContext, request)
+	if err != nil {
+		return nil, err
+	}
+	if joined {
+		return result.rows, result.err
+	}
+	defer connection.handOff()
+	var group []*heartbeatRequest
+	var rows [][][]Row
+	err = connection.lead(roundContext, func(ctx context.Context, executor Executor) error {
+		var err error
+		group, rows, err = connection.sendGroup(ctx, executor.(serverBoundedExecutor), request)
+		return err
+	})
+	// Every round of the transaction gets the same failure.
+	for index, member := range group {
+		if index == 0 {
+			continue
+		}
+		if err != nil {
+			member.result <- heartbeatResult{err: err}
+		} else {
+			member.result <- heartbeatResult{rows: rows[index]}
+		}
+	}
+	if err != nil {
+		return nil, err
+	}
+	return rows[0], nil
+}
+
+// sendGroup sends one transaction with the batches of leader and of every round that joins it. It
+// returns the rounds of the transaction, leader first, and the rows of each batch of each round.
+//
+// PostgreSQL rolls back a deadlock victim, so nothing of the transaction committed. The rollback
+// leaves the session clean, and the whole group is sent again in a new transaction with the time
+// that remains, up to fencedWriteDeadlockAttempts times.
+func (connection *heartbeatConnection) sendGroup(
+	ctx context.Context,
+	executor serverBoundedExecutor,
+	leader *heartbeatRequest,
+) ([]*heartbeatRequest, [][][]Row, error) {
+	group := []*heartbeatRequest{leader}
+	argumentsFor := func() []any {
+		group = append(group, connection.join(leader.deadline)...)
+		return []any{heartbeatPoolPayload(group)}
+	}
+	for attempt := 1; ; attempt++ {
+		rows, err := executor.query(ctx, protocolStatementRegistry[heartbeatPoolStatementName], argumentsFor)
+		if err == nil {
+			routed, err := routeHeartbeatPoolRows(group, rows)
+			return group, routed, err
+		}
+		if attempt >= fencedWriteDeadlockAttempts || !hasSQLState(err, deadlockDetectedSQLState) {
+			return group, nil, err
+		}
+	}
+}
+
+// heartbeatPoolPayload is the JSON array of every batch of group, in order.
+func heartbeatPoolPayload(group []*heartbeatRequest) string {
+	var payload strings.Builder
+	payload.WriteByte('[')
+	for _, request := range group {
+		for _, batch := range request.batches {
+			if payload.Len() > 1 {
+				payload.WriteByte(',')
+			}
+			payload.Write(batch.object)
+		}
+	}
+	payload.WriteByte(']')
+	return payload.String()
+}
+
+// routeHeartbeatPoolRows gives each batch of group its rows. The batch column is the 1-based position
+// of the batch in the statement, and each batch must get one row for each lease.
+func routeHeartbeatPoolRows(group []*heartbeatRequest, rows []Row) ([][][]Row, error) {
+	var batches [][]Row
+	for _, request := range group {
+		for range request.batches {
+			batches = append(batches, nil)
+		}
+	}
+	for _, row := range rows {
+		position := intValue(row[rowBatchField])
+		if position < 1 || position > len(batches) {
+			return nil, errors.New(invalidOwnershipResultMessage)
+		}
+		batches[position-1] = append(batches[position-1], row)
+	}
+	routed := make([][][]Row, len(group))
+	offset := 0
+	for index, request := range group {
+		for _, batch := range request.batches {
+			if len(batches[offset]) != batch.size {
+				return nil, errors.New(invalidOwnershipResultMessage)
+			}
+			routed[index] = append(routed[index], batches[offset])
+			offset++
+		}
+	}
+	return routed, nil
 }
 
 // release stops reserving and ends the acquisition loop. A round still in flight owns the
@@ -609,6 +912,16 @@ func (lease *heartbeatConnectionLease) ready() bool {
 // watch calls onReady each time a replacement connection arrives, until this hold releases.
 func (lease *heartbeatConnectionLease) watch(onReady func()) {
 	lease.connection.watch(lease, onReady)
+}
+
+// renew sends batches on the shared connection, in one transaction with the rounds of other
+// workers on the pool.
+func (lease *heartbeatConnectionLease) renew(
+	ctx context.Context,
+	bound time.Duration,
+	batches []heartbeatBatch,
+) ([][]Row, error) {
+	return lease.connection.renew(ctx, bound, batches)
 }
 
 func (lease *heartbeatConnectionLease) run(

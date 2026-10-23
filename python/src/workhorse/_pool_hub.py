@@ -25,7 +25,7 @@ from contextlib import suppress
 from dataclasses import dataclass
 from threading import Condition, Lock, Thread
 from time import monotonic
-from typing import Any, Protocol, cast
+from typing import Any, Literal, Protocol, cast
 
 from ._compatibility import SyncRowExecutor
 from ._heartbeat_round import heartbeat_round_bound_ms
@@ -377,6 +377,96 @@ class ReservationSubscription:
         self._reservation._unsubscribe(self)
 
 
+class GroupedRound(Protocol):
+    """A heartbeat round that waits in a `HeartbeatGroup`. Its deadline does not change."""
+
+    @property
+    def deadline(self) -> float: ...
+
+
+class HeartbeatGroup:
+    """The heartbeat rounds that share one transaction on the heartbeat connection of a pool.
+
+    Each worker keeps its own heartbeat schedule, but the rounds of all workers on the pool share
+    the transactions on the heartbeat connection. A round that finds no transaction in flight
+    leads the next one. Just before the leader sends its heartbeat statement, it takes every
+    waiting round whose deadline is not earlier than its own (`join`). These rounds join the
+    transaction, and the leader gives each one its result. A round that did not join waits. When
+    the transaction ends (`finish`), the waiting round with the earliest deadline leads the next
+    one. So no round waits for more than the transaction in flight when it arrives.
+    """
+
+    def __init__(self, grace_seconds: float = 0.0) -> None:
+        self._condition = Condition()
+        self._grace = grace_seconds
+        # The rounds that wait to lead or to join a transaction, in arrival order.
+        self._waiting: list[GroupedRound] = []
+        # The rounds that a leader took into its transaction. Each waits for its result.
+        self._joined: set[GroupedRound] = set()
+        self._leader: GroupedRound | None = None
+
+    def wait(self, heartbeat_round: GroupedRound) -> Literal["lead", "joined", "expired"]:
+        """Wait until `heartbeat_round` leads a transaction or joins one.
+
+        "lead": the round must send the transaction, then call `finish`. "joined": the leader
+        delivers the result of the round. "expired": the deadline of the round passed before it
+        could lead or join, so it sent nothing.
+
+        A leader that holds its transaction past its deadline plus the grace no longer blocks the
+        others: its reservation also stops counting it as the holder of the connection.
+        """
+        with self._condition:
+            self._waiting.append(heartbeat_round)
+            try:
+                while True:
+                    if heartbeat_round in self._joined:
+                        self._joined.discard(heartbeat_round)
+                        return "joined"
+                    now = monotonic()
+                    if now >= heartbeat_round.deadline:
+                        return "expired"
+                    leader = self._leader
+                    if leader is not None and now > leader.deadline + self._grace:
+                        leader = self._leader = None
+                    if leader is None and heartbeat_round is min(
+                        self._waiting, key=lambda waiting: waiting.deadline
+                    ):
+                        self._leader = heartbeat_round
+                        return "lead"
+                    timeout = heartbeat_round.deadline - now
+                    if leader is not None:
+                        timeout = min(timeout, leader.deadline + self._grace - now)
+                    self._condition.wait(timeout)
+            finally:
+                if heartbeat_round in self._waiting:
+                    self._waiting.remove(heartbeat_round)
+                self._condition.notify_all()
+
+    def join(self, leader: GroupedRound) -> list[GroupedRound]:
+        """Take the waiting rounds whose deadline is not earlier than the deadline of `leader`.
+
+        They join the transaction of `leader`, in arrival order. The leader must deliver a result
+        to each of them.
+        """
+        with self._condition:
+            if self._leader is not leader:
+                # The leader outlived its grace, so it takes no other round.
+                return []
+            joined = [waiting for waiting in self._waiting if waiting.deadline >= leader.deadline]
+            for waiting in joined:
+                self._waiting.remove(waiting)
+                self._joined.add(waiting)
+            self._condition.notify_all()
+            return joined
+
+    def finish(self, leader: GroupedRound) -> None:
+        """End the transaction of `leader`, so the next waiting round can lead."""
+        with self._condition:
+            if self._leader is leader:
+                self._leader = None
+            self._condition.notify_all()
+
+
 @dataclass(eq=False)
 class _ReservationSubscriber:
     heartbeat_ms: int
@@ -399,6 +489,8 @@ class HeartbeatReservation:
 
     def __init__(self, acquire: HeartbeatAcquire) -> None:
         self._acquire = acquire
+        # The heartbeat rounds of the workers share the transactions on the connection.
+        self.group = HeartbeatGroup(_LEND_GRACE_SECONDS)
         # One lock guards the whole connection lifecycle: acquisition, lending, and disposal.
         self._condition = Condition()
         # Disposals that run now. While one runs, no acquisition starts, and the reservation is
