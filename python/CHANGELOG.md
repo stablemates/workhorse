@@ -33,6 +33,17 @@ dashboard host does not provide the <action> action", as in the TypeScript dashb
 read-only host keeps the message "This dashboard is read-only". The code `FORBIDDEN` and the HTTP
 status 403 do not change (SM-1705).
 
+### Admin time filters reject a naive `datetime`
+
+`Admin.list_tasks` sent `created_after` and `created_before` with `datetime.isoformat()`. So did
+`list_dead_letters` and `redrive_many` for `finished_after` and `finished_before`. If a bound was
+naive, the text had no offset, and PostgreSQL read it in the session `TimeZone`. Two sessions could
+then select different time ranges for the same filter (SM-1700).
+
+Now a naive bound raises `ValueError("timestamps must include a timezone")`, as `run_at` and
+`deadline` already do. The SDK does not call the SQL function. An aware bound goes to SQL as UTC
+text that ends in `Z`, with microseconds.
+
 ### A lost notification subscription restarts the poll backoff
 
 A worker without a live subscription waits 250 ms after an empty claim, and doubles that wait
