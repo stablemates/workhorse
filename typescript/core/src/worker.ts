@@ -105,6 +105,8 @@ export function dispatchRefillBatch(concurrency: number): number {
  * A tier change reaches a running worker within this interval.
  */
 const TIER_PROBE_INTERVAL_MS = 30_000;
+// A reporter callback that always fails writes to the console at most once in this interval.
+const REPORTER_FAILURE_REPORT_INTERVAL_MS = 60_000;
 // The longest base delay before a busy retry. The retry waits base × (1 + random), with
 // base = min(BUSY_RETRY_BASE_MS, heartbeatMs / 8).
 const BUSY_RETRY_BASE_MS = 100;
@@ -112,6 +114,14 @@ const BUSY_RETRY_BASE_MS = 100;
 // the settings statement, plus a margin for the payload, the wait for the connection, and BEGIN.
 const BUSY_RETRY_MARGIN_MS = 12;
 const BUSY_RETRY_MINIMUM_MS = MINIMUM_REMAINING_MS + BUSY_RETRY_MARGIN_MS;
+
+type ReporterName = "onRegistrationError" | "onNotificationError" | "onMaintenance";
+
+interface ReporterFailureState {
+  reportedAt: number;
+  // Failures since reportedAt that the worker did not write to the console.
+  suppressed: number;
+}
 
 /** One registered lease in the heartbeat batch. Each attempt registers its own object. */
 interface HeartbeatLease {
@@ -508,11 +518,21 @@ export interface WorkerOptions {
    * Registration is not part of the dispatch contract, so a failure must never stop a worker from
    * claiming. It must not be invisible either: a worker that cannot register disappears from every
    * operator surface while continuing to run, which is indistinguishable from being dead.
+   *
+   * If the callback throws or returns a promise that rejects, the worker writes the failure to the
+   * console and continues. It writes at most one such report for each callback in each minute.
    */
   onRegistrationError?: (error: unknown) => void;
-  /** Receives LISTEN connection failures while durable fallback polling continues. */
+  /**
+   * Receives LISTEN connection failures while durable fallback polling continues. A failure of
+   * this callback has the same isolation as a failure of `onRegistrationError`.
+   */
   onNotificationError?: (error: unknown) => void;
-  /** Receives one telemetry event for every SQL-owned maintenance phase. */
+  /**
+   * Receives one telemetry event for every SQL-owned maintenance phase. A failure of this callback
+   * has the same isolation as a failure of `onRegistrationError`, and the worker keeps the
+   * telemetry that it recorded before the call.
+   */
   onMaintenance?: (telemetry: WorkerMaintenanceTelemetry) => void;
   /** Namespaces whose enabled recurring schedules this worker should evaluate and fire. */
   scheduleNamespaces?: readonly string[];
@@ -657,6 +677,8 @@ export class Worker {
     | { activeSlots: number; draining: boolean; paused: boolean }
     | undefined;
   private readonly latestMaintenance = new Map<string, WorkerMaintenanceTelemetry>();
+  // For each reporter callback, when the worker last wrote a failure of it to the console.
+  private readonly reporterFailures = new Map<ReporterName, ReporterFailureState>();
   private stopping = false;
   private locallyPaused = false;
   private remotelyPaused = false;
@@ -1846,7 +1868,7 @@ export class Worker {
         ...this.workerQueueAttributes,
         "workhorse.worker.id": this.workerId,
       });
-      this.options.onRegistrationError?.(error);
+      this.callReporter("onRegistrationError", this.options.onRegistrationError, error);
       return;
     }
     const registrationState = { activeSlots: this.activeSlots, draining: this.draining, paused };
@@ -1961,7 +1983,45 @@ export class Worker {
     const telemetry = { ...result, loop, observedAt: new Date().toISOString() };
     this.latestMaintenance.set(`${loop}:${result.phase}`, telemetry);
     recordMaintenanceMetrics(telemetry);
-    this.options.onMaintenance?.(telemetry);
+    this.callReporter("onMaintenance", this.options.onMaintenance, telemetry);
+  }
+
+  // Call an application reporter callback so that its failure never reaches the run. A reporter
+  // observes the worker. It is not part of the dispatch contract, so a throw or a rejected promise
+  // from it must not stop claims or maintenance passes.
+  private callReporter<T>(
+    name: ReporterName,
+    reporter: ((value: T) => unknown) | undefined,
+    value: T,
+  ): void {
+    if (reporter === undefined) return;
+    try {
+      // Promise.resolve also adopts a thenable or a promise from another realm.
+      Promise.resolve(reporter(value)).catch((failure: unknown) =>
+        this.reporterFailed(name, failure),
+      );
+    } catch (failure) {
+      this.reporterFailed(name, failure);
+    }
+  }
+
+  // The console is the diagnostic path, so a failed reporter is never called again for its own
+  // failure. The interval bounds the output of a reporter that always fails.
+  private reporterFailed(name: ReporterName, failure: unknown): void {
+    const nowMs = monotonicNow();
+    const state = this.reporterFailures.get(name);
+    if (state !== undefined && nowMs - state.reportedAt < REPORTER_FAILURE_REPORT_INTERVAL_MS) {
+      state.suppressed += 1;
+      return;
+    }
+    const suppressed = state?.suppressed ?? 0;
+    this.reporterFailures.set(name, { reportedAt: nowMs, suppressed: 0 });
+    const detail = suppressed > 0 ? ` after ${suppressed} unreported failures` : "";
+    try {
+      console.error(`Workhorse worker ${name} reporter failed${detail}`, failure);
+    } catch {
+      // Inspecting the failure can throw. The diagnostic path must not become a second failure.
+    }
   }
 
   run(signal?: AbortSignal): Promise<void> {
@@ -2044,7 +2104,8 @@ export class Worker {
               this.notificationClaimDelayPending = true;
               this.wakeDispatch();
             },
-            (error) => this.options.onNotificationError?.(error),
+            (error) =>
+              this.callReporter("onNotificationError", this.options.onNotificationError, error),
           );
           if (subscription) notificationSubscriptions.push(subscription);
         }

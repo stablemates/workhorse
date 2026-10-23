@@ -333,16 +333,25 @@ describe("worker registry", () => {
     const registration = async () =>
       (await admin.listWorkers()).find((entry) => entry.workerId === workerId);
 
-    const running = worker.run();
-    await vi.waitFor(async () => expect(await registration()).toBeDefined(), stallWait);
-    await vi.waitFor(() => expect(subscribe).toHaveBeenCalledOnce(), stallWait);
-    failRegistration = true;
-    worker.stop();
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    try {
+      const running = worker.run();
+      await vi.waitFor(async () => expect(await registration()).toBeDefined(), stallWait);
+      await vi.waitFor(() => expect(subscribe).toHaveBeenCalledOnce(), stallWait);
+      failRegistration = true;
+      worker.stop();
 
-    await expect(running).rejects.toEqual(
-      new AggregateError([closeFailure, registrationFailure], "Worker shutdown failed"),
-    );
-    await expect(registration()).resolves.toBeUndefined();
+      // SM-1655: a throwing onRegistrationError is a reporter failure, not a cleanup failure.
+      await expect(running).rejects.toBe(closeFailure);
+      await expect(registration()).resolves.toBeUndefined();
+      expect(consoleError).toHaveBeenCalledOnce();
+      expect(consoleError).toHaveBeenCalledWith(
+        "Workhorse worker onRegistrationError reporter failed",
+        registrationFailure,
+      );
+    } finally {
+      consoleError.mockRestore();
+    }
   });
 
   it("applies an operator pause written to PostgreSQL by another process", async () => {
