@@ -311,8 +311,11 @@ type WorkerOptions struct {
 	// Cohorts splits the slots into fixed shares for fast-tier dispatch (ADR 0076). It takes 1
 	// through Concurrency. Zero selects the default: one cohort below concurrency 8, otherwise one
 	// per 8 slots between 2 and 8, and never more than the pool connections the worker leaves spare.
-	Cohorts             int
-	Logger              *slog.Logger
+	Cohorts int
+	Logger  *slog.Logger
+	// OnRegistrationError receives a failed registry write. The worker keeps running. If the
+	// callback panics, the worker recovers, logs the failure through Logger, and continues. It logs
+	// at most one such failure in each minute.
 	OnRegistrationError func(error)
 	// RetryDelay overrides the delay the persisted retry policy would choose, for one failed
 	// attempt. It returns nil to leave the choice to the policy, which is what a worker without
@@ -367,6 +370,7 @@ type Worker struct {
 	handlers                   map[string]Handler
 	compatibility              *CachedCompatibilityCheck
 	onRegistrationError        func(error)
+	registrationReporter       reporterFailures
 	retryDelay                 func(attempt int, task ClaimedTask) *time.Duration
 	contracts                  contractCache
 	activeSlots                atomic.Int64
@@ -1553,20 +1557,25 @@ func (worker *Worker) refreshRegistration(ctx context.Context, executor Executor
 		err = errors.New(invalidWorkerRegistrationResultMessage)
 	}
 	if err != nil {
-		if worker.onRegistrationError != nil {
-			worker.onRegistrationError(err)
-		}
+		worker.reportRegistrationError(err)
 		return
 	}
 	paused, ok := rows[0][rowPausedField].(bool)
 	if !ok {
-		if worker.onRegistrationError != nil {
-			worker.onRegistrationError(errors.New(invalidWorkerRegistrationResultMessage))
-		}
+		worker.reportRegistrationError(errors.New(invalidWorkerRegistrationResultMessage))
 		return
 	}
 	worker.remotelyPaused.Store(paused)
 	worker.registered.Store(true)
+}
+
+func (worker *Worker) reportRegistrationError(err error) {
+	if worker.onRegistrationError == nil {
+		return
+	}
+	callReporter(worker.logger, registrationReporterCallback, &worker.registrationReporter, func() {
+		worker.onRegistrationError(err)
+	})
 }
 
 func (worker *Worker) deregister(ctx context.Context, executor Executor) {

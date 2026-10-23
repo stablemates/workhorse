@@ -110,6 +110,8 @@ public final class Worker implements AutoCloseable {
 
   private static final long NEVER = Long.MIN_VALUE;
   private static final long TIER_PROBE_NANOS = TimeUnit.SECONDS.toNanos(30);
+  // A reporter callback that always fails writes to the log at most once in this interval.
+  static final long REPORTER_FAILURE_REPORT_NANOS = TimeUnit.SECONDS.toNanos(60);
   private static final int COMPLETION_BATCH_LIMIT = 100;
   private static final int MAX_RETRY_DELAY_MS = Integer.MAX_VALUE;
   private static final int CAUSE_DEPTH = 16;
@@ -165,6 +167,8 @@ public final class Worker implements AutoCloseable {
   private final @Nullable RetryDelay retryDelay;
   private final @Nullable Consumer<Throwable> onRegistrationError;
   private final @Nullable Consumer<Throwable> onNotificationError;
+  // For each reporter callback, when the worker last logged a failure of it.
+  final Map<String, ReporterFailures> reporterFailures = new ConcurrentHashMap<>();
   private final System.Logger logger;
   private final WorkerTelemetry telemetry;
   private final JsonCodec codec;
@@ -1001,9 +1005,7 @@ public final class Worker implements AutoCloseable {
                     this::notifyWake,
                     error -> {
                       listenerFailed.set(true);
-                      if (errors != null) {
-                        errors.accept(error);
-                      }
+                      callReporter("onNotificationError", errors, error);
                     });
         // The listener may wait as long as the budget has left, and the readiness check then
         // still has that time.
@@ -2281,9 +2283,7 @@ public final class Worker implements AutoCloseable {
           "workhorse.worker.registration_failed",
           "Worker registration failed",
           Map.of("workhorse.worker.queues", queueNames, "error.type", error.getClass().getName()));
-      if (onRegistrationError != null) {
-        onRegistrationError.accept(error);
-      }
+      callReporter("onRegistrationError", onRegistrationError, error);
       return;
     }
     if (rows == null) {
@@ -4305,6 +4305,69 @@ public final class Worker implements AutoCloseable {
     logger.log(level, body + " " + logged);
   }
 
+  /**
+   * Calls an application reporter callback so that its failure never reaches the run. A reporter
+   * observes the worker. It is not part of the dispatch contract, so a throw from it must not stop
+   * claims or change the result of the run.
+   */
+  private void callReporter(String name, @Nullable Consumer<Throwable> reporter, Throwable error) {
+    if (reporter == null) {
+      return;
+    }
+    try {
+      reporter.accept(error);
+    } catch (RuntimeException failure) {
+      reporterFailed(name, failure);
+    }
+  }
+
+  /**
+   * The logger is the diagnostic path, so a failed reporter is never called again for its own
+   * failure. The interval bounds the output of a reporter that always fails.
+   */
+  private void reporterFailed(String name, RuntimeException failure) {
+    long suppressed =
+        reporterFailures
+            .computeIfAbsent(name, ignored -> new ReporterFailures())
+            .admit(System.nanoTime());
+    if (suppressed < 0) {
+      return;
+    }
+    String detail = suppressed > 0 ? " after " + suppressed + " unreported failures" : "";
+    try {
+      logger.log(
+          System.Logger.Level.ERROR,
+          "Workhorse worker " + name + " reporter failed" + detail,
+          failure);
+    } catch (RuntimeException ignored) {
+      // A logger can throw. The diagnostic path must not become a second failure.
+    }
+  }
+
+  /** When the worker last logged a failure of one reporter callback. */
+  static final class ReporterFailures {
+    private boolean reported;
+    long reportedAt;
+    // Failures since reportedAt that the worker did not log.
+    private long suppressed;
+
+    /**
+     * Returns the failures that the worker did not log since the last one it logged, or -1 when the
+     * worker does not log this failure.
+     */
+    synchronized long admit(long now) {
+      if (reported && now - reportedAt < REPORTER_FAILURE_REPORT_NANOS) {
+        suppressed++;
+        return -1;
+      }
+      long unreported = suppressed;
+      reported = true;
+      reportedAt = now;
+      suppressed = 0;
+      return unreported;
+    }
+  }
+
   /** Logs the error that ended a run of {@link #start} without a stop, with its stack trace. */
   private void logFailure(Throwable error) {
     if (!logger.isLoggable(System.Logger.Level.ERROR)) {
@@ -4636,13 +4699,19 @@ public final class Worker implements AutoCloseable {
       return this;
     }
 
-    /** Receives each fleet registration failure. The worker keeps running. */
+    /**
+     * Receives each fleet registration failure. The worker keeps running. If the listener throws,
+     * the worker logs the failure and continues. It logs at most one such failure in each minute.
+     */
     public Builder onRegistrationError(Consumer<Throwable> listener) {
       this.onRegistrationError = Objects.requireNonNull(listener, "listener");
       return this;
     }
 
-    /** Receives each listener connection failure. The worker keeps polling. */
+    /**
+     * Receives each listener connection failure. The worker keeps polling. A throw from the
+     * listener has the same isolation as a throw from {@link #onRegistrationError}.
+     */
     public Builder onNotificationError(Consumer<Throwable> listener) {
       this.onNotificationError = Objects.requireNonNull(listener, "listener");
       return this;

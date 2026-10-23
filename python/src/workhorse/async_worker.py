@@ -470,7 +470,6 @@ class AsyncWorker:
         self._bridge = _AsyncExecutorBridge(executor)
         self._pool = pool
         self._driver = driver
-        self._on_notification_error = on_notification_error
         self._loop: asyncio.AbstractEventLoop | None = None
         self._running = False
         self._threads = _BridgeThreads()
@@ -492,6 +491,8 @@ class AsyncWorker:
         # takes the hub's heartbeat reservation.
         self._inner._listens = False
         self._inner._hub_source = self._core_hub
+        # on_notification_error under the reporter isolation of the core.
+        self._notification_reporter = self._inner._notification_reporter()
 
     @classmethod
     def from_psycopg(
@@ -729,7 +730,7 @@ class AsyncWorker:
             self._subscription = listener.subscribe(
                 self.queues,
                 self._inner._wake_from_notification,
-                self._on_notification_error,
+                self._notification_reporter,
                 self._inner._set_notification_listening,
             )
 

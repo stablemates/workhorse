@@ -41,6 +41,16 @@ adds.
 
 ### Fixes
 
+- **A throwing reporter listener is logged once in each interval.** Before this change, a
+  `RuntimeException` from `onRegistrationError` ended the registry thread. The exception then went
+  to the uncaught exception handler of that thread on each failed refresh. The worker discarded a
+  throw from `onNotificationError` without a record.
+
+  Now the worker catches a `RuntimeException` from either listener and continues. It logs the
+  failure through its `System.Logger` at the `ERROR` level. For each listener, it logs the first
+  failure. Then it logs at most one failure in each 60 s, with the count of the failures that it did
+  not log. It never calls the failed listener for its own failure (SM-1696).
+
 - **Workers use the database clock for maintenance.** Maintenance writes shared due times and
   retention cutoffs. Before this change, the JVM worker sent its host clock as the maintenance time.
   If that clock was two days fast, other workers skipped a routine until that future time, and

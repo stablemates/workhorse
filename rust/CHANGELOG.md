@@ -11,6 +11,16 @@ adds.
 
 ## Unreleased
 
+### A panic in on_registration_error no longer stops the worker
+
+An application can give `on_registration_error` to the worker to send an alert. Before this change,
+a panic of the hook in the first registration made `Worker::run` panic. A panic in a later
+registration ended the registry loop, so the worker stopped its registry refreshes (SM-1696).
+
+Now the worker catches the panic and continues. It logs the failure through `tracing` at the error
+level. It logs the first failure. Then it logs at most one failure in each 60 s, with the count of
+the failures that it did not log. It never calls the failed hook for its own failure.
+
 ### Workers use the database clock for maintenance
 
 Maintenance writes shared state: the due time of each routine and the retention cutoffs. Before

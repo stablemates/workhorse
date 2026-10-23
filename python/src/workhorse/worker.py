@@ -77,6 +77,7 @@ from ._pool_hub import (
     require_pool as _require_pool,
 )
 from ._protocol import serialize_child_request as _serialize_child_request
+from ._reporters import ReporterFailures as _ReporterFailures
 from ._statements import (
     PROTOCOL_VERSION as _PROTOCOL_VERSION,
     SQL_STATEMENTS as _SQL_STATEMENTS,
@@ -1480,6 +1481,11 @@ class Worker:
     ``heartbeat_ms`` defaults to a third of ``lease_ms``, at least 100, and must be less than
     ``lease_ms``. The smallest supported value is 100. The worker accepts a shorter value, but on a
     loaded host it can renew no lease. ``AsyncWorker`` takes the same option.
+
+    ``on_registration_error`` and ``on_notification_error`` are reporter callbacks. If one raises,
+    the worker logs the failure to the ``workhorse.worker`` logger and continues. It logs at most
+    one failure of each callback in each minute. The worker calls them synchronously and does not
+    await a returned awaitable.
     """
 
     def __init__(
@@ -1566,6 +1572,7 @@ class Worker:
         self._notification_listening = Event()
         self._on_notification_error = on_notification_error
         self._on_registration_error = on_registration_error
+        self._reporter_failures = _ReporterFailures()
         if not 100 <= lease_ms <= 86_400_000:
             raise ValueError("lease_ms must be between 100 and 86400000")
         self.lease_ms = lease_ms
@@ -3381,8 +3388,9 @@ class Worker:
                     "error.type": error.__class__.__name__,
                 },
             )
-            if self._on_registration_error is not None:
-                self._on_registration_error(error)
+            self._reporter_failures.call(
+                "on_registration_error", self._on_registration_error, error
+            )
             return
         with self._state_lock:
             changed = self._remotely_paused != paused
@@ -3499,9 +3507,16 @@ class Worker:
         return listener.subscribe(
             self.queues,
             self._wake_from_notification,
-            self._on_notification_error,
+            self._notification_reporter(),
             self._set_notification_listening,
         )
+
+    def _notification_reporter(self) -> Callable[[BaseException], None] | None:
+        """``on_notification_error`` under the reporter isolation, for a listener subscription."""
+        reporter = self._on_notification_error
+        if reporter is None:
+            return None
+        return lambda error: self._reporter_failures.call("on_notification_error", reporter, error)
 
     def _pool_lends_listener(self) -> bool:
         """Whether the pool can lend the shared listener a connection (SM-1585).
