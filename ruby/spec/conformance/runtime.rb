@@ -100,7 +100,7 @@ module Conformance
           [task_id])
       end
       declared = fixture.fetch("error")
-      error = (declared["declaresName"] ? PaymentDeclined : StandardError).new(declared["message"])
+      error = (declared["declaresName"] ? PaymentDeclined : StandardError).new(fixture_message(declared["message"]))
       # An error raised with a backtrace already set keeps it, so a stackless error stays stackless.
       error.set_backtrace([]) unless declared["declaresStack"]
       sent = []
@@ -123,6 +123,14 @@ module Conformance
     end
 
     private
+
+    # The message a failures fixture describes. A Ruby string holds bytes, so an unpaired surrogate
+    # becomes the byte 0xFF, which is not UTF-8.
+    def fixture_message(message)
+      return message if message.is_a?(String)
+
+      message.map { |part| part.is_a?(String) ? part.b : "\xFF".b }.join.force_encoding(Encoding::UTF_8)
+    end
 
     def failure_envelope(fixture, label, stored)
       redacted = fixture["redactErrorDetails"] == true

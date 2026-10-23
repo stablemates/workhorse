@@ -20,6 +20,18 @@ upgrade steps.
 
 ## Unreleased
 
+### A handler error with text that jsonb cannot store settles by its retry policy
+
+PostgreSQL `jsonb` cannot store a NUL character or an unpaired surrogate. Before this change, a
+handler error with such text made `fail_v1` refuse the failure envelope. The worker stopped, and the
+task stayed active until lease recovery (SM-1650).
+
+Now `errorEnvelope` replaces each NUL character and each unpaired UTF-16 surrogate with U+FFFD. It
+does this in the name, the message, and the stack. The JVM and .NET workers use the same rule. The
+retry policy then settles the task. A valid surrogate pair and all other text do not change.
+
+The `protocol/v1/failures.json` fixtures pin the rule for every SDK.
+
 ### A dense cron schedule resolves only the times near its window
 
 A schedule pass calls `cron_occurrences_v1` for each schedule. Before this change, the function

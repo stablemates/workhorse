@@ -153,6 +153,71 @@ func TestWorkerFailsAnUnstorableResultUnderItsRetryPolicyAndKeepsRunning(t *test
 	}
 }
 
+// unstorableFailure names itself with a NUL, the way a Go handler can name its error.
+type unstorableFailure struct{}
+
+func (unstorableFailure) Error() string     { return "card\x00declined \xff" }
+func (unstorableFailure) ErrorName() string { return "Payment\x00Declined" }
+
+// A handler error with a NUL used to make fail_v1 refuse the envelope, which ended Run and left the
+// task leased (SM-1650). The worker now replaces the NUL, so the retry policy settles the task.
+func TestWorkerSettlesAnUnstorableHandlerErrorByItsRetryPolicy(t *testing.T) {
+	for _, fast := range []bool{false, true} {
+		tier := "full"
+		if fast {
+			tier = "fast"
+		}
+		t.Run(tier, func(t *testing.T) {
+			queueName := "go-unstorable-failure-" + tier
+			databaseURL := createConformanceDatabase(t, testDatabaseURL(t), "unstorable-failure-"+tier)
+			pool, err := pgxpool.New(context.Background(), databaseURL)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(pool.Close)
+			ctx := context.Background()
+			if fast {
+				makeFastQueue(t, pool, queueName)
+			}
+			requests := fastRequests(queueName, "failure.unstorable", 1)
+			requests[0].Options.MaxAttempts = 2
+			requests[0].Options.RetryPolicy = map[string]any{"type": "fixed", "delayMs": 0}
+			queue := workhorse.NewQueue(workhorse.NewPGXExecutor(pool), queueName)
+			taskIDs, err := queue.EnqueueMany(ctx, requests)
+			if err != nil {
+				t.Fatal(err)
+			}
+			worker, err := workhorse.NewWorker(pool, workhorse.WorkerOptions{
+				Queue: queueName, WorkerID: queueName,
+				LeaseDuration: 5 * time.Second, PollInterval: 5 * time.Millisecond,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			worker.Handle("failure.unstorable", func(context.Context, any, *workhorse.HandlerContext) (any, error) {
+				return nil, unstorableFailure{}
+			})
+
+			runContext, stop := context.WithCancel(ctx)
+			defer stop()
+			result := make(chan error, 1)
+			go func() { result <- worker.Run(runContext) }()
+			outcomes := waitForTierOutcomes(t, pool, fast, taskIDs, result)
+			stop()
+			if err := <-result; err != nil {
+				t.Fatalf("Run returned %v", err)
+			}
+			want := tierOutcome{
+				state: "failed", attempt: 2, errorName: "Payment\uFFFDDeclined",
+				errorMessage: "card\uFFFDdeclined \uFFFD",
+			}
+			if outcome := outcomes[taskIDs[0]]; outcome != want {
+				t.Fatalf("the task settled as %+v, want %+v", outcome, want)
+			}
+		})
+	}
+}
+
 type tierOutcome struct {
 	state        string
 	attempt      int

@@ -2,13 +2,16 @@ import { readFile } from "node:fs/promises";
 import { describe, expect, it } from "vitest";
 import { errorEnvelope } from "../src/queue/claim-lease-fence.js";
 
-// `protocol/v1/failures.json` owns the shape PostgreSQL stores for a handler failure. TypeScript,
-// Python, and Go each run this table, so an operator grouping a dead letter by name reads the same
+// `protocol/v1/failures.json` owns the shape PostgreSQL stores for a handler failure. Each SDK
+// runs this table, so an operator grouping a dead letter by name reads the same
 // field in every language.
+
+/** A message part: text, or one UTF-16 code unit that no strict JSON parser reads from an escape. */
+type MessagePart = string | { unpairedSurrogate: string };
 
 interface Fixture {
   id: string;
-  error: { declaresName: boolean; declaresStack: boolean; message: string };
+  error: { declaresName: boolean; declaresStack: boolean; message: string | MessagePart[] };
   redactErrorDetails: boolean;
   envelope: Record<string, string | null>;
 }
@@ -34,11 +37,22 @@ class PaymentDeclined extends Error {
   override name = DECLARED_NAME;
 }
 
+/** The message a fixture describes. A JavaScript string holds an unpaired surrogate as it is. */
+function fixtureMessage(message: string | MessagePart[]): string {
+  if (typeof message === "string") return message;
+  return message
+    .map((part) =>
+      typeof part === "string"
+        ? part
+        : String.fromCharCode(Number.parseInt(part.unpairedSurrogate, 16)),
+    )
+    .join("");
+}
+
 /** Build the error a fixture describes, in the way TypeScript declares a name and a stack. */
 function fixtureError(fixture: Fixture): Error {
-  const error = fixture.error.declaresName
-    ? new PaymentDeclined(fixture.error.message)
-    : new Error(fixture.error.message);
+  const message = fixtureMessage(fixture.error.message);
+  const error = fixture.error.declaresName ? new PaymentDeclined(message) : new Error(message);
   // A thrown Error carries V8's stack. An error that declares none is one that was never given one.
   if (!fixture.error.declaresStack) error.stack = undefined;
   return error;
@@ -93,6 +107,26 @@ describe("failure envelope", () => {
         expect(name).not.toContain(character);
       }
     }
+  });
+
+  // PostgreSQL jsonb stores no NUL and no unpaired surrogate (SM-1650). An error can set its own
+  // name and stack, so every field is cleaned, not only the message.
+  it("replaces the text that jsonb cannot store in every field", () => {
+    const error = new Error("a\u0000b \ud800 c \u{1F600}");
+    error.name = "Payment\u0000Declined\udc00";
+    error.stack = "Error: \u0000\n    at \ud83d";
+    expect(errorEnvelope(error)).toEqual({
+      name: "Payment\ufffdDeclined\ufffd",
+      message: "a\ufffdb \ufffd c \u{1F600}",
+      stack: "Error: \ufffd\n    at \ufffd",
+    });
+    expect(errorEnvelope("thrown \u0000")).toEqual({
+      name: "NonErrorThrown",
+      message: "thrown \ufffd",
+      stack: null,
+    });
+    const envelope = JSON.stringify(errorEnvelope(error));
+    expect(envelope).not.toMatch(/\\u(?:0000|d[89a-f])/i);
   });
 
   it("records a thrown non-error with a null stack", () => {

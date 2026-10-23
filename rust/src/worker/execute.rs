@@ -593,15 +593,7 @@ impl Inner {
         task: &ClaimedTask,
         error: HandlerError,
     ) -> Result<Outcome, Error> {
-        let envelope = if task.redact_error_details {
-            json!({"name": "RedactedTaskError", "message": "Task handler failed; details redacted"})
-        } else {
-            json!({
-                "name": error.name.as_deref().unwrap_or("Error"),
-                "message": error.message,
-                "stack": error.stack,
-            })
-        };
+        let envelope = failure_envelope(&error, task.redact_error_details);
         let delay = if error.is_conflict() {
             Some(-1)
         } else {
@@ -666,5 +658,57 @@ fn holds_nul(value: &Value) -> bool {
             entries.iter().any(|(key, entry)| key.contains('\0') || holds_nul(entry))
         }
         Value::Null | Value::Bool(_) | Value::Number(_) => false,
+    }
+}
+
+/// The failure envelope of `protocol/v1/failures.json` that `fail_v1` stores for `error`.
+fn failure_envelope(error: &HandlerError, redact: bool) -> Value {
+    if redact {
+        return json!({"name": "RedactedTaskError", "message": "Task handler failed; details redacted"});
+    }
+    json!({
+        "name": storable_text(error.name.as_deref().unwrap_or("Error")),
+        "message": storable_text(&error.message),
+        "stack": error.stack.as_deref().map(storable_text),
+    })
+}
+
+/// Returns `text` with each NUL replaced by U+FFFD, as the JVM and .NET workers do. jsonb refuses
+/// NUL, and a refused envelope would end the worker instead of recording the handler's failure. A
+/// Rust string cannot hold the unpaired surrogate that those workers also replace.
+fn storable_text(text: &str) -> String {
+    text.replace('\0', "\u{FFFD}")
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::{failure_envelope, storable_text};
+    use crate::HandlerError;
+
+    #[test]
+    fn storable_text_replaces_only_nul() {
+        assert_eq!(storable_text("a\0b \u{1F600} \u{FFFD}"), "a\u{FFFD}b \u{1F600} \u{FFFD}");
+        assert_eq!(storable_text("plain"), "plain");
+    }
+
+    // A handler names its own error, so the name is cleaned too (SM-1650).
+    #[test]
+    fn failure_envelope_cleans_every_field() {
+        let mut error = HandlerError::named("Payment\0Declined", "card\0declined");
+        error.stack = Some("at\0fixture".into());
+        assert_eq!(
+            failure_envelope(&error, false),
+            json!({
+                "name": "Payment\u{FFFD}Declined",
+                "message": "card\u{FFFD}declined",
+                "stack": "at\u{FFFD}fixture",
+            })
+        );
+        assert_eq!(
+            failure_envelope(&error, true),
+            json!({"name": "RedactedTaskError", "message": "Task handler failed; details redacted"})
+        );
     }
 }

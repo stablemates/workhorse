@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Globalization;
+using System.Text;
 using System.Text.Json;
 using Npgsql;
 using Workhorse.Internal;
@@ -103,6 +104,33 @@ internal sealed class RuntimeFixtures : IAsyncDisposable
     /// <summary>The error that a failures fixture declares by name. Its type name is the envelope name.</summary>
     private sealed class PaymentDeclined(string message) : Exception(message);
 
+    /// <summary>
+    /// The message a failures fixture describes: text, or an array of text parts and unpaired
+    /// surrogates. A C# string holds an unpaired surrogate as one <see cref="char"/>.
+    /// </summary>
+    private static string FixtureMessage(object? message)
+    {
+        if (message is string text)
+        {
+            return text;
+        }
+
+        var built = new StringBuilder();
+        foreach (var part in (List<object?>)message!)
+        {
+            if (part is string piece)
+            {
+                built.Append(piece);
+                continue;
+            }
+
+            var unit = Runner.Text(Runner.Object(part, "message part")["unpairedSurrogate"]);
+            built.Append((char)int.Parse(unit, NumberStyles.HexNumber, CultureInfo.InvariantCulture));
+        }
+
+        return built.ToString();
+    }
+
     internal async Task FailureAsync(OrderedDictionary<string, object?> fixture)
     {
         var name = $"failures-{Runner.Text(fixture["id"])}";
@@ -114,7 +142,7 @@ internal sealed class RuntimeFixtures : IAsyncDisposable
         }
 
         var declared = Runner.Object(fixture.GetValueOrDefault("error"), "error");
-        var message = (string)declared["message"]!;
+        var message = FixtureMessage(declared["message"]);
         var declaresStack = declared.GetValueOrDefault("declaresStack") is true;
         bool? handedStack = null;
         var sent = new ConcurrentQueue<object?>();

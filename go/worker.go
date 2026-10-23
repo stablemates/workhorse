@@ -19,6 +19,7 @@ import (
 	"sync/atomic"
 	"time"
 	"unicode"
+	"unicode/utf8"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"go.opentelemetry.io/otel/attribute"
@@ -3776,9 +3777,32 @@ func exportedErrorTypeName(err error) string {
 func handlerErrorStack(err error) any {
 	var stacker ErrorStacker
 	if errors.As(err, &stacker) && stacker.ErrorStack() != emptyString {
-		return stacker.ErrorStack()
+		return storableText(stacker.ErrorStack())
 	}
 	return nil
+}
+
+// storableText returns text with each NUL and each byte that is not UTF-8 replaced by U+FFFD.
+//
+// PostgreSQL jsonb stores no NUL, and a refused envelope would end Run instead of recording the
+// handler's failure. A Go string holds bytes, so a byte that is not UTF-8 is the nearest form of the
+// unpaired surrogate that the JVM and .NET workers replace. encoding/json replaces such a byte in the
+// same way, so the envelope that the worker builds is the one that PostgreSQL stores.
+func storableText(text string) string {
+	if utf8.ValidString(text) && !strings.ContainsRune(text, 0) {
+		return text
+	}
+	var output strings.Builder
+	output.Grow(len(text))
+	for index := 0; index < len(text); {
+		character, size := utf8.DecodeRuneInString(text[index:])
+		if character == 0 || (character == utf8.RuneError && size == 1) {
+			character = utf8.RuneError
+		}
+		output.WriteRune(character)
+		index += size
+	}
+	return output.String()
 }
 
 // handlerErrorEnvelope renders the failure envelope PostgreSQL stores for a handler error.
@@ -3791,8 +3815,8 @@ func handlerErrorEnvelope(err error, redact bool) map[string]any {
 		return map[string]any{errorNameField: redactedHandlerErrorNameValue, errorMessageField: redactedHandlerErrorTextValue}
 	}
 	return map[string]any{
-		errorNameField:    handlerErrorName(err),
-		errorMessageField: err.Error(),
+		errorNameField:    storableText(handlerErrorName(err)),
+		errorMessageField: storableText(err.Error()),
 		errorStackField:   handlerErrorStack(err),
 	}
 }

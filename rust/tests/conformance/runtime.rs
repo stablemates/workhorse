@@ -261,12 +261,13 @@ async fn failure(database: &ScratchDatabase, fixture: &Value, envelope: &Value) 
             .map_err(sql)?;
     }
     let declared = &fixture["error"];
-    let message = text(declared, "message").to_owned();
+    let message = fixture_message(&declared["message"])?;
+    // The stack repeats the message, as a real stack does, so a stack that jsonb refuses fails here.
+    let stack = format!("PaymentDeclined: {message}\n    at fixture");
     let mut error = HandlerError::new(message);
     error.name =
         (declared["declaresName"].as_bool() == Some(true)).then(|| "PaymentDeclined".into());
-    error.stack = (declared["declaresStack"].as_bool() == Some(true))
-        .then(|| "PaymentDeclined: card declined\n    at fixture".into());
+    error.stack = (declared["declaresStack"].as_bool() == Some(true)).then_some(stack);
     let worker = worker(
         database,
         4,
@@ -318,6 +319,25 @@ async fn failure(database: &ScratchDatabase, fixture: &Value, envelope: &Value) 
         })?;
     }
     Ok(())
+}
+
+/// The message a failures fixture describes. A Rust `String` holds only UTF-8, so an unpaired
+/// surrogate becomes the text that `String::from_utf8_lossy` makes from the byte 0xFF, which is the
+/// nearest input a Rust handler can produce.
+fn fixture_message(message: &Value) -> Checked<String> {
+    if let Some(text) = message.as_str() {
+        return Ok(text.to_owned());
+    }
+    let parts = message.as_array().ok_or_else(|| format!("message {message} is not text"))?;
+    let mut built = String::new();
+    for part in parts {
+        match (part.as_str(), part["unpairedSurrogate"].as_str()) {
+            (Some(text), _) => built.push_str(text),
+            (None, Some(_)) => built.push_str(&String::from_utf8_lossy(&[0xFF])),
+            (None, None) => return Err(format!("message part {part} is not text or a surrogate")),
+        }
+    }
+    Ok(built)
 }
 
 fn options_without_queue() -> WorkerOptions {

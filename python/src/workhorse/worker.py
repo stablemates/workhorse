@@ -4401,10 +4401,30 @@ def _error_envelope(error: Exception, redact_details: bool) -> Json:
     # A wrapped durable replay conflict keeps its name. The message and stack stay the outer ones.
     conflict = _durable_replay_conflict(error)
     return {
-        "name": type(conflict if conflict is not None else error).__name__,
-        "message": str(error),
-        "stack": "".join(traceback.format_exception(error)),
+        "name": _storable_text(type(conflict if conflict is not None else error).__name__),
+        "message": _storable_text(str(error)),
+        "stack": _storable_text("".join(traceback.format_exception(error))),
     }
+
+
+_UNSTORABLE_TEXT = re.compile("[\x00\ud800-\udfff]")
+_SURROGATE_PAIR = re.compile("([\ud800-\udbff])([\udc00-\udfff])")
+
+
+def _storable_text(text: str) -> str:
+    """Return `text` with each NUL and each surrogate outside a pair replaced by U+FFFD.
+
+    PostgreSQL jsonb stores neither, and a refused envelope would stop the worker instead of
+    recording the handler's failure. The JVM and .NET workers apply the same rule. A Python string
+    holds a surrogate pair as two code points, so this joins the pair into the one character that
+    the pair encodes.
+    """
+    if _UNSTORABLE_TEXT.search(text) is None:
+        return text
+    joined = _SURROGATE_PAIR.sub(
+        lambda pair: chr(0x10000 + ((ord(pair[1]) - 0xD800) << 10) + ord(pair[2]) - 0xDC00), text
+    )
+    return _UNSTORABLE_TEXT.sub("\ufffd", joined)
 
 
 def _default_worker_id() -> str:

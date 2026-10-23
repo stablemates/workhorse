@@ -208,6 +208,56 @@ describe("unstorable handler results", () => {
     },
   );
 
+  // A handler error with a NUL or an unpaired surrogate used to make fail_v1 refuse the envelope,
+  // which stopped the worker and left the task leased (SM-1650). The worker now replaces those
+  // characters, so the retry policy settles the task.
+  it.each([false, true])(
+    "settles a handler error that jsonb cannot store by its retry policy (fast tier: %s)",
+    async (fast) => {
+      const queueName = `ts-unstorable-failure-${fast ? "fast" : "full"}`;
+      if (fast) await admin.setQueueTier(queueName, "fast", adminAudit("move to the fast tier"));
+      const id = await queue.enqueue(
+        "failure.unstorable",
+        {},
+        { queue: queueName, maxAttempts: 2, retryPolicy: { type: "fixed", delayMs: 0 } },
+      );
+      const worker = new Worker(queue, { workerId: queueName, queue: queueName, pollMs: 5 }).handle(
+        "failure.unstorable",
+        () => {
+          const error = new Error("card\u0000declined \ud800");
+          error.name = "Payment\u0000Declined";
+          throw error;
+        },
+      );
+
+      const controller = new AbortController();
+      const run = worker.run(controller.signal);
+      let settled: Outcome[] = [];
+      try {
+        await vi.waitFor(
+          async () => {
+            settled = await outcomes(fast, [id]);
+            expect(settled).toHaveLength(1);
+          },
+          { timeout: 20_000, interval: 20 },
+        );
+      } finally {
+        controller.abort();
+        worker.stop();
+      }
+      await expect(run).resolves.toBeUndefined();
+      expect(settled).toEqual([
+        {
+          task_id: id,
+          state: "failed",
+          attempt: 2,
+          name: "Payment�Declined",
+          message: "card�declined �",
+        },
+      ]);
+    },
+  );
+
   // Only a value the worker refuses becomes a task failure. A database failure during completion
   // still stops the worker, and the worker sends no fail_v1 for it.
   it("still stops the worker on an operational completion error", async () => {
