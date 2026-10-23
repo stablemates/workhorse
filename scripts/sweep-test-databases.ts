@@ -4,21 +4,21 @@
  * schema change or a new UTC day retired. Dropping a database is destructive, so this command
  * mirrors `reset-db.ts`: without `--yes` it prints the plan and changes nothing.
  */
-import { readFile } from "node:fs/promises";
 import { Pool } from "pg";
 import { localDatabaseUrl } from "../typescript/core/src/local-database.js";
-import { schemaTemplateName } from "../typescript/core/test/support/schema-template.js";
 import {
   assertSweepTarget,
   checkoutDatabaseNames,
   dropRetiredDatabases,
   formatBytes,
+  liveSchemaTemplates,
   planTestDatabaseSweep,
   readDatabaseInventory,
   registryDatabaseNames,
   type SweepContext,
   type SweepEntry,
   testFamilyRoots,
+  listWorktreeRoots,
 } from "./test-database-sweep.js";
 import { worktreeContext } from "./worktree-resources.js";
 
@@ -32,18 +32,19 @@ const protectedNames = new Set([
   ...checkoutDatabaseNames({}),
   ...(await registryDatabaseNames(context.commonGitDirectory)),
 ]);
-const schema = await readFile(new URL("../sql/schema/current.sql", import.meta.url));
 const sweepContext: SweepContext = {
   protectedNames,
   familyRoots: testFamilyRoots(protectedNames),
-  currentTemplate: schemaTemplateName(schema),
+  liveTemplates: await liveSchemaTemplates(listWorktreeRoots(context.worktreeRoot)),
 };
 
 const target = new URL(sourceUrl);
 console.log(
   `Sweep target: ${target.username}@${target.hostname}:${target.port || "5432"}, test families ${[...sweepContext.familyRoots].toSorted().join(", ")}`,
 );
-console.log(`Keeping the current schema template ${sweepContext.currentTemplate}`);
+console.log(
+  `Keeping the schema templates of the worktrees: ${[...sweepContext.liveTemplates].toSorted().join(", ")}`,
+);
 
 const admin = new Pool({ connectionString: adminUrl(sourceUrl), max: 1 });
 try {
@@ -58,7 +59,7 @@ try {
     console.log(
       `Dropped ${outcome.dropped.length} database(s), reclaiming ${formatBytes(totalBytes(outcome.dropped))}`,
     );
-    report("claimed by a session since the plan was made", outcome.skipped);
+    report("claimed by a session or a template copy since the plan was made", outcome.skipped);
   } else {
     for (const entry of plan.drop) {
       console.log(

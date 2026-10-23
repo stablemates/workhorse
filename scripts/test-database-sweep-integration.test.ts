@@ -1,3 +1,5 @@
+import { randomBytes } from "node:crypto";
+import { setTimeout as sleep } from "node:timers/promises";
 import { Client, Pool } from "pg";
 import { afterAll, beforeAll, describe, expect, inject, it } from "vitest";
 import { dropLocalDatabase } from "../typescript/core/src/drop-local-database.js";
@@ -11,6 +13,10 @@ import {
   type SweepContext,
   testFamilyRoots,
 } from "./test-database-sweep.js";
+import {
+  copySchemaTemplate,
+  schemaTemplatePrefix,
+} from "../typescript/core/test/support/schema-template.js";
 
 // Two databases shaped exactly like the scratch databases `test/support/db.ts` creates. One is
 // abandoned, as a timed-out teardown leaves it; the other stands in for a suite still running.
@@ -19,11 +25,15 @@ const sourceName = databaseName(sourceUrl);
 const leakedName = `${sourceName.slice(0, 52)}_5b0eafed01`;
 const liveName = `${sourceName.slice(0, 52)}_5b0eafed02`;
 
+// A retired template of this process only, so the test never touches a template a checkout uses.
+const templateName = `${schemaTemplatePrefix}${randomBytes(8).toString("hex")}_00000000`;
+const copyName = `${sourceName.slice(0, 52)}_5b0eafed03`;
+
 const protectedNames = new Set([...checkoutDatabaseNames(process.env), sourceName]);
 const context: SweepContext = {
   protectedNames,
   familyRoots: testFamilyRoots(protectedNames),
-  currentTemplate: "workhorse_test_template_absent_00000000",
+  liveTemplates: new Set(),
 };
 
 // The sweep drops a database in the test body. A drop waits for a checkpoint, and under load that
@@ -47,7 +57,7 @@ beforeAll(async () => {
 
 afterAll(async () => {
   if (liveSession) await liveSession.end();
-  for (const name of [leakedName, liveName]) {
+  for (const name of [leakedName, liveName, templateName, `${templateName}_building`, copyName]) {
     await dropLocalDatabase(admin, name);
   }
   await admin.end();
@@ -86,6 +96,164 @@ describe("sweeping leaked scratch databases", () => {
     expect(await databaseExists(admin, sourceName)).toBe(true);
   });
 });
+
+describe("sweeping a schema template that a harness copies", () => {
+  it(
+    "skips a template under a held shared lock and drops it after the copy",
+    dropWait,
+    async () => {
+      await createEmptyTemplate();
+      const harness = new Client({ connectionString: adminUrl(sourceUrl) });
+      await harness.connect();
+      try {
+        // The harness holds this lock from its existence check until its copy ends.
+        await harness.query("SELECT pg_advisory_lock_shared(hashtextextended($1, 0))", [
+          templateName,
+        ]);
+        const plan = planTestDatabaseSweep(await templateInventory(), context);
+        expect(plan.drop.map((entry) => entry.name)).toEqual([templateName]);
+
+        const held = await dropRetiredDatabases(admin, plan, context);
+
+        expect(held.dropped).toEqual([]);
+        expect(held.skipped.map((entry) => entry.name)).toEqual([templateName]);
+        expect(await databaseExists(admin, templateName)).toBe(true);
+
+        await harness.query("SELECT pg_advisory_unlock_shared(hashtextextended($1, 0))", [
+          templateName,
+        ]);
+        const released = await dropRetiredDatabases(admin, plan, context);
+
+        expect(released.dropped.map((entry) => entry.name)).toEqual([templateName]);
+        expect(await databaseExists(admin, templateName)).toBe(false);
+      } finally {
+        await harness.end();
+      }
+    },
+  );
+
+  it(
+    "makes a copy wait for a sweep that holds the lock, then builds the template again",
+    dropWait,
+    async () => {
+      await createEmptyTemplate();
+      const sweep = new Client({ connectionString: adminUrl(sourceUrl) });
+      const harness = new Client({ connectionString: adminUrl(sourceUrl) });
+      await sweep.connect();
+      await harness.connect();
+      try {
+        // The sweep holds the exclusive lock, as `dropRetiredDatabases` does around its drop.
+        await sweep.query("SELECT pg_try_advisory_lock(hashtextextended($1, 0))", [templateName]);
+        const installs: string[] = [];
+        const copy = copySchemaTemplate(harness, {
+          templateName,
+          targetName: copyName,
+          dropDatabase: (name) => dropLocalDatabase(harness, name),
+          async install(stagingName) {
+            installs.push(stagingName);
+            const staging = new Client({ connectionString: databaseUrl(sourceUrl, stagingName) });
+            await staging.connect();
+            try {
+              await staging.query("CREATE TABLE template_marker (id integer)");
+            } finally {
+              await staging.end();
+            }
+          },
+        });
+        await waitForAdvisoryLockWaiter(harness);
+
+        await sweep.query(`DROP DATABASE ${identifier(templateName)}`);
+        await sweep.query("SELECT pg_advisory_unlock(hashtextextended($1, 0))", [templateName]);
+        await copy;
+
+        expect(installs).toEqual([`${templateName}_building`]);
+        expect(await databaseExists(admin, templateName)).toBe(true);
+        expect(await databaseExists(admin, copyName)).toBe(true);
+        const copied = new Client({ connectionString: databaseUrl(sourceUrl, copyName) });
+        await copied.connect();
+        try {
+          const marker = await copied.query("SELECT to_regclass('template_marker') AS marker");
+          expect(marker.rows[0].marker).toBe("template_marker");
+        } finally {
+          await copied.end();
+        }
+      } finally {
+        await sweep.end();
+        await harness.end();
+      }
+    },
+  );
+});
+
+describe("sweeping while the harness copies a template", () => {
+  it("skips the template between the existence check and the copy", dropWait, async () => {
+    await createEmptyTemplate();
+    const harness = new Client({ connectionString: adminUrl(sourceUrl) });
+    await harness.connect();
+    try {
+      let reachedCopy!: () => void;
+      const copyReached = new Promise<void>((resolve) => {
+        reachedCopy = resolve;
+      });
+      let resumeCopy!: () => void;
+      const copyResumed = new Promise<void>((resolve) => {
+        resumeCopy = resolve;
+      });
+      const copy = copySchemaTemplate(harness, {
+        templateName,
+        targetName: copyName,
+        // The harness drops the target right before `CREATE DATABASE ... TEMPLATE`, after its
+        // existence check, so this pause is the moment a concurrent drop breaks the copy.
+        async dropDatabase(name) {
+          await dropLocalDatabase(harness, name);
+          if (name !== copyName) return;
+          reachedCopy();
+          await copyResumed;
+        },
+        install: () => Promise.reject(new Error("The template exists, so no build runs")),
+      });
+      await copyReached;
+
+      const plan = planTestDatabaseSweep(await templateInventory(), context);
+      const outcome = await dropRetiredDatabases(admin, plan, context);
+      resumeCopy();
+      await copy;
+
+      expect(plan.drop.map((entry) => entry.name)).toEqual([templateName]);
+      expect(outcome.skipped.map((entry) => entry.name)).toEqual([templateName]);
+      expect(await databaseExists(admin, templateName)).toBe(true);
+      expect(await databaseExists(admin, copyName)).toBe(true);
+    } finally {
+      await harness.end();
+    }
+  });
+});
+
+/** Start each template test from an empty template and no copy. */
+async function createEmptyTemplate(): Promise<void> {
+  for (const name of [copyName, `${templateName}_building`, templateName]) {
+    await dropLocalDatabase(admin, name);
+  }
+  await admin.query(`CREATE DATABASE ${identifier(templateName)}`);
+}
+
+async function templateInventory() {
+  return (await readDatabaseInventory(admin)).filter((entry) => entry.name === templateName);
+}
+
+/** Wait until the harness session waits for an advisory lock, so the order of the steps is fixed. */
+async function waitForAdvisoryLockWaiter(harness: Client): Promise<void> {
+  const pid = (harness as unknown as { processID: number }).processID;
+  for (let attempt = 0; attempt < 500; attempt++) {
+    const waiting = await admin.query(
+      "SELECT 1 FROM pg_locks WHERE pid = $1 AND locktype = 'advisory' AND NOT granted",
+      [pid],
+    );
+    if (waiting.rowCount === 1) return;
+    await sleep(10);
+  }
+  throw new Error("The harness never waited for the template lock");
+}
 
 async function databaseExists(pool: Pool, name: string): Promise<boolean> {
   const result = await pool.query("SELECT 1 FROM pg_database WHERE datname = $1", [name]);

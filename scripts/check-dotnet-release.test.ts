@@ -282,7 +282,7 @@ describe("the release consumer", () => {
       classifyTestDatabase(name, {
         protectedNames: new Set([source]),
         familyRoots: testFamilyRoots([source]),
-        currentTemplate: "unused",
+        liveTemplates: new Set(),
       }).kind,
     ).toBe("scratch");
   });

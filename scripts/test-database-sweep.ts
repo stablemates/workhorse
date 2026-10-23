@@ -4,17 +4,20 @@
  * A database-scope test file creates a scratch database named after the checkout's test database
  * plus a per-process digest, and drops it in teardown. A teardown that times out never reaches
  * that drop, and removing the worktree takes its registry entry away, so `pnpm worktree:prune`
- * never sees the leftovers. Schema templates accumulate the same way: `ensureSchemaTemplate`
+ * never sees the leftovers. Schema templates accumulate the same way: `copySchemaTemplate`
  * names one per schema digest and UTC day and keeps it on purpose, so every schema change and
- * every new day retires the previous one without removing it.
+ * every new day retires the previous one without removing it. Each worktree can be on a different
+ * schema, so the sweep keeps the template of each worktree's current schema. A harness holds the
+ * template's advisory lock while it copies, and the sweep skips a template whose lock is busy.
  *
  * Classification is positive. A database is retired only when its name matches the template shape
  * or the scratch shape of a known `_test` family; everything else is foreign and is never
  * touched. Kept free of `pg` at run time so the classification tests need no server.
  */
+import { execFileSync } from "node:child_process";
 import { readdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
-import type { Pool } from "pg";
+import type { Pool, PoolClient } from "pg";
 import { databaseErrorCode } from "../typescript/core/src/errors.js";
 import {
   assertLocalDatabasePurpose,
@@ -22,12 +25,18 @@ import {
   localDatabasePurposes,
   localDatabaseUrl,
 } from "../typescript/core/src/local-database.js";
-import { schemaTemplatePrefix } from "../typescript/core/test/support/schema-template.js";
+import {
+  schemaTemplateLockName,
+  schemaTemplateName,
+  schemaTemplatePrefix,
+} from "../typescript/core/test/support/schema-template.js";
 import { isMissing } from "./environment-file.js";
 
 /** A scratch database ends in the per-process digest its harness appended. */
 const scratchDigest = /^[0-9a-f]{10}$/;
 const databaseObjectInUseCode = "55006";
+/** `pg_database_size` of a dropped database: 42704 on PostgreSQL 18, 3D000 on older versions. */
+const droppedDatabaseCodes = new Set(["42704", "3D000"]);
 
 export type TestDatabaseKind = "scratch" | "template" | "registry" | "foreign";
 
@@ -42,8 +51,8 @@ export interface SweepContext {
   protectedNames: ReadonlySet<string>;
   /** The `<prefix>_test` root each known test database shares with its scratch databases. */
   familyRoots: ReadonlySet<string>;
-  /** The template `current.sql` hashes to today, which the next test run will reuse. */
-  currentTemplate: string;
+  /** The templates the `current.sql` of each worktree hashes to today, which its next run reuses. */
+  liveTemplates: ReadonlySet<string>;
 }
 
 export interface DatabaseInventoryEntry {
@@ -66,7 +75,7 @@ export interface SweepPlan {
 
 export interface SweepOutcome {
   dropped: SweepEntry[];
-  /** Entries a session claimed between planning and dropping. */
+  /** Entries a session or a template copy claimed between planning and dropping. */
   skipped: SweepEntry[];
 }
 
@@ -80,7 +89,7 @@ export function classifyTestDatabase(
 ): TestDatabaseClassification {
   if (context.protectedNames.has(name)) return { kind: "registry", retired: false };
   if (name.startsWith(schemaTemplatePrefix)) {
-    return { kind: "template", retired: name !== context.currentTemplate };
+    return { kind: "template", retired: !context.liveTemplates.has(name) };
   }
   if (isScratchName(name, context.familyRoots)) return { kind: "scratch", retired: true };
   return { kind: "foreign", retired: false };
@@ -131,6 +140,51 @@ export async function registryDatabaseNames(commonGitDirectory: string): Promise
 }
 
 /**
+ * The template names the `current.sql` of each worktree of the repository gives today. A worktree
+ * on a branch with a migration has a different schema digest, and its next test file copies that
+ * template. A worktree without the file, such as one on an old commit, needs no template.
+ */
+export async function liveSchemaTemplates(
+  worktreeRoots: Iterable<string>,
+  now = new Date(),
+): Promise<Set<string>> {
+  const names = new Set<string>();
+  for (const root of worktreeRoots) {
+    let schema: Buffer;
+    try {
+      schema = await readFile(join(root, "sql/schema/current.sql"));
+    } catch (error) {
+      if (isMissing(error)) continue;
+      throw error;
+    }
+    names.add(schemaTemplateName(schema, now));
+  }
+  return names;
+}
+
+/** The root of every worktree `git worktree list` reports, the primary checkout first. */
+export function listWorktreeRoots(cwd: string): string[] {
+  return parseWorktreeList(
+    execFileSync("git", ["worktree", "list", "--porcelain", "-z"], {
+      cwd,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "inherit"],
+    }),
+  );
+}
+
+/**
+ * Read the roots from `git worktree list --porcelain -z`. Each field ends in a NUL character, so a
+ * path that contains a newline stays whole.
+ */
+export function parseWorktreeList(listing: string): string[] {
+  return listing
+    .split("\0")
+    .filter((field) => field.startsWith("worktree "))
+    .map((field) => field.slice("worktree ".length));
+}
+
+/**
  * Refuse the same targets `provisionCheckoutDatabases` and `dropWorktreeDatabases` refuse: a URL
  * whose database name has lost the test-purpose marker, and a server that is not this machine.
  */
@@ -142,11 +196,19 @@ export function assertSweepTarget(databaseUrl: string): void {
   }
 }
 
-/** Read every connectable database with its size and whether a backend holds it. */
-export async function readDatabaseInventory(admin: Pool): Promise<DatabaseInventoryEntry[]> {
-  const result = await admin.query<{ name: string; size_bytes: string; in_use: boolean }>(
-    `SELECT database.datname AS name,
-            pg_database_size(database.oid)::text AS size_bytes,
+/**
+ * Read every connectable database with its size and whether a backend holds it.
+ *
+ * Other checkouts create and drop scratch databases on the same server all the time. A database
+ * can disappear between the catalog read and its size read, and PostgreSQL then fails the size
+ * read. So the size of each database is a separate query, and a database that is gone is left out.
+ */
+export async function readDatabaseInventory(
+  admin: Pick<Pool, "query">,
+): Promise<DatabaseInventoryEntry[]> {
+  const result = await admin.query<{ oid: string; name: string; in_use: boolean }>(
+    `SELECT database.oid::text AS oid,
+            database.datname AS name,
             EXISTS (
               SELECT 1 FROM pg_stat_activity AS session WHERE session.datname = database.datname
             ) AS in_use
@@ -155,11 +217,23 @@ export async function readDatabaseInventory(admin: Pool): Promise<DatabaseInvent
         AND database.datallowconn
       ORDER BY database.datname`,
   );
-  return result.rows.map((row) => ({
-    name: row.name,
-    sizeBytes: Number(row.size_bytes),
-    inUse: row.in_use,
-  }));
+  const inventory: DatabaseInventoryEntry[] = [];
+  for (const row of result.rows) {
+    let size;
+    try {
+      size = await admin.query<{ size_bytes: string | null }>(
+        "SELECT pg_database_size($1::oid)::text AS size_bytes",
+        [row.oid],
+      );
+    } catch (error) {
+      if (droppedDatabaseCodes.has(databaseErrorCode(error) ?? "")) continue;
+      throw error;
+    }
+    const sizeBytes = size.rows[0]?.size_bytes;
+    if (sizeBytes === null || sizeBytes === undefined) continue;
+    inventory.push({ name: row.name, sizeBytes: Number(sizeBytes), inUse: row.in_use });
+  }
+  return inventory;
 }
 
 /** Split an inventory into what the sweep may drop and what a live session still holds. */
@@ -180,6 +254,11 @@ export function planTestDatabaseSweep(
  * Drop the planned databases one at a time. The classification is checked again per name so a
  * caller cannot hand this function a plan the guards never saw, and a database a session claimed
  * since planning is reported rather than forced away from its owner.
+ *
+ * Before it drops a template, the sweep takes the template's advisory lock with no wait. A test
+ * harness holds that lock in shared mode from its existence check until its copy ends, so a busy
+ * lock means a copy in progress, and the sweep skips the template. One session holds the lock and
+ * runs the drop, because a session advisory lock belongs to one connection.
  */
 export async function dropRetiredDatabases(
   admin: Pool,
@@ -187,19 +266,49 @@ export async function dropRetiredDatabases(
   context: SweepContext,
 ): Promise<SweepOutcome> {
   const outcome: SweepOutcome = { dropped: [], skipped: [] };
-  for (const entry of plan.drop) {
-    if (!classifyTestDatabase(entry.name, context).retired) {
-      throw new Error(`Refusing to drop ${entry.name}: no longer classified as a retired database`);
+  const session = await admin.connect();
+  try {
+    for (const entry of plan.drop) {
+      const { kind, retired } = classifyTestDatabase(entry.name, context);
+      if (!retired) {
+        throw new Error(
+          `Refusing to drop ${entry.name}: no longer classified as a retired database`,
+        );
+      }
+      const dropped =
+        kind === "template"
+          ? await dropUnlockedTemplate(session, entry.name)
+          : await dropUnheldDatabase(session, entry.name);
+      (dropped ? outcome.dropped : outcome.skipped).push(entry);
     }
-    try {
-      await admin.query(`DROP DATABASE IF EXISTS ${identifier(entry.name)}`);
-      outcome.dropped.push(entry);
-    } catch (error) {
-      if (databaseErrorCode(error) !== databaseObjectInUseCode) throw error;
-      outcome.skipped.push(entry);
-    }
+  } finally {
+    session.release();
   }
   return outcome;
+}
+
+async function dropUnlockedTemplate(session: PoolClient, name: string): Promise<boolean> {
+  const lockName = schemaTemplateLockName(name);
+  const lock = await session.query<{ locked: boolean }>(
+    "SELECT pg_try_advisory_lock(hashtextextended($1, 0)) AS locked",
+    [lockName],
+  );
+  if (!lock.rows[0]!.locked) return false;
+  try {
+    return await dropUnheldDatabase(session, name);
+  } finally {
+    await session.query("SELECT pg_advisory_unlock(hashtextextended($1, 0))", [lockName]);
+  }
+}
+
+async function dropUnheldDatabase(session: PoolClient, name: string): Promise<boolean> {
+  try {
+    await session.query(`DROP DATABASE IF EXISTS ${identifier(name)}`);
+    return true;
+  } catch (error) {
+    if (databaseErrorCode(error) !== databaseObjectInUseCode) throw error;
+    return false;
+  }
 }
 
 export function formatBytes(bytes: number): string {

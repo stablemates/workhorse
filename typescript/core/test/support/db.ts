@@ -10,7 +10,7 @@ import {
   localDatabaseUrl,
   namedTestDatabaseUrl,
 } from "../../src/local-database.js";
-import { schemaTemplateName } from "./schema-template.js";
+import { copySchemaTemplate, schemaTemplateName } from "./schema-template.js";
 
 const schemaUrl = new URL("../../../../sql/schema/current.sql", import.meta.url);
 
@@ -60,8 +60,7 @@ export function createDatabaseTestHarness(
         return;
       }
 
-      const templateName = await ensureSchemaTemplate(sourceUrl);
-      await recreateDatabase(isolatedUrl, templateName);
+      await copyCurrentSchemaTemplate(sourceUrl, isolatedName);
       await prepareCurrentHistoryPartitions(pool);
     },
     async reset() {
@@ -225,56 +224,46 @@ function isolatedDatabaseUrl(sourceUrl: string, fileUrl: string): string {
   return url.toString();
 }
 
-async function recreateDatabase(databaseUrl: string, templateName?: string): Promise<void> {
+async function recreateDatabase(databaseUrl: string): Promise<void> {
   const name = databaseName(databaseUrl);
   const admin = adminPool(databaseUrl);
   try {
     await dropDatabaseWithAdmin(admin, name);
-    await admin.query(
-      templateName === undefined
-        ? `CREATE DATABASE ${identifier(name)}`
-        : `CREATE DATABASE ${identifier(name)} TEMPLATE ${identifier(templateName)}`,
-    );
+    await admin.query(`CREATE DATABASE ${identifier(name)}`);
   } finally {
     await admin.end();
   }
 }
 
-async function ensureSchemaTemplate(databaseUrl: string): Promise<string> {
-  const schema = await readFile(schemaUrl);
-  const templateName = schemaTemplateName(schema);
-  const stagingName = `${templateName}_building`;
+/**
+ * Copy the template of the current schema into `targetName`. One checked-out client holds the
+ * advisory locks, because a pool can close an idle client and end its session locks with it.
+ */
+async function copyCurrentSchemaTemplate(databaseUrl: string, targetName: string): Promise<void> {
+  const templateName = schemaTemplateName(await readFile(schemaUrl));
   const admin = adminPool(databaseUrl);
-  let locked = false;
-
   try {
-    await admin.query("SELECT pg_advisory_lock(hashtextextended($1, 0))", [templateName]);
-    locked = true;
-    const existing = await admin.query("SELECT 1 FROM pg_database WHERE datname = $1", [
-      templateName,
-    ]);
-    if (existing.rowCount !== 0) return templateName;
-
-    await dropDatabaseWithAdmin(admin, stagingName);
-    await admin.query(`CREATE DATABASE ${identifier(stagingName)}`);
-    const stagingUrl = new URL(databaseUrl);
-    stagingUrl.pathname = `/${stagingName}`;
-    const staging = new Pool({ connectionString: stagingUrl.toString(), max: 1 });
+    const session = await admin.connect();
     try {
-      await installSchema(staging);
-    } catch (error) {
-      await staging.end();
-      await dropDatabaseWithAdmin(admin, stagingName);
-      throw error;
+      await copySchemaTemplate(session, {
+        templateName,
+        targetName,
+        dropDatabase: (name) => dropLocalDatabase(session, name, { attempts: 40, retryMs: 25 }),
+        async install(stagingName) {
+          const stagingUrl = new URL(databaseUrl);
+          stagingUrl.pathname = `/${stagingName}`;
+          const staging = new Pool({ connectionString: stagingUrl.toString(), max: 1 });
+          try {
+            await installSchema(staging);
+          } finally {
+            await staging.end();
+          }
+        },
+      });
+    } finally {
+      session.release();
     }
-    await staging.end();
-    await admin.query(
-      `ALTER DATABASE ${identifier(stagingName)} RENAME TO ${identifier(templateName)}`,
-    );
-    return templateName;
   } finally {
-    if (locked)
-      await admin.query("SELECT pg_advisory_unlock(hashtextextended($1, 0))", [templateName]);
     await admin.end();
   }
 }
