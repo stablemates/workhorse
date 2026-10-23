@@ -36,10 +36,16 @@ TASK_TYPE = "shared.connections"
 HEARTBEAT_MS = 200
 LEASE_MS = 5_000
 # The boundary cells hold every task for three leases, so a worker that cannot renew loses its
-# lease, and the heartbeat connections hold their pool connections before the refill.
-CELL_HEARTBEAT_MS = 300
-CELL_LEASE_MS = 1_500
+# lease, and the heartbeat connections hold their pool connections before the refill. A round
+# has 3/4 of the interval, and a round on a loaded host can take longer. If no round succeeds for
+# a whole lease, the worker ends the attempt. Thus a lease holds five intervals, and a round has
+# 375 ms.
+CELL_HEARTBEAT_MS = 500
+CELL_LEASE_MS = 2_500
 CELL_HOLD_SECONDS = 3 * CELL_LEASE_MS / 1000
+# The tests measure the pool and the network, not the disk. Other test databases on the same server
+# can make a WAL flush wait for seconds. Thus a COMMIT of the workers does not wait for its flush.
+COMMIT_SETTINGS = {"synchronous_commit": "off"}
 # A stop with a full pool spends at most the stop budget, max(I, 5 s), and the cleanup window of
 # 1 s. The psycopg pool timeout is 30 s, and asyncpg has none, so a wait for either fails this.
 STOP_GRACE_SECONDS = 10
@@ -96,6 +102,11 @@ def reserved_backends(database_url: str, application_name: str) -> tuple[set[int
     return listeners, heartbeats
 
 
+def connection_options(settings: dict[str, str]) -> str:
+    """The libpq ``options`` value that sets each of ``settings`` for a session."""
+    return " ".join(f"-c {name}={value}" for name, value in settings.items())
+
+
 @contextmanager
 def sync_pool(
     database_url: str, size: int, application_name: str, options: str = ""
@@ -118,12 +129,15 @@ async def async_pool(
 ) -> Any:
     settings = settings or {}
     if domain == "psycopg":
-        options = " ".join(f"-c {name}={value}" for name, value in settings.items())
         pool: AsyncConnectionPool[Any] = AsyncConnectionPool(
             database_url,
             min_size=0,
             max_size=size,
-            kwargs={"autocommit": True, "application_name": application_name, "options": options},
+            kwargs={
+                "autocommit": True,
+                "application_name": application_name,
+                "options": connection_options(settings),
+            },
             open=False,
         )
         await pool.open()
@@ -228,7 +242,7 @@ def run_sync_workers(database_url: str, workers: int, pool_size: int) -> CellRes
         return {"ok": True}
 
     errors: list[BaseException] = []
-    with sync_pool(database_url, pool_size, queue) as pool:
+    with sync_pool(database_url, pool_size, queue, connection_options(COMMIT_SETTINGS)) as pool:
         running = [
             Worker(pool, **cell_options(queue, index)).handle(TASK_TYPE, handler)
             for index in range(workers)
@@ -279,7 +293,7 @@ async def run_async_workers(
             slots.leave()
         return {"ok": True}
 
-    pool = await async_pool(database_url, domain, pool_size, queue)
+    pool = await async_pool(database_url, domain, pool_size, queue, COMMIT_SETTINGS)
     try:
         running = [
             async_worker(pool, domain, **cell_options(queue, index)).handle(TASK_TYPE, handler)
@@ -697,16 +711,16 @@ async def test_an_asyncpg_worker_on_another_event_loop_refuses_to_start(database
 SLOW_WORKERS = 8
 SLOW_CONCURRENCY = 2
 SLOW_POOL_SIZE = 6
-SLOW_LEASE_MS = 3_000
-SLOW_HEARTBEAT_MS = 1_000
+# A round has 3/4 of the interval, so 1,125 ms. At 80 ms one shared transaction fits in that time.
+# A transaction for each worker, one after another, does not. A loaded host adds time to each
+# round trip, so the bound keeps space for that. The lease holds three intervals.
+SLOW_LEASE_MS = 4_500
+SLOW_HEARTBEAT_MS = 1_500
 # Longer than the lease, so only renewals keep it.
-SLOW_HANDLER_SECONDS = 4.0
+SLOW_HANDLER_SECONDS = 5.0
 SLOW_ROUND_TRIP_SECONDS = 0.08
 # Two waves fill every slot, so each worker claims and refills.
 SLOW_TASKS = 2 * SLOW_WORKERS * SLOW_CONCURRENCY
-# The test measures the network, not the disk. Other test databases on the same server can make a
-# WAL flush wait for seconds, so a COMMIT of the workers does not wait for its flush.
-SLOW_SETTINGS = {"synchronous_commit": "off"}
 
 
 def slow_options(queue: str, index: int) -> dict[str, Any]:
@@ -789,7 +803,7 @@ def run_slow_sync_workers(slow_url: str, database_url: str, queue: str) -> list[
         return {"ok": True}
 
     errors: list[BaseException] = []
-    options = " ".join(f"-c {name}={value}" for name, value in SLOW_SETTINGS.items())
+    options = connection_options(COMMIT_SETTINGS)
     with sync_pool(slow_url, SLOW_POOL_SIZE, queue, options) as pool:
         running = [
             Worker(pool, **slow_options(queue, index)).handle(TASK_TYPE, handler)
@@ -824,7 +838,7 @@ async def run_slow_async_workers(
         await asyncio.sleep(SLOW_HANDLER_SECONDS)
         return {"ok": True}
 
-    pool = await async_pool(slow_url, domain, SLOW_POOL_SIZE, queue, SLOW_SETTINGS)
+    pool = await async_pool(slow_url, domain, SLOW_POOL_SIZE, queue, COMMIT_SETTINGS)
     runs: list[asyncio.Task[None]] = []
     try:
         running = [

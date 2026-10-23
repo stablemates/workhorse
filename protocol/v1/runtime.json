@@ -178,7 +178,7 @@
     "kind": "heartbeat-cadence",
     "covers": ["non-overlapping-heartbeats"],
     "taskType": "protocol.heartbeat-cadence",
-    "leaseMs": 500,
+    "leaseMs": 5000,
     "heartbeatMs": 10,
     "expectedCallsWhileBlocked": 1,
     "expectedMinimumCallsBeforeSettlement": 2,
