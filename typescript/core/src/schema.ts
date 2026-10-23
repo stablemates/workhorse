@@ -552,6 +552,13 @@ export const SCHEMA_MIGRATIONS: readonly SchemaMigrationStep[] = [
     description: "copy the diagnostic details into hint",
     kind: "additive",
   },
+  {
+    fromVersion: 77,
+    toVersion: 78,
+    file: "0079-bound-the-history-partition-lock-waits.sql",
+    description: "bound the history partition lock waits",
+    kind: "additive",
+  },
 ];
 
 /**

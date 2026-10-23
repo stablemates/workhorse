@@ -378,10 +378,24 @@ Every TypeScript, Python, Go, Rust, Ruby, JVM, and .NET worker calls `run_mainte
 from its slow maintenance cycle. The function calls, in order:
 
 1. `rollup_stats_v1`
-2. `prepare_history_partitions_v1`
-3. `retain_history_v1`
-4. `prune_terminal_storage_v1`
-5. `prune_worker_registry_v1`
+2. `prune_terminal_storage_v1`
+3. `prune_worker_registry_v1`
+4. `retain_history_v1`
+5. `prepare_history_partitions_v1`
+
+Every SDK sends `run_maintenance_v1` as one statement in its own transaction. Thus PostgreSQL holds
+each lock that a routine takes until the call returns. History retention and partition preparation
+take `ACCESS EXCLUSIVE` locks on the history parents, so they run last. The call returns directly
+after the partition creation DDL. Thus statistics, terminal cleanup, and registry cleanup cannot
+extend how long those locks block lifecycle transitions. Retirement locks also last through the rest
+of retention, which runs once per local date.
+
+Schema version 78 sets this order. Before it, the order was statistics, partition preparation,
+retention, terminal cleanup, and registry cleanup. Terminal cleanup reads the
+`history_retained_before` watermark that retention records. Thus, on the pass where daily retention
+advances the watermark, terminal cleanup still uses the previous watermark. The next terminal
+cleanup pass uses the new one. Retention runs once per local date, so this is a delay of one pass
+each day.
 
 | SDK        | Offer interval option                         | Default    |
 | ---------- | --------------------------------------------- | ---------- |
@@ -407,16 +421,18 @@ default cadence:
 | Terminal storage cleanup | Every five minutes. Five seconds after a pass that ended with a full batch.                                         |
 | History retention        | Once per local date at or after `maintenance_policy.history_retention_local_time` in `maintenance_policy.timezone`. |
 
-Partition retirement stops a DDL lock attempt after 250 ms. It does not wait without a limit behind
-dispatch.
+Partition creation and partition retirement each stop a DDL lock attempt after 250 ms. They do not
+wait without a limit behind dispatch or behind a long reader, such as `pg_dump`.
+[Partition DDL locks](data-model.md#partition-ddl-locks) states the limits and the transaction
+boundaries.
 
 Failure handling:
 
 - Each maintenance function keeps its existing phase exception subtransactions. A reported phase
   error therefore does not roll back successful sibling phases.
-- An unexpected top-level failure from the first four functions still rejects the pass.
+- An unexpected top-level failure from the four routine functions still rejects the pass.
 - The orchestrator catches a failure of registry pruning separately. It reports that failure as
-  `worker_registry` after the other phases.
+  `worker_registry` after the terminal storage phases and before the retention phases.
 
 Terminal storage reports `enqueue_idempotency`, `released_dependencies`, `terminal_tasks`, then
 `task_groups`. Released-edge compaction runs first. Thus the same pass can prune a prerequisite that

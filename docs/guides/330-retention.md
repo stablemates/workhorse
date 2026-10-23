@@ -22,8 +22,9 @@ due.
 3. Some seconds later, a third worker offers the pass. No routine is due, so the pass does no work.
 
 Each worker runtime offers the same pass. PostgreSQL sets the order of the routines: statistics,
-partition preparation, history retention, terminal cleanup, and registry cleanup. Terminal cleanup
-deletes finished tasks. Each routine has its own due check and its own lock. Thus a fleet that runs
+terminal cleanup, registry cleanup, history retention, and partition preparation. Terminal cleanup
+deletes finished tasks. Retention and partition preparation run last, because they lock the history
+tables exclusively. Then the pass ends directly after them and releases those locks. Each routine has its own due check and its own lock. Thus a fleet that runs
 only Python or Go workers keeps the same evidence and partitions as a TypeScript fleet.
 
 PostgreSQL also keeps a short run history for each routine. On the dashboard, the Schedules page
@@ -37,10 +38,15 @@ that the loop runs.
 **Order inside `run_maintenance_v1`**
 
 1. `rollup_stats_v1`
-2. `prepare_history_partitions_v1`
-3. `retain_history_v1`
-4. `prune_terminal_storage_v1`
-5. `prune_worker_registry_v1`, with a one-minute maximum age
+2. `prune_terminal_storage_v1`
+3. `prune_worker_registry_v1`, with a one-minute maximum age
+4. `retain_history_v1`
+5. `prepare_history_partitions_v1`
+
+Retention and partition preparation run last, so the call commits directly after the partition DDL.
+Each lock request of that DDL waits at most 250 ms. If a lock stays busy, partition preparation
+defers the day and stays due. Its recorded run has the outcome `incomplete` and names the
+`deferredDay`. Terminal cleanup uses the retention watermark of the previous pass.
 
 **Cadences** (`maintenance_policy`)
 
@@ -71,7 +77,7 @@ total affected rows, and the ordered phase results. Slow routines record every e
 `tick_v1` records only executions that return a phase error or change at least one task. It samples
 successful task-changing executions at most once per minute.
 
-More detail: [Data model: `maintenance_policy` and `maintenance_state`](../architecture/data-model.md#maintenance_policy-and-maintenance_state).
+More detail: [Data model: `maintenance_policy` and `maintenance_state`](../architecture/data-model.md#maintenance_policy-and-maintenance_state) and [Data model: Partition DDL locks](../architecture/data-model.md#partition-ddl-locks).
 
 </details>
 
@@ -370,7 +376,9 @@ Queue health shows a slow cleanup in steps: first the backlog record, then a bac
 retention lag. Usually, a shorter window is a better fix than a larger batch.
 
 Queue health also counts the rows in the default partitions. A default partition holds rows when no
-daily partition exists for them. Thus you can see when partition preparation is late.
+daily partition exists for them. Thus you can see when partition preparation is late. If a long
+reader, such as `pg_dump`, holds a history table, partition preparation waits only for a short time.
+Then it defers the day, and a later pass creates it.
 
 <details>
 <summary>Reference: retention health</summary>

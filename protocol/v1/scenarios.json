@@ -2340,7 +2340,7 @@
             {
               "value": {
                 "promotionLagMs": 10000,
-                "schemaVersion": 77,
+                "schemaVersion": 78,
                 "terminalCleanupBacklogMs": 21600000
               }
             }
@@ -2688,18 +2688,6 @@
               "phase": "stat_retention"
             },
             {
-              "phase": "history_partitions"
-            },
-            {
-              "phase": "event_retention"
-            },
-            {
-              "phase": "attempt_retention"
-            },
-            {
-              "phase": "schedule_occurrences"
-            },
-            {
               "phase": "enqueue_idempotency"
             },
             {
@@ -2713,6 +2701,18 @@
             },
             {
               "phase": "worker_registry"
+            },
+            {
+              "phase": "event_retention"
+            },
+            {
+              "phase": "attempt_retention"
+            },
+            {
+              "phase": "schedule_occurrences"
+            },
+            {
+              "phase": "history_partitions"
             }
           ]
         }
