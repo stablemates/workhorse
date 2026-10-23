@@ -1,3 +1,4 @@
+using System.Runtime.ExceptionServices;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
@@ -52,19 +53,36 @@ internal sealed class WorkerService(
         await base.StartAsync(cancellationToken).ConfigureAwait(false);
     }
 
+    /// <summary>
+    /// A test seam. The service awaits it after <see cref="Worker.RunAsync"/> ends and before it
+    /// records the outcome, so a test can hold the service at that point.
+    /// </summary>
+    internal Func<Task>? AfterRun { get; set; }
+
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         var worker = _worker ?? throw new InvalidOperationException("The hosted worker did not start");
+        ExceptionDispatchInfo? failure = null;
         try
         {
             await worker.RunAsync(stoppingToken).ConfigureAwait(false);
         }
         catch (Exception error)
         {
-            state.Faulted(error);
-            HostingLog.WorkerFailed(logger, error);
+            failure = ExceptionDispatchInfo.Capture(error);
+        }
+
+        if (AfterRun is { } afterRun)
+        {
+            await afterRun().ConfigureAwait(false);
+        }
+
+        if (failure is not null)
+        {
+            state.Faulted(failure.SourceException);
+            HostingLog.WorkerFailed(logger, failure.SourceException);
             Environment.ExitCode = 1;
-            throw;
+            failure.Throw();
         }
 
         if (!stoppingToken.IsCancellationRequested)
@@ -86,6 +104,15 @@ internal sealed class WorkerService(
         if (_worker is { } worker)
         {
             await worker.DisposeAsync().ConfigureAwait(false);
+        }
+
+        // The worker's disposal returns when the run ends, before ExecuteAsync records the outcome
+        // on another thread. Waiting for ExecuteAsync makes the phase, the log events, and the exit
+        // code final before the disposal returns (SM-1731). ExecuteAsync already logged a failure,
+        // so the disposal does not throw it.
+        if (ExecuteTask is { } execution)
+        {
+            await execution.ConfigureAwait(ConfigureAwaitOptions.SuppressThrowing);
         }
     }
 

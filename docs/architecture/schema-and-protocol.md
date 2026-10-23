@@ -3893,6 +3893,11 @@ that sum. The default 30 second timeout is above the default 25.25 seconds.
 The default `BackgroundServiceExceptionBehavior.StopHost` then stops the host, and the process exits
 with a failure status.
 
+If the application disposes the host without `StopAsync`, the hosted worker drains as a requested
+stop. The disposal first waits for `Worker.DisposeAsync`, and then for `ExecuteAsync`. So the phase
+that the health check reads, the log events, and `Environment.ExitCode` are final when the disposal
+returns. The disposal does not throw the run's error again, because `ExecuteAsync` already logged it.
+
 The `workhorse` health check opens a new connection and runs the compatibility query on it. It
 reports the failure status of its registration, `Unhealthy` by default, in these cases:
 

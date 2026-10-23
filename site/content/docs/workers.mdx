@@ -1097,6 +1097,8 @@ When the stopping token of `Worker.RunAsync` is cancelled, the worker acts in th
 - `Worker.DisposeAsync` stops the worker and waits for the drain.
 - If `RunAsync` throws in a host, the hosted worker logs the error and sets `Environment.ExitCode`
   to 1.
+- If the application disposes the host without a stop, the hosted worker drains as a requested
+  stop. The disposal returns after the hosted worker records its outcome and its exit code.
 
 More detail: [Schema and SQL protocol: .NET running and stopping](https://github.com/stablemates/workhorse/blob/main/docs/architecture/schema-and-protocol.md#net-running-and-stopping), [Schema and SQL protocol: .NET hosting](https://github.com/stablemates/workhorse/blob/main/docs/architecture/schema-and-protocol.md#net-hosting), and [Schema and SQL protocol: Shutdown grace period](https://github.com/stablemates/workhorse/blob/main/docs/architecture/schema-and-protocol.md#shutdown-grace-period).
 
