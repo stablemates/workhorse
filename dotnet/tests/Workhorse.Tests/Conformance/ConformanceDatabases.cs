@@ -13,13 +13,16 @@ namespace Workhorse.Tests.Conformance;
 /// <remarks>
 /// The compatibility fixtures rewrite the version tables, the request fixtures rename functions, and
 /// the runtime fixtures replace functions. So the lane uses databases of its own, and the other test
-/// classes keep the shared scratch database.
+/// classes keep the shared scratch database. A test that needs the only worker of a database also
+/// creates one here (SM-1738).
 /// </remarks>
 internal sealed class ConformanceDatabases(ScratchDatabase scratch)
 {
     /// <summary>A new database for <paramref name="purpose"/>, with the schema installed.</summary>
     internal async Task<ConformanceDatabase> CreateAsync(string purpose, Action<NpgsqlConnectionStringBuilder>? configure = null)
     {
+        // A run without a database skips here, before the URL is read.
+        _ = scratch.DataSource;
         var source = new Uri(Environment.GetEnvironmentVariable("DATABASE_URL_TEST")!).AbsolutePath.TrimStart('/');
         var seed = Encoding.UTF8.GetBytes(string.Create(CultureInfo.InvariantCulture, $"dotnet:{purpose}:{Environment.ProcessId}"));
         var name = $"{source[..Math.Min(source.Length, 43)]}_dotnet_{Convert.ToHexStringLower(SHA256.HashData(seed))[..10]}";
