@@ -49,6 +49,20 @@ class ScheduleEvaluationQueue extends Queue {
   }
 }
 
+// The sync sets the durable position of a new definition to 1 microsecond before the start of the
+// current second. A pass at the next whole second fires exactly one occurrence of an every-second
+// schedule. Second boundaries during the test do not change that result.
+async function firstOccurrenceAfterSync(namespace: string): Promise<Date> {
+  const position = await pool.query<{ occurrence_at: Date }>(
+    `SELECT DISTINCT date_trunc('second', last_evaluated_at) + interval '1 second' AS occurrence_at
+       FROM workhorse.schedule_definition
+      WHERE namespace = $1`,
+    [namespace],
+  );
+  expect(position.rows).toHaveLength(1);
+  return position.rows[0]!.occurrence_at;
+}
+
 function orderedScheduleEvaluationQueues(
   firstEvaluationAt: Date,
   secondEvaluationAt: Date,
@@ -412,7 +426,7 @@ describe("cron schedules", () => {
         task: { type: "cron-tick", payload: { source: "worker" } },
       },
     ]);
-    const occurrenceAt = new Date(Math.floor(Date.now() / 1_000) * 1_000);
+    const occurrenceAt = await firstOccurrenceAfterSync("integration");
     const [firstQueue, secondQueue] = orderedScheduleEvaluationQueues(occurrenceAt, occurrenceAt);
     const first = new Worker(firstQueue, {
       workerId: "scheduler-a",
@@ -975,7 +989,7 @@ describe("cron schedules", () => {
         task: { type: "cron-adjacent", payload: null },
       },
     ]);
-    const firstOccurrenceAt = new Date(Math.floor(Date.now() / 1_000) * 1_000);
+    const firstOccurrenceAt = await firstOccurrenceAfterSync("adjacent");
     const secondOccurrenceAt = new Date(firstOccurrenceAt.getTime() + 1_000);
     const [firstQueue, secondQueue] = orderedScheduleEvaluationQueues(
       firstOccurrenceAt,
@@ -1021,12 +1035,16 @@ describe("cron schedules", () => {
         task: { type: "cron-b", payload: null, queue: "schedule-b" },
       },
     ]);
-    const first = new Worker(queue, {
+    // Each pass evaluates at the first second after its own namespace position, so a second
+    // boundary during the test cannot add an occurrence.
+    const occurrenceA = await firstOccurrenceAfterSync("integration-a");
+    const occurrenceB = await firstOccurrenceAfterSync("integration-b");
+    const first = new Worker(new ScheduleEvaluationQueue(pool, occurrenceA), {
       workerId: "scheduler-namespace-a",
       queue: "schedule-a",
       scheduleNamespaces: ["integration-a"],
     }).handle("cron-a", () => null);
-    const second = new Worker(queue, {
+    const second = new Worker(new ScheduleEvaluationQueue(pool, occurrenceB), {
       workerId: "scheduler-namespace-b",
       queue: "schedule-b",
       scheduleNamespaces: ["integration-b"],
@@ -1035,11 +1053,14 @@ describe("cron schedules", () => {
     expect(await Promise.all([first.runOnce(), second.runOnce()])).toEqual([true, true]);
     expect(
       (
-        await pool.query<{ namespace: string }>(
-          "SELECT namespace FROM workhorse.schedule_occurrence ORDER BY namespace",
+        await pool.query<{ namespace: string; occurrence_at: Date }>(
+          "SELECT namespace, occurrence_at FROM workhorse.schedule_occurrence ORDER BY namespace",
         )
       ).rows,
-    ).toEqual([{ namespace: "integration-a" }, { namespace: "integration-b" }]);
+    ).toEqual([
+      { namespace: "integration-a", occurrence_at: occurrenceA },
+      { namespace: "integration-b", occurrence_at: occurrenceB },
+    ]);
   });
 
   it("uses the cross-runtime offset for hashed cron fields", async () => {
