@@ -118,6 +118,9 @@ module Stablemates
           @stop.set
         end
 
+        # Whether the attempt stopped renewing because its handler finished.
+        def released? = @released.true?
+
         # Stops renewing and waits for the watchdog. Only the first call acts.
         def release
           return unless @released.make_true
@@ -1540,7 +1543,7 @@ module Stablemates
         end
         return if finish_suspended(task, ownership, arbiter)
 
-        complete(task, encoded, arbiter)
+        complete(task, ownership, encoded, arbiter)
       end
 
       # Runs a handler inside the Rails executor when Rails is loaded, so code reloading and Active
@@ -1579,7 +1582,7 @@ module Stablemates
         end
       end
 
-      def complete(task, encoded, arbiter)
+      def complete(task, ownership, encoded, arbiter)
         accepted = Telemetry.span("workhorse.complete", Telemetry.task_span_attributes(task)) do |span|
           accepted = if fast_task?(task)
             complete_fast_task(task, encoded)
@@ -1595,14 +1598,32 @@ module Stablemates
           end
           accepted
         end
-        unless accepted
-          return arbiter.submit(:cancelled) if acknowledge_cancel(task)
+        return reconcile_rejected_completion(task, ownership, arbiter) unless accepted
 
-          arbiter.submit(:lease_expired)
-          raise LeaseLostError.new(task.id, "complete")
-        end
         Telemetry.add("workhorse.tasks.completed", 1, Telemetry.task_metric_attributes(task))
         arbiter.submit(:completed)
+      end
+
+      # Settles the boundary that made PostgreSQL refuse this attempt's completion. A completion
+      # refuses a requested cancellation, a due deadline, or a due attempt timeout without writing
+      # it. Renewal stops when the handler returns, so the attempt settles them here under its own
+      # fence and does not leave the task to recovery. Only a lost lease raises LeaseLostError.
+      #
+      # A heartbeat round that read the membership before the release can still be settling the
+      # attempt. The reconciliation waits for it on the settlement lock, and finishes with its
+      # outcome if it decided the attempt. A round that takes the lock after the release changes
+      # nothing. The heartbeat thread delivers statuses inline, so the lock is not held during the
+      # statements here.
+      def reconcile_rejected_completion(task, ownership, arbiter)
+        decided = ownership.settlement.synchronize { !arbiter.outcome.nil? }
+        return if decided && finish_lifecycle(task, arbiter)
+
+        outcome = outcome_for_status(expire_owned(task, Telemetry.current_context), ["not_due"], "complete")
+        return arbiter.submit(:cancelled) if outcome == :cancelled && acknowledge_cancel(task)
+        return arbiter.submit(outcome) if %i[deadline_exceeded attempt_timeout].include?(outcome)
+
+        arbiter.submit(:lease_expired)
+        raise LeaseLostError.new(task.id, "complete")
       end
 
       # Registers the attempt with the heartbeat and starts its lease watchdog. The watchdog's
@@ -1620,6 +1641,9 @@ module Stablemates
           renew: ->(sent_at) { ownership.renew(sent_at) || lose_lease(ownership, arbiter, cancellation) },
           settle: lambda do |status|
             ownership.settlement.synchronize do
+              # After the release, the final write settles the attempt.
+              next if ownership.released?
+
               if %w[deadline_exceeded timeout_exceeded].include?(status)
                 settle_expiration(task, arbiter, cancellation, parent)
               else
@@ -1679,6 +1703,14 @@ module Stablemates
       end
 
       def settle_expiration(task, arbiter, cancellation, parent)
+        status = expire_owned(task, parent)
+        deliver_status(task, status, arbiter, cancellation) unless status == "not_due"
+        status
+      end
+
+      # Asks PostgreSQL to settle a due deadline or attempt timeout under the attempt's fence, and
+      # records the retry and the log line for a settled one. Returns the expiration status.
+      def expire_owned(task, parent)
         row = fenced_row(SqlCatalogue::EXPIRE_OWNED_TELEMETRY_V1, task)
         status = row["status"]
         return status if status == "not_due"
@@ -1691,7 +1723,6 @@ module Stablemates
         end
         log(:info, "workhorse.task.ownership_expired", "Owned task lease expired",
           Telemetry.task_span_attributes(task).merge("workhorse.expiration.status" => status))
-        deliver_status(task, status, arbiter, cancellation)
         status
       end
 

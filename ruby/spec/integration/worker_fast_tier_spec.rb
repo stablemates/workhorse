@@ -59,6 +59,24 @@ RSpec.describe "Worker on the fast tier against PostgreSQL" do
     @connection.exec_params(outcomes_sql, [PG::TextEncoder::Array.new.encode(task_ids)]).values
   end
 
+  # SM-1649: the handler moves a boundary into the past in PostgreSQL and returns at once, so the
+  # fast-tier completion meets a due boundary. The attempt settles it before the run returns.
+  [["deadline_at", "deadline_exceeded"], ["attempt_timeout_at", "timeout"]].each do |column, outcome|
+    it "settles a #{column} that comes due before the fast-tier completion as #{outcome}" do
+      make_fast
+      task_id = queue.enqueue("late", {}, max_attempts: 1, deadline: Time.now + 3600, execution_timeout: 3600).task_id
+      output = StringIO.new
+      worker(lease: 30, heartbeat: 10, logger: Logger.new(output)).handle("late") {
+        @connection.exec_params("UPDATE workhorse.fast_task_runtime SET #{column} = clock_timestamp() - interval '1 second'
+          WHERE task_id = $1", [task_id])
+        {"late" => true}
+      }.run_once
+
+      expect(outcomes([task_id]).map { |row| row[1] }).to eq(["failed"])
+      expect(output.string).to include(%("workhorse.handler.outcome":"#{outcome}"))
+    end
+  end
+
   it "runs fast-tier tasks and records one fast_task_outcome row for each" do
     make_fast
     succeeding = Array.new(12) { |index| queue.enqueue("fast", {"index" => index}).task_id }

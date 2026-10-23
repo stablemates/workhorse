@@ -176,4 +176,81 @@ RSpec.describe W::Worker do
       expect([arbiter.outcome, cancellation.reason, ownership.stop.set?]).to eq([nil, nil, false])
     end
   end
+  # SM-1649: a heartbeat round that read the membership before the release can settle the attempt
+  # while PostgreSQL refuses its completion. The reconciliation waits for that settlement, and a
+  # round after the release changes nothing. The heartbeat thread delivers statuses inline, so the
+  # reconciliation must not hold the lock while it waits for PostgreSQL.
+  describe "a refused completion" do
+    ownership_class = described_class.const_get(:Ownership)
+    let(:task) do
+      W::ClaimedTask.new(
+        id: "00000000-0000-4000-8000-000000000002", queue: "default", type: "t", priority: 0, payload: {},
+        contract_version: nil, result_max_bytes: nil, redact_error_details: false, trace_context: nil,
+        attempt: 1, max_attempts: 1, retry_policy: nil, deadline_at: nil, execution_timeout_ms: nil,
+        attempt_timeout_at: nil, fence_token: 7, lease_expires_at: nil
+      )
+    end
+    let(:arbiter) { W::Arbiter.new }
+    let(:ownership) { ownership_class.new(Process.clock_gettime(Process::CLOCK_MONOTONIC), 30.0) }
+    let(:expirations) { [] }
+    let(:locked_during_statements) { [] }
+    let(:pool) do
+      answers = expirations
+      locked = locked_during_statements
+      settlement = ownership.settlement
+      pool_class.new do |sql, _params|
+        next [] unless sql == W::SqlCatalogue::EXPIRE_OWNED_TELEMETRY_V1
+
+        locked << settlement.locked?
+        [{"status" => answers.shift || "stale", "retry_state" => nil}]
+      end
+    end
+
+    define_method(:expiries) { pool.statements.count { |sql, _| sql == W::SqlCatalogue::EXPIRE_OWNED_TELEMETRY_V1 } }
+
+    def reconcile(subject) = subject.send(:reconcile_rejected_completion, task, ownership, arbiter)
+
+    it "settles a due boundary under the fence without holding the settlement lock" do
+      expirations << "deadline_exceeded"
+      reconcile(worker)
+      expect([arbiter.outcome, expiries, locked_during_statements]).to eq([:deadline_exceeded, 1, [false]])
+    end
+
+    it "ignores a heartbeat status that arrives after the release" do
+      subject = worker
+      members = []
+      heartbeat = Object.new
+      heartbeat.define_singleton_method(:register) { |member| (members << member) && -> {} }
+      subject.instance_variable_set(:@heartbeat, heartbeat)
+      allow(subject).to receive(:watch_expiration)
+      subject.send(:own, task, ownership, arbiter, W::CancellationToken.new)
+      ownership.release
+      members.first.settle.call("deadline_exceeded")
+      members.first.settle.call("stale")
+      expect([arbiter.outcome, expiries]).to eq([nil, 0])
+
+      expirations << "timeout_exceeded"
+      reconcile(subject)
+      expect([arbiter.outcome, expiries]).to eq([:attempt_timeout, 1])
+    end
+
+    it "waits for a heartbeat settlement that holds the lock and finishes with its outcome" do
+      subject = worker
+      ownership.settlement.lock
+      reconciliation = Thread.new { reconcile(subject) }
+      Thread.pass until reconciliation.status == "sleep" || !reconciliation.alive?
+      expect(expiries).to eq(0)
+      arbiter.submit(:attempt_timeout)
+      ownership.settlement.unlock
+      reconciliation.join
+
+      expect([arbiter.outcome, expiries]).to eq([:attempt_timeout, 0])
+    end
+
+    it "raises the lost lease of a heartbeat settlement that decided first" do
+      arbiter.submit(:lease_expired)
+      expect { reconcile(worker) }.to raise_error(W::LeaseLostError)
+      expect(expiries).to eq(0)
+    end
+  end
 end

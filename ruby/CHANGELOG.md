@@ -5,6 +5,16 @@ other SDKs carry, because every tag names one release of all of them.
 
 ## Unreleased
 
+### A refused completion settles a due deadline or attempt timeout
+
+A handler can return just before its deadline or attempt timeout, and the completion write can then
+arrive after that boundary. PostgreSQL refuses the completion. Before this change, the worker only
+tried to acknowledge a cancellation, then recorded `lease_expired` and left the task to lease
+recovery. The task then settled up to one lease later with the wrong outcome. Now
+`reconcile_rejected_completion` calls `expire_owned_telemetry_v1` under the attempt's fence before
+the completion path returns. The attempt then ends with the outcome of the due boundary. A
+cancellation request and a lost lease keep their own outcomes (SM-1649).
+
 ### Workers on one pool renew their leases in one transaction
 
 On the dedicated heartbeat connection, a round sent one transaction for each worker and each 100

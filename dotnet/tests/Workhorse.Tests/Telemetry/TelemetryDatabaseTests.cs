@@ -119,6 +119,52 @@ public sealed class TelemetryDatabaseTests(ScratchDatabase database) : IDisposab
     }
 
     /// <summary>
+    /// SM-1649: the handler changes the task in PostgreSQL and returns at once. The worker's own
+    /// timers still wait for the claimed boundaries and the heartbeat does not run in between, so
+    /// PostgreSQL refuses the completion write. A due deadline or attempt timeout settles under the
+    /// attempt's own fence before the run returns. A cancellation and a lost lease keep their own
+    /// outcomes.
+    /// </summary>
+    [Theory]
+    [InlineData("UPDATE workhorse.task_runtime SET deadline_at = clock_timestamp() - interval '1 second' WHERE task_id = $1", "failed", "deadline_exceeded", "deadline_exceeded")]
+    [InlineData("UPDATE workhorse.task_runtime SET attempt_timeout_at = clock_timestamp() - interval '1 second' WHERE task_id = $1", "failed", "timeout_exceeded", "timeout")]
+    [InlineData("SELECT status FROM workhorse.cancel_v1($1, 'test', 'no longer needed')", "canceled", "canceled", "canceled")]
+    [InlineData("UPDATE workhorse.task_runtime SET fence_token = fence_token + 1, deadline_at = clock_timestamp() - interval '1 second' WHERE task_id = $1", "active", "stale", "lease_lost")]
+    public async Task ARefusedCompletionWriteSettlesItsCause(string change, string state, string spanOutcome, string metricOutcome)
+    {
+        var taskId = await EnqueueAsync("email.send", new EnqueueOptions
+        {
+            MaxAttempts = 1,
+            Deadline = DateTimeOffset.UtcNow.AddHours(1),
+            ExecutionTimeout = TimeSpan.FromHours(1),
+        });
+        await using var worker = new Worker(database.DataSource, Options(_queue, options =>
+        {
+            options.PollingOnly = true;
+            options.PollInterval = TimeSpan.FromMilliseconds(10);
+            options.DisableRegistry = true;
+            options.Lease = TimeSpan.FromSeconds(60);
+            options.Heartbeat = TimeSpan.FromSeconds(30);
+        }));
+        worker.Handle<object?, object?>("email.send", async (_, _) =>
+        {
+            await ScalarAsync(database.DataSource, change, taskId);
+            return new { late = true };
+        });
+        Assert.True(await worker.RunOnceAsync(Token));
+
+        // The attempt settled its cause before the run returned, without a maintenance pass.
+        var row = await TaskAsync(database.DataSource, taskId);
+        Assert.Equal(state, row.Text("state"));
+        Assert.Null(row.Json("result"));
+        var complete = Single(Names.SpanComplete, span => Equals(span.GetTagItem(Names.TaskId), taskId.ToString()));
+        Assert.Equal(false, complete.GetTagItem(Names.CompleteAccepted));
+        Assert.Equal(spanOutcome, Handler(taskId).GetTagItem(Names.HandlerOutcome));
+        AssertPoints("workhorse.handler.executions", [Tags((Names.QueueName, _queue), (Names.TaskType, "email.send"), (Names.HandlerOutcome, metricOutcome))]);
+        _recorder.AssertGoverned(Surface);
+    }
+
+    /// <summary>
     /// A durable wait ends the first attempt, and a later attempt resumes the handler. Both handler
     /// spans continue the trace of the enqueue, because the trace context stays on the task.
     /// </summary>

@@ -16,8 +16,10 @@ import io.opentelemetry.sdk.metrics.data.PointData;
 import io.opentelemetry.sdk.trace.data.SpanData;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
+import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.time.Duration;
+import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -26,6 +28,8 @@ import java.util.function.BooleanSupplier;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 import run.workhorse.internal.Sql;
 import run.workhorse.internal.SqlCatalogue;
 import run.workhorse.internal.telemetry.Names;
@@ -182,6 +186,90 @@ class WorkerTelemetryDatabaseTest {
         points(metric("workhorse.tasks.failed")));
     assertEquals(List.of(task), points(metric("workhorse.tasks.retried")));
     recording.assertGoverned(Telemetry.TRACE_ATTRIBUTE_COUNT_LIMIT);
+  }
+
+  /**
+   * SM-1649: the handler changes the task in PostgreSQL and returns at once. The worker's own
+   * timers still wait for the claimed boundaries and the heartbeat does not run in between, so
+   * PostgreSQL refuses the completion write. A due deadline or attempt timeout settles under the
+   * attempt's own fence before {@code runOnce} returns. A cancellation and a lost lease keep their
+   * own outcomes.
+   */
+  @ParameterizedTest
+  @CsvSource(
+      delimiter = '|',
+      value = {
+        "UPDATE workhorse.task_runtime SET deadline_at = clock_timestamp() - interval '1 second'"
+            + " WHERE task_id = ?"
+            + "|failed|deadline_exceeded|deadline_exceeded",
+        "UPDATE workhorse.task_runtime SET attempt_timeout_at = clock_timestamp()"
+            + " - interval '1 second' WHERE task_id = ?"
+            + "|failed|timeout_exceeded|timeout",
+        "SELECT status FROM workhorse.cancel_v1(?, 'test', 'no longer needed')"
+            + "|canceled|canceled|canceled",
+        "UPDATE workhorse.task_runtime SET fence_token = fence_token + 1,"
+            + " deadline_at = clock_timestamp() - interval '1 second' WHERE task_id = ?"
+            + "|active|stale|lease_lost"
+      })
+  void settlesTheCauseOfARefusedCompletionWrite(
+      String change, String state, String spanOutcome, String metricOutcome) throws SQLException {
+    UUID taskId =
+        queue
+            .enqueue(
+                "email.send",
+                Map.of(),
+                EnqueueOptions.builder()
+                    .queue(queueName)
+                    .maxAttempts(1)
+                    .deadline(Instant.now().plus(Duration.ofHours(1)))
+                    .executionTimeout(Duration.ofHours(1))
+                    .build())
+            .taskId();
+    Worker subject =
+        worker()
+            .lease(Duration.ofSeconds(60))
+            .heartbeat(Duration.ofSeconds(30))
+            .handle(
+                "email.send",
+                Object.class,
+                (context, payload) -> {
+                  try (Connection connection = ScratchDatabase.connect();
+                      PreparedStatement statement = connection.prepareStatement(change)) {
+                    statement.setObject(1, taskId);
+                    statement.execute();
+                  }
+                  return Map.of("late", true);
+                })
+            .build();
+    assertTrue(subject.runOnce());
+
+    try (Connection connection = ScratchDatabase.connect();
+        PreparedStatement statement =
+            connection.prepareStatement(
+                "SELECT COALESCE(outcome.state, runtime.state) AS state, outcome.result"
+                    + " FROM workhorse.task task"
+                    + " LEFT JOIN workhorse.task_runtime runtime ON runtime.task_id = task.id"
+                    + " LEFT JOIN workhorse.task_outcome outcome ON outcome.task_id = task.id"
+                    + " WHERE task.id = ?")) {
+      statement.setObject(1, taskId);
+      try (ResultSet row = statement.executeQuery()) {
+        assertTrue(row.next());
+        assertEquals(state, row.getString("state"), "the state when runOnce returned");
+        assertEquals(null, row.getString("result"));
+      }
+    }
+    SpanData complete = recording.spans(Names.SPAN_COMPLETE).get(0);
+    assertEquals(
+        false, complete.getAttributes().get(AttributeKey.booleanKey(Names.COMPLETE_ACCEPTED)));
+    SpanData handler = recording.spans(Names.SPAN_HANDLER).get(0);
+    assertEquals(spanOutcome, text(handler, Names.HANDLER_OUTCOME));
+    Attributes task =
+        Attributes.builder()
+            .put(Names.QUEUE_NAME, queueName)
+            .put(Names.TASK_TYPE, "email.send")
+            .put(Names.HANDLER_OUTCOME, metricOutcome)
+            .build();
+    assertEquals(List.of(task), points(metric("workhorse.handler.executions")));
   }
 
   @Test

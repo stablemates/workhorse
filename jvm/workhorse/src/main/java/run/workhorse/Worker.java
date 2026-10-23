@@ -2832,10 +2832,10 @@ public final class Worker implements AutoCloseable {
     if (finishSuspended(claimed, ownership, arbiter)) {
       return;
     }
-    complete(task, encoded, arbiter);
+    complete(task, ownership, encoded, arbiter);
   }
 
-  private void complete(Active active, String encoded, Arbiter arbiter) {
+  private void complete(Active active, Ownership ownership, String encoded, Arbiter arbiter) {
     ClaimedTask task = active.claimed.task;
     boolean accepted =
         telemetry.complete(
@@ -2858,12 +2858,40 @@ public final class Worker implements AutoCloseable {
         "workhorse.task.completion_rejected",
         "Stale task completion rejected",
         attributes);
-    if (acknowledgeCancel(task)) {
-      arbiter.submit(Outcome.CANCELLED);
-      return;
+    reconcileRejectedCompletion(task, ownership, arbiter);
+  }
+
+  /**
+   * Settles the boundary that made PostgreSQL refuse this attempt's completion. A completion
+   * refuses a requested cancellation, a due deadline, or a due attempt timeout without writing it.
+   * Renewal stops when the handler returns, so the attempt settles them here under its own fence
+   * and does not leave the task to recovery. Only a lost lease throws {@link LeaseLostException}.
+   *
+   * <p>A heartbeat round that read the membership before the release can still settle the attempt.
+   * Both take the settlement lock, so the first one decides. If the round decided first, the
+   * attempt finishes with its outcome and writes nothing more.
+   */
+  // Package-private for RefusedCompletionTest.
+  void reconcileRejectedCompletion(ClaimedTask task, Ownership ownership, Arbiter arbiter) {
+    ownership.settlement.lock();
+    try {
+      if (arbiter.outcome() != null && finishOwnership(task, ownership, arbiter)) {
+        return;
+      }
+      Outcome outcome = outcomeFor(expireOwned(task), Set.of("not_due"), "complete");
+      if (outcome == Outcome.CANCELLED && acknowledgeCancel(task)) {
+        arbiter.submit(Outcome.CANCELLED);
+        return;
+      }
+      if (outcome == Outcome.DEADLINE_EXCEEDED || outcome == Outcome.ATTEMPT_TIMEOUT) {
+        arbiter.submit(outcome);
+        return;
+      }
+      arbiter.submit(Outcome.LEASE_EXPIRED);
+      throw new LeaseLostException(task.id(), "complete");
+    } finally {
+      ownership.settlement.unlock();
     }
-    arbiter.submit(Outcome.LEASE_EXPIRED);
-    throw new LeaseLostException(task.id(), "complete");
   }
 
   /** Hands an owned task back to PostgreSQL without charging the attempt. */
@@ -3869,6 +3897,18 @@ public final class Worker implements AutoCloseable {
 
   private @Nullable String settleExpiration(
       ClaimedTask task, Arbiter arbiter, TaskCancellation cancellation) {
+    String status = expireOwned(task);
+    if (!"not_due".equals(status)) {
+      deliverStatus(status, arbiter, cancellation);
+    }
+    return status;
+  }
+
+  /**
+   * Asks PostgreSQL to settle a due deadline or attempt timeout under the attempt's fence, and
+   * records the telemetry and the log line for a settled one. Returns the expiration status.
+   */
+  private @Nullable String expireOwned(ClaimedTask task) {
     Row row = fencedRow(SqlCatalogue.EXPIRE_OWNED_TELEMETRY_V1, task);
     String status = row.text("status");
     if ("not_due".equals(status)) {
@@ -3882,7 +3922,6 @@ public final class Worker implements AutoCloseable {
         "workhorse.task.ownership_expired",
         "Owned task lease expired",
         attributes);
-    deliverStatus(status, arbiter, cancellation);
     return status;
   }
 
