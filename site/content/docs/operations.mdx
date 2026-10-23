@@ -752,15 +752,17 @@ when the service starts, and call `stop()` when the service stops.
 <details>
 <summary>Reference: WorkhorseMetricsObserver</summary>
 
-| Member       | Behavior                                                         |
-| ------------ | ---------------------------------------------------------------- |
-| `intervalMs` | Default 10,000. A safe integer from 1,000 through 2,147,483,647. |
-| `start()`    | Collects immediately, then repeats on an unreferenced timer.     |
-| `stop()`     | Clears the timer.                                                |
-| `collect()`  | One serialized collection.                                       |
-| `onError`    | Receives interval failures.                                      |
+| Member                  | Behavior                                                              |
+| ----------------------- | --------------------------------------------------------------------- |
+| `intervalMs`            | Default 10,000. A safe integer from 1,000 through 2,147,483,647.      |
+| `maintenanceIntervalMs` | Default 60,000. A safe integer from 1,000 through 2,147,483,647.      |
+| `start()`               | Collects immediately, then repeats each query group on its own timer. |
+| `stop()`                | Clears both timers.                                                   |
+| `collect()`             | One collection of both query groups. Each group is serialized.        |
+| `onError`               | Receives interval failures.                                           |
 
-Each collection runs two read-only queries at once.
+Each queue collection runs two read-only queries at once. The maintenance query runs on its own
+interval.
 
 **Queue gauges:** `workhorse.tasks.count` by queue and state, `workhorse.queue.oldest_ready.age`,
 `workhorse.queue.paused`, `workhorse.lease.expired`, `workhorse.deadline.overdue`, and
@@ -809,6 +811,65 @@ provider registers. Provider cleanup detaches it, and a later provider attaches 
 `workhorse.queue.depth` and the observer's `workhorse.tasks.count` measure the same live work.
 
 More detail: [Telemetry: Baseline queue metrics](https://github.com/stablemates/workhorse/blob/main/docs/architecture/telemetry.md#baseline-queue-metrics).
+
+</details>
+
+### Alert when a maintenance routine stops
+
+Workers run maintenance routines in the background. These routines recover expired leases, prepare
+history partitions, apply [retention](/docs/maintenance), and remove terminal tasks. The
+`workhorse.maintenance.*` counters record only when a routine runs. If every worker stops, the
+counters record nothing, and an alert on them cannot fire. Thus the observer also records when each
+routine last completed and how far retention lags.
+
+**Example.** Your deployment turns off the retention of task identities. Later, every worker stops.
+
+1. The terminal cleanup routine completes for the last time.
+2. No routine runs after that, and no routine records an error.
+3. At each collection, the observer reads the same completion time, so
+   `workhorse.maintenance.routine.age` for `terminal_storage` grows.
+4. When the next cleanup is due and does not occur, `workhorse.maintenance.routine.overdue` starts
+   to grow, and your alert fires.
+5. All this time, `workhorse.retention.enabled` shows that `taskIdentity` is disabled, and its lag
+   does not grow. The retention alert does not fire for this category.
+
+Alert on `workhorse.maintenance.routine.overdue` to find a routine that stops. Compare
+`workhorse.retention.lag` with `workhorse.retention.lag_budget` only for a category that
+`workhorse.retention.enabled` shows as enabled. A category with no retention is a policy choice, not a fault.
+Alert also when the age of the tick has no data or stops changing, because then the observer
+does not collect.
+
+<details>
+<summary>Reference: maintenance gauges</summary>
+
+The observer runs this query every `maintenanceIntervalMs`, which defaults to 60,000. It records a
+fixed 28 series for each database.
+
+| Gauge                                   | Unit | Attribute                       |
+| --------------------------------------- | ---- | ------------------------------- |
+| `workhorse.maintenance.routine.age`     | `s`  | `workhorse.maintenance.routine` |
+| `workhorse.maintenance.routine.overdue` | `s`  | `workhorse.maintenance.routine` |
+| `workhorse.retention.lag`               | `s`  | `workhorse.retention.category`  |
+| `workhorse.retention.lag_budget`        | `s`  | `workhorse.retention.category`  |
+| `workhorse.retention.enabled`           | `1`  | `workhorse.retention.category`  |
+
+**Routines:** `tick`, `history_partitions`, `history_retention`, `terminal_storage`, and
+`statistics_rollup`. The overdue time is 0 when a routine is on time, and for a rollup that
+`statistics_rollup_interval_ms = 0` turns off.
+
+**Categories:** `taskIdentity`, `terminalOutcome`, `taskEvents`, `attemptHistory`,
+`scheduleOccurrences`, and `statistics`. A disabled category records a lag of 0.
+
+| Condition                   | Rule                                                                                                |
+| --------------------------- | --------------------------------------------------------------------------------------------------- |
+| A routine is overdue        | `workhorse.maintenance.routine.overdue > 600`                                                       |
+| A category lags its budget  | `workhorse.retention.lag > workhorse.retention.lag_budget` while `workhorse.retention.enabled == 1` |
+| A category has no retention | `workhorse.retention.enabled == 0`, as information                                                  |
+| The observer stopped        | `workhorse.maintenance.routine.age` for `tick` has no data, or does not change, for 5 minutes       |
+
+More detail: [Telemetry: Metrics observer](https://github.com/stablemates/workhorse/blob/main/docs/architecture/telemetry.md#metrics-observer),
+[Telemetry: Maintenance query](https://github.com/stablemates/workhorse/blob/main/docs/architecture/telemetry.md#maintenance-query),
+[Telemetry: Maintenance alerts](https://github.com/stablemates/workhorse/blob/main/docs/architecture/telemetry.md#maintenance-alerts).
 
 </details>
 

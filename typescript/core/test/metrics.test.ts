@@ -79,6 +79,14 @@ const workerQueueDefaults: WorkerQueueApi = {
   pruneWorkerRegistry: unsupportedWorkerQueueOperation,
 };
 
+function routine(name: string) {
+  return { "workhorse.maintenance.routine": name };
+}
+
+function category(name: string) {
+  return { "workhorse.retention.category": name };
+}
+
 function workerQueue(overrides: Partial<WorkerQueueApi>): WorkerQueueApi {
   return { ...workerQueueDefaults, ...overrides };
 }
@@ -608,24 +616,89 @@ describe("Workhorse OpenTelemetry metrics", () => {
   it("runs the database observer on an explicit interval and stops cleanly", async () => {
     vi.useFakeTimers();
     let queries = 0;
+    let maintenanceQueries = 0;
     const database: Queryable = {
-      query: async <R extends QueryResultRow>() => {
-        queries += 1;
+      query: async <R extends QueryResultRow>(text: string) => {
+        if (text.includes("queue_health_v1")) maintenanceQueries += 1;
+        else queries += 1;
         return queryResult([] as R[]);
       },
     };
     const { WorkhorseMetricsObserver } = await import("../src/metrics-observer.js");
-    const observer = new WorkhorseMetricsObserver(database, { intervalMs: 1_000 });
+    const observer = new WorkhorseMetricsObserver(database, {
+      intervalMs: 1_000,
+      maintenanceIntervalMs: 2_000,
+    });
 
     observer.start();
     await vi.advanceTimersByTimeAsync(0);
-    expect(queries).toBe(2);
+    expect([queries, maintenanceQueries]).toEqual([2, 1]);
     await vi.advanceTimersByTimeAsync(1_000);
-    expect(queries).toBe(4);
+    expect([queries, maintenanceQueries]).toEqual([4, 1]);
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect([queries, maintenanceQueries]).toEqual([6, 2]);
     observer.stop();
-    await vi.advanceTimersByTimeAsync(1_000);
-    expect(queries).toBe(4);
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect([queries, maintenanceQueries]).toEqual([6, 2]);
     vi.useRealTimers();
+  });
+
+  it("records maintenance freshness and retention lag in seconds", async () => {
+    const database: Queryable = {
+      query: async <R extends QueryResultRow>(text: string) =>
+        queryResult(
+          (text.includes("queue_health_v1")
+            ? [
+                {
+                  kind: "routine",
+                  name: "terminal_storage",
+                  age_ms: "905000",
+                  overdue_ms: 605_000,
+                },
+                { kind: "routine", name: "statistics_rollup", age_ms: 3_000, overdue_ms: "0" },
+                {
+                  kind: "retention",
+                  name: "taskEvents",
+                  lag_ms: "7200000",
+                  budget_ms: "172800000",
+                  enabled: true,
+                },
+                {
+                  kind: "retention",
+                  name: "statistics",
+                  lag_ms: "0",
+                  budget_ms: "21600000",
+                  enabled: false,
+                },
+              ]
+            : []) as unknown as R[],
+        ),
+    };
+    const { WorkhorseMetricsObserver } = await import("../src/metrics-observer.js");
+
+    await new WorkhorseMetricsObserver(database).collect();
+    await collect();
+
+    expect(metric("workhorse.maintenance.routine.age")?.dataPoints).toEqual([
+      expect.objectContaining({ attributes: routine("terminal_storage"), value: 905 }),
+      expect.objectContaining({ attributes: routine("statistics_rollup"), value: 3 }),
+    ]);
+    expect(metric("workhorse.maintenance.routine.overdue")?.dataPoints).toEqual([
+      expect.objectContaining({ attributes: routine("terminal_storage"), value: 605 }),
+      expect.objectContaining({ attributes: routine("statistics_rollup"), value: 0 }),
+    ]);
+    expect(metric("workhorse.retention.lag")?.dataPoints).toEqual([
+      expect.objectContaining({ attributes: category("taskEvents"), value: 7_200 }),
+      expect.objectContaining({ attributes: category("statistics"), value: 0 }),
+    ]);
+    expect(metric("workhorse.retention.lag_budget")?.dataPoints).toEqual([
+      expect.objectContaining({ attributes: category("taskEvents"), value: 172_800 }),
+      expect.objectContaining({ attributes: category("statistics"), value: 21_600 }),
+    ]);
+    expect(metric("workhorse.retention.enabled")?.dataPoints).toEqual([
+      expect.objectContaining({ attributes: category("taskEvents"), value: 1 }),
+      expect.objectContaining({ attributes: category("statistics"), value: 0 }),
+    ]);
   });
 
   it("rejects an observer interval Node's timer would run every millisecond", async () => {
@@ -640,6 +713,14 @@ describe("Workhorse OpenTelemetry metrics", () => {
     ).toThrow(RangeError);
     expect(
       () => new WorkhorseMetricsObserver(database, { intervalMs: MAX_TIMER_DELAY_MS }),
+    ).not.toThrow();
+    for (const maintenanceIntervalMs of [999, 1_500.5, MAX_TIMER_DELAY_MS + 1]) {
+      expect(() => new WorkhorseMetricsObserver(database, { maintenanceIntervalMs })).toThrow(
+        /maintenanceIntervalMs/,
+      );
+    }
+    expect(
+      () => new WorkhorseMetricsObserver(database, { maintenanceIntervalMs: MAX_TIMER_DELAY_MS }),
     ).not.toThrow();
   });
 
@@ -753,7 +834,17 @@ describe("Workhorse OpenTelemetry metrics", () => {
       expect(unhandled).not.toHaveBeenCalled();
       expect(
         consoleError.mock.calls.map(([, reason]) => (reason as Error).message).toSorted(),
-      ).toEqual(["reporter rejected", "reporter rejected in another realm", "reporter threw"]);
+      ).toEqual(
+        // Each observer reports the failure of its queue query and of its maintenance query.
+        [
+          "reporter rejected",
+          "reporter rejected",
+          "reporter rejected in another realm",
+          "reporter rejected in another realm",
+          "reporter threw",
+          "reporter threw",
+        ],
+      );
     } finally {
       throwing.stop();
       rejecting.stop();

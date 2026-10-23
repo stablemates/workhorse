@@ -54,6 +54,29 @@ const workerActive = lazyGauge("workhorse.worker.active", {
   description: "Occupied worker execution slots",
   unit: "{slot}",
 });
+// ADR 0110 names the maintenance freshness and retention gauges. The observer computes each value
+// from stored completion times and the database clock, so a routine that stops running still
+// gives a value that grows.
+const routineAge = lazyGauge("workhorse.maintenance.routine.age", {
+  description: "Time since a maintenance routine last completed",
+  unit: "s",
+});
+const routineOverdue = lazyGauge("workhorse.maintenance.routine.overdue", {
+  description: "Time past a maintenance routine's next due time",
+  unit: "s",
+});
+const retentionLag = lazyGauge("workhorse.retention.lag", {
+  description: "Retention lag of a history category",
+  unit: "s",
+});
+const retentionLagBudget = lazyGauge("workhorse.retention.lag_budget", {
+  description: "Queue health budget for the retention lag of a history category",
+  unit: "s",
+});
+const retentionEnabled = lazyGauge("workhorse.retention.enabled", {
+  description: "Whether a history category has a retention window",
+  unit: "1",
+});
 
 type Gauge = ReturnType<typeof lazyGauge>;
 type GaugeAttributes = Record<string, string>;
@@ -89,39 +112,92 @@ type WorkerObservationRow = {
   active_slots: string;
 };
 
+type MaintenanceObservationRow =
+  | {
+      kind: "routine";
+      name: string;
+      age_ms: number | string;
+      overdue_ms: number | string;
+    }
+  | {
+      kind: "retention";
+      name: string;
+      lag_ms: number | string;
+      budget_ms: number | string;
+      enabled: boolean;
+    };
+
 /**
  * Explicit PostgreSQL observer for queue-wide state that cannot be counted safely by every worker.
  * Run one observer per database so multiple service instances do not duplicate the same gauges.
  */
 export class WorkhorseMetricsObserver {
   private readonly intervalMs: number;
+  private readonly maintenanceIntervalMs: number;
   private readonly onError: (error: unknown) => void;
   private timer: NodeJS.Timeout | undefined;
+  private maintenanceTimer: NodeJS.Timeout | undefined;
   private pending: Promise<void> | undefined;
+  private pendingMaintenance: Promise<void> | undefined;
   // Series the last collection recorded. A synchronous gauge exports its last value until something
   // records again, so a series PostgreSQL stops returning is recorded once more as zero.
   private recorded: GaugeSeries = new Map();
 
   constructor(
     private readonly database: Queryable,
-    options: { intervalMs?: number; onError?: (error: unknown) => void } = {},
+    options: {
+      intervalMs?: number;
+      maintenanceIntervalMs?: number;
+      onError?: (error: unknown) => void;
+    } = {},
   ) {
     this.intervalMs = options.intervalMs ?? 10_000;
+    // The maintenance query runs queue_health_v1, which scans the retention boundaries, so it has
+    // its own slower interval.
+    this.maintenanceIntervalMs = options.maintenanceIntervalMs ?? 60_000;
     this.onError =
       options.onError ?? ((error) => console.error("Workhorse metrics collection failed", error));
     // Node runs a setInterval delay above the timer maximum every millisecond.
-    if (
-      !Number.isSafeInteger(this.intervalMs) ||
-      this.intervalMs < 1_000 ||
-      this.intervalMs > MAX_TIMER_DELAY_MS
-    ) {
-      throw new RangeError(
-        `metrics intervalMs must be a safe integer between 1000 and ${MAX_TIMER_DELAY_MS}`,
-      );
+    for (const [name, value] of [
+      ["intervalMs", this.intervalMs],
+      ["maintenanceIntervalMs", this.maintenanceIntervalMs],
+    ] as const) {
+      if (!Number.isSafeInteger(value) || value < 1_000 || value > MAX_TIMER_DELAY_MS) {
+        throw new RangeError(
+          `metrics ${name} must be a safe integer between 1000 and ${MAX_TIMER_DELAY_MS}`,
+        );
+      }
     }
   }
 
-  collect(): Promise<void> {
+  async collect(): Promise<void> {
+    await Promise.all([this.collectQueues(), this.collectMaintenance()]);
+  }
+
+  start(): this {
+    if (this.timer) return this;
+    const collectQueues = () =>
+      void this.collectQueues().catch((error: unknown) => this.report(error));
+    const collectMaintenance = () =>
+      void this.collectMaintenance().catch((error: unknown) => this.report(error));
+    collectQueues();
+    collectMaintenance();
+    this.timer = setInterval(collectQueues, this.intervalMs);
+    this.timer.unref();
+    this.maintenanceTimer = setInterval(collectMaintenance, this.maintenanceIntervalMs);
+    this.maintenanceTimer.unref();
+    return this;
+  }
+
+  stop(): void {
+    if (!this.timer) return;
+    clearInterval(this.timer);
+    clearInterval(this.maintenanceTimer);
+    this.timer = undefined;
+    this.maintenanceTimer = undefined;
+  }
+
+  private collectQueues(): Promise<void> {
     if (this.pending) return this.pending;
     const pending = this.collectOnce().finally(() => {
       if (this.pending === pending) this.pending = undefined;
@@ -130,19 +206,35 @@ export class WorkhorseMetricsObserver {
     return pending;
   }
 
-  start(): this {
-    if (this.timer) return this;
-    const collect = () => void this.collect().catch((error: unknown) => this.report(error));
-    collect();
-    this.timer = setInterval(collect, this.intervalMs);
-    this.timer.unref();
-    return this;
+  private collectMaintenance(): Promise<void> {
+    if (this.pendingMaintenance) return this.pendingMaintenance;
+    const pending = this.collectMaintenanceOnce().finally(() => {
+      if (this.pendingMaintenance === pending) this.pendingMaintenance = undefined;
+    });
+    this.pendingMaintenance = pending;
+    return pending;
   }
 
-  stop(): void {
-    if (!this.timer) return;
-    clearInterval(this.timer);
-    this.timer = undefined;
+  // The statement returns a fixed set of routines and retention categories, so no series
+  // disappears and the gauges need no zero record.
+  private async collectMaintenanceOnce(): Promise<void> {
+    const rejectedSince = new Date(Date.now() - EXTERNAL_WAIT_REJECTION_WINDOW_MS);
+    const { rows } = await this.database.query<MaintenanceObservationRow>(
+      SQL_STATEMENTS["maintenance_observer"],
+      [rejectedSince],
+    );
+    for (const row of rows) {
+      if (row.kind === "routine") {
+        const attributes = { "workhorse.maintenance.routine": row.name };
+        routineAge.record(Number(row.age_ms) / 1_000, attributes);
+        routineOverdue.record(Number(row.overdue_ms) / 1_000, attributes);
+      } else if (row.kind === "retention") {
+        const attributes = { "workhorse.retention.category": row.name };
+        retentionLag.record(Number(row.lag_ms) / 1_000, attributes);
+        retentionLagBudget.record(Number(row.budget_ms) / 1_000, attributes);
+        retentionEnabled.record(row.enabled ? 1 : 0, attributes);
+      }
+    }
   }
 
   // The timer calls the reporter without awaiting it. A reporter that throws or rejects would

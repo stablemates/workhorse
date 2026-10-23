@@ -185,16 +185,17 @@ instruments.
 ### Metrics observer
 
 `WorkhorseMetricsObserver` is in `typescript/core/src/metrics-observer.ts`. It records its gauges
-through the same lazy lifecycle. It does two concurrent read-only queries every `intervalMs`.
-`intervalMs` defaults to 10,000 and must be a safe integer from 1,000 through 2,147,483,647. If a
-timer delay is longer than that maximum, Node runs the timer every millisecond.
+through the same lazy lifecycle. It does two concurrent read-only queries every `intervalMs`, and
+one read-only maintenance query every `maintenanceIntervalMs`. `intervalMs` defaults to 10,000, and
+`maintenanceIntervalMs` defaults to 60,000. Each must be a safe integer from 1,000 through
+2,147,483,647. If a timer delay is longer than that maximum, Node runs the timer every millisecond.
 
-| Member      | Behavior                                                     |
-| ----------- | ------------------------------------------------------------ |
-| `start()`   | Collects immediately, then repeats on an unreferenced timer. |
-| `stop()`    | Clears the timer.                                            |
-| `collect()` | Provides a serialized one-shot collection.                   |
-| `onError`   | Receives interval failures.                                  |
+| Member      | Behavior                                                                           |
+| ----------- | ---------------------------------------------------------------------------------- |
+| `start()`   | Collects immediately, then repeats each query group on its own unreferenced timer. |
+| `stop()`    | Clears both timers.                                                                |
+| `collect()` | Provides a one-shot collection of both query groups. Each group is serialized.     |
+| `onError`   | Receives interval failures of each query group.                                    |
 
 Applications must run at most one observer per database. Every observer sees the same global
 PostgreSQL state.
@@ -242,6 +243,95 @@ The observer then records `workhorse.worker.count`, `workhorse.worker.capacity`,
 Capacity and active-slot observations repeat a multi-queue worker under every queue it can serve.
 They describe eligible shared capacity per queue. Do not sum them across queue labels.
 
+#### Maintenance query
+
+`protocol/v1/manifest.json` pins the maintenance query as `maintenance_observer`. It calls
+`queue_health_v1` for the retention lags and budgets. That call scans the retention boundaries, so
+the query runs on the slower `maintenanceIntervalMs`. The query also reads `maintenance_state`,
+`maintenance_policy`, `retention_policy`, `task_stat_state`, `worker_registry`, and
+`schema_version`. [ADR 0110](../decisions/0110-export-maintenance-freshness-and-retention-lag-from-the-metrics-observer.md)
+records the names.
+
+| Gauge                                   | Unit | Attribute                       | Value                                                        |
+| --------------------------------------- | ---- | ------------------------------- | ------------------------------------------------------------ |
+| `workhorse.maintenance.routine.age`     | `s`  | `workhorse.maintenance.routine` | Time since the last completion                               |
+| `workhorse.maintenance.routine.overdue` | `s`  | `workhorse.maintenance.routine` | Time past the next due time; 0 when on time or turned off    |
+| `workhorse.retention.lag`               | `s`  | `workhorse.retention.category`  | The lag in the `queue_health_v1` snapshot; 0 when it is null |
+| `workhorse.retention.lag_budget`        | `s`  | `workhorse.retention.category`  | The queue health budget of the category                      |
+| `workhorse.retention.enabled`           | `1`  | `workhorse.retention.category`  | 1 when the retention days are set, 0 when they are null      |
+
+Each routine has a completion time and a due time. Each due time follows the gate of the routine's
+scheduler.
+
+| `workhorse.maintenance.routine` | Completion time                       | Next due time                                                                                                                                                                          |
+| ------------------------------- | ------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `tick`                          | `maintenance_state.last_completed_at` | Completion plus the shortest `maintenance_interval_ms` of the live workers                                                                                                             |
+| `history_partitions`            | `maintenance_state.last_completed_at` | Completion plus `partition_preparation_interval_ms`                                                                                                                                    |
+| `history_retention`             | `maintenance_state.last_completed_at` | The first second of the local date after `last_completed_local_date` whose local time in `timezone` reaches `history_retention_local_time`                                             |
+| `terminal_storage`              | `maintenance_state.last_completed_at` | Completion plus `terminal_cleanup_interval_ms`. With `terminal_cleanup_backlog_since` set, completion plus the shorter of that interval and `terminal_cleanup_follow_up_delay_ms_v1()` |
+| `statistics_rollup`             | `task_stat_state.last_run_at`         | Completion plus `statistics_rollup_interval_ms`; none when the interval is 0                                                                                                           |
+
+- A routine that never completed counts its age from the earliest `schema_version.installed_at`.
+  The tick, `history_partitions`, `terminal_storage`, and an active rollup are due at that time,
+  because each of their scheduler gates runs a routine with no completion at once.
+  `history_retention` keeps its local-time gate, as the next items state. A rollup that
+  `statistics_rollup_interval_ms = 0` turns off has no due time.
+- A worker is live while its `last_heartbeat_at` is within its own `lease_ms`, as
+  `worker_client_protocols_v1` counts it. If no worker is live, the tick is due at its completion.
+  Its overdue time then equals its age.
+- A time zone change can skip or repeat the retention time. The query then takes the first second
+  that the gate accepts: the end of a skipped period, or the first of two repeated times. It
+  searches the 26 hours before the local retention time, first by minute and then by second.
+- Only a change to the retention or maintenance policy clears `last_completed_local_date`. The
+  daily pass is then due from the latest of the last completion, the installation, and the
+  `updated_at` of `maintenance_policy` and `retention_policy`. It is due at that time if the local
+  time is at or after the retention time, or else at the retention time of that local date. A
+  policy sync also moves `updated_at`, so after a sync the overdue time can count from a later time.
+- A failed tick does not move `last_completed_at`. A routine that stops, or that fails at each run,
+  thus gives a value that grows at each collection with no new phase error.
+
+Each category has a lag and a budget:
+
+| `workhorse.retention.category` | Lag field                    | Budget                       | Retention days                       |
+| ------------------------------ | ---------------------------- | ---------------------------- | ------------------------------------ |
+| `taskIdentity`                 | `task_identity_lag_ms`       | `row_retention_lag_ms`       | `task_identity_retention_days`       |
+| `terminalOutcome`              | `terminal_outcome_lag_ms`    | `row_retention_lag_ms`       | `terminal_outcome_retention_days`    |
+| `taskEvents`                   | `task_event_lag_ms`          | `partition_retention_lag_ms` | `task_event_retention_days`          |
+| `attemptHistory`               | `attempt_history_lag_ms`     | `partition_retention_lag_ms` | `attempt_history_retention_days`     |
+| `scheduleOccurrences`          | `schedule_occurrence_lag_ms` | `row_retention_lag_ms`       | `schedule_occurrence_retention_days` |
+| `statistics`                   | `statistics_lag_ms`          | `row_retention_lag_ms`       | `statistics_retention_days`          |
+
+The values match the `category` of the `retention-lag` health reason. The query records 5 routines
+with 2 gauges and 6 categories with 3 gauges. That is a fixed 28 series for each database.
+
+`evaluate_queue_health_v1` gives `retention-lag` when the lag is larger than the budget, with one
+exception. For `scheduleOccurrences`, the reason also waits until the daily history pass is due.
+The gauge can thus pass its budget for up to one day before the reason appears.
+
+#### Maintenance alerts
+
+These rules separate an overdue routine from a disabled retention category. Set each threshold
+from the cadence of your deployment.
+
+| Condition                   | Rule                                                                                                         |
+| --------------------------- | ------------------------------------------------------------------------------------------------------------ |
+| A routine is overdue        | `workhorse.maintenance.routine.overdue > 600`                                                                |
+| A category lags its budget  | `workhorse.retention.lag > workhorse.retention.lag_budget` while `workhorse.retention.enabled == 1`          |
+| A category has no retention | `workhorse.retention.enabled == 0`. This is information. Alert on it only if your policy requires retention. |
+| The observer stopped        | `workhorse.maintenance.routine.age` for `tick` has no data, or does not change, for 5 minutes                |
+
+- A disabled category records a lag of 0. The lag rule thus stays clear, and the overdue rule does
+  not fire for it.
+- The overdue time is already a duration, so the rule needs no pending period. A threshold of 600
+  seconds fires 10 minutes after a missed due time. A pending period adds to that delay.
+- A rollup that `statistics_rollup_interval_ms = 0` turns off records an overdue time of 0. Its age
+  still grows.
+- Each collection computes the age again from the database clock, so the value changes at each
+  collection that succeeds.
+- If `stop()` runs, or each maintenance collection fails, the process keeps exporting the last
+  recorded values. The age then stays the same. If the process exits, the series have no data. The
+  last rule covers both cases. `onError` receives each failed collection.
+
 #### Series that disappear
 
 Every observer gauge is synchronous. Thus an exporter with cumulative temporality repeats the last
@@ -251,6 +341,8 @@ once and then forgets it. This rule covers a worker group whose workers change s
 `worker_registry`. It also covers a queue that no longer has live rows or a `queue_control` row.
 
 A failed collection records nothing. It keeps the remembered series for the next collection.
+
+The maintenance query always returns the same 28 series, so this rule does not apply to it.
 
 #### Observer attributes
 

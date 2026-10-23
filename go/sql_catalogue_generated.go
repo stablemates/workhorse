@@ -491,6 +491,154 @@ var internalStatementRegistry = map[string]string{
               ) sampled) AS rejected_human_waits
           ) waits
          ORDER BY depth.queue_name`,
+	"maintenance_observer": `WITH health AS (
+          SELECT workhorse.queue_health_v1($1::timestamptz) AS document
+        ), installed AS (
+          SELECT min(installed_at) AS installed_at FROM workhorse.schema_version
+        ), policy AS (
+          SELECT timezone, partition_preparation_interval_ms, terminal_cleanup_interval_ms,
+                 history_retention_local_time, statistics_rollup_interval_ms, updated_at
+            FROM workhorse.maintenance_policy WHERE singleton LIMIT 1
+        ), tick AS (
+          -- The tick has no fleet cadence. Its shortest cadence among live workers is the due
+          -- interval, and with no live worker the tick is due again as soon as it completes. A
+          -- worker is live while its last heartbeat is within its own lease.
+          SELECT min(maintenance_interval_ms) AS interval_ms
+            FROM workhorse.worker_registry
+           WHERE last_heartbeat_at >= clock_timestamp() - make_interval(secs => lease_ms / 1000.0)
+        ), retention_start AS (
+          -- The daily pass is due on the first local date after its completed date, from the
+          -- first instant whose local time reaches the retention time. Only a policy change
+          -- clears the date, so a missing date makes the pass due from the latest of the
+          -- completion, the installation, and the last policy change. A start names a local
+          -- date, and an optional instant on it that the due time cannot precede.
+          SELECT start.local_date, start.not_before
+            FROM workhorse.maintenance_state state
+            CROSS JOIN installed
+            CROSS JOIN policy
+            CROSS JOIN workhorse.retention_policy retention
+            CROSS JOIN LATERAL (
+              SELECT GREATEST(
+                       COALESCE(state.last_completed_at, installed.installed_at),
+                       policy.updated_at, retention.updated_at
+                     ) AS at
+            ) cleared
+            CROSS JOIN LATERAL (
+              SELECT state.last_completed_local_date + 1 AS local_date,
+                     NULL::timestamptz AS not_before
+               WHERE state.last_completed_local_date IS NOT NULL
+              UNION ALL
+              SELECT (cleared.at AT TIME ZONE policy.timezone)::date, cleared.at
+               WHERE state.last_completed_local_date IS NULL
+            ) start
+           WHERE state.routine_name = 'history_retention' AND retention.singleton
+        ), retention_due AS (
+          -- A local time that a time zone change skips or repeats does not map to one instant,
+          -- so the search takes the first second of the local date that the scheduler accepts.
+          -- It finds the first accepted minute in the day before the target, then the first
+          -- accepted second in the minute before that.
+          SELECT eligible.at AS due_at
+            FROM retention_start start
+            CROSS JOIN policy
+            CROSS JOIN LATERAL (
+              SELECT (start.local_date + policy.history_retention_local_time)
+                       AT TIME ZONE policy.timezone AS target
+            ) clock
+            CROSS JOIN LATERAL (
+              SELECT start.not_before AS at
+               WHERE (start.not_before AT TIME ZONE policy.timezone)::time(0)
+                 >= policy.history_retention_local_time
+              UNION ALL
+              SELECT COALESCE((
+                       SELECT min(second)
+                         FROM generate_series(minute.at - interval '59 seconds', minute.at,
+                                              interval '1 second') second
+                        WHERE (second >= start.not_before OR start.not_before IS NULL)
+                          AND (second AT TIME ZONE policy.timezone)::date = start.local_date
+                          AND (second AT TIME ZONE policy.timezone)::time(0)
+                            >= policy.history_retention_local_time
+                     ), clock.target)
+                FROM (
+                  SELECT min(candidate) AS at
+                    FROM generate_series(
+                      clock.target - interval '26 hours', clock.target, interval '1 minute'
+                    ) candidate
+                   WHERE (candidate >= start.not_before OR start.not_before IS NULL)
+                     AND (candidate AT TIME ZONE policy.timezone)::date = start.local_date
+                     AND (candidate AT TIME ZONE policy.timezone)::time(0)
+                       >= policy.history_retention_local_time
+                ) minute
+               WHERE start.not_before IS NULL
+                  OR (start.not_before AT TIME ZONE policy.timezone)::time(0)
+                    < policy.history_retention_local_time
+            ) eligible
+        ), routine AS (
+          -- A routine that never completed is due at once, as each scheduler gate treats it.
+          SELECT state.routine_name,
+                 COALESCE(state.last_completed_at, installed.installed_at) AS completed_at,
+                 CASE
+                   WHEN state.routine_name = 'history_retention'
+                     THEN (SELECT due_at FROM retention_due)
+                   WHEN state.last_completed_at IS NULL THEN installed.installed_at
+                   WHEN state.routine_name = 'tick' THEN state.last_completed_at
+                     + make_interval(secs => COALESCE(tick.interval_ms, 0) / 1000.0)
+                   WHEN state.routine_name = 'history_partitions' THEN state.last_completed_at
+                     + make_interval(secs => policy.partition_preparation_interval_ms / 1000.0)
+                   -- A recorded backlog makes the follow-up pass due as
+                   -- prune_terminal_storage_v1 gates it.
+                   ELSE state.last_completed_at + make_interval(
+                     secs => CASE WHEN state.terminal_cleanup_backlog_since IS NULL
+                       THEN policy.terminal_cleanup_interval_ms
+                       ELSE LEAST(policy.terminal_cleanup_interval_ms,
+                         workhorse.terminal_cleanup_follow_up_delay_ms_v1()) END / 1000.0
+                   )
+                 END AS due_at
+            FROM workhorse.maintenance_state state
+            CROSS JOIN installed
+            CROSS JOIN policy
+            CROSS JOIN tick
+          UNION ALL
+          SELECT 'statistics_rollup', COALESCE(stat.last_run_at, installed.installed_at),
+                 CASE WHEN policy.statistics_rollup_interval_ms = 0 THEN NULL
+                      WHEN stat.last_run_at IS NULL THEN installed.installed_at
+                      ELSE stat.last_run_at + make_interval(
+                        secs => policy.statistics_rollup_interval_ms / 1000.0
+                      ) END
+            FROM workhorse.task_stat_state stat
+            CROSS JOIN installed
+            CROSS JOIN policy
+           WHERE stat.singleton
+        )
+        SELECT 'routine' AS kind, routine_name AS name,
+               GREATEST(0, extract(epoch FROM clock_timestamp() - completed_at) * 1000) AS age_ms,
+               COALESCE(GREATEST(0, extract(epoch FROM clock_timestamp() - due_at) * 1000), 0)
+                 AS overdue_ms,
+               NULL::numeric AS lag_ms, NULL::numeric AS budget_ms, NULL::boolean AS enabled
+          FROM routine
+        UNION ALL
+        SELECT 'retention', category.name, NULL, NULL,
+               COALESCE((health.document->>category.lag_key)::numeric, 0),
+               (health.document->'budgets'->>category.budget_key)::numeric,
+               category.retention_days IS NOT NULL
+          FROM health
+          CROSS JOIN workhorse.retention_policy retention
+          CROSS JOIN LATERAL (
+            VALUES
+              ('taskIdentity', 'task_identity_lag_ms', 'rowRetentionLagMs',
+                retention.task_identity_retention_days),
+              ('terminalOutcome', 'terminal_outcome_lag_ms', 'rowRetentionLagMs',
+                retention.terminal_outcome_retention_days),
+              ('taskEvents', 'task_event_lag_ms', 'partitionRetentionLagMs',
+                retention.task_event_retention_days),
+              ('attemptHistory', 'attempt_history_lag_ms', 'partitionRetentionLagMs',
+                retention.attempt_history_retention_days),
+              ('scheduleOccurrences', 'schedule_occurrence_lag_ms', 'rowRetentionLagMs',
+                retention.schedule_occurrence_retention_days),
+              ('statistics', 'statistics_lag_ms', 'rowRetentionLagMs',
+                retention.statistics_retention_days)
+          ) category(name, lag_key, budget_key, retention_days)
+         WHERE retention.singleton
+         ORDER BY kind, name`,
 	"queue_metric_snapshot": `WITH queue_names AS (
          SELECT $1::text AS queue_name
          UNION SELECT queue_name FROM workhorse.task_runtime
