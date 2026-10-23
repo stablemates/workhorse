@@ -679,7 +679,7 @@ function a release actually touches.
 `scripts/generate-sql-catalogues.ts` derives the set from the readers rather than from a hand list,
 so a new read governs its target on the next generate:
 
-- The manifest's statement catalogue, which is the SQL all six SDKs send. `assertNoInlineTypeScriptSql`
+- The manifest's statement catalogue, which is the SQL all seven SDKs send. `assertNoInlineTypeScriptSql`
   and the Python binding check keep it the only source of SDK statements.
 - The three dashboard backends, `typescript/dashboard-server/src/server`, `go/dashboard`, and
   `python/src/workhorse/dashboard`, each of which builds its own SQL.
