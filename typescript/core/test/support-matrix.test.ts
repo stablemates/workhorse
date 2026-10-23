@@ -919,6 +919,20 @@ describe("continuous integration", () => {
     expect(missing).toEqual([]);
   });
 
+  // A database test skips when DATABASE_URL_TEST is missing. The flag turns that skip into a
+  // failure, so a lane that loses its database URL cannot report a pass. See SM-1657.
+  it.each(["python", "go", "ruby", "jvm", "dotnet"])(
+    "requires PostgreSQL in the %s lane",
+    async (job) => {
+      const ci = await read(".github/workflows/ci.yml");
+      const lane = new RegExp(`\\n  ${job}:\\n[\\s\\S]*?(?=\\n\\n  \\S)`).exec(ci)?.[0] ?? "";
+      expect(lane).toContain(
+        "DATABASE_URL_TEST: postgres://workhorse:workhorse@localhost:5432/workhorse_test\n",
+      );
+      expect(lane).toContain('WORKHORSE_REQUIRE_DATABASE: "1"');
+    },
+  );
+
   it("smoke-tests exactly the declared JS runtimes without claiming them as supported", async () => {
     const workflow = await read(".github/workflows/ci.yml");
 

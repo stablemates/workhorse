@@ -15,19 +15,14 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	workhorse "github.com/stablemates/workhorse/go"
+	"github.com/stablemates/workhorse/go/internal/testdatabase"
 )
 
 // A rejected enqueue must take the account row down with it. A contract rejection is a client-side
 // error that leaves the transaction usable, so committing anyway would keep the account and lose
 // the task.
 func TestCreateAccountRollsBackWhenEnqueueFails(t *testing.T) {
-	if testing.Short() {
-		t.Skip("integration test")
-	}
-	sourceURL := os.Getenv("DATABASE_URL_TEST")
-	if sourceURL == "" {
-		t.Skip("DATABASE_URL_TEST is not set")
-	}
+	sourceURL := testdatabase.SourceURL(t)
 	ctx := context.Background()
 	pool, err := pgxpool.New(ctx, createTransactionDatabase(t, sourceURL))
 	if err != nil {

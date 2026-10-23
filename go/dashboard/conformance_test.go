@@ -26,6 +26,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	_ "github.com/jackc/pgx/v5/stdlib"
 	workhorse "github.com/stablemates/workhorse/go"
+	"github.com/stablemates/workhorse/go/internal/testdatabase"
 )
 
 type dashboardFixture struct {
@@ -99,13 +100,7 @@ func TestDashboardSatisfiesEverySharedHTTPScenarioOverDatabaseSQL(t *testing.T) 
 
 func runDashboardConformance(t *testing.T, open func(*testing.T, string, *pgxpool.Pool) workhorse.Executor) {
 	t.Helper()
-	if testing.Short() {
-		t.Skip("PostgreSQL integration tests do not run in short mode")
-	}
-	sourceURL := os.Getenv("DATABASE_URL_TEST")
-	if sourceURL == "" {
-		t.Skip("DATABASE_URL_TEST is required for dashboard conformance tests")
-	}
+	sourceURL := testdatabase.SourceURL(t)
 	ctx := context.Background()
 	databaseURL := createDashboardConformanceDatabase(t, sourceURL)
 	pool, err := pgxpool.New(ctx, databaseURL)

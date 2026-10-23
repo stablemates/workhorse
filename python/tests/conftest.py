@@ -19,6 +19,7 @@ import pytest_asyncio
 from psycopg_pool import AsyncConnectionPool, ConnectionPool
 
 from distributions import BUILD_CONSTRAINTS, install_distribution
+from required_database import source_database_url
 
 
 def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
@@ -97,9 +98,7 @@ def installed_distribution_interpreters(
 
 @pytest.fixture
 def database_url(request: pytest.FixtureRequest) -> Iterator[str]:
-    source = os.environ.get("DATABASE_URL_TEST")
-    if source is None:
-        pytest.skip("DATABASE_URL_TEST is required for integration tests")
+    source = source_database_url(os.environ)
     parsed = urlsplit(source)
     if parsed.hostname not in {"localhost", "127.0.0.1", "::1"}:
         pytest.fail("Python integration tests refuse a non-loopback database")
