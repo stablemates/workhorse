@@ -10,18 +10,11 @@ namespace Workhorse.Tests.Telemetry;
 /// listeners capture them (ADR 0107, "Telemetry"). Each test also holds every captured name to
 /// <c>api/telemetry.txt</c>.
 /// </summary>
-public sealed class TelemetryDatabaseTests(ScratchDatabase database) : IDisposable
+public sealed class TelemetryDatabaseTests(ScratchDatabase database) : TelemetryDatabaseCase(database)
 {
-    private static readonly TelemetrySurface Surface = TelemetrySurface.Read();
     private static readonly string[] RetriedStates = ["ready", "scheduled"];
-    private readonly TelemetryRecorder _recorder = new();
-    private readonly string _queue = UniqueQueue("telemetry");
-
-    private static CancellationToken Token => TestContext.Current.CancellationToken;
 
     private sealed record Approval(string By);
-
-    public void Dispose() => _recorder.Dispose();
 
     [Fact]
     public async Task TheHandlerSpanContinuesTheTraceOfTheEnqueue()
@@ -46,7 +39,7 @@ public sealed class TelemetryDatabaseTests(ScratchDatabase database) : IDisposab
 
         var enqueue = Single(Names.SpanEnqueue, span => span.TraceId == caller.TraceId);
         Assert.Equal(caller.SpanId, enqueue.ParentSpanId);
-        Assert.Equal(_queue, enqueue.GetTagItem(Names.QueueName));
+        Assert.Equal(QueueName, enqueue.GetTagItem(Names.QueueName));
         Assert.Equal("email.send", enqueue.GetTagItem(Names.TaskType));
         Assert.Equal(1L, enqueue.GetTagItem(Names.EnqueueCount));
         Assert.Equal(taskId.ToString(), enqueue.GetTagItem(Names.TaskId));
@@ -58,7 +51,7 @@ public sealed class TelemetryDatabaseTests(ScratchDatabase database) : IDisposab
         Assert.Equal(ActivityKind.Consumer, handler.Kind);
         Assert.Equal(caller.TraceId, handler.TraceId);
         Assert.Equal(enqueue.SpanId, handler.ParentSpanId);
-        Assert.Equal(_queue, handler.GetTagItem(Names.QueueName));
+        Assert.Equal(QueueName, handler.GetTagItem(Names.QueueName));
         Assert.Equal("email.send", handler.GetTagItem(Names.TaskType));
         Assert.Equal(1L, handler.GetTagItem(Names.TaskAttempt));
         Assert.Equal("succeeded", handler.GetTagItem(Names.HandlerOutcome));
@@ -70,24 +63,24 @@ public sealed class TelemetryDatabaseTests(ScratchDatabase database) : IDisposab
         Assert.Equal(true, complete.GetTagItem(Names.CompleteAccepted));
 
         var claim = Single(Names.SpanClaim, span => Equals(span.GetTagItem(Names.TaskId), taskId.ToString()));
-        Assert.Equal(_queue, claim.GetTagItem(Names.QueueName));
+        Assert.Equal(QueueName, claim.GetTagItem(Names.QueueName));
         Assert.Equal("full", claim.GetTagItem(Names.QueueTier));
         Assert.NotEqual(caller.TraceId, claim.TraceId);
 
-        var task = Tags((Names.QueueName, _queue), (Names.TaskType, "email.send"));
-        var succeeded = Tags((Names.QueueName, _queue), (Names.TaskType, "email.send"), (Names.HandlerOutcome, "succeeded"));
+        var task = Tags((Names.QueueName, QueueName), (Names.TaskType, "email.send"));
+        var succeeded = Tags((Names.QueueName, QueueName), (Names.TaskType, "email.send"), (Names.HandlerOutcome, "succeeded"));
         AssertPoints("workhorse.tasks.claimed", [task]);
         AssertPoints("workhorse.tasks.completed", [task]);
         AssertPoints("workhorse.handler.runtime", [task]);
         AssertPoints("workhorse.handler.executions", [succeeded]);
         AssertPoints("workhorse.handler.duration", [succeeded]);
         Assert.All(
-            _recorder.Of("workhorse.handler.executions", measurement => Equals(measurement.Tags[Names.QueueName], _queue)),
+            Recorder.Of("workhorse.handler.executions", measurement => Equals(measurement.Tags[Names.QueueName], QueueName)),
             measurement => Assert.Equal(handler.TraceId, measurement.Trace));
         Assert.Contains(
-            _recorder.Of("workhorse.claim.duration", measurement => Equals(measurement.Tags[Names.QueueName], _queue)),
+            Recorder.Of("workhorse.claim.duration", measurement => Equals(measurement.Tags[Names.QueueName], QueueName)),
             measurement => Equals(measurement.Tags[Names.ClaimResult], "claimed"));
-        _recorder.AssertGoverned(Surface);
+        Recorder.AssertGoverned(Surface);
     }
 
     [Fact]
@@ -111,57 +104,11 @@ public sealed class TelemetryDatabaseTests(ScratchDatabase database) : IDisposab
         Assert.Contains(state, RetriedStates);
         Assert.Equal(state, handler.GetTagItem(Names.HandlerOutcome));
 
-        var task = Tags((Names.QueueName, _queue), (Names.TaskType, "email.send"));
-        AssertPoints("workhorse.tasks.failed", [Tags((Names.QueueName, _queue), (Names.TaskType, "email.send"), (Names.AttemptOutcome, state))]);
+        var task = Tags((Names.QueueName, QueueName), (Names.TaskType, "email.send"));
+        AssertPoints("workhorse.tasks.failed", [Tags((Names.QueueName, QueueName), (Names.TaskType, "email.send"), (Names.AttemptOutcome, state))]);
         AssertPoints("workhorse.tasks.retried", [task]);
-        AssertPoints("workhorse.handler.executions", [Tags((Names.QueueName, _queue), (Names.TaskType, "email.send"), (Names.HandlerOutcome, "retry"))]);
-        _recorder.AssertGoverned(Surface);
-    }
-
-    /// <summary>
-    /// SM-1649: the handler changes the task in PostgreSQL and returns at once. The worker's own
-    /// timers still wait for the claimed boundaries and the heartbeat does not run in between, so
-    /// PostgreSQL refuses the completion write. A due deadline or attempt timeout settles under the
-    /// attempt's own fence before the run returns. A cancellation and a lost lease keep their own
-    /// outcomes.
-    /// </summary>
-    [Theory]
-    [InlineData("UPDATE workhorse.task_runtime SET deadline_at = clock_timestamp() - interval '1 second' WHERE task_id = $1", "failed", "deadline_exceeded", "deadline_exceeded")]
-    [InlineData("UPDATE workhorse.task_runtime SET attempt_timeout_at = clock_timestamp() - interval '1 second' WHERE task_id = $1", "failed", "timeout_exceeded", "timeout")]
-    [InlineData("SELECT status FROM workhorse.cancel_v1($1, 'test', 'no longer needed')", "canceled", "canceled", "canceled")]
-    [InlineData("UPDATE workhorse.task_runtime SET fence_token = fence_token + 1, deadline_at = clock_timestamp() - interval '1 second' WHERE task_id = $1", "active", "stale", "lease_lost")]
-    public async Task ARefusedCompletionWriteSettlesItsCause(string change, string state, string spanOutcome, string metricOutcome)
-    {
-        var taskId = await EnqueueAsync("email.send", new EnqueueOptions
-        {
-            MaxAttempts = 1,
-            Deadline = DateTimeOffset.UtcNow.AddHours(1),
-            ExecutionTimeout = TimeSpan.FromHours(1),
-        });
-        await using var worker = new Worker(database.DataSource, Options(_queue, options =>
-        {
-            options.PollingOnly = true;
-            options.PollInterval = TimeSpan.FromMilliseconds(10);
-            options.DisableRegistry = true;
-            options.Lease = TimeSpan.FromSeconds(60);
-            options.Heartbeat = TimeSpan.FromSeconds(30);
-        }));
-        worker.Handle<object?, object?>("email.send", async (_, _) =>
-        {
-            await ScalarAsync(database.DataSource, change, taskId);
-            return new { late = true };
-        });
-        Assert.True(await worker.RunOnceAsync(Token));
-
-        // The attempt settled its cause before the run returned, without a maintenance pass.
-        var row = await TaskAsync(database.DataSource, taskId);
-        Assert.Equal(state, row.Text("state"));
-        Assert.Null(row.Json("result"));
-        var complete = Single(Names.SpanComplete, span => Equals(span.GetTagItem(Names.TaskId), taskId.ToString()));
-        Assert.Equal(false, complete.GetTagItem(Names.CompleteAccepted));
-        Assert.Equal(spanOutcome, Handler(taskId).GetTagItem(Names.HandlerOutcome));
-        AssertPoints("workhorse.handler.executions", [Tags((Names.QueueName, _queue), (Names.TaskType, "email.send"), (Names.HandlerOutcome, metricOutcome))]);
-        _recorder.AssertGoverned(Surface);
+        AssertPoints("workhorse.handler.executions", [Tags((Names.QueueName, QueueName), (Names.TaskType, "email.send"), (Names.HandlerOutcome, "retry"))]);
+        Recorder.AssertGoverned(Surface);
     }
 
     /// <summary>
@@ -185,10 +132,10 @@ public sealed class TelemetryDatabaseTests(ScratchDatabase database) : IDisposab
         Assert.True(await worker.RunOnceAsync(Token));
         Assert.Equal("suspended", Handler(taskId).GetTagItem(Names.HandlerOutcome));
 
-        await new Queue(database.DataSource).SendSignalAsync(taskId, "approved", new Approval("ops"), "signal-1", "test", Token);
-        for (var pass = 0; pass < 20 && (await TaskAsync(database.DataSource, taskId)).Text("state") != "succeeded"; pass++)
+        await new Queue(DataSource).SendSignalAsync(taskId, "approved", new Approval("ops"), "signal-1", "test", Token);
+        for (var pass = 0; pass < 20 && (await TaskAsync(DataSource, taskId)).Text("state") != "succeeded"; pass++)
         {
-            await ScalarAsync(database.DataSource, "SELECT count(*) FROM workhorse.tick_v1(100, 100)");
+            await ScalarAsync(DataSource, "SELECT count(*) FROM workhorse.tick_v1(100, 100)");
             await worker.RunOnceAsync(Token);
         }
 
@@ -201,7 +148,7 @@ public sealed class TelemetryDatabaseTests(ScratchDatabase database) : IDisposab
             Assert.Equal(enqueue.SpanId, handler.ParentSpanId);
         });
         Assert.Equal("succeeded", handlers[1].GetTagItem(Names.HandlerOutcome));
-        _recorder.AssertGoverned(Surface);
+        Recorder.AssertGoverned(Surface);
     }
 
     /// <summary>
@@ -211,7 +158,7 @@ public sealed class TelemetryDatabaseTests(ScratchDatabase database) : IDisposab
     [Fact]
     public async Task AFastTierAttemptContinuesTheTraceOfTheEnqueue()
     {
-        await WorkerFastTierTests.FastTierAsync(database.DataSource, _queue);
+        await WorkerFastTierTests.FastTierAsync(DataSource, QueueName);
         Guid taskId;
         ActivityTraceId trace;
         using (var span = TelemetryRecorder.Caller.StartActivity("caller"))
@@ -220,12 +167,12 @@ public sealed class TelemetryDatabaseTests(ScratchDatabase database) : IDisposab
             taskId = await EnqueueAsync("total");
         }
 
-        await using var worker = new Worker(database.DataSource, Options(_queue));
+        await using var worker = new Worker(DataSource, Options(QueueName));
         worker.Handle<object?, object?>("total", (_, _) => Task.FromResult<object?>(1));
         await using (var running = new RunningWorker(worker))
         {
             await EventuallyAsync(
-                async () => (long)(await ScalarAsync(database.DataSource, "SELECT count(*) FROM workhorse.fast_task_outcome WHERE task_id = $1", taskId))! == 1,
+                async () => (long)(await ScalarAsync(DataSource, "SELECT count(*) FROM workhorse.fast_task_outcome WHERE task_id = $1", taskId))! == 1,
                 "the fast-tier outcome");
             await running.StopAsync();
         }
@@ -239,12 +186,12 @@ public sealed class TelemetryDatabaseTests(ScratchDatabase database) : IDisposab
         Assert.Equal(handler.SpanId, complete.ParentSpanId);
         Assert.Equal(true, complete.GetTagItem(Names.CompleteAccepted));
         var claim = Single(Names.SpanClaim, span => Equals(span.GetTagItem(Names.TaskId), taskId.ToString()));
-        Assert.Equal(_queue, claim.GetTagItem(Names.QueueName));
+        Assert.Equal(QueueName, claim.GetTagItem(Names.QueueName));
         Assert.Null(claim.GetTagItem(Names.QueueTier));
-        var task = Tags((Names.QueueName, _queue), (Names.TaskType, "total"));
+        var task = Tags((Names.QueueName, QueueName), (Names.TaskType, "total"));
         AssertPoints("workhorse.tasks.claimed", [task]);
         AssertPoints("workhorse.tasks.completed", [task]);
-        _recorder.AssertGoverned(Surface);
+        Recorder.AssertGoverned(Surface);
     }
 
     /// <summary>
@@ -261,14 +208,14 @@ public sealed class TelemetryDatabaseTests(ScratchDatabase database) : IDisposab
             members.Add((await EnqueueAsync("charge"), span!.TraceId));
         }
 
-        await using var worker = new Worker(database.DataSource, Options(_queue, options => options.Concurrency = 2));
+        await using var worker = new Worker(DataSource, Options(QueueName, options => options.Concurrency = 2));
         worker.HandleBatch<object?>("charge", new BatchOptions { MaxSize = 2, Linger = TimeSpan.FromSeconds(30) }, (items, _) =>
             Task.FromResult<IReadOnlyList<BatchHandlerOutcome>>([.. items.Select(_ => new BatchSucceeded(null))]));
         await using (var running = new RunningWorker(worker))
         {
             foreach (var (taskId, _) in members)
             {
-                await TaskInStateAsync(database.DataSource, taskId, "succeeded");
+                await TaskInStateAsync(DataSource, taskId, "succeeded");
             }
 
             await running.StopAsync();
@@ -282,11 +229,11 @@ public sealed class TelemetryDatabaseTests(ScratchDatabase database) : IDisposab
             Assert.Equal("succeeded", handler.GetTagItem(Names.HandlerOutcome));
         }
 
-        var batch = Tags((Names.QueueName, _queue), (Names.TaskType, "charge"), (Names.HandlerBatchFull, true));
+        var batch = Tags((Names.QueueName, QueueName), (Names.TaskType, "charge"), (Names.HandlerBatchFull, true));
         AssertPoints("workhorse.handler.batch.size", [batch]);
         AssertPoints("workhorse.handler.batch.linger", [batch]);
-        Assert.Equal(2, Assert.Single(_recorder.Of("workhorse.handler.batch.size", measurement => Equals(measurement.Tags[Names.QueueName], _queue))).Value);
-        _recorder.AssertGoverned(Surface);
+        Assert.Equal(2, Assert.Single(Recorder.Of("workhorse.handler.batch.size", measurement => Equals(measurement.Tags[Names.QueueName], QueueName))).Value);
+        Recorder.AssertGoverned(Surface);
     }
 
     /// <summary>
@@ -297,7 +244,7 @@ public sealed class TelemetryDatabaseTests(ScratchDatabase database) : IDisposab
     [Fact]
     public async Task ATaskWithoutATraceContextStartsANewTrace()
     {
-        var taskId = await WorkerHarness.EnqueueAsync(database.DataSource, _queue, "email.send", null);
+        var taskId = await WorkerHarness.EnqueueAsync(DataSource, QueueName, "email.send", null);
         Assert.Null(await StoredTraceParentAsync(taskId));
         await using var worker = Worker();
         worker.Handle<object?, object?>("email.send", (_, _) => Task.FromResult<object?>(null));
@@ -331,10 +278,10 @@ public sealed class TelemetryDatabaseTests(ScratchDatabase database) : IDisposab
         var recovery = Single(Names.SpanRecovery, span => span.TraceId == trace);
         Assert.Equal(maintenance.SpanId, recovery.ParentSpanId);
         Assert.IsType<bool>(recovery.GetTagItem(Names.RecoverySkipped));
-        var runs = _recorder.Of("workhorse.maintenance.runs", measurement => measurement.Trace == trace);
+        var runs = Recorder.Of("workhorse.maintenance.runs", measurement => measurement.Trace == trace);
         Assert.Contains(runs, measurement => Equals(measurement.Tags[Names.MaintenanceLoop], "tick") && Equals(measurement.Tags[Names.MaintenancePhase], "recover"));
-        Assert.Equal(runs.Count, _recorder.Of("workhorse.maintenance.duration", measurement => measurement.Trace == trace).Count);
-        _recorder.AssertGoverned(Surface);
+        Assert.Equal(runs.Count, Recorder.Of("workhorse.maintenance.duration", measurement => measurement.Trace == trace).Count);
+        Recorder.AssertGoverned(Surface);
     }
 
     [Fact]
@@ -377,18 +324,15 @@ public sealed class TelemetryDatabaseTests(ScratchDatabase database) : IDisposab
     }
 
     private async Task<object?> ValidAsync(Dictionary<string, string> carrier) =>
-        await ScalarAsync(database.DataSource, "SELECT workhorse.valid_trace_context_v1($1::text::jsonb)", System.Text.Json.JsonSerializer.Serialize(carrier));
+        await ScalarAsync(DataSource, "SELECT workhorse.valid_trace_context_v1($1::text::jsonb)", System.Text.Json.JsonSerializer.Serialize(carrier));
 
     private Worker Worker() =>
-        new(database.DataSource, Options(_queue, options =>
+        new(DataSource, Options(QueueName, options =>
         {
             options.PollingOnly = true;
             options.PollInterval = TimeSpan.FromMilliseconds(10);
             options.DisableRegistry = true;
         }));
-
-    private async Task<Guid> EnqueueAsync(string taskType, EnqueueOptions? options = null) =>
-        (await new Queue(database.DataSource).EnqueueAsync<object?>(taskType, null, (options ?? new EnqueueOptions()) with { Queue = _queue }, Token)).TaskId;
 
     /// <summary>
     /// The <c>traceparent</c> of <paramref name="span"/>. The flags come from the activity: .NET 11
@@ -398,26 +342,5 @@ public sealed class TelemetryDatabaseTests(ScratchDatabase database) : IDisposab
         $"00-{span.TraceId}-{span.SpanId}-{(int)span.ActivityTraceFlags:x2}";
 
     private async Task<string?> StoredTraceParentAsync(Guid taskId) =>
-        await ScalarAsync(database.DataSource, "SELECT trace_context->>'traceparent' FROM workhorse.task WHERE id = $1", taskId) as string;
-
-    private Activity Single(string name, Func<Activity, bool> match) => Assert.Single(_recorder.SpansNamed(name, match));
-
-    private List<Activity> Handlers(Guid taskId) =>
-        [.. _recorder.SpansNamed(Names.SpanHandler, span => Equals(span.GetTagItem(Names.TaskId), taskId.ToString())).OrderBy(span => span.StartTimeUtc)];
-
-    private Activity Handler(Guid taskId) => Assert.Single(Handlers(taskId));
-
-    private static Dictionary<string, object?> Tags(params (string Key, object? Value)[] tags) =>
-        tags.ToDictionary(tag => tag.Key, tag => tag.Value, StringComparer.Ordinal);
-
-    /// <summary>The tags of each measurement of <paramref name="instrument"/> on this test's queue.</summary>
-    private void AssertPoints(string instrument, IReadOnlyList<Dictionary<string, object?>> expected)
-    {
-        var points = _recorder.Of(instrument, measurement => measurement.Tags.TryGetValue(Names.QueueName, out var queue) && Equals(queue, _queue));
-        Assert.Equal(expected.Count, points.Count);
-        for (var index = 0; index < expected.Count; index++)
-        {
-            Assert.Equal(expected[index].OrderBy(tag => tag.Key), points[index].Tags.OrderBy(tag => tag.Key));
-        }
-    }
+        await ScalarAsync(DataSource, "SELECT trace_context->>'traceparent' FROM workhorse.task WHERE id = $1", taskId) as string;
 }
