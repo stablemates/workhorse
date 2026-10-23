@@ -1568,8 +1568,8 @@ mod tests {
 
     // After the database refuses connections and the heartbeat connection is lost, the keeper
     // retries without any active task. When the database accepts connections again, the worker
-    // claims at once. Its 60 s poll is longer than the wait of this test, so only the wake of the
-    // gate can start that claim.
+    // claims at once. While the gate is closed, the dispatch loop sets no poll timer. Thus no poll
+    // can start that claim.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn claims_resume_at_once_when_the_heartbeat_connection_returns() {
         let Some(database) = scratch::scratch_database("shared_claim_resume").await else {
@@ -1586,23 +1586,21 @@ mod tests {
             ..lifetime_options()
         };
         let worker = quick_worker(&pool, options);
-        let running = run(&worker);
-        // A first task proves that startup ended and that the worker claims.
+        // A first task proves that startup ended and that the worker claims. The test enqueues it
+        // before the run starts, so the first claim gets it and no poll wait comes before it.
         let first = enqueue(&queue).await;
+        let running = run(&worker);
         succeeded(&operator, first, "the first task never ran").await;
         let allow = |allowed: bool| {
             format!("ALTER DATABASE \"{}\" ALLOW_CONNECTIONS {allowed}", database.name())
         };
+        // The test holds every connection but the heartbeat connection, then the pool cannot open
+        // a new one. The test takes them while the database still accepts connections. Thus each
+        // checkout opens a connection, or it waits for a claim in flight to return one. If the
+        // database refused connections first, a checkout could fail while a claim held a
+        // connection. The keeper would then get that connection when the claim returned it.
+        let held = hold(&pool, 2).await;
         admin.batch_execute(&allow(false)).await.unwrap();
-        // The test holds every connection but the heartbeat connection, and the pool cannot open a
-        // new one. A claim in flight returns its connection, so the test waits for it.
-        let mut held = Vec::new();
-        while held.len() < 2 {
-            match pool.get().await {
-                Ok(connection) => held.push(connection),
-                Err(_) => break,
-            }
-        }
         let heartbeat = worker.0.heartbeat_connection().unwrap();
         drop(lose_heartbeat(&heartbeat).await);
         let task = enqueue(&queue).await;
