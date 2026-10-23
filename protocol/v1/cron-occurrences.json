@@ -174,5 +174,66 @@
     "now": "2026-01-31T23:59:59Z",
     "limit": 10,
     "expected": ["2026-01-31T07:49:00Z"]
+  },
+  {
+    "id": "dense-short-window",
+    "expression": "* * * * * *",
+    "timezone": "UTC",
+    "lastOccurrenceAt": "2026-01-01T12:00:00Z",
+    "now": "2026-01-01T12:00:05.500Z",
+    "limit": 10,
+    "expected": [
+      "2026-01-01T12:00:01Z",
+      "2026-01-01T12:00:02Z",
+      "2026-01-01T12:00:03Z",
+      "2026-01-01T12:00:04Z",
+      "2026-01-01T12:00:05Z"
+    ]
+  },
+  {
+    "id": "dense-spring-gap",
+    "expression": "* * * * * *",
+    "timezone": "America/New_York",
+    "lastOccurrenceAt": "2026-03-08T06:59:58Z",
+    "now": "2026-03-08T07:00:02Z",
+    "limit": 10,
+    "expected": [
+      "2026-03-08T06:59:59Z",
+      "2026-03-08T07:00:00Z",
+      "2026-03-08T07:00:01Z",
+      "2026-03-08T07:00:02Z"
+    ]
+  },
+  {
+    "id": "dense-fall-fold",
+    "expression": "* * * * * *",
+    "timezone": "America/New_York",
+    "lastOccurrenceAt": "2026-11-01T05:59:58Z",
+    "now": "2026-11-01T06:00:02Z",
+    "limit": 10,
+    "expected": ["2026-11-01T05:59:59Z"]
+  },
+  {
+    "id": "spring-gap-limit-skips-duplicates",
+    "expression": "0 0,30 * * * *",
+    "timezone": "America/New_York",
+    "lastOccurrenceAt": "2026-03-08T06:00:00Z",
+    "now": "2026-03-08T09:00:00Z",
+    "limit": 4,
+    "expected": [
+      "2026-03-08T06:30:00Z",
+      "2026-03-08T07:00:00Z",
+      "2026-03-08T07:30:00Z",
+      "2026-03-08T08:00:00Z"
+    ]
+  },
+  {
+    "id": "half-hour-gap-keeps-wall-clock-order",
+    "expression": "0 0,20,40 2 * * *",
+    "timezone": "Australia/Lord_Howe",
+    "lastOccurrenceAt": "2026-10-03T14:00:00Z",
+    "now": "2026-10-03T17:00:00Z",
+    "limit": 10,
+    "expected": ["2026-10-03T15:30:00Z", "2026-10-03T15:50:00Z", "2026-10-03T15:40:00Z"]
   }
 ]

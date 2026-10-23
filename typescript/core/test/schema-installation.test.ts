@@ -633,6 +633,10 @@ describe("schema installation", () => {
         version: 79,
         description: "compare the enqueue fingerprint instants as values",
       },
+      {
+        version: 80,
+        description: "bound the dense cron evaluation",
+      },
     ]);
 
     const protocols = await pool.query<{ version: number }>(
