@@ -11637,9 +11637,17 @@ LANGUAGE plpgsql
 AS $$
 BEGIN
   status := workhorse.expire_owned_v1(p_task_id, p_worker_id, p_fence_token);
-  SELECT runtime.state INTO retry_state FROM workhorse.task_runtime runtime
-     WHERE runtime.task_id = p_task_id AND runtime.state IN ('ready', 'scheduled')
-       AND status = 'timeout_exceeded';
+  IF status = 'timeout_exceeded' THEN
+    SELECT runtime.state INTO retry_state FROM workhorse.task_runtime runtime
+     WHERE runtime.task_id = p_task_id AND runtime.state IN ('ready', 'scheduled');
+    IF retry_state IS NULL THEN
+      -- A fast-tier row has no scheduled state; a ready row with a future run time is one.
+      SELECT CASE WHEN fast.run_at > clock_timestamp() THEN 'scheduled' ELSE 'ready' END
+        INTO retry_state
+        FROM workhorse.fast_task_runtime fast
+       WHERE fast.task_id = p_task_id AND fast.state = 'ready';
+    END IF;
+  END IF;
   RETURN NEXT;
 END;
 $$;
@@ -22760,10 +22768,11 @@ INSERT INTO workhorse.schema_migration(version, description) VALUES
   (81, 'keep the operator pause after a registry prune'),
   (82, 'fire skip schedules within the supported delay'),
   (83, 'recheck terminal cleanup references and continue lease scans'),
-  (84, 'make the day and schedule lock keys unambiguous')
+  (84, 'make the day and schedule lock keys unambiguous'),
+  (85, 'report the fast-tier retry of an expired timeout')
 ON CONFLICT DO NOTHING;
 
-INSERT INTO workhorse.schema_version(version) VALUES (84) ON CONFLICT DO NOTHING;
+INSERT INTO workhorse.schema_version(version) VALUES (85) ON CONFLICT DO NOTHING;
 
 INSERT INTO workhorse.protocol_version(version) VALUES (5) ON CONFLICT DO NOTHING;
 SELECT workhorse.create_history_day_v1(

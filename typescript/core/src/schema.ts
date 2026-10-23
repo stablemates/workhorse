@@ -601,6 +601,13 @@ export const SCHEMA_MIGRATIONS: readonly SchemaMigrationStep[] = [
     description: "make the day and schedule lock keys unambiguous",
     kind: "additive",
   },
+  {
+    fromVersion: 84,
+    toVersion: 85,
+    file: "0086-report-the-fast-tier-retry-of-an-expired-timeout.sql",
+    description: "report the fast-tier retry of an expired timeout",
+    kind: "additive",
+  },
 ];
 
 /**

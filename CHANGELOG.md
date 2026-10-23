@@ -20,6 +20,25 @@ upgrade steps.
 
 ## Unreleased
 
+### A fast-tier attempt timeout reports its retry
+
+`expire_owned_telemetry_v1` settles a due deadline or attempt timeout for a live worker and returns
+`status` and `retry_state`. The TypeScript, Python, Ruby, JVM, and .NET workers use `retry_state`
+to record a `workhorse.retry` span and one `workhorse.tasks.retried` count. Before migration 0086,
+the function reads `retry_state` only from the full tier. If an attempt timeout retries a fast-tier
+task, the function returns null, and the worker records no retry. The task state is correct
+(SM-1694).
+
+Migration 0086 (`0086-report-the-fast-tier-retry-of-an-expired-timeout.sql`) moves the schema to
+version 85. `expire_owned_telemetry_v1` now returns `ready` or `scheduled` for a fast-tier timeout
+retry. A ready fast-tier task with a future run time gives `scheduled`. The full tier keeps its
+values. The Go and Rust workers do not read `retry_state`, so this change does not add timeout
+retry telemetry to them.
+
+The migration does not raise the SDK compatibility floor, and no signature or result shape
+changes. Run `workhorse schema migrate`. Every process gets the new result when the migration
+commits.
+
 ### History-day and schedule occurrence locks are unambiguous
 
 A history-day lock converted its date to text with the session `DateStyle`. Two sessions with

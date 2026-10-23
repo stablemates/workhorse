@@ -2398,8 +2398,12 @@ carries them on its `recover` phase. The production worker path and direct `Queu
 calls therefore emit the same recovery span and counters.
 
 `expire_owned_telemetry_v1` wraps prompt timeout settlement by a live worker. It returns the exact
-next state. Thus `Queue.expireOwned` emits a retry span and increments the retry counter only if
-PostgreSQL starts another attempt.
+next state: `ready` or `scheduled` when the timeout starts another attempt, and null otherwise.
+Thus `Queue.expireOwned` emits a retry span and increments the retry counter only if PostgreSQL
+starts another attempt. A fast-tier row has no `scheduled` state, so the function reports a ready
+fast-tier row with a future `run_at` as `scheduled`. Before migration 0086, the function returns
+null for a fast-tier retry. The Go and Rust workers read only `status`, so they record no retry
+telemetry for a timeout.
 
 #### Owned release
 
