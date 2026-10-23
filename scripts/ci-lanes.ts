@@ -3,9 +3,13 @@
 // gives each other job of the workflow one boolean output that decides whether the job runs.
 //
 // The map fails open. If a changed file matches a shared input, or no entry of the map names it,
-// every lane runs. Pushes, `workflow_dispatch` runs, and the weekly schedule run every lane that
-// their event runs, whatever changed. scripts/ci-lanes.test.ts holds the map to the workflow and to
-// the files each lane names in its sources.
+// every lane runs. A docs-only pull request runs only the always-run lanes that check the
+// documentation (SM-1681). Pushes, `workflow_dispatch` runs, and the weekly schedule run every lane
+// that their event runs, whatever changed. scripts/ci-lanes.test.ts holds the map to the workflow
+// and to the files each lane names in its sources.
+//
+// `tsx scripts/ci-lanes.ts --docs-only` reads changed paths from standard input and tells whether
+// the change is docs-only, for the merge rule in AGENTS.md.
 import { execFile } from "node:child_process";
 import { appendFile } from "node:fs/promises";
 import { pathToFileURL } from "node:url";
@@ -110,7 +114,9 @@ export const FILTERED_LANES = {
     ],
   },
   "runtime-smoke": { sources: [], inputs: typescriptBuild },
-  // `pnpm test:packed` runs the full build, which also builds the site from the documentation.
+  // `pnpm test:packed` runs the full build, which also builds the site from the documentation. The
+  // site build runs site/scripts/check-language-examples.ts over docs/** and site/**, so the inputs
+  // stay. The lane is in WEEKLY_LANES, so a pull request never runs it.
   packed: { sources: [], inputs: [...typescriptBuild, "docs/**", "site/**"] },
   python: {
     sources: ["python/**"],
@@ -188,6 +194,35 @@ export const ALWAYS_RUN_LANE_INPUTS = [
   "knip.json",
   "lefthook.yml",
 ] as const;
+
+/**
+ * The documentation. If every file that a pull request changes matches one of these globs, the
+ * change is docs-only. Each glob is also in {@link ALWAYS_RUN_LANE_INPUTS}, so a docs-only change
+ * never runs every lane. AGENTS.md lets the squash merge of a docs-only change skip its push run.
+ */
+export const DOC_PATHS = ["docs/**", "site/**", "*.md", "api/README.md"] as const;
+
+/**
+ * The always-run lanes that a docs-only pull request runs, because each one has a check that reads
+ * the documentation:
+ *
+ * - `static`: `pnpm format:check`, `pnpm lint` (oxlint and knip over `site/`), and `pnpm typecheck`
+ *   (the site and its MDX pages).
+ * - `npm-release-scope`: the documentation tests of the unit scope, such as
+ *   scripts/guide-reference-values.test.ts and typescript/core/test/site-guide-coverage.test.ts.
+ * - `demo`: `pnpm build`, whose site build runs site/scripts/check-language-examples.ts, and the
+ *   site smoke test.
+ *
+ * The other always-run lane, `unit`, runs only the unit tests that spawn the Python toolchain. None
+ * of them reads the documentation, so a docs-only pull request skips it. A filtered lane that names
+ * a changed file as an input still runs.
+ */
+export const DOC_CHECK_LANES = ["static", "npm-release-scope", "demo"] as const;
+
+/** Tells whether a change lists files and every file is documentation. */
+export function isDocsOnlyChange(changedFiles: readonly string[]): boolean {
+  return changedFiles.length > 0 && changedFiles.every((file) => matchesAny(file, DOC_PATHS));
+}
 
 export type FilteredLaneName = keyof typeof FILTERED_LANES;
 export type LaneName = FilteredLaneName | (typeof ALWAYS_RUN_LANES)[number];
@@ -269,21 +304,29 @@ export function planLanes(
     selection = changedFiles
       ? selectLanes(changedFiles)
       : { all: true, reason: "the plan could not list the changed files" };
+  const docsOnly = !selection.all && changedFiles !== undefined && isDocsOnlyChange(changedFiles);
 
   const plan = {} as LanePlan;
   for (const lane of LANE_NAMES) {
     const eventGate = (WEEKLY_LANES as readonly string[]).includes(lane)
       ? eventRunsWeekly
       : eventRuns;
-    const selected =
-      selection.all ||
-      (ALWAYS_RUN_LANES as readonly string[]).includes(lane) ||
-      selection.lanes.has(lane as FilteredLaneName);
+    const alwaysRun =
+      (ALWAYS_RUN_LANES as readonly string[]).includes(lane) &&
+      (!docsOnly || (DOC_CHECK_LANES as readonly string[]).includes(lane));
+    const selected = selection.all || alwaysRun || selection.lanes.has(lane as FilteredLaneName);
     plan[lane] = eventGate && selected;
   }
+  // The reason names the filtered lanes that run, not the selected lanes that the event skips.
+  const filtered =
+    FILTERED_LANE_NAMES.filter((lane) => plan[lane])
+      .toSorted()
+      .join(", ") || "no filtered lane";
   const reason = selection.all
     ? selection.reason
-    : `the change runs ${[...selection.lanes].toSorted().join(", ") || "no filtered lane"}`;
+    : docsOnly
+      ? `the change is docs-only, so it runs ${DOC_CHECK_LANES.join(", ")} and ${filtered}`
+      : `the change runs ${filtered}`;
   return { plan, reason };
 }
 
@@ -313,9 +356,30 @@ async function pullRequestFiles(): Promise<readonly string[] | undefined> {
   }
 }
 
+/**
+ * Reads changed file paths from standard input, one on each line, and tells whether the change is
+ * docs-only. The exit code is 0 for a docs-only change and 1 for another change.
+ */
+async function checkDocsOnly(): Promise<void> {
+  let input = "";
+  for await (const chunk of process.stdin) input += String(chunk);
+  const files = input
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean);
+  const other = files.find((file) => !matchesAny(file, DOC_PATHS));
+  if (isDocsOnlyChange(files)) process.stdout.write(`docs-only: ${files.length} files\n`);
+  else {
+    process.stdout.write(`not docs-only: ${other ?? "the change lists no files"}\n`);
+    process.exitCode = 1;
+  }
+}
+
 async function main(): Promise<void> {
   const eventName = process.argv[2];
-  if (!eventName) throw new Error("Usage: scripts/ci-lanes.ts <event-name> [schedule]");
+  if (eventName === "--docs-only") return checkDocsOnly();
+  if (!eventName)
+    throw new Error("Usage: scripts/ci-lanes.ts <event-name> [schedule] | --docs-only");
   const schedule = process.argv[3] ?? "";
   const changedFiles = eventName === "pull_request" ? await pullRequestFiles() : undefined;
   const { plan, reason } = planLanes(eventName, schedule, changedFiles);
