@@ -280,7 +280,8 @@ async fn an_unconfigured_optional_procedure_is_forbidden() {
         let (status, body) = send_json(dashboard.clone(), request).await;
         assert_eq!(status, StatusCode::FORBIDDEN, "{procedure}");
         assert_eq!(body["json"]["code"], "FORBIDDEN", "{procedure}");
-        assert_eq!(body["json"]["message"], "This procedure is not available", "{procedure}");
+        let message = format!("This dashboard host does not provide the {procedure} action");
+        assert_eq!(body["json"]["message"], message, "{procedure}");
     }
     let uri = "https://example.test/workhorse/rpc/dashboard/unknown";
     let (status, body) = send_json(dashboard, request("POST", uri, json!({}))).await;

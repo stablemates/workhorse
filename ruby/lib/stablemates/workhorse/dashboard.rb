@@ -214,7 +214,9 @@ module Stablemates
         end
         handler = @procedures[procedure]
         if handler.nil?
-          return rpc_error(403, "FORBIDDEN", "This procedure is not available") if OPTIONAL_MUTATIONS.include?(procedure)
+          if OPTIONAL_MUTATIONS.include?(procedure)
+            return rpc_error(403, "FORBIDDEN", "This dashboard host does not provide the #{procedure} action")
+          end
 
           return rpc_error(404, "NOT_FOUND", "Procedure not found")
         end

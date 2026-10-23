@@ -22,6 +22,15 @@ time at the start of the call.
 
 The schema does not change.
 
+### The dashboard names an action that the host does not provide
+
+A dashboard host answers the `enqueueTest` and `setSchedulePaused` procedures only when the
+application gives a handler for them. Before this change, a writable host without that handler
+answered `FORBIDDEN` with the message "This procedure is not available". Now the message is "This
+dashboard host does not provide the <action> action", as in the TypeScript dashboard server. A
+read-only host keeps the message "This dashboard is read-only". The code `FORBIDDEN` and the HTTP
+status 403 do not change (SM-1705).
+
 ### A worker without a live notification subscription polls at the short interval
 
 A worker that can listen uses a 5,000 ms wait after an empty claim, because a notification wakes it

@@ -242,6 +242,23 @@ public sealed class DashboardHostTests(ScratchDatabase database)
     }
 
     [Fact]
+    public async Task AnswersAnUnprovidedActionAsReadOnlyOnAReadOnlyHost()
+    {
+        var options = Options();
+        options = new DashboardOptions
+        {
+            DataSource = options.DataSource,
+            Authorize = options.Authorize,
+            Environment = options.Environment,
+            ReadOnly = true,
+        };
+        await using var server = await DashboardServer.StartAsync(app => app.MapWorkhorseDashboard("/workhorse", options));
+        var response = await server.PostAsync("/workhorse/rpc/dashboard/enqueueTest", "{}");
+        Assert.Equal(403, response.Status);
+        Assert.Contains("\"message\":\"This dashboard is read-only\"", response.Text, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task AnswersProcedureErrorsWithTheRpcEnvelopeAndNoDetail()
     {
         var options = With(Options(), procedures: new Dictionary<string, DashboardProcedure>
@@ -282,7 +299,7 @@ public sealed class DashboardHostTests(ScratchDatabase database)
         Assert.Equal(404, (await server.PostAsync(Rpc + "nothing", "{}")).Status);
         var optional = await server.PostAsync(Rpc + "enqueueTest", "{}");
         Assert.Equal(403, optional.Status);
-        Assert.Contains("This procedure is not available", optional.Text, StringComparison.Ordinal);
+        Assert.Contains("\"message\":\"This dashboard host does not provide the enqueueTest action\"", optional.Text, StringComparison.Ordinal);
         Assert.Equal(400, (await server.PostAsync(Rpc + "meta", "[1]")).Status);
         Assert.Equal(400, (await server.PostAsync(Rpc + "meta", "{")).Status);
         Assert.Equal(400, (await server.PostAsync(Rpc + "meta", "{\"json\":{}}")).Status);

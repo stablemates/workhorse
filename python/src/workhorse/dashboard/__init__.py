@@ -262,7 +262,9 @@ class DashboardHost:
         handler = self._procedures.get(procedure)
         if handler is None:
             if procedure in _OPTIONAL_MUTATIONS:
-                return self._rpc_error(403, "FORBIDDEN", "This procedure is not available")
+                return self._rpc_error(
+                    403, "FORBIDDEN", f"This dashboard host does not provide the {procedure} action"
+                )
             return self._rpc_error(404, "NOT_FOUND", "Procedure not found")
         body = self._read_body(environ)
         if body is None:

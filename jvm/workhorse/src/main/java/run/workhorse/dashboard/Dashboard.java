@@ -289,7 +289,11 @@ public final class Dashboard implements Filter {
     DashboardProcedure extension = extensions.get(procedure);
     if (builtIn == null && extension == null) {
       if (OPTIONAL_MUTATIONS.contains(procedure)) {
-        return rpcError(403, "FORBIDDEN", "This procedure is not available", null);
+        return rpcError(
+            403,
+            "FORBIDDEN",
+            "This dashboard host does not provide the " + procedure + " action",
+            null);
       }
       return rpcError(404, "NOT_FOUND", "Procedure not found", null);
     }
