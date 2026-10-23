@@ -1,7 +1,9 @@
 # ADR 0087: Keep the Django Tasks backend bounded by atomic acceptance
 
-- **Status:** Proposed
+- **Status:** Accepted. Python 0.7.0 ships `workhorse.django`.
 - **Date:** 2026-10-02
+- **Note:** The Django 6.1.1 fixture pin in the decision is historical. `python/pyproject.toml`
+  holds the current fixture pin.
 - **Related:** SM-1119, [ADR 0070](0070-publish-the-verified-sqlalchemy-transaction-accessor.md),
   [ADR 0075](0075-shape-the-ruby-sdk-as-one-gem-with-an-active-job-adapter.md)
 

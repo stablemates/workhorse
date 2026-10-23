@@ -4,6 +4,9 @@
 
 Accepted for the schema version 6 validation protocol.
 
+Amended by [ADR 0098](0098-check-the-input-of-a-checkpoint-on-replay.md): a handler can give the
+input of a checkpoint. Workhorse then stores a fingerprint of the input and compares it on replay.
+
 ## Context
 
 Workhorse retries restart a handler from its entry point. Applications with several expensive or externally visible steps need an explicit boundary that records completed work so a later attempt can reuse its result instead of repeating the whole handler.

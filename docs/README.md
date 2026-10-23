@@ -25,6 +25,10 @@ published site; they do not own product behavior.
   derived statistics.
 - [`worker-processes.md`](worker-processes.md) owns the process model and lifecycle for dedicated
   workers.
+- [`kubernetes.md`](kubernetes.md) deploys Workhorse as ordinary Kubernetes workloads, with
+  reference manifests for the schema migration, the workers, and the dashboard.
+- [`rust-conformance.md`](rust-conformance.md) is the generated evidence that the Rust SDK runs each
+  `protocol/v1` fixture, or lists it as expected unsupported.
 
 ## Maintainer procedures and evidence
 
@@ -35,6 +39,10 @@ published site; they do not own product behavior.
   database schema.
 - [`dashboard-security-review.md`](dashboard-security-review.md) owns the security review checklist
   for the dashboard server, and states when a pull request has to re-walk it.
+- [`integration-brand-assets.md`](integration-brand-assets.md) records the source, the terms, and
+  the digest of each integration mark that the site shows.
+- [`tracker-history.md`](tracker-history.md) explains the earlier trackers, so you can follow a
+  historical issue label in a commit or a decision record.
 
 Architectural decisions live in [`decisions/`](decisions/). Dated benchmark reports and raw results
 live in [`benchmarks/`](benchmarks/), and dated agent documentation eval notes live in

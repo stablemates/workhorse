@@ -93,7 +93,7 @@ transaction.
 
 - `getTask`, `listTasks`, and `getTaskTimeline` show tasks.
 - `listCheckpoints`, `listWaits`, `listSignalWaits`, `listHumanWaits`, and `getProgress` show the
-  durable steps of a task.
+  checkpoints, waits, and progress of a task.
 - The dependency, child, and redrive lineage reads show the retained links between tasks.
 
 **Control failures and the fleet.**
@@ -151,7 +151,7 @@ Each handler gets `(payload, context)`. The context gives the durable execution 
 - `runChildrenAll(children)` requires each child to succeed. If a child fails, the parent gets the
   failure.
 - `setProgress(value)` and `getProgress()` write and read a status that operators can see.
-- `getCheckpoint(name)` and `getWait(name)` read one durable step without running code.
+- `getCheckpoint(name)` and `getWait(name)` read one checkpoint or one wait without running code.
 
 ## Catch errors
 
@@ -232,8 +232,8 @@ You can use each of these subcommands:
 - `schema status --json` reports the version of the installed schema, and if this build accepts it.
 - `worker --config workhorse.config.js` runs a supervised worker process.
 - `dashboard --port 3000` serves the operator dashboard.
-- `admin` reads tasks, queues, schedules, failures, workers, and durable steps. It also runs guarded
-  cancel, redrive, pause, resume, purge, and worker-pause operations.
+- `admin` reads tasks, checkpoints, waits, queues, schedules, failures, workers, and task groups. It
+  also runs guarded cancel, redrive, pause, resume, purge, and worker-pause operations.
 - `tui` opens the terminal operator interface.
 - `health --json` gives queue health in a format that a machine can read.
 
