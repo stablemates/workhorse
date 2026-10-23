@@ -42,6 +42,22 @@
     ]
   },
   {
+    "id": "string-length-counts-code-points",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "short": { "type": "string", "maxLength": 1 },
+        "long": { "type": "string", "minLength": 2 }
+      }
+    },
+    "instances": [
+      { "value": { "short": "😀" }, "valid": true },
+      { "value": { "long": "😀" }, "valid": false },
+      { "json": "{\"short\": \"\\ud83d\\ude00\"}", "valid": true },
+      { "json": "{\"long\": \"\\ud83d\\ude00\"}", "valid": false }
+    ]
+  },
+  {
     "id": "properties-without-object-type",
     "schema": { "properties": { "count": { "type": "integer" } } },
     "instances": [

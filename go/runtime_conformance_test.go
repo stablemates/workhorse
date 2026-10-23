@@ -1976,9 +1976,20 @@ func executeReplayConflictFixture(t *testing.T, fixture workerRuntimeFixture) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			subject.Handle(fixture.TaskType, func(context.Context, any, *workhorse.HandlerContext) (any, error) {
+			subject.Handle(fixture.TaskType, func(_ context.Context, _ any, handler *workhorse.HandlerContext) (any, error) {
 				var failure error
 				switch entry.ErrorKind {
+				case "checkpoint-input":
+					// The second call replays the saved checkpoint with another input, so the SDK
+					// returns its own input conflict.
+					saved := func() (any, error) { return map[string]any{"saved": true}, nil }
+					if _, err := handler.Checkpoint("saved", saved, workhorse.CheckpointOptions{Input: map[string]any{"version": 1}}); err != nil {
+						return nil, err
+					}
+					if _, err := handler.Checkpoint("saved", saved, workhorse.CheckpointOptions{Input: map[string]any{"version": 2}}); err != nil {
+						return nil, err
+					}
+					return nil, errors.New("the second checkpoint did not conflict")
 				case "checkpoint", "wrapped-checkpoint":
 					failure = &workhorse.CheckpointConflictError{TaskID: id, CheckpointName: "saved"}
 				case "wait":

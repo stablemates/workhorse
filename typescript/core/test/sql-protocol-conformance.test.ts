@@ -2444,12 +2444,18 @@ async function executeReplayConflictRuntimeFixture(
         delayCalls++;
         return 60_000;
       },
-    }).handle(fixture.taskType, async () => {
+    }).handle(fixture.taskType, async (_payload, context) => {
       switch (entry.errorKind) {
         case "checkpoint":
           throw new CheckpointConflictError(id, "saved");
         case "wrapped-checkpoint":
           throw new Error("handler", { cause: new CheckpointConflictError(id, "saved") });
+        case "checkpoint-input":
+          // The second call replays the saved checkpoint with another input, so the SDK raises
+          // its own input conflict.
+          await context.checkpoint("saved", () => ({ saved: true }), { input: { version: 1 } });
+          await context.checkpoint("saved", () => ({ saved: true }), { input: { version: 2 } });
+          throw new Error("the second checkpoint did not conflict");
         case "wait":
           throw new WaitConflictError(id, "saved", {
             taskId: id,

@@ -392,6 +392,21 @@
         }
       },
       {
+        "errorKind": "checkpoint-input",
+        "redactErrorDetails": false,
+        "expectedState": "failed",
+        "expectedAttempt": 1,
+        "expectedErrorNames": {
+          "typescript": "CheckpointInputConflictError",
+          "python": "CheckpointInputConflictError",
+          "go": "CheckpointInputConflictError",
+          "rust": "CheckpointInputConflictError",
+          "ruby": "Stablemates::Workhorse::CheckpointInputConflictError",
+          "java": "CheckpointInputConflictException",
+          "csharp": "CheckpointInputConflictException"
+        }
+      },
+      {
         "errorKind": "wait",
         "redactErrorDetails": false,
         "expectedState": "failed",

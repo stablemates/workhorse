@@ -2586,6 +2586,12 @@ def execute_replay_conflict_fixture(
                 raise Exception("transient")
             if kind == "wrapped-checkpoint":
                 raise Exception("handler") from CheckpointConflictError(task_id, "saved")
+            if kind == "checkpoint-input":
+                # The second call replays the saved checkpoint with another input, so the SDK
+                # raises its own input conflict.
+                context.checkpoint("saved", lambda: {"saved": True}, input={"version": 1})
+                context.checkpoint("saved", lambda: {"saved": True}, input={"version": 2})
+                raise AssertionError("the second checkpoint did not conflict")
             raise errors[kind](task_id, "child set" if kind == "child-set" else "saved")
 
         subject = Worker(

@@ -27,6 +27,7 @@ import java.util.Objects;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.BlockingQueue;
+import java.util.concurrent.Callable;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
@@ -52,6 +53,7 @@ import run.workhorse.BudgetDefinition;
 import run.workhorse.CancelResult;
 import run.workhorse.CancelStatus;
 import run.workhorse.CancellationReason;
+import run.workhorse.CheckpointOptions;
 import run.workhorse.ChildRequest;
 import run.workhorse.ConflictException;
 import run.workhorse.EnqueueOptions;
@@ -1092,6 +1094,22 @@ final class RuntimeFixtures {
                     taskType(fixture),
                     Object.class,
                     (ctx, payload) -> {
+                      if ("checkpoint-input".equals(kind)) {
+                        // The second call replays the saved checkpoint with another input, so the
+                        // SDK throws its own input conflict.
+                        Callable<Object> saved = () -> Map.of("saved", true);
+                        ctx.checkpoint(
+                            "saved",
+                            Object.class,
+                            CheckpointOptions.input(Map.of("version", 1)),
+                            saved);
+                        ctx.checkpoint(
+                            "saved",
+                            Object.class,
+                            CheckpointOptions.input(Map.of("version", 2)),
+                            saved);
+                        throw new IllegalStateException("the second checkpoint did not conflict");
+                      }
                       throw switch (kind) {
                         case "checkpoint" -> new ConflictException("checkpoint", "saved");
                         // A conflict inside a plain wrapper is still terminal (SM-1512).
