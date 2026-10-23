@@ -27,6 +27,71 @@ worker_pool: Any
 
 pytestmark = pytest.mark.slow
 
+# A guard against a hang, not a performance bound. The example's pool has one statement
+# connection. Its first maintenance pass, its claim, and its completion use it in turn. A busy
+# PostgreSQL slows each of them. The guard covers the startup budget (10 s with the default
+# heartbeat), the example's shutdown grace (20 s), and that serialized work.
+DEDICATED_WORKER_EXAMPLE_GUARD_SECONDS = 60
+COMPLETION_GATE_KEY = 1744
+# Only a completion inserts a task outcome, so this gate holds no enqueue, claim, or maintenance.
+HOLD_TASK_OUTCOME_INSERTS = f"""
+CREATE FUNCTION public.hold_task_outcome_insert() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+  PERFORM pg_advisory_xact_lock_shared({COMPLETION_GATE_KEY});
+  RETURN NEW;
+END
+$$;
+CREATE TRIGGER hold_task_outcome_insert BEFORE INSERT ON workhorse.task_outcome
+  FOR EACH ROW EXECUTE FUNCTION public.hold_task_outcome_insert();
+"""
+
+
+def _start_dedicated_worker_example(
+    interpreter: Path, database_url: str, cwd: Path, environment: dict[str, str]
+) -> subprocess.Popen[str]:
+    return subprocess.Popen(
+        [str(interpreter), str(DEDICATED_WORKER_EXAMPLE), database_url],
+        cwd=cwd,
+        env={**environment, "PYTHONFAULTHANDLER": "1"},
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+
+def _finish_dedicated_worker_example(process: subprocess.Popen[str]) -> tuple[int, str]:
+    try:
+        _stdout, stderr = process.communicate(timeout=DEDICATED_WORKER_EXAMPLE_GUARD_SECONDS)
+    except subprocess.TimeoutExpired:
+        pytest.fail(
+            f"the example did not exit within {DEDICATED_WORKER_EXAMPLE_GUARD_SECONDS}s; "
+            f"stderr: {_abort_with_stacks(process)}"
+        )
+    return process.returncode, stderr
+
+
+def _abort_with_stacks(process: subprocess.Popen[str]) -> str:
+    """End the example and return its stderr, with every thread's stack if it still ran."""
+    if process.poll() is None:
+        # SIGABRT makes faulthandler write every thread's stack before the process ends.
+        process.send_signal(signal.SIGABRT)
+    try:
+        _stdout, stderr = process.communicate(timeout=5)
+    except subprocess.TimeoutExpired:
+        process.kill()
+        _stdout, stderr = process.communicate()
+    return stderr
+
+
+def _completion_waits_at_gate(connection: psycopg.Connection[Any]) -> bool:
+    row = connection.execute(
+        "SELECT count(*) FROM pg_locks "
+        "WHERE locktype = 'advisory' AND objid = %s AND NOT granted "
+        "AND database = (SELECT oid FROM pg_database WHERE datname = current_database())",
+        (COMPLETION_GATE_KEY,),
+    ).fetchone()
+    return row is not None and row[0] > 0
+
 
 def _start_fixture(mode: str, timeout_ms: int) -> subprocess.Popen[str]:
     process = subprocess.Popen(
@@ -366,20 +431,47 @@ def test_built_wheel_runs_a_worker_for_a_clean_consumer(
 ) -> None:
     environment = os.environ.copy()
     environment.pop("PYTHONPATH", None)
-    result = subprocess.run(
-        [
-            str(installed_distribution_interpreters["wheel"]),
-            str(DEDICATED_WORKER_EXAMPLE),
-            database_url,
-        ],
-        check=False,
-        cwd=tmp_path,
-        env=environment,
-        capture_output=True,
-        text=True,
-        timeout=10,
+    example = _start_dedicated_worker_example(
+        installed_distribution_interpreters["wheel"], database_url, tmp_path, environment
     )
-    assert result.returncode == 0, result.stderr
+    returncode, stderr = _finish_dedicated_worker_example(example)
+    assert returncode == 0, stderr
+
+
+@pytest.mark.integration
+@pytest.mark.skipif(os.name == "nt", reason="POSIX process signals are required")
+def test_dedicated_worker_example_drains_a_completion_held_past_one_second(
+    database_url: str,
+    tmp_path: Path,
+) -> None:
+    # The example signals SIGTERM 50 ms after its handler returns. A gate holds the completion
+    # write, as a busy statement connection does, for longer than the earlier 1 s grace.
+    with psycopg.connect(database_url, autocommit=True) as gate:
+        gate.execute(HOLD_TASK_OUTCOME_INSERTS)
+        gate.execute("SELECT pg_advisory_lock(%s)", (COMPLETION_GATE_KEY,))
+        example = _start_dedicated_worker_example(
+            Path(sys.executable), database_url, tmp_path, os.environ.copy()
+        )
+        try:
+            # The wait includes the start, the first maintenance pass, and the claim.
+            eventually(
+                lambda: _completion_waits_at_gate(gate) or example.poll() is not None,
+                "the example's completion never reached the gate",
+                timeout_s=DEDICATED_WORKER_EXAMPLE_GUARD_SECONDS,
+            )
+            assert example.poll() is None, "the example ended before its completion was written"
+            # The completion reaches the gate after the handler returns, and SIGTERM comes 50 ms
+            # after that return. So a 1 s grace ends inside this 2 s hold; a 20 s grace does not.
+            held_until = monotonic() + 2
+            while example.poll() is None and monotonic() < held_until:
+                sleep(0.01)
+        except BaseException as error:
+            error.add_note(f"example stderr: {_abort_with_stacks(example)}")
+            raise
+        finally:
+            gate.execute("SELECT pg_advisory_unlock(%s)", (COMPLETION_GATE_KEY,))
+    returncode, stderr = _finish_dedicated_worker_example(example)
+    assert returncode == 0, stderr
 
 
 @pytest.mark.integration

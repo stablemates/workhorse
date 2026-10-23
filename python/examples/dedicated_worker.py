@@ -33,7 +33,7 @@ with ConnectionPool(
     database_url, min_size=3, max_size=3, kwargs={"autocommit": True}
 ) as worker_pool:
     worker = Worker(worker_pool, poll_ms=10).handle("packed.consumer", complete)
-    run_worker_process(worker, shutdown_timeout_ms=1_000)
+    run_worker_process(worker, shutdown_timeout_ms=20_000)
     with worker_pool.connection() as connection:
         outcome = connection.execute(
             "SELECT state, result FROM workhorse.task_outcome WHERE task_id = %s",
