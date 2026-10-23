@@ -27,8 +27,10 @@ daylight-saving gap and selects the first instant when a wall time repeats. Occu
 one-second precision. If several wall-clock fields normalize to the same instant, PostgreSQL emits
 that instant once. A new evaluator can return the latest occurrence at or before `now`; an
 evaluator with a durable position returns occurrences strictly after that position and at or
-before `now`. A schedule's catch-up policy selects the position and result: `skip` uses the current
-evaluation window, `latest` returns only the most recent missed occurrence, and `all` returns
-ordered occurrences capped by the supplied catch-up limit. The search horizon is 128 years.
+before `now`. A schedule's catch-up policy selects the position and result: `skip` returns the
+occurrences after the position that are not older than `now` minus the supported delay,
+`GREATEST(60 seconds, 2 × evaluation_window_ms)`, capped by the supplied catch-up limit. It records
+the older occurrences it skips on the definition row. `latest` returns only the most recent missed
+occurrence, and `all` returns ordered occurrences capped by the supplied catch-up limit. The search horizon is 128 years.
 
 [`cron-occurrences.json`](cron-occurrences.json) is the executable fixture for these rules.

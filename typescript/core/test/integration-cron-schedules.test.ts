@@ -478,6 +478,31 @@ describe("cron schedules", () => {
       ["all", "2026-09-14T10:01:00.000Z"],
       ["all", "2026-09-14T10:02:00.000Z"],
       ["latest", "2026-09-14T10:05:00.000Z"],
+      ["skip", "2026-09-14T10:05:00.000Z"],
+    ]);
+    // The supported delay is 60 seconds here, so `skip` fires only 10:05 and records the four
+    // older occurrences it skipped.
+    expect(
+      (
+        await pool.query<{
+          last_skipped_at: Date | null;
+          last_skipped_count: number | null;
+          last_skipped_through: Date | null;
+        }>(
+          `SELECT schedule_name, last_skipped_at, last_skipped_count, last_skipped_through
+             FROM workhorse.schedule_definition
+            WHERE namespace = 'catchup-policies'
+            ORDER BY schedule_name`,
+        )
+      ).rows.map((row) => [
+        row.last_skipped_at?.toISOString() ?? null,
+        row.last_skipped_count,
+        row.last_skipped_through?.toISOString() ?? null,
+      ]),
+    ).toEqual([
+      [null, null, null],
+      [null, null, null],
+      ["2026-09-14T10:05:30.000Z", 4, "2026-09-14T10:04:00.000Z"],
     ]);
 
     await queue.fireDueSchedules(["catchup-policies"], new Date("2026-09-14T10:05:30Z"), 2, 1_000);
@@ -499,8 +524,243 @@ describe("cron schedules", () => {
     expect(caughtUp.rows).toEqual([
       { schedule_name: "all", count: 6 },
       { schedule_name: "latest", count: 2 },
-      { schedule_name: "skip", count: 1 },
+      { schedule_name: "skip", count: 2 },
     ]);
+  });
+
+  it("fires every skip occurrence when a slow maintenance phase delays the next pass", async () => {
+    const namespace = `slow-maintenance-${randomUUID()}`;
+    await queue.syncSchedules(namespace, [
+      {
+        name: "secondly",
+        schedule: "* * * * * *",
+        task: { type: "cron-slow-maintenance", payload: null, queue: namespace },
+      },
+    ]);
+    class SlowMaintenanceQueue extends Queue {
+      passes = 0;
+
+      override async runMaintenance(options: { now?: Date } = {}) {
+        const results = await super.runMaintenance(options);
+        await sleep(1_500);
+        this.passes += 1;
+        return results;
+      }
+    }
+    const slowQueue = new SlowMaintenanceQueue(pool);
+    // Each schedule pass starts at least 1.5 seconds after the previous one, which is far more
+    // than the 200 millisecond maintenance interval but inside the supported delay.
+    const worker = new Worker(slowQueue, {
+      workerId: `slow-maintenance-${randomUUID()}`,
+      scheduleNamespaces: [namespace],
+      maintenanceIntervalMs: 200,
+      maintenanceRoutinePollMs: 200,
+    }).handle("cron-slow-maintenance", () => null);
+    const running = worker.run();
+    try {
+      while (slowQueue.passes < 3) await sleep(50);
+    } finally {
+      worker.stop();
+      await running;
+    }
+
+    const fired = await pool.query<{ occurrence_at: Date }>(
+      `SELECT occurrence_at FROM workhorse.schedule_occurrence
+        WHERE namespace = $1 ORDER BY occurrence_at`,
+      [namespace],
+    );
+    const instants = fired.rows.map((row) => row.occurrence_at.getTime());
+    expect(instants.length).toBeGreaterThanOrEqual(4);
+    expect(instants.slice(1).map((instant, index) => instant - instants[index]!)).toEqual(
+      instants.slice(1).map(() => 1_000),
+    );
+    expect(
+      (
+        await pool.query<{ last_skipped_at: Date | null }>(
+          "SELECT last_skipped_at FROM workhorse.schedule_definition WHERE namespace = $1",
+          [namespace],
+        )
+      ).rows[0]?.last_skipped_at,
+    ).toBeNull();
+  });
+
+  it("records at most 10,000 skipped occurrences and the newest one after an outage", async () => {
+    const namespace = `skip-outage-${randomUUID()}`;
+    await queue.syncSchedules(namespace, [
+      {
+        name: "secondly",
+        schedule: "* * * * * *",
+        task: { type: "cron-skip-outage", payload: null, queue: namespace },
+      },
+    ]);
+    await pool.query(
+      `UPDATE workhorse.schedule_definition SET last_evaluated_at = '2026-09-14T06:00:00Z'
+        WHERE namespace = $1`,
+      [namespace],
+    );
+
+    await queue.fireDueSchedules([namespace], new Date("2026-09-14T10:00:00.500Z"), 100, 1_000);
+
+    const fired = await pool.query<{ count: number; first: Date; last: Date }>(
+      `SELECT count(*)::integer AS count, min(occurrence_at) AS first, max(occurrence_at) AS last
+         FROM workhorse.schedule_occurrence WHERE namespace = $1`,
+      [namespace],
+    );
+    expect(fired.rows[0]).toEqual({
+      count: 60,
+      first: new Date("2026-09-14T09:59:01Z"),
+      last: new Date("2026-09-14T10:00:00Z"),
+    });
+    // The outage holds 14,340 older occurrences. The record caps the count and still names the
+    // newest skipped occurrence.
+    const record = await pool.query(
+      `SELECT last_skipped_at, last_skipped_count, last_skipped_through, last_evaluated_at
+         FROM workhorse.schedule_definition WHERE namespace = $1`,
+      [namespace],
+    );
+    expect(record.rows[0]).toEqual({
+      last_skipped_at: new Date("2026-09-14T10:00:00.500Z"),
+      last_skipped_count: 10_000,
+      last_skipped_through: new Date("2026-09-14T09:59:00Z"),
+      last_evaluated_at: new Date("2026-09-14T10:00:00.500Z"),
+    });
+  });
+
+  it("uses two evaluation windows as the supported delay for a long maintenance interval", async () => {
+    const namespace = `skip-long-interval-${randomUUID()}`;
+    await queue.syncSchedules(namespace, [
+      {
+        name: "secondly",
+        schedule: "* * * * * *",
+        task: { type: "cron-skip-long-interval", payload: null, queue: namespace },
+      },
+    ]);
+    await pool.query(
+      `UPDATE workhorse.schedule_definition SET last_evaluated_at = '2026-09-14T10:00:00Z'
+        WHERE namespace = $1`,
+      [namespace],
+    );
+
+    // A 60-second window gives a 120-second supported delay, so all 90 due occurrences fire.
+    await queue.fireDueSchedules([namespace], new Date("2026-09-14T10:01:30.500Z"), 100, 60_000);
+
+    const fired = await pool.query<{ count: number; first: Date }>(
+      `SELECT count(*)::integer AS count, min(occurrence_at) AS first
+         FROM workhorse.schedule_occurrence WHERE namespace = $1`,
+      [namespace],
+    );
+    expect(fired.rows[0]).toEqual({ count: 90, first: new Date("2026-09-14T10:00:01Z") });
+    expect(
+      (
+        await pool.query<{ last_skipped_at: Date | null }>(
+          "SELECT last_skipped_at FROM workhorse.schedule_definition WHERE namespace = $1",
+          [namespace],
+        )
+      ).rows[0]?.last_skipped_at,
+    ).toBeNull();
+  });
+
+  it("continues a skip schedule that reaches the catch-up limit on the next pass", async () => {
+    const namespace = `skip-limit-${randomUUID()}`;
+    await queue.syncSchedules(namespace, [
+      {
+        name: "secondly",
+        schedule: "* * * * * *",
+        task: { type: "cron-skip-limit", payload: null, queue: namespace },
+      },
+    ]);
+    await pool.query(
+      `UPDATE workhorse.schedule_definition SET last_evaluated_at = '2026-09-14T10:00:00Z'
+        WHERE namespace = $1`,
+      [namespace],
+    );
+    const now = new Date("2026-09-14T10:00:25.500Z");
+
+    // 25 occurrences are due inside the supported delay. Each pass fires at most 10 of them.
+    for (const expected of [10, 20, 25]) {
+      await queue.fireDueSchedules([namespace], now, 10, 1_000);
+      expect(
+        (
+          await pool.query<{ count: number }>(
+            "SELECT count(*)::integer AS count FROM workhorse.schedule_occurrence WHERE namespace = $1",
+            [namespace],
+          )
+        ).rows[0]?.count,
+      ).toBe(expected);
+    }
+    const record = await pool.query(
+      `SELECT last_skipped_at, last_evaluated_at FROM workhorse.schedule_definition
+        WHERE namespace = $1`,
+      [namespace],
+    );
+    expect(record.rows[0]).toEqual({ last_skipped_at: null, last_evaluated_at: now });
+  });
+
+  it("reads no occurrence history of a namespace that another pass holds", async () => {
+    const namespace = `busy-namespace-${randomUUID()}`;
+    await queue.syncSchedules(namespace, [
+      {
+        name: "minutely",
+        schedule: "0 * * * * *",
+        task: { type: "cron-busy-namespace", payload: null, queue: namespace },
+      },
+    ]);
+    // 500 retained occurrences, all older than the durable position.
+    await pool.query(
+      `INSERT INTO workhorse.schedule_occurrence (namespace, schedule_name, occurrence_at)
+       SELECT $1, 'minutely', '2026-09-13T00:00:00Z'::timestamptz + make_interval(mins => step)
+         FROM generate_series(1, 500) step`,
+      [namespace],
+    );
+    await pool.query(
+      `UPDATE workhorse.schedule_definition SET last_evaluated_at = '2026-09-14T10:00:30Z'
+        WHERE namespace = $1`,
+      [namespace],
+    );
+    const occurrenceReads = async (): Promise<{ scans: number; rows: number }> => {
+      const client = await pool.connect();
+      try {
+        // The counters also hold unflushed reads of earlier work on this connection, so the
+        // check compares them before and after the pass.
+        const counters = async (): Promise<{ scans: number; rows: number }> => {
+          const stats = await client.query<{ scans: string; rows: string }>(
+            `SELECT seq_scan + COALESCE(idx_scan, 0) AS scans,
+                    seq_tup_read + COALESCE(idx_tup_fetch, 0) AS rows
+               FROM pg_stat_xact_user_tables
+              WHERE schemaname = 'workhorse' AND relname = 'schedule_occurrence'`,
+          );
+          return { scans: Number(stats.rows[0]!.scans), rows: Number(stats.rows[0]!.rows) };
+        };
+        await client.query("BEGIN");
+        const before = await counters();
+        await client.query(
+          `SELECT * FROM workhorse.fire_due_schedules_v2(
+             ARRAY[$1::text], '2026-09-14T10:00:40Z', 100, 1000
+           )`,
+          [namespace],
+        );
+        const after = await counters();
+        await client.query("ROLLBACK");
+        return { scans: after.scans - before.scans, rows: after.rows - before.rows };
+      } finally {
+        client.release();
+      }
+    };
+
+    // The owned namespace reads one occurrence row for its one definition.
+    await expect(occurrenceReads()).resolves.toEqual({ scans: 1, rows: 1 });
+
+    const holder = await pool.connect();
+    try {
+      await holder.query(
+        "SELECT pg_advisory_lock(hashtextextended('workhorse:schedule-namespace:' || $1, 0))",
+        [namespace],
+      );
+      await expect(occurrenceReads()).resolves.toEqual({ scans: 0, rows: 0 });
+    } finally {
+      await holder.query("SELECT pg_advisory_unlock_all()");
+      holder.release();
+    }
   });
 
   // The occurrence calculator has its own daylight-saving cases. This covers the firing path,

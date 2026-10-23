@@ -1779,7 +1779,8 @@ async fn a_panicking_batch_callback_fails_every_member_with_failure_evidence() {
 #[tokio::test]
 async fn maintenance_fires_due_schedules_in_its_namespaces() {
     let Some(harness) = harness("worker_schedules").await else { return };
-    // `skip` evaluates only the last maintenance window, so the missed minute needs `latest`.
+    // `skip` fires only inside the supported delay of at least 60 seconds, so the missed minute
+    // needs `latest`.
     let definition = ScheduleDefinition {
         catchup_policy: ScheduleCatchupPolicy::Latest,
         ..ScheduleDefinition::new(

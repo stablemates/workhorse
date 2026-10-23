@@ -580,6 +580,13 @@ export const SCHEMA_MIGRATIONS: readonly SchemaMigrationStep[] = [
     description: "keep the operator pause after a registry prune",
     kind: "additive",
   },
+  {
+    fromVersion: 81,
+    toVersion: 82,
+    file: "0083-fire-skip-schedules-within-the-supported-delay.sql",
+    description: "fire skip schedules within the supported delay",
+    kind: "additive",
+  },
 ];
 
 /**

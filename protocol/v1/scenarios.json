@@ -2340,7 +2340,7 @@
             {
               "value": {
                 "promotionLagMs": 10000,
-                "schemaVersion": 81,
+                "schemaVersion": 82,
                 "terminalCleanupBacklogMs": 21600000
               }
             }
@@ -4085,6 +4085,114 @@
                 },
                 "outcome": "replayed"
               }
+            }
+          ]
+        }
+      }
+    ]
+  },
+  {
+    "id": "schedule-skip-supported-delay",
+    "steps": [
+      {
+        "id": "sync-a-skip-schedule",
+        "sql": "SELECT count(*)::integer AS synced FROM (SELECT workhorse.sync_schedule_definitions_v2($1::text, $2::jsonb, true)) sync",
+        "parameters": [
+          "protocol-skip-delay",
+          [
+            {
+              "name": "secondly",
+              "schedule": "* * * * * *",
+              "timezone": "UTC",
+              "enabled": true,
+              "catchupPolicy": "skip",
+              "queue": "protocol-skip-delay",
+              "priority": 0,
+              "concurrencyKey": null,
+              "type": "protocol.skip-delay",
+              "payload": null,
+              "maxAttempts": 1,
+              "retryPolicy": null,
+              "contractVersion": null,
+              "payloadMaxBytes": 1048576,
+              "resultMaxBytes": 1048576,
+              "sensitivePayloadKeys": [],
+              "sensitiveResultKeys": []
+            }
+          ]
+        ],
+        "expect": {
+          "rows": [
+            {
+              "synced": 1
+            }
+          ]
+        }
+      },
+      {
+        "id": "set-the-durable-position",
+        "sql": "UPDATE workhorse.schedule_definition SET last_evaluated_at = $2::timestamptz WHERE namespace = $1 RETURNING schedule_name",
+        "parameters": ["protocol-skip-delay", "2026-09-14T10:00:00.500Z"],
+        "expect": {
+          "rows": [
+            {
+              "schedule_name": "secondly"
+            }
+          ]
+        }
+      },
+      {
+        "id": "a-pass-later-than-one-interval-fires-every-occurrence",
+        "sql": "SELECT count(*)::integer AS fired, to_char(min(occurrence_at) AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') AS first, to_char(max(occurrence_at) AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') AS last FROM workhorse.fire_due_schedules_v2(ARRAY[$1::text], $2::timestamptz, 100, 1000)",
+        "parameters": ["protocol-skip-delay", "2026-09-14T10:00:02.700Z"],
+        "expect": {
+          "rows": [
+            {
+              "fired": 2,
+              "first": "2026-09-14T10:00:01Z",
+              "last": "2026-09-14T10:00:02Z"
+            }
+          ]
+        }
+      },
+      {
+        "id": "a-delay-inside-the-supported-delay-records-no-skip",
+        "sql": "SELECT to_char(last_skipped_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS.MS\"Z\"') AS skipped_at, last_skipped_count AS skipped_count, to_char(last_skipped_through AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') AS skipped_through FROM workhorse.schedule_definition WHERE namespace = $1",
+        "parameters": ["protocol-skip-delay"],
+        "expect": {
+          "rows": [
+            {
+              "skipped_at": null,
+              "skipped_count": null,
+              "skipped_through": null
+            }
+          ]
+        }
+      },
+      {
+        "id": "an-outage-fires-only-the-supported-delay",
+        "sql": "SELECT count(*)::integer AS fired, to_char(min(occurrence_at) AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') AS first, to_char(max(occurrence_at) AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') AS last FROM workhorse.fire_due_schedules_v2(ARRAY[$1::text], $2::timestamptz, 100, 1000)",
+        "parameters": ["protocol-skip-delay", "2026-09-14T10:05:02.700Z"],
+        "expect": {
+          "rows": [
+            {
+              "fired": 60,
+              "first": "2026-09-14T10:04:03Z",
+              "last": "2026-09-14T10:05:02Z"
+            }
+          ]
+        }
+      },
+      {
+        "id": "the-outage-records-the-skip",
+        "sql": "SELECT to_char(last_skipped_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS.MS\"Z\"') AS skipped_at, last_skipped_count AS skipped_count, to_char(last_skipped_through AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') AS skipped_through FROM workhorse.schedule_definition WHERE namespace = $1",
+        "parameters": ["protocol-skip-delay"],
+        "expect": {
+          "rows": [
+            {
+              "skipped_at": "2026-09-14T10:05:02.700Z",
+              "skipped_count": 240,
+              "skipped_through": "2026-09-14T10:04:02Z"
             }
           ]
         }
