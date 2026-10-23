@@ -10,6 +10,18 @@ adds.
 
 ## Unreleased
 
+### A raising reporter callback no longer stops the worker
+
+An application can give `on_registration_error` to the worker to send an alert. Before this change,
+a registration refresh could fail, and then the callback could raise. The exception left the
+registry path and could stop the run. The worker also discarded a raise from
+`on_notification_error` without a record (SM-1696).
+
+Now `Worker` and `AsyncWorker` catch an `Exception` from either callback and continue. They log the
+failure to the `workhorse.worker` logger at the error level. For each callback, the worker logs the
+first failure. Then it logs at most one failure in each 60 s, with the count of the failures that it
+did not log. It never calls the failed callback for its own failure.
+
 ### Workers use the database clock for maintenance
 
 Maintenance writes shared state: the due time of each routine and the retention cutoffs. Before

@@ -127,6 +127,9 @@ impl OwnershipStatus {
 }
 
 /// Receives a registry write failure; the worker keeps running without it.
+///
+/// If the hook panics, the worker catches the panic, logs it through `tracing`, and continues. It
+/// logs at most one such panic in each minute.
 pub type RegistrationErrorHook = Arc<dyn Fn(&Error) + Send + Sync>;
 /// Overrides the persisted retry delay for a failed attempt; `None` keeps the task's policy.
 pub type RetryDelay = Arc<dyn Fn(i32, &ClaimedTask) -> Option<Duration> + Send + Sync>;
@@ -369,6 +372,73 @@ pub(crate) struct Inner {
     /// Registry statements of an ended run that outlived its stop deadline. The next run waits
     /// for them before it registers, so they cannot change that run.
     late: Mutex<Vec<JoinHandle<()>>>,
+    /// When the worker last logged a panic of `on_registration_error`.
+    registration_reporter: Mutex<ReporterFailures>,
+}
+
+/// A reporter callback that always fails logs at most once in this interval.
+const REPORTER_FAILURE_REPORT_INTERVAL: Duration = Duration::from_secs(60);
+
+/// When the worker last logged a failure of one reporter callback.
+#[derive(Default)]
+struct ReporterFailures {
+    reported_at: Option<Instant>,
+    /// Failures since `reported_at` that the worker did not log.
+    suppressed: u64,
+}
+
+impl ReporterFailures {
+    /// Whether the worker logs this failure, and how many failures it did not log since the last
+    /// one it logged.
+    fn admit(&mut self, now: Instant) -> Option<u64> {
+        if self
+            .reported_at
+            .is_some_and(|at| now.duration_since(at) < REPORTER_FAILURE_REPORT_INTERVAL)
+        {
+            self.suppressed += 1;
+            return None;
+        }
+        self.reported_at = Some(now);
+        Some(std::mem::take(&mut self.suppressed))
+    }
+}
+
+/// Calls an application reporter callback so that its panic never reaches the run. A reporter
+/// observes the worker. It is not part of the dispatch contract, so its failure must not stop
+/// claims or change the result of the run. `tracing` is the diagnostic path, so the worker never
+/// calls the failed reporter again for its own failure.
+fn call_reporter(name: &str, failures: &Mutex<ReporterFailures>, call: impl FnOnce()) {
+    let Err(panic) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(call)) else {
+        return;
+    };
+    let suppressed = lock(failures).admit(Instant::now());
+    let message = panic
+        .downcast_ref::<&str>()
+        .map(|message| (*message).to_owned())
+        .or_else(|| panic.downcast_ref::<String>().cloned())
+        .unwrap_or_else(|| "a panic without a message".to_owned());
+    // A panic payload can panic when it drops, and a tracing subscriber can panic too. The
+    // diagnostic path must not become a second failure.
+    contain(move || drop(panic));
+    let Some(suppressed) = suppressed else {
+        return;
+    };
+    contain(|| {
+        let detail = if suppressed > 0 {
+            format!(" after {suppressed} unreported failures")
+        } else {
+            String::new()
+        };
+        tracing::error!(error = %message, "Workhorse worker {name} reporter failed{detail}");
+    });
+}
+
+/// Runs `step` and discards a panic from it. The payload of that panic can also panic when it
+/// drops, so the worker leaks it instead.
+fn contain(step: impl FnOnce()) {
+    if let Err(payload) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(step)) {
+        std::mem::forget(payload);
+    }
 }
 
 /// The claim gate of one run. It holds the shared heartbeat connection of that run, and it closes
@@ -616,6 +686,7 @@ impl Worker {
             subscription: Mutex::default(),
             run_gate: Mutex::default(),
             late: Mutex::default(),
+            registration_reporter: Mutex::default(),
         })))
     }
 
@@ -1259,7 +1330,11 @@ impl Inner {
                 self.paused.store(paused, Ordering::SeqCst);
             }
             Err(error) => match &self.options.on_registration_error {
-                Some(hook) => hook(&error),
+                Some(hook) => {
+                    call_reporter("on_registration_error", &self.registration_reporter, || {
+                        hook(&error);
+                    });
+                }
                 None => {
                     tracing::warn!(error = %error, workhorse.worker.id = %self.worker_id, "worker registration failed")
                 }
@@ -1661,6 +1736,152 @@ mod tests {
         let permit = Arc::clone(&worker.0.run_permit).acquire_owned().await.unwrap();
         worker.0.registered.store(true, Ordering::SeqCst);
         RunScope::new(&worker.0, permit)
+    }
+
+    /// A tracing writer that keeps every line in memory.
+    #[derive(Clone, Default)]
+    struct CapturedLog(Arc<Mutex<Vec<u8>>>);
+
+    impl std::io::Write for CapturedLog {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            lock(&self.0).extend_from_slice(bytes);
+            Ok(bytes.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    impl CapturedLog {
+        fn text(&self) -> String {
+            String::from_utf8_lossy(&lock(&self.0)).into_owned()
+        }
+    }
+
+    /// SM-1696: a panic of `on_registration_error` never reaches the worker, and the worker logs
+    /// it at most once in each interval.
+    #[tokio::test]
+    async fn a_panicking_registration_reporter_is_isolated_and_bounded() {
+        let closed = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = closed.local_addr().unwrap().port();
+        drop(closed);
+        let calls = Arc::new(AtomicUsize::new(0));
+        let options = WorkerOptions {
+            on_registration_error: Some(Arc::new({
+                let calls = Arc::clone(&calls);
+                move |_: &Error| {
+                    calls.fetch_add(1, Ordering::SeqCst);
+                    panic!("alert client is offline");
+                }
+            })),
+            ..WorkerOptions::default()
+        };
+        let worker = Worker::new(silent_pool_on(port), options).unwrap();
+        let log = CapturedLog::default();
+        let subscriber = tracing_subscriber::fmt()
+            .with_writer({
+                let log = log.clone();
+                move || log.clone()
+            })
+            .finish();
+        let _default = tracing::subscriber::set_default(subscriber);
+
+        for _ in 0..3 {
+            worker.0.refresh_registration().await;
+        }
+
+        assert_eq!(calls.load(Ordering::SeqCst), 3);
+        assert!(!worker.0.registered.load(Ordering::SeqCst));
+        let text = log.text();
+        assert_eq!(
+            text.matches("Workhorse worker on_registration_error reporter failed").count(),
+            1,
+            "{text}"
+        );
+        assert!(text.contains("alert client is offline"), "{text}");
+
+        // After the interval, the next report states the failures that the worker did not log.
+        lock(&worker.0.registration_reporter).reported_at =
+            Instant::now().checked_sub(REPORTER_FAILURE_REPORT_INTERVAL);
+        worker.0.refresh_registration().await;
+        let text = log.text();
+        assert!(text.contains("reporter failed after 2 unreported failures"), "{text}");
+    }
+
+    /// A tracing writer that panics on each write.
+    struct PanickingWriter;
+
+    impl std::io::Write for PanickingWriter {
+        fn write(&mut self, _bytes: &[u8]) -> std::io::Result<usize> {
+            panic!("log writer failed");
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    /// SM-1696: a tracing subscriber that panics while the worker reports a reporter panic does
+    /// not reach the worker either.
+    #[tokio::test]
+    async fn a_panicking_subscriber_does_not_reach_the_worker() {
+        let closed = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = closed.local_addr().unwrap().port();
+        drop(closed);
+        let options = WorkerOptions {
+            on_registration_error: Some(Arc::new(|_: &Error| panic!("alert client is offline"))),
+            ..WorkerOptions::default()
+        };
+        let worker = Worker::new(silent_pool_on(port), options).unwrap();
+        let subscriber = tracing_subscriber::fmt().with_writer(|| PanickingWriter).finish();
+        let _default = tracing::subscriber::set_default(subscriber);
+
+        worker.0.refresh_registration().await;
+
+        assert!(lock(&worker.0.registration_reporter).reported_at.is_some());
+    }
+
+    /// A panic payload that panics again when it drops.
+    struct PanickingPayload;
+
+    impl Drop for PanickingPayload {
+        fn drop(&mut self) {
+            panic!("payload drop failed");
+        }
+    }
+
+    /// SM-1696: a reporter panic whose payload panics when it drops does not reach the worker,
+    /// also when the worker does not log the failure.
+    #[tokio::test]
+    async fn a_panic_payload_that_panics_on_drop_does_not_reach_the_worker() {
+        let closed = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = closed.local_addr().unwrap().port();
+        drop(closed);
+        let options = WorkerOptions {
+            on_registration_error: Some(Arc::new(|_: &Error| {
+                std::panic::panic_any(PanickingPayload);
+            })),
+            ..WorkerOptions::default()
+        };
+        let worker = Worker::new(silent_pool_on(port), options).unwrap();
+        let log = CapturedLog::default();
+        let subscriber = tracing_subscriber::fmt()
+            .with_writer({
+                let log = log.clone();
+                move || log.clone()
+            })
+            .finish();
+        let _default = tracing::subscriber::set_default(subscriber);
+
+        // The first failure is logged, and the second is not.
+        worker.0.refresh_registration().await;
+        worker.0.refresh_registration().await;
+
+        let text = log.text();
+        assert_eq!(text.matches("reporter failed").count(), 1, "{text}");
+        assert!(text.contains("a panic without a message"), "{text}");
+        assert_eq!(lock(&worker.0.registration_reporter).suppressed, 1);
     }
 
     const ACCEPTED: Duration = Duration::from_secs(5);

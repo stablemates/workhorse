@@ -5,6 +5,18 @@ other SDKs carry, because every tag names one release of all of them.
 
 ## Unreleased
 
+### A raising reporter callback no longer stops the worker
+
+An application can give `on_registration_error` to the worker to send an alert. Before this change,
+a registration refresh could fail, and then the callback could raise. The error left the registry
+path and could stop the run. The worker also discarded a raise from `on_notification_error` without
+a record (SM-1696).
+
+Now the worker rescues a `StandardError` from either callback and continues. It writes the failure
+to `logger` at the error level. Without a logger, it writes the failure to standard error. For each
+callback, it writes the first failure. Then it writes at most one failure in each 60 s, with the
+count of the failures that it did not write. It never calls the failed callback for its own failure.
+
 ### Workers use the database clock for maintenance
 
 Maintenance writes shared state: the due time of each routine and the retention cutoffs. Before

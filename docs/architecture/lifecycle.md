@@ -1111,6 +1111,10 @@ dispatch contract. Thus, a failure of a reporter never stops a TypeScript worker
   60,000 ms (`REPORTER_FAILURE_REPORT_INTERVAL_MS`). The next report after unreported failures
   adds `after <n> unreported failures`.
 
+The Python, Go, Rust, Ruby, and JVM workers apply the same rule to their reporter callbacks, each
+with its own diagnostic path. The .NET worker catches a failure of its reporter events and writes no
+record. [Reporter callback failures](../parity.md#reporter-callback-failures) lists each SDK.
+
 #### Capacity release notifications
 
 An update that moves a governed runtime away from active, or deletes it, runs

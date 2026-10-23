@@ -10,6 +10,16 @@ adds.
 
 ## Unreleased
 
+### A panic in OnRegistrationError no longer stops the worker
+
+An application can give `OnRegistrationError` to the worker to send an alert. Before this change,
+a registration refresh could fail, and then the callback could panic. The panic left the registry
+path and could end the process. A registration failure must never stop a worker (SM-1696).
+
+Now the worker recovers the panic and continues. It logs the failure through `Logger` at the error
+level. It logs the first failure. Then it logs at most one failure in each 60 s, with the count of
+the failures that it did not log. It never calls the failed callback for its own failure.
+
 ### Workers use the database clock for maintenance
 
 Maintenance writes shared state: the due time of each routine and the retention cutoffs. Before

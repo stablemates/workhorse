@@ -583,6 +583,14 @@ const (
 
 const invalidWorkerRegistrationResultMessage = "PostgreSQL returned an invalid worker registration result"
 
+// The log text of a failed reporter callback, and the callback names it reports.
+const (
+	reporterFailureMessage       = "Workhorse worker %s reporter failed%s"
+	reporterFailureDetail        = " after %d unreported failures"
+	reporterFailureErrorKey      = "error"
+	registrationReporterCallback = "OnRegistrationError"
+)
+
 const (
 	invalidPolicyResultMessage      = "PostgreSQL returned an invalid policy result"
 	invalidPolicyOptionsMessage     = "invalid policy synchronization options"

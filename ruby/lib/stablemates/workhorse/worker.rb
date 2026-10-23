@@ -274,6 +274,8 @@ module Stablemates
         @retry_delay = retry_delay
         @on_registration_error = on_registration_error
         @on_notification_error = on_notification_error
+        @reporter_failures = {}
+        @reporter_failures_lock = Mutex.new
         @logger = logger
         @queue = Queue.new(@executor, default_queue: @queues.first)
         @heartbeat = shared_heartbeats ? Heartbeat.new(@executor, dedicated: false) : Heartbeat.dedicated(pool)
@@ -423,6 +425,44 @@ module Stablemates
         nil
       end
 
+      # A reporter callback that always fails writes at most one report in this interval.
+      REPORTER_FAILURE_REPORT_INTERVAL = 60.0
+      private_constant :REPORTER_FAILURE_REPORT_INTERVAL
+
+      # Calls an application reporter callback so that its failure never reaches the run. A reporter
+      # observes the worker. It is not part of the dispatch contract, so a raise from it must not stop
+      # claims or change the result of the run.
+      def call_reporter(name, reporter, error)
+        reporter&.call(error)
+      rescue => e
+        reporter_failed(name, e)
+      end
+
+      # The logger, or standard error without one, is the diagnostic path, so a failed reporter is
+      # never called again for its own failure. The interval bounds the output of a reporter that
+      # always fails.
+      def reporter_failed(name, failure)
+        now = monotonic
+        suppressed = @reporter_failures_lock.synchronize do
+          reported_at, count = @reporter_failures[name]
+          if reported_at && now - reported_at < REPORTER_FAILURE_REPORT_INTERVAL
+            @reporter_failures[name] = [reported_at, count + 1]
+            next
+          end
+          @reporter_failures[name] = [now, 0]
+          count || 0
+        end
+        return if suppressed.nil?
+
+        detail = suppressed.positive? ? " after #{suppressed} unreported failures" : ""
+        body = "Workhorse worker #{name} reporter failed#{detail}: #{failure.class}: #{failure.message}"
+        @logger.nil? ? Kernel.warn("workhorse: #{body}") : @logger.error(body)
+      rescue
+        # Inspecting the failure or writing the log can raise. The diagnostic path must not become a
+        # second failure.
+        nil
+      end
+
       def log(severity, event, body, attributes = {})
         Telemetry.log(@logger, severity, event, body, {"workhorse.worker.id" => @worker_id}.merge(attributes))
       end
@@ -511,7 +551,7 @@ module Stablemates
         begin
           if continuous && !@polling_only && pool_lends_listener?
             listener = Listener.shared(@pool).subscribe(@queues, on_wake: method(:notify),
-              on_error: ->(error) { @on_notification_error&.call(error) })
+              on_error: ->(error) { call_reporter(:on_notification_error, @on_notification_error, error) })
           end
           refresh_registration(force: true)
           log(:info, "workhorse.worker.started", "Worker started",
@@ -1326,7 +1366,7 @@ module Stablemates
         rescue => e
           log(:info, "workhorse.worker.registration_failed", "Worker registration failed",
             "error.type" => e.class.name)
-          @on_registration_error&.call(e)
+          call_reporter(:on_registration_error, @on_registration_error, e)
           return
         end
         paused = rows.first&.fetch("paused", nil) == "t"
