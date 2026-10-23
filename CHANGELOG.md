@@ -20,6 +20,27 @@ upgrade steps.
 
 ## Unreleased
 
+### A late schedule pass no longer loses a `skip` occurrence
+
+A worker waits one maintenance interval after its schedule pass ends, so the next pass always
+starts more than one interval after the previous one. Before this change, a `skip` schedule fired
+only occurrences newer than one interval. An occurrence in the extra time never fired, and nothing
+recorded the miss (SM-1644). Also, each pass read all retained occurrences of a namespace before it
+tried the namespace lock, so a pass that lost the lock read that history for nothing (SM-1647).
+
+Migration 0083 (`0083-fire-skip-schedules-within-the-supported-delay.sql`) moves the schema to
+version 82. A `skip` schedule now continues from its durable position. It fires each occurrence
+that is not older than the supported delay, `GREATEST(60 seconds, 2 × evaluation_window_ms)`. After
+a longer outage, it skips only the older occurrences and records the skip in the new columns
+`last_skipped_at`, `last_skipped_count`, and `last_skipped_through` of `schedule_definition`. The
+count stops at 10,000. A `skip` pass that reaches the catch-up limit advances only through its last
+occurrence, as `all` does, so the next pass fires the rest. `fire_due_schedules_v2` now tries each namespace lock before it reads
+occurrence history, and it reads one occurrence row for each definition in a namespace it holds.
+
+The migration does not raise the SDK compatibility floor. No SDK statement changes, and the result
+of `fire_due_schedules_v2` keeps its shape. The `latest` and `all` policies do not change. The
+migration changes no stored data.
+
 ### A registry prune keeps the operator pause of a live worker
 
 An operator pauses a worker. A network partition or a PostgreSQL failover then stops the worker

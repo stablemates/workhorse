@@ -3700,26 +3700,29 @@ revision, never arbitrary SQL.
 
 The columns of `schedule_definition`, with their PostgreSQL types and keys:
 
-| Column                | Type          | Key         |
-| --------------------- | ------------- | ----------- |
-| `namespace`           | `text`        | Primary key |
-| `schedule_name`       | `text`        | Primary key |
-| `cron_expression`     | `text`        |             |
-| `queue_name`          | `text`        |             |
-| `concurrency_key`     | `text`        |             |
-| `task_type`           | `text`        |             |
-| `payload`             | `jsonb`       |             |
-| `contract_version`    | `text`        |             |
-| `payload_max_bytes`   | `int`         |             |
-| `result_max_bytes`    | `int`         |             |
-| `payload_redact_keys` | `text[]`      |             |
-| `result_redact_keys`  | `text[]`      |             |
-| `retry_policy`        | `jsonb`       |             |
-| `configured_enabled`  | `boolean`     |             |
-| `paused`              | `boolean`     |             |
-| `paused_by`           | `text`        |             |
-| `paused_reason`       | `text`        |             |
-| `paused_at`           | `timestamptz` |             |
+| Column                 | Type          | Key         |
+| ---------------------- | ------------- | ----------- |
+| `namespace`            | `text`        | Primary key |
+| `schedule_name`        | `text`        | Primary key |
+| `cron_expression`      | `text`        |             |
+| `queue_name`           | `text`        |             |
+| `concurrency_key`      | `text`        |             |
+| `task_type`            | `text`        |             |
+| `payload`              | `jsonb`       |             |
+| `contract_version`     | `text`        |             |
+| `payload_max_bytes`    | `int`         |             |
+| `result_max_bytes`     | `int`         |             |
+| `payload_redact_keys`  | `text[]`      |             |
+| `result_redact_keys`   | `text[]`      |             |
+| `retry_policy`         | `jsonb`       |             |
+| `configured_enabled`   | `boolean`     |             |
+| `paused`               | `boolean`     |             |
+| `paused_by`            | `text`        |             |
+| `paused_reason`        | `text`        |             |
+| `paused_at`            | `timestamptz` |             |
+| `last_skipped_at`      | `timestamptz` |             |
+| `last_skipped_count`   | `int`         |             |
+| `last_skipped_through` | `timestamptz` |             |
 
 #### Catch-up position
 
@@ -3730,6 +3733,22 @@ retention. It advances without a revision change during evaluation.
 
 `set_schedule_paused_v1` moves that position to the resume time for `skip`. `latest` and `all`
 retain their prior position.
+
+#### Skip record
+
+A `skip` pass skips the occurrences older than the supported delay
+([Firing due schedules](#firing-due-schedules)). If it skips one or more, it records the skip on the
+definition row in the same update that advances `last_evaluated_at`:
+
+- `last_skipped_at` is the `now` of the pass.
+- `last_skipped_count` is the number of skipped occurrences, from 1 through 10,000. The pass stops
+  the count at 10,000, so 10,000 means 10,000 or more.
+- `last_skipped_through` is the newest skipped occurrence.
+
+The three columns are null until the first skip. `fire_due_schedules_v2` is the only writer, and it
+writes the three columns together. A later skip replaces them. A pass that skips nothing leaves them unchanged. Synchronization and
+`set_schedule_paused_v1` do not change them. A pass that defers before its first occurrence writes
+no row ([Busy occurrences](#busy-occurrences)), so the next pass records the same skip.
 
 #### Synchronization
 
@@ -3805,19 +3824,37 @@ Evaluation cost:
 `fire_due_schedules_v2(namespaces, now, catchup_limit, evaluation_window_ms)` runs in one database
 round trip:
 
-1. It lists definitions whose `configured_enabled` is true and `paused` is false.
-2. It loads their last durable occurrence.
-3. It calls `cron_occurrences_v1`.
-4. It delegates selected results to revision-fenced `fire_schedule_v1`.
+1. It tries the lock of each offered namespace that has an enabled, unpaused definition
+   ([Namespace locking](#namespace-locking)).
+2. In the namespaces it holds, it lists definitions whose `configured_enabled` is true and `paused`
+   is false.
+3. It reads the newest occurrence of each definition: one row through
+   `schedule_occurrence_time_idx`. The evaluation starts after the later of that occurrence and
+   `last_evaluated_at`.
+4. It calls `cron_occurrences_v1`.
+5. It delegates selected results to revision-fenced `fire_schedule_v1`.
 
-| Policy   | Selected occurrences                                                                                  |
-| -------- | ----------------------------------------------------------------------------------------------------- |
-| `skip`   | Only occurrences newer than both the durable position and `now - evaluation_window_ms`                |
-| `latest` | The newest occurrence after the durable position                                                      |
-| `all`    | Ordered occurrences after the durable position; advances only through the bounded result at the limit |
+| Policy   | Selected occurrences                                                                                                                                           |
+| -------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `skip`   | Occurrences after the durable position that are not older than `now - supported delay`, up to the limit; advances only through the bounded result at the limit |
+| `latest` | The newest occurrence after the durable position                                                                                                               |
+| `all`    | Ordered occurrences after the durable position; advances only through the bounded result at the limit                                                          |
 
 The worker supplies its `maintenanceIntervalMs`, `maintenance_interval_ms`, or
 `MaintenanceInterval` as the evaluation window.
+
+The supported delay is `GREATEST(60 seconds, 2 × evaluation_window_ms)`. It is the longest gap
+between two passes after which `skip` still fires every occurrence. A worker waits one maintenance
+interval after its pass ends, so the gap between two passes is always longer than one interval. A
+gap inside the supported delay is a normal delay, and the pass fires every occurrence in it, up to
+the catch-up limit. A
+longer gap is an outage. The pass fires only the occurrences inside the supported delay and records
+the older ones as a skip ([Skip record](#skip-record)). The count of skipped occurrences stops at
+10,000, so the work of a pass after a long outage stays bounded.
+
+Schema version 82 introduced the supported delay. Before it, `skip` fired only occurrences newer
+than `now - evaluation_window_ms`, so a pass that started late could lose an occurrence without a
+record.
 
 A null `now` means `clock_timestamp()`, and every SDK passes null. Schedule evaluation therefore
 reads the same clock that budgets and rate limits read.
@@ -3855,7 +3892,9 @@ The policy defaults to `skip`. The limit accepts 1 through 10,000 and defaults t
 Every runtime calls `fire_due_schedules_v2` on the maintenance cadence, independently of the
 `tick_v1` lock. The function takes one transaction advisory lock per namespace.
 
-- Concurrent callers for one namespace return without evaluation.
+- It tries every namespace lock, in namespace order, before it reads `schedule_occurrence`.
+- Concurrent callers for one namespace return without evaluation. A caller that does not get the
+  lock reads no occurrence row of that namespace.
 - Workers offering different namespaces can progress in parallel.
 - Persisted occurrence keys remain the final duplicate barrier.
 

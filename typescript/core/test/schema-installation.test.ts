@@ -641,6 +641,10 @@ describe("schema installation", () => {
         version: 81,
         description: "keep the operator pause after a registry prune",
       },
+      {
+        version: 82,
+        description: "fire skip schedules within the supported delay",
+      },
     ]);
 
     const protocols = await pool.query<{ version: number }>(

@@ -439,7 +439,7 @@ RSpec.describe "Worker runtime against PostgreSQL" do
 
   it "fires due schedules in its namespaces during maintenance" do
     namespace = "rb-#{SecureRandom.hex(6)}"
-    # :skip evaluates only the last maintenance window, so the missed minute needs :latest.
+    # :skip fires only inside the supported delay of at least 60 seconds, so the missed minute needs :latest.
     definition = W::ScheduleDefinition.new(name: "every-minute", schedule: "* * * * *", catchup_policy: :latest,
       task: W::ScheduledTask.new(task_type: "cron", payload: {}, queue: @queue_name))
     queue.sync_schedules(namespace, [definition])

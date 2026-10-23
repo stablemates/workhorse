@@ -35,3 +35,20 @@ clients that use SQL protocol 1 during a rolling upgrade.
 - A worker that uses SQL protocol 1 keeps the old catch-up behavior until that worker is upgraded.
 - Schema migration 2 initializes existing definitions at the migration time, so the upgrade does
   not enqueue an existing backlog.
+
+## Amendment: `skip` fires within a supported delay (2026-10-23)
+
+The Decision section first said that `skip` evaluates only the current maintenance window. This
+amendment supersedes that sentence.
+
+A worker waits one maintenance interval after its schedule pass ends. Thus the gap between two
+passes is always longer than one interval, and an occurrence in the extra time never fired
+(SM-1644). From schema version 82, `skip` continues from `last_evaluated_at`, as `latest` and `all`
+do. It fires each occurrence that is not older than the supported delay,
+`GREATEST(60 seconds, 2 × evaluation_window_ms)`. It skips only older occurrences, and it records
+each skip in `last_skipped_at`, `last_skipped_count`, and `last_skipped_through` on the definition
+row. The count stops at 10,000.
+
+`fire_due_schedules_v2` keeps its signature and its result shape. The worker still supplies its
+maintenance interval as the evaluation window. A pause or an outage longer than the supported delay
+still does not make a backlog.
