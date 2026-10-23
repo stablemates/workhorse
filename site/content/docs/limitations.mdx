@@ -19,9 +19,9 @@ only adds. Thus, a running deployment upgrades in place.
 Workhorse supports task dependencies, fan-in policies, child tasks, external signals, and human
 decisions. It does not have a separate language to define workflows, or a model to deploy a graph.
 
-Workaround: write these durable steps in ordinary handler code. If you must define and deploy a
-workflow separately from the application code, use a separate workflow tool. You can use it together
-with Workhorse or in its place.
+Workaround: write the workflow in ordinary handler code, with checkpoints, waits, child tasks, and
+task dependencies. If you must define and deploy a workflow separately from the application code,
+use a separate workflow tool. You can use it together with Workhorse or in its place.
 
 ## Make handlers stop when a cancellation arrives
 

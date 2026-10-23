@@ -19,7 +19,7 @@ project uses psycopg2, it cannot give its connection to `Queue`.
 In your Django environment, install the tested framework and driver:
 
 ```sh
-pip install 'Django==6.1.1' 'psycopg[binary]==3.3.6' 'stablemates-workhorse[django]'
+pip install 'Django==6.1.2' 'psycopg[binary]==3.3.6' 'stablemates-workhorse[django]'
 ```
 
 Then set up the database:
@@ -33,12 +33,12 @@ Django continues to own the migrations of your application.
 <details>
 <summary>Reference: tested versions</summary>
 
-| Item       | Value                                                                              |
-| ---------- | ---------------------------------------------------------------------------------- |
-| Django     | 6.1.1, pinned by the repository fixture. The `django` extra allows `>=6.1.1,<6.2`. |
-| Psycopg    | 3.3.6, pinned by the repository fixture                                            |
-| Python     | The supported versions of Workhorse, from 3.12                                     |
-| PostgreSQL | The supported versions of Workhorse, from 15                                       |
+| Item       | Value                                                                                                         |
+| ---------- | ------------------------------------------------------------------------------------------------------------- |
+| Django     | 6.1.2, pinned by the repository fixture in `python/pyproject.toml`. The `django` extra allows `>=6.1.1,<6.2`. |
+| Psycopg    | 3.3.6, pinned by the repository fixture                                                                       |
+| Python     | The supported versions of Workhorse, from 3.12                                                                |
+| PostgreSQL | The supported versions of Workhorse, from 15                                                                  |
 
 - Django is optional. An ordinary Workhorse installation does not install Django.
 - The typing dependencies for Django are development-only.
@@ -242,7 +242,7 @@ More detail: [ADR 0087: Keep the Django Tasks backend bounded by atomic acceptan
 - [Django transaction ownership and `on_commit`](https://docs.djangoproject.com/en/6.1/topics/db/transactions/)
 - [Django async transactions and thread-sensitive execution](https://docs.djangoproject.com/en/6.1/topics/async/)
 - [Django PostgreSQL drivers](https://docs.djangoproject.com/en/6.1/ref/databases/#postgresql-notes)
-- [Django 6.1.1 connection wrapper](https://github.com/django/django/blob/6.1.1/django/db/backends/base/base.py)
+- [Django 6.1.2 connection wrapper](https://github.com/django/django/blob/6.1.2/django/db/backends/base/base.py)
 - [Psycopg connection contexts and transactions](https://www.psycopg.org/psycopg3/docs/basic/transactions.html)
 
 ## Next

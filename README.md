@@ -7,10 +7,10 @@ Workhorse is versioned SQL functions inside the database you already run. Every 
 same workers, the same durable waits, and the same dashboard, with no broker or server beside
 PostgreSQL.
 
-> **Public beta:** Workhorse is usable for evaluation and early production adoption. A 0.x minor
-> release may change behaviour, so read the changelog before you upgrade. It will not ask you to
-> recreate your database: migrations are ordered, and inside a major line a migration only adds, so
-> a running deployment upgrades in place.
+> **Public beta:** You can use Workhorse for evaluation and for early production use. A 0.x minor
+> release can change behavior, so read the changelog before you upgrade. A minor release does not
+> make you create your database again. Migrations are ordered, and inside a major line a migration
+> only adds. Thus, a running deployment upgrades in place.
 
 [![Build status](https://github.com/stablemates/workhorse/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/stablemates/workhorse/actions/workflows/ci.yml?query=branch%3Amain)
 

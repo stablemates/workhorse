@@ -90,7 +90,9 @@ await admin.setQueueTier("emails", "fast", {
 ```
 
 From a shell, `workhorse admin set-tier` does the same change. The CLI checks the target and asks
-for a confirmation first. The Queues page of the dashboard shows the tier of each queue.
+for a confirmation first. The Queues page of the dashboard shows the tier of each queue. Its menu
+can also change the tier. The dashboard calls `Admin.setQueueTier`, so the same guards apply. If
+Workhorse refuses the change, the dashboard shows the reason, and the queue keeps its tier.
 
 Workhorse refuses a tier change while the queue has a live task in either tier. Thus, a task never
 moves between tiers, and its record stays in one place. Workhorse also refuses a move to the fast
@@ -120,8 +122,11 @@ of the queue, then:
 - The CLI command is `workhorse admin set-tier <queue> --tier <fast|full>`.
 - `redrive_v1` copies a task into the current tier of its queue, not the tier it closed in.
 - Retention prunes `fast_task_outcome`, and cold export has a `fast_task_outcome` dataset.
+- The dashboard Queues page calls the `setQueueTier` procedure of `dashboard/v1`. The host calls
+  `Admin.setQueueTier` with the actor that the server assigns. `status` in the answer is `set`, or
+  the guard that refused the switch: `live_tasks`, `concurrency_policy`, or `rate_limit_policy`.
 
-More detail: [Fast tier: Changing the tier](../architecture/fast-tier.md#changing-the-tier).
+More detail: [Fast tier: Changing the tier](../architecture/fast-tier.md#changing-the-tier) and [Dashboard: Queues page](../architecture/dashboard.md#queues-page).
 
 </details>
 
@@ -448,7 +453,7 @@ await admin.setQueueHistory("emails", { recordAttempts: true, recordClaims: fals
 - `recordClaims` writes a `claimed` event for each claim.
 
 From a shell, `workhorse admin set-history` sets the same switches. The Queues page of the dashboard
-shows the history that each queue records.
+shows the history that each queue records, and its menu can also set the switches.
 
 Each switch adds back a part of the cost that the tier removes. Keep the switches off by default.
 Set a switch only when you need its records.
@@ -469,12 +474,14 @@ Set a switch only when you need its records.
   `Admin.SetQueueHistory`, and Rust `set_queue_history` wrap it.
 - The CLI command is `workhorse admin set-history <queue>` with `--record-attempts <on|off>` and
   `--record-claims <on|off>`. An omitted flag keeps its setting.
+- The dashboard Queues page calls the `setQueueHistory` procedure of `dashboard/v1`, which calls
+  `Admin.setQueueHistory`. An absent setting keeps its value.
 
 **Derived dashboard rows.** `dashboard_attempt_history_v1` derives one row per `errors` entry and
 one for the final attempt. `dashboard_task_event_v1` derives an `enqueued` event, a `claimed` event
 unless a recorded one exists, and a terminal event named `COALESCE(closed_as, state)`.
 
-More detail: [Fast tier: Changing the history switches](../architecture/fast-tier.md#changing-the-history-switches) and [Fast tier: Fast read models](../architecture/fast-tier.md#fast-read-models).
+More detail: [Fast tier: Changing the history switches](../architecture/fast-tier.md#changing-the-history-switches), [Fast tier: Fast read models](../architecture/fast-tier.md#fast-read-models), and [Dashboard: Queues page](../architecture/dashboard.md#queues-page).
 
 </details>
 

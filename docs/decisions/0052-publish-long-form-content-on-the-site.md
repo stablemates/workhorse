@@ -2,6 +2,8 @@
 
 - **Status:** Accepted
 - **Date:** 2026-09-02
+- **Amended by:** [ADR 0104](0104-publish-sourced-product-comparisons-in-the-docs.md) (comparisons
+  are docs pages, not posts)
 - **Related:** WH-556,
   WH-589,
   WH-548,

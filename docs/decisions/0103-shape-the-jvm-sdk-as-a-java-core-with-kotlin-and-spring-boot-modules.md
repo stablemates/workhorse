@@ -1,6 +1,6 @@
 # ADR 0103: Shape the JVM SDK as a Java core with Kotlin and Spring Boot modules
 
-- **Status:** Proposed
+- **Status:** Accepted. Maven Central serves the three JVM artifacts from 0.9.0.
 - **Date:** 2026-10-17
 - **Amends:** [ADR 0021](0021-no-framework-integration-packages.md),
   [ADR 0054](0054-define-what-1-0-0-promises.md),

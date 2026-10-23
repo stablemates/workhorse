@@ -24,13 +24,13 @@ separately, in the same database. Django continues to own the migrations of your
 <details>
 <summary>Reference: tested versions</summary>
 
-| Item       | Value                                                          |
-| ---------- | -------------------------------------------------------------- |
-| Django     | 6.1.1, pinned by the fixture. The extra allows `>=6.1.1,<6.2`. |
-| Psycopg    | 3.3.6, pinned by the fixture                                   |
-| asgiref    | 3.12.1, pinned by the fixture                                  |
-| Python     | The supported versions of Workhorse                            |
-| PostgreSQL | The supported versions of Workhorse                            |
+| Item       | Value                                                                                     |
+| ---------- | ----------------------------------------------------------------------------------------- |
+| Django     | 6.1.2, pinned by the fixture in `python/pyproject.toml`. The extra allows `>=6.1.1,<6.2`. |
+| Psycopg    | 3.3.6, pinned by the fixture                                                              |
+| asgiref    | 3.12.1, pinned by the fixture                                                             |
+| Python     | The supported versions of Workhorse                                                       |
+| PostgreSQL | The supported versions of Workhorse                                                       |
 
 More detail: [ADR 0087: Keep the Django Tasks backend bounded by atomic acceptance](https://github.com/stablemates/workhorse/blob/main/docs/decisions/0087-bounded-django-tasks-backend.md) and [Compatibility: Supported versions](https://github.com/stablemates/workhorse/blob/main/docs/compatibility.md#supported-versions).
 
@@ -244,7 +244,7 @@ through `pnpm python:test` one time for each change.
 
 The contract follows the released
 [Django 6.1 Tasks documentation](https://docs.djangoproject.com/en/6.1/topics/tasks/) and the
-[Django 6.1.1 backend source](https://github.com/django/django/blob/6.1.1/django/tasks/backends/base.py).
+[Django 6.1.2 backend source](https://github.com/django/django/blob/6.1.2/django/tasks/backends/base.py).
 
 ## Next
 
