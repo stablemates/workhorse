@@ -1514,20 +1514,21 @@ read the retention preview through the new `dashboard_retention_preview_v1`. Its
 through the new `deregister_worker_v2`. Thus the schema floor rises. The upgrade is a rolling
 deployment, and a mixed fleet is supported while it runs.
 
-1. Run `workhorse schema migrate`. It applies migrations 0075 through 0079 and leaves the schema at
-   version 78.
+1. Run `workhorse schema migrate`. It applies migrations 0075 through 0080 and leaves the schema at
+   version 79.
 2. Roll out the new processes in any order.
 
 A 0.9.0 database is at schema version 73. The migrations only add, or change behavior that was an
 error:
 
-| Migration                                               | Schema version | Changes                                                                                            |
-| ------------------------------------------------------- | -------------- | -------------------------------------------------------------------------------------------------- |
-| `0075-allow-throttle-on-fast-tier-queues.sql`           | 74             | `enqueue_throttle_v1` and `enqueue_many_v1` accept throttle on a fast-tier queue                   |
-| `0076-add-the-dashboard-retention-preview-function.sql` | 75             | `dashboard_retention_preview_v1`, which returns the retention preview document                     |
-| `0077-fence-the-worker-deregistration-by-instance.sql`  | 76             | `deregister_worker_v2`, which deletes a registry row only for the instance of the caller           |
-| `0078-copy-the-diagnostic-details-into-hint.sql`        | 77             | Each P1001 to P1010 error also carries its DETAIL JSON in HINT                                     |
-| `0079-bound-the-history-partition-lock-waits.sql`       | 78             | Partition DDL waits at most 250 ms for each lock, and retention and partition preparation run last |
+| Migration                                                     | Schema version | Changes                                                                                                            |
+| ------------------------------------------------------------- | -------------- | ------------------------------------------------------------------------------------------------------------------ |
+| `0075-allow-throttle-on-fast-tier-queues.sql`                 | 74             | `enqueue_throttle_v1` and `enqueue_many_v1` accept throttle on a fast-tier queue                                   |
+| `0076-add-the-dashboard-retention-preview-function.sql`       | 75             | `dashboard_retention_preview_v1`, which returns the retention preview document                                     |
+| `0077-fence-the-worker-deregistration-by-instance.sql`        | 76             | `deregister_worker_v2`, which deletes a registry row only for the instance of the caller                           |
+| `0078-copy-the-diagnostic-details-into-hint.sql`              | 77             | Each P1001 to P1010 error also carries its DETAIL JSON in HINT                                                     |
+| `0079-bound-the-history-partition-lock-waits.sql`             | 78             | Partition DDL waits at most 250 ms for each lock, and retention and partition preparation run last                 |
+| `0080-compare-the-enqueue-fingerprint-instants-as-values.sql` | 79             | An enqueue fingerprint compares `runAt` and `deadline` as instants, so a replay matches from any session time zone |
 
 The SDK schema floor rises from 73 to 76. Every SDK statement catalogue names
 `dashboard_retention_preview_v1`, which schema version 75 adds, and `deregister_worker_v2`, which
@@ -1548,7 +1549,12 @@ Migration 0079 changes the row order of `run_maintenance_v1`. The set of phases 
 phases must run last so that their parent locks end when the call commits. No SDK reads the rows by
 position, so this is a change of behavior and not a breaking change.
 
-A 0.9 process keeps working on schema version 78. Its dashboard host still sends its own retention
+Schema version 79 does not raise the floor. Migration 0080 changes the bodies of `enqueue_batch_v1`
+and `enqueue_debounce_v1`, and no signature. A replay that the earlier schema rejected only because
+of the session time zone now returns the bound task. A fingerprint stored before the migration
+still matches an exact replay. Every process gets the new comparison when the migration commits.
+
+A 0.9 process keeps working on schema version 79. Its dashboard host still sends its own retention
 preview statement, which reads tables that the migrations do not change. Its worker still sends
 `deregister_worker_v1`, which migration 0077 does not change. Every process gets the throttle
 behavior when migration 0075 commits. On schema 73, a throttled enqueue into a fast-tier queue still

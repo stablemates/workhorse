@@ -108,6 +108,47 @@ AS $$
   SELECT sha256(convert_to(p_scope || chr(31) || p_key, 'UTF8'));
 $$;
 
+-- An enqueue fingerprint stores each instant as UTC text with microsecond precision, so the text
+-- does not depend on the session TimeZone. Before schema version 79, a fingerprint stored the
+-- to_jsonb() text, which carries the offset of the session that wrote it.
+CREATE OR REPLACE FUNCTION workhorse.idempotency_instant_v1(p_value timestamptz)
+RETURNS jsonb
+LANGUAGE sql
+STABLE
+PARALLEL SAFE
+AS $$
+  SELECT CASE
+    WHEN p_value IS NULL THEN 'null'::jsonb
+    WHEN NOT isfinite(p_value) THEN to_jsonb(p_value::text)
+    WHEN extract(year FROM p_value AT TIME ZONE 'UTC') < 1 THEN to_jsonb(
+      to_char(p_value AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z BC"')
+    )
+    ELSE to_jsonb(to_char(p_value AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"'))
+  END;
+$$;
+
+-- A stored enqueue fingerprint with its runAt and deadline members in the form of
+-- idempotency_instant_v1. The members compare as instants: a fingerprint that an earlier schema
+-- stored keeps its own offset in the text, so it reads back to the same instant.
+CREATE OR REPLACE FUNCTION workhorse.canonical_enqueue_fingerprint_v1(p_fingerprint jsonb)
+RETURNS jsonb
+LANGUAGE sql
+STABLE
+PARALLEL SAFE
+AS $$
+  SELECT p_fingerprint
+    || CASE WHEN jsonb_typeof(p_fingerprint->'runAt') = 'string'
+         THEN jsonb_build_object('runAt', workhorse.idempotency_instant_v1(
+           (p_fingerprint->>'runAt')::timestamptz
+         ))
+         ELSE '{}'::jsonb END
+    || CASE WHEN jsonb_typeof(p_fingerprint->'deadline') = 'string'
+         THEN jsonb_build_object('deadline', workhorse.idempotency_instant_v1(
+           (p_fingerprint->>'deadline')::timestamptz
+         ))
+         ELSE '{}'::jsonb END;
+$$;
+
 -- PostgreSQL 15-17 do not provide uuidv7(). Keep generation inside the schema so historical
 -- identities have the same time-sortable representation on every supported PostgreSQL version.
 CREATE OR REPLACE FUNCTION workhorse.uuid_v7_v1()
@@ -6395,6 +6436,7 @@ DECLARE
   v_fingerprint_tags text[];
   v_request_digest text;
   v_conflicting_fields text[];
+  v_stored_fingerprint jsonb;
   v_proposed_task_id uuid;
   v_existing workhorse.enqueue_idempotency%ROWTYPE;
   v_is_new boolean;
@@ -6796,9 +6838,10 @@ BEGIN
         'sensitiveResultKeys', to_jsonb(v_result_redact_keys),
         'tags', to_jsonb(v_fingerprint_tags),
         'runAt', CASE
-          WHEN v_request->>'runAt' IS NULL THEN 'null'::jsonb ELSE to_jsonb(v_run_at)
+          WHEN v_request->>'runAt' IS NULL THEN 'null'::jsonb
+          ELSE workhorse.idempotency_instant_v1(v_run_at)
         END,
-        'deadline', to_jsonb(v_deadline_at),
+        'deadline', workhorse.idempotency_instant_v1(v_deadline_at),
         'executionTimeoutMs', to_jsonb(v_execution_timeout_ms),
         'maxAttempts', v_max_attempts,
         'retryPolicy', v_retry_policy,
@@ -6839,26 +6882,32 @@ BEGIN
           CONTINUE;
         END IF;
         IF v_existing.request_fingerprint <> v_fingerprint THEN
-          SELECT COALESCE(array_agg(field ORDER BY field COLLATE "C"), '{}')
-            INTO v_conflicting_fields
-            FROM jsonb_object_keys(v_fingerprint) field
-           WHERE v_existing.request_fingerprint->field IS DISTINCT FROM v_fingerprint->field;
-          v_diagnostic := jsonb_build_object(
-            'scope', v_scope,
-            'keyPreview', v_key_preview,
-            'keyDigest', v_key_digest,
-            'keyLength', v_key_length,
-            'existingTaskId', v_existing.task_id,
-            'ordinal', v_ordinal,
-            'conflictingFields', to_jsonb(v_conflicting_fields),
-            'storedRequestDigest', workhorse.sha256_hex_v1(v_existing.request_fingerprint::text),
-            'rejectedRequestDigest', v_request_digest
-          )::text;
-          RAISE EXCEPTION USING
-            ERRCODE = 'P1001',
-            MESSAGE = 'enqueue idempotency conflict with a retained request',
-            DETAIL = v_diagnostic,
-            HINT = v_diagnostic;
+          -- The timestamp members compare as instants, so the session TimeZone of either request
+          -- does not matter.
+          v_stored_fingerprint :=
+            workhorse.canonical_enqueue_fingerprint_v1(v_existing.request_fingerprint);
+          IF v_stored_fingerprint <> v_fingerprint THEN
+            SELECT COALESCE(array_agg(field ORDER BY field COLLATE "C"), '{}')
+              INTO v_conflicting_fields
+              FROM jsonb_object_keys(v_fingerprint) field
+             WHERE v_stored_fingerprint->field IS DISTINCT FROM v_fingerprint->field;
+            v_diagnostic := jsonb_build_object(
+              'scope', v_scope,
+              'keyPreview', v_key_preview,
+              'keyDigest', v_key_digest,
+              'keyLength', v_key_length,
+              'existingTaskId', v_existing.task_id,
+              'ordinal', v_ordinal,
+              'conflictingFields', to_jsonb(v_conflicting_fields),
+              'storedRequestDigest', workhorse.sha256_hex_v1(v_existing.request_fingerprint::text),
+              'rejectedRequestDigest', v_request_digest
+            )::text;
+            RAISE EXCEPTION USING
+              ERRCODE = 'P1001',
+              MESSAGE = 'enqueue idempotency conflict with a retained request',
+              DETAIL = v_diagnostic,
+              HINT = v_diagnostic;
+          END IF;
         END IF;
         task_id := v_existing.task_id;
         v_is_new := false;
@@ -7320,8 +7369,8 @@ BEGIN
       'sensitivePayloadKeys', to_jsonb(v_payload_redact_keys),
       'sensitiveResultKeys', to_jsonb(v_result_redact_keys),
       'tags', to_jsonb(v_fingerprint_tags),
-      'runAt', to_jsonb(v_run_at),
-      'deadline', to_jsonb((v_normalized->>'deadline')::timestamptz),
+      'runAt', workhorse.idempotency_instant_v1(v_run_at),
+      'deadline', workhorse.idempotency_instant_v1((v_normalized->>'deadline')::timestamptz),
       'executionTimeoutMs', to_jsonb((v_normalized->>'executionTimeoutMs')::numeric),
       'maxAttempts', COALESCE((v_normalized->>'maxAttempts')::integer, 25),
       'retryPolicy', v_retry_policy,
@@ -22361,10 +22410,11 @@ INSERT INTO workhorse.schema_migration(version, description) VALUES
   (75, 'add the dashboard retention preview function'),
   (76, 'fence the worker deregistration by instance'),
   (77, 'copy the diagnostic details into hint'),
-  (78, 'bound the history partition lock waits')
+  (78, 'bound the history partition lock waits'),
+  (79, 'compare the enqueue fingerprint instants as values')
 ON CONFLICT DO NOTHING;
 
-INSERT INTO workhorse.schema_version(version) VALUES (78) ON CONFLICT DO NOTHING;
+INSERT INTO workhorse.schema_version(version) VALUES (79) ON CONFLICT DO NOTHING;
 
 INSERT INTO workhorse.protocol_version(version) VALUES (5) ON CONFLICT DO NOTHING;
 SELECT workhorse.create_history_day_v1(
