@@ -1,10 +1,13 @@
 import { useEffect, useRef, useState, type CSSProperties } from "react";
 
+import { DerbyStatusLine } from "@/components/derby-status";
 import {
   createHorses,
   createRace,
   DERBY_TUNING,
+  derbyStatus,
   formatRaceClock,
+  type DerbyPhase,
   type HorseState,
   type HorseStatus,
   type LogLine,
@@ -20,8 +23,6 @@ import {
  * Rendering is hydration-safe: the initial state is constant, and every
  * random draw happens inside the Start click handler.
  */
-
-type Phase = "pick" | "running" | "done";
 
 const statusLabel: Record<HorseStatus, string> = {
   ready: "ready",
@@ -168,7 +169,7 @@ function RaceLog({ log }: { log: readonly LogLine[] }) {
 }
 
 export function TheDerby() {
-  const [phase, setPhase] = useState<Phase>("pick");
+  const [phase, setPhase] = useState<DerbyPhase>("pick");
   const [pickedId, setPickedId] = useState<string | null>(null);
   const [race, setRace] = useState<RaceState | null>(null);
   const recordedRef = useRef(false);
@@ -237,18 +238,13 @@ export function TheDerby() {
         ? "derby — race in progress"
         : "derby — result";
 
-  let statusLine: string;
-  let statusClass = "text-fd-muted-foreground";
-  if (phase === "pick") {
-    statusLine = pickedId ? `${pickedId} at the gate — start when ready` : "pick a horse to enter";
-  } else if (phase === "running") {
-    statusLine = `racing — ${formatRaceClock(race?.tick ?? 0)}`;
-  } else if (winnerId === pickedId) {
-    statusLine = `${winnerId} wins — you picked the winner`;
-    statusClass = "text-safety-600 dark:text-safety-400";
-  } else {
-    statusLine = `${winnerId} wins — ${pickedId} finished #${selection?.rank}`;
-  }
+  const status = derbyStatus({
+    phase,
+    pickedId,
+    winnerId,
+    pickedRank: selection?.rank,
+    tick: race?.tick ?? 0,
+  });
 
   return (
     <div className="wh-frame min-w-0" data-derby>
@@ -282,9 +278,7 @@ export function TheDerby() {
         )}
       </details>
       <div className="wh-frame-bar flex flex-wrap items-center justify-between gap-2 border-t wh-rule px-4 py-2">
-        <span role="status" aria-live="polite" className={`font-mono text-xs ${statusClass}`}>
-          {statusLine}
-        </span>
+        <DerbyStatusLine status={status} />
         <div className="flex flex-wrap gap-2">
           {phase === "done" ? (
             <button

@@ -2,6 +2,19 @@ import { ArrowExpand01Icon, Cancel01Icon } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
 import { useRef, type MouseEvent } from "react";
 
+import diagramSizes from "../lib/diagram-sizes.json";
+
+/** The CSS width and height of each generated diagram, keyed by slug. */
+const sizes: Record<string, readonly number[] | undefined> = diagramSizes;
+
+function sizeOf(slug: string) {
+  const [width, height] = sizes[slug] ?? [];
+  if (width === undefined || height === undefined) {
+    throw new Error(`No diagram named ${slug}. Run \`pnpm diagrams:generate\`.`);
+  }
+  return { width, height };
+}
+
 /**
  * One diagram that `scripts/diagrams.ts` generates into `public/diagrams/`. The
  * page shows the light or the dark image of the current theme, and the narrow
@@ -10,9 +23,26 @@ import { useRef, type MouseEvent } from "react";
  * The column is narrower than a wide diagram, and a phone shows the narrow
  * variant. A click opens the wide image of the current theme at full size in a
  * modal dialog. On a small screen the dialog scrolls horizontally.
+ *
+ * Each image states its width and height, so the page reserves its space before
+ * it loads. The images load lazily: the browser does not load the image of the
+ * other theme or the images of a closed dialog, because they are not rendered.
+ * Set `eager` only on a diagram in the first screen of its page, where a lazy
+ * image delays the main content. Then the browser loads both theme images.
  */
-export function Diagram({ name, alt }: { name: string; alt: string }) {
+export function Diagram({
+  name,
+  alt,
+  eager = false,
+}: {
+  name: string;
+  alt: string;
+  eager?: boolean;
+}) {
   const dialog = useRef<HTMLDialogElement>(null);
+  const wide = sizeOf(name);
+  const narrow = sizeOf(`${name}-narrow`);
+  const loading = eager ? "eager" : "lazy";
 
   // A click on the dialog itself or on the space around the image closes it.
   function closeOutside(event: MouseEvent<HTMLElement>) {
@@ -30,8 +60,19 @@ export function Diagram({ name, alt }: { name: string; alt: string }) {
       >
         {(["light", "dark"] as const).map((theme) => (
           <picture key={theme} className={theme === "light" ? "dark:hidden" : "hidden dark:block"}>
-            <source media="(max-width: 600px)" srcSet={`/diagrams/${name}-narrow-${theme}.png`} />
-            <img src={`/diagrams/${name}-${theme}.png`} alt={alt} />
+            <source
+              media="(max-width: 600px)"
+              srcSet={`/diagrams/${name}-narrow-${theme}.png`}
+              {...narrow}
+            />
+            <img
+              src={`/diagrams/${name}-${theme}.png`}
+              alt={alt}
+              {...wide}
+              loading={loading}
+              decoding="async"
+              className="h-auto w-full"
+            />
           </picture>
         ))}
         <span
@@ -55,6 +96,9 @@ export function Diagram({ name, alt }: { name: string; alt: string }) {
                 key={theme}
                 src={`/diagrams/${name}-${theme}.png`}
                 alt={alt}
+                {...wide}
+                loading="lazy"
+                decoding="async"
                 className={`m-auto h-auto self-center w-[max(960px,min(1920px,calc(100vw_-_5rem)))] max-w-none ${theme === "light" ? "dark:hidden" : "hidden dark:block"}`}
               />
             ))}

@@ -4,6 +4,8 @@ import {
   createHorses,
   createRace,
   DERBY_TUNING,
+  derbyStatus,
+  formatRaceClock,
   raceStandings,
   runRaceToEnd,
   stepRace,
@@ -106,5 +108,70 @@ describe("Derby event history", () => {
     const race = runRaceToEnd(createRace(seed));
     expect(race.winnerId).toBe(winner);
     expect(race.tick).toBe(tick);
+  });
+});
+
+/** The announcements a screen reader hears: one for each change of the live text. */
+function announced(texts: readonly string[]) {
+  return texts.filter((text, index) => text !== texts[index - 1]);
+}
+
+describe("Derby status announcements", () => {
+  it("announces the race start and the result once each and keeps the clock out", () => {
+    const pickedId = "wal-runner";
+    let race = createRace(42);
+    const live: string[] = [];
+    const clocks: (string | null)[] = [];
+    while (!race.winnerId && race.tick < DERBY_TUNING.maxTicks) {
+      const status = derbyStatus({
+        phase: "running",
+        pickedId,
+        winnerId: null,
+        pickedRank: undefined,
+        tick: race.tick,
+      });
+      live.push(status.announcement);
+      clocks.push(status.clock);
+      race = stepRace(race);
+    }
+    const rank = raceStandings(race.horses).find((entry) => entry.horse.id === pickedId)?.rank;
+    const result = derbyStatus({
+      phase: "done",
+      pickedId,
+      winnerId: race.winnerId,
+      pickedRank: rank,
+      tick: race.tick,
+    });
+    live.push(result.announcement);
+
+    expect(clocks.length).toBeGreaterThan(50);
+    expect(clocks).toEqual(clocks.map((_, tick) => formatRaceClock(tick)));
+    expect(live.some((text) => /t\+\d/.test(text))).toBe(false);
+    expect(announced(live)).toEqual(["racing", `furlong-poll wins — wal-runner finished #${rank}`]);
+    expect(result.clock).toBeNull();
+  });
+
+  it("announces the result of a reduced-motion race once, with no clock", () => {
+    const race = runRaceToEnd(createRace(1));
+    const status = derbyStatus({
+      phase: "done",
+      pickedId: race.winnerId,
+      winnerId: race.winnerId,
+      pickedRank: 1,
+      tick: race.tick,
+    });
+    expect(status).toEqual({
+      announcement: "foal-tolerant wins — you picked the winner",
+      clock: null,
+      won: true,
+    });
+  });
+
+  it("asks for a pick, then names the picked horse at the gate", () => {
+    const pick = { phase: "pick", winnerId: null, pickedRank: undefined, tick: 0 } as const;
+    expect(derbyStatus({ ...pick, pickedId: null }).announcement).toBe("pick a horse to enter");
+    expect(derbyStatus({ ...pick, pickedId: "hot-standby" }).announcement).toBe(
+      "hot-standby at the gate — start when ready",
+    );
   });
 });
