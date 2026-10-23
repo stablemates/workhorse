@@ -51,6 +51,28 @@ describe("browser storage", () => {
   });
 });
 
+describe("dashboard time zone preference", () => {
+  it("falls back to the browser zone when the stored zone is unknown", async () => {
+    vi.stubGlobal("localStorage", {
+      getItem: (key: string) => (key === "workhorse-timezone" ? "Mars/Olympus_Mons" : null),
+      setItem: () => undefined,
+    });
+    const preferences = await import("./preferences.js");
+    expect(preferences.displayTimeZone).toBeNull();
+    expect(preferences.currentTimeZoneValue()).toBe("system");
+    expect(() => preferences.formatExact("2026-10-23T06:00:00.000Z")).not.toThrow();
+  });
+
+  it("loads a stored zone that the browser knows", async () => {
+    vi.stubGlobal("localStorage", {
+      getItem: (key: string) => (key === "workhorse-timezone" ? "Pacific/Auckland" : null),
+      setItem: () => undefined,
+    });
+    const preferences = await import("./preferences.js");
+    expect(preferences.currentTimeZoneValue()).toBe("Pacific/Auckland");
+  });
+});
+
 describe("dashboard preferences when storage is denied", () => {
   it("loads the time zone preference with the browser zone", async () => {
     const preferences = await import("./preferences.js");

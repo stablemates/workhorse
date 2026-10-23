@@ -19,7 +19,7 @@ import {
   Text,
   TextInput,
 } from "@mantine/core";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { dashboardRefreshBlockers, useRefreshBlocker } from "../../refresh-blockers.js";
 import { Select } from "../../dropdown-activity.js";
 import { formatCount } from "../../count-format.js";
@@ -32,34 +32,60 @@ import {
 import { PageHeader } from "../../components/task-list.js";
 import { deriveSettingsRecommendations } from "../../presentation-policy.js";
 
-/** Common timezones plus the browser default; stored values are IANA zone names. */
-export const timeZoneOptions: Array<{ value: string; label: string }> = [
-  {
-    value: "system",
-    label: `System (${Intl.DateTimeFormat().resolvedOptions().timeZone})`,
-  },
-  { value: "UTC", label: "UTC" },
-  { value: "America/New_York", label: "America/New_York" },
-  { value: "America/Chicago", label: "America/Chicago" },
-  { value: "America/Denver", label: "America/Denver" },
-  { value: "America/Los_Angeles", label: "America/Los_Angeles" },
-  { value: "Europe/London", label: "Europe/London" },
-  { value: "Europe/Berlin", label: "Europe/Berlin" },
-  { value: "Europe/Kyiv", label: "Europe/Kyiv" },
-  { value: "Asia/Dubai", label: "Asia/Dubai" },
-  { value: "Asia/Kolkata", label: "Asia/Kolkata" },
-  { value: "Asia/Singapore", label: "Asia/Singapore" },
-  { value: "Asia/Tokyo", label: "Asia/Tokyo" },
-  { value: "Australia/Sydney", label: "Australia/Sydney" },
+/** The zones to offer when the browser has no `Intl.supportedValuesOf`. */
+const fallbackTimeZones = [
+  "UTC",
+  "America/New_York",
+  "America/Chicago",
+  "America/Denver",
+  "America/Los_Angeles",
+  "Europe/London",
+  "Europe/Berlin",
+  "Europe/Kyiv",
+  "Asia/Dubai",
+  "Asia/Kolkata",
+  "Asia/Singapore",
+  "Asia/Tokyo",
+  "Australia/Sydney",
 ];
-export const supportedMaintenanceTimeZoneOptions = Array.from(
-  new Set([
-    "UTC",
-    ...(typeof Intl.supportedValuesOf === "function"
-      ? Intl.supportedValuesOf("timeZone")
-      : timeZoneOptions.filter(({ value }) => value !== "system").map(({ value }) => value)),
-  ]),
-).map((value) => ({ value, label: value }));
+interface TimeZoneLister {
+  supportedValuesOf?: (key: "timeZone") => string[];
+}
+
+/** Every IANA zone the browser knows, or the short list when it cannot list them. UTC is first. */
+export function supportedTimeZones(intl: TimeZoneLister = Intl): string[] {
+  let zones = fallbackTimeZones;
+  if (typeof intl.supportedValuesOf === "function") {
+    try {
+      const listed = intl.supportedValuesOf("timeZone");
+      if (listed.length > 0) zones = listed;
+    } catch {
+      // Keep the short list.
+    }
+  }
+  return Array.from(new Set(["UTC", ...zones]));
+}
+const browserTimeZones = supportedTimeZones();
+
+/**
+ * The display time zone choices: System, then every supported zone. Stored values are IANA zone
+ * names. A selected zone that the list does not contain, for example a zone the browser writes
+ * under another name, stays as a choice so the field never shows an empty value.
+ */
+export function displayTimeZoneOptions(
+  selected: string,
+  zones: string[] = browserTimeZones,
+): Array<{ value: string; label: string }> {
+  const values = selected === "system" || zones.includes(selected) ? zones : [...zones, selected];
+  return [
+    { value: "system", label: `System (${Intl.DateTimeFormat().resolvedOptions().timeZone})` },
+    ...values.map((value) => ({ value, label: value })),
+  ];
+}
+export const supportedMaintenanceTimeZoneOptions = browserTimeZones.map((value) => ({
+  value,
+  label: value,
+}));
 export interface SettingsPageProps {
   data: DashboardSettingsPage;
   saving: boolean;
@@ -179,6 +205,7 @@ export function SettingsPage({
 }: SettingsPageProps) {
   const recommendations = deriveSettingsRecommendations(data);
   const [timeZone, setTimeZone] = useState(currentTimeZoneValue);
+  const timeZoneOptions = useMemo(() => displayTimeZoneOptions(timeZone), [timeZone]);
   const [maintenance, setMaintenance] = useState(() => ({
     timezone: data.maintenance.timezone,
     historyRetentionLocalTime: data.maintenance.historyRetentionLocalTime,

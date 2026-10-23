@@ -166,3 +166,49 @@ describe("settings page", () => {
     expect(html).toContain("30.0 s lease");
   });
 });
+
+describe("display time zone choices", () => {
+  it("offers every zone the browser lists, after System and UTC", async () => {
+    const { displayTimeZoneOptions, supportedTimeZones } =
+      await import("./pages/settings/index.js");
+    const zones = supportedTimeZones({
+      supportedValuesOf: () => ["Africa/Abidjan", "Pacific/Auckland", "UTC"],
+    });
+    expect(zones).toEqual(["UTC", "Africa/Abidjan", "Pacific/Auckland"]);
+    const values = displayTimeZoneOptions("system", zones).map(({ value }) => value);
+    expect(values).toEqual(["system", "UTC", "Africa/Abidjan", "Pacific/Auckland"]);
+  });
+
+  it("offers more than the short list in this runtime", async () => {
+    const { displayTimeZoneOptions } = await import("./pages/settings/index.js");
+    const values = displayTimeZoneOptions("system").map(({ value }) => value);
+    expect(values.slice(0, 2)).toEqual(["system", "UTC"]);
+    expect(values.length).toBeGreaterThan(14);
+    expect(values).toContain("Pacific/Auckland");
+  });
+
+  it("keeps the short list when the browser cannot list zones", async () => {
+    const { supportedTimeZones } = await import("./pages/settings/index.js");
+    for (const zones of [
+      supportedTimeZones({}),
+      supportedTimeZones({
+        supportedValuesOf: () => {
+          throw new RangeError("Invalid key");
+        },
+      }),
+      supportedTimeZones({ supportedValuesOf: () => [] }),
+    ]) {
+      expect(zones).toHaveLength(13);
+      expect(zones[0]).toBe("UTC");
+      expect(zones).toContain("Europe/Kyiv");
+    }
+  });
+
+  it("keeps a selected zone that the list does not contain", async () => {
+    const { displayTimeZoneOptions } = await import("./pages/settings/index.js");
+    const values = displayTimeZoneOptions("Asia/Calcutta", ["UTC", "Asia/Kolkata"]).map(
+      ({ value }) => value,
+    );
+    expect(values).toEqual(["system", "UTC", "Asia/Kolkata", "Asia/Calcutta"]);
+  });
+});

@@ -63,6 +63,7 @@ import { TaskListingFilters, TaskSortSelect, useTaskFacets } from "../components
 import { TaskListRow } from "../components/task-row.js";
 import { currentTimeZoneValue, subscribeTimeZone } from "../preferences.js";
 import { formatCount } from "../count-format.js";
+import { randomUuid } from "../random-uuid.js";
 
 const TasksActivityChart = lazy(() => import("../charts/activity.js"));
 
@@ -182,7 +183,7 @@ export const TasksPage = memo(function TasksPage({
         audit: {
           actor: auditActor,
           reason: `Redrive ${redriveSelection.selected} from the task list`,
-          requestId: crypto.randomUUID(),
+          requestId: randomUuid(),
         },
       });
       notifyRedriveBatch({ results: batch.results, moreRemain: batch.nextCursor !== null });

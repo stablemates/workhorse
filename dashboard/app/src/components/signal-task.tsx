@@ -11,6 +11,7 @@ import { useState } from "react";
 import { formatExact } from "../preferences.js";
 import { useDashboardClient } from "../core.js";
 import { DrawerSection } from "./task-detail-overview.js";
+import { randomUuid } from "../random-uuid.js";
 
 async function deliverDashboardSignal({
   client,
@@ -41,8 +42,8 @@ async function deliverDashboardSignal({
       id: taskId,
       name,
       payload: parsed.value,
-      idempotencyKey: crypto.randomUUID(),
-      audit: { actor: auditActor, reason, requestId: crypto.randomUUID() },
+      idempotencyKey: randomUuid(),
+      audit: { actor: auditActor, reason, requestId: randomUuid() },
     });
     notifyDashboard({
       title: delivery.status === "delivered" ? "Signal delivered" : "Signal unchanged",

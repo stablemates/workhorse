@@ -1009,6 +1009,26 @@ The color theme control in the header offers Light, Dark, and System.
   `followSystemScheme` listens for each change of the browser setting.
 - The inline theme script reads `system` the same as a missing value.
 
+The display time zone setting on the Settings page offers System, then UTC, then every IANA zone
+that `Intl.supportedValuesOf("timeZone")` returns. The user can search the list.
+
+- If the browser has no `Intl.supportedValuesOf`, or the call fails or returns no zone, the list has
+  13 zones: UTC and 12 common zones. `supportedTimeZones` in
+  `dashboard/app/src/pages/settings/index.tsx` makes this decision.
+- If the browser does not recognize the stored `workhorse-timezone` value, the dashboard uses the
+  browser time zone. `readStoredTimeZone` in `dashboard/app/src/preferences.tsx` makes this decision.
+- If the selected zone is not in the list, `displayTimeZoneOptions` adds it as the last choice.
+- The Maintenance timezone setting uses the same zone list without System.
+
+### Client request IDs
+
+The SPA creates a random UUID for each mutation `audit.requestId` and each `idempotencyKey`. It
+also creates one for a notification ID when the caller gives no ID. `randomUuid` in
+`dashboard/app/src/random-uuid.ts` makes these UUIDs. A browser gives `crypto.randomUUID()` only in
+a secure context. If the browser gives `crypto.randomUUID()`, `randomUuid` calls it. If not,
+`randomUuid` builds a version 4 UUID from `crypto.getRandomValues()`, which every context gives.
+This fallback does not make plain HTTP a supported deployment.
+
 ### Page loads, task reloads, and focus
 
 The SPA reads each page again on manual refresh, on auto refresh, and after an operator action.
