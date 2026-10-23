@@ -20,6 +20,22 @@ upgrade steps.
 
 ## Unreleased
 
+### The metrics observer reports maintenance freshness and retention lag
+
+The `workhorse.maintenance.*` counters and histograms record only when a routine runs. If every
+worker stops, they record nothing, and an operator cannot alert on a routine that stops (SM-1674).
+
+`WorkhorseMetricsObserver` now records five gauges from database state:
+`workhorse.maintenance.routine.age`, `workhorse.maintenance.routine.overdue`,
+`workhorse.retention.lag`, `workhorse.retention.lag_budget`, and `workhorse.retention.enabled`. They
+use the attributes `workhorse.maintenance.routine` and `workhorse.retention.category`, and give a
+fixed 28 series for each database. The observer reads them every `maintenanceIntervalMs`, a new
+option with a default of 60,000, because the query calls `queue_health_v1`. `start()` now runs that
+query at once, and `collect()` runs it with the queue queries.
+[ADR 0110](docs/decisions/0110-export-maintenance-freshness-and-retention-lag-from-the-metrics-observer.md)
+records the names. `docs/architecture/telemetry.md` gives alert examples. The change needs no
+migration.
+
 ### The .NET docs state how a `DateTime` converts to an enqueue time
 
 C# converts a `DateTime` to a `DateTimeOffset` implicitly. If the `Kind` is `Local` or

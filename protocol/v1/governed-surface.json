@@ -1016,6 +1016,10 @@
         "total": "integer"
       }
     },
+    "terminal_cleanup_follow_up_delay_ms_v1": {
+      "arguments": [],
+      "returns": "integer"
+    },
     "tick_v1": {
       "arguments": ["integer?", "integer?"],
       "returns": "table",
@@ -1486,6 +1490,28 @@
         "worker_id": "text"
       }
     },
+    "maintenance_policy": {
+      "kind": "table",
+      "columns": {
+        "history_retention_local_time": "time(0)",
+        "partition_preparation_interval_ms": "integer",
+        "singleton": "boolean",
+        "statistics_rollup_interval_ms": "integer",
+        "terminal_cleanup_interval_ms": "integer",
+        "timezone": "text",
+        "updated_at": "timestamptz"
+      }
+    },
+    "maintenance_state": {
+      "kind": "table",
+      "columns": {
+        "last_completed_at": "timestamptz",
+        "last_completed_local_date": "date",
+        "routine_name": "text",
+        "terminal_cleanup_backlog_since": "timestamptz",
+        "updated_at": "timestamptz"
+      }
+    },
     "protocol_version": {
       "kind": "table",
       "columns": {
@@ -1528,6 +1554,19 @@
         "updated_at": "timestamptz"
       }
     },
+    "retention_policy": {
+      "kind": "table",
+      "columns": {
+        "attempt_history_retention_days": "integer",
+        "schedule_occurrence_retention_days": "integer",
+        "singleton": "boolean",
+        "statistics_retention_days": "integer",
+        "task_event_retention_days": "integer",
+        "task_identity_retention_days": "integer",
+        "terminal_outcome_retention_days": "integer",
+        "updated_at": "timestamptz"
+      }
+    },
     "schedule_definition": {
       "kind": "table",
       "columns": {
@@ -1567,6 +1606,7 @@
     "schema_version": {
       "kind": "table",
       "columns": {
+        "installed_at": "timestamptz",
         "version": "integer"
       }
     },
@@ -1758,6 +1798,14 @@
         "task_type": "text"
       }
     },
+    "task_stat_state": {
+      "kind": "table",
+      "columns": {
+        "last_run_at": "timestamptz",
+        "singleton": "boolean",
+        "updated_at": "timestamptz"
+      }
+    },
     "task_wait": {
       "kind": "table",
       "columns": {
@@ -1785,6 +1833,7 @@
         "instance_id": "uuid",
         "last_heartbeat_at": "timestamptz",
         "lease_ms": "integer",
+        "maintenance_interval_ms": "integer",
         "paused": "boolean",
         "paused_at": "timestamptz",
         "paused_by": "text",
@@ -1919,7 +1968,6 @@
       "sync_schedule_definitions_internal_v1",
       "task_group_member_limit_v1",
       "task_group_shard_count_v1",
-      "terminal_cleanup_follow_up_delay_ms_v1",
       "terminalize_deadline_v1",
       "timeout_envelope_v1",
       "timeout_owned_v1",
@@ -1937,12 +1985,9 @@
       "contract_definition",
       "contract_policy",
       "enqueue_idempotency",
-      "maintenance_policy",
       "maintenance_run",
-      "maintenance_state",
       "queue_health_policy",
       "queue_purge_request",
-      "retention_policy",
       "schema_migration",
       "task_group",
       "task_group_callback",
@@ -1950,7 +1995,6 @@
       "task_group_member",
       "task_group_shard",
       "task_redrive",
-      "task_stat_state",
       "worker_pause_tombstone"
     ]
   }

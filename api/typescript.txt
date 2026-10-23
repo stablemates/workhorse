@@ -5856,6 +5856,7 @@ type WorkhorseLogEvent = "workhorse.handler.batch_dispatched" | "workhorse.handl
 class WorkhorseMetricsObserver {
   constructor(database: Queryable, options?: {
     intervalMs?: number;
+    maintenanceIntervalMs?: number;
     onError?: (error: unknown) => void;
   });
   collect(): Promise<void>;
