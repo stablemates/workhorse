@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ClaimedTask, HeartbeatBatchStatus } from "../src/index.js";
 import { Worker } from "../src/index.js";
 import { workerHeartbeatReservation } from "../src/worker-internal.js";
+import { type HeartbeatSchedule, recordHeartbeatTimers } from "./support/heartbeat-timers.js";
 import { createIntegrationTestContext } from "./support/integration.js";
 
 // A busy lease renews nothing and gets no ownership verdict. The worker retries only the busy
@@ -319,11 +320,28 @@ describe("busy heartbeat retry", () => {
     const queueName = "busy-retry-short";
     const id = await queue.enqueue("short", {}, { queue: queueName });
     let rounds: Round[] = [];
+    // The worker's next regular slot when each round starts. A regular round sets it before it
+    // sends, and a retry does not change it. Thus a round with the slot of the round before it is a
+    // retry.
+    const slots: (number | undefined)[] = [];
+    // The time left before the next regular slot when a busy retry falls due. Each value is less
+    // than the shortest bound of a retry, so the worker must send nothing.
+    const shortRetries: number[] = [];
+    // The first round that starts after a short retry falls due. This round and the rounds after
+    // it go to the database.
+    let renewalFrom: number | undefined;
     onReservedChannel((channel) => {
       rounds = interceptRounds(channel, async (round, tasks) => {
-        if (round > 0) return undefined;
-        // The busy answer arrives so late that the retry falls due 10 ms before the next slot.
-        await sleep(heartbeatMs - retryDelayMs - 10);
+        const slot = schedule().nextHeartbeatAt!;
+        slots[round] = slot;
+        if (shortRetries.length > 0) {
+          renewalFrom ??= round;
+          return undefined;
+        }
+        // The busy answer arrives so late that the retry falls due at most 10 ms before the slot.
+        // A slow host can only make the retry later. If it falls due at or after the slot, the
+        // worker drops it, and the next regular round tries again.
+        await sleep(Math.max(0, slot - retryDelayMs - 10 - performance.now()));
         return new Map(tasks.map((task) => [task.id, "busy" as const]));
       });
     });
@@ -337,18 +355,37 @@ describe("busy heartbeat retry", () => {
       registryIntervalMs: 0,
     }).handle("short", async () => {
       claimedUntil = await expiresAt(id);
-      await vi.waitFor(() => expect(rounds[1]?.endedAt).toBeDefined(), {
-        timeout: 5_000,
-        interval: 10,
-      });
+      // A slow host can make a regular round reach its bound. The test waits for one that ends
+      // without a failure, and counts rounds, not time.
+      await vi.waitFor(
+        () => {
+          expect(renewalFrom).toBeDefined();
+          const renewed = rounds
+            .slice(renewalFrom)
+            .some((round) => round.endedAt !== undefined && round.failed === undefined);
+          expect(renewed).toBe(true);
+        },
+        { timeout: 15_000, interval: 10 },
+      );
       renewedUntil = await expiresAt(id);
       return null;
     });
+    const schedule = () => worker as unknown as HeartbeatSchedule;
+    recordHeartbeatTimers(worker, () => {
+      const { heartbeatTimerIsRetry, nextHeartbeatAt } = schedule();
+      const leftMs = nextHeartbeatAt! - performance.now();
+      if (heartbeatTimerIsRetry && leftMs > 0) shortRetries.push(leftMs);
+      return false;
+    });
     expect(await worker.runOnce()).toBe(true);
-    // The second round is the regular one, one interval after the first. It did not fail, and it
-    // renewed the lease that the first round reported busy.
-    expect(rounds[1]!.startedAt - rounds[0]!.startedAt).toBeGreaterThanOrEqual(0.9 * heartbeatMs);
-    expect(rounds[1]!.failed).toBeUndefined();
+    // A busy retry falls due before the slot, with less time left than a retry needs.
+    expect(shortRetries.length).toBeGreaterThan(0);
+    for (const leftMs of shortRetries) expect(leftMs).toBeLessThan(20);
+    // The worker sends no retry: each round after the first is a regular round with a new slot.
+    for (let index = 1; index < rounds.length; index += 1) {
+      expect(slots[index]).toBeGreaterThan(slots[index - 1]!);
+    }
+    // A regular round after the short retry renews the lease that the earlier rounds report busy.
     expect(renewedUntil).toBeGreaterThan(claimedUntil!);
     expect(await outcomeState(id)).toBe("succeeded");
   });
@@ -356,47 +393,91 @@ describe("busy heartbeat retry", () => {
   it("sends no retry for a busy lease that left while its round ran", async () => {
     const heartbeatMs = 300;
     const queueName = "busy-retry-left";
-    const id = await queue.enqueue("left", {}, { queue: queueName });
+    // `kept` runs until the test ends, so the worker keeps its schedule after `left` finishes.
+    const left = await queue.enqueue("left", { leaves: true }, { queue: queueName });
+    const kept = await queue.enqueue("left", { leaves: false }, { queue: queueName });
     let rounds: Round[] = [];
-    let finish!: () => void;
-    const finished = new Promise<void>((resolve) => {
-      finish = resolve;
-    });
+    // The worker's next regular slot when each round starts. A retry leaves it as it is.
+    const slots: (number | undefined)[] = [];
+    // The first round that sends `left`.
+    let leftRound: number | undefined;
     let roundSent!: () => void;
     const sent = new Promise<void>((resolve) => {
       roundSent = resolve;
     });
+    let release!: () => void;
+    const released = new Promise<void>((resolve) => {
+      release = resolve;
+    });
     onReservedChannel((channel) => {
-      rounds = interceptRounds(channel, async (_round, tasks) => {
+      rounds = interceptRounds(channel, async (round, tasks, send) => {
+        slots[round] = schedule().nextHeartbeatAt;
+        if (leftRound !== undefined || !tasks.some((task) => task.id === left)) return undefined;
+        leftRound = round;
         roundSent();
-        // The task finishes while this round is in flight. Its late busy answer counts for nothing.
-        await finished;
-        await sleep(100);
-        return new Map(tasks.map((task) => [task.id, "busy" as const]));
+        // `left` finishes while this round is in flight. Its late busy answer has no effect. The
+        // other lease goes to the database.
+        await vi.waitFor(() => expect(schedule().heartbeatLeases.has(left)).toBe(false), {
+          timeout: 10_000,
+          interval: 5,
+        });
+        const statuses = await send(tasks.filter((task) => task.id !== left));
+        statuses.set(left, "busy");
+        return statuses;
       });
     });
     const worker = new Worker(queue, {
       workerId: "busy-retry-left-worker",
       queue: queueName,
+      concurrency: 2,
       leaseMs: 30_000,
       heartbeatMs,
       registryIntervalMs: 0,
       sharedHeartbeats: false,
-    }).handle("left", async () => {
-      await sent;
+    }).handle("left", async (payload: { leaves: boolean }) => {
+      await (payload.leaves ? sent : released);
       return null;
     });
-    const run = worker.runOnce();
-    await sent;
-    finish();
-    expect(await run).toBe(true);
-    await vi.waitFor(() => expect(rounds[0]?.endedAt).toBeDefined(), {
-      timeout: 5_000,
-      interval: 10,
+    const schedule = () => worker as unknown as HeartbeatSchedule;
+    const timers = recordHeartbeatTimers(worker);
+    // The task IDs of each busy set that a round gives to a retry. The worker stores the set before
+    // it arms a timer, so this record does not depend on when the busy answer arrives.
+    const busySets: string[][] = [];
+    let busyRetryLeases: { task: ClaimedTask }[] | undefined;
+    Object.defineProperty(worker, "busyRetryLeases", {
+      configurable: true,
+      get: () => busyRetryLeases,
+      set: (leases: { task: ClaimedTask }[] | undefined) => {
+        if (leases !== undefined) busySets.push(leases.map((lease) => lease.task.id));
+        busyRetryLeases = leases;
+      },
     });
-    await sleep(heartbeatMs);
-    expect(rounds).toHaveLength(1);
-    expect(await outcomeState(id)).toBe("succeeded");
+    const run = worker.runOnce();
+    try {
+      // A retry falls due before the next regular round. The wait counts rounds, not time.
+      await vi.waitFor(
+        () => {
+          expect(leftRound).toBeDefined();
+          expect(rounds[leftRound! + 1]?.endedAt).toBeDefined();
+        },
+        { timeout: 15_000, interval: 10 },
+      );
+    } finally {
+      release();
+    }
+    expect(await run).toBe(true);
+    // The late busy answer gives no lease to a retry, and the worker arms no retry timer. The
+    // database renews the other lease, so no lease is busy.
+    expect(busySets).toEqual([]);
+    expect(timers.filter((timer) => timer.retry)).toEqual([]);
+    // The worker sends no retry: each later round is a regular round with a new slot. No round sends
+    // `left` again.
+    for (let index = leftRound! + 1; index < rounds.length; index += 1) {
+      expect(slots[index]).toBeGreaterThan(slots[index - 1]!);
+      expect(rounds[index]!.taskIds).not.toContain(left);
+    }
+    expect(await outcomeState(left)).toBe("succeeded");
+    expect(await outcomeState(kept)).toBe("succeeded");
   });
 
   it.each([false, true])(
