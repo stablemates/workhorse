@@ -172,10 +172,14 @@ raises `contract documents are immutable; publish a new version`.
 2. If a cached definition raises `TaskContractValidationError` or `TaskValueSizeLimitError`, the
    client reloads that task type's definition once and validates again. The second result stands.
 
-Child-task creation and `syncSchedules` use the same path.
+Child-task creation uses the same path. `syncSchedules` does not use the cache or the local
+definitions. It reads the current definition of each task type from PostgreSQL once. If PostgreSQL
+has no definition for a type, the schedule stores no contract version. Call `syncContracts()`
+before `syncSchedules()`.
 
-More detail: [Data model: Contract definitions and policy](../architecture/data-model.md#contract-definitions-and-policy)
-and [Data model: Contract validation at enqueue and completion](../architecture/data-model.md#contract-validation-at-enqueue-and-completion).
+More detail: [Data model: Contract definitions and policy](../architecture/data-model.md#contract-definitions-and-policy),
+[Data model: Contract validation at enqueue and completion](../architecture/data-model.md#contract-validation-at-enqueue-and-completion),
+and [Operations: Contract stamping](../architecture/operations.md#contract-stamping).
 
 </details>
 

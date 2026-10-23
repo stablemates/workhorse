@@ -20,6 +20,19 @@ upgrade steps.
 
 ## Unreleased
 
+### TypeScript schedule sync reads the current payload contract from PostgreSQL
+
+A schedule stores the payload contract version, size limits, and redaction keys of its task type.
+Before this change, `Queue.syncSchedules` used the payload contract that the queue had cached, or a
+local payload contract definition. If an operator overrode the current version after the cache
+filled, the schedule stored the old version. Each occurrence then fired with the old redaction keys
+(SM-1652).
+
+Now `syncSchedules` reads the current payload contract of each task type once from PostgreSQL, as
+the other SDKs do. If PostgreSQL has no payload contract for a task type, the schedule stores no
+contract version, even when the queue has a local definition. Call `syncContracts()` before
+`syncSchedules()` to store local definitions first. No schema change is required.
+
 ### Partition preparation no longer blocks lifecycle transitions behind a reader
 
 Partition preparation creates the next daily partitions of `task_event` and `attempt_history`. It

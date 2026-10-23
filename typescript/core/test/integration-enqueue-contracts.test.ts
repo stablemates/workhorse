@@ -59,6 +59,18 @@ async function debouncedTaskRows(taskId: string): Promise<Record<string, unknown
   return result.rows[0]!;
 }
 
+/** The contract fields that schedule sync stored on one schedule of the override tests. */
+async function storedSchedule(name: string): Promise<Record<string, unknown>[]> {
+  const result = await pool.query<Record<string, unknown>>(
+    `SELECT contract_version, payload_max_bytes, result_max_bytes,
+            payload_redact_keys, result_redact_keys
+       FROM workhorse.schedule_definition
+      WHERE namespace = 'contract-override' AND schedule_name = $1`,
+    [name],
+  );
+  return result.rows;
+}
+
 const dependencyCoalescingCases = [
   ["debounce", "prerequisiteTaskId"],
   ["debounce", "dependencies"],
@@ -783,6 +795,7 @@ describe("enqueue contracts", () => {
         },
       },
     });
+    await contractedQueue.syncContracts();
     await contractedQueue.syncSchedules("contract-tests", [
       {
         name: "scheduled-contract",
@@ -813,6 +826,125 @@ describe("enqueue contracts", () => {
       payload: { kind: "scheduled" },
     });
     expect((await admin.getTask(id!))?.payload).not.toHaveProperty("token");
+  });
+
+  describe("schedule synchronization after an operator override", () => {
+    const versions: TaskTypeContracts["versions"] = {
+      old: {
+        maxPayloadBytes: 256,
+        maxResultBytes: 512,
+        payloadSchema: { type: "object", required: ["kind"], properties: { kind: true } },
+        sensitivePayloadKeys: ["oldSecret"],
+        sensitiveResultKeys: ["oldReceipt"],
+      },
+      current: {
+        maxPayloadBytes: 2048,
+        maxResultBytes: 4096,
+        payloadSchema: {
+          type: "object",
+          required: ["kind", "region"],
+          properties: { kind: true, region: true },
+        },
+        sensitivePayloadKeys: ["token"],
+        sensitiveResultKeys: ["receipt"],
+      },
+    };
+    const warmedQueue = async (taskType: string): Promise<Queue> => {
+      const synced = new Queue(pool, "default", {
+        contracts: { [taskType]: { currentVersion: "old", versions } },
+      });
+      await synced.syncContracts();
+      // Warm the cached acceptance under the old version before the operator changes the policy.
+      await synced.enqueue(taskType, { kind: "warm" });
+      return synced;
+    };
+
+    it("stores and fires the current contract instead of the cached one", async () => {
+      const synced = await warmedQueue("schedule.override");
+      await pool.query(
+        "SELECT workhorse.override_contract_version_v1('schedule.override', 'current')",
+      );
+
+      await synced.syncSchedules("contract-override", [
+        {
+          name: "override-report",
+          schedule: "0 * * * *",
+          task: {
+            type: "schedule.override",
+            payload: { kind: "report", region: "eu", token: "schedule-secret" },
+          },
+        },
+      ]);
+
+      const expected = {
+        contract_version: "current",
+        payload_max_bytes: 2048,
+        result_max_bytes: 4096,
+        payload_redact_keys: ["token"],
+        result_redact_keys: ["receipt"],
+      };
+      await expect(storedSchedule("override-report")).resolves.toEqual([expected]);
+      const schedule = (await synced.schedules(["contract-override"]))[0]!;
+      const id = await synced.fireSchedule(
+        schedule.namespace,
+        schedule.name,
+        schedule.revision,
+        new Date("2026-08-10T12:00:00Z"),
+      );
+      const fired = await pool.query(
+        `SELECT contract_version, payload_max_bytes, result_max_bytes,
+                payload_redact_keys, result_redact_keys
+           FROM workhorse.task WHERE id = $1`,
+        [id],
+      );
+      expect(fired.rows).toEqual([expected]);
+      expect((await admin.getTask(id!))?.payload).toEqual({ kind: "report", region: "eu" });
+    });
+
+    it("rejects a payload the current contract rejects before it stores the schedule", async () => {
+      const synced = await warmedQueue("schedule.override.invalid");
+      await pool.query(
+        "SELECT workhorse.override_contract_version_v1('schedule.override.invalid', 'current')",
+      );
+
+      await expect(
+        synced.syncSchedules("contract-override", [
+          {
+            name: "override-invalid",
+            schedule: "0 * * * *",
+            task: { type: "schedule.override.invalid", payload: { kind: "report" } },
+          },
+        ]),
+      ).rejects.toMatchObject({
+        name: "TaskContractValidationError",
+        contractVersion: "current",
+      });
+      await expect(storedSchedule("override-invalid")).resolves.toEqual([]);
+    });
+
+    it("ignores a local contract that PostgreSQL does not have", async () => {
+      const unsynced = new Queue(pool, "default", {
+        contracts: { "schedule.local-only": { currentVersion: "old", versions } },
+      });
+
+      await unsynced.syncSchedules("contract-override", [
+        {
+          name: "local-only",
+          schedule: "0 * * * *",
+          task: { type: "schedule.local-only", payload: { other: true } },
+        },
+      ]);
+
+      await expect(storedSchedule("local-only")).resolves.toEqual([
+        {
+          contract_version: null,
+          payload_max_bytes: 1048576,
+          result_max_bytes: 1048576,
+          payload_redact_keys: [],
+          result_redact_keys: [],
+        },
+      ]);
+    });
   });
 
   it("refuses to turn an existing v1 schema into a mixed installation", async () => {

@@ -667,6 +667,30 @@ export class EnqueueContractsModule extends QueueModule {
     return this.serializedTaskAcceptanceUnder(taskType, payload, definition).acceptance;
   }
 
+  // A schedule stores the contract fields of its task type, and firing an occurrence does not check
+  // the contract policy. A stale version would persist on every occurrence, so each type's current
+  // contract comes from PostgreSQL, not from the cache or the local definitions.
+  async currentTaskAcceptances(
+    tasks: readonly { type: string; payload: Json }[],
+  ): Promise<TaskAcceptance[]> {
+    const taskTypes = [...new Set(tasks.map((task) => task.type))];
+    const definitions = new Map(
+      await Promise.all(
+        taskTypes.map(
+          async (taskType) => [taskType, await this.loadContract(taskType, null)] as const,
+        ),
+      ),
+    );
+    return tasks.map(
+      (task) =>
+        this.serializedTaskAcceptanceUnder(
+          task.type,
+          task.payload,
+          definitions.get(task.type) ?? null,
+        ).acceptance,
+    );
+  }
+
   // An operator can change the selected version or its limits after syncContracts(). A payload the
   // cached definition rejects may be valid under the current one, so the client reloads the
   // definition once through the enqueue's queryable and validates again before it reports the

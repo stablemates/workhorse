@@ -1827,15 +1827,36 @@ describe("SQL protocol conformance fixtures", () => {
     const executed = new Set<string>();
     for (const fixture of fixtures.schedules) {
       let parameters: readonly unknown[] | undefined;
+      // Schedule sync reads each type's current contract from PostgreSQL, so the fake database
+      // answers that lookup with the current version of the fixture's contracts.
+      const contracts = (fixture.contracts ?? {}) as Record<
+        string,
+        { currentVersion: string; versions: Record<string, Record<string, unknown>> }
+      >;
       const database: Queryable = {
-        async query() {
-          parameters = arguments[1];
+        async query(text: string, values?: readonly unknown[]) {
+          if (text.includes("get_contract_definition_v1")) {
+            const typeContracts = contracts[String(values?.[0])];
+            if (typeContracts === undefined) return { rows: [] } as never;
+            const current = typeContracts.versions[typeContracts.currentVersion]!;
+            return {
+              rows: [
+                {
+                  version: typeContracts.currentVersion,
+                  schema: { payload: current.payloadSchema, result: current.resultSchema },
+                  payload_max_bytes: current.maxPayloadBytes,
+                  result_max_bytes: current.maxResultBytes,
+                  payload_redact_keys: current.sensitivePayloadKeys,
+                  result_redact_keys: current.sensitiveResultKeys,
+                },
+              ],
+            } as never;
+          }
+          parameters = values;
           return { rows: [] } as never;
         },
       };
-      const queue = new Queue(database, fixture.defaultQueue, {
-        contracts: fixture.contracts as never,
-      });
+      const queue = new Queue(database, fixture.defaultQueue);
       await queue.syncSchedules(fixture.namespace, fixture.application as never, {
         prune: fixture.prune,
       });
