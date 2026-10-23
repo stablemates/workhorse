@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, expect, it } from "vitest";
 
+import { repositoryRoot } from "./packages.js";
 import { downloadThenCheck, toolBinary } from "./run-go-check.js";
 
 // The download fails while the marker file is missing and creates it, so it fails once and then
@@ -86,4 +87,30 @@ it("names the installed binary after the last element of the package path", () =
   expect(toolBinary("honnef.co/go/tools/cmd/staticcheck@v0.7.0")).toBe(`staticcheck${suffix}`);
   expect(toolBinary("golang.org/x/vuln/cmd/govulncheck@v1.7.0")).toBe(`govulncheck${suffix}`);
   expect(() => toolBinary("golang.org/x/vuln/cmd/govulncheck")).toThrow(/<package>@<version>/);
+});
+
+// A database test reads state that `go test` does not track, so a cached result is not a test run
+// (SM-1659). Every Go test command that CI runs must pass `-count=1`, apart from the `-short` scope,
+// which has no database packages. The compile and module caches stay in use.
+it("runs every Go database test command of CI without cached results", async () => {
+  const workflow = await readFile(path.join(repositoryRoot, ".github/workflows/ci.yml"), "utf8");
+  const manifest = JSON.parse(
+    await readFile(path.join(repositoryRoot, "package.json"), "utf8"),
+  ) as {
+    scripts: Record<string, string>;
+  };
+  const resolve = (name: string): string => {
+    const command = manifest.scripts[name];
+    if (command === undefined) throw new Error(`package.json has no script ${name}`);
+    const alias = /^pnpm ([\w:-]+)$/.exec(command);
+    return alias?.[1] === undefined ? command : resolve(alias[1]);
+  };
+  const names = [...workflow.matchAll(/run: pnpm (go:test[\w:-]*)/g)].map((match) => match[1]);
+
+  expect(names).toEqual(expect.arrayContaining(["go:test", "go:test:race"]));
+  const databaseCommands = names
+    .map((name) => ({ name, args: resolve(name ?? "").split(/\s+/) }))
+    .filter(({ args }) => !args.includes("-short"));
+  expect(databaseCommands.filter(({ args }) => !args.includes("test"))).toEqual([]);
+  expect(databaseCommands.filter(({ args }) => !args.includes("-count=1"))).toEqual([]);
 });
