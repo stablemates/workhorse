@@ -20,6 +20,30 @@ upgrade steps.
 
 ## Unreleased
 
+### A registry prune keeps the operator pause of a live worker
+
+An operator pauses a worker. A network partition or a PostgreSQL failover then stops the worker
+from refreshing its registration for more than one minute, and maintenance prunes its stale row.
+Before this change, the next registration of the same worker inserted a new row with
+`paused = false`. The worker started to claim tasks again, and no operator ended the pause
+(SM-1646).
+
+Migration 0082 (`0082-keep-the-operator-pause-after-a-registry-prune.sql`) moves the schema to
+version 81. It adds the table `worker_pause_tombstone`. When `prune_worker_registry_v1` removes a
+paused row, it keeps the pause of that worker instance for one day or three registration
+intervals, whichever is longer. If the same instance registers again in that time,
+`register_worker_v1` restores the pause and its attribution. A new instance still starts running.
+An operator resume or a deregistration of the instance ends the kept pause.
+Registration, resume, deregistration, and pruning of one worker ID take one transaction advisory
+lock, so a resume cannot miss a registration that restores a kept pause.
+
+`prune_worker_registry_v1` also keeps each row for at least three of its own registration
+intervals. Before this change, a worker with a registration interval above one minute could lose
+its row between two healthy refreshes.
+
+The migration does not raise the SDK compatibility floor. No SDK statement changes. The migration
+changes no stored data.
+
 ### A handler error with text that jsonb cannot store settles by its retry policy
 
 PostgreSQL `jsonb` cannot store a NUL character or an unpaired surrogate. Before this change, a

@@ -1950,7 +1950,8 @@
       "task_group_member",
       "task_group_shard",
       "task_redrive",
-      "task_stat_state"
+      "task_stat_state",
+      "worker_pause_tombstone"
     ]
   }
 }

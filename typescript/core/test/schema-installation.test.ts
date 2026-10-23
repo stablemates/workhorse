@@ -637,6 +637,10 @@ describe("schema installation", () => {
         version: 80,
         description: "bound the dense cron evaluation",
       },
+      {
+        version: 81,
+        description: "keep the operator pause after a registry prune",
+      },
     ]);
 
     const protocols = await pool.query<{ version: number }>(

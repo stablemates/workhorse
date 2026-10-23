@@ -14,7 +14,7 @@ public final class SqlCatalogue {
   public static final int MINIMUM_PROTOCOL_VERSION = 5;
   public static final int MAXIMUM_PROTOCOL_VERSION = 5;
   public static final int MINIMUM_SCHEMA_VERSION = 76;
-  public static final int MAXIMUM_SCHEMA_VERSION = 80;
+  public static final int MAXIMUM_SCHEMA_VERSION = 81;
 
   /** PostgreSQL's atomic enqueue batch limit. */
   public static final int MAX_ENQUEUE_BATCH_SIZE = 1000;

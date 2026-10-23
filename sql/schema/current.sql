@@ -696,6 +696,37 @@ CREATE INDEX IF NOT EXISTS worker_registry_heartbeat_idx
 CREATE INDEX IF NOT EXISTS worker_registry_queue_idx
   ON workhorse.worker_registry (queue_name, worker_id);
 
+-- The operator pause of one worker instance whose registration maintenance pruned.
+--
+-- Maintenance removes a registration that stopped refreshing. A live instance can also stop
+-- refreshing for a short time, for example during a network partition or a PostgreSQL failover.
+-- When it comes back, register_worker_v1 inserts a new row. Without this relation, that row starts
+-- with paused = false, and the operator pause ends without an operator action (SM-1646).
+--
+-- prune_worker_registry_v1 keeps the pause of a pruned row here, keyed by worker ID and fenced by
+-- instance ID. If the same instance registers again before expires_at, register_worker_v1 restores
+-- the pause. A new instance, an operator resume, or a deregistration removes the row. The relation
+-- holds at most one row per pruned paused worker.
+CREATE TABLE IF NOT EXISTS workhorse.worker_pause_tombstone (
+  worker_id text PRIMARY KEY CHECK (worker_id <> ''),
+  instance_id uuid NOT NULL,
+  paused_by text CHECK (paused_by IS NULL OR paused_by <> ''),
+  paused_reason text CHECK (paused_reason IS NULL OR paused_reason <> ''),
+  paused_request_id_preview text,
+  paused_request_id_digest text CHECK (
+    paused_request_id_digest IS NULL OR char_length(paused_request_id_digest) = 12
+  ),
+  paused_request_id_length integer CHECK (
+    paused_request_id_length IS NULL OR paused_request_id_length BETWEEN 1 AND 512
+  ),
+  paused_at timestamptz,
+  pruned_at timestamptz NOT NULL DEFAULT clock_timestamp(),
+  expires_at timestamptz NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS worker_pause_tombstone_expires_idx
+  ON workhorse.worker_pause_tombstone (expires_at);
+
 -- Stable accepted-task identity and definition. Keyed debounce may replace the definition only
 -- while its runtime remains pending; dispatch makes the accepted definition immutable.
 CREATE TABLE IF NOT EXISTS workhorse.task (
@@ -8539,8 +8570,8 @@ $$;
 -- the pause decision PostgreSQL owns.
 --
 -- Operator pause is deliberately **process-scoped**. A heartbeat from the same instance preserves
--- the flag; a new instance of the same worker id clears it, so a restarted or replaced worker
--- always comes back running. The durable lever for "stop processing this work" is queue pause,
+-- the flag, also after maintenance pruned the row of that instance; a new instance of the same
+-- worker id clears it, so a restarted or replaced worker always comes back running. The durable lever for "stop processing this work" is queue pause,
 -- which is keyed by queue name and unaffected by worker lifecycles. Keeping the two distinct means
 -- a pause can never become a forgotten flag that silently idles a worker after a later deployment.
 --
@@ -8573,6 +8604,7 @@ LANGUAGE plpgsql
 AS $$
 DECLARE
   v_paused boolean;
+  v_tombstone workhorse.worker_pause_tombstone%ROWTYPE;
 BEGIN
   IF p_worker_id IS NULL OR p_worker_id = '' THEN
     RAISE EXCEPTION 'worker_id must not be empty';
@@ -8611,6 +8643,11 @@ BEGIN
   IF p_sdk_version IS NOT NULL AND (p_sdk_version = '' OR char_length(p_sdk_version) > 64) THEN
     RAISE EXCEPTION 'sdk_version must be 1 to 64 characters when supplied';
   END IF;
+
+  -- Registration, resume, deregistration, and pruning of one worker ID run one at a time. Without
+  -- this lock, a resume could miss the uncommitted row of a registration that restores a kept
+  -- pause, and the worker would stay paused after the resume.
+  PERFORM pg_advisory_xact_lock(hashtextextended('workhorse:worker-registry:' || p_worker_id, 0));
 
   INSERT INTO workhorse.worker_registry AS registry
     (worker_id, instance_id, hostname, pid, queue_names, schedule_namespaces, queue_name,
@@ -8681,6 +8718,28 @@ BEGIN
         END
   RETURNING registry.paused INTO v_paused;
 
+  -- Maintenance can prune the row of a live instance that missed its refreshes. A kept pause of
+  -- this instance comes back with the new row. A kept pause of another instance ends, because a
+  -- new instance starts running. This statement runs after the upsert, so it also sees a kept
+  -- pause that a concurrent prune committed while the upsert waited for the row lock.
+  DELETE FROM workhorse.worker_pause_tombstone tombstone
+   WHERE tombstone.worker_id = p_worker_id
+  RETURNING tombstone.* INTO v_tombstone;
+  IF FOUND AND v_tombstone.instance_id = p_instance_id
+     AND v_tombstone.expires_at > clock_timestamp() THEN
+    UPDATE workhorse.worker_registry registry
+       SET paused = true,
+           paused_by = v_tombstone.paused_by,
+           paused_reason = v_tombstone.paused_reason,
+           paused_request_id_preview = v_tombstone.paused_request_id_preview,
+           paused_request_id_digest = v_tombstone.paused_request_id_digest,
+           paused_request_id_length = v_tombstone.paused_request_id_length,
+           paused_at = v_tombstone.paused_at
+     WHERE registry.worker_id = p_worker_id
+       AND registry.instance_id = p_instance_id;
+    v_paused := true;
+  END IF;
+
   RETURN v_paused;
 END;
 $$;
@@ -8697,8 +8756,11 @@ BEGIN
   IF p_worker_id IS NULL OR p_worker_id = '' THEN
     RAISE EXCEPTION 'worker_id must not be empty';
   END IF;
+  -- The same lock as register_worker_v1, so a deregistration cannot interleave with a registration.
+  PERFORM pg_advisory_xact_lock(hashtextextended('workhorse:worker-registry:' || p_worker_id, 0));
   DELETE FROM workhorse.worker_registry WHERE worker_id = p_worker_id;
   GET DIAGNOSTICS v_deleted = ROW_COUNT;
+  DELETE FROM workhorse.worker_pause_tombstone WHERE worker_id = p_worker_id;
   RETURN v_deleted > 0;
 END;
 $$;
@@ -8720,10 +8782,16 @@ BEGIN
   IF p_instance_id IS NULL THEN
     RAISE EXCEPTION 'instance_id must not be null';
   END IF;
+  -- The same lock as register_worker_v1, so a deregistration cannot interleave with a registration.
+  PERFORM pg_advisory_xact_lock(hashtextextended('workhorse:worker-registry:' || p_worker_id, 0));
   DELETE FROM workhorse.worker_registry
    WHERE worker_id = p_worker_id
      AND instance_id = p_instance_id;
   GET DIAGNOSTICS v_deleted = ROW_COUNT;
+  -- The instance ends, so its kept pause ends too. A kept pause of another instance stays.
+  DELETE FROM workhorse.worker_pause_tombstone
+   WHERE worker_id = p_worker_id
+     AND instance_id = p_instance_id;
   RETURN v_deleted > 0;
 END;
 $$;
@@ -8758,6 +8826,10 @@ BEGIN
     RAISE EXCEPTION 'paused must not be null';
   END IF;
 
+  -- The same lock as register_worker_v1. A resume thus sees the row that a concurrent registration
+  -- writes, also when that registration restores a kept pause.
+  PERFORM pg_advisory_xact_lock(hashtextextended('workhorse:worker-registry:' || p_worker_id, 0));
+
   RETURN QUERY
   UPDATE workhorse.worker_registry AS registry
      SET paused = p_paused,
@@ -8767,6 +8839,12 @@ BEGIN
    WHERE registry.worker_id = p_worker_id
   RETURNING registry.worker_id, registry.paused, registry.paused_by, registry.paused_reason,
             registry.paused_at, registry.last_heartbeat_at;
+
+  -- A resume also ends a pause that maintenance kept after it pruned the registration.
+  IF NOT p_paused THEN
+    DELETE FROM workhorse.worker_pause_tombstone tombstone
+     WHERE tombstone.worker_id = p_worker_id;
+  END IF;
 END;
 $$;
 
@@ -8853,6 +8931,13 @@ $$;
 
 -- Drop registrations whose process stopped heartbeating long ago. The relation holds one row per
 -- worker, so this stays a trivial bounded delete regardless of task volume.
+--
+-- A row stays for at least three of its own registration intervals, so a worker with a long
+-- interval is never pruned between two healthy refreshes. The pause of a pruned paused row moves
+-- to worker_pause_tombstone. It stays there for one day or three registration intervals, whichever
+-- is longer, so that the same instance gets it back when it registers again. The function also
+-- removes the expired kept pauses. It skips a worker ID whose lock another call holds, and a later
+-- prune removes that row. It returns the number of registrations that it removed.
 CREATE OR REPLACE FUNCTION workhorse.prune_worker_registry_v1(
   p_max_age interval DEFAULT interval '1 day'
 )
@@ -8860,11 +8945,61 @@ RETURNS integer
 LANGUAGE plpgsql
 AS $$
 DECLARE
+  v_now timestamptz := clock_timestamp();
   v_count integer;
 BEGIN
-  DELETE FROM workhorse.worker_registry
-   WHERE last_heartbeat_at < clock_timestamp() - GREATEST(p_max_age, interval '1 minute');
-  GET DIAGNOSTICS v_count = ROW_COUNT;
+  WITH pruned AS (
+    DELETE FROM workhorse.worker_registry registry
+     WHERE registry.last_heartbeat_at < v_now - interval '1 minute'
+       -- The CASE takes the lock of a worker ID only for a stale row. A try-lock skips a worker
+       -- whose registration, resume, or deregistration runs now, and it cannot deadlock.
+       AND CASE
+         WHEN registry.last_heartbeat_at < v_now - GREATEST(
+           p_max_age,
+           interval '1 minute',
+           make_interval(secs => registry.registry_interval_ms::bigint * 3 / 1000.0)
+         )
+         THEN pg_try_advisory_xact_lock(
+           hashtextextended('workhorse:worker-registry:' || registry.worker_id, 0)
+         )
+         ELSE false
+       END
+    RETURNING registry.*
+  ), kept AS (
+    INSERT INTO workhorse.worker_pause_tombstone AS tombstone
+      (worker_id, instance_id, paused_by, paused_reason, paused_request_id_preview,
+       paused_request_id_digest, paused_request_id_length, paused_at, pruned_at, expires_at)
+    SELECT pruned.worker_id, pruned.instance_id, pruned.paused_by, pruned.paused_reason,
+           pruned.paused_request_id_preview, pruned.paused_request_id_digest,
+           pruned.paused_request_id_length, pruned.paused_at, v_now,
+           v_now + GREATEST(
+             interval '1 day',
+             make_interval(secs => pruned.registry_interval_ms::bigint * 3 / 1000.0)
+           )
+      FROM pruned
+     WHERE pruned.paused
+    ON CONFLICT (worker_id) DO UPDATE
+      SET instance_id = EXCLUDED.instance_id,
+          paused_by = EXCLUDED.paused_by,
+          paused_reason = EXCLUDED.paused_reason,
+          paused_request_id_preview = EXCLUDED.paused_request_id_preview,
+          paused_request_id_digest = EXCLUDED.paused_request_id_digest,
+          paused_request_id_length = EXCLUDED.paused_request_id_length,
+          paused_at = EXCLUDED.paused_at,
+          pruned_at = EXCLUDED.pruned_at,
+          expires_at = EXCLUDED.expires_at
+  )
+  SELECT count(*)::integer INTO v_count FROM pruned;
+
+  DELETE FROM workhorse.worker_pause_tombstone tombstone
+   WHERE CASE
+     WHEN tombstone.expires_at <= v_now
+     THEN pg_try_advisory_xact_lock(
+       hashtextextended('workhorse:worker-registry:' || tombstone.worker_id, 0)
+     )
+     ELSE false
+   END;
+
   RETURN v_count;
 END;
 $$;
@@ -22493,10 +22628,11 @@ INSERT INTO workhorse.schema_migration(version, description) VALUES
   (77, 'copy the diagnostic details into hint'),
   (78, 'bound the history partition lock waits'),
   (79, 'compare the enqueue fingerprint instants as values'),
-  (80, 'bound the dense cron evaluation')
+  (80, 'bound the dense cron evaluation'),
+  (81, 'keep the operator pause after a registry prune')
 ON CONFLICT DO NOTHING;
 
-INSERT INTO workhorse.schema_version(version) VALUES (80) ON CONFLICT DO NOTHING;
+INSERT INTO workhorse.schema_version(version) VALUES (81) ON CONFLICT DO NOTHING;
 
 INSERT INTO workhorse.protocol_version(version) VALUES (5) ON CONFLICT DO NOTHING;
 SELECT workhorse.create_history_day_v1(

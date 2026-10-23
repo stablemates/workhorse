@@ -1127,6 +1127,11 @@ A local resume cannot clear an operator pause. If it could, the fleet could undo
 operator sets from a dashboard. But an operator pause applies only to the process that it names. A
 restarted process starts without it.
 
+A short connection loss does not end an operator pause. If a process stops its refreshes for a time,
+maintenance removes its stale row but keeps its pause for a limited time. If the same process
+registers again before the kept pause expires, it is still paused. An operator resume ends the kept
+pause.
+
 `Worker.stop` drains the worker. The worker takes no new claims, and active handlers run to
 completion. Then `run` returns. On `SIGTERM`, the worker process stops its workers for you.
 

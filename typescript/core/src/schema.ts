@@ -573,6 +573,13 @@ export const SCHEMA_MIGRATIONS: readonly SchemaMigrationStep[] = [
     description: "bound the dense cron evaluation",
     kind: "additive",
   },
+  {
+    fromVersion: 80,
+    toVersion: 81,
+    file: "0082-keep-the-operator-pause-after-a-registry-prune.sql",
+    description: "keep the operator pause after a registry prune",
+    kind: "additive",
+  },
 ];
 
 /**

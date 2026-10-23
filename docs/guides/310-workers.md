@@ -571,6 +571,11 @@ A local resume cannot clear an operator pause. If it could, the fleet could undo
 operator sets from a dashboard. But an operator pause applies only to the process that it names. A
 restarted process starts without it.
 
+A short connection loss does not end an operator pause. If a process stops its refreshes for a time,
+maintenance removes its stale row but keeps its pause for a limited time. If the same process
+registers again before the kept pause expires, it is still paused. An operator resume ends the kept
+pause.
+
 `Worker.stop` drains the worker. The worker takes no new claims, and active handlers run to
 completion. Then `run` returns. On `SIGTERM`, the worker process stops its workers for you.
 
@@ -587,9 +592,13 @@ with `Admin.pauseQueue`, not the worker.
   characters), and the request ID (1 to 512 UTF-8 bytes).
 - Each worker start announces a new `instance_id`. `register_worker_v1` keeps the pause only while
   that instance continues to refresh. A new instance of the same worker ID clears the pause.
+- `prune_worker_registry_v1` keeps a row for at least three of its `registry_interval_ms`. When it
+  removes a paused row, `worker_pause_tombstone` keeps the pause of that `instance_id` for one day
+  or three registration intervals, whichever is longer. A registration of the same instance in that
+  time restores the pause. A resume or a deregistration of the instance ends it.
 - A worker cannot write `paused`, and an operator cannot write the runtime columns.
 
-More detail: [Data model: Pause scope](../architecture/data-model.md#pause-scope), [Data model: Pause ownership](../architecture/data-model.md#pause-ownership), and [Operations and CLI: Worker pause](../architecture/operations.md#worker-pause).
+More detail: [Data model: Pause scope](../architecture/data-model.md#pause-scope), [Data model: Pause after a prune](../architecture/data-model.md#pause-after-a-prune), [Data model: Pause ownership](../architecture/data-model.md#pause-ownership), and [Operations and CLI: Worker pause](../architecture/operations.md#worker-pause).
 
 </details>
 
