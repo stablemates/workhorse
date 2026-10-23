@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { setTimeout as sleep } from "node:timers/promises";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { installSchema, Queue, type RetentionPolicyDefinition, Worker } from "../src/index.js";
 import { createIntegrationTestContext } from "./support/integration.js";
 
@@ -13,6 +13,15 @@ const {
   adminAudit,
   createFailedTask,
 } = createIntegrationTestContext(import.meta.url);
+
+// The shared reset keeps maintenance_state, and each prune_terminal_tasks_v1 call flips the tier
+// that goes first. Without this reset, a test inherits the parity that earlier tests leave.
+beforeEach(async () => {
+  await pool.query(
+    `UPDATE workhorse.maintenance_state SET terminal_prune_fast_first = false
+      WHERE routine_name = 'terminal_storage'`,
+  );
+});
 
 const stored = async () =>
   (
@@ -1560,103 +1569,131 @@ describe("retention maintenance", () => {
     ).toBe(0);
   });
 
-  it("prunes past a window of redrive sources pinned by younger targets", async () => {
-    // A source stays while its target exists, and its target finishes later. A window filled with
-    // pinned sources once kept every pass from reaching the targets that release them.
-    const limit = 2;
-    const sources: string[] = [];
-    for (let index = 0; index < limit * 4; index += 1) {
-      sources.push(await createFailedTask({ type: "redriven-source" }));
-    }
-    const liveSource = await createFailedTask({ type: "live-redrive-source" });
-    const targets: string[] = [];
-    for (const source of sources) {
-      const redrive = await admin.redrive(source, adminAudit("bulk recovery"));
-      targets.push(redrive.targetTaskId!);
-    }
-    for (let index = 0; index < targets.length; index += 1) {
-      const task = await queue.claim("redrive-retention-worker");
-      expect(targets).toContain(task?.id);
-      expect(await queue.complete(task!, "redrive-retention-worker", { done: true })).toBe(true);
-    }
-    const unrelated: string[] = [];
-    for (let index = 0; index < limit; index += 1) {
-      const id = await queue.enqueue("unrelated", {});
-      const task = await queue.claim("redrive-retention-worker");
-      expect(task?.id).toBe(id);
-      expect(await queue.complete(task!, "redrive-retention-worker", { done: true })).toBe(true);
-      unrelated.push(id);
-    }
-    const liveTarget = (await admin.redrive(liveSource, adminAudit("live recovery"))).targetTaskId!;
+  it.each([
+    ["the fast tier", true],
+    ["the full tier", false],
+  ] as const)(
+    "prunes past a window of redrive sources pinned by younger targets when %s goes first",
+    async (_tier, fastFirst) => {
+      // A source stays while its target exists, and its target finishes later. A window filled with
+      // pinned sources once kept every pass from reaching the targets that release them.
+      const limit = 2;
+      const sources: string[] = [];
+      for (let index = 0; index < limit * 4; index += 1) {
+        sources.push(await createFailedTask({ type: "redriven-source" }));
+      }
+      const liveSource = await createFailedTask({ type: "live-redrive-source" });
+      const targets: string[] = [];
+      for (const source of sources) {
+        const redrive = await admin.redrive(source, adminAudit("bulk recovery"));
+        targets.push(redrive.targetTaskId!);
+      }
+      for (let index = 0; index < targets.length; index += 1) {
+        const task = await queue.claim("redrive-retention-worker");
+        expect(targets).toContain(task?.id);
+        expect(await queue.complete(task!, "redrive-retention-worker", { done: true })).toBe(true);
+      }
+      const unrelated: string[] = [];
+      for (let index = 0; index < limit; index += 1) {
+        const id = await queue.enqueue("unrelated", {});
+        const task = await queue.claim("redrive-retention-worker");
+        expect(task?.id).toBe(id);
+        expect(await queue.complete(task!, "redrive-retention-worker", { done: true })).toBe(true);
+        unrelated.push(id);
+      }
+      const liveTarget = (await admin.redrive(liveSource, adminAudit("live recovery")))
+        .targetTaskId!;
 
-    const age = async (ids: string[], finishedDaysAgo: number) => {
-      await pool.query(
-        `UPDATE workhorse.task SET created_at = clock_timestamp() - interval '41 days'
+      const age = async (ids: string[], finishedDaysAgo: number) => {
+        await pool.query(
+          `UPDATE workhorse.task SET created_at = clock_timestamp() - interval '41 days'
           WHERE id = ANY($1::uuid[])`,
-        [ids],
-      );
-      await pool.query(
-        `UPDATE workhorse.task_outcome
+          [ids],
+        );
+        await pool.query(
+          `UPDATE workhorse.task_outcome
             SET finished_at = clock_timestamp() - make_interval(days => $2),
                 history_through_at = clock_timestamp() - make_interval(days => $2)
           WHERE task_id = ANY($1::uuid[])`,
-        [ids, finishedDaysAgo],
+          [ids, finishedDaysAgo],
+        );
+      };
+      await age([liveSource, liveTarget], 40);
+      await age(sources, 39);
+      await age(targets, 35);
+      await age(unrelated, 33);
+      await pool.query("DELETE FROM workhorse.task_event");
+      await pool.query("DELETE FROM workhorse.attempt_history");
+      await pool.query(
+        `UPDATE workhorse.maintenance_state SET terminal_prune_fast_first = $1
+          WHERE routine_name = 'terminal_storage'`,
+        [fastFirst],
       );
-    };
-    await age([liveSource, liveTarget], 40);
-    await age(sources, 39);
-    await age(targets, 35);
-    await age(unrelated, 33);
-    await pool.query("DELETE FROM workhorse.task_event");
-    await pool.query("DELETE FROM workhorse.attempt_history");
 
-    const prune = async () => {
-      const result = await pool.query<{ pruned: number }>(
-        `SELECT workhorse.prune_terminal_tasks_v1(
+      const prune = async () => {
+        const result = await pool.query<{ pruned: number }>(
+          `SELECT workhorse.prune_terminal_tasks_v1(
                   clock_timestamp() - interval '30 days',
                   clock_timestamp() - interval '30 days',
                   date_trunc('day', clock_timestamp() - interval '30 days'), $1
                 ) AS pruned`,
-        [limit],
-      );
-      // Read the flag in its own statement so it sees this pass's update, not the previous one.
-      const state = await pool.query<{ starved: boolean }>(
-        `SELECT terminal_prune_dependency_starved AS starved FROM workhorse.maintenance_state
+          [limit],
+        );
+        // Read the flag in its own statement so it sees this pass's update, not the previous one.
+        const state = await pool.query<{ starved: boolean }>(
+          `SELECT terminal_prune_dependency_starved AS starved FROM workhorse.maintenance_state
           WHERE routine_name = 'terminal_storage'`,
-      );
-      expect(state.rows).toEqual([{ starved: false }]);
-      return result.rows[0]!.pruned;
-    };
-    const remaining = async (ids: string[]) =>
-      new Set(
-        (
-          await pool.query<{ id: string }>(
-            "SELECT id FROM workhorse.task WHERE id = ANY($1::uuid[])",
-            [ids],
-          )
-        ).rows.map(({ id }) => id),
-      );
+        );
+        expect(state.rows).toEqual([{ starved: false }]);
+        return result.rows[0]!.pruned;
+      };
+      const remaining = async (ids: string[]) =>
+        new Set(
+          (
+            await pool.query<{ id: string }>(
+              "SELECT id FROM workhorse.task WHERE id = ANY($1::uuid[])",
+              [ids],
+            )
+          ).rows.map(({ id }) => id),
+        );
 
-    // Each pass deletes a full batch. A source goes only after its own target, and the younger
-    // unrelated tasks go only after every redriven task has.
-    const tracked = [...sources, ...targets, ...unrelated];
-    const deletedInPass = new Map<string, number>();
-    for (let pass = 1; pass <= tracked.length / limit; pass += 1) {
-      expect(await prune()).toBe(limit);
-      const left = await remaining(tracked);
-      for (const id of tracked)
-        if (!left.has(id) && !deletedInPass.has(id)) deletedInPass.set(id, pass);
-    }
-    expect(deletedInPass.size).toBe(tracked.length);
-    sources.forEach((source, index) => {
-      expect(deletedInPass.get(source)).toBeGreaterThan(deletedInPass.get(targets[index]!)!);
-    });
-    const lastRedriven = Math.max(...[...sources, ...targets].map((id) => deletedInPass.get(id)!));
-    for (const id of unrelated) expect(deletedInPass.get(id)).toBeGreaterThan(lastRedriven);
+      // Each pass deletes a full batch, and a source goes only after its own target. If the fast tier
+      // goes first, the full tier gets the whole batch in one statement. Then a source goes in a
+      // later pass than its target, and the unrelated tasks go after every redriven task. If the full
+      // tier goes first, it gets half the batch and then the share the empty fast tier leaves. That
+      // second statement can delete a source that the first statement released.
+      const tracked = [...sources, ...targets, ...unrelated];
+      const deletedInPass = new Map<string, number>();
+      for (let pass = 1; pass <= tracked.length / limit; pass += 1) {
+        expect(await prune()).toBe(limit);
+        const left = await remaining(tracked);
+        for (const id of tracked)
+          if (!left.has(id) && !deletedInPass.has(id)) deletedInPass.set(id, pass);
+      }
+      expect(deletedInPass.size).toBe(tracked.length);
+      sources.forEach((source, index) => {
+        const targetPass = deletedInPass.get(targets[index]!)!;
+        expect(deletedInPass.get(source)).toBeGreaterThanOrEqual(targetPass + (fastFirst ? 1 : 0));
+      });
+      // The full-first run must reach the case that the fast-first run cannot reach.
+      expect(
+        sources.some(
+          (source, index) => deletedInPass.get(source) === deletedInPass.get(targets[index]!),
+        ),
+      ).toBe(!fastFirst);
+      // An unrelated task is younger than every redriven task. If the full tier goes first, the last
+      // source is still pinned when the last target goes, so an unrelated task can join that pass.
+      const lastPass = (ids: string[]) => Math.max(...ids.map((id) => deletedInPass.get(id)!));
+      const lastRedriven = lastPass([...sources, ...targets]);
+      const lastTarget = lastPass(targets);
+      const firstUnrelatedPass = fastFirst ? lastRedriven + 1 : lastTarget;
+      for (const id of unrelated)
+        expect(deletedInPass.get(id)).toBeGreaterThanOrEqual(firstUnrelatedPass);
 
-    expect(await prune()).toBe(0);
-    expect(await remaining([liveSource, liveTarget])).toEqual(new Set([liveSource, liveTarget]));
-  });
+      expect(await prune()).toBe(0);
+      expect(await remaining([liveSource, liveTarget])).toEqual(new Set([liveSource, liveTarget]));
+    },
+  );
 
   it("reports retention boundaries, lag, eligible partitions, and exact default counts", async () => {
     const oldDay = "2016-01-04";
@@ -2331,6 +2368,7 @@ describe("retention maintenance", () => {
           SELECT EXISTS (
             SELECT 1 FROM pg_locks
              WHERE relation = 'workhorse.attempt_history'::regclass
+               AND database = (SELECT oid FROM pg_database WHERE datname = current_database())
                AND mode = 'AccessExclusiveLock'
                AND NOT granted
           ) AS waiting`);
@@ -2411,6 +2449,7 @@ describe("retention maintenance", () => {
           `SELECT EXISTS (
              SELECT 1 FROM pg_locks
               WHERE relation = 'workhorse.task_event'::regclass
+                AND database = (SELECT oid FROM pg_database WHERE datname = current_database())
                 AND mode = 'AccessExclusiveLock' AND NOT granted
            ) AS waiting`,
         )
@@ -2568,6 +2607,9 @@ describe("retention maintenance", () => {
              FROM pg_locks
             WHERE relation IN ('workhorse.task_event'::regclass,
                                'workhorse.attempt_history'::regclass)
+              -- Every scratch database copies one template, so the relation OIDs repeat in the
+              -- databases of the other test files that run at the same time.
+              AND database = (SELECT oid FROM pg_database WHERE datname = current_database())
               AND mode = 'AccessExclusiveLock'`,
         ),
       ).resolves.toMatchObject({ rows: [{ locked: [] }] });
