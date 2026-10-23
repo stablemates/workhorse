@@ -1,5 +1,4 @@
 export { Dashboard, type DashboardProps } from "./dashboard-root.js";
-export { HumanDecisionControls } from "./external-wait-controls.js";
 export { BatchExecutionLine, CoalescingSection } from "./components/task-detail-relations.js";
 export {
   BoundaryTimeline,
