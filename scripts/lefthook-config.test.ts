@@ -1,9 +1,18 @@
 import { execFileSync, spawnSync } from "node:child_process";
-import { chmod, mkdtemp, readdir, readFile, realpath, rm, writeFile } from "node:fs/promises";
+import {
+  chmod,
+  mkdir,
+  mkdtemp,
+  readdir,
+  readFile,
+  realpath,
+  rm,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { parse } from "yaml";
+import { parse, stringify } from "yaml";
 
 const config = await readFile(path.resolve(import.meta.dirname, "../lefthook.yml"), "utf8");
 
@@ -86,6 +95,145 @@ describe("lefthook pre-commit scope", () => {
     expect(config).toContain('glob: "ruby/**"');
     expect(config).toContain("run: mise exec -- pnpm ruby:lint");
     expect(config).toContain("ruby/lib/stablemates/workhorse/sql_catalogue_generated.rb}");
+  });
+});
+
+// The pre-commit jobs, with each command replaced by `echo selected-<n>`, where n indexes `commands`.
+function echoJobs(jobs: readonly Job[], commands: string[]): Job[] {
+  return jobs.map((job) => {
+    const { run, group, ...rest } = job;
+    if (group) return { ...rest, group: { ...group, jobs: echoJobs(group.jobs, commands) } };
+    if (run === undefined) return job;
+    commands.push(run);
+    return { ...rest, run: `echo selected-${commands.length - 1}` };
+  });
+}
+
+// The commands that the pinned lefthook selects for a commit of these files, in the order it runs
+// them. Lefthook runs in a scratch repository with every command replaced by `echo`, so its own
+// glob rules decide the selection and no check runs.
+async function selectedRuns(files: readonly string[]): Promise<string[]> {
+  const commands: string[] = [];
+  const preCommit = {
+    ...hooks["pre-commit"]!,
+    jobs: echoJobs(hooks["pre-commit"]!.jobs, commands),
+  };
+  const directory = await realpath(await mkdtemp(path.join(tmpdir(), "workhorse-lefthook-")));
+  const { LEFTHOOK: _skip, ...env } = scratchEnvironment(directory);
+  try {
+    const git = (...args: string[]) =>
+      execFileSync("git", args, { cwd: directory, encoding: "utf8", env }).trim();
+    const probe = spawnSync("git", ["rev-parse", "--absolute-git-dir"], {
+      cwd: directory,
+      encoding: "utf8",
+      env,
+    });
+    expect(probe.status).not.toBe(0);
+    git("init", "--quiet", directory);
+    expect(git("rev-parse", "--absolute-git-dir")).toBe(path.join(directory, ".git"));
+    await writeFile(path.join(directory, "lefthook.yml"), stringify({ "pre-commit": preCommit }));
+    for (const file of files) {
+      await mkdir(path.dirname(path.join(directory, file)), { recursive: true });
+      await writeFile(path.join(directory, file), "probe\n");
+    }
+    git("add", "--", ...files);
+    const result = spawnSync(
+      lefthookBinary,
+      ["run", "pre-commit", "--no-tty", "--colors", "off", "--no-auto-install"],
+      { cwd: directory, encoding: "utf8", env },
+    );
+    if (result.status !== 0) throw new Error(`lefthook failed: ${result.stderr}`);
+    return [...result.stdout.matchAll(/^selected-(\d+)$/gm)].map(
+      (match) => commands[Number(match[1])]!,
+    );
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+    expect((await readFile(repositoryConfig)).equals(repositoryConfigBefore)).toBe(true);
+  }
+}
+
+const lefthookBinary = path.resolve(import.meta.dirname, "../node_modules/.bin/lefthook");
+
+// The files whose commit does not select `run`.
+async function missing(files: readonly string[], run: string): Promise<string[]> {
+  const selections = await Promise.all(files.map((file) => selectedRuns([file])));
+  return files.filter((_, index) => !selections[index]!.includes(run));
+}
+
+describe("lefthook pre-commit selection", () => {
+  const repository = path.resolve(import.meta.dirname, "..");
+  const catalogueCheck = "mise exec -- pnpm sql-catalogues:check";
+  // A selected database suite would make the hook need PostgreSQL, which it must not.
+  const databaseSuite = /jvm:test|jvm:gates|release-check|test:database|test:schema|db:reset/;
+
+  it("checks the catalogues after a change to each catalogue that the generator writes", async () => {
+    const generator = await readFile(
+      path.join(repository, "scripts/generate-sql-catalogues.ts"),
+      "utf8",
+    );
+    const catalogues = [...generator.matchAll(/emit\(\s*"([^"]+)"/g)].map((match) => match[1]!);
+
+    expect(catalogues).toContain("rust/src/sql_catalogue_generated.rs");
+    expect(catalogues).toContain(
+      "jvm/workhorse/src/main/java/run/workhorse/internal/SqlCatalogue.java",
+    );
+    expect(await missing(catalogues, catalogueCheck)).toEqual([]);
+  });
+
+  it("checks the catalogues after a change to the schema or to a generator input", async () => {
+    const generator = await readFile(
+      path.join(repository, "scripts/generate-sql-catalogues.ts"),
+      "utf8",
+    );
+    const helpers = [...generator.matchAll(/from "\.\/([\w-]+)\.js"/g)].map(
+      (match) => `scripts/${match[1]}.ts`,
+    );
+    const inputs = [
+      "sql/schema/current.sql",
+      "protocol/v1/manifest.json",
+      "protocol/v1/governed-surface.json",
+      "dotnet/src/Workhorse.AspNetCore/Internal/DashboardSqlCatalogue.statements.json",
+      "scripts/generate-sql-catalogues.ts",
+      ...helpers,
+    ];
+
+    expect(helpers.length).toBeGreaterThan(0);
+    for (const input of inputs)
+      await expect(readFile(path.join(repository, input))).resolves.toBeDefined();
+    expect(await missing(inputs, catalogueCheck)).toEqual([]);
+  });
+
+  it("formats and lints the JVM sources, without the JVM tests", async () => {
+    const { scripts } = JSON.parse(
+      await readFile(path.join(repository, "package.json"), "utf8"),
+    ) as { scripts: Record<string, string> };
+    for (const file of [
+      "jvm/workhorse/src/main/java/run/workhorse/Admin.java",
+      "jvm/api-snapshot/src/main/kotlin/run/workhorse/apisnapshot/KotlinApi.kt",
+      "jvm/api-snapshot/build.gradle.kts",
+    ]) {
+      const selected = await selectedRuns([file]);
+      expect(selected.filter((run) => run.includes("jvm:"))).toEqual([
+        "mise exec -- pnpm jvm:format:check",
+        "mise exec -- pnpm jvm:lint",
+      ]);
+      expect(selected.filter((run) => databaseSuite.test(run))).toEqual([]);
+    }
+    expect(scripts["jvm:format:check"]).not.toMatch(/\btest\b/);
+    expect(scripts["jvm:lint"]).not.toMatch(/\btest\b/);
+  });
+
+  it("runs the two Gradle builds one at a time", () => {
+    const checks = hooks["pre-commit"]!.jobs[1]!.group!.jobs;
+    const jvm = checks.find((job) => job.name === "check JVM formatting and lint")?.group;
+    expect(jvm?.parallel).toBeUndefined();
+    expect(jvm?.piped).toBe(true);
+  });
+
+  it("selects no database suite for a schema change", async () => {
+    const selected = await selectedRuns(["sql/schema/current.sql"]);
+    expect(selected).toContain(catalogueCheck);
+    expect(selected.filter((run) => databaseSuite.test(run))).toEqual([]);
   });
 });
 
