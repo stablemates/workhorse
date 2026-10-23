@@ -795,10 +795,12 @@ describe("claim lease fence", () => {
       deadline: new Date(Date.now() + 5_000),
       maxAttempts: 4,
     });
+    // The lease and the heartbeat interval are long. Thus on a slow host, a heartbeat round that
+    // reaches its bound cannot end the attempt before the deadline. The lease watchdog cannot too.
     const worker = new Worker(queue, {
       workerId: "ignored-deadline-worker",
-      leaseMs: 5_000,
-      heartbeatMs: 50,
+      leaseMs: 30_000,
+      heartbeatMs: 1_000,
     }).handle("ignored-deadline", async (_payload, context) => {
       started.resolve();
       context.signal.addEventListener("abort", () => aborted.resolve(context.signal.reason), {
