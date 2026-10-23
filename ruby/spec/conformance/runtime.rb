@@ -399,6 +399,10 @@ module Conformance
     #
     # The worker can listen and keeps the default poll interval. The registry is off, because its
     # interval caps the claim wait.
+    #
+    # The bounds after the loss start at events that the driver controls, not at the moment the
+    # driver sees them. A loaded driver sees an event late, and the worker's backoff grows in that
+    # time. A late observation would thus charge the driver's delay to the worker.
     def subscription_recovery(fixture)
       name = queue_name(fixture)
       # The driver can arm the hold again for the next LISTEN.
@@ -411,7 +415,14 @@ module Conformance
       handled = Concurrent::Array.new
       recovery_end = 0
       lost_at = 0.0
+      wait_end = nil
+      notification_wait = 0.0
       enqueued_after_loss = 0.0
+      # The driver can hold the first empty claim that starts at or after hold_from. The recorder
+      # records that claim, sets reached, and returns it to the worker only after released.
+      hold_from = Concurrent::AtomicReference.new
+      reached = Concurrent::Event.new
+      released = Concurrent::Event.new
       # The wait runs before LISTEN reaches PostgreSQL.
       hold_listen = lambda do |connection|
         connection.define_singleton_method(:exec) do |sql, *rest, &block|
@@ -435,8 +446,22 @@ module Conformance
           started = monotonic
           rows = original.call(sql, params)
           claims << [started, monotonic, rows.any?] if recording.true?
+          from = hold_from.get
+          if from && started >= from && rows.none? && hold_from.compare_and_set(from, nil)
+            reached.set
+            raise "the held claim was never released" unless released.wait(15)
+          end
           rows
         end
+        # The worker installs this wait only when it settles an empty claim. The wait keeps the wake
+        # version of that claim, so a wake after the claim ends the wait. It returns the end of the
+        # installed wait that a wake can end, or nil without one.
+        empty_wait = lambda do
+          wait = subject.instance_variable_get(:@dispatch_slots)&.empty_wait
+          wait[0] if wait && !wait[1].nil?
+        end
+        # The shortest wait at the notification base: the interval less its jitter of 10 %.
+        notification_wait = subject.instance_variable_get(:@notification_poll_ms) * 0.9 / 1000.0
         thread = Thread.new { subject.run }
         begin
           eventually("the worker made no empty claim before the first enqueue", 5) { claims.any? { |_, _, any| !any } }
@@ -454,27 +479,34 @@ module Conformance
           recovery_end = claims.size
 
           # The next empty claim starts a new wait at the notification base. Then the driver ends
-          # the live listener session and holds the next LISTEN, so the subscription is lost.
+          # the live listener session and holds the next LISTEN, so the subscription is lost. The
+          # driver first waits until the worker has installed that wait. A loss before that moment
+          # gives the polling base without a wake.
           eventually("the worker made no empty claim after the second task", 7) do
             claims.drop(recovery_end).any? { |_, _, any| !any }
+          end
+          empty_end = claims.drop(recovery_end).find { |_, _, any| !any }[1]
+          eventually("the worker did not wait at the notification base after the second task", 7) do
+            (deadline = empty_wait.call) && deadline >= empty_end + notification_wait
           end
           listen_released.set(Concurrent::Event.new)
           pid = listener_pid.get
           check(pid, "the driver did not see the listener's LISTEN")
-          value("SELECT pg_terminate_backend($1)", pid)
-          eventually("the listener session did not end", 7) do
-            value("SELECT 1 FROM pg_stat_activity WHERE pid = $1", pid).nil?
-          end
+          # The loss starts when the driver ends the session. The recorder holds the first empty
+          # claim after that moment, which is the claim that the loss wakes. The worker thus cannot
+          # advance its backoff before the driver enqueues the third task.
+          wait_end = empty_wait.call
           lost_at = monotonic
-          # The loss wakes the worker. The third task waits for the claims after that wake.
-          eventually("the worker made no claim after the subscription was lost", 7) do
-            claims.any? { |started, _, _| started >= lost_at }
-          end
+          hold_from.set(lost_at)
+          value("SELECT pg_terminate_backend($1)", pid)
+          eventually("the worker made no claim after the subscription was lost", 7) { reached.set? }
           enqueued_after_loss = monotonic
           queue.enqueue(fixture["taskType"], {"task" => "third"}, queue: name)
+          released.set
           eventually("the worker did not run the third task", 7) { handled.size == 3 }
         ensure
           recording.make_false
+          released.set
           listen_released.get.set
           subject.stop
           check(thread.join(10), "the worker did not stop")
@@ -498,9 +530,19 @@ module Conformance
         "want at most #{fixture["expectedMaximumEmptyClaimsAfterRecovery"]}")
       # After the loss, the worker claims at once and then polls at the polling-only base again.
       maximum = fixture["expectedMaximumClaimDelayAfterLossMs"]
-      woken = (ordered.find { |claim| claim[0] >= lost_at }[0] - lost_at) * 1000
-      check(woken <= maximum,
-        "the first claim after the subscription was lost waited #{woken.round} ms, want at most #{maximum} ms")
+      woken = ordered.index { |claim| claim[0] >= lost_at }
+      check(woken&.positive?, "no claim after the subscription was lost had a claim before it")
+      woken_delay = (ordered[woken][0] - lost_at) * 1000
+      check(woken_delay <= maximum,
+        "the first claim after the subscription was lost waited #{woken_delay.round} ms, want at most #{maximum} ms")
+      # When the driver ended the session, the claim before the woken one had installed a wait at
+      # the notification base. The woken claim started before that wait ended, so the loss started it.
+      check(wait_end, "the worker had no empty-claim wait when the session ended")
+      check(wait_end >= ordered[woken - 1][1] + notification_wait,
+        "the claim before the loss did not install a wait at the notification base")
+      check(ordered[woken][0] < wait_end,
+        "the first claim after the subscription was lost started when the wait ended, " \
+        "so the wait, not the loss, started it")
       third_delay = (ordered[third][0] - enqueued_after_loss) * 1000
       check(third_delay <= maximum,
         "the claim that found the third task waited #{third_delay.round} ms after the subscription was lost, " \

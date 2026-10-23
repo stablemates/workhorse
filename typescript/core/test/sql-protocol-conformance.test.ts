@@ -684,6 +684,9 @@ async function executePollCadenceRuntimeFixture(
   expect(delayMs).toBeLessThanOrEqual(fixture.expectedMaximumDelayMs);
 }
 
+// The shortest wait at the notification base: 5 s less its jitter of 10 %.
+const NOTIFICATION_WAIT_MS = 4_500;
+
 async function executeSubscriptionRecoveryRuntimeFixture(
   database: Pool,
   fixture: SubscriptionRecoveryRuntimeFixture,
@@ -696,6 +699,11 @@ async function executeSubscriptionRecoveryRuntimeFixture(
   let recording = true;
   // Each claim_many_v1 call's start, its return to the worker, and whether it found a task.
   const claims: { started: number; returned: number; found: boolean }[] = [];
+  // The runner can hold the first empty claim that starts at or after `holdFrom`. The recorder
+  // records that claim, sets `reached`, and returns it to the worker only after `released`.
+  let holdFrom: number | undefined;
+  let reached = false;
+  const released = deferred<void>();
   const recorded = async (
     text: unknown,
     run: () => Promise<{ rows: unknown[] }>,
@@ -705,6 +713,11 @@ async function executeSubscriptionRecoveryRuntimeFixture(
     const result = await run();
     if (recording) {
       claims.push({ started, returned: performance.now(), found: result.rows.length > 0 });
+    }
+    if (holdFrom !== undefined && started >= holdFrom && result.rows.length === 0) {
+      holdFrom = undefined;
+      reached = true;
+      await released.promise;
     }
     return result;
   };
@@ -741,8 +754,24 @@ async function executeSubscriptionRecoveryRuntimeFixture(
     handled.push((payload as { task: string }).task);
     return null;
   });
+  // The worker chooses each wait in nextDispatchPollMs and records there whether it listens. After
+  // an empty claim it installs the chosen wait with the wake version of that claim, so a wake after
+  // the claim ends the wait. A wake also ends each other wait that the worker chooses here.
+  const internals = worker as unknown as {
+    nextDispatchPollMs(): number;
+    listenedAtLastWait: boolean;
+  };
+  const chooseWait = internals.nextDispatchPollMs.bind(worker);
+  let chosenWait: { at: number; deadline: number; listening: boolean } | undefined;
+  internals.nextDispatchPollMs = () => {
+    const at = performance.now();
+    const waitMs = chooseWait();
+    chosenWait = { at, deadline: at + waitMs, listening: internals.listenedAtLastWait };
+    return waitMs;
+  };
   let recoveryEnd = 0;
   let lostAt = 0;
+  let waitEnd: number | undefined;
   let enqueuedAfterLoss = 0;
   const running = worker.run();
   try {
@@ -771,30 +800,37 @@ async function executeSubscriptionRecoveryRuntimeFixture(
     recoveryEnd = claims.length;
 
     // The next empty claim starts a new wait at the notification base. Then the runner ends the
-    // live listener session and holds the next LISTEN, so the subscription is lost.
+    // live listener session and holds the next LISTEN, so the subscription is lost. The runner
+    // first waits until the worker has chosen that wait. A loss before that moment gives the
+    // polling base without a wake.
     await waitUntil(
       () => claims.slice(recoveryEnd).some((claim) => !claim.found),
       "the worker made no empty claim after the second task",
     );
-    listenGate = deferred<void>();
-    await database.query("SELECT pg_terminate_backend($1)", [listenerPid]);
-    await waitUntil(async () => {
-      const session = await database.query("SELECT 1 FROM pg_stat_activity WHERE pid = $1", [
-        listenerPid,
-      ]);
-      return session.rows.length === 0;
-    }, "the listener session did not end");
-    lostAt = performance.now();
-    // The loss wakes the worker. The third task waits for the claims after that wake.
+    const emptyEnd = claims.slice(recoveryEnd).find((claim) => !claim.found)!.returned;
     await waitUntil(
-      () => claims.some((claim) => claim.started >= lostAt),
-      "the worker made no claim after the subscription was lost",
+      () =>
+        chosenWait !== undefined &&
+        chosenWait.listening &&
+        chosenWait.at >= emptyEnd &&
+        chosenWait.deadline >= emptyEnd + NOTIFICATION_WAIT_MS,
+      "the worker did not wait at the notification base after the second task",
     );
+    listenGate = deferred<void>();
+    // The loss starts when the runner ends the session. The recorder holds the first empty claim
+    // after that moment, which is the claim that the loss wakes. The worker thus cannot advance
+    // its backoff before the runner enqueues the third task.
+    waitEnd = chosenWait!.deadline;
+    lostAt = holdFrom = performance.now();
+    await database.query("SELECT pg_terminate_backend($1)", [listenerPid]);
+    await waitUntil(() => reached, "the worker made no claim after the subscription was lost");
     enqueuedAfterLoss = performance.now();
     await queue.enqueue(fixture.taskType, { task: "third" }, { queue: queueName });
+    released.resolve();
     await waitUntil(() => handled.length === 3, "the worker did not run the third task");
   } finally {
     recording = false;
+    released.resolve();
     listenGate.resolve();
     worker.stop();
     await running;
@@ -817,11 +853,26 @@ async function executeSubscriptionRecoveryRuntimeFixture(
       .length,
     "empty claims after the second task, with a live subscription",
   ).toBeLessThanOrEqual(fixture.expectedMaximumEmptyClaimsAfterRecovery);
-  // After the loss, the worker claims at once and then polls at the polling-only base again.
+  // After the loss, the worker claims at once and then polls at the polling-only base again. The
+  // bounds start at events that the runner controls, not at the moment the runner sees them. A
+  // loaded runner sees an event late, and the worker's backoff grows in that time.
+  const woken = ordered.findIndex((claim) => claim.started >= lostAt);
+  expect(woken, "no claim started after the subscription was lost").toBeGreaterThan(0);
   expect(
-    ordered.find((claim) => claim.started >= lostAt)!.started - lostAt,
+    ordered[woken]!.started - lostAt,
     "wait for the first claim after the subscription was lost",
   ).toBeLessThanOrEqual(fixture.expectedMaximumClaimDelayAfterLossMs);
+  // When the runner ended the session, the claim before the woken one had a wait at the
+  // notification base. The woken claim started before that wait ended, so the loss started it.
+  expect(waitEnd, "the worker had no wait when the session ended").toBeDefined();
+  expect(
+    waitEnd! - ordered[woken - 1]!.returned,
+    "wait after the claim before the loss, at the notification base",
+  ).toBeGreaterThanOrEqual(NOTIFICATION_WAIT_MS);
+  expect(
+    ordered[woken]!.started,
+    "start of the first claim after the subscription was lost, before its wait ended",
+  ).toBeLessThan(waitEnd!);
   expect(
     ordered[third]!.started - enqueuedAfterLoss,
     "wait for the claim that found the third task, after the subscription was lost",
