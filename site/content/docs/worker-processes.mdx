@@ -79,7 +79,7 @@ If your app already supervises its processes, you do not need the CLI. Use one o
   the definition.
 - At startup, the process validates the definition, creates one adapter, creates and configures
   every `Worker`, starts the optional probe server, and starts every run loop. It reports readiness
-  only after every worker starts.
+  only after every worker passes its startup checks.
 
 More detail: [Worker process lifecycle](https://github.com/stablemates/workhorse/blob/main/docs/architecture/operations.md#worker-process-lifecycle).
 
@@ -148,10 +148,12 @@ The probe server is an optional HTTP server that tells an orchestrator the state
 has two endpoints:
 
 - Liveness (`/livez`) reports success while the process runs or drains.
-- Readiness (`/readyz`) reports success only while the workers can ask for tasks.
+- Readiness (`/readyz`) reports success after every worker passes its startup checks, until the
+  drain starts.
 
-Readiness fails as soon as the drain starts. Thus, a rolling deployment sends no work to a process
-that stops.
+Readiness fails while the workers start, and again as soon as the drain starts. Thus, a rolling
+deployment waits for a process that can work, and sends no work to a process that stops. A pause
+does not change readiness, because a pause is a decision of the operator, not a fault.
 
 The probe server does not serve your application. It shows no task data, no queue data, and no
 metrics, and it accepts no changes. You can bind it where your orchestrator needs it.
@@ -163,10 +165,10 @@ process. The process does not continue with only some of its workers.
 <details>
 <summary>Reference: probe listener</summary>
 
-| Endpoint      | Running | Draining or failing |
-| ------------- | ------: | ------------------: |
-| `GET /livez`  |     200 |                 200 |
-| `GET /readyz` |     200 |                 503 |
+| Endpoint      | Starting | Running or paused | Draining or failing |
+| ------------- | -------: | ----------------: | ------------------: |
+| `GET /livez`  |      200 |               200 |                 200 |
+| `GET /readyz` |      503 |               200 |                 503 |
 
 - `probes.livenessPath` and `probes.readinessPath` change the two paths. `HEAD` is supported.
   Other paths and methods return 404.

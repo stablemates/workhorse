@@ -123,6 +123,17 @@ const mutationAuthorization = os
   });
 const mutationProcedure = procedure.meta({ mutation: true }).use(mutationAuthorization);
 
+/**
+ * The refusal for a mutation that a writable host does not provide, because it wires no controller
+ * or no method for it. It keeps the `FORBIDDEN` code of the dashboard contract, but its message
+ * names the action, so that it does not read as a read-only deployment.
+ */
+function actionUnavailable(action: string): ORPCError<"FORBIDDEN", unknown> {
+  return new ORPCError("FORBIDDEN", {
+    message: `This dashboard host does not provide the ${action} action`,
+  });
+}
+
 const utf8 = new TextEncoder();
 /**
  * The audit request ID, bounded in UTF-8 bytes to match the SQL audit functions.
@@ -681,7 +692,7 @@ export const dashboardRouter = {
     }),
     enqueueTest: mutationProcedure.input(enqueueTestInput).handler(async ({ context, input }) => {
       if (!context.operator.enqueueTest) {
-        throw new ORPCError("FORBIDDEN", { message: "This dashboard is read-only" });
+        throw actionUnavailable("enqueueTest");
       }
       return context.operator.enqueueTest(
         input.kind,
@@ -695,7 +706,7 @@ export const dashboardRouter = {
       .input(setSchedulePausedInput)
       .handler(async ({ context, input }) => {
         if (!context.scheduleController?.setSchedulePaused) {
-          throw new ORPCError("FORBIDDEN", { message: "This dashboard is read-only" });
+          throw actionUnavailable("setSchedulePaused");
         }
         return context.scheduleController.setSchedulePaused(
           input.namespace,
@@ -708,7 +719,7 @@ export const dashboardRouter = {
       .input(setQueuePausedInput)
       .handler(async ({ context, input }) => {
         if (!context.queueController?.setQueuePaused) {
-          throw new ORPCError("FORBIDDEN", { message: "This dashboard is read-only" });
+          throw actionUnavailable("setQueuePaused");
         }
         return context.queueController.setQueuePaused(
           input.queue,
@@ -718,7 +729,7 @@ export const dashboardRouter = {
       }),
     purgeQueue: mutationProcedure.input(purgeQueueInput).handler(async ({ context, input }) => {
       if (!context.queueController?.purgeQueue) {
-        throw new ORPCError("FORBIDDEN", { message: "This dashboard is read-only" });
+        throw actionUnavailable("purgeQueue");
       }
       return context.queueController.purgeQueue(
         input.queue,
@@ -733,7 +744,7 @@ export const dashboardRouter = {
      */
     setQueueTier: mutationProcedure.input(setQueueTierInput).handler(async ({ context, input }) => {
       if (!context.queueController?.setQueueTier) {
-        throw new ORPCError("FORBIDDEN", { message: "This dashboard is read-only" });
+        throw actionUnavailable("setQueueTier");
       }
       return context.queueController.setQueueTier(
         input.queue,
@@ -746,7 +757,7 @@ export const dashboardRouter = {
       .input(setQueueHistoryInput)
       .handler(async ({ context, input }) => {
         if (!context.queueController?.setQueueHistory) {
-          throw new ORPCError("FORBIDDEN", { message: "This dashboard is read-only" });
+          throw actionUnavailable("setQueueHistory");
         }
         return context.queueController.setQueueHistory(
           input.queue,
@@ -761,7 +772,7 @@ export const dashboardRouter = {
       .input(setWorkerPausedInput)
       .handler(async ({ context, input }) => {
         if (!context.workerController?.setWorkerPaused) {
-          throw new ORPCError("FORBIDDEN", { message: "This dashboard is read-only" });
+          throw actionUnavailable("setWorkerPaused");
         }
         return context.workerController.setWorkerPaused(
           input.workerId,
@@ -773,7 +784,7 @@ export const dashboardRouter = {
       .input(overrideMaintenancePolicyInput)
       .handler(async ({ context, input }) => {
         if (!context.settingsController) {
-          throw new ORPCError("FORBIDDEN", { message: "This dashboard is read-only" });
+          throw actionUnavailable("overrideMaintenancePolicy");
         }
         await context.settingsController.overrideMaintenancePolicy(
           input.definition,
@@ -784,7 +795,7 @@ export const dashboardRouter = {
       .input(revertMaintenancePolicyInput)
       .handler(async ({ context, input }) => {
         if (!context.settingsController) {
-          throw new ORPCError("FORBIDDEN", { message: "This dashboard is read-only" });
+          throw actionUnavailable("revertMaintenancePolicy");
         }
         await context.settingsController.revertMaintenancePolicy(
           input.settings,
@@ -795,7 +806,7 @@ export const dashboardRouter = {
       .input(overrideRetentionPolicyInput)
       .handler(async ({ context, input }) => {
         if (!context.settingsController) {
-          throw new ORPCError("FORBIDDEN", { message: "This dashboard is read-only" });
+          throw actionUnavailable("overrideRetentionPolicy");
         }
         await context.settingsController.overrideRetentionPolicy(
           input.definition,
@@ -806,7 +817,7 @@ export const dashboardRouter = {
       .input(revertRetentionPolicyInput)
       .handler(async ({ context, input }) => {
         if (!context.settingsController) {
-          throw new ORPCError("FORBIDDEN", { message: "This dashboard is read-only" });
+          throw actionUnavailable("revertRetentionPolicy");
         }
         await context.settingsController.revertRetentionPolicy(
           input.settings,
@@ -815,7 +826,7 @@ export const dashboardRouter = {
       }),
     runTaskNow: mutationProcedure.input(runTaskNowInput).handler(async ({ context, input }) => {
       if (!context.taskController?.runTaskNow) {
-        throw new ORPCError("FORBIDDEN", { message: "This dashboard is read-only" });
+        throw actionUnavailable("runTaskNow");
       }
       const result = await context.taskController.runTaskNow(
         input.id,
@@ -833,7 +844,7 @@ export const dashboardRouter = {
      */
     cancelTask: mutationProcedure.input(cancelTaskInput).handler(async ({ context, input }) => {
       if (!context.taskController?.cancelTask) {
-        throw new ORPCError("FORBIDDEN", { message: "This dashboard is read-only" });
+        throw actionUnavailable("cancelTask");
       }
       const result = await context.taskController.cancelTask(
         input.id,
@@ -846,7 +857,7 @@ export const dashboardRouter = {
     }),
     signalTask: mutationProcedure.input(signalTaskInput).handler(async ({ context, input }) => {
       if (!context.taskController?.signalTask) {
-        throw new ORPCError("FORBIDDEN", { message: "This dashboard is read-only" });
+        throw actionUnavailable("signalTask");
       }
       const result = await context.taskController.signalTask(
         input.id,
@@ -864,7 +875,7 @@ export const dashboardRouter = {
       .input(completeHumanWaitInput)
       .handler(async ({ context, input }) => {
         if (!context.taskController?.completeHumanWait) {
-          throw new ORPCError("FORBIDDEN", { message: "This dashboard is read-only" });
+          throw actionUnavailable("completeHumanWait");
         }
         const result = await context.taskController.completeHumanWait(
           input.id,
@@ -887,7 +898,7 @@ export const dashboardRouter = {
      */
     redriveTask: mutationProcedure.input(redriveTaskInput).handler(async ({ context, input }) => {
       if (!context.taskController?.redriveTask) {
-        throw new ORPCError("FORBIDDEN", { message: "This dashboard is read-only" });
+        throw actionUnavailable("redriveTask");
       }
       const result = await context.taskController.redriveTask(
         input.id,
@@ -908,7 +919,7 @@ export const dashboardRouter = {
       .input(redriveDeadLettersInput)
       .handler(async ({ context, input }) => {
         if (!context.taskController?.redriveDeadLetters) {
-          throw new ORPCError("FORBIDDEN", { message: "This dashboard is read-only" });
+          throw actionUnavailable("redriveDeadLetters");
         }
         return context.taskController.redriveDeadLetters(
           { queue: input.queue, taskType: input.taskType, tags: input.tags },
@@ -928,7 +939,7 @@ export const dashboardRouter = {
       .input(cancelTaskGroupInput)
       .handler(async ({ context, input }) => {
         if (!context.taskController?.cancelTaskGroup) {
-          throw new ORPCError("FORBIDDEN", { message: "This dashboard is read-only" });
+          throw actionUnavailable("cancelTaskGroup");
         }
         const group = await context.taskController.cancelTaskGroup(
           input.id,

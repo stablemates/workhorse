@@ -167,6 +167,9 @@ export function dashboardDatabase(
       }
       const client = asLentClient(await pool.connect());
       if (!client) throw new TypeError("Database connect() did not return a releasable client");
+      // Set when ROLLBACK fails. The client can still be inside the transaction, or its connection
+      // can be broken, so the pool must destroy it rather than lend it again.
+      let rollbackFailure: unknown;
       try {
         // READ ONLY is a second, cheaper guard: a dashboard read has no business writing, and a
         // procedure that tried would be refused by PostgreSQL rather than by review.
@@ -177,13 +180,20 @@ export function dashboardDatabase(
         await client.query("COMMIT");
         return { rows: result.rows };
       } catch (error) {
-        await client.query("ROLLBACK").catch(() => undefined);
+        try {
+          await client.query("ROLLBACK");
+        } catch (failure) {
+          rollbackFailure =
+            failure instanceof Error ? failure : new Error("Dashboard read ROLLBACK failed");
+        }
         if (databaseErrorCode(error) === QUERY_CANCELED) {
           throw new DashboardReadTimeoutError(timeoutMs, { cause: error });
         }
         throw error;
       } finally {
-        client.release();
+        // node-postgres destroys a client that is released with an error.
+        if (rollbackFailure === undefined) client.release();
+        else client.release(rollbackFailure);
       }
     },
   };

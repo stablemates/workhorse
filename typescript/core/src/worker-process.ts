@@ -1,6 +1,6 @@
 import type { WorkhorseAdapter } from "./adapter.js";
 import type { Worker, WorkerOptions } from "./worker.js";
-import { observeWorkerFailure } from "./worker-failure.js";
+import { observeWorkerFailure, observeWorkerStartup } from "./worker-failure.js";
 import { createServer } from "node:http";
 import type { Server } from "node:http";
 
@@ -134,9 +134,18 @@ function closeServer(server: Server): Promise<void> {
   });
 }
 
+/**
+ * The readiness of a worker process. `starting` holds until every worker passed its startup checks,
+ * and `draining` holds from the first shutdown cause. A pause does not change readiness: `paused`
+ * is true only as information, while every worker is paused.
+ */
+type ProbeReadiness =
+  | { ready: true; paused: boolean }
+  | { ready: false; status: "starting" | "draining" };
+
 async function startProbeServer(
   options: WorkerProcessProbeOptions,
-  isReady: () => boolean,
+  readiness: () => ProbeReadiness,
 ): Promise<{ server: Server; url: string }> {
   const hostname = options.hostname ?? "127.0.0.1";
   const livenessPath = options.livenessPath ?? "/livez";
@@ -151,10 +160,15 @@ async function startProbeServer(
       response.writeHead(404).end();
       return;
     }
-    const ready = path === livenessPath || isReady();
-    response.writeHead(ready ? 200 : 503, { "content-type": "application/json" });
+    const state: ProbeReadiness =
+      path === livenessPath ? { ready: true, paused: false } : readiness();
+    response.writeHead(state.ready ? 200 : 503, { "content-type": "application/json" });
     if (request.method === "HEAD") response.end();
-    else response.end(JSON.stringify({ status: ready ? "ok" : "draining" }));
+    else if (!state.ready) response.end(JSON.stringify({ status: state.status }));
+    else
+      response.end(
+        JSON.stringify(state.paused ? { status: "ok", paused: true } : { status: "ok" }),
+      );
   });
   await new Promise<void>((resolve, reject) => {
     const onError = (error: Error): void => {
@@ -194,7 +208,9 @@ export async function startWorkerProcess<TTransaction = unknown>(
   validateDefinition(definition as WorkerProcessDefinition);
   const adapter = await definition.adapter();
   const workers: Worker[] = [];
-  let ready = false;
+  // Workers that passed their startup checks. Readiness waits for all of them.
+  const started = new Set<Worker>();
+  let shuttingDown = false;
   let probeServer: Server | undefined;
   let probeUrl: string | null = null;
 
@@ -211,7 +227,11 @@ export async function startWorkerProcess<TTransaction = unknown>(
 
   if (definition.probes) {
     try {
-      const probe = await startProbeServer(definition.probes, () => ready);
+      const probe = await startProbeServer(definition.probes, (): ProbeReadiness => {
+        if (shuttingDown) return { ready: false, status: "draining" };
+        if (started.size < workers.length) return { ready: false, status: "starting" };
+        return { ready: true, paused: workers.every((worker) => worker.isPaused()) };
+      });
       probeServer = probe.server;
       probeUrl = probe.url;
     } catch (error) {
@@ -220,7 +240,6 @@ export async function startWorkerProcess<TTransaction = unknown>(
     }
   }
 
-  let shuttingDown = false;
   let shutdownPromise: Promise<void> | undefined;
   let resolveCompleted!: () => void;
   let rejectCompleted!: (error: unknown) => void;
@@ -236,10 +255,11 @@ export async function startWorkerProcess<TTransaction = unknown>(
   // keeps programmatic callers from producing an unhandled rejection before they attach their own.
   void completed.catch(() => undefined);
 
+  // Each worker reports its startup from inside run(), so the observer is set before run() starts.
+  for (const worker of workers) observeWorkerStartup(worker, () => started.add(worker));
   const runs: Promise<void>[] = [];
   try {
     for (const worker of workers) runs.push(worker.run());
-    ready = true;
   } catch (error) {
     for (const worker of workers) worker.stop();
     await Promise.allSettled(runs);
@@ -258,7 +278,6 @@ export async function startWorkerProcess<TTransaction = unknown>(
     if (shutdownPromise) return shutdownPromise;
 
     shuttingDown = true;
-    ready = false;
     for (const worker of workers) worker.stop();
     shutdownPromise = (async () => {
       const results = await settlements;

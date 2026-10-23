@@ -70,6 +70,7 @@ workhorse.worker.active                          gauge             {slot}       
 workhorse.worker.capacity                        gauge             {slot}        Declared worker execution slots
 workhorse.worker.count                           gauge             {worker}      Registered workers by queue and runtime state
 workhorse.worker.heartbeat.failure               counter           {heartbeat}   Worker heartbeats rejected by PostgreSQL ownership or timing checks
+workhorse.worker.heartbeat.round_failure         counter           {round}       Worker heartbeat rounds that failed before PostgreSQL gave a verdict
 
 ## Spans
 
@@ -108,6 +109,7 @@ workhorse.handler.batch.max_size
 workhorse.handler.batch.size
 workhorse.handler.duration_ms
 workhorse.handler.outcome
+workhorse.heartbeat.failure_reason
 workhorse.heartbeat.status
 workhorse.human_wait.name
 workhorse.human_wait.status

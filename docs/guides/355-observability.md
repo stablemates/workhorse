@@ -57,6 +57,7 @@ use traces.
 | `workhorse.claim.duration`                                     | Yes        | Yes    | Yes | Yes  | Yes  | Yes | Yes  |
 | `workhorse.handler.*` (five instruments)                       | Yes        | Yes    | Yes | Yes  | Yes  | Yes | Yes  |
 | `workhorse.worker.heartbeat.failure`                           | Yes        | Yes    | Yes | Yes  | Yes  | Yes | Yes  |
+| `workhorse.worker.heartbeat.round_failure`                     | Yes        | No     | No  | No   | No   | No  | No   |
 | `workhorse.leases.expired`                                     | Yes        | Yes    | Yes | Yes  | Yes  | Yes | Yes  |
 | `workhorse.schedule.fired`, `workhorse.schedule.lag`           | Yes        | Yes    | No  | No   | Yes  | Yes | Yes  |
 | `workhorse.maintenance.runs`, `.rows`, `.duration`, `.errors`  | Yes        | Yes    | No  | No   | Yes  | Yes | Yes  |

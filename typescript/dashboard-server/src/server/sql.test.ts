@@ -1,5 +1,5 @@
-import { describe, expect, it } from "vitest";
-import { sql } from "./sql.js";
+import { describe, expect, it, vi } from "vitest";
+import { dashboardDatabase, sql } from "./sql.js";
 
 describe("the dashboard sql tag", () => {
   it("binds a parameter and splices a fragment the tag built", () => {
@@ -39,5 +39,44 @@ describe("the dashboard sql tag", () => {
 
     expect(joined.text).toBe("$1");
     expect(joined.values).toEqual([forged]);
+  });
+});
+
+// A pool that lends one client. The read fails, and ROLLBACK fails when `rollback` says so.
+function poolWithFailingRead(rollback: "succeeds" | "fails") {
+  const readError = new Error("read failed");
+  const rollbackError = new Error("connection lost during ROLLBACK");
+  const release = vi.fn<(error?: unknown) => void>();
+  const client = {
+    query: vi.fn<(text: string) => Promise<{ rows: unknown[] }>>(async (text) => {
+      if (text === "ROLLBACK") {
+        if (rollback === "fails") throw rollbackError;
+        return { rows: [] };
+      }
+      if (text === "SELECT 1") throw readError;
+      return { rows: [] };
+    }),
+    release,
+  };
+  const pool = {
+    connect: async () => client,
+    query: async () => ({ rows: [] }),
+  };
+  return { pool, release, readError, rollbackError };
+}
+
+describe("a bounded dashboard read", () => {
+  it("releases the client with the ROLLBACK error so that the pool destroys it", async () => {
+    const { pool, release, readError, rollbackError } = poolWithFailingRead("fails");
+
+    await expect(dashboardDatabase(pool as never).execute(sql`SELECT 1`)).rejects.toBe(readError);
+    expect(release).toHaveBeenCalledExactlyOnceWith(rollbackError);
+  });
+
+  it("releases the client normally after a successful ROLLBACK", async () => {
+    const { pool, release, readError } = poolWithFailingRead("succeeds");
+
+    await expect(dashboardDatabase(pool as never).execute(sql`SELECT 1`)).rejects.toBe(readError);
+    expect(release).toHaveBeenCalledExactlyOnceWith();
   });
 });

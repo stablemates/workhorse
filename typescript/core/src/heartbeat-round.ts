@@ -10,3 +10,14 @@
 export function heartbeatRoundBoundMs(heartbeatMs: number): number {
   return Math.max(1, Math.floor((heartbeatMs * 3) / 4), Math.min(50, heartbeatMs));
 }
+
+/**
+ * A heartbeat round that reached its deadline on the reserved connection. The worker's telemetry
+ * reads the class to report the failed round as a `timeout`, without parsing the message.
+ */
+export class HeartbeatRoundTimeoutError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "HeartbeatRoundTimeoutError";
+  }
+}

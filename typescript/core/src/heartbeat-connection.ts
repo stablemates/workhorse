@@ -4,6 +4,7 @@ import type { QueryResult, QueryResultRow } from "pg";
 import { SQL_STATEMENTS } from "./queue/sql-catalogue.generated.js";
 import { monotonicNow } from "./timers.js";
 import { databaseErrorCode } from "./errors.js";
+import { HeartbeatRoundTimeoutError } from "./heartbeat-round.js";
 import type { HeartbeatLeasePayload } from "./queue/claim-lease-fence.js";
 import { FENCED_WRITE_DEADLOCK_ATTEMPTS } from "./queue/fenced-write.js";
 import type { HeartbeatBatchStatus, Queryable } from "./types.js";
@@ -363,14 +364,14 @@ const ROUND_TIMEOUTS =
 export const MINIMUM_REMAINING_MS = 8;
 
 function roundExpired(): Error {
-  return new Error("Heartbeat round reached its deadline");
+  return new HeartbeatRoundTimeoutError("Heartbeat round reached its deadline");
 }
 
 /**
  * A round that reached its deadline before it sent its heartbeat, with no statement in flight. It
  * sent nothing, or its ROLLBACK returned, so the connection is clean and the next round uses it.
  */
-class HeartbeatRoundExpiredCleanly extends Error {
+class HeartbeatRoundExpiredCleanly extends HeartbeatRoundTimeoutError {
   constructor() {
     super("Heartbeat round reached its deadline before its heartbeat");
     this.name = "HeartbeatRoundExpiredCleanly";
@@ -712,7 +713,9 @@ export class ReservedConnection {
    */
   private timedOut(request: RenewalRequest): void {
     if (request.settled) return;
-    const error = new Error(`Heartbeat did not finish within ${request.timeoutMs} ms`);
+    const error = new HeartbeatRoundTimeoutError(
+      `Heartbeat did not finish within ${request.timeoutMs} ms`,
+    );
     const transaction = this.transaction;
     if (transaction?.leader === request) {
       this.endTransaction(transaction, { error });

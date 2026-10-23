@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { ClaimedTask, WorkhorseAdapter, WorkerProcessSignal } from "../src/index.js";
 import { Worker, defineWorkerProcess, runWorkerProcess, startWorkerProcess } from "../src/index.js";
 import type { WorkerQueueApi } from "../src/worker.js";
-import { observeWorkerFailure } from "../src/worker-failure.js";
+import { observeWorkerFailure, reportWorkerStartup } from "../src/worker-failure.js";
 
 function deferred<T = void>() {
   let resolve!: (value: T | PromiseLike<T>) => void;
@@ -17,13 +17,26 @@ function deferred<T = void>() {
 
 class FakeWorker {
   readonly runResult = deferred<void>();
-  readonly run = vi.fn<() => Promise<void>>(() => this.runResult.promise);
+  readonly run = vi.fn<() => Promise<void>>(() => {
+    // A real worker reports its startup from inside run(), after its startup checks pass.
+    if (this.startsAtOnce) reportWorkerStartup(this);
+    return this.runResult.promise;
+  });
   readonly stop = vi.fn<() => void>(() => {
     if (this.drainOnStop) this.runResult.resolve();
   });
   readonly handle = vi.fn<() => FakeWorker>(() => this);
+  paused = false;
+  readonly isPaused = vi.fn<() => boolean>(() => this.paused);
 
-  constructor(private readonly drainOnStop = true) {}
+  constructor(
+    private readonly drainOnStop = true,
+    private readonly startsAtOnce = true,
+  ) {}
+
+  passStartup(): void {
+    reportWorkerStartup(this);
+  }
 }
 
 class FakeSignalSource {
@@ -477,5 +490,140 @@ describe("fatal worker errors while a handler ignores cancellation", () => {
     expect(worker.runtimeState()).toMatchObject({ activeSlots: 1, draining: true });
     releaseHandler.resolve();
     await expect(running).rejects.toBe(failure);
+  });
+});
+
+async function probe(
+  url: string | null,
+  path = "/readyz",
+): Promise<{ status: number; body: unknown }> {
+  const response = await fetch(`${url}${path}`);
+  return { status: response.status, body: await response.json() };
+}
+
+// A real worker over a queue whose first registration write waits until the test releases it.
+function registeringWorkerFixture(options: { remotelyPaused?: boolean } = {}) {
+  const registration = deferred<{ paused: boolean }>();
+  const queue = {
+    defaultQueue: "default",
+    claim: async () => null,
+    heartbeatStatus: async () => "accepted",
+    complete: async () => true,
+    fail: async () => "failed",
+    tick: async () => [],
+    runMaintenance: async () => [],
+    registerWorker: vi.fn<WorkerQueueApi["registerWorker"]>(async () => registration.promise),
+    deregisterWorker: async () => true,
+  } as unknown as WorkerQueueApi;
+  const worker = new Worker(queue, { pollMs: 5, maintenanceIntervalMs: 60_000 });
+  const definition = defineWorkerProcess({
+    adapter: () =>
+      ({
+        createWorker: () => worker,
+        close: async () => undefined,
+      }) as unknown as WorkhorseAdapter,
+    workers: [{ configure: () => undefined }],
+    probes: { port: 0 },
+    logger: {
+      info: vi.fn<(message: string) => void>(),
+      error: vi.fn<(message: string, error?: unknown) => void>(),
+    },
+  });
+  const passRegistration = () => registration.resolve({ paused: options.remotelyPaused === true });
+  return { definition, passRegistration, queue, worker };
+}
+
+describe("worker process readiness", () => {
+  it("reports starting until every worker passed its startup checks", async () => {
+    const first = new FakeWorker(true, false);
+    const second = new FakeWorker(true, false);
+    const { definition } = fixture([first, second]);
+    const runtime = await startWorkerProcess({ ...definition, probes: { port: 0 } });
+
+    await expect(probe(runtime.probeUrl)).resolves.toEqual({
+      status: 503,
+      body: { status: "starting" },
+    });
+    await expect(probe(runtime.probeUrl, "/livez")).resolves.toEqual({
+      status: 200,
+      body: { status: "ok" },
+    });
+    first.passStartup();
+    await expect(probe(runtime.probeUrl)).resolves.toMatchObject({ status: 503 });
+    second.passStartup();
+    await expect(probe(runtime.probeUrl)).resolves.toEqual({
+      status: 200,
+      body: { status: "ok" },
+    });
+
+    await runtime.shutdown();
+  });
+
+  it("waits for the first registration of a real worker", async () => {
+    const { definition, passRegistration, queue } = registeringWorkerFixture();
+    const runtime = await startWorkerProcess(definition);
+
+    await vi.waitFor(() => expect(queue.registerWorker).toHaveBeenCalled());
+    await expect(probe(runtime.probeUrl)).resolves.toEqual({
+      status: 503,
+      body: { status: "starting" },
+    });
+    passRegistration();
+    await vi.waitFor(async () => expect((await probe(runtime.probeUrl)).status).toBe(200));
+
+    await runtime.shutdown();
+  });
+
+  it("gives no ready interval to a worker that refuses to start", async () => {
+    const worker = new FakeWorker(true, false);
+    const { definition } = fixture([worker]);
+    const runtime = await startWorkerProcess({ ...definition, probes: { port: 0 } });
+
+    await expect(probe(runtime.probeUrl)).resolves.toEqual({
+      status: 503,
+      body: { status: "starting" },
+    });
+    // The refusal rejects run() before the worker reports its startup.
+    worker.runResult.reject(new Error("schema refused"));
+    await expect(runtime.failure).resolves.toMatchObject({ message: "schema refused" });
+    await expect(runtime.completed).rejects.toThrow("schema refused");
+  });
+
+  it("stays ready while every worker is paused locally", async () => {
+    const { definition, passRegistration, worker } = registeringWorkerFixture();
+    passRegistration();
+    const runtime = await startWorkerProcess(definition);
+    await vi.waitFor(async () => expect((await probe(runtime.probeUrl)).status).toBe(200));
+
+    worker.pause();
+    await expect(probe(runtime.probeUrl)).resolves.toEqual({
+      status: 200,
+      body: { status: "ok", paused: true },
+    });
+    worker.resume();
+    await expect(probe(runtime.probeUrl)).resolves.toEqual({
+      status: 200,
+      body: { status: "ok" },
+    });
+
+    await runtime.shutdown();
+  });
+
+  it("stays ready while an operator pause holds every worker", async () => {
+    const { definition, passRegistration, worker } = registeringWorkerFixture({
+      remotelyPaused: true,
+    });
+    passRegistration();
+    const runtime = await startWorkerProcess(definition);
+
+    await vi.waitFor(async () =>
+      expect(await probe(runtime.probeUrl)).toEqual({
+        status: 200,
+        body: { status: "ok", paused: true },
+      }),
+    );
+    expect(worker.runtimeState()).toMatchObject({ remotelyPaused: true, locallyPaused: false });
+
+    await runtime.shutdown();
   });
 });

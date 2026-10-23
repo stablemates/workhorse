@@ -5,6 +5,8 @@ import type {
   RedriveStatus,
   TraceContext,
 } from "./types.js";
+import { databaseErrorCode } from "./errors.js";
+import { HeartbeatRoundTimeoutError } from "./heartbeat-round.js";
 
 export type TelemetryAttributeValue =
   | string
@@ -349,6 +351,10 @@ export const telemetryMetrics = {
     description: "Worker heartbeats rejected by PostgreSQL ownership or timing checks",
     unit: "{heartbeat}",
   }),
+  heartbeatRoundFailures: lazyCounter("workhorse.worker.heartbeat.round_failure", {
+    description: "Worker heartbeat rounds that failed before PostgreSQL gave a verdict",
+    unit: "{round}",
+  }),
   maintenanceRuns: lazyCounter("workhorse.maintenance.runs", {
     description: "Workhorse maintenance phase executions",
     unit: "{run}",
@@ -434,6 +440,75 @@ export function recordScheduleFired(namespace: string, name: string, occurrenceA
 
 export function recordHeartbeatFailure(status: Exclude<HeartbeatBatchStatus, "accepted">): void {
   telemetryMetrics.heartbeatFailures.add(1, { "workhorse.heartbeat.status": status });
+}
+
+/** Bounded `workhorse.heartbeat.failure_reason` values of a failed heartbeat round. */
+export type HeartbeatRoundFailureReason = "timeout" | "connection" | "database" | "other";
+
+/** Socket and DNS error codes: the round did not reach PostgreSQL or lost its connection. */
+const CONNECTION_ERROR_CODES = new Set([
+  "ECONNREFUSED",
+  "ECONNRESET",
+  "EHOSTUNREACH",
+  "ENETUNREACH",
+  "ENOTFOUND",
+  "EPIPE",
+  "ETIMEDOUT",
+  "EAI_AGAIN",
+]);
+
+/** The error, its `cause` chain, and the members of an `AggregateError`, outermost first. */
+function* errorChain(
+  error: unknown,
+  seen = new Set<unknown>(),
+): Generator<Record<string, unknown>> {
+  if (error === null || typeof error !== "object" || seen.has(error) || seen.size >= 16) return;
+  seen.add(error);
+  const record = error as Record<string, unknown>;
+  yield record;
+  if (Array.isArray(record.errors)) {
+    for (const nested of record.errors) yield* errorChain(nested, seen);
+  }
+  yield* errorChain(record.cause, seen);
+}
+
+/**
+ * The category of a rejected heartbeat round. A round deadline, `statement_timeout` (`57014`), and
+ * `idle_in_transaction_session_timeout` (`25P03`) are `timeout`. A socket error, SQLSTATE class
+ * `08`, a server shutdown (`57P01` to `57P03`), and a terminated `pg` connection are `connection`.
+ * Any other SQLSTATE is `database`. Everything else is `other`.
+ */
+export function heartbeatRoundFailureReason(error: unknown): HeartbeatRoundFailureReason {
+  const chain = [...errorChain(error)];
+  if (chain.some((entry) => entry instanceof HeartbeatRoundTimeoutError)) return "timeout";
+  const sqlState = databaseErrorCode(error);
+  if (sqlState === "57014" || sqlState === "25P03") return "timeout";
+  if (
+    sqlState?.startsWith("08") === true ||
+    sqlState === "57P01" ||
+    sqlState === "57P02" ||
+    sqlState === "57P03" ||
+    chain.some(
+      (entry) =>
+        (typeof entry.code === "string" && CONNECTION_ERROR_CODES.has(entry.code)) ||
+        (typeof entry.message === "string" && entry.message.startsWith("Connection terminated")),
+    )
+  ) {
+    return "connection";
+  }
+  return sqlState === undefined ? "other" : "database";
+}
+
+/**
+ * Count one heartbeat round that rejected before PostgreSQL returned a status for its leases. The
+ * round gives no ownership verdict, so `workhorse.worker.heartbeat.failure` does not count it. The
+ * worker records one value for each failed round, so the rate stays bounded by the heartbeat
+ * interval and its busy retries.
+ */
+export function recordHeartbeatRoundFailure(error: unknown): void {
+  telemetryMetrics.heartbeatRoundFailures.add(1, {
+    "workhorse.heartbeat.failure_reason": heartbeatRoundFailureReason(error),
+  });
 }
 
 export function taskSpanAttributes(
