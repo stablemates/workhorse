@@ -10,8 +10,6 @@ public sealed class WorkerBatchTests(ScratchDatabase database)
     private static readonly TimeSpan LongLinger = TimeSpan.FromSeconds(60);
 
     private static BatchOptions Bounds(int maxSize, TimeSpan linger) => new() { MaxSize = maxSize, Linger = linger };
-    private static readonly string[] Ready = ["ready"];
-    private static readonly string[] ReadyOrRunning = ["ready", "running"];
 
     private sealed record Order(int OrderId);
 
@@ -217,15 +215,14 @@ public sealed class WorkerBatchTests(ScratchDatabase database)
 
         var running = new RunningWorker(worker);
         await started.Task.WaitAsync(Patience, TestContext.Current.CancellationToken);
-        var complete = true;
         try
         {
             await running.StopAsync();
         }
         catch (ShutdownIncompleteException)
         {
-            // A loaded machine can need more than the 250 ms unwind window for the two releases.
-            complete = false;
+            // A loaded machine can need more than the 250 ms unwind window for the two releases. A
+            // release that outlives the window still finishes after the run returns (SM-1685).
         }
 
         // The batch token was cancelled only after the worker cancelled every member for the shutdown.
@@ -233,8 +230,8 @@ public sealed class WorkerBatchTests(ScratchDatabase database)
         foreach (var id in new[] { first, second })
         {
             // A member that stopped for the shutdown goes back without a charged attempt. It never fails.
-            var state = (await TaskAsync(database.DataSource, id)).Text("state");
-            Assert.Contains(state, complete ? Ready : ReadyOrRunning);
+            var row = await TaskInStateAsync(database.DataSource, id, "ready");
+            Assert.Equal(1, row.RequiredInteger("current_attempt"));
         }
 
         await running.DisposeAsync();
