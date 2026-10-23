@@ -680,10 +680,13 @@ names the instance of the run that stops, so a late call cannot delete the row o
 
 **Opt-out.** An opted-out worker writes no `worker_registry` row. `tick_v1` spaces the expired-lease
 scan by half the shortest maintenance interval among live registered workers. Thus, an opted-out
-worker never shortens that spacing. While registered workers continue to tick, recovery follows the
-expiry of a lease by at most one interval of the fastest registered worker. That bound holds only
-while recovery reaches the scan. If other recovery work fills the limit, the scan waits for a later
-tick. With no live registered worker, every tick runs the scan.
+worker never shortens that spacing. While registered workers continue to tick, a tick reaches the
+scan at most one interval of the fastest registered worker after a lease expires. That bound holds
+only while recovery reaches the scan. If other recovery work fills the limit, the scan waits for a
+later tick. With no live registered worker, every tick runs the scan.
+
+A scan is complete only when it returns fewer rows than its share of the recovery limit. A scan that
+fills its share leaves a backlog, so the next tick scans again.
 
 More detail: [Data model: `worker_registry`](../architecture/data-model.md#worker_registry), [Task lifecycle: Maintenance cadence](../architecture/lifecycle.md#maintenance-cadence), [Schema and SQL protocol: JVM running and stopping](../architecture/schema-and-protocol.md#jvm-running-and-stopping), and [Schema and SQL protocol: .NET worker](../architecture/schema-and-protocol.md#net-worker).
 

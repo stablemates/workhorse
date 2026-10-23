@@ -645,6 +645,10 @@ describe("schema installation", () => {
         version: 82,
         description: "fire skip schedules within the supported delay",
       },
+      {
+        version: 83,
+        description: "recheck terminal cleanup references and continue lease scans",
+      },
     ]);
 
     const protocols = await pool.query<{ version: number }>(

@@ -3649,8 +3649,10 @@ Two more columns belong to `terminal_storage` alone:
 - Workhorse sets `terminal_cleanup_backlog_since` while terminal storage passes end with a full
   batch. It holds the start of the first such pass. A successful pass without a backlog clears it.
 
-`lease_recovery_started_at` belongs to `tick` alone. It records the start of the last tick that ran
-the expired-lease scan, as [Tick](lifecycle.md#maintenance-cadence) describes.
+`lease_recovery_started_at` belongs to `tick` alone. It records the start of the last tick whose
+expired-lease scan completed, as [Tick](lifecycle.md#maintenance-cadence) describes. A scan is
+complete when it returns fewer rows than its share of the recovery limit. Since migration 0084, a
+scan that fills its share does not change the column, so the next tick scans again.
 
 Workers poll all four database-scheduled routines, including the statistics rollup, on the
 maintenance interval of their SDK. PostgreSQL does the global due check and advisory-lock

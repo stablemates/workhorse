@@ -587,6 +587,13 @@ export const SCHEMA_MIGRATIONS: readonly SchemaMigrationStep[] = [
     description: "fire skip schedules within the supported delay",
     kind: "additive",
   },
+  {
+    fromVersion: 82,
+    toVersion: 83,
+    file: "0084-recheck-terminal-cleanup-references-and-continue-lease-scans.sql",
+    description: "recheck terminal cleanup references and continue lease scans",
+    kind: "additive",
+  },
 ];
 
 /**

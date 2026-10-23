@@ -102,6 +102,36 @@ async function expireLeaseAndTick(prefix: string): Promise<{ recovered: number; 
   return { recovered, state: state.rows[0]!.state };
 }
 
+async function recoverWithLimit(limit: number): Promise<number> {
+  const result = await database.pool.query<{ rows_affected: number }>(
+    "SELECT rows_affected FROM workhorse.tick_v1(100, $1) WHERE phase = 'recover'",
+    [limit],
+  );
+  return result.rows[0]!.rows_affected;
+}
+
+async function leaseScanAt(): Promise<Date | null> {
+  const result = await database.pool.query<{ scanned_at: Date | null }>(
+    `SELECT lease_recovery_started_at AS scanned_at FROM workhorse.maintenance_state
+      WHERE routine_name = 'tick'`,
+  );
+  return result.rows[0]!.scanned_at;
+}
+
+async function insertPastDeadline(name: string): Promise<void> {
+  await database.pool.query(
+    `INSERT INTO workhorse.task(id, queue_name, task_type, payload, max_attempts)
+     VALUES (md5($1)::uuid, 'scan-cost', 'scan.cost', '{}'::jsonb, 3)`,
+    [name],
+  );
+  await database.pool.query(
+    `INSERT INTO workhorse.task_runtime(task_id, queue_name, state, run_at, deadline_at)
+     VALUES (md5($1)::uuid, 'scan-cost', 'scheduled',
+             clock_timestamp() + interval '1 hour', clock_timestamp() - interval '1 second')`,
+    [name],
+  );
+}
+
 async function insertFastRuntime(
   count: number,
   prefix: string,
@@ -254,6 +284,98 @@ describe("scan cost bounds", () => {
 
       expect(next.rows[0]!.rows_affected).toBe(1);
       expect(lease.rows[0]!.state).toBe("ready");
+    });
+
+    it("scans again on the next tick while an expired-lease batch fills the limit", async () => {
+      await registerWorker("scan-cost-worker", { maintenanceIntervalMs: 60_000 });
+      await insertActive("backlog-", 5, "-1 second");
+
+      // A limit of two leaves a backlog after each full batch, so no batch spaces the next scan.
+      const full = [await recoverWithLimit(2), await recoverWithLimit(2)];
+      const fullScanAt = await leaseScanAt();
+      // The third batch returns fewer rows than the limit, so the scan is complete.
+      const last = await recoverWithLimit(2);
+      const completeScanAt = await leaseScanAt();
+      await insertActive("after-backlog-", 1, "-1 second");
+      const spaced = await recoverWithLimit(2);
+
+      expect(full).toEqual([2, 2]);
+      expect(fullScanAt).toBeNull();
+      expect(last).toBe(1);
+      expect(completeScanAt).not.toBeNull();
+      expect(spaced).toBe(0);
+    });
+
+    it("scans again when earlier recovery work leaves a share that the batch fills", async () => {
+      await registerWorker("scan-cost-worker", { maintenanceIntervalMs: 60_000 });
+      await insertActive("shared-", 2, "-1 second");
+      await insertPastDeadline("shared-deadline");
+
+      // The deadline takes one of the two rows, and one expired lease fills the rest.
+      const first = await recoverWithLimit(2);
+      const firstScanAt = await leaseScanAt();
+      const second = await recoverWithLimit(2);
+
+      expect(first).toBe(2);
+      expect(firstScanAt).toBeNull();
+      expect(second).toBe(1);
+      expect(await leaseScanAt()).not.toBeNull();
+    });
+
+    it("does not space the next scan when attempt timeouts fill the recovery limit", async () => {
+      await registerWorker("scan-cost-worker", { maintenanceIntervalMs: 60_000 });
+      await insertActive("timeout-lease-", 1, "-1 second");
+      await insertActive("timeout-", 1, "1 hour");
+      await database.pool.query(
+        `UPDATE workhorse.task_runtime SET attempt_timeout_at = clock_timestamp() - interval '1 second'
+          WHERE task_id = md5('timeout-1')::uuid`,
+      );
+
+      // The timeout fills a limit of one, so recovery returns before the expired-lease scan.
+      expect(await recoverWithLimit(1)).toBe(1);
+      expect(await leaseScanAt()).toBeNull();
+      expect(await recoverWithLimit(1)).toBe(1);
+      expect(await leaseScanAt()).toBeNull();
+      // The lease filled the limit of one too, so the next tick scans and finds nothing left.
+      expect(await recoverWithLimit(1)).toBe(0);
+      expect(await leaseScanAt()).not.toBeNull();
+    });
+
+    it("scans again when fast-tier work leaves a share that the batch fills", async () => {
+      await registerWorker("scan-cost-worker", { maintenanceIntervalMs: 60_000 });
+      await insertActive("fast-share-", 2, "-1 second");
+      await insertFastRuntime(1, "fast-deadline-", { enqueuedAt: "clock_timestamp()" });
+      await database.pool.query(
+        `UPDATE workhorse.fast_task_runtime SET deadline_at = clock_timestamp() - interval '1 second'
+          WHERE task_id = md5('fast-deadline-1')::uuid`,
+      );
+
+      // The fast-tier deadline takes one of the two rows, and one expired lease fills the rest.
+      expect(await recoverWithLimit(2)).toBe(2);
+      expect(await leaseScanAt()).toBeNull();
+      expect(await recoverWithLimit(2)).toBe(1);
+      expect(await leaseScanAt()).not.toBeNull();
+    });
+
+    it("spaces the next scan after a batch that returned fewer rows because one was locked", async () => {
+      await registerWorker("scan-cost-worker", { maintenanceIntervalMs: 60_000 });
+      await insertActive("locked-", 2, "-1 second");
+      const holder = await database.pool.connect();
+      try {
+        // A heartbeat or another recovery holds the lock. That transaction decides the row.
+        await holder.query("BEGIN");
+        await holder.query(
+          "SELECT 1 FROM workhorse.task_runtime WHERE task_id = md5('locked-1')::uuid FOR UPDATE",
+        );
+
+        expect(await recoverWithLimit(2)).toBe(1);
+        expect(await leaseScanAt()).not.toBeNull();
+      } finally {
+        await holder.query("ROLLBACK");
+        holder.release();
+      }
+      // The scan is spaced, so the skipped lease waits for a later scan.
+      expect(await recoverWithLimit(2)).toBe(0);
     });
 
     it("ignores a registration whose heartbeat is older than its own lease", async () => {
