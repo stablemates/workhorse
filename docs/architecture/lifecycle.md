@@ -891,7 +891,10 @@ infinities, and fractions throw before any queue operation.
 A `retryDelayMs` callback must return `undefined` or a safe integer from 0 through 2,147,483,647.
 `undefined` defers to the persisted retry policy of the task. The worker checks the result after a
 handler failure and before `fail_v1`. Any other result, such as a fraction, `NaN`, or `-1`, rejects
-the worker run before the failure write. Thus a jittered delay must be rounded and capped.
+the worker run before the failure write. Thus a jittered delay must be rounded and capped. The
+other six SDKs use the same range. Their duration types round to the nearest millisecond, half up,
+before the check, and no SDK clamps
+([ADR 0111](../decisions/0111-define-one-retry-delay-override-range.md)).
 
 The default of `leaseMs` is 30,000 ms. The default of `heartbeatMs` is
 `max(100, floor(leaseMs / 3))` ms. The smallest supported `heartbeatMs` is 100 ms. The worker

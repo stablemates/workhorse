@@ -2250,6 +2250,44 @@ export const PARITY_DEFAULT_ROWS: readonly ParityDefaultRow[] = [
     },
   },
   {
+    setting: "Handler retry delay override range",
+    dotnet: {
+      value: "0 to 2,147,483,647 ms, refused outside",
+      file: "dotnet/src/Workhorse/Worker.Execution.cs",
+      pattern: "internal static int RetryDelayMilliseconds(TimeSpan delay)",
+    },
+    jvm: {
+      value: "0 to 2,147,483,647 ms, refused outside",
+      file: "jvm/workhorse/src/main/java/run/workhorse/Worker.java",
+      pattern: "static long retryDelayMilliseconds(Duration delay)",
+    },
+    rust: {
+      value: "0 to 2,147,483,647 ms, refused outside",
+      file: "rust/src/worker/execute.rs",
+      pattern: "fn retry_delay_millis(delay: Duration) -> Result<i32, Error>",
+    },
+    typescript: {
+      value: "0 to 2,147,483,647 ms, refused outside",
+      file: "typescript/core/src/worker.ts",
+      pattern: "const MAX_RETRY_DELAY_MS = 2_147_483_647;",
+    },
+    python: {
+      value: "0 to 2,147,483,647 ms, refused outside",
+      file: "python/src/workhorse/worker.py",
+      pattern: "_MAX_RETRY_DELAY_MS = 2_147_483_647",
+    },
+    go: {
+      value: "0 to 2,147,483,647 ms, refused outside",
+      file: "go/worker.go",
+      pattern: "const maxRetryDelay = 2147483647 * time.Millisecond",
+    },
+    ruby: {
+      value: "0 to 2,147,483,647 ms, refused outside",
+      file: "ruby/lib/stablemates/workhorse/worker.rb",
+      pattern: "def retry_delay_milliseconds(delay)",
+    },
+  },
+  {
     setting: "Queue of a handler task group add without a queue",
     dotnet: {
       value: "The queue of the member task",

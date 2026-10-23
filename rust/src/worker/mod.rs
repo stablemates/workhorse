@@ -132,6 +132,10 @@ impl OwnershipStatus {
 /// logs at most one such panic in each minute.
 pub type RegistrationErrorHook = Arc<dyn Fn(&Error) + Send + Sync>;
 /// Overrides the persisted retry delay for a failed attempt; `None` keeps the task's policy.
+///
+/// The worker rounds the duration to the nearest millisecond, half up. A duration that rounds above
+/// 2147483647 ms makes the failure settlement return [`Error::InvalidArgument`] before `fail_v1`.
+/// The worker does not clamp it.
 pub type RetryDelay = Arc<dyn Fn(i32, &ClaimedTask) -> Option<Duration> + Send + Sync>;
 
 /// How a worker claims, leases, maintains and drains. `Default` gives the ADR 0072 values.

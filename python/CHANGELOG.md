@@ -10,6 +10,16 @@ adds.
 
 ## Unreleased
 
+### retry_delay_ms refuses a value above the fail_v1 range
+
+`fail_v1` takes the retry delay as a PostgreSQL `integer`. Before this change, `Worker` accepted a
+fixed `retry_delay_ms` of any size, and it did not check a fixed value at construction. A value
+above 2,147,483,647 reached `fail_v1`, and the failure write failed (SM-1668).
+
+Now `Worker` and `AsyncWorker` raise `ValueError` at construction if a fixed value is not an
+integer from 0 through 2,147,483,647. If a callable returns such a value, the worker raises
+`ValueError` before `fail_v1`. ADR 0111 records the rule for all seven SDKs.
+
 ### A raising reporter callback no longer stops the worker
 
 An application can give `on_registration_error` to the worker to send an alert. Before this change,

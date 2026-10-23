@@ -10,6 +10,17 @@ adds.
 
 ## Unreleased
 
+### RetryDelay refuses a duration outside the fail_v1 range
+
+`fail_v1` takes the retry delay as a PostgreSQL `integer`. Before this change, a `RetryDelay`
+callback that returned a negative duration gave no override, so the persisted policy applied. A
+duration above 2,147,483,647 ms reached `fail_v1`, and the failure write failed. The worker also
+truncated a fraction of a millisecond (SM-1668).
+
+Now the worker rounds the duration to the nearest millisecond, half up. A negative duration, or one
+that rounds above 2,147,483,647 ms, is an error before `fail_v1`, and `Run` returns it. ADR 0111
+records the rule for all seven SDKs.
+
 ### A panic in OnRegistrationError no longer stops the worker
 
 An application can give `OnRegistrationError` to the worker to send an alert. Before this change,

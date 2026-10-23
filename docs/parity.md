@@ -249,12 +249,13 @@ differ today, and the reasons follow the table.
 | Dispatch cohorts                                  | 1 below concurrency 8, else concurrency / 8 within 2 to 8 | 1 below concurrency 8, else concurrency / 8 within 2 to 8 | 1 below concurrency 8, else concurrency / 8 within 2 to 8 | 1 below concurrency 8, else concurrency / 8 within 2 to 8 | 1 below concurrency 8, else concurrency / 8 within 2 to 8 | 1 below concurrency 8, else concurrency / 8 within 2 to 8 | 1 below concurrency 8, else concurrency / 8 within 2 to 8 |
 | Shutdown grace, then                              | 25,000 ms, then exit the process                          | 25,000 ms, then exit the process                          | 25,000 ms, then abandon the handlers                      | 25,000 ms, then abandon the handlers                      | 25,000 ms, then abandon the handlers                      | 25,000 ms, then abandon the handlers                      | 25,000 ms, then abandon the handlers                      |
 | Handler retry delay override                      | `retryDelayMs`, unset                                     | `retry_delay_ms`, unset                                   | `RetryDelay`, unset                                       | `retry_delay`, unset                                      | `retry_delay`, unset                                      | `retryDelay`, unset                                       | `RetryDelay`, unset                                       |
+| Handler retry delay override range                | 0 to 2,147,483,647 ms, refused outside                    | 0 to 2,147,483,647 ms, refused outside                    | 0 to 2,147,483,647 ms, refused outside                    | 0 to 2,147,483,647 ms, refused outside                    | 0 to 2,147,483,647 ms, refused outside                    | 0 to 2,147,483,647 ms, refused outside                    | 0 to 2,147,483,647 ms, refused outside                    |
 | Queue of a handler task group add without a queue | The queue of the member task                              | The queue of the member task                              | The queue of the member task                              | The queue of the member task                              | The queue of the member task                              | The queue of the member task                              | The queue of the member task                              |
 | Queue of a child task request without a queue     | The queue of the parent task                              | The queue of the parent task                              | The queue of the parent task                              | The queue of the parent task                              | The queue of the parent task                              | The queue of the parent task                              | The queue of the parent task                              |
 
 <!-- END GENERATED PARITY DEFAULTS -->
 
-Three rows carry a condition the setting name alone cannot.
+Four rows carry a condition the setting name alone cannot.
 
 - **Claim poll interval.** A worker claims on one of two schedules. While its `LISTEN` subscription
   is live, a notification wakes it, so polling is only a fallback and the worker waits the ceiling
@@ -276,6 +277,13 @@ Three rows carry a condition the setting name alone cannot.
   `now` as the maintenance time, so the database clock sets due times and retention cutoffs. The
   Python asyncpg driver reads `database_time` first, which adds one round trip to each routine
   pass.
+- **Handler retry delay override range.** `fail_v1` takes the delay as a PostgreSQL `integer`, so
+  the range is 0 through 2,147,483,647 ms. Zero retries at once. TypeScript and Python take integer
+  milliseconds and refuse any other number. Go, Rust, Ruby, the JVM, and .NET take a duration and
+  round it to the nearest millisecond, half up. Then they check the range. Each SDK refuses a
+  negative value, also one that rounds to 0, and no SDK clamps. A fixed value is refused at
+  construction. A callback result is refused before `fail_v1`, as
+  [ADR 0111](decisions/0111-define-one-retry-delay-override-range.md) records.
 
 The shutdown deadline agrees at 25,000 ms, and it sits under the 30 second termination grace a
 container platform gives a process by default. What follows that deadline cannot agree, and it is

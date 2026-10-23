@@ -11,6 +11,16 @@ adds.
 
 ## Unreleased
 
+### retry_delay refuses a duration above the fail_v1 range
+
+`fail_v1` takes the retry delay as a PostgreSQL `integer`. Before this change, the worker clamped a
+`retry_delay` result above 2,147,483,647 ms to that limit without a record. It also truncated a
+fraction of a millisecond (SM-1668).
+
+Now the worker rounds the duration to the nearest millisecond, half up. A duration that rounds above
+2,147,483,647 ms makes the failure settlement return `Error::InvalidArgument` before `fail_v1`.
+ADR 0111 records the rule for all seven SDKs.
+
 ### A panic in on_registration_error no longer stops the worker
 
 An application can give `on_registration_error` to the worker to send an alert. Before this change,

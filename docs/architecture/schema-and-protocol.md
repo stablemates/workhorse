@@ -315,11 +315,10 @@ records the name of the conflict. Its fields `message` and `stack` stay those of
 #### Settling a conflict
 
 For these errors, the worker skips its retry-delay callback. Then it records the conflict name in
-the failure envelope. Only the conflict settlement sends `-1`. A TypeScript `retryDelayMs` callback
-can return a value other than `undefined` or a safe integer from 0 through 2,147,483,647. If it
-does, the callback throws before `fail_v1`. Python and Ruby raise an error for a negative callback
-result. Go replaces a negative result with nil. Configured redaction still records
-`RedactedTaskError`. The terminal classification occurs before redaction.
+the failure envelope. Only the conflict settlement sends `-1`. No retry delay override can send
+`-1`. Every SDK refuses an override outside 0 through 2,147,483,647 ms before `fail_v1`, a negative
+value included ([ADR 0111](../decisions/0111-define-one-retry-delay-override-range.md)). Configured
+redaction still records `RedactedTaskError`. The terminal classification occurs before redaction.
 
 Transient failures, lease loss, child-limit refusals, and already-waiting signal refusals keep their
 existing settlement behavior. `protocol/v1/runtime.json` pins terminal conflicts and those retryable
@@ -767,20 +766,22 @@ statement.
 
 #### Worker options
 
-| Option                        | Default                                       | Accepts                                                                                                                                            |
-| ----------------------------- | --------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `concurrency`                 | 1                                             | Integers from 1 through 100.                                                                                                                       |
-| `lease_ms`                    | 30,000 milliseconds per claim                 | 100 through 86,400,000.                                                                                                                            |
-| `heartbeat_ms`                | The greater of 100 or one third of `lease_ms` | Positive values less than `lease_ms`.                                                                                                              |
-| `poll_ms`                     | 250                                           | Positive values.                                                                                                                                   |
-| `maintenance_routine_poll_ms` | 60000                                         | Integers of at least 100. Bounds how often the worker offers the slow retention routines.                                                          |
-| `retry_delay_ms`              | Unset                                         | A whole number of milliseconds, or a callable over the attempt and the claimed task. The callable returns `None` to leave the delay to the policy. |
+| Option                        | Default                                       | Accepts                                                                                                                                                                  |
+| ----------------------------- | --------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `concurrency`                 | 1                                             | Integers from 1 through 100.                                                                                                                                             |
+| `lease_ms`                    | 30,000 milliseconds per claim                 | 100 through 86,400,000.                                                                                                                                                  |
+| `heartbeat_ms`                | The greater of 100 or one third of `lease_ms` | Positive values less than `lease_ms`.                                                                                                                                    |
+| `poll_ms`                     | 250                                           | Positive values.                                                                                                                                                         |
+| `maintenance_routine_poll_ms` | 60000                                         | Integers of at least 100. Bounds how often the worker offers the slow retention routines.                                                                                |
+| `retry_delay_ms`              | Unset                                         | An integer from 0 through 2,147,483,647 milliseconds, or a callable over the attempt and the claimed task. The callable returns `None` to leave the delay to the policy. |
 
 The smallest supported `heartbeat_ms` is 100. The worker accepts a shorter value
 ([Supported heartbeat interval](lifecycle.md#supported-heartbeat-interval)).
 
 `retry_delay_ms` reports the delay of one failed attempt to `fail_v1`. This delay replaces the
-choice of the persisted retry policy.
+choice of the persisted retry policy. If a fixed value is not an integer in the range, `Worker`
+raises `ValueError` at construction. If a callable returns such a value, the worker raises
+`ValueError` before `fail_v1` (ADR 0111).
 
 `queue` selects one queue, and `queues` selects an ordered, de-duplicated set. If the caller
 supplies both, `Worker` raises `ValueError`.
@@ -1653,7 +1654,9 @@ Option behavior:
 - One buffered semaphore owns the `Concurrency` budget across every configured queue.
 - `MaintenanceRoutineInterval` bounds how often the worker offers the slow retention routines.
 - `RetryDelay` reports the delay of one failed attempt. It returns nil to leave the delay to the
-  persisted retry policy.
+  persisted retry policy. The worker rounds a duration to the nearest millisecond, half up. A
+  negative duration, or one that rounds above 2,147,483,647 ms, is an error before `fail_v1`,
+  and `Run` returns it (ADR 0111).
 - `WorkerOptions.DisableRegistry` prevents registration and remote pause delivery.
 - `WorkerOptions.OnRegistrationError` observes a failed refresh. It does not stop dispatch.
 - An empty `ScheduleNamespaces` list disables schedule evaluation.
@@ -2013,18 +2016,21 @@ member remains. Each run reserves it before the worker registers, as
 a run subscribes to `Worker::Listener.shared(pool)` only when the pool `size` is an Integer of at
 least 2. Otherwise the run logs `workhorse.worker.polling_only` once and polls.
 
-| Option           | Default                                                 | Accepts                       |
-| ---------------- | ------------------------------------------------------- | ----------------------------- |
-| `concurrency`    |                                                         | Integers from 1 through 100   |
-| `lease`          | 30 seconds                                              | 0.1 through 86,400 seconds    |
-| `heartbeat`      | The larger of 100 milliseconds and a third of the lease | Values shorter than the lease |
-| `shutdown_grace` | 25 seconds                                              | 0 through 86,400 seconds      |
+| Option           | Default                                                 | Accepts                                                          |
+| ---------------- | ------------------------------------------------------- | ---------------------------------------------------------------- |
+| `concurrency`    |                                                         | Integers from 1 through 100                                      |
+| `lease`          | 30 seconds                                              | 0.1 through 86,400 seconds                                       |
+| `heartbeat`      | The larger of 100 milliseconds and a third of the lease | Values shorter than the lease                                    |
+| `shutdown_grace` | 25 seconds                                              | 0 through 86,400 seconds                                         |
+| `retry_delay`    | Unset                                                   | 0 through 2,147,483,647 ms after half-up rounding, or a callable |
 
 The smallest supported `heartbeat` is 0.1 seconds. The worker accepts a shorter value
 ([Supported heartbeat interval](lifecycle.md#supported-heartbeat-interval)).
 
-Durations are finite Numeric seconds. `cohorts` splits the slots for fast-tier dispatch, as
-[Workers on a fast-tier queue](fast-tier.md#workers-on-a-fast-tier-queue) describes.
+Durations are finite Numeric seconds. A `retry_delay` rounds to the nearest millisecond, half up.
+A negative `retry_delay` raises `ArgumentError`, also when it rounds to 0. The worker raises at
+construction for a fixed value, and before `fail_v1` for a callable result (ADR 0111). `cohorts`
+splits the slots for fast-tier dispatch, as [Workers on a fast-tier queue](fast-tier.md#workers-on-a-fast-tier-queue) describes.
 
 #### Handler threads
 
@@ -2467,21 +2473,21 @@ crate. Then it tests the default consumer.
 `Worker::new(pool, options)` accepts a caller-owned `deadpool_postgres::Pool`. It validates
 `WorkerOptions` before it returns. `WorkerOptions::default()` gives the ADR 0072 values.
 
-| Option                         | Default                                                                                     | Accepts                                                                 |
-| ------------------------------ | ------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------- |
-| `WorkerOptions.queues`         | `["default"]`                                                                               | Drops empty names and later duplicates; must keep one name              |
-| `worker_id`                    | Host name, process ID, and a random suffix                                                  |                                                                         |
-| `concurrency`                  | 1                                                                                           | 1 through 100                                                           |
-| `lease_duration`               | 30 seconds                                                                                  | Whole milliseconds from 100 milliseconds through 24 hours               |
-| `heartbeat_interval`           | The larger of 100 milliseconds and one third of the lease, truncated to a whole millisecond | Positive values shorter than the lease                                  |
-| `poll_interval`                | 5 seconds while the listener is connected, else 250 milliseconds, doubling toward 5 seconds |                                                                         |
-| `maintenance_interval`         | 1 second                                                                                    | Positive whole milliseconds                                             |
-| `maintenance_routine_interval` | 60 seconds                                                                                  | Positive whole milliseconds                                             |
-| `registry_interval`            | 5 seconds                                                                                   | Whole milliseconds of at least 100                                      |
-| `schedule_namespaces`          | Empty                                                                                       | Rejects empty names; drops later duplicates                             |
-| `schedule_catchup_limit`       | 100                                                                                         | 1 through 10,000                                                        |
-| `shutdown_grace_period`        | 25 seconds                                                                                  | Positive whole milliseconds                                             |
-| `retry_delay`                  |                                                                                             | Overrides one failed attempt's delay; `None` keeps the persisted policy |
+| Option                         | Default                                                                                     | Accepts                                                                                                                    |
+| ------------------------------ | ------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
+| `WorkerOptions.queues`         | `["default"]`                                                                               | Drops empty names and later duplicates; must keep one name                                                                 |
+| `worker_id`                    | Host name, process ID, and a random suffix                                                  |                                                                                                                            |
+| `concurrency`                  | 1                                                                                           | 1 through 100                                                                                                              |
+| `lease_duration`               | 30 seconds                                                                                  | Whole milliseconds from 100 milliseconds through 24 hours                                                                  |
+| `heartbeat_interval`           | The larger of 100 milliseconds and one third of the lease, truncated to a whole millisecond | Positive values shorter than the lease                                                                                     |
+| `poll_interval`                | 5 seconds while the listener is connected, else 250 milliseconds, doubling toward 5 seconds |                                                                                                                            |
+| `maintenance_interval`         | 1 second                                                                                    | Positive whole milliseconds                                                                                                |
+| `maintenance_routine_interval` | 60 seconds                                                                                  | Positive whole milliseconds                                                                                                |
+| `registry_interval`            | 5 seconds                                                                                   | Whole milliseconds of at least 100                                                                                         |
+| `schedule_namespaces`          | Empty                                                                                       | Rejects empty names; drops later duplicates                                                                                |
+| `schedule_catchup_limit`       | 100                                                                                         | 1 through 10,000                                                                                                           |
+| `shutdown_grace_period`        | 25 seconds                                                                                  | Positive whole milliseconds                                                                                                |
+| `retry_delay`                  |                                                                                             | Overrides one failed attempt's delay: 0 through 2,147,483,647 ms after half-up rounding; `None` keeps the persisted policy |
 
 The smallest supported `heartbeat_interval` is 100 milliseconds. The worker accepts a shorter value
 ([Supported heartbeat interval](lifecycle.md#supported-heartbeat-interval)).
@@ -2862,7 +2868,8 @@ The smallest supported `heartbeat` is 100 milliseconds. The worker accepts a sho
 `disableRegistry(true)` turns off the worker registry. `sharedHeartbeats(true)` makes heartbeat
 rounds borrow from the `DataSource`. `pollingOnly(true)` opens no listener. `retryDelay` takes a
 `RetryDelay` that returns a delay of 0 through 2,147,483,647 milliseconds, or `null` for the
-persisted policy. A `DataSource` reports no pool size, so the worker checks no pool size and never
+persisted policy. The worker rounds the delay to the nearest millisecond, half up. A negative delay,
+or one that rounds above the limit, throws `IllegalArgumentException` before `fail_v1` (ADR 0111). A `DataSource` reports no pool size, so the worker checks no pool size and never
 caps the default cohorts. It refuses to start only when its startup steps do not end within the
 startup budget ([JVM connections](#jvm-connections)).
 
@@ -3709,8 +3716,9 @@ the options, so a later change to the `WorkerOptions` object has no effect. An i
 Each upper bound of "and more" is `int.MaxValue` milliseconds. `DisableRegistry = true` turns off
 the worker registry. `SharedHeartbeats = true` makes each heartbeat round open its own connection.
 `PollingOnly = true` opens no listener. `RetryDelay` is a delegate over the attempt and the
-`ClaimedTask` that returns a `TimeSpan?`. The worker clamps the delay to 0 through 2,147,483,647
-milliseconds, and `null` keeps the persisted policy. `Json` sets the JSON options of payloads and
+`ClaimedTask` that returns a `TimeSpan?`. The worker rounds the delay to the nearest millisecond,
+half up, and `null` keeps the persisted policy. A negative delay, or one that rounds above
+2,147,483,647 milliseconds, throws `ArgumentOutOfRangeException` before `fail_v1` (ADR 0111). `Json` sets the JSON options of payloads and
 results. `LoggerFactory` sets the `ILoggerFactory`, and `null` logs nothing.
 
 Three methods register a handler:

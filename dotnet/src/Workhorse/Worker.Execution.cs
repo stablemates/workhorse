@@ -340,6 +340,23 @@ public sealed partial class Worker
         await SettleStatusAsync(task, status, arbiter, "release", "not_due", Outcome.LeaseExpired, cancellationToken).ConfigureAwait(false);
     }
 
+    /// <summary>
+    /// The milliseconds that <c>fail_v1</c> takes for a retry delay override. The delay rounds to
+    /// the nearest millisecond, half up. A negative delay, or one that rounds above
+    /// <see cref="int.MaxValue"/>, throws before <c>fail_v1</c>; the worker never clamps it (ADR 0111).
+    /// </summary>
+    internal static int RetryDelayMilliseconds(TimeSpan delay)
+    {
+        const long limitTicks = int.MaxValue * TimeSpan.TicksPerMillisecond + TimeSpan.TicksPerMillisecond / 2;
+        if (delay < TimeSpan.Zero || delay.Ticks >= limitTicks)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(delay), delay, "RetryDelay must return null or a TimeSpan from 0 through 2147483647 ms.");
+        }
+
+        return (int)((delay.Ticks + TimeSpan.TicksPerMillisecond / 2) / TimeSpan.TicksPerMillisecond);
+    }
+
     /// <summary>Records a handler failure. PostgreSQL retries or fails the task by its retry policy.</summary>
     private async Task SettleFailureAsync(ClaimedTask task, Exception error, Arbiter arbiter, CancellationToken cancellationToken)
     {
@@ -352,7 +369,7 @@ public sealed partial class Worker
         }
         else if (_retryDelay?.Invoke(task.Attempt, task) is { } chosen)
         {
-            delay = (int)Math.Clamp(Math.Round(chosen.TotalMilliseconds), 0, int.MaxValue);
+            delay = RetryDelayMilliseconds(chosen);
         }
 
         Row row;

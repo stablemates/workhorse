@@ -14,7 +14,7 @@ use tracing::Instrument;
 use super::handler::{ErasedHandler, HandlerResult};
 use super::heartbeat::Beat;
 use super::value_size::jsonb_text_bytes;
-use super::{exactly_one, lock, millis_i32, sql, ActiveSlot, Inner, OwnershipStatus};
+use super::{exactly_one, lock, sql, ActiveSlot, Inner, OwnershipStatus};
 use crate::fenced_write::fenced_rows;
 use crate::telemetry::{self, Attribute, Counter, Histogram};
 use crate::{
@@ -601,7 +601,8 @@ impl Inner {
                 .retry_delay
                 .as_ref()
                 .and_then(|delay| delay(task.attempt, task))
-                .map(millis_i32)
+                .map(retry_delay_millis)
+                .transpose()?
         };
         let rows = fenced_rows(
             &self.statements(),
@@ -680,11 +681,27 @@ fn storable_text(text: &str) -> String {
     text.replace('\0', "\u{FFFD}")
 }
 
+/// Converts a retry delay override to the milliseconds that `fail_v1` takes. The delay rounds to the
+/// nearest millisecond, half up. A delay that rounds above the PostgreSQL integer maximum is an
+/// error before `fail_v1`; the worker never clamps it (ADR 0111).
+fn retry_delay_millis(delay: Duration) -> Result<i32, Error> {
+    let millis = (delay.as_nanos() + 500_000) / 1_000_000;
+    i32::try_from(millis).map_err(|_| {
+        Error::invalid(format!(
+            "retry_delay returned {delay:?}; it must return None or a duration from 0 through \
+             2147483647 ms"
+        ))
+    })
+}
+
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
+
     use serde_json::json;
 
-    use super::{failure_envelope, storable_text};
+    use super::{failure_envelope, retry_delay_millis, storable_text};
+    use crate::Error;
     use crate::HandlerError;
 
     #[test]
@@ -710,5 +727,26 @@ mod tests {
             failure_envelope(&error, true),
             json!({"name": "RedactedTaskError", "message": "Task handler failed; details redacted"})
         );
+    }
+
+    // fail_v1 takes an integer, so the override range ends at 2147483647 ms (SM-1668 PAR-06).
+    #[test]
+    fn retry_delay_millis_rounds_half_up_and_refuses_values_above_the_limit() {
+        let limit = Duration::from_millis(2_147_483_647);
+        assert_eq!(retry_delay_millis(limit).unwrap(), 2_147_483_647);
+        assert_eq!(retry_delay_millis(limit + Duration::from_micros(499)).unwrap(), 2_147_483_647);
+        assert_eq!(retry_delay_millis(Duration::ZERO).unwrap(), 0);
+        assert_eq!(retry_delay_millis(Duration::from_micros(1_400)).unwrap(), 1);
+        assert_eq!(retry_delay_millis(Duration::from_micros(1_500)).unwrap(), 2);
+        for refused in [
+            Duration::from_millis(2_147_483_648),
+            limit + Duration::from_micros(500),
+            Duration::MAX,
+        ] {
+            assert!(
+                matches!(retry_delay_millis(refused), Err(Error::InvalidArgument(message)) if message.contains("retry_delay")),
+                "{refused:?} must be refused"
+            );
+        }
     }
 }

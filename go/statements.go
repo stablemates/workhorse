@@ -404,6 +404,7 @@ const (
 	undecodableValueFormat              = "workhorse could not decode the value: %w"
 	invalidCompletionResultMessage      = "PostgreSQL returned an invalid completion result"
 	invalidFailureResultMessage         = "PostgreSQL returned an invalid failure result"
+	retryDelayRangeMessage              = "workhorse: RetryDelay returned %s; it must return nil or a duration from 0 through %s"
 	rejectedFailureStateFormat          = "PostgreSQL rejected failure settlement with state %s"
 	invalidReleaseResultMessage         = "PostgreSQL returned an invalid release result"
 	rejectedReleaseStatusFormat         = "PostgreSQL rejected the release with status %s"

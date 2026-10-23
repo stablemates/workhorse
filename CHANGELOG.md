@@ -46,6 +46,16 @@ the six admin time filters now state the rule. The architecture reference also s
 can make the build report each implicit conversion with `Microsoft.CodeAnalysis.BannedApiAnalyzers`.
 The C# governed surface does not change (SM-1722).
 
+### The .NET RetryDelay refuses a delay outside the fail_v1 range
+
+`fail_v1` takes the retry delay as a PostgreSQL `integer`. Before this change, the .NET worker
+clamped a `RetryDelay` result to 0 through 2,147,483,647 ms without a record. A negative delay thus
+retried the task at once. The worker also rounded a fraction of a millisecond to even (SM-1668).
+
+Now the worker rounds the delay to the nearest millisecond, half up. A negative delay, or one that
+rounds above 2,147,483,647 ms, throws `ArgumentOutOfRangeException` before `fail_v1`. The Go, Rust,
+Python, and Ruby notes list their changes. ADR 0111 records the rule for all seven SDKs.
+
 ### A fast-tier attempt timeout reports its retry
 
 `expire_owned_telemetry_v1` settles a due deadline or attempt timeout for a live worker and returns

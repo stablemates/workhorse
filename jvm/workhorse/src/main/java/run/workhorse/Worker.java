@@ -2964,7 +2964,16 @@ public final class Worker implements AutoCloseable {
       return null;
     }
     Duration delay = retryDelay.delay(task.attempt(), task);
-    return delay == null ? null : Values.milliseconds(delay, "retryDelay", 0, MAX_RETRY_DELAY_MS);
+    return delay == null ? null : retryDelayMilliseconds(delay);
+  }
+
+  /**
+   * The milliseconds that {@code fail_v1} takes for a retry delay override. The delay rounds to the
+   * nearest millisecond, half up. A negative delay, or one that rounds above the PostgreSQL integer
+   * maximum, throws before {@code fail_v1}; the worker never clamps it (ADR 0111).
+   */
+  static long retryDelayMilliseconds(Duration delay) {
+    return Values.milliseconds(delay, "retryDelay", 0, MAX_RETRY_DELAY_MS);
   }
 
   /** The failure envelope of {@code protocol/v1/failures.json}. */

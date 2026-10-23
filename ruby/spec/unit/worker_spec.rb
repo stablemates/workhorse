@@ -1,5 +1,6 @@
 # frozen_string_literal: true
 
+require "bigdecimal"
 require "spec_helper"
 
 RSpec.describe W::Worker do
@@ -32,6 +33,45 @@ RSpec.describe W::Worker do
     expect { worker(retry_delay: -1) }.to raise_error(ArgumentError, /retry_delay/)
     expect { worker.handle("") { {} } }.to raise_error(ArgumentError, /task_type/)
     expect(pool.statements).to be_empty
+  end
+
+  # fail_v1 takes an integer, so the override range ends at 2147483647 ms (SM-1668 PAR-06, ADR 0111).
+  describe "the retry delay override" do
+    let(:task) do
+      W::ClaimedTask.new(
+        id: "00000000-0000-4000-8000-000000000001", queue: "default", type: "t", priority: 0, payload: {},
+        contract_version: nil, result_max_bytes: nil, redact_error_details: false, trace_context: nil,
+        attempt: 1, max_attempts: 3, retry_policy: nil, deadline_at: nil, execution_timeout_ms: nil,
+        attempt_timeout_at: nil, fence_token: 7, lease_expires_at: nil
+      )
+    end
+
+    def override(delay) = worker(retry_delay: ->(_attempt, _task) { delay }).send(:retry_delay_override, task)
+
+    it "sends the limit, zero, and a fraction rounded half up" do
+      expect(override(Rational(2_147_483_647, 1000))).to eq(2_147_483_647)
+      expect(override(0)).to eq(0)
+      expect(override(Rational(14, 10_000))).to eq(1)
+      expect(override(Rational(15, 10_000))).to eq(2)
+      expect(override(Rational(1001, 2000))).to eq(501)
+      expect(override(0.0015)).to eq(2)
+      expect(worker(retry_delay: Rational(1001, 2000)).send(:retry_delay_override, task)).to eq(501)
+      expect(override(BigDecimal("0.5005"))).to eq(501)
+      expect(worker(retry_delay: BigDecimal("0.5005")).send(:retry_delay_override, task)).to eq(501)
+      expect(override(BigDecimal("2147483.6474999999"))).to eq(2_147_483_647)
+      expect(worker(retry_delay: BigDecimal("2147483.6474999999")).send(:retry_delay_override, task))
+        .to eq(2_147_483_647)
+      expect(override(nil)).to be_nil
+    end
+
+    it "refuses one above the limit and every negative value, before fail_v1" do
+      [Rational(2_147_483_648, 1000), Rational(4_294_967_295, 2000), BigDecimal("2147483.6475"), -1,
+        Rational(-1, 10_000), BigDecimal("-0.0001"), BigDecimal("NaN"), Float::INFINITY].each do |delay|
+        expect { override(delay) }.to raise_error(ArgumentError, /retry_delay/)
+        expect { worker(retry_delay: delay) }.to raise_error(ArgumentError, /retry_delay/)
+      end
+      expect(pool.statements).to be_empty
+    end
   end
 
   it "refuses a pool too small to keep a heartbeat connection unless heartbeats share it" do

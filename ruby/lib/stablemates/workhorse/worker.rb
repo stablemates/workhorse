@@ -232,6 +232,10 @@ module Stablemates
       end
       private_constant :Borrowed
 
+      RETRY_DELAY_RANGE = (0..2_147_483_647)
+      RETRY_DELAY_REFUSAL = "retry_delay must be a finite Numeric count of seconds between 0 and 2147483.647"
+      private_constant :RETRY_DELAY_RANGE, :RETRY_DELAY_REFUSAL
+
       attr_reader :worker_id, :queues, :concurrency, :cohorts
 
       def initialize(pool, queues: ["default"], worker_id: nil, concurrency: 1, lease: 30, heartbeat: nil,
@@ -268,9 +272,7 @@ module Stablemates
 
         @schedule_catchup_limit = schedule_catchup_limit
         @shutdown_grace = Values.milliseconds(shutdown_grace, "shutdown_grace", 0..86_400_000) / 1000.0
-        unless retry_delay.nil? || retry_delay.respond_to?(:call)
-          Values.milliseconds(retry_delay, "retry_delay", 0..2_147_483_647)
-        end
+        retry_delay_milliseconds(retry_delay) unless retry_delay.nil? || retry_delay.respond_to?(:call)
         @retry_delay = retry_delay
         @on_registration_error = on_registration_error
         @on_notification_error = on_notification_error
@@ -1914,7 +1916,29 @@ module Stablemates
         delay = @retry_delay.respond_to?(:call) ? @retry_delay.call(task.attempt, task) : @retry_delay
         return nil if delay.nil?
 
-        Values.milliseconds(delay, "retry_delay", 0..2_147_483_647)
+        retry_delay_milliseconds(delay)
+      end
+
+      # fail_v1 takes the delay as a PostgreSQL integer. The delay rounds to the nearest
+      # millisecond, half up. A negative delay is refused also when it rounds to 0 (ADR 0111).
+      # A real value other than a Float converts exactly, so 500.5 ms is 501 ms.
+      def retry_delay_milliseconds(delay)
+        negative = delay.is_a?(Numeric) && delay.respond_to?(:negative?) && delay.negative?
+        exact = exact_retry_delay_milliseconds(delay) unless negative
+        return exact if exact && RETRY_DELAY_RANGE.cover?(exact)
+        raise ArgumentError, RETRY_DELAY_REFUSAL if negative || exact
+
+        Values.milliseconds(delay, "retry_delay", RETRY_DELAY_RANGE)
+      end
+
+      # Whole milliseconds of an Integer, Rational, or BigDecimal count of seconds, rounded half up.
+      # Returns nil for a Float or for a value without an exact Rational form.
+      def exact_retry_delay_milliseconds(delay)
+        return nil if !delay.is_a?(Numeric) || delay.is_a?(Float) || !delay.real?
+
+        (delay.to_r * 1000).round(half: :up)
+      rescue NoMethodError, RangeError
+        nil
       end
 
       def error_envelope(error, redact)
