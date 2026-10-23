@@ -37,7 +37,9 @@ const invalid: Array<[keyof WorkerOptions, number[]]> = [
   ["maintenanceRoutinePollMs", [Number.NaN, Infinity, -1, 99, 100.5, overTimerMaximum]],
   ["registryIntervalMs", [Number.NaN, Infinity, -1, 99, 100.5, overTimerMaximum]],
   ["scheduleCatchupLimit", [Number.NaN, Infinity, -1, 0, 1.5, 10_001]],
-  ["retryDelayMs", [Number.NaN, Infinity, -1, 1.5]],
+  // SM-1654: fail_v1 takes the delay as a PostgreSQL integer, so a larger fixed delay passed
+  // construction and then stopped the worker at its first handler failure.
+  ["retryDelayMs", [Number.NaN, Infinity, -1, 1.5, 2_147_483_648, Number.MAX_SAFE_INTEGER]],
 ];
 
 describe("Worker timing and limit options", () => {
@@ -75,6 +77,7 @@ describe("Worker timing and limit options", () => {
           maintenanceIntervalMs: MAX_TIMER_DELAY_MS,
           maintenanceRoutinePollMs: MAX_TIMER_DELAY_MS,
           registryIntervalMs: MAX_TIMER_DELAY_MS,
+          retryDelayMs: 2_147_483_647,
           // The heartbeat must stay shorter than the largest lease.
           leaseMs: 86_400_000,
           heartbeatMs: 86_399_999,
