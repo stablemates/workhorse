@@ -1909,10 +1909,21 @@ class WorkerDatabaseTest {
     assertTrue(drained.compareTo(Duration.ofSeconds(10)) < 0, "the drain ended: " + drained);
   }
 
+  /**
+   * The handler fails with its own error after the drain cancels it. The worker then charges the
+   * attempt, and does not release the task.
+   *
+   * <p>The handler throws only after the cancellation at the end of the grace. Its failure write
+   * thus runs in the unwind window of 250 ms. On a loaded host, the write can take longer, and
+   * {@code close} throws {@link ShutdownIncompleteException} while the write still ends (SM-1686,
+   * as SM-1543). The drain stops only the lease renewal of an attempt that it abandons. The
+   * duration of the drain is not what this test checks, so it waits for the outcome of the task.
+   */
   @Test
   void stillChargesTheAttemptWhenAHandlerFailsOnItsOwnAfterTheStop() throws Exception {
     UUID taskId = enqueue("own", Map.of(), EnqueueOptions.builder().maxAttempts(1));
     CountDownLatch started = new CountDownLatch(1);
+    AtomicReference<@Nullable CancellationReason> reason = new AtomicReference<>();
     Worker worker =
         worker()
             .shutdownGrace(Duration.ofMillis(100))
@@ -1929,14 +1940,37 @@ class WorkerDatabaseTest {
                       // Waits for the token, not for the interrupt.
                     }
                   }
+                  reason.set(ctx.cancellation().reason());
                   throw new IllegalStateException("own failure");
                 })
             .build();
     worker.start();
     await(started, "the handler");
-    worker.close();
+    try {
+      worker.close();
+    } catch (ShutdownIncompleteException slow) {
+      assertEquals(1, slow.abandoned(), "only the failing attempt was still in flight");
+    }
 
-    assertEquals("failed", status(taskId).state());
+    // The handler records the reason before it throws, and the task leaves the active state only
+    // after the throw. Even if the handler starts late, it records the reason before this wait
+    // ends.
+    waitUntil(
+        taskId + " left the active state",
+        () -> {
+          try {
+            return !status(taskId).state().equals("active");
+          } catch (SQLException error) {
+            throw new IllegalStateException(error);
+          }
+        });
+    assertEquals(CancellationReason.SHUTDOWN, reason.get(), "the handler failed after the stop");
+    Status charged = status(taskId);
+    assertEquals("failed", charged.state(), "the own failure charged the only attempt");
+    assertEquals(1, charged.attempt());
+    assertTrue(
+        String.valueOf(charged.error()).contains("own failure"),
+        "the failure is the handler's own: " + charged.error());
   }
 
   @Test
