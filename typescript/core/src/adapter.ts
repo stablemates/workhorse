@@ -126,9 +126,9 @@ export class QueryError extends WorkhorseError {
 /**
  * Present rows as the node-postgres result shape the {@link Queryable} protocol is written in.
  *
- * Workhorse reads `rows` and occasionally `rowCount`, and nothing else. The remaining fields are
- * stated rather than omitted so an adapter's result is a `QueryResult` in full, instead of a
- * partial object that happens to satisfy the reads made today.
+ * Workhorse reads only `rows`. The remaining fields, `rowCount` included, are stated rather than
+ * omitted so an adapter's result is a `QueryResult` in full, instead of a partial object that
+ * happens to satisfy the reads made today.
  */
 export function rowsToQueryResult<TRow extends QueryResultRow>(
   rows: readonly TRow[],

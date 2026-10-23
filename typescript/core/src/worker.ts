@@ -1,5 +1,6 @@
 import { setTimeout as sleep } from "node:timers/promises";
 import { randomUUID } from "node:crypto";
+import { addAbortListener } from "node:events";
 import { hostname } from "node:os";
 import {
   CancellationRequestedError,
@@ -540,8 +541,14 @@ export interface WorkerOptions {
   scheduleNamespaces?: readonly string[];
   /** Maximum missed occurrences fired for one schedule in one maintenance pass. */
   scheduleCatchupLimit?: number;
-  /** Override SQL-owned retry backoff, either fixed or derived from the attempt and claimed task. */
-  /** Return undefined to defer to the task's persisted policy or SQL compatibility default. */
+  /**
+   * Override SQL-owned retry backoff, either fixed or derived from the attempt and claimed task.
+   *
+   * A callback returns `undefined` or a safe integer from 0 through 2147483647. `undefined` defers
+   * to the task's persisted policy or the SQL compatibility default. Any other result, such as a
+   * fraction, rejects the worker run before the failure write. Round and cap a jittered delay, for
+   * example `(attempt) => Math.min(60_000, Math.round(1_000 * 2 ** attempt * Math.random()))`.
+   */
   retryDelayMs?: number | ((attempt: number, task: ClaimedTask) => number | undefined);
   /** @internal Test-only crash hook. Injected crashes deliberately bypass normal fail/retry handling. */
   failpoint?: Failpoint | ((point: Failpoint, task: ClaimedTask) => boolean | Promise<boolean>);
@@ -572,6 +579,38 @@ function requireSafeInteger(
   if (!Number.isSafeInteger(value) || value < minimum) {
     throw new Error(`${name} must be a safe integer ${range}`);
   }
+}
+
+/**
+ * Aborts when any input aborts, until `dispose()` removes its listeners from the inputs.
+ *
+ * `AbortSignal.any` keeps a record on each input for each composed signal. On Node 22 those records
+ * stay while the input lives, so repeated waits on one long-lived caller signal grow without limit.
+ * `addAbortListener` also sees an abort when another listener stops its propagation.
+ */
+function composeAbortSignals(inputs: readonly AbortSignal[]): {
+  signal: AbortSignal;
+  dispose: () => void;
+} {
+  const controller = new AbortController();
+  const listeners: Disposable[] = [];
+  const dispose = (): void => {
+    for (const listener of listeners.splice(0)) listener[Symbol.dispose]();
+  };
+  for (const input of inputs) {
+    if (input.aborted) {
+      dispose();
+      controller.abort(input.reason);
+      break;
+    }
+    listeners.push(
+      addAbortListener(input, () => {
+        dispose();
+        controller.abort(input.reason);
+      }),
+    );
+  }
+  return { signal: controller.signal, dispose };
 }
 
 /**
@@ -1104,6 +1143,8 @@ export class Worker {
       item: BatchHandlerItem<TPayload>;
       resolve: (result: TResult) => void;
       reject: (error: unknown) => void;
+      // Removes the abort listener that takes the member out of the batch while it waits.
+      detach: () => void;
     };
     type PendingQueue = {
       items: PendingItem[];
@@ -1121,6 +1162,7 @@ export class Worker {
       }
       const batch: PendingItem[] = [];
       for (const member of pending.items.splice(0, maxSize)) {
+        member.detach();
         const insertionIndex = batch.findIndex(
           (candidate) =>
             candidate.priority < member.priority ||
@@ -1237,19 +1279,44 @@ export class Worker {
         });
     };
 
+    // A member whose signal aborts while it waits leaves the batch at once and settles with the
+    // abort reason, so the batch callback never gets a task this worker no longer owns.
+    const remove = (queueName: string, member: PendingItem): void => {
+      const pending = pendingQueues.get(queueName);
+      const index = pending?.items.indexOf(member) ?? -1;
+      if (pending === undefined || index === -1) return;
+      pending.items.splice(index, 1);
+      if (pending.items.length === 0 && pending.lingerTimer !== undefined) {
+        clearTimeout(pending.lingerTimer);
+        pending.lingerTimer = undefined;
+      }
+    };
+
     const adapter: Handler<TPayload, TResult> = (payload, context) =>
       new Promise<TResult>((resolve, reject) => {
+        const { signal } = context;
+        if (signal.aborted) {
+          reject(signal.reason);
+          return;
+        }
         const queueName = context.task.queue;
         const pending = pendingQueues.get(queueName) ?? { items: [], lingerTimer: undefined };
         pendingQueues.set(queueName, pending);
-        pending.items.push({
+        const onAbort = (): void => {
+          remove(queueName, member);
+          reject(signal.reason);
+        };
+        const member: PendingItem = {
           arrivalOrder: nextArrival,
           arrivedAt: performance.now(),
           priority: context.task.priority,
           item: { payload, context },
           resolve,
           reject,
-        });
+          detach: () => signal.removeEventListener("abort", onAbort),
+        };
+        signal.addEventListener("abort", onAbort, { once: true });
+        pending.items.push(member);
         nextArrival += 1;
         if (pending.items.length >= maxSize || lingerMs === 0) {
           dispatch(queueName);
@@ -2080,18 +2147,19 @@ export class Worker {
     let unwindDeadline: number | undefined;
     const startup = new AbortController();
     this.abortRun = () => startup.abort();
-    const stopSignal =
-      signal === undefined ? startup.signal : AbortSignal.any([startup.signal, signal]);
+    const stopSignal = composeAbortSignals(
+      signal === undefined ? [startup.signal] : [startup.signal, signal],
+    );
     // Every statement of this run that can outlive it. The next run waits for all of them.
     const stopWork: Promise<unknown>[] = [];
     let maintenance: Promise<unknown> | undefined;
     let registration: Promise<unknown> | undefined;
     const runFailure = await (async () => {
       if (shouldStop()) return;
-      if (!(await this.settlePreviousRun(stopSignal)) || shouldStop()) return;
+      if (!(await this.settlePreviousRun(stopSignal.signal)) || shouldStop()) return;
       this.instanceId = randomUUID();
       if (channel !== undefined) {
-        const failure = await channel.checkReadiness(this.startupBudgetMs, stopSignal);
+        const failure = await channel.checkReadiness(this.startupBudgetMs, stopSignal.signal);
         if (failure?.step === "stopped" || shouldStop()) return;
         if (failure !== undefined) throw this.readinessRefusal(channel, failure);
       }
@@ -2101,7 +2169,7 @@ export class Worker {
       const firstRegistration = this.refreshRegistration(true);
       this.pendingStartupRegistration = firstRegistration;
       stopWork.push(firstRegistration);
-      await this.untilAborted(firstRegistration, stopSignal);
+      await this.untilAborted(firstRegistration, stopSignal.signal);
       this.abortRun = undefined;
       if (shouldStop()) return;
       reportWorkerStartup(this);
@@ -2158,6 +2226,7 @@ export class Worker {
 
     ended = true;
     this.abortRun = undefined;
+    stopSignal.dispose();
     this.running = false;
     this.draining = this.activeSlots > 0;
     stopWakingOnReady?.();
@@ -2663,8 +2732,12 @@ export class Worker {
   ): Promise<void> {
     const wakeSignal = this.wakeController.signal;
     if (this.wakeVersion !== observedWakeVersion) return;
-    const waitSignal = signal ? AbortSignal.any([wakeSignal, signal]) : wakeSignal;
-    await sleep(durationMs, undefined, { signal: waitSignal }).catch(() => undefined);
+    const wait = composeAbortSignals(signal ? [wakeSignal, signal] : [wakeSignal]);
+    try {
+      await sleep(durationMs, undefined, { signal: wait.signal }).catch(() => undefined);
+    } finally {
+      wait.dispose();
+    }
   }
 
   // `ended` aborts when the caller stops waiting for another reason, so the timer does not stay.
@@ -2676,8 +2749,12 @@ export class Worker {
   ): Promise<void> {
     const wakeSignal = this.dispatchWakeController.signal;
     if (this.dispatchWakeVersion !== (observedWakeVersion ?? this.dispatchWakeVersion)) return;
-    const waitSignal = AbortSignal.any(signal ? [wakeSignal, signal, ended] : [wakeSignal, ended]);
-    await sleep(durationMs, undefined, { signal: waitSignal }).catch(() => undefined);
+    const wait = composeAbortSignals(signal ? [wakeSignal, signal, ended] : [wakeSignal, ended]);
+    try {
+      await sleep(durationMs, undefined, { signal: wait.signal }).catch(() => undefined);
+    } finally {
+      wait.dispose();
+    }
   }
 
   private wakeDispatch(): void {

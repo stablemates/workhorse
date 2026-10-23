@@ -5626,8 +5626,14 @@ interface WorkerOptions {
   scheduleNamespaces?: readonly string[];
   /** Maximum missed occurrences fired for one schedule in one maintenance pass. */
   scheduleCatchupLimit?: number;
-  /** Override SQL-owned retry backoff, either fixed or derived from the attempt and claimed task. */
-  /** Return undefined to defer to the task's persisted policy or SQL compatibility default. */
+  /**
+  * Override SQL-owned retry backoff, either fixed or derived from the attempt and claimed task.
+  *
+  * A callback returns `undefined` or a safe integer from 0 through 2147483647. `undefined` defers
+  * to the task's persisted policy or the SQL compatibility default. Any other result, such as a
+  * fraction, rejects the worker run before the failure write. Round and cap a jittered delay, for
+  * example `(attempt) => Math.min(60_000, Math.round(1_000 * 2 ** attempt * Math.random()))`.
+  */
   retryDelayMs?: number | ((attempt: number, task: ClaimedTask) => number | undefined);
 }
 
