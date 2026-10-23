@@ -4,8 +4,9 @@ Each file here records one governed surface as it stands on this commit. A pull 
 that removes a name, renames one, or narrows a type changes a file here, so the change is visible in
 review and the check names it. [ADR 0054](../docs/decisions/0054-define-what-1-0-0-promises.md)
 [ADR 0079](../docs/decisions/0079-govern-the-rust-api-as-an-eighth-surface.md),
-[ADR 0084](../docs/decisions/0084-govern-the-ruby-api-as-a-ninth-surface.md), and
-[ADR 0103](../docs/decisions/0103-shape-the-jvm-sdk-as-a-java-core-with-kotlin-and-spring-boot-modules.md)
+[ADR 0084](../docs/decisions/0084-govern-the-ruby-api-as-a-ninth-surface.md),
+[ADR 0103](../docs/decisions/0103-shape-the-jvm-sdk-as-a-java-core-with-kotlin-and-spring-boot-modules.md), and
+[ADR 0107](../docs/decisions/0107-shape-the-dotnet-sdk-as-a-csharp-core-with-hosting-ef-core-and-asp-net-core-packages.md)
 define the surfaces, and Gate 1 of
 [ADR 0056](../docs/decisions/0056-set-the-1-0-0-exit-criteria.md) requires the checks.
 
@@ -18,6 +19,7 @@ define the surfaces, and Gate 1 of
 | `ruby.txt`       | Every public constant under `Stablemates::Workhorse` and the Active Job adapter, less `:nodoc:`             | `pnpm ruby-api:check`          | `pnpm ruby-api:generate`          |
 | `java.txt`       | Every public and protected Java declaration of `workhorse` and the starter, and each `workhorse.*` property | `pnpm java-api:check`          | `pnpm java-api:generate`          |
 | `kotlin.txt`     | Every public Kotlin declaration of `workhorse-kotlin`, with its default arguments                           | `pnpm kotlin-api:check`        | `pnpm kotlin-api:generate`        |
+| `dotnet.txt`     | Every public and protected C# type and member of the four .NET packages, and each `Workhorse:*` key         | `pnpm dotnet-api:check`        | `pnpm dotnet-api:generate`        |
 | `cli.txt`        | The `workhorse` commands, flags, exit codes, and `--json` payloads                                          | `pnpm cli-surface:check`       | `pnpm cli-surface:generate`       |
 | `telemetry.txt`  | Every instrument, span, and attribute name Workhorse emits                                                  | `pnpm telemetry-surface:check` | `pnpm telemetry-surface:generate` |
 
@@ -28,6 +30,11 @@ These are generated artifacts. Do not edit one by hand: run its generator and co
 The check prints the lines that went and the lines that arrived. A line that went is the interesting
 half, because a removal, a rename, and a narrowing all read as a line disappearing. A line that only
 arrived is an addition, which is not breaking, and running the generator is the whole fix.
+
+Two checks label some lines in their own way. `java.txt` lists a record that only gained last
+components as additive, not as gone. `dotnet.txt` lists some arrived lines as breaking under ADR
+0107, and "How the C# file reads the assemblies" names them. Regenerating the file does not make
+such a change safe.
 
 ## Why the Go file has a different shape
 
@@ -122,6 +129,61 @@ An `internal` declaration marked `@PublishedApi` is present, because a public in
 compiles a call to it into the caller. A type name that the file imports or that the package
 declares is fully qualified. The reader refuses a star import, because it could not then qualify
 the names.
+
+## How the C# file reads the assemblies
+
+`dotnet.txt` reads the built assemblies of `Workhorse`, `Workhorse.Hosting`,
+`Workhorse.EntityFrameworkCore`, and `Workhorse.AspNetCore`, one section for each package. The
+reader is `dotnet/tools/Workhorse.ApiSnapshot`, a console project that never ships. It reads the
+metadata with `System.Reflection.Metadata` and loads no assembly. The script passes each project
+directory under `dotnet/src` as a package. A package that the tool does not reference stops the
+reader, so a new package cannot leave its section out.
+
+Each type has a header line, then one line for each public and protected member. A member line
+starts with the name of the type that declares it. An `implements` line names one interface of the
+type, so a new interface is one arrived line. Types are fully qualified, except the C# keyword
+types such as `string` and `int`. The reader stops if a public type is outside the namespace of
+its package, because ADR 0107 puts each type there.
+
+Each line keeps what a C# caller compiles against:
+
+- `?` on a nullable type. The reader decodes the compiler's nullable metadata, so the line shows the
+  annotation that the source writes. An unconstrained type parameter such as `TPayload` has no
+  `?`.
+- `required`, `init`, `static`, `abstract`, `virtual`, `override`, `sealed`, `params`, `this` on an
+  extension method, `ref`, `ref readonly`, `out`, and `in`.
+- The attributes that change what a caller compiles: the nullable analysis attributes, such as
+  `[NotNullWhen(true)]` and `[return: MaybeNull]`, and `[SetsRequiredMembers]`.
+- The attributes of a property's `get` and `set`, such as `[return: NotNull] get;`.
+- Tuple element names, such as `(int count, string? name)`, because a caller reads an element by
+  its name.
+- The access of a nested type, and the value of a `const decimal`, which C# writes as an attribute.
+- `record struct` for a record struct. Its constructor and its `Deconstruct` have lines.
+- Parameter names, because a caller can pass an argument by name.
+- Default values, generic constraints, and variance. An enum member shows its number, because a
+  compiled caller holds the number.
+
+A record header implies the members that the compiler writes for every record: the equality
+members, `ToString`, and the clone method behind `with`. So these members have no lines. A
+constructor always has a line. The copy constructor of a record that is not sealed is protected,
+and a caller can derive from the record through it. A `Deconstruct` method has a line, because only
+a positional record has one, and ADR 0107 does not allow positional records.
+
+A change can break callers without a gone line. The check names two such cases under their own
+heading. One is a new `required` property or field of an existing type. The other is a new abstract member
+of a type that callers implement: an interface, or an abstract class with a public or protected
+constructor. Each is an arrived line, and the check reports it as breaking.
+
+The last section lists each `Workhorse:*` configuration key with its type and default. The reader
+takes them from `ConfigurationKeys.json`, which `Workhorse.Hosting` embeds in its assembly. The
+tests in `Workhorse.Tests/Hosting/ConfigurationTests.cs` hold each key and each default in that file
+to the options that the key binds. So a renamed option fails those tests, and the file cannot keep
+a key that the code no longer reads.
+
+Package validation is a second check of the same surface. `EnablePackageValidation` is on in every
+package, and `dotnet pack` runs it. After the first publish, the release stage compares each package
+with the previous published version. That check downloads the baseline, so it does not run in
+`pnpm check`. The committed snapshot stays the check of Gate 1.
 
 ## Where the last two read from
 

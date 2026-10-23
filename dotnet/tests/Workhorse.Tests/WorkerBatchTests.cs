@@ -8,6 +8,8 @@ namespace Workhorse.Tests;
 public sealed class WorkerBatchTests(ScratchDatabase database)
 {
     private static readonly TimeSpan LongLinger = TimeSpan.FromSeconds(60);
+
+    private static BatchOptions Bounds(int maxSize, TimeSpan linger) => new() { MaxSize = maxSize, Linger = linger };
     private static readonly string[] Ready = ["ready"];
     private static readonly string[] ReadyOrRunning = ["ready", "running"];
 
@@ -39,7 +41,7 @@ public sealed class WorkerBatchTests(ScratchDatabase database)
         var queue = UniqueQueue("batch-order");
         await using var worker = new Worker(database.DataSource, Options(queue, options => options.Concurrency = 3));
         var calls = new ConcurrentQueue<int[]>();
-        worker.HandleBatch<Order>("charge", new BatchOptions(3, LongLinger), (items, _) =>
+        worker.HandleBatch<Order>("charge", Bounds(3, LongLinger), (items, _) =>
         {
             calls.Enqueue([.. items.Select(item => item.Payload.OrderId)]);
             return Task.FromResult<IReadOnlyList<BatchHandlerOutcome>>(
@@ -79,7 +81,7 @@ public sealed class WorkerBatchTests(ScratchDatabase database)
     {
         var queue = UniqueQueue("batch-throw");
         await using var worker = new Worker(database.DataSource, Options(queue, options => options.Concurrency = 2));
-        worker.HandleBatch<Order>("charge", new BatchOptions(2, LongLinger), (_, _) => throw new DeclinedException("the gateway is down"));
+        worker.HandleBatch<Order>("charge", Bounds(2, LongLinger), (_, _) => throw new DeclinedException("the gateway is down"));
         var first = await EnqueueAsync(database.DataSource, queue, "charge", new { orderId = 1 }, new { maxAttempts = 1 });
         var second = await EnqueueAsync(database.DataSource, queue, "charge", new { orderId = 2 }, new { maxAttempts = 1 });
 
@@ -104,7 +106,7 @@ public sealed class WorkerBatchTests(ScratchDatabase database)
     {
         var queue = UniqueQueue("batch-count");
         await using var worker = new Worker(database.DataSource, Options(queue, options => options.Concurrency = 2));
-        worker.HandleBatch<Order>("charge", new BatchOptions(2, LongLinger), (_, _) =>
+        worker.HandleBatch<Order>("charge", Bounds(2, LongLinger), (_, _) =>
             Task.FromResult<IReadOnlyList<BatchHandlerOutcome>>([new BatchSucceeded(null)]));
         var first = await EnqueueAsync(database.DataSource, queue, "charge", new { orderId = 1 }, new { maxAttempts = 1 });
         var second = await EnqueueAsync(database.DataSource, queue, "charge", new { orderId = 2 }, new { maxAttempts = 1 });
@@ -127,7 +129,7 @@ public sealed class WorkerBatchTests(ScratchDatabase database)
         var queue = UniqueQueue("batch-type");
         await using var worker = new Worker(database.DataSource, Options(queue));
         var seen = new ConcurrentQueue<List<Order>>();
-        worker.HandleBatch(new LineBatch(seen), new BatchOptions(1, TimeSpan.Zero));
+        worker.HandleBatch(new LineBatch(seen), Bounds(1, TimeSpan.Zero));
         var id = await EnqueueAsync(database.DataSource, queue, "lines", new[] { new { orderId = 2 }, new { orderId = 3 } });
 
         await using var running = new RunningWorker(worker);
@@ -144,7 +146,7 @@ public sealed class WorkerBatchTests(ScratchDatabase database)
         var queue = UniqueQueue("batch-linger");
         await using var worker = new Worker(database.DataSource, Options(queue, options => options.Concurrency = 4));
         var sizes = new ConcurrentQueue<int>();
-        worker.HandleBatch<Order>("charge", new BatchOptions(4, TimeSpan.FromMilliseconds(100)), (items, _) =>
+        worker.HandleBatch<Order>("charge", Bounds(4, TimeSpan.FromMilliseconds(100)), (items, _) =>
         {
             sizes.Enqueue(items.Count);
             return Task.FromResult<IReadOnlyList<BatchHandlerOutcome>>([.. items.Select(_ => new BatchSucceeded(null))]);
@@ -164,7 +166,7 @@ public sealed class WorkerBatchTests(ScratchDatabase database)
         var queue = UniqueQueue("batch-drain");
         await using var worker = new Worker(database.DataSource, Options(queue, options => options.Concurrency = 4));
         var sizes = new ConcurrentQueue<int>();
-        worker.HandleBatch<Order>("charge", new BatchOptions(4, LongLinger), (items, _) =>
+        worker.HandleBatch<Order>("charge", Bounds(4, LongLinger), (items, _) =>
         {
             sizes.Enqueue(items.Count);
             return Task.FromResult<IReadOnlyList<BatchHandlerOutcome>>([.. items.Select(_ => new BatchSucceeded(null))]);
@@ -193,7 +195,7 @@ public sealed class WorkerBatchTests(ScratchDatabase database)
         }));
         var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var reasons = new ConcurrentQueue<CancelReason?>();
-        worker.HandleBatch<Order>("charge", new BatchOptions(2, LongLinger), async (items, cancellationToken) =>
+        worker.HandleBatch<Order>("charge", Bounds(2, LongLinger), async (items, cancellationToken) =>
         {
             started.TrySetResult();
             try
@@ -246,7 +248,7 @@ public sealed class WorkerBatchTests(ScratchDatabase database)
         await using var worker = new Worker(database.DataSource, Options(queue, options => options.Concurrency = 3));
         var statements = new ConcurrentQueue<Worker.FusedStatement>();
         worker.FusedStatementHook = statements.Enqueue;
-        worker.HandleBatch<Order>("charge", new BatchOptions(3, LongLinger), (items, _) =>
+        worker.HandleBatch<Order>("charge", Bounds(3, LongLinger), (items, _) =>
             Task.FromResult<IReadOnlyList<BatchHandlerOutcome>>([.. items.Select(item => new BatchSucceeded(new Total(item.Payload.OrderId)))]));
         var ids = new List<Guid>();
         for (var order = 1; order <= 3; order++)
@@ -272,7 +274,7 @@ public sealed class WorkerBatchTests(ScratchDatabase database)
         await using var worker = new Worker(database.DataSource, Options(queue, options => options.Concurrency = 2));
         var operations = new ConcurrentQueue<int>();
         var replays = new ConcurrentQueue<string>();
-        worker.HandleBatch<Order>("charge", new BatchOptions(2, TimeSpan.FromMilliseconds(200)), async (items, _) =>
+        worker.HandleBatch<Order>("charge", Bounds(2, TimeSpan.FromMilliseconds(200)), async (items, _) =>
         {
             var outcomes = new List<BatchHandlerOutcome>();
             foreach (var item in items)
@@ -323,7 +325,7 @@ public sealed class WorkerBatchTests(ScratchDatabase database)
         await WorkerFastTierTests.FastTierAsync(database.DataSource, queue);
         await using var worker = new Worker(database.DataSource, Options(queue));
         var features = new ConcurrentQueue<string>();
-        worker.HandleBatch<Order>("charge", new BatchOptions(1, TimeSpan.Zero), async (items, _) =>
+        worker.HandleBatch<Order>("charge", Bounds(1, TimeSpan.Zero), async (items, _) =>
         {
             var context = items[0].Context;
             Func<Task>[] calls = [() => context.CheckpointAsync("charged", _ => Task.FromResult(1)), () => context.SetProgressAsync(1)];
@@ -362,15 +364,15 @@ public sealed class WorkerBatchTests(ScratchDatabase database)
         static Task<IReadOnlyList<BatchHandlerOutcome>> None(IReadOnlyList<BatchHandlerItem<Order>> items, CancellationToken token) =>
             Task.FromResult<IReadOnlyList<BatchHandlerOutcome>>([]);
 
-        Assert.Throws<ArgumentOutOfRangeException>(() => worker.HandleBatch<Order>("charge", new BatchOptions(3, TimeSpan.Zero), None));
-        Assert.Throws<ArgumentOutOfRangeException>(() => new BatchOptions(0, TimeSpan.Zero));
-        Assert.Throws<ArgumentOutOfRangeException>(() => new BatchOptions(101, TimeSpan.Zero));
-        Assert.Throws<ArgumentException>(() => new BatchOptions(1, TimeSpan.FromSeconds(61)));
-        Assert.Throws<ArgumentException>(() => new BatchOptions(1, TimeSpan.FromTicks(1)));
+        Assert.Throws<ArgumentOutOfRangeException>(() => worker.HandleBatch<Order>("charge", Bounds(3, TimeSpan.Zero), None));
+        Assert.Equal("maxSize", Assert.Throws<ArgumentOutOfRangeException>(() => worker.HandleBatch<Order>("charge", Bounds(0, TimeSpan.Zero), None)).ParamName);
+        Assert.Equal("maxSize", Assert.Throws<ArgumentOutOfRangeException>(() => worker.HandleBatch<Order>("charge", Bounds(101, TimeSpan.Zero), None)).ParamName);
+        Assert.Throws<ArgumentException>(() => worker.HandleBatch<Order>("charge", Bounds(1, TimeSpan.FromSeconds(61)), None));
+        Assert.Equal("linger", Assert.Throws<ArgumentException>(() => worker.HandleBatch<Order>("charge", Bounds(1, TimeSpan.FromTicks(1)), None)).ParamName);
         Assert.Throws<ArgumentNullException>(() => new BatchFailed(null!));
 
-        worker.HandleBatch<Order>("charge", new BatchOptions(2, TimeSpan.Zero), None);
+        worker.HandleBatch<Order>("charge", Bounds(2, TimeSpan.Zero), None);
         Assert.False(await worker.RunOnceAsync(TestContext.Current.CancellationToken));
-        Assert.Throws<InvalidOperationException>(() => worker.HandleBatch<Order>("charge", new BatchOptions(2, TimeSpan.Zero), None));
+        Assert.Throws<InvalidOperationException>(() => worker.HandleBatch<Order>("charge", Bounds(2, TimeSpan.Zero), None));
     }
 }

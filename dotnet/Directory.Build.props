@@ -15,6 +15,13 @@
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
     <Deterministic>true</Deterministic>
+    <!--
+      `dotnet pack` checks each package with package validation (ADR 0107, "Governed surface and
+      release"). Before the first publish it checks the package against its own target framework.
+      The release stage then sets PackageValidationBaselineVersion. The check does not run in
+      `pnpm check`, because it downloads the baseline. A project with IsPackable false is not packed.
+    -->
+    <EnablePackageValidation>true</EnablePackageValidation>
   </PropertyGroup>
   <!--
     Every restore audits the direct and the transitive packages against the GitHub advisories that

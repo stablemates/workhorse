@@ -6,12 +6,21 @@ namespace Workhorse.AspNetCore;
 /// </summary>
 public sealed class DashboardRpcException : Exception
 {
+    /// <summary>A refusal with no <c>data</c> in the envelope.</summary>
+    /// <param name="status">The HTTP status, such as 409.</param>
+    /// <param name="code">The RPC code, such as <c>CONFLICT</c>.</param>
+    /// <param name="message">The message for the operator.</param>
+    public DashboardRpcException(int status, string code, string message)
+        : this(status, code, message, null)
+    {
+    }
+
     /// <summary>A refusal.</summary>
     /// <param name="status">The HTTP status, such as 409.</param>
     /// <param name="code">The RPC code, such as <c>CONFLICT</c>.</param>
     /// <param name="message">The message for the operator.</param>
-    /// <param name="data">A value for the envelope's <c>data</c>, or <c>null</c> for none.</param>
-    public DashboardRpcException(int status, string code, string message, object? data = null)
+    /// <param name="details">A value for the envelope's <c>data</c>, or <c>null</c> for none.</param>
+    public DashboardRpcException(int status, string code, string message, object? details)
         : base(message)
     {
         ArgumentOutOfRangeException.ThrowIfLessThan(status, 400);
@@ -19,7 +28,7 @@ public sealed class DashboardRpcException : Exception
         ArgumentException.ThrowIfNullOrWhiteSpace(code);
         Status = status;
         Code = code;
-        Details = data;
+        Details = details;
     }
 
     /// <summary>A refusal with no status, which the analyzers require. It answers 500.</summary>

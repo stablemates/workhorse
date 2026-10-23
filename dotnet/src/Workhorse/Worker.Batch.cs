@@ -17,7 +17,8 @@ public sealed partial class Worker
     /// </summary>
     /// <typeparam name="TPayload">The payload type, with its type arguments. The worker decodes each
     /// payload as this type, so a batch handler of <c>List&lt;Order&gt;</c> receives orders.</typeparam>
-    /// <exception cref="ArgumentOutOfRangeException"><see cref="BatchOptions.MaxSize"/> exceeds <see cref="Concurrency"/>.</exception>
+    /// <exception cref="ArgumentOutOfRangeException"><see cref="BatchOptions.MaxSize"/> is not from 1 to 100, or exceeds <see cref="Concurrency"/>.</exception>
+    /// <exception cref="ArgumentException"><see cref="BatchOptions.Linger"/> is not a whole number of milliseconds from 0 to 60 s.</exception>
     /// <exception cref="InvalidOperationException">The worker has already run.</exception>
     public void HandleBatch<TPayload>(
         string taskType,
@@ -26,6 +27,7 @@ public sealed partial class Worker
     {
         ArgumentNullException.ThrowIfNull(options);
         ArgumentNullException.ThrowIfNull(handler);
+        options.Validate();
         if (options.MaxSize > Concurrency)
         {
             throw new ArgumentOutOfRangeException(nameof(options), "MaxSize must not exceed the worker's concurrency");
@@ -41,7 +43,8 @@ public sealed partial class Worker
     }
 
     /// <summary>Registers <paramref name="handler"/> for its <see cref="IBatchHandler{TPayload}.TaskType"/>.</summary>
-    /// <exception cref="ArgumentOutOfRangeException"><see cref="BatchOptions.MaxSize"/> exceeds <see cref="Concurrency"/>.</exception>
+    /// <exception cref="ArgumentOutOfRangeException"><see cref="BatchOptions.MaxSize"/> is not from 1 to 100, or exceeds <see cref="Concurrency"/>.</exception>
+    /// <exception cref="ArgumentException"><see cref="BatchOptions.Linger"/> is not a whole number of milliseconds from 0 to 60 s.</exception>
     /// <exception cref="InvalidOperationException">The worker has already run.</exception>
     public void HandleBatch<TPayload>(IBatchHandler<TPayload> handler, BatchOptions options)
     {

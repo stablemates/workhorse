@@ -136,7 +136,8 @@ jobs:
           distribution: temurin
           java-version: 25.0.4 # Pinned to the java version in mise.toml.
       # `pnpm lint` runs `dotnet format` over the .NET solution and builds it with the analyzers as
-      # errors, on the SDK that mise.toml pins. The SDK goes into its own directory, so the muxer
+      # errors, and `dotnet-api:check` builds the packages to read their API, on the SDK that
+      # mise.toml pins. The SDK goes into its own directory, so the muxer
       # finds no other SDK of the runner image.
       - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
         env:
@@ -159,6 +160,7 @@ jobs:
       - run: pnpm ruby-api:check
       - run: pnpm java-api:check
       - run: pnpm kotlin-api:check
+      - run: pnpm dotnet-api:check
       - run: pnpm cli-surface:check
       - run: pnpm telemetry-surface:check
       - run: pnpm format:check

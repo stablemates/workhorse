@@ -36,6 +36,15 @@ export interface SnapshotContract {
     readonly label: string;
     readonly test: (line: string, before: readonly string[], after: readonly string[]) => boolean;
   };
+  /**
+   * An arrived line that the surface's own rule treats as breaking, for example a new `required`
+   * property of an existing C# type. The failure lists such a line under its own heading, not as
+   * arrived.
+   */
+  readonly breakingArrival?: {
+    readonly label: string;
+    readonly test: (line: string, before: readonly string[]) => boolean;
+  };
 }
 
 /** Lines present in `before` but not in `after`, counting repeats. */
@@ -76,15 +85,21 @@ export function snapshotDrift(
   const additive = contract.additive;
   const grown = additive ? missed.filter((line) => additive.test(line, before, after)) : [];
   const gone = missed.filter((line) => !grown.includes(line));
-  const arrived = missing(after, before);
+  const added = missing(after, before);
+  const breakingArrival = contract.breakingArrival;
+  const breaking = breakingArrival
+    ? added.filter((line) => breakingArrival.test(line, before))
+    : [];
+  const arrived = added.filter((line) => !breaking.includes(line));
   // Both empty means the same lines came back in a different order or spacing. A generator that
   // lets that happen is the defect, so say which one rather than reporting a difference with
   // nothing in it.
   const difference =
-    missed.length === 0 && arrived.length === 0
+    missed.length === 0 && added.length === 0
       ? "\nEvery line is still present, so only their order or spacing moved; that generator owes a stable ordering."
       : report(contract.goneLabel, gone) +
         report(additive?.label ?? "", grown) +
+        report(breakingArrival?.label ?? "", breaking) +
         report(contract.arrivedLabel, arrived);
   return (
     `${contract.path} no longer describes this surface; run ${contract.generateCommand}.` +

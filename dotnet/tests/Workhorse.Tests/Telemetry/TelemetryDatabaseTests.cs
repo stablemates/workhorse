@@ -216,7 +216,7 @@ public sealed class TelemetryDatabaseTests(ScratchDatabase database) : IDisposab
         }
 
         await using var worker = new Worker(database.DataSource, Options(_queue, options => options.Concurrency = 2));
-        worker.HandleBatch<object?>("charge", new BatchOptions(2, TimeSpan.FromSeconds(30)), (items, _) =>
+        worker.HandleBatch<object?>("charge", new BatchOptions { MaxSize = 2, Linger = TimeSpan.FromSeconds(30) }, (items, _) =>
             Task.FromResult<IReadOnlyList<BatchHandlerOutcome>>([.. items.Select(_ => new BatchSucceeded(null))]));
         await using (var running = new RunningWorker(worker))
         {
