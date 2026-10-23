@@ -45,3 +45,20 @@ are not implied by it.
 - Direct PostgreSQL access remains outside dashboard authorization. Deployment guidance must still
   apply least-privilege database roles and network controls.
 - A development bypass remains explicit and is valid only on loopback or a Unix socket.
+
+## Amendment: the database role guidance exists (2026-10-23)
+
+The consequences above promise least-privilege database roles, but no guidance existed. SM-1667
+records this amendment. The decision text does not change.
+
+1. [Operations: Database roles](../architecture/operations.md#database-roles) gives the SQL for
+   four roles: the installation role, the read-only dashboard, the writable dashboard, and the
+   worker. `typescript/dashboard-server/test/database-roles-integration.test.ts` runs that SQL on a
+   scratch database.
+2. Each Workhorse function is `SECURITY INVOKER`, and the dashboard read functions read base
+   tables. Thus the read-only role needs `SELECT` on each table in the `workhorse` schema. It can
+   read each stored value, so its grants are not a redaction boundary.
+3. A worker runs maintenance, which creates and drops history partitions. Thus the worker role is a
+   member of the installation role, and its sessions act as that role.
+4. The schema still installs no grant. SM-1710 tracks a read role that can read only the governed
+   `dashboard_*_v1` views. It needs a maintainer decision.

@@ -2,7 +2,7 @@
 
 This page is part of the [Workhorse architecture reference](../architecture.md). It owns
 deployment synchronization, the worker process lifecycle, the command-line entry points, the
-administrative CLI and TUI, and operational limits.
+administrative CLI and TUI, the database roles, and operational limits.
 
 ## Deployment synchronization
 
@@ -714,6 +714,112 @@ Frame rendering (`renderTuiFrame`) and key handling (`handleTuiKey`) in
 without a terminal.
 
 If stdin or stdout is not interactive, the TUI refuses to start and exits 1.
+
+## Database roles
+
+Workhorse creates no database role and installs no `GRANT` or `REVOKE`. The operator creates the
+roles and gives the privileges. This section gives the smallest grant set for four roles: the
+installation role, the read-only dashboard, the writable dashboard, and the worker.
+`typescript/dashboard-server/test/database-roles-integration.test.ts` runs the SQL blocks of this section, as
+written, on a scratch database.
+
+### Limits of the read-only role
+
+Read these limits before you give the read-only role to a person or a service.
+
+- The read-only role reads every table in the `workhorse` schema. Each Workhorse function is
+  `SECURITY INVOKER`, so it runs with the privileges of the role that calls it. The dashboard read
+  functions read base tables, such as `workhorse.task`, not only the `dashboard_*_v1` views. Thus
+  the role needs `SELECT` on each table.
+- These grants are not a redaction boundary. A person with the read-only credentials and a SQL
+  client can read each payload, result, checkpoint value, progress value, and human-wait context as
+  stored. The payload and result redaction keys change only what the dashboard shows. [Dashboard: Redaction
+  scope](dashboard.md#redaction-scope) states what the dashboard redacts.
+- The schema gives no function privilege, so PostgreSQL gives `EXECUTE` on each function to
+  `PUBLIC`. The read-only role can call each action function. A call that writes a table fails with
+  SQLSTATE `42501` (`insufficient_privilege`), because the role has no write privilege.
+- The read-only dashboard mode is an application check. The grants add a second check in
+  PostgreSQL, which applies also when the dashboard is writable or misconfigured.
+- SM-1710 tracks a read role that can read only the governed `dashboard_*_v1` views. It needs a
+  maintainer decision.
+
+### Create the roles
+
+A database administrator with the `CREATEROLE` attribute runs this block. Replace `app` with the
+name of the database. Then set a password for each role with `ALTER ROLE … PASSWORD` or `\password`.
+
+```sql
+CREATE ROLE workhorse_owner LOGIN;
+CREATE ROLE workhorse_dashboard_read LOGIN;
+CREATE ROLE workhorse_dashboard_write LOGIN;
+CREATE ROLE workhorse_worker LOGIN;
+GRANT CONNECT, CREATE ON DATABASE app TO workhorse_owner;
+GRANT CONNECT ON DATABASE app
+  TO workhorse_dashboard_read, workhorse_dashboard_write, workhorse_worker;
+GRANT workhorse_owner TO workhorse_worker;
+ALTER ROLE workhorse_worker SET role = workhorse_owner;
+```
+
+### Installation role
+
+`workhorse_owner` runs `workhorse schema install` and each `workhorse schema migrate`. The `CREATE`
+privilege on the database lets it create the `workhorse` schema. It then owns each table, view,
+sequence, and function in that schema. Only the owner can give privileges on these objects, so
+`workhorse_owner` runs the `GRANT` blocks below.
+
+### Read-only dashboard role
+
+`workhorse_owner` runs this block after the installation and after each migration:
+
+```sql
+GRANT USAGE ON SCHEMA workhorse TO workhorse_dashboard_read;
+GRANT SELECT ON ALL TABLES IN SCHEMA workhorse TO workhorse_dashboard_read;
+```
+
+With these grants, each dashboard read and the schema compatibility check succeed. Each action
+fails with SQLSTATE `42501`, and a direct `INSERT`, `UPDATE`, or `DELETE` fails the same way.
+
+### Writable dashboard role
+
+`workhorse_owner` runs this block after the installation and after each migration:
+
+```sql
+GRANT USAGE ON SCHEMA workhorse TO workhorse_dashboard_write;
+GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA workhorse
+  TO workhorse_dashboard_write;
+GRANT USAGE, SELECT, UPDATE ON ALL SEQUENCES IN SCHEMA workhorse TO workhorse_dashboard_write;
+```
+
+With these grants, each dashboard read succeeds, and the dashboard actions succeed. The role can
+also enqueue tasks, so an application that only enqueues can use the same grants. The role cannot
+run maintenance, as the next section explains.
+
+### Worker role
+
+`workhorse_worker` is a member of `workhorse_owner`, and each of its sessions starts with
+`SET ROLE workhorse_owner`. Thus a worker has the privileges of the owner, and each object that it
+creates belongs to the owner. A worker needs this because each `Worker` runs maintenance, and no
+worker option turns maintenance off.
+
+- `prepare_history_partitions_v1` calls `create_history_day_v1`, which creates the daily partitions
+  of `workhorse.task_event` and `workhorse.attempt_history`. `retain_history_v1` calls
+  `retire_history_partitions_v1`, which drops old partitions. Only the owner of a table can create
+  or drop its partitions.
+- The installation creates the partitions of the first days. Thus on the day of the installation,
+  maintenance succeeds also with the writable grants. On a later day, partition preparation records
+  SQLSTATE `42501` in the `error` column of its result.
+- If a worker partition belongs to `workhorse_worker`, not to the owner, the next `GRANT … ON ALL
+  TABLES` of the owner fails with SQLSTATE `42501`. The `SET role` setting prevents this. Do not
+  remove it.
+- The writable grants let a process enqueue, claim, and complete tasks. No supported worker
+  configuration runs without maintenance, so this section does not give a narrower worker role.
+
+### Grants after a migration
+
+`GRANT … ON ALL TABLES IN SCHEMA` and `GRANT … ON ALL SEQUENCES IN SCHEMA` apply only to the objects
+that exist when the statement runs. A migration can add a table. Thus run the read-only and writable
+blocks again after each migration. A history partition that maintenance creates needs no grant,
+because PostgreSQL checks the privileges of the partitioned table when a query names it.
 
 ## Operational limits
 
