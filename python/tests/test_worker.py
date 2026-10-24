@@ -35,6 +35,7 @@ from workhorse import (
 )
 from workhorse._statements import PROTOCOL_VERSION
 from workhorse._drivers import SyncExecutor
+from workhorse._notifications import SharedTaskNotificationListener
 from workhorse._version import WORKHORSE_VERSION
 
 
@@ -1220,22 +1221,46 @@ def test_run_wakes_from_a_dedicated_notification_connection(database_url: str) -
         assert worker_errors == []
 
 
-def test_run_keeps_polling_when_notification_connections_fail(database_url: str) -> None:
+def test_run_keeps_polling_when_notification_connections_fail(
+    database_url: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
     handled = Event()
     notification_error = Event()
+    empty_claim = Event()
     worker_errors: list[BaseException] = []
 
     def unavailable_listener() -> object:
         raise RuntimeError("listener capacity unavailable")
 
-    with (
-        psycopg.connect(database_url) as enqueue_connection,
-        psycopg.connect(database_url, autocommit=True) as worker_connection,
-    ):
+    class SilentListener(SharedTaskNotificationListener):
+        """A listener that never wakes a worker, so a reconnect wake cannot find the task."""
+
+        def _wake_all(self) -> None:
+            pass
+
+    # Every worker on a pool shares one listener (ADR 0071). This pool gets one that cannot connect.
+    monkeypatch.setattr(
+        worker_module,
+        "_SharedTaskNotificationListener",
+        lambda _connection_factory: SilentListener(unavailable_listener),
+    )
+
+    with psycopg.connect(database_url) as enqueue_connection:
         worker = Worker(
             worker_pool,
             on_notification_error=lambda _error: notification_error.set(),
         ).handle("notification.fallback", lambda _payload, _context: handled.set())
+
+        # The worker chooses its next poll after each empty claim. The test enqueues only after
+        # one empty claim, so only the poll timer can start the claim that finds the task.
+        choose_wait = worker._dispatch_wait_seconds
+
+        def observe_wait(slots: Any) -> float:
+            if slots.consecutive_empty_claims > 0:
+                empty_claim.set()
+            return choose_wait(slots)
+
+        monkeypatch.setattr(worker, "_dispatch_wait_seconds", observe_wait)
 
         def run_worker() -> None:
             try:
@@ -1245,44 +1270,74 @@ def test_run_keeps_polling_when_notification_connections_fail(database_url: str)
 
         thread = Thread(target=run_worker)
         thread.start()
-        Queue(enqueue_connection).enqueue("notification.fallback", {})
-        enqueue_connection.commit()
+        try:
+            assert notification_error.wait(timeout=30)
+            assert empty_claim.wait(timeout=30)
+            Queue(enqueue_connection).enqueue("notification.fallback", {})
+            enqueue_connection.commit()
 
-        assert handled.wait(timeout=1)
-        worker.stop()
-        thread.join(timeout=5)
+            assert handled.wait(timeout=30)
+        finally:
+            worker.stop()
+            thread.join(timeout=30)
         assert not thread.is_alive()
         assert worker_errors == []
 
 
 def test_worker_renews_ownership_while_handler_runs(database_url: str) -> None:
+    lease_expiries: list[tuple[datetime, datetime]] = []
+
     with (
         psycopg.connect(database_url) as enqueue_connection,
         psycopg.connect(database_url, autocommit=True) as worker_connection,
+        psycopg.connect(database_url, autocommit=True) as observer_connection,
     ):
         task_id = Queue(enqueue_connection).enqueue("lease.renewed", {})
         enqueue_connection.commit()
 
-        # The handler outlives the original lease, so only renewal keeps the completion
-        # accepted. The lease is ten heartbeats long, so it lapses only if no round succeeds for
-        # about 1.8 s. A 200 ms interval gives each round a 150 ms bound. The 1 000 ms / 100 ms
-        # pairing can lose its lease under host load.
-        def outlive_original_lease(_payload: object, _context: object) -> dict[str, bool]:
-            sleep(2.5)
+        def lease_expiry() -> datetime:
+            row = observer_connection.execute(
+                "SELECT expires_at FROM workhorse.task_runtime WHERE task_id = %s "
+                "UNION ALL "
+                "SELECT expires_at FROM workhorse.fast_task_runtime WHERE task_id = %s",
+                (task_id, task_id),
+            ).fetchone()
+            assert row is not None
+            return row[0]
+
+        # The handler returns only after the database clock passes the lease expiry that it saw at
+        # start. So only a renewal keeps the completion accepted. The handler waits for that time,
+        # not for a fixed sleep. The lease is ten heartbeats long, so it lapses only if no round
+        # succeeds for 5 s. A 500 ms interval gives each round a 375 ms bound.
+        def outlive_first_lease(_payload: object, _context: object) -> dict[str, bool]:
+            first_expiry = lease_expiry()
+            eventually(
+                lambda: (
+                    observer_connection.execute(
+                        "SELECT clock_timestamp() > %s", (first_expiry,)
+                    ).fetchone()
+                    == (True,)
+                ),
+                "the database clock never passed the first lease expiry",
+                timeout_s=30,
+            )
+            lease_expiries.append((first_expiry, lease_expiry()))
             return {"renewed": True}
 
         worker = Worker(
             worker_pool,
             worker_id="python-heartbeat-worker",
-            lease_ms=2_000,
-            heartbeat_ms=200,
-        ).handle("lease.renewed", outlive_original_lease)
+            lease_ms=5_000,
+            heartbeat_ms=500,
+        ).handle("lease.renewed", outlive_first_lease)
 
         assert worker.run_once() is True
         outcome = worker_connection.execute(
             "SELECT state, result FROM workhorse.task_outcome WHERE task_id = %s", (task_id,)
         ).fetchone()
         assert outcome == ("succeeded", {"renewed": True})
+        [(first_expiry, renewed_expiry)] = lease_expiries
+        assert renewed_expiry > first_expiry
 
 
 def test_worker_delivers_and_acknowledges_cancellation(database_url: str) -> None:
@@ -1633,7 +1688,9 @@ def test_handler_failure_retries_on_the_database_schedule(database_url: str) -> 
             {},
             EnqueueOptions(
                 max_attempts=2,
-                retry_policy={"type": "fixed", "delayMs": 500},
+                # The second run_once() must find no due task. A host stall shorter than this
+                # delay cannot make the retry due before that claim.
+                retry_policy={"type": "fixed", "delayMs": 5_000},
             ),
         )
         enqueue_connection.commit()
@@ -1647,22 +1704,27 @@ def test_handler_failure_retries_on_the_database_schedule(database_url: str) -> 
 
         worker = Worker(worker_pool, worker_id="python-retry-worker").handle("email.retry", handle)
 
+        def database_time() -> datetime:
+            row = worker_connection.execute("SELECT clock_timestamp()").fetchone()
+            assert row is not None
+            return row[0]
+
+        # The failure falls between these two database times, so the schedule must too. A late
+        # read cannot change this check.
+        before_failure = database_time()
         assert worker.run_once() is True
+        after_failure = database_time()
         assert worker.run_once() is False
 
         scheduled = worker_connection.execute(
-            "SELECT state, current_attempt, error->>'name', error->>'message', "
-            "run_at > clock_timestamp() "
+            "SELECT state, current_attempt, error->>'name', error->>'message', run_at "
             "FROM workhorse.task_runtime WHERE task_id = %s",
             (task_id,),
         ).fetchone()
-        assert scheduled == (
-            "scheduled",
-            2,
-            "RuntimeError",
-            "provider unavailable",
-            True,
-        )
+        assert scheduled is not None
+        assert scheduled[:4] == ("scheduled", 2, "RuntimeError", "provider unavailable")
+        delay = timedelta(seconds=5)
+        assert before_failure + delay <= scheduled[4] <= after_failure + delay
         failed_attempt = worker_connection.execute(
             "SELECT outcome, error->>'name', error->>'message' "
             "FROM workhorse.attempt_history WHERE task_id = %s AND attempt = 1",
@@ -1675,6 +1737,7 @@ def test_handler_failure_retries_on_the_database_schedule(database_url: str) -> 
                 worker_connection.execute("SELECT workhorse.promote_v1(100)").fetchone() == (1,)
             ),
             "the retry backoff never elapsed into a promotable task",
+            timeout_s=30,
         )
         assert worker.run_once() is True
         assert attempts == 2
