@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -602,11 +603,16 @@ func (tracer heartbeatGateTracer) TraceQueryStart(
 
 func (heartbeatGateTracer) TraceQueryEnd(context.Context, *pgx.Conn, pgx.TraceQueryEndData) {}
 
+type reconnectClaimContextKey struct{}
+
+// notificationReconnectGateTracer holds every LISTEN after the first until the test closes
+// release. It counts the empty claims whose statements start after the reconnect starts.
 type notificationReconnectGateTracer struct {
-	mu               sync.Mutex
-	listenCalls      int
-	reconnectStarted chan struct{}
-	release          <-chan struct{}
+	mu                   sync.Mutex
+	listenCalls          int
+	reconnectStarted     chan struct{}
+	release              <-chan struct{}
+	emptyClaimsInBackoff atomic.Int64
 }
 
 func newNotificationReconnectGateTracer(release <-chan struct{}) *notificationReconnectGateTracer {
@@ -621,6 +627,12 @@ func (tracer *notificationReconnectGateTracer) TraceQueryStart(
 	_ *pgx.Conn,
 	data pgx.TraceQueryStartData,
 ) context.Context {
+	if strings.Contains(data.SQL, "claim_many_v1") {
+		tracer.mu.Lock()
+		inBackoff := tracer.listenCalls > 1
+		tracer.mu.Unlock()
+		return context.WithValue(ctx, reconnectClaimContextKey{}, inBackoff)
+	}
 	if strings.TrimSpace(data.SQL) != "LISTEN workhorse_tasks" {
 		return ctx
 	}
@@ -638,19 +650,75 @@ func (tracer *notificationReconnectGateTracer) TraceQueryStart(
 	return ctx
 }
 
-func (*notificationReconnectGateTracer) TraceQueryEnd(
-	context.Context,
-	*pgx.Conn,
-	pgx.TraceQueryEndData,
+func (tracer *notificationReconnectGateTracer) TraceQueryEnd(
+	ctx context.Context,
+	_ *pgx.Conn,
+	data pgx.TraceQueryEndData,
 ) {
+	inBackoff, _ := ctx.Value(reconnectClaimContextKey{}).(bool)
+	if inBackoff && data.Err == nil && data.CommandTag.RowsAffected() == 0 {
+		tracer.emptyClaimsInBackoff.Add(1)
+	}
 }
 
 func (tracer *notificationReconnectGateTracer) waitForReconnect(t *testing.T) {
 	t.Helper()
 	select {
 	case <-tracer.reconnectStarted:
-	case <-time.After(time.Second):
+	case <-time.After(10 * time.Second):
 		t.Fatal("notification listener did not enter reconnect backoff")
+	}
+}
+
+type pauseClaimQueryContextKey struct{}
+
+// pauseClaimGateTracer holds the first claim statement that starts after the test sets holding,
+// until the test calls releaseHeld. It counts the claim statements that start.
+type pauseClaimGateTracer struct {
+	holding     atomic.Bool
+	held        chan struct{}
+	release     chan struct{}
+	releaseOnce sync.Once
+	heldEnded   chan struct{}
+	started     atomic.Int64
+}
+
+func (tracer *pauseClaimGateTracer) releaseHeld() {
+	tracer.releaseOnce.Do(func() { close(tracer.release) })
+}
+
+func newPauseClaimGateTracer() *pauseClaimGateTracer {
+	return &pauseClaimGateTracer{
+		held:      make(chan struct{}),
+		release:   make(chan struct{}),
+		heldEnded: make(chan struct{}),
+	}
+}
+
+func (tracer *pauseClaimGateTracer) TraceQueryStart(
+	ctx context.Context,
+	_ *pgx.Conn,
+	data pgx.TraceQueryStartData,
+) context.Context {
+	if !strings.Contains(data.SQL, "claim_many_v1") {
+		return ctx
+	}
+	held := tracer.holding.CompareAndSwap(true, false)
+	if held {
+		close(tracer.held)
+		<-tracer.release
+	}
+	tracer.started.Add(1)
+	return context.WithValue(ctx, pauseClaimQueryContextKey{}, held)
+}
+
+func (tracer *pauseClaimGateTracer) TraceQueryEnd(
+	ctx context.Context,
+	_ *pgx.Conn,
+	_ pgx.TraceQueryEndData,
+) {
+	if held, _ := ctx.Value(pauseClaimQueryContextKey{}).(bool); held {
+		close(tracer.heldEnded)
 	}
 }
 
@@ -1876,11 +1944,22 @@ func TestWorkerMaintenanceRecoversAnExpiredPeerLease(t *testing.T) {
 func TestWorkerRegistryDeliversRemotePauseAndDeregisters(t *testing.T) {
 	databaseURL := createConformanceDatabase(t, testDatabaseURL(t), "worker-registry-pause")
 	ctx, cancel := context.WithCancel(context.Background())
-	pool, err := pgxpool.New(ctx, databaseURL)
+	config, err := pgxpool.ParseConfig(databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	claims := newPauseClaimGateTracer()
+	config.ConnConfig.Tracer = claims
+	pool, err := pgxpool.NewWithConfig(ctx, config)
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(pool.Close)
+	// If the test stops early, the held claim must end before pool.Close waits for its connection.
+	t.Cleanup(func() {
+		claims.releaseHeld()
+		cancel()
+	})
 
 	queueName := "go-registry"
 	workerID := "go-registry-worker"
@@ -1935,6 +2014,15 @@ func TestWorkerRegistryDeliversRemotePauseAndDeregisters(t *testing.T) {
 	if sdkVersion == nil || *sdkVersion != workhorse.Version {
 		t.Fatalf("sdk version = %v, want %s", sdkVersion, workhorse.Version)
 	}
+	// A pause stops later claims. A claim that starts before the pause read still runs the tasks
+	// it returns (SM-1796). The worker has one slot, so it has at most one claim in flight. The
+	// tracer holds that claim at its statement until the worker stores the pause.
+	claims.holding.Store(true)
+	select {
+	case <-claims.held:
+	case <-time.After(10 * time.Second):
+		t.Fatal("worker did not start a claim")
+	}
 	if _, err := pool.Exec(
 		ctx,
 		"SELECT * FROM workhorse.set_worker_paused_v1($1, true, $2, $3, $4)",
@@ -1945,23 +2033,40 @@ func TestWorkerRegistryDeliversRemotePauseAndDeregisters(t *testing.T) {
 	); err != nil {
 		t.Fatal(err)
 	}
-	refreshed := false
-	for time.Now().Before(deadline) {
+	// The registry loop stores the pause after its refresh statement returns. It starts the next
+	// refresh after that store. So a refresh after the pause-reading refresh proves the store.
+	deadline = time.Now().Add(10 * time.Second)
+	var pauseRead *time.Time
+	stored := false
+	for !stored && time.Now().Before(deadline) {
+		var refreshedAt time.Time
+		var refreshed bool
 		if err := pool.QueryRow(
 			ctx,
-			"SELECT last_heartbeat_at > paused_at FROM workhorse.worker_registry WHERE worker_id = $1",
+			"SELECT last_heartbeat_at, last_heartbeat_at > paused_at FROM workhorse.worker_registry WHERE worker_id = $1",
 			workerID,
-		).Scan(&refreshed); err != nil {
+		).Scan(&refreshedAt, &refreshed); err != nil {
 			t.Fatal(err)
 		}
-		if refreshed {
-			break
+		if pauseRead == nil && refreshed {
+			pauseRead = &refreshedAt
+		} else if pauseRead != nil && refreshedAt.After(*pauseRead) {
+			stored = true
+			continue
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	if !refreshed {
+	if !stored {
 		t.Fatal("worker did not consume the remote pause")
 	}
+	// The held claim finds no task. The dispatch loop reads the pause before it can start another.
+	claims.releaseHeld()
+	select {
+	case <-claims.heldEnded:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the claim from before the pause did not answer")
+	}
+	claimStarts := claims.started.Load()
 
 	queue := workhorse.NewQueue(workhorse.NewPGXExecutor(pool), queueName)
 	if _, err := queue.Enqueue(ctx, "registered", nil); err != nil {
@@ -1971,6 +2076,9 @@ func TestWorkerRegistryDeliversRemotePauseAndDeregisters(t *testing.T) {
 	case <-handled:
 		t.Fatal("worker claimed while remotely paused")
 	case <-time.After(250 * time.Millisecond):
+	}
+	if started := claims.started.Load(); started != claimStarts {
+		t.Fatalf("worker started %d claims while remotely paused", started-claimStarts)
 	}
 	if _, err := pool.Exec(
 		ctx,
@@ -2496,11 +2604,24 @@ func TestWorkerPollingContinuesDuringNotificationReconnectBackoff(t *testing.T) 
 	}
 	waitForWorkerLog(t, &logs, "notification listener unavailable")
 	reconnectGate.waitForReconnect(t)
+	// The test enqueues only after two empty claims that start in the backoff. One worker slot
+	// gives one claim at a time. Without polls, the worker has at most two such claims. One
+	// claim can start before the listener fails, and the wake of the failure starts the other.
+	// After them, only a poll can claim the task.
+	emptyClaimsDeadline := time.Now().Add(30 * time.Second)
+	for reconnectGate.emptyClaimsInBackoff.Load() < 2 {
+		if !time.Now().Before(emptyClaimsDeadline) {
+			t.Fatal("worker did not poll while the listener reconnects")
+		}
+		time.Sleep(time.Millisecond)
+	}
 	queue := workhorse.NewQueue(workhorse.NewPGXExecutor(pool), queueName)
 	if _, err := queue.Enqueue(ctx, "polled-during-backoff", map[string]any{"value": "backoff"}); err != nil {
 		t.Fatal(err)
 	}
-	assertHandledWithin(t, handled, "backoff", time.Second)
+	// While the worker does not listen, its empty-claim backoff grows toward 5 s, and a host stall
+	// adds to that. The reconnect stays held, so no notification wakes the worker in this wait.
+	assertHandledWithin(t, handled, "backoff", 30*time.Second)
 	var replacementListeners int
 	if err := pool.QueryRow(
 		ctx,
@@ -2526,7 +2647,7 @@ func TestWorkerPollingContinuesDuringNotificationReconnectBackoff(t *testing.T) 
 
 func waitForWorkerLog(t *testing.T, logs *lockedBuffer, message string) {
 	t.Helper()
-	deadline := time.NewTimer(time.Second)
+	deadline := time.NewTimer(10 * time.Second)
 	defer deadline.Stop()
 	for !strings.Contains(logs.String(), message) {
 		select {

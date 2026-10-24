@@ -1878,7 +1878,19 @@ describe("worker registry", () => {
   it("keeps bounded polling as the fallback when the database cannot LISTEN", async () => {
     const pollingQueue = new Queue({ query: pool.query.bind(pool) });
     const handled: string[] = [];
-    const claim = vi.spyOn(pollingQueue, "claimMany");
+    const realClaim = pollingQueue.claimMany.bind(pollingQueue);
+    let claimsInFlight = 0;
+    let emptyClaims = 0;
+    const claim = vi.spyOn(pollingQueue, "claimMany").mockImplementation(async (...args) => {
+      claimsInFlight += 1;
+      try {
+        const tasks = await realClaim(...args);
+        if (tasks.length === 0) emptyClaims += 1;
+        return tasks;
+      } finally {
+        claimsInFlight -= 1;
+      }
+    });
     const worker = new Worker(pollingQueue, {
       sharedHeartbeats: true,
       workerId: "notification-fallback",
@@ -1891,7 +1903,13 @@ describe("worker registry", () => {
 
     const running = worker.run();
     try {
-      await vi.waitFor(() => expect(claim).toHaveBeenCalled(), stallWait);
+      // A claim that starts before the enqueue can find the task without a poll (SM-1788). So the
+      // test enqueues only after an empty claim answers and no claim is in flight. Then only the
+      // poll timer can start the claim that finds the task.
+      await vi.waitFor(() => {
+        expect(emptyClaims).toBeGreaterThan(0);
+        expect(claimsInFlight).toBe(0);
+      }, stallWait);
       await queue.enqueue("notification-fallback", { message: "polled" });
 
       await vi.waitFor(() => expect(handled).toEqual(["polled"]), stallWait);
