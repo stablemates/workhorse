@@ -394,6 +394,17 @@ public sealed class WorkerTests(ScratchDatabase database)
         await ScalarAsync(database.DataSource, "SELECT 1 FROM workhorse.set_worker_paused_v1($1, true, 'test', 'maintenance', $2)", worker.WorkerId, Guid.NewGuid().ToString());
         await EventuallyAsync(() => worker.IsPaused, "the worker reads the remote pause");
 
+        // A pause stops later claims, but a claim that started before it still runs the tasks it
+        // returns (SM-1753). Each dispatch pass starts a due registry refresh, then reads the pause,
+        // then claims. A refresh starts only after the refresh before it ended. So a refresh after the
+        // one that read the pause comes from a pass that saw the pause. Each claim of an earlier pass
+        // has started by then. The test enqueues the task after those claims answer.
+        var pausedAt = (string)(await ScalarAsync(database.DataSource, "SELECT last_heartbeat_at::text FROM workhorse.worker_registry WHERE worker_id = $1", worker.WorkerId))!;
+        await EventuallyAsync(
+            async () => await ScalarAsync(database.DataSource, "SELECT last_heartbeat_at > $2::text::timestamptz FROM workhorse.worker_registry WHERE worker_id = $1", worker.WorkerId, pausedAt) is true,
+            "a pass that saw the pause refreshes the registry");
+        await EventuallyAsync(() => Volatile.Read(ref worker.ClaimsInFlight) == 0, "the claims from before the pause answer");
+
         // A paused worker claims nothing, so the task stays ready for many poll intervals.
         var taskId = await EnqueueAsync(database.DataSource, queue, "paused", new { orderId = 1 });
         await Task.Delay(TimeSpan.FromMilliseconds(500), TestContext.Current.CancellationToken);
