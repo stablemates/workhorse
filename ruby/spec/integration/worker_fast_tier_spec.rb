@@ -160,6 +160,11 @@ RSpec.describe "Worker on the fast tier against PostgreSQL" do
     expect(subject.instance_variable_get(:@full_tier_until)).not_to have_key(@queue_name)
   end
 
+  # The lease of the slow tier-read specs, in seconds. A loaded host can keep every heartbeat round
+  # from an answer for more than 2 s. The lease watchdog then ends the attempt as LeaseExpired
+  # (SM-1794). A read that no heartbeat covers waits 2 s past this lease, so the lease still expires.
+  def tier_read_lease = 10
+
   # Holds each tier read of +subject+ until a heartbeat round renews a lease after the read began,
   # and fails the first read when +fail_first+. A read that no heartbeat covers waits +limit+
   # seconds, past the lease, so the lease expires. The shared heartbeat runs through this executor.
@@ -200,14 +205,14 @@ RSpec.describe "Worker on the fast tier against PostgreSQL" do
 
   it "reads the tier of a cutover claim under the heartbeat, so a slow read keeps the lease" do
     raised = Queue.new
-    subject = worker(concurrency: 1, lease: 2, heartbeat: 0.1).handle("fast-durable") do |_payload, context|
+    subject = worker(concurrency: 1, lease: tier_read_lease, heartbeat: 0.1).handle("fast-durable") do |_payload, context|
       context.checkpoint("step") { raise "the checkpoint block must not run" }
     rescue => e
       raised << e
       raise
     end
     task_id = cut_over(subject)
-    slow_tier_reads(subject, 4)
+    slow_tier_reads(subject, tier_read_lease + 2)
 
     run_until(subject) { fast_outcome(task_id).any? }
 
@@ -219,14 +224,14 @@ RSpec.describe "Worker on the fast tier against PostgreSQL" do
 
   it "raises a slow failed tier read from the durable call before any durable write" do
     raised = Queue.new
-    subject = worker(concurrency: 1, lease: 2, heartbeat: 0.1).handle("fast-durable") do |_payload, context|
+    subject = worker(concurrency: 1, lease: tier_read_lease, heartbeat: 0.1).handle("fast-durable") do |_payload, context|
       context.checkpoint("step") { raise "the checkpoint block must not run" }
     rescue => e
       raised << e
       raise
     end
     task_id = cut_over(subject)
-    slow_tier_reads(subject, 4, fail_first: true)
+    slow_tier_reads(subject, tier_read_lease + 2, fail_first: true)
 
     run_until(subject) { fast_outcome(task_id).any? }
 
@@ -238,11 +243,11 @@ RSpec.describe "Worker on the fast tier against PostgreSQL" do
 
   it "keeps the lease of a full-tier task while a slow tier read admits its checkpoint" do
     reads = Concurrent::AtomicFixnum.new
-    subject = worker(concurrency: 1, lease: 2, heartbeat: 0.1).handle("full-durable") do |_payload, context|
+    subject = worker(concurrency: 1, lease: tier_read_lease, heartbeat: 0.1).handle("full-durable") do |_payload, context|
       context.checkpoint("step") { reads.increment }
       {}
     end
-    slow_tier_reads(subject, 4)
+    slow_tier_reads(subject, tier_read_lease + 2)
     task_id = queue.enqueue("full-durable", {}, max_attempts: 1).task_id
     state = lambda do
       @connection.exec_params("SELECT state FROM workhorse.task_outcome WHERE task_id = $1", [task_id]).values
@@ -340,10 +345,14 @@ RSpec.describe "Worker on the fast tier against PostgreSQL" do
       .to eq(["Batch handler for exit raised SystemExit: raised exit", "Batch handler for exit returned SystemExit: returned exit"])
   end
 
+  # The stop deadline is the shutdown grace after dispatch ends. Before it, the batch must see its
+  # members arrive, write its dispatch evidence, and call the handler. With a 50 ms grace, a host
+  # stall can cancel the members first (SM-1794). A worker that waits for the grace or the linger
+  # still fails the 10 s bound.
   it "runs a lingering batch as soon as a stopping worker drains" do
     task_ids = Array.new(2) { queue.enqueue("linger", {}, max_attempts: 1).task_id }
     calls = Concurrent::Array.new
-    subject = worker(concurrency: 3, shutdown_grace: 0.05)
+    subject = worker(concurrency: 3, shutdown_grace: 15)
     subject.handle_batch("linger", max_size: 3, linger: 30) do |items|
       calls << [items.size, items.any? { |item| item.context.cancellation.cancelled? }]
       items.map { {status: :succeeded, result: {}} }
