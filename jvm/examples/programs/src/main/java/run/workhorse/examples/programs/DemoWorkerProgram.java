@@ -1,7 +1,11 @@
 package run.workhorse.examples.programs;
 
 import java.net.InetAddress;
+import java.net.URI;
+import java.net.URISyntaxException;
+import java.net.URLDecoder;
 import java.net.UnknownHostException;
+import java.nio.charset.StandardCharsets;
 import java.security.SecureRandom;
 import java.time.Duration;
 import java.util.HexFormat;
@@ -20,8 +24,8 @@ import run.workhorse.WorkerProcess;
  * Serves the JVM queues of the dashboard demo, plus the queue every demo language shares. It is the
  * JVM counterpart of {@code ruby/examples/demo_worker.rb}.
  *
- * <p>The demo does not start this worker yet. The program reads {@code DATABASE_URL_PRIMARY} as a
- * JDBC URL.
+ * <p>Both demo launchers start this worker. The program reads {@code DATABASE_URL_PRIMARY} as a
+ * {@code postgres://} URL, as the other demo workers do, or as a PgJDBC URL.
  *
  * <p>Documentation: https://workhorse.run/docs/dashboard
  */
@@ -58,6 +62,81 @@ public final class DemoWorkerProgram {
       throw new IllegalArgumentException("DATABASE_URL_PRIMARY is required");
     }
     return value;
+  }
+
+  /**
+   * Builds the data source for {@code url}. A {@code jdbc:} URL goes to PgJDBC as it is. PgJDBC
+   * reads no {@code postgres://} URL, so the program maps its parts to the data source. Each value
+   * uses percent decoding only, as libpq decodes it, so a {@code +} stays a {@code +}.
+   *
+   * @throws IllegalArgumentException if the URL is not a PostgreSQL URL, has no host, or names a
+   *     parameter the program does not map
+   */
+  static PGSimpleDataSource dataSource(String url) {
+    PGSimpleDataSource dataSource = new PGSimpleDataSource();
+    if (url.startsWith("jdbc:")) {
+      dataSource.setURL(url);
+      return dataSource;
+    }
+    URI uri;
+    try {
+      uri = new URI(url);
+    } catch (URISyntaxException error) {
+      throw new IllegalArgumentException("DATABASE_URL_PRIMARY is not a valid URL", error);
+    }
+    String scheme = uri.getScheme();
+    if (!"postgres".equals(scheme) && !"postgresql".equals(scheme)) {
+      throw new IllegalArgumentException(
+          "DATABASE_URL_PRIMARY must be a jdbc:, postgres://, or postgresql:// URL");
+    }
+    // PgJDBC connects over TCP only, so a URL without a host, which names a Unix socket, fails.
+    String host = uri.getHost();
+    if (host == null || host.isEmpty()) {
+      throw new IllegalArgumentException("DATABASE_URL_PRIMARY must name a host");
+    }
+    dataSource.setServerNames(new String[] {host});
+    if (uri.getPort() >= 0) {
+      dataSource.setPortNumbers(new int[] {uri.getPort()});
+    }
+    String path = uri.getRawPath();
+    if (path != null && path.length() > 1) {
+      dataSource.setDatabaseName(decode(path.substring(1)));
+    }
+    String userInfo = uri.getRawUserInfo();
+    if (userInfo != null) {
+      int colon = userInfo.indexOf(':');
+      dataSource.setUser(decode(colon < 0 ? userInfo : userInfo.substring(0, colon)));
+      if (colon >= 0) {
+        dataSource.setPassword(decode(userInfo.substring(colon + 1)));
+      }
+    }
+    String query = uri.getRawQuery();
+    if (query != null) {
+      for (String pair : query.split("&", -1)) {
+        if (pair.isEmpty()) {
+          continue;
+        }
+        int equals = pair.indexOf('=');
+        String name = decode(equals < 0 ? pair : pair.substring(0, equals));
+        String value = equals < 0 ? "" : decode(pair.substring(equals + 1));
+        switch (name) {
+          case "sslmode" -> dataSource.setSslMode(value);
+          case "application_name" -> dataSource.setApplicationName(value);
+          case "connect_timeout" -> dataSource.setConnectTimeout(Integer.parseInt(value, 10));
+          case "options" -> dataSource.setOptions(value);
+          default ->
+              throw new IllegalArgumentException(
+                  "DATABASE_URL_PRIMARY names the parameter "
+                      + name
+                      + ", which the JVM demo worker does not map");
+        }
+      }
+    }
+    return dataSource;
+  }
+
+  private static String decode(String value) {
+    return URLDecoder.decode(value.replace("+", "%2B"), StandardCharsets.UTF_8);
   }
 
   /**
@@ -188,8 +267,7 @@ public final class DemoWorkerProgram {
     Map<String, String> environment = System.getenv();
     Optional<Duration> poll = pollInterval(environment);
     boolean waits = waitsForSchema(environment);
-    PGSimpleDataSource dataSource = new PGSimpleDataSource();
-    dataSource.setURL(databaseUrl(environment));
+    PGSimpleDataSource dataSource = dataSource(databaseUrl(environment));
     if (waits) {
       waitForSchema(dataSource, SCHEMA_RETRY);
     }

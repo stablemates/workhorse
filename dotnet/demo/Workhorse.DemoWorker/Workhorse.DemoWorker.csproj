@@ -1,7 +1,7 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <!--
     The .NET counterpart of the demo worker programs. It runs on the Generic Host with
-    Workhorse.Hosting, as a .NET application does. The demo does not start it (SM-1630, SM-1680).
+    Workhorse.Hosting, as a .NET application does. Both demo launchers start it (SM-1680).
     Workhorse.Tests runs it against a scratch database.
   -->
   <PropertyGroup>

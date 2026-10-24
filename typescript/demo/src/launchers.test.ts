@@ -59,9 +59,9 @@ async function launchPlan(
 describe.each(["scripts/dev.ts", "typescript/demo/container-entrypoint.mjs"])("%s", (path) => {
   it("starts exactly one isolated staging worker only when its database exists", async () => {
     const { launches: primaryOnly } = await launchPlan(path);
-    expect(primaryOnly).toHaveLength(6);
+    expect(primaryOnly).toHaveLength(8);
     const { launches: withStaging } = await launchPlan(path, "postgres://secondary/staging");
-    expect(withStaging).toHaveLength(7);
+    expect(withStaging).toHaveLength(9);
     const staging = withStaging.filter(({ env }) => env.WORKHORSE_DEMO_WORKSPACE === "staging");
     expect(staging).toHaveLength(1);
     expect(staging[0]!.env).toMatchObject({
@@ -70,10 +70,26 @@ describe.each(["scripts/dev.ts", "typescript/demo/container-entrypoint.mjs"])("%
     });
     expect(
       withStaging
-        .slice(0, 6)
+        .slice(0, 8)
         .every(({ env }) => env.DATABASE_URL_PRIMARY === "postgres://primary/demo"),
     ).toBe(true);
     expect(staging[0]!.args).toEqual(withStaging[1]!.args);
+  });
+});
+
+/** The service name of each process a launcher starts, in start order. */
+async function serviceNames(path: string) {
+  const { launches } = await launchPlan(path, "postgres://secondary/staging");
+  return launches.map(({ env }) => env.WORKHORSE_DEMO_SERVICE_NAME ?? "workhorse-demo-server");
+}
+
+describe("both demo launchers", () => {
+  it("start the same workers under the same service names", async () => {
+    const development = await serviceNames("scripts/dev.ts");
+    expect(await serviceNames("typescript/demo/container-entrypoint.mjs")).toEqual(development);
+    expect(development).toEqual(
+      expect.arrayContaining(["workhorse-demo-worker-jvm", "workhorse-demo-worker-dotnet"]),
+    );
   });
 });
 
@@ -89,7 +105,7 @@ describe("typescript/demo/container-entrypoint.mjs start order", () => {
     );
     expect(launchedAtFirstHealthCheck[0]).toBe(1);
     expect(launches[0]!.env.WORKHORSE_DEMO_SERVICE_NAME).toBe("workhorse-demo-server");
-    expect(launches).toHaveLength(7);
+    expect(launches).toHaveLength(9);
   });
 
   it("starts no worker when the server exits before it answers", async () => {

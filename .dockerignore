@@ -26,6 +26,11 @@ dist
 **/.venv
 target
 **/target
+# Local JVM and .NET build outputs. The image builds both workers from their sources.
+jvm/.gradle
+jvm/**/build
+dotnet/**/bin
+dotnet/**/obj
 coverage
 **/coverage
 docs/benchmarks/results

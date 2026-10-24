@@ -16,8 +16,8 @@ namespace Workhorse.DemoWorker;
 /// <c>DemoWorkerProgram</c>.
 /// </summary>
 /// <remarks>
-/// The demo does not start this worker, because the demo container's memory budget does not hold
-/// another runtime (SM-1680). A test runs the program against a scratch database only.
+/// Both demo launchers start this worker (SM-1680). A test runs the program against a scratch
+/// database.
 /// Documentation: https://workhorse.run/docs/dashboard
 /// </remarks>
 internal static partial class DemoWorkerProgram

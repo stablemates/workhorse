@@ -47,6 +47,8 @@ the `node` user can only read and run them:
 - `/opt/workhorse-demo`, which holds the server, the TypeScript workers, and their dependencies;
 - `/opt/workhorse-python` and `/opt/workhorse-python-worker.py`;
 - `/opt/workhorse-ruby`;
+- `/opt/workhorse-jvm` and the JRE in `/opt/java/openjdk`;
+- `/opt/workhorse-dotnet` and the .NET runtime in `/usr/share/dotnet`;
 - `/usr/local/bin/workhorse-go-demo-worker` and `/usr/local/bin/workhorse-rust-demo-worker`.
 
 The `node` user writes only to the log directory, `/opt/workhorse-demo/logs`, which
@@ -109,6 +111,22 @@ holds only `pg`, `connection_pool`, `concurrent-ruby`, and `logger`. The `pg` ge
 prebuilt `x86_64-linux-musl` or `aarch64-linux-musl` build, so the stage compiles nothing. Update the
 lock with Bundler whenever `ruby/Gemfile` or the gemspec changes; the frozen install rejects a stale
 lock.
+
+The demo image runs its JVM worker on a JRE and its .NET worker on the .NET runtime. Neither image
+carries Gradle, a JDK, or the .NET SDK:
+
+- The `jvm-build` stage runs the Gradle task `:examples:programs:demoWorkerClassPath`, which copies
+  the jar of `DemoWorkerProgram` and its runtime jars. Gradle checks each jar against
+  `jvm/gradle/verification-metadata.xml`. The runtime stage copies the JRE of the `jre` stage, an
+  Alpine Temurin build whose tag names the Java version that `mise.toml` pins.
+- The `dotnet-build` stage publishes `dotnet/demo/Workhorse.DemoWorker` framework-dependent, on the
+  SDK version that `mise.toml` pins. The runtime stage copies the runtime of the `dotnet-runtime`
+  stage. Its version must be the runtime that the SDK carries.
+
+`typescript/demo/src/multilang-workers.test.ts` fails when a stage tag and its `mise.toml` pin
+disagree. Both runtimes are Alpine builds, so they run on the musl C library of the runtime base.
+Before the build finishes, a check loads the JVM worker's main class and starts the .NET worker until
+it asks for its database URL.
 
 The demo image carries only what the container runs. `pnpm deploy` copies the files that
 `files` in `typescript/demo/package.json` names, so a new file the container loads at runtime must
@@ -267,8 +285,13 @@ The primary URL must not require TLS. The Rust worker connects without TLS, so i
 connection stops the Rust worker, and the entry point then stops the container. The secondary URL
 reaches only a TypeScript worker, so this constraint does not apply to it.
 
+The JVM and .NET workers read the same `postgres://` URL. Each maps the host, port, database,
+credentials, and the parameters `sslmode`, `application_name`, `connect_timeout`, and `options` to
+its own driver. If the URL names another parameter or a Unix socket without a host, the JVM worker
+stops. The .NET worker accepts a socket directory in the `host` parameter.
+
 Each demo workspace should have a dedicated role and database. The primary workspace runs TypeScript,
-Python, Go, Rust, and Ruby workers. When `DATABASE_URL_SECONDARY` is set, both launchers add one dedicated
+Python, Go, Rust, Ruby, JVM, and .NET workers. When `DATABASE_URL_SECONDARY` is set, both launchers add one dedicated
 TypeScript worker for staging, with two execution slots and its own connection pool. The launcher
 maps the secondary URL to that child process only and sets `WORKHORSE_DEMO_WORKSPACE=staging`.
 The container supervises and drains this worker alongside the primary workers.
@@ -285,14 +308,23 @@ not claims, and enqueues a small batch there and on `demo-rust`. It then syncs a
 schedules. A primary database that already carries every earlier marker runs this step once. A step
 marked `fast-tier-ruby-dashboard-v1` follows it for the Ruby worker. It moves `demo-ruby-fast` to the
 fast tier, records both attempts and claims, and enqueues a small batch there and on `demo-ruby`. It
-then syncs all five fast-tier schedules. A step marked `task-groups-dashboard-v1` creates five task
-groups for the task groups page: one that finishes with the result `succeeded`, one that finishes
-with the result `failed`, one that stays sealed with a pending member, one that stays open, and one
-that the step cancels. Their member tasks run on `demo-python`, `demo-go`, `demo-rust`, and
-`demo-ruby`, and their callbacks run on `demo-shared`. A primary database that already carries every
-earlier marker runs this step once, with no migration and no reset. The sealed group keeps one member
-task whose run time never arrives. The open group has two member tasks that finish normally. Thus
-neither group keeps a worker busy. The `task-group` schedule in the `workhorse-demo` namespace then creates one group twice an
+then syncs all five fast-tier schedules.
+
+A step marked `fast-tier-jvm-dotnet-dashboard-v1` follows it for the JVM and .NET workers. It moves
+`demo-jvm-fast` and `demo-dotnet-fast` to the fast tier. The JVM queue records claims but not
+attempts, and the .NET queue records neither. The step enqueues a small batch on each fast-tier
+queue and one task on `demo-jvm` and on `demo-dotnet`. It then syncs all seven fast-tier schedules.
+The `workhorse-demo` namespace gains the schedules `language-worker.jvm` and `language-worker.dotnet`
+at the next start.
+
+A step marked `task-groups-dashboard-v1` creates five task groups for the task groups page: one that
+finishes with the result `succeeded`, one that finishes with the result `failed`, one that stays
+sealed with a pending member, one that stays open, and one that the step cancels. Their member tasks
+run on `demo-python`, `demo-go`, `demo-rust`, and `demo-ruby`, and their callbacks run on
+`demo-shared`. A primary database that already carries every earlier marker runs this step once,
+with no migration and no reset. The sealed group keeps one member task whose run time never
+arrives. The open group has two member tasks that finish normally. Thus neither group keeps a worker
+busy. The `task-group` schedule in the `workhorse-demo` namespace then creates one group twice an
 hour. Each group adds about seven tasks, so the schedule adds about 340 tasks a day. Existing
 staging history is retained, and admission policies also govern tasks left by the previous seed.
 Fresh production history includes task-specific customer, email, order, and report context.
@@ -318,25 +350,35 @@ that arrives first, starts no worker. The workers begin a few seconds after the 
 previous container is still draining.
 
 That memory limit and the image's Node heap ceiling are one pair. `Dockerfile` sets
-`NODE_OPTIONS=--max-old-space-size=128` in its runtime stage. V8 sizes a heap from a fixed default
+`NODE_OPTIONS=--max-old-space-size=80` in its runtime stage. V8 sizes a heap from a fixed default
 rather than from the container, so an uncapped Node process here believes it may grow to 4,288 MB.
 It then defers collection while it believes memory remains, the container limit is reached first,
 and the kernel kills the process. That kill carries no message and no stack, so it reads as an
 unexplained restart rather than as a memory problem.
 
 The container runs four Node processes: the supervisor, the server, the TypeScript worker, and the
-staging worker. Each holds about 80 MiB outside its heap, and the Python, Go, Rust, and Ruby workers
-hold under 120 MiB together, so four ceilings and that overhead must fit the limit. Changing one value alone
-breaks the pair. A larger limit without a larger ceiling is capacity the demo will not use, and a
-smaller limit without a smaller ceiling restores the silent kill.
-`typescript/demo/src/container-memory.test.ts` reads both files and fails when they disagree.
+staging worker. Each holds about 80 MiB outside its heap. The other workers share the same limit:
 
-Both values were measured in a container limited to 1 GiB, with both workspaces configured. The
-load was the demo's own recurring schedules plus continuous dashboard reads. Without the ceiling
-the container's resident set peaked at 821 MiB of the 1,024 MiB it is allowed, and each Node
-process held about 290 MiB. With the ceiling the container peaked at 611 MiB and no process was
-killed. Nothing fails at the uncapped peak today, because the demo's working set is small. Anything
-that grows that working set reaches the container limit before V8 collects.
+- The Python, Go, Rust, and Ruby workers hold under 120 MiB together.
+- `container-entrypoint.mjs` starts the JVM worker with the serial collector and three ceilings:
+  `-Xmx32m` for the heap, `-XX:MaxMetaspaceSize=24m`, and `-XX:ReservedCodeCacheSize=16m`. The JVM
+  can grow each one to its ceiling, so the sum counts each whole ceiling. The JVM holds about
+  48 MiB more for its own code, the class data archive, and thread stacks.
+- The .NET worker holds under 112 MiB. This value is a measured budget, as the value for the
+  Python, Go, Rust, and Ruby workers is.
+
+Four Node ceilings, the JVM ceilings, and that overhead must fit the limit. With these values the
+sum is 992 MiB of 1,024 MiB. Changing one value alone breaks the pair. A larger limit without a
+larger ceiling is capacity the demo will not use, and a smaller limit without a smaller ceiling
+restores the silent kill. `typescript/demo/src/container-memory.test.ts` reads `Dockerfile`, the
+entry point, and this page, and fails when they disagree.
+
+Both values were first measured in a container limited to 1 GiB, with both workspaces configured.
+The load was the demo's own recurring schedules plus continuous dashboard reads. Without the
+ceiling the container's resident set peaked at 821 MiB of the 1,024 MiB it is allowed, and each
+Node process held about 290 MiB. With a ceiling of 128 MiB the container peaked at 611 MiB and no
+process was killed. Nothing fails at the uncapped peak today, because the demo's working set is
+small. Anything that grows that working set reaches the container limit before V8 collects.
 
 The Rust worker's figure came later, from the same limits and both workspaces. Its resident set
 peaked at 5 MiB. The Python worker peaked at 42 MiB and the Go worker at 15 MiB in the same run.
@@ -344,6 +386,13 @@ peaked at 5 MiB. The Python worker peaked at 42 MiB and the Go worker at 15 MiB 
 The Ruby worker's figure came from its own container under the same limits. That container ran the
 `ruby-build` stage's gems on the runtime base. It completed 12,000 tasks on `demo-ruby` and
 `demo-shared`, then idled for a minute. Its resident set peaked at 45 MiB, with at most 13 threads.
+
+The JVM and .NET workers' figures came from the image with every worker, under the same limits and
+both workspaces, with the Node ceiling at 80 MiB. The load was the demo's own schedules, a traffic
+surge at the upper size of `traffic.surge`, and continuous dashboard reads. The container peaked at
+586 MiB, and no process was killed. The JVM worker peaked at 72 MiB and the .NET worker at 104 MiB.
+The largest V8 heap in use was 41 MiB, in the server, and the largest old space was 26 MiB. Thus
+each Node process used at most about half of its ceiling.
 
 The demo answers a fixed public surface. `GET /up` and `GET /robots.txt` respond without touching
 the dashboard host. `GET` requests under the dashboard path serve the application shell, and `GET`
@@ -560,7 +609,7 @@ next release on, the ordinary pipeline step applies again.
 The demo host is the soak site for
 [ADR 0056](https://github.com/stablemates/workhorse/blob/main/docs/decisions/0056-set-the-1-0-0-exit-criteria.md)
 Gate 4, which holds the 1.0.0 tag on one database running 30 consecutive days under continuous
-work. It already runs TypeScript, Python, Go, Rust, and Ruby workers against one PostgreSQL database, so the
+work. It already runs TypeScript, Python, Go, Rust, Ruby, JVM, and .NET workers against one PostgreSQL database, so the
 evidence is a matter of leaving it alone rather than building anything.
 
 While a soak window is open:

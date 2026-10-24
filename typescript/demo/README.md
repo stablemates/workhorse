@@ -6,7 +6,7 @@ The demo uses Hono as its web server and Drizzle through Workhorse's ORM adapter
 a transactionally created order and durable task, and worker-owned scheduling drives recurring work.
 
 **The demo runs each worker in a separate process.** The Hono server and TypeScript, Python, Go,
-Rust, and Ruby workers share nothing but PostgreSQL. Workers announce themselves in
+Rust, Ruby, JVM, and .NET workers share nothing but PostgreSQL. Workers announce themselves in
 `workhorse.worker_registry`, the dashboard reads the fleet from there, and operator pause travels
 through SQL. The browser refreshes on a bounded polling interval.
 
@@ -36,10 +36,15 @@ plus one named budget that the main queue and the partner API queue share.
 One deterministic keyed seed exposes deduplication evidence without persisting or displaying the raw
 key. The operator menu also retains an explicit idempotent enqueue path.
 
-Prerequisites are Node.js 22+, pnpm 10+, Go 1.25+, `uv`, Cargo, Ruby 3.3+ with Bundler, workspace
-dependencies installed with `pnpm install`, the Ruby gems installed with `pnpm ruby:install`, and
-PostgreSQL 15+ with the local `workhorse` role described in the root README. No
-PostgreSQL extensions are required; recurring work runs through the workers themselves.
+The demo needs these prerequisites:
+
+- Node.js 22+, pnpm 10+, Go 1.25+, `uv`, Cargo, and Ruby 3.3+ with Bundler.
+- The JDK, Gradle, and .NET SDK versions that `mise.toml` pins.
+- The workspace dependencies, installed with `pnpm install`.
+- The Ruby gems, installed with `pnpm ruby:install`.
+- PostgreSQL 15+ with the local `workhorse` role described in the root README.
+
+No PostgreSQL extensions are required; recurring work runs through the workers themselves.
 
 Every demo run writes structured OpenTelemetry logs to
 `logs/<environment>/workhorse-demo-server.ndjson` and

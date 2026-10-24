@@ -23,7 +23,9 @@ import {
   DEMO_CONCURRENCY_POLICY_NAMESPACE,
   DEMO_DURABLE_STEP_MS,
   DEMO_DURABLE_TIMER_WAIT_MS,
+  DEMO_DOTNET_QUEUE,
   DEMO_GO_QUEUE,
+  DEMO_JVM_QUEUE,
   DEMO_LONG_RUNNING_MS,
   DEMO_LONG_RUNNING_SEED_TASKS,
   DEMO_PERSISTENT_RETRY_DELAYS_MS,
@@ -46,7 +48,9 @@ import {
   DEMO_TRAFFIC_TIERS,
   DEMO_WORKER_POLL_MS,
   DURABLE_TIMER_TASK_TYPE,
+  DOTNET_WORKER_SCHEDULE_NAME,
   GO_WORKER_SCHEDULE_NAME,
+  JVM_WORKER_SCHEDULE_NAME,
   HEARTBEAT_SCHEDULE_NAME,
   HISTORICAL_WORKER_IDS,
   installDemoSchema,
@@ -302,10 +306,24 @@ describe("Workhorse demo", () => {
           configured_enabled: true,
         },
         {
+          schedule_name: DOTNET_WORKER_SCHEDULE_NAME,
+          cron_expression: "2-59/4 * * * *",
+          task_type: LANGUAGE_WORKER_TASK_TYPE,
+          queue_name: DEMO_DOTNET_QUEUE,
+          configured_enabled: true,
+        },
+        {
           schedule_name: GO_WORKER_SCHEDULE_NAME,
           cron_expression: "2-59/3 * * * *",
           task_type: LANGUAGE_WORKER_TASK_TYPE,
           queue_name: DEMO_GO_QUEUE,
+          configured_enabled: true,
+        },
+        {
+          schedule_name: JVM_WORKER_SCHEDULE_NAME,
+          cron_expression: "*/4 * * * *",
+          task_type: LANGUAGE_WORKER_TASK_TYPE,
+          queue_name: DEMO_JVM_QUEUE,
           configured_enabled: true,
         },
         {
@@ -469,7 +487,7 @@ describe("Workhorse demo", () => {
 
     const seeded = await seedDemoData(database);
     expect(seeded).toMatchObject({ seeded: true, historicalTaskCount: 362 });
-    expect(seeded.taskIds).toHaveLength(126);
+    expect(seeded.taskIds).toHaveLength(136);
     expect(await seedDemoData(database)).toEqual({
       seeded: false,
       taskIds: [],
@@ -481,14 +499,14 @@ describe("Workhorse demo", () => {
            FROM (
              -- Throttled acceptance runs inside a SQL exception block, so those rows carry
              -- subtransaction xids of the same showcase transaction rather than its top-level id.
-             -- The fast-tier, Rust, Ruby, and task group steps commit in their own transactions,
+             -- The fast-tier, late language, and task group steps commit in their own transactions,
              -- like the long-running step.
              SELECT xmin::text AS version FROM workhorse.task
                WHERE id = ANY($1::uuid[])
                  AND task_type NOT IN ('demo.long-running', 'demo.keyed-throttle')
                  AND NOT 'fast-tier' = ANY(tags)
                  AND NOT 'task-group' = ANY(tags)
-                 AND queue_name NOT IN ('demo-rust', 'demo-ruby')
+                 AND queue_name NOT IN ('demo-rust', 'demo-ruby', 'demo-jvm', 'demo-dotnet')
              UNION ALL SELECT xmin::text FROM public.workhorse_demo_order
             UNION ALL SELECT xmin::text FROM public.workhorse_demo_seed
                WHERE name = 'default-dashboard-v8'
@@ -503,8 +521,9 @@ describe("Workhorse demo", () => {
     ).toMatchObject({ rows: [{ count: 1 }] });
     expect(await pool.query("SELECT count(*)::integer AS count FROM workhorse.task")).toMatchObject(
       {
-        // The task group step adds 18 member tasks and the two callbacks of its canceled group.
-        rows: [{ count: 490 }],
+        // The task group step adds 18 member tasks and the two callbacks of its canceled group. The
+        // JVM and .NET step adds five tasks for each of its two languages.
+        rows: [{ count: 500 }],
       },
     );
     const blockedTasks = await dashboardClient(app).dashboard.tasks({
@@ -771,9 +790,9 @@ describe("Workhorse demo", () => {
     // the Rust and Ruby seeds each add one due full-tier task. The task group seed adds 13 due
     // members, one held member, and two callbacks of its canceled group.
     await expect(client.dashboard.taskCounts()).resolves.toMatchObject({
-      all: 490,
-      scheduled: 16,
-      queued: 94,
+      all: 500,
+      scheduled: 18,
+      queued: 102,
       completed: 350,
       discarded: 21,
       retried: 22,
@@ -814,11 +833,11 @@ describe("Workhorse demo", () => {
     });
     await expect(
       client.dashboard.tasks({ filter: "all", page: 1, pageSize: 25, count: "exact" }),
-    ).resolves.toMatchObject({ count: "exact", total: 490 });
+    ).resolves.toMatchObject({ count: "exact", total: 500 });
     await expect(client.dashboard.taskCounts()).resolves.toMatchObject({
-      all: 490,
-      scheduled: 16,
-      queued: 94,
+      all: 500,
+      scheduled: 18,
+      queued: 102,
       completed: 350,
       discarded: 21,
     });
@@ -827,9 +846,13 @@ describe("Workhorse demo", () => {
     await expect(client.dashboard.taskFacets()).resolves.toMatchObject({
       queues: [
         "demo",
+        "demo-dotnet",
+        "demo-dotnet-fast",
         "demo-fast",
         "demo-go",
         "demo-go-fast",
+        "demo-jvm",
+        "demo-jvm-fast",
         "demo-python",
         "demo-python-fast",
         "demo-ruby",
@@ -863,7 +886,7 @@ describe("Workhorse demo", () => {
       await client.dashboard.tasks({ filter: "scheduled", page: 1, pageSize: 25 }),
     ).toMatchObject({
       filter: "scheduled",
-      total: 16,
+      total: 18,
       tasks: expect.arrayContaining([expect.objectContaining({ state: "scheduled" })]),
     });
     await expect(
@@ -976,9 +999,13 @@ describe("Workhorse demo", () => {
     });
     expect(queueActivity.groups).toEqual([
       "demo",
+      "demo-dotnet",
+      "demo-dotnet-fast",
       "demo-fast",
       "demo-go",
       "demo-go-fast",
+      "demo-jvm",
+      "demo-jvm-fast",
       "demo-python",
       "demo-python-fast",
       "demo-ruby",

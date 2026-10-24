@@ -61,7 +61,11 @@ import {
   DEMO_MAINTENANCE_INTERVAL_MS,
   DEMO_OPERATOR_IDEMPOTENCY_KEY,
   DEMO_OPERATOR_IDEMPOTENCY_SCOPE,
+  DEMO_DOTNET_FAST_TIER_QUEUE,
+  DEMO_DOTNET_QUEUE,
   DEMO_GO_QUEUE,
+  DEMO_JVM_FAST_TIER_QUEUE,
+  DEMO_JVM_QUEUE,
   DEMO_PERSISTENT_RETRY_DELAYS_MS,
   DEMO_PERSISTENT_RETRY_POLICIES,
   DEMO_PYTHON_QUEUE,
@@ -89,6 +93,7 @@ import {
   DEMO_TIMING_HANDLER_MS,
   DEMO_TIMING_POLICY_TIMEOUT_MS,
   DEMO_TIMING_TIMEOUT_MS,
+  DOTNET_WORKER_SCHEDULE_NAME,
   DURABLE_TIMER_TASK_TYPE,
   FAILURE_TASK_TYPE,
   HEARTBEAT_SCHEDULE_NAME,
@@ -97,6 +102,8 @@ import {
   FAST_TIER_SEED_NAME,
   HISTORICAL_SEED_NAME,
   HISTORICAL_WORKER_IDS,
+  JVM_DOTNET_SEED_NAME,
+  JVM_WORKER_SCHEDULE_NAME,
   LONG_RUNNING_TASK_TYPE,
   LANGUAGE_WORKER_TASK_TYPE,
   LONG_RUNNING_SCHEDULE_NAME,
@@ -699,7 +706,7 @@ function heartbeatSchedule(enabled = true) {
 function languageWorkerSchedule(
   name: string,
   schedule: string,
-  language: "typescript" | "python" | "go" | "rust" | "ruby",
+  language: "typescript" | "python" | "go" | "rust" | "ruby" | "jvm" | "dotnet",
   queue: string,
   enabled = true,
 ) {
@@ -994,6 +1001,14 @@ export async function syncDemoSchedules(database: Pool): Promise<void> {
       "3-59/4 * * * *",
       "ruby",
       DEMO_RUBY_QUEUE,
+      true,
+    ),
+    languageWorkerSchedule(JVM_WORKER_SCHEDULE_NAME, "*/4 * * * *", "jvm", DEMO_JVM_QUEUE, true),
+    languageWorkerSchedule(
+      DOTNET_WORKER_SCHEDULE_NAME,
+      "2-59/4 * * * *",
+      "dotnet",
+      DEMO_DOTNET_QUEUE,
       true,
     ),
     sharedWorkerSchedule(true),
@@ -1910,27 +1925,30 @@ async function seedRateLimitDemoData(database: DemoDatabase): Promise<string[]> 
 
 /**
  * The languages whose workers joined the demo after `FAST_TIER_SEED_NAME` had run, in the order
- * they joined. Each one has its own seed marker, so a database that ran every earlier step runs
- * only the new one.
+ * they joined. Each step has its own seed marker, so a database that ran every earlier step runs
+ * only the new one. The JVM and .NET workers joined together, so one step covers both.
  */
 const LATE_LANGUAGE_SEEDS = [
   {
     seedName: RUST_SEED_NAME,
-    label: "Rust",
-    queue: DEMO_RUST_QUEUE,
-    fastTier: DEMO_RUST_FAST_TIER_QUEUE,
+    languages: [{ label: "Rust", queue: DEMO_RUST_QUEUE, fastTier: DEMO_RUST_FAST_TIER_QUEUE }],
   },
   {
     seedName: RUBY_SEED_NAME,
-    label: "Ruby",
-    queue: DEMO_RUBY_QUEUE,
-    fastTier: DEMO_RUBY_FAST_TIER_QUEUE,
+    languages: [{ label: "Ruby", queue: DEMO_RUBY_QUEUE, fastTier: DEMO_RUBY_FAST_TIER_QUEUE }],
+  },
+  {
+    seedName: JVM_DOTNET_SEED_NAME,
+    languages: [
+      { label: "JVM", queue: DEMO_JVM_QUEUE, fastTier: DEMO_JVM_FAST_TIER_QUEUE },
+      { label: ".NET", queue: DEMO_DOTNET_QUEUE, fastTier: DEMO_DOTNET_FAST_TIER_QUEUE },
+    ],
   },
 ] as const;
 
 type FastTierEntry =
   | (typeof DEMO_FAST_TIER_QUEUES)[number]
-  | (typeof LATE_LANGUAGE_SEEDS)[number]["fastTier"];
+  | (typeof LATE_LANGUAGE_SEEDS)[number]["languages"][number]["fastTier"];
 
 function fastTierSchedule(entry: FastTierEntry) {
   const schedule = languageWorkerSchedule(
@@ -2021,10 +2039,10 @@ async function seedFastTierDemoData(database: DemoDatabase): Promise<string[]> {
 }
 
 /**
- * Bring one late language's queues into a demo that already ran every earlier step. The step moves
- * the language's fast-tier queue to the fast tier before it enqueues anything there. It then
+ * Bring one late step's language queues into a demo that already ran every earlier step. The step
+ * moves each language's fast-tier queue to the fast tier before it enqueues anything there. It then
  * replaces the fast-tier schedule namespace, because a sync removes any schedule it does not name.
- * The sync names every language up to this one and no later one: a later language's schedule could
+ * The sync names every language up to this step and no later one: a later language's schedule could
  * fire into its queue before that language's step moves the queue to the fast tier.
  */
 async function seedLateLanguageDemoData(database: DemoDatabase, index: number): Promise<string[]> {
@@ -2038,31 +2056,39 @@ async function seedLateLanguageDemoData(database: DemoDatabase, index: number): 
     `);
     if (marker.rows.length === 0) return [];
 
+    // Every enqueue below names its queue, so the default queue only has to be a queue of the step.
     const workhorse = createDrizzleAdapter(transaction, {
-      defaultQueue: step.queue,
+      defaultQueue: step.languages[0].queue,
       queueOptions: DEMO_QUEUE_OPTIONS,
     });
-    const entry = step.fastTier;
-    await workhorse.admin.setQueueTier(entry.queue, "fast", {
-      actor: "workhorse-demo-seed",
-      reason: `Show the ${step.label} worker on the fast tier of the demo dashboard`,
-      requestId: `${step.seedName}:${entry.queue}`,
-    });
-    await workhorse.admin.setQueueHistory(entry.queue, entry.history);
-
-    const payload = { language: entry.language };
-    const taskIds = [
-      await workhorse.queue.enqueue(LANGUAGE_WORKER_TASK_TYPE, payload, {
-        queue: step.queue,
-        maxAttempts: 1,
-        tags: ["demo-test", "language-worker", entry.language],
-      }),
-    ];
-    for (const options of fastTierTaskOptions(entry, Date.now())) {
-      taskIds.push(await workhorse.queue.enqueue(LANGUAGE_WORKER_TASK_TYPE, payload, options));
+    for (const { label, fastTier: entry } of step.languages) {
+      await workhorse.admin.setQueueTier(entry.queue, "fast", {
+        actor: "workhorse-demo-seed",
+        reason: `Show the ${label} worker on the fast tier of the demo dashboard`,
+        requestId: `${step.seedName}:${entry.queue}`,
+      });
+      await workhorse.admin.setQueueHistory(entry.queue, entry.history);
     }
 
-    const joined = LATE_LANGUAGE_SEEDS.slice(0, index + 1).map((late) => late.fastTier);
+    const taskIds: string[] = [];
+    const now = Date.now();
+    for (const { queue, fastTier: entry } of step.languages) {
+      const payload = { language: entry.language };
+      taskIds.push(
+        await workhorse.queue.enqueue(LANGUAGE_WORKER_TASK_TYPE, payload, {
+          queue,
+          maxAttempts: 1,
+          tags: ["demo-test", "language-worker", entry.language],
+        }),
+      );
+      for (const options of fastTierTaskOptions(entry, now)) {
+        taskIds.push(await workhorse.queue.enqueue(LANGUAGE_WORKER_TASK_TYPE, payload, options));
+      }
+    }
+
+    const joined = LATE_LANGUAGE_SEEDS.slice(0, index + 1).flatMap((late) =>
+      late.languages.map((language) => language.fastTier),
+    );
     await workhorse.queue.syncSchedules(
       DEMO_FAST_TIER_SCHEDULE_NAMESPACE,
       [...DEMO_FAST_TIER_QUEUES, ...joined].map(fastTierSchedule),

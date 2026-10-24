@@ -53,6 +53,45 @@ RUN bundle config set --local frozen true \
   && bundle install --jobs ${BUILD_CONCURRENCY} --quiet
 COPY ruby/examples/demo_worker.rb ./
 
+# The JVM worker's jars. The build reads the core's sources and the dashboard bundle that the core
+# jar carries. The runtime stage needs no Gradle and no JDK, only the JRE stage below.
+FROM gradle:9.8.1-jdk25-alpine@sha256:88b059d39a3971709550fc721c029b0c54ab785dfe4fa4169ae04017cf2c22a4 AS jvm-build
+
+WORKDIR /workhorse
+ARG BUILD_CONCURRENCY=4
+ENV GRADLE_USER_HOME=/var/cache/gradle
+COPY dashboard/v1/bundle/ ./dashboard/v1/bundle/
+COPY jvm/ ./jvm/
+# The Gradle caches persist in the builder between image builds, like the Go caches. The jars leave
+# the build directory in the same step, so the stage keeps only what the runtime copies.
+RUN --mount=type=cache,target=/var/cache/gradle \
+    gradle --quiet --no-daemon --max-workers=${BUILD_CONCURRENCY} -p jvm :examples:programs:demoWorkerClassPath \
+  && cp -r jvm/examples/programs/build/demo-worker /opt/workhorse-jvm
+
+# The JRE that runs the JVM worker. Its tag is the Temurin release that mise.toml pins. It is an
+# Alpine build, so it runs on the musl C library of the runtime stage's base.
+FROM eclipse-temurin:25.0.4_7-jre-alpine@sha256:2ca9adf44f5c29d28ecd26cf92d75cc0c66b7f32bfd839a4439e363a8b428af8 AS jre
+
+# The .NET worker, published framework-dependent and without an app host, so one build serves every
+# architecture. The SDK tag is the version that mise.toml pins.
+FROM mcr.microsoft.com/dotnet/sdk:10.0.402-alpine3.24@sha256:496914451b05ac5a24592024362ec370c3a2d3c3fe817f864e4aa55c4c194a56 AS dotnet-build
+
+WORKDIR /workhorse
+ARG BUILD_CONCURRENCY=4
+ENV DOTNET_CLI_TELEMETRY_OPTOUT=1
+ENV DOTNET_NOLOGO=1
+COPY dotnet/ ./dotnet/
+# The NuGet package cache persists in the builder between image builds, like the Go caches.
+RUN --mount=type=cache,target=/root/.nuget/packages \
+    dotnet publish dotnet/demo/Workhorse.DemoWorker \
+      --configuration Release \
+      --output /opt/workhorse-dotnet \
+      -maxcpucount:${BUILD_CONCURRENCY} \
+      -p:UseAppHost=false
+
+# The .NET runtime that runs the .NET worker. It matches the runtime of the SDK above.
+FROM mcr.microsoft.com/dotnet/runtime:10.0.13-alpine3.24@sha256:6a97a629f6c44e7263b41175e79cb9aeb1df631d3714e74e80a4ddd016258646 AS dotnet-runtime
+
 FROM ghcr.io/astral-sh/uv:0.13.5@sha256:32a7bb39b496babbd997b0a39a4d66c126bdaf5661b302bf6f06abda8deca6ff AS uv
 
 # The dependencies install on the runtime stage's base and its pinned python3, not on a Python
@@ -145,9 +184,10 @@ ENV PORT=3000
 # grow to 4288 MB. It then defers collection until the container limit is reached first and the
 # kernel kills the process with no message and no stack. The container runs four Node processes —
 # the supervisor, the server, the TypeScript worker, and the staging worker — and each also holds
-# about 80 MiB outside the heap, so four ceilings plus the Python, Go, Rust, and Ruby workers must
-# fit 1 GiB.
-ENV NODE_OPTIONS=--max-old-space-size=128
+# about 80 MiB outside the heap, so four ceilings plus the Python, Go, Rust, Ruby, JVM, and .NET
+# workers must fit 1 GiB. The JVM worker's heap, metaspace, and code cache ceilings are in
+# container-entrypoint.mjs.
+ENV NODE_OPTIONS=--max-old-space-size=80
 ENV WORKHORSE_DEMO_MODE=production
 ENV WORKHORSE_DEMO_LOG_DIRECTORY=/opt/workhorse-demo/logs
 ENV PYTHONPATH=/opt/workhorse-python
@@ -161,6 +201,10 @@ COPY --from=go-build /opt/workhorse-go-demo-worker /usr/local/bin/workhorse-go-d
 COPY --from=rust-build /opt/workhorse-rust-demo-worker /usr/local/bin/workhorse-rust-demo-worker
 COPY --from=python-build /opt/workhorse-python /opt/workhorse-python
 COPY --from=ruby-build /opt/workhorse-ruby /opt/workhorse-ruby
+COPY --from=jvm-build /opt/workhorse-jvm /opt/workhorse-jvm
+COPY --from=jre /opt/java/openjdk /opt/java/openjdk
+COPY --from=dotnet-build /opt/workhorse-dotnet /opt/workhorse-dotnet
+COPY --from=dotnet-runtime /usr/share/dotnet /usr/share/dotnet
 COPY python/examples/demo_worker.py /opt/workhorse-python-worker.py
 ARG ALPINE_PYTHON_VERSION
 RUN apk add --no-cache libpq python3=${ALPINE_PYTHON_VERSION} ruby ruby-bundler
@@ -177,9 +221,12 @@ RUN set -eu \
   && python3 -B -c "import workhorse._contracts" \
   && BUNDLE_GEMFILE=/opt/workhorse-ruby/Gemfile ruby -rbundler/setup -e 'require "stablemates/workhorse"' \
   && node -e 'import("@stablemates/workhorse").then(() => import("@stablemates/workhorse-dashboard-server"))' \
+  && /opt/java/openjdk/bin/java --dry-run -cp '/opt/workhorse-jvm/*' run.workhorse.examples.programs.DemoWorkerProgram \
+  && dotnet_check="$(/usr/share/dotnet/dotnet /opt/workhorse-dotnet/Workhorse.DemoWorker.dll 2>&1 || true)" \
+  && if [ "$dotnet_check" != "DATABASE_URL_PRIMARY is required" ]; then echo "The .NET worker did not start: $dotnet_check" >&2; exit 1; fi \
   && probe="logs/.write-probe-$$" && : > "$probe" && rm "$probe" \
   && if touch /opt/workhorse-demo/.write-probe 2>/dev/null; then echo "The node user can write /opt/workhorse-demo" >&2; exit 1; fi \
-  && writable="$(find /opt/workhorse-demo /opt/workhorse-python /opt/workhorse-python-worker.py /opt/workhorse-ruby /usr/local/bin/workhorse-go-demo-worker /usr/local/bin/workhorse-rust-demo-worker -path /opt/workhorse-demo/logs -prune -o ! -type l \( -user node -o -group node -o -perm -0002 \) -print)" \
+  && writable="$(find /opt/workhorse-demo /opt/workhorse-python /opt/workhorse-python-worker.py /opt/workhorse-ruby /opt/workhorse-jvm /opt/java/openjdk /opt/workhorse-dotnet /usr/share/dotnet /usr/local/bin/workhorse-go-demo-worker /usr/local/bin/workhorse-rust-demo-worker -path /opt/workhorse-demo/logs -prune -o ! -type l \( -user node -o -group node -o -perm -0002 \) -print)" \
   && if [ -n "$writable" ]; then echo "The node user can write application files:" >&2; echo "$writable" >&2; exit 1; fi
 EXPOSE 3000
 
