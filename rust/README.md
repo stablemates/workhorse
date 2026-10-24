@@ -201,6 +201,8 @@ The PostgreSQL tests in `rust/tests/postgres.rs`, `rust/tests/enqueue_postgres.r
 `rust/tests/protocol_conformance.rs` exercise the real
 `workhorse` adapter. Each one creates a scratch database from `DATABASE_URL_TEST`, installs
 `sql/schema/current.sql`, and drops the database afterward.
+The scratch database sets `synchronous_commit = off`, so a host I/O stall does not add a WAL
+flush wait to each commit in a test.
 `pnpm db:sweep` finds any scratch database that a failed teardown leaves behind.
 
 Without `DATABASE_URL_TEST` a local `pnpm rust:test` skips those tests and prints the reason.

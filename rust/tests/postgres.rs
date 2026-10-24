@@ -66,3 +66,21 @@ async fn postgres_scratch_database_is_isolated_and_dropped() {
     let after: i64 = admin.query_one(exists, &[&name]).await.unwrap().get(0);
     assert_eq!(after, 0, "scratch database {name} survived its guard");
 }
+
+#[tokio::test]
+async fn postgres_scratch_database_commits_without_waiting_for_the_wal_flush() {
+    let Some(database) = support::scratch_database("postgres_scratch_async_commit").await else {
+        return;
+    };
+    // Each new session in the scratch database takes the setting, including the worker's pool.
+    for _ in 0..2 {
+        let setting: String = database
+            .connect()
+            .await
+            .query_one("SELECT current_setting('synchronous_commit')", &[])
+            .await
+            .unwrap()
+            .get(0);
+        assert_eq!(setting, "off", "a host I/O stall would delay each commit in a test");
+    }
+}

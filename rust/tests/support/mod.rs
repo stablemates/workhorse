@@ -5,6 +5,9 @@
 //! `sql/schema/current.sql` into it, and drops it when the guard goes out of scope. `pnpm db:sweep`
 //! recognizes the same name shape if a teardown never runs.
 //!
+//! The scratch database sets `synchronous_commit = off`. Its commits do not wait for the WAL flush,
+//! so a host I/O stall does not add a flush wait to each commit of a test.
+//!
 //! Without `DATABASE_URL_TEST` a local run skips with a visible reason. CI, or
 //! `WORKHORSE_REQUIRE_DATABASE=1`, turns that skip into a failure, and a database that is set but
 //! unreachable always fails.
@@ -132,6 +135,16 @@ pub async fn scratch_database(test: &str) -> Option<ScratchDatabase> {
         .unwrap_or_else(|error| panic!("create scratch database {name}: {error:?}"));
     // Owned from here on, so a failed schema install still drops the database.
     let scratch = ScratchDatabase { name, url, admin };
+    // The scratch database is for tests only, so its commits do not wait for the WAL flush. A host
+    // I/O stall can make one flush take seconds and break the time bounds of a test. Visibility
+    // and order do not change. Only a server crash can lose such a commit, and no test needs it.
+    client
+        .batch_execute(&format!(
+            "ALTER DATABASE {} SET synchronous_commit = off",
+            quote(&scratch.name)
+        ))
+        .await
+        .unwrap_or_else(|error| panic!("configure scratch database {}: {error:?}", scratch.name));
     scratch
         .connect()
         .await
