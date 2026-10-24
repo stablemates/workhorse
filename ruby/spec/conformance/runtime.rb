@@ -28,6 +28,9 @@ module Conformance
     STATE = "SELECT state, current_attempt, error->>'name' AS error_name FROM workhorse.task_runtime " \
       "WHERE task_id = $1 UNION ALL SELECT state, current_attempt, error->>'name' FROM workhorse.task_outcome " \
       "WHERE task_id = $1"
+    # A maintenance interval, in seconds, that no fixture outlasts. A worker with it runs only the
+    # tick that is due when it starts.
+    ONE_TICK_INTERVAL = 3600
 
     # Records the parent of every span the worker starts while a trace fixture runs.
     class Tracer < ::OpenTelemetry::Trace::Tracer
@@ -335,6 +338,9 @@ module Conformance
     # the next claim. That span is the worker's own cadence. It leaves out the claim that finds
     # the task and the dispatch to the handler. A slow runner or a slow database therefore cannot
     # charge that latency to the backoff.
+    #
+    # The dispatch loop runs a due maintenance tick just before it claims. So the worker's only
+    # tick is the one at its start: a later one would fall inside the measured span on a slow host.
     def poll_cadence(fixture)
       name = queue_name(fixture)
       polls = fixture["emptyPollsBeforeEnqueue"]
@@ -346,7 +352,8 @@ module Conformance
       handled = Concurrent::Event.new
       maximum = fixture["expectedMaximumDelayMs"] / 1000.0
       with_pool do |pool|
-        subject = worker(pool, fixture, poll_interval: fixture["pollMs"] / 1000.0).handle(fixture["taskType"]) do
+        subject = worker(pool, fixture, poll_interval: fixture["pollMs"] / 1000.0,
+          maintenance_interval: ONE_TICK_INTERVAL).handle(fixture["taskType"]) do
           handled.set
           nil
         end
@@ -1014,6 +1021,12 @@ module Conformance
 
     # Makes the first heartbeat rounds report the lease busy, and checks that the worker retries
     # only that lease, sooner than its interval, and keeps the attempt running.
+    #
+    # The retry gap runs from the return of a busy round to the start of the worker's next round,
+    # at the worker's own stamps. That span is the worker's retry schedule. So the check does not
+    # charge to the schedule a round that a loaded host stalls past the next regular slot. A worker
+    # that waits for the regular round still fails. The worker connections do not wait for a WAL
+    # flush at COMMIT. On a shared server, other databases can make that flush take seconds.
     def heartbeat_busy(fixture)
       task_id = queue.enqueue(fixture["taskType"], {}, queue: queue_name(fixture)).task_id
       started = Concurrent::Event.new
@@ -1022,7 +1035,8 @@ module Conformance
       timeout = fixture["renewalTimeoutMs"] / 1000.0
       injection = fixture.fetch("injection")
       rounds = []
-      with_pool do |pool|
+      sent = nil
+      with_pool(on_connect: ->(connection) { connection.exec("SET synchronous_commit = off") }) do |pool|
         subject = worker(pool, fixture, lease: fixture["leaseMs"] / 1000.0, heartbeat: fixture["heartbeatMs"] / 1000.0)
           .handle(fixture["taskType"]) do |_payload, context|
           started.set
@@ -1031,6 +1045,7 @@ module Conformance
           cancellations << task_id if context.cancellation.cancelled?
           nil
         end
+        sent = record_heartbeat_rounds(subject)
         running(-> { subject.run_once }) do |result|
           check(started.wait(5), "the handler never started")
           renewal(task_id, expiry(task_id), timeout)
@@ -1050,9 +1065,15 @@ module Conformance
       busy = rounds.first(fixture["expectedBusyRounds"])
       counts = busy.map { |round| Integer(round["lease_count"], 10) }
       check(counts.all?(1), "the busy rounds sent #{counts} leases, want 1 each")
-      gaps = busy.map { |round| Float(round["round_at_ms"]) }.each_cons(2).map { |earlier, later| later - earlier }
+      answers = sent.each_index.select { |index| sent[index][2] }
+      check(answers.length >= fixture["expectedBusyRounds"],
+        "the worker saw #{answers.length} busy rounds, want #{fixture["expectedBusyRounds"]}")
+      retried = answers.first(fixture["expectedBusyRounds"] - 1)
+      check(retried.all? { |index| index + 1 < sent.length }, "the worker sent no round after a busy round")
+      gaps = retried.map { |index| (sent[index + 1][0] - sent[index][1]) * 1000 }
       check(gaps.all? { |gap| gap < fixture["maximumRetryGapMs"] },
-        "busy retries came #{gaps} ms apart, want less than #{fixture["maximumRetryGapMs"]}")
+        "the worker started the next round #{gaps.map(&:round)} ms after a busy round, want less than " \
+        "#{fixture["maximumRetryGapMs"]} ms")
       check(cancellations.length == fixture["expectedCancellations"], "the handler saw a cancellation")
       expect_state(task_id, fixture["expectedState"])
       expect_outcomes(task_id, [fixture["expectedAttemptOutcome"]])
@@ -1066,7 +1087,9 @@ module Conformance
         task_id = queue.enqueue(fixture["taskType"], {}, queue: queue_name(fixture)).task_id
         ticks = []
         with_pool do |pool|
-          subject = worker(pool, fixture, maintenance_interval: 0.1).handle(fixture["taskType"]) { nil }
+          # The first tick of a worker is due at once. With a short interval, a slow claim or
+          # completion makes the next one due before the empty claim that ends the pass.
+          subject = worker(pool, fixture, maintenance_interval: ONE_TICK_INTERVAL).handle(fixture["taskType"]) { nil }
           wrap_rows(subject) do |original, sql, params|
             rows = original.call(sql, params)
             ticks << rows if sql == W::SqlCatalogue::TICK_V1
@@ -1192,6 +1215,25 @@ module Conformance
       yield pool
     ensure
       pool&.shutdown(&:close)
+    end
+
+    # Records each heartbeat round of +subject+ at the worker's own stamps, as [start, return, busy].
+    # The return comes after COMMIT. +busy+ tells whether the round scheduled a busy retry, and it
+    # is nil for a round that raised. One thread runs every round of a pool, so the entries are in
+    # the order of the rounds.
+    def record_heartbeat_rounds(subject)
+      rounds = Concurrent::Array.new
+      subject.instance_variable_get(:@heartbeat).define_singleton_method(:send_round) do |*arguments, &block|
+        started = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+        busy = nil
+        begin
+          super(*arguments, &block)
+          busy = !instance_variable_get(:@busy).nil?
+        ensure
+          rounds << [started, Process.clock_gettime(Process::CLOCK_MONOTONIC), busy]
+        end
+      end
+      rounds
     end
 
     # Makes each heartbeat statement on +connection+ wait until +released+ is set. The call waits
