@@ -206,7 +206,11 @@ def test_signal_wait_uses_the_shorter_caller_timeout(database_url: str) -> None:
 
 
 def test_signal_wait_uses_an_earlier_task_deadline(database_url: str) -> None:
-    deadline = datetime.now(UTC) + timedelta(seconds=1)
+    # PostgreSQL keeps a task out of a claim after its deadline. Thus the deadline must be far
+    # enough away that a loaded host claims the task first. The wait timeout is longer still. The
+    # enqueue keeps whole milliseconds, so the deadline has no smaller part.
+    later = datetime.now(UTC) + timedelta(seconds=60)
+    deadline = later.replace(microsecond=later.microsecond // 1000 * 1000)
 
     with (
         psycopg.connect(database_url) as enqueue_connection,
@@ -220,17 +224,19 @@ def test_signal_wait_uses_an_earlier_task_deadline(database_url: str) -> None:
         enqueue_connection.commit()
         worker = Worker(worker_pool, worker_id="python-signal-deadline-worker").handle(
             "signal.deadline",
-            lambda _payload, context: context.wait_for_signal("approval", timeout_ms=5_000),
+            lambda _payload, context: context.wait_for_signal("approval", timeout_ms=600_000),
         )
 
-        assert worker.run_once() is True
+        assert worker.run_once() is True, "the worker did not claim the task before its deadline"
+        # The wait also writes its end into the runtime deadline, so both must equal the enqueued
+        # deadline. A comparison of the two values only would pass for any wait timeout.
         assert worker_connection.execute(
-            "SELECT signal.timeout_at = runtime.deadline_at "
+            "SELECT signal.timeout_at, runtime.deadline_at "
             "FROM workhorse.task_signal_wait signal "
             "JOIN workhorse.task_runtime runtime ON runtime.task_id = signal.task_id "
             "WHERE signal.task_id = %s AND signal.signal_name = 'approval'",
             (task_id,),
-        ).fetchone() == (True,)
+        ).fetchone() == (deadline, deadline), "the signal wait does not end at the task deadline"
 
 
 def test_signal_payload_limit_counts_utf8_json_bytes(database_url: str) -> None:

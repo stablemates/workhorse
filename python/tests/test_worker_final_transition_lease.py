@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 from collections.abc import Callable, Sequence
-from threading import Event, Lock, Thread
+from threading import Condition, Event, Lock, Thread
 from time import monotonic, sleep
 from typing import Any
 
@@ -467,20 +467,18 @@ def test_a_base_exception_from_the_handler_still_ends_supervision() -> None:
         assert worker._heartbeat_members == {}
 
 
-# Under load, a round can pass its bound and renew nothing. A lease of four intervals still renews
-# when some rounds fail, and a lease that stopped renewing at handler return still lapses during the
-# delay.
-INTEGRATION_LEASE_MS = 2_000
+# Under load, a round can pass its bound and renew nothing. A host stall can stop every round for
+# seconds, so a short lease lapses on correct code. This lease is longer than any wait of the test.
+INTEGRATION_LEASE_MS = 30_000
 INTEGRATION_HEARTBEAT_MS = 500
+# The longest wait for a renewal of the held lease. It ends before the lease, so a lapse cannot hide
+# a worker that stops renewing at handler return.
+RENEWAL_SECONDS = 20
 FINAL_WRITES = (STATEMENTS.complete, STATEMENTS.fail, STATEMENTS.acknowledge_cancel)
 
 
 class DelayedFinalWrite:
-    """Send every statement to PostgreSQL, but hold the final write for two leases.
-
-    While it waits, the test runs lease recovery. A lease that stopped renewing at handler return
-    would lapse and hand the task to recovery before the completion arrives.
-    """
+    """Send every statement to PostgreSQL, but hold the first final write while the test acts."""
 
     def __init__(self, inner: SyncExecutor, during_delay: Callable[[], None]) -> None:
         self._inner = inner
@@ -494,13 +492,57 @@ class DelayedFinalWrite:
         return self._inner.rows(statement, parameters)
 
 
+class BlockedHeartbeats:
+    """Stop new heartbeat rounds of a worker while the test holds them, and count running rounds.
+
+    The heartbeat loop catches the errors of a round, so the test reads them from `errors`.
+    """
+
+    def __init__(self, rounds: Callable[..., Any]) -> None:
+        self._rounds = rounds
+        self._changed = Condition()
+        self._blocked = False
+        self._running = 0
+        self.errors: list[str] = []
+
+    def __call__(self, *arguments: Any) -> Any:
+        with self._changed:
+            if not self._changed.wait_for(lambda: not self._blocked, EVENT_SECONDS):
+                self.errors.append("the test never unblocked the heartbeat rounds")
+                raise AssertionError(self.errors[-1])
+            self._running += 1
+        try:
+            return self._rounds(*arguments)
+        finally:
+            with self._changed:
+                self._running -= 1
+                self._changed.notify_all()
+
+    def block(self) -> None:
+        """Stop new rounds, and wait until no call of the worker waits for a round."""
+        with self._changed:
+            self._blocked = True
+            assert self._changed.wait_for(lambda: self._running == 0, EVENT_SECONDS), (
+                "a heartbeat round did not end"
+            )
+
+    def unblock(self) -> None:
+        with self._changed:
+            self._blocked = False
+            self._changed.notify_all()
+
+
 @pytest.mark.parametrize(
-    ("cancel", "want_state"),
-    [(False, "succeeded"), (True, "canceled")],
-    ids=["completes-under-the-claimed-fence", "settles-a-cancellation-requested-meanwhile"],
+    ("scenario", "want_state"),
+    [("complete", "succeeded"), ("cancel", "canceled"), ("cancel-after-lapse", "canceled")],
+    ids=[
+        "completes-under-the-claimed-fence",
+        "settles-a-cancellation-requested-meanwhile",
+        "recovers-a-cancellation-after-the-lease-lapses",
+    ],
 )
 def test_a_delayed_completion_keeps_the_claimed_lease(
-    database_url: str, worker_pool: ConnectionPool, cancel: bool, want_state: str
+    database_url: str, worker_pool: ConnectionPool, scenario: str, want_state: str
 ) -> None:
     queue_name = "python-final-transition-lease"
     with psycopg.connect(database_url, autocommit=True) as operator:
@@ -509,19 +551,54 @@ def test_a_delayed_completion_keeps_the_claimed_lease(
         )
     claimed_fence: list[int] = []
 
+    def lease(operator: psycopg.Connection) -> tuple[int, object]:
+        row = operator.execute(
+            "SELECT fence_token, expires_at FROM workhorse.task_runtime WHERE task_id = %s",
+            (task_id,),
+        ).fetchone()
+        assert row is not None, "the task left its lease before the final write"
+        return int(row[0]), row[1]
+
     def during_delay() -> None:
         with psycopg.connect(database_url, autocommit=True) as operator:
-            row = operator.execute(
-                "SELECT fence_token FROM workhorse.task_runtime WHERE task_id = %s", (task_id,)
-            ).fetchone()
-            assert row is not None
-            claimed_fence.append(int(row[0]))
-            if cancel:
+            fence, held_expiry = lease(operator)
+            claimed_fence.append(fence)
+            if scenario == "cancel":
+                # Cancellation refuses renewal. complete_v1 then refuses the held completion, and
+                # the worker acknowledges the cancellation under the claimed fence.
                 assert Queue(operator).cancel(task_id).status == "cancel_requested"
-            deadline = monotonic() + 2 * INTEGRATION_LEASE_MS / 1000
-            while monotonic() < deadline:
-                operator.execute("SELECT * FROM workhorse.recover_expired_telemetry_v1(100, 0)")
-                sleep(INTEGRATION_LEASE_MS / 4000)
+                return
+            if scenario == "cancel-after-lapse":
+                # The lease ends in database time without a wait. Recovery then settles the
+                # requested cancellation, and the held completion is stale when it arrives.
+                assert Queue(operator).cancel(task_id).status == "cancel_requested"
+                heartbeats.block()
+                try:
+                    # A round past its deadline can still run on its own thread and lock the row.
+                    # Recovery skips a locked row, so one transaction holds the lock from the
+                    # update to the recovery.
+                    with operator.transaction():
+                        operator.execute(
+                            "UPDATE workhorse.task_runtime "
+                            "SET expires_at = clock_timestamp() - interval '1 ms' "
+                            "WHERE task_id = %s",
+                            (task_id,),
+                        )
+                        recovered = operator.execute(
+                            "SELECT rows_affected "
+                            "FROM workhorse.recover_expired_telemetry_v1(100, 0)"
+                        ).fetchone()
+                    assert recovered == (1,), "recovery did not take the lapsed lease"
+                finally:
+                    heartbeats.unblock()
+                return
+            # The handler has returned. A heartbeat must still move the expiry in PostgreSQL.
+            deadline = monotonic() + RENEWAL_SECONDS
+            while lease(operator) == (fence, held_expiry):
+                assert monotonic() < deadline, (
+                    "no heartbeat renewed the lease in PostgreSQL while the final write was held"
+                )
+                sleep(INTEGRATION_HEARTBEAT_MS / 5000)
 
     def handle(_payload: object, _context: object) -> object:
         return {"settled": True}
@@ -537,13 +614,13 @@ def test_a_delayed_completion_keeps_the_claimed_lease(
             registry_interval_ms=0,
             _executor=executor,  # type: ignore[arg-type]
         ).handle(TASK, handle)
+        heartbeats = BlockedHeartbeats(worker._heartbeat_rows)
+        worker._heartbeat_rows = heartbeats  # type: ignore[method-assign]
         assert worker.run_once() is True
 
+    assert heartbeats.errors == []
     assert executor.delayed == 1
     with psycopg.connect(database_url, autocommit=True) as observer:
-        if cancel:
-            # Cancellation refuses renewal, so recovery settles the requested cancellation.
-            observer.execute("SELECT * FROM workhorse.recover_expired_telemetry_v1(100, 0)")
         outcome = observer.execute(
             "SELECT state, fence_token, current_attempt FROM workhorse.task_outcome "
             "WHERE task_id = %s",

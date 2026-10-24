@@ -26,6 +26,21 @@ from workhorse import (
 from workhorse.async_worker import _BridgeThreads
 
 
+# A stop can spend the whole stop budget, max(heartbeat_ms, 5 s), on a claim in flight, maintenance,
+# or the draining registry refresh. The default 30 s lease gives a heartbeat interval of 10 s, so
+# the budget is 10 s. The 1 s cleanup window, which also releases the shared listener, comes next.
+STOP_SECONDS = 15
+
+
+async def run_ends_after_stop(run: asyncio.Task[None]) -> None:
+    """Wait until a stopped run ends. A run that is still alive after the stop budget fails."""
+    done, _ = await asyncio.wait((run,), timeout=STOP_SECONDS)
+    assert done, (
+        f"the run did not end within {STOP_SECONDS} s after stop(), past its stop budget of 10 s"
+    )
+    run.result()
+
+
 def enqueue(database_url: str, type: str, payload: object, *, queue: str = "default") -> str:
     with psycopg.connect(database_url) as connection:
         return Queue(connection).enqueue(
@@ -210,12 +225,13 @@ async def test_async_worker_notifications_wake_continuous_dispatch_and_stop_drai
         await asyncio.sleep(0.05)
         assert not run.done()
         release.set()
-        await asyncio.wait_for(run, timeout=2)
+        await run_ends_after_stop(run)
         assert outcome(database_url, task_id) == ("succeeded", {"handled": True})
     finally:
         release.set()
         worker.stop()
-        await run
+        # A bound here lets a failed wait above reach pytest.
+        await asyncio.wait((run,), timeout=STOP_SECONDS)
         await query_connection.close()
 
 
@@ -310,7 +326,7 @@ async def test_saturated_and_paused_async_worker_keeps_promoting_due_tasks(
     finally:
         release.set()
         worker.stop()
-        await asyncio.wait_for(run, timeout=5)
+        await run_ends_after_stop(run)
 
 
 @pytest.mark.asyncio
@@ -438,7 +454,7 @@ async def test_asyncpg_run_removes_the_notification_listener_before_release(
             )
         finally:
             worker.stop()
-            await asyncio.wait_for(run, timeout=2)
+            await run_ends_after_stop(run)
 
         assert reported == []
         assert pool.get_idle_size() == 3
@@ -482,7 +498,7 @@ async def test_async_worker_run_starts_only_its_own_notification_listener(
         await asyncio.sleep(0.5)
     finally:
         worker.stop()
-        await asyncio.wait_for(run, timeout=2)
+        await run_ends_after_stop(run)
 
     assert core_listeners == [None]
     assert reported == []
