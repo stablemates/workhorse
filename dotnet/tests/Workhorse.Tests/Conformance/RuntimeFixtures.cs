@@ -43,6 +43,12 @@ internal sealed class RuntimeFixtures : IAsyncDisposable
     private static readonly TimeSpan Patience = TimeSpan.FromSeconds(10);
 
     /// <summary>
+    /// The shutdown grace of the release-wait worker. It ends before <see cref="Patience"/>, so a run
+    /// whose stop comes during a stalled claim returns before the runner stops its wait.
+    /// </summary>
+    private static readonly TimeSpan ReleaseWaitShutdownGrace = TimeSpan.FromSeconds(5);
+
+    /// <summary>
     /// A wait for a handler to start that measures nothing and only stops a fixture that would hang.
     /// It is longer than the worker's startup budget of <c>max(heartbeat, 5 s)</c>, after which the
     /// worker still ticks and claims.
@@ -1192,6 +1198,10 @@ internal sealed class RuntimeFixtures : IAsyncDisposable
             options.PollingOnly = false;
             options.Lease = Millis(fixture, "leaseMs");
             options.PollInterval = Millis(fixture, "pollMs");
+            // The shared server can stall a claim on its WAL flush for longer than Patience. A stop
+            // during that claim waits until ShutdownGrace, so the grace must end before Patience
+            // (SM-1799).
+            options.ShutdownGrace = ReleaseWaitShutdownGrace;
             await using var subject = new Worker(pool.DataSource, options);
             subject.Handle<JsonElement>((string)fixture["registeredTaskType"]!, (_, _) => Task.CompletedTask);
             var run = Running(subject, () => subject.RunAsync(CancellationToken.None));
