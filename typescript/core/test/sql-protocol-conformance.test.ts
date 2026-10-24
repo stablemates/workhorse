@@ -22,6 +22,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type {
   ClaimedTask,
   EnqueueRequest,
+  ExpireOwnedStatus,
   TaskAttemptOutcome,
   Json,
   Queryable,
@@ -71,7 +72,7 @@ import {
   Worker,
   WORKHORSE_SCHEMA_VERSION,
 } from "../src/index.js";
-import type { Pool } from "pg";
+import { Pool } from "pg";
 import { raceBudgetAdmission } from "./support/budget-race.js";
 import { createDatabaseTestHarness } from "./support/db.js";
 import { workerHeartbeatReservation } from "../src/worker-internal.js";
@@ -355,48 +356,61 @@ async function executeExpirationRuntimeFixture(
   fixture: ExpirationRuntimeFixture,
 ): Promise<void> {
   const queueName = `runtime-${fixture.id}`;
-  // The expiry PostgreSQL holds for each attempt, before the worker's copy moves earlier.
+  // The expiry PostgreSQL holds for each attempt, from the start of its handler.
   const databaseExpiries: Date[] = [];
+  // What PostgreSQL answered to the expiry requests of each attempt, in order.
+  const expiryAnswers = new Map<number, ExpireOwnedStatus[]>();
+  const [field, column] =
+    fixture.mode === "deadline"
+      ? (["deadlineAt", "deadline_at"] as const)
+      : (["attemptTimeoutAt", "attempt_timeout_at"] as const);
+  // The worker counts its local expiry from the clock reading of the claim. That reading is the
+  // lease expiry less the lease. The worker starts to count when the attempt starts. So the claim
+  // answer gives the worker an expiry `durationMs - localClockLeadMs` after that reading. The
+  // handler then sets the database expiry `durationMs` after the attempt starts. Thus a slow claim
+  // answer makes both expiries later, and the lead stays. An expiry that the database holds before
+  // the attempt starts loses the lead to that delay. On a new connection, the delay can be longer
+  // than one second.
   const earlyTimerQueue = new Proxy(queue, {
     get(target, property, receiver) {
       if (property === "claimMany") return undefined;
+      if (property === "expireOwned") {
+        return async (...args: Parameters<Queue["expireOwned"]>) => {
+          const status = await target.expireOwned(...args);
+          expiryAnswers.set(args[0].attempt, [
+            ...(expiryAnswers.get(args[0].attempt) ?? []),
+            status,
+          ]);
+          return status;
+        };
+      }
       if (property !== "claim") return Reflect.get(target, property, receiver);
       return async (...args: Parameters<Queue["claim"]>) => {
         const claimed = await target.claim(...args);
-        if (claimed && fixture.mode === "deadline") {
-          const deadline = await database.query<{ deadlineAt: Date }>(
-            `UPDATE workhorse.task_runtime
-                SET deadline_at = clock_timestamp() + $2::integer * interval '1 millisecond'
-              WHERE task_id = $1::uuid
-              RETURNING deadline_at AS "deadlineAt"`,
-            [claimed.id, fixture.durationMs],
-          );
-          databaseExpiries.push(deadline.rows[0]!.deadlineAt);
-          claimed.deadlineAt = new Date(
-            deadline.rows[0]!.deadlineAt.getTime() - fixture.localClockLeadMs,
-          );
-        }
-        if (claimed && fixture.mode === "execution-timeout" && claimed.attemptTimeoutAt) {
-          databaseExpiries.push(claimed.attemptTimeoutAt);
-          claimed.attemptTimeoutAt = new Date(
-            claimed.attemptTimeoutAt.getTime() - fixture.localClockLeadMs,
+        if (claimed) {
+          claimed[field] = new Date(
+            claimed.leaseExpiresAt.getTime() -
+              fixture.leaseMs +
+              fixture.durationMs -
+              fixture.localClockLeadMs,
           );
         }
         return claimed;
       };
     },
   });
-  const expiration = new Date(Date.now() + 3_600_000);
+  // The handler sets the expiry that PostgreSQL holds. The enqueued one only has to be far enough
+  // away that the database cannot reach it first.
   const id = await queue.enqueue(
     fixture.taskType,
     {},
     fixture.mode === "deadline"
-      ? { queue: queueName, deadline: expiration, maxAttempts: fixture.maxAttempts }
-      : {
+      ? {
           queue: queueName,
-          executionTimeoutMs: fixture.durationMs,
+          deadline: new Date(Date.now() + 3_600_000),
           maxAttempts: fixture.maxAttempts,
-        },
+        }
+      : { queue: queueName, executionTimeoutMs: 3_600_000, maxAttempts: fixture.maxAttempts },
   );
   const abortReasons: unknown[] = [];
   // PostgreSQL's clock when each handler observed its cancellation.
@@ -409,6 +423,14 @@ async function executeExpirationRuntimeFixture(
     heartbeatMs: fixture.heartbeatMs,
   }).handle(fixture.taskType, async (_payload, context) => {
     handled.push({ id: context.task.id, attempt: context.task.attempt });
+    const expiry = await database.query<{ expiry: Date }>(
+      `UPDATE workhorse.task_runtime
+          SET ${column} = clock_timestamp() + $2::integer * interval '1 millisecond'
+        WHERE task_id = $1::uuid
+        RETURNING ${column} AS expiry`,
+      [context.task.id, fixture.durationMs],
+    );
+    databaseExpiries.push(expiry.rows[0]!.expiry);
     const reason = await waitForAbort(context.signal);
     const now = await database.query<{ now: Date }>("SELECT clock_timestamp() AS now");
     cancelledAt.push(now.rows[0]!.now);
@@ -424,6 +446,14 @@ async function executeExpirationRuntimeFixture(
       currentAttempt: expected.attempt,
       ...(expected.errorName === undefined ? {} : { error: { name: expected.errorName } }),
     });
+  }
+  // A local timer that leads the database asks before the expiry, so PostgreSQL first answers
+  // not_due. Without that answer, the fixture does not prove that the worker asks again.
+  if (fixture.localClockLeadMs > 0) {
+    expect(
+      handled.map(({ attempt }) => expiryAnswers.get(attempt)?.[0]),
+      "the first answer to each attempt's expiry request",
+    ).toEqual(handled.map(() => "not_due"));
   }
   // Each pass ran the same task, at the next attempt.
   expect(handled).toEqual(fixture.expectedAfterRuns.map((_, run) => ({ id, attempt: run + 1 })));
@@ -1676,9 +1706,27 @@ async function executeRuntimeFixture(
     case "cooperative-cancellation":
       await executeCooperativeCancellationRuntimeFixture(queue, admin, database, fixture);
       break;
-    case "expiration":
-      await executeExpirationRuntimeFixture(queue, admin, database, fixture);
+    case "expiration": {
+      // On a busy disk, a commit can wait seconds for its WAL flush. Meanwhile, the expiry request
+      // waits for the row lock of that transaction, and only then reads the clock. That wait can
+      // use up the whole lead. So these fixtures commit without the flush. They prove the expiry
+      // answers, not durability.
+      const unflushed = new Pool({
+        connectionString: runtimeDatabase.databaseUrl,
+        options: "-c synchronous_commit=off",
+      });
+      try {
+        await executeExpirationRuntimeFixture(
+          runtimeQueue(unflushed),
+          new Admin(unflushed),
+          unflushed,
+          fixture,
+        );
+      } finally {
+        await unflushed.end();
+      }
       break;
+    }
     case "lease-loss":
       await executeLeaseLossRuntimeFixture(queue, admin, database, fixture);
       break;
