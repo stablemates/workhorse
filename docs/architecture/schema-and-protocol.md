@@ -2828,7 +2828,7 @@ non-replaceable reason in an enqueue answer throws `UnexpectedStatusException`.
 | `priority`                 | 0 through 100. The default is 0.                                                |
 | `runAt`                    | An `Instant`. A request without it runs now.                                    |
 | `deadline`                 | An `Instant`, truncated to milliseconds.                                        |
-| `executionTimeout`         | A `Duration` of 0 through 31,536,000,000 ms. 0 sets no timeout.                 |
+| `executionTimeout`         | 0, or a `Duration` that rounds to 1 through 31,536,000,000 ms. 0 sets none.     |
 | `maxAttempts`              | 1 through 100. `null` or 0 is 25.                                               |
 | `concurrencyKey`, `budget` | At most 256 UTF-8 bytes each.                                                   |
 | `tags`                     | At most 20 tags of 1 through 100 characters.                                    |
@@ -3682,7 +3682,7 @@ default options. Each method is asynchronous and takes a last `CancellationToken
 | `Priority`                 | 0 through 100. `null` is 0.                                                                 |
 | `RunAt`                    | A `DateTimeOffset`. A request without it runs now.                                          |
 | `Deadline`                 | A `DateTimeOffset`.                                                                         |
-| `ExecutionTimeout`         | A `TimeSpan` of 0 through 31,536,000,000 ms. `null` or zero sets no timeout.                |
+| `ExecutionTimeout`         | Zero, or a `TimeSpan` that rounds to 1 through 31,536,000,000 ms. `null` or zero sets none. |
 | `MaxAttempts`              | 1 through 100. `null` or 0 is 25.                                                           |
 | `ConcurrencyKey`, `Budget` | At most 256 UTF-8 bytes each.                                                               |
 | `Tags`                     | At most 20 tags of 1 through 100 characters.                                                |

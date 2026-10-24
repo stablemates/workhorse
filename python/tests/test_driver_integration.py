@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
+from typing import cast
 
 import asyncpg
 import psycopg
@@ -222,6 +223,27 @@ def test_enqueue_modes_dependencies_batch_and_schedules(database_url: str) -> No
             "WHERE namespace = 'billing' AND schedule_name = 'daily'"
         ).fetchone()
     assert schedule == ("0 0 * * *",)
+
+
+def test_stores_no_execution_timeout_for_an_omitted_or_zero_value(database_url: str) -> None:
+    with psycopg.connect(database_url, autocommit=True) as connection:
+        queue = Queue(connection)
+        timeouts = (None, 0, 1, 31_536_000_000)
+        ids = [
+            queue.enqueue("timeout", {}, EnqueueOptions(execution_timeout_ms=timeout))
+            for timeout in timeouts
+        ]
+        stored = [
+            connection.execute(
+                "SELECT execution_timeout_ms FROM workhorse.task WHERE id = %s::uuid", (task_id,)
+            ).fetchone()
+            for task_id in ids
+        ]
+        for refused in (cast(int, 0.4), -1, 31_536_000_001):
+            with pytest.raises(psycopg.errors.RaiseException, match="executionTimeoutMs must be"):
+                queue.enqueue("timeout", {}, EnqueueOptions(execution_timeout_ms=refused))
+
+    assert stored == [(None,), (None,), (1,), (31_536_000_000,)]
 
 
 def test_psycopg_asserts_schema_compatibility_at_startup(database_url: str) -> None:

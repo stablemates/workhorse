@@ -20,6 +20,24 @@ upgrade steps.
 
 ## Unreleased
 
+### An execution timeout of 0 enqueues a task with no timeout
+
+**Behavior change.** Before this change, `executionTimeoutMs: 0` reached `enqueue_many_v1`, and
+PostgreSQL refused the enqueue. Go, Rust, Ruby, the JVM, and .NET read 0 as no timeout. Thus one
+task definition succeeded in one SDK and failed in another (SM-1714).
+
+Now `Queue.enqueue`, `Queue.enqueueMany`, and a child task request send no execution timeout for 0.
+The task has no timeout, the same as when the option is omitted. A fraction or a value outside 1
+through 31,536,000,000 is still refused. ADR 0114 records the rule for all seven SDKs.
+
+### The .NET ExecutionTimeout refuses a nonzero value that rounds to 0 ms
+
+The .NET queue rounds `EnqueueOptions.ExecutionTimeout` to the nearest millisecond. Before this
+change, a positive `TimeSpan` below 0.5 ms rounded to 0, and the task had no timeout (SM-1714).
+
+Now the queue throws `ArgumentException` for a nonzero `TimeSpan` that rounds to 0 ms. `null` and
+`TimeSpan.Zero` still set no timeout. ADR 0114 records the rule for all seven SDKs.
+
 ### The dashboard logout requires a same-origin request
 
 The built-in single-admin login has a logout path, `{path}/logout`. Before this change, logout did

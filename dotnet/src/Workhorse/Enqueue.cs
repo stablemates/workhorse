@@ -35,7 +35,10 @@ public sealed record EnqueueOptions
     /// </remarks>
     public DateTimeOffset? Deadline { get; init; }
 
-    /// <summary>The timeout of each attempt, or <c>null</c> or zero for none.</summary>
+    /// <summary>
+    /// The timeout of each attempt, or <c>null</c> or zero for none. A nonzero value must round to
+    /// 1 ms or more.
+    /// </summary>
     public TimeSpan? ExecutionTimeout { get; init; }
 
     /// <summary>The attempt limit, 1 to 100, or <c>null</c> or 0 for 25.</summary>

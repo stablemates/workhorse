@@ -241,6 +241,25 @@ describe("child tasks", () => {
     });
   });
 
+  it("creates a child with no execution timeout for a zero value", async () => {
+    const parentQueue = "timeout-child-parents";
+    const parentId = await queue.enqueue("timeout-child-parent", null, { queue: parentQueue });
+    const parent = await queue.claim("timeout-parent-worker", { queue: parentQueue });
+    await queue.createChildren(parent!, "timeout-parent-worker", [
+      { name: "zero", type: "timeout-child", payload: null, options: { executionTimeoutMs: 0 } },
+      { name: "one", type: "timeout-child", payload: null, options: { executionTimeoutMs: 1 } },
+    ]);
+
+    const lineage = await admin.getChildLineage(parentId);
+    const stored = await Promise.all(
+      lineage.records.map(async (record) => [
+        record.name,
+        (await admin.getTask(record.childTaskId))?.executionTimeoutMs,
+      ]),
+    );
+    expect(Object.fromEntries(stored)).toEqual({ zero: null, one: 1 });
+  });
+
   it.each([false, true])(
     "replays a child request without a queue against a stored child on another queue (set=%s)",
     async (set) => {

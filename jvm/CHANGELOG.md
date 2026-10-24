@@ -187,6 +187,11 @@ adds.
 
 ### Behavior changes
 
+- **`executionTimeout` refuses a nonzero value that rounds to 0 ms.** The queue rounds the `Duration` to
+  the nearest millisecond. Before this change, a positive `Duration` below 0.5 ms rounded to 0, and
+  the task had no timeout. Now the queue throws `IllegalArgumentException` for a nonzero `Duration`
+  that rounds to 0 ms. `null` and `Duration.ZERO` still set no timeout. ADR 0114 records the rule
+  for all seven SDKs (SM-1714).
 - **A worker now checks its pool when it starts, and refuses to start on a failed check.** The
   worker reserves the heartbeat connection, starts its listener, and borrows one ordinary
   connection for the compatibility query. The reservation and the borrow share one budget, the

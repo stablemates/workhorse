@@ -262,17 +262,21 @@ differently from a thrown error. Thus, an operator can see if a handler was slow
 <details>
 <summary>Reference: execution timeout</summary>
 
-| SDK          | Option                                              | Rule                                                           |
-| ------------ | --------------------------------------------------- | -------------------------------------------------------------- |
-| TypeScript   | `EnqueueOptions.executionTimeoutMs`                 | An integer from 1 to 31,536,000,000 ms                         |
-| Python       | `execution_timeout_ms`                              | An integer from 1 to 31,536,000,000 ms                         |
-| Go           | `EnqueueOptions.ExecutionTimeoutMS`                 | The same budget                                                |
-| Rust         | `execution_timeout_ms`                              | The same budget                                                |
-| Ruby         | `execution_timeout:`                                | The same budget, in seconds                                    |
-| Java, Kotlin | `EnqueueOptions.Builder.executionTimeout(Duration)` | A `Duration` up to 31,536,000,000 ms; 0 sets none              |
-| C#           | `EnqueueOptions.ExecutionTimeout`                   | A `TimeSpan` up to 31,536,000,000 ms; `null` or zero sets none |
+| SDK          | Option                                              | Rule                                               |
+| ------------ | --------------------------------------------------- | -------------------------------------------------- |
+| TypeScript   | `EnqueueOptions.executionTimeoutMs`                 | An integer from 1 to 31,536,000,000 ms             |
+| Python       | `execution_timeout_ms`                              | An integer from 1 to 31,536,000,000 ms             |
+| Go           | `EnqueueOptions.ExecutionTimeoutMS`                 | An integer from 1 to 31,536,000,000 ms             |
+| Rust         | `execution_timeout_ms`                              | An integer from 1 to 31,536,000,000 ms             |
+| Ruby         | `execution_timeout:`                                | Seconds that round to 1 to 31,536,000,000 ms       |
+| Java, Kotlin | `EnqueueOptions.Builder.executionTimeout(Duration)` | A `Duration` that rounds to 1 to 31,536,000,000 ms |
+| C#           | `EnqueueOptions.ExecutionTimeout`                   | A `TimeSpan` that rounds to 1 to 31,536,000,000 ms |
 
-The timeout is optional.
+The timeout is optional. In every SDK, an omitted timeout and an explicit 0 both set no timeout.
+
+- An integer SDK sends any other value. `enqueue_many_v1` refuses a fraction or a value out of range.
+- Ruby, the JVM, and .NET round a duration to the nearest millisecond, half up. They refuse a
+  nonzero duration that rounds to 0 ms, a negative duration, and a value out of range.
 
 **Accounting**
 

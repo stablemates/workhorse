@@ -21,7 +21,8 @@ import run.workhorse.internal.Values;
  * @param budget the named budget, or {@code null}
  * @param runAt the earliest run time, or {@code null} for now
  * @param deadline the absolute deadline, or {@code null}
- * @param executionTimeout the timeout of each attempt, or {@code null} or zero for none
+ * @param executionTimeout the timeout of each attempt, or {@code null} or zero for none. A nonzero
+ *     duration must round to 1 ms or more.
  * @param maxAttempts the attempt limit, 1 to 100, or {@code null} or 0 for 25
  * @param retryPolicy the persisted retry policy, such as {@code {"type": "fixed", "delayMs":
  *     1000}}, or {@code null}

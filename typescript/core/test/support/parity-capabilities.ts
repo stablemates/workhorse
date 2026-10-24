@@ -2288,6 +2288,44 @@ export const PARITY_DEFAULT_ROWS: readonly ParityDefaultRow[] = [
     },
   },
   {
+    setting: "Enqueue execution timeout",
+    dotnet: {
+      value: "Unset or 0 is none; else 1 to 31,536,000,000 ms",
+      file: "dotnet/src/Workhorse/Queue.cs",
+      pattern: "private static long? ExecutionTimeout(TimeSpan? timeout)",
+    },
+    jvm: {
+      value: "Unset or 0 is none; else 1 to 31,536,000,000 ms",
+      file: "jvm/workhorse/src/main/java/run/workhorse/Queue.java",
+      pattern: "private static @Nullable Long executionTimeout(@Nullable Duration timeout)",
+    },
+    rust: {
+      value: "Unset or 0 is none; else 1 to 31,536,000,000 ms",
+      file: "rust/src/enqueue.rs",
+      pattern: "options.execution_timeout_ms.filter(|value| *value != 0).into()",
+    },
+    typescript: {
+      value: "Unset or 0 is none; else 1 to 31,536,000,000 ms",
+      file: "typescript/core/src/queue/enqueue-contracts.ts",
+      pattern: "return value === undefined || value === 0 ? null : value;",
+    },
+    python: {
+      value: "Unset or 0 is none; else 1 to 31,536,000,000 ms",
+      file: "python/src/workhorse/_protocol.py",
+      pattern: "return None if value is None or value == 0 else value",
+    },
+    go: {
+      value: "Unset or 0 is none; else 1 to 31,536,000,000 ms",
+      file: "go/queue.go",
+      pattern: "ExecutionTimeoutMS:   nilIfZero(options.ExecutionTimeoutMS),",
+    },
+    ruby: {
+      value: "Unset or 0 is none; else 1 to 31,536,000,000 ms",
+      file: "ruby/lib/stablemates/workhorse/queue.rb",
+      pattern: "return nil if value.nil? || (value.is_a?(Numeric) && value.zero?)",
+    },
+  },
+  {
     setting: "Queue of a handler task group add without a queue",
     dotnet: {
       value: "The queue of the member task",
