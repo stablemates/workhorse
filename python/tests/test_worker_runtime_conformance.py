@@ -99,12 +99,19 @@ def test_python_worker_satisfies_every_shared_runtime_fixture(
 
     with psycopg.connect(database_url, autocommit=True) as connection:
         for fixture in fixtures:
-            if worker_flavour == "async":
-                if fixture["kind"] not in ASYNC_RUNTIME_FIXTURE_KINDS:
-                    continue
-                asyncio.run(execute_async_runtime_fixture(connection, fixture, database_url))
-            else:
-                execute_runtime_fixture(connection, fixture, database_url)
+            if worker_flavour == "async" and fixture["kind"] not in ASYNC_RUNTIME_FIXTURE_KINDS:
+                continue
+            try:
+                if worker_flavour == "async":
+                    run_async_fixture(
+                        execute_async_runtime_fixture(connection, fixture, database_url)
+                    )
+                else:
+                    execute_runtime_fixture(connection, fixture, database_url)
+            except BaseException as error:
+                # One test runs every fixture, so the failure names the fixture that failed.
+                error.add_note(f"runtime fixture {fixture['id']} ({worker_flavour} worker)")
+                raise
             coverage.update(fixture["covers"])
 
     if worker_flavour == "async":
@@ -740,7 +747,7 @@ def execute_poll_cadence_fixture(
         # wakes it for new work. The fixture pins the polling backoff, so the worker polls only.
         worker._listens = False
         worker.handle(fixture["taskType"], lambda _payload, _context: handled.set())
-        running = Thread(target=worker.run)
+        running = Thread(target=worker.run, daemon=True)
         running.start()
         try:
             for poll in range(1, fixture["emptyPollsBeforeEnqueue"] + 1):
@@ -1967,6 +1974,50 @@ async def wait_for_async(condition: Callable[[], Awaitable[bool]], message: str)
         await asyncio.sleep(0.01)
 
 
+async def returned[T](run: Awaitable[T]) -> T:
+    """Waits for an async worker run to return, past the worker's stop budget and a margin.
+
+    The wait does not cancel the run. A cancelled AsyncWorker run stops its core and waits for the
+    core to drain, so a cancellation cannot end a run that never returns.
+    """
+    task = asyncio.ensure_future(run)
+    seconds = stop_budget_seconds() + THREAD_EXIT_MARGIN_SECONDS
+    done, _ = await asyncio.wait((task,), timeout=seconds)
+    assert done, (
+        f"the async worker run did not return after the runner waited {seconds:.0f} s for it, "
+        f"past the worker's stop budget of {stop_budget_seconds():.0f} s"
+    )
+    return task.result()
+
+
+def run_async_fixture(fixture_run: Awaitable[None]) -> None:
+    """Runs one async fixture on an event loop of its own, and gives up a run that did not return.
+
+    asyncio.run cancels each task that is left and waits for it without a limit. A cancelled
+    AsyncWorker run waits for its core to drain, so a run that never returns would hang the suite
+    after its fixture failed. This loop cancels the tasks that are left, and then gives each
+    cleanup step GUARD_SECONDS before it closes.
+    """
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    try:
+        loop.run_until_complete(fixture_run)
+    finally:
+        try:
+            left = asyncio.all_tasks(loop)
+            for task in left:
+                task.cancel()
+            if left:
+                loop.run_until_complete(asyncio.wait(left, timeout=GUARD_SECONDS))
+            # An async generator can close over a run that never returns, so its close has a bound.
+            closing = loop.create_task(loop.shutdown_asyncgens())
+            loop.run_until_complete(asyncio.wait((closing,), timeout=GUARD_SECONDS))
+            loop.run_until_complete(loop.shutdown_default_executor(timeout=GUARD_SECONDS))
+        finally:
+            asyncio.set_event_loop(None)
+            loop.close()
+
+
 async def execute_async_json_round_trip_fixture(
     connection: psycopg.Connection[Any], fixture: Mapping[str, Any], database_url: str
 ) -> None:
@@ -1982,7 +2033,7 @@ async def execute_async_json_round_trip_fixture(
 
     async with async_worker(database_url, fixture) as worker:
         worker.handle(fixture["taskType"], handler)
-        assert await worker.run_once() is True
+        assert await returned(worker.run_once()) is True
     assert received == [payload]
     stored = connection.execute(
         "SELECT task.payload, outcome.result FROM workhorse.task task "
@@ -2016,7 +2067,7 @@ async def execute_async_missing_handler_fixture(
         older.handle(fixture["registeredTaskType"], registered)
         # A pass that released each task that it claimed made no progress, so it returns False.
         released_pass_progress = fixture["expectedReleasedPassOutcome"] != "unprocessed"
-        assert await older.run_once() is released_pass_progress
+        assert await returned(older.run_once()) is released_pass_progress
         assert_task_states(connection, {"task": task_id}, {"task": fixture["expectedAfterRelease"]})
         attempts, releases = await async_release_evidence(connection, task_id)
         # The refusal belongs to no attempt, so the task keeps the attempt it was enqueued with.
@@ -2024,7 +2075,7 @@ async def execute_async_missing_handler_fixture(
         assert releases == fixture["expectedReleaseEvents"]
         # The worker keeps no state between calls. The next call claims the ready task again at
         # once, inside the poll interval, releases it, and returns False again.
-        assert await older.run_once() is released_pass_progress
+        assert await returned(older.run_once()) is released_pass_progress
         assert await async_release_evidence(connection, task_id) == (
             fixture["expectedAttempts"],
             fixture["expectedReleaseEventsAfterNextPass"],
@@ -2040,7 +2091,7 @@ async def execute_async_missing_handler_fixture(
         database_url, fixture, suffix="-newer", lease_ms=fixture["leaseMs"]
     ) as newer:
         newer.handle(fixture["taskType"], handler)
-        assert await newer.run_once() is True
+        assert await returned(newer.run_once()) is True
     assert handled == [{"index": 1}]
     assert_task_states(connection, {"task": task_id}, {"task": fixture["expectedAfterHandled"]})
 
@@ -2158,7 +2209,13 @@ async def held_listen_async_worker(
     try:
         yield AsyncWorker.from_asyncpg(asyncpg_pool, **options)
     finally:
-        await asyncpg_pool.close()
+        # Pool.close waits without a limit for each connection that a run still holds.
+        try:
+            await asyncio.wait_for(asyncpg_pool.close(), timeout=GUARD_SECONDS)
+        except TimeoutError:
+            asyncpg_pool.terminate()
+            # The error chains to a failure in flight, so that failure stays in the report.
+            raise AssertionError(f"the asyncpg pool did not close within {GUARD_SECONDS} s")
 
 
 async def execute_async_subscription_recovery_fixture(
@@ -2260,7 +2317,7 @@ async def execute_async_subscription_recovery_driver(
             executor.released.set()
             hold.released.set()
             worker.stop()
-            await running
+            await returned(running)
     assert_subscription_recovery(
         executor.claims,
         recovery_end,
@@ -2292,7 +2349,7 @@ async def execute_async_release_wait_fixture(
             listeners = await asyncio.to_thread(listening_sessions, connection)
         finally:
             worker.stop()
-            await running
+            await returned(running)
     assert listeners > 0, "no session listened while the worker ran"
     assert_release_wait(times, fixture)
 
@@ -2311,7 +2368,7 @@ async def execute_async_maintenance_phase_error_fixture(
         async with async_worker(database_url, fixture, maintenance_interval_ms=100) as worker:
             worker.handle(fixture["taskType"], handler)
             # The failing phase runs on this pass, and the pass still claims and settles the task.
-            assert await worker.run_once() is True
+            assert await returned(worker.run_once()) is True
         assert_task_states(connection, {"task": task_id}, {"task": fixture["expectedState"]})
 
 
@@ -2343,7 +2400,7 @@ async def execute_async_cancellation_fixture(
             lambda: Queue(connection).cancel(task_id, reason=fixture["cancelReason"])
         )
         assert cancelled.status == "cancel_requested"
-        assert await execution is True
+        assert await returned(execution) is True
     assert [type(reason).__name__ for reason in reasons] == [fixture["expectedAbortReason"]]
     assert_task_states(connection, {"task": task_id}, {"task": fixture["expectedState"]})
     assert_attempt_outcomes(connection, task_id, [fixture["expectedAttemptOutcome"]])
@@ -2379,7 +2436,7 @@ async def execute_async_graceful_drain_fixture(
         await asyncio.sleep(fixture["settleCheckMs"] / 1000)
         assert not running.done()
         release_handlers.set()
-        await running
+        await returned(running)
         assert active_slots(worker._inner) == 0
     states = [task_state(connection, task_id)["state"] for task_id in task_ids]
     assert states.count("succeeded") == fixture["expectedSucceeded"]
@@ -2432,7 +2489,7 @@ async def execute_async_heartbeat_failure_fixture(
             await async_wait_for_lease_renewal(connection, task_id, renewed, timeout_ms)
         finally:
             release.set()
-        assert await execution is True
+        assert await returned(execution) is True
     assert len(cancellations) == fixture["expectedCancellations"]
     assert_task_states(connection, {"task": task_id}, {"task": fixture["expectedState"]})
     assert_attempt_outcomes(connection, task_id, [fixture["expectedAttemptOutcome"]])
@@ -2485,7 +2542,7 @@ async def execute_async_heartbeat_busy_fixture(
                 )
         finally:
             release.set()
-        assert await execution is True
+        assert await returned(execution) is True
     assert_busy_rounds(rounds, recorder.rounds(), fixture)
     assert len(cancellations) == fixture["expectedCancellations"]
     assert_task_states(connection, {"task": task_id}, {"task": fixture["expectedState"]})
@@ -2586,7 +2643,8 @@ def run_in_thread(operation: Callable[[], object], errors: list[BaseException]) 
         except BaseException as error:
             errors.append(error)
 
-    thread = Thread(target=run)
+    # A run that never returns fails its join, and a daemon thread then lets the suite exit.
+    thread = Thread(target=run, daemon=True)
     thread.start()
     return thread
 
