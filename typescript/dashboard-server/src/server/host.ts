@@ -18,6 +18,7 @@ import type { DashboardMaintenanceLoopCadences } from "../wire.js";
 import { dashboardAssetsDirectory } from "./assets.js";
 import { createSingleAdminAuthentication } from "./authentication.js";
 import { renderDashboardHtml } from "./html.js";
+import { rejectCrossOriginMutation } from "./same-origin.js";
 import { dashboardRouter, isDashboardMutation } from "./router.js";
 import { createDashboardQueueHealthReader, type DashboardQueueHealthReader } from "./read-model.js";
 import { boundedQueryable, DASHBOARD_STATEMENT_TIMEOUT_MS, dashboardDatabase } from "./sql.js";
@@ -407,18 +408,6 @@ function createHostCheck(allowedHosts: readonly string[]): (url: URL) => boolean
   }
   return (url) =>
     allowedHosts.some((entry) => new URL(`${url.protocol}//${entry}`).host === url.host);
-}
-
-function rejectCrossOriginMutation(request: Request): Response | null {
-  const origin = request.headers.get("origin");
-  if (origin) {
-    try {
-      if (new URL(origin).origin === new URL(request.url).origin) return null;
-    } catch {
-      // A malformed Origin is never evidence that the request came from this dashboard.
-    }
-  }
-  return Response.json({ error: "A same-origin mutation request is required" }, { status: 403 });
 }
 
 /**

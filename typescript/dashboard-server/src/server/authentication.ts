@@ -1,6 +1,7 @@
 import { randomBytes, scrypt as scryptCallback, timingSafeEqual } from "node:crypto";
 import { isIP } from "node:net";
 import type { DashboardSingleAdminOptions } from "@stablemates/workhorse-dashboard-contract";
+import { rejectCrossOriginMutation } from "./same-origin.js";
 
 const SESSION_COOKIE = "__Host-workhorse-dashboard-session";
 const DEFAULT_SESSION_TTL_SECONDS = 8 * 60 * 60;
@@ -287,6 +288,9 @@ export function createSingleAdminAuthentication(
         if (request.method !== "POST") {
           return new Response(null, { status: 405, headers: { allow: "POST" } });
         }
+        // Logout changes server state, so a page on another site must not end the session.
+        const rejection = rejectCrossOriginMutation(request);
+        if (rejection) return rejection;
         const token = cookieValue(request);
         if (token) sessions.delete(token);
         return new Response(null, {

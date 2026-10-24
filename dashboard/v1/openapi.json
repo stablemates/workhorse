@@ -8009,7 +8009,7 @@
         "type": "apiKey",
         "in": "cookie",
         "name": "__Host-workhorse-dashboard-session",
-        "description": "Authorization is delegated to the host application, which may accept any credential it recognizes. A deployment without a host authorizer runs the built-in single-admin session instead: POST {basePath}/login with a form body of username and password sets this cookie, and POST {basePath}/logout clears it. An unauthenticated request answers 401 and an unauthorized one 403, both with a HostError body."
+        "description": "Authorization is delegated to the host application, which may accept any credential it recognizes. A deployment without a host authorizer runs the built-in single-admin session instead: POST {basePath}/login with a form body of username and password sets this cookie, and a same-origin POST {basePath}/logout clears it. An unauthenticated request answers 401 and an unauthorized one 403, both with a HostError body."
       }
     },
     "schemas": {
