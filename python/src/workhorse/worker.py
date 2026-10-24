@@ -78,6 +78,7 @@ from ._pool_hub import (
 )
 from ._protocol import serialize_child_request as _serialize_child_request
 from ._reporters import ReporterFailures as _ReporterFailures
+from ._statement_watch import StatementWatch as _StatementWatch
 from ._statements import (
     PROTOCOL_VERSION as _PROTOCOL_VERSION,
     SQL_STATEMENTS as _SQL_STATEMENTS,
@@ -1713,6 +1714,10 @@ class Worker:
         self._registration_call: Future[list[_Row]] | None = None
         # The startup budget and the stop budget: max(heartbeat_ms, 5 s) (ADR 0071, rules 3 and 8).
         self._connection_budget_seconds = _connection_budget_ms(self.heartbeat_ms) / 1000
+        # Warns once when a maintenance pass or a claim waits longer than the stop budget.
+        self._statement_watch = _StatementWatch(
+            self._connection_budget_seconds, self._warn_slow_statement
+        )
         self._hub_source: _HubSource = self._attach_sync_hub
         # False when the caller listens for notifications itself, as AsyncWorker does.
         self._listens = True
@@ -2845,10 +2850,11 @@ class Worker:
                 )
                 if rows is None:
                     claim_span.set_attribute("workhorse.queue.tier", "full")
-                    rows = self._claim_executor(generation).rows(
-                        _STATEMENTS.claim_many,
-                        (queue_name, self.worker_id, limit - len(claimed), self.lease_ms),
-                    )
+                    with self._statement_watch.watch("claim"):
+                        rows = self._claim_executor(generation).rows(
+                            _STATEMENTS.claim_many,
+                            (queue_name, self.worker_id, limit - len(claimed), self.lease_ms),
+                        )
                 claimed_tasks = tuple(_claimed_task(row, queue_name) for row in rows)
                 _record_claim(
                     queue_name,
@@ -2892,11 +2898,12 @@ class Worker:
         if fast_limit <= 0:
             return []
         try:
-            rows = _fenced_write_rows(
-                self._claim_executor(generation),
-                _STATEMENTS.complete_many_and_claim,
-                (self.worker_id, [], [], [], queue_name, fast_limit, self.lease_ms),
-            )
+            with self._statement_watch.watch("claim"):
+                rows = _fenced_write_rows(
+                    self._claim_executor(generation),
+                    _STATEMENTS.complete_many_and_claim,
+                    (self.worker_id, [], [], [], queue_name, fast_limit, self.lease_ms),
+                )
         except Exception as error:
             if not isinstance(_translate_database_error(error), FastTierUnsupportedError):
                 raise
@@ -3127,7 +3134,9 @@ class Worker:
             else self._executor
         )
         try:
-            rows = _fenced_write_rows(executor, _STATEMENTS.complete_many_and_claim, parameters)
+            # A send that only completes claims nothing, so only a send that claims is watched.
+            with self._statement_watch.watch("claim") if claim_limit > 0 else nullcontext():
+                rows = _fenced_write_rows(executor, _STATEMENTS.complete_many_and_claim, parameters)
         except Exception as error:
             if not isinstance(_translate_database_error(error), FastTierUnsupportedError):
                 raise
@@ -3207,6 +3216,18 @@ class Worker:
             return _DATABASE_NOW
         return self._executor.rows(_STATEMENTS.database_time)[0]["now"]
 
+    def _warn_slow_statement(self, statement: str, elapsed_ms: int) -> None:
+        _emit_log(
+            "WARN",
+            "workhorse.worker.statement_slow",
+            "Worker statement is still waiting after the stop budget",
+            {
+                "workhorse.worker.id": self.worker_id,
+                "workhorse.worker.statement": statement,
+                "workhorse.worker.elapsed_ms": elapsed_ms,
+            },
+        )
+
     def _run_maintenance_if_due(self) -> bool:
         """Run the tick and the slow routines, each only when its own cadence is due."""
         now_monotonic = monotonic()
@@ -3214,6 +3235,14 @@ class Worker:
         routines_due = self._due_for_maintenance_routines(now_monotonic)
         if not tick_due and not routines_due:
             return False
+        with self._statement_watch.watch("maintenance"):
+            self._run_due_maintenance(now_monotonic, tick_due, routines_due)
+        return True
+
+    def _run_due_maintenance(
+        self, now_monotonic: float, tick_due: bool, routines_due: bool
+    ) -> None:
+        """Send the statements of one maintenance pass."""
         with (
             _start_span(
                 "workhorse.maintenance",
@@ -3305,10 +3334,10 @@ class Worker:
                 )
             maintenance_span.set_attribute("workhorse.maintenance.rows_affected", total_rows)
         if not tick_due:
-            return True
+            return
         self._last_maintenance_at = now_monotonic
         if not self.schedule_namespaces:
-            return True
+            return
         now = datetime.now(UTC)
         fired_occurrences = self._executor.rows(
             _STATEMENTS.fire_due_schedules,
@@ -3345,7 +3374,6 @@ class Worker:
                     "Recurring schedule fired",
                     {**schedule_attributes, "workhorse.task.id": str(task_id)},
                 )
-        return True
 
     def _refresh_registration(
         self, *, force: bool = False, draining: bool = False, deadline: float | None = None

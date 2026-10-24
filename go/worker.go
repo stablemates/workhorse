@@ -1628,7 +1628,40 @@ func (worker *Worker) maintenanceLoop(ctx context.Context) error {
 	}
 }
 
+// warnWhenSlow starts the slow-statement timer of one maintenance pass or one claim statement. If
+// the statement still runs after ShutdownGracePeriod, the timer logs statementSlowEvent once with
+// the measured wait. The caller must call the returned function when the statement returns, on
+// every path. The timer does not change the statement, and a zero grace starts no timer.
+func (worker *Worker) warnWhenSlow(ctx context.Context, statement string) func() bool {
+	budget := worker.shutdownGracePeriod
+	if budget <= 0 {
+		return func() bool { return false }
+	}
+	startedAt := time.Now()
+	timer := time.AfterFunc(budget, func() {
+		// A logger that panics must not stop the process from a timer goroutine.
+		defer func() { _ = recover() }()
+		elapsed := time.Since(startedAt).Milliseconds()
+		logWorkerEvent(
+			ctx,
+			worker.logger,
+			slog.LevelWarn,
+			statementSlowEvent,
+			statementSlowLogMessage,
+			func() []any {
+				return []any{
+					slog.String(workerIDAttribute, worker.workerID),
+					slog.String(workerStatementAttribute, statement),
+					slog.Int64(workerElapsedAttribute, elapsed),
+				}
+			},
+		)
+	})
+	return timer.Stop
+}
+
 func (worker *Worker) runMaintenance(ctx context.Context) error {
+	defer worker.warnWhenSlow(ctx, maintenanceStatementKind)()
 	executor := NewPGXExecutor(worker.pool)
 	rows, err := executor.Query(
 		ctx,
@@ -2099,6 +2132,9 @@ func (worker *Worker) completeChunk(queue string, chunk []*completionEntry) {
 		fences[index] = entry.task.FenceToken
 		results[index] = entry.encoded
 	}
+	if limit > 0 {
+		defer worker.warnWhenSlow(chunk[0].ctx, claimStatementKind)()
+	}
 	var sentAt time.Time
 	rows, err := queryFencedWriteEach(
 		chunk[0].ctx,
@@ -2170,19 +2206,22 @@ func (worker *Worker) claimQueue(
 		if fastLimit <= 0 {
 			return nil, false, nil
 		}
-		rows, err := queryFencedWriteEach(
-			ctx,
-			executor,
-			protocolStatementRegistry[completeManyAndClaimStatementName],
-			func() ([]any, error) {
-				if !worker.heartbeatReady() {
-					return nil, errHeartbeatClaimGateClosed
-				}
-				return []any{
-					worker.workerID, []string{}, []int64{}, []json.RawMessage{}, queue, min(limit, fastLimit), leaseMS,
-				}, nil
-			},
-		)
+		rows, err := func() ([]Row, error) {
+			defer worker.warnWhenSlow(ctx, claimStatementKind)()
+			return queryFencedWriteEach(
+				ctx,
+				executor,
+				protocolStatementRegistry[completeManyAndClaimStatementName],
+				func() ([]any, error) {
+					if !worker.heartbeatReady() {
+						return nil, errHeartbeatClaimGateClosed
+					}
+					return []any{
+						worker.workerID, []string{}, []int64{}, []json.RawMessage{}, queue, min(limit, fastLimit), leaseMS,
+					}, nil
+				},
+			)
+		}()
 		if err == nil {
 			worker.markFastTier(queue)
 			return claimedFastRows(rows), true, nil
@@ -2196,6 +2235,7 @@ func (worker *Worker) claimQueue(
 	if !worker.heartbeatReady() {
 		return nil, false, errHeartbeatClaimGateClosed
 	}
+	defer worker.warnWhenSlow(ctx, claimStatementKind)()
 	rows, err := executor.Query(
 		ctx,
 		protocolStatementRegistry[claimManyStatementName],

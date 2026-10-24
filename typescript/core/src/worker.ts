@@ -77,6 +77,9 @@ import {
   type WorkerQueueTierRead,
   workerCheckpointsRead,
   workerCompletionPrepare,
+  workerStatementWatch,
+  type WatchedCompletionClaim,
+  type WorkerStatementWatch,
   workerHeartbeatReservation,
   workerHeartbeatReservationProblem,
   workerStatementPoolCapacity,
@@ -799,6 +802,43 @@ export class Worker {
     return withClaimGate(() => channel.usable(), operation);
   }
 
+  // Runs the fused statement of a completion that claims under the slow-statement watch.
+  private readonly watchClaim: WorkerStatementWatch = (statement) =>
+    this.warnIfSlow("claim", statement);
+
+  // Logs one warning when a maintenance pass or a claim still waits after the stop budget, so a
+  // lock wait names its statement. The warning does not end, fail, or delay the statement.
+  private async warnIfSlow<T>(
+    statement: "maintenance" | "claim",
+    operation: () => Promise<T>,
+  ): Promise<T> {
+    const startedAt = monotonicNow();
+    const timer = setTimeout(
+      () => {
+        try {
+          logWarn(
+            "workhorse.worker.statement_slow",
+            "Worker statement is still waiting after the stop budget",
+            {
+              "workhorse.worker.id": this.workerId,
+              "workhorse.worker.statement": statement,
+              "workhorse.worker.elapsed_ms": Math.round(monotonicNow() - startedAt),
+            },
+          );
+        } catch {
+          // A failed log record must not fail the statement.
+        }
+      },
+      Math.min(this.startupBudgetMs, MAX_TIMER_DELAY_MS),
+    );
+    timer.unref();
+    try {
+      return await operation();
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
   // ADR 0071 rule 6: no claim of any kind, ordinary or fused, while the reserved heartbeat
   // connection is not usable. A worker without a reserved connection (sharedHeartbeats, or a
   // custom WorkerQueueApi) has no gate.
@@ -1459,8 +1499,10 @@ export class Worker {
           const queueName = this.queueNames[this.nextQueueIndex]!;
           this.nextQueueIndex = (this.nextQueueIndex + 1) % this.queueNames.length;
           const sentAt = monotonicNow();
-          const task = await this.gated(() =>
-            this.queue.claim(this.workerId, { queue: queueName, leaseMs: this.leaseMs }),
+          const task = await this.warnIfSlow("claim", () =>
+            this.gated(() =>
+              this.queue.claim(this.workerId, { queue: queueName, leaseMs: this.leaseMs }),
+            ),
           );
           if (task) {
             this.claimSentAt.set(task, sentAt);
@@ -1504,8 +1546,10 @@ export class Worker {
     if (this.queue.claimFast && (this.fullTierUntil.get(queueName) ?? 0) <= sentAt) {
       if (fastLimit <= 0) return [];
       try {
-        claimed = await this.gated(() =>
-          this.queue.claimFast!(this.workerId, Math.min(limit, fastLimit), options),
+        claimed = await this.warnIfSlow("claim", () =>
+          this.gated(() =>
+            this.queue.claimFast!(this.workerId, Math.min(limit, fastLimit), options),
+          ),
         );
         this.fullTierUntil.delete(queueName);
         this.fastTierQueues.add(queueName);
@@ -1517,7 +1561,9 @@ export class Worker {
       }
     }
     if (claimed === undefined) {
-      claimed = await this.gated(() => this.queue.claimMany!(this.workerId, limit, options));
+      claimed = await this.warnIfSlow("claim", () =>
+        this.gated(() => this.queue.claimMany!(this.workerId, limit, options)),
+      );
       if (claimed.length > 0) this.trackFullTierClaim(queueName, claimed);
     }
     for (const task of claimed) this.claimSentAt.set(task, sentAt);
@@ -1777,7 +1823,9 @@ export class Worker {
     if (prepare) return prepare(task, this.workerId, result);
     return async (claim) => {
       if (claim && this.queue.completeAndClaim) {
-        return this.queue.completeAndClaim(task, this.workerId, result, claim);
+        const send = () => this.queue.completeAndClaim!(task, this.workerId, result, claim);
+        // A custom queue gets no watch from the claim, so the worker watches its call here.
+        return claim.limit > 0 ? this.warnIfSlow("claim", send) : send();
       }
       return { accepted: await this.queue.complete(task, this.workerId, result), claimed: [] };
     };
@@ -1796,16 +1844,17 @@ export class Worker {
     try {
       // The fused statement reads the heartbeat gate before each attempt, also after it waited
       // for its batch or its connection, and then claims nothing if the gate is closed.
-      const outcome = await this.gated(() =>
-        write(
-          reservation?.claim ?? {
-            queue: task.queue,
-            limit: 0,
-            leaseMs: this.leaseMs,
-            cohort: this.taskCohorts.get(task),
-          },
-        ),
-      );
+      const claim: WatchedCompletionClaim = {
+        ...(reservation?.claim ?? {
+          queue: task.queue,
+          limit: 0,
+          leaseMs: this.leaseMs,
+          cohort: this.taskCohorts.get(task),
+        }),
+      };
+      // Not enumerable, so a custom WorkerQueueApi receives the same claim fields as before.
+      Object.defineProperty(claim, workerStatementWatch, { value: this.watchClaim });
+      const outcome = await this.gated(() => write(claim));
       for (const next of outcome.claimed) {
         this.fastTasks.add(next);
         this.claimSentAt.set(next, sentAt);
@@ -2010,6 +2059,10 @@ export class Worker {
 
   private async runMaintenance(): Promise<void> {
     await this.refreshRegistration();
+    await this.warnIfSlow("maintenance", () => this.runMaintenancePass());
+  }
+
+  private async runMaintenancePass(): Promise<void> {
     const nowMs = monotonicNow();
     if (nowMs - this.lastTickAt >= this.maintenanceIntervalMs) {
       this.recordMaintenanceDrift(nowMs, this.lastTickAt, this.maintenanceIntervalMs, "tick");

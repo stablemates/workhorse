@@ -137,10 +137,12 @@ public sealed class TelemetrySurfaceTests
         "workhorse.worker.concurrency",
         "workhorse.worker.deregistered",
         "workhorse.worker.draining",
+        "workhorse.worker.elapsed_ms",
         "workhorse.worker.id",
         "workhorse.worker.paused",
         "workhorse.worker.pool_max_size",
         "workhorse.worker.queues",
+        "workhorse.worker.statement",
     ];
 
     /// <summary>

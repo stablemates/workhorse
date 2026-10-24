@@ -34,6 +34,7 @@ require_relative "workhorse/worker/batch"
 require_relative "workhorse/worker/heartbeat"
 require_relative "workhorse/worker/listener"
 require_relative "workhorse/worker/process"
+require_relative "workhorse/worker/statement_watch"
 require_relative "workhorse/worker/supervisor"
 
 module Stablemates

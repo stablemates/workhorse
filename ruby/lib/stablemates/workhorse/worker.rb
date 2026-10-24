@@ -277,6 +277,11 @@ module Stablemates
 
         @schedule_catchup_limit = schedule_catchup_limit
         @shutdown_grace = Values.milliseconds(shutdown_grace, "shutdown_grace", 0..86_400_000) / 1000.0
+        # Warns once when a maintenance pass or a claim waits longer than the stop budget.
+        @statement_watch = StatementWatch.new(@shutdown_grace) do |statement, elapsed_ms|
+          log(:warn, "workhorse.worker.statement_slow", "Worker statement is still waiting after the stop budget",
+            "workhorse.worker.statement" => statement, "workhorse.worker.elapsed_ms" => elapsed_ms)
+        end
         retry_delay_milliseconds(retry_delay) unless retry_delay.nil? || retry_delay.respond_to?(:call)
         @retry_delay = retry_delay
         @on_registration_error = on_registration_error
@@ -918,8 +923,10 @@ module Stablemates
           rows = claim_queue(queue, limit, started_at, fast_limit, gate)
           if rows.nil?
             Telemetry.set_attribute(span, "workhorse.queue.tier", "full")
-            rows = permitted(gate) do |build|
-              @executor.rows(SqlCatalogue::CLAIM_MANY_V1, build.call { [queue, @worker_id, limit.to_s, @lease_ms.to_s] })
+            rows = @statement_watch.watch("claim") do
+              permitted(gate) do |build|
+                @executor.rows(SqlCatalogue::CLAIM_MANY_V1, build.call { [queue, @worker_id, limit.to_s, @lease_ms.to_s] })
+              end
             end
             track_full_tier_claim(queue, rows) if rows.any?
           end
@@ -972,9 +979,11 @@ module Stablemates
         return [] if fast_limit <= 0
 
         begin
-          rows = permitted(gate) do |build|
-            @executor.fenced_rows(SqlCatalogue::COMPLETE_MANY_AND_CLAIM_V1,
-              build.call { [@worker_id, "{}", "{}", "{}", queue, fast_limit.to_s, @lease_ms.to_s] })
+          rows = @statement_watch.watch("claim") do
+            permitted(gate) do |build|
+              @executor.fenced_rows(SqlCatalogue::COMPLETE_MANY_AND_CLAIM_V1,
+                build.call { [@worker_id, "{}", "{}", "{}", queue, fast_limit.to_s, @lease_ms.to_s] })
+            end
           end
         rescue FastTierUnsupportedError
           mark_full_tier(queue, sent_at)
@@ -1216,7 +1225,9 @@ module Stablemates
           ]
         end
         begin
-          rows = @executor.fenced_rows(SqlCatalogue::COMPLETE_MANY_AND_CLAIM_V1, params)
+          send = -> { @executor.fenced_rows(SqlCatalogue::COMPLETE_MANY_AND_CLAIM_V1, params) }
+          # A send that only completes claims nothing, so only a send that claims is watched.
+          rows = claim_limit.positive? ? @statement_watch.watch("claim", &send) : send.call
         rescue FastTierUnsupportedError
           mark_full_tier(queue, sent_at)
           chunk.each { |member| member.full_tier = true }
@@ -1408,6 +1419,11 @@ module Stablemates
         now = monotonic
         return false if now - @last_maintenance_at.get < @maintenance_ms / 1000.0
 
+        @statement_watch.watch("maintenance") { run_maintenance_pass(now) }
+        true
+      end
+
+      def run_maintenance_pass(now)
         Telemetry.span("workhorse.maintenance", {"workhorse.maintenance.operation" => "tick"}) do |span|
           total = 0
           Telemetry.span("workhorse.recovery", {}) do |recovery|
@@ -1425,7 +1441,6 @@ module Stablemates
         end
         @last_maintenance_at.set(now)
         fire_schedules unless @schedule_namespaces.empty?
-        true
       end
 
       # Records one maintenance phase row and returns its affected row count. Only tick rows log.

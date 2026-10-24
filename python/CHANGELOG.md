@@ -10,6 +10,19 @@ adds.
 
 ## Unreleased
 
+### The worker warns when a maintenance pass or a claim waits longer than the stop budget
+
+A maintenance pass or a claim can wait for a lock that another session holds. Before this change,
+the worker logged nothing while it waited. A test run blocked for about one hour, and no log named
+the statement (SM-1785).
+
+Now `Worker` and `AsyncWorker` logs `workhorse.worker.statement_slow` once, at warn level, if a
+maintenance pass or a claim waits longer than the stop budget. The stop budget is
+max(`heartbeat_ms`, 5 s), the stop deadline. The record carries `workhorse.worker.id`,
+`workhorse.worker.statement` (`maintenance` or `claim`), and `workhorse.worker.elapsed_ms`.
+`workhorse.worker.elapsed_ms` is the wait at the moment of the warning. The statement continues to
+wait, and no other behavior changes.
+
 ### An execution timeout of 0 enqueues a task with no timeout
 
 **Behavior change.** Before this change, `execution_timeout_ms=0` reached `enqueue_many_v1`, and

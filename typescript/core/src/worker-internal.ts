@@ -27,6 +27,19 @@ export interface WorkerCompletionPreparation {
 }
 
 /**
+ * Set by the worker on the `CompletionClaim` of a fused completion. The statement that claims for
+ * it runs inside this function, so the worker warns once when that statement waits longer than its
+ * stop budget.
+ */
+export const workerStatementWatch = Symbol("workhorse.worker.statement-watch");
+
+export type WorkerStatementWatch = <T>(statement: () => Promise<T>) => Promise<T>;
+
+export interface WatchedCompletionClaim extends CompletionClaim {
+  [workerStatementWatch]?: WorkerStatementWatch;
+}
+
+/**
  * Returns a heartbeat channel on one reserved pooled connection, or undefined when the database
  * cannot lend one. The worker then heartbeats through the shared pool.
  */

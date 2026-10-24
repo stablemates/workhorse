@@ -490,6 +490,7 @@ public sealed partial class Worker
             var startedAt = 0L;
             IReadOnlyList<Row> rows = [];
             var permitted = false;
+            var watch = WatchStatement("claim");
             try
             {
                 await using var connection = await DataSources.OpenAsync(_dataSource, CancellationToken.None).ConfigureAwait(false);
@@ -509,6 +510,7 @@ public sealed partial class Worker
             }
             finally
             {
+                watch?.Dispose();
                 if (permitted)
                 {
                     run.ReleaseClaimPermit();

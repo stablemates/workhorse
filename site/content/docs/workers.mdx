@@ -937,6 +937,10 @@ Thus, these rules apply to a shutdown:
   deadline still ends it. Each other SDK ends or cancels the wait at its stop deadline or its
   grace. If a claim leases a task after that limit, the task can stay active until recovery makes
   it available again.
+- A maintenance pass or a claim can wait for a lock that another session holds. The stop budget is
+  the time that the SDK gives one step of a stop, for example its shutdown grace. If the statement
+  waits longer, the worker logs one `workhorse.worker.statement_slow` warning that names the
+  statement. The statement continues to wait, and the warning does not change it.
 - You can configure the drain deadline. Thus, a handler that ignores its abort signal cannot block
   a deploy indefinitely.
 - A hard kill leaves tasks active. Their leases expire, and recovery makes the tasks available again.

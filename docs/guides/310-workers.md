@@ -382,6 +382,10 @@ Thus, these rules apply to a shutdown:
   deadline still ends it. Each other SDK ends or cancels the wait at its stop deadline or its
   grace. If a claim leases a task after that limit, the task can stay active until recovery makes
   it available again.
+- A maintenance pass or a claim can wait for a lock that another session holds. The stop budget is
+  the time that the SDK gives one step of a stop, for example its shutdown grace. If the statement
+  waits longer, the worker logs one `workhorse.worker.statement_slow` warning that names the
+  statement. The statement continues to wait, and the warning does not change it.
 - You can configure the drain deadline. Thus, a handler that ignores its abort signal cannot block
   a deploy indefinitely.
 - A hard kill leaves tasks active. Their leases expire, and recovery makes the tasks available again.
@@ -417,6 +421,29 @@ With a zero grace, a Ruby, JVM, or .NET worker cancels its handlers, and the sto
 | Go            | Until the grace ends. Then the worker cancels the claim and waits for it to return.                                      |
 | Rust and Ruby | Until the grace ends                                                                                                     |
 | JVM and .NET  | Until the grace ends, but not earlier than 250 ms after the dispatch loop ends and not later than 250 ms after the grace |
+
+**Warning for a long maintenance pass or claim**
+
+`workhorse.worker.statement_slow` fires once when a maintenance pass or a claim waits longer than
+the stop budget. `workhorse.worker.elapsed_ms` is the wait at the moment of the warning.
+
+| Value                 | Shared key                    | .NET name   |
+| --------------------- | ----------------------------- | ----------- |
+| Worker                | `workhorse.worker.id`         | `WorkerId`  |
+| `maintenance`/`claim` | `workhorse.worker.statement`  | `Statement` |
+| Wait in milliseconds  | `workhorse.worker.elapsed_ms` | `ElapsedMs` |
+
+The .NET record names each value by its log template, as [ADR 0107](../decisions/0107-shape-the-dotnet-sdk-as-a-csharp-core-with-hosting-ef-core-and-asp-net-core-packages.md#telemetry) states.
+
+| SDK        | Stop budget                                       |
+| ---------- | ------------------------------------------------- |
+| TypeScript | max(`heartbeatMs`, 5 s)                           |
+| Python     | max(`heartbeat_ms`, 5 s)                          |
+| Go         | `ShutdownGracePeriod`, 25 s by default            |
+| Rust       | `shutdown_grace_period`, 25 s by default          |
+| Ruby       | `shutdown_grace`, 25 s by default. 0 turns it off |
+| JVM        | `shutdownGrace`, 25 s by default. 0 turns it off  |
+| .NET       | `ShutdownGrace`, 25 s by default. 0 turns it off  |
 
 **TypeScript process exits**
 

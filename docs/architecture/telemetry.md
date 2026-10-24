@@ -577,7 +577,7 @@ The .NET SDK has no OpenTelemetry logs dependency. It emits no OpenTelemetry log
 | -------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Debug    | Enqueue acceptance and replay, claims, accepted heartbeats, handler registration and execution boundaries, checkpoints, progress, schedule replay, and worker deregistration.                                                             |
 | Info     | Queue and worker lifecycle, final execution outcomes, rejected heartbeats, completion and failure, cancellation, durable waits, promotion and recovery, schedule changes, redrive, and maintenance that changes rows or returns an error. |
-| Warning  | Handlers that catch a durable-wait suspension signal and return normally.                                                                                                                                                                 |
+| Warning  | Handlers that catch a durable-wait suspension signal and return normally, a worker that polls without a notification listener, and a maintenance pass or a claim that waits longer than the stop budget.                                  |
 
 #### Debug event names
 
@@ -641,6 +641,13 @@ successful configuration changes at info.
 - `workhorse.worker.polling_only` carries `workhorse.worker.id`, `workhorse.worker.queues`, and
   `workhorse.worker.pool_max_size`, the pool maximum size that the worker found or `unknown`. A
   `Worker.run()` that starts without a notification subscription emits it once.
+- `workhorse.worker.statement_slow` carries `workhorse.worker.id`, `workhorse.worker.statement`
+  (`maintenance` or `claim`), and `workhorse.worker.elapsed_ms`, the milliseconds that the statement
+  waited at the moment of the warning. A maintenance pass or a claim that waits longer than the stop
+  budget emits it once, and the statement can continue to wait after it.
+  [Statement bounds](lifecycle.md#statement-bounds) states the stop budget of each SDK. The .NET
+  record names the three values `WorkerId`, `Statement`, and `ElapsedMs` by its log template
+  ([ADR 0107](../decisions/0107-shape-the-dotnet-sdk-as-a-csharp-core-with-hosting-ef-core-and-asp-net-core-packages.md#telemetry)).
 
 #### Log record attributes
 

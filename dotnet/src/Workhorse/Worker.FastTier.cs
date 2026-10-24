@@ -80,6 +80,7 @@ public sealed partial class Worker
         IReadOnlyList<Row> rows;
         var sentAt = 0L;
         var permit = new ClaimPermit(run);
+        var watch = WatchStatement("claim");
         try
         {
             await using var connection = await DataSources.OpenAsync(_dataSource, CancellationToken.None).ConfigureAwait(false);
@@ -113,6 +114,7 @@ public sealed partial class Worker
         }
         finally
         {
+            watch?.Dispose();
             permit.Release();
         }
 
@@ -435,6 +437,8 @@ public sealed partial class Worker
         var sentAt = probedAt;
         var sentLimit = 0;
         IReadOnlyList<Row> rows;
+        // A send that only completes claims nothing, so only a send that can claim is watched.
+        var watch = chunk.Exists(member => member.Limit > 0) ? WatchStatement("claim") : null;
         try
         {
             // The claim limit is read on the open connection before each attempt, a resend too. Each
@@ -477,6 +481,7 @@ public sealed partial class Worker
         }
         finally
         {
+            watch?.Dispose();
             // The statement settled, so each fused claim of the chunk gives back its permit.
             foreach (var member in chunk)
             {

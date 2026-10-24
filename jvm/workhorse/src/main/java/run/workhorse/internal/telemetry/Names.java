@@ -85,10 +85,12 @@ public final class Names {
   public static final String WORKER_CONCURRENCY = "workhorse.worker.concurrency";
   public static final String WORKER_DEREGISTERED = "workhorse.worker.deregistered";
   public static final String WORKER_DRAINING = "workhorse.worker.draining";
+  public static final String WORKER_ELAPSED_MS = "workhorse.worker.elapsed_ms";
   public static final String WORKER_ID = "workhorse.worker.id";
   public static final String WORKER_PAUSED = "workhorse.worker.paused";
   public static final String WORKER_POOL_MAX_SIZE = "workhorse.worker.pool_max_size";
   public static final String WORKER_QUEUES = "workhorse.worker.queues";
+  public static final String WORKER_STATEMENT = "workhorse.worker.statement";
 
   /**
    * The log event names of the TypeScript {@code WorkhorseLogEvent} union in {@code
@@ -149,6 +151,7 @@ public final class Names {
           "workhorse.worker.registration_failed",
           "workhorse.worker.resumed",
           "workhorse.worker.started",
+          "workhorse.worker.statement_slow",
           "workhorse.worker.stop_requested",
           "workhorse.worker.stopped",
           "workhorse.worker_registry.pruned");

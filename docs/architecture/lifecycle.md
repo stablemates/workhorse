@@ -1136,7 +1136,52 @@ Other lock waits have no limit:
   another claim has locked.
 - A table lock that DDL, `LOCK TABLE`, or `TRUNCATE` takes delays each of these statements.
 
-The worker logs nothing while a statement waits.
+While a statement waits, the worker logs one warning when the wait passes the stop budget of the
+SDK. The warning names the statement, so an operator can find the wait. It does not end, fail, or
+delay the statement.
+
+- The event is `workhorse.worker.statement_slow`, at warn level. Its body is "Worker statement is
+  still waiting after the stop budget".
+- `workhorse.worker.id` names the worker.
+- `workhorse.worker.statement` is `maintenance` for one maintenance pass (`tick_v1`,
+  `fire_due_schedules_v2`, and `run_maintenance_v1`) or `claim` for one claim statement
+  (`claim_v1`, `claim_many_v1`, the fast-tier claim, or `complete_many_and_claim_v1`). The
+  registration refresh is not part of a maintenance pass.
+- `workhorse.worker.elapsed_ms` is the integer number of milliseconds that the statement waited at
+  the moment of the warning. The statement can continue to wait after it.
+
+A timer starts with each statement, and every result of the statement cancels it. Thus each long
+wait logs one warning, also when it waits for an hour. The timer does not keep the process alive. If
+the log call fails, the worker ignores the failure.
+
+| SDK        | Stop budget                                                           |
+| ---------- | --------------------------------------------------------------------- |
+| TypeScript | max(`heartbeatMs`, 5 s), the unwind window                            |
+| Python     | max(`heartbeat_ms`, 5 s), the stop deadline                           |
+| Go         | `ShutdownGracePeriod`, 25 s by default                                |
+| Rust       | `shutdown_grace_period`, 25 s by default                              |
+| Ruby       | `shutdown_grace`, 25 s by default. A grace of 0 turns the warning off |
+| JVM        | `shutdownGrace`, 25 s by default. A grace of 0 turns the warning off  |
+| .NET       | `ShutdownGrace`, 25 s by default. A grace of 0 turns the warning off  |
+
+Each SDK times the statements as follows:
+
+- TypeScript and Go start one timer for each statement.
+- Python and Ruby use one watch thread for each worker. That thread starts with the first watched
+  statement. It ends when it watched nothing for one full wait of one stop budget. Thus an idle
+  thread can stay for up to two stop budgets.
+- Rust races each statement with a Tokio timer.
+- The JVM schedules the warning on one daemon timer thread that every worker of the process shares.
+  That thread ends after 1 s without a timer.
+- .NET uses one `Timer` for each statement. The default `Command Timeout` of 30 seconds is longer
+  than the default grace, so the warning comes first.
+
+The worker watches a `complete_many_and_claim_v1` as a claim only if it asks for at least one task
+when the worker starts it. A statement that only completes tasks gets no warning. If the heartbeat
+gate closes before the send, the statement claims nothing, but the worker still watches it.
+
+The .NET record names its values by its log template: `WorkerId`, `Statement`, and `ElapsedMs`. The
+other .NET worker records use the same names, as [ADR 0107](../decisions/0107-shape-the-dotnet-sdk-as-a-csharp-core-with-hosting-ef-core-and-asp-net-core-packages.md#telemetry) states.
 
 `run()` does not wait for its first maintenance pass before its first claim
 ([First maintenance pass](#first-maintenance-pass)). After a stop, each SDK ends its wait for a
