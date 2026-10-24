@@ -746,9 +746,18 @@ const secondLogin = await host.handle(new Request("https://dashboard.test/login"
   body: new URLSearchParams({ username: "operator", password: "correct horse" }),
 }));
 const secondCookie = secondLogin.headers.get("set-cookie").split(";", 1)[0];
-const logout = await host.handle(new Request("https://dashboard.test/logout", {
+const logoutWithoutOrigin = await host.handle(new Request("https://dashboard.test/logout", {
   method: "POST",
   headers: { cookie: secondCookie },
+}));
+assert.equal(logoutWithoutOrigin.status, 403);
+const stillLoggedIn = await host.handle(new Request("https://dashboard.test/", {
+  headers: { cookie: secondCookie },
+}));
+assert.equal(stillLoggedIn.headers.get("location"), "/tasks");
+const logout = await host.handle(new Request("https://dashboard.test/logout", {
+  method: "POST",
+  headers: { cookie: secondCookie, origin: "https://dashboard.test" },
 }));
 assert.equal(logout.status, 303);
 const loggedOut = await host.handle(new Request("https://dashboard.test/tasks", {
