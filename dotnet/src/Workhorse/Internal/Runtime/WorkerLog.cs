@@ -41,6 +41,10 @@ internal static partial class WorkerLog
         Message = "The stop step {Step} did not finish before the shutdown deadline")]
     internal static partial void StopStepAbandoned(ILogger logger, string step);
 
+    [LoggerMessage(EventName = "workhorse.worker.statement_slow", Level = LogLevel.Warning,
+        Message = "Worker statement is still waiting after the stop budget: worker {WorkerId}, statement {Statement}, {ElapsedMs} ms")]
+    internal static partial void StatementSlow(ILogger logger, string workerId, string statement, long elapsedMs);
+
     [LoggerMessage(EventName = "workhorse.worker.registration_failed", Level = LogLevel.Information,
         Message = "Worker registration failed")]
     internal static partial void RegistrationFailed(ILogger logger, Exception error);

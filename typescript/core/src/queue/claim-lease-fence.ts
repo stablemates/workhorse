@@ -29,6 +29,11 @@ import type {
   TraceContext,
 } from "../types.js";
 import { QueueModule } from "./module-context.js";
+import {
+  workerStatementWatch,
+  type WatchedCompletionClaim,
+  type WorkerStatementWatch,
+} from "../worker-internal.js";
 import { durableReplayConflict } from "./replay-conflicts.js";
 import { nullableRowTimestamp, rowTimestamp } from "./row-mapping.js";
 
@@ -72,6 +77,8 @@ interface PendingCompletionBatch {
   queue: string;
   leaseMs: number;
   entries: PendingCompletion[];
+  /** The worker's watch for a statement of this batch that claims. */
+  watch?: WorkerStatementWatch | undefined;
 }
 
 /** complete_many_and_claim_v1 takes at most this many completions and claims per call. */
@@ -605,6 +612,7 @@ export class ClaimLeaseFenceModule extends QueueModule {
         void this.flushCompletions(batch!);
       });
     }
+    batch.watch ??= (claim as WatchedCompletionClaim)[workerStatementWatch];
     const entries = batch.entries;
     return new Promise((resolve, reject) => {
       entries.push({ task, serializedResult, limit, resolve, reject });
@@ -684,13 +692,11 @@ export class ClaimLeaseFenceModule extends QueueModule {
         "workhorse.complete",
         { "workhorse.queue.name": batch.queue, "workhorse.complete.batch_size": entries.length },
         async (span) => {
-          const result = await this.completeManyAndClaim(
-            batch.workerId,
-            batch.queue,
-            batch.leaseMs,
-            entries,
-            limit,
-          );
+          const send = () =>
+            this.completeManyAndClaim(batch.workerId, batch.queue, batch.leaseMs, entries, limit);
+          // A statement that only completes claims nothing, so only a statement that claims is
+          // watched.
+          const result = await (limit > 0 && batch.watch ? batch.watch(send) : send());
           this.recordClaims(span, result.claimed, batch.queue, batch.workerId, startedAt);
           return result;
         },

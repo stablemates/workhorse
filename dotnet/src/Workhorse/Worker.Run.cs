@@ -591,6 +591,52 @@ public sealed partial class Worker
             WorkerTelemetry.MaintenanceDriftOf(now - routine, _routineMs, "background_routines");
         }
 
+        var watch = WatchStatement("maintenance");
+        try
+        {
+            await MaintenancePassAsync(now, routineDue).ConfigureAwait(false);
+        }
+        finally
+        {
+            watch?.Dispose();
+        }
+    }
+
+    /// <summary>
+    /// Starts the timer of one maintenance pass or claim statement. If the statement still runs after
+    /// <see cref="WorkerOptions.ShutdownGrace"/>, the timer logs one warning with the time waited, so
+    /// a lock wait names its statement. The caller disposes the timer when the statement returns or
+    /// fails. The warning does not end, fail, or delay the statement. A zero grace starts no timer,
+    /// because every statement would pass it.
+    /// </summary>
+    private Timer? WatchStatement(string statement)
+    {
+        if (_shutdownGraceNanos == 0)
+        {
+            return null;
+        }
+
+        var startedAt = Monotonic.Now();
+        return new Timer(
+            _ =>
+            {
+                try
+                {
+                    WorkerLog.StatementSlow(_logger, WorkerId, statement, (Monotonic.Now() - startedAt) / 1_000_000);
+                }
+                catch (Exception)
+                {
+                    // A failed log record must not change the statement.
+                }
+            },
+            null,
+            Monotonic.Span(_shutdownGraceNanos),
+            Timeout.InfiniteTimeSpan);
+    }
+
+    /// <summary>Runs the statements of one maintenance pass: the tick, the routines, and the schedules.</summary>
+    private async Task MaintenancePassAsync(long now, bool routineDue)
+    {
         using (var pass = WorkerTelemetry.StartMaintenance())
         await using (var connection = await DataSources.OpenAsync(_dataSource, CancellationToken.None).ConfigureAwait(false))
         {

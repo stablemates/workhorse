@@ -11,6 +11,17 @@ adds.
 
 ## Unreleased
 
+### The worker warns when a statement waits past shutdown_grace_period
+
+A maintenance pass or a claim can wait for a lock that another session holds. Before this change,
+the worker logged nothing while it waited (SM-1785).
+
+Now the worker logs `workhorse.worker.statement_slow` once, at warn level, if a maintenance pass or
+a claim waits longer than the stop budget. The stop budget is `shutdown_grace_period`. The record
+carries `workhorse.worker.id`, `workhorse.worker.statement` (`maintenance` or `claim`), and
+`workhorse.worker.elapsed_ms`. `workhorse.worker.elapsed_ms` is the wait at the moment of the
+warning. The statement continues to wait, and no other behavior changes.
+
 ### The worker intervals accept 100 through 2,147,483,647 ms
 
 `register_worker_v1` takes `maintenance_interval`, `maintenance_routine_interval`, and

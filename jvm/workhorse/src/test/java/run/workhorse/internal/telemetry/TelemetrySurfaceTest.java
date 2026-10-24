@@ -210,7 +210,7 @@ class TelemetrySurfaceTest {
     while (matcher.find()) {
       events.add(matcher.group(1));
     }
-    assertEquals(55, events.size(), "the union has 55 events");
+    assertEquals(56, events.size(), "the union has 56 events");
     assertEquals(events, new TreeSet<>(Names.LOG_EVENTS));
   }
 

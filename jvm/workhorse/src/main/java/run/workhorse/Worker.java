@@ -29,6 +29,8 @@ import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.RejectedExecutionException;
+import java.util.concurrent.ScheduledFuture;
+import java.util.concurrent.ScheduledThreadPoolExecutor;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -227,6 +229,23 @@ public final class Worker implements AutoCloseable {
 
   /** The dispatch passes that saw a pause. Tests read it through {@link #pauseObservations}. */
   private final AtomicLong pauseObservations = new AtomicLong();
+
+  /**
+   * The timers of {@link #watchStatement}, shared by every worker of the process. Its one daemon
+   * thread ends when no timer is due, so it never keeps the process alive. A canceled timer leaves
+   * the queue at once.
+   */
+  private static final ScheduledThreadPoolExecutor STATEMENT_TIMERS = statementTimers();
+
+  private static ScheduledThreadPoolExecutor statementTimers() {
+    ScheduledThreadPoolExecutor timers =
+        new ScheduledThreadPoolExecutor(
+            1, Thread.ofPlatform().daemon().name("workhorse-statement-timer").factory());
+    timers.setRemoveOnCancelPolicy(true);
+    timers.setKeepAliveTime(1, TimeUnit.SECONDS);
+    timers.allowCoreThreadTimeOut(true);
+    return timers;
+  }
 
   private final AtomicLong lastMaintenanceAt = new AtomicLong(NEVER);
   private final AtomicLong lastRoutineAt = new AtomicLong(NEVER);
@@ -1313,6 +1332,40 @@ public final class Worker implements AutoCloseable {
   }
 
   /**
+   * Starts the timer of one maintenance pass or claim statement, and returns the action that
+   * cancels it. If the statement still runs after {@code shutdownGrace}, the timer logs one warning
+   * with the time waited, so a lock wait names its statement. The caller cancels the timer when the
+   * statement returns or fails. The warning does not end, fail, or delay the statement. A zero
+   * grace starts no timer, because every statement would pass it.
+   */
+  private Runnable watchStatement(String statement) {
+    if (shutdownGraceNanos == 0) {
+      return () -> {};
+    }
+    long startedAt = System.nanoTime();
+    ScheduledFuture<?> timer =
+        STATEMENT_TIMERS.schedule(
+            () -> {
+              try {
+                log(
+                    System.Logger.Level.WARNING,
+                    "workhorse.worker.statement_slow",
+                    "Worker statement is still waiting after the stop budget",
+                    Map.of(
+                        "workhorse.worker.statement",
+                        statement,
+                        "workhorse.worker.elapsed_ms",
+                        TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startedAt)));
+              } catch (RuntimeException ignored) {
+                // A failed log record must not change the statement.
+              }
+            },
+            shutdownGraceNanos,
+            TimeUnit.NANOSECONDS);
+    return () -> timer.cancel(false);
+  }
+
+  /**
    * The budget that a startup refusal names: the reserved connections and one statement. {@code
    * listens} is whether the worker uses the shared listener.
    */
@@ -1788,6 +1841,7 @@ public final class Worker implements AutoCloseable {
       // for the pool.
       ClaimPermit permit = new ClaimPermit(run);
       List<Row> rows;
+      Runnable watch = watchStatement("claim");
       try {
         rows =
             withConnection(
@@ -1802,6 +1856,7 @@ public final class Worker implements AutoCloseable {
                             Long.toString(leaseMs))
                         : List.of());
       } finally {
+        watch.run();
         permit.release();
       }
       for (Row row : rows) {
@@ -1866,6 +1921,7 @@ public final class Worker implements AutoCloseable {
     // nothing.
     AtomicBoolean withdrawn = new AtomicBoolean();
     ClaimPermit permit = new ClaimPermit(run);
+    Runnable watch = watchStatement("claim");
     try {
       rows =
           withConnection(
@@ -1892,6 +1948,7 @@ public final class Worker implements AutoCloseable {
       markFullTier(name, sentAt);
       return null;
     } finally {
+      watch.run();
       permit.release();
     }
     if (withdrawn.get()) {
@@ -2440,6 +2497,16 @@ public final class Worker implements AutoCloseable {
     if (routineDue && routine != NEVER) {
       telemetry.maintenanceDrift(now - routine, routineMs, "background_routines");
     }
+    Runnable watch = watchStatement("maintenance");
+    try {
+      maintenancePass(now, routineDue);
+    } finally {
+      watch.run();
+    }
+  }
+
+  /** Runs the statements of one maintenance pass: the tick, the routines, and the schedules. */
+  private void maintenancePass(long now, boolean routineDue) {
     telemetry.maintenance(
         () ->
             withConnection(
@@ -3447,6 +3514,8 @@ public final class Worker implements AutoCloseable {
     // batch or for the pool. The statement then still settles every completion, and claims only
     // for those whose gate is open, with a claim limit of 0 when none is.
     AtomicInteger sentLimit = new AtomicInteger(claimLimit);
+    // A send that only completes claims nothing, so only a send that can claim is watched.
+    Runnable watch = claimLimit > 0 ? watchStatement("claim") : () -> {};
     try {
       rows =
           withConnection(
@@ -3480,6 +3549,7 @@ public final class Worker implements AutoCloseable {
       }
       return;
     } finally {
+      watch.run();
       // The statement settled, so each fused claim of the chunk gives back its permit.
       for (PendingCompletion member : chunk) {
         member.permit.release();

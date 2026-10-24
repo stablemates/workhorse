@@ -989,8 +989,10 @@ so a stalled statement holds neither the dispatch loop nor a stop.
 **Maintenance and claim statements.** The worker sets no `statement_timeout`, no `lock_timeout`,
 and no client timeout on `tick_v1`, `fire_due_schedules_v2`, `run_maintenance_v1`, or a claim
 statement. The checkout timeout of the pool limits only the borrow. Thus a statement waits as long
-as PostgreSQL makes it wait, for example for a table lock that another session holds. The worker
-logs nothing while it waits.
+as PostgreSQL makes it wait, for example for a table lock that another session holds. If a pass or
+a claim waits longer than max(`heartbeat_ms`, 5 s), the worker logs
+`workhorse.worker.statement_slow` once and continues to wait
+([Statement bounds](lifecycle.md#statement-bounds)).
 
 - In `run()`, the maintenance thread runs the first pass beside the first claim
   ([ADR 0078](../decisions/0078-start-a-long-running-workers-first-claim-beside-its-startup-maintenance-pass.md)). Each

@@ -38,6 +38,12 @@ adds.
   `workhorse.task.execution_finished` now uses the bounded metric values, such as `succeeded`, in
   place of the outcome constant names. The body of `workhorse.handler.signal_swallowed` is now the
   TypeScript body (SM-1438).
+- **The worker logs a statement that waits after the stop budget.** If a maintenance pass or a
+  claim statement still runs after `shutdownGrace`, the worker logs one
+  `workhorse.worker.statement_slow` warning. The record names the worker, the statement as
+  `maintenance` or `claim`, and the time that the statement waited in milliseconds. The warning
+  does not end, fail, or delay the statement. A grace of 0 turns the warning off. The record also
+  goes to OpenTelemetry (SM-1785).
 
 ### Fixes
 

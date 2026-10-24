@@ -531,6 +531,8 @@ const (
 	recoveryRowsAffectedAttribute  = "workhorse.recovery.rows_affected"
 	recoveryExpiredLeasesAttribute = "workhorse.recovery.expired_leases"
 	recoveryRetriedAttribute       = "workhorse.recovery.retried"
+	workerStatementAttribute       = "workhorse.worker.statement"
+	workerElapsedAttribute         = "workhorse.worker.elapsed_ms"
 
 	handlerSpanName                = "workhorse.handler"
 	taskClaimedEvent               = "workhorse.task.claimed"
@@ -545,6 +547,7 @@ const (
 	leaseWatchdogEvent             = "workhorse.task.lease_expired"
 	leasesRecoveredEvent           = "workhorse.leases.recovered"
 	batchDispatchedEvent           = "workhorse.handler.batch_dispatched"
+	statementSlowEvent             = "workhorse.worker.statement_slow"
 	taskClaimedLogMessage          = "Task claimed"
 	handlerStartedLogMessage       = "Task handler started"
 	executionFinishedLogMessage    = "Task execution finished"
@@ -557,6 +560,9 @@ const (
 	leaseWatchdogLogMessage        = "No heartbeat was accepted within the task lease"
 	leasesRecoveredLogMessage      = "Expired leases recovered"
 	batchDispatchedLogMessage      = "Batch handler dispatched"
+	statementSlowLogMessage        = "Worker statement is still waiting after the stop budget"
+	maintenanceStatementKind       = "maintenance"
+	claimStatementKind             = "claim"
 	handlerFailedSpanStatusMessage = "handler failed"
 
 	traceParentField         = "traceparent"

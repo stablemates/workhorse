@@ -1418,8 +1418,43 @@ impl Inner {
         }
     }
 
-    /// Promotes and recovers tasks, fires due schedules, and runs the routine pass when due.
+    /// Awaits `statement`, one maintenance pass or one claim statement. If it still runs after
+    /// `shutdown_grace_period`, this logs `workhorse.worker.statement_slow` once with the measured
+    /// wait and keeps waiting. The warning does not change the statement, a drop of the future
+    /// drops the timer, and a zero grace starts no timer.
+    async fn warn_when_slow<T>(&self, kind: &'static str, statement: impl Future<Output = T>) -> T {
+        let budget = self.options.shutdown_grace_period;
+        if budget.is_zero() {
+            return statement.await;
+        }
+        let mut statement = std::pin::pin!(statement);
+        let started = Instant::now();
+        tokio::select! {
+            biased;
+            output = &mut statement => return output,
+            () = tokio::time::sleep(budget) => {}
+        }
+        let elapsed = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
+        // A subscriber that panics must not fail the statement.
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            tracing::warn!(
+                event.name = "workhorse.worker.statement_slow",
+                workhorse.worker.id = %self.worker_id,
+                workhorse.worker.statement = kind,
+                workhorse.worker.elapsed_ms = elapsed,
+                "Worker statement is still waiting after the stop budget"
+            );
+        }));
+        statement.await
+    }
+
+    /// Runs one maintenance pass, and warns once if it outlives the stop budget.
     async fn run_maintenance(&self) -> Result<(), Error> {
+        self.warn_when_slow("maintenance", self.maintenance_pass()).await
+    }
+
+    /// Promotes and recovers tasks, fires due schedules, and runs the routine pass when due.
+    async fn maintenance_pass(&self) -> Result<(), Error> {
         let rows = self.statements().rows(sql::TICK_V1, &[&PROMOTE_LIMIT, &RECOVER_LIMIT]).await?;
         if rows.is_empty() {
             return Err(Error::invalid("PostgreSQL returned an invalid maintenance result"));
@@ -1613,21 +1648,25 @@ impl Inner {
             }
             let fast_limit = limit.min(fast_limit) as i32;
             let gated = self.statements().gated(&allowed);
-            let claimed = fenced_rows(
-                &gated,
-                sql::COMPLETE_MANY_AND_CLAIM_V1,
-                &[
-                    &self.worker_id,
-                    &Vec::<Uuid>::new(),
-                    &Vec::<i64>::new(),
-                    &Vec::<Value>::new(),
-                    &queue,
-                    &fast_limit,
-                    &lease,
-                ],
-            )
-            .await
-            .map_err(Error::translate_fast_tier);
+            let claimed = self
+                .warn_when_slow(
+                    "claim",
+                    fenced_rows(
+                        &gated,
+                        sql::COMPLETE_MANY_AND_CLAIM_V1,
+                        &[
+                            &self.worker_id,
+                            &Vec::<Uuid>::new(),
+                            &Vec::<i64>::new(),
+                            &Vec::<Value>::new(),
+                            &queue,
+                            &fast_limit,
+                            &lease,
+                        ],
+                    ),
+                )
+                .await
+                .map_err(Error::translate_fast_tier);
             if gated.refused() {
                 return Ok(None);
             }
@@ -1650,7 +1689,12 @@ impl Inner {
         }
         let limit = limit as i32;
         let gated = self.statements().gated(&allowed);
-        let rows = gated.rows(sql::CLAIM_MANY_V1, &[&queue, &self.worker_id, &limit, &lease]).await;
+        let rows = self
+            .warn_when_slow(
+                "claim",
+                gated.rows(sql::CLAIM_MANY_V1, &[&queue, &self.worker_id, &limit, &lease]),
+            )
+            .await;
         if gated.refused() {
             return Ok(None);
         }

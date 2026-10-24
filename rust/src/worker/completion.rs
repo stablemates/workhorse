@@ -154,22 +154,21 @@ impl Inner {
         // submitted the batch, after its checkout. A completion that waited while the heartbeat
         // connection went, or while its run ended, then settles and claims nothing (ADR 0071,
         // rule 6). The gate never stops the settlement itself.
-        let mut limit = limit;
-        let mut rows = None;
-        if limit > 0 {
-            let allowed = || gate.and_then(RunGate::permit);
-            let gated = self.statements().gated(&allowed);
-            let sent = self.send_completions(&gated, statement, limit).await;
-            if gated.refused() {
-                limit = 0;
-            } else {
-                rows = Some(sent);
+        let send = async {
+            if limit > 0 {
+                let allowed = || gate.and_then(RunGate::permit);
+                let gated = self.statements().gated(&allowed);
+                let sent = self.send_completions(&gated, statement, limit).await;
+                if !gated.refused() {
+                    return (sent, limit);
+                }
             }
-        }
-        let rows = match rows {
-            Some(rows) => rows,
-            None => self.send_completions(&self.statements(), statement, 0).await,
+            (self.send_completions(&self.statements(), statement, 0).await, 0)
         };
+        // A send that asks for a task is watched as a claim, also when a refused gate makes it
+        // settle only. A send that only completes claims nothing, so it is not watched.
+        let (rows, limit) =
+            if limit > 0 { self.warn_when_slow("claim", send).await } else { send.await };
         let rows = rows.map_err(Error::translate_fast_tier)?;
         // The first row carries every accepted id; a stale fence leaves its task out of it.
         let accepted = match rows.first() {
