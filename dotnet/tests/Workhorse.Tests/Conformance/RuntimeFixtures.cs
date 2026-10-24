@@ -3,6 +3,7 @@ using System.Diagnostics;
 using System.Globalization;
 using System.Text;
 using System.Text.Json;
+using Microsoft.Extensions.Logging;
 using Npgsql;
 using Workhorse.Internal;
 using Workhorse.Internal.Database;
@@ -40,6 +41,13 @@ internal sealed class RuntimeFixtures : IAsyncDisposable
     };
 
     private static readonly TimeSpan Patience = TimeSpan.FromSeconds(10);
+
+    /// <summary>
+    /// A wait for a handler to start that measures nothing and only stops a fixture that would hang.
+    /// It is longer than the worker's startup budget of <c>max(heartbeat, 5 s)</c>, after which the
+    /// worker still ticks and claims.
+    /// </summary>
+    private static readonly TimeSpan StartGuard = TimeSpan.FromSeconds(15);
 
     private readonly ConformanceDatabase _database;
     private readonly OrderedDictionary<string, object?> _envelope;
@@ -1658,6 +1666,21 @@ internal sealed class RuntimeFixtures : IAsyncDisposable
     /// next regular round. The injected function answers <c>busy</c> for its first calls and records
     /// each one, then hands every call to the real function, which renews the lease.
     /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The retry gap runs from the return of a busy round to the start of the worker's next round, at
+    /// the worker's side (<see cref="HeartbeatRounds"/>). That span is the worker's own retry
+    /// schedule. It excludes the latency of both rounds, so a round that a loaded host stalls or
+    /// fails is not charged to the schedule. A worker that waits for the next regular round still fails.
+    /// </para>
+    /// <para>
+    /// The worker connections do not wait for a WAL flush at <c>COMMIT</c>. On a shared server, the
+    /// other databases can make that flush take seconds, and a round that waits for it can fail. The
+    /// busy answers renew nothing, so failed rounds after them can consume the lease. Then the worker
+    /// abandons the lease, as it must (SM-1445), and no runner can pass the fixture. A host stall
+    /// that fails three rounds in a row stays a known limit of the fixture (SM-1786).
+    /// </para>
+    /// </remarks>
     private async Task HeartbeatBusyAsync(OrderedDictionary<string, object?> fixture)
     {
         var taskId = await EnqueueAsync(TaskType(fixture), Json.Members(), Options(QueueName(fixture)));
@@ -1668,13 +1691,21 @@ internal sealed class RuntimeFixtures : IAsyncDisposable
         var expected = (long)fixture["expectedBusyRounds"]!;
         var injection = Get(fixture, "injection");
         var rounds = new List<object?>();
-        await using (var pool = Intercept.Create(_database, Intercept.Hook.None))
+        var sent = new HeartbeatRounds();
+        await using (var pool = Intercept.Create(_database, sent, connection => connection.Options = "-c synchronous_commit=off"))
         {
+            await using (var connection = await pool.DataSource.OpenConnectionAsync())
+            {
+                Failure.Check(Database.Rows(connection, "SHOW synchronous_commit") is [{ } row] && Matcher.Same(Json.Object(row)!["synchronous_commit"], "off"), "the worker pool waits for the WAL flush");
+            }
+
             await using var subject = NewWorker(pool, fixture, options =>
             {
                 options.Lease = Millis(fixture, "leaseMs");
                 options.Heartbeat = Millis(fixture, "heartbeatMs");
+                options.LoggerFactory = sent;
             });
+            sent.Heartbeat = subject.HeartbeatForTests;
             subject.Handle<JsonElement>(TaskType(fixture), async (context, _) =>
             {
                 started.TrySetResult();
@@ -1687,7 +1718,7 @@ internal sealed class RuntimeFixtures : IAsyncDisposable
             var result = Running(subject, () => subject.RunOnceAsync());
             try
             {
-                await Started(started, "the handler never started");
+                await Started(started, "the handler never started", StartGuard);
                 await RenewalAsync(taskId, await ExpiryAsync(taskId), timeout);
                 await InjectedBodyAsync(injection, async () =>
                 {
@@ -1711,22 +1742,130 @@ internal sealed class RuntimeFixtures : IAsyncDisposable
             }
         }
 
+        // Each retry sent only the busy lease.
         var busy = rounds.Take((int)expected).Select(row => Json.Object(row)!).ToList();
-        var maximumGap = Convert.ToDouble(fixture["maximumRetryGapMs"], CultureInfo.InvariantCulture);
         for (var index = 0; index < busy.Count; index++)
         {
             var leases = Convert.ToInt64(busy[index]["lease_count"], CultureInfo.InvariantCulture);
             Failure.Check(leases == 1, $"busy round {index} sent {leases} leases, want 1");
-            if (index > 0)
-            {
-                var gap = Convert.ToDouble(busy[index]["round_at_ms"], CultureInfo.InvariantCulture) - Convert.ToDouble(busy[index - 1]["round_at_ms"], CultureInfo.InvariantCulture);
-                Failure.Check(gap < maximumGap, $"busy round {index} came {gap} ms after the previous one");
-            }
         }
+
+        // Each retry came sooner than the next regular round.
+        var maximumGap = Convert.ToDouble(fixture["maximumRetryGapMs"], CultureInfo.InvariantCulture);
+        var gaps = sent.RetryGaps((int)expected);
+        Failure.Check(gaps.All(gap => gap < maximumGap), $"the worker started the next round [{string.Join(", ", gaps.Select(gap => Math.Round(gap)))}] ms after a busy round, want less than {maximumGap} ms");
 
         Failure.Check(cancellations == (long)fixture["expectedCancellations"]!, "the handler saw a cancellation");
         await ExpectStateAsync(taskId, Get(fixture, "expectedState"));
         await ExpectOutcomesAsync(taskId, [fixture.GetValueOrDefault("expectedAttemptOutcome")]);
+    }
+
+    /// <summary>
+    /// Records each heartbeat round of one worker on its reserved connection. A round starts when the
+    /// worker sends its <c>BEGIN</c> batch with the round's settings. A busy round returns when the
+    /// worker logs <c>workhorse.task.heartbeat_rejected</c> with status <c>busy</c>. The worker logs it on
+    /// the heartbeat thread when it settles the round, before it schedules the retry.
+    /// </summary>
+    /// <remarks>
+    /// <see cref="Heartbeat.RoundsStarted"/> also counts a round that sent nothing, for example one
+    /// that reached its deadline before <c>BEGIN</c>. The start of such a round is not known, so no
+    /// gap is measured across it.
+    /// </remarks>
+    private sealed class HeartbeatRounds : Intercept.Hook, ILoggerFactory, ILogger
+    {
+        private readonly Lock _lock = new();
+        private readonly List<(long Started, long Sequence)> _rounds = [];
+        private readonly List<long> _busy = [];
+
+        /// <summary>The heartbeat of the worker. Set it before the worker runs.</summary>
+        internal Heartbeat? Heartbeat { get; set; }
+
+        internal override bool SeesBatches => true;
+
+        internal override void Before(Intercept.Call call)
+        {
+            if (Heartbeat is not { } heartbeat || !call.Statements.Contains(SessionCommands.RoundTimeouts))
+            {
+                return;
+            }
+
+            var round = (Stopwatch.GetTimestamp(), heartbeat.RoundsStarted);
+            lock (_lock)
+            {
+                _rounds.Add(round);
+            }
+        }
+
+        /// <summary>
+        /// The time in milliseconds from the return of each of the first <paramref name="expected"/>
+        /// busy rounds but the last to the start of the next round.
+        /// </summary>
+        internal List<double> RetryGaps(int expected)
+        {
+            List<(long Started, long Sequence)> rounds;
+            List<long> busy;
+            lock (_lock)
+            {
+                rounds = [.. _rounds];
+                busy = [.. _busy];
+            }
+
+            // A busy answer belongs to the latest round that started before it.
+            var answers = new List<(int Round, long Returned)>();
+            for (var index = 0; index < rounds.Count; index++)
+            {
+                var end = index + 1 < rounds.Count ? rounds[index + 1].Started : long.MaxValue;
+                if (busy.FirstOrDefault(at => at >= rounds[index].Started && at < end) is var returned and not 0)
+                {
+                    answers.Add((index, returned));
+                }
+            }
+
+            Failure.Check(answers.Count >= expected, $"the worker saw {answers.Count} busy rounds, want {expected}");
+            var gaps = new List<double>();
+            foreach (var (index, returned) in answers.Take(expected - 1))
+            {
+                Failure.Check(index + 1 < rounds.Count, "the worker sent no round after a busy round");
+                if (rounds[index + 1].Sequence - rounds[index].Sequence == 1)
+                {
+                    gaps.Add(Stopwatch.GetElapsedTime(returned, rounds[index + 1].Started).TotalMilliseconds);
+                }
+            }
+
+            Failure.Check(gaps.Count > 0, "a round that sent nothing came after each busy round, so no retry gap was measured");
+            return gaps;
+        }
+
+        public ILogger CreateLogger(string categoryName) => this;
+
+        public void AddProvider(ILoggerProvider provider)
+        {
+        }
+
+        public void Dispose()
+        {
+        }
+
+        public IDisposable? BeginScope<TState>(TState state)
+            where TState : notnull => null;
+
+        public bool IsEnabled(LogLevel logLevel) => true;
+
+        public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter)
+        {
+            if (eventId.Name == "workhorse.task.heartbeat_rejected"
+                && state is IReadOnlyList<KeyValuePair<string, object?>> values
+                && values.Any(value => value is { Key: "Status", Value: "busy" }))
+            {
+                var at = Stopwatch.GetTimestamp();
+                lock (_lock)
+                {
+                    _busy.Add(at);
+                }
+            }
+
+            TestLog.Instance.Log(logLevel, eventId, state, exception, formatter);
+        }
     }
 
     /// <summary>
@@ -2058,8 +2197,8 @@ internal sealed class RuntimeFixtures : IAsyncDisposable
         }
     }
 
-    private static async Task Started(TaskCompletionSource started, string message) =>
-        Failure.Check(await Completes(started.Task, TimeSpan.FromSeconds(5)), message);
+    private static async Task Started(TaskCompletionSource started, string message, TimeSpan? timeout = null) =>
+        Failure.Check(await Completes(started.Task, timeout ?? TimeSpan.FromSeconds(5)), message);
 
     /// <summary>Waits until <paramref name="token"/> is cancelled, or fails after 5 s.</summary>
     private static async Task WaitForCancellationAsync(string message, CancellationToken token)
