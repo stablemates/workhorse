@@ -408,20 +408,20 @@ gives:
 
 Spare connections are the pool size minus the pooled connections that the worker keeps for its
 listener and its heartbeats. Each SDK reads its own pool settings. A Java `DataSource` reports no
-pool size, so the Java default has a cap only from a declared `poolMaxSize`. The .NET default has no
-pool-size cap. In TypeScript, pools of 3, 4, 6,
+pool size, so the Java default has a cap only from a declared `poolMaxSize`. The .NET default has a
+cap only on a pooled data source. In TypeScript, pools of 3, 4, 6,
 and 10 connections give a concurrency-64 worker 1, 2, 4, and 8 cohorts.
 
-| SDK        | Option                   | Rule                                                    |
-| ---------- | ------------------------ | ------------------------------------------------------- |
-| TypeScript | `WorkerOptions.cohorts`  | 1 through `concurrency`                                 |
-| Python     | `Worker(cohorts=...)`    | 1 through `concurrency`                                 |
-| Go         | `WorkerOptions.Cohorts`  | 1 through `Concurrency`; 0 selects the default          |
-| Rust       | `WorkerOptions::cohorts` | `Option<usize>`, 1 through `concurrency`                |
-| Ruby       | `Worker.new(cohorts:)`   | 1 through `concurrency`                                 |
-| Java       | `Worker.Builder.cohorts` | 1 through `concurrency`; `poolMaxSize` caps the default |
-| Kotlin     | `cohorts = n`            | 1 through `concurrency`                                 |
-| .NET       | `WorkerOptions.Cohorts`  | 1 through `Concurrency`; 0 selects the default          |
+| SDK        | Option                   | Rule                                                                       |
+| ---------- | ------------------------ | -------------------------------------------------------------------------- |
+| TypeScript | `WorkerOptions.cohorts`  | 1 through `concurrency`                                                    |
+| Python     | `Worker(cohorts=...)`    | 1 through `concurrency`                                                    |
+| Go         | `WorkerOptions.Cohorts`  | 1 through `Concurrency`; 0 selects the default                             |
+| Rust       | `WorkerOptions::cohorts` | `Option<usize>`, 1 through `concurrency`                                   |
+| Ruby       | `Worker.new(cohorts:)`   | 1 through `concurrency`                                                    |
+| Java       | `Worker.Builder.cohorts` | 1 through `concurrency`; `poolMaxSize` caps the default                    |
+| Kotlin     | `cohorts = n`            | 1 through `concurrency`                                                    |
+| .NET       | `WorkerOptions.Cohorts`  | 1 through `Concurrency`; 0 selects the default, which `Max Pool Size` caps |
 
 An explicit count is never capped.
 

@@ -161,7 +161,7 @@ public sealed class WorkerUnitTests
     [InlineData(17, 3)]
     [InlineData(100, 8)]
     public void TheDefaultCohortsFollowTheSharedRule(int concurrency, int cohorts) =>
-        Assert.Equal(cohorts, Worker.DefaultCohorts(concurrency));
+        Assert.Equal(cohorts, Worker.DefaultCohorts(concurrency, null));
 
     [Fact]
     public void TheRegistryReceivesTheCSharpLanguageAndTheTrainVersion()

@@ -31,6 +31,18 @@ behavior change for a caller who sets `pollMs` above 5,000: an idle worker claim
 a live subscription, the backoff still caps the wait at 5,000 ms. ADR 0112 records the order for all
 seven SDKs.
 
+### A .NET pool size caps the default cohorts
+
+A pooled `NpgsqlDataSource` reports its `Max Pool Size`. Before this change, the .NET worker did not
+use that size when it chose its default cohorts. A worker with `Concurrency = 64` and
+`Max Pool Size=4` used 8 cohorts on 2 free connections (SM-1758).
+
+Now the worker caps its default cohorts at `Max Pool Size`, minus 1 for the listener and minus 1
+for the heartbeat connection. Thus that worker uses 2 cohorts. `PollingOnly` reserves no listener
+connection, and `SharedHeartbeats` reserves no heartbeat connection, as in the other SDKs. With
+`Pooling=false`, the size is unknown, so the default is not capped. An explicit `Cohorts` is never
+capped.
+
 ### The .NET heartbeat round gives each server budget one quarter
 
 PostgreSQL measures `statement_timeout` for each statement and

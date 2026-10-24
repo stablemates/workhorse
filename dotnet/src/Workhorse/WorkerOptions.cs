@@ -28,7 +28,11 @@ public sealed class WorkerOptions
     /// <summary>
     /// The number of slot cohorts for the fast task tier (ADR 0076), from 1 to
     /// <see cref="Concurrency"/>. The default, 0, chooses one cohort below concurrency 8, and one
-    /// for each 8 slots from 2 to 8 otherwise.
+    /// for each 8 slots from 2 to 8 otherwise. On a pooled data source, the worker then caps that
+    /// default at the spare connections of the pool. The spare connections are <c>Max Pool Size</c>,
+    /// minus 1 for the listener when the worker listens. Unless <see cref="SharedHeartbeats"/> is set,
+    /// the heartbeat connection takes 1 more. The cap is never below 1. An explicit value is never
+    /// capped.
     /// </summary>
     public int Cohorts { get; set; }
 

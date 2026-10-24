@@ -271,7 +271,9 @@ Four rows carry a condition the setting name alone cannot.
   default at the connections left after its listener and heartbeat connection. A worker that
   only polls reserves no listener connection, and a worker with shared heartbeats reserves no
   heartbeat connection. A JVM `DataSource` reports no size, so the JVM worker caps the default only
-  at a declared `poolMaxSize`. An explicit cohort count is never capped.
+  at a declared `poolMaxSize`. A .NET `NpgsqlDataSource` reports its `Max Pool Size` when pooling
+  is on, so the .NET worker caps the default only on a pooled data source. An explicit cohort count
+  is never capped.
 - **Maintenance routine offer interval.** All seven tick maintenance every 1,000 ms, which bounds
   dispatch latency. The slower retention routines keep their own minute, because PostgreSQL owns
   the global due decision and a faster offer only adds rejected calls. All seven bind the text

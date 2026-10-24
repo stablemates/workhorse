@@ -285,11 +285,11 @@ public sealed class WorkerFastTierTests(ScratchDatabase database)
     [Fact]
     public void TheDefaultCohortsFollowTheConcurrency()
     {
-        Assert.Equal(1, Worker.DefaultCohorts(7));
-        Assert.Equal(2, Worker.DefaultCohorts(8));
-        Assert.Equal(2, Worker.DefaultCohorts(16));
-        Assert.Equal(3, Worker.DefaultCohorts(17));
-        Assert.Equal(8, Worker.DefaultCohorts(100));
+        Assert.Equal(1, Worker.DefaultCohorts(7, null));
+        Assert.Equal(2, Worker.DefaultCohorts(8, null));
+        Assert.Equal(2, Worker.DefaultCohorts(16, null));
+        Assert.Equal(3, Worker.DefaultCohorts(17, null));
+        Assert.Equal(8, Worker.DefaultCohorts(100, null));
     }
 
     private static void InterlockedMax(ref int target, int value)
