@@ -2381,6 +2381,14 @@ prevent the next occurrence from enqueueing independently.
 
 Both boundaries are optional. `execution_timeout_ms` is an integer from 1 through 31,536,000,000.
 
+Every SDK reads an omitted execution timeout and an explicit 0 as no timeout. It then sends no
+`executionTimeoutMs` value, and `enqueue_many_v1` stores `execution_timeout_ms` as `NULL`.
+TypeScript, Python, Go, and Rust send any other value unchanged, and `enqueue_many_v1` refuses a
+fraction or a value outside the range. Ruby, the JVM, and .NET round a duration to the nearest
+millisecond, half up. They refuse a nonzero duration that rounds to 0 ms, a negative duration, and a
+value above 31,536,000,000 ms before any statement.
+[ADR 0114](../decisions/0114-read-a-zero-execution-timeout-as-no-timeout.md) records the rule.
+
 `terminalize_deadline_v1` closes an expired task in one of three ways:
 
 - An active row closes the current attempt with the owning worker and fence.

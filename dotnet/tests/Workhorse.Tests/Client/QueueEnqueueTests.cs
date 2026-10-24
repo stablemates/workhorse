@@ -174,6 +174,31 @@ public sealed class QueueEnqueueTests(ScratchDatabase database)
     }
 
     [Fact]
+    public async Task StoresNoExecutionTimeoutForAnOmittedOrZeroValue()
+    {
+        var queueName = UniqueName("timeout");
+        var queue = new Queue(database.DataSource, new QueueOptions { DefaultQueue = queueName });
+        async Task<long?> Stored(TimeSpan? timeout)
+        {
+            var result = await queue.EnqueueAsync("t", 1, new EnqueueOptions { ExecutionTimeout = timeout }, Token);
+            return (await TaskAsync(database, result.TaskId))!.Long("execution_timeout_ms");
+        }
+
+        Assert.Null(await Stored(null));
+        Assert.Null(await Stored(TimeSpan.Zero));
+        Assert.Equal(1, await Stored(TimeSpan.FromMilliseconds(1)));
+        Assert.Equal(1, await Stored(TimeSpan.FromTicks(5_000)));
+        Assert.Equal(31_536_000_000, await Stored(TimeSpan.FromMilliseconds(31_536_000_000)));
+        foreach (var refused in new[] { TimeSpan.FromTicks(4_000), TimeSpan.FromTicks(1), TimeSpan.FromTicks(-4_000), TimeSpan.FromMilliseconds(31_536_000_001) })
+        {
+            var error = await Assert.ThrowsAsync<ArgumentException>(() => queue.EnqueueAsync("t", 1, new EnqueueOptions { ExecutionTimeout = refused }, Token));
+            Assert.Equal("enqueue request 1: execution timeout must be a TimeSpan between 0.001 and 31536000 seconds", error.Message);
+        }
+
+        Assert.Equal(5, await CountAsync(database, queueName));
+    }
+
+    [Fact]
     public async Task ReplaysAnIdempotentEnqueueAndRefusesADifferentRequest()
     {
         var queue = new Queue(database.DataSource, new QueueOptions { DefaultQueue = UniqueName("idempotency") });

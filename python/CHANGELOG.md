@@ -10,6 +10,16 @@ adds.
 
 ## Unreleased
 
+### An execution timeout of 0 enqueues a task with no timeout
+
+**Behavior change.** Before this change, `execution_timeout_ms=0` reached `enqueue_many_v1`, and
+PostgreSQL refused the enqueue. Go, Rust, Ruby, the JVM, and .NET read 0 as no timeout. Thus one
+task definition succeeded in one SDK and failed in another (SM-1714).
+
+Now `Queue`, `AsyncQueue`, and a child task request send no execution timeout for 0. The task has no
+timeout, the same as `None`. A fraction or a value outside 1 through 31,536,000,000 is still
+refused. ADR 0114 records the rule for all seven SDKs.
+
 ### The worker intervals refuse a value above the SQL integer limit
 
 `register_worker_v1` takes `maintenance_interval_ms`, `maintenance_routine_poll_ms`, and

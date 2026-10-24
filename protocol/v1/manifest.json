@@ -16,7 +16,13 @@
     "maxEnqueueBatchSize": 1000
   },
   "fixtureCoverage": {
-    "requests": ["keyed-enqueue-request", "minimal-enqueue-request"],
+    "requests": [
+      "keyed-enqueue-request",
+      "minimal-enqueue-request",
+      "zero-execution-timeout-request",
+      "minimum-execution-timeout-request",
+      "maximum-execution-timeout-request"
+    ],
     "schedules": [
       "recurring-schedule-definition",
       "minimal-schedule-definition",

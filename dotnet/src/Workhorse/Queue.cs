@@ -1043,8 +1043,7 @@ public sealed partial class Queue
 
         input["deadline"] = options.Deadline is { } deadline ? Values.Timestamp(deadline) : null;
         input["budget"] = OptionalBytes(options.Budget, MaxNameBytes, "budget");
-        var timeout = options.ExecutionTimeout is { } executionTimeout ? Values.Milliseconds(executionTimeout, "execution timeout", 0, MaxDurationMs) : 0;
-        input["executionTimeoutMs"] = timeout == 0 ? null : timeout;
+        input["executionTimeoutMs"] = ExecutionTimeout(options.ExecutionTimeout);
         input["prerequisiteTaskId"] = null;
         input["dependencies"] = options.Dependencies is { } dependencies ? DependenciesDocument(dependencies) : null;
         input["tags"] = Tags(options.Tags);
@@ -1344,6 +1343,15 @@ public sealed partial class Queue
             ? value!
             : throw new ArgumentException($"{label} must contain between 1 and {maximum} UTF-8 bytes");
     }
+
+    /// <summary>
+    /// The protocol value of an execution timeout. Zero means no timeout, as <c>null</c> does. A
+    /// nonzero duration that rounds to 0 ms is refused, so it cannot remove the timeout.
+    /// </summary>
+    private static long? ExecutionTimeout(TimeSpan? timeout) =>
+        timeout is not { } value || value == TimeSpan.Zero
+            ? null
+            : Values.Milliseconds(value, "execution timeout", 1, MaxDurationMs);
 
     /// <summary>The value, or <c>null</c> when it is null or empty. A value longer than the maximum throws.</summary>
     private static string? OptionalBytes(string? value, int maximum, string label)

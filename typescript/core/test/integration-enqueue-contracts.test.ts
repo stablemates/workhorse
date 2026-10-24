@@ -10,6 +10,7 @@ import {
   installSchema,
   type Json,
   MAX_ENQUEUE_BATCH_SIZE,
+  MAX_EXECUTION_TIMEOUT_MS,
   MAX_IDEMPOTENCY_KEY_BYTES,
   MAX_IDEMPOTENCY_SCOPE_BYTES,
   MAX_IDEMPOTENCY_TTL_MS,
@@ -162,6 +163,14 @@ const runBatch = async (order: readonly [string, string]) => {
     client.release();
   }
 };
+
+async function storedExecutionTimeout(id: string): Promise<string | null> {
+  const result = await pool.query<{ execution_timeout_ms: string | null }>(
+    "SELECT execution_timeout_ms::text FROM workhorse.task WHERE id = $1::uuid",
+    [id],
+  );
+  return result.rows[0]!.execution_timeout_ms;
+}
 
 describe("enqueue contracts", () => {
   it("uses the synchronized contract cache for one-statement batch enqueue", async () => {
@@ -1151,6 +1160,32 @@ describe("enqueue contracts", () => {
     await expect(
       queue.enqueue("invalid-decimal-priority", null, { priority: 1.5 }),
     ).rejects.toThrow("priority must be an integer between 0 and 100");
+  });
+
+  it("stores no execution timeout for an omitted or zero value", async () => {
+    expect(await storedExecutionTimeout(await queue.enqueue("timeout-omitted", null))).toBeNull();
+    expect(
+      await storedExecutionTimeout(
+        await queue.enqueue("timeout-zero", null, { executionTimeoutMs: 0 }),
+      ),
+    ).toBeNull();
+    expect(
+      await storedExecutionTimeout(
+        await queue.enqueue("timeout-one", null, { executionTimeoutMs: 1 }),
+      ),
+    ).toBe("1");
+    expect(
+      await storedExecutionTimeout(
+        await queue.enqueue("timeout-limit", null, {
+          executionTimeoutMs: MAX_EXECUTION_TIMEOUT_MS,
+        }),
+      ),
+    ).toBe(String(MAX_EXECUTION_TIMEOUT_MS));
+    for (const executionTimeoutMs of [0.4, -1, MAX_EXECUTION_TIMEOUT_MS + 1]) {
+      await expect(queue.enqueue("timeout-refused", null, { executionTimeoutMs })).rejects.toThrow(
+        "executionTimeoutMs must be an integer between 1 and 31536000000",
+      );
+    }
   });
 
   it("replays an equivalent scoped key without duplicate task, event, FIFO, or notify effects", async () => {

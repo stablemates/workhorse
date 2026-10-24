@@ -151,7 +151,7 @@ def serialize_request(
         "deadline": _timestamp(options.deadline),
         "concurrencyKey": options.concurrency_key,
         "budget": options.budget,
-        "executionTimeoutMs": options.execution_timeout_ms,
+        "executionTimeoutMs": _execution_timeout(options.execution_timeout_ms),
         "maxAttempts": options.max_attempts,
         "retryPolicy": dict(options.retry_policy) if options.retry_policy is not None else None,
         "prerequisiteTaskId": None,
@@ -195,7 +195,7 @@ def serialize_child_request(
         "deadline": _timestamp(options.deadline),
         "concurrencyKey": options.concurrency_key,
         "budget": options.budget,
-        "executionTimeoutMs": options.execution_timeout_ms,
+        "executionTimeoutMs": _execution_timeout(options.execution_timeout_ms),
         "maxAttempts": options.max_attempts,
         "retryPolicy": dict(options.retry_policy) if options.retry_policy is not None else None,
         "prerequisiteTaskId": None,
@@ -221,6 +221,11 @@ def _validate_options(options: EnqueueOptions) -> None:
         raise ValueError("debounced enqueue uses its PostgreSQL-owned window instead of run_at")
     if (options.debounce is not None or options.throttle is not None) and options.dependencies:
         raise ValueError("enqueue options cannot combine debounce or throttle with dependencies")
+
+
+def _execution_timeout(value: int | None) -> int | None:
+    """Return the protocol value of an execution timeout. Zero means no timeout, as ``None``."""
+    return None if value is None or value == 0 else value
 
 
 def _validate_priority(priority: int) -> None:

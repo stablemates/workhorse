@@ -338,6 +338,11 @@ function validateValueLimit(value: number | undefined, field: string): number | 
   return value;
 }
 
+/** The protocol value of an execution timeout. Zero means no timeout, the same as an omitted one. */
+export function executionTimeoutValue(value: number | undefined): number | null {
+  return value === undefined || value === 0 ? null : value;
+}
+
 export function validateTaskPriority(value: number | undefined): number {
   if (value === undefined) return 0;
   if (!Number.isSafeInteger(value) || value < 0 || value > MAX_TASK_PRIORITY) {
@@ -973,7 +978,7 @@ export class EnqueueContractsModule extends QueueModule {
       deadline: options.deadline?.toISOString() ?? null,
       concurrencyKey: options.concurrencyKey ?? null,
       budget: options.budget ?? null,
-      executionTimeoutMs: options.executionTimeoutMs ?? null,
+      executionTimeoutMs: executionTimeoutValue(options.executionTimeoutMs),
       maxAttempts: options.maxAttempts ?? 25,
       retryPolicy: options.retryPolicy ?? null,
       prerequisiteTaskId: options.prerequisiteTaskId ?? null,

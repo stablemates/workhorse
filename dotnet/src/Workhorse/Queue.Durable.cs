@@ -131,8 +131,7 @@ public sealed partial class Queue
 
         input["deadline"] = options.Deadline is { } deadline ? Values.Timestamp(deadline) : null;
         input["budget"] = OptionalBytes(options.Budget, MaxNameBytes, "budget");
-        var timeout = options.ExecutionTimeout is { } executionTimeout ? Values.Milliseconds(executionTimeout, "execution timeout", 0, MaxDurationMs) : 0;
-        input["executionTimeoutMs"] = timeout == 0 ? null : timeout;
+        input["executionTimeoutMs"] = ExecutionTimeout(options.ExecutionTimeout);
         input["prerequisiteTaskId"] = null;
         input["dependencies"] = null;
         input["tags"] = Tags(options.Tags);

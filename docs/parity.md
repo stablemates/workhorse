@@ -250,12 +250,13 @@ differ today, and the reasons follow the table.
 | Shutdown grace, then                              | 25,000 ms, then exit the process                          | 25,000 ms, then exit the process                          | 25,000 ms, then abandon the handlers                      | 25,000 ms, then abandon the handlers                      | 25,000 ms, then abandon the handlers                      | 25,000 ms, then abandon the handlers                      | 25,000 ms, then abandon the handlers                      |
 | Handler retry delay override                      | `retryDelayMs`, unset                                     | `retry_delay_ms`, unset                                   | `RetryDelay`, unset                                       | `retry_delay`, unset                                      | `retry_delay`, unset                                      | `retryDelay`, unset                                       | `RetryDelay`, unset                                       |
 | Handler retry delay override range                | 0 to 2,147,483,647 ms, refused outside                    | 0 to 2,147,483,647 ms, refused outside                    | 0 to 2,147,483,647 ms, refused outside                    | 0 to 2,147,483,647 ms, refused outside                    | 0 to 2,147,483,647 ms, refused outside                    | 0 to 2,147,483,647 ms, refused outside                    | 0 to 2,147,483,647 ms, refused outside                    |
+| Enqueue execution timeout                         | Unset or 0 is none; else 1 to 31,536,000,000 ms           | Unset or 0 is none; else 1 to 31,536,000,000 ms           | Unset or 0 is none; else 1 to 31,536,000,000 ms           | Unset or 0 is none; else 1 to 31,536,000,000 ms           | Unset or 0 is none; else 1 to 31,536,000,000 ms           | Unset or 0 is none; else 1 to 31,536,000,000 ms           | Unset or 0 is none; else 1 to 31,536,000,000 ms           |
 | Queue of a handler task group add without a queue | The queue of the member task                              | The queue of the member task                              | The queue of the member task                              | The queue of the member task                              | The queue of the member task                              | The queue of the member task                              | The queue of the member task                              |
 | Queue of a child task request without a queue     | The queue of the parent task                              | The queue of the parent task                              | The queue of the parent task                              | The queue of the parent task                              | The queue of the parent task                              | The queue of the parent task                              | The queue of the parent task                              |
 
 <!-- END GENERATED PARITY DEFAULTS -->
 
-Four rows carry a condition the setting name alone cannot.
+Five rows carry a condition the setting name alone cannot.
 
 - **Claim poll interval.** A worker claims on one of two schedules. While its `LISTEN` subscription
   is live, a notification wakes it, so polling is only a fallback and the worker waits the ceiling
@@ -287,6 +288,13 @@ Four rows carry a condition the setting name alone cannot.
   negative value, also one that rounds to 0, and no SDK clamps. A fixed value is refused at
   construction. A callback result is refused before `fail_v1`, as
   [ADR 0111](decisions/0111-define-one-retry-delay-override-range.md) records.
+- **Enqueue execution timeout.** An omitted timeout and an explicit 0 both mean no timeout. The SDK
+  then sends no value to PostgreSQL. A Go caller cannot tell 0 from an omitted value, so all seven
+  SDKs read 0 as Go does. TypeScript, Python, Go, and Rust take integer milliseconds, and
+  PostgreSQL refuses a fraction or a value outside 1 through 31,536,000,000 ms. Ruby, the JVM, and
+  .NET take a duration and round it to the nearest millisecond, half up. They refuse a nonzero
+  value that rounds to 0 ms, so a value below the precision cannot remove the timeout, as
+  [ADR 0114](decisions/0114-read-a-zero-execution-timeout-as-no-timeout.md) records.
 
 The shutdown deadline agrees at 25,000 ms, and it sits under the 30 second termination grace a
 container platform gives a process by default. What follows that deadline cannot agree, and it is

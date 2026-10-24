@@ -348,9 +348,7 @@ module Stablemates
         input["queue"] = stored_queue || parent.queue if request.queue.nil? || request.queue.empty?
         input["deadline"] = request.deadline && Values.timestamp(request.deadline, "deadline")
         input["budget"] = optional_bytes(request.budget, MAX_NAME_BYTES, "budget")
-        timeout = request.execution_timeout &&
-          Values.milliseconds(request.execution_timeout, "execution timeout", 0..MAX_DURATION_MS)
-        input["executionTimeoutMs"] = timeout&.zero? ? nil : timeout
+        input["executionTimeoutMs"] = execution_timeout(request.execution_timeout)
         input["prerequisiteTaskId"] = nil
         input["dependencies"] = nil
         input["tags"] = tags(request.tags)
@@ -473,9 +471,7 @@ module Stablemates
         input["runAt"] = Values.timestamp(request.run_at || now, "run at") if request.run_at || !keyed
         input["deadline"] = request.deadline && Values.timestamp(request.deadline, "deadline")
         input["budget"] = optional_bytes(request.budget, MAX_NAME_BYTES, "budget")
-        timeout = request.execution_timeout &&
-          Values.milliseconds(request.execution_timeout, "execution timeout", 0..MAX_DURATION_MS)
-        input["executionTimeoutMs"] = timeout&.zero? ? nil : timeout
+        input["executionTimeoutMs"] = execution_timeout(request.execution_timeout)
         input["prerequisiteTaskId"] = nil
         input["dependencies"] = request.dependencies && dependencies_document(request.dependencies)
         input["tags"] = tags(request.tags)
@@ -483,6 +479,14 @@ module Stablemates
         input["debounce"] = debounce_document(request.debounce) if request.debounce
         input["throttle"] = throttle_document(request.throttle) if request.throttle
         input
+      end
+
+      # The protocol value of an execution timeout. An exact zero means no timeout, as nil does. A
+      # nonzero value that rounds to 0 ms is refused, so it cannot remove the timeout.
+      def execution_timeout(value)
+        return nil if value.nil? || (value.is_a?(Numeric) && value.zero?)
+
+        Values.milliseconds(value, "execution timeout", 1..MAX_DURATION_MS)
       end
 
       def validate_options(request)

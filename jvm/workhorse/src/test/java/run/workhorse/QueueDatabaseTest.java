@@ -304,6 +304,38 @@ class QueueDatabaseTest {
   }
 
   @Test
+  void storesNoExecutionTimeoutForAnOmittedOrZeroValue() throws SQLException {
+    String name = unique("timeout");
+    assertNull(timeout(queueOptions(name)));
+    assertNull(timeout(queueOptions(name).executionTimeout(Duration.ZERO)));
+    assertEquals(1L, timeout(queueOptions(name).executionTimeout(Duration.ofMillis(1))));
+    assertEquals(1L, timeout(queueOptions(name).executionTimeout(Duration.ofNanos(500_000))));
+    assertEquals(
+        31_536_000_000L, timeout(queueOptions(name).executionTimeout(Duration.ofDays(365))));
+    for (Duration refused :
+        List.of(
+            Duration.ofNanos(400_000),
+            Duration.ofNanos(1),
+            Duration.ofNanos(-400_000),
+            Duration.ofMillis(31_536_000_001L))) {
+      IllegalArgumentException error =
+          assertThrows(
+              IllegalArgumentException.class,
+              () -> queue.enqueue("t", null, queueOptions(name).executionTimeout(refused).build()));
+      assertEquals(
+          "enqueue request 1: execution timeout must be a Duration between 0.001 and 31536000"
+              + " seconds",
+          error.getMessage());
+    }
+    assertEquals(5, tasksIn(name));
+  }
+
+  private @Nullable Long timeout(EnqueueOptions.Builder options) throws SQLException {
+    return task(queue.enqueue("timeout", null, options.build()).taskId())
+        .longValue("execution_timeout_ms");
+  }
+
+  @Test
   void refusesAnInvalidOptionBeforeAnyStatement() throws SQLException {
     String name = unique("invalid");
     List<EnqueueOptions> invalid =

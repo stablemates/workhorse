@@ -5,6 +5,15 @@ other SDKs carry, because every tag names one release of all of them.
 
 ## Unreleased
 
+### execution_timeout refuses a nonzero value that rounds to 0 ms
+
+The queue rounds `execution_timeout:` to the nearest millisecond. Before this change, a positive
+value below 0.0005 seconds rounded to 0, and the task had no timeout. A small negative value, such
+as -0.0004, also set no timeout (SM-1714).
+
+Now the queue raises `ArgumentError` for a nonzero value that rounds to 0 ms or is negative. `nil`
+and an exact 0 still set no timeout. ADR 0114 records the rule for all seven SDKs.
+
 ### The worker intervals refuse a value above the SQL integer limit
 
 `register_worker_v1` takes `maintenance_interval`, `maintenance_routine_interval`, and

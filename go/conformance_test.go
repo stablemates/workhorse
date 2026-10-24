@@ -232,12 +232,13 @@ func TestConformanceCoverageRejectsMissingCapability(t *testing.T) {
 
 func TestConformanceCoverageRejectsUnexecutedDeclaredFixture(t *testing.T) {
 	manifest := readFixture[protocolFixtureManifest](t, "manifest.json")
-	err := verifyNamedFixtureCoverage(
-		manifest,
-		"requests",
-		manifest.FixtureCoverage["requests"],
-		map[string]struct{}{"keyed-enqueue-request": {}},
-	)
+	executed := map[string]struct{}{}
+	for _, id := range manifest.FixtureCoverage["requests"] {
+		if id != "minimal-enqueue-request" {
+			executed[id] = struct{}{}
+		}
+	}
+	err := verifyNamedFixtureCoverage(manifest, "requests", manifest.FixtureCoverage["requests"], executed)
 	if err == nil || err.Error() != "requests fixtures were not executed: minimal-enqueue-request" {
 		t.Fatalf("unexpected error: %v", err)
 	}

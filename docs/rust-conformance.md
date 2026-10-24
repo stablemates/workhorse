@@ -17,7 +17,7 @@ fixture does not pass, and when a listed fixture passes. `pnpm rust:test` runs i
 | `cron-occurrences.json` |       24 |      24 |                    0 |
 | `failures.json`         |        8 |       8 |                    0 |
 | `interpreter.json`      |        1 |       1 |                    0 |
-| `requests.json`         |        2 |       2 |                    0 |
+| `requests.json`         |        5 |       5 |                    0 |
 | `runtime.json`          |       26 |      26 |                    0 |
 | `scenarios.json`        |       22 |      22 |                    0 |
 | `schedules.json`        |        3 |       3 |                    0 |

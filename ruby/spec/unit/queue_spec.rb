@@ -144,7 +144,7 @@ RSpec.describe Stablemates::Workhorse::Queue do
   it "refuses every value outside a protocol bound before any statement" do
     prefix = "enqueue request 1: "
     seconds = "must be a finite Numeric count of seconds between"
-    expect(refusal(execution_timeout: -1)).to eq("#{prefix}execution timeout #{seconds} 0 and 31536000")
+    expect(refusal(execution_timeout: -1)).to eq("#{prefix}execution timeout #{seconds} 0.001 and 31536000")
     expect(refusal(execution_timeout: Float::INFINITY)).to start_with("#{prefix}execution timeout #{seconds}")
     expect(refusal(execution_timeout: Complex(1, 1))).to start_with("#{prefix}execution timeout #{seconds}")
     expect(refusal(execution_timeout: "5")).to start_with("#{prefix}execution timeout #{seconds}")
@@ -189,6 +189,29 @@ RSpec.describe Stablemates::Workhorse::Queue do
     executor = FakeExecutor.new { [] }
     expect { described_class.new(executor).enqueue("t", {}, execution_timeout: 1.5) }.to raise_error(ArgumentError)
     expect(executor.statements.last.last.first).to include('"executionTimeoutMs":1500')
+  end
+
+  it "sends no execution timeout for an omitted or zero value" do
+    sent = lambda do |**options|
+      executor = FakeExecutor.new { [] }
+      expect { described_class.new(executor).enqueue("t", {}, **options) }.to raise_error(ArgumentError)
+      JSON.parse(executor.statements.last.last.first).first.fetch("executionTimeoutMs")
+    end
+
+    expect(sent.call).to be_nil
+    expect(sent.call(execution_timeout: 0)).to be_nil
+    expect(sent.call(execution_timeout: 0.0)).to be_nil
+    expect(sent.call(execution_timeout: 0.001)).to eq(1)
+    expect(sent.call(execution_timeout: 0.0005)).to eq(1)
+    expect(sent.call(execution_timeout: 31_536_000)).to eq(31_536_000_000)
+  end
+
+  it "refuses a nonzero execution timeout that rounds to 0 ms" do
+    message = "enqueue request 1: execution timeout must be a finite Numeric count of seconds between " \
+      "0.001 and 31536000"
+    expect(refusal(execution_timeout: 0.0004)).to eq(message)
+    expect(refusal(execution_timeout: -0.0004)).to eq(message)
+    expect(refusal(execution_timeout: 31_536_000.001)).to eq(message)
   end
 
   it "refuses a policy definition outside a protocol bound before any statement" do

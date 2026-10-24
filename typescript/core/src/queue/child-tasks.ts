@@ -17,6 +17,7 @@ import { expectOneRow } from "../errors.js";
 import { QueueModule, type QueueModuleContext } from "./module-context.js";
 import type { EnqueueContractsModule } from "./enqueue-contracts.js";
 import {
+  executionTimeoutValue,
   TaskContractValidationError,
   TaskValueSizeLimitError,
   validateTaskPriority,
@@ -173,7 +174,7 @@ export class ChildTasksModule extends QueueModule {
       deadline: options.deadline?.toISOString() ?? null,
       concurrencyKey: options.concurrencyKey ?? null,
       budget: options.budget ?? null,
-      executionTimeoutMs: options.executionTimeoutMs ?? null,
+      executionTimeoutMs: executionTimeoutValue(options.executionTimeoutMs),
       maxAttempts: options.maxAttempts ?? 25,
       retryPolicy: options.retryPolicy ?? null,
       prerequisiteTaskId: null,

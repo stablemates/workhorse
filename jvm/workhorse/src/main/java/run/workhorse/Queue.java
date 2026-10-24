@@ -575,12 +575,7 @@ public final class Queue {
     Instant deadline = options.deadline();
     input.put("deadline", deadline == null ? null : Values.timestamp(deadline));
     input.put("budget", optionalBytes(options.budget(), MAX_NAME_BYTES, "budget"));
-    Long timeout =
-        options.executionTimeout() == null
-            ? null
-            : Values.milliseconds(
-                options.executionTimeout(), "execution timeout", 0, MAX_DURATION_MS);
-    input.put("executionTimeoutMs", timeout == null || timeout == 0 ? null : timeout);
+    input.put("executionTimeoutMs", executionTimeout(options.executionTimeout()));
     input.put("prerequisiteTaskId", null);
     input.put("dependencies", null);
     input.put("tags", tags(options.tags()));
@@ -1454,12 +1449,7 @@ public final class Queue {
     Instant deadline = options.deadline();
     input.put("deadline", deadline == null ? null : Values.timestamp(deadline));
     input.put("budget", optionalBytes(options.budget(), MAX_NAME_BYTES, "budget"));
-    Long timeout =
-        options.executionTimeout() == null
-            ? null
-            : Values.milliseconds(
-                options.executionTimeout(), "execution timeout", 0, MAX_DURATION_MS);
-    input.put("executionTimeoutMs", timeout == null || timeout == 0 ? null : timeout);
+    input.put("executionTimeoutMs", executionTimeout(options.executionTimeout()));
     input.put("prerequisiteTaskId", null);
     Dependencies dependencies = options.dependencies();
     input.put("dependencies", dependencies == null ? null : dependenciesDocument(dependencies));
@@ -1822,6 +1812,17 @@ public final class Queue {
           label + " must contain between 1 and " + maximum + " UTF-8 bytes");
     }
     return value;
+  }
+
+  /**
+   * The protocol value of an execution timeout. Zero means no timeout, as {@code null} does. A
+   * nonzero duration that rounds to 0 ms is refused, so it cannot remove the timeout.
+   */
+  private static @Nullable Long executionTimeout(@Nullable Duration timeout) {
+    if (timeout == null || timeout.isZero()) {
+      return null;
+    }
+    return Values.milliseconds(timeout, "execution timeout", 1, MAX_DURATION_MS);
   }
 
   /** The value, or null when it is null or empty. A longer value than the maximum throws. */

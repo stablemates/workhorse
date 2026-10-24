@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import json
 from datetime import UTC, datetime
-from typing import Any
+from types import SimpleNamespace
+from typing import Any, cast
 
 import pytest
 from protocol_fixtures import assert_fixture_execution, read_protocol_fixture
@@ -19,6 +20,7 @@ from workhorse import (
     TaskContractVersion,
     TaskTypeContracts,
 )
+from workhorse._protocol import serialize_child_request, serialize_request
 from workhorse._statements import MINIMUM_SCHEMA_VERSION, PROTOCOL_VERSION
 
 
@@ -85,6 +87,7 @@ def test_serializes_every_shared_request_fixture_and_returns_the_canonical_resul
                 priority=options.get("priority", 0),
                 concurrency_key=options.get("concurrencyKey"),
                 budget=options.get("budget"),
+                execution_timeout_ms=options.get("executionTimeoutMs"),
                 max_attempts=options.get("maxAttempts", 25),
                 retry_policy=options.get("retryPolicy"),
                 tags=tuple(options.get("tags", [])),
@@ -108,6 +111,23 @@ def test_serializes_every_shared_request_fixture_and_returns_the_canonical_resul
         assert "workhorse.enqueue_many_v1" in connection.calls[1][0]
         executed.add(fixture["id"])
     assert_fixture_execution("requests", fixtures, executed)
+
+
+@pytest.mark.parametrize(
+    ("execution_timeout_ms", "expected"),
+    [(None, None), (0, None), (1, 1), (31_536_000_000, 31_536_000_000)],
+)
+def test_sends_no_execution_timeout_for_an_omitted_or_zero_value(
+    execution_timeout_ms: int | None, expected: int | None
+) -> None:
+    options = EnqueueOptions(execution_timeout_ms=execution_timeout_ms)
+    parent = cast(Any, SimpleNamespace(queue="parents", trace_context=None))
+
+    root = serialize_request(EnqueueRequest("timeout", {}, options), "default")
+    child = serialize_child_request(parent, "timeout.child", {}, options)
+
+    assert root["executionTimeoutMs"] == expected
+    assert child["executionTimeoutMs"] == expected
 
 
 def test_refuses_an_incompatible_schema_before_enqueueing() -> None:
