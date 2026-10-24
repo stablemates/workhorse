@@ -856,6 +856,22 @@ A `DataSource` reports no pool size, so the cap applies only when the caller dec
 - Declared sizes of 3, 4, 6, and 10 give a concurrency-64 worker 1, 2, 4, and 8 cohorts.
 - Without `poolMaxSize`, the default is not capped.
 
+#### .NET worker
+
+`WorkerOptions.Cohorts` takes an integer from 1 through `Concurrency`, and 0 selects the default. An
+explicit value is never capped. For 0, `Worker.DefaultCohorts(concurrency, spareConnections)`
+applies the TypeScript default.
+
+The worker reads `Max Pool Size` from the connection string of its `NpgsqlDataSource`. It caps the
+default only when `Pooling` is true:
+
+- `spareConnections` is `Max Pool Size`, minus 1 for the listener when the worker listens, minus 1
+  for the heartbeat connection unless `SharedHeartbeats` is true.
+- The worker listens unless `PollingOnly` is true. Under `SharedHeartbeats`, it listens only when
+  `Max Pool Size` is at least 2.
+- Pools of 3, 4, 6, and 10 connections give a concurrency-64 worker 1, 2, 4, and 8 cohorts.
+- With `Pooling=false`, the size is unknown, so the default is not capped.
+
 #### Handler context rejections
 
 A fast-tier handler context rejects durable execution locally with `FastTierUnsupportedError` for

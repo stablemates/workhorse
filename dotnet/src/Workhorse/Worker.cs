@@ -101,8 +101,7 @@ public sealed partial class Worker : IAsyncDisposable
         Concurrency = options.Concurrency;
         // A claim waits for a quarter of the slots, so at most four claims are in flight.
         _refillBatch = (Concurrency + 3) / 4;
-        Cohorts = options.Cohorts == 0 ? DefaultCohorts(Concurrency) : options.Cohorts;
-        if (Cohorts < 1 || Cohorts > Concurrency)
+        if (options.Cohorts != 0 && (options.Cohorts < 1 || options.Cohorts > Concurrency))
         {
             throw new ArgumentOutOfRangeException(nameof(options), "Cohorts must be between 1 and Concurrency");
         }
@@ -149,6 +148,8 @@ public sealed partial class Worker : IAsyncDisposable
                 nameof(dataSource));
         }
 
+        // The default cohorts need the pool size, so the worker chooses them after it reads the size.
+        Cohorts = options.Cohorts == 0 ? DefaultCohorts(Concurrency, SpareConnections()) : options.Cohorts;
         _heartbeat = _sharedHeartbeats ? Heartbeat.Borrowing(_dataSource) : Heartbeat.Shared(_dataSource);
     }
 
@@ -296,10 +297,25 @@ public sealed partial class Worker : IAsyncDisposable
     }
 
     /// <summary>
-    /// The cohorts of a worker without the option: one below concurrency 8, and otherwise one for
-    /// each 8 slots, from 2 to 8.
+    /// The cohorts of a worker without the option (ADR 0076): one below concurrency 8, and otherwise
+    /// one for each 8 slots, from 2 to 8. With a known pool size, the count is then capped at the
+    /// spare connections, and never below 1. Without one, the count is not capped.
     /// </summary>
-    internal static int DefaultCohorts(int concurrency) => concurrency < 8 ? 1 : Math.Clamp((concurrency + 7) / 8, 2, 8);
+    internal static int DefaultCohorts(int concurrency, int? spareConnections)
+    {
+        var cohorts = concurrency < 8 ? 1 : Math.Clamp((concurrency + 7) / 8, 2, 8);
+        return spareConnections is { } spare ? Math.Clamp(spare, 1, cohorts) : cohorts;
+    }
+
+    /// <summary>
+    /// The pooled connections that stay for cohorts after the listener and the heartbeat connection
+    /// take theirs. Without pooling, the size is unknown, so the result is <c>null</c> (SM-1758).
+    /// </summary>
+    private int? SpareConnections()
+    {
+        var listens = !_pollingOnly && PoolLendsListener();
+        return _poolMaxSize - (listens ? 1 : 0) - (_sharedHeartbeats ? 0 : 1);
+    }
 
     private async Task EnterRunAsync()
     {

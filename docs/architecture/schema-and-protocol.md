@@ -3779,25 +3779,26 @@ before any statement.
 the options, so a later change to the `WorkerOptions` object has no effect. An invalid option throws
 `ArgumentException` or `ArgumentOutOfRangeException`. Durations round to whole milliseconds.
 
-| Property                     | Default                                                                                                      | Accepts                                        |
-| ---------------------------- | ------------------------------------------------------------------------------------------------------------ | ---------------------------------------------- |
-| `Queues`                     | `["default"]`                                                                                                | Non-empty names                                |
-| `WorkerId`                   | The host name, the process ID, and a random suffix                                                           | A non-empty string                             |
-| `Concurrency`                | 1                                                                                                            | 1 through 100                                  |
-| `Cohorts`                    | 0, which selects 1 below concurrency 8, and otherwise concurrency divided by 8, rounded up, from 2 through 8 | 1 through `Concurrency`                        |
-| `Lease`                      | 30 seconds                                                                                                   | 100 milliseconds through 1 day                 |
-| `Heartbeat`                  | `null`, which selects the larger of 100 milliseconds and a third of the lease                                | 1 millisecond and more, shorter than the lease |
-| `PollInterval`               | `null`: 5 seconds with a listener; 250 milliseconds, doubling toward 5 seconds, without one                  | 1 millisecond and more                         |
-| `MaintenanceInterval`        | 1 second                                                                                                     | 100 milliseconds and more                      |
-| `MaintenanceRoutineInterval` | 60 seconds                                                                                                   | 100 milliseconds and more                      |
-| `RegistryInterval`           | 5 seconds                                                                                                    | 100 milliseconds and more                      |
-| `ScheduleNamespaces`         | Empty                                                                                                        | Non-empty names                                |
-| `ScheduleCatchupLimit`       | 100                                                                                                          | 1 through 10,000                               |
-| `ShutdownGrace`              | 25 seconds                                                                                                   | 0 through 1 day                                |
+| Property                     | Default                                                                                                                                      | Accepts                                        |
+| ---------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------- |
+| `Queues`                     | `["default"]`                                                                                                                                | Non-empty names                                |
+| `WorkerId`                   | The host name, the process ID, and a random suffix                                                                                           | A non-empty string                             |
+| `Concurrency`                | 1                                                                                                                                            | 1 through 100                                  |
+| `Cohorts`                    | 0, which selects 1 below concurrency 8, and otherwise concurrency divided by 8, rounded up, from 2 through 8, then capped by `Max Pool Size` | 1 through `Concurrency`                        |
+| `Lease`                      | 30 seconds                                                                                                                                   | 100 milliseconds through 1 day                 |
+| `Heartbeat`                  | `null`, which selects the larger of 100 milliseconds and a third of the lease                                                                | 1 millisecond and more, shorter than the lease |
+| `PollInterval`               | `null`: 5 seconds with a listener; 250 milliseconds, doubling toward 5 seconds, without one                                                  | 1 millisecond and more                         |
+| `MaintenanceInterval`        | 1 second                                                                                                                                     | 100 milliseconds and more                      |
+| `MaintenanceRoutineInterval` | 60 seconds                                                                                                                                   | 100 milliseconds and more                      |
+| `RegistryInterval`           | 5 seconds                                                                                                                                    | 100 milliseconds and more                      |
+| `ScheduleNamespaces`         | Empty                                                                                                                                        | Non-empty names                                |
+| `ScheduleCatchupLimit`       | 100                                                                                                                                          | 1 through 10,000                               |
+| `ShutdownGrace`              | 25 seconds                                                                                                                                   | 0 through 1 day                                |
 
 Each upper bound of "and more" is `int.MaxValue` milliseconds. `DisableRegistry = true` turns off
 the worker registry. `SharedHeartbeats = true` makes each heartbeat round open its own connection.
-`PollingOnly = true` opens no listener. `RetryDelay` is a delegate over the attempt and the
+`PollingOnly = true` opens no listener. On a pooled data source, `Max Pool Size` caps the default
+`Cohorts` ([.NET worker](fast-tier.md#net-worker)). `RetryDelay` is a delegate over the attempt and the
 `ClaimedTask` that returns a `TimeSpan?`. The worker rounds the delay to the nearest millisecond,
 half up, and `null` keeps the persisted policy. A negative delay, or one that rounds above
 2,147,483,647 milliseconds, throws `ArgumentOutOfRangeException` before `fail_v1` (ADR 0111). `Json` sets the JSON options of payloads and

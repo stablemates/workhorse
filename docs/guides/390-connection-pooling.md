@@ -388,8 +388,8 @@ takes one connection. The worker selects only as many cohorts as the remaining c
 Then more completion round trips can occur at the same time.
 
 This rule applies in each language if the pool states its size. A Java `DataSource` does not state
-its size, so the Java default has a cap only if you declare the size with `poolMaxSize`. The pool
-does not cap the .NET default. Workhorse never limits an explicit `cohorts`
+its size, so the Java default has a cap only if you declare the size with `poolMaxSize`. The .NET
+default has a cap only if pooling is on. Workhorse never limits an explicit `cohorts`
 option.
 
 <details>
@@ -402,7 +402,7 @@ option.
 - then capped at the spare connections, and never below 1.
 
 A `DataSource` reports no pool size, so the Java worker applies the third rule only to a declared
-`poolMaxSize`. The .NET worker uses only the first two rules.
+`poolMaxSize`. The .NET worker applies the third rule only when `Pooling` is true.
 
 **Spare connections**
 
@@ -414,12 +414,13 @@ A `DataSource` reports no pool size, so the Java worker applies the third rule o
 | Ruby       | Pool size, minus 1 unless `polling_only`, minus 1 unless `shared_heartbeats`.                                |
 | Rust       | `max_size`, minus 1 unless `shared_heartbeats`. The listener sits outside the pool.                          |
 | Java       | `poolMaxSize`, minus 1 for the listener when the worker listens, minus 1 unless `sharedHeartbeats`.          |
+| .NET       | `Max Pool Size`, minus 1 for the listener when the worker listens, minus 1 unless `SharedHeartbeats`.        |
 
 In TypeScript, pools of 3, 4, 6, and 10 connections give a concurrency-64 worker 1, 2, 4, and 8
 cohorts. A TypeScript database with an attached pool, such as a Prisma or Kysely adapter, runs
 statements outside that pool, so its default is not capped.
 
-More detail: [Fast tier: Dispatch cohorts](../architecture/fast-tier.md#dispatch-cohorts), [Fast tier: TypeScript worker](../architecture/fast-tier.md#typescript-worker), [Fast tier: JVM worker](../architecture/fast-tier.md#jvm-worker), and [Schema and SQL protocol: JVM worker](../architecture/schema-and-protocol.md#jvm-worker).
+More detail: [Fast tier: Dispatch cohorts](../architecture/fast-tier.md#dispatch-cohorts), [Fast tier: TypeScript worker](../architecture/fast-tier.md#typescript-worker), [Fast tier: JVM worker](../architecture/fast-tier.md#jvm-worker), [Fast tier: .NET worker](../architecture/fast-tier.md#net-worker), and [Schema and SQL protocol: JVM worker](../architecture/schema-and-protocol.md#jvm-worker).
 
 </details>
 
