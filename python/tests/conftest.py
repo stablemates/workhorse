@@ -1,6 +1,7 @@
 from __future__ import annotations
 # ruff: noqa
 
+import asyncio
 import functools
 import hashlib
 import os
@@ -304,4 +305,16 @@ async def asyncpg_pool(database_url: str) -> asyncpg.Pool:
     try:
         yield pool
     finally:
-        await pool.close()
+        # Pool.close waits until every acquired connection comes back. A connection that a test
+        # never released would hold the teardown without a bound, so end the pool instead.
+        try:
+            await asyncio.wait_for(pool.close(), timeout=ASYNCPG_POOL_CLOSE_SECONDS)
+        except TimeoutError:
+            pool.terminate()
+            raise RuntimeError(
+                f"the asyncpg pool did not close within {ASYNCPG_POOL_CLOSE_SECONDS} s; "
+                "a connection was not released"
+            ) from None
+
+
+ASYNCPG_POOL_CLOSE_SECONDS = 30

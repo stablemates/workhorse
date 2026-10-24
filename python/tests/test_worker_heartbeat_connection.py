@@ -3,8 +3,9 @@ from __future__ import annotations
 
 
 import asyncio
-from itertools import pairwise
-from threading import Event, Lock, Thread
+import sys
+import traceback
+from threading import Event, Lock, Thread, current_thread, enumerate as threads
 from time import monotonic, sleep
 from typing import Any
 
@@ -30,12 +31,11 @@ pytestmark = pytest.mark.integration
 
 # The acceptance scenario: a handler's checkpoint statement is held for ten seconds.
 CHECKPOINT_HOLD_SECONDS = 10
-LEASE_MS = 3_000
 HEARTBEAT_MS = 1_000
 # A round whose COMMIT ends after the round bound renews nothing. A 3 s lease outlives only one such
-# round, and a loaded host can delay two COMMITs in sequence. So the async test uses a lease that
-# outlives the hold. It waits for the renewals while the checkpoint is held.
-HELD_ASYNC_LEASE_MS = 30_000
+# round, and a loaded host can delay two COMMITs in sequence. So both tests use a lease that outlives
+# the hold. They wait for the renewals while the checkpoint is held.
+HELD_LEASE_MS = 30_000
 RENEWALS_DURING_HOLD = 3
 
 
@@ -69,8 +69,58 @@ class StatementLog:
         return LoggedCursor
 
 
+# A connection that the test opens stops waiting for PostgreSQL after these bounds. A lock that
+# another session holds then fails the test in seconds. The worker's own connections keep the
+# settings that the worker gives them.
+TEST_CONNECTION_OPTIONS = "-c statement_timeout=30s -c lock_timeout=30s"
+
+
+def connect(database_url: str, **kwargs: Any) -> psycopg.Connection[Any]:
+    return psycopg.connect(
+        database_url, connect_timeout=10, options=TEST_CONNECTION_OPTIONS, **kwargs
+    )
+
+
+def stall_report(database_url: str) -> str:
+    """Describe what the worker waits for: the sessions of the test database and each thread."""
+    lines: list[str] = []
+    try:
+        with connect(database_url, autocommit=True) as observer:
+            rows = observer.execute(
+                "SELECT pid, state, wait_event_type, wait_event, pg_blocking_pids(pid), "
+                "left(query, 160) FROM pg_stat_activity "
+                "WHERE datname = current_database() AND pid <> pg_backend_pid()"
+            ).fetchall()
+        lines.extend(f"session {row}" for row in rows)
+    except psycopg.Error as error:
+        lines.append(f"pg_stat_activity was not read: {error!r}")
+    frames = sys._current_frames()
+    for thread in threads():
+        frame = frames.get(thread.ident or 0)
+        if frame is not None and thread is not current_thread():
+            stack = "".join(traceback.format_stack(frame)[-8:])
+            lines.append(f"thread {thread.name}:\n{stack}")
+    return "\n".join(lines)
+
+
+def wait_for_start(started: Event, database_url: str) -> None:
+    """Wait for a handler to start. If it does not start in 30 s, report what the worker waits for."""
+    if not started.wait(30):
+        pytest.fail(f"the handler did not start within 30 s\n{stall_report(database_url)}")
+
+
+def join_run(run: Thread) -> None:
+    """Wait 30 s for a `run_once` thread that the test released, and check that it returned.
+
+    Call it in `finally`, so the check also runs after a failure. A failure here keeps the earlier
+    one as its context.
+    """
+    run.join(30)
+    assert not run.is_alive(), "run_once did not return within 30 s after the test released it"
+
+
 def enqueue(database_url: str, task_type: str, queue: str) -> str:
-    with psycopg.connect(database_url) as connection:
+    with connect(database_url) as connection:
         task_id = Queue(connection, default_queue=queue).enqueue(
             task_type, {}, EnqueueOptions(max_attempts=1)
         )
@@ -79,7 +129,7 @@ def enqueue(database_url: str, task_type: str, queue: str) -> str:
 
 
 def outcome(database_url: str, task_id: str) -> tuple[Any, ...] | None:
-    with psycopg.connect(database_url, autocommit=True) as observer:
+    with connect(database_url, autocommit=True) as observer:
         return observer.execute(
             "SELECT state FROM workhorse.task_outcome WHERE task_id = %s", (task_id,)
         ).fetchone()
@@ -98,7 +148,7 @@ class CheckpointHold:
     def _hold(self, database_url: str) -> None:
         if not self.handler_running.wait(30):
             return
-        with psycopg.connect(database_url) as blocker:
+        with connect(database_url) as blocker:
             blocker.execute("LOCK TABLE workhorse.task_checkpoint IN ACCESS EXCLUSIVE MODE")
             self.held_from = monotonic()
             self.lock_held.set()
@@ -108,18 +158,90 @@ class CheckpointHold:
     def enter(self) -> None:
         """Called by the handler: wait for the lock so its checkpoint statement blocks."""
         self.handler_running.set()
-        assert self.lock_held.wait(30)
+        assert self.lock_held.wait(30), "the checkpoint hold did not take the lock"
 
     def join(self) -> None:
-        self._thread.join()
+        self._thread.join(CHECKPOINT_HOLD_SECONDS + 30)
+        assert not self._thread.is_alive(), "the checkpoint hold did not end"
 
 
-def assert_heartbeats_kept_pace(times: list[float], held_from: float, held_until: float) -> None:
-    during_hold = [at for at in times if held_from <= at <= held_until]
-    assert len(during_hold) >= CHECKPOINT_HOLD_SECONDS * 1000 // HEARTBEAT_MS - 2, times
-    gaps = [later - earlier for earlier, later in pairwise(during_hold)]
-    # A heartbeat may be late by at most one interval.
-    assert max(gaps) <= 2 * HEARTBEAT_MS / 1000, gaps
+class RenewalObserver:
+    """Count the lease renewals that the heartbeat makes while the checkpoint is held.
+
+    A thread polls `workhorse.task_runtime`. It stops after `RENEWALS_DURING_HOLD` renewals, at the
+    end of the hold, when the task has finished, or when the test stops it.
+    """
+
+    def __init__(self, database_url: str, task_id: str, hold: CheckpointHold) -> None:
+        self.renewed_at: list[float] = []
+        self._database_url = database_url
+        self._task_id = task_id
+        self._hold = hold
+        self._stop = Event()
+        self._errors: list[BaseException] = []
+        self._thread = Thread(target=self._run)
+        self._thread.start()
+
+    def _current_expiry(self) -> Any:
+        """Read the lease expiry, or None after the task finished."""
+        with connect(self._database_url, autocommit=True) as observer:
+            row = observer.execute(
+                "SELECT expires_at FROM workhorse.task_runtime WHERE task_id = %s", (self._task_id,)
+            ).fetchone()
+        return None if row is None else row[0]
+
+    def _run(self) -> None:
+        try:
+            self._observe()
+        except BaseException as error:
+            self._errors.append(error)
+
+    def _observe(self) -> None:
+        while not self._hold.lock_held.wait(0.05):
+            if self._stop.is_set():
+                return
+        held_until = self._hold.held_from + CHECKPOINT_HOLD_SECONDS
+        expiry = self._current_expiry()
+        while expiry is not None and len(self.renewed_at) < RENEWALS_DURING_HOLD:
+            if self._stop.is_set():
+                return
+            current = self._current_expiry()
+            # A read that ends after the hold counts nothing, also when the task has finished.
+            if current is None or monotonic() >= held_until:
+                return
+            if current > expiry:
+                expiry = current
+                self.renewed_at.append(monotonic())
+            sleep(0.02)
+
+    def finish(self, *, stop: bool = False) -> None:
+        """Wait for the observer, and raise its error. With `stop`, end it within one poll first.
+
+        The observer must end before the scratch database goes.
+        """
+        if stop:
+            self._stop.set()
+        self._thread.join(CHECKPOINT_HOLD_SECONDS + 30)
+        assert not self._thread.is_alive(), "the renewal observer did not end"
+        if self._errors:
+            raise self._errors[0]
+
+    def assert_renewed(self) -> None:
+        assert len(self.renewed_at) == RENEWALS_DURING_HOLD, (
+            f"the heartbeat renewed the lease {len(self.renewed_at)} times while the checkpoint "
+            f"was held, not {RENEWALS_DURING_HOLD}"
+        )
+
+
+def assert_the_handler_resumed(
+    database_url: str, task_id: str, handler_resumed_at: list[float]
+) -> None:
+    if not handler_resumed_at:
+        with connect(database_url, autocommit=True) as observer:
+            settled = observer.execute(
+                "SELECT state, error FROM workhorse.task_outcome WHERE task_id = %s", (task_id,)
+            ).fetchone()
+        pytest.fail(f"the handler did not resume after the held checkpoint; outcome {settled}")
 
 
 @pytest.mark.slow
@@ -169,23 +291,30 @@ def test_a_held_checkpoint_does_not_delay_heartbeats(database_url: str) -> None:
 
         return SyncExecutor(LoggedConnection()), close
 
-    with psycopg.connect(database_url, autocommit=True) as worker_connection:
-        worker = Worker(
-            worker_pool,
-            queue="heartbeat-connection",
-            worker_id="python-heartbeat-connection",
-            lease_ms=LEASE_MS,
-            heartbeat_ms=HEARTBEAT_MS,
-            _executor=SyncExecutor(worker_connection),
-            _heartbeat_executor_factory=heartbeat_executor,
-        ).handle("checkpoint.held", handler)
-        assert worker.run_once() is True
-        hold.join()
+    renewals = RenewalObserver(database_url, task_id, hold)
+    try:
+        with psycopg.connect(database_url, autocommit=True) as worker_connection:
+            worker = Worker(
+                worker_pool,
+                queue="heartbeat-connection",
+                worker_id="python-heartbeat-connection",
+                lease_ms=HELD_LEASE_MS,
+                heartbeat_ms=HEARTBEAT_MS,
+                _executor=SyncExecutor(worker_connection),
+                _heartbeat_executor_factory=heartbeat_executor,
+            ).handle("checkpoint.held", handler)
+            assert worker.run_once() is True
+            hold.join()
+            renewals.finish()
+    finally:
+        renewals.finish(stop=True)
 
-    assert handler_resumed_at
+    assert_the_handler_resumed(database_url, task_id, handler_resumed_at)
+    # The reserved heartbeat connection renewed the lease while the checkpoint statement waited
+    # for the lock.
+    renewals.assert_renewed()
+    # The checkpoint statement stayed blocked for the hold.
     assert handler_resumed_at[0] - hold.held_from >= CHECKPOINT_HOLD_SECONDS - 1
-    # The pooled heartbeat connection is independently reserved; handler timing
-    # verifies that the checkpoint remained blocked during the lease renewal.
     assert outcome(database_url, task_id) == ("succeeded",)
 
 
@@ -243,68 +372,26 @@ async def test_a_held_async_checkpoint_does_not_delay_heartbeats(
         async def release(self, connection: LoggedConnection) -> None:
             await asyncpg_pool.release(connection._connection)
 
-    renewed_at: list[float] = []
-    stop_observing = Event()
-
-    def current_expiry() -> Any:
-        """Read the lease expiry, or None after the task finished."""
-        with psycopg.connect(database_url, autocommit=True) as observer:
-            row = observer.execute(
-                "SELECT expires_at FROM workhorse.task_runtime WHERE task_id = %s", (task_id,)
-            ).fetchone()
-        return None if row is None else row[0]
-
-    def observe_renewals() -> None:
-        """Count the renewals that the heartbeat makes while the checkpoint is held."""
-        while not hold.lock_held.wait(0.05):
-            if stop_observing.is_set():
-                return
-        held_until = hold.held_from + CHECKPOINT_HOLD_SECONDS
-        expiry = current_expiry()
-        while expiry is not None and len(renewed_at) < RENEWALS_DURING_HOLD:
-            if stop_observing.is_set():
-                return
-            current = current_expiry()
-            # A read that ends after the hold counts nothing, also when the task has finished.
-            if current is None or monotonic() >= held_until:
-                return
-            if current > expiry:
-                expiry = current
-                renewed_at.append(monotonic())
-            sleep(0.02)
-
     logged_pool = LoggedPool()
-    renewals = asyncio.ensure_future(asyncio.to_thread(observe_renewals))
+    renewals = RenewalObserver(database_url, task_id, hold)
+    worker = AsyncWorker.from_asyncpg(
+        logged_pool,
+        queue="heartbeat-connection-async",
+        worker_id="python-async-heartbeat-connection",
+        lease_ms=HELD_LEASE_MS,
+        heartbeat_ms=HEARTBEAT_MS,
+    ).handle("checkpoint.held.async", handler)
     try:
-        worker = AsyncWorker.from_asyncpg(
-            logged_pool,
-            queue="heartbeat-connection-async",
-            worker_id="python-async-heartbeat-connection",
-            lease_ms=HELD_ASYNC_LEASE_MS,
-            heartbeat_ms=HEARTBEAT_MS,
-        ).handle("checkpoint.held.async", handler)
         assert await worker.run_once() is True
         await asyncio.to_thread(hold.join)
-        await renewals
+        await asyncio.to_thread(renewals.finish)
     finally:
         worker.stop()
-        # The observer stops within one poll, so it ends before the scratch database goes.
-        stop_observing.set()
-        await asyncio.wait((renewals,))
-        if not renewals.cancelled():
-            renewals.exception()
+        await asyncio.to_thread(renewals.finish, stop=True)
 
-    if not handler_resumed_at:
-        with psycopg.connect(database_url, autocommit=True) as observer:
-            settled = observer.execute(
-                "SELECT state, error FROM workhorse.task_outcome WHERE task_id = %s", (task_id,)
-            ).fetchone()
-        pytest.fail(f"the handler did not resume after the held checkpoint; outcome {settled}")
+    assert_the_handler_resumed(database_url, task_id, handler_resumed_at)
     # The heartbeat renewed the lease while the checkpoint statement waited for the lock.
-    assert len(renewed_at) == RENEWALS_DURING_HOLD, (
-        f"the heartbeat renewed the lease {len(renewed_at)} times while the checkpoint was held, "
-        f"not {RENEWALS_DURING_HOLD}"
-    )
+    renewals.assert_renewed()
     # The checkpoint statement stayed blocked for the hold.
     assert handler_resumed_at[0] - hold.held_from >= CHECKPOINT_HOLD_SECONDS - 1
     assert outcome(database_url, task_id) == ("succeeded",)
@@ -350,7 +437,7 @@ WATCHDOG_HEARTBEAT_MS = 100
 
 def lease_expiry(database_url: str, task_id: str) -> Any:
     """Read the lease PostgreSQL granted the claiming worker."""
-    with psycopg.connect(database_url, autocommit=True) as observer:
+    with connect(database_url, autocommit=True) as observer:
         row = observer.execute(
             "SELECT expires_at FROM workhorse.task_runtime WHERE task_id = %s", (task_id,)
         ).fetchone()
@@ -441,7 +528,7 @@ def test_a_failed_heartbeat_round_leaves_tasks_running_and_the_next_round_renews
     run = Thread(target=lambda: processed.append(worker.run_once()))
     run.start()
     try:
-        assert started.wait(30)
+        wait_for_start(started, database_url)
         claimed = lease_expiry(database_url, task_id)
         renewed = wait_for_lease_renewal(database_url, task_id, claimed)
         assert failed.wait(30)
@@ -450,7 +537,7 @@ def test_a_failed_heartbeat_round_leaves_tasks_running_and_the_next_round_renews
         assert cancelled == []
     finally:
         release.set()
-        run.join(30)
+        join_run(run)
 
     assert processed == [True]
     assert cancelled == []
@@ -492,7 +579,7 @@ def test_a_handler_is_aborted_when_no_heartbeat_is_accepted_within_the_lease(
         processed: list[bool] = []
         run = Thread(target=lambda: processed.append(worker.run_once()))
         run.start()
-        assert started.wait(30)
+        wait_for_start(started, database_url)
         run.join(60)
         assert not run.is_alive()
 
@@ -567,11 +654,11 @@ def test_an_accepted_answer_after_the_lease_window_ended_does_not_renew_it(
     run = Thread(target=lambda: processed.append(worker.run_once()))
     run.start()
     try:
-        assert started.wait(30)
+        wait_for_start(started, database_url)
         run.join(30)
     finally:
         watchdog_release.set()
-        run.join(30)
+        join_run(run)
 
     assert processed == [True]
     assert answered[0] == ["accepted"]
@@ -593,8 +680,10 @@ class BlockingTask:
 
     def __init__(self) -> None:
         self.started = Event()
+        self.started_at = 0.0
         self.release = Event()
         self.cancelled = False
+        self.reason: BaseException | None = None
 
     def reset(self) -> None:
         """Block the next task too. Call it only while no task of this gate runs."""
@@ -602,18 +691,22 @@ class BlockingTask:
         self.release.clear()
 
     def handler(self, _payload: Any, context: HandlerContext) -> dict[str, bool]:
+        self.started_at = monotonic()
         self.started.set()
         while not self.release.wait(0.02):
             if context.cancellation.cancelled:
                 self.cancelled = True
+                self.reason = context.cancellation.reason
                 break
         return {"ok": True}
 
     async def async_handler(self, _payload: Any, context: AsyncHandlerContext) -> dict[str, bool]:
+        self.started_at = monotonic()
         self.started.set()
         while not self.release.is_set():
             if context.cancellation.cancelled:
                 self.cancelled = True
+                self.reason = context.cancellation.reason
                 break
             await asyncio.sleep(0.02)
         return {"ok": True}
@@ -625,7 +718,7 @@ def heartbeat_backends(database_url: str) -> list[tuple[int, str, str]]:
 
     A round ends with the COMMIT of its transaction, and no other worker statement sends one.
     """
-    with psycopg.connect(database_url, autocommit=True) as observer:
+    with connect(database_url, autocommit=True) as observer:
         rows = observer.execute(
             "SELECT pid, state, query FROM pg_stat_activity WHERE datname = current_database() "
             "AND pid <> pg_backend_pid() "
@@ -736,7 +829,7 @@ def reserve_an_identified_heartbeat_connection(
     for _attempt in range(RESERVATION_ATTEMPTS):
         before.reset()
         before_id = enqueue(database_url, f"{task_type}.before", queue)
-        assert before.started.wait(30)
+        wait_for_start(before.started, database_url)
         # A renewal shows that a round of this task ended on the connection.
         wait_for_lease_renewal(database_url, before_id, lease_expiry(database_url, before_id))
         before.release.set()
@@ -770,13 +863,13 @@ def terminate_the_idle_heartbeat_connection(
     reserved, held = reserve_an_identified_heartbeat_connection(
         database_url, core, rounds, queue, task_type, before
     )
-    with psycopg.connect(database_url, autocommit=True) as observer:
+    with connect(database_url, autocommit=True) as observer:
         terminated = observer.execute("SELECT pg_terminate_backend(%s)", (reserved,)).fetchone()
     assert terminated == (True,)
     sleep(0.1)
 
     after_id = enqueue(database_url, f"{task_type}.after", queue)
-    assert after.started.wait(30)
+    wait_for_start(after.started, database_url)
     claimed = lease_expiry(database_url, after_id)
     # The first round finds the connection dead and discards it; a later round renews on a new one.
     replacement = wait_for_heartbeat_backend(database_url, other_than=reserved)
@@ -912,8 +1005,8 @@ def sample_heartbeats_while_locked(database_url: str) -> list[list[float]]:
     """Hold the fast-tier table lock for eight intervals, and sample the heartbeat statements."""
     samples: list[list[float]] = []
     with (
-        psycopg.connect(database_url) as blocker,
-        psycopg.connect(database_url, autocommit=True) as observer,
+        connect(database_url) as blocker,
+        connect(database_url, autocommit=True) as observer,
     ):
         lock_the_fast_tier_table(blocker)
         until = monotonic() + 8 * BOUND_HEARTBEAT_MS / 1000
@@ -948,11 +1041,11 @@ def test_a_heartbeat_round_that_waits_on_a_lock_ends_on_the_server_by_its_deadli
     run = Thread(target=lambda: processed.append(worker.run_once()))
     run.start()
     try:
-        assert task.started.wait(30)
+        wait_for_start(task.started, database_url)
         samples = sample_heartbeats_while_locked(database_url)
     finally:
         task.release.set()
-        run.join(30)
+        join_run(run)
 
     assert_one_bounded_statement(samples)
     assert processed == [True]
@@ -981,7 +1074,7 @@ async def test_an_async_heartbeat_round_that_waits_on_a_lock_ends_on_the_server_
     worker.handle("heartbeat.bound", task.async_handler)
     run = asyncio.create_task(worker.run_once())
     try:
-        assert await asyncio.to_thread(task.started.wait, 30)
+        await asyncio.to_thread(wait_for_start, task.started, database_url)
         samples = await asyncio.to_thread(sample_heartbeats_while_locked, database_url)
     finally:
         task.release.set()
@@ -1029,17 +1122,64 @@ def heartbeats_reach(
         sleep(0.01)
 
 
-def time_out_one_round(database_url: str, task: BlockingTask) -> None:
+class MarginTrace:
+    """Record the claim, each heartbeat round, and the table lock of one margin test.
+
+    The worker measures the lease from the moment its claim left, so the trace starts there.
+    """
+
+    def __init__(self, core: Worker) -> None:
+        self.claims: list[float] = []
+        self.rounds = RecordedRounds(core, failures=True)
+        self.locked_at = 0.0
+        self.unlocked_at = 0.0
+        execute = core._execute_claimed_task
+
+        def recorded(task: Any, claim_sent_at: float) -> None:
+            self.claims.append(claim_sent_at)
+            execute(task, claim_sent_at)
+
+        core._execute_claimed_task = recorded  # type: ignore[method-assign]
+
+    def describe(self, task: BlockingTask) -> str:
+        """The trace in seconds after the claim left, for a failure message."""
+        origin = self.claims[0] if self.claims else task.started_at
+        rounds = ", ".join(
+            f"{started - origin:.3f}-{ended - origin:.3f} {'/'.join(statuses)}"
+            for started, ended, statuses in self.rounds.after(0)
+        )
+        return (
+            f"handler at {task.started_at - origin:.3f} s, table lock "
+            f"{self.locked_at - origin:.3f}-{self.unlocked_at - origin:.3f} s, rounds [{rounds}], "
+            f"cancellation reason {task.reason!r}"
+        )
+
+    def assert_kept(self, task: BlockingTask) -> None:
+        """Check that the attempt kept its lease. If not, tell a missed precondition from a lost
+        margin."""
+        if not task.cancelled:
+            return
+        later = self.rounds.after(1)
+        if any(started < self.unlocked_at for started, _ended, _statuses in later):
+            pytest.fail(
+                "precondition not met: a later round started while the table lock was held: "
+                + self.describe(task)
+            )
+        pytest.fail(f"the worker ended the attempt: {self.describe(task)}")
+
+
+def time_out_one_round(database_url: str, task: BlockingTask, trace: MarginTrace) -> None:
     """Hold the table lock until the first round times out, then release the handler after the
     lease."""
-    assert task.started.wait(30)
+    wait_for_start(task.started, database_url)
     started = monotonic()
     interval = MARGIN_HEARTBEAT_MS / 1000
     with (
-        psycopg.connect(database_url, autocommit=True) as observer,
-        psycopg.connect(database_url) as blocker,
+        connect(database_url, autocommit=True) as observer,
+        connect(database_url) as blocker,
     ):
         lock_the_fast_tier_table(blocker)
+        trace.locked_at = monotonic()
         # The first round falls due one interval after the lease registered, just before the
         # handler started. A lock that comes later than half an interval can miss that round.
         held = monotonic() - started
@@ -1057,7 +1197,8 @@ def time_out_one_round(database_url: str, task: BlockingTask) -> None:
             "precondition not met: the first round did not time out"
         )
         blocker.commit()
-        released = monotonic() - started
+        trace.unlocked_at = monotonic()
+        released = trace.unlocked_at - started
         assert released <= 1.9 * interval, (
             f"precondition not met: the table lock ended {released:.3f} s after the handler started"
         )
@@ -1076,17 +1217,18 @@ def test_one_timed_out_heartbeat_round_leaves_a_renewal_margin(database_url: str
         lease_ms=MARGIN_LEASE_MS,
         heartbeat_ms=MARGIN_HEARTBEAT_MS,
     ).handle("heartbeat.margin", task.handler)
+    trace = MarginTrace(worker)
     processed: list[bool] = []
     run = Thread(target=lambda: processed.append(worker.run_once()))
     run.start()
     try:
-        time_out_one_round(database_url, task)
+        time_out_one_round(database_url, task, trace)
     finally:
         task.release.set()
-        run.join(30)
+        join_run(run)
 
     assert processed == [True]
-    assert not task.cancelled
+    trace.assert_kept(task)
     assert outcome(database_url, task_id) == ("succeeded",)
 
 
@@ -1109,15 +1251,16 @@ async def test_one_timed_out_async_heartbeat_round_leaves_a_renewal_margin(
     else:
         worker = AsyncWorker.from_asyncpg(asyncpg_pool, **options)
     worker.handle("heartbeat.margin", task.async_handler)
+    trace = MarginTrace(worker._inner)
     run = asyncio.create_task(worker.run_once())
     try:
-        await asyncio.to_thread(time_out_one_round, database_url, task)
+        await asyncio.to_thread(time_out_one_round, database_url, task, trace)
     finally:
         task.release.set()
         processed = await asyncio.wait_for(run, timeout=30)
 
     assert processed is True
-    assert not task.cancelled
+    trace.assert_kept(task)
     assert outcome(database_url, task_id) == ("succeeded",)
 
 
@@ -1159,7 +1302,7 @@ def test_a_failed_heartbeat_round_opens_its_replacement_before_the_next_round(
     run = Thread(target=lambda: processed.append(worker.run_once()))
     run.start()
     try:
-        assert task.started.wait(30)
+        wait_for_start(task.started, database_url)
         assert failed.wait(30)
         failed_at = monotonic()
         # The first round opened one connection and kept it. The failed round discarded it, and
@@ -1171,7 +1314,7 @@ def test_a_failed_heartbeat_round_opens_its_replacement_before_the_next_round(
         assert opens[1] - failed_at < heartbeat_ms / 1000 / 2
     finally:
         task.release.set()
-        run.join(30)
+        join_run(run)
 
     assert processed == [True]
     assert not task.cancelled
@@ -1186,14 +1329,21 @@ BUSY_HEARTBEAT_MS = 400
 class RecordedRounds:
     """Record when each heartbeat round of a worker started and ended, and its statuses."""
 
-    def __init__(self, worker: Worker) -> None:
+    def __init__(self, worker: Worker, *, failures: bool = False) -> None:
+        """With `failures`, also record each round that raised, with the error as its status."""
         self._lock = Lock()
         self.entries: list[tuple[float, float, list[str]]] = []
         original = worker._heartbeat_rows
 
         def recorded(parameters: Any, deadline: float) -> Any:
             started = monotonic()
-            rows = original(parameters, deadline)
+            try:
+                rows = original(parameters, deadline)
+            except BaseException as error:
+                if failures:
+                    with self._lock:
+                        self.entries.append((started, monotonic(), [type(error).__name__]))
+                raise
             with self._lock:
                 self.entries.append((started, monotonic(), [str(row["status"]) for row in rows]))
             return rows
@@ -1223,8 +1373,8 @@ def observe_a_busy_round(
     database_url: str, task_id: str, task: BlockingTask, rounds: RecordedRounds
 ) -> None:
     """Lock the task's row, see one round report it busy at once, then see a round renew it."""
-    assert task.started.wait(30)
-    with psycopg.connect(database_url) as blocker:
+    wait_for_start(task.started, database_url)
+    with connect(database_url) as blocker:
         blocker.execute(
             "SELECT FROM workhorse.task_runtime WHERE task_id = %s FOR UPDATE", (task_id,)
         )
@@ -1259,7 +1409,7 @@ def test_a_heartbeat_round_reports_a_locked_row_busy_without_waiting(database_ur
         observe_a_busy_round(database_url, task_id, task, rounds)
     finally:
         task.release.set()
-        run.join(30)
+        join_run(run)
 
     assert processed == [True]
     assert not task.cancelled
@@ -1315,7 +1465,7 @@ def test_a_lease_that_stays_busy_is_lost_when_the_watchdog_ends_it(database_url:
     def handler(_payload: Any, context: HandlerContext) -> dict[str, bool]:
         started_at.append(monotonic())
         started.set()
-        assert locked.wait(30)
+        assert locked.wait(30), "the test did not lock the task's row"
         assert context.cancellation.wait(timeout=30), "the watchdog never aborted the handler"
         cancelled_at.append(monotonic())
         reasons.append(context.cancellation.reason)
@@ -1333,8 +1483,8 @@ def test_a_lease_that_stays_busy_is_lost_when_the_watchdog_ends_it(database_url:
     run = Thread(target=lambda: processed.append(worker.run_once()))
     run.start()
     try:
-        assert started.wait(30)
-        with psycopg.connect(database_url) as blocker:
+        wait_for_start(started, database_url)
+        with connect(database_url) as blocker:
             blocker.execute(
                 "SELECT FROM workhorse.task_runtime WHERE task_id = %s FOR UPDATE", (task_id,)
             )
@@ -1347,10 +1497,12 @@ def test_a_lease_that_stays_busy_is_lost_when_the_watchdog_ends_it(database_url:
             blocker.commit()
     finally:
         locked.set()
-        run.join(30)
+        join_run(run)
 
     assert processed == [True]
-    assert len(reasons) == 1 and isinstance(reasons[0], StaleLeaseError)
+    assert len(reasons) == 1 and isinstance(reasons[0], StaleLeaseError), (
+        f"the watchdog did not end the attempt with a lost lease: {reasons}"
+    )
     # Every round sent while the row was locked reported it busy, and retries ran between the slots.
     held = [entry for entry in recorded if entry[0] >= locked_at]
     assert held and all(statuses == ["busy"] for _, _, statuses in held), held
