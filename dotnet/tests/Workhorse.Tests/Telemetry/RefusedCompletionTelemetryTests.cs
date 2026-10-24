@@ -12,6 +12,11 @@ namespace Workhorse.Tests.Telemetry;
 /// The worker of this test runs its own tick before its claim, so that tick sees no overdue
 /// attempt. A stopped worker can abandon a slow tick that then ends later, but a tick is not slow
 /// on a test database.
+/// <para>
+/// <see cref="Worker.RunOnceAsync"/> also runs a due tick before the claim that finds no task. At
+/// the 1 s default interval, an attempt that took more than 1 s let that second tick settle the
+/// moved deadline (SM-1792). The test sets an interval of one hour, so only the first tick runs.
+/// </para>
 /// </summary>
 [CollectionDefinition(nameof(RefusedCompletionTelemetryTests), DisableParallelization = true)]
 public sealed class RefusedCompletionTelemetryRunsAlone;
@@ -47,6 +52,7 @@ public sealed class RefusedCompletionTelemetryTests(ScratchDatabase database) : 
             options.DisableRegistry = true;
             options.Lease = TimeSpan.FromSeconds(60);
             options.Heartbeat = TimeSpan.FromSeconds(30);
+            options.MaintenanceInterval = TimeSpan.FromHours(1);
         }));
         worker.Handle<object?, object?>("email.send", async (_, _) =>
         {

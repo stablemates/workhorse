@@ -1,5 +1,6 @@
 using System.Text.Json;
 using Microsoft.Extensions.Logging;
+using Npgsql;
 using Workhorse.Internal;
 using Workhorse.Tests.Conformance;
 using Workhorse.Tests.Testing;
@@ -308,14 +309,26 @@ public sealed class WorkerTests(ScratchDatabase database)
         await run.StopAsync();
     }
 
-    [Fact]
-    public async Task ACancelRequestCancelsTheTokenWithItsReason()
+    /// <summary>
+    /// The worker learns a cancel request only from an accepted heartbeat round. <c>cancel_v1</c>
+    /// locks the task row until its transaction commits. Each round that meets the lock answers
+    /// <c>busy</c> and renews nothing. Under host load, that commit took more than 3 s. The test
+    /// used a 3 s lease, so the attempt lost its lease first (SM-1792). The 60 s lease outlasts
+    /// such a wait. The held case keeps the cancel transaction open until a round answers
+    /// <c>busy</c>, and then for 2 s more. Then a round after the commit delivers the request.
+    /// </summary>
+    [Theory]
+    [InlineData(0)]
+    [InlineData(2000)]
+    public async Task ACancelRequestCancelsTheTokenWithItsReason(int holdMs)
     {
         var queue = UniqueQueue("cancel");
+        var log = new BusyRoundLog();
         await using var worker = new Worker(database.DataSource, Options(queue, options =>
         {
-            options.Lease = TimeSpan.FromSeconds(3);
-            options.Heartbeat = TimeSpan.FromMilliseconds(200);
+            options.Lease = TimeSpan.FromSeconds(60);
+            options.Heartbeat = TimeSpan.FromMilliseconds(500);
+            options.LoggerFactory = log;
         }));
         var witness = new CancellationWitness();
         worker.Handle<Order>("cancellable", (context, _) => witness.WaitForCancellationAsync(context));
@@ -323,7 +336,20 @@ public sealed class WorkerTests(ScratchDatabase database)
 
         await using var running = new RunningWorker(worker);
         await witness.Registered.Task.WaitAsync(Patience, TestContext.Current.CancellationToken);
-        await ScalarAsync(database.DataSource, "SELECT status FROM workhorse.cancel_v1($1, 'test', 'no longer needed')", taskId);
+        await using (var connection = await database.DataSource.OpenConnectionAsync(TestContext.Current.CancellationToken))
+        await using (var transaction = await connection.BeginTransactionAsync(TestContext.Current.CancellationToken))
+        {
+            await using var cancel = new NpgsqlCommand("SELECT status FROM workhorse.cancel_v1($1, 'test', 'no longer needed')", connection, transaction);
+            cancel.Parameters.Add(new NpgsqlParameter { Value = taskId });
+            Assert.Equal("cancel_requested", await cancel.ExecuteScalarAsync(TestContext.Current.CancellationToken));
+            if (holdMs > 0)
+            {
+                await EventuallyAsync(() => log.BusyRounds > 0, "a heartbeat round that meets the cancel lock");
+                await Task.Delay(holdMs, TestContext.Current.CancellationToken);
+            }
+
+            await transaction.CommitAsync(TestContext.Current.CancellationToken);
+        }
 
         await TaskInStateAsync(database.DataSource, taskId, "canceled");
         await witness.AssertReasonAsync(CancelReason.Requested);
@@ -537,6 +563,39 @@ public sealed class WorkerTests(ScratchDatabase database)
 
         Assert.False(await worker.RunOnceAsync(TestContext.Current.CancellationToken));
         Assert.Equal(["now"], log.Bound);
+    }
+
+    /// <summary>Counts the heartbeat rounds that answer <c>busy</c>, and writes each event to <see cref="TestLog"/>.</summary>
+    private sealed class BusyRoundLog : ILoggerFactory, ILogger
+    {
+        private int _busyRounds;
+
+        internal int BusyRounds => Volatile.Read(ref _busyRounds);
+
+        public ILogger CreateLogger(string categoryName) => this;
+
+        public void AddProvider(ILoggerProvider provider)
+        {
+        }
+
+        public void Dispose()
+        {
+        }
+
+        public IDisposable? BeginScope<TState>(TState state)
+            where TState : notnull => null;
+
+        public bool IsEnabled(LogLevel logLevel) => true;
+
+        public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter)
+        {
+            if (eventId.Name == "workhorse.task.heartbeat_rejected" && formatter(state, exception).EndsWith("status busy", StringComparison.Ordinal))
+            {
+                Interlocked.Increment(ref _busyRounds);
+            }
+
+            TestLog.Instance.Log(logLevel, eventId, state, exception, formatter);
+        }
     }
 
     /// <summary>Records the parameter values that Npgsql logs for each <c>run_maintenance_v1</c> call.</summary>
