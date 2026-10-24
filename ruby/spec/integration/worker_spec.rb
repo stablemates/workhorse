@@ -392,10 +392,14 @@ RSpec.describe "Worker against PostgreSQL" do
     expect(output.string).to include(%("workhorse.handler.outcome":"canceled"))
   end
 
+  # The worker's own expiration answers stale, so the task stays active with an overdue deadline.
+  # run_once also runs a due tick before the claim that finds no task. If the attempt takes more
+  # than the 1 s default interval, that tick settles the deadline (SM-1795). The interval of one
+  # hour lets only the tick before the first claim run.
   it "leaves a task whose lease was taken over before the completion write to recovery" do
     task_id = queue.enqueue("late", {}, max_attempts: 1, deadline: Time.now + 3600).task_id
     output = StringIO.new
-    worker(lease: 30, heartbeat: 10, logger: Logger.new(output)).handle("late") {
+    worker(lease: 30, heartbeat: 10, maintenance_interval: 3600, logger: Logger.new(output)).handle("late") {
       @connection.exec_params("UPDATE workhorse.task_runtime SET fence_token = fence_token + 1,
         deadline_at = clock_timestamp() - interval '1 second' WHERE task_id = $1", [task_id])
       {"late" => true}

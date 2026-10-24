@@ -194,6 +194,10 @@ class WorkerTelemetryDatabaseTest {
    * PostgreSQL refuses the completion write. A due deadline or attempt timeout settles under the
    * attempt's own fence before {@code runOnce} returns. A cancellation and a lost lease keep their
    * own outcomes.
+   *
+   * <p>{@code runOnce} also runs a due tick before the claim that finds no task. If the attempt
+   * takes more than the 1 s default interval, that tick settles the moved deadline of the lost
+   * lease (SM-1795). The interval of one hour lets only the tick before the first claim run.
    */
   @ParameterizedTest
   @CsvSource(
@@ -229,6 +233,7 @@ class WorkerTelemetryDatabaseTest {
         worker()
             .lease(Duration.ofSeconds(60))
             .heartbeat(Duration.ofSeconds(30))
+            .maintenanceInterval(Duration.ofHours(1))
             .handle(
                 "email.send",
                 Object.class,
