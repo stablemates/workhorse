@@ -769,6 +769,8 @@ def test_batch_evidence_failure_does_not_change_settlement(database_url: str) ->
 
 
 def test_batch_member_cancellation_does_not_disturb_its_peer(database_url: str) -> None:
+    handler_errors: list[BaseException] = []
+
     with (
         psycopg.connect(database_url) as enqueue_connection,
         psycopg.connect(database_url, autocommit=True) as worker_connection,
@@ -780,14 +782,22 @@ def test_batch_member_cancellation_does_not_disturb_its_peer(database_url: str) 
         enqueue_connection.commit()
 
         def handle_batch(items: Any) -> list[dict[str, object]]:
-            canceled = next(item for item in items if item.payload["cancel"] is True)
-            status = operator_connection.execute(
-                "SELECT status FROM workhorse.cancel_v1(%s::uuid, %s::text, %s::text)",
-                (canceled.context.task.id, "batch-test", "member canceled"),
-            ).fetchone()
-            assert status == ("cancel_requested",)
-            assert canceled.context.cancellation.wait(timeout=5)
-            assert isinstance(canceled.context.cancellation.reason, CancellationRequestedError)
+            try:
+                canceled = next(item for item in items if item.payload["cancel"] is True)
+                status = operator_connection.execute(
+                    "SELECT status FROM workhorse.cancel_v1(%s::uuid, %s::text, %s::text)",
+                    (canceled.context.task.id, "batch-test", "member canceled"),
+                ).fetchone()
+                assert status == ("cancel_requested",)
+                assert canceled.context.cancellation.wait(timeout=30)
+                assert isinstance(canceled.context.cancellation.reason, CancellationRequestedError)
+                peer = next(item for item in items if item.payload["cancel"] is False)
+                assert not peer.context.cancellation.cancelled
+            except BaseException as error:
+                # If the handler raises, Workhorse fails the whole batch, and the peer gets a retry
+                # and no outcome. The test keeps the error, so that a failure names it.
+                handler_errors.append(error)
+                raise
             return [
                 {"status": "succeeded", "result": {"cancel": item.payload["cancel"]}}
                 for item in items
@@ -797,15 +807,15 @@ def test_batch_member_cancellation_does_not_disturb_its_peer(database_url: str) 
             worker_pool,
             worker_id="python-batch-cancellation-worker",
             concurrency=2,
-            # The worker sees the cancel request only in a heartbeat status, and the cancel needs a
-            # live lease. Below 100 ms, the smallest supported interval, every round under host
-            # load can time out. The lease is longer than the handler's 5 s wait, so it cannot
-            # lapse first.
-            lease_ms=10_000,
-            heartbeat_ms=100,
+            # The worker sees the cancel request only in an accepted heartbeat round. A 500 ms
+            # interval gives each round a 375 ms bound. The handler waits 30 s for the request, and
+            # the lease is longer than that wait, so it cannot lapse first.
+            lease_ms=60_000,
+            heartbeat_ms=500,
         ).handle_batch("batch.cancel", max_size=2, linger_ms=100, handler=handle_batch)
 
         assert worker.run_once() is True
+        assert handler_errors == []
         outcomes = worker_connection.execute(
             "SELECT task_id::text, state, result, error->>'reason' "
             "FROM workhorse.task_outcome WHERE task_id = ANY(%s::uuid[])",
@@ -1340,8 +1350,15 @@ def test_worker_renews_ownership_while_handler_runs(database_url: str) -> None:
         assert renewed_expiry > first_expiry
 
 
-def test_worker_delivers_and_acknowledges_cancellation(database_url: str) -> None:
+@pytest.mark.parametrize("round_outage", [False, True], ids=["rounds-accepted", "rounds-fail"])
+def test_worker_delivers_and_acknowledges_cancellation(
+    database_url: str, monkeypatch: pytest.MonkeyPatch, round_outage: bool
+) -> None:
     handler_started = Event()
+    cancel_sent = Event()
+    round_failed_after_cancel = Event()
+    outage_over = Event()
+    delivered_at: list[float] = []
     observed_reason: list[BaseException] = []
     worker_error: list[BaseException] = []
 
@@ -1355,18 +1372,34 @@ def test_worker_delivers_and_acknowledges_cancellation(database_url: str) -> Non
 
         def wait_for_cancellation(_payload: object, context: HandlerContext) -> dict[str, bool]:
             handler_started.set()
-            assert context.cancellation.wait(timeout=5)
+            assert context.cancellation.wait(timeout=30)
+            delivered_at.append(monotonic())
             observed_reason.append(context.cancellation.reason)
             return {"ignoredCancellation": True}
 
         worker = Worker(
             worker_pool,
             worker_id="python-cancellation-worker",
-            # The worker sees the cancel request only in a heartbeat status. 100 ms is the smallest
-            # supported interval. The lease is longer than the handler's 5 s wait.
-            lease_ms=10_000,
-            heartbeat_ms=100,
+            # The worker sees the cancel request only in an accepted heartbeat round. A 500 ms
+            # interval gives each round a 375 ms bound. The handler waits 30 s for the request, and
+            # the lease is longer than that wait, so it cannot lapse first.
+            lease_ms=60_000,
+            heartbeat_ms=500,
         ).handle("cancel.active", wait_for_cancellation)
+
+        # In the outage case, every heartbeat round fails, as rounds do when the host stalls. The
+        # outage ends only after one round fails while the cancel request is pending, so a round
+        # after the outage must deliver the request.
+        send_rounds = worker._heartbeat_rows
+
+        def stalled_rounds(batches: Any, deadline: float) -> Any:
+            if round_outage and not outage_over.is_set():
+                if cancel_sent.is_set():
+                    round_failed_after_cancel.set()
+                raise TimeoutError("the test failed this heartbeat round")
+            return send_rounds(batches, deadline)
+
+        monkeypatch.setattr(worker, "_heartbeat_rows", stalled_rounds)
 
         def run_worker() -> None:
             try:
@@ -1376,19 +1409,35 @@ def test_worker_delivers_and_acknowledges_cancellation(database_url: str) -> Non
 
         thread = Thread(target=run_worker)
         thread.start()
-        assert handler_started.wait(timeout=5)
+        try:
+            assert handler_started.wait(timeout=30)
+            outage_started_at = monotonic()
 
-        cancellation = operator_connection.execute(
-            "SELECT status FROM workhorse.cancel_v1(%s::uuid, %s::text, %s::text)",
-            (task_id, "operator", "deployment stopped"),
-        ).fetchone()
-        assert cancellation == ("cancel_requested",)
+            cancellation = operator_connection.execute(
+                "SELECT status FROM workhorse.cancel_v1(%s::uuid, %s::text, %s::text)",
+                (task_id, "operator", "deployment stopped"),
+            ).fetchone()
+            assert cancellation == ("cancel_requested",)
+            cancel_sent.set()
 
-        thread.join(timeout=5)
-        assert not thread.is_alive()
+            if round_outage:
+                assert round_failed_after_cancel.wait(timeout=30)
+                # The outage lasts at least 2 s, and no round delivers the request during it.
+                sleep(max(0.0, outage_started_at + 2 - monotonic()))
+                assert delivered_at == []
+            outage_ended_at = monotonic()
+            outage_over.set()
+
+            thread.join(timeout=30)
+            assert not thread.is_alive()
+        finally:
+            outage_over.set()
+            thread.join(timeout=30)
         assert worker_error == []
         assert len(observed_reason) == 1
         assert isinstance(observed_reason[0], CancellationRequestedError)
+        if round_outage:
+            assert delivered_at[0] >= outage_ended_at
 
         outcome = operator_connection.execute(
             "SELECT state, error->>'reason' FROM workhorse.task_outcome WHERE task_id = %s",
