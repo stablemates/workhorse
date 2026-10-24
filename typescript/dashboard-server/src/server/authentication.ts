@@ -15,6 +15,13 @@ const MAX_TRACKED_LOGIN_CLIENTS = 1_024;
 const MAX_CONCURRENT_PASSWORD_HASHES = 2;
 /** The throttle key of every request whose transport supplied no peer address. */
 const UNIDENTIFIED_CLIENT = "unidentified";
+/**
+ * The `scrypt-v1` cost. N=16384 is a deliberate choice at the low end of current guidance. Online
+ * guessing stays slow: each client gets `MAX_FAILED_LOGINS` failures in each
+ * `FAILED_LOGIN_WINDOW_MS`, and `MAX_CONCURRENT_PASSWORD_HASHES` bounds the derivations that run at
+ * once. A stronger cost needs a new scheme name, because the server must still verify stored
+ * `scrypt-v1` hashes.
+ */
 const SCRYPT_OPTIONS = { N: 16_384, r: 8, p: 1, maxmem: 32 * 1_024 * 1_024 } as const;
 const ISO_TIMESTAMP = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?(?:Z|[+-]\d{2}:\d{2})$/;
 const LOGIN_ERROR_PLACEHOLDER = "<!--__WORKHORSE_LOGIN_ERROR__-->";

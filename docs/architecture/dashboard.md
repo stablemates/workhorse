@@ -1722,6 +1722,10 @@ The authentication options contain:
 | digest             | exactly 32 bytes                                                                   |
 | session lifetime   | default 28,800 seconds (8 hours); integer lifetimes from 60 through 86,400 seconds |
 
+The `scrypt-v1` cost of `N=16384` is a deliberate choice at the low end of current guidance.
+The login throttle and the derivation limit below slow online guessing. A stronger cost needs a
+new scheme name, because the server must still verify stored `scrypt-v1` hashes.
+
 The server compares the derived digest with `timingSafeEqual`. A password longer than 1,024
 characters never matches.
 
