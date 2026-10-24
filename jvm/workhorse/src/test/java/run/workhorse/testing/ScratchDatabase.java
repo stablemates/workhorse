@@ -30,6 +30,10 @@ import org.junit.jupiter.api.extension.ExtensionContext;
  * when the test run ends. {@code pnpm db:sweep} recognizes the same name shape if the drop never
  * runs.
  *
+ * <p>The scratch database and each extra database set {@code synchronous_commit = off}. Their
+ * commits do not wait for the WAL flush. Thus a host I/O stall does not add a flush wait to each
+ * commit of a test (SM-1804).
+ *
  * <p>Without {@code DATABASE_URL_TEST} a local run skips with a visible reason. {@code CI} or
  * {@code WORKHORSE_REQUIRE_DATABASE=1} turns that skip into a failure.
  */
@@ -97,10 +101,7 @@ public final class ScratchDatabase implements BeforeAllCallback {
       String source = template(main);
       try (Connection admin = DriverManager.getConnection(main.adminUrl, main.credentials)) {
         dropDatabase(admin, name);
-        try (Statement statement = admin.createStatement()) {
-          statement.execute(
-              "CREATE DATABASE " + quoteIdentifier(name) + " TEMPLATE " + quoteIdentifier(source));
-        }
+        createDatabase(admin, name, " TEMPLATE " + quoteIdentifier(source));
       }
     }
     report("running against extra scratch database " + name);
@@ -271,9 +272,7 @@ public final class ScratchDatabase implements BeforeAllCallback {
     database = created;
     try (Connection admin = DriverManager.getConnection(created.adminUrl, credentials)) {
       dropDatabase(admin, name);
-      try (Statement statement = admin.createStatement()) {
-        statement.execute("CREATE DATABASE " + quoteIdentifier(name));
-      }
+      createDatabase(admin, name, "");
     }
     try (Connection connection = DriverManager.getConnection(created.url, credentials);
         Statement statement = connection.createStatement()) {
@@ -343,6 +342,24 @@ public final class ScratchDatabase implements BeforeAllCallback {
         return earlier;
       }
       return error;
+    }
+  }
+
+  /**
+   * Creates {@code name} with the clause {@code options}, for example a {@code TEMPLATE} clause.
+   *
+   * <p>A scratch database is for tests only, so its commits do not wait for the WAL flush. A host
+   * I/O stall can make one flush take seconds, and a lease of a few seconds then lapses although
+   * the worker is correct. Visibility and order do not change. Only a server crash can lose such a
+   * commit, and no JVM test restarts PostgreSQL or reads the WAL. A copy of a template does not
+   * take this setting from the template, so each database sets it.
+   */
+  private static void createDatabase(Connection admin, String name, String options)
+      throws SQLException {
+    try (Statement statement = admin.createStatement()) {
+      statement.execute("CREATE DATABASE " + quoteIdentifier(name) + options);
+      statement.execute(
+          "ALTER DATABASE " + quoteIdentifier(name) + " SET synchronous_commit = off");
     }
   }
 
