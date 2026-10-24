@@ -683,7 +683,7 @@ Rust, Java, or Kotlin worker holds its own.
 | Listener connected (`run()`)                  | 5,000 ms fallback poll, ±10% jitter        |
 | Notification after an empty claim             | Random delay of 0 to 50 ms before claiming |
 | Notification after a claim that found work    | No delay                                   |
-| Explicit `pollMs` (`poll_ms`, `PollInterval`) | Replaces the fallback base                 |
+| Explicit `pollMs` (`poll_ms`, `PollInterval`) | Replaces the base; no cap with a listener  |
 | No listener, consecutive empty waits          | Doubles up to a 5,000 ms cap, ±10% jitter  |
 | No listener, starting wait                    | 250 ms                                     |
 | TypeScript `runOnce()`                        | No wait; never opens a listener            |

@@ -492,7 +492,9 @@ export interface WorkerOptions {
   /**
    * Idle fallback polling delay. By default, `run()` waits five seconds while its notification
    * subscription is live. Without a live subscription, it starts at 250 milliseconds and backs off
-   * after each empty claim. `runOnce()` does not wait: it claims on each call.
+   * after each empty claim, up to five seconds. An explicit value replaces both bases. While the
+   * subscription is live, the worker waits the explicit value without the five-second cap. Each
+   * wait has ±10% jitter. `runOnce()` does not wait: it claims on each call.
    */
   pollMs?: number;
   /** Minimum delay between worker-owned maintenance and recurring schedule passes. */
@@ -2717,12 +2719,17 @@ export class Worker {
     this.listenedAtLastWait = listening;
     const baseMs =
       this.explicitPollMs ?? (listening ? DEFAULT_NOTIFICATION_FALLBACK_POLL_MS : DEFAULT_POLL_MS);
-    const exponent = listening ? 0 : Math.max(0, this.consecutiveEmptyClaims - 1);
-    const durationMs = Math.min(
-      MAX_EMPTY_POLL_MS,
-      Math.max(1, baseMs) * 2 ** Math.min(exponent, 30),
-    );
-    return jitterDuration(durationMs);
+    // With a live subscription, a notification wakes the worker, so the wait is the base without
+    // backoff or cap. An explicit pollMs is then the caller's fallback interval, as in every SDK
+    // (ADR 0112). Without one, the backoff doubles toward the 5,000 ms cap. Jitter follows the cap,
+    // and the timer maximum bounds the result.
+    const durationMs = listening
+      ? Math.max(1, baseMs)
+      : Math.min(
+          MAX_EMPTY_POLL_MS,
+          Math.max(1, baseMs) * 2 ** Math.min(Math.max(0, this.consecutiveEmptyClaims - 1), 30),
+        );
+    return Math.min(MAX_TIMER_DELAY_MS, jitterDuration(durationMs));
   }
 
   private async waitForWake(

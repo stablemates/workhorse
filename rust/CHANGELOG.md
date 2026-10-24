@@ -11,6 +11,18 @@ adds.
 
 ## Unreleased
 
+### The worker intervals accept 100 through 2,147,483,647 ms
+
+`register_worker_v1` takes `maintenance_interval`, `maintenance_routine_interval`, and
+`registry_interval` as PostgreSQL `integer` milliseconds, and the registry refuses a value below 100. Before this change, `Worker::new` accepted a tick or routine interval from 1 ms. The worker
+ran at that cadence but wrote 100 ms to the registry. It also accepted a value above
+2,147,483,647 ms and wrote 2,147,483,647 ms instead (SM-1668).
+
+Now `Worker::new` returns `Error::InvalidArgument` if one of these intervals is not a whole number
+of milliseconds from 100 ms through 2,147,483,647 ms. `disable_registry` still turns off
+registration. This is a behavior change for a caller who passes such a value. ADR 0112 records the
+range for all seven SDKs.
+
 ### retry_delay refuses a duration above the fail_v1 range
 
 `fail_v1` takes the retry delay as a PostgreSQL `integer`. Before this change, the worker clamped a

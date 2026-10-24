@@ -313,6 +313,77 @@ The retry delay override sends one attempt's delay to `fail_v1` in place of the 
 choice. All seven SDKs carry it and all seven leave it unset, so the persisted retry policy chooses
 every delay until a caller says otherwise.
 
+## Poll, interval, and shutdown boundaries
+
+The defaults above agree, but an explicit value meets a boundary too. This section states three
+boundaries: the order of the poll wait steps, the accepted maintenance intervals, and what a zero
+shutdown grace does. [ADR 0112](decisions/0112-define-the-poll-wait-order-and-the-worker-interval-range.md)
+sets one rule for the first two. The per-SDK option tables in
+[Schema and protocol](architecture/schema-and-protocol.md) own the exact ranges.
+
+### Poll wait order
+
+Every SDK computes the wait after an empty claim in the same order.
+
+1. It takes the explicit poll interval, or else 5,000 ms with a live subscription and 250 ms
+   without one.
+2. With a live subscription, it waits that base. It does not back off, and it does not cap an
+   explicit poll interval.
+3. Without a live subscription, it doubles the base for each empty claim after the first and caps
+   the result at 5,000 ms.
+4. It applies ±10% jitter after the cap. The wait is at least 1 ms.
+
+One step differs, because of where each SDK refreshes the registry.
+
+| Step                                           | TypeScript | Python | Go  | Rust | Ruby | JVM | .NET |
+| ---------------------------------------------- | ---------- | ------ | --- | ---- | ---- | --- | ---- |
+| Wait cut to the registry interval after jitter | No         | Yes    | No  | No   | Yes  | Yes | Yes  |
+
+The registry cut applies only while registration is on. Python, Ruby, the JVM, and .NET refresh the
+registry from the dispatch loop. With the default 5,000 ms registry interval, their longest idle
+wait is 5,000 ms, and in TypeScript, Go, and Rust it is about 5,500 ms.
+[Operations: Polling cadence](architecture/operations.md#polling-cadence) gives the steps.
+
+### Accepted maintenance intervals
+
+The maintenance tick, the maintenance routine offer, and the registry refresh intervals accept
+100 through 2,147,483,647 ms in all seven SDKs. `register_worker_v1` takes each one as a
+PostgreSQL `integer`, and its check refuses a value below 100. Each SDK refuses another value at
+construction. Go reads a zero duration as the default, because it cannot tell zero from an unset
+option. Each SDK keeps its own way to turn registration off.
+
+| SDK        | Turn off registration    |
+| ---------- | ------------------------ |
+| TypeScript | `registryIntervalMs: 0`  |
+| Python     | `registry_interval_ms=0` |
+| Go         | `DisableRegistry`        |
+| Rust       | `disable_registry`       |
+| Ruby       | `disable_registry: true` |
+| JVM        | `disableRegistry(true)`  |
+| .NET       | `DisableRegistry`        |
+
+The poll interval keeps a range of its own in each SDK. TypeScript accepts 0, Go reads 0 as the
+default, Rust does not check it, and Python, Ruby, the JVM, and .NET refuse 0.
+
+### Zero shutdown grace
+
+| SDK and API                                       | Accepted range                   | Zero                                                           |
+| ------------------------------------------------- | -------------------------------- | -------------------------------------------------------------- |
+| TypeScript `runWorkerProcess` `shutdownTimeoutMs` | 1 to 3,600,000 ms                | Refused                                                        |
+| Python `run_worker_process` `shutdown_timeout_ms` | 1 to 3,600,000 ms                | Refused                                                        |
+| Go `WorkerOptions.ShutdownGracePeriod`            | 1 ms or more, whole milliseconds | Selects the 25,000 ms default                                  |
+| Rust `WorkerOptions::shutdown_grace_period`       | 1 ms or more, whole milliseconds | Refused                                                        |
+| Ruby `Worker.new(shutdown_grace:)`                | 0 to 86,400 s                    | No handler wait; the stop ends within the 250 ms unwind window |
+| Ruby `run_worker_processes(shutdown_grace:)`      | 0 to 86,400 s                    | Sends `SIGKILL` to the child processes at once                 |
+| JVM `Worker.Builder.shutdownGrace`                | 0 to 1 day                       | No handler wait; the stop ends within the 250 ms unwind window |
+| .NET `WorkerOptions.ShutdownGrace`                | 0 to 1 day                       | No handler wait; the stop ends within the 250 ms unwind window |
+
+The TypeScript and Python `Worker.stop()` take no grace. The Kotlin `WorkerScope.shutdownGrace` and
+the Spring Boot property `workhorse.worker.shutdown-grace` pass their value to the JVM builder. Go
+cannot tell an unset `time.Duration` from zero, so a zero grace is the default and not an error.
+In Ruby, the JVM, and .NET, the claims in flight, the handler cancellation, and the cleanup share
+that one window, so a cancelled handler can get less than 250 ms to return.
+
 ## Integer semantics
 
 PostgreSQL stores a `jsonb` number at full precision, but the SDKs do not read one the same way.

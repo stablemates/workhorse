@@ -791,12 +791,19 @@ statement.
 | `concurrency`                 | 1                                             | Integers from 1 through 100.                                                                                                                                             |
 | `lease_ms`                    | 30,000 milliseconds per claim                 | 100 through 86,400,000.                                                                                                                                                  |
 | `heartbeat_ms`                | The greater of 100 or one third of `lease_ms` | Positive values less than `lease_ms`.                                                                                                                                    |
-| `poll_ms`                     | 250                                           | Positive values.                                                                                                                                                         |
-| `maintenance_routine_poll_ms` | 60000                                         | Integers of at least 100. Bounds how often the worker offers the slow retention routines.                                                                                |
+| `poll_ms`                     | 250                                           | Integers of at least 1. Replaces both the 250 ms and the 5,000 ms base.                                                                                                  |
+| `maintenance_interval_ms`     | 1000                                          | Integers from 100 through 2,147,483,647.                                                                                                                                 |
+| `maintenance_routine_poll_ms` | 60000                                         | Integers from 100 through 2,147,483,647. Bounds how often the worker offers the slow retention routines.                                                                 |
+| `registry_interval_ms`        | 5000                                          | 0, which turns off registration, or integers from 100 through 2,147,483,647.                                                                                             |
 | `retry_delay_ms`              | Unset                                         | An integer from 0 through 2,147,483,647 milliseconds, or a callable over the attempt and the claimed task. The callable returns `None` to leave the delay to the policy. |
 
 The smallest supported `heartbeat_ms` is 100. The worker accepts a shorter value
 ([Supported heartbeat interval](lifecycle.md#supported-heartbeat-interval)).
+
+`register_worker_v1` takes the three interval options as PostgreSQL `integer` values, so `Worker`
+raises `ValueError` at construction for a value outside the range
+([ADR 0112](../decisions/0112-define-the-poll-wait-order-and-the-worker-interval-range.md)).
+`poll_ms` has no upper limit.
 
 `retry_delay_ms` reports the delay of one failed attempt to `fail_v1`. This delay replaces the
 choice of the persisted retry policy. If a fixed value is not an integer in the range, `Worker`
@@ -1407,7 +1414,8 @@ Thus lock acquisition, log emission, timer creation, and thread creation occur o
 handler of the main thread.
 
 - The first signal starts the shutdown deadline and calls `Worker.stop()` on a separate thread. The
-  deadline defaults to 25,000 milliseconds and accepts integers from 1 through 3,600,000.
+  deadline defaults to 25,000 milliseconds and accepts integers from 1 through 3,600,000. Zero
+  raises `ValueError`. `Worker.stop()` takes no shutdown grace, and its handler drain has no limit.
 - If the worker drains before the deadline, the function restores the previous handlers and returns.
 - A second signal calls `force_exit` with 128 plus its signal number. That gives 130 for `SIGINT`
   and 143 for `SIGTERM`.
@@ -1646,28 +1654,38 @@ other. Thus they cannot multiply the concurrency budget or race the queue cursor
 
 #### Worker options
 
-| Option                                     | Default                                                                                           | Accepts                                                            |
-| ------------------------------------------ | ------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------ |
-| `WorkerOptions.WorkerID`                   | Host name, process ID, and a random suffix                                                        |                                                                    |
-| `WorkerOptions.Concurrency`                | 1                                                                                                 | Integers from 1 through 100                                        |
-| `WorkerOptions.LeaseDuration`              | 30,000 milliseconds                                                                               | Whole-millisecond values from 100 through 86,400,000               |
-| `WorkerOptions.PollInterval`               | 5,000 milliseconds while the listener is live, else 250 milliseconds, doubling toward 5 seconds   |                                                                    |
-| `WorkerOptions.HeartbeatInterval`          | The larger of 100 milliseconds and one third of `LeaseDuration`, truncated to a whole millisecond | Positive values shorter than the lease                             |
-| `WorkerOptions.MaintenanceInterval`        | 1,000 milliseconds                                                                                | Positive whole-millisecond values                                  |
-| `WorkerOptions.MaintenanceRoutineInterval` | 60,000 milliseconds                                                                               | Positive whole-millisecond values                                  |
-| `WorkerOptions.RetryDelay`                 | Unset                                                                                             | `func(attempt int, task ClaimedTask)` returning a `*time.Duration` |
-| `WorkerOptions.RegistryInterval`           | 5,000 milliseconds                                                                                | Whole-millisecond values of at least 100                           |
-| `WorkerOptions.ScheduleNamespaces`         | Empty                                                                                             | Non-empty names; duplicates after the first are removed            |
-| `WorkerOptions.ScheduleCatchupLimit`       | 100                                                                                               | Integers from 1 through 10,000                                     |
-| `WorkerOptions.ShutdownGracePeriod`        | 25,000 milliseconds                                                                               | Positive whole-millisecond values                                  |
-| `WorkerOptions.PollingOnly`                | False                                                                                             |                                                                    |
-| `WorkerOptions.Logger`                     | `slog.Default()`                                                                                  | A `*slog.Logger`                                                   |
+| Option                                     | Default                                                                                           | Accepts                                                                            |
+| ------------------------------------------ | ------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------- |
+| `WorkerOptions.WorkerID`                   | Host name, process ID, and a random suffix                                                        |                                                                                    |
+| `WorkerOptions.Concurrency`                | 1                                                                                                 | Integers from 1 through 100                                                        |
+| `WorkerOptions.LeaseDuration`              | 30,000 milliseconds                                                                               | Whole-millisecond values from 100 through 86,400,000                               |
+| `WorkerOptions.PollInterval`               | 5,000 milliseconds while the listener is live, else 250 milliseconds, doubling toward 5 seconds   | 0, which selects the default, or positive values                                   |
+| `WorkerOptions.HeartbeatInterval`          | The larger of 100 milliseconds and one third of `LeaseDuration`, truncated to a whole millisecond | Positive values shorter than the lease                                             |
+| `WorkerOptions.MaintenanceInterval`        | 1,000 milliseconds                                                                                | 0, which selects the default, or whole milliseconds from 100 through 2,147,483,647 |
+| `WorkerOptions.MaintenanceRoutineInterval` | 60,000 milliseconds                                                                               | 0, which selects the default, or whole milliseconds from 100 through 2,147,483,647 |
+| `WorkerOptions.RetryDelay`                 | Unset                                                                                             | `func(attempt int, task ClaimedTask)` returning a `*time.Duration`                 |
+| `WorkerOptions.RegistryInterval`           | 5,000 milliseconds                                                                                | 0, which selects the default, or whole milliseconds from 100 through 2,147,483,647 |
+| `WorkerOptions.ScheduleNamespaces`         | Empty                                                                                             | Non-empty names; duplicates after the first are removed                            |
+| `WorkerOptions.ScheduleCatchupLimit`       | 100                                                                                               | Integers from 1 through 10,000                                                     |
+| `WorkerOptions.ShutdownGracePeriod`        | 25,000 milliseconds                                                                               | 0, which selects the default, or positive whole-millisecond values                 |
+| `WorkerOptions.PollingOnly`                | False                                                                                             |                                                                                    |
+| `WorkerOptions.Logger`                     | `slog.Default()`                                                                                  | A `*slog.Logger`                                                                   |
 
 The smallest supported `HeartbeatInterval` is 100 milliseconds. The worker accepts a shorter value
 ([Supported heartbeat interval](lifecycle.md#supported-heartbeat-interval)).
 
 The `PollInterval` defaults match the TypeScript and Python defaults that
 [ADR 0072](../decisions/0072-converge-the-worker-runtime-defaults.md) records.
+
+Go cannot tell an unset `time.Duration` option from an explicit zero. Thus zero selects the default
+of each duration option above. A zero `ShutdownGracePeriod` is a 25 second grace. It is not refused,
+and it does not abandon the handlers at once. Thus `RegistryInterval` cannot turn off registration;
+`DisableRegistry` does.
+
+`register_worker_v1` takes the three interval options as PostgreSQL `integer` milliseconds. Its
+check refuses a value below 100. Thus `NewWorker` refuses a value outside the range
+([ADR 0112](../decisions/0112-define-the-poll-wait-order-and-the-worker-interval-range.md)).
+`PollInterval` and `ShutdownGracePeriod` have no upper limit.
 
 Option behavior:
 
@@ -2036,18 +2054,31 @@ member remains. Each run reserves it before the worker registers, as
 a run subscribes to `Worker::Listener.shared(pool)` only when the pool `size` is an Integer of at
 least 2. Otherwise the run logs `workhorse.worker.polling_only` once and polls.
 
-| Option           | Default                                                 | Accepts                                                          |
-| ---------------- | ------------------------------------------------------- | ---------------------------------------------------------------- |
-| `concurrency`    |                                                         | Integers from 1 through 100                                      |
-| `lease`          | 30 seconds                                              | 0.1 through 86,400 seconds                                       |
-| `heartbeat`      | The larger of 100 milliseconds and a third of the lease | Values shorter than the lease                                    |
-| `shutdown_grace` | 25 seconds                                              | 0 through 86,400 seconds                                         |
-| `retry_delay`    | Unset                                                   | 0 through 2,147,483,647 ms after half-up rounding, or a callable |
+| Option                         | Default                                                                                    | Accepts                                                          |
+| ------------------------------ | ------------------------------------------------------------------------------------------ | ---------------------------------------------------------------- |
+| `concurrency`                  |                                                                                            | Integers from 1 through 100                                      |
+| `lease`                        | 30 seconds                                                                                 | 0.1 through 86,400 seconds                                       |
+| `heartbeat`                    | The larger of 100 milliseconds and a third of the lease                                    | Values shorter than the lease                                    |
+| `poll_interval`                | Unset: 5 seconds with a listener; 250 milliseconds, doubling toward 5 seconds, without one | 0.001 seconds and more                                           |
+| `maintenance_interval`         | 1 second                                                                                   | 0.1 through 2,147,483.647 seconds                                |
+| `maintenance_routine_interval` | 60 seconds                                                                                 | 0.1 through 2,147,483.647 seconds                                |
+| `registry_interval`            | 5 seconds                                                                                  | 0.1 through 2,147,483.647 seconds                                |
+| `shutdown_grace`               | 25 seconds                                                                                 | 0 through 86,400 seconds                                         |
+| `retry_delay`                  | Unset                                                                                      | 0 through 2,147,483,647 ms after half-up rounding, or a callable |
 
 The smallest supported `heartbeat` is 0.1 seconds. The worker accepts a shorter value
 ([Supported heartbeat interval](lifecycle.md#supported-heartbeat-interval)).
 
-Durations are finite Numeric seconds. A `retry_delay` rounds to the nearest millisecond, half up.
+Durations are finite Numeric seconds. The worker rounds each duration to the nearest millisecond
+before the range check. `register_worker_v1` takes the three interval options as PostgreSQL
+`integer` milliseconds, so the worker refuses a value outside the range
+([ADR 0112](../decisions/0112-define-the-poll-wait-order-and-the-worker-interval-range.md)).
+`poll_interval` has no upper limit. `disable_registry: true` turns off registration, and the worker
+then does not check `registry_interval`. A zero `shutdown_grace` sets the stop deadline
+when dispatch ends. Thus the stop steps below wait for no running handler and cancel the rest at
+once. The final deadline is still one unwind window later.
+
+A `retry_delay` rounds to the nearest millisecond, half up.
 A negative `retry_delay` raises `ArgumentError`, also when it rounds to 0. The worker raises at
 construction for a fixed value, and before `fail_v1` for a callable result (ADR 0111). `cohorts`
 splits the slots for fast-tier dispatch, as [Workers on a fast-tier queue](fast-tier.md#workers-on-a-fast-tier-queue) describes.
@@ -2500,17 +2531,23 @@ crate. Then it tests the default consumer.
 | `concurrency`                  | 1                                                                                           | 1 through 100                                                                                                              |
 | `lease_duration`               | 30 seconds                                                                                  | Whole milliseconds from 100 milliseconds through 24 hours                                                                  |
 | `heartbeat_interval`           | The larger of 100 milliseconds and one third of the lease, truncated to a whole millisecond | Positive values shorter than the lease                                                                                     |
-| `poll_interval`                | 5 seconds while the listener is connected, else 250 milliseconds, doubling toward 5 seconds |                                                                                                                            |
-| `maintenance_interval`         | 1 second                                                                                    | Positive whole milliseconds                                                                                                |
-| `maintenance_routine_interval` | 60 seconds                                                                                  | Positive whole milliseconds                                                                                                |
-| `registry_interval`            | 5 seconds                                                                                   | Whole milliseconds of at least 100                                                                                         |
+| `poll_interval`                | 5 seconds while the listener is connected, else 250 milliseconds, doubling toward 5 seconds | Any value; not checked. A wait is at least 1 millisecond                                                                   |
+| `maintenance_interval`         | 1 second                                                                                    | Whole milliseconds from 100 through 2,147,483,647                                                                          |
+| `maintenance_routine_interval` | 60 seconds                                                                                  | Whole milliseconds from 100 through 2,147,483,647                                                                          |
+| `registry_interval`            | 5 seconds                                                                                   | Whole milliseconds from 100 through 2,147,483,647                                                                          |
 | `schedule_namespaces`          | Empty                                                                                       | Rejects empty names; drops later duplicates                                                                                |
 | `schedule_catchup_limit`       | 100                                                                                         | 1 through 10,000                                                                                                           |
-| `shutdown_grace_period`        | 25 seconds                                                                                  | Positive whole milliseconds                                                                                                |
+| `shutdown_grace_period`        | 25 seconds                                                                                  | Positive whole milliseconds; zero is refused                                                                               |
 | `retry_delay`                  |                                                                                             | Overrides one failed attempt's delay: 0 through 2,147,483,647 ms after half-up rounding; `None` keeps the persisted policy |
 
 The smallest supported `heartbeat_interval` is 100 milliseconds. The worker accepts a shorter value
 ([Supported heartbeat interval](lifecycle.md#supported-heartbeat-interval)).
+
+`disable_registry` turns off registration, and `registry_interval` keeps its check.
+`register_worker_v1` takes the three interval options as PostgreSQL `integer` milliseconds, and its
+check refuses a value below 100, so `Worker::new` refuses a value outside the range
+([ADR 0112](../decisions/0112-define-the-poll-wait-order-and-the-worker-interval-range.md)).
+`Worker::new` refuses a zero `shutdown_grace_period` with `Error::InvalidArgument`.
 
 The worker expects a listener only when all of these conditions are true:
 
@@ -3049,8 +3086,10 @@ After `stop()`, the worker shuts down in this order:
 8. It deregisters the worker.
 9. `run` throws `ShutdownIncompleteException` if it abandoned a handler. `abandoned()` is the count.
 
-The total stop time is `shutdownGrace` plus the 250 millisecond unwind window. Every wait after the
-grace ends by then: the claims in flight, the listener close, the unwind window, the release of the
+The total stop time is `shutdownGrace` plus the 250 millisecond unwind window. A zero
+`shutdownGrace` ends step 3 at once, so the whole stop ends within the unwind window. The wait for
+the claims in flight in step 1 uses part of that window, so the handlers that step 4 cancels can get
+less than 250 milliseconds to return. Every wait after the grace ends by then: the claims in flight, the listener close, the unwind window, the release of the
 unstarted tasks, and the deregistration. Thus a pool with no free connection cannot extend a stop.
 A release or a deregistration that still waits then continues, and gives its connection back when
 it ends.
@@ -3808,7 +3847,9 @@ After the token is cancelled, the worker shuts down in this order:
    count.
 
 The default `ShutdownGrace` is 25 seconds. The total stop time is `ShutdownGrace` plus the 250
-millisecond unwind window. With the defaults,
+millisecond unwind window. A zero `ShutdownGrace` ends the wait of step 3 at once, so the whole stop
+ends within the unwind window. The wait for the claims in flight in step 1 uses part of that window,
+so the handlers that step 5 cancels can get less than 250 milliseconds to return. With the defaults,
 that is 25.25 seconds, which fits inside the 30 second default `HostOptions.ShutdownTimeout`. Every
 wait after the grace ends by then. Cancellation is cooperative: the worker never aborts a thread.
 

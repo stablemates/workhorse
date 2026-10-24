@@ -10,6 +10,17 @@ adds.
 
 ## Unreleased
 
+### The worker intervals refuse a value above the SQL integer limit
+
+`register_worker_v1` takes `maintenance_interval_ms`, `maintenance_routine_poll_ms`, and
+`registry_interval_ms` as PostgreSQL `integer` values. Before this change, `Worker` accepted a
+larger value, and then each registration failed (SM-1668).
+
+Now `Worker` and `AsyncWorker` raise `ValueError` at construction if one of these intervals is not
+an integer from 100 through 2,147,483,647. `registry_interval_ms=0` still turns off registration.
+This is a behavior change for a caller who passes a larger value. ADR 0112 records the range for
+all seven SDKs.
+
 ### retry_delay_ms refuses a value above the fail_v1 range
 
 `fail_v1` takes the retry delay as a PostgreSQL `integer`. Before this change, `Worker` accepted a

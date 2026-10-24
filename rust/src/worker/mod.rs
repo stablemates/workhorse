@@ -57,8 +57,10 @@ const POLLING_POLL: Duration = Duration::from_millis(250);
 const MAX_EMPTY_POLL: Duration = Duration::from_secs(5);
 const MAX_NOTIFICATION_DELAY_MS: u128 = 50;
 const MAX_CONCURRENCY: usize = 100;
-const MIN_REGISTRY_INTERVAL: Duration = Duration::from_millis(100);
-const MIN_MAINTENANCE_REPORT: Duration = Duration::from_millis(100);
+// register_worker_v1 takes each maintenance, routine, and registry interval as a PostgreSQL
+// integer, and its check refuses a value below 100 ms. Every SDK accepts this range (ADR 0112).
+const MIN_INTERVAL: Duration = Duration::from_millis(100);
+const MAX_INTERVAL: Duration = Duration::from_millis(i32::MAX as u64);
 const MAX_CATCHUP_LIMIT: i32 = 10_000;
 const PROMOTE_LIMIT: i32 = 100;
 const RECOVER_LIMIT: i32 = 100;
@@ -160,8 +162,13 @@ pub struct WorkerOptions {
     /// Without a connected listener, it defaults to 250ms, which doubles toward 5s after each empty
     /// claim.
     pub poll_interval: Option<Duration>,
+    /// The maintenance tick cadence. Defaults to 1s. This interval, `maintenance_routine_interval`,
+    /// and `registry_interval` each take whole milliseconds from 100ms through 2147483647ms
+    /// (ADR 0112).
     pub maintenance_interval: Duration,
+    /// How often this worker offers the slow retention routines. Defaults to 60s.
     pub maintenance_routine_interval: Duration,
+    /// The registry refresh cadence. Defaults to 5s. `disable_registry` turns registration off.
     pub registry_interval: Duration,
     /// Skips registration, so operator surfaces neither see nor pause this worker. An unregistered
     /// worker does not shorten the expired-lease scan spacing, which follows the shortest
@@ -234,6 +241,10 @@ fn whole_millis(duration: Duration) -> bool {
     duration.subsec_nanos() % 1_000_000 == 0
 }
 
+fn valid_interval(interval: Duration) -> bool {
+    whole_millis(interval) && (MIN_INTERVAL..=MAX_INTERVAL).contains(&interval)
+}
+
 fn millis_i32(duration: Duration) -> i32 {
     i32::try_from(duration.as_millis()).unwrap_or(i32::MAX)
 }
@@ -296,21 +307,20 @@ fn validate(
     if !whole_millis(heartbeat) || heartbeat.is_zero() || heartbeat >= lease {
         return invalid("worker heartbeat interval must be a whole number of milliseconds greater than zero and shorter than the lease duration");
     }
-    if !whole_millis(options.maintenance_interval) || options.maintenance_interval.is_zero() {
+    if !valid_interval(options.maintenance_interval) {
         return invalid(
-            "worker maintenance interval must be a positive whole number of milliseconds",
+            "worker maintenance interval must be between 100 and 2147483647 whole milliseconds",
         );
     }
-    if !whole_millis(options.maintenance_routine_interval)
-        || options.maintenance_routine_interval.is_zero()
-    {
+    if !valid_interval(options.maintenance_routine_interval) {
         return invalid(
-            "worker maintenance routine interval must be a positive whole number of milliseconds",
+            "worker maintenance routine interval must be between 100 and 2147483647 whole milliseconds",
         );
     }
-    if !whole_millis(options.registry_interval) || options.registry_interval < MIN_REGISTRY_INTERVAL
-    {
-        return invalid("worker registry interval must be at least 100 whole milliseconds");
+    if !valid_interval(options.registry_interval) {
+        return invalid(
+            "worker registry interval must be between 100 and 2147483647 whole milliseconds",
+        );
     }
     if options.schedule_namespaces.iter().any(String::is_empty) {
         return invalid("worker schedule namespaces must contain only non-empty names");
@@ -1354,8 +1364,8 @@ impl Inner {
         let lease = millis_i32(options.lease_duration);
         let heartbeat = millis_i32(self.heartbeat_interval);
         let poll = millis_i32(self.poll_interval);
-        let maintenance = millis_i32(options.maintenance_interval.max(MIN_MAINTENANCE_REPORT));
-        let routine = millis_i32(options.maintenance_routine_interval.max(MIN_MAINTENANCE_REPORT));
+        let maintenance = millis_i32(options.maintenance_interval);
+        let routine = millis_i32(options.maintenance_routine_interval);
         let registry = millis_i32(options.registry_interval);
         let active = i32::try_from(self.active.load(Ordering::SeqCst)).unwrap_or(i32::MAX);
         let draining = self.draining.load(Ordering::SeqCst);
@@ -2022,6 +2032,46 @@ mod tests {
         assert!(recovery_retries(0, &Value::Null).is_empty());
     }
 
+    // SM-1668 PAR-09 (ADR 0112): register_worker_v1 takes each interval as a PostgreSQL integer,
+    // and its check refuses a value below 100 ms. Every SDK accepts 100 through 2147483647 ms.
+    #[tokio::test]
+    async fn intervals_accept_100_ms_through_the_sql_integer_limit() {
+        let limit = Duration::from_millis(i32::MAX as u64);
+        for interval in [Duration::from_millis(100), limit] {
+            let options = WorkerOptions {
+                maintenance_interval: interval,
+                maintenance_routine_interval: interval,
+                registry_interval: interval,
+                ..Default::default()
+            };
+            assert!(Worker::new(pool(4), options).is_ok(), "{interval:?}");
+        }
+        type Set = fn(&mut WorkerOptions, Duration);
+        let options: [(Set, &str); 3] = [
+            (|options, value| options.maintenance_interval = value, "maintenance"),
+            (|options, value| options.maintenance_routine_interval = value, "maintenance routine"),
+            (|options, value| options.registry_interval = value, "registry"),
+        ];
+        for (set, name) in options {
+            for value in [
+                Duration::ZERO,
+                Duration::from_millis(1),
+                Duration::from_millis(99),
+                limit + Duration::from_millis(1),
+                Duration::from_micros(100_500),
+            ] {
+                let mut refused = WorkerOptions::default();
+                set(&mut refused, value);
+                rejects(
+                    refused,
+                    &format!(
+                        "worker {name} interval must be between 100 and 2147483647 whole milliseconds"
+                    ),
+                );
+            }
+        }
+    }
+
     #[tokio::test]
     async fn validation_matches_go() {
         rejects(
@@ -2042,14 +2092,22 @@ mod tests {
         );
         rejects(
             WorkerOptions { registry_interval: Duration::from_millis(99), ..Default::default() },
-            "worker registry interval must be at least 100 whole milliseconds",
+            "worker registry interval must be between 100 and 2147483647 whole milliseconds",
         );
         rejects(
             WorkerOptions { schedule_catchup_limit: 0, ..Default::default() },
             "worker schedule catch-up limit must be between 1 and 10000",
         );
+        // SM-1668 PAR-09: Rust refuses a zero grace. It does not read zero as the default.
         rejects(
             WorkerOptions { shutdown_grace_period: Duration::ZERO, ..Default::default() },
+            "worker shutdown grace period must be a positive whole number of milliseconds",
+        );
+        rejects(
+            WorkerOptions {
+                shutdown_grace_period: Duration::from_micros(1_500),
+                ..Default::default()
+            },
             "worker shutdown grace period must be a positive whole number of milliseconds",
         );
         let error = Worker::new(pool(2), WorkerOptions::default()).unwrap_err();
@@ -2130,6 +2188,24 @@ mod tests {
         for listening in [false, true] {
             let delay = worker.0.poll_delay(1, listening);
             assert!(delay >= Duration::from_millis(900) && delay <= Duration::from_millis(1100));
+        }
+    }
+
+    // SM-1668 PAR-09 (ADR 0112): with a live subscription, an explicit poll interval is the
+    // fallback interval, so the 5 s cap does not apply. Without one, the cap applies before the
+    // jitter.
+    #[tokio::test]
+    async fn an_explicit_poll_interval_is_capped_only_while_the_worker_polls() {
+        let options =
+            WorkerOptions { poll_interval: Some(Duration::from_secs(30)), ..Default::default() };
+        let worker = Worker::new(pool(4), options).unwrap();
+        for _ in 0..50 {
+            let listening = worker.0.poll_delay(4, true);
+            assert!(listening >= Duration::from_secs(27) && listening <= Duration::from_secs(33));
+            let polling = worker.0.poll_delay(4, false);
+            assert!(
+                polling >= Duration::from_millis(4500) && polling <= Duration::from_millis(5500)
+            );
         }
     }
 }

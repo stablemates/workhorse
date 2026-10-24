@@ -287,13 +287,18 @@ type WorkerOptions struct {
 	// HeartbeatInterval defaults to the larger of 100 ms and a third of LeaseDuration, and it must
 	// be shorter than LeaseDuration. The smallest supported value is 100 ms. The worker accepts a
 	// shorter value, but on a loaded host it can renew no lease.
-	HeartbeatInterval   time.Duration
-	PollInterval        time.Duration
+	HeartbeatInterval time.Duration
+	PollInterval      time.Duration
+	// MaintenanceInterval sets the tick cadence. It defaults to one second. MaintenanceInterval,
+	// MaintenanceRoutineInterval, and RegistryInterval each accept a whole number of milliseconds
+	// from 100 ms through 2147483647 ms, and zero selects the default (ADR 0112).
 	MaintenanceInterval time.Duration
 	// MaintenanceRoutineInterval bounds how often this worker offers the slow retention routines
 	// to PostgreSQL. It defaults to one minute and never runs faster than MaintenanceInterval.
 	MaintenanceRoutineInterval time.Duration
-	RegistryInterval           time.Duration
+	// RegistryInterval sets the registry refresh cadence. It defaults to five seconds. A zero
+	// value selects the default; DisableRegistry turns registration off.
+	RegistryInterval time.Duration
 	// DisableRegistry skips registration, so operator surfaces neither see nor pause this worker.
 	// An unregistered worker does not shorten the expired-lease scan spacing, which follows the
 	// shortest maintenance interval among live registered workers. While any are live, an expired
@@ -521,21 +526,21 @@ func NewWorker(pool *pgxpool.Pool, options WorkerOptions) (*Worker, error) {
 	if maintenanceInterval == 0 {
 		maintenanceInterval = defaultMaintenanceInterval
 	}
-	if maintenanceInterval < time.Millisecond || maintenanceInterval%time.Millisecond != 0 {
+	if !validWorkerInterval(maintenanceInterval) {
 		return nil, errors.New(workerMaintenanceRangeMessage)
 	}
 	maintenanceRoutineInterval := options.MaintenanceRoutineInterval
 	if maintenanceRoutineInterval == 0 {
 		maintenanceRoutineInterval = defaultMaintenanceRoutineInterval
 	}
-	if maintenanceRoutineInterval < time.Millisecond || maintenanceRoutineInterval%time.Millisecond != 0 {
+	if !validWorkerInterval(maintenanceRoutineInterval) {
 		return nil, errors.New(workerRoutineIntervalRangeMessage)
 	}
 	registryInterval := options.RegistryInterval
 	if registryInterval == 0 {
 		registryInterval = defaultRegistryInterval
 	}
-	if registryInterval < 100*time.Millisecond || registryInterval%time.Millisecond != 0 {
+	if !validWorkerInterval(registryInterval) {
 		return nil, errors.New(workerRegistryRangeMessage)
 	}
 	scheduleNamespaces := make([]string, 0, len(options.ScheduleNamespaces))
@@ -1532,7 +1537,6 @@ func (worker *Worker) refreshRegistration(ctx context.Context, executor Executor
 	if !worker.registryEnabled {
 		return
 	}
-	maintenanceMS := max(int(worker.maintenanceInterval/time.Millisecond), 100)
 	rows, err := executor.Query(
 		ctx,
 		internalStatementRegistry[registerWorkerStatementName],
@@ -1546,8 +1550,8 @@ func (worker *Worker) refreshRegistration(ctx context.Context, executor Executor
 		int(worker.leaseDuration/time.Millisecond),
 		int(worker.heartbeatInterval/time.Millisecond),
 		int(worker.pollInterval/time.Millisecond),
-		maintenanceMS,
-		max(int(worker.maintenanceRoutineInterval/time.Millisecond), 100),
+		int(worker.maintenanceInterval/time.Millisecond),
+		int(worker.maintenanceRoutineInterval/time.Millisecond),
 		int(worker.registryInterval/time.Millisecond),
 		int(worker.activeSlots.Load()),
 		draining,
@@ -3531,6 +3535,14 @@ func (worker *Worker) releaseOwned(
 		)
 	}
 	return nil
+}
+
+// validWorkerInterval reports whether a maintenance, routine, or registry interval is a whole number
+// of milliseconds from 100 through 2147483647. register_worker_v1 takes each one as a PostgreSQL
+// integer, and its check refuses a value below 100, so every SDK accepts this range (ADR 0112).
+func validWorkerInterval(interval time.Duration) bool {
+	return interval >= 100*time.Millisecond && interval <= 2147483647*time.Millisecond &&
+		interval%time.Millisecond == 0
 }
 
 // maxRetryDelay is the largest retry delay that fail_v1 accepts: the PostgreSQL integer maximum,

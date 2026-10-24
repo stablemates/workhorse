@@ -563,34 +563,52 @@ public sealed partial class Worker
     /// </summary>
     private long DispatchWait(RunState run)
     {
-        long milliseconds;
+        bool listening;
+        int empty;
         lock (_stateLock)
         {
-            var listening = run.Listener is { IsListening: true };
+            listening = run.Listener is { IsListening: true };
             if (!listening && run.ListenedAtLastWait)
             {
                 run.Empty = Math.Min(run.Empty, 1);
             }
 
             run.ListenedAtLastWait = listening;
-            if (listening)
-            {
-                milliseconds = _notificationPollMs;
-            }
-            else
-            {
-                var doublings = Math.Min(Math.Max(0, run.Empty - 1), 20);
-                milliseconds = Math.Min(MaxEmptyPollMs, _pollMs << doublings);
-            }
+            empty = run.Empty;
         }
 
-        milliseconds = Math.Max(1, (long)Math.Round(milliseconds * (0.9 + (0.2 * Random.Shared.NextDouble()))));
-        if (_registryMs > 0)
+        return Monotonic.Millis(DispatchWaitMillis(
+            listening, empty, _pollMs, _notificationPollMs, _registryMs, 0.9 + (0.2 * Random.Shared.NextDouble())));
+    }
+
+    /// <summary>
+    /// The wait after an empty claim, in milliseconds (ADR 0112). With a live subscription it is the
+    /// notification base, without backoff or cap, so an explicit poll interval keeps its value.
+    /// Without one, the base doubles for each empty claim after the first, up to the 5,000 ms cap.
+    /// Then the jitter factor applies, and a registered worker cuts the wait to its registry
+    /// interval, because it refreshes the registry from the dispatch loop.
+    /// </summary>
+    internal static long DispatchWaitMillis(
+        bool listening, int empty, long pollMs, long notificationPollMs, long registryMs, double jitter)
+    {
+        long milliseconds;
+        if (listening)
         {
-            milliseconds = Math.Min(milliseconds, _registryMs);
+            milliseconds = notificationPollMs;
+        }
+        else
+        {
+            var doublings = Math.Min(Math.Max(0, empty - 1), 20);
+            milliseconds = Math.Min(MaxEmptyPollMs, pollMs << doublings);
         }
 
-        return Monotonic.Millis(milliseconds);
+        milliseconds = Math.Max(1, (long)Math.Round(milliseconds * jitter));
+        if (registryMs > 0)
+        {
+            milliseconds = Math.Min(milliseconds, registryMs);
+        }
+
+        return milliseconds;
     }
 
     /// <summary>Ends the claims of <paramref name="run"/>.</summary>

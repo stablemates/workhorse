@@ -37,7 +37,7 @@ func TestWorkerRunKeepsRunningAfterALeaseLoss(t *testing.T) {
 		LeaseDuration:       time.Second,
 		HeartbeatInterval:   100 * time.Millisecond,
 		PollInterval:        10 * time.Millisecond,
-		MaintenanceInterval: 20 * time.Millisecond,
+		MaintenanceInterval: 100 * time.Millisecond,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -129,7 +129,7 @@ func TestWorkerLogsAFailingMaintenancePhaseAndKeepsRunning(t *testing.T) {
 		LeaseDuration:       time.Second,
 		HeartbeatInterval:   100 * time.Millisecond,
 		PollInterval:        10 * time.Millisecond,
-		MaintenanceInterval: 20 * time.Millisecond,
+		MaintenanceInterval: 100 * time.Millisecond,
 		Logger:              slog.New(slog.NewTextHandler(&logs, nil)),
 	})
 	if err != nil {
@@ -190,7 +190,7 @@ func TestWorkerWithoutALoggerWritesToTheDefaultLogger(t *testing.T) {
 		LeaseDuration:       time.Second,
 		HeartbeatInterval:   100 * time.Millisecond,
 		PollInterval:        10 * time.Millisecond,
-		MaintenanceInterval: 20 * time.Millisecond,
+		MaintenanceInterval: 100 * time.Millisecond,
 	})
 	if err != nil {
 		t.Fatal(err)

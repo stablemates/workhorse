@@ -293,7 +293,42 @@ describe("dedicated worker process runtime", () => {
       ),
     ).rejects.toThrow("shutdownTimeoutMs");
   });
+
+  // SM-1668 PAR-09: the process deadline is 1 through 3,600,000 ms. The definition and the run
+  // options both refuse zero.
+  it("accepts a shutdown deadline from 1 through 3,600,000 ms and refuses zero", async () => {
+    const run = runWithShutdownDeadline;
+    for (const accepted of [1, 3_600_000]) {
+      await expect(run(accepted, undefined)).rejects.toThrow("adapter reached");
+      await expect(run(undefined, accepted)).rejects.toThrow("adapter reached");
+    }
+    for (const refused of [0, -1, 1.5, 3_600_001, Number.NaN]) {
+      await expect(run(refused, undefined)).rejects.toThrow("shutdownTimeoutMs");
+      await expect(run(undefined, refused)).rejects.toThrow("shutdownTimeoutMs");
+    }
+  });
 });
+
+// The adapter throws after validation, so its error shows that the deadline passed the check.
+function runWithShutdownDeadline(
+  definitionMs: number | undefined,
+  optionMs: number | undefined,
+): Promise<void> {
+  return runWorkerProcess(
+    {
+      adapter: () => {
+        throw new Error("adapter reached");
+      },
+      workers: [{ configure: vi.fn<(worker: Worker) => void>() }],
+      shutdownTimeoutMs: definitionMs,
+    },
+    {
+      signalSource: new FakeSignalSource(),
+      forceExit: vi.fn<(code: number) => void>(),
+      shutdownTimeoutMs: optionMs,
+    },
+  );
+}
 
 function stalledTask(id = "stalled", type = "stalled"): ClaimedTask {
   return {

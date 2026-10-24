@@ -330,6 +330,7 @@ Only registered workers set the spacing. A worker that opts out of the registry 
 | Go         | `WorkerOptions.DisableRegistry`   |
 | Rust       | `WorkerOptions::disable_registry` |
 | Ruby       | `disable_registry: true`          |
+| JVM        | `Worker.Builder.disableRegistry`  |
 | .NET       | `WorkerOptions.DisableRegistry`   |
 
 For example, one registered worker has a 60 s maintenance interval, and ten unregistered workers

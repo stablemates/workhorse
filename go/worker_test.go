@@ -2048,7 +2048,7 @@ func TestWorkerMaintenanceCadenceDoesNotWaitForAHandler(t *testing.T) {
 		LeaseDuration:       time.Second,
 		HeartbeatInterval:   100 * time.Millisecond,
 		PollInterval:        5 * time.Millisecond,
-		MaintenanceInterval: 20 * time.Millisecond,
+		MaintenanceInterval: 100 * time.Millisecond,
 		ShutdownGracePeriod: 20 * time.Millisecond,
 	})
 	if err != nil {
@@ -2237,7 +2237,7 @@ func TestWorkerOwnershipLifecycleSupportsASingleConnectionPool(t *testing.T) {
 		LeaseDuration:       10 * time.Second,
 		HeartbeatInterval:   100 * time.Millisecond,
 		PollInterval:        5 * time.Millisecond,
-		MaintenanceInterval: 20 * time.Millisecond,
+		MaintenanceInterval: 100 * time.Millisecond,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -2310,7 +2310,7 @@ func TestWorkerNotificationsWakeClaimsAndReconnectAfterListenerLoss(t *testing.T
 		LeaseDuration:       time.Second,
 		HeartbeatInterval:   100 * time.Millisecond,
 		PollInterval:        5 * time.Second,
-		MaintenanceInterval: 20 * time.Millisecond,
+		MaintenanceInterval: 100 * time.Millisecond,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -2386,7 +2386,7 @@ func TestWorkerPollingOnlyFallbackLogsAndClaimsOnThePollInterval(t *testing.T) {
 		LeaseDuration:       time.Second,
 		HeartbeatInterval:   100 * time.Millisecond,
 		PollInterval:        50 * time.Millisecond,
-		MaintenanceInterval: 20 * time.Millisecond,
+		MaintenanceInterval: 100 * time.Millisecond,
 		PollingOnly:         true,
 		Logger:              slog.New(slog.NewTextHandler(&logs, nil)),
 	})
@@ -2443,7 +2443,7 @@ func TestWorkerPollingContinuesDuringNotificationReconnectBackoff(t *testing.T) 
 		LeaseDuration:       time.Second,
 		HeartbeatInterval:   100 * time.Millisecond,
 		PollInterval:        5 * time.Millisecond,
-		MaintenanceInterval: 20 * time.Millisecond,
+		MaintenanceInterval: 100 * time.Millisecond,
 		Logger:              slog.New(slog.NewTextHandler(&logs, nil)),
 	})
 	if err != nil {

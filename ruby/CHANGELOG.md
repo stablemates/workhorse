@@ -5,6 +5,16 @@ other SDKs carry, because every tag names one release of all of them.
 
 ## Unreleased
 
+### The worker intervals refuse a value above the SQL integer limit
+
+`register_worker_v1` takes `maintenance_interval`, `maintenance_routine_interval`, and
+`registry_interval` as PostgreSQL `integer` milliseconds. Before this change, `Worker.new` accepted
+a larger value, and then each registration failed (SM-1668).
+
+Now `Worker.new` raises `ArgumentError` if one of these intervals is not from 0.1 through
+2,147,483.647 seconds. `disable_registry: true` still turns off registration. This is a behavior
+change for a caller who passes a larger value. ADR 0112 records the range for all seven SDKs.
+
 ### An anonymous error class records the name of its superclass
 
 Ruby gives an anonymous class a nil name. Before this change, a handler that raised an instance of

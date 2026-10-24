@@ -35,6 +35,72 @@ RSpec.describe W::Worker do
     expect(pool.statements).to be_empty
   end
 
+  # SM-1668 PAR-09: Ruby accepts a zero grace. The stop deadline is then the moment the dispatch
+  # loop ends, so the drain cancels every handler at once, and the stop ends within one unwind window.
+  it "accepts a shutdown grace from 0 through one day, and refuses a negative grace" do
+    expect(worker(shutdown_grace: 0).instance_variable_get(:@shutdown_grace)).to eq(0.0)
+    expect(worker(shutdown_grace: 0.0004).instance_variable_get(:@shutdown_grace)).to eq(0.0)
+    expect(worker(shutdown_grace: 86_400).instance_variable_get(:@shutdown_grace)).to eq(86_400.0)
+    [-0.001, 86_400.001, nil].each do |grace|
+      expect { worker(shutdown_grace: grace) }.to raise_error(ArgumentError, /shutdown_grace/)
+    end
+    expect(pool.statements).to be_empty
+  end
+
+  # SM-1668 PAR-09 (ADR 0112): register_worker_v1 takes each interval as a PostgreSQL integer, so
+  # every SDK accepts 100 through 2147483647 ms and refuses other values at construction.
+  it "accepts a maintenance, routine, or registry interval from 0.1 s through 2147483.647 s" do
+    {maintenance_interval: :@maintenance_ms, maintenance_routine_interval: :@routine_ms,
+     registry_interval: :@registry_ms}.each do |option, ivar|
+      [[0.1, 100], [Rational(2_147_483_647, 1000), 2_147_483_647]].each do |seconds, milliseconds|
+        subject = worker(option => seconds, :disable_registry => false)
+        expect(subject.instance_variable_get(ivar)).to eq(milliseconds)
+      end
+      [0, 0.001, 0.099, Rational(2_147_483_648, 1000), -1, nil].each do |seconds|
+        expect { worker(option => seconds, :disable_registry => false) }
+          .to raise_error(ArgumentError, /#{option} must be .* between 0.1 and 2147483.647/)
+      end
+    end
+    expect(worker(registry_interval: 0, disable_registry: true).instance_variable_get(:@registry_ms)).to eq(0)
+    expect(pool.statements).to be_empty
+  end
+
+  # SM-1668 PAR-09 (ADR 0112): with a live subscription, an explicit poll interval is the fallback
+  # interval, so the 5,000 ms cap does not apply. Without one, the cap applies before the jitter. A
+  # worker that registers then cuts the wait to its registry interval.
+  describe "the wait after an empty claim" do
+    slots_class = Struct.new(:listener, :empty, :listened_at_last_wait)
+
+    def wait_ms(subject, listening:, jitter:)
+      allow(subject).to receive(:rand).and_return(jitter)
+      listener = Struct.new(:listening?).new(listening)
+      (subject.send(:dispatch_wait, slots_class.new(listener, 4, listening)) * 1000).round
+    end
+
+    define_method(:slots_class) { slots_class }
+
+    it "caps an explicit poll interval only while the worker polls" do
+      subject = worker(poll_interval: 30)
+      expect([0.9, 1.1].map { |jitter| wait_ms(subject, listening: true, jitter:) }).to eq([27_000, 33_000])
+      expect([0.9, 1.1].map { |jitter| wait_ms(subject, listening: false, jitter:) }).to eq([4_500, 5_500])
+    end
+
+    it "cuts the jittered wait to the registry interval of a registered worker" do
+      subject = worker(poll_interval: 30, disable_registry: false, registry_interval: 5)
+      expect(wait_ms(subject, listening: true, jitter: 0.9)).to eq(5_000)
+      expect(wait_ms(subject, listening: false, jitter: 1.1)).to eq(5_000)
+    end
+  end
+
+  it "accepts a zero supervisor grace, and refuses a negative one before it forks" do
+    supervisor = instance_double(W::Supervisor, run: nil)
+    allow(W::Supervisor).to receive_messages(fork_supported?: true, new: supervisor)
+    W.run_worker_processes(processes: 1, shutdown_grace: 0) { nil }
+    expect(W::Supervisor).to have_received(:new).with(1, 0.0, an_instance_of(Proc))
+    expect { W.run_worker_processes(processes: 1, shutdown_grace: -1) { nil } }
+      .to raise_error(ArgumentError, /shutdown_grace/)
+  end
+
   # fail_v1 takes an integer, so the override range ends at 2147483647 ms (SM-1668 PAR-06, ADR 0111).
   describe "the retry delay override" do
     let(:task) do
