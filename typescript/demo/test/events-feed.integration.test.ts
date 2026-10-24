@@ -287,6 +287,13 @@ describe("Workhorse dashboard events feed", () => {
         },
       },
     );
+    // Terminal-storage maintenance deletes a released edge after its dependent is terminal. The
+    // reset leaves that routine due, so the first pass of the workers can run it while these tasks
+    // finish. A recent completion delays the routine for its full interval. Thus the lineage reads
+    // below do not depend on the order of the commits (SM-1808).
+    await pool.query(
+      "UPDATE workhorse.maintenance_state SET last_completed_at = clock_timestamp() WHERE routine_name = 'terminal_storage'",
+    );
     workhorse.start();
 
     try {
@@ -298,6 +305,14 @@ describe("Workhorse dashboard events feed", () => {
           dependentTaskId: releasedDependent,
           prerequisiteTaskId: releasedPrerequisite,
           resolution: "release",
+        },
+      ]);
+      const canceledLineage = await workhorse.context.admin.getDependencyLineage(canceledDependent);
+      expect(canceledLineage.records).toMatchObject([
+        {
+          dependentTaskId: canceledDependent,
+          prerequisiteTaskId: failingPrerequisite,
+          resolution: "cancel",
         },
       ]);
     } finally {
