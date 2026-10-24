@@ -672,16 +672,26 @@ func (buffer *lockedBuffer) String() string {
 }
 
 type heartbeatQueryTracer struct {
-	mu         sync.Mutex
-	delay      time.Duration
-	calls      int
-	active     int
-	maxOverlap int
-	started    chan struct{}
+	mu    sync.Mutex
+	delay time.Duration
+	// delayedCalls is the number of calls the tracer delays. Zero delays every call.
+	delayedCalls int
+	calls        int
+	active       int
+	maxOverlap   int
+	started      chan struct{}
 }
 
 func newHeartbeatQueryTracer(delay time.Duration) *heartbeatQueryTracer {
 	return &heartbeatQueryTracer{delay: delay, started: make(chan struct{}, 16)}
+}
+
+// newFirstHeartbeatQueryTracer delays only the first heartbeat statement, so the later rounds can
+// renew the lease in PostgreSQL.
+func newFirstHeartbeatQueryTracer(delay time.Duration) *heartbeatQueryTracer {
+	tracer := newHeartbeatQueryTracer(delay)
+	tracer.delayedCalls = 1
+	return tracer
 }
 
 func (tracer *heartbeatQueryTracer) TraceQueryStart(
@@ -696,9 +706,17 @@ func (tracer *heartbeatQueryTracer) TraceQueryStart(
 	tracer.calls++
 	tracer.active++
 	tracer.maxOverlap = max(tracer.maxOverlap, tracer.active)
+	delay := tracer.delay
+	if tracer.delayedCalls > 0 && tracer.calls > tracer.delayedCalls {
+		delay = 0
+	}
 	tracer.mu.Unlock()
-	tracer.started <- struct{}{}
-	time.Sleep(tracer.delay)
+	// waitForCalls reads the counter after each signal, so a dropped signal loses no call.
+	select {
+	case tracer.started <- struct{}{}:
+	default:
+	}
+	time.Sleep(delay)
 	return context.WithValue(ctx, heartbeatQueryContextKey{}, true)
 }
 
@@ -1318,7 +1336,9 @@ func executeWorkerHeartbeatFixture(t *testing.T, fixture workerRuntimeFixture) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	tracer := newHeartbeatQueryTracer(3 * time.Duration(fixture.HeartbeatMS) * time.Millisecond)
+	// The first round is blocked for longer than its bound, so it fails. The later rounds are not
+	// delayed, so they renew the lease in PostgreSQL.
+	tracer := newFirstHeartbeatQueryTracer(3 * time.Duration(fixture.HeartbeatMS) * time.Millisecond)
 	config.ConnConfig.Tracer = tracer
 	pool, err := pgxpool.NewWithConfig(ctx, config)
 	if err != nil {
@@ -1342,6 +1362,11 @@ func executeWorkerHeartbeatFixture(t *testing.T, fixture workerRuntimeFixture) {
 	}
 	started := make(chan struct{})
 	release := make(chan struct{})
+	// A failed check ends the test before the handler returns. The cleanup runs before pool.Close,
+	// which waits for the handler's connection.
+	var releaseOnce sync.Once
+	releaseHandler := func() { releaseOnce.Do(func() { close(release) }) }
+	t.Cleanup(releaseHandler)
 	worker.Handle(fixture.TaskType, func(_ context.Context, _ any, _ *workhorse.HandlerContext) (any, error) {
 		close(started)
 		<-release
@@ -1352,6 +1377,9 @@ func executeWorkerHeartbeatFixture(t *testing.T, fixture workerRuntimeFixture) {
 		processed bool
 		err       error
 	}
+	// The observer connects before the worker starts, so no connect runs while the first round is
+	// blocked.
+	observer := observeDatabase(t, ctx, databaseURL)
 	workerResult := make(chan workerRunResult, 1)
 	go func() {
 		processed, err := worker.RunOnce(ctx)
@@ -1369,7 +1397,11 @@ func executeWorkerHeartbeatFixture(t *testing.T, fixture workerRuntimeFixture) {
 		)
 	}
 	tracer.waitForCalls(t, fixture.ExpectedMinimumCallsBeforeSettlement)
-	close(release)
+	// The rounds after the blocked one renew the lease until the handler returns, so a renewal after
+	// any reading proves that they reach PostgreSQL.
+	renewed := leaseExpiry(t, ctx, observer, taskID)
+	waitForLeaseRenewal(t, ctx, observer, taskID, renewed, 5*time.Second)
+	releaseHandler()
 	result := <-workerResult
 	processed, err := result.processed, result.err
 	if err != nil || !processed {
