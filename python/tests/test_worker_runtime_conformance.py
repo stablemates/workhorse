@@ -3,9 +3,13 @@ from __future__ import annotations
 
 
 import asyncio
+import inspect
 import json
+import sys
+import traceback
 from collections.abc import AsyncIterator, Awaitable, Callable, Iterator, Mapping
 from contextlib import AbstractContextManager, asynccontextmanager, contextmanager, suppress
+from functools import cache
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from queue import Empty, SimpleQueue
@@ -39,6 +43,7 @@ from workhorse import (
     Worker,
 )
 import workhorse.worker as worker_module
+from workhorse._pool_hub import connection_budget_ms
 from workhorse._statements import SQL_STATEMENTS, STATEMENTS, DriverStatement
 from workhorse._drivers import PooledSyncExecutor, SyncExecutor
 
@@ -705,7 +710,7 @@ class HeldPollCursor:
         if started is not None:
             if not rows and self._gate.holding:
                 self._gate.reached.put(None)
-                self._gate.released.get(timeout=5)
+                self._gate.released.get(timeout=GUARD_SECONDS)
             self._gate.claims.append((started, monotonic(), bool(rows)))
         return rows
 
@@ -740,7 +745,8 @@ def execute_poll_cadence_fixture(
         try:
             for poll in range(1, fixture["emptyPollsBeforeEnqueue"] + 1):
                 try:
-                    gate.reached.get(timeout=fixture["expectedMaximumDelayMs"] / 1_000 + 1)
+                    # A guard only. The gate's stamps measure the backoff after the run.
+                    gate.reached.get(timeout=GUARD_SECONDS)
                 except Empty:
                     raise AssertionError(
                         f"worker did not complete empty poll {poll} before the backoff check"
@@ -754,13 +760,12 @@ def execute_poll_cadence_fixture(
                     )
                     gate.holding = False
                 gate.release()
-            assert handled.wait(fixture["expectedMaximumDelayMs"] / 1_000 + 1)
+            assert handled.wait(GUARD_SECONDS), "the worker did not run the enqueued task"
         finally:
             gate.holding = False
             gate.release()
             worker.stop()
-            running.join(timeout=2)
-            assert not running.is_alive()
+            join(running)
     claims = sorted(gate.claims)
     found = next((index for index, claim in enumerate(claims) if claim[2]), None)
     assert found, "no claim_many_v1 call after an empty poll returned the enqueued task"
@@ -910,8 +915,9 @@ def execute_subscription_recovery_fixture(
     enqueued_after_loss = 0.0
 
     def wait_long(condition: Callable[[], bool], message: str) -> None:
-        # A bounded wait that is longer than the notification base.
-        deadline = monotonic() + 7
+        # A guard that is longer than the notification base. The claim recorder's stamps measure
+        # the bounds of each phase after the run.
+        deadline = monotonic() + GUARD_SECONDS
         while not condition():
             assert monotonic() < deadline, message
             sleep(0.005)
@@ -1758,13 +1764,67 @@ def busy_rounds(
     return [(float(row[0]), int(row[1])) for row in rows]
 
 
-def assert_busy_rounds(rounds: list[tuple[float, int]], fixture: Mapping[str, Any]) -> None:
+class HeartbeatRoundRecorder:
+    """Records each heartbeat round of a worker at the worker's own stamps.
+
+    Each entry holds the round's start, its return to the heartbeat thread, and whether a lease was
+    busy. A round that failed has ``None``. One thread runs every round of a worker, so the entries
+    are in the order of the rounds.
+    """
+
+    def __init__(self, worker: Worker) -> None:
+        self._rows = worker._heartbeat_rows
+        self._lock = Lock()
+        self._rounds: list[tuple[float, float, bool | None]] = []
+        worker._heartbeat_rows = self._record  # type: ignore[method-assign]
+
+    def _record(self, batches: Any, deadline: float) -> Any:
+        started = monotonic()
+        try:
+            rows = self._rows(batches, deadline)
+        except BaseException:
+            with self._lock:
+                self._rounds.append((started, monotonic(), None))
+            raise
+        busy = any(row["status"] == "busy" for row in rows)
+        with self._lock:
+            self._rounds.append((started, monotonic(), busy))
+        return rows
+
+    def rounds(self) -> list[tuple[float, float, bool | None]]:
+        with self._lock:
+            return list(self._rounds)
+
+
+def assert_busy_rounds(
+    rounds: list[tuple[float, int]],
+    sent: list[tuple[float, float, bool | None]],
+    fixture: Mapping[str, Any],
+) -> None:
+    """Asserts the busy rounds in the database and the retry after each one at the worker.
+
+    ``rounds`` holds the busy rows of the injected function. ``sent`` holds the worker's rounds
+    from a ``HeartbeatRoundRecorder``. The retry gap runs from the return of a busy round to the
+    start of the worker's next round. That span is the worker's own retry schedule. It leaves out
+    the latency of the next round, so a round that a loaded host stalls or fails is not charged to
+    the schedule. A worker that waits for the next regular round still fails.
+    """
     busy = rounds[: fixture["expectedBusyRounds"]]
     assert len(busy) == fixture["expectedBusyRounds"], rounds
-    # Each retry sent only the busy lease, and came sooner than the next regular round.
+    # Each retry sent only the busy lease.
     assert [lease_count for _, lease_count in busy] == [1] * len(busy), rounds
-    gaps = [later[0] - earlier[0] for earlier, later in zip(busy, busy[1:])]
-    assert all(gap < fixture["maximumRetryGapMs"] for gap in gaps), gaps
+    answers = [index for index, entry in enumerate(sent) if entry[2]]
+    assert len(answers) >= fixture["expectedBusyRounds"], (
+        f"the worker saw {len(answers)} busy rounds, want {fixture['expectedBusyRounds']}"
+    )
+    # Each retry came sooner than the next regular round.
+    retried = answers[: fixture["expectedBusyRounds"] - 1]
+    assert all(index + 1 < len(sent) for index in retried), sent
+    gaps = [(sent[index + 1][0] - sent[index][1]) * 1_000 for index in retried]
+    assert all(gap < fixture["maximumRetryGapMs"] for gap in gaps), (
+        f"the worker started the next round {[round(gap) for gap in gaps]} ms after a busy "
+        f"round, want less than {fixture['maximumRetryGapMs']} ms"
+    )
 
 
 def execute_heartbeat_busy_fixture(
@@ -1790,6 +1850,7 @@ def execute_heartbeat_busy_fixture(
         lease_ms=fixture["leaseMs"],
         heartbeat_ms=fixture["heartbeatMs"],
     ).handle(fixture["taskType"], handler)
+    recorder = HeartbeatRoundRecorder(worker)
     results: list[bool] = []
     thread = run_in_thread(lambda: results.append(worker.run_once()), errors)
     timeout_ms = fixture["renewalTimeoutMs"]
@@ -1811,7 +1872,7 @@ def execute_heartbeat_busy_fixture(
     join(thread)
     assert errors == []
     assert results == [True]
-    assert_busy_rounds(rounds, fixture)
+    assert_busy_rounds(rounds, recorder.rounds(), fixture)
     assert len(cancellations) == fixture["expectedCancellations"]
     assert_task_states(connection, {"task": task_id}, {"task": fixture["expectedState"]})
     assert_attempt_outcomes(connection, task_id, [fixture["expectedAttemptOutcome"]])
@@ -2402,6 +2463,8 @@ async def execute_async_heartbeat_busy_fixture(
         heartbeat_ms=fixture["heartbeatMs"],
     ) as worker:
         worker.handle(fixture["taskType"], handler)
+        # AsyncWorker runs its heartbeat rounds in the worker core that it wraps.
+        recorder = HeartbeatRoundRecorder(worker._inner)
         execution = asyncio.create_task(worker.run_once())
         try:
             await asyncio.wait_for(started.wait(), timeout=10)
@@ -2423,7 +2486,7 @@ async def execute_async_heartbeat_busy_fixture(
         finally:
             release.set()
         assert await execution is True
-    assert_busy_rounds(rounds, fixture)
+    assert_busy_rounds(rounds, recorder.rounds(), fixture)
     assert len(cancellations) == fixture["expectedCancellations"]
     assert_task_states(connection, {"task": task_id}, {"task": fixture["expectedState"]})
     assert_attempt_outcomes(connection, task_id, [fixture["expectedAttemptOutcome"]])
@@ -2528,9 +2591,70 @@ def run_in_thread(operation: Callable[[], object], errors: list[BaseException]) 
     return thread
 
 
-def join(thread: Thread) -> None:
-    thread.join(timeout=5)
-    assert not thread.is_alive()
+# A wait that measures nothing and only stops a test that would hang. Each fixture checks its own
+# bounds at stamps after the run, so a stall of a loaded host does not reach those checks.
+GUARD_SECONDS = 15
+# The time that the runner waits for a run thread to end, in addition to the worker's stop budget.
+THREAD_EXIT_MARGIN_SECONDS = 10
+
+
+@cache
+def stop_budget_seconds() -> float:
+    """The longest stop budget of a fixture's worker: max(heartbeat interval, 5 s).
+
+    A run can spend its stop budget on a claim in flight before it releases its connections. A
+    worker without a heartbeat interval uses ``max(100, lease_ms // 3)``, and most runner workers
+    keep the default lease, so their budget comes from that lease.
+    """
+    default_lease_ms = inspect.signature(Worker).parameters["lease_ms"].default
+    intervals = [
+        fixture.get("heartbeatMs", max(100, fixture.get("leaseMs", default_lease_ms) // 3))
+        for fixture in read_json("protocol/v1/runtime.json")
+    ]
+    return connection_budget_ms(max([*intervals, max(100, default_lease_ms // 3)])) / 1000
+
+
+def join(thread: Thread, timeout: float | None = None) -> None:
+    """Waits for a run thread to end, past the worker's stop budget and a margin for load."""
+    seconds = stop_budget_seconds() + THREAD_EXIT_MARGIN_SECONDS if timeout is None else timeout
+    thread.join(timeout=seconds)
+    assert not thread.is_alive(), still_alive(thread, seconds)
+
+
+def still_alive(thread: Thread, seconds: float) -> str:
+    """Names a thread that did not end, and the stack where it waits."""
+    frame = sys._current_frames().get(thread.ident) if thread.ident is not None else None
+    stack = "".join(traceback.format_stack(frame)[-8:]) if frame is not None else "(no frame)\n"
+    return (
+        f"thread {thread.name} is still alive after the runner waited {seconds:.0f} s for it, "
+        f"past the worker's stop budget of {stop_budget_seconds():.0f} s. It waits in:\n{stack}"
+    )
+
+
+def test_join_names_a_run_thread_that_is_still_alive_and_where_it_waits() -> None:
+    blocked = Event()
+    thread = Thread(target=blocked.wait, name="runtime-fixture-run")
+    thread.start()
+    try:
+        # Thread.start returns before the target runs, so the stack shows the wait only after it.
+        wait_for(
+            lambda: (
+                (frame := sys._current_frames().get(thread.ident or 0)) is not None
+                and frame.f_code.co_name == "wait"
+            ),
+            "the thread did not start to wait",
+        )
+        with pytest.raises(AssertionError) as raised:
+            join(thread, timeout=0.05)
+    finally:
+        blocked.set()
+        thread.join()
+    message = str(raised.value)
+    assert "thread runtime-fixture-run is still alive" in message
+    assert f"stop budget of {stop_budget_seconds():.0f} s" in message
+    assert ", in wait\n" in message
+    # Runner workers that keep the default lease of 30 s have an interval of 10 s.
+    assert stop_budget_seconds() == 10
 
 
 def wait_for(condition: Callable[[], bool], message: str) -> None:
