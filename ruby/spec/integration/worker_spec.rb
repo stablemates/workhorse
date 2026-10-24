@@ -320,11 +320,17 @@ RSpec.describe "Worker against PostgreSQL" do
     )
   end
 
+  # PostgreSQL rate-limits a progress write that comes less than 100 ms after the previous one. A
+  # host stall between the two writes can let the second one through (SM-1794). So the spec moves
+  # the stored time of the first write one minute forward. Only a stall of a minute then lets the
+  # second write leave the window.
   it "round-trips progress and rate-limits a quick change" do
     task_id = queue.enqueue("report", {}).task_id
     seen = nil
     worker.handle("report") { |_payload, context|
       saved = context.set_progress({"done" => 1})
+      @connection.exec_params("UPDATE workhorse.task_progress SET updated_at = updated_at + interval '1 minute'
+        WHERE task_id = $1", [task_id])
       retry_after = begin
         context.set_progress({"done" => 2})
       rescue W::ProgressRateLimitedError => e
