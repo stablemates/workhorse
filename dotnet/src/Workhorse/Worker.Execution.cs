@@ -575,28 +575,22 @@ public sealed partial class Worker
 
         try
         {
-            var dueAt = expirationAt;
-            while (true)
-            {
-                await DelayUntilAsync(dueAt, ownership.Stopped).ConfigureAwait(false);
-                string? status;
-                await ownership.Settlement.WaitAsync(ownership.Stopped).ConfigureAwait(false);
-                try
+            await AskForExpirationAsync(
+                expirationAt,
+                TimeProvider.System,
+                async () =>
                 {
-                    status = await SettleExpirationAsync(task, arbiter).ConfigureAwait(false);
-                }
-                finally
-                {
-                    ownership.Settlement.Release();
-                }
-
-                if (status != "not_due")
-                {
-                    return;
-                }
-
-                dueAt = DateTimeOffset.UtcNow + Monotonic.Span(ExpirationRetryNanos);
-            }
+                    await ownership.Settlement.WaitAsync(ownership.Stopped).ConfigureAwait(false);
+                    try
+                    {
+                        return await SettleExpirationAsync(task, arbiter).ConfigureAwait(false);
+                    }
+                    finally
+                    {
+                        ownership.Settlement.Release();
+                    }
+                },
+                ownership.Stopped).ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (ownership.Stopped.IsCancellationRequested)
         {
@@ -609,20 +603,50 @@ public sealed partial class Worker
     }
 
     /// <summary>
-    /// Waits until <paramref name="dueAt"/>. A timer takes at most about 49.7 days, and a deadline
-    /// can be later, so the wait runs in slices and reads the clock again before each one.
+    /// Calls <paramref name="ask"/> at <paramref name="expirationAt"/>, and again after
+    /// <see cref="ExpirationRetryNanos"/> while it answers <c>not_due</c>. The expiry is a database
+    /// timestamp, so <paramref name="wallClock"/> converts it to a monotonic due time once. Every
+    /// wait reads only the monotonic clock, so a step of the wall clock does not change it (SM-1688).
     /// </summary>
-    private static async Task DelayUntilAsync(DateTimeOffset dueAt, CancellationToken cancellationToken)
+    internal static async Task AskForExpirationAsync(
+        DateTimeOffset expirationAt,
+        TimeProvider wallClock,
+        Func<Task<string?>> ask,
+        CancellationToken cancellationToken)
     {
+        // A past expiry is due now. Nanos saturates, and a saturated negative delay would wrap to a
+        // future due time. Monotonic values wrap, so DelayUntilAsync compares by difference.
+        var delay = Math.Max(0, Monotonic.Nanos(expirationAt - wallClock.GetUtcNow()));
+        var dueAt = unchecked(Monotonic.Now() + delay);
         while (true)
         {
-            var remaining = dueAt - DateTimeOffset.UtcNow;
-            if (remaining <= TimeSpan.Zero)
+            await DelayUntilAsync(dueAt, cancellationToken).ConfigureAwait(false);
+            if (await ask().ConfigureAwait(false) != "not_due")
             {
                 return;
             }
 
-            await Task.Delay(remaining < MaxDelaySlice ? remaining : MaxDelaySlice, cancellationToken).ConfigureAwait(false);
+            dueAt = unchecked(Monotonic.Now() + ExpirationRetryNanos);
+        }
+    }
+
+    /// <summary>
+    /// Waits until the monotonic time <paramref name="dueAt"/>. A timer takes at most about 49.7
+    /// days, and a deadline can be later, so the wait runs in slices and reads the clock again
+    /// before each one.
+    /// </summary>
+    private static async Task DelayUntilAsync(long dueAt, CancellationToken cancellationToken)
+    {
+        while (true)
+        {
+            var remaining = unchecked(dueAt - Monotonic.Now());
+            if (remaining <= 0)
+            {
+                return;
+            }
+
+            var slice = Monotonic.Span(remaining);
+            await Task.Delay(slice < MaxDelaySlice ? slice : MaxDelaySlice, cancellationToken).ConfigureAwait(false);
         }
     }
 

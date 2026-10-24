@@ -360,36 +360,40 @@ type Worker struct {
 	explicitPollInterval bool
 	maintenanceInterval  time.Duration
 	// maintenanceRoutineInterval and lastRoutineOffer gate the slow routines. RunOnce and the
-	// maintenance loop both offer them, so the last offer is shared state.
+	// maintenance loop both offer them, so the last offer is shared state. lastRoutineOffer holds
+	// the routineClock reading of the last offer in nanoseconds, and 0 before the first offer.
 	maintenanceRoutineInterval time.Duration
 	lastRoutineOffer           atomic.Int64
-	registryInterval           time.Duration
-	registryEnabled            bool
-	hostname                   string
-	instanceID                 string
-	scheduleNamespaces         []string
-	scheduleCatchupLimit       int
-	shutdownGracePeriod        time.Duration
-	pollingOnly                bool
-	logger                     *slog.Logger
-	metrics                    *workerMetrics
-	runPermit                  chan struct{}
-	handlers                   map[string]Handler
-	compatibility              *CachedCompatibilityCheck
-	onRegistrationError        func(error)
-	registrationReporter       reporterFailures
-	retryDelay                 func(attempt int, task ClaimedTask) *time.Duration
-	contracts                  contractCache
-	activeSlots                atomic.Int64
-	draining                   atomic.Bool
-	remotelyPaused             atomic.Bool
-	registered                 atomic.Bool
-	heartbeatMu                sync.Mutex
-	heartbeatMembers           map[*heartbeatMember]struct{}
-	heartbeatWake              chan struct{}
-	heartbeatRunning           bool
-	heartbeatLease             *heartbeatConnectionLease
-	sharedHeartbeats           bool
+	// routineClock measures the routine cadence. It is sinceMonotonicEpoch, so a step of the wall
+	// clock does not change the cadence. Tests replace it.
+	routineClock         func() time.Duration
+	registryInterval     time.Duration
+	registryEnabled      bool
+	hostname             string
+	instanceID           string
+	scheduleNamespaces   []string
+	scheduleCatchupLimit int
+	shutdownGracePeriod  time.Duration
+	pollingOnly          bool
+	logger               *slog.Logger
+	metrics              *workerMetrics
+	runPermit            chan struct{}
+	handlers             map[string]Handler
+	compatibility        *CachedCompatibilityCheck
+	onRegistrationError  func(error)
+	registrationReporter reporterFailures
+	retryDelay           func(attempt int, task ClaimedTask) *time.Duration
+	contracts            contractCache
+	activeSlots          atomic.Int64
+	draining             atomic.Bool
+	remotelyPaused       atomic.Bool
+	registered           atomic.Bool
+	heartbeatMu          sync.Mutex
+	heartbeatMembers     map[*heartbeatMember]struct{}
+	heartbeatWake        chan struct{}
+	heartbeatRunning     bool
+	heartbeatLease       *heartbeatConnectionLease
+	sharedHeartbeats     bool
 	// heartbeatRound sends the heartbeat statements of one round and returns the status of each
 	// member, in the order of members. It is queryHeartbeatRound outside tests.
 	heartbeatRound func(members []*heartbeatMember, deadline time.Time) ([]ownershipStatus, error)
@@ -615,6 +619,7 @@ func NewWorker(pool *pgxpool.Pool, options WorkerOptions) (*Worker, error) {
 		explicitPollInterval:       options.PollInterval != 0,
 		maintenanceInterval:        maintenanceInterval,
 		maintenanceRoutineInterval: maintenanceRoutineInterval,
+		routineClock:               sinceMonotonicEpoch,
 		registryInterval:           registryInterval,
 		registryEnabled:            !options.DisableRegistry,
 		hostname:                   workerHostname(),
@@ -1733,12 +1738,21 @@ func (worker *Worker) runMaintenance(ctx context.Context) error {
 // offer when it does. The tick runs every second to bound dispatch latency, but ADR 0011 puts the
 // routines on their own cadence because PostgreSQL decides which phase is due.
 func (worker *Worker) dueForMaintenanceRoutines() bool {
-	now := time.Now().UnixNano()
+	now := int64(worker.routineClock())
 	last := worker.lastRoutineOffer.Load()
 	if last != 0 && now-last < int64(worker.maintenanceRoutineInterval) {
 		return false
 	}
 	return worker.lastRoutineOffer.CompareAndSwap(last, now)
+}
+
+// monotonicEpoch is a fixed time.Time with a monotonic reading. UnixNano drops that reading, so a
+// stored elapsed time is a duration since this epoch.
+var monotonicEpoch = time.Now()
+
+// sinceMonotonicEpoch is the time since monotonicEpoch on the monotonic clock.
+func sinceMonotonicEpoch() time.Duration {
+	return time.Since(monotonicEpoch)
 }
 
 func (worker *Worker) recordRecovery(ctx context.Context, row Row) {
