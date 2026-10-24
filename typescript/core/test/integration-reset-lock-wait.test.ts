@@ -47,6 +47,38 @@ describe("database reset with a session from an earlier test", () => {
     }
   });
 
+  it("stops when the hook gives up and leaves no transaction open", async () => {
+    const holder = await pool.connect();
+    try {
+      await holder.query("BEGIN");
+      await holder.query("LOCK TABLE workhorse.task_runtime IN ROW EXCLUSIVE MODE");
+      const hook = new AbortController();
+      const started = Date.now();
+      const reset = database.reset({ signal: hook.signal }).then(
+        () => undefined,
+        (error: unknown) => error as Error,
+      );
+      await waitForResetLockWait();
+
+      // Vitest aborts the signal of a hook that times out (SM-1679).
+      hook.abort();
+      const failure = await reset;
+      expect(failure?.name).toBe("AbortError");
+      expect(Date.now() - started).toBeLessThan(2_000);
+
+      const open = await pool.query(
+        `SELECT pid FROM pg_stat_activity
+          WHERE datname = current_database() AND pid <> pg_backend_pid()
+            AND state LIKE 'idle in transaction%' AND query NOT LIKE 'LOCK TABLE %'`,
+      );
+      expect(open.rows).toEqual([]);
+    } finally {
+      await holder.query("ROLLBACK");
+      holder.release();
+    }
+    await expect(database.reset()).resolves.toBeUndefined();
+  });
+
   it("names the session that keeps its locks", async () => {
     const holder = await pool.connect();
     try {

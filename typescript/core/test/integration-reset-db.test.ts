@@ -1,22 +1,20 @@
-import { spawnSync } from "node:child_process";
 import path from "node:path";
 import { Client } from "pg";
 import { afterAll, beforeAll, describe, expect, inject, it } from "vitest";
 import { createDatabaseTestHarness } from "./support/db.js";
-import { cliNodeArgs } from "./support/cli-process.js";
+import { runCliScript } from "./support/cli-process.js";
 
 const repository = path.resolve(import.meta.dirname, "../../..");
 const cli = path.join(repository, "typescript/core/src/cli/reset-db.ts");
 const harness = createDatabaseTestHarness(import.meta.url, { schemaProvisioning: "install" });
 
 function resetDb(args: readonly string[], environment: NodeJS.ProcessEnv) {
-  const result = spawnSync(process.execPath, [...cliNodeArgs, cli, ...args], {
+  return runCliScript(cli, args, {
     cwd: repository,
     env: { ...process.env, WORKHORSE_ALLOW_REMOTE_RESET: undefined, ...environment },
-    encoding: "utf8",
+    // The reset drops a database, so it can wait for a checkpoint as long as a database hook.
+    timeoutMs: inject("databaseHookTimeout"),
   });
-  if (result.error) throw result.error;
-  return { code: result.status, stdout: result.stdout, stderr: result.stderr };
 }
 
 // The reset drops a database in the test body. A drop waits for a checkpoint, and under load that
@@ -30,24 +28,26 @@ beforeAll(harness.setup);
 afterAll(harness.teardown);
 
 describe("db:reset", () => {
-  it("refuses without confirmation", () => {
-    const result = resetDb(["--database", "test"], { DATABASE_URL_TEST: harness.databaseUrl });
+  it("refuses without confirmation", async () => {
+    const result = await resetDb(["--database", "test"], {
+      DATABASE_URL_TEST: harness.databaseUrl,
+    });
     expect(result.code).not.toBe(0);
     expect(result.stderr).toContain("Pass --yes to confirm the destructive reset");
   });
 
-  it("refuses a database whose name lacks the purpose suffix", () => {
+  it("refuses a database whose name lacks the purpose suffix", async () => {
     const wrongPurpose = new URL(harness.databaseUrl);
     wrongPurpose.pathname = "/workhorse_bench";
-    const result = resetDb(["--database", "test", "--yes"], {
+    const result = await resetDb(["--database", "test", "--yes"], {
       DATABASE_URL_TEST: wrongPurpose.toString(),
     });
     expect(result.code).not.toBe(0);
     expect(result.stderr).toContain('Refusing to use database "workhorse_bench" for test');
   });
 
-  it("refuses a remote host", () => {
-    const result = resetDb(["--database", "test", "--yes"], {
+  it("refuses a remote host", async () => {
+    const result = await resetDb(["--database", "test", "--yes"], {
       DATABASE_URL_TEST: "postgres://workhorse:workhorse@db.invalid:5432/workhorse_test",
     });
     expect(result.code).not.toBe(0);
@@ -58,17 +58,20 @@ describe("db:reset", () => {
 
   it("resets a database while a session of its own role holds it open", dropWait, async () => {
     const holder = new Client({ connectionString: harness.databaseUrl });
-    holder.on("error", () => {});
+    // The test process reads the termination while the reset runs, so the client reports it here.
+    const holderErrors: Error[] = [];
+    holder.on("error", (error) => holderErrors.push(error));
     await holder.connect();
     try {
       await holder.query("CREATE TABLE public.reset_marker (id int)");
 
-      const result = resetDb(["--database", "test", "--yes"], {
+      const result = await resetDb(["--database", "test", "--yes"], {
         DATABASE_URL_TEST: harness.databaseUrl,
       });
       expect(result.stderr).toBe("");
       expect(result.code).toBe(0);
-      await expect(holder.query("SELECT 1")).rejects.toThrow(/terminat/i);
+      await expect(holder.query("SELECT 1")).rejects.toThrow(/terminat|connection error/i);
+      expect(holderErrors.map((error) => error.message).join("\n")).toMatch(/terminat/i);
     } finally {
       await holder.end().catch(() => {});
     }

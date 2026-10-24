@@ -1,10 +1,10 @@
-import { spawnSync } from "node:child_process";
 import path from "node:path";
+import { setTimeout as sleep } from "node:timers/promises";
 import { mkdtemp, writeFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { describe, expect, it } from "vitest";
 import { createIntegrationTestContext } from "./support/integration.js";
-import { cliNodeArgs } from "./support/cli-process.js";
+import { runCliScript } from "./support/cli-process.js";
 
 const repository = path.resolve(import.meta.dirname, "../../..");
 const cli = path.join(repository, "typescript/core/src/cli/workhorse.ts");
@@ -14,54 +14,88 @@ const { createFailedTask, databaseUrl, pool, queue, admin } = createIntegrationT
 const databaseName = new URL(databaseUrl).pathname.slice(1);
 
 function runCli(args: readonly string[]) {
-  const result = spawnSync(process.execPath, [...cliNodeArgs, cli, ...args], {
-    cwd: repository,
-    env: process.env,
-    encoding: "utf8",
-    input: "",
-  });
-  if (result.error) throw result.error;
-  return { code: result.status, stdout: result.stdout, stderr: result.stderr };
+  return runCliScript(cli, args, { cwd: repository, env: process.env });
 }
 
 function runAdmin(args: readonly string[]) {
   return runCli(["admin", ...args, "--database-url", databaseUrl]);
 }
 
+describe("admin CLI process", () => {
+  // A reset that outlives its hook keeps its TRUNCATE transaction open in this process. Before
+  // SM-1679, the CLI run stopped the event loop, so the transaction never ended, the CLI waited for
+  // its locks, and the test waited for the CLI without a limit.
+  it("lets this process end its transaction while the CLI waits for the locks", async () => {
+    const taskId = await queue.enqueue("email.send", { to: "operator@example.com" });
+    const holder = await pool.connect();
+    try {
+      const { rows } = await holder.query<{ pid: number }>("SELECT pg_backend_pid() AS pid");
+      await holder.query("BEGIN");
+      await holder.query(
+        "LOCK TABLE workhorse.task, workhorse.task_runtime IN ACCESS EXCLUSIVE MODE",
+      );
+      const run = runAdmin(["task", taskId, "--json"]);
+
+      const deadline = Date.now() + 10_000;
+      for (;;) {
+        const waiting = await pool.query(
+          `SELECT 1 FROM pg_stat_activity
+            WHERE datname = current_database() AND pid <> $1 AND wait_event_type = 'Lock'`,
+          [rows[0]!.pid],
+        );
+        if (waiting.rowCount !== 0) break;
+        if (Date.now() >= deadline) throw new Error("The CLI did not wait for the table locks");
+        await sleep(20);
+      }
+      await holder.query("COMMIT");
+
+      const result = await run;
+      expect(result.stderr).toBe("");
+      expect(result.code).toBe(0);
+      expect(JSON.parse(result.stdout)).toMatchObject({ id: taskId, state: "ready" });
+    } finally {
+      await holder.query("ROLLBACK").catch(() => undefined);
+      holder.release();
+    }
+  });
+});
+
 describe("admin CLI inspection", () => {
   it("lists tasks with lifecycle filters as JSON", async () => {
     const taskId = await queue.enqueue("report.build", { day: "2026-08-18" });
-    const result = runAdmin(["tasks", "--json", "--state", "ready", "--queue", "default"]);
+    const result = await runAdmin(["tasks", "--json", "--state", "ready", "--queue", "default"]);
     expect(result.code).toBe(0);
     const page = JSON.parse(result.stdout) as {
       items: Array<{ id: string; state: string; type: string }>;
     };
     expect(page.items.map((item) => item.id)).toContain(taskId);
-    expect(runAdmin(["tasks", "--json", "--state", "succeeded"]).stdout).not.toContain(taskId);
+    expect((await runAdmin(["tasks", "--json", "--state", "succeeded"])).stdout).not.toContain(
+      taskId,
+    );
   });
 
   it("shows one task snapshot and its timeline", async () => {
     const taskId = await queue.enqueue("email.send", { to: "operator@example.com" });
-    const detail = runAdmin(["task", taskId, "--json"]);
+    const detail = await runAdmin(["task", taskId, "--json"]);
     expect(detail.code).toBe(0);
     expect(JSON.parse(detail.stdout)).toMatchObject({
       id: taskId,
       state: "ready",
       type: "email.send",
     });
-    const human = runAdmin(["task", taskId]);
+    const human = await runAdmin(["task", taskId]);
     expect(human.code).toBe(0);
     expect(human.stdout).toContain("email.send");
 
-    const timeline = runAdmin(["timeline", taskId, "--json"]);
+    const timeline = await runAdmin(["timeline", taskId, "--json"]);
     expect(timeline.code).toBe(0);
     expect(
       (JSON.parse(timeline.stdout) as { items: Array<{ kind: string }> }).items.length,
     ).toBeGreaterThan(0);
   });
 
-  it("exits 1 for a missing task", () => {
-    const result = runAdmin(["task", "00000000-0000-0000-0000-000000000000"]);
+  it("exits 1 for a missing task", async () => {
+    const result = await runAdmin(["task", "00000000-0000-0000-0000-000000000000"]);
     expect(result.code).toBe(1);
     expect(result.stderr).toContain("not found");
   });
@@ -85,31 +119,31 @@ describe("admin CLI inspection", () => {
       draining: false,
     });
 
-    const failures = runAdmin(["failures", "--json"]);
+    const failures = await runAdmin(["failures", "--json"]);
     expect(failures.code).toBe(0);
     expect(JSON.parse(failures.stdout).items[0]).toMatchObject({
       taskId: failedId,
       type: "import.run",
     });
 
-    const queues = runAdmin(["queues", "--json"]);
+    const queues = await runAdmin(["queues", "--json"]);
     expect(queues.code).toBe(0);
     expect(JSON.parse(queues.stdout)).toEqual(
       expect.arrayContaining([expect.objectContaining({ queue: "default", paused: false })]),
     );
 
-    const schedules = runAdmin(["schedules", "--json"]);
+    const schedules = await runAdmin(["schedules", "--json"]);
     expect(schedules.code).toBe(0);
     expect(JSON.parse(schedules.stdout)).toEqual([
       expect.objectContaining({ namespace: "reports", name: "nightly", schedule: "0 3 * * *" }),
     ]);
 
-    const workers = runAdmin(["workers"]);
+    const workers = await runAdmin(["workers"]);
     expect(workers.code).toBe(0);
     expect(workers.stdout).toContain("worker-1");
     expect(workers.stdout).toContain("host-a");
 
-    const maintenance = runAdmin(["maintenance", "--json"]);
+    const maintenance = await runAdmin(["maintenance", "--json"]);
     expect(maintenance.code).toBe(0);
     expect(JSON.parse(maintenance.stdout)).toMatchObject({
       maintenancePolicy: { timezone: "UTC" },
@@ -125,14 +159,14 @@ describe("admin CLI durable-handler reads", () => {
     await queue.saveCheckpoint(task!, "cli-checkpoint-worker", "extracted", { rows: 120 });
     await queue.saveCheckpoint(task!, "cli-checkpoint-worker", "transformed", { rows: 118 });
 
-    const list = runAdmin(["checkpoints", taskId, "--json"]);
+    const list = await runAdmin(["checkpoints", taskId, "--json"]);
     expect(list.code).toBe(0);
     expect(JSON.parse(list.stdout)).toEqual([
       expect.objectContaining({ taskId, name: "extracted", value: { rows: 120 } }),
       expect.objectContaining({ taskId, name: "transformed", value: { rows: 118 } }),
     ]);
 
-    const one = runAdmin(["checkpoints", taskId, "--name", "transformed", "--json"]);
+    const one = await runAdmin(["checkpoints", taskId, "--name", "transformed", "--json"]);
     expect(one.code).toBe(0);
     expect(JSON.parse(one.stdout)).toMatchObject({
       taskId,
@@ -142,7 +176,7 @@ describe("admin CLI durable-handler reads", () => {
       workerId: "cli-checkpoint-worker",
     });
 
-    const table = runAdmin(["checkpoints", taskId]);
+    const table = await runAdmin(["checkpoints", taskId]);
     expect(table.code).toBe(0);
     expect(table.stdout).toContain("extracted");
     expect(table.stdout).toContain("transformed");
@@ -153,13 +187,13 @@ describe("admin CLI durable-handler reads", () => {
     const task = await queue.claim("cli-wait-worker", { leaseMs: 10_000 });
     await queue.scheduleWait(task!, "cli-wait-worker", "provider-cooldown", { durationMs: 5_000 });
 
-    const list = runAdmin(["waits", taskId, "--json"]);
+    const list = await runAdmin(["waits", taskId, "--json"]);
     expect(list.code).toBe(0);
     expect(JSON.parse(list.stdout)).toEqual([
       expect.objectContaining({ taskId, name: "provider-cooldown", mode: "relative" }),
     ]);
 
-    const one = runAdmin(["waits", taskId, "--name", "provider-cooldown", "--json"]);
+    const one = await runAdmin(["waits", taskId, "--name", "provider-cooldown", "--json"]);
     expect(one.code).toBe(0);
     expect(JSON.parse(one.stdout)).toMatchObject({
       taskId,
@@ -168,18 +202,18 @@ describe("admin CLI durable-handler reads", () => {
       workerId: "cli-wait-worker",
     });
 
-    const table = runAdmin(["waits", taskId]);
+    const table = await runAdmin(["waits", taskId]);
     expect(table.code).toBe(0);
     expect(table.stdout).toContain("provider-cooldown");
   });
 
   it("exits 1 for a checkpoint or wait name the task never recorded", async () => {
     const taskId = await queue.enqueue("nothing.saved", {});
-    const checkpoint = runAdmin(["checkpoints", taskId, "--name", "missing"]);
+    const checkpoint = await runAdmin(["checkpoints", taskId, "--name", "missing"]);
     expect(checkpoint.code).toBe(1);
     expect(checkpoint.stderr).toContain("no checkpoint named missing");
 
-    const wait = runAdmin(["waits", taskId, "--name", "missing"]);
+    const wait = await runAdmin(["waits", taskId, "--name", "missing"]);
     expect(wait.code).toBe(1);
     expect(wait.stderr).toContain("no wait named missing");
   });
@@ -194,7 +228,7 @@ describe("admin CLI durable-handler reads", () => {
     const signalTask = await queue.claim("cli-signal-worker", { leaseMs: 10_000 });
     await queue.waitForSignal(signalTask!, "cli-signal-worker", "provider-callback");
 
-    const result = runAdmin(["external-waits", "--json"]);
+    const result = await runAdmin(["external-waits", "--json"]);
     expect(result.code).toBe(0);
     expect(JSON.parse(result.stdout)).toEqual({
       human: {
@@ -220,7 +254,7 @@ describe("admin CLI durable-handler reads", () => {
       },
     });
 
-    const table = runAdmin(["external-waits"]);
+    const table = await runAdmin(["external-waits"]);
     expect(table.code).toBe(0);
     expect(table.stdout).toContain("human");
     expect(table.stdout).toContain("approval");
@@ -236,7 +270,7 @@ describe("admin CLI durable-handler reads", () => {
     const secondTask = await queue.claim("cli-page-worker-2", { leaseMs: 10_000 });
     await queue.waitForHuman(secondTask!, "cli-page-worker-2", "approval", { order: 2 });
 
-    const page = runAdmin(["external-waits", "--limit", "1", "--json"]);
+    const page = await runAdmin(["external-waits", "--limit", "1", "--json"]);
     expect(page.code).toBe(0);
     const parsed = JSON.parse(page.stdout) as {
       human: { items: Array<{ taskId: string }>; nextCursor: Record<string, string> };
@@ -244,7 +278,7 @@ describe("admin CLI durable-handler reads", () => {
     expect(parsed.human.items.map((item) => item.taskId)).toEqual([first]);
     expect(parsed.human.nextCursor).toMatchObject({ taskId: first, name: "approval" });
 
-    const next = runAdmin([
+    const next = await runAdmin([
       "external-waits",
       "--limit",
       "1",
@@ -257,8 +291,8 @@ describe("admin CLI durable-handler reads", () => {
     expect(following.human.items.map((item) => item.taskId)).toEqual([second]);
   });
 
-  it("rejects a cursor that is not the printed continuation object", () => {
-    const result = runAdmin(["external-waits", "--human-cursor", '{"taskId":"only"}']);
+  it("rejects a cursor that is not the printed continuation object", async () => {
+    const result = await runAdmin(["external-waits", "--human-cursor", '{"taskId":"only"}']);
     expect(result.code).toBe(64);
     expect(result.stderr).toContain("--human-cursor must be a JSON");
   });
@@ -267,7 +301,7 @@ describe("admin CLI durable-handler reads", () => {
 describe("admin CLI guarded operations", () => {
   it("requires an explicit --env for every mutation", async () => {
     const taskId = await queue.enqueue("cancel.me", {});
-    const result = runAdmin(["cancel", taskId, "--yes"]);
+    const result = await runAdmin(["cancel", taskId, "--yes"]);
     expect(result.code).toBe(64);
     expect(result.stderr).toContain("requires --env");
     expect((await admin.getTask(taskId))?.state).toBe("ready");
@@ -275,7 +309,7 @@ describe("admin CLI guarded operations", () => {
 
   it("refuses an --env that does not name the connected database", async () => {
     const taskId = await queue.enqueue("cancel.me", {});
-    const result = runAdmin(["cancel", taskId, "--env", "workhorse_production", "--yes"]);
+    const result = await runAdmin(["cancel", taskId, "--env", "workhorse_production", "--yes"]);
     expect(result.code).toBe(1);
     expect(result.stderr).toContain(`does not match the connected database "${databaseName}"`);
     expect((await admin.getTask(taskId))?.state).toBe("ready");
@@ -283,7 +317,7 @@ describe("admin CLI guarded operations", () => {
 
   it("requires --yes when no interactive confirmation is possible", async () => {
     const taskId = await queue.enqueue("cancel.me", {});
-    const result = runAdmin(["cancel", taskId, "--env", databaseName]);
+    const result = await runAdmin(["cancel", taskId, "--env", databaseName]);
     expect(result.code).toBe(64);
     expect(result.stderr).toContain("requires --yes");
     expect((await admin.getTask(taskId))?.state).toBe("ready");
@@ -291,7 +325,7 @@ describe("admin CLI guarded operations", () => {
 
   it("cancels a task with attribution once confirmed", async () => {
     const taskId = await queue.enqueue("cancel.me", {});
-    const result = runAdmin([
+    const result = await runAdmin([
       "cancel",
       taskId,
       "--env",
@@ -315,7 +349,7 @@ describe("admin CLI guarded operations", () => {
 
   it("redrives a terminal failure into a new task", async () => {
     const failedId = await createFailedTask({ type: "import.run" });
-    const result = runAdmin([
+    const result = await runAdmin([
       "redrive",
       failedId,
       "--env",
@@ -333,7 +367,7 @@ describe("admin CLI guarded operations", () => {
 
   it("exits 1 when redriving a task that is not a terminal failure", async () => {
     const taskId = await queue.enqueue("still.ready", {});
-    const result = runAdmin([
+    const result = await runAdmin([
       "redrive",
       taskId,
       "--env",
@@ -347,7 +381,7 @@ describe("admin CLI guarded operations", () => {
   });
 
   it("pauses and resumes a queue durably", async () => {
-    const paused = runAdmin([
+    const paused = await runAdmin([
       "pause",
       "default",
       "--env",
@@ -358,11 +392,11 @@ describe("admin CLI guarded operations", () => {
     ]);
     expect(paused).toMatchObject({ code: 0 });
     expect(paused.stdout).toContain("Paused queue default");
-    expect(JSON.parse(runAdmin(["queues", "--json"]).stdout)).toEqual(
+    expect(JSON.parse((await runAdmin(["queues", "--json"])).stdout)).toEqual(
       expect.arrayContaining([expect.objectContaining({ queue: "default", paused: true })]),
     );
 
-    const resumed = runAdmin([
+    const resumed = await runAdmin([
       "resume",
       "default",
       "--env",
@@ -372,7 +406,7 @@ describe("admin CLI guarded operations", () => {
       "--yes",
     ]);
     expect(resumed.code).toBe(0);
-    expect(JSON.parse(runAdmin(["queues", "--json"]).stdout)).toEqual(
+    expect(JSON.parse((await runAdmin(["queues", "--json"])).stdout)).toEqual(
       expect.arrayContaining([expect.objectContaining({ queue: "default", paused: false })]),
     );
   });
@@ -381,7 +415,7 @@ describe("admin CLI guarded operations", () => {
     const queueName = "cli-purge";
     const first = await queue.enqueue("purge.me", {}, { queue: queueName });
     const second = await queue.enqueue("purge.me", {}, { queue: queueName });
-    const result = runAdmin([
+    const result = await runAdmin([
       "purge",
       queueName,
       "--env",
@@ -414,9 +448,9 @@ describe("admin CLI guarded operations", () => {
         "cli-purge-conflict-request",
         "--yes",
       ]);
-    expect(purge("first destructive request")).toMatchObject({ code: 0 });
+    expect(await purge("first destructive request")).toMatchObject({ code: 0 });
 
-    const conflict = purge("a different destructive request");
+    const conflict = await purge("a different destructive request");
     expect(conflict.code).toBe(1);
     expect(conflict.stderr).toContain(`Refused: Queue purge conflict for ${queueName}`);
   });
@@ -425,11 +459,11 @@ describe("admin CLI guarded operations", () => {
     const queueName = "cli-purge-guarded";
     const taskId = await queue.enqueue("purge.me", {}, { queue: queueName });
 
-    const noReason = runAdmin(["purge", queueName, "--env", databaseName, "--yes"]);
+    const noReason = await runAdmin(["purge", queueName, "--env", databaseName, "--yes"]);
     expect(noReason.code).toBe(64);
     expect(noReason.stderr).toContain("requires --reason");
 
-    const noConfirmation = runAdmin([
+    const noConfirmation = await runAdmin([
       "purge",
       queueName,
       "--env",
@@ -465,7 +499,7 @@ describe("admin CLI guarded operations", () => {
       { taskId: releasedId!, recorded: 1, pendingEdges: 0, action: "released" },
     ].toSorted((left, right) => (left.taskId < right.taskId ? -1 : 1));
 
-    const preview = runAdmin(["repair-dependencies", "--dry-run", "--json"]);
+    const preview = await runAdmin(["repair-dependencies", "--dry-run", "--json"]);
     expect(preview.code).toBe(0);
     expect(JSON.parse(preview.stdout)).toEqual(
       expected.map(({ taskId, recorded, pendingEdges, action }) => ({
@@ -478,19 +512,19 @@ describe("admin CLI guarded operations", () => {
         action,
       })),
     );
-    const table = runAdmin(["repair-dependencies", "--dry-run", "--limit", "1"]);
+    const table = await runAdmin(["repair-dependencies", "--dry-run", "--limit", "1"]);
     expect(table.code).toBe(0);
     expect(table.stdout).toContain(expected[0]!.taskId);
     expect(table.stdout).not.toContain(expected[1]!.taskId);
     expect((await admin.getTask(releasedId!))?.state).toBe("blocked");
 
-    const noReason = runAdmin(["repair-dependencies", "--env", databaseName, "--yes"]);
+    const noReason = await runAdmin(["repair-dependencies", "--env", databaseName, "--yes"]);
     expect(noReason.code).toBe(64);
     expect(noReason.stderr).toContain("requires --reason");
-    const noEnvironment = runAdmin(["repair-dependencies", "--reason", "recount", "--yes"]);
+    const noEnvironment = await runAdmin(["repair-dependencies", "--reason", "recount", "--yes"]);
     expect(noEnvironment.code).toBe(64);
     expect(noEnvironment.stderr).toContain("requires --env");
-    const noConfirmation = runAdmin([
+    const noConfirmation = await runAdmin([
       "repair-dependencies",
       "--env",
       databaseName,
@@ -499,12 +533,12 @@ describe("admin CLI guarded operations", () => {
     ]);
     expect(noConfirmation.code).toBe(64);
     expect(noConfirmation.stderr).toContain("requires --yes");
-    const tooMany = runAdmin(["repair-dependencies", "--dry-run", "--limit", "100001"]);
+    const tooMany = await runAdmin(["repair-dependencies", "--dry-run", "--limit", "100001"]);
     expect(tooMany.code).toBe(64);
     expect(tooMany.stderr).toContain("--limit must be at most 100000");
     expect((await admin.getTask(releasedId!))?.state).toBe("blocked");
 
-    const repair = runAdmin([
+    const repair = await runAdmin([
       "repair-dependencies",
       "--env",
       databaseName,
@@ -542,9 +576,9 @@ describe("admin CLI guarded operations", () => {
       },
     ]);
 
-    const rerun = runAdmin(["repair-dependencies", "--dry-run", "--json"]);
+    const rerun = await runAdmin(["repair-dependencies", "--dry-run", "--json"]);
     expect(JSON.parse(rerun.stdout)).toEqual([]);
-    expect(runAdmin(["cancel", recountedId!, "--dry-run"]).stderr).toContain(
+    expect((await runAdmin(["cancel", recountedId!, "--dry-run"])).stderr).toContain(
       "does not support --dry-run",
     );
   });
@@ -564,11 +598,11 @@ describe("admin CLI guarded operations", () => {
         "--yes",
         "--json",
       ]);
-    const fast = setTier("fast");
+    const fast = await setTier("fast");
     expect(fast.code).toBe(0);
     expect(JSON.parse(fast.stdout)).toEqual({ queue: queueName, tier: "fast" });
     // An idle fast-tier queue has no live tasks, so its control row alone keeps it listed.
-    expect(JSON.parse(runAdmin(["queues", "--json"]).stdout)).toEqual(
+    expect(JSON.parse((await runAdmin(["queues", "--json"])).stdout)).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
           queue: queueName,
@@ -579,9 +613,9 @@ describe("admin CLI guarded operations", () => {
         }),
       ]),
     );
-    expect(runAdmin(["queues"]).stdout).toMatch(/cli-tier\s+no\s+fast\s+none/);
+    expect((await runAdmin(["queues"])).stdout).toMatch(/cli-tier\s+no\s+fast\s+none/);
 
-    const full = setTier("full");
+    const full = await setTier("full");
     expect(full.code).toBe(0);
     expect(JSON.parse(full.stdout)).toEqual({ queue: queueName, tier: "full" });
   });
@@ -589,7 +623,7 @@ describe("admin CLI guarded operations", () => {
   it("refuses a tier change the database guards against", async () => {
     const queueName = "cli-tier-live";
     await queue.enqueue("live", {}, { queue: queueName });
-    const refused = runAdmin([
+    const refused = await runAdmin([
       "set-tier",
       queueName,
       "--tier",
@@ -605,30 +639,30 @@ describe("admin CLI guarded operations", () => {
       `Refused: Queue ${queueName} has live tasks, so its tier cannot change.`,
     );
     expect(refused.stderr).not.toContain("Fast-tier queue");
-    expect(JSON.parse(runAdmin(["queues", "--json"]).stdout)).toEqual(
+    expect(JSON.parse((await runAdmin(["queues", "--json"])).stdout)).toEqual(
       expect.arrayContaining([expect.objectContaining({ queue: queueName, tier: "full" })]),
     );
   });
 
-  it("requires --tier, --reason, and confirmation before a tier change", () => {
+  it("requires --tier, --reason, and confirmation before a tier change", async () => {
     const base = ["set-tier", "cli-tier-guarded", "--env", databaseName];
-    const noTier = runAdmin([...base, "--reason", "no tier", "--yes"]);
+    const noTier = await runAdmin([...base, "--reason", "no tier", "--yes"]);
     expect(noTier.code).toBe(64);
     expect(noTier.stderr).toContain("requires --tier <fast|full>");
 
-    const badTier = runAdmin([...base, "--tier", "medium", "--reason", "bad tier", "--yes"]);
+    const badTier = await runAdmin([...base, "--tier", "medium", "--reason", "bad tier", "--yes"]);
     expect(badTier.code).toBe(64);
     expect(badTier.stderr).toContain("--tier must be fast or full");
 
-    const noReason = runAdmin([...base, "--tier", "fast", "--yes"]);
+    const noReason = await runAdmin([...base, "--tier", "fast", "--yes"]);
     expect(noReason.code).toBe(64);
     expect(noReason.stderr).toContain("requires --reason");
 
-    const noConfirmation = runAdmin([...base, "--tier", "fast", "--reason", "unconfirmed"]);
+    const noConfirmation = await runAdmin([...base, "--tier", "fast", "--reason", "unconfirmed"]);
     expect(noConfirmation.code).toBe(64);
     expect(noConfirmation.stderr).toContain("requires --yes");
 
-    const noEnvironment = runAdmin([
+    const noEnvironment = await runAdmin([
       "set-tier",
       "cli-tier-guarded",
       "--tier",
@@ -643,7 +677,7 @@ describe("admin CLI guarded operations", () => {
 
   it("changes one history setting at a time and keeps the other", async () => {
     const queueName = "cli-history";
-    const fast = runAdmin([
+    const fast = await runAdmin([
       "set-tier",
       queueName,
       "--tier",
@@ -658,7 +692,7 @@ describe("admin CLI guarded operations", () => {
     const setHistory = (...flags: string[]) =>
       runAdmin(["set-history", queueName, ...flags, "--env", databaseName, "--yes", "--json"]);
 
-    const claims = setHistory("--record-claims", "on");
+    const claims = await setHistory("--record-claims", "on");
     expect(claims.code).toBe(0);
     expect(JSON.parse(claims.stdout)).toEqual({
       queue: queueName,
@@ -669,20 +703,20 @@ describe("admin CLI guarded operations", () => {
     // A known fast-tier queue needs neither the full-tier note nor the unknown-queue warning.
     expect(claims.stderr).toBe("");
 
-    const attempts = setHistory("--record-attempts", "on");
+    const attempts = await setHistory("--record-attempts", "on");
     expect(JSON.parse(attempts.stdout)).toEqual({
       queue: queueName,
       tier: "fast",
       recordAttempts: true,
       recordClaims: true,
     });
-    expect(JSON.parse(runAdmin(["queues", "--json"]).stdout)).toEqual(
+    expect(JSON.parse((await runAdmin(["queues", "--json"])).stdout)).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ queue: queueName, recordAttempts: true, recordClaims: true }),
       ]),
     );
 
-    const off = runAdmin([
+    const off = await runAdmin([
       "set-history",
       queueName,
       "--record-attempts",
@@ -700,7 +734,7 @@ describe("admin CLI guarded operations", () => {
   it("notes that a full-tier queue records all history", async () => {
     const queueName = "cli-history-full";
     await queue.enqueue("live", {}, { queue: queueName });
-    const result = runAdmin([
+    const result = await runAdmin([
       "set-history",
       queueName,
       "--record-claims",
@@ -718,9 +752,9 @@ describe("admin CLI guarded operations", () => {
     expect(result.stderr).not.toContain("Warning:");
   });
 
-  it("warns when the history change names an unknown queue", () => {
+  it("warns when the history change names an unknown queue", async () => {
     const queueName = "cli-history-typo";
-    const result = runAdmin([
+    const result = await runAdmin([
       "set-history",
       queueName,
       "--record-attempts",
@@ -737,21 +771,21 @@ describe("admin CLI guarded operations", () => {
     );
   });
 
-  it("refuses history flags it cannot apply or record", () => {
+  it("refuses history flags it cannot apply or record", async () => {
     const base = ["set-history", "cli-history-guarded", "--env", databaseName, "--yes"];
-    const nothing = runAdmin(base);
+    const nothing = await runAdmin(base);
     expect(nothing.code).toBe(64);
     expect(nothing.stderr).toContain("requires --record-attempts <on|off> or --record-claims");
 
-    const malformed = runAdmin([...base, "--record-claims", "yes"]);
+    const malformed = await runAdmin([...base, "--record-claims", "yes"]);
     expect(malformed.code).toBe(64);
     expect(malformed.stderr).toContain("--record-claims must be on or off");
 
-    const reason = runAdmin([...base, "--record-claims", "on", "--reason", "not recorded"]);
+    const reason = await runAdmin([...base, "--record-claims", "on", "--reason", "not recorded"]);
     expect(reason.code).toBe(64);
     expect(reason.stderr).toContain("does not support --reason");
 
-    const noConfirmation = runAdmin([
+    const noConfirmation = await runAdmin([
       "set-history",
       "cli-history-guarded",
       "--record-claims",
@@ -778,7 +812,7 @@ describe("admin CLI guarded operations", () => {
       });
     await register();
 
-    const paused = runAdmin([
+    const paused = await runAdmin([
       "pause-worker",
       workerId,
       "--env",
@@ -799,7 +833,7 @@ describe("admin CLI guarded operations", () => {
     // The pause is a registry row, not a signal to a connected process: the same worker learns
     // about it on its next registration heartbeat, and the fleet view reports it meanwhile.
     expect(await register()).toEqual({ paused: true });
-    const listed = JSON.parse(runAdmin(["workers", "--json"]).stdout) as Array<{
+    const listed = JSON.parse((await runAdmin(["workers", "--json"])).stdout) as Array<{
       workerId: string;
       paused: boolean;
     }>;
@@ -807,7 +841,7 @@ describe("admin CLI guarded operations", () => {
       expect.arrayContaining([expect.objectContaining({ workerId, paused: true })]),
     );
 
-    const resumed = runAdmin([
+    const resumed = await runAdmin([
       "resume-worker",
       workerId,
       "--env",
@@ -821,8 +855,8 @@ describe("admin CLI guarded operations", () => {
     expect(await register()).toEqual({ paused: false });
   });
 
-  it("exits 1 when pausing a worker that is not registered", () => {
-    const result = runAdmin([
+  it("exits 1 when pausing a worker that is not registered", async () => {
+    const result = await runAdmin([
       "pause-worker",
       "worker-that-aged-out",
       "--env",
@@ -849,15 +883,21 @@ describe("admin CLI guarded operations", () => {
     };
     await queue.registerWorker(registration);
 
-    const noReason = runAdmin(["pause-worker", workerId, "--env", databaseName, "--yes"]);
+    const noReason = await runAdmin(["pause-worker", workerId, "--env", databaseName, "--yes"]);
     expect(noReason.code).toBe(64);
     expect(noReason.stderr).toContain("requires --reason");
 
-    const noEnvironment = runAdmin(["pause-worker", workerId, "--reason", "no target", "--yes"]);
+    const noEnvironment = await runAdmin([
+      "pause-worker",
+      workerId,
+      "--reason",
+      "no target",
+      "--yes",
+    ]);
     expect(noEnvironment.code).toBe(64);
     expect(noEnvironment.stderr).toContain("requires --env");
 
-    const noConfirmation = runAdmin([
+    const noConfirmation = await runAdmin([
       "pause-worker",
       workerId,
       "--env",
@@ -873,8 +913,8 @@ describe("admin CLI guarded operations", () => {
 });
 
 describe("tui command", () => {
-  it("refuses to start without an interactive terminal", () => {
-    const result = runCli(["tui", "--database-url", databaseUrl]);
+  it("refuses to start without an interactive terminal", async () => {
+    const result = await runCli(["tui", "--database-url", databaseUrl]);
     expect(result.code).toBe(1);
     expect(result.stderr).toContain("requires an interactive terminal");
   });
@@ -892,7 +932,10 @@ describe("admin CLI paged investigations", () => {
     let cursor: object | null = null;
     let firstCursor: object | null = null;
     do {
-      const result = runAdmin([...args, ...(cursor ? ["--cursor", JSON.stringify(cursor)] : [])]);
+      const result = await runAdmin([
+        ...args,
+        ...(cursor ? ["--cursor", JSON.stringify(cursor)] : []),
+      ]);
       expect({ code: result.code, stderr: result.stderr }).toEqual({ code: 0, stderr: "" });
       const page = JSON.parse(result.stdout);
       seen.push(...page.items.map((item: { id: string }) => item.id));
@@ -900,7 +943,7 @@ describe("admin CLI paged investigations", () => {
       firstCursor ??= cursor;
       expect(seen.length).toBeLessThanOrEqual(ids.length);
     } while (cursor);
-    const wrong = runAdmin([
+    const wrong = await runAdmin([
       "tasks",
       "--type",
       "different",
@@ -910,11 +953,12 @@ describe("admin CLI paged investigations", () => {
     ]);
     expect(wrong.code).toBe(1);
     expect(seen.toSorted()).toEqual(ids.toSorted());
-    expect(runAdmin(["tasks", "--limit", "1"]).stdout).toContain("Next cursor");
+    expect((await runAdmin(["tasks", "--limit", "1"])).stdout).toContain("Next cursor");
     const snapshot = await admin.getTask(ids[0]!);
     expect(
       JSON.parse(
-        runAdmin(["tasks", "--created-before", snapshot!.createdAt.toISOString(), "--json"]).stdout,
+        (await runAdmin(["tasks", "--created-before", snapshot!.createdAt.toISOString(), "--json"]))
+          .stdout,
       ).items,
     ).toEqual([]);
   });
@@ -925,7 +969,7 @@ describe("admin CLI paged investigations", () => {
     const seen: object[] = [];
     let cursor: object | null = null;
     do {
-      const result = runAdmin([
+      const result = await runAdmin([
         "timeline",
         taskId,
         "--limit",
@@ -985,11 +1029,11 @@ describe("admin CLI paged investigations", () => {
       "1",
       "--json",
     ];
-    const firstResult = runAdmin(args);
+    const firstResult = await runAdmin(args);
     expect({ code: firstResult.code, stderr: firstResult.stderr }).toEqual({ code: 0, stderr: "" });
     const page = JSON.parse(firstResult.stdout);
     expect(page.items.map((item: { taskId: string }) => item.taskId)).toEqual([second]);
-    const next = runAdmin([...args, "--cursor", JSON.stringify(page.nextCursor)]);
+    const next = await runAdmin([...args, "--cursor", JSON.stringify(page.nextCursor)]);
     expect({ code: next.code, stderr: next.stderr }).toEqual({ code: 0, stderr: "" });
     expect(JSON.parse(next.stdout)).toMatchObject({ items: [{ taskId: first }], nextCursor: null });
   });
@@ -1011,8 +1055,8 @@ describe("admin CLI paged investigations", () => {
     ["redrive", "unused", "--dry-run"],
     ["redrive-many", "--state", "failed"],
     ["tasks", "unexpected"],
-  ])("rejects malformed or inapplicable options: %j", (...args) => {
-    expect(runAdmin(args).code).toBe(64);
+  ])("rejects malformed or inapplicable options: %j", async (...args) => {
+    expect((await runAdmin(args)).code).toBe(64);
   });
 });
 
@@ -1048,7 +1092,7 @@ describe("admin CLI bulk recovery", () => {
       "--json",
     ];
     const before = await admin.getTaskTimeline(first);
-    const preview = runAdmin([...args, "--dry-run"]);
+    const preview = await runAdmin([...args, "--dry-run"]);
     expect({ code: preview.code, stderr: preview.stderr }).toEqual({ code: 0, stderr: "" });
     expect(JSON.parse(preview.stdout)).toMatchObject({
       results: [{ sourceTaskId: first, targetTaskId: null, status: "eligible" }],
@@ -1056,19 +1100,19 @@ describe("admin CLI bulk recovery", () => {
     expect((await admin.getRedriveLineage(first)).records).toEqual([]);
     expect(await admin.getTaskTimeline(first)).toEqual(before);
     const execute = [...args, "--env", databaseName, "--yes"];
-    const result = runAdmin(execute);
+    const result = await runAdmin(execute);
     expect({ code: result.code, stderr: result.stderr }).toEqual({ code: 0, stderr: "" });
     const page = JSON.parse(result.stdout);
     expect(page.results).toEqual([
       expect.objectContaining({ sourceTaskId: first, status: "redriven" }),
     ]);
     expect((await admin.getTask(page.results[0].targetTaskId))?.state).toBe("ready");
-    const replay = runAdmin(execute);
+    const replay = await runAdmin(execute);
     expect({ code: replay.code, stderr: replay.stderr }).toEqual({ code: 0, stderr: "" });
     expect(JSON.parse(replay.stdout).results).toEqual([
       expect.objectContaining({ targetTaskId: page.results[0].targetTaskId, status: "replayed" }),
     ]);
-    const next = runAdmin([...execute, "--cursor", JSON.stringify(page.nextCursor)]);
+    const next = await runAdmin([...execute, "--cursor", JSON.stringify(page.nextCursor)]);
     expect({ code: next.code, stderr: next.stderr }).toEqual({ code: 0, stderr: "" });
     expect(JSON.parse(next.stdout)).toMatchObject({
       results: [{ sourceTaskId: second, status: "redriven" }],
@@ -1076,7 +1120,7 @@ describe("admin CLI bulk recovery", () => {
     });
     expect((await admin.getRedriveLineage(excluded)).records).toEqual([]);
     expect((await admin.getTask(first))?.state).toBe("failed");
-    const changed = runAdmin(
+    const changed = await runAdmin(
       execute.map((arg) => (arg === "provider restored" ? "changed reason" : arg)),
     );
     expect(changed.code).toBe(1);
@@ -1086,11 +1130,14 @@ describe("admin CLI bulk recovery", () => {
   it("requires a replay identity, environment, and confirmation before bulk writes", async () => {
     const taskId = await createFailedTask({ type: "guarded.bulk" });
     const args = ["redrive-many", "--reason", "recovery"];
-    expect(runAdmin([...args, "--env", databaseName, "--yes"]).code).toBe(64);
-    expect(runAdmin([...args, "--request-id", "bulk-guard", "--yes"]).code).toBe(64);
-    expect(runAdmin([...args, "--request-id", "bulk-guard", "--env", databaseName]).code).toBe(64);
+    expect((await runAdmin([...args, "--env", databaseName, "--yes"])).code).toBe(64);
+    expect((await runAdmin([...args, "--request-id", "bulk-guard", "--yes"])).code).toBe(64);
     expect(
-      runAdmin([...args, "--request-id", "bulk-guard", "--env", "wrong-database", "--yes"]).code,
+      (await runAdmin([...args, "--request-id", "bulk-guard", "--env", databaseName])).code,
+    ).toBe(64);
+    expect(
+      (await runAdmin([...args, "--request-id", "bulk-guard", "--env", "wrong-database", "--yes"]))
+        .code,
     ).toBe(1);
     expect((await admin.getRedriveLineage(taskId)).records).toEqual([]);
   });
@@ -1105,7 +1152,7 @@ describe("admin CLI external-wait delivery", () => {
     const file = path.join(directory, "answer.json");
     try {
       await writeFile(file, '{"approved":true,"comment":"reviewed"}');
-      const result = runAdmin([
+      const result = await runAdmin([
         "complete-human",
         taskId,
         "--name",
@@ -1152,7 +1199,7 @@ describe("admin CLI external-wait delivery", () => {
         "--yes",
         "--json",
       ];
-      const result = runAdmin(args);
+      const result = await runAdmin(args);
       expect({ code: result.code, stderr: result.stderr }).toEqual({ code: 0, stderr: "" });
       expect(JSON.parse(result.stdout)).toMatchObject({
         taskId,
@@ -1161,12 +1208,12 @@ describe("admin CLI external-wait delivery", () => {
         status: command === "signal" ? "delivered" : "completed",
         [command === "signal" ? "deliveredBy" : "completedBy"]: "oncall",
       });
-      const replay = runAdmin(args);
+      const replay = await runAdmin(args);
       expect({ code: replay.code, stderr: replay.stderr }).toEqual({ code: 0, stderr: "" });
       expect(JSON.parse(replay.stdout)).toMatchObject({ status: "duplicate", payload: false });
-      const conflict = runAdmin(args.map((arg) => (arg === "false" ? "true" : arg)));
+      const conflict = await runAdmin(args.map((arg) => (arg === "false" ? "true" : arg)));
       expect(conflict.code).toBe(1);
-      const different = runAdmin(
+      const different = await runAdmin(
         args.map((arg) => (arg === "delivery-request" ? "another-request" : arg)),
       );
       expect(different.code).toBe(1);
@@ -1200,24 +1247,27 @@ describe("admin CLI external-wait delivery", () => {
         "--request-id",
         "guard-request",
       ];
-      expect(runAdmin([...base, "--yes"]).code).toBe(64);
-      expect(runAdmin([...base, "--env", "wrong", "--yes"]).code).toBe(1);
-      expect(runAdmin([...base, "--env", databaseName]).code).toBe(64);
+      expect((await runAdmin([...base, "--yes"])).code).toBe(64);
+      expect((await runAdmin([...base, "--env", "wrong", "--yes"])).code).toBe(1);
+      expect((await runAdmin([...base, "--env", databaseName])).code).toBe(64);
       expect(
-        runAdmin([
-          ...base.map((arg) => (arg === "null" ? "invalid json" : arg)),
-          "--env",
-          databaseName,
-          "--yes",
-        ]).code,
+        (
+          await runAdmin([
+            ...base.map((arg) => (arg === "null" ? "invalid json" : arg)),
+            "--env",
+            databaseName,
+            "--yes",
+          ])
+        ).code,
       ).toBe(64);
       expect(
-        runAdmin([...base, "--payload-file", "unused", "--env", databaseName, "--yes"]).code,
+        (await runAdmin([...base, "--payload-file", "unused", "--env", databaseName, "--yes"]))
+          .code,
       ).toBe(64);
       const pending =
         command === "signal" ? await admin.listSignalWaits() : await admin.listHumanWaits();
       expect(pending.items.map((wait) => wait.taskId)).toEqual([taskId]);
-      const missing = runAdmin([
+      const missing = await runAdmin([
         ...base.map((arg) => (arg === taskId ? "00000000-0000-0000-0000-000000000000" : arg)),
         "--env",
         databaseName,
@@ -1253,7 +1303,7 @@ describe("admin CLI task groups", () => {
     const open = await queue.createTaskGroup();
     await queue.addToTaskGroup(open.id, [groupMember(3)]);
 
-    const all = runAdmin(["task-groups", "--json"]);
+    const all = await runAdmin(["task-groups", "--json"]);
     expect(all.code).toBe(0);
     const page = JSON.parse(all.stdout) as {
       state: string;
@@ -1264,18 +1314,20 @@ describe("admin CLI task groups", () => {
     expect(page.groups.map((group) => group.id)).toEqual([open.id, sealed.id, finished.id]);
     expect(page.groups[1]).toMatchObject({ state: "sealed", counts: { total: 2, pending: 2 } });
 
-    const openOnly = JSON.parse(runAdmin(["task-groups", "--state", "open", "--json"]).stdout);
+    const openOnly = JSON.parse(
+      (await runAdmin(["task-groups", "--state", "open", "--json"])).stdout,
+    );
     expect(openOnly.groups.map((group: { id: string }) => group.id)).toEqual([open.id]);
 
-    const first = JSON.parse(runAdmin(["task-groups", "--limit", "2", "--json"]).stdout);
+    const first = JSON.parse((await runAdmin(["task-groups", "--limit", "2", "--json"])).stdout);
     expect(first).toMatchObject({ pageSize: 2, hasMore: true });
     const second = JSON.parse(
-      runAdmin(["task-groups", "--limit", "2", "--page", "2", "--json"]).stdout,
+      (await runAdmin(["task-groups", "--limit", "2", "--page", "2", "--json"])).stdout,
     );
     expect(second).toMatchObject({ page: 2, hasMore: false });
     expect(second.groups.map((group: { id: string }) => group.id)).toEqual([finished.id]);
 
-    const human = runAdmin(["task-groups", "--limit", "2"]);
+    const human = await runAdmin(["task-groups", "--limit", "2"]);
     expect(human.code).toBe(0);
     expect(human.stdout).toContain("DONE");
     expect(human.stdout).toContain(`${sealed.id}  sealed`);
@@ -1291,8 +1343,8 @@ describe("admin CLI task groups", () => {
     ["--page", "1001"],
     ["--limit", "101"],
     ["--after", "1"],
-  ])("rejects a task-groups option: %s %s", (...args) => {
-    expect(runAdmin(["task-groups", ...args]).code).toBe(64);
+  ])("rejects a task-groups option: %s %s", async (...args) => {
+    expect((await runAdmin(["task-groups", ...args])).code).toBe(64);
   });
 
   it("shows one task group with its counts, member tasks, and newest events", async () => {
@@ -1302,7 +1354,7 @@ describe("admin CLI task groups", () => {
     const [claimed] = await queue.claimMany("cli-group-worker", 1, { queue: "cli-group-members" });
     expect(await queue.complete(claimed!, "cli-group-worker", null)).toBe(true);
 
-    const detail = runAdmin(["task-group", group.id, "--limit", "2", "--json"]);
+    const detail = await runAdmin(["task-group", group.id, "--limit", "2", "--json"]);
     expect(detail.code).toBe(0);
     const parsed = JSON.parse(detail.stdout) as {
       group: { id: string; state: string; counts: Record<string, number> };
@@ -1321,26 +1373,30 @@ describe("admin CLI task groups", () => {
     expect(parsed.events.map((event) => event.type)).toEqual(["sealed", "created"]);
     expect(parsed.eventsTruncated).toBe(false);
 
-    const next = JSON.parse(runAdmin(["task-group", group.id, "--after", "2", "--json"]).stdout);
+    const next = JSON.parse(
+      (await runAdmin(["task-group", group.id, "--after", "2", "--json"])).stdout,
+    );
     expect(next.members.map((entry: { position: number }) => entry.position)).toEqual([3]);
     expect(next.nextAfter).toBeNull();
-    const exact = JSON.parse(runAdmin(["task-group", group.id, "--limit", "3", "--json"]).stdout);
+    const exact = JSON.parse(
+      (await runAdmin(["task-group", group.id, "--limit", "3", "--json"])).stdout,
+    );
     expect(exact.members).toHaveLength(3);
     expect(exact.nextAfter).toBeNull();
 
-    const human = runAdmin(["task-group", group.id, "--limit", "2"]);
+    const human = await runAdmin(["task-group", group.id, "--limit", "2"]);
     expect(human.code).toBe(0);
     expect(human.stdout).toContain("total 3, succeeded 1, failed 0, canceled 0, pending 2");
     expect(human.stdout).toContain("POSITION");
     expect(human.stdout).toContain("Next member page: pass --after 2");
 
-    const missing = runAdmin(["task-group", "00000000-0000-0000-0000-000000000000"]);
+    const missing = await runAdmin(["task-group", "00000000-0000-0000-0000-000000000000"]);
     expect(missing.code).toBe(1);
     expect(missing.stderr).toContain("not found");
   });
 
-  it("rejects a task-group identity that is not a UUID", () => {
-    expect(runAdmin(["task-group", "not-a-group"]).code).toBe(64);
+  it("rejects a task-group identity that is not a UUID", async () => {
+    expect((await runAdmin(["task-group", "not-a-group"])).code).toBe(64);
   });
 
   it.each([
@@ -1352,7 +1408,7 @@ describe("admin CLI task groups", () => {
     const { group } = await queue.taskGroup(groupCallbacks, (builder) =>
       builder.add([groupMember(1)]),
     );
-    expect(runAdmin(["task-group", group.id, ...args]).code).toBe(64);
+    expect((await runAdmin(["task-group", group.id, ...args])).code).toBe(64);
   });
 
   it("cancels a task group with an actor and a required reason", async () => {
@@ -1360,16 +1416,26 @@ describe("admin CLI task groups", () => {
       builder.add([groupMember(1), groupMember(2)]),
     );
     const guarded = ["cancel-task-group", group.id];
-    expect(runAdmin([...guarded, "--env", databaseName, "--yes"]).code).toBe(64);
-    expect(runAdmin([...guarded, "--reason", "stuck import", "--yes"]).code).toBe(64);
-    expect(runAdmin([...guarded, "--reason", "stuck import", "--env", databaseName]).code).toBe(64);
+    expect((await runAdmin([...guarded, "--env", databaseName, "--yes"])).code).toBe(64);
+    expect((await runAdmin([...guarded, "--reason", "stuck import", "--yes"])).code).toBe(64);
     expect(
-      runAdmin([...guarded, "--reason", "stuck import", "--env", "workhorse_production", "--yes"])
-        .code,
+      (await runAdmin([...guarded, "--reason", "stuck import", "--env", databaseName])).code,
+    ).toBe(64);
+    expect(
+      (
+        await runAdmin([
+          ...guarded,
+          "--reason",
+          "stuck import",
+          "--env",
+          "workhorse_production",
+          "--yes",
+        ])
+      ).code,
     ).toBe(1);
     await expect(admin.getTaskGroup(group.id)).resolves.toMatchObject({ canceledAt: null });
 
-    const canceled = runAdmin([
+    const canceled = await runAdmin([
       ...guarded,
       "--actor",
       "oncall@example.com",
@@ -1403,7 +1469,7 @@ describe("admin CLI task groups", () => {
       members: 2,
     });
 
-    const again = runAdmin([
+    const again = await runAdmin([
       ...guarded,
       "--reason",
       "stuck import",
@@ -1415,7 +1481,7 @@ describe("admin CLI task groups", () => {
     expect(again.code).toBe(1);
     expect(JSON.parse(again.stdout)).toMatchObject({ status: "already_finished" });
 
-    const missing = runAdmin([
+    const missing = await runAdmin([
       "cancel-task-group",
       "00000000-0000-0000-0000-000000000000",
       "--reason",
@@ -1435,7 +1501,7 @@ describe("admin CLI task groups", () => {
     const [active] = await queue.claimMany("cli-group-worker", 1, { queue: "cli-group-members" });
     const cancel = ["cancel-task-group", group.id, "--reason", "stuck import"];
     const guarded = [...cancel, "--env", databaseName, "--yes"];
-    const result = runAdmin(guarded);
+    const result = await runAdmin(guarded);
     expect(result.code).toBe(0);
     expect(result.stdout).toContain("1 active member task(s) must stop before it finishes");
     await expect(admin.getTaskGroup(group.id)).resolves.toMatchObject({
@@ -1444,7 +1510,7 @@ describe("admin CLI task groups", () => {
     });
 
     // A cancel of a sealed group that an earlier cancel canceled runs again and writes its event.
-    const again = runAdmin([...guarded, "--json"]);
+    const again = await runAdmin([...guarded, "--json"]);
     expect(again.code).toBe(0);
     expect(JSON.parse(again.stdout)).toMatchObject({ status: "canceled" });
 
@@ -1452,7 +1518,7 @@ describe("admin CLI task groups", () => {
     // changes nothing, so the snapshot cancel time does not make it a success.
     expect(await queue.acknowledgeCancel(active!, "cli-group-worker")).toBe(true);
     await expect(admin.getTaskGroup(group.id)).resolves.toMatchObject({ state: "finished" });
-    const finished = runAdmin([...guarded, "--json"]);
+    const finished = await runAdmin([...guarded, "--json"]);
     expect(finished.code).toBe(1);
     expect(JSON.parse(finished.stdout)).toMatchObject({
       status: "already_finished",

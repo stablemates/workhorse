@@ -1,4 +1,3 @@
-import { spawnSync } from "node:child_process";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
@@ -7,29 +6,23 @@ import {
   WORKHORSE_SCHEMA_VERSION,
 } from "../src/schema.js";
 import { createIntegrationTestContext } from "./support/integration.js";
-import { cliNodeArgs } from "./support/cli-process.js";
+import { runCliScript } from "./support/cli-process.js";
 
 const repository = path.resolve(import.meta.dirname, "../../..");
 const cli = path.join(repository, "typescript/core/src/cli/workhorse.ts");
 const { databaseUrl, pool } = createIntegrationTestContext(import.meta.url);
 
 function runCli(args: readonly string[]) {
-  const result = spawnSync(process.execPath, [...cliNodeArgs, cli, ...args], {
-    cwd: repository,
-    env: process.env,
-    encoding: "utf8",
-  });
-  if (result.error) throw result.error;
-  return { code: result.status, stdout: result.stdout, stderr: result.stderr };
+  return runCliScript(cli, args, { cwd: repository, env: process.env });
 }
 
 async function withInstalledVersion(
   version: number,
-  assertions: (result: ReturnType<typeof runCli>) => void,
+  assertions: (result: Awaited<ReturnType<typeof runCli>>) => void,
 ): Promise<void> {
   await pool.query("UPDATE workhorse.schema_version SET version = $1", [version]);
   try {
-    assertions(runCli(["schema", "status", "--database-url", databaseUrl, "--json"]));
+    assertions(await runCli(["schema", "status", "--database-url", databaseUrl, "--json"]));
   } finally {
     await pool.query("UPDATE workhorse.schema_version SET version = $1", [
       WORKHORSE_SCHEMA_VERSION,
@@ -38,16 +31,16 @@ async function withInstalledVersion(
 }
 
 describe("database CLI output", () => {
-  it("leaves an already-current schema unchanged through schema migrate", () => {
-    const result = runCli(["schema", "migrate", `--database-url=${databaseUrl}`]);
+  it("leaves an already-current schema unchanged through schema migrate", async () => {
+    const result = await runCli(["schema", "migrate", `--database-url=${databaseUrl}`]);
     expect(result.code).toBe(0);
     expect(result.stdout).toContain(
       `Workhorse schema v${WORKHORSE_SCHEMA_VERSION} is already current.`,
     );
   });
 
-  it("emits separate current-schema and PostgreSQL support fields", () => {
-    const result = runCli(["schema", "status", `--database-url=${databaseUrl}`, "--json"]);
+  it("emits separate current-schema and PostgreSQL support fields", async () => {
+    const result = await runCli(["schema", "status", `--database-url=${databaseUrl}`, "--json"]);
     expect(result.code).toBe(0);
     expect(JSON.parse(result.stdout)).toMatchObject({
       schema: {
@@ -97,14 +90,14 @@ describe("database CLI output", () => {
     });
   });
 
-  it("reports no pending contract step on a current schema", () => {
-    const result = runCli(["schema", "contract", `--database-url=${databaseUrl}`]);
+  it("reports no pending contract step on a current schema", async () => {
+    const result = await runCli(["schema", "contract", `--database-url=${databaseUrl}`]);
     expect(result.code).toBe(0);
     expect(result.stdout).toContain("no contract step is pending");
   });
 
-  it("emits the QueueHealth shape with --json", () => {
-    const result = runCli(["health", "--database-url", databaseUrl, "--json"]);
+  it("emits the QueueHealth shape with --json", async () => {
+    const result = await runCli(["health", "--database-url", databaseUrl, "--json"]);
     expect(result.code).toBe(0);
     expect(JSON.parse(result.stdout)).toMatchObject({
       status: { level: "healthy", reasons: [] },
