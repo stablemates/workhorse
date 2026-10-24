@@ -174,7 +174,8 @@ checks the pool's shape, not its pooling mode, so it still reports the capabilit
 **Fallback poll.** A `Worker.run()` with a live listener polls every 5,000 ms by default, with ±10%
 jitter. Before its `LISTEN` succeeds, and while it reconnects, the worker starts at 250 ms instead.
 A lost listener wakes the worker, and its backoff restarts at 250 ms. An explicit `pollMs` replaces
-both bases.
+both bases. While the listener is live, the worker waits the explicit value without the 5,000 ms
+cap.
 
 More detail: [Operations and CLI: Polling-only cases](../architecture/operations.md#polling-only-cases), [Operations and CLI: Polling cadence](../architecture/operations.md#polling-cadence), [Overview: Listener under the opt-out](../architecture/overview.md#listener-under-the-opt-out), and [Schema and SQL protocol: .NET connections](../architecture/schema-and-protocol.md#net-connections).
 

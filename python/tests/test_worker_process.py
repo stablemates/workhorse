@@ -168,9 +168,24 @@ def test_missed_graceful_drain_deadline_exits_with_failure() -> None:
     assert process.returncode == 1, f"stdout: {stdout!r} stderr: {stderr!r}"
 
 
-def test_shutdown_deadline_rejects_values_outside_the_process_contract() -> None:
+@pytest.mark.parametrize("shutdown_timeout_ms", [0, -1, 3_600_001, 1.5, True])
+def test_shutdown_deadline_rejects_values_outside_the_process_contract(
+    shutdown_timeout_ms: object,
+) -> None:
+    # SM-1668 PAR-09: the process deadline is 1 through 3,600,000 ms, and zero is refused.
     with pytest.raises(ValueError, match="shutdown_timeout_ms"):
-        run_worker_process(cast(Worker, object()), shutdown_timeout_ms=0)
+        run_worker_process(
+            cast(Worker, object()), shutdown_timeout_ms=cast(int, shutdown_timeout_ms)
+        )
+
+
+@pytest.mark.parametrize("shutdown_timeout_ms", [1, 3_600_000])
+def test_shutdown_deadline_accepts_the_limits_of_the_process_contract(
+    shutdown_timeout_ms: int,
+) -> None:
+    # The stand-in worker fails only after the deadline passed validation.
+    with pytest.raises(AttributeError, match="_stop_version_snapshot"):
+        run_worker_process(cast(Worker, object()), shutdown_timeout_ms=shutdown_timeout_ms)
 
 
 @pytest.mark.skipif(os.name == "nt", reason="POSIX process signals are required")

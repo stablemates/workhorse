@@ -55,6 +55,17 @@ describe("Worker timing and limit options", () => {
     });
   }
 
+  // SM-1668 PAR-09 (ADR 0112): 0 stays the TypeScript way to turn registration off. A forced
+  // refresh then sends nothing to the registry.
+  it("sends no registration when registryIntervalMs is 0", async () => {
+    const { queue, calls } = recordingQueue();
+    const worker = new Worker(queue, { registryIntervalMs: 0 }) as unknown as {
+      refreshRegistration(force?: boolean): Promise<void>;
+    };
+    await worker.refreshRegistration(true);
+    expect(calls).not.toContain("registerWorker");
+  });
+
   it("accepts the documented zero values and range limits", () => {
     const { queue } = recordingQueue();
     expect(

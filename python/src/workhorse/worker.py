@@ -1479,6 +1479,17 @@ class _HandlerDurability:
 # so the worker refuses it first (ADR 0111).
 _MAX_RETRY_DELAY_MS = 2_147_483_647
 
+# register_worker_v1 takes each maintenance, routine, and registry interval as a PostgreSQL
+# integer. A larger value would fail each registration, so every SDK refuses it first (ADR 0112).
+_MAX_INTERVAL_MS = 2_147_483_647
+
+
+def _is_interval_ms(value: object, *, zero: bool = False) -> bool:
+    """Whether an interval is an integer from 100 through the SQL limit, or an allowed 0."""
+    if isinstance(value, bool) or not isinstance(value, int):
+        return False
+    return (zero and value == 0) or 100 <= value <= _MAX_INTERVAL_MS
+
 
 def _checked_retry_delay_ms(value: object, prefix: str) -> int:
     """Return a retry delay override that fail_v1 accepts, or raise ValueError."""
@@ -1602,24 +1613,18 @@ class Worker:
         self._heartbeat_round_ms = _heartbeat_round_bound_ms(self.heartbeat_ms)
         if not 0 < self.heartbeat_ms < self.lease_ms:
             raise ValueError("heartbeat_ms must be positive and less than lease_ms")
-        if (
-            isinstance(maintenance_interval_ms, bool)
-            or not isinstance(maintenance_interval_ms, int)
-            or maintenance_interval_ms < 100
-        ):
-            raise ValueError("maintenance_interval_ms must be an integer of at least 100")
-        if (
-            isinstance(maintenance_routine_poll_ms, bool)
-            or not isinstance(maintenance_routine_poll_ms, int)
-            or maintenance_routine_poll_ms < 100
-        ):
-            raise ValueError("maintenance_routine_poll_ms must be an integer of at least 100")
-        if (
-            isinstance(registry_interval_ms, bool)
-            or not isinstance(registry_interval_ms, int)
-            or (registry_interval_ms != 0 and registry_interval_ms < 100)
-        ):
-            raise ValueError("registry_interval_ms must be 0 or an integer of at least 100")
+        if not _is_interval_ms(maintenance_interval_ms):
+            raise ValueError(
+                "maintenance_interval_ms must be an integer between 100 and 2147483647"
+            )
+        if not _is_interval_ms(maintenance_routine_poll_ms):
+            raise ValueError(
+                "maintenance_routine_poll_ms must be an integer between 100 and 2147483647"
+            )
+        if not _is_interval_ms(registry_interval_ms, zero=True):
+            raise ValueError(
+                "registry_interval_ms must be 0 or an integer between 100 and 2147483647"
+            )
         if (
             isinstance(schedule_catchup_limit, bool)
             or not isinstance(schedule_catchup_limit, int)

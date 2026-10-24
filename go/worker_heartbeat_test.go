@@ -178,7 +178,7 @@ func TestWorkerHeartbeatsRenewWhileHandlersHoldEveryOtherPooledConnection(t *tes
 		LeaseDuration:       5 * time.Second,
 		HeartbeatInterval:   reservedHeartbeatInterval,
 		PollInterval:        5 * time.Millisecond,
-		MaintenanceInterval: 20 * time.Millisecond,
+		MaintenanceInterval: 100 * time.Millisecond,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -850,7 +850,7 @@ func TestWorkerRetriesAFailedHeartbeatRoundAndKeepsTasksRunning(t *testing.T) {
 		LeaseDuration:       retryLeaseDuration,
 		HeartbeatInterval:   reservedHeartbeatInterval,
 		PollInterval:        5 * time.Millisecond,
-		MaintenanceInterval: 20 * time.Millisecond,
+		MaintenanceInterval: 100 * time.Millisecond,
 		Logger:              slog.New(slog.NewTextHandler(&logs, nil)),
 	})
 	if err != nil {
@@ -1113,7 +1113,7 @@ func TestWorkerRunSurvivesTheTerminationOfItsIdleHeartbeatConnection(t *testing.
 		LeaseDuration:       10 * time.Second,
 		HeartbeatInterval:   100 * time.Millisecond,
 		PollInterval:        5 * time.Millisecond,
-		MaintenanceInterval: 20 * time.Millisecond,
+		MaintenanceInterval: 100 * time.Millisecond,
 		Logger:              slog.New(slog.NewTextHandler(&logs, nil)),
 	})
 	if err != nil {

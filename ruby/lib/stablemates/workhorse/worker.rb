@@ -236,6 +236,11 @@ module Stablemates
       RETRY_DELAY_REFUSAL = "retry_delay must be a finite Numeric count of seconds between 0 and 2147483.647"
       private_constant :RETRY_DELAY_RANGE, :RETRY_DELAY_REFUSAL
 
+      # register_worker_v1 takes each maintenance, routine, and registry interval as a PostgreSQL
+      # integer, and its check refuses a value below 100 ms. Every SDK accepts this range (ADR 0112).
+      INTERVAL_RANGE = (100..2_147_483_647)
+      private_constant :INTERVAL_RANGE
+
       attr_reader :worker_id, :queues, :concurrency, :cohorts
 
       def initialize(pool, queues: ["default"], worker_id: nil, concurrency: 1, lease: 30, heartbeat: nil,
@@ -263,9 +268,9 @@ module Stablemates
         @poll_ms = poll_interval.nil? ? 250 : Values.milliseconds(poll_interval, "poll_interval", 1..)
         @notification_poll_ms = poll_interval.nil? ? NOTIFICATION_POLL_MS : @poll_ms
         @polling_only = polling_only ? true : false
-        @maintenance_ms = Values.milliseconds(maintenance_interval, "maintenance_interval", 100..)
-        @routine_ms = Values.milliseconds(maintenance_routine_interval, "maintenance_routine_interval", 100..)
-        @registry_ms = disable_registry ? 0 : Values.milliseconds(registry_interval, "registry_interval", 100..)
+        @maintenance_ms = Values.milliseconds(maintenance_interval, "maintenance_interval", INTERVAL_RANGE)
+        @routine_ms = Values.milliseconds(maintenance_routine_interval, "maintenance_routine_interval", INTERVAL_RANGE)
+        @registry_ms = disable_registry ? 0 : Values.milliseconds(registry_interval, "registry_interval", INTERVAL_RANGE)
         @schedule_namespaces = unique_names(schedule_namespaces, "schedule_namespaces")
         raise ArgumentError, "schedule_catchup_limit must be an Integer between 1 and 10000" unless
           schedule_catchup_limit.is_a?(Integer) && schedule_catchup_limit.between?(1, 10_000)

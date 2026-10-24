@@ -1968,30 +1968,56 @@ public final class Worker implements AutoCloseable {
    * lost, the backoff restarts: the empty claims of the live period do not count.
    */
   private long dispatchWait(RunState run) {
-    long milliseconds;
+    boolean listening;
+    int empty;
     stateLock.lock();
     try {
       Listener.Subscription listener = run.listener;
-      boolean listening = listener != null && listener.isListening();
+      listening = listener != null && listener.isListening();
       if (!listening && run.listenedAtLastWait) {
         run.empty = Math.min(run.empty, 1);
       }
       run.listenedAtLastWait = listening;
-      if (listening) {
-        milliseconds = notificationPollMs;
-      } else {
-        int doublings = Math.min(Math.max(0, run.empty - 1), 20);
-        milliseconds = Math.min(MAX_EMPTY_POLL_MS, pollMs << doublings);
-      }
+      empty = run.empty;
     } finally {
       stateLock.unlock();
     }
-    milliseconds =
-        Math.max(1, Math.round(milliseconds * ThreadLocalRandom.current().nextDouble(0.9, 1.1)));
+    return TimeUnit.MILLISECONDS.toNanos(
+        dispatchWaitMillis(
+            listening,
+            empty,
+            pollMs,
+            notificationPollMs,
+            registryMs,
+            ThreadLocalRandom.current().nextDouble(0.9, 1.1)));
+  }
+
+  /**
+   * The wait after an empty claim, in milliseconds (ADR 0112). With a live subscription it is the
+   * notification base, without backoff or cap, so an explicit poll interval keeps its value.
+   * Without one, the base doubles for each empty claim after the first, up to the 5,000 ms cap.
+   * Then the jitter factor applies, and a registered worker cuts the wait to its registry interval,
+   * because it refreshes the registry from the dispatch loop.
+   */
+  static long dispatchWaitMillis(
+      boolean listening,
+      int empty,
+      long pollMs,
+      long notificationPollMs,
+      long registryMs,
+      double jitter) {
+    long milliseconds;
+    if (listening) {
+      milliseconds = notificationPollMs;
+    } else {
+      int doublings = Math.min(Math.max(0, empty - 1), 20);
+      milliseconds = Math.min(MAX_EMPTY_POLL_MS, pollMs << doublings);
+    }
+    milliseconds = Math.max(1, Math.round(milliseconds * jitter));
     if (registryMs > 0) {
       milliseconds = Math.min(milliseconds, registryMs);
     }
-    return TimeUnit.MILLISECONDS.toNanos(milliseconds);
+    return milliseconds;
   }
 
   /**

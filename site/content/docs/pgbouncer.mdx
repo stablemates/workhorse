@@ -171,7 +171,8 @@ checks the pool's shape, not its pooling mode, so it still reports the capabilit
   `polling_only`, the Rust worker logs no listener warning.
 
 **Fallback poll.** A notification-capable `Worker.run()` polls every 5,000 ms by default, with ±10%
-jitter. An explicit `pollMs` replaces that base.
+jitter. An explicit `pollMs` replaces that base. While the listener is live, the worker waits the
+explicit value without the 5,000 ms cap.
 
 More detail: [Operations and CLI: Polling-only cases](https://github.com/stablemates/workhorse/blob/main/docs/architecture/operations.md#polling-only-cases), [Operations and CLI: Polling cadence](https://github.com/stablemates/workhorse/blob/main/docs/architecture/operations.md#polling-cadence), [Overview: Listener under the opt-out](https://github.com/stablemates/workhorse/blob/main/docs/architecture/overview.md#listener-under-the-opt-out), and [Schema and SQL protocol: .NET connections](https://github.com/stablemates/workhorse/blob/main/docs/architecture/schema-and-protocol.md#net-connections).
 

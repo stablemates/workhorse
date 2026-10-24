@@ -218,7 +218,7 @@ Rust, Java, or Kotlin worker holds its own.
 | Listener connected (`run()`)                  | 5,000 ms fallback poll, ±10% jitter        |
 | Notification after an empty claim             | Random delay of 0 to 50 ms before claiming |
 | Notification after a claim that found work    | No delay                                   |
-| Explicit `pollMs` (`poll_ms`, `PollInterval`) | Replaces the fallback base                 |
+| Explicit `pollMs` (`poll_ms`, `PollInterval`) | Replaces the base; no cap with a listener  |
 | No listener, consecutive empty waits          | Doubles up to a 5,000 ms cap, ±10% jitter  |
 | No listener, starting wait                    | 250 ms                                     |
 | TypeScript `runOnce()`                        | No wait; never opens a listener            |
@@ -232,6 +232,10 @@ Rust, Java, or Kotlin worker holds its own.
   uses the 250 ms starting wait until `LISTEN` succeeds.
 - A lost listener wakes the worker. The backoff then restarts at 250 ms, because the empty claims
   of the live period do not count.
+- While the listener is connected, an explicit poll interval keeps its value: no backoff and no
+  cap. Without a listener, the 5,000 ms cap also applies to it.
+- The jitter applies after the cap. Python, Ruby, the JVM, and .NET then cut each wait to the
+  registry interval.
 - A pool with a capacity of 1 stays polling-only. Go `WorkerOptions.PollingOnly` turns the listener
   off for a transaction-mode pooler.
 
@@ -388,12 +392,18 @@ after the drain.
 <details>
 <summary>Reference: shutdown deadline</summary>
 
-| SDK        | Option                                 | Default   | Range             |
-| ---------- | -------------------------------------- | --------- | ----------------- |
-| TypeScript | `shutdownTimeoutMs`                    | 25,000 ms | 1 to 3,600,000 ms |
-| Python     | `shutdown_timeout_ms`                  | 25,000 ms | 1 to 3,600,000 ms |
-| Go         | `WorkerOptions.ShutdownGracePeriod`    | 25,000 ms | Positive whole ms |
-| Rust       | `WorkerOptions::shutdown_grace_period` | 25 s      | —                 |
+| SDK        | Option                                 | Default   | Range             | Zero                |
+| ---------- | -------------------------------------- | --------- | ----------------- | ------------------- |
+| TypeScript | `shutdownTimeoutMs`                    | 25,000 ms | 1 to 3,600,000 ms | Refused             |
+| Python     | `shutdown_timeout_ms`                  | 25,000 ms | 1 to 3,600,000 ms | Refused             |
+| Go         | `WorkerOptions.ShutdownGracePeriod`    | 25,000 ms | Positive whole ms | Selects the default |
+| Rust       | `WorkerOptions::shutdown_grace_period` | 25 s      | Positive whole ms | Refused             |
+| Ruby       | `shutdown_grace`                       | 25 s      | 0 to 86,400 s     | No handler wait     |
+| JVM        | `Worker.Builder.shutdownGrace`         | 25 s      | 0 to 1 day        | No handler wait     |
+| .NET       | `WorkerOptions.ShutdownGrace`          | 25 s      | 0 to 1 day        | No handler wait     |
+
+With a zero grace, a Ruby, JVM, or .NET worker cancels its handlers, and the stop ends within the
+250 ms unwind window.
 
 **TypeScript process exits**
 
@@ -409,7 +419,7 @@ The second signal to a Python process calls `force_exit` with 128 plus the signa
 The first signal marks readiness false and calls `stop()` on every worker. Active handlers and their
 heartbeat batch continue. Process termination never writes a durable task cancellation.
 
-More detail: [Operations and CLI: Shutdown deadline and failure](../architecture/operations.md#shutdown-deadline-and-failure) and [Schema and SQL protocol: Python worker processes](../architecture/schema-and-protocol.md#python-worker-processes).
+More detail: [Operations and CLI: Shutdown deadline and failure](../architecture/operations.md#shutdown-deadline-and-failure), [Schema and SQL protocol: Python worker processes](../architecture/schema-and-protocol.md#python-worker-processes), [Go shutdown grace period](../architecture/schema-and-protocol.md#shutdown-grace-period), [Rust worker](../architecture/schema-and-protocol.md#rust-worker), [Ruby worker construction](../architecture/schema-and-protocol.md#worker-construction), [JVM worker](../architecture/schema-and-protocol.md#jvm-worker), and [.NET worker](../architecture/schema-and-protocol.md#net-worker).
 
 </details>
 

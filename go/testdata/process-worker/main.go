@@ -40,7 +40,7 @@ func main() {
 		LeaseDuration:       leaseDuration,
 		HeartbeatInterval:   heartbeatInterval,
 		PollInterval:        5 * time.Millisecond,
-		MaintenanceInterval: 20 * time.Millisecond,
+		MaintenanceInterval: 100 * time.Millisecond,
 		ShutdownGracePeriod: shutdownGracePeriod,
 		PollingOnly:         true,
 	})

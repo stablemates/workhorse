@@ -89,7 +89,8 @@ Process termination does not create a durable task cancellation. It also does no
 
 A configurable deadline prevents an uncooperative handler from blocking termination forever. The
 default deadline is 25 seconds. `shutdownTimeoutMs` sets the deadline. Its value is a safe integer
-from 1 through 3,600,000, and its default is 25,000 ms.
+from 1 through 3,600,000, and its default is 25,000 ms. The process refuses zero.
+`Worker.stop()` takes no deadline.
 
 | Event                          | Exit                                                                     |
 | ------------------------------ | ------------------------------------------------------------------------ |
@@ -978,12 +979,36 @@ connection.
 | Active listener, `Worker.run()`             | 5,000 ms default fallback poll, ±10% jitter         |
 | Notification after an empty claim           | Random delay from 0 through 50 ms before claiming   |
 | Claim that released every task              | The next empty wait; a notification does not end it |
-| Explicit `pollMs`                           | Replaces both default bases                         |
+| Explicit `pollMs`                           | Replaces both bases; no cap with an active listener |
 | No active listener, first empty wait        | 250 ms, ±10% jitter                                 |
 | No active listener, consecutive empty waits | Double through a 5,000 ms cap, ±10% jitter          |
 | `runOnce()`                                 | No wait; never opens a listener                     |
 
 Every pass uses authoritative `claim_many_v1` transitions.
+
+`nextDispatchPollMs()` computes each wait in this order, which
+[ADR 0112](../decisions/0112-define-the-poll-wait-order-and-the-worker-interval-range.md) sets for
+every SDK:
+
+1. It takes the base: `pollMs` if the caller set it, else 5,000 ms with a live subscription and
+   250 ms without one.
+2. With a live subscription, the wait is the base, without backoff or cap. Thus an explicit
+   `pollMs` above 5,000 ms keeps its value.
+3. Without a live subscription, it doubles the base once for each empty claim after the first, and
+   caps the result at 5,000 ms. The cap also applies to an explicit `pollMs`.
+4. It applies ±10% jitter after the cap, and the wait is at least 1 ms. Thus the longest wait
+   without a live subscription is 5,500 ms. The TypeScript worker also bounds the wait at
+   `MAX_TIMER_DELAY_MS`, 2,147,483,647 ms.
+
+Python, Ruby, the JVM, and .NET refresh the registry from the dispatch loop. After the jitter, they
+cut the wait to the registry interval, unless registration is off. With the default 5,000 ms
+registry interval, their longest wait is 5,000 ms. The .NET worker also cuts the wait to the time
+until its next maintenance tick. TypeScript, Go, and Rust refresh the registry and run maintenance
+on their own timers, so their dispatch wait does not depend on these intervals.
+
+Each SDK writes the configured poll interval to `worker_registry`, not the wait it computes.
+Without an explicit value, Go writes 5,000 ms unless `PollingOnly` is set, Rust writes 5,000 ms
+when it expects a listener, and the other SDKs write 250 ms.
 
 `nextDispatchPollMs()` reads `isListening()` of the subscriptions before each wait. Thus a listener
 that has not run `LISTEN` yet, or that reconnects after a lost connection, counts as no active

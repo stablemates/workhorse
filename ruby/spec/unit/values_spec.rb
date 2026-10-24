@@ -54,18 +54,19 @@ RSpec.describe W::Values do
       def with = raise("unit specs never check out a connection")
     end
 
+    # The maintenance, routine, and registry intervals end at the SQL integer limit (ADR 0112).
     {
-      heartbeat: [0, "0.001"],
-      poll_interval: [0, "0.001"],
-      maintenance_interval: [0.05, "0.1"],
-      maintenance_routine_interval: [0.05, "0.1"],
-      registry_interval: [0.05, "0.1"]
-    }.each do |option, (value, limit)|
+      heartbeat: [0, "of at least 0.001"],
+      poll_interval: [0, "of at least 0.001"],
+      maintenance_interval: [0.05, "between 0.1 and 2147483.647"],
+      maintenance_routine_interval: [0.05, "between 0.1 and 2147483.647"],
+      registry_interval: [0.05, "between 0.1 and 2147483.647"]
+    }.each do |option, (value, limits)|
       it "raises ArgumentError for #{option}: #{value}" do
         pool = pool_class.new
         options = {queues: ["default"], polling_only: true}.merge(option => value)
         expect { W::Worker.new(pool, **options) }
-          .to raise_error(ArgumentError, "#{option} must be a finite Numeric count of seconds of at least #{limit}")
+          .to raise_error(ArgumentError, "#{option} must be a finite Numeric count of seconds #{limits}")
         expect(pool.statements).to be_empty
       end
     end

@@ -20,6 +20,17 @@ upgrade steps.
 
 ## Unreleased
 
+### An explicit pollMs keeps its value while the subscription is live
+
+`Worker` takes `pollMs` as its fallback poll interval. Before this change, the worker capped every
+wait at 5,000 ms, also an explicit `pollMs` while its `LISTEN` subscription was live. Thus
+`pollMs: 30_000` waited about 5 s, and the other six SDKs waited about 30 s (SM-1668).
+
+Now a worker with a live subscription waits the explicit `pollMs` with ±10% jitter. This is a
+behavior change for a caller who sets `pollMs` above 5,000: an idle worker claims less often. Without
+a live subscription, the backoff still caps the wait at 5,000 ms. ADR 0112 records the order for all
+seven SDKs.
+
 ### The .NET heartbeat round gives each server budget one quarter
 
 PostgreSQL measures `statement_timeout` for each statement and

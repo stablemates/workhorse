@@ -218,3 +218,101 @@ func TestWorkerRefusesARetryDelayOutsideTheSQLIntegerRange(t *testing.T) {
 		})
 	}
 }
+
+// SM-1668 PAR-09: Go cannot tell an unset ShutdownGracePeriod from an explicit zero, so zero means
+// the 25 s default. It does not refuse zero, and it does not abandon the handlers at once.
+func TestWorkerReadsAZeroShutdownGraceAsTheDefault(t *testing.T) {
+	for _, testCase := range []struct {
+		name  string
+		grace time.Duration
+		want  time.Duration
+	}{
+		{"zero", 0, 25 * time.Second},
+		{"one millisecond", time.Millisecond, time.Millisecond},
+		{"one day", 24 * time.Hour, 24 * time.Hour},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			worker := newDefaultWorker(t, WorkerOptions{ShutdownGracePeriod: testCase.grace})
+			if worker.shutdownGracePeriod != testCase.want {
+				t.Fatalf("grace %s: got %s, want %s", testCase.grace, worker.shutdownGracePeriod, testCase.want)
+			}
+		})
+	}
+}
+
+func TestWorkerRefusesANegativeOrFractionalShutdownGrace(t *testing.T) {
+	for _, grace := range []time.Duration{-time.Millisecond, time.Microsecond, 1500 * time.Microsecond} {
+		_, err := NewWorker(unconnectedPool(t), WorkerOptions{
+			Queue: "defaults", WorkerID: "defaults-worker", SharedHeartbeats: true, ShutdownGracePeriod: grace,
+		})
+		if err == nil || err.Error() != workerShutdownGraceRangeMessage {
+			t.Fatalf("grace %s: got %v, want %q", grace, err, workerShutdownGraceRangeMessage)
+		}
+	}
+}
+
+// SM-1668 PAR-09 (ADR 0112): register_worker_v1 takes each interval as a PostgreSQL integer, and
+// its check refuses a value below 100. Every SDK accepts 100 through 2147483647 ms. Zero selects
+// the default, because Go cannot tell it from an unset option.
+func TestWorkerAcceptsAMaintenanceOrRegistryIntervalFrom100MsThroughTheSQLLimit(t *testing.T) {
+	limit := 2147483647 * time.Millisecond
+	for _, interval := range []time.Duration{100 * time.Millisecond, limit} {
+		worker := newDefaultWorker(t, WorkerOptions{
+			MaintenanceInterval: interval, MaintenanceRoutineInterval: interval, RegistryInterval: interval,
+		})
+		if worker.maintenanceInterval != interval || worker.maintenanceRoutineInterval != interval ||
+			worker.registryInterval != interval {
+			t.Fatalf("interval %s: got %s, %s, %s", interval,
+				worker.maintenanceInterval, worker.maintenanceRoutineInterval, worker.registryInterval)
+		}
+	}
+	worker := newDefaultWorker(t, WorkerOptions{})
+	if worker.maintenanceInterval != time.Second || worker.maintenanceRoutineInterval != time.Minute ||
+		worker.registryInterval != 5*time.Second {
+		t.Fatalf("zero intervals: got %s, %s, %s",
+			worker.maintenanceInterval, worker.maintenanceRoutineInterval, worker.registryInterval)
+	}
+}
+
+func TestWorkerRefusesAMaintenanceOrRegistryIntervalOutsideTheRange(t *testing.T) {
+	refused := []time.Duration{
+		time.Millisecond, 99 * time.Millisecond, 2147483648 * time.Millisecond,
+		-time.Millisecond, 100*time.Millisecond + time.Microsecond,
+	}
+	for _, testCase := range []struct {
+		option  string
+		message string
+		set     func(*WorkerOptions, time.Duration)
+	}{
+		{"MaintenanceInterval", workerMaintenanceRangeMessage,
+			func(options *WorkerOptions, value time.Duration) { options.MaintenanceInterval = value }},
+		{"MaintenanceRoutineInterval", workerRoutineIntervalRangeMessage,
+			func(options *WorkerOptions, value time.Duration) { options.MaintenanceRoutineInterval = value }},
+		{"RegistryInterval", workerRegistryRangeMessage,
+			func(options *WorkerOptions, value time.Duration) { options.RegistryInterval = value }},
+	} {
+		for _, value := range refused {
+			options := WorkerOptions{Queue: "defaults", WorkerID: "defaults-worker", SharedHeartbeats: true}
+			testCase.set(&options, value)
+			if _, err := NewWorker(unconnectedPool(t), options); err == nil || err.Error() != testCase.message {
+				t.Errorf("%s %s: got %v, want %q", testCase.option, value, err, testCase.message)
+			}
+		}
+	}
+}
+
+// SM-1668 PAR-09 (ADR 0112): with a live subscription, an explicit PollInterval is the fallback
+// interval, so the 5 s cap does not apply. Without one, the cap applies before the ±10% jitter.
+func TestWorkerCapsAnExplicitPollIntervalOnlyWhileItPolls(t *testing.T) {
+	worker := newDefaultWorker(t, WorkerOptions{PollInterval: 30 * time.Second})
+	for range 50 {
+		listening := workerPollDelay(worker.claimPollBase(true), 4, false)
+		if listening < 27*time.Second || listening > 33*time.Second {
+			t.Fatalf("explicit 30s poll while listening waited %s, want 27s to 33s", listening)
+		}
+		polling := workerPollDelay(worker.claimPollBase(false), 4, true)
+		if polling < 4500*time.Millisecond || polling > 5500*time.Millisecond {
+			t.Fatalf("explicit 30s poll while polling waited %s, want 4.5s to 5.5s", polling)
+		}
+	}
+}
