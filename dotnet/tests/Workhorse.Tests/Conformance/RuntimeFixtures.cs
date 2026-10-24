@@ -490,9 +490,15 @@ internal sealed class RuntimeFixtures : IAsyncDisposable
                 starts.TryRemove(call, out var start);
                 claims.Enqueue((start, Stopwatch.GetTimestamp(), call.Rows));
             });
+        var grace = TimeSpan.Zero;
         await using (var pool = Intercept.Create(_database, hook))
         {
-            await using var subject = NewWorker(pool, fixture, options => options.PollInterval = Millis(fixture, "pollMs"));
+            // The runner does not dispose the worker, because DisposeAsync waits for the run without a bound (SM-1801).
+            var subject = NewWorker(pool, fixture, options =>
+            {
+                options.PollInterval = Millis(fixture, "pollMs");
+                grace = options.ShutdownGrace;
+            });
             subject.Handle<JsonElement>(TaskType(fixture), (_, _) =>
             {
                 handled.TrySetResult();
@@ -522,7 +528,7 @@ internal sealed class RuntimeFixtures : IAsyncDisposable
                 Volatile.Write(ref holding, 0);
                 released.Release();
                 subject.Stop();
-                await Settled(run);
+                await StoppedAsync(run, grace);
             }
         }
 
@@ -548,12 +554,15 @@ internal sealed class RuntimeFixtures : IAsyncDisposable
         using var release = new ManualResetEventSlim();
         var active = 0;
         var expectedActive = (long)fixture["expectedActiveAtStop"]!;
+        var grace = TimeSpan.Zero;
         await using (var pool = Intercept.Create(_database, Intercept.Hook.None))
         {
-            await using var subject = NewWorker(pool, fixture, options =>
+            // The runner does not dispose the worker, because DisposeAsync waits for the run without a bound (SM-1801).
+            var subject = NewWorker(pool, fixture, options =>
             {
                 options.Concurrency = checked((int)(long)fixture["concurrency"]!);
                 options.PollInterval = TimeSpan.FromSeconds(5);
+                grace = options.ShutdownGrace;
             });
             subject.Handle<JsonElement>(TaskType(fixture), async (_, _) =>
             {
@@ -580,6 +589,10 @@ internal sealed class RuntimeFixtures : IAsyncDisposable
             {
                 release.Set();
                 subject.Stop();
+                // The fixture tests the drain, which ShutdownGrace bounds, so the grace stays. The
+                // shared server can stall the completions of the drain for longer than Patience. Thus
+                // the runner waits for the whole grace, and then for Patience (SM-1801).
+                await StoppedAsync(run, grace);
             }
 
             await JoinAsync(run);
@@ -700,10 +713,13 @@ internal sealed class RuntimeFixtures : IAsyncDisposable
                 }
             });
         await using var pool = Intercept.Create(_database, hook);
-        await using var subject = NewWorker(pool, fixture, options =>
+        var grace = TimeSpan.Zero;
+        // The runner does not dispose the worker, because DisposeAsync waits for the run without a bound (SM-1801).
+        var subject = NewWorker(pool, fixture, options =>
         {
             options.Concurrency = concurrency;
             options.SharedHeartbeats = true;
+            grace = options.ShutdownGrace;
         });
         subject.Handle<JsonElement>(TaskType(fixture), async (_, _) =>
         {
@@ -797,7 +813,7 @@ internal sealed class RuntimeFixtures : IAsyncDisposable
             ReleaseHeld();
             OpenAll();
             subject.Stop();
-            await Settled(run);
+            await StoppedAsync(run, grace);
         }
     }
 
@@ -1202,7 +1218,8 @@ internal sealed class RuntimeFixtures : IAsyncDisposable
             // during that claim waits until ShutdownGrace, so the grace must end before Patience
             // (SM-1799).
             options.ShutdownGrace = ReleaseWaitShutdownGrace;
-            await using var subject = new Worker(pool.DataSource, options);
+            // The runner does not dispose the worker, because DisposeAsync waits for the run without a bound (SM-1801).
+            var subject = new Worker(pool.DataSource, options);
             subject.Handle<JsonElement>((string)fixture["registeredTaskType"]!, (_, _) => Task.CompletedTask);
             var run = Running(subject, () => subject.RunAsync(CancellationToken.None));
             try
@@ -1218,6 +1235,7 @@ internal sealed class RuntimeFixtures : IAsyncDisposable
             finally
             {
                 subject.Stop();
+                await StoppedAsync(run, ReleaseWaitShutdownGrace);
             }
 
             await JoinAsync(run);
@@ -1318,7 +1336,8 @@ internal sealed class RuntimeFixtures : IAsyncDisposable
         {
             var options = BaseOptions(name, $"dotnet-{Runner.Text(fixture["id"])}");
             options.PollingOnly = false;
-            await using var subject = new Worker(pool.DataSource, options);
+            // The runner does not dispose the worker, because DisposeAsync waits for the run without a bound (SM-1801).
+            var subject = new Worker(pool.DataSource, options);
             subject.Handle<JsonElement>(TaskType(fixture), (_, payload) =>
             {
                 handled.Enqueue(payload.GetProperty("task").GetString()!);
@@ -1377,7 +1396,7 @@ internal sealed class RuntimeFixtures : IAsyncDisposable
                 }
 
                 subject.Stop();
-                await Settled(run);
+                await StoppedAsync(run, options.ShutdownGrace);
                 foreach (var gate in gates)
                 {
                     gate.Dispose();
@@ -2178,6 +2197,29 @@ internal sealed class RuntimeFixtures : IAsyncDisposable
         catch (TimeoutException)
         {
             throw new Failure("the worker run did not return");
+        }
+    }
+
+    /// <summary>
+    /// Waits for a stopped <paramref name="run"/> for its shutdown <paramref name="grace"/> and then
+    /// <see cref="Patience"/>, and ignores its result. A run that has not returned by then fails the
+    /// fixture. The runner calls it in a <c>finally</c> block, so the wait also bounds a fixture that
+    /// fails early. <c>Worker.DisposeAsync</c> waits for the run without a bound, so without this
+    /// wait the suite hangs instead of failing (SM-1801).
+    /// </summary>
+    private static async Task StoppedAsync(Task run, TimeSpan grace)
+    {
+        try
+        {
+            await run.WaitAsync(grace + Patience);
+        }
+        catch (TimeoutException)
+        {
+            throw new Failure($"the worker run did not return within its shutdown grace of {grace.TotalSeconds} s and then {Patience.TotalSeconds} s");
+        }
+        catch (Exception)
+        {
+            // The fixture reports its own outcome; this wait only bounds the run.
         }
     }
 
