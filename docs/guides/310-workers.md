@@ -378,7 +378,10 @@ final write. A second signal makes the process exit at once, without the drain.
 Thus, these rules apply to a shutdown:
 
 - A claim that is in flight can return after the shutdown starts. The worker drains that task and
-  does not abandon it.
+  does not abandon it. A TypeScript worker has no limit of its own for that wait, but the process
+  deadline still ends it. Each other SDK ends or cancels the wait at its stop deadline or its
+  grace. If a claim leases a task after that limit, the task can stay active until recovery makes
+  it available again.
 - You can configure the drain deadline. Thus, a handler that ignores its abort signal cannot block
   a deploy indefinitely.
 - A hard kill leaves tasks active. Their leases expire, and recovery makes the tasks available again.
@@ -405,6 +408,16 @@ after the drain.
 With a zero grace, a Ruby, JVM, or .NET worker cancels its handlers, and the stop ends within the
 250 ms unwind window.
 
+**Claims in flight after a stop**
+
+| SDK           | Wait for a claim in flight                                                                                               |
+| ------------- | ------------------------------------------------------------------------------------------------------------------------ |
+| TypeScript    | No limit in the worker. The process deadline ends the wait.                                                              |
+| Python        | Until the stop deadline, max(`heartbeat_ms`, 5 s) after `stop()`                                                         |
+| Go            | Until the grace ends. Then the worker cancels the claim and waits for it to return.                                      |
+| Rust and Ruby | Until the grace ends                                                                                                     |
+| JVM and .NET  | Until the grace ends, but not earlier than 250 ms after the dispatch loop ends and not later than 250 ms after the grace |
+
 **TypeScript process exits**
 
 | Event                          | Exit                                                             |
@@ -419,7 +432,7 @@ The second signal to a Python process calls `force_exit` with 128 plus the signa
 The first signal marks readiness false and calls `stop()` on every worker. Active handlers and their
 heartbeat batch continue. Process termination never writes a durable task cancellation.
 
-More detail: [Operations and CLI: Shutdown deadline and failure](../architecture/operations.md#shutdown-deadline-and-failure), [Schema and SQL protocol: Python worker processes](../architecture/schema-and-protocol.md#python-worker-processes), [Go shutdown grace period](../architecture/schema-and-protocol.md#shutdown-grace-period), [Rust worker](../architecture/schema-and-protocol.md#rust-worker), [Ruby worker construction](../architecture/schema-and-protocol.md#worker-construction), [JVM worker](../architecture/schema-and-protocol.md#jvm-worker), and [.NET worker](../architecture/schema-and-protocol.md#net-worker).
+More detail: [Operations and CLI: Shutdown deadline and failure](../architecture/operations.md#shutdown-deadline-and-failure), [Schema and SQL protocol: Python worker processes](../architecture/schema-and-protocol.md#python-worker-processes), [Go shutdown grace period](../architecture/schema-and-protocol.md#shutdown-grace-period), [Rust worker](../architecture/schema-and-protocol.md#rust-worker), [Ruby worker construction](../architecture/schema-and-protocol.md#worker-construction), [JVM worker](../architecture/schema-and-protocol.md#jvm-worker), [.NET worker](../architecture/schema-and-protocol.md#net-worker), and [Task lifecycle: Statement bounds](../architecture/lifecycle.md#statement-bounds).
 
 </details>
 

@@ -489,8 +489,8 @@ public final class Worker implements AutoCloseable {
   }
 
   /**
-   * Claims and runs tasks until a claim finds no handled task, then drains. It opens no listener
-   * and does no startup maintenance pass.
+   * Claims and runs tasks until a claim finds no handled task, then drains. It opens no listener.
+   * Before each claim, it runs a maintenance pass when the maintenance interval has elapsed.
    *
    * @return whether a handled task ran
    */

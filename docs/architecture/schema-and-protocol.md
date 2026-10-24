@@ -986,6 +986,20 @@ A registration statement runs on its own thread, and the worker waits for it unt
 statement at most is in flight. A refresh that finds the previous statement still running skips,
 so a stalled statement holds neither the dispatch loop nor a stop.
 
+**Maintenance and claim statements.** The worker sets no `statement_timeout`, no `lock_timeout`,
+and no client timeout on `tick_v1`, `fire_due_schedules_v2`, `run_maintenance_v1`, or a claim
+statement. The checkout timeout of the pool limits only the borrow. Thus a statement waits as long
+as PostgreSQL makes it wait, for example for a table lock that another session holds. The worker
+logs nothing while it waits.
+
+- In `run()`, the maintenance thread runs the first pass beside the first claim
+  ([ADR 0078](../decisions/0078-start-a-long-running-workers-first-claim-beside-its-startup-maintenance-pass.md)). Each
+  claim runs on its own thread. Neither wait holds the dispatch loop. After a stop, both waits end
+  at the stop deadline.
+- `run_once()` runs a due maintenance pass on its dispatch thread before it claims. That pass has no
+  bound, and a `stop()` does not end it. A claim of `run_once()` runs on its own thread. The wait
+  for it has no bound until the loop ends. Then the wait ends at the stop deadline.
+
 **Stop.** The first `stop()` of a run fixes the stop deadline at max(`heartbeat_ms`, 5 s) after that
 call. A loop that ends without a stop fixes it when it ends. These waits end at the deadline:
 
@@ -3041,7 +3055,8 @@ run continues.
 
 - `run()` claims until `stop()`, and then drains.
 - `runOnce()` claims until a claim returns no task with a handler, and then drains. It opens no
-  listener. It returns `true` only when it claimed a task whose type has a handler.
+  listener, and it runs a maintenance pass before it claims when the maintenance interval elapsed.
+  It returns `true` only when it claimed a task whose type has a handler.
 - `start()` runs the loop on its own thread and returns at once. `close()` calls `stop()`, waits for
   the drain, and throws a failure of the `start` loop. If that loop ends with an error and no
   `stop()` came first, the worker logs the error at once at `ERROR`, as
@@ -3533,6 +3548,14 @@ The analyzer then reports warning RS0030 at each implicit conversion, also for a
 
 Every statement runs on an `NpgsqlConnection`. The SDK never changes session state on a connection
 that the caller owns. It sets no `search_path`, no isolation level, and no transaction.
+
+The SDK sets a `CommandTimeout` only on the heartbeat round and the listener. On every other
+command, Npgsql applies the `Command Timeout` of the connection string, 30 seconds by default. That
+includes each maintenance statement and each claim of the worker. If such a statement waits longer,
+for example for a table lock, Npgsql cancels it and the statement fails. A failed maintenance or
+claim statement ends the run, as [.NET failure settlement](#net-failure-settlement) states. A
+`Command Timeout` of 0 removes the bound. The other SDKs set no bound on these statements
+([Statement bounds](lifecycle.md#statement-bounds)).
 
 `Queue` and `Admin` take an `NpgsqlDataSource`. Each instance has two forms.
 
