@@ -437,6 +437,10 @@ each day.
 [ADR 0011](../decisions/0011-daily-retention-and-split-maintenance.md) decided that default, and
 [ADR 0072](../decisions/0072-converge-the-worker-runtime-defaults.md) holds the SDKs to it.
 
+Every SDK measures the offer interval on a monotonic clock. Thus, if the wall clock of the worker
+steps forward or backward, the interval does not change. The Go worker stores the last offer as the
+duration since `monotonicEpoch`, a fixed `time.Time`, because `UnixNano` drops the monotonic reading.
+
 PostgreSQL checks the persisted due state under the advisory lock of each routine. Thus extra
 offers have no effect. No routine shares the promotion advisory lock. Each routine has its own
 default cadence:
@@ -2480,6 +2484,11 @@ The TypeScript `TaskAttempt` does not use the wall clock of the worker for that 
    stops, unless a heartbeat has reported the expiry.
 5. A failed request is not a confirmation either. The handler continues to run. The timer asks again
    after the same backoff. The lease watchdog still ends an attempt whose lease nobody renews.
+
+The .NET worker converts the earlier of `deadline_at` and `attempt_timeout_at` to a due time on
+`Monotonic.Now()` once, when the attempt starts its expiry watch. After a `not_due` answer, it asks
+again 5 ms later on the same clock. Thus, if the wall clock of the worker steps forward or backward,
+neither wait changes.
 
 A `deadline_exceeded` or `timeout_exceeded` heartbeat answer is already the verdict of the database.
 The worker then aborts the handler at once and calls `expire_owned_v1` in the background. The

@@ -2,6 +2,7 @@ package workhorse
 
 import (
 	"context"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -135,9 +136,38 @@ func TestWorkerOffersMaintenanceRoutinesOnTheirOwnCadence(t *testing.T) {
 	if worker.dueForMaintenanceRoutines() {
 		t.Fatal("a pass inside the routine interval offers nothing")
 	}
-	worker.lastRoutineOffer.Store(time.Now().Add(-2 * time.Minute).UnixNano())
+}
+
+func TestWorkerMeasuresTheRoutineCadenceOnTheMonotonicClock(t *testing.T) {
+	// SM-1688: the cadence follows routineClock only. The wall clock does not move in this test,
+	// so a worker that read the wall clock would not offer the routines again.
+	worker := newDefaultWorker(t, WorkerOptions{})
+	elapsed := time.Hour
+	worker.routineClock = func() time.Duration { return elapsed }
 	if !worker.dueForMaintenanceRoutines() {
-		t.Fatal("a pass after the routine interval offers the routines again")
+		t.Fatal("the first pass offers the routines")
+	}
+	elapsed += 59 * time.Second
+	if worker.dueForMaintenanceRoutines() {
+		t.Fatal("a pass 59 seconds later offers nothing")
+	}
+	elapsed += time.Second
+	if !worker.dueForMaintenanceRoutines() {
+		t.Fatal("a pass one routine interval later offers the routines again")
+	}
+	if worker.lastRoutineOffer.Load() != int64(elapsed) {
+		t.Fatalf("last offer: got %d, want the routineClock reading %d", worker.lastRoutineOffer.Load(), int64(elapsed))
+	}
+}
+
+func TestWorkerRoutineClockIsMonotonic(t *testing.T) {
+	// A wall reading such as UnixNano has no monotonic reading. The routine clock must keep it.
+	worker := newDefaultWorker(t, WorkerOptions{})
+	if got := reflect.ValueOf(worker.routineClock).Pointer(); got != reflect.ValueOf(sinceMonotonicEpoch).Pointer() {
+		t.Fatal("the worker measures the routine cadence with sinceMonotonicEpoch")
+	}
+	if monotonicEpoch.Round(0) == monotonicEpoch {
+		t.Fatal("monotonicEpoch has a monotonic reading")
 	}
 }
 
