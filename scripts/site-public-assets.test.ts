@@ -3,7 +3,12 @@ import { readdir, readFile } from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { repositoryRoot } from "./packages.js";
-import { imagePattern, publicImages, siteImageUses } from "./site-public-assets.js";
+import {
+  imagePattern,
+  markdownImageUrls,
+  publicImages,
+  siteImageUses,
+} from "./site-public-assets.js";
 
 // The site build copies all of site/public into the site image, so a committed file there that
 // nothing uses still ships (SM-1673). Generated files in site/public are ignored by git, so only the
@@ -42,6 +47,15 @@ describe("site/public", () => {
         committed.has(image) && !used.has(image) && !markdown.includes(`site/public/${image}`),
     );
     expect(unused, "Remove these files, or use them on a page.").toEqual([]);
+  });
+
+  // A registry renders a package README without the repository, so the README loads its images
+  // from the public site. The prune step must keep each of them (SM-1787).
+  it("keeps every image that repository Markdown loads from the public site", async () => {
+    const [used, markdown] = await Promise.all([siteImageUses(), repositoryMarkdown()]);
+    const loaded = [...markdownImageUrls(markdown)];
+    expect(loaded).toContain("diagrams/readme-overview-dark.png");
+    expect(loaded.filter((image) => !used.has(image))).toEqual([]);
   });
 
   it("names no image that does not exist", async () => {
