@@ -1591,6 +1591,26 @@ func executeWorkerHeartbeatBusyFixture(t *testing.T, fixture workerRuntimeFixtur
 	}
 	t.Cleanup(pool.Close)
 	observer := observeDatabase(t, ctx, databaseURL)
+	// The fixture checks the retry schedule, not durability. On a shared server, the other databases
+	// can make a WAL flush take seconds. A COMMIT that waits for that flush can make a round fail.
+	// So the worker connections of this fixture do not wait for the flush.
+	workerConfig, err := pgxpool.ParseConfig(databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	workerConfig.ConnConfig.RuntimeParams["synchronous_commit"] = "off"
+	workerPool, err := pgxpool.NewWithConfig(ctx, workerConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(workerPool.Close)
+	var commit string
+	if err := workerPool.QueryRow(ctx, "SHOW synchronous_commit").Scan(&commit); err != nil {
+		t.Fatal(err)
+	}
+	if commit != "off" {
+		t.Fatalf("the worker pool has synchronous_commit %q; want off", commit)
+	}
 
 	queueName := "runtime-" + fixture.ID
 	queue := workhorse.NewQueue(workhorse.NewPGXExecutor(pool), queueName)
@@ -1598,7 +1618,7 @@ func executeWorkerHeartbeatBusyFixture(t *testing.T, fixture workerRuntimeFixtur
 	if err != nil {
 		t.Fatal(err)
 	}
-	worker, err := workhorse.NewWorker(pool, workhorse.WorkerOptions{
+	worker, err := workhorse.NewWorker(workerPool, workhorse.WorkerOptions{
 		Queue: queueName, WorkerID: "go-" + fixture.ID,
 		LeaseDuration:     time.Duration(fixture.LeaseMS) * time.Millisecond,
 		HeartbeatInterval: time.Duration(fixture.HeartbeatMS) * time.Millisecond,
@@ -1607,6 +1627,7 @@ func executeWorkerHeartbeatBusyFixture(t *testing.T, fixture workerRuntimeFixtur
 	if err != nil {
 		t.Fatal(err)
 	}
+	sent := workhorse.RecordHeartbeatRoundsForTest(worker)
 	started := make(chan struct{})
 	release, closeRelease := releaseOnce(t)
 	cancellations := make(chan struct{}, 1)
@@ -1658,23 +1679,51 @@ func executeWorkerHeartbeatBusyFixture(t *testing.T, fixture workerRuntimeFixtur
 	}
 
 	busy := rounds[:fixture.ExpectedBusyRounds]
-	// Each retry sent only the busy lease, and came sooner than the next regular round.
+	// Each retry sent only the busy lease.
 	for index, round := range busy {
 		if round.leaseCount != 1 {
 			t.Fatalf("busy round %d named %d leases; want 1", index+1, round.leaseCount)
 		}
-		if index > 0 {
-			if gap := round.roundAtMS - busy[index-1].roundAtMS; gap >= fixture.MaximumRetryGapMS {
-				t.Fatalf("busy round %d came %.0f ms after the previous one; want less than %.0f ms",
-					index+1, gap, fixture.MaximumRetryGapMS)
-			}
-		}
 	}
+	// Each retry came sooner than the next regular round.
+	assertBusyRetryGaps(t, sent(), fixture)
 	if len(cancellations) != fixture.ExpectedCancellations {
 		t.Fatalf("busy heartbeat rounds cancelled %d handlers", len(cancellations))
 	}
 	assertWorkerFixtureTaskState(t, ctx, pool, taskID, fixture.ExpectedState)
 	assertWorkerFixtureAttemptOutcomes(t, ctx, pool, taskID, []string{fixture.ExpectedAttemptOutcome})
+}
+
+// assertBusyRetryGaps checks the retry after each busy round at the worker's stamps. The gap runs
+// from the return of a busy round to the start of the worker's next round. That span is the
+// worker's own retry schedule. It excludes the latency of both rounds, so a round that a loaded
+// host stalls or fails is not charged to the schedule. A worker that waits for the next regular
+// round still fails.
+func assertBusyRetryGaps(t *testing.T, sent []workhorse.HeartbeatRoundForTest, fixture workerRuntimeFixture) {
+	t.Helper()
+	var answers []int
+	for index, round := range sent {
+		if round.Busy {
+			answers = append(answers, index)
+		}
+	}
+	if len(answers) < fixture.ExpectedBusyRounds {
+		t.Fatalf("the worker saw %d busy rounds; want %d", len(answers), fixture.ExpectedBusyRounds)
+	}
+	var gaps []int64
+	late := false
+	for _, index := range answers[:fixture.ExpectedBusyRounds-1] {
+		if index+1 >= len(sent) {
+			t.Fatalf("the worker sent no round after busy round %d", index+1)
+		}
+		gap := sent[index+1].Started.Sub(sent[index].Returned)
+		gaps = append(gaps, gap.Milliseconds())
+		late = late || float64(gap.Microseconds())/1000 >= fixture.MaximumRetryGapMS
+	}
+	if late {
+		t.Fatalf("the worker started the next round %v ms after a busy round; want less than %.0f ms",
+			gaps, fixture.MaximumRetryGapMS)
+	}
 }
 
 func executeWorkerMaintenancePhaseErrorFixture(t *testing.T, fixture workerRuntimeFixture) {

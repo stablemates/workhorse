@@ -75,7 +75,7 @@ import {
 import { Pool } from "pg";
 import { raceBudgetAdmission } from "./support/budget-race.js";
 import { createDatabaseTestHarness } from "./support/db.js";
-import { workerHeartbeatReservation } from "../src/worker-internal.js";
+import { workerHeartbeatReservation, type WorkerHeartbeatChannel } from "../src/worker-internal.js";
 
 const compatibilityDatabase = createDatabaseTestHarness(
   new URL("?compatibility", import.meta.url).href,
@@ -1405,6 +1405,7 @@ async function executeHeartbeatBusyRuntimeFixture(
     return null;
   });
 
+  const sent = recordHeartbeatRounds(worker);
   const execution = worker.runOnce();
   let rounds: { round_at_ms: number; lease_count: number }[] = [];
   try {
@@ -1433,19 +1434,85 @@ async function executeHeartbeatBusyRuntimeFixture(
   await expect(execution).resolves.toBe(true);
 
   const busy = rounds.slice(0, fixture.expectedBusyRounds);
-  // Each retry sent only the busy lease, and came sooner than the next regular round.
+  // Each retry sent only the busy lease.
   expect(busy.map((round) => Number(round.lease_count))).toEqual(busy.map(() => 1));
-  for (let index = 1; index < busy.length; index += 1) {
-    expect(Number(busy[index]!.round_at_ms) - Number(busy[index - 1]!.round_at_ms)).toBeLessThan(
-      fixture.maximumRetryGapMs,
-    );
-  }
+  // Each retry came sooner than the next regular round.
+  expectBusyRetryGaps(sent, fixture);
   expect(cancellations).toBe(fixture.expectedCancellations);
   await expect(admin.getTask(id)).resolves.toMatchObject({
     state: fixture.expectedState.state,
     currentAttempt: fixture.expectedState.attempt,
   });
   await expectAttemptOutcome(database, id, fixture.expectedAttemptOutcome);
+}
+
+/**
+ * One heartbeat round of a worker at the worker's own stamps: its start, its return to the worker,
+ * and whether a lease was busy. A round that failed has `busy` undefined.
+ */
+interface HeartbeatRoundStamp {
+  startedAt: number;
+  returnedAt: number;
+  busy: boolean | undefined;
+}
+
+/**
+ * Records each heartbeat round of `worker` on its reserved heartbeat connection. The worker sends
+ * one round at a time, so the entries are in the order of the rounds.
+ */
+function recordHeartbeatRounds(worker: Worker): HeartbeatRoundStamp[] {
+  const rounds: HeartbeatRoundStamp[] = [];
+  const internals = worker as unknown as {
+    reservedHeartbeatChannel(): WorkerHeartbeatChannel | undefined;
+  };
+  const reserved = internals.reservedHeartbeatChannel.bind(worker);
+  const recorded = new WeakSet<WorkerHeartbeatChannel>();
+  internals.reservedHeartbeatChannel = () => {
+    const channel = reserved();
+    if (channel === undefined || recorded.has(channel)) return channel;
+    recorded.add(channel);
+    const send = channel.heartbeatMany.bind(channel);
+    channel.heartbeatMany = async (...round) => {
+      const startedAt = performance.now();
+      try {
+        const statuses = await send(...round);
+        const busy = [...statuses.values()].includes("busy");
+        rounds.push({ startedAt, returnedAt: performance.now(), busy });
+        return statuses;
+      } catch (error) {
+        rounds.push({ startedAt, returnedAt: performance.now(), busy: undefined });
+        throw error;
+      }
+    };
+    return channel;
+  };
+  return rounds;
+}
+
+/**
+ * Checks the retry after each busy round at the worker's stamps. The gap runs from the return of a
+ * busy round to the start of the worker's next round. That span is the worker's own retry
+ * schedule. It excludes the latency of both rounds, so a round that a loaded host stalls or fails
+ * is not charged to the schedule. A worker that waits for the next regular round still fails.
+ */
+function expectBusyRetryGaps(sent: HeartbeatRoundStamp[], fixture: HeartbeatBusyRuntimeFixture) {
+  const answers = sent.flatMap((round, index) => (round.busy === true ? [index] : []));
+  if (answers.length < fixture.expectedBusyRounds) {
+    throw new Error(
+      `the worker saw ${answers.length} busy rounds, want ${fixture.expectedBusyRounds}`,
+    );
+  }
+  const retried = answers.slice(0, fixture.expectedBusyRounds - 1);
+  if (retried.some((index) => index + 1 >= sent.length)) {
+    throw new Error("the worker sent no round after a busy round");
+  }
+  const gaps = retried.map((index) => sent[index + 1]!.startedAt - sent[index]!.returnedAt);
+  if (gaps.some((gap) => gap >= fixture.maximumRetryGapMs)) {
+    throw new Error(
+      `the worker started the next round ${JSON.stringify(gaps.map(Math.round))} ms after a ` +
+        `busy round, want less than ${fixture.maximumRetryGapMs} ms`,
+    );
+  }
 }
 
 async function leaseExpiry(database: Queryable, taskId: string): Promise<Date> {
@@ -1769,9 +1836,27 @@ async function executeRuntimeFixture(
     case "heartbeat-failure":
       await executeHeartbeatFailureRuntimeFixture(queue, admin, database, fixture);
       break;
-    case "heartbeat-busy":
-      await executeHeartbeatBusyRuntimeFixture(queue, admin, database, fixture);
+    case "heartbeat-busy": {
+      // The fixture checks the retry schedule, not durability. On a shared server, the other
+      // databases can make a WAL flush take seconds. A COMMIT that waits for that flush can make a
+      // round fail. So the worker connections of this fixture do not wait for the flush.
+      const unflushed = new Pool({
+        connectionString: runtimeDatabase.databaseUrl,
+        options: "-c synchronous_commit=off",
+      });
+      try {
+        const commit = await unflushed.query<{ synchronous_commit: string }>(
+          "SHOW synchronous_commit",
+        );
+        if (commit.rows[0]?.synchronous_commit !== "off") {
+          throw new Error("the worker pool waits for the WAL flush");
+        }
+        await executeHeartbeatBusyRuntimeFixture(runtimeQueue(unflushed), admin, database, fixture);
+      } finally {
+        await unflushed.end();
+      }
       break;
+    }
     case "maintenance-phase-error":
       await executeMaintenancePhaseErrorRuntimeFixture(queue, admin, database, fixture);
       break;
