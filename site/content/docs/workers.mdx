@@ -933,7 +933,10 @@ final write. A second signal makes the process exit at once, without the drain.
 Thus, these rules apply to a shutdown:
 
 - A claim that is in flight can return after the shutdown starts. The worker drains that task and
-  does not abandon it.
+  does not abandon it. A TypeScript worker has no limit of its own for that wait, but the process
+  deadline still ends it. Each other SDK ends or cancels the wait at its stop deadline or its
+  grace. If a claim leases a task after that limit, the task can stay active until recovery makes
+  it available again.
 - You can configure the drain deadline. Thus, a handler that ignores its abort signal cannot block
   a deploy indefinitely.
 - A hard kill leaves tasks active. Their leases expire, and recovery makes the tasks available again.

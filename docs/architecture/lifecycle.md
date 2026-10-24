@@ -964,7 +964,8 @@ worker paused or stopped during the delay, the worker never sends the claim.
 
 If a claim returns tasks after `stop`, `pause`, a handler failure, or a claim error, those tasks
 still run. Each of these tasks holds a lease. On stop, the loop drains every claim in flight, runs
-the tasks that they return, and then awaits every handler.
+the tasks that they return, and then awaits every handler. Most SDKs stop the wait for a claim at a
+deadline, as [Statement bounds](#statement-bounds) states.
 
 The runtime fixture `busy-worker-refills-slots-with-overlapping-batched-claims` pins, in every SDK:
 
@@ -1083,7 +1084,11 @@ Two logs cover batches, without payloads or task IDs:
 - `pause()` prevents later claims while maintenance and active tasks continue.
 - `resume()` clears the local pause and makes claims immediately eligible.
 - `stop()` enters draining state and prevents later claims. It allows every already active handler
-  and its final fenced transition to finish before `run()` resolves.
+  and its final fenced transition to finish before `run()` resolves. In TypeScript and Python,
+  `Worker.run()` waits for these handlers without a bound. The worker process runner exits at its
+  shutdown deadline. Go, Rust, Ruby, the JVM, and .NET cancel the handlers at the end of their
+  shutdown grace, and then abandon each handler that still runs. [ADR 0072](../decisions/0072-converge-the-worker-runtime-defaults.md)
+  records this exception, and [Parity](../parity.md) states the defaults.
 
 A worker has two pause sources, and either one stops claims:
 
@@ -1096,6 +1101,73 @@ A worker has two pause sources, and either one stops claims:
 These process-local controls do not apply queue weights. `concurrency_policy` enforces a durable
 active-work budget across worker processes. `rate_limit_policy` enforces a durable start-rate budget
 across worker processes.
+
+#### Statement bounds
+
+A maintenance pass and a claim can wait for a lock that another session holds. This section states
+how long each SDK waits for these statements, and when a stop ends the wait.
+
+No SDK sets `statement_timeout`, `lock_timeout`, or a client timeout on `tick_v1`,
+`fire_due_schedules_v2`, `run_maintenance_v1`, `claim_v1`, `claim_many_v1`, or
+`complete_many_and_claim_v1`. Only the heartbeat round sets `statement_timeout`, as
+[Heartbeat round deadline](#heartbeat-round-deadline) states. In .NET, Npgsql applies the
+`Command Timeout` of the connection string to these commands, 30 seconds by default, because the
+worker sets no `CommandTimeout`. A statement that passes it fails, and the run ends as for any
+failed worker statement.
+
+The SQL functions skip or limit some lock waits:
+
+- `tick_v1` takes its advisory lock with `pg_try_advisory_xact_lock`. If another tick has the lock,
+  the tick skips its pass.
+- A claim selects ready tasks with `SKIP LOCKED`, so it skips a locked `task_runtime` or
+  `fast_task_runtime` row. A full-tier claim locks with `FOR NO KEY UPDATE`, and a fast-tier claim
+  locks with `FOR UPDATE`. It can still wait while it follows the update chain of a row that another
+  worker leased at the same time. `fast_claim_v1` limits that wait with a `lock_timeout` of 50 ms
+  ([ADR 0081](../decisions/0081-release-a-fused-claim-lock-before-it-can-deadlock.md)).
+- `run_maintenance_v1` sets a `lock_timeout` of 250 ms when it prepares or retires history
+  partitions. If the time ends, it skips that step.
+
+Other lock waits have no limit:
+
+- A full-tier claim takes the shared advisory locks of the concurrency and rate-limit policies of
+  its queue. A policy synchronization of that queue thus delays the claim.
+- A claim can wait for the lock of a budget.
+- On a queue with a concurrency or rate-limit policy, a claim can wait for an admission shard that
+  another claim has locked.
+- A table lock that DDL, `LOCK TABLE`, or `TRUNCATE` takes delays each of these statements.
+
+The worker logs nothing while a statement waits.
+
+`run()` does not wait for its first maintenance pass before its first claim
+([First maintenance pass](#first-maintenance-pass)). After a stop, each SDK ends its wait for a
+statement in flight as follows:
+
+| SDK        | Maintenance pass in flight                                                                                                                                            | Claim in flight                                                                                                                                                                                           |
+| ---------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| TypeScript | `run()` stops its wait at the end of the unwind window, max(`heartbeatMs`, 5 s) after the dispatch loop ends.                                                         | `run()` waits without a bound.                                                                                                                                                                            |
+| Python     | `run()` stops its wait at the stop deadline, max(`heartbeat_ms`, 5 s) after the first `stop()`.                                                                       | `run()` stops its wait at the same stop deadline and leaves the claim.                                                                                                                                    |
+| Go         | The end of the `Run` context cancels the pass at once, and pgx interrupts the statement.                                                                              | The drain context cancels the statement at the end of `ShutdownGracePeriod`. `Run` waits for the claim to return and logs `claimsOutlivedGraceLogMessage` once.                                           |
+| Rust       | `run` drops the pass after the dispatch loop ends and the draining registration refresh ends or reaches the grace deadline. The statement can continue on the server. | `run` drops the claim at the end of `shutdown_grace_period`.                                                                                                                                              |
+| Ruby       | `run` waits for the startup pass until the end of `shutdown_grace`. A later pass runs on the dispatch thread, so the stop waits for it to return.                     | `run` stops its wait at the end of `shutdown_grace`, counted from the end of the dispatch loop.                                                                                                           |
+| JVM        | `run()` stops its wait at the end of `shutdownGrace` and logs `workhorse.worker.stop_step_abandoned`.                                                                 | `run()` stops its wait at the end of `shutdownGrace`, but not earlier than 250 ms after the dispatch loop ends and not later than 250 ms after the grace. It logs `workhorse.worker.claims_abandoned`.    |
+| .NET       | `RunAsync` stops its wait at the end of `ShutdownGrace` and logs `workhorse.worker.stop_step_abandoned`.                                                              | `RunAsync` stops its wait at the end of `ShutdownGrace`, but not earlier than 250 ms after the dispatch loop ends and not later than 250 ms after the grace. It logs `workhorse.worker.claims_abandoned`. |
+
+A statement that a run leaves behind can still finish on the server. A task that a late claim
+leases stays leased until expired-lease recovery takes it.
+
+A single pass (`runOnce()`, `run_once()`, `RunOnce`, `RunOnceAsync`) runs maintenance before it
+claims, as [First maintenance pass](#first-maintenance-pass) states. Without a stop, it waits for
+that pass and for its claims without a bound. The .NET command timeout is the only limit. A stop
+changes these waits as follows:
+
+- Python, TypeScript, and Ruby run the maintenance pass of a single pass on the calling thread or
+  task. A stop does not end that wait.
+- In Python and Ruby, the wait for a claim of a single pass ends as the table states.
+- In Go, the end of the context ends the maintenance pass. `RunOnce` sends its claim with
+  `context.WithoutCancel`, so the claim has no bound.
+- The JVM and .NET single passes end the wait for the maintenance pass and for a claim as the table
+  states.
+- Rust `run_once` takes no stop. Only a drop of its future ends these waits.
 
 #### Reporter callbacks
 
