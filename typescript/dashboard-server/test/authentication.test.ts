@@ -240,7 +240,7 @@ dashboardAuthenticationSuite(dashboardAuthenticationSuiteName, () => {
     expect(response?.headers.get("location")).toBe("/workhorse");
   });
 
-  it("invalidates the server-side session on logout", async () => {
+  it("invalidates the server-side session on a same-origin logout", async () => {
     const host = createDashboardHost({
       database,
       path: "/",
@@ -252,7 +252,7 @@ dashboardAuthenticationSuite(dashboardAuthenticationSuiteName, () => {
     const logout = await host.handle(
       new Request("https://dashboard.test/logout", {
         method: "POST",
-        headers: { cookie },
+        headers: { cookie, origin: "https://dashboard.test" },
       }),
     );
     const application = await host.handle(
@@ -266,6 +266,36 @@ dashboardAuthenticationSuite(dashboardAuthenticationSuiteName, () => {
     );
     expect(application?.status).toBe(302);
     expect(application?.headers.get("location")).toBe("/login");
+  });
+
+  it("keeps the session when a logout request is not same-origin", async () => {
+    const host = createDashboardHost({
+      database,
+      path: "/",
+      singleAdmin: { username: "operator", passwordHash },
+    });
+    const loginResponse = await login(host);
+    const cookie = (loginResponse.headers.get("set-cookie") ?? "").split(";", 1)[0];
+
+    for (const origin of ["https://attacker.test", "not a url", undefined]) {
+      const logout = await host.handle(
+        new Request("https://dashboard.test/logout", {
+          method: "POST",
+          headers: origin === undefined ? { cookie } : { cookie, origin },
+        }),
+      );
+      expect(logout?.status).toBe(403);
+      expect(logout?.headers.get("set-cookie")).toBeNull();
+      await expect(logout?.json()).resolves.toEqual({
+        error: "A same-origin mutation request is required",
+      });
+    }
+
+    const application = await host.handle(
+      new Request("https://dashboard.test/", { headers: { cookie } }),
+    );
+    expect(application?.status).toBe(302);
+    expect(application?.headers.get("location")).toBe("/tasks");
   });
 
   it("rejects an expired session even when the browser still presents its cookie", async () => {

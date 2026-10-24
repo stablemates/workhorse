@@ -345,7 +345,8 @@ server keeps each session in its memory and gives the browser only a random toke
 
 If the session expired, the browser cannot read the dashboard HTML, the assets, or the RPC
 responses. To end a session before it expires, send a `POST` request to the logout path. The server
-deletes its record. After that, the cookie does not work, even if the browser keeps it.
+deletes its record. After that, the cookie does not work, even if the browser keeps it. The logout
+request must come from the dashboard origin, so a page on a different site cannot end the session.
 
 <details>
 <summary>Reference: sessions</summary>
@@ -367,8 +368,9 @@ deletes its record. After that, the cookie does not work, even if the browser ke
 
 **Login and logout.** A successful login answers `303` to the mount path. `POST /logout` (at
 `{path}/logout`) deletes the server record, expires the cookie, and answers `303` to the login page.
-Another method on `/logout` answers `405`. After a `401`, `createDashboardClient()` calls
-`window.location.replace(loginUrl)` once.
+Another method on `/logout` answers `405`. If the `Origin` of a logout request is absent, malformed,
+or a different origin, `rejectCrossOriginMutation` answers `403` and the session stays valid.
+After a `401`, `createDashboardClient()` calls `window.location.replace(loginUrl)` once.
 
 More detail: [Dashboard: Sessions](../architecture/dashboard.md#sessions),
 [Dashboard: Login page and client](../architecture/dashboard.md#login-page-and-client), and

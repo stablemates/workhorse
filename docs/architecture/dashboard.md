@@ -1748,6 +1748,8 @@ token in `__Host-workhorse-dashboard-session` with `Path=/`, `Max-Age`, `Secure`
   `{basePath}/login`. Any other request gets `401` with `{ "error": "Unauthorized" }`.
 - `POST /logout` deletes the server record, expires the cookie, and answers `303` to the login path.
   Another method on the logout path answers `405` with `Allow: POST`.
+- `POST /logout` applies `rejectCrossOriginMutation` before it reads the cookie. If the `Origin`
+  is absent, malformed, or a different origin, logout answers `403` and keeps the session.
 - An expired server record never authorizes a request, even if a client retains its cookie.
 - A successful login answers `303` to the mount path. The mount path is the login path without its
   trailing `/login`, or `/` for a root mount.
@@ -1865,7 +1867,8 @@ the oRPC procedure metadata. `isDashboardMutation` resolves the request path aga
 list.
 
 For every mutation, `rejectCrossOriginMutation` requires an `Origin` header whose parsed origin
-exactly matches the request URL origin.
+exactly matches the request URL origin. An absent or malformed `Origin` fails with `403`. The
+single-admin logout applies the same check (see [Sessions](#sessions)).
 
 The authenticated actor comes from one of these sources:
 

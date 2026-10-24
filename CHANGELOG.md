@@ -20,6 +20,17 @@ upgrade steps.
 
 ## Unreleased
 
+### The dashboard logout requires a same-origin request
+
+The built-in single-admin login has a logout path, `{path}/logout`. Before this change, logout did
+not check the `Origin` header. Thus a page on a different site could send a `POST` to that path and
+end the session (SM-1720). The `SameSite=Strict` cookie made this unlikely in a current browser.
+
+Now logout applies the same Origin check as each dashboard mutation. If the `Origin` is absent,
+malformed, or a different origin, logout answers `403` and keeps the session. The dashboard's own
+sign-out form is not affected. A script that ends a session must send the dashboard origin in
+`Origin`.
+
 ### An explicit pollMs keeps its value while the subscription is live
 
 `Worker` takes `pollMs` as its fallback poll interval. Before this change, the worker capped every
