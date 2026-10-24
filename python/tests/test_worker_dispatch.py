@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable, Iterator, Sequence
 from contextlib import contextmanager
 from itertools import pairwise
-from threading import Event, Lock, Thread
+from threading import Event, Lock, Thread, current_thread
 from time import monotonic, sleep
 from typing import Any
 
@@ -695,64 +695,181 @@ class RecordedMaintenance(ScriptedClaims):
             with self._lock:
                 self.ticks_in_flight -= 1
 
+    def tick_count(self) -> int:
+        with self._lock:
+            return len(self.ticks)
+
+    def offer_count(self) -> int:
+        with self._lock:
+            return len(self.schedule_offers)
+
+
+class MaintenanceSchedule:
+    """Record the times that a worker's maintenance thread chooses, not when a statement arrives.
+
+    A pass stamps its start before the tick and plans the next wake from that stamp. A loaded
+    host can delay the statement after the stamp, so an arrival time measures the host. Each
+    pass keeps the stamp of the tick before it, and each planned wait is paired with the timeout
+    that the maintenance thread gives its stop event.
+    """
+
+    def __init__(
+        self, worker: Worker, claims: RecordedMaintenance, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        self._lock = Lock()
+        self._maintenance_thread: Thread | None = None
+        self._ticks: list[float] = []
+        self._offers: list[float] = []
+        self._passes: list[tuple[float, float, float | None, float]] = []
+        self._planned_waits: list[tuple[float, float, float]] = []
+        self._applied_waits: list[float | None] = []
+        run_pass = worker._run_maintenance_if_due
+        seconds_until_due = worker._seconds_until_maintenance_due
+        schedule = self
+
+        def recorded_pass() -> bool:
+            with self._lock:
+                self._maintenance_thread = current_thread()
+            entered_at = monotonic()
+            previous_tick_at = worker._last_maintenance_at
+            ticks_before = claims.tick_count()
+            offers_before = claims.offer_count()
+            ran = run_pass()
+            exited_at = monotonic()
+            with self._lock:
+                ticked_at = (
+                    worker._last_maintenance_at if claims.tick_count() > ticks_before else None
+                )
+                self._passes.append((entered_at, previous_tick_at, ticked_at, exited_at))
+                if ticked_at is not None:
+                    self._ticks.append(ticked_at)
+                    if claims.offer_count() > offers_before:
+                        self._offers.append(worker._last_maintenance_at)
+            return ran
+
+        def recorded_wait() -> float:
+            asked_at = monotonic()
+            wait = seconds_until_due()
+            with self._lock:
+                self._planned_waits.append((worker._last_maintenance_at, asked_at, wait))
+            return wait
+
+        class RecordedEvent(Event):
+            def wait(self, timeout: float | None = None) -> bool:
+                with schedule._lock:
+                    if current_thread() is schedule._maintenance_thread:
+                        schedule._applied_waits.append(timeout)
+                return super().wait(timeout)
+
+        worker._run_maintenance_if_due = recorded_pass  # type: ignore[method-assign]
+        worker._seconds_until_maintenance_due = recorded_wait  # type: ignore[method-assign]
+        # The maintenance thread creates its stop event when the run starts.
+        monkeypatch.setattr(worker_module, "Event", RecordedEvent)
+
     def ticks_since(self, started_at: float) -> list[float]:
         with self._lock:
-            return [at for at in self.ticks if at >= started_at]
+            return [at for at in self._ticks if at >= started_at]
 
     def offers_since(self, started_at: float) -> list[float]:
         with self._lock:
-            return [at for at in self.schedule_offers if at >= started_at]
+            return [at for at in self._offers if at >= started_at]
+
+    def passes_since(self, started_at: float) -> list[tuple[float, float, float | None, float]]:
+        """Each pass: its start, the stamp of the tick before it, its own tick stamp, its end."""
+        with self._lock:
+            return [entry for entry in self._passes if entry[0] >= started_at]
+
+    def waits_since(self, started_at: float) -> list[tuple[float, float, float, float | None]]:
+        """Each planned wait with the timeout that the maintenance thread applies to it."""
+        with self._lock:
+            assert len(self._applied_waits) == len(self._planned_waits)
+            return [
+                (*planned, applied)
+                for planned, applied in zip(self._planned_waits, self._applied_waits, strict=True)
+                if planned[0] >= started_at
+            ]
 
 
-def maintenance_worker(claims: RecordedMaintenance, **options: Any) -> Worker:
-    return scripted_worker(
+def maintenance_worker(
+    claims: RecordedMaintenance, monkeypatch: pytest.MonkeyPatch, **options: Any
+) -> tuple[Worker, MaintenanceSchedule]:
+    worker = scripted_worker(
         claims,
         maintenance_interval_ms=100,
         maintenance_routine_poll_ms=100,
         schedule_namespaces=("dispatch-schedules",),
         **options,
     )
+    return worker, MaintenanceSchedule(worker, claims, monkeypatch)
 
 
-def assert_on_cadence(times: list[float], interval: float) -> None:
-    """Every gap between passes stays near the maintenance interval."""
-    gaps = [later - earlier for earlier, later in pairwise(times)]
-    # A loaded host delays a wake, so the bound allows that slack but no dispatcher-sized stall.
-    assert gaps and max(gaps) < interval * 2.5, gaps
+def assert_on_cadence(schedule: MaintenanceSchedule, started_at: float, interval: float) -> None:
+    """Every tick starts one interval after the last, a due pass ticks, and no wait runs late.
+
+    The checks use the times that the worker chooses and the timeouts that it applies, so a host
+    that delays a thread cannot fail them. A maintenance thread that stalls or stops misses the
+    five ticks that the test waits for within the deadline of wait_for.
+    """
+    ticks = schedule.ticks_since(started_at)
+    gaps = [later - earlier for earlier, later in pairwise(ticks)]
+    assert gaps and min(gaps) >= interval, gaps
+    # The worker reads its clock after the pass starts, so a tick that is due then must run, and
+    # its stamp falls inside the pass.
+    passes = schedule.passes_since(started_at)
+    skipped = [
+        (entered_at, previous_tick_at)
+        for entered_at, previous_tick_at, ticked_at, _ in passes
+        if ticked_at is None and entered_at - previous_tick_at >= interval
+    ]
+    assert skipped == [], skipped
+    misplaced = [
+        (entered_at, ticked_at, exited_at)
+        for entered_at, _, ticked_at, exited_at in passes
+        if ticked_at is not None and not entered_at <= ticked_at <= exited_at
+    ]
+    assert misplaced == [], misplaced
+    waits = schedule.waits_since(started_at)
+    late = [
+        (asked_at, planned, applied)
+        for ticked_at, asked_at, planned, applied in waits
+        if applied != planned or planned > max(0.0, ticked_at + interval - asked_at) + 1e-6
+    ]
+    assert waits and late == [], late
 
 
 # SM-1014: maintenance ran only when a slot was free, so a full worker stopped ticking and stopped
 # offering schedules until a handler returned.
-def test_saturated_worker_keeps_maintenance_and_schedule_offers_on_cadence() -> None:
+def test_saturated_worker_keeps_maintenance_and_schedule_offers_on_cadence(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     claims = RecordedMaintenance([task_row(0, HANDLED), task_row(1, HANDLED)])
     executions = Executions(claims)
-    worker = maintenance_worker(claims, concurrency=2)
+    worker, schedule = maintenance_worker(claims, monkeypatch, concurrency=2)
     with running(worker, executions) as errors:
         wait_for(lambda: executions.running() == 2, "the worker did not fill its slots")
         saturated_at = monotonic()
         wait_for(
-            lambda: (
-                min(len(claims.ticks_since(saturated_at)), len(claims.offers_since(saturated_at)))
-                >= 5
-            ),
+            lambda: len(schedule.offers_since(saturated_at)) >= 5,
             "a full worker stopped offering schedules",
         )
-        ticks = claims.ticks_since(saturated_at)
-        offers = claims.offers_since(saturated_at)
         assert executions.running() == 2
     assert errors == []
-    assert len(ticks) >= 5
-    assert_on_cadence(ticks, 0.1)
-    assert_on_cadence(offers, 0.1)
+    # Each tick offers the schedules in the same pass, so the offers keep the tick cadence.
+    ticks = schedule.ticks_since(saturated_at)
+    assert schedule.offers_since(saturated_at) == ticks
+    assert_on_cadence(schedule, saturated_at, 0.1)
     assert claims.maximum_ticks_in_flight == 1
 
 
 @pytest.mark.parametrize("pause", ["local", "remote"])
-def test_paused_worker_keeps_maintenance_on_cadence(pause: str) -> None:
+def test_paused_worker_keeps_maintenance_on_cadence(
+    pause: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
     claims = RecordedMaintenance([task_row(0, HANDLED)], remotely_paused=pause == "remote")
     executions = Executions(claims)
-    worker = maintenance_worker(
+    worker, schedule = maintenance_worker(
         claims,
+        monkeypatch,
         concurrency=2,
         poll_ms=10,
         registry_interval_ms=0 if pause == "local" else 1_000,
@@ -762,38 +879,40 @@ def test_paused_worker_keeps_maintenance_on_cadence(pause: str) -> None:
     with running(worker, executions) as errors:
         started_at = monotonic()
         wait_for(
-            lambda: len(claims.ticks_since(started_at)) >= 5, "a paused worker stopped ticking"
+            lambda: len(schedule.ticks_since(started_at)) >= 5, "a paused worker stopped ticking"
         )
         assert worker.is_paused()
         assert claims.claims() == 0
-        ticks = claims.ticks_since(started_at)
     assert errors == []
-    assert_on_cadence(ticks, 0.1)
+    assert_on_cadence(schedule, started_at, 0.1)
     assert claims.maximum_ticks_in_flight == 1
 
 
-def test_empty_claim_backoff_does_not_stretch_maintenance() -> None:
+def test_empty_claim_backoff_does_not_stretch_maintenance(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     claims = RecordedMaintenance()
     executions = Executions(claims)
     # The empty-claim wait is fifty maintenance intervals long.
-    worker = maintenance_worker(claims, concurrency=2, poll_ms=5_000)
+    worker, schedule = maintenance_worker(claims, monkeypatch, concurrency=2, poll_ms=5_000)
     with running(worker, executions) as errors:
         wait_for(lambda: claims.claims() == 1, "the worker did not claim")
         backing_off_at = monotonic()
         wait_for(
-            lambda: len(claims.ticks_since(backing_off_at)) >= 5,
+            lambda: len(schedule.ticks_since(backing_off_at)) >= 5,
             "the empty-claim wait stalled maintenance",
         )
         assert claims.claims() == 1
-        ticks = claims.ticks_since(backing_off_at)
     assert errors == []
-    assert_on_cadence(ticks, 0.1)
+    assert_on_cadence(schedule, backing_off_at, 0.1)
 
 
-def test_failed_later_maintenance_pass_stops_and_drains_the_run() -> None:
+def test_failed_later_maintenance_pass_stops_and_drains_the_run(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     claims = RecordedMaintenance([task_row(0, HANDLED)], fail_tick=3)
     executions = Executions(claims)
-    worker = maintenance_worker(claims, concurrency=1)
+    worker, _ = maintenance_worker(claims, monkeypatch, concurrency=1)
     worker._execute_claimed_task = executions.execute  # type: ignore[method-assign]
     errors: list[BaseException] = []
     finished = Event()
@@ -824,11 +943,11 @@ def test_failed_later_maintenance_pass_stops_and_drains_the_run() -> None:
     assert executions.started == [task_row(0, HANDLED)["task_id"]]
 
 
-def test_run_once_runs_maintenance_before_it_claims() -> None:
+def test_run_once_runs_maintenance_before_it_claims(monkeypatch: pytest.MonkeyPatch) -> None:
     claims = RecordedMaintenance([task_row(0, HANDLED)])
     executions = Executions(claims)
     executions.open = True
-    worker = maintenance_worker(claims, concurrency=1)
+    worker, _ = maintenance_worker(claims, monkeypatch, concurrency=1)
     worker._execute_claimed_task = executions.execute  # type: ignore[method-assign]
     assert worker.run_once() is True
     maintained = [
