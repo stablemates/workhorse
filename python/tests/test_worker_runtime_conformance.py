@@ -512,15 +512,15 @@ def execute_lease_loss_fixture(
     ).handle(fixture["taskType"], handler)
     # A heartbeat locks the task's runtime row, and recovery skips a locked row. A heartbeat that
     # started just after the expiry would make the recovery below find no lease. Hold every
-    # heartbeat until the recovery ends, as the Go fixture does. The first heartbeat after that
-    # finds the recovered task and reports the lease as stale. If a full lease passes first, the
-    # worker's lease watchdog ends the attempt with the same error and writes nothing.
+    # heartbeat until the recovery ends, as the Go fixture does. A later round reaches PostgreSQL,
+    # which answers that the lease is stale.
     recovery_ended = Event()
+    heartbeat_statuses: list[object] = []
     open_heartbeat_executor = worker_module._psycopg_pool_heartbeat_executor_factory(worker_pool)
 
     def open_held_heartbeat_executor() -> tuple[Any, Callable[[], None]]:
         executor, close = open_heartbeat_executor()
-        return HeldHeartbeats(executor, recovery_ended), close
+        return HeldHeartbeats(executor, recovery_ended, heartbeat_statuses), close
 
     worker._heartbeat_executor_factory = open_held_heartbeat_executor
     run_results: list[bool] = []
@@ -544,6 +544,8 @@ def execute_lease_loss_fixture(
     assert fixture["expectedRunOutcome"] == "processed"
     assert run_results == [True]
     assert abort_messages == [fixture["expectedAbortMessage"]]
+    # A heartbeat round reaches PostgreSQL, and PostgreSQL answers that the lease is stale.
+    assert "stale" in heartbeat_statuses, heartbeat_statuses
     assert set(fixture["portableRejectedWrites"]) <= set(fixture["expectedRejectedWrites"])
     assert list(rejected_writes) == fixture["portableRejectedWrites"]
     assert set(rejected_writes.values()) == {fixture["expectedRejectedWriteError"]}
@@ -555,16 +557,31 @@ class HeldHeartbeats:
     """Send each heartbeat on the worker's own heartbeat executor after the test releases it.
 
     The heartbeat waits before it reaches PostgreSQL, so it holds no row lock while it waits.
+    `statuses` records each lease status that PostgreSQL returns.
     """
 
-    def __init__(self, executor: Any, released: Event) -> None:
+    # A round on the reserved connection also sends BEGIN, its timeouts, and COMMIT.
+    _FORWARDED = frozenset({"command", "connection", "dialect", "prepare"})
+    _HEARTBEATS = (STATEMENTS.heartbeat_many, STATEMENTS.heartbeat_pool)
+
+    def __init__(self, executor: Any, released: Event, statuses: list[object]) -> None:
         self._executor = executor
         self._released = released
+        self._statuses = statuses
+
+    def __getattr__(self, name: str) -> Any:
+        if name not in self._FORWARDED:
+            raise AttributeError(name)
+        return getattr(self._executor, name)
 
     def rows(self, statement: DriverStatement, parameters: Any = ()) -> list[Mapping[str, object]]:
-        if statement is STATEMENTS.heartbeat_many:
+        heartbeat = any(statement is held for held in self._HEARTBEATS)
+        if heartbeat:
             assert self._released.wait(timeout=5), "held heartbeat was never released"
-        return self._executor.rows(statement, parameters)
+        rows = self._executor.rows(statement, parameters)
+        if heartbeat:
+            self._statuses.extend(row["status"] for row in rows)
+        return rows
 
 
 def execute_heartbeat_fixture(
