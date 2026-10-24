@@ -2016,13 +2016,19 @@ async fn heartbeat_failure(database: &ScratchDatabase, fixture: &Value) -> Check
 /// Replaces the heartbeat function with the fixture's body, which answers the first rounds `busy`.
 /// The busy retries must send only the busy lease, sooner than the next regular round, and the
 /// attempt must keep running until a later round renews its lease.
+///
+/// The retry gap runs from the return of a busy round to the start of the worker's next round, at
+/// the worker's own socket (`RoundSocket`). That span is the worker's retry schedule. So the check
+/// does not charge to the schedule a round that a loaded host stalls past the next regular slot. A
+/// worker that waits for the regular round still fails. The worker connections do not wait for a
+/// WAL flush at `COMMIT`. On a shared server, other databases can make that flush take seconds.
 async fn heartbeat_busy(database: &ScratchDatabase, fixture: &Value) -> Checked {
     let client = database.connect().await;
     let queue = queue(database, fixture).await?;
     let task_type = text(fixture, "taskType");
     let task = queue.enqueue(task_type, &json!({}), Default::default()).await.map_err(driver)?;
     let task = task.task_id;
-    let worker = worker(database, 4, lease_options(fixture))?;
+    let (worker, sent) = recording_worker(database, 4, lease_options(fixture))?;
     let (started, mut handler_started) = mpsc::unbounded_channel();
     let (release, released) = watch::channel(false);
     let cancellations = Arc::new(AtomicUsize::new(0));
@@ -2059,13 +2065,27 @@ async fn heartbeat_busy(database: &ScratchDatabase, fixture: &Value) -> Checked 
     let expected = usize::try_from(number(fixture, "expectedBusyRounds")).expect("a count");
     let busy = &rounds[..expected];
     // Each retry sent only the busy lease, and came sooner than the next regular round.
-    check(busy.iter().all(|(_, leases)| *leases == 1), || {
+    check(busy.iter().all(|leases| *leases == 1), || {
         format!("busy rounds sent {busy:?} leases, want 1 each")
     })?;
+    // A busy round that ends after its deadline fails, and the worker schedules no retry. Its
+    // next round is then the regular one. That round is due at most one interval minus the round
+    // bound after the return, so the failed round cannot fail the check.
+    let sent = sent.lock().unwrap().clone();
+    let answers: Vec<usize> = (0..sent.len())
+        .filter(|&index| sent[index].busy && sent[index].returned.is_some())
+        .collect();
+    check(answers.len() >= expected, || {
+        format!("the worker saw {} busy rounds, want {expected}", answers.len())
+    })?;
     let maximum = number(fixture, "maximumRetryGapMs") as f64;
-    for pair in busy.windows(2) {
-        let gap = pair[1].0 - pair[0].0;
-        check(gap < maximum, || format!("a busy retry came {gap} ms later, want < {maximum}"))?;
+    for &index in &answers[..expected - 1] {
+        let next = sent.get(index + 1).ok_or("the worker sent no round after a busy round")?;
+        let returned = sent[index].returned.expect("selected above");
+        let gap = next.started.duration_since(returned).as_secs_f64() * 1e3;
+        check(gap < maximum, || {
+            format!("the worker started the next round {gap:.0} ms after a busy round, want < {maximum} ms")
+        })?;
     }
     let cancelled = cancellations.load(Ordering::SeqCst) as i64;
     let expected = number(fixture, "expectedCancellations");
@@ -2076,17 +2096,16 @@ async fn heartbeat_busy(database: &ScratchDatabase, fixture: &Value) -> Checked 
     assert_outcomes(&client, task, &[text(fixture, "expectedAttemptOutcome")]).await
 }
 
-/// Waits for the fixture's busy rounds, then for a later round to renew the lease. Returns each
-/// recorded round as its time in milliseconds and its lease count.
-async fn busy_rounds(client: &Client, task: Uuid, fixture: &Value) -> Checked<Vec<(f64, i32)>> {
+/// Waits for the fixture's busy rounds, then for a later round to renew the lease. Returns the
+/// lease count of each recorded round.
+async fn busy_rounds(client: &Client, task: Uuid, fixture: &Value) -> Checked<Vec<i32>> {
     let within = millis(fixture, "renewalTimeoutMs");
     let expected = usize::try_from(number(fixture, "expectedBusyRounds")).expect("a count");
     let query = text(&fixture["injection"], "roundsQuery");
     let deadline = Instant::now() + within;
     let rounds = loop {
         let rows = client.query(query, &[]).await.map_err(sql)?;
-        let rounds: Vec<(f64, i32)> =
-            rows.iter().map(|row| (row.get("round_at_ms"), row.get("lease_count"))).collect();
+        let rounds: Vec<i32> = rows.iter().map(|row| row.get("lease_count")).collect();
         if rounds.len() >= expected {
             break rounds;
         }
@@ -2098,6 +2117,190 @@ async fn busy_rounds(client: &Client, task: Uuid, fixture: &Value) -> Checked<Ve
     // The busy rounds renewed nothing. The next round reaches the real function and renews.
     wait_for_renewal(client, task, lease_expiry(client, task).await?, within).await?;
     Ok(rounds)
+}
+
+/// One heartbeat round at the worker's socket.
+#[derive(Clone, Copy, Debug)]
+struct SocketRound {
+    /// When the worker wrote the first message of the round.
+    started: Instant,
+    /// When the idle `ReadyForQuery` after `COMMIT` or `ROLLBACK` arrived. A round whose
+    /// connection closed first has none.
+    returned: Option<Instant>,
+    /// Whether a row of the round carried the status `busy`.
+    busy: bool,
+}
+
+/// The heartbeat rounds of a worker pool, in the order they started. The worker sends one round
+/// at a time, so a round starts only after the round before it ends.
+type SocketRounds = Arc<Mutex<Vec<SocketRound>>>;
+
+/// The start of the first message of each heartbeat round on the reserved connection. No other
+/// statement of the worker contains it.
+const ROUND_START: &[u8] = b"BEGIN; SELECT set_config('statement_timeout'";
+
+/// A worker whose pool connects through `RoundSocket`, and the rounds that the sockets record.
+/// The connections do not wait for a WAL flush at `COMMIT`.
+fn recording_worker(
+    database: &ScratchDatabase,
+    pool_size: usize,
+    options: WorkerOptions,
+) -> Checked<(Worker, SocketRounds)> {
+    let mut config: tokio_postgres::Config = database.url().parse().map_err(sql)?;
+    config.options("-c synchronous_commit=off");
+    let rounds = SocketRounds::default();
+    let connect = RecordingConnect { rounds: Arc::clone(&rounds) };
+    let manager = deadpool_postgres::Manager::from_connect(config, connect, Default::default());
+    let pool = deadpool_postgres::Pool::builder(manager)
+        .max_size(pool_size)
+        .build()
+        .map_err(|error| error.to_string())?;
+    Ok((Worker::new(pool, options).map_err(driver)?, rounds))
+}
+
+/// Opens each pool connection over a `RoundSocket`.
+struct RecordingConnect {
+    rounds: SocketRounds,
+}
+
+type Connected = Result<(Client, tokio::task::JoinHandle<()>), tokio_postgres::Error>;
+
+impl deadpool_postgres::Connect for RecordingConnect {
+    fn connect(
+        &self,
+        config: &tokio_postgres::Config,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Connected> + Send + '_>> {
+        let config = config.clone();
+        Box::pin(async move {
+            // With one host and one port, the socket and the driver use the same address.
+            let ([tokio_postgres::config::Host::Tcp(host)], [port]) =
+                (config.get_hosts(), config.get_ports())
+            else {
+                panic!("the test database must have one TCP host and one port");
+            };
+            let address = (host.clone(), *port);
+            let stream = loop {
+                match tokio::net::TcpStream::connect(address.clone()).await {
+                    Ok(stream) => break stream,
+                    // The driver has no public error for a socket. So if the socket does not
+                    // open, the driver's own connection reports why. If that connection opens,
+                    // it closes, and the socket tries again, so the pool gets only recorded
+                    // connections.
+                    Err(_) => drop(config.connect(NoTls).await?),
+                }
+            };
+            let _ = stream.set_nodelay(true);
+            let socket = RoundSocket {
+                stream,
+                rounds: Arc::clone(&self.rounds),
+                open: None,
+                received: None,
+            };
+            let (client, connection) = config.connect_raw(socket, NoTls).await?;
+            Ok((client, tokio::spawn(async move { drop(connection.await) })))
+        })
+    }
+}
+
+/// A TCP stream that reads the PostgreSQL messages of the worker's heartbeat rounds. A round starts
+/// when the worker writes `ROUND_START`, and it returns at the next idle `ReadyForQuery`.
+struct RoundSocket {
+    stream: tokio::net::TcpStream,
+    rounds: SocketRounds,
+    /// The index in `rounds` of the round that this connection has open.
+    open: Option<usize>,
+    /// The bytes from PostgreSQL that do not yet make a whole message. It is `None` until the
+    /// first round starts, so the answers to the startup stay out.
+    received: Option<Vec<u8>>,
+}
+
+impl RoundSocket {
+    /// Reads each whole message in `received`. A message is a type byte, a length that counts
+    /// itself, and a body.
+    fn read_messages(&mut self) {
+        let Some(received) = self.received.as_mut() else { return };
+        while received.len() >= 5 {
+            let length = u32::from_be_bytes(received[1..5].try_into().unwrap()) as usize;
+            if received.len() < 1 + length {
+                break;
+            }
+            let body = &received[5..1 + length];
+            if let Some(open) = self.open {
+                let mut rounds = self.rounds.lock().unwrap();
+                match received[0] {
+                    b'D' if carries_busy(body) => rounds[open].busy = true,
+                    b'Z' if body == b"I" => {
+                        rounds[open].returned = Some(Instant::now());
+                        self.open = None;
+                    }
+                    _ => {}
+                }
+            }
+            received.drain(..1 + length);
+        }
+    }
+}
+
+/// Whether a `DataRow` body has a column with the value `busy`. The body is a column count, then
+/// a length and the bytes of each column. A length of -1 is a NULL.
+fn carries_busy(row: &[u8]) -> bool {
+    let mut columns = row.get(2..).unwrap_or_default();
+    while let Some((length, rest)) = columns.split_first_chunk::<4>() {
+        let length = usize::try_from(i32::from_be_bytes(*length)).unwrap_or(0);
+        if rest.get(..length) == Some(b"busy".as_slice()) {
+            return true;
+        }
+        columns = rest.get(length..).unwrap_or_default();
+    }
+    false
+}
+
+impl tokio::io::AsyncRead for RoundSocket {
+    fn poll_read(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buf: &mut tokio::io::ReadBuf<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        let this = self.get_mut();
+        let before = buf.filled().len();
+        let polled = std::pin::Pin::new(&mut this.stream).poll_read(cx, buf);
+        if let Some(received) = this.received.as_mut() {
+            received.extend_from_slice(&buf.filled()[before..]);
+            this.read_messages();
+        }
+        polled
+    }
+}
+
+impl tokio::io::AsyncWrite for RoundSocket {
+    fn poll_write(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buf: &[u8],
+    ) -> std::task::Poll<std::io::Result<usize>> {
+        let this = self.get_mut();
+        if this.open.is_none() && buf.windows(ROUND_START.len()).any(|bytes| bytes == ROUND_START) {
+            let mut rounds = this.rounds.lock().unwrap();
+            this.open = Some(rounds.len());
+            rounds.push(SocketRound { started: Instant::now(), returned: None, busy: false });
+            this.received.get_or_insert_with(Vec::new);
+        }
+        std::pin::Pin::new(&mut this.stream).poll_write(cx, buf)
+    }
+
+    fn poll_flush(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        std::pin::Pin::new(&mut self.get_mut().stream).poll_flush(cx)
+    }
+
+    fn poll_shutdown(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        std::pin::Pin::new(&mut self.get_mut().stream).poll_shutdown(cx)
+    }
 }
 
 /// Replaces one installed function with the fixture's body while `observe` runs. Afterwards it
