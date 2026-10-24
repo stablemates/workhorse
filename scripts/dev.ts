@@ -83,6 +83,30 @@ const commands: Array<{
       WORKHORSE_DEMO_SERVICE_NAME: "workhorse-demo-worker-ruby",
     },
   },
+  {
+    // Gradle runs a build in a daemon of its own session, so a JVM that Gradle starts misses the
+    // signal to this child's process group. Gradle only builds the class path, and `exec` makes
+    // the worker JVM this child.
+    command: "sh",
+    arguments: [
+      "-c",
+      'gradle --quiet -p jvm :examples:programs:demoWorkerClassPath && exec java -cp "jvm/examples/programs/build/demo-worker/*" run.workhorse.examples.programs.DemoWorkerProgram',
+    ],
+    env: {
+      ...process.env,
+      WORKHORSE_DEMO_MODE: mode,
+      WORKHORSE_DEMO_SERVICE_NAME: "workhorse-demo-worker-jvm",
+    },
+  },
+  {
+    command: "dotnet",
+    arguments: ["run", "--project", "dotnet/demo/Workhorse.DemoWorker"],
+    env: {
+      ...process.env,
+      WORKHORSE_DEMO_MODE: mode,
+      WORKHORSE_DEMO_SERVICE_NAME: "workhorse-demo-worker-dotnet",
+    },
+  },
 ];
 
 if (process.env.DATABASE_URL_SECONDARY) {

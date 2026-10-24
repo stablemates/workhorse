@@ -40,3 +40,14 @@ dependencies {
 
 // `pnpm jvm:lint` compiles the Kotlin sources too, and every Kotlin warning is an error.
 tasks.named("lint") { dependsOn("compileKotlin", "compileTestKotlin") }
+
+// Both demo launchers start the demo worker (SM-1680). Each runs `demoWorkerClassPath` and starts
+// the JVM with the jars in build/demo-worker. `scripts/dev.ts` does not run the worker through
+// Gradle, because Gradle runs a build in a daemon of its own session, outside the launcher's
+// process group. The image copies the jars, so it needs no Gradle.
+tasks.register<Sync>("demoWorkerClassPath") {
+  description = "Copies the jars of the demo worker into build/demo-worker."
+  from(tasks.named("jar"))
+  from(configurations.named("runtimeClasspath"))
+  into(layout.buildDirectory.dir("demo-worker"))
+}

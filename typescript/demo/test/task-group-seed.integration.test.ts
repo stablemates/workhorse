@@ -17,6 +17,7 @@ import {
   LANGUAGE_WORKER_TASK_TYPE,
   LONG_RUNNING_SEED_NAME,
   REPRESENTATIVE_SEED_NAME,
+  JVM_DOTNET_SEED_NAME,
   RUBY_SEED_NAME,
   RUST_SEED_NAME,
   SHARED_WORKER_TASK_TYPE,
@@ -32,7 +33,10 @@ import { createDemoIntegrationSuite } from "./support/demo-integration.js";
 const { createTestApplication, dashboardClient, database, pool, waitFor } =
   createDemoIntegrationSuite(import.meta.url);
 
-/** Every marker a deployed demo carried before the task group step existed. */
+/**
+ * Every marker a deployed demo carried before the task group step existed. The later JVM and .NET
+ * step is marked too, so this file observes the task group step alone.
+ */
 const EXISTING_SEED_MARKERS = [
   DEMO_RATE_LIMIT_SEED_NAME,
   LONG_RUNNING_SEED_NAME,
@@ -42,6 +46,7 @@ const EXISTING_SEED_MARKERS = [
   FAST_TIER_SEED_NAME,
   RUST_SEED_NAME,
   RUBY_SEED_NAME,
+  JVM_DOTNET_SEED_NAME,
 ];
 
 const LANGUAGE_QUEUES = DEMO_TASK_GROUP_LANGUAGES.map((entry) => entry.queue);

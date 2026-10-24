@@ -46,12 +46,16 @@ export const DEMO_PYTHON_QUEUE = "demo-python";
 export const DEMO_GO_QUEUE = "demo-go";
 export const DEMO_RUST_QUEUE = "demo-rust";
 export const DEMO_RUBY_QUEUE = "demo-ruby";
+export const DEMO_JVM_QUEUE = "demo-jvm";
+export const DEMO_DOTNET_QUEUE = "demo-dotnet";
 export const DEMO_SHARED_QUEUE = "demo-shared";
 export const DEMO_FAST_QUEUE = "demo-fast";
 export const DEMO_PYTHON_FAST_QUEUE = "demo-python-fast";
 export const DEMO_GO_FAST_QUEUE = "demo-go-fast";
 export const DEMO_RUST_FAST_QUEUE = "demo-rust-fast";
 export const DEMO_RUBY_FAST_QUEUE = "demo-ruby-fast";
+export const DEMO_JVM_FAST_QUEUE = "demo-jvm-fast";
+export const DEMO_DOTNET_FAST_QUEUE = "demo-dotnet-fast";
 export const FAST_TIER_SEED_NAME = "fast-tier-dashboard-v1";
 /**
  * The fast-tier schedules live outside `DEMO_SCHEDULE_NAMESPACE` because web startup replaces that
@@ -111,6 +115,27 @@ export const DEMO_RUBY_FAST_TIER_QUEUE = {
   scheduleName: "fast-tier.ruby",
   schedule: "4-59/5 * * * *",
 } as const;
+/**
+ * The JVM and .NET workers joined together, after a deployed demo had run the task group step, so
+ * one marker covers both. On a new database the step runs before the task group step. The JVM
+ * fast-tier queue records claims without attempts, like the Python one, and the .NET queue records
+ * neither, like the Go one.
+ */
+export const JVM_DOTNET_SEED_NAME = "fast-tier-jvm-dotnet-dashboard-v1";
+export const DEMO_JVM_FAST_TIER_QUEUE = {
+  queue: DEMO_JVM_FAST_QUEUE,
+  language: "jvm",
+  history: { recordAttempts: false, recordClaims: true },
+  scheduleName: "fast-tier.jvm",
+  schedule: "*/10 * * * *",
+} as const;
+export const DEMO_DOTNET_FAST_TIER_QUEUE = {
+  queue: DEMO_DOTNET_FAST_QUEUE,
+  language: "dotnet",
+  history: { recordAttempts: false, recordClaims: false },
+  scheduleName: "fast-tier.dotnet",
+  schedule: "5-59/10 * * * *",
+} as const;
 export const REPRESENTATIVE_SEED_NAME = "default-dashboard-v8";
 export const LONG_RUNNING_SEED_NAME = "long-running-dashboard-v2";
 export const HISTORICAL_SEED_NAME = "historical-dashboard-v1";
@@ -127,7 +152,7 @@ export const DEMO_WORKER_POLL_MS = 15_000;
  * runtime so the polyglot topology is visible; the integration harness still exercises generated
  * identities independently.
  */
-export const DEMO_WORKER_CONCURRENCY = [3, 3, 3, 3, 3] as const;
+export const DEMO_WORKER_CONCURRENCY = [3, 3, 3, 3, 3, 3, 3] as const;
 /**
  * Worker identities attached to the seeded historical attempts.
  *
@@ -223,6 +248,8 @@ export const PYTHON_WORKER_SCHEDULE_NAME = "language-worker.python";
 export const GO_WORKER_SCHEDULE_NAME = "language-worker.go";
 export const RUST_WORKER_SCHEDULE_NAME = "language-worker.rust";
 export const RUBY_WORKER_SCHEDULE_NAME = "language-worker.ruby";
+export const JVM_WORKER_SCHEDULE_NAME = "language-worker.jvm";
+export const DOTNET_WORKER_SCHEDULE_NAME = "language-worker.dotnet";
 export const SHARED_WORKER_SCHEDULE_NAME = "shared-worker";
 export const REPORT_SCHEDULE_NAME = "demo.report";
 export const LONG_RUNNING_SCHEDULE_NAME = "demo.long-running";

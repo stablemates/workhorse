@@ -73,6 +73,34 @@ const processes = [
       BUNDLE_GEMFILE: "/opt/workhorse-ruby/Gemfile",
     },
   },
+  {
+    name: "JVM worker",
+    command: "/opt/java/openjdk/bin/java",
+    // These flags and the Node heap ceiling share the container's memory limit. See the resource
+    // section of DEPLOYMENT.md before changing either.
+    arguments: [
+      "-XX:+UseSerialGC",
+      "-Xmx32m",
+      "-XX:MaxMetaspaceSize=24m",
+      "-XX:ReservedCodeCacheSize=16m",
+      "-XX:TieredStopAtLevel=1",
+      "-Xss512k",
+      "-cp",
+      "/opt/workhorse-jvm/*",
+      "run.workhorse.examples.programs.DemoWorkerProgram",
+    ],
+    environment: {
+      WORKHORSE_DEMO_SERVICE_NAME: "workhorse-demo-worker-jvm",
+    },
+  },
+  {
+    name: ".NET worker",
+    command: "/usr/share/dotnet/dotnet",
+    arguments: ["/opt/workhorse-dotnet/Workhorse.DemoWorker.dll"],
+    environment: {
+      WORKHORSE_DEMO_SERVICE_NAME: "workhorse-demo-worker-dotnet",
+    },
+  },
 ];
 
 if (process.env.DATABASE_URL_SECONDARY) {

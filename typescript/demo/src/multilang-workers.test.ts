@@ -2,9 +2,13 @@ import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
+  DEMO_DOTNET_FAST_QUEUE,
+  DEMO_DOTNET_QUEUE,
   DEMO_FAST_TIER_SCHEDULE_NAMESPACE,
   DEMO_GO_FAST_QUEUE,
   DEMO_GO_QUEUE,
+  DEMO_JVM_FAST_QUEUE,
+  DEMO_JVM_QUEUE,
   DEMO_PYTHON_FAST_QUEUE,
   DEMO_PYTHON_QUEUE,
   DEMO_QUEUE,
@@ -68,7 +72,7 @@ describe("multilanguage demo worker topology", () => {
   });
 
   it("declares one equal-capacity worker in each runtime", () => {
-    expect(DEMO_WORKER_CONCURRENCY).toEqual([3, 3, 3, 3, 3]);
+    expect(DEMO_WORKER_CONCURRENCY).toEqual([3, 3, 3, 3, 3, 3, 3]);
     expect([
       DEMO_QUEUE,
       DEMO_RATE_LIMIT_QUEUE,
@@ -76,6 +80,8 @@ describe("multilanguage demo worker topology", () => {
       DEMO_GO_QUEUE,
       DEMO_RUST_QUEUE,
       DEMO_RUBY_QUEUE,
+      DEMO_JVM_QUEUE,
+      DEMO_DOTNET_QUEUE,
       DEMO_SHARED_QUEUE,
     ]).toEqual([
       "demo",
@@ -84,6 +90,8 @@ describe("multilanguage demo worker topology", () => {
       "demo-go",
       "demo-rust",
       "demo-ruby",
+      "demo-jvm",
+      "demo-dotnet",
       "demo-shared",
     ]);
     expect(LANGUAGE_WORKER_TASK_TYPE).toBe("demo.language-worker");
@@ -179,6 +187,67 @@ describe("multilanguage demo worker topology", () => {
     );
     expect(rubyWorker).toContain("e.code == :schema_not_installed");
     expect(rubyWorker).toContain('mode == "development"');
+  });
+
+  it("builds the JVM and .NET workers on the runtimes that mise.toml pins", async () => {
+    const [dockerfile, miseConfig] = await Promise.all([
+      readFile(resolve("Dockerfile"), "utf8"),
+      readFile(resolve("mise.toml"), "utf8"),
+    ]);
+    const java = /^java = "temurin-(\d+\.\d+\.\d+)"$/m.exec(miseConfig)?.[1];
+    const dotnet = /^dotnet = "(\d+\.\d+\.\d+)"$/m.exec(miseConfig)?.[1];
+    expect(java).toBeDefined();
+    expect(dotnet).toBeDefined();
+    expect(dockerfile).toMatch(
+      new RegExp(`^FROM eclipse-temurin:${java}_\\d+-jre-alpine@sha256:[0-9a-f]{64} AS jre$`, "m"),
+    );
+    expect(dockerfile).toMatch(
+      new RegExp(
+        `^FROM mcr\\.microsoft\\.com/dotnet/sdk:${dotnet}-alpine[\\d.]+@sha256:[0-9a-f]{64} AS dotnet-build$`,
+        "m",
+      ),
+    );
+    expect(dockerfile).toMatch(
+      /^FROM mcr\.microsoft\.com\/dotnet\/runtime:\d+\.\d+\.\d+-alpine[\d.]+@sha256:[0-9a-f]{64} AS dotnet-runtime$/m,
+    );
+    expect(dockerfile).toContain(":examples:programs:demoWorkerClassPath");
+    expect(dockerfile).toContain("COPY --from=jre /opt/java/openjdk /opt/java/openjdk");
+    expect(dockerfile).toContain("COPY --from=dotnet-runtime /usr/share/dotnet /usr/share/dotnet");
+  });
+
+  it("packages and supervises the JVM and .NET workers on their own queues", async () => {
+    const [entrypoint, developmentLauncher, jvmWorker, dotnetWorker] = await Promise.all([
+      readFile(resolve("typescript/demo/container-entrypoint.mjs"), "utf8"),
+      readFile(resolve("scripts/dev.ts"), "utf8"),
+      readFile(
+        resolve(
+          "jvm/examples/programs/src/main/java/run/workhorse/examples/programs/DemoWorkerProgram.java",
+        ),
+        "utf8",
+      ),
+      readFile(resolve("dotnet/demo/Workhorse.DemoWorker/DemoWorkerProgram.cs"), "utf8"),
+    ]);
+
+    expect(entrypoint).toContain('"/opt/java/openjdk/bin/java"');
+    expect(entrypoint).toContain('"run.workhorse.examples.programs.DemoWorkerProgram"');
+    expect(entrypoint).toContain('"workhorse-demo-worker-jvm"');
+    expect(entrypoint).toContain('"/opt/workhorse-dotnet/Workhorse.DemoWorker.dll"');
+    expect(entrypoint).toContain('"workhorse-demo-worker-dotnet"');
+    expect(developmentLauncher).toContain(":examples:programs:demoWorkerClassPath && exec java");
+    expect(developmentLauncher).toContain('"dotnet/demo/Workhorse.DemoWorker"');
+    expect(jvmWorker).toContain(`JVM_QUEUE = "${DEMO_JVM_QUEUE}"`);
+    expect(jvmWorker).toContain(`JVM_FAST_QUEUE = "${DEMO_JVM_FAST_QUEUE}"`);
+    expect(jvmWorker).toContain(`SHARED_QUEUE = "${DEMO_SHARED_QUEUE}"`);
+    expect(jvmWorker).toContain(
+      `FAST_TIER_SCHEDULE_NAMESPACE = "${DEMO_FAST_TIER_SCHEDULE_NAMESPACE}"`,
+    );
+    expect(jvmWorker).toContain(".queues(JVM_QUEUE, SHARED_QUEUE, JVM_FAST_QUEUE)");
+    expect(dotnetWorker).toContain(`DotnetQueue = "${DEMO_DOTNET_QUEUE}"`);
+    expect(dotnetWorker).toContain(`DotnetFastQueue = "${DEMO_DOTNET_FAST_QUEUE}"`);
+    expect(dotnetWorker).toContain(`SharedQueue = "${DEMO_SHARED_QUEUE}"`);
+    expect(dotnetWorker).toContain(
+      `FastTierScheduleNamespace = "${DEMO_FAST_TIER_SCHEDULE_NAMESPACE}"`,
+    );
   });
 
   it("enforces the shared handler contract in TypeScript", () => {

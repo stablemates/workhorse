@@ -3,9 +3,12 @@ package run.workhorse.examples.programs;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import java.net.URLEncoder;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.sql.Connection;
@@ -24,6 +27,7 @@ import org.jspecify.annotations.Nullable;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.postgresql.ds.PGSimpleDataSource;
 import run.workhorse.EnqueueOptions;
 import run.workhorse.JsonCodec;
 import run.workhorse.Queue;
@@ -105,6 +109,75 @@ class DemoWorkerProgramTest {
     assertThrows(
         IllegalArgumentException.class,
         () -> DemoWorkerProgram.sharedTask(Map.of("source", 123), 1));
+  }
+
+  @Test
+  void itMapsAPostgresUrlToThePgJdbcDataSource() {
+    PGSimpleDataSource dataSource =
+        DemoWorkerProgram.dataSource(
+            "postgres://demo%40user:p+ss%2Fw@db.internal:6543/demo%20primary"
+                + "?sslmode=disable&application_name=demo+jvm&connect_timeout=7");
+    assertEquals("db.internal", dataSource.getServerNames()[0]);
+    assertEquals(6543, dataSource.getPortNumbers()[0]);
+    assertEquals("demo primary", dataSource.getDatabaseName());
+    assertEquals("demo@user", dataSource.getUser());
+    assertEquals("p+ss/w", dataSource.getPassword());
+    assertEquals("disable", dataSource.getSslMode());
+    assertEquals("demo+jvm", dataSource.getApplicationName());
+    assertEquals(7, dataSource.getConnectTimeout());
+
+    PGSimpleDataSource bare = DemoWorkerProgram.dataSource("postgresql://localhost/demo");
+    assertEquals("localhost", bare.getServerNames()[0]);
+    assertEquals("demo", bare.getDatabaseName());
+    assertNull(bare.getUser());
+  }
+
+  @Test
+  void itPassesAJdbcUrlToPgJdbcUnchanged() {
+    PGSimpleDataSource dataSource =
+        DemoWorkerProgram.dataSource("jdbc:postgresql://db.internal:6543/demo?user=app");
+    assertEquals("db.internal", dataSource.getServerNames()[0]);
+    assertEquals(6543, dataSource.getPortNumbers()[0]);
+    assertEquals("demo", dataSource.getDatabaseName());
+    assertEquals("app", dataSource.getUser());
+  }
+
+  @Test
+  void itRefusesAUrlItCannotMap() {
+    assertThrows(
+        IllegalArgumentException.class, () -> DemoWorkerProgram.dataSource("mysql://host/db"));
+    assertThrows(
+        IllegalArgumentException.class,
+        () -> DemoWorkerProgram.dataSource("postgres:///db?host=/var/run/postgresql"));
+    assertThrows(
+        IllegalArgumentException.class,
+        () -> DemoWorkerProgram.dataSource("postgres://host/db?target_session_attrs=any"));
+  }
+
+  @Test
+  void itConnectsWithAPostgresUrlAndWithAJdbcUrl() throws Exception {
+    try (IsolatedExampleDatabase db = IsolatedExampleDatabase.create("demo-worker-url")) {
+      PGSimpleDataSource jdbc = DemoWorkerProgram.dataSource(db.jdbcUrl());
+      String postgres =
+          "postgres://"
+              + encode(jdbc.getUser())
+              + ":"
+              + encode(jdbc.getPassword())
+              + "@"
+              + jdbc.getServerNames()[0]
+              + ":"
+              + jdbc.getPortNumbers()[0]
+              + "/"
+              + encode(jdbc.getDatabaseName());
+      for (PGSimpleDataSource dataSource : List.of(jdbc, DemoWorkerProgram.dataSource(postgres))) {
+        try (Connection connection = dataSource.getConnection();
+            Statement statement = connection.createStatement();
+            ResultSet row = statement.executeQuery("SELECT current_database()")) {
+          assertTrue(row.next());
+          assertEquals(jdbc.getDatabaseName(), row.getString(1));
+        }
+      }
+    }
   }
 
   @Test
@@ -220,6 +293,11 @@ class DemoWorkerProgramTest {
       }
       waiting.get(ExampleDatabase.WAIT.toSeconds(), TimeUnit.SECONDS);
     }
+  }
+
+  private static String encode(@Nullable String value) {
+    return URLEncoder.encode(value == null ? "" : value, StandardCharsets.UTF_8)
+        .replace("+", "%20");
   }
 
   private static UUID enqueue(
