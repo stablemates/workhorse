@@ -653,23 +653,28 @@ def test_batch_handler_failure_shapes_fail_every_member(database_url: str) -> No
             worker_id="python-invalid-batch-worker",
             concurrency=6,
         )
-        worker.handle_batch("batch.thrown", max_size=2, linger_ms=100, handler=thrown)
+        # Each batch must hold both of its members. A short linger dispatches a member alone when
+        # its peer starts late, as on a loaded host or when it waits for a free slot. The arity
+        # handler then returns 1 outcome for 1 task, and the task succeeds. A full batch dispatches
+        # as soon as its second member arrives, so the long linger costs no time. Four batch types
+        # hold at most four waiting members, so a peer always finds one of the six slots free.
+        worker.handle_batch("batch.thrown", max_size=2, linger_ms=60_000, handler=thrown)
         worker.handle_batch(
             "batch.arity",
             max_size=2,
-            linger_ms=100,
+            linger_ms=60_000,
             handler=lambda _items: [{"status": "succeeded", "result": None}],
         )
         worker.handle_batch(
             "batch.invalid",
             max_size=2,
-            linger_ms=100,
+            linger_ms=60_000,
             handler=lambda _items: [
                 {"status": "unknown", "result": None},
                 {"status": "succeeded", "result": None},
             ],
         )
-        worker.handle_batch("batch.abort", max_size=2, linger_ms=100, handler=aborted)
+        worker.handle_batch("batch.abort", max_size=2, linger_ms=60_000, handler=aborted)
 
         assert worker.run_once() is True
         all_tasks = [task_id for tasks in tasks_by_type.values() for task_id in tasks]
