@@ -13,6 +13,10 @@ import { repositoryRoot } from "./packages.js";
  * `site/public/diagrams`, but the site does not use them, so `Dockerfile.site` removes them from
  * the build output with `--prune`.
  *
+ * A package README is different. A registry such as PyPI or crates.io cannot resolve a repository
+ * path, so the README loads the image from `https://workhorse.run/` (SM-1787). Such a reference in
+ * repository Markdown outside `site/` counts as a use, and the prune step keeps the image.
+ *
  * `scripts/site-public-assets.test.ts` fails when a committed file in `site/public` has no use.
  */
 
@@ -25,6 +29,11 @@ const sourceFiles = ["integrations.json", "mdx-components.tsx", "nginx.conf", "s
 const sourcePattern = /\.(tsx?|mdx?|json|css|conf)$/;
 // The size map names every generated diagram, whether a page shows it or not.
 const ignoredSources = new Set([path.join(siteRoot, "lib/diagram-sizes.json")]);
+// The image build excludes `.git`, so the Markdown search walks the checkout. It skips the site,
+// whose sources the site search reads, and directories that hold only dependencies or build output.
+const skippedMarkdownDirectories = new Set(["node_modules", "dist", "target"]);
+const publicImageUrlPattern =
+  /https:\/\/workhorse\.run\/((?:[\w.-]+\/)*[\w.-]+\.(?:png|svg|ico|jpe?g|webp|avif|gif))(?=["'`)?#;\s]|$)/gm;
 
 async function walk(directory: string): Promise<string[]> {
   const entries = await readdir(directory, { withFileTypes: true }).catch(() => []);
@@ -47,6 +56,38 @@ export async function publicImages(): Promise<string[]> {
     .map((file) => path.relative(publicRoot, file).split(path.sep).join("/"))
     .filter((file) => imagePattern.test(file))
     .toSorted();
+}
+
+async function markdownFiles(directory: string): Promise<string[]> {
+  const entries = await readdir(directory, { withFileTypes: true }).catch(() => []);
+  const files: string[] = [];
+  for (const entry of entries) {
+    const full = path.join(directory, entry.name);
+    if (entry.isDirectory()) {
+      if (entry.name.startsWith(".") || skippedMarkdownDirectories.has(entry.name)) continue;
+      if (full === siteRoot) continue;
+      files.push(...(await markdownFiles(full)));
+    } else if (entry.name.endsWith(".md")) {
+      files.push(full);
+    }
+  }
+  return files;
+}
+
+/**
+ * The images in `site/public` that repository Markdown outside `site/` loads from the public site,
+ * as paths below `site/public`.
+ */
+export function markdownImageUrls(markdown: string): Set<string> {
+  const used = new Set<string>();
+  for (const match of markdown.matchAll(publicImageUrlPattern)) used.add(match[1]!);
+  return used;
+}
+
+async function repositoryMarkdown(): Promise<string> {
+  const files = await markdownFiles(repositoryRoot);
+  const texts = await Promise.all(files.map((file) => readFile(file, "utf8").catch(() => "")));
+  return texts.join("\n");
 }
 
 async function siteSources(): Promise<string> {
@@ -85,6 +126,7 @@ export async function siteImageUses(): Promise<Set<string>> {
       used.add(`diagrams/${match[1]!}-${variant}.png`);
     }
   }
+  for (const image of markdownImageUrls(await repositoryMarkdown())) used.add(image);
   return used;
 }
 
