@@ -162,6 +162,9 @@ Confirm the CLI's single-administrator mode is the boundary it claims to be.
 
 - Confirm `WORKHORSE_DASHBOARD_PASSWORD_HASH` is a `scrypt-v1` hash and never a password, that
   each variable has a `_FILE` form, and that setting both forms is an error.
+- Confirm `scrypt-v1` still uses `N=16384`. That cost is a deliberate choice, because the login
+  throttle and the derivation limit slow online guessing. Do not report it as a finding.
+  [Credentials](architecture/dashboard.md#credentials) records the decision.
 - Confirm a partial credential configuration fails rather than serving unauthenticated.
 - Confirm the unauthenticated development bypass is refused on any listener that is not loopback
   or a Unix socket, and that an authenticated remote listener requires an explicit HTTPS
