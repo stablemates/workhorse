@@ -464,11 +464,10 @@ async fn batch(database: &ScratchDatabase, fixture: &Value) -> Checked {
     }
     let concurrency = usize::try_from(number(fixture, "concurrency")).unwrap_or(1);
     let max_size = usize::try_from(number(fixture, "batchMaxSize")).unwrap_or(1);
-    let worker = worker(
-        database,
-        6,
-        WorkerOptions { concurrency, lease_duration: Duration::from_secs(1), ..options(fixture) },
-    )?;
+    // SM-1800: the worker keeps the default lease. In the second run the retry task waits alone
+    // for the whole linger. If the host stalls a heartbeat round, a short lease can expire.
+    // PostgreSQL then refuses the completion and leaves the task active.
+    let worker = worker(database, 6, WorkerOptions { concurrency, ..options(fixture) })?;
     let order = Arc::new(Mutex::new(Vec::<String>::new()));
     let stopper = Arc::new(Mutex::new(None::<oneshot::Sender<()>>));
     let (recorded, stop) = (Arc::clone(&order), Arc::clone(&stopper));
@@ -1219,11 +1218,8 @@ async fn graceful_drain(database: &ScratchDatabase, fixture: &Value) -> Checked 
         );
     }
     let concurrency = usize::try_from(number(fixture, "concurrency")).unwrap_or(1);
-    let worker = worker(
-        database,
-        6,
-        WorkerOptions { concurrency, lease_duration: Duration::from_secs(1), ..options(fixture) },
-    )?;
+    // The default lease, as in `batch`: a held handler must not lose its lease to a host stall.
+    let worker = worker(database, 6, WorkerOptions { concurrency, ..options(fixture) })?;
     let active = Arc::new(AtomicUsize::new(0));
     let (release, released) = watch::channel(false);
     let counted = Arc::clone(&active);
