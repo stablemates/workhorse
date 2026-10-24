@@ -741,8 +741,9 @@ Read these limits before you give the read-only role to a person or a service.
   SQLSTATE `42501` (`insufficient_privilege`), because the role has no write privilege.
 - The read-only dashboard mode is an application check. The grants add a second check in
   PostgreSQL, which applies also when the dashboard is writable or misconfigured.
-- SM-1710 tracks a read role that can read only the governed `dashboard_*_v1` views. It needs a
-  maintainer decision.
+- Workhorse offers no narrower read role that reads only the governed `dashboard_*_v1` views.
+  [ADR 0113](../decisions/0113-keep-one-dashboard-database-role-setup.md) records this decision and
+  its reason. Thus treat the credentials of each dashboard role as confidential.
 
 ### Create the roles
 

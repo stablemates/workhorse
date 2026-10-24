@@ -60,5 +60,6 @@ records this amendment. The decision text does not change.
    read each stored value, so its grants are not a redaction boundary.
 3. A worker runs maintenance, which creates and drops history partitions. Thus the worker role is a
    member of the installation role, and its sessions act as that role.
-4. The schema still installs no grant. SM-1710 tracks a read role that can read only the governed
-   `dashboard_*_v1` views. It needs a maintainer decision.
+4. The schema still installs no grant. [ADR 0113](0113-keep-one-dashboard-database-role-setup.md)
+   decides that Workhorse offers no narrower read role that reads only the governed
+   `dashboard_*_v1` views.
