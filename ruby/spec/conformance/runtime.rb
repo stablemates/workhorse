@@ -31,6 +31,16 @@ module Conformance
     # A maintenance interval, in seconds, that no fixture outlasts. A worker with it runs only the
     # tick that is due when it starts.
     ONE_TICK_INTERVAL = 3600
+    # How long, in seconds, a runner waits for a stopped run to return.
+    RUN_WAIT = 10
+    # The shutdown grace, in seconds, of a worker whose stopped run the runner joins. The shared server
+    # can stall a claim on its WAL flush for longer than RUN_WAIT. A stop during that claim waits until
+    # the grace ends, so the grace must end before the wait of the runner (SM-1801).
+    JOIN_GRACE = 5
+    # The shutdown grace, in seconds, of the graceful-drain worker, which is the default. The fixture
+    # tests the drain, which the grace bounds, so the runner waits for the whole grace and then
+    # RUN_WAIT (SM-1801).
+    DRAIN_GRACE = 25
 
     # Records the parent of every span the worker starts while a trace fixture runs.
     class Tracer < ::OpenTelemetry::Trace::Tracer
@@ -353,7 +363,7 @@ module Conformance
       maximum = fixture["expectedMaximumDelayMs"] / 1000.0
       with_pool do |pool|
         subject = worker(pool, fixture, poll_interval: fixture["pollMs"] / 1000.0,
-          maintenance_interval: ONE_TICK_INTERVAL).handle(fixture["taskType"]) do
+          maintenance_interval: ONE_TICK_INTERVAL, shutdown_grace: JOIN_GRACE).handle(fixture["taskType"]) do
           handled.set
           nil
         end
@@ -386,7 +396,7 @@ module Conformance
           holding.make_false
           released << true
           subject.stop
-          check(thread.join(10), "the worker did not stop")
+          check(thread.join(RUN_WAIT), "the worker did not stop")
         end
       end
       found = claims.index { |_, _, any| any }
@@ -442,8 +452,8 @@ module Conformance
         end
       end
       with_pool(on_connect: hold_listen) do |pool|
-        subject = W::Worker.new(pool, queues: [name], worker_id: "ruby-#{fixture["id"]}", disable_registry: true)
-          .handle(fixture["taskType"]) do |payload|
+        subject = W::Worker.new(pool, queues: [name], worker_id: "ruby-#{fixture["id"]}", disable_registry: true,
+          shutdown_grace: JOIN_GRACE).handle(fixture["taskType"]) do |payload|
             handled << payload["task"]
             nil
           end
@@ -516,7 +526,7 @@ module Conformance
           released.set
           listen_released.get.set
           subject.stop
-          check(thread.join(10), "the worker did not stop")
+          check(thread.join(RUN_WAIT), "the worker did not stop")
         end
       end
       ordered = claims.sort_by(&:first)
@@ -563,7 +573,8 @@ module Conformance
       end
       release = Concurrent::Event.new
       with_pool do |pool|
-        subject = worker(pool, fixture, concurrency: fixture["concurrency"], poll_interval: 5)
+        subject = worker(pool, fixture, concurrency: fixture["concurrency"], poll_interval: 5,
+          shutdown_grace: DRAIN_GRACE)
           .handle(fixture["taskType"]) { raise "the handler was never released" unless release.wait(5) }
         thread = Thread.new { subject.run }
         begin
@@ -575,7 +586,7 @@ module Conformance
         ensure
           release.set
           subject.stop
-          check(thread.join(10), "the worker did not drain")
+          check(thread.join(DRAIN_GRACE + RUN_WAIT), "the worker did not drain")
         end
         thread.value
         check(active(subject).zero?, "slots remain active after the drain")
@@ -648,7 +659,8 @@ module Conformance
       started = -> { lock.synchronize { handlers.fetch(:started).length } }
       claim_count = -> { lock.synchronize { claims.fetch(:limits).length } }
       with_pool(6) do |pool|
-        subject = worker(pool, fixture, concurrency: fixture["concurrency"], shared_heartbeats: true)
+        subject = worker(pool, fixture, concurrency: fixture["concurrency"], shared_heartbeats: true,
+          shutdown_grace: JOIN_GRACE)
           .handle(fixture["taskType"]) do
           finished = Concurrent::Event.new
           blocked = lock.synchronize do
@@ -717,7 +729,7 @@ module Conformance
           release_held.call
           open_all.call
           subject.stop
-          check(thread.join(10), "the worker did not stop")
+          check(thread.join(RUN_WAIT), "the worker did not stop")
         end
       end
     end
@@ -869,7 +881,8 @@ module Conformance
       task_id = queue.enqueue(fixture["taskType"], {}, queue: name).task_id
       with_pool do |pool|
         subject = W::Worker.new(pool, queues: [name], worker_id: "ruby-#{fixture["id"]}", disable_registry: true,
-          lease: fixture["leaseMs"] / 1000.0, poll_interval: fixture["pollMs"] / 1000.0)
+          lease: fixture["leaseMs"] / 1000.0, poll_interval: fixture["pollMs"] / 1000.0,
+          shutdown_grace: JOIN_GRACE)
           .handle(fixture["registeredTaskType"]) { nil }
         thread = Thread.new { subject.run }
         begin
@@ -879,7 +892,7 @@ module Conformance
             "AND query = 'LISTEN workhorse_tasks'"), 10)
         ensure
           subject.stop
-          check(thread.join(10), "the worker did not stop")
+          check(thread.join(RUN_WAIT), "the worker did not stop")
         end
         thread.value
         check(listeners.positive?, "no session listened while the worker ran")

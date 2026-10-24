@@ -88,6 +88,23 @@ final class RuntimeFixtures {
    */
   private static final Map<String, String> GAPS = Map.of();
 
+  /** How long a runner waits for a stopped run to return. */
+  private static final long RUN_WAIT_SECONDS = 10;
+
+  /**
+   * The shutdown grace of a worker whose stopped run the runner joins. The shared server can stall
+   * a claim on its WAL flush for longer than {@link #RUN_WAIT_SECONDS}. A stop during that claim
+   * waits until the grace ends, so the grace must end before the wait of the runner (SM-1801).
+   */
+  private static final Duration JOIN_GRACE = Duration.ofSeconds(5);
+
+  /**
+   * The shutdown grace of the graceful-drain worker, which is the default. The fixture tests the
+   * drain, which the grace bounds, so the runner waits for the whole grace and then {@link
+   * #RUN_WAIT_SECONDS} (SM-1801).
+   */
+  private static final Duration DRAIN_GRACE = Duration.ofSeconds(25);
+
   private static final Map<CancellationReason, String> CANCEL_NAMES =
       Map.of(
           CancellationReason.REQUESTED, "CancellationRequestedError",
@@ -572,6 +589,7 @@ final class RuntimeFixtures {
       Worker subject =
           worker(pool, fixture)
               .pollInterval(millis(fixture, "pollMs"))
+              .shutdownGrace(JOIN_GRACE)
               .handle(
                   taskType(fixture),
                   Object.class,
@@ -601,7 +619,7 @@ final class RuntimeFixtures {
         holding.set(false);
         released.add(true);
         subject.stop();
-        run.get(10, TimeUnit.SECONDS);
+        run.get(RUN_WAIT_SECONDS, TimeUnit.SECONDS);
       }
     }
     List<long[]> seen = List.copyOf(claims);
@@ -646,6 +664,7 @@ final class RuntimeFixtures {
           worker(pool, fixture)
               .concurrency(Math.toIntExact((Long) fixture.get("concurrency")))
               .pollInterval(Duration.ofSeconds(5))
+              .shutdownGrace(DRAIN_GRACE)
               .handle(
                   taskType(fixture),
                   Object.class,
@@ -671,8 +690,16 @@ final class RuntimeFixtures {
       } finally {
         release.countDown();
         subject.stop();
+        // The wait is in the finally block, so it also bounds a fixture that fails early. The
+        // failure of the fixture stays the reported outcome.
+        try {
+          run.get(DRAIN_GRACE.toSeconds() + RUN_WAIT_SECONDS, TimeUnit.SECONDS);
+        } catch (ExecutionException | TimeoutException ignored) {
+          // The checks after the drain report the outcome.
+        }
       }
-      run.get(10, TimeUnit.SECONDS);
+      check(run.isDone(), "the worker run did not return within its shutdown grace and then 10 s");
+      run.get();
       check(active.get() == 0, "slots remain active after the drain");
     }
     List<String> states = new ArrayList<>();
@@ -770,6 +797,7 @@ final class RuntimeFixtures {
           worker(pool, fixture)
               .concurrency(concurrency)
               .sharedHeartbeats(true)
+              .shutdownGrace(JOIN_GRACE)
               .handle(
                   taskType(fixture),
                   Object.class,
@@ -849,7 +877,7 @@ final class RuntimeFixtures {
         releaseHeld.run();
         openAll.run();
         subject.stop();
-        run.handle((value, error) -> null).get(10, TimeUnit.SECONDS);
+        run.handle((value, error) -> null).get(RUN_WAIT_SECONDS, TimeUnit.SECONDS);
       }
     }
   }
@@ -1382,6 +1410,7 @@ final class RuntimeFixtures {
               .disableRegistry(true)
               .lease(millis(fixture, "leaseMs"))
               .pollInterval(millis(fixture, "pollMs"))
+              .shutdownGrace(JOIN_GRACE)
               .handle(
                   (String) fixture.get("registeredTaskType"), Object.class, (ctx, payload) -> null)
               .build();
@@ -1397,7 +1426,7 @@ final class RuntimeFixtures {
       } finally {
         subject.stop();
       }
-      run.get(10, TimeUnit.SECONDS);
+      run.get(RUN_WAIT_SECONDS, TimeUnit.SECONDS);
     }
     check(listeners > 0, "no session listened while the worker ran");
     List<Double> times = new ArrayList<>();
@@ -1496,6 +1525,7 @@ final class RuntimeFixtures {
               .queues(name)
               .workerId("jvm-" + fixture.get("id"))
               .disableRegistry(true)
+              .shutdownGrace(JOIN_GRACE)
               .handle(
                   taskType(fixture),
                   Object.class,
@@ -1580,7 +1610,7 @@ final class RuntimeFixtures {
         released.countDown();
         listenGate.get().countDown();
         subject.stop();
-        run.get(10, TimeUnit.SECONDS);
+        run.get(RUN_WAIT_SECONDS, TimeUnit.SECONDS);
       }
     }
     List<long[]> ordered;
