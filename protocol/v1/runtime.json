@@ -267,7 +267,7 @@
     "runMs": 2500,
     "expectedMinimumReleases": 2,
     "expectedMaximumReleases": 3,
-    "expectedMinimumReleaseGapMs": 900
+    "expectedMinimumReleaseGapMs": 800
   },
   {
     "id": "json-values-survive-the-payload-and-result-round-trip",

@@ -2591,10 +2591,17 @@ time from 0 through 50 ms. The SDKs name that delay `NOTIFICATION_CLAIM_DELAY_MS
 
 The SDKs mark the release wait in the empty-wait state of the loop. TypeScript and Go set a
 `release` flag on `emptyWait`. Python, Rust, and Ruby store no wake version (`None` or `nil`) in
-`empty_wait`. .NET stores a `null` `Version` in its `EmptyWait` record. The shared runtime fixture
+`empty_wait`. .NET stores a `null` `Version` in its `EmptyWait` record.
+
+The shared runtime fixture
 `a-listening-worker-claims-a-released-task-again-only-after-its-poll-interval` runs a listening
-worker with a 1,000 ms poll interval for 2,500 ms. It requires 2 or 3 releases, at least 900 ms
-apart. Each runner also requires a session in `pg_stat_activity` whose last query is
+worker with a 1,000 ms poll interval for 2,500 ms. It requires 2 or 3 releases, at least 800 ms
+apart. The shortest wait is 900 ms. Each worker starts the release wait when its claim returns,
+and releases the task later on a handler thread or task. The release statement stamps
+`occurred_at`, so a late release makes the next gap shorter than the wait. The 100 ms margin is
+for this measurement.
+
+Each runner also requires a session in `pg_stat_activity` whose last query is
 `LISTEN workhorse_tasks`, because the fixture proves nothing without a listener.
 
 A pause ends a release wait. Thus a resume claims at once, as it does after an ordinary empty wait.

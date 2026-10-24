@@ -54,6 +54,18 @@ Its subscription-recovery fixture holds the `LISTEN` of a worker that can listen
 the worker polls at the polling-only base until the subscription is live, and at the notification
 base after that. Then it ends the live listener session and checks that the worker claims at once
 and polls at the polling-only base again.
+
+Its release-wait fixture runs a listening worker that has no handler for its one ready task, with
+a 1,000 ms poll interval. Each runner reads the gap between two `released` events, which PostgreSQL
+stamps in the release statement. Every worker starts its release wait when its claim returns, and
+then releases the task on a handler thread or task. So a release that starts late makes the next
+gap shorter than the wait.
+
+The shortest wait is 900 ms, and the fixture requires at least 800 ms. The margin is for this
+measurement. With a live subscription and no registry cap, the focused poll-wait cases of each SDK
+check that the wait is at least 0.9 times the poll interval
+([ADR 0112](../docs/decisions/0112-define-the-poll-wait-order-and-the-worker-interval-range.md)).
+
 Its budget-admission fixture pins that `max_active` holds across queues. A claim is parked on its
 queue's token-bucket row after it samples its ready rows. A budgeted task then commits on that
 queue, and a claim of the same budget on another queue stays open until the parked claim either
