@@ -6,7 +6,7 @@ import gc
 import weakref
 from contextlib import suppress
 from datetime import UTC, datetime, timedelta
-from threading import Event, Thread
+from threading import Event, Lock, Thread, current_thread
 from time import monotonic, sleep
 from typing import Any
 
@@ -919,6 +919,7 @@ def test_run_once_rotates_claims_across_queues(database_url: str) -> None:
 
 def test_run_pauses_resumes_and_drains_active_slots(database_url: str) -> None:
     started: list[int] = []
+    handler_threads: list[Thread] = []
     releases = [Event(), Event(), Event()]
     two_started = Event()
     third_started = Event()
@@ -936,6 +937,7 @@ def test_run_pauses_resumes_and_drains_active_slots(database_url: str) -> None:
         def handle(payload: Any, _context: object) -> None:
             sequence = int(payload["sequence"])
             started.append(sequence)
+            handler_threads.append(current_thread())
             if len(started) == 2:
                 two_started.set()
             if len(started) == 3:
@@ -946,8 +948,49 @@ def test_run_pauses_resumes_and_drains_active_slots(database_url: str) -> None:
             worker_pool,
             worker_id="python-controlled-worker",
             concurrency=2,
-            poll_ms=5_000,
+            # Only the wake of resume() can start the third task within the 5 s wait below. Without
+            # it, the paused loop of a listening worker waits a full poll interval of about 60 s.
+            poll_ms=60_000,
+            registry_interval_ms=60_000,
         ).handle("controlled", handle)
+
+        class ObservedWake(Event):
+            """The run loop's wake event. It shows when the loop waits long with no wake set.
+
+            One lock covers clear(), the start and end of wait(), and the check. Thus the check
+            cannot combine a wait of one pass with the clear of the next pass.
+            """
+
+            def __init__(self) -> None:
+                super().__init__()
+                self._observed = Lock()
+                self._wait_ends_at: float | None = None
+
+            def clear(self) -> None:
+                with self._observed:
+                    super().clear()
+
+            def wait(self, timeout: float | None = None) -> bool:
+                with self._observed:
+                    self._wait_ends_at = float("inf") if timeout is None else monotonic() + timeout
+                try:
+                    return super().wait(timeout)
+                finally:
+                    with self._observed:
+                        self._wait_ends_at = None
+
+            def waits_long_without_wake(self) -> bool:
+                # Before the listener listens, the loop waits at most about 5.5 s. Only the
+                # listening loop's wait of about 60 s outlasts the 5 s wait for the third task.
+                with self._observed:
+                    ends_at = self._wait_ends_at
+                    return (
+                        ends_at is not None and ends_at - monotonic() > 10 and not super().is_set()
+                    )
+
+        # The loop reads the pause after it clears its wake, and waits only after that read.
+        wake = ObservedWake()
+        worker._wake = wake
 
         def run_worker() -> None:
             try:
@@ -959,25 +1002,51 @@ def test_run_pauses_resumes_and_drains_active_slots(database_url: str) -> None:
 
         thread = Thread(target=run_worker)
         thread.start()
-        assert two_started.wait(timeout=5)
+        try:
+            assert two_started.wait(timeout=5)
 
-        worker.pause()
-        assert worker.is_paused() is True
-        for sequence in started:
-            releases[sequence].set()
-        assert not third_started.wait(timeout=0.2)
+            worker.pause()
+            assert worker.is_paused() is True
+            for sequence in started:
+                releases[sequence].set()
+            assert not third_started.wait(timeout=0.2)
 
-        worker.resume()
-        assert worker.is_paused() is False
-        assert third_started.wait(timeout=1)
+            # The exit of each released handler wakes the loop too. A handler thread ends after its
+            # wake. Thus the test joins both, and then waits until the paused loop waits again.
+            for handler_thread in list(handler_threads):
+                handler_thread.join(timeout=5)
+                assert not handler_thread.is_alive()
+            # A slow listener start can cost one short wait first, so this check allows 15 s.
+            eventually(
+                wake.waits_long_without_wake,
+                "the paused loop never started a long wait after the handlers ended",
+                timeout_s=15,
+            )
+            assert not third_started.is_set()
 
-        worker.stop()
-        assert not run_finished.wait(timeout=0.2)
-        releases[started[2]].set()
-        assert run_finished.wait(timeout=5)
-        thread.join(timeout=5)
-        assert not thread.is_alive()
-        assert worker_error == []
+            worker.resume()
+            assert worker.is_paused() is False
+            # A claim commit comes before the third task starts. Under load, it can take more than 1 s.
+            assert third_started.wait(timeout=5)
+
+            worker.stop()
+            assert not run_finished.wait(timeout=0.2)
+            releases[started[2]].set()
+            # A stop can spend its whole stop budget, max(heartbeat_ms, 5 s), on a claim in flight,
+            # maintenance, or the draining registry refresh. The default 30 s lease gives a heartbeat
+            # interval of 10 s, so the budget is 10 s. The 1 s cleanup window and a margin follow.
+            assert run_finished.wait(timeout=15), (
+                "the run did not finish within the stop budget of 10 s plus a margin of 5 s"
+            )
+            thread.join(timeout=5)
+            assert not thread.is_alive()
+            assert worker_error == []
+        finally:
+            # A failed assertion must not leave the worker running and keep the process alive.
+            for release in releases:
+                release.set()
+            worker.stop()
+            thread.join(timeout=15)
 
         outcomes = worker_connection.execute(
             "SELECT task_id::text, state FROM workhorse.task_outcome "
@@ -1048,6 +1117,19 @@ def test_worker_registry_delivers_remote_pause_and_deregisters(database_url: str
                 break
             sleep(0.01)
         assert refreshed == (True,)
+        # The registry statement commits before the worker reads its pause. A pass reads the pause
+        # only after its refresh, so after is_paused() the loop starts no claim. A claim that
+        # started before can still lease the task and run it (lifecycle.md, "Dispatch loop").
+        eventually(worker.is_paused, "the worker never read the remote pause")
+
+        def no_claim_in_flight() -> bool:
+            with worker._state_lock:
+                slots = worker._dispatch_slots
+                return (
+                    slots is not None and slots.whole_claims == 0 and not any(slots.cohort_claims)
+                )
+
+        eventually(no_claim_in_flight, "a claim from before the pause never ended")
 
         Queue(enqueue_connection, "python-registry").enqueue("registered", {})
         enqueue_connection.commit()
@@ -1558,8 +1640,14 @@ def test_worker_reports_its_own_deadline_settlement_before_a_later_stale_heartbe
         original_expire = worker._expire_owned_task
         heartbeat_statuses: list[object] = []
 
-        def observed_heartbeat_rows(*arguments: Any) -> Any:
-            rows = original_heartbeat_rows(*arguments)
+        expiration_settled = Event()
+
+        def observed_heartbeat_rows(batches: Any, deadline: float) -> Any:
+            # Each round waits for the settlement. An earlier round can meet the expiration
+            # transaction and answer busy. Its other answers wait for the lock of the stall.
+            window = deadline - monotonic()
+            assert expiration_settled.wait(timeout=10)
+            rows = original_heartbeat_rows(batches, monotonic() + window)
             heartbeat_statuses.extend(row["status"] for row in rows)
             heartbeat_answered.set()
             return rows
@@ -1567,6 +1655,7 @@ def test_worker_reports_its_own_deadline_settlement_before_a_later_stale_heartbe
         def stalled_expire(task: Any, parent_context: object) -> object:
             status = original_expire(task, parent_context)
             if status == "deadline_exceeded":
+                expiration_settled.set()
                 assert heartbeat_answered.wait(timeout=5)
             return status
 
