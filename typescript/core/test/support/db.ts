@@ -38,7 +38,8 @@ export function createDatabaseTestHarness(
   databaseUrl: string;
   pool: Pool;
   setup: () => Promise<void>;
-  reset: () => Promise<void>;
+  /** Pass the hook's signal, so the reset stops its retries when the hook times out. */
+  reset: (options?: { signal?: AbortSignal }) => Promise<void>;
   teardown: () => Promise<void>;
 } {
   const sourceUrl = localDatabaseUrl("test");
@@ -63,7 +64,8 @@ export function createDatabaseTestHarness(
       await copyCurrentSchemaTemplate(sourceUrl, isolatedName);
       await prepareCurrentHistoryPartitions(pool);
     },
-    async reset() {
+    async reset(resetOptions = {}) {
+      resetOptions.signal?.throwIfAborted();
       const schemas = ["workhorse", ...(options.extraSchemas ?? [])];
       const result = await pool.query<{ table_name: string }>(
         `SELECT format('%I.%I', namespace.nspname, relation.relname) AS table_name
@@ -93,7 +95,7 @@ export function createDatabaseTestHarness(
           ],
         ],
       );
-      await truncateWithoutDeadlock(pool, options.resetLockWaitMs ?? 30_000, [
+      await truncateWithoutDeadlock(pool, options.resetLockWaitMs ?? 30_000, resetOptions.signal, [
         ...(result.rows.length > 0
           ? [
               `TRUNCATE ${result.rows.map((row) => row.table_name).join(", ")} RESTART IDENTITY CASCADE`,
@@ -140,10 +142,15 @@ const maintenanceStateReset = `UPDATE workhorse.maintenance_state SET
  * `deadlock_timeout`, and the lock wait of the reset ends before that. Then the reset releases its
  * locks, the other statement finishes, and the reset tries again. If the locks stay held, the
  * error names the sessions that hold them.
+ *
+ * If the hook that runs the reset times out, Vitest aborts the signal and starts the next test. The
+ * reset then must not try again, because a retry in a later test can lock the tables that the test
+ * uses. Each attempt ends its transaction before the reset checks the signal (SM-1679).
  */
 async function truncateWithoutDeadlock(
   pool: Pool,
   lockWaitMs: number,
+  signal: AbortSignal | undefined,
   statements: readonly string[],
 ): Promise<void> {
   const client = await pool.connect();
@@ -155,6 +162,7 @@ async function truncateWithoutDeadlock(
     const lockTimeoutMs = Math.max(1, Math.min(200, Math.floor(deadlockTimeoutMs / 5)));
     const deadline = Date.now() + lockWaitMs;
     for (;;) {
+      signal?.throwIfAborted();
       await client.query("BEGIN");
       try {
         await client.query(`SET LOCAL lock_timeout = ${lockTimeoutMs}`);

@@ -111,8 +111,8 @@ export function createIntegrationTestContext(
     await database.setup();
   });
 
-  beforeEach(async ({ onTestFinished }) => {
-    await database.reset();
+  beforeEach(async ({ onTestFinished, signal }) => {
+    await database.reset({ signal });
     await pool.query(`UPDATE workhorse.task_stat_state SET
       rolled_up_through = date_bin('1 minute', clock_timestamp(), timestamp '2000-01-01' AT TIME ZONE 'UTC'),
       last_run_at = NULL, updated_at = clock_timestamp()`);
