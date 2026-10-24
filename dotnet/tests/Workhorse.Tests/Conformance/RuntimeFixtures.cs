@@ -1548,6 +1548,14 @@ internal sealed class RuntimeFixtures : IAsyncDisposable
     /// cancellation of its token; with a <c>value</c> one it returns a value. One attempt makes a
     /// charged attempt fail the task for good.
     /// </summary>
+    /// <remarks>
+    /// The worker cancels the handler at the shutdown deadline. So the settlement always starts then,
+    /// and it must commit inside the 250 ms unwind window, whatever the grace is. With
+    /// <c>synchronous_commit</c> on, a commit waits for the WAL flush of the PostgreSQL cluster, which
+    /// the other test suites on a shared host also use. Such a flush can take 700 ms, and then the
+    /// worker counts the handler as abandoned (SM-1747). So the worker's pool commits without that
+    /// wait. The fixture proves the cancellation and the unwind window, not the durability of a commit.
+    /// </remarks>
     private async Task ShutdownCancellationAsync(OrderedDictionary<string, object?> fixture)
     {
         var behavior = Get(fixture, "shutdownBehavior");
@@ -1556,8 +1564,13 @@ internal sealed class RuntimeFixtures : IAsyncDisposable
         var taskId = await EnqueueAsync(TaskType(fixture), Json.Members(), Options(QueueName(fixture)) with { MaxAttempts = Runner.Int(fixture.GetValueOrDefault("maxAttempts")) });
         var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var reasons = new ConcurrentQueue<CancelReason?>();
-        await using (var pool = Intercept.Create(_database, Intercept.Hook.None))
+        await using (var pool = Intercept.Create(_database, Intercept.Hook.None, connection => connection.Options = "-c synchronous_commit=off"))
         {
+            await using (var connection = await pool.DataSource.OpenConnectionAsync())
+            {
+                Failure.Check(Database.Rows(connection, "SHOW synchronous_commit") is [{ } row] && Matcher.Same(Json.Object(row)!["synchronous_commit"], "off"), "the worker pool waits for the WAL flush");
+            }
+
             await using var subject = NewWorker(pool, fixture, options => options.ShutdownGrace = Millis(fixture, "shutdownGraceMs"));
             subject.Handle<JsonElement, object?>(TaskType(fixture), async (context, _) =>
             {
