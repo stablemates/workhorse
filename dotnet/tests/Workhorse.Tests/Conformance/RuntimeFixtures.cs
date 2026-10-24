@@ -250,12 +250,15 @@ internal sealed class RuntimeFixtures : IAsyncDisposable
         var taskId = await EnqueueAsync(TaskType(fixture), Json.Members(), Options(QueueName(fixture)));
         var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var reasons = new ConcurrentQueue<string?>();
+        var grace = TimeSpan.Zero;
         await using var pool = Intercept.Create(_database, Intercept.Hook.None);
-        await using var subject = NewWorker(pool, fixture, options =>
+        // The runner does not dispose the worker, because DisposeAsync waits for the run without a bound (SM-1802).
+        var subject = NewWorker(pool, fixture, options =>
         {
             options.Lease = Millis(fixture, "leaseMs");
             options.Heartbeat = Millis(fixture, "heartbeatMs");
             options.SharedHeartbeats = true;
+            grace = options.ShutdownGrace;
         });
         subject.Handle<JsonElement>(TaskType(fixture), async (context, _) =>
         {
@@ -265,10 +268,19 @@ internal sealed class RuntimeFixtures : IAsyncDisposable
             context.CancellationToken.ThrowIfCancellationRequested();
         });
         var result = Running(subject, () => subject.RunOnceAsync());
-        await Started(started, "the handler never started");
-        var cancel = await _queue.CancelAsync(taskId, new CancelOptions { RequestedBy = "runtime-fixture", Reason = (string?)fixture.GetValueOrDefault("cancelReason") });
-        Failure.Check(cancel.Status == CancelStatus.CancelRequested, $"cancel returned {cancel.Status}");
-        Failure.Check(await JoinAsync(result), "the worker did not report the cancelled run");
+        try
+        {
+            await Started(started, "the handler never started");
+            var cancel = await _queue.CancelAsync(taskId, new CancelOptions { RequestedBy = "runtime-fixture", Reason = (string?)fixture.GetValueOrDefault("cancelReason") });
+            Failure.Check(cancel.Status == CancelStatus.CancelRequested, $"cancel returned {cancel.Status}");
+            Failure.Check(await JoinAsync(result), "the worker did not report the cancelled run");
+        }
+        finally
+        {
+            subject.Stop();
+            await StoppedAsync(result, grace);
+        }
+
         Failure.Check(reasons.SequenceEqual([fixture.GetValueOrDefault("expectedAbortReason") as string]), $"abort reasons [{string.Join(", ", reasons)}]");
         await ExpectStateAsync(taskId, Get(fixture, "expectedState"));
         await ExpectOutcomesAsync(taskId, [fixture.GetValueOrDefault("expectedAttemptOutcome")]);
@@ -405,12 +417,15 @@ internal sealed class RuntimeFixtures : IAsyncDisposable
                     Interlocked.Decrement(ref active);
                 }
             });
+        var grace = TimeSpan.Zero;
         await using var pool = Intercept.Create(_database, hook);
-        await using var subject = NewWorker(pool, fixture, options =>
+        // The runner does not dispose the worker, because DisposeAsync waits for the run without a bound (SM-1802).
+        var subject = NewWorker(pool, fixture, options =>
         {
             options.Lease = Millis(fixture, "leaseMs");
             options.Heartbeat = TimeSpan.FromMilliseconds(heartbeat);
             options.SharedHeartbeats = true;
+            grace = options.ShutdownGrace;
         });
         subject.Handle<JsonElement>(TaskType(fixture), async (_, _) =>
         {
@@ -435,7 +450,8 @@ internal sealed class RuntimeFixtures : IAsyncDisposable
         {
             releaseFirst.Set();
             releaseHandler.Set();
-            await Settled(result);
+            subject.Stop();
+            await StoppedAsync(result, grace);
         }
 
         // An in-flight round can end after the attempt settles; it starts no new one.
@@ -904,12 +920,15 @@ internal sealed class RuntimeFixtures : IAsyncDisposable
                 throw new InvalidOperationException("a held heartbeat was never released");
             }
         });
+        var grace = TimeSpan.Zero;
         await using (var pool = Intercept.Create(_database, hook))
         {
-            await using var subject = NewWorker(pool, fixture, options =>
+            // The runner does not dispose the worker, because DisposeAsync waits for the run without a bound (SM-1802).
+            var subject = NewWorker(pool, fixture, options =>
             {
                 options.Lease = Millis(fixture, "leaseMs");
                 options.Heartbeat = Millis(fixture, "heartbeatMs");
+                grace = options.ShutdownGrace;
             });
             subject.Handle<JsonElement, object?>(TaskType(fixture), async (context, _) =>
             {
@@ -947,6 +966,8 @@ internal sealed class RuntimeFixtures : IAsyncDisposable
             finally
             {
                 recoveryEnded.Set();
+                subject.Stop();
+                await StoppedAsync(result, grace);
             }
         }
 
@@ -1608,7 +1629,8 @@ internal sealed class RuntimeFixtures : IAsyncDisposable
                 Failure.Check(Database.Rows(connection, "SHOW synchronous_commit") is [{ } row] && Matcher.Same(Json.Object(row)!["synchronous_commit"], "off"), "the worker pool waits for the WAL flush");
             }
 
-            await using var subject = NewWorker(pool, fixture, options => options.ShutdownGrace = Millis(fixture, "shutdownGraceMs"));
+            // The runner does not dispose the worker, because DisposeAsync waits for the run without a bound (SM-1802).
+            var subject = NewWorker(pool, fixture, options => options.ShutdownGrace = Millis(fixture, "shutdownGraceMs"));
             subject.Handle<JsonElement, object?>(TaskType(fixture), async (context, _) =>
             {
                 started.TrySetResult();
@@ -1622,9 +1644,17 @@ internal sealed class RuntimeFixtures : IAsyncDisposable
                 return Json.Members(("finished", true));
             });
             var run = Running(subject, () => subject.RunAsync(CancellationToken.None));
-            await Started(started, "the handler never started");
-            subject.Stop();
-            await JoinAsync(run);
+            try
+            {
+                await Started(started, "the handler never started");
+                subject.Stop();
+                await JoinAsync(run);
+            }
+            finally
+            {
+                subject.Stop();
+                await StoppedAsync(run, Millis(fixture, "shutdownGraceMs"));
+            }
         }
 
         Failure.Check(reasons.SequenceEqual([CancelReason.Shutdown]), $"the handler saw cancellation reasons [{string.Join(", ", reasons)}]");
@@ -1646,11 +1676,14 @@ internal sealed class RuntimeFixtures : IAsyncDisposable
         using var release = new ManualResetEventSlim();
         var cancellations = 0;
         var timeout = (long)fixture["renewalTimeoutMs"]! / 1000;
+        var grace = TimeSpan.Zero;
         await using var pool = Intercept.Create(_database, Intercept.Hook.None);
-        await using var subject = NewWorker(pool, fixture, options =>
+        // The runner does not dispose the worker, because DisposeAsync waits for the run without a bound (SM-1802).
+        var subject = NewWorker(pool, fixture, options =>
         {
             options.Lease = Millis(fixture, "leaseMs");
             options.Heartbeat = Millis(fixture, "heartbeatMs");
+            grace = options.ShutdownGrace;
         });
         subject.Handle<JsonElement>(TaskType(fixture), async (context, _) =>
         {
@@ -1682,7 +1715,8 @@ internal sealed class RuntimeFixtures : IAsyncDisposable
         finally
         {
             release.Set();
-            await Settled(result);
+            subject.Stop();
+            await StoppedAsync(result, grace);
         }
 
         Failure.Check(cancellations == (long)fixture["expectedCancellations"]!, "the handler saw a cancellation");
@@ -1721,6 +1755,7 @@ internal sealed class RuntimeFixtures : IAsyncDisposable
         var injection = Get(fixture, "injection");
         var rounds = new List<object?>();
         var sent = new HeartbeatRounds();
+        var grace = TimeSpan.Zero;
         await using (var pool = Intercept.Create(_database, sent, connection => connection.Options = "-c synchronous_commit=off"))
         {
             await using (var connection = await pool.DataSource.OpenConnectionAsync())
@@ -1728,11 +1763,13 @@ internal sealed class RuntimeFixtures : IAsyncDisposable
                 Failure.Check(Database.Rows(connection, "SHOW synchronous_commit") is [{ } row] && Matcher.Same(Json.Object(row)!["synchronous_commit"], "off"), "the worker pool waits for the WAL flush");
             }
 
-            await using var subject = NewWorker(pool, fixture, options =>
+            // The runner does not dispose the worker, because DisposeAsync waits for the run without a bound (SM-1802).
+            var subject = NewWorker(pool, fixture, options =>
             {
                 options.Lease = Millis(fixture, "leaseMs");
                 options.Heartbeat = Millis(fixture, "heartbeatMs");
                 options.LoggerFactory = sent;
+                grace = options.ShutdownGrace;
             });
             sent.Heartbeat = subject.HeartbeatForTests;
             subject.Handle<JsonElement>(TaskType(fixture), async (context, _) =>
@@ -1767,7 +1804,8 @@ internal sealed class RuntimeFixtures : IAsyncDisposable
             finally
             {
                 release.Set();
-                await Settled(result);
+                subject.Stop();
+                await StoppedAsync(result, grace);
             }
         }
 
