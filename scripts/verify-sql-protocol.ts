@@ -285,7 +285,10 @@ export interface ReleaseWaitRuntimeFixture extends RuntimeFixtureBase {
   runMs: number;
   expectedMinimumReleases: number;
   expectedMaximumReleases: number;
-  /** The poll interval less its jitter: the least time between two releases of the task. */
+  /**
+   * The least time between two releases of the task. It is below the shortest wait, the poll
+   * interval less its jitter, because each release statement stamps its event after the wait starts.
+   */
   expectedMinimumReleaseGapMs: number;
 }
 
