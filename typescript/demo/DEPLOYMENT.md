@@ -287,8 +287,9 @@ reaches only a TypeScript worker, so this constraint does not apply to it.
 
 The JVM and .NET workers read the same `postgres://` URL. Each maps the host, port, database,
 credentials, and the parameters `sslmode`, `application_name`, `connect_timeout`, and `options` to
-its own driver. If the URL names another parameter or a Unix socket without a host, the JVM worker
-stops. The .NET worker accepts a socket directory in the `host` parameter.
+its own driver. Both workers also map the `host` and `port` parameters. As in libpq, a `host` value
+that starts with `/` is the directory of the server's Unix socket. If the URL names another
+parameter, the worker stops.
 
 Each demo workspace should have a dedicated role and database. The primary workspace runs TypeScript,
 Python, Go, Rust, Ruby, JVM, and .NET workers. When `DATABASE_URL_SECONDARY` is set, both launchers add one dedicated

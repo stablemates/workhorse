@@ -7,7 +7,14 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import java.io.IOException;
+import java.net.InetSocketAddress;
+import java.net.StandardProtocolFamily;
 import java.net.URLEncoder;
+import java.net.UnixDomainSocketAddress;
+import java.nio.ByteBuffer;
+import java.nio.channels.ServerSocketChannel;
+import java.nio.channels.SocketChannel;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -22,11 +29,16 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 import org.jspecify.annotations.Nullable;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.junit.jupiter.api.io.TempDir;
+import org.postgresql.PGConnection;
+import org.postgresql.PGNotification;
 import org.postgresql.ds.PGSimpleDataSource;
 import run.workhorse.EnqueueOptions;
 import run.workhorse.JsonCodec;
@@ -133,6 +145,85 @@ class DemoWorkerProgramTest {
   }
 
   @Test
+  void itMapsAUnixSocketUrlAsLibpqReadsIt() {
+    PGSimpleDataSource socket =
+        DemoWorkerProgram.dataSource(
+            "postgresql://demo:p%40ss@/workhorse_demo?host=/var/run/postgresql");
+    assertEquals(DemoWorkerProgram.UnixSocketFactory.class.getName(), socket.getSocketFactory());
+    assertEquals("/var/run/postgresql/.s.PGSQL.5432", socket.getSocketFactoryArg());
+    assertEquals("workhorse_demo", socket.getDatabaseName());
+    assertEquals("demo", socket.getUser());
+    assertEquals("p@ss", socket.getPassword());
+    assertEquals("disable", socket.getSslMode());
+
+    PGSimpleDataSource port =
+        DemoWorkerProgram.dataSource("postgres:///demo?host=%2Ftmp%2Fpg&port=6543&sslmode=prefer");
+    assertEquals("/tmp/pg/.s.PGSQL.6543", port.getSocketFactoryArg());
+    assertEquals("prefer", port.getSslMode());
+
+    PGSimpleDataSource tcp =
+        DemoWorkerProgram.dataSource("postgres://ignored/demo?host=db.internal");
+    assertEquals("db.internal", tcp.getServerNames()[0]);
+    assertNull(tcp.getSocketFactory());
+  }
+
+  @Test
+  void itRunsTasksThroughAUnixSocket(@TempDir Path directory) throws Exception {
+    try (IsolatedExampleDatabase db = IsolatedExampleDatabase.create("demo-worker-socket")) {
+      PGSimpleDataSource tcp = DemoWorkerProgram.dataSource(db.jdbcUrl());
+      try (SocketRelay relay =
+          new SocketRelay(
+              directory.resolve(".s.PGSQL.5432"),
+              tcp.getServerNames()[0],
+              tcp.getPortNumbers()[0])) {
+        PGSimpleDataSource socket =
+            DemoWorkerProgram.dataSource(
+                "postgresql://"
+                    + encode(tcp.getUser())
+                    + ":"
+                    + encode(tcp.getPassword())
+                    + "@/"
+                    + encode(tcp.getDatabaseName())
+                    + "?host="
+                    + encode(directory.toString()));
+        try (Connection listener = socket.getConnection();
+            Connection notifier = socket.getConnection();
+            Statement listen = listener.createStatement();
+            Statement notify = notifier.createStatement();
+            ResultSet row = listen.executeQuery("SELECT current_database()")) {
+          assertTrue(row.next());
+          assertEquals(tcp.getDatabaseName(), row.getString(1));
+          assertTrue(relay.connections() >= 2, "the connections go through the socket");
+
+          // The listener blocks in getNotifications with a timeout, so a read must time out.
+          listen.execute("LISTEN demo_socket");
+          PGConnection notifications = listener.unwrap(PGConnection.class);
+          long started = System.nanoTime();
+          assertEquals(0, notifications.getNotifications(200).length);
+          assertTrue(System.nanoTime() - started >= TimeUnit.MILLISECONDS.toNanos(150));
+          notify.execute("NOTIFY demo_socket, 'ready'");
+          PGNotification[] received = notifications.getNotifications(10_000);
+          assertEquals(1, received.length);
+          assertEquals("ready", received[0].getParameter());
+        }
+
+        UUID task = enqueue(db.queue(), DemoWorkerProgram.JVM_QUEUE, "language", "jvm", null);
+        Worker worker =
+            DemoWorkerProgram.buildWorker(
+                socket, Optional.of(Duration.ofMillis(20)), "demo-jvm-test-" + UUID.randomUUID());
+        CompletableFuture<Void> running = CompletableFuture.runAsync(worker::run);
+        try {
+          assertEquals(TaskState.SUCCEEDED, db.awaitTerminal(task).state());
+        } finally {
+          worker.stop();
+          running.get(ExampleDatabase.WAIT.toSeconds(), TimeUnit.SECONDS);
+          worker.close();
+        }
+      }
+    }
+  }
+
+  @Test
   void itPassesAJdbcUrlToPgJdbcUnchanged() {
     PGSimpleDataSource dataSource =
         DemoWorkerProgram.dataSource("jdbc:postgresql://db.internal:6543/demo?user=app");
@@ -147,8 +238,7 @@ class DemoWorkerProgramTest {
     assertThrows(
         IllegalArgumentException.class, () -> DemoWorkerProgram.dataSource("mysql://host/db"));
     assertThrows(
-        IllegalArgumentException.class,
-        () -> DemoWorkerProgram.dataSource("postgres:///db?host=/var/run/postgresql"));
+        IllegalArgumentException.class, () -> DemoWorkerProgram.dataSource("postgres:///db"));
     assertThrows(
         IllegalArgumentException.class,
         () -> DemoWorkerProgram.dataSource("postgres://host/db?target_session_attrs=any"));
@@ -329,6 +419,73 @@ class DemoWorkerProgramTest {
       }
       assertTrue(System.nanoTime() < deadline, "fast task " + taskId + " has no outcome");
       Thread.sleep(20);
+    }
+  }
+
+  /**
+   * Serves a Unix socket and relays each connection to the TCP port of the test server. The test
+   * server listens on TCP only, so the relay stands in for the server's own socket.
+   */
+  private static final class SocketRelay implements AutoCloseable {
+    private final Path path;
+    private final ServerSocketChannel server;
+    private final List<SocketChannel> channels = new CopyOnWriteArrayList<>();
+    private final AtomicInteger accepted = new AtomicInteger();
+
+    SocketRelay(Path path, String host, int port) throws IOException {
+      this.path = path;
+      server = ServerSocketChannel.open(StandardProtocolFamily.UNIX);
+      server.bind(UnixDomainSocketAddress.of(path));
+      Thread.ofVirtual()
+          .start(
+              () -> {
+                try {
+                  while (true) {
+                    SocketChannel client = server.accept();
+                    SocketChannel upstream = SocketChannel.open(new InetSocketAddress(host, port));
+                    channels.add(client);
+                    channels.add(upstream);
+                    accepted.incrementAndGet();
+                    pump(client, upstream);
+                    pump(upstream, client);
+                  }
+                } catch (IOException ignored) {
+                  // The relay closed its server channel.
+                }
+              });
+    }
+
+    int connections() {
+      return accepted.get();
+    }
+
+    private static void pump(SocketChannel from, SocketChannel to) {
+      Thread.ofVirtual()
+          .start(
+              () -> {
+                ByteBuffer buffer = ByteBuffer.allocate(16_384);
+                try (from;
+                    to) {
+                  while (from.read(buffer) >= 0) {
+                    buffer.flip();
+                    while (buffer.hasRemaining()) {
+                      to.write(buffer);
+                    }
+                    buffer.clear();
+                  }
+                } catch (IOException ignored) {
+                  // One side closed the connection.
+                }
+              });
+    }
+
+    @Override
+    public void close() throws IOException {
+      server.close();
+      for (SocketChannel channel : channels) {
+        channel.close();
+      }
+      Files.deleteIfExists(path);
     }
   }
 }
