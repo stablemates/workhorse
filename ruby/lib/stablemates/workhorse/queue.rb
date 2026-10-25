@@ -661,8 +661,10 @@ module Stablemates
         end
 
         document = Values.json(value, value_label)
+        # PostgreSQL bounds the value with octet_length(value::jsonb::text), which can be longer
+        # than the compact JSON, so the queue measures the same text.
         raise ArgumentError, "#{value_label} must be at most 65536 bytes of JSON" if
-          document.bytesize > MAX_EXTERNAL_VALUE_BYTES
+          Values.jsonb_text_bytes(document) > MAX_EXTERNAL_VALUE_BYTES
         unless idempotency_key.is_a?(String) && idempotency_key.bytesize.between?(1, 512)
           raise ArgumentError, "#{label} idempotency key must contain between 1 and 512 UTF-8 bytes"
         end

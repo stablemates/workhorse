@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 
+from ._contracts import jsonb_text_bytes
 from .types import Json
 
 MAX_EXTERNAL_WAIT_NAME_CHARACTERS = 200
@@ -32,8 +33,14 @@ def validate_wait_timeout(timeout_ms: int | None, label: str) -> int | None:
 
 
 def encode_wait_value(value: Json, label: str) -> str:
+    """Encode a signal or human wait value, or raise before a statement can carry it.
+
+    PostgreSQL bounds the value with octet_length(value::jsonb::text). That text puts a space
+    after each separator, so it can be longer than the compact JSON. The client measures the same
+    text.
+    """
     encoded = json.dumps(value, separators=(",", ":"), allow_nan=False, ensure_ascii=False)
-    if len(encoded.encode()) > MAX_EXTERNAL_WAIT_VALUE_BYTES:
+    if jsonb_text_bytes(json.loads(encoded)) > MAX_EXTERNAL_WAIT_VALUE_BYTES:
         raise ValueError(f"{label} must encode to at most {MAX_EXTERNAL_WAIT_VALUE_BYTES} bytes")
     return encoded
 

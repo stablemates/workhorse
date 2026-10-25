@@ -13,10 +13,10 @@ use tracing::Instrument;
 
 use super::handler::{ErasedHandler, HandlerResult};
 use super::heartbeat::Beat;
-use super::value_size::jsonb_text_bytes;
 use super::{exactly_one, lock, sql, ActiveSlot, Inner, OwnershipStatus};
 use crate::fenced_write::fenced_rows;
 use crate::telemetry::{self, Attribute, Counter, Histogram};
+use crate::value_size::jsonb_text_bytes;
 use crate::{
     CancelReason, CancellationToken, ClaimedTask, Error, Executor, HandlerContext, HandlerError,
     Operation,

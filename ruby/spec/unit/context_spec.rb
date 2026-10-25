@@ -262,6 +262,19 @@ RSpec.describe W::HandlerContext do
     expect(executor.statements).to be_empty
   end
 
+  it "measures a human wait context as jsonb text before any statement runs" do
+    # Compact JSON writes 30,000 zeros in 60,001 bytes. PostgreSQL's jsonb text puts a space after
+    # each comma, so it writes the same array in 90,000 bytes, which is above the limit.
+    zeros = [0] * 30_000
+    expect(JSON.generate(zeros).bytesize).to be < 65_536
+    executor = FakeExecutor.new
+    ctx = described_class.new(executor: executor, queue: W::Queue.new(executor), task: task, worker_id: "w",
+      cancellation: token, arbiter: arbiter, fast_tier: -> { raise "the tier lookup must not run" })
+    expect { ctx.wait_for_human("h", zeros) }
+      .to raise_error(ArgumentError, "human wait context must be at most 65536 bytes of JSON")
+    expect(executor.statements).to be_empty
+  end
+
   it "maps a signal wait's statuses" do
     {"already_waiting" => W::AlreadyWaitingError, "limit_exceeded" => W::LimitExceededError,
      "stale" => W::LeaseLostError}.each do |status, error|

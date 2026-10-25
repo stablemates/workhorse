@@ -27,6 +27,7 @@ mod sqlx_transport;
 mod task_groups;
 mod telemetry;
 mod types;
+mod value_size;
 mod waits;
 mod worker;
 

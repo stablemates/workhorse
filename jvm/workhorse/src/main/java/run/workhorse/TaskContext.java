@@ -1,7 +1,6 @@
 package run.workhorse;
 
 import java.lang.reflect.Type;
-import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
@@ -24,6 +23,7 @@ import java.util.function.Function;
 import org.jspecify.annotations.Nullable;
 import run.workhorse.internal.Contracts.PayloadContract;
 import run.workhorse.internal.Json;
+import run.workhorse.internal.JsonbSize;
 import run.workhorse.internal.Row;
 import run.workhorse.internal.SqlCatalogue;
 import run.workhorse.internal.Suspension;
@@ -351,20 +351,30 @@ final class TaskContext implements HandlerContext {
     return decode(text, type);
   }
 
+  /**
+   * Refuses a human wait context before its statement when PostgreSQL would refuse it. PostgreSQL
+   * bounds the context with {@code octet_length(context::jsonb::text)}, which can be longer than
+   * the compact JSON, so the worker measures the same text.
+   */
+  static String checkHumanContext(String encoded) {
+    if (JsonbSize.of(encoded) > MAX_EXTERNAL_VALUE_BYTES) {
+      throw new IllegalArgumentException(
+          "human wait context must be at most " + MAX_EXTERNAL_VALUE_BYTES + " bytes of JSON");
+    }
+    return encoded;
+  }
+
   @Override
   // ADR 0103 fixes this signature: the type argument comes from the call site.
   @SuppressWarnings("TypeParameterUnusedInFormals")
   public <T extends @Nullable Object> T waitForHuman(
       String name, @Nullable Object context, Type type, @Nullable Duration timeout) {
     externalName(name, "human wait");
-    durable("human waits");
     Objects.requireNonNull(type, "type");
     Long timeoutMs = externalTimeout(timeout, "human wait");
-    String encoded = sortedJson(tree(context, "human wait context"));
-    if (encoded.getBytes(StandardCharsets.UTF_8).length > MAX_EXTERNAL_VALUE_BYTES) {
-      throw new IllegalArgumentException(
-          "human wait context must be at most " + MAX_EXTERNAL_VALUE_BYTES + " bytes of JSON");
-    }
+    // The size check runs before the tier lookup, which can read PostgreSQL.
+    String encoded = checkHumanContext(sortedJson(tree(context, "human wait context")));
+    durable("human waits");
     String text =
         (String)
             once(

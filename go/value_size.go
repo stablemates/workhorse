@@ -222,3 +222,102 @@ func numericTextBytes(token string) int {
 	}
 	return bytes
 }
+
+// scannedJSONBTextBytes measures PostgreSQL's jsonb text from the tokens of valid JSON, without the
+// nesting limit of the decoder. It keeps its own stack of open containers. An object keeps the last
+// member of each key, as jsonb does.
+func scannedJSONBTextBytes(encoded []byte) int {
+	type container struct {
+		object  bool
+		members map[string]int
+		bytes   int
+		count   int
+		key     string
+	}
+	var stack []*container
+	result := 0
+	expectKey := false
+	// add records a complete value of size bytes in the open container, or as the result.
+	add := func(bytes int) {
+		if len(stack) == 0 {
+			result = bytes
+			return
+		}
+		top := stack[len(stack)-1]
+		if top.object {
+			top.members[top.key] = jsonbStringBytes(top.key) + 2 + bytes
+			return
+		}
+		top.bytes += bytes
+		top.count++
+	}
+	for index := 0; index < len(encoded); {
+		switch character := encoded[index]; {
+		case character == '{' || character == '[':
+			stack = append(stack, &container{object: character == '{', members: map[string]int{}})
+			expectKey = character == '{'
+			index++
+		case character == '}' || character == ']':
+			top := stack[len(stack)-1]
+			stack = stack[:len(stack)-1]
+			bytes, count := top.bytes, top.count
+			if top.object {
+				count = len(top.members)
+				for _, member := range top.members {
+					bytes += member
+				}
+			}
+			if count > 0 {
+				bytes += 2 * (count - 1)
+			}
+			add(2 + bytes)
+			expectKey = false
+			index++
+		case character == ',':
+			expectKey = len(stack) > 0 && stack[len(stack)-1].object
+			index++
+		case character == '"':
+			end := index + 1
+			for encoded[end] != '"' {
+				if encoded[end] == '\\' {
+					end++
+				}
+				end++
+			}
+			var text string
+			if err := json.Unmarshal(encoded[index:end+1], &text); err != nil {
+				text = string(encoded[index+1 : end])
+			}
+			if expectKey {
+				stack[len(stack)-1].key = text
+				expectKey = false
+			} else {
+				add(jsonbStringBytes(text))
+			}
+			index = end + 1
+		case character == 't' || character == 'n':
+			add(4)
+			index += 4
+		case character == 'f':
+			add(5)
+			index += 5
+		case isNumberByte(character):
+			end := index
+			for end < len(encoded) && isNumberByte(encoded[end]) {
+				end++
+			}
+			add(numericTextBytes(string(encoded[index:end])))
+			index = end
+		default:
+			// Whitespace and ':' add nothing to the measure.
+			index++
+		}
+	}
+	return result
+}
+
+// isNumberByte reports a byte that a JSON number token can hold.
+func isNumberByte(character byte) bool {
+	return (character >= '0' && character <= '9') || character == '-' || character == '+' ||
+		character == '.' || character == 'e' || character == 'E'
+}

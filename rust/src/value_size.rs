@@ -1,9 +1,10 @@
-//! Measures a handler result the way PostgreSQL enforces its size limit.
+//! Measures a JSON value the way PostgreSQL enforces its size limits.
 //!
 //! The completion statements refuse a result whose `octet_length(result::jsonb::text)` exceeds the
 //! task's `result_max_bytes`. That refusal is a database error, which would end the settlement
 //! rather than the attempt, so the worker measures the same text first and fails the attempt
-//! through the task's retry policy instead.
+//! through the task's retry policy instead. The signal and human wait statements bound their
+//! values with the same text, so the client measures it before it sends one.
 use serde_json::{Number, Value};
 
 /// Returns the UTF-8 length of PostgreSQL's jsonb text for `value`.
@@ -11,7 +12,7 @@ use serde_json::{Number, Value};
 /// That text puts a space after each `:` and `,`, escapes only `"`, `\` and control characters,
 /// and writes numbers in plain decimal notation. A `Value` object already holds one entry per key,
 /// as jsonb does.
-pub(super) fn jsonb_text_bytes(value: &Value) -> usize {
+pub(crate) fn jsonb_text_bytes(value: &Value) -> usize {
     let mut total = 0;
     let mut pending = vec![value];
     while let Some(item) = pending.pop() {

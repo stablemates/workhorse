@@ -19,6 +19,7 @@ use crate::policies::{
 };
 use crate::sql_catalogue_generated as sql;
 use crate::types::*;
+use crate::value_size::jsonb_text_bytes;
 use crate::{Error, Operation};
 
 const DEFAULT_MAX_ATTEMPTS: i32 = 25;
@@ -556,7 +557,9 @@ fn validate_delivery(
             "{label} name must contain between 1 and 200 characters without surrounding whitespace"
         )));
     }
-    if serde_json::to_vec(value)?.len() > MAX_EXTERNAL_VALUE_BYTES {
+    // PostgreSQL bounds the value with `octet_length(value::jsonb::text)`, which can be longer
+    // than the compact JSON, so the client measures the same text.
+    if jsonb_text_bytes(value) > MAX_EXTERNAL_VALUE_BYTES {
         return Err(Error::invalid(format!("{value_label} must be at most 65536 bytes of JSON")));
     }
     if !(1..=512).contains(&options.idempotency_key.len()) {
@@ -679,4 +682,30 @@ pub(crate) fn trace_context() -> Option<Value> {
 #[cfg(not(feature = "opentelemetry"))]
 pub(crate) fn trace_context() -> Option<Value> {
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::{json, Value};
+
+    use super::{validate_delivery, DeliveryOptions, MAX_EXTERNAL_VALUE_BYTES};
+
+    #[test]
+    fn measures_signal_and_human_wait_values_as_jsonb_text() {
+        // Compact JSON writes 30,000 zeros in 60,001 bytes. PostgreSQL's jsonb text puts a space
+        // after each comma, so it writes the same array in 90,000 bytes.
+        let zeros = Value::Array(vec![json!(0); 30_000]);
+        assert!(zeros.to_string().len() < MAX_EXTERNAL_VALUE_BYTES);
+        let options = DeliveryOptions::new("oversized", "approval-service");
+        for (label, value_label) in
+            [("signal", "signal payload"), ("human wait", "human wait result")]
+        {
+            let error =
+                validate_delivery(label, value_label, "approval", &zeros, &options).unwrap_err();
+            assert_eq!(
+                error.to_string(),
+                format!("{value_label} must be at most 65536 bytes of JSON")
+            );
+        }
+    }
 }

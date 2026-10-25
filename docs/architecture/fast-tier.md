@@ -904,7 +904,9 @@ set:
 - Repeated child names raise `ArgumentError`, also before the tier check.
 
 The context validates every other argument after the tier check. That includes a checkpoint's block,
-a sleep's duration or time, a wait's timeout, and a human wait's context.
+a sleep's duration or time, and a signal wait's timeout. A human wait validates its timeout and its
+context before the tier check, so an oversized context raises `ArgumentError` before the deferred
+tier read.
 
 `get_checkpoint` and `get_progress` stay reads and still answer. For a task in a batch, the Ruby
 `BatchHandlerContext` delegates to its `HandlerContext`, so its `checkpoint` and `set_progress`
@@ -932,7 +934,8 @@ The TypeScript worker does the same:
 - `Worker.trackFullTierClaim` gives the tasks of a non-empty `claim_many_v1` result one shared tier
   read, which caches only an answer.
 - `createHandlerContext` awaits that read at the start of each call in the table, before any read,
-  write, or callback.
+  write, or callback. `waitForHuman` first measures its context, so an oversized context raises
+  `RangeError` before the read.
 - The read reaches `QueueAdministration.queueTier` through the internal `workerQueueTierRead`
   capability.
 - The context of a task in a batch comes from the same `createHandlerContext`, so its `checkpoint`

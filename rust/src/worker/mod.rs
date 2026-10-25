@@ -12,7 +12,6 @@ mod heartbeat;
 mod notifications;
 mod process;
 mod shared;
-mod value_size;
 
 /// The scratch databases of the integration tests, for the unit tests that need PostgreSQL.
 #[cfg(test)]

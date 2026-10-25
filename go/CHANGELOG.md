@@ -10,6 +10,18 @@ adds.
 
 ## Unreleased
 
+### The Go client measures signal and human wait values as PostgreSQL does
+
+PostgreSQL limits a signal payload, a human wait context, and a human wait result to 65,536 bytes of
+`octet_length(value::jsonb::text)`. That text has a space after each `:` and `,`, so it can be
+longer than compact JSON. Before this change, the Go client counted the compact JSON. A value near
+the limit passed that check, and then PostgreSQL refused the statement with a database error
+(SM-1639).
+
+Now `Queue.SendSignal`, `Queue.CompleteHumanWait`, and `HandlerContext.WaitForHuman` measure the
+canonical JSONB text before any statement. An oversized value raises an error. The limit does not
+change.
+
 ### The worker warns when a statement waits past ShutdownGracePeriod
 
 A maintenance pass or a claim can wait for a lock that another session holds. Before this change,

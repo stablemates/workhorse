@@ -290,7 +290,9 @@ public sealed partial class Worker
             ExternalName(name, "human wait");
             var timeoutMs = ExternalTimeout(timeout, "human wait");
             var encoded = SortedJson(Values.Node(Storable(context, "human wait context")));
-            if (Values.Bytes(encoded) > MaxExternalValueBytes)
+            // PostgreSQL bounds the context with octet_length(context::jsonb::text), which can be
+            // longer than the compact JSON, so the worker measures the same text.
+            if (JsonbSize.Of(encoded) > MaxExternalValueBytes)
             {
                 throw new ArgumentException($"human wait context must be at most {MaxExternalValueBytes} bytes of JSON", nameof(context));
             }

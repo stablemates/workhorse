@@ -3,7 +3,7 @@ import { checkpointInputFingerprint } from "./checkpoint-fingerprint.js";
 import { FastTierUnsupportedError } from "./errors.js";
 import { CheckpointInputConflictError } from "./queue/checkpoints-progress-waits.js";
 import { ChildConflictError } from "./queue/child-tasks.js";
-import type { ExternalWaitOptions } from "./queue/external-waits.js";
+import { encodeExternalWaitValue, type ExternalWaitOptions } from "./queue/external-waits.js";
 import type { TaskAttempt } from "./task-attempt.js";
 import type { TaskGroupLink } from "./queue/task-groups.js";
 import type {
@@ -51,6 +51,12 @@ export function createHandlerContext(
       return operation(...args);
     }) as TOperation;
   };
+  const guardedHumanWait = guard("human waits", context.waitForHuman);
+  // The tier read can query PostgreSQL, so an oversized context fails before it.
+  const waitForHuman = (async (name: string, humanContext: Json, options?: ExternalWaitOptions) => {
+    encodeExternalWaitValue(humanContext, "Human wait context");
+    return guardedHumanWait(name, humanContext, options);
+  }) as HandlerContext["waitForHuman"];
   return {
     ...context,
     setProgress: guard("progress", context.setProgress),
@@ -58,7 +64,7 @@ export function createHandlerContext(
     sleep: guard("durable waits", context.sleep),
     sleepUntil: guard("durable waits", context.sleepUntil),
     waitForSignal: guard("signal waits", context.waitForSignal),
-    waitForHuman: guard("human waits", context.waitForHuman),
+    waitForHuman,
     runChild: guard("child tasks", context.runChild),
     runChildren: guard("child tasks", context.runChildren),
     runChildrenAll: guard("child tasks", context.runChildrenAll),

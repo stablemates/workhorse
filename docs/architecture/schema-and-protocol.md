@@ -701,10 +701,14 @@ key raises `HumanWaitIdempotencyConflictError`.
 | -------------------------------------------------- | ------------------------------------------------------- |
 | External-wait names                                | 1 through 200 characters without surrounding whitespace |
 | `timeout_ms`                                       | 1 through 604,800,000                                   |
-| Signal payloads, human contexts, and human results | At most 65,536 UTF-8 bytes when encoded                 |
+| Signal payloads, human contexts, and human results | At most 65,536 bytes of canonical JSONB text            |
 | Delivery idempotency keys                          | 1 through 512 UTF-8 bytes                               |
 | `requested_by`                                     | 1 through 200 characters                                |
 | Enqueue batches                                    | At most 1,000 requests                                  |
+
+Canonical JSONB text is the text that `octet_length(value::jsonb::text)` measures. It puts a space
+after each `:` and `,`, so it can be longer than compact JSON. Each SDK measures that text before any
+statement. Thus an oversized value raises the argument error of the SDK, not a database error.
 
 | Enqueue setting           | Default                 |
 | ------------------------- | ----------------------- |
@@ -2190,7 +2194,7 @@ The order in which the writes return has no effect. A throttled report raises
 - A checkpoint or wait name is a String of 1 through 200 characters. An invalid name raises
   `ArgumentError` before the block runs and before any statement.
 - Signal and human wait names contain 1 through 200 characters without surrounding whitespace.
-- The human context encodes to at most 65,536 bytes of JSON.
+- The human context holds at most 65,536 bytes of canonical JSONB text.
 - A `timeout` other than nil must be a count of seconds. If it is not, the wait raises
   `ArgumentError` before any write.
 
@@ -2444,12 +2448,12 @@ retries after a driver error.
 `sync_schedules`, `sync_contracts`, `sync_concurrency_policies`, `sync_rate_limit_policies`,
 `sync_budgets`, and the matching policy and budget list methods.
 
-| Input                               | Limit                                      |
-| ----------------------------------- | ------------------------------------------ |
-| `EnqueueOptions.max_attempts`       | Defaults to 25. Zero selects that default. |
-| `enqueue_many`                      | At most 1,000 requests                     |
-| Task dependencies                   | 1 through 100 unique prerequisite task IDs |
-| Signal payload or human-wait result | At most 65,536 bytes of JSON               |
+| Input                               | Limit                                        |
+| ----------------------------------- | -------------------------------------------- |
+| `EnqueueOptions.max_attempts`       | Defaults to 25. Zero selects that default.   |
+| `enqueue_many`                      | At most 1,000 requests                       |
+| Task dependencies                   | 1 through 100 unique prerequisite task IDs   |
+| Signal payload or human-wait result | At most 65,536 bytes of canonical JSONB text |
 
 ### Enqueue transport foundation
 
@@ -2693,15 +2697,15 @@ never exits the process. Thus the caller chooses the exit code.
 each handler its durable calls over the pool of the worker. Every checkpoint, wait, and child name
 contains 1 through 200 characters.
 
-| Call                                                | Behavior                                                                                                                                     |
-| --------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
-| `checkpoint(name, op)`                              | Returns the stored value, or runs `op` once and saves its result.                                                                            |
-| `set_progress`                                      | Replaces the latest progress. A throttled report returns `Error::ProgressRateLimited` with its retry delay.                                  |
-| `get_progress`                                      | Returns `None` before any report.                                                                                                            |
-| `sleep`                                             | Accepts whole milliseconds from 1 millisecond through 365 days.                                                                              |
-| `sleep_until`                                       | Accepts a wake time at most 365 days ahead.                                                                                                  |
-| `wait_for_signal` and `wait_for_human`              | Take an optional timeout of whole milliseconds from 1 millisecond through 7 days. The human context encodes to at most 65,536 bytes of JSON. |
-| `run_child`, `run_children`, and `run_children_all` | Accept at most 100 children with unique names.                                                                                               |
+| Call                                                | Behavior                                                                                                                                                |
+| --------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `checkpoint(name, op)`                              | Returns the stored value, or runs `op` once and saves its result.                                                                                       |
+| `set_progress`                                      | Replaces the latest progress. A throttled report returns `Error::ProgressRateLimited` with its retry delay.                                             |
+| `get_progress`                                      | Returns `None` before any report.                                                                                                                       |
+| `sleep`                                             | Accepts whole milliseconds from 1 millisecond through 365 days.                                                                                         |
+| `sleep_until`                                       | Accepts a wake time at most 365 days ahead.                                                                                                             |
+| `wait_for_signal` and `wait_for_human`              | Take an optional timeout of whole milliseconds from 1 millisecond through 7 days. The human context holds at most 65,536 bytes of canonical JSONB text. |
+| `run_child`, `run_children`, and `run_children_all` | Accept at most 100 children with unique names.                                                                                                          |
 
 `run_children` maps each name to a `ChildOutcome`. `run_children_all` fails unless every child
 succeeds.
@@ -3235,7 +3239,7 @@ input, and a `null` input is the JSON value `null`.
 - A checkpoint, wait, or child name contains 1 through 200 Unicode code points. An invalid name
   throws `IllegalArgumentException` before the operation runs and before any statement.
 - Signal and human wait names also have no leading or trailing whitespace or NUL.
-- The human context encodes to at most 65,536 bytes of JSON.
+- The human context holds at most 65,536 bytes of canonical JSONB text.
 - `runChild` throws `IllegalArgumentException` for options with idempotency, debounce, throttle, or
   dependencies.
 - A child set of more than 100 children throws `LimitExceededException` before any other check.
@@ -3713,7 +3717,7 @@ statement. `EnqueueAsync` returns an `EnqueueResult` with `TaskId`, `Outcome`, a
 before any statement:
 
 - The name has 1 through 200 characters without surrounding whitespace.
-- The value encodes to at most 65,536 bytes of JSON.
+- The value holds at most 65,536 bytes of canonical JSONB text.
 - The idempotency key has 1 through 512 UTF-8 bytes.
 - `requestedBy` has 1 through 200 characters.
 
@@ -4171,7 +4175,7 @@ the child queue is omitted, it is the queue of the parent task. `TaskGroup.GetAs
 - A checkpoint, wait, or child name contains 1 through 200 Unicode code points. An invalid name
   throws `ArgumentException` before the operation runs and before any statement.
 - Signal and human wait names also have no leading or trailing whitespace or NUL.
-- The human context encodes to at most 65,536 bytes of JSON.
+- The human context holds at most 65,536 bytes of canonical JSONB text.
 - A child set of more than 100 children throws `LimitExceededException`. Duplicate child names throw
   `ArgumentException`.
 - On a fast-tier queue, each durable write throws `FastTierUnsupportedException` before any

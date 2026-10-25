@@ -222,12 +222,15 @@ module Stablemates
       # arrives. +context+ is JSON shown to that person; +timeout+ is a count of seconds.
       def wait_for_human(name, context, timeout: nil)
         external_name(name, "human wait")
-        durable!("human waits")
         timeout_ms = external_timeout(timeout, "human wait")
         Values.check_json(context, "human wait context")
         encoded = canonical_json(context)
+        # PostgreSQL bounds the context with octet_length(context::jsonb::text), which can be
+        # longer than the compact JSON, so the worker measures the same text. The check runs before
+        # the tier lookup, which can read PostgreSQL.
         raise ArgumentError, "human wait context must be at most #{MAX_EXTERNAL_VALUE_BYTES} bytes of JSON" if
-          encoded.bytesize > MAX_EXTERNAL_VALUE_BYTES
+          Values.jsonb_text_bytes(encoded) > MAX_EXTERNAL_VALUE_BYTES
+        durable!("human waits")
 
         once(:wait_for_human, name, encoded) do
           live!(:wait_for_human)

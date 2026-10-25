@@ -473,6 +473,29 @@ public sealed class DurableContextTests(ScratchDatabase database)
         Assert.Equal(0L, await ScalarAsync(DataSource, "SELECT count(*) FROM workhorse.task_wait WHERE task_id = $1", taskId));
     }
 
+    [Fact]
+    public async Task AHumanWaitContextIsMeasuredAsJsonbTextBeforeItsStatement()
+    {
+        // Compact JSON writes 30,000 zeros in 60,001 bytes. PostgreSQL's jsonb text puts a space
+        // after each comma, so it writes the same array in 90,000 bytes, which is above the limit.
+        var zeros = new int[30_000];
+        Assert.True(JsonSerializer.Serialize(zeros).Length < 65_536);
+        var taskId = await EnqueueAsync("oversized-human-context", null);
+        string? message = null;
+        await using var worker = Worker();
+        worker.Handle<object?>("oversized-human-context", async (context, _) =>
+        {
+            var error = await Assert.ThrowsAsync<ArgumentException>(
+                () => context.WaitForHumanAsync<int[], object?>("review", zeros, null));
+            message = error.Message;
+        });
+
+        Assert.True(await worker.RunOnceAsync(Token));
+        Assert.StartsWith("human wait context must be at most 65536 bytes of JSON", message, StringComparison.Ordinal);
+        Assert.Equal("succeeded", (await TaskAsync(DataSource, taskId)).Text("state"));
+        Assert.Equal(0L, await ScalarAsync(DataSource, "SELECT count(*) FROM workhorse.task_human_wait WHERE task_id = $1", taskId));
+    }
+
     // ---------------------------------------------------------------------------------------------
     // Durable timers
 
