@@ -5,7 +5,7 @@ using Workhorse.Tests.Testing;
 namespace Workhorse.Tests.Internal.Json;
 
 /// <summary><see cref="JsonbSize"/> against the length of the <c>jsonb</c> text of PostgreSQL.</summary>
-public sealed class JsonbSizeTests(ScratchDatabase database)
+public sealed class JsonbSizeTests(ScratchDatabase database) : IClassFixture<ScratchDatabase>
 {
     public static TheoryData<string> Documents() =>
     [

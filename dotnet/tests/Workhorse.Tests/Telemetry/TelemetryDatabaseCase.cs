@@ -10,7 +10,7 @@ namespace Workhorse.Tests.Telemetry;
 /// The shared setup of a telemetry test against PostgreSQL: a recorder of the runtime listeners, a
 /// unique queue, and the reads of the captured spans and measurements of that queue.
 /// </summary>
-public abstract class TelemetryDatabaseCase(ScratchDatabase database) : IDisposable
+public abstract class TelemetryDatabaseCase(ScratchDatabase database) : IDisposable, IClassFixture<ScratchDatabase>
 {
     private protected static readonly TelemetrySurface Surface = TelemetrySurface.Read();
 

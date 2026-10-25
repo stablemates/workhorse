@@ -7,7 +7,7 @@ using Workhorse.Tests.Testing;
 namespace Workhorse.Tests.Internal.Database;
 
 /// <summary>The startup check runs every case of <c>protocol/v1/compatibility.json</c>.</summary>
-public sealed class CompatibilityTests(ScratchDatabase database)
+public sealed class CompatibilityTests(ScratchDatabase database) : IClassFixture<ScratchDatabase>
 {
     public static TheoryData<string> Cases() =>
         [.. Repository.Json("protocol/v1/compatibility.json").EnumerateArray().Select(item => item.GetProperty("id").GetString()!)];

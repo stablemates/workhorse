@@ -4,7 +4,7 @@ using static Workhorse.Tests.Client.QueueTesting;
 namespace Workhorse.Tests.Client;
 
 /// <summary>Concurrency policies, rate limit policies, budgets, and schedules.</summary>
-public sealed class QueuePolicyTests(ScratchDatabase database)
+public sealed class QueuePolicyTests(ScratchDatabase database) : IClassFixture<ScratchDatabase>
 {
     [Fact]
     public async Task SyncsAndListsConcurrencyPolicies()

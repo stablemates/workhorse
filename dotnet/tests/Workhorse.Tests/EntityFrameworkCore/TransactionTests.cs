@@ -7,7 +7,7 @@ using static Workhorse.Tests.Testing.WorkerHarness;
 namespace Workhorse.Tests.EntityFrameworkCore;
 
 /// <summary>An enqueue that joins a <c>DbContext</c> transaction (ADR 0107, "EF Core").</summary>
-public sealed class TransactionTests(ScratchDatabase database)
+public sealed class TransactionTests(ScratchDatabase database) : IClassFixture<ScratchDatabase>
 {
     private static CancellationToken Token => TestContext.Current.CancellationToken;
 

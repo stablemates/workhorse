@@ -10,6 +10,8 @@
     <RootNamespace>Workhorse.Examples.Tests</RootNamespace>
     <!-- Test code needs no public documentation, and xUnit finds public test classes by reflection. -->
     <NoWarn>$(NoWarn);CS1591;CA1515;CA1707</NoWarn>
+    <!-- One scratch database for the process, without a reset (SM-1732). See ScratchDatabase. -->
+    <DefineConstants>$(DefineConstants);WORKHORSE_PROCESS_DATABASE</DefineConstants>
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="../Workhorse.Examples/Workhorse.Examples.csproj" />

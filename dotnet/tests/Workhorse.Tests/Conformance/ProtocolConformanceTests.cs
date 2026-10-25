@@ -7,7 +7,7 @@ namespace Workhorse.Tests.Conformance;
 /// must agree with <c>expected-unsupported.json</c>. The counterpart of the JVM
 /// <c>ProtocolConformanceTest</c>.
 /// </summary>
-public sealed class ProtocolConformanceTests(ScratchDatabase database)
+public sealed class ProtocolConformanceTests(ScratchDatabase database) : IClassFixture<ScratchDatabase>
 {
     private static string Protocol => Repository.Path("protocol/v1");
 

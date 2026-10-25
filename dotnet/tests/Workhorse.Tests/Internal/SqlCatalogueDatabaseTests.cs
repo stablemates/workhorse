@@ -9,7 +9,7 @@ namespace Workhorse.Tests.Internal;
 /// PostgreSQL parses and describes every catalogue statement as Npgsql sends it. A failure names a
 /// statement whose native placeholders, parameter types, or casts Npgsql cannot send.
 /// </summary>
-public sealed class SqlCatalogueDatabaseTests(ScratchDatabase database)
+public sealed class SqlCatalogueDatabaseTests(ScratchDatabase database) : IClassFixture<ScratchDatabase>
 {
     public static TheoryData<string> Statements() => [.. SqlCatalogue.All.Select(statement => statement.Name)];
 

@@ -10,7 +10,7 @@ using static Workhorse.Tests.Client.QueueTesting;
 namespace Workhorse.Tests.Client;
 
 /// <summary>The enqueue rows of the client table of <c>docs/parity.md</c>.</summary>
-public sealed class QueueEnqueueTests(ScratchDatabase database)
+public sealed class QueueEnqueueTests(ScratchDatabase database) : IClassFixture<ScratchDatabase>
 {
     private sealed record Order(int OrderId, string Note);
 

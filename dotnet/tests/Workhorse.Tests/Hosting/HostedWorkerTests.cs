@@ -9,7 +9,7 @@ using static Workhorse.Tests.Testing.WorkerHarness;
 namespace Workhorse.Tests.Hosting;
 
 /// <summary>The hosted worker of <c>Workhorse.Hosting</c> against PostgreSQL (ADR 0107).</summary>
-public sealed class HostedWorkerTests(ScratchDatabase database)
+public sealed class HostedWorkerTests(ScratchDatabase database) : IClassFixture<ScratchDatabase>
 {
     private static CancellationToken Token => TestContext.Current.CancellationToken;
 

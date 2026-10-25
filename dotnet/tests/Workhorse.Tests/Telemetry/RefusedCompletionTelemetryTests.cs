@@ -4,25 +4,21 @@ using static Workhorse.Tests.Testing.WorkerHarness;
 
 namespace Workhorse.Tests.Telemetry;
 
-/// <summary>
-/// The refused-completion test runs alone (SM-1721). Its handler moves a deadline or an attempt
-/// timeout into the past. The maintenance tick of any running worker settles every overdue attempt in
-/// the scratch database. If a tick wins, the worker's own expiration answers <c>stale</c>, and the
-/// attempt reports a lost lease. With no parallel test, no other worker ticks while the test runs.
-/// The worker of this test runs its own tick before its claim, so that tick sees no overdue
-/// attempt. A stopped worker can abandon a slow tick that then ends later, but a tick is not slow
+/// <summary>The telemetry of a completion write that PostgreSQL refuses (SM-1649).</summary>
+/// <remarks>
+/// The handler of the test moves a deadline or an attempt timeout into the past. The maintenance
+/// tick of any running worker settles every overdue attempt in its database. If a tick wins, the
+/// worker's own expiration answers <c>stale</c>, and the attempt reports a lost lease. This class has
+/// a database of its own, so no worker of a parallel class ticks on it (SM-1721, SM-1732). The tests
+/// of the class run one at a time. The worker of this test runs its own tick before its claim, so
+/// that tick sees no overdue attempt. A stopped worker can abandon a slow tick that then ends later, but a tick is not slow
 /// on a test database.
 /// <para>
 /// <see cref="Worker.RunOnceAsync"/> also runs a due tick before the claim that finds no task. At
 /// the 1 s default interval, an attempt that took more than 1 s let that second tick settle the
 /// moved deadline (SM-1792). The test sets an interval of one hour, so only the first tick runs.
 /// </para>
-/// </summary>
-[CollectionDefinition(nameof(RefusedCompletionTelemetryTests), DisableParallelization = true)]
-public sealed class RefusedCompletionTelemetryRunsAlone;
-
-/// <summary>The telemetry of a completion write that PostgreSQL refuses (SM-1649).</summary>
-[Collection(nameof(RefusedCompletionTelemetryTests))]
+/// </remarks>
 public sealed class RefusedCompletionTelemetryTests(ScratchDatabase database) : TelemetryDatabaseCase(database)
 {
     /// <summary>

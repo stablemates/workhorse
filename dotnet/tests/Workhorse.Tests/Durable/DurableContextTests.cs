@@ -11,21 +11,17 @@ using static Workhorse.Tests.Testing.WorkerHarness;
 namespace Workhorse.Tests.Durable;
 
 /// <summary>
-/// The durable tests run alone. Each of their worker passes runs maintenance, and a maintenance pass
-/// skips a routine that another pass holds, so a test of another class that reads the result of its
-/// own pass would see it skipped.
-/// </summary>
-[CollectionDefinition(nameof(DurableContextTests), DisableParallelization = true)]
-public sealed class DurableContextRunsAlone;
-
-/// <summary>
 /// The durable context against PostgreSQL: checkpoints, timers, waits, children, task groups,
 /// progress, and suspension (ADR 0107, "Durable context" and "Suspension"). Each test drives the
 /// worker with <see cref="Worker.RunOnceAsync"/> passes and reads the task state, so no test waits
 /// for a fixed time.
 /// </summary>
-[Collection(nameof(DurableContextTests))]
-public sealed class DurableContextTests(ScratchDatabase database)
+/// <remarks>
+/// Each worker pass of these tests runs maintenance, and a maintenance pass skips a routine that
+/// another pass holds. This class has a database of its own, so its passes do not make a pass of a
+/// parallel class skip a routine (SM-1732).
+/// </remarks>
+public sealed class DurableContextTests(ScratchDatabase database) : IClassFixture<ScratchDatabase>
 {
     private readonly string _queue = UniqueQueue("durable");
 

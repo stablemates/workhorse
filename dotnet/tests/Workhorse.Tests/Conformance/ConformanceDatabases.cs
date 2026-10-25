@@ -12,8 +12,8 @@ namespace Workhorse.Tests.Conformance;
 /// </summary>
 /// <remarks>
 /// The compatibility fixtures rewrite the version tables, the request fixtures rename functions, and
-/// the runtime fixtures replace functions. So the lane uses databases of its own, and the other test
-/// classes keep the shared scratch database. A test that needs the only worker of a database also
+/// the runtime fixtures replace functions. So the lane uses databases of its own, and a reset of the
+/// class database does not undo those changes. A test that needs the only worker of a database also
 /// creates one here (SM-1738).
 /// </remarks>
 internal sealed class ConformanceDatabases(ScratchDatabase scratch)

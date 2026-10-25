@@ -9,7 +9,7 @@ using static Workhorse.Tests.Testing.WorkerHarness;
 namespace Workhorse.Tests.Hosting;
 
 /// <summary>The <c>workhorse</c> health check (ADR 0107, "Hosting and dependency injection").</summary>
-public sealed class HealthCheckTests(ScratchDatabase database)
+public sealed class HealthCheckTests(ScratchDatabase database) : IClassFixture<ScratchDatabase>
 {
     private static CancellationToken Token => TestContext.Current.CancellationToken;
 

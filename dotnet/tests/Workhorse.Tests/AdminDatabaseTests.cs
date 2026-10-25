@@ -11,7 +11,7 @@ namespace Workhorse.Tests;
 /// The C# <c>Admin</c> against PostgreSQL: one or more tests for each operator cell of
 /// <c>docs/parity.md</c> that <c>Admin</c> owns, as the Java <c>AdminDatabaseTest</c> has.
 /// </summary>
-public sealed class AdminDatabaseTests
+public sealed class AdminDatabaseTests : IClassFixture<ScratchDatabase>
 {
     private static readonly Guid NilTask = Guid.Empty;
 

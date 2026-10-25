@@ -8,7 +8,7 @@ using static Workhorse.Tests.Testing.WorkerHarness;
 namespace Workhorse.Tests.DemoWorker;
 
 /// <summary>The .NET worker of the hosted dashboard demo (<c>dotnet/demo/Workhorse.DemoWorker</c>).</summary>
-public sealed class DemoWorkerTests(ScratchDatabase database)
+public sealed class DemoWorkerTests(ScratchDatabase database) : IClassFixture<ScratchDatabase>
 {
     private static CancellationToken Token => TestContext.Current.CancellationToken;
 

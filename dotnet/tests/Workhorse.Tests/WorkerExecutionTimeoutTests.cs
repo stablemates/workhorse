@@ -3,18 +3,15 @@ using static Workhorse.Tests.Testing.WorkerHarness;
 
 namespace Workhorse.Tests;
 
-/// <summary>
-/// The execution-timeout test runs alone (SM-1684). The maintenance tick of any running worker times
-/// out every overdue attempt in the scratch database. If a tick wins, the worker's own expiration
-/// answers <c>stale</c>, and the handler sees <see cref="CancelReason.LeaseLost"/>. With no parallel
-/// test, only this worker's local timer can settle the attempt. The suite runs about 1 s longer.
-/// </summary>
-[CollectionDefinition(nameof(WorkerExecutionTimeoutTests), DisableParallelization = true)]
-public sealed class WorkerExecutionTimeoutRunsAlone;
-
 /// <summary>The C# worker's local execution-timeout timer against PostgreSQL.</summary>
-[Collection(nameof(WorkerExecutionTimeoutTests))]
-public sealed class WorkerExecutionTimeoutTests(ScratchDatabase database)
+/// <remarks>
+/// The maintenance tick of any running worker times out every overdue attempt in its database. If a
+/// tick wins, the worker's own expiration answers <c>stale</c>, and the handler sees
+/// <see cref="CancelReason.LeaseLost"/>. This class has a database of its own, so no worker of a
+/// parallel class ticks on it, and only this worker's local timer can settle the attempt (SM-1684,
+/// SM-1732).
+/// </remarks>
+public sealed class WorkerExecutionTimeoutTests(ScratchDatabase database) : IClassFixture<ScratchDatabase>
 {
     private sealed record Order(int OrderId);
 

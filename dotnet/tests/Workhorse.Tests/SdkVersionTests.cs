@@ -13,7 +13,7 @@ namespace Workhorse.Tests;
 /// release"). Each test reads the train version from <c>dotnet/Directory.Build.props</c>, so a wrong
 /// version in the assembly fails here and does not pass as the expected value.
 /// </summary>
-public sealed partial class SdkVersionTests(ScratchDatabase database)
+public sealed partial class SdkVersionTests(ScratchDatabase database) : IClassFixture<ScratchDatabase>
 {
     private sealed record Order(int OrderId);
 
