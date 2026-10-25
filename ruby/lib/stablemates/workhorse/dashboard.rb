@@ -148,11 +148,15 @@ module Stablemates
           return json(503, {"error" => UNVERIFIED_COMPATIBILITY})
         end
 
+        rpc_prefix = "#{@base_path}/rpc/dashboard/"
+        if !path.start_with?(rpc_prefix) && cross_origin_read?(env)
+          return json(403, {"error" => "A same-origin request is required"})
+        end
+
         # A mounting stack may hand over the mount point itself as SCRIPT_NAME plus a PATH_INFO of "/".
         return [302, {"location" => "#{@base_path}/tasks"}, []] if [@base_path, "#{@base_path}/"].include?(path)
         return asset(path[(@base_path.length + 1)..]) if path.start_with?("#{@base_path}/assets/")
 
-        rpc_prefix = "#{@base_path}/rpc/dashboard/"
         return rpc(env, path.delete_prefix(rpc_prefix), actor) if path.start_with?(rpc_prefix)
 
         application(actor)
@@ -207,6 +211,9 @@ module Stablemates
 
       def rpc(env, procedure, actor)
         return rpc_error(405, "METHOD_NOT_SUPPORTED", "Method Not Supported") unless env["REQUEST_METHOD"] == "POST"
+        if !MUTATIONS.include?(procedure) && cross_origin_read?(env)
+          return json(403, {"error" => "A same-origin request is required"})
+        end
 
         if MUTATIONS.include?(procedure)
           return json(403, {"error" => "A same-origin mutation request is required"}) unless same_origin?(env)
@@ -272,6 +279,10 @@ module Stablemates
         (body.bytesize > MAX_REQUEST_BYTES) ? nil : body
       end
 
+      # A browser sends Origin on every cross-origin fetch, so a host CORS policy cannot expose a read
+      # to a foreign page. A top-level navigation sends none.
+      def cross_origin_read?(env) = env.key?("HTTP_ORIGIN") && !same_origin?(env)
+
       def same_origin?(env)
         origin = env["HTTP_ORIGIN"]
         return false unless origin.is_a?(String)
@@ -279,8 +290,13 @@ module Stablemates
         parsed = URI.parse(origin)
         return false if parsed.scheme.nil? || parsed.host.nil? || parsed.host.empty?
 
-        netloc = origin.delete_prefix("#{parsed.scheme}://").split(%r{[/?#]}, 2).first
-        "#{parsed.scheme}://#{netloc}" == "#{scheme(env)}://#{env["HTTP_HOST"]}"
+        # An origin is a scheme and an authority, with no path, query, fragment, or user.
+        netloc = origin.sub(%r{\A#{Regexp.escape(parsed.scheme)}://}i, "")
+        return false if netloc.match?(%r{[/?#@]}) || netloc == origin
+
+        # Letter case and a default port do not change an origin.
+        Dashboard.canonical_host(netloc, parsed.scheme.downcase) ==
+          Dashboard.canonical_host(env["HTTP_HOST"].to_s, scheme(env))
       rescue URI::InvalidURIError
         false
       end

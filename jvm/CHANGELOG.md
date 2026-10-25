@@ -11,6 +11,29 @@ adds.
 
 ## Unreleased
 
+### The dashboard filter refuses a cross-origin read
+
+A CORS filter earlier in the chain can add CORS headers to `run.workhorse.dashboard.Dashboard`
+responses. If that policy allowed credentials, a page on another origin could read the dashboard,
+task payloads included, with the operator's cookies (SM-1675). Now the filter answers 403 with
+`{"error":"A same-origin request is required"}` for a page, an asset, or a read procedure whose
+`Origin` header names another origin.
+
+The same-origin check read only the first of two `Origin` headers, so a same-origin value could
+hide a foreign one. Now it refuses a request with more than one `Origin` header, also for a
+mutation.
+
+The same-origin check compared the `Host` text exactly, so `Host: example.test:443` with
+`Origin: https://example.test` failed. Now letter case and the default port do not matter, as in
+the allowed hosts check. An `Origin` with a path, a query, a fragment, or a user fails.
+
+A request without `Origin`, such as a top-level navigation, and a same-origin request still
+work. A mutation keeps its own refusal. The change needs no migration.
+
+Upgrade step: if a proxy in front of the host ends TLS, the host must see the scheme that the
+browser used. Otherwise the dashboard page's own module scripts carry an `Origin` that does not
+match, and the host refuses them.
+
 ### A busy fast-tier queue no longer keeps the worker from its other queues
 
 While one fast-tier queue had a backlog, the fused refill of each completion kept every slot, so the

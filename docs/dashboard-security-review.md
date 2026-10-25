@@ -136,6 +136,10 @@ browser's ambient credentials.
 - Confirm `rejectCrossOriginMutation` refuses a mutation whose `Origin` is absent, unparseable, or
   a different origin. Absent must fail closed. Confirm the single-admin logout applies the same
   check, so a cross-origin request cannot end a session.
+- Confirm each backend refuses a page, an asset, or a read procedure whose `Origin` names another
+  origin, with 403, and serves a request without `Origin`. A host CORS policy can wrap an embedded
+  host, so the first bullet does not hold for every embedding. The `cross-origin-read` conformance
+  scenario and the unit tests of each backend hold this rule (ADR 0029, SM-1675).
 - Confirm `isDashboardMutation` classifies exactly the paths oRPC dispatches. oRPC matches the raw
   pathname against an exact tree of `encodeURIComponent`-encoded segments; the classifier joins
   the same segments after dropping empty ones. Any path the classifier reads more loosely than

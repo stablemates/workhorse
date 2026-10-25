@@ -14333,7 +14333,7 @@
         }
       },
       "Forbidden": {
-        "description": "The host's authorization refused the authenticated principal.",
+        "description": "Two refusals share this status. The host's authorization refused the authenticated principal, or the request carries an Origin header that names another origin. A request without an Origin header passes the origin check.",
         "content": {
           "application/json": {
             "schema": {
@@ -14344,6 +14344,13 @@
                 "summary": "Principal refused",
                 "value": {
                   "error": "Forbidden"
+                }
+              },
+              "crossOrigin": {
+                "summary": "Origin names another origin",
+                "description": "Taken from conformance.json. Generated identifiers, timestamps, and measurements are replaced by placeholders: 00000000-0000-7000-8000-000000000000 stands for a UUID, 2026-01-01T00:00:00.000Z for a timestamp, 0 and \"string\" for a measured number or text. Fixture: meta-cross-origin.",
+                "value": {
+                  "error": "A same-origin request is required"
                 }
               }
             }

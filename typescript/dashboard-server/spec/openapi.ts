@@ -428,12 +428,14 @@ function errorExchange(
   status: number,
   mode: string,
   origin: string,
+  accept: (exchange: ConformanceExchange) => boolean = () => true,
 ): ConformanceExchange {
   const found = exchanges.find(
     (exchange) =>
       exchange.expect.status === status &&
       (exchange.mode ?? "writable") === mode &&
-      (exchange.origin ?? "same") === origin,
+      (exchange.origin ?? "same") === origin &&
+      accept(exchange),
   );
   if (!found) {
     throw new Error(`conformance.json has no ${status} exchange in mode ${mode}, origin ${origin}`);
@@ -542,7 +544,16 @@ export function composeDashboardOpenApi({
   const badRequest = errorExchange(exchanges, 400, "writable", "same");
   const notFound = errorExchange(exchanges, 404, "writable", "same");
   const methodNotSupported = errorExchange(exchanges, 405, "writable", "same");
-  const crossOrigin = errorExchange(exchanges, 403, "writable", "cross");
+  const isMutation = (exchange: ConformanceExchange) =>
+    manifest.procedures[exchange.procedure]?.mutation === true;
+  const crossOrigin = errorExchange(exchanges, 403, "writable", "cross", isMutation);
+  const crossOriginRead = errorExchange(
+    exchanges,
+    403,
+    "writable",
+    "cross",
+    (exchange) => !isMutation(exchange),
+  );
   const readOnly = errorExchange(exchanges, 403, "read-only", "same");
 
   const responses: Record<string, Json> = {
@@ -560,9 +571,16 @@ export function composeDashboardOpenApi({
       { unauthenticated: hostExample("No session", "Unauthorized") },
     ),
     Forbidden: jsonResponse(
-      "The host's authorization refused the authenticated principal.",
+      "Two refusals share this status. The host's authorization refused the authenticated principal, or the request carries an Origin header that names another origin. A request without an Origin header passes the origin check.",
       ref(hostErrorName),
-      { forbidden: hostExample("Principal refused", "Forbidden") },
+      {
+        forbidden: hostExample("Principal refused", "Forbidden"),
+        crossOrigin: example(
+          crossOriginRead,
+          crossOriginRead.expect.body,
+          "Origin names another origin",
+        ),
+      },
     ),
     MutationForbidden: jsonResponse(
       "Three refusals share this status. HostError bodies: the host's authorization refused the principal, or the same-origin check failed. " +

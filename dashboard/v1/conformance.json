@@ -9474,6 +9474,51 @@
       ]
     },
     {
+      "id": "cross-origin-read",
+      "exchanges": [
+        {
+          "id": "meta-cross-origin",
+          "procedure": "meta",
+          "request": {},
+          "origin": "cross",
+          "expect": {
+            "status": 403,
+            "body": {
+              "error": "A same-origin request is required"
+            }
+          }
+        },
+        {
+          "id": "tasks-cross-origin",
+          "procedure": "tasks",
+          "request": {
+            "json": {}
+          },
+          "origin": "cross",
+          "expect": {
+            "status": 403,
+            "body": {
+              "error": "A same-origin request is required"
+            }
+          }
+        },
+        {
+          "id": "meta-missing-origin",
+          "procedure": "meta",
+          "request": {},
+          "origin": "none",
+          "expect": {
+            "status": 200,
+            "body": {
+              "json": {
+                "environment": "conformance"
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
       "id": "foreign-host-rejection",
       "exchanges": [
         {

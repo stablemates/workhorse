@@ -192,6 +192,60 @@ def test_dashboard_host_requires_same_origin_before_a_mutation() -> None:
     assert json.loads(body) == {"error": "A same-origin mutation request is required"}
 
 
+@pytest.mark.parametrize(
+    ("path", "method"),
+    [
+        ("/workhorse", "GET"),
+        ("/workhorse/tasks", "GET"),
+        ("/workhorse/assets/index.js", "GET"),
+        ("/workhorse/rpc/dashboard/meta", "POST"),
+    ],
+)
+@pytest.mark.parametrize(
+    "origin",
+    [
+        "https://attacker.test",
+        "null",
+        "not a url",
+        "",
+        "https://[",
+        "https://example.test/",
+        "https://example.test/, https://attacker.test",
+        "https://user@example.test",
+    ],
+)
+def test_dashboard_host_refuses_a_cross_origin_read(path: str, method: str, origin: str) -> None:
+    # A host CORS policy with credentials would let a foreign page read the response.
+    body = {"json": None} if method == "POST" else None
+    status, _, response = _request(_host(), path, method=method, body=body, origin=origin)
+    assert status == "403 Forbidden"
+    assert json.loads(response) == {"error": "A same-origin request is required"}
+
+
+def test_dashboard_host_compares_the_origin_without_letter_case_or_default_port() -> None:
+    for origin in ("https://example.test", "HTTPS://example.test"):
+        status, _, _ = _request(
+            _host(), "/workhorse/tasks", origin=origin, http_host="EXAMPLE.test:443"
+        )
+        assert status == "200 OK", origin
+
+
+@pytest.mark.parametrize("origin", [None, "https://example.test"])
+def test_dashboard_host_serves_a_read_without_origin_or_from_the_same_origin(
+    origin: str | None,
+) -> None:
+    status, _, _ = _request(_host(), "/workhorse", origin=origin)
+    assert status == "302 Found"
+    status, _, body = _request(_host(), "/workhorse/tasks", origin=origin)
+    assert status == "200 OK"
+    assert b'"basePath":"/workhorse"' in body
+    status, _, body = _request(
+        _host(), "/workhorse/rpc/dashboard/meta", method="POST", body={"json": None}, origin=origin
+    )
+    assert status == "200 OK"
+    assert json.loads(body)["json"]["environment"] == "test"
+
+
 def test_dashboard_host_assigns_the_authenticated_actor() -> None:
     status, _, body = _request(
         _host(),

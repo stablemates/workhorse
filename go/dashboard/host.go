@@ -208,6 +208,11 @@ func (host *handler) ServeHTTP(response http.ResponseWriter, request *http.Reque
 		writeJSON(response, http.StatusServiceUnavailable, map[string]any{"error": message})
 		return
 	}
+	rpcPrefix := host.basePath + "/rpc/dashboard/"
+	if !strings.HasPrefix(pathname, rpcPrefix) && crossOriginRead(request) {
+		writeJSON(response, http.StatusForbidden, map[string]any{"error": "A same-origin request is required"})
+		return
+	}
 	mountRoot := host.basePath
 	if mountRoot == "" {
 		mountRoot = "/"
@@ -221,7 +226,6 @@ func (host *handler) ServeHTTP(response http.ResponseWriter, request *http.Reque
 		host.serveAsset(response, strings.TrimPrefix(pathname, host.basePath+"/"))
 		return
 	}
-	rpcPrefix := host.basePath + "/rpc/dashboard/"
 	if strings.HasPrefix(pathname, rpcPrefix) {
 		host.serveRPC(response, request, strings.TrimPrefix(pathname, rpcPrefix), actor)
 		return
@@ -255,6 +259,10 @@ func (host *handler) assertCompatible(ctx context.Context) error {
 func (host *handler) serveRPC(response http.ResponseWriter, request *http.Request, name, actor string) {
 	if request.Method != http.MethodPost {
 		writeRPCError(response, http.StatusMethodNotAllowed, "METHOD_NOT_SUPPORTED", "Method Not Supported")
+		return
+	}
+	if !mutations[name] && crossOriginRead(request) {
+		writeJSON(response, http.StatusForbidden, map[string]any{"error": "A same-origin request is required"})
 		return
 	}
 	if mutations[name] {
@@ -354,10 +362,25 @@ func assignActor(input any, actor string) {
 	}
 }
 
+// crossOriginRead reports a request whose Origin names another origin. A browser sends Origin on
+// every cross-origin fetch, so a host CORS policy cannot expose a read to a foreign page. A
+// top-level navigation sends none.
+func crossOriginRead(request *http.Request) bool {
+	_, present := request.Header["Origin"]
+	return present && !sameOrigin(request)
+}
+
 func sameOrigin(request *http.Request) bool {
+	// Two Origin headers name no single origin, so neither one can pass.
+	if len(request.Header.Values("Origin")) != 1 {
+		return false
+	}
 	origin := request.Header.Get("Origin")
-	parsed, err := request.URL.Parse(origin)
-	if err != nil || origin == "" || parsed.Scheme == "" || parsed.Host == "" {
+	// url.Parse, not request.URL.Parse: a relative reference such as "null" must not resolve
+	// against the request URL and pass as this origin.
+	parsed, err := url.Parse(origin)
+	// An origin is a scheme and an authority, with no path, query, fragment, or user.
+	if err != nil || parsed.Scheme == "" || parsed.Host == "" || parsed.User != nil || !strings.EqualFold(origin, parsed.Scheme+"://"+parsed.Host) {
 		return false
 	}
 	scheme := request.URL.Scheme
@@ -368,7 +391,8 @@ func sameOrigin(request *http.Request) bool {
 			scheme = "http"
 		}
 	}
-	return parsed.Scheme == scheme && parsed.Host == request.Host
+	// Letter case and a default port do not change an origin.
+	return canonicalHost(parsed.Host, parsed.Scheme) == canonicalHost(request.Host, scheme)
 }
 
 func (host *handler) serveApplication(response http.ResponseWriter, actor string) {

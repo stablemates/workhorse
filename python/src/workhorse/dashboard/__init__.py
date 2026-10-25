@@ -232,13 +232,15 @@ class DashboardHost:
             _LOGGER.exception("Dashboard schema compatibility check failed")
             return self._json(503, {"error": _UNVERIFIED_COMPATIBILITY})
 
+        rpc_prefix = self.base_path + "/rpc/dashboard/"
+        if not path.startswith(rpc_prefix) and self._cross_origin_read(environ):
+            return self._json(403, {"error": "A same-origin request is required"})
         mount_root = self.base_path or "/"
         if path == mount_root:
             return DashboardResponse(302, b"", (("Location", self.base_path + "/tasks"),))
         asset_prefix = self.base_path + "/assets/"
         if path.startswith(asset_prefix):
             return self._asset(path[len(self.base_path) + 1 :])
-        rpc_prefix = self.base_path + "/rpc/dashboard/"
         if path.startswith(rpc_prefix):
             return self._rpc(environ, path[len(rpc_prefix) :], actor)
         return self._application(actor)
@@ -254,6 +256,8 @@ class DashboardHost:
     def _rpc(self, environ: dict[str, object], procedure: str, actor: str) -> DashboardResponse:
         if str(environ.get("REQUEST_METHOD", "GET")) != "POST":
             return self._rpc_error(405, "METHOD_NOT_SUPPORTED", "Method Not Supported")
+        if procedure not in _MUTATIONS and self._cross_origin_read(environ):
+            return self._json(403, {"error": "A same-origin request is required"})
         if procedure in _MUTATIONS:
             if not self._same_origin(environ):
                 return self._json(403, {"error": "A same-origin mutation request is required"})
@@ -366,16 +370,28 @@ class DashboardHost:
         body = cast(bytes, stream.read(_MAX_REQUEST_BYTES + 1))
         return None if len(body) > _MAX_REQUEST_BYTES else body
 
+    def _cross_origin_read(self, environ: dict[str, object]) -> bool:
+        # A browser sends Origin on every cross-origin fetch, so a host CORS policy cannot expose a
+        # read to a foreign page. A top-level navigation sends none.
+        return "HTTP_ORIGIN" in environ and not self._same_origin(environ)
+
     def _same_origin(self, environ: dict[str, object]) -> bool:
         origin = environ.get("HTTP_ORIGIN")
         if not isinstance(origin, str):
             return False
-        parsed = urlsplit(origin)
-        if not parsed.scheme or not parsed.netloc:
+        try:
+            parsed = urlsplit(origin)
+        except ValueError:
+            # An unparsable Origin, such as "https://[", is never evidence of this origin.
+            return False
+        # An origin is a scheme and an authority. A path also catches two joined Origin headers.
+        if not parsed.netloc:
+            return False
+        if origin.lower() != f"{parsed.scheme}://{parsed.netloc}".lower() or "@" in origin:
             return False
         scheme = str(environ.get("wsgi.url_scheme", "http"))
         host = str(environ.get("HTTP_HOST", ""))
-        return f"{parsed.scheme}://{parsed.netloc}" == f"{scheme}://{host}"
+        return _canonical_host(parsed.netloc, parsed.scheme) == _canonical_host(host, scheme)
 
     def _application(self, actor: str) -> DashboardResponse:
         template = self._bundle_files()["app/index.html"].decode()

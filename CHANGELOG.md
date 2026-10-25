@@ -30,6 +30,21 @@ through 2,147,483,647 ms (ADR 0112). An unset `pollMs` keeps the default.
 
 Upgrade step: replace `pollMs: 0` with `pollMs: 1`. The wait does not change.
 
+### The embedded dashboard host refuses a cross-origin read
+
+A host application can put a CORS policy in front of `createDashboardHost`. If that policy allowed
+credentials, a page on another origin could read the dashboard, task payloads included, with the
+operator's cookies (SM-1675). Now the host answers 403 with
+`{"error":"A same-origin request is required"}` for a page, an asset, or a read procedure whose
+`Origin` header names another origin.
+
+A request without `Origin`, such as a top-level navigation, and a same-origin request still
+work. A mutation keeps its own refusal. The change needs no migration.
+
+Upgrade step: if a proxy in front of the host ends TLS, the host must see the scheme that the
+browser used. Otherwise the dashboard page's own module scripts carry an `Origin` that does not
+match, and the host refuses them.
+
 ### A busy fast-tier queue no longer keeps a worker from its other queues
 
 A worker can serve several queues. On the fast tier, a completion claims the next task of its own

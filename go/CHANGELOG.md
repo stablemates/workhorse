@@ -19,6 +19,30 @@ Now `NewWorker` refuses a `PollInterval` that is not a whole number of milliseco
 2,147,483,647 with its usual option error. Every SDK accepts this range (ADR 0112). A zero
 `PollInterval` still selects the default.
 
+### The dashboard handler refuses a cross-origin read and an `Origin: null` mutation
+
+A wrapping handler can add CORS headers to `dashboard.NewHandler` responses. If that policy allowed
+credentials, a page on another origin could read the dashboard, task payloads included, with the
+operator's cookies (SM-1675). Now the handler answers 403 with
+`{"error":"A same-origin request is required"}` for a page, an asset, or a read procedure whose
+`Origin` header names another origin.
+
+The same-origin check also resolved a relative `Origin` against the request URL. A sandboxed frame
+sends `Origin: null`, so the check accepted a mutation from it. Now it parses `Origin` on its own
+and refuses it. It also refuses a request with more than one `Origin` header, also
+for a mutation, because the check read only the first one.
+
+The same-origin check compared the `Host` text exactly, so `Host: example.test:443` with
+`Origin: https://example.test` failed. Now letter case and the default port do not matter, as in
+the allowed hosts check. An `Origin` with a path, a query, a fragment, or a user fails.
+
+A request without `Origin`, such as a top-level navigation, and a same-origin request still
+work. A mutation keeps its own refusal. The change needs no migration.
+
+Upgrade step: if a proxy in front of the host ends TLS, the host must see the scheme that the
+browser used. Otherwise the dashboard page's own module scripts carry an `Origin` that does not
+match, and the host refuses them.
+
 ### A busy fast-tier queue no longer keeps the worker from its other queues
 
 While one fast-tier queue had a backlog, the fused refill of each completion kept every slot, so the
