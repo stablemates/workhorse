@@ -58,6 +58,7 @@ import { createHash, randomBytes } from "node:crypto";
 import { cp, mkdir, mkdtemp, readFile, readdir, realpath, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { setTimeout as sleep } from "node:timers/promises";
 import { parseArgs } from "node:util";
 import { Client } from "pg";
 import { dropLocalDatabase } from "../typescript/core/src/drop-local-database.js";
@@ -504,9 +505,52 @@ interface SigningKey {
   readonly password: string;
 }
 
-/** Stops the `gpg-agent` of a GnuPG home, if one runs. Call it before the home is deleted. */
+/** How long `stopAgent` waits for the `gpg-agent` process to exit after it asks the agent to stop. */
+const agentExitTimeoutMs = 10_000;
+
+/** The process ID of the `gpg-agent` of a GnuPG home, or `undefined` if no agent runs. */
+async function agentPid(gnupgHome: string): Promise<number | undefined> {
+  const output = await run(
+    "gpg-connect-agent",
+    ["--homedir", gnupgHome, "--no-autostart", "getinfo pid", "/bye"],
+    { capture: true, quiet: true },
+  );
+  const pid = /^D (\d+)$/m.exec(output)?.[1];
+  return pid === undefined ? undefined : Number(pid);
+}
+
+/** Whether process `pid` still runs. A zombie process has exited, so it does not run. */
+async function processRuns(pid: number): Promise<boolean> {
+  let state: string;
+  try {
+    state = await run("ps", ["-o", "stat=", "-p", String(pid)], { capture: true, quiet: true });
+  } catch (error) {
+    // ps exits with 1 when no process has the ID. Any other failure is a real error.
+    if (error instanceof Error && error.message.startsWith("ps -o exited with 1")) return false;
+    throw error;
+  }
+  return state.trim() !== "" && !state.trim().startsWith("Z");
+}
+
+/** Waits until process `pid` exits, and fails if it still runs after `timeoutMs`. */
+export async function waitForExit(pid: number, name: string, timeoutMs: number): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (await processRuns(pid)) {
+    if (Date.now() >= deadline) throw new Error(`${name} ${pid} still runs after ${timeoutMs} ms`);
+    await sleep(20);
+  }
+}
+
+/**
+ * Stops the `gpg-agent` of a GnuPG home, if one runs. Call it before the home is deleted.
+ *
+ * `gpgconf --kill` can return before the agent process exits. Thus the function waits until the
+ * process exits, and it fails if the process still runs after `agentExitTimeoutMs`.
+ */
 export async function stopAgent(gnupgHome: string): Promise<void> {
+  const pid = await agentPid(gnupgHome);
   await run("gpgconf", ["--homedir", gnupgHome, "--kill", "all"], { capture: true, quiet: true });
+  if (pid !== undefined) await waitForExit(pid, `gpg-agent of ${gnupgHome}`, agentExitTimeoutMs);
 }
 
 /**
