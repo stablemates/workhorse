@@ -3,6 +3,11 @@ package run.workhorse;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import io.opentelemetry.context.Context;
+import io.opentelemetry.sdk.OpenTelemetrySdk;
+import io.opentelemetry.sdk.logs.LogRecordProcessor;
+import io.opentelemetry.sdk.logs.ReadWriteLogRecord;
+import io.opentelemetry.sdk.logs.SdkLoggerProvider;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 import java.lang.reflect.Proxy;
@@ -28,7 +33,8 @@ import run.workhorse.testing.ScratchDatabase;
 
 /**
  * SM-1696: a reporter callback that throws never stops the worker, and the worker logs its failures
- * at most once in each interval.
+ * at most once in each interval. SM-1726: the log is the catalogued {@code
+ * workhorse.worker.reporter_failed} record, and each report path has its own guard.
  */
 @ExtendWith(ScratchDatabase.class)
 @Timeout(value = 60, unit = TimeUnit.SECONDS)
@@ -171,9 +177,18 @@ class WorkerReporterDatabaseTest {
     }
 
     assertEquals(1, logger.reports("onRegistrationError"), String.valueOf(logger.messages));
+    // SM-1726: the report is the catalogued event with the callback and the error type. It never
+    // carries the error message.
     assertTrue(
         logger.messages.contains(
-            "Workhorse worker onRegistrationError reporter failed: alert client is offline"),
+            "Workhorse worker onRegistrationError reporter failed {event.name=workhorse.worker"
+                + ".reporter_failed, workhorse.worker.id="
+                + worker.workerId()
+                + ", workhorse.worker.reporter=registration_error,"
+                + " error.type=java.lang.IllegalStateException}"),
+        String.valueOf(logger.messages));
+    assertTrue(
+        logger.messages.stream().noneMatch(message -> message.contains("alert client is offline")),
         String.valueOf(logger.messages));
 
     // After the interval, the next report states the failures that the worker did not log.
@@ -241,10 +256,79 @@ class WorkerReporterDatabaseTest {
 
     assertEquals(1, logger.reports("onNotificationError"), String.valueOf(logger.messages));
     assertTrue(
-        logger.messages.contains(
-            "Workhorse worker onNotificationError reporter failed: notification alert is offline"),
+        logger.messages.stream()
+            .anyMatch(
+                message ->
+                    message.startsWith("Workhorse worker onNotificationError reporter failed {")
+                        && message.contains("workhorse.worker.reporter=notification_error")
+                        && message.contains("error.type=java.lang.IllegalStateException")),
+        String.valueOf(logger.messages));
+    assertTrue(
+        logger.messages.stream().noneMatch(message -> message.contains("alert is offline")),
         String.valueOf(logger.messages));
     // Each callback has its own limit, so the notification reports do not hide this one.
     assertEquals(1, logger.reports("onRegistrationError"), String.valueOf(logger.messages));
+  }
+
+  /** A log processor that throws for each {@code workhorse.worker.reporter_failed} record. */
+  private static final class FailingReporterLogs implements LogRecordProcessor {
+    final AtomicInteger attempts = new AtomicInteger();
+
+    @Override
+    public void onEmit(Context context, ReadWriteLogRecord record) {
+      if ("workhorse.worker.reporter_failed".equals(record.toLogRecordData().getEventName())) {
+        attempts.incrementAndGet();
+        throw new IllegalStateException("log exporter is offline");
+      }
+    }
+  }
+
+  @Test
+  void aThrowingOpenTelemetryLogPathStillGivesTheLoggerRecord() throws Exception {
+    FailingReporterLogs logs = new FailingReporterLogs();
+    RecordingLogger logger = new RecordingLogger();
+    try (OpenTelemetrySdk sdk =
+        OpenTelemetrySdk.builder()
+            .setLoggerProvider(SdkLoggerProvider.builder().addLogRecordProcessor(logs).build())
+            .build()) {
+      AtomicInteger calls = new AtomicInteger();
+      Worker worker =
+          Worker.builder(offlineRegistry())
+              .queues(queueName)
+              .pollingOnly(true)
+              .pollInterval(Duration.ofMillis(10))
+              .registryInterval(Duration.ofMillis(100))
+              .shutdownGrace(Duration.ZERO)
+              .logger(logger)
+              .telemetry(WorkhorseTelemetry.of(sdk))
+              .onRegistrationError(
+                  error -> {
+                    calls.incrementAndGet();
+                    throw new IllegalStateException("alert client is offline");
+                  })
+              .build();
+      worker.start();
+      try {
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(20);
+        while (calls.get() < 2 && System.nanoTime() < deadline) {
+          Thread.sleep(10);
+        }
+        assertTrue(calls.get() >= 2, "the worker keeps refreshing its registration");
+      } finally {
+        worker.close();
+      }
+
+      // The OpenTelemetry path threw, and System.Logger still has the one bounded record.
+      assertEquals(1, logs.attempts.get(), "the OpenTelemetry path received the record");
+      assertEquals(1, logger.reports("onRegistrationError"), String.valueOf(logger.messages));
+      assertTrue(
+          logger.messages.contains(
+              "Workhorse worker onRegistrationError reporter failed {event.name=workhorse.worker"
+                  + ".reporter_failed, workhorse.worker.id="
+                  + worker.workerId()
+                  + ", workhorse.worker.reporter=registration_error,"
+                  + " error.type=java.lang.IllegalStateException}"),
+          String.valueOf(logger.messages));
+    }
   }
 }

@@ -460,9 +460,14 @@ module Stablemates
         reporter_failed(name, e)
       end
 
+      # The workhorse.worker.reporter value of each reporter callback. Every SDK uses the same values.
+      REPORTER_VALUES = {on_registration_error: "registration_error", on_notification_error: "notification_error"}.freeze
+      private_constant :REPORTER_VALUES
+
       # The logger, or standard error without one, is the diagnostic path, so a failed reporter is
       # never called again for its own failure. The interval bounds the output of a reporter that
-      # always fails.
+      # always fails. The report names the error type only, because the message can hold application
+      # data.
       def reporter_failed(name, failure)
         now = monotonic
         suppressed = @reporter_failures_lock.synchronize do
@@ -477,8 +482,14 @@ module Stablemates
         return if suppressed.nil?
 
         detail = suppressed.positive? ? " after #{suppressed} unreported failures" : ""
-        body = "Workhorse worker #{name} reporter failed#{detail}: #{failure.class}: #{failure.message}"
-        @logger.nil? ? Kernel.warn("workhorse: #{body}") : @logger.error(body)
+        body = "Workhorse worker #{name} reporter failed#{detail}"
+        attributes = {"workhorse.worker.id" => @worker_id, "workhorse.worker.reporter" => REPORTER_VALUES.fetch(name),
+                      "error.type" => error_name(failure)}
+        if @logger.nil?
+          Kernel.warn("workhorse: workhorse.worker.reporter_failed: #{body} #{JSON.generate(attributes)}")
+        else
+          Telemetry.log(@logger, :error, "workhorse.worker.reporter_failed", body, attributes)
+        end
       rescue
         # Inspecting the failure or writing the log can raise. The diagnostic path must not become a
         # second failure.

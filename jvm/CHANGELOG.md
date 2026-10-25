@@ -34,6 +34,14 @@ Upgrade step: if a proxy in front of the host ends TLS, the host must see the sc
 browser used. Otherwise the dashboard page's own module scripts carry an `Origin` that does not
 match, and the host refuses them.
 
+### A failed reporter callback gives a catalogued log record
+
+A throw from `onRegistrationError` or `onNotificationError` gave a `System.Logger` record with the
+exception and no event name (SM-1726). Now the worker logs `workhorse.worker.reporter_failed` with
+`workhorse.worker.id`, `workhorse.worker.reporter` (`registration_error` or `notification_error`),
+and `error.type`, the class name. The record no longer carries the exception. The worker also emits
+the event through OpenTelemetry at warn. The level and the bound do not change.
+
 ### A busy fast-tier queue no longer keeps the worker from its other queues
 
 While one fast-tier queue had a backlog, the fused refill of each completion kept every slot, so the

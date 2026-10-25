@@ -1248,16 +1248,20 @@ dispatch contract. Thus, a failure of a reporter never stops a TypeScript worker
 - The worker records its own result before it calls the reporter. `worker.maintenanceTelemetry()`
   and the maintenance metrics keep the phase row. A failed registration keeps the last known pause
   value.
-- The worker writes the failure to the console with `console.error`, as
-  `Workhorse worker <callback> reporter failed`. It never calls the failed reporter for its own
-  failure. If `console.error` throws, the worker ignores that error.
+- The worker reports the failure as the `workhorse.worker.reporter_failed` log event at warn,
+  through the telemetry provider. It also writes `Workhorse worker <callback> reporter failed` with
+  `console.error`. The second argument holds the event attributes. The report carries
+  `workhorse.worker.reporter` and `error.type`, never the error message. It never calls the failed
+  reporter for its own failure. If one report path throws, the worker ignores that error and still
+  uses the other path.
 - For each callback, the worker writes the first failure and then at most one failure in each
   60,000 ms (`REPORTER_FAILURE_REPORT_INTERVAL_MS`). The next report after unreported failures
   adds `after <n> unreported failures`.
 
-The Python, Go, Rust, Ruby, and JVM workers apply the same rule to their reporter callbacks, each
-with its own diagnostic path. The .NET worker catches a failure of its reporter events and writes no
-record. [Reporter callback failures](../parity.md#reporter-callback-failures) lists each SDK.
+The Python, Go, Rust, Ruby, JVM, and .NET workers apply the same rule to their reporter callbacks.
+Each worker uses its own diagnostic path and emits the same event.
+[Reporter callback failures](../parity.md#reporter-callback-failures) lists each SDK. The
+[warning event names](telemetry.md#warning-event-names) state the attributes of the event.
 
 #### Capacity release notifications
 

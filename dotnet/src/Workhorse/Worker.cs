@@ -43,6 +43,8 @@ public sealed partial class Worker : IAsyncDisposable
     private readonly NpgsqlDataSource _dataSource;
     private readonly JsonCodec _codec;
     private readonly ILogger _logger;
+    private readonly ReporterFailures _registrationReporter = new();
+    private readonly ReporterFailures _notificationReporter = new();
     private readonly string[] _queues;
     private readonly string _queueText;
     private readonly int _refillBatch;
@@ -367,28 +369,43 @@ public sealed partial class Worker : IAsyncDisposable
     /// <summary>A handler, and the coordinator of a batch handler.</summary>
     private sealed record Registration(Func<HandlerContext, string, Task<object?>> Invoke, BatchCoordinator? Batch);
 
-    private void OnRegistrationError(Exception error)
-    {
-        try
-        {
-            RegistrationError?.Invoke(this, error);
-        }
-        catch (Exception)
-        {
-            // A caller's event handler must not stop the worker.
-        }
-    }
+    private void OnRegistrationError(Exception error) =>
+        CallReporter(RegistrationError, "registration_error", _registrationReporter, error);
 
     private void OnNotificationError(Exception error)
     {
         WorkerLog.NotificationFailed(_logger, error);
+        CallReporter(NotificationError, "notification_error", _notificationReporter, error);
+    }
+
+    /// <summary>
+    /// Raises a reporter event so that a handler that throws never stops the worker. A reporter
+    /// observes the worker. It is not part of the dispatch contract. The log is the diagnostic path,
+    /// so the worker never raises the event again for the failure of its handler.
+    /// </summary>
+    private void CallReporter(EventHandler<Exception>? reporter, string value, ReporterFailures failures, Exception error)
+    {
         try
         {
-            NotificationError?.Invoke(this, error);
+            reporter?.Invoke(this, error);
         }
-        catch (Exception)
+        catch (Exception failure)
         {
-            // A caller's event handler must not stop the worker.
+            var suppressed = failures.Admit(Monotonic.Now());
+            if (suppressed < 0)
+            {
+                return;
+            }
+
+            try
+            {
+                // The record names the error type only, because the message can hold application data.
+                WorkerLog.ReporterFailed(_logger, WorkerId, value, failure.GetType().FullName ?? failure.GetType().Name, suppressed);
+            }
+            catch (Exception)
+            {
+                // A logger can throw. The diagnostic path must not become a second failure.
+            }
         }
     }
 

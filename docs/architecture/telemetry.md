@@ -656,7 +656,7 @@ The .NET SDK has no OpenTelemetry logs dependency. It emits no OpenTelemetry log
 | -------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Debug    | Enqueue acceptance and replay, claims, accepted heartbeats, handler registration and execution boundaries, checkpoints, progress, schedule replay, and worker deregistration.                                                             |
 | Info     | Queue and worker lifecycle, final execution outcomes, rejected heartbeats, completion and failure, cancellation, durable waits, promotion and recovery, schedule changes, redrive, and maintenance that changes rows or returns an error. |
-| Warning  | Handlers that catch a durable-wait suspension signal and return normally, a worker that polls without a notification listener, and a maintenance pass or a claim that waits longer than the stop budget.                                  |
+| Warning  | Handlers that catch a durable-wait suspension signal and return normally, a worker that polls without a notification listener, a reporter callback that fails, and a maintenance pass or a claim that waits longer than the stop budget.  |
 
 #### Debug event names
 
@@ -727,6 +727,21 @@ successful configuration changes at info.
   [Statement bounds](lifecycle.md#statement-bounds) states the stop budget of each SDK. The .NET
   record names the three values `WorkerId`, `Statement`, and `ElapsedMs` by its log template
   ([ADR 0107](../decisions/0107-shape-the-dotnet-sdk-as-a-csharp-core-with-hosting-ef-core-and-asp-net-core-packages.md#telemetry)).
+
+- `workhorse.worker.reporter_failed` carries `workhorse.worker.id`, `workhorse.worker.reporter`,
+  and `error.type`. `workhorse.worker.reporter` names the reporter callback that failed:
+  `registration_error`, `notification_error`, or `maintenance`. `error.type` is the type of the
+  failure, such as the error class name or `panic` in Rust. The record never carries the error
+  message or the value that the worker gave to the callback.
+
+  For each callback, the worker emits the first failure and then at most one in each 60 s. The body
+  states the count of the failures that the worker did not emit.
+  [Reporter callbacks](lifecycle.md#reporter-callbacks) states the isolation rule.
+
+  Go, Python, Ruby, Rust, the JVM, and .NET write the record to their logger at error. The
+  TypeScript worker writes it with `console.error`. The TypeScript, Python, and JVM OpenTelemetry
+  records use warn. The .NET record names the values `WorkerId`, `Reporter`, `ErrorType`, and
+  `Unreported` by its log template.
 
 #### Log record attributes
 

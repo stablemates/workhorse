@@ -35,7 +35,7 @@ module Stablemates
         "workhorse.schedule.lag" => [:histogram, "Delay between a scheduled occurrence and its durable firing", "s"],
         "workhorse.maintenance.duration" => [:histogram, "Workhorse maintenance phase duration", "ms"]
       }.freeze
-      LEVELS = {debug: Logger::DEBUG, info: Logger::INFO, warn: Logger::WARN}.freeze
+      LEVELS = {debug: Logger::DEBUG, info: Logger::INFO, warn: Logger::WARN, error: Logger::ERROR}.freeze
       # The errors of the driver and the runtime that mean the round did not reach PostgreSQL or
       # lost its connection: a closed or refused connection, a failed send, a socket or DNS error.
       CONNECTION_ERRORS = [PG::ConnectionBad, PG::UnableToSend, IOError, SystemCallError, SocketError].freeze

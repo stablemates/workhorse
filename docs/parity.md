@@ -155,20 +155,24 @@ A reporter callback is a worker option that observes the worker, such as the reg
 callback. A reporter is not part of the dispatch contract. Thus, if a reporter fails, the worker
 continues to claim and run tasks, and the result of the run does not change.
 
-In TypeScript, Python, Go, Rust, Ruby, and the JVM, the worker catches the failure and writes a
-bounded report. For each callback, it writes the first failure. Then it writes at most one failure
-in each 60 s, with the count of the failures that it did not write. It never calls the failed
-reporter for its own failure. If the report itself fails, the worker ignores that failure.
+In every SDK, the worker catches the failure and writes a bounded report. For each callback, it
+writes the first failure. Then it writes at most one failure in each 60 s, with the count of the
+failures that it did not write. It never calls the failed reporter for its own failure. If the
+report itself fails, the worker ignores that failure.
 
-| SDK        | Reporter callbacks                                            | Failure that the worker catches                | Report                                                         |
-| ---------- | ------------------------------------------------------------- | ---------------------------------------------- | -------------------------------------------------------------- |
-| TypeScript | `onRegistrationError`, `onNotificationError`, `onMaintenance` | A throw, or a promise or thenable that rejects | `console.error`                                                |
-| Python     | `on_registration_error`, `on_notification_error`              | An `Exception`                                 | The `workhorse.worker` logger, at error                        |
-| Go         | `OnRegistrationError`                                         | A panic                                        | `WorkerOptions.Logger`, at error                               |
-| Rust       | `on_registration_error`                                       | A panic                                        | `tracing`, at error                                            |
-| Ruby       | `on_registration_error`, `on_notification_error`              | A `StandardError`                              | `logger` at error, or standard error                           |
-| JVM        | `onRegistrationError`, `onNotificationError`                  | A `RuntimeException`                           | The worker's `System.Logger`, at `ERROR`                       |
-| .NET       | The `RegistrationError` and `NotificationError` events        | An `Exception`                                 | None ([SM-1726](https://linear.app/stablemates/issue/SM-1726)) |
+Every report is the `workhorse.worker.reporter_failed` log event. It carries `workhorse.worker.id`,
+`workhorse.worker.reporter`, and `error.type`, and never the error message. The
+[warning event names](architecture/telemetry.md#warning-event-names) state the values.
+
+| SDK        | Reporter callbacks                                            | Failure that the worker catches                | Report                                                                  |
+| ---------- | ------------------------------------------------------------- | ---------------------------------------------- | ----------------------------------------------------------------------- |
+| TypeScript | `onRegistrationError`, `onNotificationError`, `onMaintenance` | A throw, or a promise or thenable that rejects | The telemetry provider at warn, and `console.error`                     |
+| Python     | `on_registration_error`, `on_notification_error`              | An `Exception`                                 | The `workhorse.worker` logger at error, and OpenTelemetry logs at warn  |
+| Go         | `OnRegistrationError`                                         | A panic                                        | `WorkerOptions.Logger`, at error                                        |
+| Rust       | `on_registration_error`                                       | A panic                                        | `tracing`, at error                                                     |
+| Ruby       | `on_registration_error`, `on_notification_error`              | A `StandardError`                              | `logger` at error, or standard error                                    |
+| JVM        | `onRegistrationError`, `onNotificationError`                  | A `RuntimeException`                           | The worker's `System.Logger` at `ERROR`, and OpenTelemetry logs at warn |
+| .NET       | The `RegistrationError` and `NotificationError` events        | An `Exception`                                 | `WorkerOptions.LoggerFactory`, at error                                 |
 
 Only TypeScript has a maintenance reporter. Go and Rust have no notification reporter: their
 workers write a listener failure to their logger. A Python, Go, Rust, Ruby, JVM, or .NET reporter
@@ -176,11 +180,10 @@ returns no value that the worker awaits. Thus, these SDKs have no asynchronous r
 The worker does not await an awaitable that a Python callback returns. An `async void` .NET event
 handler fails outside the worker.
 
-The .NET worker drops a reporter failure without a log record. Every .NET log record carries an
-event name of the shared telemetry catalogue, and that catalogue has no name for this failure.
-[SM-1726](https://linear.app/stablemates/issue/SM-1726) adds a catalogued event name for a reporter
-failure in every SDK. A Rust panic also goes to the panic hook of the process, which writes each
-panic to standard error by default.
+The value of `error.type` follows the type system of each SDK. A Go worker gives the Go type of the
+panic value, such as `string`. A Rust worker gives `panic`, because a panic payload has no type
+name. A Rust panic also goes to the panic hook of the process, which writes each panic to standard
+error by default.
 
 ## Active Job reachability
 

@@ -142,6 +142,7 @@ public sealed class TelemetrySurfaceTests
         "workhorse.worker.paused",
         "workhorse.worker.pool_max_size",
         "workhorse.worker.queues",
+        "workhorse.worker.reporter",
         "workhorse.worker.statement",
     ];
 

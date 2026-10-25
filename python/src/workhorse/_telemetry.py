@@ -56,6 +56,7 @@ WorkhorseLogEvent = Literal[
     "workhorse.worker.polling_only",
     "workhorse.worker.registered",
     "workhorse.worker.registration_failed",
+    "workhorse.worker.reporter_failed",
     "workhorse.worker.resumed",
     "workhorse.worker.started",
     "workhorse.worker.statement_slow",

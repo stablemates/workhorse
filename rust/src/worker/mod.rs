@@ -431,16 +431,22 @@ impl ReporterFailures {
 /// observes the worker. It is not part of the dispatch contract, so its failure must not stop
 /// claims or change the result of the run. `tracing` is the diagnostic path, so the worker never
 /// calls the failed reporter again for its own failure.
-fn call_reporter(name: &str, failures: &Mutex<ReporterFailures>, call: impl FnOnce()) {
+///
+/// `name` is the option name for the log text, and `value` is the bounded
+/// `workhorse.worker.reporter` value that every SDK shares. The worker logs
+/// `workhorse.worker.reporter_failed` with the error type `panic`. It never logs the panic payload,
+/// because that payload can hold an error message.
+fn call_reporter(
+    name: &str,
+    value: &str,
+    worker_id: &str,
+    failures: &Mutex<ReporterFailures>,
+    call: impl FnOnce(),
+) {
     let Err(panic) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(call)) else {
         return;
     };
     let suppressed = lock(failures).admit(Instant::now());
-    let message = panic
-        .downcast_ref::<&str>()
-        .map(|message| (*message).to_owned())
-        .or_else(|| panic.downcast_ref::<String>().cloned())
-        .unwrap_or_else(|| "a panic without a message".to_owned());
     // A panic payload can panic when it drops, and a tracing subscriber can panic too. The
     // diagnostic path must not become a second failure.
     contain(move || drop(panic));
@@ -453,7 +459,13 @@ fn call_reporter(name: &str, failures: &Mutex<ReporterFailures>, call: impl FnOn
         } else {
             String::new()
         };
-        tracing::error!(error = %message, "Workhorse worker {name} reporter failed{detail}");
+        tracing::error!(
+            event.name = "workhorse.worker.reporter_failed",
+            workhorse.worker.id = %worker_id,
+            workhorse.worker.reporter = value,
+            error.r#type = "panic",
+            "Workhorse worker {name} reporter failed{detail}"
+        );
     });
 }
 
@@ -1365,9 +1377,13 @@ impl Inner {
             }
             Err(error) => match &self.options.on_registration_error {
                 Some(hook) => {
-                    call_reporter("on_registration_error", &self.registration_reporter, || {
-                        hook(&error);
-                    });
+                    call_reporter(
+                        "on_registration_error",
+                        "registration_error",
+                        &self.worker_id,
+                        &self.registration_reporter,
+                        || hook(&error),
+                    );
                 }
                 None => {
                     tracing::warn!(error = %error, workhorse.worker.id = %self.worker_id, "worker registration failed")
@@ -1890,7 +1906,18 @@ mod tests {
             1,
             "{text}"
         );
-        assert!(text.contains("alert client is offline"), "{text}");
+        // SM-1726: the report is the catalogued event with the callback and the error type. It
+        // never carries the panic payload, because that payload can hold an error message.
+        for field in [
+            "ERROR",
+            "event.name=\"workhorse.worker.reporter_failed\"",
+            "workhorse.worker.reporter=\"registration_error\"",
+            "error.type=\"panic\"",
+        ] {
+            assert!(text.contains(field), "{field} in {text}");
+        }
+        assert!(text.contains(&format!("workhorse.worker.id={}", worker.0.worker_id)), "{text}");
+        assert!(!text.contains("alert client is offline"), "{text}");
 
         // After the interval, the next report states the failures that the worker did not log.
         lock(&worker.0.registration_reporter).reported_at =
@@ -1971,7 +1998,7 @@ mod tests {
 
         let text = log.text();
         assert_eq!(text.matches("reporter failed").count(), 1, "{text}");
-        assert!(text.contains("a panic without a message"), "{text}");
+        assert!(text.contains("error.type=\"panic\""), "{text}");
         assert_eq!(lock(&worker.0.registration_reporter).suppressed, 1);
     }
 

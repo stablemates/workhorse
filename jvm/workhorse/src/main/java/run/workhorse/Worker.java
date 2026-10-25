@@ -58,6 +58,7 @@ import run.workhorse.internal.Sql;
 import run.workhorse.internal.SqlCatalogue;
 import run.workhorse.internal.Suspension;
 import run.workhorse.internal.Values;
+import run.workhorse.internal.telemetry.Names;
 import run.workhorse.internal.telemetry.Telemetry;
 import run.workhorse.internal.telemetry.WorkerTelemetry;
 
@@ -4527,7 +4528,8 @@ public final class Worker implements AutoCloseable {
 
   /**
    * The logger is the diagnostic path, so a failed reporter is never called again for its own
-   * failure. The interval bounds the output of a reporter that always fails.
+   * failure. The interval bounds the output of a reporter that always fails. The record names the
+   * error type only, because the error message can hold application data.
    */
   private void reporterFailed(String name, RuntimeException failure) {
     long suppressed =
@@ -4538,14 +4540,38 @@ public final class Worker implements AutoCloseable {
       return;
     }
     String detail = suppressed > 0 ? " after " + suppressed + " unreported failures" : "";
+    String event = "workhorse.worker.reporter_failed";
+    String body = "Workhorse worker " + name + " reporter failed" + detail;
+    Map<String, @Nullable Object> fields = new LinkedHashMap<>();
+    fields.put("workhorse.worker.id", workerId);
+    fields.put(Names.WORKER_REPORTER, reporterValue(name));
+    fields.put("error.type", failure.getClass().getName());
+    // Each path has its own guard, so a failure of one path does not stop the other. The
+    // diagnostic path must not become a second failure.
     try {
-      logger.log(
-          System.Logger.Level.ERROR,
-          "Workhorse worker " + name + " reporter failed" + detail,
-          failure);
+      telemetry.log(System.Logger.Level.ERROR, event, body, fields);
     } catch (RuntimeException ignored) {
-      // A logger can throw. The diagnostic path must not become a second failure.
+      // OpenTelemetry failed.
     }
+    try {
+      if (logger.isLoggable(System.Logger.Level.ERROR)) {
+        Map<String, @Nullable Object> logged = new LinkedHashMap<>();
+        logged.put("event.name", event);
+        logged.putAll(fields);
+        logger.log(System.Logger.Level.ERROR, body + " " + logged);
+      }
+    } catch (RuntimeException ignored) {
+      // The logger failed.
+    }
+  }
+
+  /** The {@code workhorse.worker.reporter} value of a reporter callback, which every SDK shares. */
+  private static String reporterValue(String name) {
+    return switch (name) {
+      case "onRegistrationError" -> "registration_error";
+      case "onNotificationError" -> "notification_error";
+      default -> throw new IllegalArgumentException("Unknown reporter callback " + name);
+    };
   }
 
   /** When the worker last logged a failure of one reporter callback. */

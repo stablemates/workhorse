@@ -10,6 +10,14 @@ adds.
 
 ## Unreleased
 
+### A failed reporter callback gives a catalogued log record
+
+A panic of `OnRegistrationError` gave a log record with the panic value and no event name
+(SM-1726). Now the record has `event.name` `workhorse.worker.reporter_failed`,
+`workhorse.worker.id`, `workhorse.worker.reporter` (`registration_error`), and `error.type`, the Go
+type of the panic value. The record no longer carries the panic value, because that value can hold
+an error message. The level and the bound do not change.
+
 ### The worker refuses a poll interval outside 1 through 2,147,483,647 ms
 
 Before this change, `NewWorker` refused only a negative `WorkerOptions.PollInterval` (SM-1778). It

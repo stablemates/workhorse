@@ -1,4 +1,7 @@
-"""SM-1696: a reporter callback that raises never stops the worker, and its log is bounded."""
+"""SM-1696: a reporter callback that raises never stops the worker, and its log is bounded.
+
+SM-1726: the log is the catalogued ``workhorse.worker.reporter_failed`` record.
+"""
 
 from __future__ import annotations
 
@@ -7,6 +10,7 @@ from typing import Any
 
 import pytest
 
+from workhorse import _reporters
 from workhorse._reporters import REPORTER_FAILURE_REPORT_INTERVAL_SECONDS
 from workhorse.async_worker import AsyncWorker
 from workhorse.worker import Worker
@@ -38,8 +42,10 @@ def _reports(caplog: pytest.LogCaptureFixture, name: str) -> list[logging.LogRec
 
 
 def test_a_raising_registration_reporter_does_not_stop_the_worker(
-    caplog: pytest.LogCaptureFixture,
+    caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    emitted: list[tuple[Any, ...]] = []
+    monkeypatch.setattr(_reporters, "emit_log", lambda *record: emitted.append(record))
     calls: list[BaseException] = []
 
     def reporter(error: BaseException) -> None:
@@ -50,6 +56,7 @@ def test_a_raising_registration_reporter_does_not_stop_the_worker(
         _Pool(),  # type: ignore[arg-type]
         queue="reporters",
         on_registration_error=reporter,
+        worker_id="reporter-worker",
         _executor=_OfflineExecutor(),  # type: ignore[arg-type]
     )
 
@@ -61,8 +68,24 @@ def test_a_raising_registration_reporter_does_not_stop_the_worker(
     reports = _reports(caplog, "on_registration_error")
     assert len(reports) == 1
     assert reports[0].levelno == logging.ERROR
-    assert reports[0].exc_info is not None
-    assert str(reports[0].exc_info[1]) == "alert client is offline"
+    attributes = {
+        "workhorse.worker.id": "reporter-worker",
+        "workhorse.worker.reporter": "registration_error",
+        "error.type": "RuntimeError",
+    }
+    assert reports[0].__dict__["event.name"] == "workhorse.worker.reporter_failed"
+    assert {key: reports[0].__dict__[key] for key in attributes} == attributes
+    # The report never carries the error message.
+    assert reports[0].exc_info is None
+    assert "alert client is offline" not in caplog.text
+    assert emitted == [
+        (
+            "WARN",
+            "workhorse.worker.reporter_failed",
+            "Workhorse worker on_registration_error reporter failed",
+            attributes,
+        )
+    ]
 
     # After the interval, the next report states the failures that the worker did not log.
     state = worker._reporter_failures._state
@@ -75,6 +98,7 @@ def test_a_raising_registration_reporter_does_not_stop_the_worker(
     reports = _reports(caplog, "on_registration_error")
     assert len(reports) == 2
     assert reports[1].getMessage().endswith("reporter failed after 2 unreported failures")
+    assert len(emitted) == 2
 
 
 def test_a_raising_notification_reporter_is_logged_once_in_each_interval(
@@ -87,7 +111,9 @@ def test_a_raising_notification_reporter_is_logged_once_in_each_interval(
     reporter(ConnectionError("listener is offline"))
     reporter(ConnectionError("listener is offline"))
 
-    assert len(_reports(caplog, "on_notification_error")) == 1
+    reports = _reports(caplog, "on_notification_error")
+    assert len(reports) == 1
+    assert reports[0].__dict__["workhorse.worker.reporter"] == "notification_error"
     # Each callback has its own interval.
     assert _reports(caplog, "on_registration_error") == []
 
@@ -112,3 +138,56 @@ def test_an_async_worker_isolates_its_reporters(caplog: pytest.LogCaptureFixture
     assert len(_reports(caplog, "on_notification_error")) == 1
     # The core runs the registry refreshes, so it holds the registration reporter.
     assert worker._inner._on_registration_error is _raise
+
+
+def test_a_raising_log_handler_does_not_stop_the_opentelemetry_record(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    emitted: list[tuple[Any, ...]] = []
+    monkeypatch.setattr(_reporters, "emit_log", lambda *record: emitted.append(record))
+
+    class _RaisingHandler(logging.Handler):
+        def emit(self, _record: logging.LogRecord) -> None:
+            raise OSError("log sink is offline")
+
+        def handleError(self, _record: logging.LogRecord) -> None:
+            raise OSError("log sink is offline")
+
+    logger = logging.getLogger("workhorse.worker")
+    handler = _RaisingHandler()
+    logger.addHandler(handler)
+    try:
+        worker = Worker(_Pool(), queue="reporters", on_notification_error=_raise)  # type: ignore[arg-type]
+        reporter = worker._notification_reporter()
+        assert reporter is not None
+        reporter(ConnectionError("listener is offline"))
+    finally:
+        logger.removeHandler(handler)
+
+    assert [record[1] for record in emitted] == ["workhorse.worker.reporter_failed"]
+
+
+def test_a_failure_whose_class_name_raises_does_not_reach_the_worker(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    emitted: list[tuple[Any, ...]] = []
+    monkeypatch.setattr(_reporters, "emit_log", lambda *record: emitted.append(record))
+
+    class _Meta(type):
+        @property
+        def __name__(cls) -> str:  # type: ignore[override]
+            raise OSError("class name is offline")
+
+    class _Odd(Exception, metaclass=_Meta):
+        pass
+
+    def reporter(_error: BaseException) -> None:
+        raise _Odd
+
+    worker = Worker(_Pool(), queue="reporters", on_notification_error=reporter)  # type: ignore[arg-type]
+    notification_reporter = worker._notification_reporter()
+    assert notification_reporter is not None
+
+    notification_reporter(ConnectionError("listener is offline"))
+
+    assert [record[3]["error.type"] for record in emitted] == ["Exception"]

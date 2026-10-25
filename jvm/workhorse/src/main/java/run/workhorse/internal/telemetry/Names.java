@@ -91,6 +91,7 @@ public final class Names {
   public static final String WORKER_PAUSED = "workhorse.worker.paused";
   public static final String WORKER_POOL_MAX_SIZE = "workhorse.worker.pool_max_size";
   public static final String WORKER_QUEUES = "workhorse.worker.queues";
+  public static final String WORKER_REPORTER = "workhorse.worker.reporter";
   public static final String WORKER_STATEMENT = "workhorse.worker.statement";
 
   /**
@@ -150,6 +151,7 @@ public final class Names {
           "workhorse.worker.polling_only",
           "workhorse.worker.registered",
           "workhorse.worker.registration_failed",
+          "workhorse.worker.reporter_failed",
           "workhorse.worker.resumed",
           "workhorse.worker.started",
           "workhorse.worker.statement_slow",

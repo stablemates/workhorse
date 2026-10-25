@@ -10,6 +10,15 @@ adds.
 
 ## Unreleased
 
+### A failed reporter callback gives a catalogued log record
+
+A raise from `on_registration_error` or `on_notification_error` gave a `workhorse.worker` log record
+with the exception attached and no event name (SM-1726). Now the record carries `event.name`
+`workhorse.worker.reporter_failed`, `workhorse.worker.id`, `workhorse.worker.reporter`
+(`registration_error` or `notification_error`), and `error.type` as `extra` fields, and no
+exception. The worker also emits the same event at warn through the OpenTelemetry logs API. The
+level of the `workhorse.worker` record and the bound do not change.
+
 ### The worker refuses a `poll_ms` above 2,147,483,647
 
 Before this change, `poll_ms` had no upper limit (SM-1778). Now `Worker` and `AsyncWorker` raise
