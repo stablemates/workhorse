@@ -130,6 +130,10 @@ type workerRuntimeFixture struct {
 	HandlerResult                        string                            `json:"handlerResult"`
 	ExpectedCancelled                    workerFixtureReleasedState        `json:"expectedCancelled"`
 	ExpectedDrained                      workerFixtureTaskState            `json:"expectedDrained"`
+	HotTaskCount                         int                               `json:"hotTaskCount"`
+	HotHandlerMS                         int                               `json:"hotHandlerMs"`
+	ExpectedMaximumHotTasksBeforeCold    int                               `json:"expectedMaximumHotTasksBeforeCold"`
+	ColdEnqueueAfterHotStarts            int                               `json:"coldEnqueueAfterHotStarts"`
 }
 
 // workerFixtureReleasedState is the state of a task a worker released, with the events it recorded.

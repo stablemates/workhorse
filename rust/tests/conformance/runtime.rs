@@ -64,6 +64,7 @@ pub async fn run_runtime(fixture: &Value) -> Outcome {
             "subscription-recovery" => subscription_recovery(database, fixture).await,
             "graceful-drain" => graceful_drain(database, fixture).await,
             "slot-refill" => slot_refill(database, fixture).await,
+            "queue-fairness" => queue_fairness(database, fixture).await,
             "budget-admission-race" => budget_admission_race(database, fixture).await,
             "missing-handler" => missing_handler(database, fixture).await,
             "release-wait" => release_wait(database, fixture).await,
@@ -1302,6 +1303,79 @@ impl HandlerGate {
             let _ = finish.send(());
         }
     }
+}
+
+/// A fused refill asks only its own queue. The task of the cold queue must still run before the
+/// backlog of the hot queue ends (ADR 0076, rule 17).
+async fn queue_fairness(database: &ScratchDatabase, fixture: &Value) -> Checked {
+    let (hot, cold) =
+        (format!("{}-hot", queue_name(fixture)), format!("{}-cold", queue_name(fixture)));
+    let admin = Admin::connect(database.url()).await.map_err(driver)?;
+    for name in [&hot, &cold] {
+        let audit = AdminAudit {
+            actor: "runtime-fixture".into(),
+            reason: text(fixture, "id").into(),
+            request_id: format!("{}-{name}", text(fixture, "id")),
+        };
+        admin.set_queue_tier(name, QueueTier::Fast, &audit).await.map_err(driver)?;
+    }
+    let queue = queue(database, fixture).await?;
+    let task_type = text(fixture, "taskType");
+    let on = |name: &str| EnqueueOptions { queue: Some(name.into()), ..Default::default() };
+    for sequence in 0..number(fixture, "hotTaskCount") {
+        queue.enqueue(task_type, &json!({"sequence": sequence}), on(&hot)).await.map_err(driver)?;
+    }
+    let worker = worker(
+        database,
+        16,
+        WorkerOptions {
+            queues: vec![hot.clone(), cold.clone()],
+            concurrency: usize::try_from(number(fixture, "concurrency")).unwrap_or(1),
+            poll_interval: Some(millis(fixture, "pollMs")),
+            ..options(fixture)
+        },
+    )?;
+    let started = Arc::new(Mutex::new(Vec::<String>::new()));
+    let (recorded, hot_handler) = (Arc::clone(&started), millis(fixture, "hotHandlerMs"));
+    let hot_queue = hot.clone();
+    worker.handle(task_type, move |_: Value, context: HandlerContext| {
+        let task_queue = context.task().queue.clone();
+        recorded.lock().unwrap().push(task_queue.clone());
+        let hot = task_queue == hot_queue;
+        async move {
+            if hot {
+                tokio::time::sleep(hot_handler).await;
+            }
+            Ok(Value::Null)
+        }
+    });
+    let (stop, running) = run(&worker);
+    let outcome = async {
+        // The cold task arrives while fused refills already hold the slots, so the result does
+        // not depend on which queue the first plain claim asks.
+        let hot_starts = usize::try_from(number(fixture, "coldEnqueueAfterHotStarts"))
+            .map_err(|error| error.to_string())?;
+        eventually_within(Duration::from_secs(7), "the worker never started its hot tasks", || {
+            let count = started.lock().unwrap().len();
+            async move { Ok(count >= hot_starts) }
+        })
+        .await?;
+        queue.enqueue(task_type, &json!({"cold": true}), on(&cold)).await.map_err(driver)?;
+        eventually_within(Duration::from_secs(7), "the worker never ran the cold task", || async {
+            Ok(started.lock().unwrap().contains(&cold))
+        })
+        .await?;
+        let position = started.lock().unwrap().iter().position(|name| *name == cold).unwrap_or(0);
+        let most = usize::try_from(number(fixture, "expectedMaximumHotTasksBeforeCold"))
+            .map_err(|error| error.to_string())?;
+        check(position <= most, || {
+            format!("{position} hot tasks started before the cold task, want at most {most}")
+        })
+    }
+    .await;
+    let _ = stop.send(());
+    running.await.map_err(|error| error.to_string())?.map_err(driver)?;
+    outcome
 }
 
 /// The claims the `slot-refill` wrapper records the limit of.

@@ -938,6 +938,10 @@ running handlers minus the reserved slots.
 - The loop waits for the first finished handler, returned claim, or wake. It never awaits a claim
   inline.
 
+A fused claim on the fast tier asks only its own queue. A worker with more than one queue therefore
+gives up one fused refill when another queue had no claim for one poll interval
+([Fast tier: Queue fairness](fast-tier.md#queue-fairness)).
+
 When `dispatchLoop` starts a handler or a claim, it attaches exactly one settlement reaction to its
 promise. That reaction puts the settlement in a queue and wakes the loop. The loop observes the
 queue in arrival order and never races the pending promises. Thus a handler that runs for hours

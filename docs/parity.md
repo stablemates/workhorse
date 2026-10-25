@@ -106,6 +106,7 @@ telemetry, and graceful shutdown.
 | Bounded worker concurrency                                  | Supported  | Supported | Supported | Supported | Supported | Supported | Supported |
 | Fast task tier with one outcome row per task                | Supported  | Supported | Supported | Supported | Supported | Supported | Supported |
 | Fused fast-tier completion and refill claim in slot cohorts | Supported  | Supported | Supported | Supported | Supported | Supported | Supported |
+| Fused refill gives the other queues of a worker a claim     | Supported  | Supported | Supported | Supported | Supported | Supported | Supported |
 | Unhandled task type released to its queue                   | Supported  | Supported | Supported | Supported | Supported | Supported | Supported |
 | Heartbeats, lease recovery, fenced ownership                | Supported  | Supported | Supported | Supported | Supported | Supported | Supported |
 | Cooperative cancellation delivery                           | Supported  | Supported | Supported | Supported | Supported | Supported | Supported |

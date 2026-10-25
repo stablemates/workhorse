@@ -42,6 +42,8 @@ import java.util.concurrent.atomic.AtomicReference;
 import javax.sql.DataSource;
 import org.jspecify.annotations.Nullable;
 import org.postgresql.PGConnection;
+import run.workhorse.Admin;
+import run.workhorse.AdminAudit;
 import run.workhorse.AlreadyWaitingException;
 import run.workhorse.BatchFailed;
 import run.workhorse.BatchHandler;
@@ -63,6 +65,7 @@ import run.workhorse.LeaseLostException;
 import run.workhorse.LimitExceededException;
 import run.workhorse.Queue;
 import run.workhorse.QueueOptions;
+import run.workhorse.QueueTier;
 import run.workhorse.RateLimit;
 import run.workhorse.RateLimitPolicyDefinition;
 import run.workhorse.Worker;
@@ -163,6 +166,7 @@ final class RuntimeFixtures {
         case "heartbeat-busy" -> heartbeatBusy(fixture);
         case "maintenance-phase-error" -> maintenancePhaseError(fixture);
         case "slot-refill" -> slotRefill(fixture);
+        case "queue-fairness" -> queueFairness(fixture);
         case "batch" -> batch(fixture);
         case "suspension-replay" -> suspensionReplay(fixture);
         case "lease-loss" -> leaseLoss(fixture);
@@ -877,6 +881,74 @@ final class RuntimeFixtures {
       } finally {
         releaseHeld.run();
         openAll.run();
+        subject.stop();
+        run.handle((value, error) -> null).get(RUN_WAIT_SECONDS, TimeUnit.SECONDS);
+      }
+    }
+  }
+
+  /**
+   * A fused refill asks only its own queue. The cold queue's task must still run before the hot
+   * queue's backlog ends (ADR 0076, rule 17).
+   */
+  private void queueFairness(Map<String, @Nullable Object> fixture) throws Exception {
+    String hot = queueName(fixture) + "-hot";
+    String cold = queueName(fixture) + "-cold";
+    Admin admin = new Admin(Connections.borrowed(connection));
+    for (String name : List.of(hot, cold)) {
+      synchronized (connection) {
+        admin.setQueueTier(
+            name,
+            QueueTier.FAST,
+            new AdminAudit(
+                "runtime-fixture",
+                String.valueOf(fixture.get("id")),
+                fixture.get("id") + "-" + name));
+      }
+    }
+    long hotTaskCount = (Long) fixture.get("hotTaskCount");
+    for (long sequence = 0; sequence < hotTaskCount; sequence++) {
+      enqueue(taskType(fixture), Map.of("sequence", sequence), options(hot));
+    }
+    long hotHandlerMs = (Long) fixture.get("hotHandlerMs");
+    List<String> started = new CopyOnWriteArrayList<>();
+    try (Intercept pool = new Intercept(opener, new Intercept.Hook() {})) {
+      Worker subject =
+          Worker.builder(pool)
+              .queues(hot, cold)
+              .workerId("jvm-" + fixture.get("id"))
+              .pollingOnly(true)
+              .disableRegistry(true)
+              .concurrency(Math.toIntExact((Long) fixture.get("concurrency")))
+              .pollInterval(millis(fixture, "pollMs"))
+              .shutdownGrace(JOIN_GRACE)
+              .handle(
+                  taskType(fixture),
+                  Object.class,
+                  (ctx, payload) -> {
+                    started.add(ctx.task().queue());
+                    if (hot.equals(ctx.task().queue())) {
+                      Thread.sleep(hotHandlerMs);
+                    }
+                    return null;
+                  })
+              .build();
+      CompletableFuture<Void> run = running(subject, subject::run);
+      try {
+        // The cold task arrives while fused refills already hold the slots, so the result does not
+        // depend on which queue the first plain claim asks.
+        long hotStarts = (Long) fixture.get("coldEnqueueAfterHotStarts");
+        eventually(
+            "the worker did not start " + hotStarts + " hot tasks",
+            7,
+            () -> started.size() >= hotStarts);
+        enqueue(taskType(fixture), Map.of("cold", true), options(cold));
+        eventually("the worker never ran the cold task", 7, () -> started.contains(cold));
+        int coldAt = started.indexOf(cold);
+        check(
+            coldAt <= (Long) fixture.get("expectedMaximumHotTasksBeforeCold"),
+            coldAt + " hot tasks started before the cold task");
+      } finally {
         subject.stop();
         run.handle((value, error) -> null).get(RUN_WAIT_SECONDS, TimeUnit.SECONDS);
       }

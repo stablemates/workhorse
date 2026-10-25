@@ -36,6 +36,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.AtomicLongArray;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.locks.Condition;
 import java.util.concurrent.locks.ReentrantLock;
@@ -226,6 +227,13 @@ public final class Worker implements AutoCloseable {
   private @Nullable List<Object> loggedRegistration;
   private final AtomicLong nextQueueIndex = new AtomicLong();
 
+  /**
+   * The {@link System#nanoTime} when a claim last asked each queue of {@link #queueNames} for
+   * tasks, plain or fused. A worker with more than one queue reads it, so a fused refill cannot
+   * keep the other queues from a claim (ADR 0076, rule 17).
+   */
+  private final AtomicLongArray queueAskedAt;
+
   /** The claims started and not yet answered. Tests read it through {@link #claimsInFlight}. */
   private final AtomicInteger claimsInFlight = new AtomicInteger();
 
@@ -318,6 +326,13 @@ public final class Worker implements AutoCloseable {
    */
   volatile @Nullable Consumer<FusedStatement> fusedStatementHook;
 
+  /**
+   * A test hook that receives each queue that a plain claim asks, after the worker records the ask
+   * and before the claim goes out. A test blocks in it to hold a plain claim in flight. It is
+   * {@code null} in production, and no public API sets it.
+   */
+  volatile @Nullable Consumer<String> beforeQueueClaim;
+
   /** One fused statement: its completions, its claim limit, and the tasks it claimed. */
   record FusedStatement(int completions, int claimLimit, int claimed) {}
 
@@ -349,6 +364,7 @@ public final class Worker implements AutoCloseable {
     this.dataSource = builder.dataSource;
     this.connections = ConnectionSource.of(dataSource);
     this.queueNames = builder.queues;
+    this.queueAskedAt = new AtomicLongArray(queueNames.size());
     this.workerId =
         builder.workerId != null
             ? builder.workerId
@@ -737,6 +753,9 @@ public final class Worker implements AutoCloseable {
     boolean passEnded;
     boolean claimedAny;
     @Nullable RuntimeException claimError;
+    // True when a completion skipped its fused refill so that a plain claim can ask the other
+    // queues. The next plain claim clears it, so only one completion at a time skips its refill.
+    boolean fairnessSkipPending;
 
     /** False once the dispatch loop ends, so completions stop claiming with it. */
     boolean open = true;
@@ -1167,6 +1186,11 @@ public final class Worker implements AutoCloseable {
       run.listener = listener;
     } finally {
       stateLock.unlock();
+    }
+    // A queue counts as asked when the run starts, so the first completions keep their refills.
+    long runStartedAt = System.nanoTime();
+    for (int index = 0; index < queueNames.size(); index++) {
+      queueAskedAt.set(index, runStartedAt);
     }
     int inFlight = 0;
     try {
@@ -1609,6 +1633,7 @@ public final class Worker implements AutoCloseable {
     try {
       ClaimPlan plan = claimPlan(inFlight, run);
       if (plan != null) {
+        run.fairnessSkipPending = false;
         slots.reservedTotal += plan.limit;
         if (plan.cohort == WHOLE) {
           slots.wholeClaims++;
@@ -1822,7 +1847,13 @@ public final class Worker implements AutoCloseable {
     // The claim gate is read again before each queue, so a lost heartbeat connection stops the
     // claims of the remaining queues.
     for (int offset = 0; offset < size && claimed.size() < limit && claimGateOpen(run); offset++) {
-      String name = queueNames.get((start + offset) % size);
+      int index = (start + offset) % size;
+      String name = queueNames.get(index);
+      queueAskedAt.set(index, System.nanoTime());
+      Consumer<String> hook = beforeQueueClaim;
+      if (hook != null) {
+        hook.accept(name);
+      }
       int free = limit - claimed.size();
       telemetry.claim(name, () -> claim(run, name, free, fastLimit - claimed.size(), claimed));
     }
@@ -3297,7 +3328,8 @@ public final class Worker implements AutoCloseable {
    * Sets aside the slots that a completion's fused claim can fill (ADR 0076). The claim asks for
    * the free slots of the task's cohort plus the slot the task leaves. It claims nothing while the
    * worker stops, pauses, or waits after an empty claim, and it waits for the refill batch while
-   * another claim for the cohort is in flight.
+   * another claim for the cohort is in flight. It also claims nothing when another queue of the
+   * worker has waited one fairness interval for a claim (ADR 0076, rule 17).
    */
   private CompletionClaim reserveCompletionClaim(Active task) {
     RunState run = task.run;
@@ -3314,10 +3346,22 @@ public final class Worker implements AutoCloseable {
           || !claimGateOpen(run)) {
         return idle;
       }
-      int limit = Math.min(slots.free(), slots.cohortFree(cohort)) + 1;
+      int free = Math.min(slots.free(), slots.cohortFree(cohort)) + 1;
       boolean claiming = slots.wholeClaims > 0 || slots.claims[cohort] > 0;
-      if (limit <= 0 || (claiming && limit < slots.refillBatch)) {
+      if (free <= 0 || (claiming && free < slots.refillBatch)) {
         return idle;
+      }
+      // The completion gives its slot back, so the loop's next plain claim continues the rotation.
+      int queueIndex = queueNames.indexOf(task.claimed.task.queue());
+      if (!run.fairnessSkipPending && otherQueueWaiting(queueIndex)) {
+        run.fairnessSkipPending = true;
+        return idle;
+      }
+      // Until that plain claim starts, a fused claim refills only its own slot, so it cannot take
+      // the slot that the skipped completion gave back.
+      int limit = run.fairnessSkipPending ? 1 : free;
+      if (queueIndex >= 0) {
+        queueAskedAt.set(queueIndex, System.nanoTime());
       }
       slots.reservedTotal += limit;
       slots.reserved[cohort] += limit;
@@ -3328,6 +3372,26 @@ public final class Worker implements AutoCloseable {
     } finally {
       stateLock.unlock();
     }
+  }
+
+  /**
+   * Whether a queue other than the one at {@code queueIndex} has had no claim for one fairness
+   * interval: the poll interval, or the polling-only default. A fused claim asks only its own
+   * queue, so while that queue has a backlog its completions keep every slot, and no plain claim
+   * asks the other queues (ADR 0076, rule 17). A worker with one queue never waits for this.
+   */
+  private boolean otherQueueWaiting(int queueIndex) {
+    if (queueNames.size() < 2) {
+      return false;
+    }
+    long now = System.nanoTime();
+    long interval = TimeUnit.MILLISECONDS.toNanos(pollMs);
+    for (int index = 0; index < queueNames.size(); index++) {
+      if (index != queueIndex && now - queueAskedAt.get(index) >= interval) {
+        return true;
+      }
+    }
+    return false;
   }
 
   /**

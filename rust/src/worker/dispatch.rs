@@ -10,6 +10,10 @@
 //! With more than one cohort, the slots split into cohorts, and a fused claim fills only its own
 //! cohort (rules 10 to 15).
 //!
+//! A fused claim asks only the completing task's queue. So when another queue of the worker has
+//! had no claim for a fairness interval, one completion claims nothing, and the next plain claim
+//! continues the rotation (rule 17).
+//!
 //! While the pool identity holds no heartbeat connection, the gate is closed: no claim starts, and
 //! a completion claims nothing (ADR 0071, rule 6). When the connection comes back, the loop claims
 //! at once.
@@ -35,6 +39,10 @@ pub(super) trait Dispatch: Send + Sync + 'static {
     fn concurrency(&self) -> usize;
     fn cohorts(&self) -> usize;
     fn queue_count(&self) -> usize;
+    /// The index of `task`'s queue in the configured queues.
+    fn queue_index(&self, task: &Self::Task) -> usize;
+    /// The time after which a queue that no claim asked makes a completion skip its fused claim.
+    fn fairness_interval(&self) -> Duration;
     fn paused(&self) -> bool;
     /// Whether no queue is full-tier, so claims can fill one cohort at a time.
     fn fast_tier_only(&self) -> bool;
@@ -59,12 +67,13 @@ pub(super) trait Dispatch: Send + Sync + 'static {
         let spread = (random_fraction() * (MAX_NOTIFICATION_DELAY_MS + 1) as f64) as u64;
         Duration::from_millis(spread)
     }
-    /// Claims up to `limit` tasks, at most `fast_limit` of them from fast-tier queues. A failed
-    /// claim reports it and returns what it leased first.
+    /// Claims up to `limit` tasks, at most `fast_limit` of them from fast-tier queues, and tells
+    /// `asked` each queue it asks. A failed claim reports it and returns what it leased first.
     fn claim(
         &self,
         limit: usize,
         fast_limit: usize,
+        asked: AskedQueues<Self::Task>,
     ) -> impl Future<Output = Vec<Self::Task>> + Send + 'static;
     /// Starts one claimed task, which holds `ticket` until it ends, and returns whether a
     /// registered handler runs it.
@@ -124,6 +133,12 @@ struct Slots {
     wake_version: u64,
     /// Fused claims reserved and not yet handed to the loop.
     fused: usize,
+    /// The time when a claim last asked each queue for tasks. Empty with one queue.
+    asked_at: Vec<Instant>,
+    fairness_interval: Duration,
+    /// Set when a completion skipped its fused claim. The next plain claim clears it, so only one
+    /// completion at a time skips.
+    fairness_skip_pending: bool,
 }
 
 impl Slots {
@@ -133,6 +148,13 @@ impl Slots {
                 (active + cohort.active, handed_over + cohort.handed_over)
             });
         self.concurrency as isize - active as isize + handed_over as isize - self.reserved as isize
+    }
+
+    /// Whether a queue other than `queue` has had no claim for the fairness interval.
+    fn other_queue_waiting(&self, queue: usize, now: Instant) -> bool {
+        self.asked_at.iter().enumerate().any(|(index, asked_at)| {
+            index != queue && now.duration_since(*asked_at) >= self.fairness_interval
+        })
     }
 
     /// The cohort with the most free slots, the first on a tie.
@@ -171,25 +193,40 @@ struct Shared<T: Send + 'static> {
     claims_allowed: Box<dyn Fn() -> bool + Send + Sync>,
 }
 
+/// Records the time when a plain claim asks a queue for tasks (ADR 0076, rule 17).
+pub(super) struct AskedQueues<T: Send + 'static>(Arc<Shared<T>>);
+
+impl<T: Send + 'static> AskedQueues<T> {
+    /// Records that a claim asks the queue at `queue` now.
+    pub(super) fn record(&self, queue: usize) {
+        if let Some(asked_at) = lock(&self.0.slots).asked_at.get_mut(queue) {
+            *asked_at = Instant::now();
+        }
+    }
+}
+
 /// A running task's hold on its slot. Dropping it frees the slot.
 pub(super) struct Ticket<T: Send + 'static> {
     shared: Arc<Shared<T>>,
     cohort: usize,
+    /// The index of the task's queue.
+    queue: usize,
     handed_over: AtomicBool,
 }
 
 impl<T: Send + 'static> Ticket<T> {
-    fn new(shared: &Arc<Shared<T>>, cohort: usize) -> Self {
-        Self { shared: Arc::clone(shared), cohort, handed_over: AtomicBool::new(false) }
+    fn new(shared: &Arc<Shared<T>>, cohort: usize, queue: usize) -> Self {
+        Self { shared: Arc::clone(shared), cohort, queue, handed_over: AtomicBool::new(false) }
     }
 
     /// Reserves a fused claim for this task's completion, or returns `None` when the task should
-    /// complete without one (ADR 0076, rules 3, 12 and 14).
+    /// complete without one (ADR 0076, rules 3, 12, 14 and 17).
     ///
     /// The claim may fill the free slots of the task's cohort plus the slot the task hands over.
     /// While a plain claim that can fill that cohort is in flight, it claims only when that
     /// would fill at least a refill batch. A paused worker starts no claim, and neither does a
-    /// worker whose claim gate is closed: its completion uses a claim limit of zero.
+    /// worker whose claim gate is closed: its completion uses a claim limit of zero. When another
+    /// queue has had no claim for the fairness interval, one completion also claims nothing.
     pub(super) fn reserve(&self) -> Option<Reservation<'_, T>> {
         if (self.shared.paused)() || !(self.shared.claims_allowed)() {
             return None;
@@ -199,9 +236,23 @@ impl<T: Send + 'static> Ticket<T> {
             return None;
         }
         let cohort = &slots.cohorts[self.cohort];
-        let limit = (slots.free().min(cohort.free()) + 1).max(0) as usize;
-        if (slots.whole_claims > 0 || cohort.claims > 0) && limit < slots.refill_batch {
+        let free = (slots.free().min(cohort.free()) + 1).max(0) as usize;
+        if (slots.whole_claims > 0 || cohort.claims > 0) && free < slots.refill_batch {
             return None;
+        }
+        // The completion gives its slot back, so the next plain claim continues the rotation.
+        let now = Instant::now();
+        if !slots.fairness_skip_pending && slots.other_queue_waiting(self.queue, now) {
+            slots.fairness_skip_pending = true;
+            return None;
+        }
+        // Until that plain claim starts, a fused claim refills only its own slot, so it cannot take
+        // the slot that the skipped completion gave back.
+        let limit = if slots.fairness_skip_pending { free.min(1) } else { free };
+        if limit > 0 {
+            if let Some(asked_at) = slots.asked_at.get_mut(self.queue) {
+                *asked_at = now;
+            }
         }
         slots.reserved += limit;
         slots.cohorts[self.cohort].reserved += limit;
@@ -265,7 +316,9 @@ impl<T: Send + 'static> Reservation<'_, T> {
             let tasks = claimed.map(|tasks| {
                 tasks
                     .into_iter()
-                    .map(|task| (task, Ticket::new(shared, slots.assign(Some(cohort)))))
+                    .map(|task| {
+                        (task, Ticket::new(shared, slots.assign(Some(cohort)), self.ticket.queue))
+                    })
                     .collect()
             });
             let handoff = Handoff { tasks, wake_version: self.wake_version };
@@ -332,6 +385,10 @@ impl<D: Dispatch> Dispatcher<D> {
             .map(|capacity| Cohort { capacity, ..Cohort::default() })
             .collect();
         let (sender, handoffs) = mpsc::unbounded_channel();
+        // Every queue counts as asked when the run starts, so the first completions keep their
+        // fused claims.
+        let queue_count = worker.queue_count();
+        let asked_at = if queue_count > 1 { vec![Instant::now(); queue_count] } else { Vec::new() };
         let slots = Slots {
             concurrency,
             refill_batch: refill_batch(concurrency),
@@ -342,6 +399,9 @@ impl<D: Dispatch> Dispatcher<D> {
             waiting: false,
             wake_version: 0,
             fused: 0,
+            asked_at,
+            fairness_interval: worker.fairness_interval(),
+            fairness_skip_pending: false,
         };
         Self {
             worker: Arc::clone(worker),
@@ -415,6 +475,7 @@ impl<D: Dispatch> Dispatcher<D> {
         {
             let mut slots = lock(&self.shared.slots);
             slots.reserved += limit;
+            slots.fairness_skip_pending = false;
             match cohort {
                 Some(cohort) => {
                     slots.cohorts[cohort].claims += 1;
@@ -430,6 +491,7 @@ impl<D: Dispatch> Dispatcher<D> {
         let wake_version = self.wake_version;
         let worker = Arc::clone(&self.worker);
         let stopping = Arc::clone(&self.stopping);
+        let asked = AskedQueues(Arc::clone(&self.shared));
         let handle = self.claims.spawn(async move {
             if delayed {
                 tokio::time::sleep(worker.notification_delay()).await;
@@ -437,7 +499,7 @@ impl<D: Dispatch> Dispatcher<D> {
                     return Claimed { wake_version, tasks: None };
                 }
             }
-            let tasks = worker.claim(limit, cohort_limit).await;
+            let tasks = worker.claim(limit, cohort_limit, asked).await;
             Claimed { wake_version, tasks: Some(tasks) }
         });
         self.plain.insert(handle.id(), PlainClaim { limit, cohort, cohort_limit });
@@ -454,7 +516,7 @@ impl<D: Dispatch> Dispatcher<D> {
         let mut handled = false;
         for task in tasks {
             let assigned = lock(&self.shared.slots).assign(cohort);
-            let ticket = Ticket::new(&self.shared, assigned);
+            let ticket = Ticket::new(&self.shared, assigned, self.worker.queue_index(&task));
             handled |= self.worker.launch(executions, task, ticket);
         }
         handled
@@ -678,11 +740,13 @@ mod tests {
         handled: bool,
         fuse: bool,
         gate: Option<oneshot::Receiver<()>>,
+        /// The index of the task's queue.
+        queue: usize,
     }
 
     impl FakeTask {
         fn ready() -> Self {
-            Self { handled: true, fuse: false, gate: None }
+            Self { handled: true, fuse: false, gate: None, queue: 0 }
         }
     }
 
@@ -691,6 +755,7 @@ mod tests {
     struct FusedRequest {
         limit: Option<usize>,
         cohort: usize,
+        queue: usize,
         answer: oneshot::Sender<Option<Vec<FakeTask>>>,
     }
 
@@ -712,6 +777,10 @@ mod tests {
         released: AtomicUsize,
         /// The claim gate, open unless a test closes it.
         gate: watch::Sender<bool>,
+        /// Each plain claim asks one queue, in rotation.
+        next_queue: AtomicUsize,
+        /// The queue the last plain claim asked.
+        last_asked: AtomicUsize,
     }
 
     impl Dispatch for Fake {
@@ -727,6 +796,14 @@ mod tests {
 
         fn queue_count(&self) -> usize {
             self.queue_count
+        }
+
+        fn queue_index(&self, task: &FakeTask) -> usize {
+            task.queue
+        }
+
+        fn fairness_interval(&self) -> Duration {
+            self.poll
         }
 
         fn paused(&self) -> bool {
@@ -766,7 +843,11 @@ mod tests {
             &self,
             limit: usize,
             fast_limit: usize,
+            asked: AskedQueues<FakeTask>,
         ) -> impl Future<Output = Vec<FakeTask>> + Send + 'static {
+            let queue = self.next_queue.fetch_add(1, Ordering::SeqCst) % self.queue_count;
+            asked.record(queue);
+            self.last_asked.store(queue, Ordering::SeqCst);
             let (answer, answered) = oneshot::channel();
             let _ = self.claims.send((limit, fast_limit, answer));
             async move { answered.await.unwrap_or_default() }
@@ -798,6 +879,7 @@ mod tests {
                     let _ = fused.send(FusedRequest {
                         limit: reservation.as_ref().map(Reservation::limit),
                         cohort: ticket.cohort,
+                        queue: ticket.queue,
                         answer,
                     });
                     if let Some(reservation) = reservation {
@@ -835,6 +917,8 @@ mod tests {
                 started: Arc::new(AtomicUsize::new(0)),
                 released: AtomicUsize::new(0),
                 gate: watch::Sender::new(true),
+                next_queue: AtomicUsize::new(0),
+                last_asked: AtomicUsize::new(0),
             });
             (worker, claims, fused)
         }
@@ -946,7 +1030,7 @@ mod tests {
         (0..count)
             .map(|_| {
                 let (finish, gate) = oneshot::channel();
-                (FakeTask { handled: true, fuse, gate: Some(gate) }, finish)
+                (FakeTask { handled: true, fuse, gate: Some(gate), queue: 0 }, finish)
             })
             .unzip()
     }
@@ -1453,5 +1537,116 @@ mod tests {
             .expect("the loop panicked");
         assert_eq!(harness.worker.started.load(Ordering::SeqCst), 3);
         assert!(harness.claims.try_recv().is_err(), "the loop claimed after the stop");
+    }
+    // SM-1676: a fused claim asks only the completing task's queue. While that queue had a
+    // backlog, each completion refilled the slot, and no plain claim asked the other queue.
+    #[tokio::test(start_paused = true)]
+    async fn gives_another_queue_a_claim_while_a_fast_queue_keeps_a_backlog() {
+        let backlog = 100;
+        // The tasks that wait in queue a (index 0) and queue b (index 1).
+        let mut waiting = [backlog, 1];
+        let mut take = |queue: usize, limit: usize| {
+            let count = limit.min(waiting[queue]);
+            waiting[queue] -= count;
+            let (mut tasks, finishers) = gated_with(count, true);
+            for task in &mut tasks {
+                task.queue = queue;
+            }
+            (tasks, finishers)
+        };
+        let mut harness = Harness::start(Setup {
+            queue_count: 2,
+            poll: Duration::from_millis(20),
+            ..Setup::default()
+        });
+        // The queue of each task, in start order, and the fused limit of each completion of a.
+        let (mut ran, mut fused) = (Vec::new(), Vec::new());
+        let mut source: Option<FusedRequest> = None;
+        while !ran.contains(&1) && ran.len() <= backlog {
+            let (queue, mut finishers) = match source.take() {
+                Some(FusedRequest { limit: Some(limit), queue, answer, .. }) => {
+                    let (tasks, finishers) = take(queue, limit);
+                    let _ = answer.send(Some(tasks));
+                    (queue, finishers)
+                }
+                _ => {
+                    let (limit, _, answer) = harness.next_claim().await;
+                    let queue = harness.worker.last_asked.load(Ordering::SeqCst);
+                    let (tasks, finishers) = take(queue, limit);
+                    let _ = answer.send(tasks);
+                    (queue, finishers)
+                }
+            };
+            let Some(finisher) = finishers.pop() else { continue };
+            ran.push(queue);
+            tokio::time::sleep(Duration::from_millis(2)).await;
+            let _ = finisher.send(());
+            let request = harness.next_fused().await;
+            if request.queue == 0 {
+                fused.push(request.limit);
+            }
+            source = Some(request);
+        }
+        drop(source);
+        harness.stop().await;
+
+        // Once queue b has waited a poll interval, one completion of a claims nothing. Its slot
+        // goes to a plain claim, which asks b next. The completions before it refill their slot.
+        let cold = ran.iter().position(|&queue| queue == 1).expect("the task of b never ran");
+        assert!(cold < backlog / 2, "the task of b ran after {cold} tasks of a");
+        let skip = fused.iter().position(Option::is_none).expect("no completion skipped");
+        assert!(skip > 0, "the first completion skipped its fused claim");
+        assert!(fused[..skip].iter().all(|limit| *limit == Some(1)), "{fused:?}");
+        assert_eq!(skip, cold - 1, "the completion just before the task of b skipped");
+    }
+
+    // SM-1676: while a plain claim was in flight, a second completion took the slot that a
+    // fairness skip gave back. Every slot was full again, so no plain claim asked queue b.
+    #[tokio::test(start_paused = true)]
+    async fn keeps_the_slot_of_a_fairness_skip_free_for_a_plain_claim() {
+        let mut harness = Harness::start(Setup {
+            concurrency: 4,
+            cohorts: 2,
+            queue_count: 2,
+            poll: Duration::from_millis(40),
+            ..Setup::default()
+        });
+        // Cohort 0 runs the first two tasks, and cohort 1 runs the next two.
+        let (limit, _, answer) = harness.next_claim().await;
+        assert_eq!(limit, 2);
+        let (tasks, mut zero) = gated_with(2, true);
+        let _ = answer.send(tasks);
+        let (limit, _, answer) = harness.next_claim().await;
+        assert_eq!(limit, 2);
+        let (tasks, mut one) = gated_with(2, true);
+        let _ = answer.send(tasks);
+
+        // A cohort 1 completion skips its fused claim, and the test holds the plain claim that
+        // takes its slot.
+        tokio::time::sleep(Duration::from_millis(60)).await;
+        let _ = one.remove(0).send(());
+        let request = harness.next_fused().await;
+        assert_eq!((request.cohort, request.limit), (1, None));
+        let (limit, _, held) = harness.next_claim().await;
+        assert_eq!(limit, 1);
+
+        // Queue b waits a fairness interval again while that claim is in flight.
+        tokio::time::sleep(Duration::from_millis(60)).await;
+        let _ = zero.remove(0).send(());
+        let skipped = harness.next_fused().await;
+        settled().await;
+        let _ = zero.remove(0).send(());
+        let capped = harness.next_fused().await;
+        assert_eq!((skipped.cohort, skipped.limit), (0, None), "the first completion skips");
+        assert_eq!(
+            (capped.cohort, capped.limit),
+            (0, Some(1)),
+            "the next completion refills only its own slot"
+        );
+
+        let _ = capped.answer.send(Some(Vec::new()));
+        let _ = held.send(Vec::new());
+        drop((zero, one));
+        harness.stop().await;
     }
 }
