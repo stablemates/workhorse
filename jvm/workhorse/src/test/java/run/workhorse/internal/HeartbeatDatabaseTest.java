@@ -498,6 +498,11 @@ class HeartbeatDatabaseTest {
    * SM-1569: a failed renewal on a connection that stays open, and a round that a row lock holds,
    * are not a loss of readiness. The reservation stays connected, so the claim gate stays open, and
    * the heartbeat keeps its one connection.
+   *
+   * <p>SM-1806: a round that ends after its deadline discards the connection, as in every SDK. So a
+   * host that delays one round past its bound fails this test. The failure messages hold the
+   * checkouts and the events. They show whether a round aborted or closed the connection, and
+   * whether a replacement followed.
    */
   @Test
   void staysConnectedThroughAFailedRenewalAndABusyRound() throws Exception {
@@ -547,13 +552,31 @@ class HeartbeatDatabaseTest {
 
       sampling.set(false);
       sampler.join(Duration.ofSeconds(5));
-      assertFalse(disconnected.get(), "the reservation stayed connected");
-      assertEquals(1, watched.checkouts.get(), "the heartbeat kept its one connection");
+      assertFalse(
+          disconnected.get(),
+          () -> "the reservation stayed connected; " + checkoutsAndEvents(watched));
+      assertEquals(
+          1,
+          watched.checkouts.get(),
+          () -> "the heartbeat kept its one connection; " + checkoutsAndEvents(watched));
     } finally {
       sampling.set(false);
       unregister.run();
       reservation.close();
     }
+  }
+
+  /**
+   * The checkouts of {@code watched}, as a count and the backend PID of each, and its events, for a
+   * failure message.
+   */
+  private static String checkoutsAndEvents(Watched watched) {
+    return "checkouts: "
+        + watched.checkouts.get()
+        + " "
+        + watched.checkoutPids
+        + ", events: "
+        + watched.events;
   }
 
   /**
