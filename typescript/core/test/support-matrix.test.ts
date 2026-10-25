@@ -1199,7 +1199,7 @@ describe("continuous integration", () => {
     );
   });
 
-  it("prepares the nuget job in the protected nuget environment and keeps it off until SM-1441", async () => {
+  it("publishes the .NET packages from the protected nuget environment on each v* tag", async () => {
     const workflow = await read(".github/workflows/release.yml");
     const ci = await read(".github/workflows/ci.yml");
     const scripts = (await readManifest("package.json")).scripts as Record<string, string>;
@@ -1218,13 +1218,12 @@ describe("continuous integration", () => {
     expect(ci).not.toContain("secrets.NUGET");
     expect(ci).not.toContain("NuGet/login");
 
-    // The job is off: its condition starts with a literal false, so no run starts it, enters the
-    // nuget environment, or asks for a token. github-release does not wait for a skipped job.
+    // The job runs on each v* tag that is not a dry run, and github-release waits for it.
     expect(job).toContain(
-      "if: false && startsWith(github.ref, 'refs/tags/v') && inputs.dry-run != true",
+      "\n    if: startsWith(github.ref, 'refs/tags/v') && inputs.dry-run != true\n",
     );
-    expect(job).toContain("SM-1441");
-    expect(release).not.toMatch(/needs: \[[^\]]*nuget/);
+    expect(job).not.toContain("false &&");
+    expect(release).toMatch(/needs: \[[^\]]*\bnuget\b/);
     expect(workflow.replaceAll(/^\s*#.*$/gm, "").match(/dotnet nuget push/g)).toHaveLength(1);
     expect(workflow.replaceAll(/^\s*#.*$/gm, "").match(/NuGet\/login@/g)).toHaveLength(1);
 
@@ -1261,15 +1260,13 @@ describe("continuous integration", () => {
     const registries = [
       workflow.slice(workflow.indexOf("\n  crates-io:"), workflow.indexOf("\n  rubygems:")),
       workflow.slice(workflow.indexOf("\n  rubygems:"), workflow.indexOf("\n  maven-central:")),
-      workflow.slice(
-        workflow.indexOf("\n  maven-central:"),
-        workflow.indexOf("\n  github-release:"),
-      ),
+      workflow.slice(workflow.indexOf("\n  maven-central:"), workflow.indexOf("\n  nuget:")),
+      workflow.slice(workflow.indexOf("\n  nuget:"), workflow.indexOf("\n  github-release:")),
     ];
 
-    expect(job).toContain("needs: [publish, crates-io, rubygems, maven-central]");
+    expect(job).toContain("needs: [publish, crates-io, rubygems, maven-central, nuget]");
     expect(job).toContain("if: startsWith(github.ref, 'refs/tags/v') && inputs.dry-run != true");
-    // A crate or gem that sits the train out must still succeed, or the release never appears.
+    // A registry job that publishes nothing must still succeed, or the release never appears.
     for (const registry of registries) {
       expect(registry).toContain('echo "publish=false" >> "$GITHUB_OUTPUT"');
       expect(registry).not.toContain("exit 1");

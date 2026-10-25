@@ -405,13 +405,13 @@ jobs:
   # gem, and the JVM artifacts, they join only when `dotnet/Directory.Build.props` carries the tag's
   # version, and they follow npm so that a stopped train never reaches nuget.org.
   #
-  # THIS JOB IS OFF. The `false &&` in its condition keeps it from starting, so no run enters the
-  # `nuget` environment, asks for an OIDC token, or pushes a package. The job stays off until the
-  # maintainer finishes SM-1441: the nuget.org organization, the trusted publishing policy for this
-  # workflow file and the `nuget` environment, the protected `nuget` environment with a required
-  # reviewer, and its `NUGET_USER` secret. To turn the job on, the maintainer removes `false &&` and
-  # adds `nuget` to the `needs` of `github-release`, in one pull request. Until then `github-release`
-  # does not wait for this job, because a skipped job that it needs would skip the release too.
+  # The job runs on each `v*` tag. It enters the protected `nuget` environment, so no step starts
+  # until the required reviewer of that environment approves the run. The version check runs after
+  # the approval, so each `v*` run waits for the reviewer, even a run that pushes nothing. If the
+  # reviewer rejects the run, the job fails and `github-release` does not run. `github-release`
+  # needs this job, so the GitHub release announces a version only after nuget.org has it. A version
+  # mismatch or a missing `NUGET_USER` secret ends the job with success and no push. The GitHub
+  # release then appears without the .NET packages.
   #
   # Publication carries no stored key. `NuGet/login` exchanges this job's OIDC identity for an API
   # key that nuget.org mints for one hour, only for the trusted publishing policy of SM-1441. Only
@@ -423,7 +423,7 @@ jobs:
   # one directory, runs package validation against the previous published version, and runs the
   # release consumer from that directory. The push step then sends the same files.
   nuget:
-    if: false && startsWith(github.ref, 'refs/tags/v') && inputs.dry-run != true
+    if: startsWith(github.ref, 'refs/tags/v') && inputs.dry-run != true
     needs: publish
     runs-on: depot-ubuntu-24.04
     timeout-minutes: 30
@@ -531,11 +531,12 @@ jobs:
   # guards, so the documentation points deployments at the CLI.
   #
   # The release announces the version, so it waits for every registry that publishes from this tag.
-  # A crate, gem, or JVM line whose version does not match the tag sits the train out, and its job
-  # still succeeds. A failed crate, gem, or Central upload leaves no public release to retract.
+  # If the version of a crate, gem, JVM, or .NET line does not match the tag, its job publishes
+  # nothing and still succeeds. A failed crate, gem, Central, or nuget.org upload leaves no public
+  # release to retract.
   github-release:
     if: startsWith(github.ref, 'refs/tags/v') && inputs.dry-run != true
-    needs: [publish, crates-io, rubygems, maven-central]
+    needs: [publish, crates-io, rubygems, maven-central, nuget]
     runs-on: depot-ubuntu-24.04
     timeout-minutes: 10
     permissions:
