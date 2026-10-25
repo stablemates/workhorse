@@ -397,6 +397,11 @@ class WorkerTelemetryDatabaseTest {
    * SM-1704: the first heartbeat round fails before PostgreSQL returns its statuses. The worker
    * counts it once in {@code workhorse.worker.heartbeat.round_failure}, and not in {@code
    * workhorse.worker.heartbeat.failure}. The next round renews the lease, and the task completes.
+   *
+   * <p>SM-1815: a 100 ms heartbeat gives each round a 75 ms bound and a server budget of about 18
+   * ms. On a loaded host, a later round can reach that bound and count once as {@code timeout}.
+   * That is a second failed round, so the test accepts it. The injected failure has SQLSTATE {@code
+   * 08006} and no timeout in its chain, so it can only count as {@code connection}.
    */
   @Test
   void countsAHeartbeatRoundThatFailsBeforePostgresqlAnswersAndCompletesTheTask() {
@@ -416,8 +421,9 @@ class WorkerTelemetryDatabaseTest {
                 "email.send",
                 Object.class,
                 (context, payload) -> {
-                  // Two rounds after the failed one renew the lease before the handler returns.
-                  waitUntil(() -> rounds.get() >= 3);
+                  // A round after the failed one commits a renewal in PostgreSQL before the handler
+                  // returns. Only a committed renewal ends this wait (SM-1815).
+                  waitUntil(() -> renewed(taskId));
                   return null;
                 })
             .build();
@@ -426,11 +432,22 @@ class WorkerTelemetryDatabaseTest {
     MetricData failures = metric("workhorse.worker.heartbeat.round_failure");
     assertEquals("{round}", failures.getUnit());
     List<LongPointData> points = List.copyOf(failures.getLongSumData().getPoints());
-    assertEquals(1, points.size(), points.toString());
-    assertEquals(
-        Attributes.of(AttributeKey.stringKey(Names.HEARTBEAT_FAILURE_REASON), "connection"),
-        points.get(0).getAttributes());
-    assertEquals(1, points.get(0).getValue());
+    AttributeKey<String> reason = AttributeKey.stringKey(Names.HEARTBEAT_FAILURE_REASON);
+    List<LongPointData> connection =
+        points.stream()
+            .filter(point -> point.getAttributes().equals(Attributes.of(reason, "connection")))
+            .toList();
+    assertEquals(1, connection.size(), points.toString());
+    assertEquals(1, connection.get(0).getValue(), points.toString());
+    // A later round that reaches its deadline is a second failed round (SM-1815).
+    assertTrue(
+        points.stream()
+            .map(LongPointData::getAttributes)
+            .allMatch(
+                attributes ->
+                    attributes.equals(Attributes.of(reason, "connection"))
+                        || attributes.equals(Attributes.of(reason, "timeout"))),
+        points.toString());
     assertTrue(
         recording.metrics().stream()
             .noneMatch(metric -> metric.getName().equals("workhorse.worker.heartbeat.failure")),
@@ -449,8 +466,28 @@ class WorkerTelemetryDatabaseTest {
   }
 
   /**
+   * Whether a heartbeat has renewed the lease of {@code taskId} since its claim. The claim sets
+   * {@code heartbeat_at} to {@code acquired_at}, and only a committed renewal moves it later.
+   */
+  private static boolean renewed(UUID taskId) {
+    try (Connection connection = ScratchDatabase.connect();
+        PreparedStatement statement =
+            connection.prepareStatement(
+                "SELECT heartbeat_at > acquired_at AS renewed FROM workhorse.task_runtime"
+                    + " WHERE task_id = ?")) {
+      statement.setObject(1, taskId);
+      try (ResultSet row = statement.executeQuery()) {
+        return row.next() && row.getBoolean("renewed");
+      }
+    } catch (SQLException error) {
+      throw new IllegalStateException("could not read the lease", error);
+    }
+  }
+
+  /**
    * {@code source}, whose connections fail the first heartbeat statement with a connection error
-   * before it reaches PostgreSQL. {@code rounds} counts each heartbeat statement, failed or sent.
+   * before it reaches PostgreSQL. {@code rounds} counts each heartbeat statement that the round
+   * prepares.
    */
   private static DataSource failFirstHeartbeat(DataSource source, AtomicInteger rounds) {
     return (DataSource)

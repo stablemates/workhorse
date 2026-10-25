@@ -203,7 +203,9 @@ class WorkerReporterDatabaseTest {
             .queues(queueName)
             .pollInterval(Duration.ofMillis(10))
             .registryInterval(Duration.ofMillis(100))
-            .shutdownGrace(Duration.ZERO)
+            // SM-1807: the handler signals before its attempt ends. A zero grace gives that attempt
+            // only the unwind window, which a loaded host can exceed, so close() waits for it.
+            .shutdownGrace(Duration.ofSeconds(20))
             .logger(logger)
             .onRegistrationError(
                 error -> {
