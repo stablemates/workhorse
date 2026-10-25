@@ -40,6 +40,19 @@ class ConcurrencyPoliciesKotlinExamplesTest {
   }
 
   @Test
+  fun theWarehouseLimitStoresThePolicyAndTheKey() = runBlocking {
+    val orderId = "kotlin-${UUID.randomUUID()}"
+    ConcurrencyPoliciesKotlinExamples.limitEachWarehouse(queue, orderId, "warehouse-berlin")
+    val policy = queue.listConcurrencyPolicies(listOf("fulfillment"))[0]
+    assertEquals("shop", policy.namespace)
+    assertEquals(20, policy.maxActive)
+    assertEquals(2, policy.maxActivePerKey)
+    val task = ExampleDatabase.task("order.fulfill", "orderId", orderId)
+    assertEquals("fulfillment", task.queue)
+    assertEquals("warehouse-berlin", task.concurrencyKey)
+  }
+
+  @Test
   fun theBudgetLimitsTwoQueues() = runBlocking {
     val budgets = ConcurrencyPoliciesKotlinExamples.budgets(queue)
     assertEquals(1, budgets.size)

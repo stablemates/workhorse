@@ -46,6 +46,19 @@ class ConcurrencyPoliciesExamplesTest {
   }
 
   @Test
+  void theWarehouseLimitStoresThePolicyAndTheKey() throws SQLException {
+    String orderId = "java-" + UUID.randomUUID();
+    examples.limitEachWarehouse(orderId, "warehouse-berlin");
+    ConcurrencyPolicy policy = queue.listConcurrencyPolicies(List.of("fulfillment")).get(0);
+    assertEquals("shop", policy.namespace());
+    assertEquals(20, policy.maxActive());
+    assertEquals(2, policy.maxActivePerKey());
+    TaskDetail task = ExampleDatabase.task("order.fulfill", "orderId", orderId);
+    assertEquals("fulfillment", task.queue());
+    assertEquals("warehouse-berlin", task.concurrencyKey());
+  }
+
+  @Test
   void theBudgetLimitsTwoQueues() throws SQLException {
     List<Budget> budgets = examples.budgets();
     assertEquals(1, budgets.size());

@@ -29,15 +29,21 @@ function sizeOf(slug: string) {
  * other theme or the images of a closed dialog, because they are not rendered.
  * Set `eager` only on a diagram in the first screen of its page, where a lazy
  * image delays the main content. Then the browser loads both theme images.
+ *
+ * Set `narrow` to show the narrow image on every screen, at most 520 px wide.
+ * Use it for a diagram whose wide image has too much text to read at the
+ * width of the column. The dialog still opens the wide image.
  */
 export function Diagram({
   name,
   alt,
   eager = false,
+  narrow: narrowOnly = false,
 }: {
   name: string;
   alt: string;
   eager?: boolean;
+  narrow?: boolean;
 }) {
   const dialog = useRef<HTMLDialogElement>(null);
   const wide = sizeOf(name);
@@ -60,18 +66,20 @@ export function Diagram({
       >
         {(["light", "dark"] as const).map((theme) => (
           <picture key={theme} className={theme === "light" ? "dark:hidden" : "hidden dark:block"}>
-            <source
-              media="(max-width: 600px)"
-              srcSet={`/diagrams/${name}-narrow-${theme}.png`}
-              {...narrow}
-            />
+            {narrowOnly ? null : (
+              <source
+                media="(max-width: 600px)"
+                srcSet={`/diagrams/${name}-narrow-${theme}.png`}
+                {...narrow}
+              />
+            )}
             <img
-              src={`/diagrams/${name}-${theme}.png`}
+              src={`/diagrams/${name}${narrowOnly ? "-narrow" : ""}-${theme}.png`}
               alt={alt}
-              {...wide}
+              {...(narrowOnly ? narrow : wide)}
               loading={loading}
               decoding="async"
-              className="h-auto w-full"
+              className={narrowOnly ? "mx-auto h-auto w-full max-w-[520px]" : "h-auto w-full"}
             />
           </picture>
         ))}

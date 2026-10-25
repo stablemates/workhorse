@@ -25,6 +25,24 @@ class DurableExecutionKotlinExamples(
     }
   }
 
+  /**
+   * Registers the `order.fulfill` handler of the "What is Workhorse?" page, which waits for the
+   * warehouse between two checkpoints.
+   */
+  fun registerFulfillment(scope: WorkerScope) {
+    scope.handle<Map<String, Any?>>("order.fulfill") { ctx, payload ->
+      val orderId = payload.getValue("orderId") as String
+      // docs:start kotlin-overview-fulfill
+      val charge =
+        ctx.checkpoint<Map<String, Any?>>("charge") { payments.charge(orderId, "charge:$orderId") }
+      ctx.waitForSignal<Map<String, Any?>>("packed")
+      val shipment =
+        ctx.checkpoint<Map<String, Any?>>("shipment") { logistics.createShipment(orderId, charge) }
+      // docs:end
+      shipment
+    }
+  }
+
   /** Registers the `trial.follow-up` handler, which waits for a time between two emails. */
   fun registerFollowUp(scope: WorkerScope) {
     scope.handle<Map<String, Any?>>("trial.follow-up") { ctx, payload ->

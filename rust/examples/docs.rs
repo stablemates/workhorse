@@ -808,6 +808,53 @@ async fn durable_checkpoints(
     Ok(shipment)
 }
 
+async fn overview_fulfill(
+    context: HandlerContext,
+    order: Order,
+) -> std::result::Result<Value, HandlerError> {
+    // docs:start overview-fulfill
+    let charge: Value = context
+        .checkpoint("charge", || payments::charge(&order.id, format!("charge:{}", order.id)))
+        .await?;
+    context.wait_for_signal::<Value>("packed", None).await?;
+    let shipment: Value =
+        context.checkpoint("shipment", || logistics::create_shipment(&order.id, &charge)).await?;
+    // docs:end
+    Ok(shipment)
+}
+
+async fn overview_warehouse_limit(
+    queue: &Queue<Client>,
+    order_id: &str,
+    warehouse_id: &str,
+) -> Result {
+    // docs:start overview-warehouse-limit
+    queue
+        .sync_concurrency_policies(
+            "shop",
+            &[ConcurrencyPolicyDefinition {
+                queue: "fulfillment".into(),
+                max_active: 20,
+                max_active_per_key: Some(2),
+            }],
+            false,
+        )
+        .await?;
+    queue
+        .enqueue(
+            "order.fulfill",
+            &json!({ "orderId": order_id }),
+            EnqueueOptions {
+                queue: Some("fulfillment".into()),
+                concurrency_key: Some(warehouse_id.into()),
+                ..Default::default()
+            },
+        )
+        .await?;
+    // docs:end
+    Ok(())
+}
+
 async fn durable_sleep(
     context: HandlerContext,
     trial: Trial,

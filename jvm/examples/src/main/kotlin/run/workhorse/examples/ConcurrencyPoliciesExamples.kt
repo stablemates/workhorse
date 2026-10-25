@@ -37,6 +37,21 @@ object ConcurrencyPoliciesKotlinExamples {
     // docs:end
   }
 
+  /** Limits each warehouse and enqueues an order, as the "What is Workhorse?" page shows. */
+  suspend fun limitEachWarehouse(queue: Queue, orderId: String, warehouseId: String) {
+    // docs:start kotlin-overview-warehouse-limit
+    queue.syncConcurrencyPoliciesSuspend(
+      "shop",
+      listOf(ConcurrencyPolicyDefinition("fulfillment", 20, 2)),
+    )
+    queue.enqueueSuspend(
+      "order.fulfill",
+      mapOf("orderId" to orderId),
+      EnqueueOptions.builder().queue("fulfillment").concurrencyKey(warehouseId).build(),
+    )
+    // docs:end
+  }
+
   /** Synchronizes a budget and enqueues two tasks that name it. */
   suspend fun budgets(queue: Queue): List<Budget> {
     // docs:start kotlin-concurrency-policies-budget

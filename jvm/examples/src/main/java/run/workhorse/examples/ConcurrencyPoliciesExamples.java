@@ -36,6 +36,18 @@ public final class ConcurrencyPoliciesExamples {
     // docs:end
   }
 
+  /** The policy and the enqueue of the "What is Workhorse?" page. */
+  void limitEachWarehouse(String orderId, String warehouseId) {
+    // docs:start java-overview-warehouse-limit
+    queue.syncConcurrencyPolicies(
+        "shop", List.of(new ConcurrencyPolicyDefinition("fulfillment", 20, 2)));
+    queue.enqueue(
+        "order.fulfill",
+        Map.of("orderId", orderId),
+        EnqueueOptions.builder().queue("fulfillment").concurrencyKey(warehouseId).build());
+    // docs:end
+  }
+
   List<Budget> budgets() {
     // docs:start java-concurrency-policies-budget
     List<Budget> budgets =

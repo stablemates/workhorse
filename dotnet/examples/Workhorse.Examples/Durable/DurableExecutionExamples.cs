@@ -12,6 +12,9 @@ public sealed record Charge(string Id);
 /// <summary>A shipment of the logistics provider.</summary>
 public sealed record Shipment(string ShipmentId, string ChargeId);
 
+/// <summary>The parcel that the warehouse sends as the <c>packed</c> signal.</summary>
+public sealed record Parcel(string ParcelId);
+
 /// <summary>The result of one email.</summary>
 public sealed record MailResult(bool Sent);
 
@@ -56,6 +59,29 @@ public sealed class DurableExecutionExamples(IPayments payments, ILogistics logi
                 // docs:start csharp-durable-execution-checkpoint
                 var charge = await context.CheckpointAsync(
                     "charge", ct => payments.ChargeAsync(orderId, $"charge:{orderId}", ct));
+                var shipment = await context.CheckpointAsync(
+                    "shipment", ct => logistics.CreateShipmentAsync(orderId, charge, ct));
+                // docs:end
+                return shipment;
+            });
+    }
+
+    /// <summary>
+    /// Registers the <c>order.fulfill</c> handler of the "What is Workhorse?" page, which waits for the
+    /// warehouse between two checkpoints.
+    /// </summary>
+    public void RegisterFulfillment(Worker worker)
+    {
+        ArgumentNullException.ThrowIfNull(worker);
+        worker.Handle<OrderPayload, Shipment>(
+            "order.fulfill",
+            async (context, payload) =>
+            {
+                var orderId = payload.OrderId;
+                // docs:start csharp-overview-fulfill
+                var charge = await context.CheckpointAsync(
+                    "charge", ct => payments.ChargeAsync(orderId, $"charge:{orderId}", ct));
+                await context.WaitForSignalAsync<Parcel>("packed", null);
                 var shipment = await context.CheckpointAsync(
                     "shipment", ct => logistics.CreateShipmentAsync(orderId, charge, ct));
                 // docs:end

@@ -411,6 +411,24 @@ module DocsExamples
     shipment
   end
 
+  def overview_fulfill(context, order)
+    # docs:start overview-fulfill
+    charge = context.checkpoint("charge") { Payments.charge(order.fetch("id"), "charge:#{order.fetch("id")}") }
+    context.wait_for_signal("packed")
+    shipment = context.checkpoint("shipment") { Logistics.create_shipment(order.fetch("id"), charge) }
+    # docs:end
+    shipment
+  end
+
+  def overview_warehouse_limit(queue, order_id, warehouse_id)
+    # docs:start overview-warehouse-limit
+    queue.sync_concurrency_policies("shop", [
+      Stablemates::Workhorse::ConcurrencyPolicyDefinition.new(queue: "fulfillment", max_active: 20, max_active_per_key: 2)
+    ], prune: false)
+    queue.enqueue("order.fulfill", {"orderId" => order_id}, queue: "fulfillment", concurrency_key: warehouse_id)
+    # docs:end
+  end
+
   def durable_sleep(context, trial)
     # docs:start durable-sleep
     welcome = context.checkpoint("welcome") { Mailer.welcome(trial.fetch("to")) }
