@@ -1,4 +1,5 @@
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
+import { once } from "node:events";
 import { chmod, mkdtemp, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -23,6 +24,7 @@ import {
   stopAgent,
   tagVersion,
   throwawayKey,
+  waitForExit,
   withoutPublicationSecrets,
 } from "./check-jvm-release.js";
 import { jdbcUrl } from "./verify-release.js";
@@ -434,6 +436,22 @@ describe("the javadoc jars", () => {
     ).toEqual([
       "workhorse-kotlin-0.8.0-javadoc.jar has no index.html, so it holds no documentation",
     ]);
+  });
+});
+
+describe("waiting for a process to exit", () => {
+  it("fails while the process still runs, and returns after it exits", async () => {
+    const child = spawn("sleep", ["30"], { stdio: "ignore" });
+    const exited = once(child, "exit");
+    try {
+      await expect(waitForExit(child.pid!, "sleep", 100)).rejects.toThrow(
+        `sleep ${child.pid} still runs after 100 ms`,
+      );
+    } finally {
+      child.kill();
+    }
+    await exited;
+    await expect(waitForExit(child.pid!, "sleep", 5_000)).resolves.toBeUndefined();
   });
 });
 
