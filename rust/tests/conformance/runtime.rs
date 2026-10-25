@@ -559,9 +559,43 @@ fn abort_reason(name: &str) -> Checked<CancelReason> {
         "CancellationRequestedError" => CancelReason::Requested,
         "DeadlineExceededError" => CancelReason::DeadlineExceeded,
         "ExecutionTimeoutError" => CancelReason::ExecutionTimeout,
+        "LeaseLostError" => CancelReason::LeaseLost,
         other => return Err(format!("no Rust cancel reason corresponds to {other}")),
     })
 }
+
+/// Does what a maintenance tick does with `timeout_owned_v1` for an overdue attempt, after it waits
+/// until PostgreSQL's clock reaches the attempt timeout.
+const TIME_OUT_WHEN_DUE: &str = "WITH due AS (
+       SELECT task_id, worker_id, fence_token,
+              pg_sleep(GREATEST(0, EXTRACT(EPOCH FROM attempt_timeout_at - clock_timestamp())) + 0.01)
+         FROM workhorse.task_runtime
+        WHERE task_id = $1 AND state = 'active'
+     )
+     SELECT workhorse.timeout_owned_v1(task_id, worker_id, fence_token) FROM due";
+
+/// Puts a wrapper in front of `expire_owned_telemetry_v1`. The wrapper writes each answer to
+/// `workhorse.test_expiry_answers`, so the test can read what the worker got.
+const RECORD_EXPIRY_ANSWERS: &str =
+    "ALTER FUNCTION workhorse.expire_owned_telemetry_v1(uuid, text, bigint)
+       RENAME TO expire_owned_telemetry_v1_recorded;
+     CREATE TABLE workhorse.test_expiry_answers (answered bigserial PRIMARY KEY, status text);
+     DO $$
+     BEGIN
+       EXECUTE format(
+         'CREATE FUNCTION workhorse.expire_owned_telemetry_v1(p_task_id uuid, p_worker_id text, '
+           || 'p_fence_token bigint) RETURNS %s LANGUAGE sql AS %L',
+         pg_get_function_result(
+           'workhorse.expire_owned_telemetry_v1_recorded(uuid, text, bigint)'::regprocedure),
+         'WITH answer AS (SELECT * FROM workhorse.expire_owned_telemetry_v1_recorded('
+           || 'p_task_id, p_worker_id, p_fence_token)), '
+           || 'recorded AS (INSERT INTO workhorse.test_expiry_answers (status) '
+           || 'SELECT answer.status FROM answer) SELECT * FROM answer');
+     END
+     $$";
+
+const FIRST_EXPIRY_ANSWER: &str =
+    "SELECT status FROM workhorse.test_expiry_answers ORDER BY answered LIMIT 1";
 
 /// Holds the database's expiry `localClockLeadMs` away from the one the worker was told, so the
 /// local timer and PostgreSQL disagree about when the attempt ends.
@@ -600,11 +634,18 @@ async fn expiration(database: &ScratchDatabase, fixture: &Value) -> Checked {
             .map_err(sql)?;
         options.deadline = Some(chrono::Utc::now() + chrono::Duration::hours(1));
     } else {
-        options.execution_timeout_ms = Some(duration);
+        // A late local timer starts from a longer timeout, and the handler moves the database copy
+        // back by the lead. Thus the database timeout still falls `durationMs` after the claim.
+        options.execution_timeout_ms =
+            Some(duration + number(fixture, "localClockLeadMs").min(0).abs());
     }
     let task = queue.enqueue(task_type, &json!({}), options).await.map_err(driver)?.task_id;
     let column = if deadline { "deadline_at" } else { "attempt_timeout_at" };
     let lead = number(fixture, "localClockLeadMs") as f64;
+    let times_out_first = fixture["databaseTimesOutFirst"] == json!(true);
+    if times_out_first {
+        client.batch_execute(RECORD_EXPIRY_ANSWERS).await.map_err(sql)?;
+    }
     let reasons = Arc::new(Mutex::new(Vec::new()));
     let observed = Arc::clone(&reasons);
     // Whether PostgreSQL's clock had reached the expiry it held when each handler observed its
@@ -628,6 +669,13 @@ async fn expiration(database: &ScratchDatabase, fixture: &Value) -> Checked {
             );
             let expiry: chrono::DateTime<chrono::Utc> =
                 client.query_one(&statement, &[&context.task().id, &lead]).await?.get(0);
+            if times_out_first {
+                let timed_out: bool =
+                    client.query_one(TIME_OUT_WHEN_DUE, &[&context.task().id]).await?.get(0);
+                if !timed_out {
+                    return Err(HandlerError::new("PostgreSQL did not time out the attempt first"));
+                }
+            }
             context.cancellation().cancelled().await;
             let after: bool =
                 client.query_one("SELECT clock_timestamp() >= $1", &[&expiry]).await?.get(0);
@@ -654,6 +702,14 @@ async fn expiration(database: &ScratchDatabase, fixture: &Value) -> Checked {
     check(after_expiry == vec![cancelled_after; reasons.len()], || {
         format!("cancellation after the database expiry {after_expiry:?}")
     })?;
+    // An attempt that PostgreSQL timed out first leaves the late local timer no active attempt.
+    if times_out_first {
+        let first: Option<String> =
+            client.query_opt(FIRST_EXPIRY_ANSWER, &[]).await.map_err(sql)?.map(|row| row.get(0));
+        check(first.as_deref() == Some("stale"), || {
+            format!("the first expiry answer {first:?}, want stale")
+        })?;
+    }
     assert_outcomes(&client, task, &strings(&fixture["expectedAttemptOutcomes"])).await
 }
 

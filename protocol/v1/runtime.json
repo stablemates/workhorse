@@ -141,6 +141,23 @@
     "expectedAttemptOutcomes": ["timeout", "timeout"]
   },
   {
+    "id": "execution-timeout-reports-lease-loss-after-stale-expiry",
+    "kind": "expiration",
+    "covers": ["execution-timeout-settlement", "database-authoritative-expiration"],
+    "taskType": "protocol.execution-timeout-stale",
+    "mode": "execution-timeout",
+    "durationMs": 200,
+    "localClockLeadMs": -2500,
+    "leaseMs": 15000,
+    "heartbeatMs": 5000,
+    "maxAttempts": 1,
+    "databaseTimesOutFirst": true,
+    "expectedAbortReasons": ["LeaseLostError"],
+    "expectedCancelledAfterDatabaseExpiry": true,
+    "expectedAfterRuns": [{ "state": "failed", "attempt": 1, "errorName": "ExecutionTimeout" }],
+    "expectedAttemptOutcomes": ["timeout"]
+  },
+  {
     "id": "lease-loss-fences-handler-writes",
     "kind": "lease-loss",
     "covers": ["lease-loss-fencing"],

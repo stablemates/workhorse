@@ -19,8 +19,15 @@ module Conformance
     CANCEL_NAMES = {
       requested: "CancellationRequestedError",
       deadline_exceeded: "DeadlineExceededError",
-      execution_timeout: "ExecutionTimeoutError"
+      execution_timeout: "ExecutionTimeoutError",
+      lease_lost: "LeaseLostError"
     }.freeze
+    # A maintenance tick calls timeout_owned_v1 for an overdue attempt. This statement does the same
+    # after it waits until PostgreSQL's clock reaches the attempt timeout.
+    TIME_OUT_WHEN_DUE = "WITH due AS (SELECT task_id, worker_id, fence_token, pg_sleep(GREATEST(0, " \
+      "EXTRACT(EPOCH FROM attempt_timeout_at - clock_timestamp())) + 0.01) FROM workhorse.task_runtime " \
+      "WHERE task_id = $1 AND state = 'active') " \
+      "SELECT workhorse.timeout_owned_v1(task_id, worker_id, fence_token)::text FROM due"
     ADMISSION_SHARDS = "SELECT pg_advisory_xact_lock(hashtextextended('workhorse:admission-shard:' || $1 || ':' || " \
       "shard, 0)) FROM generate_series(0, 7) AS shard"
     WAITS_ON = "SELECT EXISTS (SELECT 1 FROM pg_stat_activity WHERE pid = $1 AND wait_event_type = 'Lock' " \
@@ -239,10 +246,15 @@ module Conformance
       # The expiry PostgreSQL holds for each attempt, and its clock when the handler saw cancellation.
       expiries = Concurrent::Array.new
       cancelled_at = Concurrent::Array.new
+      # What PostgreSQL answered to each expiry request, in order.
+      expiry_answers = Concurrent::Array.new
       with_pool do |pool|
         subject = worker(pool, fixture, lease: fixture["leaseMs"] / 1000.0, heartbeat: fixture["heartbeatMs"] / 1000.0,
           shared_heartbeats: true)
         subject.handle(fixture["taskType"]) do |_payload, context|
+          if fixture["databaseTimesOutFirst"] && value(TIME_OUT_WHEN_DUE, task_id) != "true"
+            raise "PostgreSQL did not time out the attempt first"
+          end
           raise "the expiration never reached the handler" unless context.cancellation.wait(5)
 
           cancelled_at << value("SELECT clock_timestamp()::text")
@@ -254,6 +266,7 @@ module Conformance
         # or behind PostgreSQL.
         wrap_rows(subject) do |original, sql, params|
           rows = original.call(sql, params)
+          rows.each { |row| expiry_answers << row["status"] } if sql == W::SqlCatalogue::EXPIRE_OWNED_TELEMETRY_V1
           next rows unless sql == W::SqlCatalogue::CLAIM_MANY_V1 && rows.any?
 
           field = deadline ? "deadline_at" : "attempt_timeout_at"
@@ -276,6 +289,10 @@ module Conformance
         end
       end
       check(reasons.to_a == fixture["expectedAbortReasons"], "abort reasons #{reasons.to_a}")
+      # An attempt that PostgreSQL timed out first leaves the late local timer no active attempt.
+      if fixture["databaseTimesOutFirst"]
+        check(expiry_answers.first == "stale", "expiry answers #{expiry_answers.to_a}")
+      end
       # Both times come from the database clock, so the worker clock cannot move either one.
       check(expiries.size == cancelled_at.size, "#{expiries.size} claims, #{cancelled_at.size} cancellations")
       after_expiry = cancelled_at.zip(expiries).map do |at, expiry|

@@ -73,7 +73,8 @@ interface RuntimeFixtureBase {
 type RuntimeAbortReason =
   | "CancellationRequestedError"
   | "DeadlineExceededError"
-  | "ExecutionTimeoutError";
+  | "ExecutionTimeoutError"
+  | "LeaseLostError";
 
 export type RuntimeWriteOperation =
   | "setProgress"
@@ -135,6 +136,11 @@ export interface ExpirationRuntimeFixture extends RuntimeFixtureBase {
   leaseMs: number;
   heartbeatMs: number;
   maxAttempts: number;
+  /**
+   * The runner times out the attempt in PostgreSQL, as maintenance does, after the database expiry
+   * and before the late local timer. The worker's expiry request then answers `stale`.
+   */
+  databaseTimesOutFirst?: boolean;
   expectedAbortReasons: RuntimeAbortReason[];
   expectedCancelledAfterDatabaseExpiry: boolean;
   expectedAfterRuns: ExpectedRuntimeState[];

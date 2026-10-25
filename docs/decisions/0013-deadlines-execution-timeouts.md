@@ -75,3 +75,35 @@ A durable wait deliberately releases the worker slot. Charging scheduled sleep a
 ## Validation
 
 Acceptance requires PostgreSQL integration coverage for validation and idempotency equivalence, expired ready and scheduled work, active cooperative delivery, ignored-signal maintenance, timeout retry and terminal exhaustion, durable-wait budget pause/resume, deadline-versus-timeout ordering, cancellation and completion races, stale-fence rejection, health pressure, recurring definitions, and a focused operational scenario. The complete typecheck, lint, unit, integration, packed-package, demo smoke, and format checks must pass before the roadmap item is marked complete.
+
+## Amendment: a stale expiry answer reports lease loss (2026-10-25)
+
+Another actor can end an attempt before the local timer of its worker fires. For example, a task
+has `executionTimeoutMs = 300`. A maintenance tick calls `timeout_owned_v1` for the overdue attempt
+first. Then the local timer sends `expire_owned_telemetry_v1`, and PostgreSQL answers `stale`,
+because no active attempt is left under that fence.
+
+The SDKs gave the handler different reasons for this case. TypeScript, Python, Ruby, the JVM, and
+.NET gave the lease-loss reason. Go and Rust gave the execution-timeout reason, because they set the
+reason before they sent the request. SM-1651 changed Go and Rust to cancel the handler only after
+the answer, and that change also made them report lease loss. No decision recorded the rule.
+
+If the expiry request of a timed-out attempt answers `stale`, every SDK reports the lease-loss
+reason to the handler. The worker writes nothing more for that attempt. A `stale` answer gives the
+worker no timeout evidence. The attempt can have ended for another reason, and another worker can
+already hold the expired lease. This rule follows from the decision above: local timers are
+advisory, and timeout evidence stays distinct from lease expiry. The attempt outcome and the error
+envelope still come from the transition that PostgreSQL committed.
+
+The shared runtime case `execution-timeout-reports-lease-loss-after-stale-expiry` in
+`protocol/v1/runtime.json` holds the rule in the conformance runner of every SDK. The runner times out the
+attempt with `timeout_owned_v1` after the database timeout and before the late local timer. The
+first expiry answer must be `stale`, and the handler must observe the lease-loss reason. The task
+must fail with `ExecutionTimeout`.
+
+### Rejected: report the execution timeout in every SDK
+
+The worker could report the execution-timeout reason, because the attempt had a timeout that was
+due. But the worker did not observe that PostgreSQL committed a timeout. It observed only that it
+no longer owns the attempt. This option reports a timeout that PostgreSQL did not confirm to this
+worker, so it mixes timeout evidence with lease expiry.

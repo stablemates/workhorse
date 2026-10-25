@@ -383,6 +383,22 @@ def execute_cancellation_fixture(
     assert_attempt_outcomes(connection, task_id, [fixture["expectedAttemptOutcome"]])
 
 
+# A maintenance tick calls timeout_owned_v1 for an overdue attempt. This statement does the same
+# after it waits until PostgreSQL's clock reaches the attempt timeout.
+TIME_OUT_WHEN_DUE = """
+WITH due AS (
+  SELECT task_id, worker_id, fence_token,
+         pg_sleep(GREATEST(0, EXTRACT(EPOCH FROM attempt_timeout_at - clock_timestamp())) + 0.01)
+    FROM workhorse.task_runtime
+   WHERE task_id = %s AND state = 'active'
+)
+SELECT workhorse.timeout_owned_v1(task_id, worker_id, fence_token) FROM due
+"""
+
+# The Python worker reports a lost lease as StaleLeaseError.
+ABORT_REASON_NAMES = {"StaleLeaseError": "LeaseLostError"}
+
+
 def execute_expiration_fixture(
     connection: psycopg.Connection[Any], fixture: Mapping[str, Any]
 ) -> None:
@@ -410,15 +426,21 @@ def execute_expiration_fixture(
     # The expiry PostgreSQL holds for each attempt, and its clock when the handler saw cancellation.
     database_expiries: list[datetime] = []
     cancelled_at: list[datetime] = []
+    # What PostgreSQL answered to each expiry request, in order.
+    expiry_answers: list[object] = []
     worker: Worker
 
     def handler(_payload: object, context: HandlerContext) -> None:
+        if fixture.get("databaseTimesOutFirst"):
+            timed_out = connection.execute(TIME_OUT_WHEN_DUE, (task_id,)).fetchall()
+            assert timed_out == [(True,)], "the timeout that PostgreSQL settles first"
         assert context.cancellation.wait(timeout=5)
         now = connection.execute("SELECT clock_timestamp()").fetchone()
         assert now is not None
         cancelled_at.append(now[0])
         reason = context.cancellation.reason
-        abort_reasons.append(type(reason).__name__)
+        name = type(reason).__name__
+        abort_reasons.append(ABORT_REASON_NAMES.get(name, name))
         worker.pause()
         raise reason
 
@@ -434,6 +456,8 @@ def execute_expiration_fixture(
 
     def early_claim(statement: DriverStatement, parameters: Any = ()) -> list[Mapping[str, object]]:
         rows = original_rows(statement, parameters)
+        if statement is STATEMENTS.expire_owned:
+            expiry_answers.extend(row["status"] for row in rows)
         if statement is STATEMENTS.claim_many and rows:
             claimed = dict(rows[0])
             if fixture["mode"] == "deadline":
@@ -461,6 +485,9 @@ def execute_expiration_fixture(
         assert worker.run_once() is True
         assert_task_states(connection, {"task": task_id}, {"task": expected})
     assert abort_reasons == fixture["expectedAbortReasons"]
+    # An attempt that PostgreSQL timed out first leaves the late local timer no active attempt.
+    if fixture.get("databaseTimesOutFirst"):
+        assert expiry_answers[:1] == ["stale"], f"expiry answers {expiry_answers}"
     # Both times come from the database clock, so the worker clock cannot move either one.
     assert len(database_expiries) == len(cancelled_at)
     assert [at >= expiry for at, expiry in zip(cancelled_at, database_expiries, strict=True)] == [

@@ -73,6 +73,7 @@ type workerRuntimeFixture struct {
 	MaximumClaimDelayAfterLossMS         int                               `json:"expectedMaximumClaimDelayAfterLossMs"`
 	Mode                                 string                            `json:"mode"`
 	LocalClockLeadMS                     int                               `json:"localClockLeadMs"`
+	DatabaseTimesOutFirst                bool                              `json:"databaseTimesOutFirst"`
 	ExpectedCancelledAfterDatabaseExpiry bool                              `json:"expectedCancelledAfterDatabaseExpiry"`
 	ExpectedAbortReason                  string                            `json:"expectedAbortReason"`
 	ExpectedAbortReasons                 []string                          `json:"expectedAbortReasons"`
@@ -1615,6 +1616,37 @@ CREATE TRIGGER test_anchor_deadline_at_claim BEFORE UPDATE ON workhorse.task_run
 	}
 }
 
+// timeOutWhenDue does what a maintenance tick does with timeout_owned_v1 for an overdue attempt,
+// after it waits until PostgreSQL's clock reaches the attempt timeout.
+const timeOutWhenDue = `WITH due AS (
+  SELECT task_id, worker_id, fence_token,
+         pg_sleep(GREATEST(0, EXTRACT(EPOCH FROM attempt_timeout_at - clock_timestamp())) + 0.01)
+    FROM workhorse.task_runtime
+   WHERE task_id = $1::uuid AND state = 'active'
+)
+SELECT workhorse.timeout_owned_v1(task_id, worker_id, fence_token) FROM due`
+
+// recordExpiryAnswers puts a wrapper in front of expire_owned_telemetry_v1. The wrapper writes each
+// answer to workhorse.test_expiry_answers, so the test can read what the worker got.
+const recordExpiryAnswers = `ALTER FUNCTION workhorse.expire_owned_telemetry_v1(uuid, text, bigint)
+  RENAME TO expire_owned_telemetry_v1_recorded;
+CREATE TABLE workhorse.test_expiry_answers (answered bigserial PRIMARY KEY, status text);
+DO $$
+BEGIN
+  EXECUTE format(
+    'CREATE FUNCTION workhorse.expire_owned_telemetry_v1(p_task_id uuid, p_worker_id text, '
+      || 'p_fence_token bigint) RETURNS %s LANGUAGE sql AS %L',
+    pg_get_function_result(
+      'workhorse.expire_owned_telemetry_v1_recorded(uuid, text, bigint)'::regprocedure),
+    'WITH answer AS (SELECT * FROM workhorse.expire_owned_telemetry_v1_recorded('
+      || 'p_task_id, p_worker_id, p_fence_token)), '
+      || 'recorded AS (INSERT INTO workhorse.test_expiry_answers (status) '
+      || 'SELECT answer.status FROM answer) SELECT * FROM answer');
+END
+$$`
+
+const firstExpiryAnswer = `SELECT status FROM workhorse.test_expiry_answers ORDER BY answered LIMIT 1`
+
 func executeWorkerExpirationFixture(t *testing.T, fixture workerRuntimeFixture) {
 	databaseURL := createConformanceDatabase(t, testDatabaseURL(t), "worker-"+fixture.Mode)
 	ctx := context.Background()
@@ -1634,11 +1666,18 @@ func executeWorkerExpirationFixture(t *testing.T, fixture workerRuntimeFixture) 
 		placeholder := time.Now().UTC().Add(time.Hour)
 		options.Deadline = &placeholder
 	} else {
-		options.ExecutionTimeoutMS = fixture.DurationMS
+		// A late local timer starts from a longer timeout, and the handler moves the database copy
+		// back by the lead. Thus the database timeout still falls durationMs after the claim.
+		options.ExecutionTimeoutMS = fixture.DurationMS + max(0, -fixture.LocalClockLeadMS)
 	}
 	taskID, err := queue.Enqueue(ctx, fixture.TaskType, nil, options)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if fixture.DatabaseTimesOutFirst {
+		if _, err := pool.Exec(ctx, recordExpiryAnswers); err != nil {
+			t.Fatal(err)
+		}
 	}
 	// A maintenance tick could settle the expiry first and turn the next heartbeat into stale, so
 	// only the worker's own request settles it here.
@@ -1672,6 +1711,14 @@ func executeWorkerExpirationFixture(t *testing.T, fixture workerRuntimeFixture) 
 			causes <- fmt.Errorf("move the database expiry: %w", err)
 			afterExpiry <- false
 			return nil, err
+		}
+		if fixture.DatabaseTimesOutFirst {
+			var timedOut bool
+			if err := pool.QueryRow(ctx, timeOutWhenDue, taskID).Scan(&timedOut); err != nil || !timedOut {
+				causes <- fmt.Errorf("time out the attempt in PostgreSQL first: timed out %t: %v", timedOut, err)
+				afterExpiry <- false
+				return nil, err
+			}
 		}
 		<-handlerContext.Done()
 		causes <- context.Cause(handlerContext)
@@ -1711,6 +1758,13 @@ func executeWorkerExpirationFixture(t *testing.T, fixture workerRuntimeFixture) 
 	for attempt := range fixture.ExpectedAbortReasons {
 		if after := awaitSignal(t, afterExpiry, "the database clock reading from the handler"); after != fixture.ExpectedCancelledAfterDatabaseExpiry {
 			t.Fatalf("attempt %d: cancelled after the database expiry = %t", attempt+1, after)
+		}
+	}
+	// An attempt that PostgreSQL timed out first leaves the late local timer no active attempt.
+	if fixture.DatabaseTimesOutFirst {
+		var first string
+		if err := pool.QueryRow(ctx, firstExpiryAnswer).Scan(&first); err != nil || first != "stale" {
+			t.Fatalf("the first expiry answer = %q, want stale: %v", first, err)
 		}
 	}
 	assertWorkerFixtureAttemptOutcomes(t, ctx, pool, taskID, fixture.ExpectedAttemptOutcomes)

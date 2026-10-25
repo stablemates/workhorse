@@ -351,6 +351,24 @@ async function executeCooperativeCancellationRuntimeFixture(
   await expectAttemptOutcome(database, id, fixture.expectedAttemptOutcome);
 }
 
+// A maintenance tick calls timeout_owned_v1 for an overdue attempt. This statement does the same
+// after it waits until PostgreSQL's clock reaches the attempt timeout.
+const TIME_OUT_WHEN_DUE = `WITH due AS (
+    SELECT task_id, worker_id, fence_token,
+           pg_sleep(GREATEST(0, EXTRACT(EPOCH FROM attempt_timeout_at - clock_timestamp())) + 0.01)
+      FROM workhorse.task_runtime
+     WHERE task_id = $1::uuid AND state = 'active'
+  )
+  SELECT workhorse.timeout_owned_v1(task_id, worker_id, fence_token) AS timed_out FROM due`;
+
+// The TypeScript worker aborts a lost lease with a plain Error, so its message names the reason.
+function abortReasonName(reason: unknown): string | undefined {
+  if (!(reason instanceof Error)) return undefined;
+  return reason.name === "Error" && reason.message === "Task lease was lost"
+    ? "LeaseLostError"
+    : reason.name;
+}
+
 async function executeExpirationRuntimeFixture(
   queue: Queue,
   admin: Admin,
@@ -433,6 +451,14 @@ async function executeExpirationRuntimeFixture(
       [context.task.id, fixture.durationMs],
     );
     databaseExpiries.push(expiry.rows[0]!.expiry);
+    if (fixture.databaseTimesOutFirst) {
+      const timedOut = await database.query<{ timed_out: boolean }>(TIME_OUT_WHEN_DUE, [
+        context.task.id,
+      ]);
+      expect(timedOut.rows, "the timeout that PostgreSQL settles first").toEqual([
+        { timed_out: true },
+      ]);
+    }
     const reason = await waitForAbort(context.signal);
     const now = await database.query<{ now: Date }>("SELECT clock_timestamp() AS now");
     cancelledAt.push(now.rows[0]!.now);
@@ -451,6 +477,13 @@ async function executeExpirationRuntimeFixture(
   }
   // A local timer that leads the database asks before the expiry, so PostgreSQL first answers
   // not_due. Without that answer, the fixture does not prove that the worker asks again.
+  // An attempt that PostgreSQL timed out first leaves the late local timer no active attempt.
+  if (fixture.databaseTimesOutFirst) {
+    expect(
+      handled.map(({ attempt }) => expiryAnswers.get(attempt)?.[0]),
+      "the first answer to each attempt's expiry request",
+    ).toEqual(handled.map(() => "stale"));
+  }
   if (fixture.localClockLeadMs > 0) {
     expect(
       handled.map(({ attempt }) => expiryAnswers.get(attempt)?.[0]),
@@ -459,9 +492,7 @@ async function executeExpirationRuntimeFixture(
   }
   // Each pass ran the same task, at the next attempt.
   expect(handled).toEqual(fixture.expectedAfterRuns.map((_, run) => ({ id, attempt: run + 1 })));
-  expect(abortReasons).toEqual(
-    fixture.expectedAbortReasons.map((name) => expect.objectContaining({ name })),
-  );
+  expect(abortReasons.map(abortReasonName)).toEqual(fixture.expectedAbortReasons);
   // Both times come from the database clock, so the worker clock cannot move either one.
   expect(databaseExpiries).toHaveLength(cancelledAt.length);
   expect(
