@@ -806,10 +806,13 @@ On the Schedules page:
   schedule's destination queue and by its task type.
 - Compact rows show the queue, evaluator count, and Pause or Resume action.
 - A deployment-disabled definition shows `Config off`.
-- If `lastSkippedAt` and `lastSkippedCount` are set, the Last run cell shows a yellow
-  `Skipped <count> · <relative time>` badge. A count of 10,000 shows as `10,000+`. The badge
+- If `lastSkippedAt` and `lastSkippedCount` are set, the Last run cell can show a yellow
+  `Skipped <count> · <relative time>` badge. The badge shows only while `lastSkippedAt` is less
+  than 24 hours older than the browser clock. A count of 10,000 shows as `10,000+`. The badge
   tooltip and accessible name give the exact skip time, the count, and the exact newest skipped
-  occurrence. A schedule without a skip shows no badge.
+  occurrence. A schedule without a skip shows no badge. Nothing clears the skip keys when later
+  occurrences fire. Thus a skip that is 24 hours old or older also shows no badge. The rule is in
+  `scheduleSkipSummary` in `dashboard/app/src/pages/schedules.tsx`.
 - Focusable tooltips carry the task type, priority, worker wording, pause durability, and full
   maintenance status.
 
