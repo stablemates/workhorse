@@ -324,6 +324,9 @@ describe("schema installation", () => {
         "updated_at",
         "priority",
         "catchup_policy",
+        "last_skipped_at",
+        "last_skipped_count",
+        "last_skipped_through",
       ],
       dashboard_schedule_occurrence_v1: ["namespace", "schedule_name", "occurrence_at", "fired_at"],
       dashboard_worker_registry_v1: [
@@ -656,6 +659,10 @@ describe("schema installation", () => {
       {
         version: 85,
         description: "report the fast-tier retry of an expired timeout",
+      },
+      {
+        version: 86,
+        description: "show the last schedule skip on the dashboard",
       },
     ]);
 

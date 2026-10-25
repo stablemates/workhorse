@@ -31,6 +31,28 @@ export const resumeScheduleWarnings = {
   all: "Workhorse may enqueue missed occurrences in bounded batches as soon as a worker evaluates this schedule. It will continue until the schedule catches up. Tasks already enqueued are unchanged.",
 } as const;
 
+/**
+ * The last skip of a `skip` schedule, or null before the first one. A database below schema 86
+ * returns no skip keys, so the page shows no skip there. Workhorse stops the count at 10,000, so
+ * that value means 10,000 or more.
+ */
+export function scheduleSkipSummary(schedule: {
+  lastSkippedAt?: string | null;
+  lastSkippedCount?: number | null;
+  lastSkippedThrough?: string | null;
+}): { label: string; detail: string } | null {
+  const skippedAt = schedule.lastSkippedAt ?? null;
+  const skipped = schedule.lastSkippedCount ?? null;
+  if (skippedAt === null || skipped === null) return null;
+  const capped = skipped >= 10_000;
+  const count = formatCount(Math.min(skipped, 10_000));
+  const occurrences = skipped === 1 ? "occurrence" : "occurrences";
+  return {
+    label: `Skipped ${count}${capped ? "+" : ""} · ${formatRelative(skippedAt)}`,
+    detail: `At ${formatExact(skippedAt)}, Workhorse skipped ${count}${capped ? " or more" : ""} missed ${occurrences} older than the supported delay. The newest skipped occurrence is ${formatExact(schedule.lastSkippedThrough)}.`,
+  };
+}
+
 export const pauseScheduleWarning =
   "Workhorse will stop enqueuing occurrences of this schedule until an operator resumes it. The pause survives deploys. Tasks already enqueued are unchanged.";
 
@@ -195,6 +217,7 @@ export function CronPage({
                     schedule.maintenance?.lastCompletedAt ??
                     schedule.maintenance?.lastStartedAt ??
                     schedule.lastFiredAt;
+                  const skip = scheduleSkipSummary(schedule);
                   return (
                     <Fragment key={scheduleKey}>
                       <Table.Tr>
@@ -382,6 +405,25 @@ export function CronPage({
                           <Text size="sm" c="dimmed" title={formatExact(lastRunAt)}>
                             {lastRunAt ? formatRelative(lastRunAt) : "never"}
                           </Text>
+                          {skip ? (
+                            <Tooltip
+                              label={skip.detail}
+                              multiline
+                              maw={360}
+                              withArrow
+                              events={{ hover: true, focus: true, touch: true }}
+                            >
+                              <Badge
+                                color="yellow"
+                                variant="light"
+                                size="sm"
+                                tabIndex={0}
+                                aria-label={`Last skip: ${skip.detail}`}
+                              >
+                                {skip.label}
+                              </Badge>
+                            </Tooltip>
+                          ) : null}
                         </Table.Td>
                         <Table.Td ta="right">
                           {schedule.kind === "system" ? (

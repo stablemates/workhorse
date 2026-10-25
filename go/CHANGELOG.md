@@ -10,6 +10,13 @@ adds.
 
 ## Unreleased
 
+### The dashboard Schedules page shows the last skip of a schedule
+
+Migration 0087 (`0087-show-the-last-schedule-skip-on-the-dashboard.sql`) moves the schema to version 86. The `dashboard/v1` cron document gains `lastSkippedAt`, `lastSkippedCount`, and
+`lastSkippedThrough` on each application schedule, an additive change. The bundled Schedules page
+shows a `Skipped` badge with the count and the time of the last skip of a `skip` schedule (SM-1708).
+The migration does not raise the SDK compatibility floor.
+
 ### The worker refuses a shutdown grace above one day
 
 Before this change, `WorkerOptions.ShutdownGracePeriod` had no upper limit (SM-1778). Ruby, the JVM,

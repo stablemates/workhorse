@@ -469,6 +469,18 @@ export interface DashboardScheduleRow {
   lastFiredAt: string | null;
   /** Live workers that currently offer this schedule namespace. */
   evaluatorCount: number;
+  /**
+   * When the last evaluation of a `skip` schedule skipped occurrences. Null before the first skip.
+   * Absent when the installed schema predates version 86, which this dashboard still accepts.
+   */
+  lastSkippedAt?: string | null;
+  /**
+   * The occurrences that the last skip dropped, from 1 through 10,000; 10,000 means at least
+   * 10,000. Absent with `lastSkippedAt`.
+   */
+  lastSkippedCount?: number | null;
+  /** The newest occurrence that the last skip dropped. Absent with `lastSkippedAt`. */
+  lastSkippedThrough?: string | null;
 }
 
 export interface DashboardMaintenanceLoopCadences {

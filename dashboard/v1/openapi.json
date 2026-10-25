@@ -2174,9 +2174,12 @@
                             "lastFiredAt": null,
                             "pausedReason": null,
                             "catchupPolicy": "skip",
+                            "lastSkippedAt": "2026-09-14T03:10:00.000Z",
                             "evaluatorCount": 1,
                             "occurrenceCount": 0,
-                            "configuredEnabled": true
+                            "lastSkippedCount": 4,
+                            "configuredEnabled": true,
+                            "lastSkippedThrough": "2026-09-13T03:00:00.000Z"
                           }
                         ],
                         "capturedAt": "2026-01-01T00:00:00.000Z",
@@ -10528,6 +10531,36 @@
           },
           "evaluatorCount": {
             "type": "number"
+          },
+          "lastSkippedAt": {
+            "anyOf": [
+              {
+                "type": "null"
+              },
+              {
+                "type": "string"
+              }
+            ]
+          },
+          "lastSkippedCount": {
+            "anyOf": [
+              {
+                "type": "null"
+              },
+              {
+                "type": "number"
+              }
+            ]
+          },
+          "lastSkippedThrough": {
+            "anyOf": [
+              {
+                "type": "null"
+              },
+              {
+                "type": "string"
+              }
+            ]
           }
         },
         "required": [

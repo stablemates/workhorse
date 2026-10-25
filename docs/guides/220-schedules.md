@@ -402,6 +402,10 @@ count is the number of live workers that can evaluate the namespace. To see the 
 in that queue, open the run count. The task list opens in a new browser tab. If the deployment
 disabled a definition, the page shows `Config off`. A paused definition does not show `Config off`.
 
+If a `skip` schedule skipped occurrences, its last-run cell shows a `Skipped` badge with the count
+and the time of the last skip. The tooltip of the badge also shows the newest skipped occurrence. A
+schedule that never skipped an occurrence shows no badge.
+
 A routine is maintenance work that runs directly in PostgreSQL and creates no task. The page lists
 the routines beside the application schedules. The last-run value of a routine records that direct
 run. To see recent outcomes, durations, affected rows, phase timings, and errors, expand the row of
@@ -422,6 +426,10 @@ routines.
 - The run count links to `/tasks?queue=<queue>&type=<task type>`. The task listing has no schedule
   filter.
 - A deployment-disabled definition shows `Config off`. A paused definition does not show it.
+- `lastSkippedAt`, `lastSkippedCount`, and `lastSkippedThrough` return `last_skipped_at`,
+  `last_skipped_count`, and `last_skipped_through` from `dashboard_schedule_definition_v1`. They are
+  null until the first skip. The badge shows a count of 10,000 as `10,000+`. A database below schema
+  version 86 returns none of the keys.
 
 **Maintenance routines.** The page lists `tick`, `history_partitions`, `history_retention`, and
 `terminal_storage`. Each shows its retained run total and its five newest `maintenance_run` rows.

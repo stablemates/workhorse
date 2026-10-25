@@ -593,6 +593,9 @@ class DashboardScheduleRow(TypedDict, total=False):
     occurrenceCount: Required[float]
     lastFiredAt: Required[str | None]
     evaluatorCount: Required[float]
+    lastSkippedAt: NotRequired[str | None]
+    lastSkippedCount: NotRequired[float | None]
+    lastSkippedThrough: NotRequired[str | None]
 
 
 class DashboardSetQueueTierResult(TypedDict, total=False):

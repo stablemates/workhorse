@@ -32,3 +32,16 @@ it("names every shared wire type with the Dashboard prefix", async () => {
   // generated Go and Python bindings, beside the core one the same SDK already exports.
   expect(names.filter((name) => !name.startsWith(dashboardDefinitionPrefix))).toEqual([]);
 });
+
+it("accepts a schedule row without the skip keys that schema 86 adds", async () => {
+  const committed = await readFile(join(artifactDirectory, "procedures.json"), "utf8");
+  const contract = JSON.parse(committed) as {
+    $defs: Record<string, { properties: Record<string, unknown>; required: string[] }>;
+  };
+  const row = contract.$defs.DashboardScheduleRow!;
+  // The dashboard accepts schema 76 and later, and a database below schema 86 returns no skip keys.
+  const skipKeys = ["lastSkippedAt", "lastSkippedCount", "lastSkippedThrough"];
+  expect(Object.keys(row.properties)).toEqual(expect.arrayContaining(skipKeys));
+  expect(row.required.filter((key) => skipKeys.includes(key))).toEqual([]);
+  expect(row.required).toContain("evaluatorCount");
+});

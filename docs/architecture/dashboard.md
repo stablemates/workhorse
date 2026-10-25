@@ -428,7 +428,7 @@ The version 1 views expose these exact columns:
 | `dashboard_queue_control_v1`       | `queue_name`, `paused`, `tier`, `record_attempts`, `record_claims`                                                                                                                                                                                                                                            |
 | `dashboard_rate_limit_policy_v1`   | `queue_name`                                                                                                                                                                                                                                                                                                  |
 | `dashboard_retention_policy_v1`    | `singleton`, `task_event_retention_days`, `attempt_history_retention_days`                                                                                                                                                                                                                                    |
-| `dashboard_schedule_definition_v1` | `namespace`, `schedule_name`, `cron_expression`, `timezone`, `queue_name`, `task_type`, `configured_enabled`, `paused`, `paused_by`, `paused_reason`, `paused_at`, `revision`, `updated_at`, `priority`                                                                                                       |
+| `dashboard_schedule_definition_v1` | `namespace`, `schedule_name`, `cron_expression`, `timezone`, `queue_name`, `task_type`, `configured_enabled`, `paused`, `paused_by`, `paused_reason`, `paused_at`, `revision`, `updated_at`, `priority`, `catchup_policy`, `last_skipped_at`, `last_skipped_count`, `last_skipped_through`                    |
 | `dashboard_schedule_occurrence_v1` | `namespace`, `schedule_name`, `occurrence_at`, `fired_at`                                                                                                                                                                                                                                                     |
 | `dashboard_signal_wait_v1`         | `task_id`, `queue_name`, `task_type`, `signal_name`, `attempt`, `created_at`, `deadline_at`                                                                                                                                                                                                                   |
 | `dashboard_worker_registry_v1`     | `worker_id`, `hostname`, `pid`, `queue_name`, `concurrency`, `lease_ms`, `heartbeat_ms`, `poll_ms`, `maintenance_interval_ms`, `maintenance_routine_poll_ms`, `registry_interval_ms`, `active_slots`, `draining`, `paused`, `started_at`, `last_heartbeat_at`, `queue_names`, `schedule_namespaces`           |
@@ -787,6 +787,18 @@ Each definition includes `evaluatorCount`. It counts registrations that meet bot
 Application rows return `configuredEnabled`, `paused`, `pausedBy`, `pausedReason`, `pausedAt`, and
 effective `active`.
 
+Since schema version 86, each definition also returns the last skip of a `skip` schedule from
+`dashboard_schedule_definition_v1`:
+
+| Key                  | Column                 | Value                                                               |
+| -------------------- | ---------------------- | ------------------------------------------------------------------- |
+| `lastSkippedAt`      | `last_skipped_at`      | The `now` of the evaluation pass that skipped occurrences, or null. |
+| `lastSkippedCount`   | `last_skipped_count`   | The number of skipped occurrences, from 1 through 10,000, or null.  |
+| `lastSkippedThrough` | `last_skipped_through` | The newest skipped occurrence, or null.                             |
+
+The three keys are null until the first skip. A later skip replaces them. A database below schema
+version 86 returns none of the keys.
+
 On the Schedules page:
 
 - Each application schedule's occurrence count links to `/tasks?queue=<queue>&type=<task type>` in
@@ -794,6 +806,10 @@ On the Schedules page:
   schedule's destination queue and by its task type.
 - Compact rows show the queue, evaluator count, and Pause or Resume action.
 - A deployment-disabled definition shows `Config off`.
+- If `lastSkippedAt` and `lastSkippedCount` are set, the Last run cell shows a yellow
+  `Skipped <count> · <relative time>` badge. A count of 10,000 shows as `10,000+`. The badge
+  tooltip and accessible name give the exact skip time, the count, and the exact newest skipped
+  occurrence. A schedule without a skip shows no badge.
 - Focusable tooltips carry the task type, priority, worker wording, pause durability, and full
   maintenance status.
 
