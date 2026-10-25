@@ -156,7 +156,7 @@ names:
   `workhorse.complete`, `workhorse.recovery`, and `workhorse.maintenance`.
 - The Java queue and worker: the same six spans and `workhorse.enqueue`.
 - The .NET queue and worker: the same six spans and `workhorse.enqueue`.
-- The Go and Rust workers: only `workhorse.handler`.
+- The Go and Rust workers: `workhorse.handler` and `workhorse.retry`.
 
 More detail: [Telemetry: Trace context propagation](../architecture/telemetry.md#trace-context-propagation), [Telemetry: TypeScript spans](../architecture/telemetry.md#typescript-spans), [Telemetry: Python spans](../architecture/telemetry.md#python-spans), [Telemetry: Go spans](../architecture/telemetry.md#go-spans), [Telemetry: Rust spans](../architecture/telemetry.md#rust-spans), [Telemetry: Ruby spans](../architecture/telemetry.md#ruby-spans), [Telemetry: JVM spans](../architecture/telemetry.md#jvm-spans), [Schema and SQL protocol: JVM telemetry](../architecture/schema-and-protocol.md#jvm-telemetry), and [Schema and SQL protocol: .NET telemetry](../architecture/schema-and-protocol.md#net-telemetry).
 

@@ -94,6 +94,22 @@ pub(crate) fn handler_span(task: &ClaimedTask) -> tracing::Span {
     span
 }
 
+/// The `workhorse.retry` span of one settlement that can start another attempt.
+///
+/// Its parent is the current span, which is the handler span during a settlement. It carries the
+/// task attributes of the TypeScript span. The caller records `workhorse.retry.outcome`.
+pub(crate) fn retry_span(task: &ClaimedTask) -> tracing::Span {
+    tracing::info_span!(
+        "workhorse.retry",
+        otel.status_code = tracing::field::Empty,
+        otel.status_message = tracing::field::Empty,
+        workhorse.task.id = %task.id,
+        workhorse.task.type = %task.task_type,
+        workhorse.task.attempt = task.attempt,
+        workhorse.retry.outcome = tracing::field::Empty,
+    )
+}
+
 #[cfg(feature = "opentelemetry")]
 mod otel {
     use opentelemetry::metrics::{Counter as OtelCounter, Histogram as OtelHistogram};

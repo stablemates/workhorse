@@ -145,6 +145,7 @@ const (
 	rowAcceptedField                     = "accepted"
 	rowStateField                        = "state"
 	rowStatusField                       = "status"
+	rowRetryStateField                   = "retry_state"
 	rowPausedField                       = "paused"
 	rowTaskTypeField                     = "task_type"
 	rowPriorityField                     = "priority"
@@ -545,6 +546,8 @@ const (
 	workerElapsedAttribute         = "workhorse.worker.elapsed_ms"
 
 	handlerSpanName                = "workhorse.handler"
+	retrySpanName                  = "workhorse.retry"
+	retryOutcomeAttribute          = "workhorse.retry.outcome"
 	taskClaimedEvent               = "workhorse.task.claimed"
 	handlerStartedEvent            = "workhorse.handler.started"
 	executionFinishedEvent         = "workhorse.task.execution_finished"

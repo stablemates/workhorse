@@ -239,6 +239,25 @@ func startHandlerSpan(ctx context.Context, task ClaimedTask) (context.Context, t
 	)
 }
 
+// startRetrySpan starts the workhorse.retry span of one settlement, as a child of the span on ctx,
+// and returns ctx with the retry span active. It carries the task attributes of the TypeScript span.
+// The caller sets workhorse.retry.outcome.
+func startRetrySpan(ctx context.Context, task ClaimedTask) (context.Context, trace.Span) {
+	if otel.GetTracerProvider() == initialTracerProvider {
+		// A span that records nothing, so End cannot end the caller's span.
+		return ctx, trace.SpanFromContext(context.Background())
+	}
+	return otel.Tracer(telemetryInstrumentationName).Start(
+		ctx,
+		retrySpanName,
+		trace.WithAttributes(
+			attribute.String(taskIDAttribute, task.ID),
+			attribute.String(taskTypeAttribute, task.Type),
+			attribute.Int(taskAttemptAttribute, task.Attempt),
+		),
+	)
+}
+
 // extractTraceContext returns ctx with the task's stored trace context as its span parent. A task
 // descends only from the trace its enqueue stored, so any span context on ctx is replaced, and a
 // task without a stored context starts a new trace. Cancellation and values on ctx still reach the

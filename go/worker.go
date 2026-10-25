@@ -2320,6 +2320,9 @@ func (worker *Worker) execute(
 	handler Handler,
 ) (resultError error) {
 	handlerParent, span := startHandlerSpan(ctx, task)
+	// Every settlement of this attempt runs under the handler span, so its workhorse.retry span is
+	// a child of it. handlerParent keeps the cancellation and the values of ctx.
+	ctx = handlerParent
 	outcome := handlerOutcomeUnknown
 	startedAt := time.Now()
 	logWorkerEvent(
@@ -3222,7 +3225,9 @@ func ownershipCause(task ClaimedTask, status ownershipStatus) error {
 	}
 }
 
-// expireOwnedOnce asks PostgreSQL once to expire the attempt's ownership under its fence.
+// expireOwnedOnce asks PostgreSQL once to expire the attempt's ownership under its fence. If the
+// expiry starts another attempt, retry_state names its state, and the worker records the
+// workhorse.retry span and one workhorse.tasks.retried count, as the TypeScript worker does.
 func (worker *Worker) expireOwnedOnce(ctx context.Context, task ClaimedTask) (ownershipStatus, error) {
 	rows, err := queryFencedWrite(
 		ctx,
@@ -3233,7 +3238,19 @@ func (worker *Worker) expireOwnedOnce(ctx context.Context, task ClaimedTask) (ow
 	if err != nil {
 		return emptyString, err
 	}
-	return parseOwnershipStatus(rows)
+	status, err := parseOwnershipStatus(rows)
+	if err != nil {
+		return emptyString, err
+	}
+	if retryState, ok := rows[0][rowRetryStateField].(string); ok {
+		retryContext, span := startRetrySpan(ctx, task)
+		span.SetAttributes(attribute.String(retryOutcomeAttribute, retryState))
+		if worker.metrics.enabled {
+			worker.metrics.retried.Add(retryContext, 1, taskMetricOptions(task))
+		}
+		span.End()
+	}
+	return status, nil
 }
 
 // expireOwnership settles an expiry after the handler returned. It asks again while PostgreSQL
@@ -3654,30 +3671,78 @@ func (worker *Worker) failAttempt(
 	task ClaimedTask,
 	handlerError error,
 ) (handlerOutcome, error) {
-	envelope := handlerErrorEnvelope(handlerError, task.RedactErrorDetails)
-	encoded, err := json.Marshal(envelope)
+	state, err := worker.writeFailure(ctx, executor, task, handlerError)
 	if err != nil {
 		return handlerOutcomeUnknown, err
 	}
-	lease := worker.fencedLease(task)
+	switch state {
+	case workerFailureReady, workerFailureScheduled:
+		return handlerOutcomeRetry, nil
+	case workerFailureFailed:
+		return handlerOutcomeFailed, nil
+	case workerFailureCancelRequested:
+		return handlerOutcomeCanceled, worker.acknowledgeCancellation(ctx, executor, task)
+	case workerFailureDeadline:
+		return handlerOutcomeDeadlineExceeded, nil
+	case workerFailureTimeout:
+		return handlerOutcomeTimeout, nil
+	case workerFailureStale:
+		return worker.reconcileRejectedSettlement(
+			ctx,
+			executor,
+			task,
+			&StaleLeaseError{TaskID: task.ID},
+		)
+	default:
+		return handlerOutcomeUnknown, fmt.Errorf(rejectedFailureStateFormat, state)
+	}
+}
+
+// writeFailure sends one failure to fail_v1 and returns the state that PostgreSQL settled. The
+// workhorse.retry span covers the write, its metrics, and its log record, as in the TypeScript
+// worker. A cancellation acknowledgement or a reconciliation that follows is outside the span.
+func (worker *Worker) writeFailure(
+	ctx context.Context,
+	executor Executor,
+	task ClaimedTask,
+	handlerError error,
+) (state string, resultError error) {
+	// A delay out of range fails before the span starts, as in the TypeScript worker.
 	var delay any
+	var err error
 	if durableReplayConflictName(handlerError) != emptyString {
 		delay = int64(-1)
 	} else if delay, err = worker.retryDelayOverride(task); err != nil {
-		return handlerOutcomeUnknown, err
+		return emptyString, err
 	}
+	// The write, its metrics, and its log record run with the retry span active.
+	ctx, span := startRetrySpan(ctx, task)
+	defer func() {
+		if resultError != nil {
+			span.RecordError(resultError)
+			span.SetStatus(codes.Error, resultError.Error())
+		}
+		span.End()
+	}()
+	envelope := handlerErrorEnvelope(handlerError, task.RedactErrorDetails)
+	encoded, err := json.Marshal(envelope)
+	if err != nil {
+		return emptyString, err
+	}
+	lease := worker.fencedLease(task)
 	arguments := append(lease.parameters(), encoded, delay)
 	rows, err := queryFencedWrite(ctx, executor, protocolStatementRegistry[failStatementName], arguments...)
 	if err != nil {
-		return handlerOutcomeUnknown, err
+		return emptyString, err
 	}
 	if len(rows) != 1 {
-		return handlerOutcomeUnknown, errors.New(invalidFailureResultMessage)
+		return emptyString, errors.New(invalidFailureResultMessage)
 	}
 	state, ok := rows[0][rowStateField].(string)
 	if !ok {
-		return handlerOutcomeUnknown, errors.New(invalidFailureResultMessage)
+		return emptyString, errors.New(invalidFailureResultMessage)
 	}
+	span.SetAttributes(attribute.String(retryOutcomeAttribute, state))
 	if worker.metrics.enabled {
 		worker.metrics.failed.Add(
 			ctx,
@@ -3702,27 +3767,7 @@ func (worker *Worker) failAttempt(
 			return append(taskLogAttributes(task, worker.workerID), slog.String(attemptOutcomeAttribute, state))
 		},
 	)
-	switch state {
-	case workerFailureReady, workerFailureScheduled:
-		return handlerOutcomeRetry, nil
-	case workerFailureFailed:
-		return handlerOutcomeFailed, nil
-	case workerFailureCancelRequested:
-		return handlerOutcomeCanceled, worker.acknowledgeCancellation(ctx, executor, task)
-	case workerFailureDeadline:
-		return handlerOutcomeDeadlineExceeded, nil
-	case workerFailureTimeout:
-		return handlerOutcomeTimeout, nil
-	case workerFailureStale:
-		return worker.reconcileRejectedSettlement(
-			ctx,
-			executor,
-			task,
-			&StaleLeaseError{TaskID: task.ID},
-		)
-	default:
-		return handlerOutcomeUnknown, fmt.Errorf(rejectedFailureStateFormat, state)
-	}
+	return state, nil
 }
 
 func (worker *Worker) fencedLease(task ClaimedTask) fencedLease {

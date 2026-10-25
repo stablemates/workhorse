@@ -132,7 +132,9 @@ impl Inner {
                 }
                 () = &mut expiry, if expires.is_some() && expired.is_none() && expiring.is_none()
                     && rejected.is_none() => {
-                    expiring = Some(Box::pin(self.expire_owned_once(&task)));
+                    // The request runs under the handler span, so a retry span is its child.
+                    expiring =
+                        Some(Box::pin(self.expire_owned_once(&task).instrument(span.clone())));
                 }
                 answer = async { expiring.as_mut().expect("the guard checks it").await },
                     if expiring.is_some() => {
@@ -226,7 +228,9 @@ impl Inner {
         let settled = if context.suspended() {
             Ok("suspended")
         } else {
-            self.settle(&task, result, expired, rejected, token.reason(), slot).await
+            self.settle(&task, result, expired, rejected, token.reason(), slot)
+                .instrument(span.clone())
+                .await
         };
         let settled = match settled {
             Err(Error::LeaseLost { .. }) => Ok("lease_lost"),
@@ -307,7 +311,9 @@ impl Inner {
         }
     }
 
-    /// Asks PostgreSQL once to expire the task's ownership under its fence.
+    /// Asks PostgreSQL once to expire the task's ownership under its fence. If the expiry starts
+    /// another attempt, `retry_state` names its state, and the worker records the `workhorse.retry`
+    /// span and one `workhorse.tasks.retried` count, as the TypeScript worker does.
     async fn expire_owned_once(&self, task: &ClaimedTask) -> Result<OwnershipStatus, Error> {
         let rows = fenced_rows(
             &self.statements(),
@@ -316,7 +322,21 @@ impl Inner {
         )
         .await?;
         let row = exactly_one(&rows, "expire_owned_telemetry_v1")?;
-        OwnershipStatus::parse(row.try_get::<_, Option<String>>("status")?.as_deref())
+        let status =
+            OwnershipStatus::parse(row.try_get::<_, Option<String>>("status")?.as_deref())?;
+        if let Some(retry_state) = row.try_get::<_, Option<String>>("retry_state")? {
+            let span = telemetry::retry_span(task);
+            span.record("workhorse.retry.outcome", retry_state.as_str());
+            self.metrics.add(
+                Counter::Retried,
+                1.0,
+                &[
+                    ("workhorse.queue.name", Attribute::Text(&task.queue)),
+                    ("workhorse.task.type", Attribute::Text(&task.task_type)),
+                ],
+            );
+        }
+        Ok(status)
     }
 
     /// Asks PostgreSQL to expire the task's ownership after the handler returned, retrying briefly
@@ -604,33 +624,65 @@ impl Inner {
                 .map(retry_delay_millis)
                 .transpose()?
         };
+        let span = telemetry::retry_span(task);
+        let state = self.write_failure(task, &envelope, delay).instrument(span.clone()).await;
+        let state = match state {
+            Ok(state) => state,
+            Err(error) => {
+                // As on the handler span, the error is the span status. The worker writes no
+                // exception event.
+                span.record("otel.status_code", "error");
+                span.record("otel.status_message", error.to_string().as_str());
+                return Err(error);
+            }
+        };
+        drop(span);
+        match state.as_str() {
+            "ready" | "scheduled" => Ok("retry"),
+            "failed" => Ok("failed"),
+            "cancel_requested" => self.acknowledge(task).await,
+            "deadline_exceeded" => Ok("deadline_exceeded"),
+            "timeout_exceeded" => Ok("timeout"),
+            "stale" => self.reconcile(task, Operation::Fail).await,
+            _ => Err(Error::UnexpectedStatus { operation: Operation::Fail, status: state }),
+        }
+    }
+
+    /// Sends one failure to `fail_v1` under the `workhorse.retry` span and returns the state that
+    /// PostgreSQL settled. The span covers the write, its metrics, and its log record, as in the
+    /// TypeScript worker. A cancellation acknowledgement or a reconciliation that follows is outside
+    /// the span.
+    async fn write_failure(
+        &self,
+        task: &ClaimedTask,
+        envelope: &Value,
+        delay: Option<i32>,
+    ) -> Result<String, Error> {
         let rows = fenced_rows(
             &self.statements(),
             sql::FAIL_V1,
-            &[&task.id, &self.worker_id, &task.fence_token, &envelope, &delay],
+            &[&task.id, &self.worker_id, &task.fence_token, envelope, &delay],
         )
         .await?;
         let state: Option<String> = exactly_one(&rows, "fail_v1")?.try_get("state")?;
         let state = state.unwrap_or_default();
+        tracing::Span::current().record("workhorse.retry.outcome", state.as_str());
+        if !matches!(
+            state.as_str(),
+            "ready" | "scheduled" | "failed" | "deadline_exceeded" | "timeout_exceeded"
+        ) {
+            return Ok(state);
+        }
         let dimensions = [
             ("workhorse.queue.name", Attribute::Text(&task.queue)),
             ("workhorse.task.type", Attribute::Text(&task.task_type)),
         ];
-        let outcome = match state.as_str() {
-            "ready" | "scheduled" => "retry",
-            "failed" => "failed",
-            "cancel_requested" => return self.acknowledge(task).await,
-            "deadline_exceeded" => "deadline_exceeded",
-            "timeout_exceeded" => "timeout",
-            "stale" => return self.reconcile(task, Operation::Fail).await,
-            _ => return Err(Error::UnexpectedStatus { operation: Operation::Fail, status: state }),
-        };
         self.metrics.add(
             Counter::Failed,
             1.0,
             &[dimensions[0], dimensions[1], ("workhorse.attempt.outcome", Attribute::Text(&state))],
         );
-        if outcome == "retry" {
+        if matches!(state.as_str(), "ready" | "scheduled") {
             self.metrics.add(Counter::Retried, 1.0, &dimensions);
         }
         tracing::info!(
@@ -640,7 +692,7 @@ impl Inner {
             workhorse.task.state = %state,
             "Task failure processed"
         );
-        Ok(outcome)
+        Ok(state)
     }
 }
 

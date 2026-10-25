@@ -513,13 +513,29 @@ so that SDK span limits can match it.
 
 #### Go spans
 
-The Go worker emits only the `workhorse.handler` consumer span. It carries these attributes:
+The Go worker emits the `workhorse.handler` consumer span and the `workhorse.retry` span. The
+handler span carries these attributes:
 
 - `workhorse.queue.name`
 - `workhorse.task.id`
 - `workhorse.task.type`
 - `workhorse.task.attempt`
 - the bounded `workhorse.handler.outcome`
+
+The `workhorse.retry` span is a child of the handler span. It carries `workhorse.task.id`,
+`workhorse.task.type`, `workhorse.task.attempt`, and `workhorse.retry.outcome`, as the TypeScript
+span does. `startRetrySpan` in `go/telemetry.go` starts it in two cases:
+
+1. `writeFailure` sends a handler failure to `fail_v1`. The span covers the write, its metrics, and
+   its log record. `workhorse.retry.outcome` is the state that `fail_v1` returns, also when that
+   state starts no attempt. If the write fails, the span has the error status.
+2. `expireOwnedOnce` gets an answer from `expire_owned_telemetry_v1` with a `retry_state` that is
+   not null. The span then records that state as `workhorse.retry.outcome`, and the worker adds one
+   to `workhorse.tasks.retried`.
+
+The Go worker does not emit `workhorse.enqueue`, `workhorse.claim`, `workhorse.complete`,
+`workhorse.heartbeat`, `workhorse.recovery`, `workhorse.maintenance`, or
+`workhorse.schedule.synchronize`.
 
 #### Python spans
 
@@ -540,14 +556,26 @@ these cases, worker behavior does not change:
 
 #### Rust spans
 
-The Rust worker emits only the `workhorse.handler` consumer span. `telemetry::handler_span` creates
-it as a `tracing` span. With the `opentelemetry` feature, a `tracing-opentelemetry` layer that the
-application installs exports it. The span carries `workhorse.queue.name`, `workhorse.task.id`,
-`workhorse.task.type`, and `workhorse.task.attempt`. If the outcome is not `succeeded` or
-`unknown`, the worker sets the span status to error.
+The Rust worker emits the `workhorse.handler` consumer span and the `workhorse.retry` span.
+`telemetry::handler_span` and `telemetry::retry_span` create them as `tracing` spans. With the
+`opentelemetry` feature, a `tracing-opentelemetry` layer that the application installs exports them.
+The handler span carries `workhorse.queue.name`, `workhorse.task.id`, `workhorse.task.type`, and
+`workhorse.task.attempt`. If the outcome is not `succeeded` or `unknown`, the worker sets the span
+status to error.
+
+The `workhorse.retry` span is a child of the handler span. It carries `workhorse.task.id`,
+`workhorse.task.type`, `workhorse.task.attempt`, and `workhorse.retry.outcome`, as the TypeScript
+span does. The worker creates it in two cases:
+
+1. `write_failure` sends a handler failure to `fail_v1`. The span covers the write, its metrics,
+   and its log record. `workhorse.retry.outcome` is the state that `fail_v1` returns, also when that
+   state starts no attempt. If the write fails, the worker sets the span status to error.
+2. `expire_owned_once` gets an answer from `expire_owned_telemetry_v1` with a `retry_state` that is
+   not null. The span then records that state as `workhorse.retry.outcome`, and the worker adds one
+   to `workhorse.tasks.retried`.
 
 The Rust worker does not emit `workhorse.enqueue`, `workhorse.claim`, `workhorse.complete`,
-`workhorse.retry`, `workhorse.heartbeat`, `workhorse.recovery`, `workhorse.maintenance`, or
+`workhorse.heartbeat`, `workhorse.recovery`, `workhorse.maintenance`, or
 `workhorse.schedule.synchronize`.
 
 #### Ruby spans

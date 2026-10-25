@@ -1607,9 +1607,9 @@ version gets the new locks when the migration commits.
 Schema version 85 does not raise the floor. Migration 0086 changes the body of
 `expire_owned_telemetry_v1`, and no signature or result shape. A fast-tier attempt timeout that
 starts another attempt now returns `ready` or `scheduled` in `retry_state`, not null. Thus the
-TypeScript, Python, Ruby, JVM, and .NET workers record the retry span and the retry count for it.
-The Go and Rust workers do not read `retry_state`. Every process of every SDK version gets
-the new result when the migration commits.
+workers of all seven SDKs record the retry span and the retry count for it. A Go or Rust worker
+from before SM-1734 does not read `retry_state`, so it records no retry telemetry for a timeout.
+Every process of every SDK version gets the new result when the migration commits.
 
 A 0.9 process keeps working on schema version 85. Its dashboard host still sends its own retention
 preview statement, which reads tables that the migrations do not change. Its worker still sends

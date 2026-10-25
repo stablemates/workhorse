@@ -2626,8 +2626,8 @@ next state: `ready` or `scheduled` when the timeout starts another attempt, and 
 Thus `Queue.expireOwned` emits a retry span and increments the retry counter only if PostgreSQL
 starts another attempt. A fast-tier row has no `scheduled` state, so the function reports a ready
 fast-tier row with a future `run_at` as `scheduled`. Before migration 0086, the function returns
-null for a fast-tier retry. The Go and Rust workers read only `status`, so they record no retry
-telemetry for a timeout.
+null for a fast-tier retry. The workers of all seven SDKs read `retry_state` and record the same
+retry span and retry count.
 
 #### Owned release
 
