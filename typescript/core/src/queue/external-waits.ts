@@ -132,11 +132,12 @@ export function validateExternalWaitName(name: string, label: string): void {
 }
 
 // PostgreSQL bounds the value with octet_length(value::jsonb::text). That text puts a space after
-// each `:` and `,`, so it can be longer than the compact JSON. The client measures the same text.
+// each `:` and `,`, so it can be longer than the compact JSON. The client measures the same text
+// from the JSON it sends, so a JSON.rawJSON number keeps its scale.
 export function encodeExternalWaitValue(value: Json, label: string): string {
   const encoded = JSON.stringify(value);
   if (encoded === undefined) throw new TypeError(`${label} must be JSON serializable`);
-  if (jsonbTextBytes(JSON.parse(encoded) as Json) > MAX_EXTERNAL_WAIT_VALUE_BYTES) {
+  if (jsonbTextBytes(encoded) > MAX_EXTERNAL_WAIT_VALUE_BYTES) {
     throw new RangeError(`${label} must be at most ${MAX_EXTERNAL_WAIT_VALUE_BYTES} bytes`);
   }
   return encoded;

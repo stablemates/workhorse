@@ -707,8 +707,10 @@ key raises `HumanWaitIdempotencyConflictError`.
 | Enqueue batches                                    | At most 1,000 requests                                  |
 
 Canonical JSONB text is the text that `octet_length(value::jsonb::text)` measures. It puts a space
-after each `:` and `,`, so it can be longer than compact JSON. Each SDK measures that text before any
-statement. Thus an oversized value raises the argument error of the SDK, not a database error.
+after each `:` and `,`, so it can be longer than compact JSON. It writes each number in plain decimal
+notation with the scale of its JSON token, so `0.0` stays `0.0` and `1.5e1` becomes `15`. Each SDK
+measures that text before any statement. The TypeScript client measures the tokens of the JSON text
+that it sends, so a `JSON.rawJSON` number keeps its scale. Thus an oversized value raises the argument error of the SDK, not a database error.
 
 | Enqueue setting           | Default                 |
 | ------------------------- | ----------------------- |

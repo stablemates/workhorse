@@ -569,7 +569,42 @@ describe("enqueue contracts", () => {
       "SELECT octet_length(value::jsonb::text) AS bytes FROM unnest($1::text[]) WITH ORDINALITY AS input(value, ordinal) ORDER BY ordinal",
       [values.map((value) => JSON.stringify(value))],
     );
-    expect(values.map((value) => jsonbTextBytes(value))).toEqual(rows.map((row) => row.bytes));
+    expect(values.map((value) => jsonbTextBytes(JSON.stringify(value)))).toEqual(
+      rows.map((row) => row.bytes),
+    );
+  });
+
+  // A JSON.rawJSON number keeps the scale and exponent of its token, and JSON text can repeat a
+  // key. PostgreSQL keeps the scale, expands the exponent, and keeps the last member of each key.
+  it("measures number tokens and repeated keys as PostgreSQL's jsonb text", async () => {
+    const texts = [
+      "0.0",
+      "-0.0",
+      "-0",
+      "1.50",
+      "-12.500",
+      "1e2",
+      "1E+2",
+      "1.5e1",
+      "1.25e1",
+      "100e-1",
+      "0.001e2",
+      "0.00100e-3",
+      "-1.0e-5",
+      "123.456e-10",
+      "0e5",
+      "0.0e-3",
+      "7e0",
+      '[0.0, 1.00, -2.000e1, {"a": 1.0e-2}]',
+      '{"a": 1, "a": 22.50}',
+      '{"a": {"b": 1, "b": [0.0, 0.00]}, "c": "x", "a": {"b": 1e3, "b": "\\u00e9\\n"}}',
+      '[{"k": [{"k": 0.10}, {"k": 1, "k": 2.0e-1}]}, "\\/", "\\u0041"]',
+    ];
+    const { rows } = await pool.query<{ bytes: number }>(
+      "SELECT octet_length(value::jsonb::text) AS bytes FROM unnest($1::text[]) WITH ORDINALITY AS input(value, ordinal) ORDER BY ordinal",
+      [texts],
+    );
+    expect(texts.map((text) => jsonbTextBytes(text))).toEqual(rows.map((row) => row.bytes));
   });
 
   it("rejects a value whose compact JSON fits but whose jsonb text does not", async () => {

@@ -46,6 +46,19 @@ error (SM-1639).
 Now `Queue.sendSignal`, `Queue.completeHumanWait`, and `Queue.waitForHuman` measure the canonical
 JSONB text before any statement. An oversized value raises `RangeError`. The limit does not change.
 
+### The TypeScript client keeps the scale of a `JSON.rawJSON` number when it measures a value
+
+PostgreSQL keeps the scale of a JSON number in its `jsonb` text, so `0.0` stays `0.0`. The
+TypeScript client parsed the JSON again before it measured a value, and each `0.0` became `0`. A
+signal payload of 15,000 `JSON.rawJSON("0.0")` values measured 45,000 bytes in the client and 75,000
+bytes in PostgreSQL. The client accepted it, and PostgreSQL refused the statement with a database
+error (SM-1810).
+
+Now the client measures the JSON text that it sends, token by token. Each number keeps the scale of
+its token. This applies to `Queue.sendSignal`, `Queue.completeHumanWait`, `Queue.waitForHuman`, the
+payload size check, and the result size check. An oversized value raises `RangeError` or
+`TaskValueSizeLimitError` before any statement. The limits do not change.
+
 ### The worker warns when a maintenance pass or a claim waits longer than the stop budget
 
 A maintenance pass or a claim can wait for a lock that another session holds. Before this change,
