@@ -2,6 +2,7 @@ package workhorse
 
 import (
 	"context"
+	"math"
 	"reflect"
 	"strings"
 	"testing"
@@ -270,8 +271,12 @@ func TestWorkerReadsAZeroShutdownGraceAsTheDefault(t *testing.T) {
 	}
 }
 
-func TestWorkerRefusesANegativeOrFractionalShutdownGrace(t *testing.T) {
-	for _, grace := range []time.Duration{-time.Millisecond, time.Microsecond, 1500 * time.Microsecond} {
+// SM-1778: Go refuses a grace above one day, as Ruby, the JVM, and .NET do.
+func TestWorkerRefusesANegativeFractionalOrOverlongShutdownGrace(t *testing.T) {
+	for _, grace := range []time.Duration{
+		-time.Millisecond, time.Microsecond, 1500 * time.Microsecond,
+		24*time.Hour + time.Millisecond, time.Duration(math.MaxInt64 / int64(time.Millisecond) * int64(time.Millisecond)),
+	} {
 		_, err := NewWorker(unconnectedPool(t), WorkerOptions{
 			Queue: "defaults", WorkerID: "defaults-worker", SharedHeartbeats: true, ShutdownGracePeriod: grace,
 		})

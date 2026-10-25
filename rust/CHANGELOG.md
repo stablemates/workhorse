@@ -11,6 +11,16 @@ adds.
 
 ## Unreleased
 
+### The worker refuses a shutdown grace above one day
+
+Before this change, `WorkerOptions::shutdown_grace_period` had no upper limit (SM-1778). A grace
+near `Duration::MAX` passed construction, and `Worker::run` then panicked when it computed its
+shutdown deadline. Ruby, the JVM, and .NET already refuse a grace above 86,400,000 ms.
+
+Now `Worker::new` refuses a grace above 86,400,000 ms (one day) with its usual option error. A
+caller who passed a longer grace gets an error at construction. The lower limit and the
+whole-millisecond check do not change.
+
 ### The worker records the retry span
 
 Before this change, the Rust worker recorded no `workhorse.retry` span. When an attempt timeout

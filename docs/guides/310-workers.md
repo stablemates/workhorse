@@ -399,15 +399,15 @@ after the drain.
 <details>
 <summary>Reference: shutdown deadline</summary>
 
-| SDK        | Option                                 | Default   | Range             | Zero                |
-| ---------- | -------------------------------------- | --------- | ----------------- | ------------------- |
-| TypeScript | `shutdownTimeoutMs`                    | 25,000 ms | 1 to 3,600,000 ms | Refused             |
-| Python     | `shutdown_timeout_ms`                  | 25,000 ms | 1 to 3,600,000 ms | Refused             |
-| Go         | `WorkerOptions.ShutdownGracePeriod`    | 25,000 ms | Positive whole ms | Selects the default |
-| Rust       | `WorkerOptions::shutdown_grace_period` | 25 s      | Positive whole ms | Refused             |
-| Ruby       | `shutdown_grace`                       | 25 s      | 0 to 86,400 s     | No handler wait     |
-| JVM        | `Worker.Builder.shutdownGrace`         | 25 s      | 0 to 1 day        | No handler wait     |
-| .NET       | `WorkerOptions.ShutdownGrace`          | 25 s      | 0 to 1 day        | No handler wait     |
+| SDK        | Option                                 | Default   | Range                        | Zero                |
+| ---------- | -------------------------------------- | --------- | ---------------------------- | ------------------- |
+| TypeScript | `shutdownTimeoutMs`                    | 25,000 ms | 1 to 3,600,000 ms            | Refused             |
+| Python     | `shutdown_timeout_ms`                  | 25,000 ms | 1 to 3,600,000 ms            | Refused             |
+| Go         | `WorkerOptions.ShutdownGracePeriod`    | 25,000 ms | 1 to 86,400,000 ms, whole ms | Selects the default |
+| Rust       | `WorkerOptions::shutdown_grace_period` | 25 s      | 1 to 86,400,000 ms, whole ms | Refused             |
+| Ruby       | `shutdown_grace`                       | 25 s      | 0 to 86,400 s                | No handler wait     |
+| JVM        | `Worker.Builder.shutdownGrace`         | 25 s      | 0 to 1 day                   | No handler wait     |
+| .NET       | `WorkerOptions.ShutdownGrace`          | 25 s      | 0 to 1 day                   | No handler wait     |
 
 With a zero grace, a Ruby, JVM, or .NET worker cancels its handlers, and the stop ends within the
 250 ms unwind window.

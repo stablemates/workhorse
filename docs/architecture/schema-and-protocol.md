@@ -1697,7 +1697,7 @@ other. Thus they cannot multiply the concurrency budget or race the queue cursor
 | `WorkerOptions.RegistryInterval`           | 5,000 milliseconds                                                                                | 0, which selects the default, or whole milliseconds from 100 through 2,147,483,647 |
 | `WorkerOptions.ScheduleNamespaces`         | Empty                                                                                             | Non-empty names; duplicates after the first are removed                            |
 | `WorkerOptions.ScheduleCatchupLimit`       | 100                                                                                               | Integers from 1 through 10,000                                                     |
-| `WorkerOptions.ShutdownGracePeriod`        | 25,000 milliseconds                                                                               | 0, which selects the default, or positive whole-millisecond values                 |
+| `WorkerOptions.ShutdownGracePeriod`        | 25,000 milliseconds                                                                               | 0, which selects the default, or whole milliseconds from 1 through 86,400,000      |
 | `WorkerOptions.PollingOnly`                | False                                                                                             |                                                                                    |
 | `WorkerOptions.Logger`                     | `slog.Default()`                                                                                  | A `*slog.Logger`                                                                   |
 
@@ -1715,7 +1715,8 @@ and it does not abandon the handlers at once. Thus `RegistryInterval` cannot tur
 `register_worker_v1` takes the three interval options as PostgreSQL `integer` milliseconds. Its
 check refuses a value below 100. Thus `NewWorker` refuses a value outside the range
 ([ADR 0112](../decisions/0112-define-the-poll-wait-order-and-the-worker-interval-range.md)).
-`PollInterval` and `ShutdownGracePeriod` have no upper limit.
+`NewWorker` refuses a `ShutdownGracePeriod` above 86,400,000 milliseconds (one day), the limit that
+Ruby, the JVM, and .NET use. `PollInterval` has no upper limit.
 
 Option behavior:
 
@@ -2579,7 +2580,7 @@ crate. Then it tests the default consumer.
 | `registry_interval`            | 5 seconds                                                                                   | Whole milliseconds from 100 through 2,147,483,647                                                                          |
 | `schedule_namespaces`          | Empty                                                                                       | Rejects empty names; drops later duplicates                                                                                |
 | `schedule_catchup_limit`       | 100                                                                                         | 1 through 10,000                                                                                                           |
-| `shutdown_grace_period`        | 25 seconds                                                                                  | Positive whole milliseconds; zero is refused                                                                               |
+| `shutdown_grace_period`        | 25 seconds                                                                                  | Whole milliseconds from 1 through 86,400,000; zero is refused                                                              |
 | `retry_delay`                  |                                                                                             | Overrides one failed attempt's delay: 0 through 2,147,483,647 ms after half-up rounding; `None` keeps the persisted policy |
 
 The smallest supported `heartbeat_interval` is 100 milliseconds. The worker accepts a shorter value
@@ -2589,7 +2590,9 @@ The smallest supported `heartbeat_interval` is 100 milliseconds. The worker acce
 `register_worker_v1` takes the three interval options as PostgreSQL `integer` milliseconds, and its
 check refuses a value below 100, so `Worker::new` refuses a value outside the range
 ([ADR 0112](../decisions/0112-define-the-poll-wait-order-and-the-worker-interval-range.md)).
-`Worker::new` refuses a zero `shutdown_grace_period` with `Error::InvalidArgument`.
+`Worker::new` refuses a zero `shutdown_grace_period` with `Error::InvalidArgument`. It also refuses
+a grace above 86,400,000 milliseconds (one day), the limit that Ruby, the JVM, and .NET use. Thus
+the run cannot overflow its deadline arithmetic.
 
 The worker expects a listener only when all of these conditions are true:
 

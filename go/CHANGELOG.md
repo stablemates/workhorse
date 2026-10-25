@@ -10,6 +10,15 @@ adds.
 
 ## Unreleased
 
+### The worker refuses a shutdown grace above one day
+
+Before this change, `WorkerOptions.ShutdownGracePeriod` had no upper limit (SM-1778). Ruby, the JVM,
+and .NET already refuse a grace above 86,400,000 ms.
+
+Now `NewWorker` refuses a grace above 86,400,000 ms (one day) with its usual option error. A caller
+who passed a longer grace gets an error at construction. The lower limit and the whole-millisecond
+check do not change.
+
 ### The worker records the retry span
 
 Before this change, the Go worker recorded no `workhorse.retry` span. When an attempt timeout

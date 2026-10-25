@@ -373,7 +373,7 @@ const (
 	cronSundayField                     = "0"
 	cronLastDayCandidateRange           = "28-31"
 	recoverMaintenancePhase             = "recover"
-	workerShutdownGraceRangeMessage     = "worker shutdown grace period must be a positive whole number of milliseconds"
+	workerShutdownGraceRangeMessage     = "worker shutdown grace period must be a whole number of milliseconds between 1 and 86400000"
 	shutdownIncompleteMessage           = "worker shutdown grace period expired while handlers were still running"
 	workerShutdownIncompleteFormat      = "%w: %d abandoned"
 	workerRegistryRangeMessage          = "worker registry interval must be between 100 and 2147483647 whole milliseconds"

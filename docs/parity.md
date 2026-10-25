@@ -388,20 +388,22 @@ default, Rust does not check it, and Python, Ruby, the JVM, and .NET refuse 0.
 
 ### Zero shutdown grace
 
-| SDK and API                                       | Accepted range                   | Zero                                                           |
-| ------------------------------------------------- | -------------------------------- | -------------------------------------------------------------- |
-| TypeScript `runWorkerProcess` `shutdownTimeoutMs` | 1 to 3,600,000 ms                | Refused                                                        |
-| Python `run_worker_process` `shutdown_timeout_ms` | 1 to 3,600,000 ms                | Refused                                                        |
-| Go `WorkerOptions.ShutdownGracePeriod`            | 1 ms or more, whole milliseconds | Selects the 25,000 ms default                                  |
-| Rust `WorkerOptions::shutdown_grace_period`       | 1 ms or more, whole milliseconds | Refused                                                        |
-| Ruby `Worker.new(shutdown_grace:)`                | 0 to 86,400 s                    | No handler wait; the stop ends within the 250 ms unwind window |
-| Ruby `run_worker_processes(shutdown_grace:)`      | 0 to 86,400 s                    | Sends `SIGKILL` to the child processes at once                 |
-| JVM `Worker.Builder.shutdownGrace`                | 0 to 1 day                       | No handler wait; the stop ends within the 250 ms unwind window |
-| .NET `WorkerOptions.ShutdownGrace`                | 0 to 1 day                       | No handler wait; the stop ends within the 250 ms unwind window |
+| SDK and API                                       | Accepted range               | Zero                                                           |
+| ------------------------------------------------- | ---------------------------- | -------------------------------------------------------------- |
+| TypeScript `runWorkerProcess` `shutdownTimeoutMs` | 1 to 3,600,000 ms            | Refused                                                        |
+| Python `run_worker_process` `shutdown_timeout_ms` | 1 to 3,600,000 ms            | Refused                                                        |
+| Go `WorkerOptions.ShutdownGracePeriod`            | 1 to 86,400,000 ms, whole ms | Selects the 25,000 ms default                                  |
+| Rust `WorkerOptions::shutdown_grace_period`       | 1 to 86,400,000 ms, whole ms | Refused                                                        |
+| Ruby `Worker.new(shutdown_grace:)`                | 0 to 86,400 s                | No handler wait; the stop ends within the 250 ms unwind window |
+| Ruby `run_worker_processes(shutdown_grace:)`      | 0 to 86,400 s                | Sends `SIGKILL` to the child processes at once                 |
+| JVM `Worker.Builder.shutdownGrace`                | 0 to 1 day                   | No handler wait; the stop ends within the 250 ms unwind window |
+| .NET `WorkerOptions.ShutdownGrace`                | 0 to 1 day                   | No handler wait; the stop ends within the 250 ms unwind window |
 
-The TypeScript and Python `Worker.stop()` take no grace. The Kotlin `WorkerScope.shutdownGrace` and
-the Spring Boot property `workhorse.worker.shutdown-grace` pass their value to the JVM builder. Go
-cannot tell an unset `time.Duration` from zero, so a zero grace is the default and not an error.
+Go, Rust, Ruby, the JVM, and .NET refuse a grace above one day, 86,400,000 ms, at construction. The
+TypeScript and Python process runners keep their limit of 3,600,000 ms. The TypeScript and Python
+`Worker.stop()` take no grace. The Kotlin `WorkerScope.shutdownGrace` and the Spring Boot property
+`workhorse.worker.shutdown-grace` pass their value to the JVM builder. Go cannot tell an unset
+`time.Duration` from zero, so a zero grace is the default and not an error.
 In Ruby, the JVM, and .NET, the claims in flight, the handler cancellation, and the cleanup share
 that one window, so a cancelled handler can get less than 250 ms to return.
 

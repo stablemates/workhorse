@@ -954,12 +954,12 @@ after the drain.
 <details>
 <summary>Reference: shutdown deadline</summary>
 
-| SDK        | Option                                 | Default   | Range             |
-| ---------- | -------------------------------------- | --------- | ----------------- |
-| TypeScript | `shutdownTimeoutMs`                    | 25,000 ms | 1 to 3,600,000 ms |
-| Python     | `shutdown_timeout_ms`                  | 25,000 ms | 1 to 3,600,000 ms |
-| Go         | `WorkerOptions.ShutdownGracePeriod`    | 25,000 ms | Positive whole ms |
-| Rust       | `WorkerOptions::shutdown_grace_period` | 25 s      | —                 |
+| SDK        | Option                                 | Default   | Range                        |
+| ---------- | -------------------------------------- | --------- | ---------------------------- |
+| TypeScript | `shutdownTimeoutMs`                    | 25,000 ms | 1 to 3,600,000 ms            |
+| Python     | `shutdown_timeout_ms`                  | 25,000 ms | 1 to 3,600,000 ms            |
+| Go         | `WorkerOptions.ShutdownGracePeriod`    | 25,000 ms | 1 to 86,400,000 ms, whole ms |
+| Rust       | `WorkerOptions::shutdown_grace_period` | 25 s      | 1 to 86,400,000 ms, whole ms |
 
 **TypeScript process exits**
 
