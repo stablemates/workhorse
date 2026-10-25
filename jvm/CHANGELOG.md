@@ -47,6 +47,18 @@ adds.
 
 ### Fixes
 
+- **The JVM client measures signal and human wait values as PostgreSQL does.** PostgreSQL limits a
+  signal payload, a human wait context, and a human wait result to 65,536 bytes of
+  `octet_length(value::jsonb::text)`. That text has a space after each `:` and `,`, so it can be
+  longer than compact JSON. Before this change, the JVM client counted the compact JSON. A value
+  near the limit passed that check, and then PostgreSQL refused the statement with a database error
+  (SM-1639).
+
+  Now `Queue.sendSignal`, `Queue.completeHumanWait`, and `HandlerContext.waitForHuman` measure the
+  canonical JSONB text before any statement. An oversized value throws `IllegalArgumentException`.
+  `HandlerContext.waitForHuman` also checks the context before its tier lookup, which can read
+  PostgreSQL. The limit does not change.
+
 - **A declared pool size caps the default cohorts.** A `DataSource` reports no pool size. Before
   this change, the worker ignored `poolMaxSize` when it chose its default cohorts. A worker with
   concurrency 64 and `poolMaxSize(4)` used 8 cohorts on 2 free connections.

@@ -491,12 +491,28 @@ func validateExternalWaitDelivery(delivery ExternalWaitDelivery, label string) e
 	return nil
 }
 
+// encodeExternalWaitValue encodes a signal or human wait value and refuses it before any statement
+// when PostgreSQL would. PostgreSQL bounds the value with octet_length(value::jsonb::text). That
+// text puts a space after each ':' and ',', so it can be longer than the compact encoding. The
+// client measures the same text. Without exponent notation that text is at most twice as long as
+// the compact encoding, so most values skip the exact measure. A value nested deeper than the
+// decoder accepts is measured from its tokens instead.
 func encodeExternalWaitValue(value any, label string) ([]byte, error) {
 	encoded, err := json.Marshal(value)
 	if err != nil {
 		return nil, err
 	}
-	if len(encoded) > maximumExternalWaitBytes {
+	if len(encoded)*2 <= maximumExternalWaitBytes && !hasExponentNumber(encoded) {
+		return encoded, nil
+	}
+	var actual int
+	var decoded any
+	if err := decodeContractJSON(encoded, &decoded); err == nil {
+		actual = jsonbTextBytes(decoded)
+	} else {
+		actual = scannedJSONBTextBytes(encoded)
+	}
+	if actual > maximumExternalWaitBytes {
 		return nil, fmt.Errorf(externalWaitValueSizeFormat, label)
 	}
 	return encoded, nil

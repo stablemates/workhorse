@@ -59,6 +59,20 @@ RSpec.describe Stablemates::Workhorse::Queue do
       .to raise_error(W::UnexpectedStatusError)
   end
 
+  it "measures signal payloads and human wait results as jsonb text before any statement runs" do
+    # Compact JSON writes 30,000 zeros in 60,001 bytes. PostgreSQL's jsonb text puts a space after
+    # each comma, so it writes the same array in 90,000 bytes, which is above the limit.
+    zeros = [0] * 30_000
+    expect(JSON.generate(zeros).bytesize).to be < 65_536
+    executor = FakeExecutor.new
+    queue = described_class.new(executor)
+    expect { queue.send_signal(task, "go", zeros, idempotency_key: "k", requested_by: "ops") }
+      .to raise_error(ArgumentError, "signal payload must be at most 65536 bytes of JSON")
+    expect { queue.complete_human_wait(task, "review", zeros, idempotency_key: "k", requested_by: "ann") }
+      .to raise_error(ArgumentError, "human wait result must be at most 65536 bytes of JSON")
+    expect(executor.statements).to be_empty
+  end
+
   it "refuses an unknown enqueue outcome" do
     queue = described_class.new(FakeExecutor.new do
       [{"ordinal" => "1", "task_id" => task, "outcome" => "levitated", "reason" => nil}]

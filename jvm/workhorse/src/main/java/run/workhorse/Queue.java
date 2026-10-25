@@ -27,6 +27,7 @@ import run.workhorse.internal.ContractSchema;
 import run.workhorse.internal.Contracts;
 import run.workhorse.internal.Contracts.PayloadContract;
 import run.workhorse.internal.Json;
+import run.workhorse.internal.JsonbSize;
 import run.workhorse.internal.PgjdbcVersion;
 import run.workhorse.internal.Row;
 import run.workhorse.internal.Sql;
@@ -825,7 +826,9 @@ public final class Queue {
           label + " name must contain between 1 and 200 characters without surrounding whitespace");
     }
     String document = Json.write(tree(value, valueLabel));
-    if (bytes(document) > MAX_EXTERNAL_VALUE_BYTES) {
+    // PostgreSQL bounds the value with octet_length(value::jsonb::text), which can be longer than
+    // the compact JSON, so the queue measures the same text.
+    if (JsonbSize.of(document) > MAX_EXTERNAL_VALUE_BYTES) {
       throw new IllegalArgumentException(valueLabel + " must be at most 65536 bytes of JSON");
     }
     int keyBytes = bytes(idempotencyKey);

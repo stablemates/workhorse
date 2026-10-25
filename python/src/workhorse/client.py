@@ -356,12 +356,10 @@ class Queue:
         idempotency_key: str,
         requested_by: str,
     ) -> SignalDeliveryResult:
+        parameters = _signal_parameters(task_id, name, payload, idempotency_key, requested_by)
         _assert_sync_compatible(self._executor)
         row = _one_row(
-            self._executor.rows(
-                _STATEMENTS.send_signal,
-                _signal_parameters(task_id, name, payload, idempotency_key, requested_by),
-            ),
+            self._executor.rows(_STATEMENTS.send_signal, parameters),
             "workhorse.send_signal_v1",
         )
         return _signal_result(row, task_id, name)
@@ -375,12 +373,10 @@ class Queue:
         idempotency_key: str,
         requested_by: str,
     ) -> HumanWaitCompletionResult:
+        parameters = _human_parameters(task_id, name, result, idempotency_key, requested_by)
         _assert_sync_compatible(self._executor)
         row = _one_row(
-            self._executor.rows(
-                _STATEMENTS.complete_human_wait,
-                _human_parameters(task_id, name, result, idempotency_key, requested_by),
-            ),
+            self._executor.rows(_STATEMENTS.complete_human_wait, parameters),
             "workhorse.complete_human_wait_v1",
         )
         return _human_result(row, task_id, name)
@@ -775,12 +771,10 @@ class AsyncQueue:
         idempotency_key: str,
         requested_by: str,
     ) -> SignalDeliveryResult:
+        parameters = _signal_parameters(task_id, name, payload, idempotency_key, requested_by)
         await _assert_async_compatible(self._executor)
         row = _one_row(
-            await self._executor.rows(
-                _STATEMENTS.send_signal,
-                _signal_parameters(task_id, name, payload, idempotency_key, requested_by),
-            ),
+            await self._executor.rows(_STATEMENTS.send_signal, parameters),
             "workhorse.send_signal_v1",
         )
         return _signal_result(row, task_id, name)
@@ -794,12 +788,10 @@ class AsyncQueue:
         idempotency_key: str,
         requested_by: str,
     ) -> HumanWaitCompletionResult:
+        parameters = _human_parameters(task_id, name, result, idempotency_key, requested_by)
         await _assert_async_compatible(self._executor)
         row = _one_row(
-            await self._executor.rows(
-                _STATEMENTS.complete_human_wait,
-                _human_parameters(task_id, name, result, idempotency_key, requested_by),
-            ),
+            await self._executor.rows(_STATEMENTS.complete_human_wait, parameters),
             "workhorse.complete_human_wait_v1",
         )
         return _human_result(row, task_id, name)

@@ -8,6 +8,7 @@ use serde_json::Value;
 
 use crate::context::{status, validate_name};
 use crate::sql_catalogue_generated as sql;
+use crate::value_size::jsonb_text_bytes;
 use crate::{Error, HandlerContext, Operation};
 
 const MAX_SLEEP: Duration = Duration::from_secs(365 * 24 * 60 * 60);
@@ -120,10 +121,8 @@ impl HandlerContext {
         validate_wait_name(name, "human wait")?;
         let timeout = wait_timeout(timeout)?;
         let context = serde_json::to_value(context)?;
+        check_human_context(&context)?;
         let encoded = context.to_string();
-        if encoded.len() > MAX_HUMAN_CONTEXT_BYTES {
-            return Err(Error::invalid("human wait context must encode to at most 65536 bytes"));
-        }
         let key = format!("human:{name}");
         let request = format!("{timeout:?}:{encoded}");
         let value = self
@@ -166,4 +165,31 @@ fn whole_millis(duration: Duration, max: Duration, label: &str) -> Result<i64, E
         )));
     }
     i64::try_from(duration.as_millis()).map_err(|_| Error::invalid(format!("{label} is too long")))
+}
+
+/// Refuses a human wait context before its statement when PostgreSQL would refuse it. PostgreSQL
+/// bounds the context with `octet_length(context::jsonb::text)`, which can be longer than the
+/// compact JSON, so the client measures the same text.
+fn check_human_context(context: &Value) -> Result<(), Error> {
+    if jsonb_text_bytes(context) > MAX_HUMAN_CONTEXT_BYTES {
+        return Err(Error::invalid("human wait context must encode to at most 65536 bytes"));
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::{json, Value};
+
+    use super::{check_human_context, MAX_HUMAN_CONTEXT_BYTES};
+
+    #[test]
+    fn measures_the_context_as_jsonb_text() {
+        // Compact JSON writes 30,000 zeros in 60,001 bytes. PostgreSQL's jsonb text puts a space
+        // after each comma, so it writes the same array in 90,000 bytes.
+        let zeros = Value::Array(vec![json!(0); 30_000]);
+        assert!(zeros.to_string().len() < MAX_HUMAN_CONTEXT_BYTES);
+        let error = check_human_context(&zeros).unwrap_err();
+        assert_eq!(error.to_string(), "human wait context must encode to at most 65536 bytes");
+    }
 }
