@@ -29,7 +29,7 @@ const (
 	sharedQueue               = "demo-shared"
 	scheduleNamespace         = "workhorse-demo"
 	fastTierScheduleNamespace = "workhorse-demo-fast-tier"
-	workerConcurrency         = 3
+	workerConcurrency         = 6
 	defaultPollMilliseconds   = 15_000
 	schemaRetryInterval       = 500 * time.Millisecond
 )
@@ -181,7 +181,14 @@ func main() {
 	if err != nil {
 		panic(err)
 	}
-	pool, err := pgxpool.New(runContext, url)
+	poolConfig, err := pgxpool.ParseConfig(url)
+	if err != nil {
+		panic(err)
+	}
+	// Each handler slot, the heartbeat, the notification listener, and the dispatch loop can hold a
+	// connection at once. The pgx default depends on the host's CPU count instead.
+	poolConfig.MaxConns = workerConcurrency + 4
+	pool, err := pgxpool.NewWithConfig(runContext, poolConfig)
 	if err != nil {
 		panic(err)
 	}

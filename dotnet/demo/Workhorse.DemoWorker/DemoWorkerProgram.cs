@@ -30,7 +30,7 @@ internal static partial class DemoWorkerProgram
     internal const string ScheduleNamespace = "workhorse-demo";
     internal const string FastTierScheduleNamespace = "workhorse-demo-fast-tier";
     internal const string Language = "dotnet";
-    internal const int WorkerConcurrency = 3;
+    internal const int WorkerConcurrency = 6;
     internal const long DefaultPollMs = 15_000;
     internal static readonly TimeSpan SchemaRetry = TimeSpan.FromMilliseconds(500);
 

@@ -13,6 +13,7 @@ import {
   DEMO_PYTHON_QUEUE,
   DEMO_QUEUE,
   DEMO_RATE_LIMIT_QUEUE,
+  DEMO_REPORT_EXPORT_QUEUE,
   DEMO_RUBY_FAST_QUEUE,
   DEMO_RUBY_QUEUE,
   DEMO_RUST_FAST_QUEUE,
@@ -71,10 +72,33 @@ describe("multilanguage demo worker topology", () => {
     expect(dockerfile).toContain("python3 is {actual}, the pin is {expected}");
   });
 
-  it("declares one equal-capacity worker in each runtime", () => {
-    expect(DEMO_WORKER_CONCURRENCY).toEqual([3, 3, 3, 3, 3, 3, 3]);
+  it("declares one equal-capacity worker in each runtime", async () => {
+    expect(DEMO_WORKER_CONCURRENCY).toEqual([6, 6, 6, 6, 6, 6, 6]);
+    const slots = DEMO_WORKER_CONCURRENCY[0];
+    const declarations = [
+      ["python/examples/demo_worker.py", /^WORKER_CONCURRENCY = (\d+)$/m],
+      ["go/examples/demo-worker/main.go", /^\s*workerConcurrency\s+= (\d+)$/m],
+      ["rust/demo-worker/src/lib.rs", /^pub const WORKER_CONCURRENCY: usize = (\d+);$/m],
+      ["ruby/examples/demo_worker.rb", /^\s*WORKER_CONCURRENCY = (\d+)$/m],
+      [
+        "jvm/examples/programs/src/main/java/run/workhorse/examples/programs/DemoWorkerProgram.java",
+        /static final int WORKER_CONCURRENCY = (\d+);/,
+      ],
+      [
+        "dotnet/demo/Workhorse.DemoWorker/DemoWorkerProgram.cs",
+        /internal const int WorkerConcurrency = (\d+);/,
+      ],
+    ] as const;
+    for (const [path, declaration] of declarations) {
+      const source = await readFile(resolve(path), "utf8");
+      expect({ path, slots: declaration.exec(source)?.[1] }).toEqual({
+        path,
+        slots: String(slots),
+      });
+    }
     expect([
       DEMO_QUEUE,
+      DEMO_REPORT_EXPORT_QUEUE,
       DEMO_RATE_LIMIT_QUEUE,
       DEMO_PYTHON_QUEUE,
       DEMO_GO_QUEUE,
@@ -85,6 +109,7 @@ describe("multilanguage demo worker topology", () => {
       DEMO_SHARED_QUEUE,
     ]).toEqual([
       "demo",
+      "report-exports",
       "partner-api",
       "demo-python",
       "demo-go",

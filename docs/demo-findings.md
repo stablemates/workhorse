@@ -13,7 +13,8 @@ dashboard discovers the fleet without process-local controller objects.
 
 Each runtime owns a queue for its application handlers. TypeScript, Python, Go, Rust, Ruby, JVM, and
 .NET also compete for one runtime-neutral task on `demo-shared`, which exercises compatible claim and
-settlement through every public SDK. The TypeScript worker separately serves the rate-limited `partner-api` queue.
+settlement through every public SDK. The TypeScript worker separately serves the rate-limited `partner-api` queue
+and the `report-exports` queue, which carries the concurrency policy.
 
 The application mounts the publishable dashboard host. Development supplies the dashboard's Vite
 middleware, while production serves the built browser bundle through the same host. Passing
@@ -30,7 +31,9 @@ the dashboard server's versioned read surface.
 
 The demo also exercises queue pause, purge, worker pause, recurring schedules, retention,
 maintenance, health, and a rate-limited `partner-api` queue. That queue leaves an admissible backlog
-visible while PostgreSQL refills its queue-wide and per-key rate tokens.
+visible while PostgreSQL refills its queue-wide and per-key rate tokens. The `report-exports` queue
+shows a concurrency policy: a noisy tenant fills its key, and the exports of other customers still
+run.
 
 ## What belongs to verification instead
 

@@ -58,6 +58,12 @@ import {
   DEMO_IDEMPOTENCY_TTL_MS,
   DEMO_LONG_RUNNING_SEED_DELAY_MS,
   DEMO_LONG_RUNNING_SEED_TASKS,
+  DEMO_REPORT_EXPORT_BURST_SCHEDULE,
+  DEMO_REPORT_EXPORT_BURST_SCHEDULE_NAME,
+  DEMO_REPORT_EXPORT_CUSTOMERS,
+  DEMO_REPORT_EXPORT_NOISY_CUSTOMER,
+  DEMO_REPORT_EXPORT_QUEUE,
+  DEMO_REPORT_EXPORT_SCHEDULE,
   DEMO_MAINTENANCE_INTERVAL_MS,
   DEMO_OPERATOR_IDEMPOTENCY_KEY,
   DEMO_OPERATOR_IDEMPOTENCY_SCOPE,
@@ -115,6 +121,8 @@ import {
   RUST_WORKER_SCHEDULE_NAME,
   RUBY_SEED_NAME,
   RUBY_WORKER_SCHEDULE_NAME,
+  REPORT_EXPORT_BURST_TASK_TYPE,
+  REPORT_EXPORT_TASK_TYPE,
   REPORT_TASK_TYPE,
   REPORT_SCHEDULE_NAME,
   REPRESENTATIVE_SEED_NAME,
@@ -785,6 +793,45 @@ function trafficSchedules() {
   );
 }
 
+/**
+ * The report export showcase: one steady export per customer every two minutes, and a noisy-tenant
+ * burst twice an hour. The burst driver runs on `demo`, so it does not use the export queue's cap.
+ */
+function reportExportSchedules() {
+  return [
+    ...DEMO_REPORT_EXPORT_CUSTOMERS.map(
+      ({ customer, scheduleName }) =>
+        ({
+          name: scheduleName,
+          schedule: DEMO_REPORT_EXPORT_SCHEDULE,
+          catchupPolicy: "latest",
+          enabled: true,
+          task: {
+            type: REPORT_EXPORT_TASK_TYPE,
+            queue: DEMO_REPORT_EXPORT_QUEUE,
+            payload: { source: "schedule", customer },
+            concurrencyKey: customer,
+            maxAttempts: 1,
+            tags: ["report-export", "concurrency-policy"],
+          },
+        }) as const,
+    ),
+    {
+      name: DEMO_REPORT_EXPORT_BURST_SCHEDULE_NAME,
+      schedule: DEMO_REPORT_EXPORT_BURST_SCHEDULE,
+      catchupPolicy: "latest",
+      enabled: true,
+      task: {
+        type: REPORT_EXPORT_BURST_TASK_TYPE,
+        queue: DEMO_QUEUE,
+        payload: { customer: DEMO_REPORT_EXPORT_NOISY_CUSTOMER },
+        maxAttempts: 1,
+        tags: ["report-export", "noisy-tenant"],
+      },
+    } as const,
+  ];
+}
+
 function taskGroupSchedule() {
   return {
     name: TASK_GROUP_SCHEDULE_NAME,
@@ -1017,15 +1064,19 @@ export async function syncDemoSchedules(database: Pool): Promise<void> {
     ...featureShowcaseSchedules(new Map()),
     ...trafficSchedules(),
     taskGroupSchedule(),
+    ...reportExportSchedules(),
   ]);
 }
 
-/** Synchronize the fleet-wide dispatch budget showcased by the seeded long-running tasks. */
+/**
+ * Synchronize the fleet-wide policy of the report export showcase. The namespace owns no policy on
+ * `demo`, so pruning removes the earlier `demo` policy and worker slots alone limit that queue.
+ */
 export async function syncDemoConcurrencyPolicies(database: Pool): Promise<void> {
   const queue = new Queue(database, DEMO_QUEUE);
   await queue.syncConcurrencyPolicies(DEMO_CONCURRENCY_POLICY_NAMESPACE, [
     {
-      queue: DEMO_QUEUE,
+      queue: DEMO_REPORT_EXPORT_QUEUE,
       maxActive: DEMO_CONCURRENCY_MAX_ACTIVE,
       maxActivePerKey: DEMO_CONCURRENCY_MAX_ACTIVE_PER_KEY,
     },
@@ -1044,7 +1095,7 @@ export async function syncDemoRateLimitPolicies(database: Pool): Promise<void> {
   ]);
 }
 
-/** Synchronize the named budget that the main queue and the partner API queue share. */
+/** Synchronize the named budget that the report export queue and the partner API queue share. */
 export async function syncDemoBudgets(database: Pool): Promise<void> {
   const queue = new Queue(database, DEMO_QUEUE);
   await queue.syncBudgets(DEMO_BUDGET_NAMESPACE, [
@@ -1862,6 +1913,7 @@ async function seedLongRunningDemoData(database: DemoDatabase): Promise<string[]
           LONG_RUNNING_TASK_TYPE,
           { source: "long-running-seed", label: task.label },
           {
+            queue: DEMO_REPORT_EXPORT_QUEUE,
             concurrencyKey: task.concurrencyKey,
             budget: DEMO_BUDGET_NAME,
             maxAttempts: 1,

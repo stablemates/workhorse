@@ -15,7 +15,7 @@ pub const RUST_FAST_QUEUE: &str = "demo-rust-fast";
 pub const SHARED_QUEUE: &str = "demo-shared";
 pub const SCHEDULE_NAMESPACE: &str = "workhorse-demo";
 pub const FAST_TIER_SCHEDULE_NAMESPACE: &str = "workhorse-demo-fast-tier";
-pub const WORKER_CONCURRENCY: usize = 3;
+pub const WORKER_CONCURRENCY: usize = 6;
 pub const DEFAULT_POLL_MILLISECONDS: u64 = 15_000;
 const SCHEMA_RETRY: Duration = Duration::from_millis(500);
 

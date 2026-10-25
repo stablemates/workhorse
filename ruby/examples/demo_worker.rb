@@ -18,7 +18,7 @@ module WorkhorseDemoWorker
   SHARED_QUEUE = "demo-shared"
   SCHEDULE_NAMESPACE = "workhorse-demo"
   FAST_TIER_SCHEDULE_NAMESPACE = "workhorse-demo-fast-tier"
-  WORKER_CONCURRENCY = 3
+  WORKER_CONCURRENCY = 6
   DEFAULT_POLL_MS = 15_000
   SCHEMA_RETRY_SECONDS = 0.5
 

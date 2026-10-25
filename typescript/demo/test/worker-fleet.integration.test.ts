@@ -14,15 +14,11 @@ import {
   createDemoIntegrationSuite,
 } from "./support/demo-integration.js";
 
-const {
-  createTestApplication,
-  dashboardClient,
-  database,
-  pool,
-  waitFor,
-  waitForRegisteredWorker,
-  waitForWorker,
-} = createDemoIntegrationSuite(import.meta.url);
+const { createTestApplication, dashboardClient, database, pool, waitFor, waitForWorker } =
+  createDemoIntegrationSuite(import.meta.url);
+
+/** The slots of one demo worker. Every worker declares the same number. */
+const slots = DEMO_WORKER_CONCURRENCY[0];
 
 describe("Workhorse demo", () => {
   it("reports overlapping slots and keeps active work running when a worker is paused", async () => {
@@ -32,14 +28,12 @@ describe("Workhorse demo", () => {
       longRunningTaskMs: TEST_CONTROL_WINDOW_TASK_MS,
     });
     const client = dashboardClient(app);
-    workhorse.start();
 
     try {
-      // Wait for both unnamed workers before enqueueing enough work to fill either worker's slots.
-      await waitForRegisteredWorker(client);
-
+      // Enqueue enough work to fill two workers before any worker starts. The first worker to claim
+      // then finds every task ready and fills all of its slots in one claim.
       const enqueued = await Promise.all(
-        Array.from({ length: 6 }, (_, index) =>
+        Array.from({ length: slots * 2 }, (_, index) =>
           client.dashboard.enqueueTest({
             kind: "long-running",
             audit: {
@@ -50,15 +44,16 @@ describe("Workhorse demo", () => {
           }),
         ),
       );
+      workhorse.start();
 
       const busyFleet = await waitFor(
         () => client.dashboard.workers(),
-        (page) => page.workers.some((worker) => worker.activeSlots === 3),
+        (page) => page.workers.some((worker) => worker.activeSlots === slots),
       );
-      const overlapped = busyFleet.workers.find((worker) => worker.activeSlots === 3)!;
-      expect(overlapped).toMatchObject({ concurrency: 3, activeSlots: 3, paused: false });
+      const overlapped = busyFleet.workers.find((worker) => worker.activeSlots === slots)!;
+      expect(overlapped).toMatchObject({ concurrency: slots, activeSlots: slots, paused: false });
       // SQL-observed active tasks and in-process slots describe the same overlap from two sources.
-      expect(overlapped.activeTasks).toBe(3);
+      expect(overlapped.activeTasks).toBe(slots);
 
       await expect(
         client.dashboard.setWorkerPaused({
@@ -72,9 +67,9 @@ describe("Workhorse demo", () => {
       const paused = (await client.dashboard.workers()).workers.find(
         (worker) => worker.id === overlapped.id,
       );
-      expect(paused).toMatchObject({ paused: true, activeSlots: 3, concurrency: 3 });
+      expect(paused).toMatchObject({ paused: true, activeSlots: slots, concurrency: slots });
 
-      // Each of these six handlers sleeps for a control window, and the fleet has nine slots, so
+      // Each of these handlers sleeps for a control window, and the fleet has more free slots, so
       // the wait blocks on one window of work whose duration the test chose. A poll count cannot
       // promise to outlast that, however large: it buys a duration only at an assumed read
       // latency, and this file's latency moves with what else the lane is running. The wall-clock
@@ -170,7 +165,9 @@ describe("Workhorse demo", () => {
       const page = await client.dashboard.workers();
       expect(page.workers.map((worker) => worker.activeTasks).reduce((a, b) => a + b, 0)).toBe(1);
       expect(page.workers).toHaveLength(DEMO_WORKER_CONCURRENCY.length);
-      expect(page.workers.map((worker) => worker.concurrency)).toEqual([3, 3, 3, 3, 3, 3, 3]);
+      expect(page.workers.map((worker) => worker.concurrency)).toEqual([
+        ...DEMO_WORKER_CONCURRENCY,
+      ]);
       for (const worker of page.workers) {
         expect(worker).toMatchObject({ registered: true, draining: false });
         expect(worker.activeSlots).not.toBeNull();

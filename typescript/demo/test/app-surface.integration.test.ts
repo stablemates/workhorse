@@ -8,7 +8,7 @@
 import { setTimeout as sleep } from "node:timers/promises";
 import { describe, expect, it } from "vitest";
 import { seedStagingData, syncStagingSchedules } from "../src/staging.js";
-import { Queue } from "@stablemates/workhorse";
+import { Queue, type Json } from "@stablemates/workhorse";
 import { createDrizzleAdapter } from "@stablemates/workhorse-drizzle";
 import {
   assertDemoSchemaCompatible,
@@ -37,6 +37,13 @@ import {
   DEMO_RATE_LIMIT_POLICY_NAMESPACE,
   DEMO_RATE_LIMIT_QUEUE,
   DEMO_RATE_LIMIT_SEED_TASKS,
+  DEMO_REPORT_EXPORT_BURST_SCHEDULE,
+  DEMO_REPORT_EXPORT_BURST_SCHEDULE_NAME,
+  DEMO_REPORT_EXPORT_BURST_SIZE,
+  DEMO_REPORT_EXPORT_CUSTOMERS,
+  DEMO_REPORT_EXPORT_NOISY_CUSTOMER,
+  DEMO_REPORT_EXPORT_QUEUE,
+  DEMO_REPORT_EXPORT_SCHEDULE,
   DEMO_RUBY_QUEUE,
   DEMO_RUST_QUEUE,
   DEMO_SCHEDULE_NAMESPACE,
@@ -81,6 +88,7 @@ import {
   DEMO_FEATURE_SHOWCASE_FAMILIES,
   DEMO_FEATURE_SHOWCASE_SOURCE,
 } from "../src/feature-showcase.js";
+import { reportExportBurstRequests } from "../src/handlers.js";
 import { createDemoWorkerDefinition } from "../src/worker-definition.js";
 import {
   GENERATED_WORKER_ID,
@@ -92,6 +100,9 @@ import {
 
 const { createTestApplication, dashboardClient, database, pool, waitFor } =
   createDemoIntegrationSuite(import.meta.url);
+
+/** A claimed task carries no key, so the export tests read the customer from the payload. */
+const exportCustomer = (task: { payload: Json }) => (task.payload as { customer: string }).customer;
 
 it("reports readiness outside the dashboard route space", async () => {
   const { app } = createTestApplication({ workers: false });
@@ -351,6 +362,20 @@ describe("Workhorse demo", () => {
           schedule_name: TYPESCRIPT_WORKER_SCHEDULE_NAME,
           cron_expression: "*/3 * * * *",
           task_type: LANGUAGE_WORKER_TASK_TYPE,
+          queue_name: DEMO_QUEUE,
+          configured_enabled: true,
+        },
+        ...DEMO_REPORT_EXPORT_CUSTOMERS.map(({ scheduleName }) => ({
+          schedule_name: scheduleName,
+          cron_expression: DEMO_REPORT_EXPORT_SCHEDULE,
+          task_type: "demo.report-export",
+          queue_name: DEMO_REPORT_EXPORT_QUEUE,
+          configured_enabled: true,
+        })),
+        {
+          schedule_name: DEMO_REPORT_EXPORT_BURST_SCHEDULE_NAME,
+          cron_expression: DEMO_REPORT_EXPORT_BURST_SCHEDULE,
+          task_type: "demo.report-export-burst",
           queue_name: DEMO_QUEUE,
           configured_enabled: true,
         },
@@ -863,6 +888,7 @@ describe("Workhorse demo", () => {
         "emails",
         "orders",
         "partner-api",
+        "report-exports",
         "showcase-dead-letter",
         "showcase-redrive-replay",
         "showcase-redrive-success",
@@ -1016,6 +1042,7 @@ describe("Workhorse demo", () => {
       "emails",
       "orders",
       "partner-api",
+      "report-exports",
       "showcase-dead-letter",
       "showcase-redrive-replay",
       "showcase-redrive-success",
@@ -1075,20 +1102,26 @@ describe("Workhorse demo", () => {
   });
 
   it("synchronizes a fleet budget and seeds queue-scoped key examples", async () => {
+    // A deployed demo stored the earlier policy on the whole `demo` queue. The sync prunes it.
+    await new Queue(pool).syncConcurrencyPolicies(DEMO_CONCURRENCY_POLICY_NAMESPACE, [
+      { queue: DEMO_QUEUE, maxActive: 3, maxActivePerKey: 1 },
+    ]);
     await syncDemoConcurrencyPolicies(pool);
     await seedDemoData(database);
 
-    await expect(new Queue(pool).listConcurrencyPolicies(["demo"])).resolves.toEqual([
+    await expect(
+      new Queue(pool).listConcurrencyPolicies([DEMO_QUEUE, DEMO_REPORT_EXPORT_QUEUE]),
+    ).resolves.toEqual([
       expect.objectContaining({
         namespace: DEMO_CONCURRENCY_POLICY_NAMESPACE,
-        queue: "demo",
+        queue: DEMO_REPORT_EXPORT_QUEUE,
         maxActive: DEMO_CONCURRENCY_MAX_ACTIVE,
         maxActivePerKey: DEMO_CONCURRENCY_MAX_ACTIVE_PER_KEY,
       }),
     ]);
     await expect(
       pool.query(
-        `SELECT payload->>'label' AS label, concurrency_key, tags
+        `SELECT payload->>'label' AS label, queue_name, concurrency_key, tags
            FROM workhorse.task
           WHERE task_type = 'demo.long-running'
             AND payload->>'source' = 'long-running-seed'
@@ -1098,16 +1131,19 @@ describe("Workhorse demo", () => {
       rows: [
         {
           label: "archive-validation",
+          queue_name: DEMO_REPORT_EXPORT_QUEUE,
           concurrency_key: "customer-acme",
           tags: expect.arrayContaining(["concurrency-policy"]),
         },
         {
           label: "partner-catalog-sync",
+          queue_name: DEMO_REPORT_EXPORT_QUEUE,
           concurrency_key: "customer-acme",
           tags: expect.arrayContaining(["concurrency-policy"]),
         },
         {
           label: "quarterly-report-export",
+          queue_name: DEMO_REPORT_EXPORT_QUEUE,
           concurrency_key: "customer-globex",
           tags: expect.arrayContaining(["concurrency-policy"]),
         },
@@ -1140,15 +1176,17 @@ describe("Workhorse demo", () => {
       [exampleIds],
     );
 
-    const queue = new Queue(pool, "demo");
-    const first = await queue.claim("demo-concurrency-a", { queue: "demo" });
-    const second = await queue.claim("demo-concurrency-b", { queue: "demo" });
+    const queue = new Queue(pool, DEMO_REPORT_EXPORT_QUEUE);
+    const first = await queue.claim("demo-concurrency-a", { queue: DEMO_REPORT_EXPORT_QUEUE });
+    const second = await queue.claim("demo-concurrency-b", { queue: DEMO_REPORT_EXPORT_QUEUE });
     if (!first || !second) throw new Error("Expected two distinct concurrency keys to be admitted");
     expect([keyById.get(first.id), keyById.get(second.id)].toSorted()).toEqual([
       "customer-acme",
       "customer-globex",
     ]);
-    await expect(queue.claim("demo-concurrency-c", { queue: "demo" })).resolves.toBeNull();
+    await expect(
+      queue.claim("demo-concurrency-c", { queue: DEMO_REPORT_EXPORT_QUEUE }),
+    ).resolves.toBeNull();
 
     const acmeClaim = keyById.get(first.id) === "customer-acme" ? first : second;
     const acmeWorker = acmeClaim === first ? "demo-concurrency-a" : "demo-concurrency-b";
@@ -1159,10 +1197,74 @@ describe("Workhorse demo", () => {
       idByLabel.get("partner-catalog-sync"),
     ].find((id) => id !== acmeClaim.id);
     await queue.complete(acmeClaim, acmeWorker, { seededConcurrencyExample: true });
-    const released = await queue.claim("demo-concurrency-c", { queue: "demo" });
+    const released = await queue.claim("demo-concurrency-c", { queue: DEMO_REPORT_EXPORT_QUEUE });
     expect(released?.id).toBe(remainingAcmeId);
     await queue.complete(globexClaim, globexWorker, { seededConcurrencyExample: true });
     await queue.complete(released!, "demo-concurrency-c", { seededConcurrencyExample: true });
+  });
+
+  it("keeps the other customers' exports running while a noisy tenant fills its key", async () => {
+    await syncDemoConcurrencyPolicies(pool);
+    const queue = new Queue(pool, DEMO_REPORT_EXPORT_QUEUE);
+    const exportPolicy = async () =>
+      (await queue.health()).concurrencyPolicies.policies.find(
+        (policy) => policy.queue === DEMO_REPORT_EXPORT_QUEUE,
+      );
+    const claimAll = async (workerPrefix: string) => {
+      const claimed = [];
+      for (let index = 0; ; index += 1) {
+        const task = await queue.claim(`${workerPrefix}-${index}`, {
+          queue: DEMO_REPORT_EXPORT_QUEUE,
+        });
+        if (!task) return claimed;
+        claimed.push(task);
+      }
+    };
+
+    // The burst arrives on an odd minute, when the steady exports are finished.
+    await queue.enqueueMany(reportExportBurstRequests("noisy-burst-driver"));
+    expect(await exportPolicy()).toMatchObject({
+      active: 0,
+      available: DEMO_CONCURRENCY_MAX_ACTIVE,
+      saturatedKeys: 0,
+      highestKeyActive: 0,
+    });
+    const burstClaims = await claimAll("export-burst");
+    expect(burstClaims.map(exportCustomer)).toEqual([DEMO_REPORT_EXPORT_NOISY_CUSTOMER]);
+    expect(await exportPolicy()).toMatchObject({
+      active: 1,
+      available: DEMO_CONCURRENCY_MAX_ACTIVE - 1,
+      blockedReady: DEMO_REPORT_EXPORT_BURST_SIZE - 1,
+      saturatedKeys: 1,
+      highestKeyActive: 1,
+    });
+
+    // At the next even minute every steady customer enqueues one export.
+    for (const { customer } of DEMO_REPORT_EXPORT_CUSTOMERS) {
+      await queue.enqueue(
+        "demo.report-export",
+        { source: "schedule", customer },
+        { queue: DEMO_REPORT_EXPORT_QUEUE, concurrencyKey: customer, maxAttempts: 1 },
+      );
+    }
+    const steadyClaims = await claimAll("export-steady");
+    // The queue cap admits two of the three steady customers beside the noisy tenant.
+    expect(steadyClaims.map(exportCustomer)).toEqual(
+      DEMO_REPORT_EXPORT_CUSTOMERS.slice(0, 2).map(({ customer }) => customer),
+    );
+    expect(await exportPolicy()).toMatchObject({
+      active: DEMO_CONCURRENCY_MAX_ACTIVE,
+      available: 0,
+      blockedReady: DEMO_REPORT_EXPORT_BURST_SIZE - 1 + 1,
+      saturatedKeys: DEMO_CONCURRENCY_MAX_ACTIVE,
+      highestKeyActive: 1,
+    });
+
+    // A finished steady export frees queue capacity for the waiting customer, not for the burst.
+    const [finished] = steadyClaims;
+    await queue.complete(finished!, "export-steady-0", { exported: true });
+    const next = await claimAll("export-next");
+    expect(next.map(exportCustomer)).toEqual([DEMO_REPORT_EXPORT_CUSTOMERS[2].customer]);
   });
 
   it("synchronizes one named budget that the seeded queues share", async () => {
@@ -1188,7 +1290,7 @@ describe("Workhorse demo", () => {
         [DEMO_BUDGET_NAME],
       ),
     ).resolves.toMatchObject({
-      rows: [{ queue_name: DEMO_QUEUE }, { queue_name: DEMO_RATE_LIMIT_QUEUE }],
+      rows: [{ queue_name: DEMO_RATE_LIMIT_QUEUE }, { queue_name: DEMO_REPORT_EXPORT_QUEUE }],
     });
     const health = await new Queue(pool).health();
     expect(health.budgetPolicies.budgets).toEqual([

@@ -148,7 +148,7 @@ if (stagingPool && stagingDatabase) {
 }
 if (stagingPool) {
   await syncStagingSchedules(stagingPool);
-  // Apply admission policies to tasks retained from the older shared seed, too.
+  // Staging stores the same admission policies, so the sync also removes its earlier `demo` policy.
   await syncDemoConcurrencyPolicies(stagingPool);
   await syncDemoRateLimitPolicies(stagingPool);
   await syncDemoBudgets(stagingPool);

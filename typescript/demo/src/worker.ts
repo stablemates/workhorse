@@ -8,6 +8,7 @@ import {
   DEMO_FAST_TIER_SCHEDULE_NAMESPACE,
   DEMO_QUEUE,
   DEMO_RATE_LIMIT_QUEUE,
+  DEMO_REPORT_EXPORT_QUEUE,
   DEMO_SCHEDULE_NAMESPACE,
   DEMO_SHARED_QUEUE,
   DEMO_WORKER_CONCURRENCY,
@@ -26,10 +27,11 @@ import { createDemoWorkerDefinition } from "./worker-definition.js";
  * their own connection pool, and their own lifecycle, and share nothing with the web tier except
  * PostgreSQL. Run it with `workhorse worker --config <compiled module>`.
  *
- * The launcher starts this TypeScript worker beside the Python and Go demo workers. This worker
- * owns the application-specific handlers and serves the ordinary and rate-limited queues. All
- * three runtimes also serve one shared queue whose handler has the same contract in every SDK.
- * Outside staging, each runtime also serves its own fast-tier queue and that queue's schedule.
+ * The launcher starts this TypeScript worker beside the other language demo workers. This worker
+ * owns the application-specific handlers and serves the ordinary and rate-limited queues. Every
+ * runtime also serves one shared queue whose handler has the same contract in every SDK. Outside
+ * staging, this worker also serves the report export queue, and each runtime serves its own
+ * fast-tier queue and that queue's schedule.
  */
 const databaseUrl = resolveDemoDatabaseUrl();
 const workerPollMs = process.env.WORKHORSE_WORKER_POLL_MS
@@ -37,7 +39,10 @@ const workerPollMs = process.env.WORKHORSE_WORKER_POLL_MS
   : DEMO_WORKER_POLL_MS;
 const staging = process.env.WORKHORSE_DEMO_WORKSPACE === "staging";
 const workerId = `demo-${staging ? "staging" : "typescript"}-${hostname().replaceAll(/[^\w.-]/g, "-")}-${process.pid}-${randomUUID().slice(0, 8)}`;
-const pool = new Pool({ connectionString: databaseUrl, max: 10 });
+const concurrency = staging ? 2 : DEMO_WORKER_CONCURRENCY[0];
+// The pool holds a connection for each handler slot, the heartbeat, the notification listener, the
+// dispatch loop, and the registry refresh.
+const pool = new Pool({ connectionString: databaseUrl, max: concurrency + 4 });
 const database = createDemoDatabase(pool);
 const adapter = createDrizzleAdapter(database, {
   defaultQueue: DEMO_QUEUE,
@@ -53,9 +58,10 @@ export default defineWorkerProcess({
         DEMO_QUEUE,
         DEMO_RATE_LIMIT_QUEUE,
         DEMO_SHARED_QUEUE,
-        ...(staging ? [] : [DEMO_FAST_QUEUE]),
+        // Staging has no report exports and no fast tier.
+        ...(staging ? [] : [DEMO_REPORT_EXPORT_QUEUE, DEMO_FAST_QUEUE]),
       ],
-      concurrency: staging ? 2 : DEMO_WORKER_CONCURRENCY[0],
+      concurrency,
       workerId,
       scheduleNamespaces: staging
         ? [DEMO_SCHEDULE_NAMESPACE]

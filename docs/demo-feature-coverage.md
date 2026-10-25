@@ -55,6 +55,10 @@ Operational capabilities are demonstrated through their own surfaces rather than
 
 - leases, heartbeats, fencing, recovery, worker concurrency, pause, and drain appear on Workers and System;
 - queue pause, resume, purge, and statistics appear in the local operator controls;
+- the `report-exports` queue carries the concurrency policy: three active exports and one for each
+  customer key. Twice an hour, a burst of 20 exports for the noisy tenant `customer-northwind` fills
+  its key. The Queues page then shows a saturated key and `blockedReady` exports, while the exports
+  of `customer-acme`, `customer-globex`, and `customer-initech` still run;
 - the `partner-api` queue consumes its initial queue and per-key token bursts, leaving a visible
   throttled backlog with a PostgreSQL-calculated next eligibility time; its dedicated worker drains
   that backlog only as tokens refill;

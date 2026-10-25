@@ -715,7 +715,7 @@ describe("Workhorse demo", () => {
   });
 
   it("declares deterministic demo worker concurrency and projects it through RPC", async () => {
-    expect(DEMO_WORKER_CONCURRENCY).toEqual([3, 3, 3, 3, 3, 3, 3]);
+    expect(DEMO_WORKER_CONCURRENCY).toEqual([6, 6, 6, 6, 6, 6, 6]);
 
     const { app, workhorse } = createTestApplication({ operator: createLocalOperator(database) });
     const client = dashboardClient(app);
@@ -726,7 +726,7 @@ describe("Workhorse demo", () => {
     try {
       const defaultQueueWorker = await waitForRegisteredWorker(client);
       expect(defaultQueueWorker).toMatchObject({
-        concurrency: 3,
+        concurrency: 6,
         activeSlots: 0,
         activeTasks: 0,
         paused: false,
