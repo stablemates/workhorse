@@ -1,9 +1,14 @@
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from typing import Literal, Protocol, cast
+
+import psycopg
+
+from ._heartbeat_round import HeartbeatRoundExpired
 
 AttributeValue = (
     str | bool | int | float | Sequence[str] | Sequence[bool] | Sequence[int] | Sequence[float]
@@ -181,6 +186,11 @@ _heartbeat_failures = _counter(
     "Worker heartbeats rejected by PostgreSQL ownership or timing checks",
     "{heartbeat}",
 )
+_heartbeat_round_failures = _counter(
+    "workhorse.worker.heartbeat.round_failure",
+    "Worker heartbeat rounds that failed before PostgreSQL gave a verdict",
+    "{round}",
+)
 _schedules_fired = _counter(
     "workhorse.schedule.fired", "Recurring schedule occurrences durably fired", "{occurrence}"
 )
@@ -334,6 +344,110 @@ def record_retry(task: TaskRecord) -> None:
 
 def record_heartbeat_failure(status: str) -> None:
     _heartbeat_failures.add(1, {"workhorse.heartbeat.status": status})
+
+
+HeartbeatRoundFailureReason = Literal["timeout", "connection", "database", "other"]
+
+# The SQLSTATE values that end a round on a server timeout: statement_timeout and
+# idle_in_transaction_session_timeout.
+_TIMEOUT_SQLSTATES = frozenset({"57014", "25P03"})
+# The SQLSTATE values of a server shutdown. Class 08 is a connection exception too.
+_SHUTDOWN_SQLSTATES = frozenset({"57P01", "57P02", "57P03"})
+_SQLSTATE_PATTERN = re.compile(r"[0-9A-Z]{5}")
+# The most errors that the classifier reads in one chain.
+_ERROR_CHAIN_LIMIT = 16
+
+
+def _error_chain(error: BaseException) -> list[BaseException]:
+    """The error, the members of an exception group, `__cause__`, and `__context__`.
+
+    The outermost error comes first. Each error counts once, so a cycle ends the walk, and the walk
+    stops after `_ERROR_CHAIN_LIMIT` errors.
+    """
+    chain: list[BaseException] = []
+    seen: set[int] = set()
+    pending: list[BaseException] = [error]
+    while pending and len(chain) < _ERROR_CHAIN_LIMIT:
+        entry = pending.pop(0)
+        if id(entry) in seen:
+            continue
+        seen.add(id(entry))
+        chain.append(entry)
+        if isinstance(entry, BaseExceptionGroup):
+            pending.extend(entry.exceptions)
+        pending.extend(
+            nested for nested in (entry.__cause__, entry.__context__) if nested is not None
+        )
+    return chain
+
+
+def _sqlstate(error: BaseException) -> str | None:
+    """The SQLSTATE of a server error: `sqlstate` of psycopg and asyncpg, else `code`."""
+    for name in ("sqlstate", "code"):
+        value = getattr(error, name, None)
+        if isinstance(value, str) and _SQLSTATE_PATTERN.fullmatch(value):
+            return value
+    return None
+
+
+def _is_connection_error(error: BaseException) -> bool:
+    """True for a client error that shows the round did not reach PostgreSQL or lost it."""
+    # OSError covers ConnectionError (ConnectionResetError, BrokenPipeError, and others),
+    # socket.gaierror for DNS, and a socket TimeoutError.
+    if isinstance(error, OSError):
+        return True
+    # psycopg raises OperationalError without a SQLSTATE when it cannot connect, when the
+    # connection is closed or lost, and when psycopg_pool.PoolTimeout gives no connection.
+    if isinstance(error, psycopg.OperationalError) and _sqlstate(error) is None:
+        return True
+    # asyncpg raises InterfaceError for an operation on a closed connection, and
+    # ConnectionDoesNotExistError (SQLSTATE 08003) when it lost the connection during one. asyncpg
+    # is an optional dependency, so the class is matched by its name and module.
+    return "connection is closed" in str(error) and any(
+        cls.__name__ == "InterfaceError" and cls.__module__.startswith("asyncpg")
+        for cls in type(error).__mro__
+    )
+
+
+def heartbeat_round_failure_reason(error: BaseException) -> HeartbeatRoundFailureReason:
+    """The category of a heartbeat round that failed before PostgreSQL gave a verdict.
+
+    The classifier reads the error and its chain (`_error_chain`), in this order:
+
+    1. `timeout`: the round deadline error `HeartbeatRoundExpired` (also when the round expired
+       cleanly), or SQLSTATE `57014` (statement_timeout) or `25P03`
+       (idle_in_transaction_session_timeout).
+    2. `connection`: a built-in `OSError` (a socket, DNS, or socket timeout error), a psycopg
+       `OperationalError` without a SQLSTATE (also `psycopg_pool.PoolTimeout`), an asyncpg
+       `InterfaceError` for a closed connection, a SQLSTATE of class `08`, or `57P01` to `57P03`.
+    3. `database`: any other SQLSTATE.
+    4. `other`: everything else.
+    """
+    chain = _error_chain(error)
+    if any(isinstance(entry, HeartbeatRoundExpired) for entry in chain):
+        return "timeout"
+    sqlstate = next(
+        (state for state in (_sqlstate(entry) for entry in chain) if state is not None), None
+    )
+    if sqlstate in _TIMEOUT_SQLSTATES:
+        return "timeout"
+    if (
+        sqlstate is not None and (sqlstate.startswith("08") or sqlstate in _SHUTDOWN_SQLSTATES)
+    ) or any(_is_connection_error(entry) for entry in chain):
+        return "connection"
+    return "other" if sqlstate is None else "database"
+
+
+def record_heartbeat_round_failure(error: BaseException) -> None:
+    """Count one heartbeat round that failed before PostgreSQL returned a status for its leases.
+
+    The round gives no ownership verdict, so `workhorse.worker.heartbeat.failure` does not count
+    it. The worker records one value for each failed round, so the rate stays bounded by the
+    heartbeat interval and its busy retries.
+    """
+    _heartbeat_round_failures.add(
+        1, {"workhorse.heartbeat.failure_reason": heartbeat_round_failure_reason(error)}
+    )
 
 
 def record_handler_execution(

@@ -11,9 +11,13 @@ import io.opentelemetry.api.trace.SpanKind;
 import io.opentelemetry.api.trace.StatusCode;
 import io.opentelemetry.api.trace.Tracer;
 import io.opentelemetry.context.Scope;
+import io.opentelemetry.sdk.metrics.data.LongPointData;
 import io.opentelemetry.sdk.metrics.data.MetricData;
 import io.opentelemetry.sdk.metrics.data.PointData;
 import io.opentelemetry.sdk.trace.data.SpanData;
+import java.lang.reflect.InvocationTargetException;
+import java.lang.reflect.Method;
+import java.lang.reflect.Proxy;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
@@ -24,7 +28,9 @@ import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.BooleanSupplier;
+import javax.sql.DataSource;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -385,6 +391,98 @@ class WorkerTelemetryDatabaseTest {
             .anyMatch(
                 point -> "tick".equals(point.get(AttributeKey.stringKey(Names.MAINTENANCE_LOOP)))));
     recording.assertGoverned(Telemetry.TRACE_ATTRIBUTE_COUNT_LIMIT);
+  }
+
+  /**
+   * SM-1704: the first heartbeat round fails before PostgreSQL returns its statuses. The worker
+   * counts it once in {@code workhorse.worker.heartbeat.round_failure}, and not in {@code
+   * workhorse.worker.heartbeat.failure}. The next round renews the lease, and the task completes.
+   */
+  @Test
+  void countsAHeartbeatRoundThatFailsBeforePostgresqlAnswersAndCompletesTheTask() {
+    AtomicInteger rounds = new AtomicInteger();
+    DataSource failing = failFirstHeartbeat(dataSource, rounds);
+    UUID taskId = queue.enqueue("email.send", Map.of(), options()).taskId();
+    Worker subject =
+        Worker.builder(failing)
+            .queues(queueName)
+            .pollingOnly(true)
+            .pollInterval(Duration.ofMillis(10))
+            .disableRegistry(true)
+            .telemetry(telemetry)
+            .lease(Duration.ofSeconds(10))
+            .heartbeat(Duration.ofMillis(100))
+            .handle(
+                "email.send",
+                Object.class,
+                (context, payload) -> {
+                  // Two rounds after the failed one renew the lease before the handler returns.
+                  waitUntil(() -> rounds.get() >= 3);
+                  return null;
+                })
+            .build();
+    assertTrue(subject.runOnce());
+
+    MetricData failures = metric("workhorse.worker.heartbeat.round_failure");
+    assertEquals("{round}", failures.getUnit());
+    List<LongPointData> points = List.copyOf(failures.getLongSumData().getPoints());
+    assertEquals(1, points.size(), points.toString());
+    assertEquals(
+        Attributes.of(AttributeKey.stringKey(Names.HEARTBEAT_FAILURE_REASON), "connection"),
+        points.get(0).getAttributes());
+    assertEquals(1, points.get(0).getValue());
+    assertTrue(
+        recording.metrics().stream()
+            .noneMatch(metric -> metric.getName().equals("workhorse.worker.heartbeat.failure")),
+        "a failed round gives no ownership verdict");
+    Attributes task =
+        Attributes.builder()
+            .put(Names.QUEUE_NAME, queueName)
+            .put(Names.TASK_TYPE, "email.send")
+            .build();
+    assertEquals(List.of(task), points(metric("workhorse.tasks.completed")));
+    assertEquals(
+        "succeeded", text(recording.spans(Names.SPAN_HANDLER).get(0), Names.HANDLER_OUTCOME));
+    assertEquals(
+        taskId.toString(), text(recording.spans(Names.SPAN_HANDLER).get(0), Names.TASK_ID));
+    recording.assertGoverned(Telemetry.TRACE_ATTRIBUTE_COUNT_LIMIT);
+  }
+
+  /**
+   * {@code source}, whose connections fail the first heartbeat statement with a connection error
+   * before it reaches PostgreSQL. {@code rounds} counts each heartbeat statement, failed or sent.
+   */
+  private static DataSource failFirstHeartbeat(DataSource source, AtomicInteger rounds) {
+    return (DataSource)
+        Proxy.newProxyInstance(
+            DataSource.class.getClassLoader(),
+            new Class<?>[] {DataSource.class},
+            (proxy, method, arguments) -> {
+              Object result = invoke(method, source, arguments);
+              if (!method.getName().equals("getConnection")) {
+                return result;
+              }
+              Connection connection = (Connection) result;
+              return Proxy.newProxyInstance(
+                  Connection.class.getClassLoader(),
+                  new Class<?>[] {Connection.class},
+                  (inner, call, values) -> {
+                    if (call.getName().equals("prepareStatement")
+                        && String.valueOf(values[0]).contains("heartbeat_many_v2")
+                        && rounds.getAndIncrement() == 0) {
+                      throw new SQLException("injected connection failure", "08006");
+                    }
+                    return invoke(call, connection, values);
+                  });
+            });
+  }
+
+  private static Object invoke(Method method, Object target, Object[] arguments) throws Throwable {
+    try {
+      return method.invoke(target, arguments);
+    } catch (InvocationTargetException error) {
+      throw error.getCause();
+    }
   }
 
   private static void waitUntil(BooleanSupplier condition) throws InterruptedException {

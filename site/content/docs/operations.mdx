@@ -670,12 +670,14 @@ metrics for each enqueue, claim, execution, cancellation, recovery, and redrive.
 schedule firing and routines. Before registration, TypeScript core records nothing.
 
 The Python worker records the metrics of the worker: claims, settlements, handler outcomes and
-durations, batch delivery, and rejected heartbeats. It also records lease recovery, schedule
-firing, and routines. It does not record enqueue, cancellation, or redrive metrics.
+durations, batch delivery, rejected heartbeats, and failed heartbeat rounds. It also records lease
+recovery, schedule firing, and routines. It does not record enqueue, cancellation, or redrive
+metrics.
 
 The Go worker records the metrics of the worker through the OpenTelemetry Go API. Claims,
-settlements, handler outcomes and durations, batch delivery, rejected heartbeats, and lease
-recovery use the same instrument names, units, and attributes as the JavaScript worker.
+settlements, handler outcomes and durations, batch delivery, rejected heartbeats, failed heartbeat
+rounds, and lease recovery use the same instrument names, units, and attributes as the JavaScript
+worker.
 
 The Rust worker records the metrics of the worker when its `opentelemetry` feature is on. It records
 the same worker metrics as the Go worker. It does not record schedule firing or routines.
@@ -700,6 +702,7 @@ use traces.
 | `workhorse.claim.duration`                                     | Yes        | Yes    | Yes | Yes  | Yes  | Yes | Yes  |
 | `workhorse.handler.*` (five instruments)                       | Yes        | Yes    | Yes | Yes  | Yes  | Yes | Yes  |
 | `workhorse.worker.heartbeat.failure`                           | Yes        | Yes    | Yes | Yes  | Yes  | Yes | Yes  |
+| `workhorse.worker.heartbeat.round_failure`                     | Yes        | Yes    | Yes | Yes  | Yes  | Yes | Yes  |
 | `workhorse.leases.expired`                                     | Yes        | Yes    | Yes | Yes  | Yes  | Yes | Yes  |
 | `workhorse.schedule.fired`, `workhorse.schedule.lag`           | Yes        | Yes    | No  | No   | Yes  | Yes | Yes  |
 | `workhorse.maintenance.runs`, `.rows`, `.duration`, `.errors`  | Yes        | Yes    | No  | No   | Yes  | Yes | Yes  |

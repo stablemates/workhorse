@@ -192,6 +192,135 @@ impl Heartbeats {
     }
 }
 
+/// The failure of a round that its own deadline ended, while it waited for the transaction of the
+/// other rounds, for the connection, or for PostgreSQL.
+pub(super) const DEADLINE_EXCEEDED: &str = "heartbeat round exceeded its deadline";
+
+/// The failure of a round whose deadline came before it sent its heartbeat statement.
+const DEADLINE_BEFORE_STATEMENT: &str = "heartbeat round reached its deadline before the statement";
+
+/// The failure of a round whose `COMMIT` returned after its deadline.
+const DEADLINE_AFTER_COMMIT: &str = "heartbeat round reached its deadline after the commit";
+
+/// The failure of a round that found the heartbeat connection closed.
+const CONNECTION_CLOSED: &str = "the heartbeat connection closed";
+
+/// The bounded `workhorse.heartbeat.failure_reason` values of a failed heartbeat round.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum RoundFailureReason {
+    Timeout,
+    Connection,
+    Database,
+    Other,
+}
+
+impl RoundFailureReason {
+    pub(super) fn as_str(self) -> &'static str {
+        match self {
+            Self::Timeout => "timeout",
+            Self::Connection => "connection",
+            Self::Database => "database",
+            Self::Other => "other",
+        }
+    }
+}
+
+/// The most errors of a source chain that `heartbeat_round_failure_reason` reads.
+const FAILURE_CHAIN_LIMIT: usize = 16;
+
+/// The category of a failed heartbeat round. It reads the error and at most
+/// `FAILURE_CHAIN_LIMIT` errors of its `source` chain, and the first rule that matches wins:
+///
+/// 1. `timeout`: one of the round's own deadline failures (`DEADLINE_EXCEEDED`,
+///    `DEADLINE_BEFORE_STATEMENT`, `DEADLINE_AFTER_COMMIT`), or SQLSTATE `57014`
+///    (`statement_timeout`) or `25P03` (`idle_in_transaction_session_timeout`).
+/// 2. `connection`: the round did not reach PostgreSQL or lost its connection. This is a
+///    `std::io::Error` (also a socket or connect timeout), a closed `tokio_postgres` connection, a
+///    closed heartbeat connection (`CONNECTION_CLOSED`), SQLSTATE class `08`, or `57P01` to `57P03`
+///    (server shutdown). It is also a pool that had no connection for the round: a closed pool
+///    (`PoolError::Closed`), or any pool timeout (`PoolError::Timeout`) at the pool's own wait,
+///    create, or recycle limit.
+/// 3. `database`: any other SQLSTATE.
+/// 4. `other`: everything else, such as an invalid answer or a pool without a runtime
+///    (`PoolError::NoRuntimeSpecified`, a configuration error).
+///
+/// A `PoolError::Backend` or `PoolError::PostCreateHook` error gets the reason of its source.
+///
+/// A round never uses sqlx, so no sqlx error is classified. A round that joined the transaction
+/// of another worker gets a text copy of the failure (`Error::share`), so the lead classifies the
+/// original error for it (`RoundFailure::shared`).
+pub(super) fn heartbeat_round_failure_reason(error: &Error) -> RoundFailureReason {
+    let mut deadline = false;
+    let mut connection = false;
+    let mut sqlstates: Vec<String> = Vec::new();
+    let mut entry: Option<&(dyn std::error::Error + 'static)> = Some(error);
+    for _ in 0..FAILURE_CHAIN_LIMIT {
+        let Some(current) = entry else { break };
+        if let Some(error) = current.downcast_ref::<Error>() {
+            if let Error::InvalidArgument(message) = error {
+                let message = message.as_str();
+                deadline |= [DEADLINE_EXCEEDED, DEADLINE_BEFORE_STATEMENT, DEADLINE_AFTER_COMMIT]
+                    .contains(&message);
+                connection |= message == CONNECTION_CLOSED;
+            }
+            if let Error::Pool(
+                deadpool_postgres::PoolError::Closed | deadpool_postgres::PoolError::Timeout(_),
+            ) = error
+            {
+                connection = true;
+            }
+            sqlstates.extend(error.sqlstate().map(str::to_owned));
+        } else if let Some(error) = current.downcast_ref::<tokio_postgres::Error>() {
+            connection |= error.is_closed();
+            sqlstates.extend(error.code().map(|code| code.code().to_owned()));
+        } else if let Some(error) = current.downcast_ref::<tokio_postgres::error::DbError>() {
+            sqlstates.push(error.code().code().to_owned());
+        } else if current.is::<std::io::Error>() {
+            connection = true;
+        }
+        entry = current.source();
+    }
+    let any = |test: fn(&str) -> bool| sqlstates.iter().any(|code| test(code));
+    if deadline || any(|code| code == "57014" || code == "25P03") {
+        RoundFailureReason::Timeout
+    } else if connection
+        || any(|code| code.starts_with("08") || ["57P01", "57P02", "57P03"].contains(&code))
+    {
+        RoundFailureReason::Connection
+    } else if sqlstates.is_empty() {
+        RoundFailureReason::Other
+    } else {
+        RoundFailureReason::Database
+    }
+}
+
+/// A failed round, and the reason of the error that ended it.
+#[derive(Debug)]
+pub(super) struct RoundFailure {
+    pub(super) error: Error,
+    pub(super) reason: RoundFailureReason,
+}
+
+impl RoundFailure {
+    /// The failure of a round that joined the transaction that `error` ended. The error is the
+    /// text copy of `Error::share`, so the reason comes from the original error.
+    pub(super) fn shared(error: &Error) -> Self {
+        Self { error: error.share(), reason: heartbeat_round_failure_reason(error) }
+    }
+}
+
+impl From<Error> for RoundFailure {
+    fn from(error: Error) -> Self {
+        Self { reason: heartbeat_round_failure_reason(&error), error }
+    }
+}
+
+impl From<tokio_postgres::Error> for RoundFailure {
+    fn from(error: tokio_postgres::Error) -> Self {
+        Error::from(error).into()
+    }
+}
+
 /// Starts the transaction of a round and sets both server timeouts for it only, in one message
 /// and one round trip. `SET LOCAL` cannot take a bind parameter, so the budgets, which are whole
 /// numbers of milliseconds, go into the text. `set_config(..., true)` has the scope of `SET LOCAL`.
@@ -302,7 +431,7 @@ async fn server_bounded_rows(
     connection.batch_execute("COMMIT").await?;
     // A `COMMIT` that ends after the deadline does not count as a renewal.
     if Instant::now() >= deadline {
-        return Err(Error::invalid("heartbeat round reached its deadline after the commit").into());
+        return Err(Error::invalid(DEADLINE_AFTER_COMMIT).into());
     }
     Ok(rows)
 }
@@ -317,9 +446,7 @@ async fn roll_back_expired(
     deadline: Instant,
 ) -> Result<Vec<tokio_postgres::Row>, BoundedRoundError> {
     if Instant::now() >= deadline {
-        return Err(
-            Error::invalid("heartbeat round reached its deadline before the statement").into()
-        );
+        return Err(Error::invalid(DEADLINE_BEFORE_STATEMENT).into());
     }
     connection.batch_execute("ROLLBACK").await?;
     Err(BoundedRoundError::Expired)
@@ -473,7 +600,13 @@ impl Inner {
                     Some((Instant::now() + busy_retry_delay(interval), busy))
                 }
                 Ok(_) => None,
-                Err(error) => {
+                Err(RoundFailure { error, reason }) => {
+                    // The round gave no verdict, so `Counter::HeartbeatFailures` does not count it.
+                    self.metrics.add(
+                        Counter::HeartbeatRoundFailures,
+                        1.0,
+                        &[("workhorse.heartbeat.failure_reason", Attribute::Text(reason.as_str()))],
+                    );
                     tracing::warn!(error = %error, workhorse.worker.id = %self.worker_id, "heartbeat round failed; retrying");
                     None
                 }
@@ -495,7 +628,7 @@ impl Inner {
         &self,
         members: &[Sent],
         deadline: Instant,
-    ) -> Result<Vec<Sent>, Error> {
+    ) -> Result<Vec<Sent>, RoundFailure> {
         // A lease renewed by this round runs from before the request left, which can only be
         // earlier than the renewal in PostgreSQL, so a local lease window never outlasts the real one.
         let sent_at = Instant::now();
@@ -508,12 +641,12 @@ impl Inner {
         &self,
         members: &[Sent],
         deadline: Instant,
-    ) -> Result<HashMap<String, LeaseStatus>, Error> {
+    ) -> Result<HashMap<String, LeaseStatus>, RoundFailure> {
         #[cfg(test)]
         {
             let fake = self.heartbeats.fake_round.lock().unwrap().clone();
             if let Some(fake) = fake {
-                return fake(members.to_vec(), deadline).await;
+                return Ok(fake(members.to_vec(), deadline).await?);
             }
         }
         let lease_ms = self.options.lease_duration.as_millis() as u64;
@@ -560,7 +693,7 @@ impl Inner {
         &self,
         batches: Vec<serde_json::Value>,
         deadline: Instant,
-    ) -> Result<shared::RoundRows, Error> {
+    ) -> Result<shared::RoundRows, RoundFailure> {
         let heartbeat = self
             .heartbeat_connection()
             .ok_or_else(|| Error::invalid("worker holds no heartbeat connection"))?;
@@ -568,12 +701,12 @@ impl Inner {
             shared::Turn::Joined(rows) => return rows,
             shared::Turn::Lead(lead) => lead,
         };
-        let expired = || Error::invalid("heartbeat round exceeded its deadline");
+        let expired = || Error::invalid(DEADLINE_EXCEEDED);
         let reserved = timeout_at(deadline, heartbeat.lock()).await.map_err(|_| expired())?;
         let holding = Holding { heartbeat: &heartbeat, reserved, settled: false };
         let round = timeout_at(deadline, async {
             let Some(connection) = holding.reserved.as_ref() else {
-                return Err(Error::invalid("the heartbeat connection closed").into());
+                return Err(Error::invalid(CONNECTION_CLOSED).into());
             };
             server_bounded_rows(connection, deadline, &mut lead).await
         })
@@ -584,13 +717,11 @@ impl Inner {
         let rows: Result<Vec<_>, Error> = match round {
             Ok(rows) => rows.iter().map(pool_row).collect(),
             // No statement of the round can still run, so the next round uses the connection.
-            Err(BoundedRoundError::Expired) => {
-                Err(Error::invalid("heartbeat round reached its deadline before the statement"))
-            }
+            Err(BoundedRoundError::Expired) => Err(Error::invalid(DEADLINE_BEFORE_STATEMENT)),
             Err(BoundedRoundError::Failed(error)) => Err(error),
         };
         holding.settle(failed);
-        lead.answer(rows)
+        Ok(lead.answer(rows)?)
     }
 
     /// Delivers a completed round only to the same registrations that sent it, and returns the
@@ -1026,6 +1157,154 @@ mod tests {
         assert_eq!(calls[2].at, started + interval * 2, "the failed retry started another retry");
     }
 
+    /// A test error whose `source` is `inner`, as a driver or an application wraps an error.
+    #[derive(Debug)]
+    struct Wrapped(Box<dyn std::error::Error + Send + Sync>);
+
+    impl std::fmt::Display for Wrapped {
+        fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            formatter.write_str("wrapped")
+        }
+    }
+
+    impl std::error::Error for Wrapped {
+        fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+            Some(&*self.0)
+        }
+    }
+
+    fn wrapped(inner: impl std::error::Error + Send + Sync + 'static) -> Error {
+        Error::database(None, None, Wrapped(Box::new(inner)))
+    }
+
+    fn pool_timeout(kind: deadpool_postgres::TimeoutType) -> Error {
+        Error::Pool(deadpool_postgres::PoolError::Timeout(kind))
+    }
+
+    fn sqlstate(code: &str) -> Error {
+        Error::database(Some(code), None, std::fmt::Error)
+    }
+
+    #[test]
+    fn a_failed_round_has_one_of_four_reasons() {
+        use RoundFailureReason::{Connection, Database, Other, Timeout};
+        let io = || std::io::Error::from(std::io::ErrorKind::ConnectionReset);
+        let cases = [
+            (Error::invalid(DEADLINE_EXCEEDED), Timeout),
+            (Error::invalid(DEADLINE_BEFORE_STATEMENT), Timeout),
+            (Error::invalid(DEADLINE_AFTER_COMMIT), Timeout),
+            (wrapped(Error::invalid(DEADLINE_EXCEEDED)), Timeout),
+            (sqlstate("57014"), Timeout),
+            (sqlstate("25P03"), Timeout),
+            (wrapped(sqlstate("57014")), Timeout),
+            (wrapped(Wrapped(Box::new(Error::invalid(DEADLINE_EXCEEDED)))), Timeout),
+            // The deadline wins over a connection error in the same chain: the `io::Error` of a
+            // custom error has the source of that error.
+            (
+                Error::database(
+                    None,
+                    None,
+                    std::io::Error::other(Wrapped(Box::new(Error::invalid(DEADLINE_EXCEEDED)))),
+                ),
+                Timeout,
+            ),
+            (Error::database(None, None, io()), Connection),
+            (wrapped(io()), Connection),
+            (Error::invalid(CONNECTION_CLOSED), Connection),
+            (Error::Pool(deadpool_postgres::PoolError::Closed), Connection),
+            (pool_timeout(deadpool_postgres::TimeoutType::Wait), Connection),
+            (pool_timeout(deadpool_postgres::TimeoutType::Create), Connection),
+            (pool_timeout(deadpool_postgres::TimeoutType::Recycle), Connection),
+            (wrapped(pool_timeout(deadpool_postgres::TimeoutType::Wait)), Connection),
+            (sqlstate("08006"), Connection),
+            (sqlstate("57P01"), Connection),
+            (sqlstate("57P03"), Connection),
+            (wrapped(sqlstate("08000")), Connection),
+            (sqlstate("40P01"), Database),
+            (sqlstate("57P04"), Database),
+            (wrapped(sqlstate("23505")), Database),
+            (Error::invalid("injected failure"), Other),
+            (Error::Pool(deadpool_postgres::PoolError::NoRuntimeSpecified), Other),
+            (wrapped(std::fmt::Error), Other),
+        ];
+        for (error, reason) in cases {
+            assert_eq!(heartbeat_round_failure_reason(&error), reason, "{error:?}");
+        }
+        assert_eq!(
+            [Timeout, Connection, Database, Other].map(RoundFailureReason::as_str),
+            ["timeout", "connection", "database", "other"]
+        );
+    }
+
+    // A failed round counts once in `workhorse.worker.heartbeat.round_failure`, with its reason,
+    // and not in `workhorse.worker.heartbeat.failure`. A later accepted round counts nothing.
+    #[cfg(feature = "opentelemetry")]
+    #[tokio::test(start_paused = true)]
+    async fn a_failed_round_counts_one_round_failure_with_its_reason() {
+        use opentelemetry::metrics::MeterProvider;
+        use opentelemetry_sdk::metrics::data::{AggregatedMetrics, MetricData};
+        use opentelemetry_sdk::metrics::{
+            InMemoryMetricExporter, PeriodicReader, SdkMeterProvider,
+        };
+
+        let exporter = InMemoryMetricExporter::default();
+        let provider = SdkMeterProvider::builder()
+            .with_reader(PeriodicReader::builder(exporter.clone()).build())
+            .build();
+        let interval = Duration::from_secs(1);
+        let mut worker = worker_with(interval, Duration::from_secs(30));
+        Arc::get_mut(&mut worker.0).expect("a new worker is not shared").metrics =
+            crate::telemetry::Metrics::with_meter(&provider.meter("workhorse"));
+        let rounds = Rounds::install(&worker, Duration::ZERO, |index, members| match index {
+            0 => Err(Error::invalid(DEADLINE_EXCEEDED)),
+            _ => Ok(answer(members, ACCEPTED, &[])),
+        });
+        let started = Instant::now();
+        let _membership =
+            worker.0.register_heartbeat(Uuid::new_v4(), 1, started + Duration::from_secs(30));
+        tokio::time::sleep(interval * 25 / 10).await;
+        assert_eq!(rounds.calls().len(), 2, "one failed and one accepted round ran");
+        provider.force_flush().unwrap();
+
+        let mut points = Vec::new();
+        let mut verdicts = 0;
+        for resource in exporter.get_finished_metrics().unwrap() {
+            for scope in resource.scope_metrics() {
+                for metric in scope.metrics() {
+                    let AggregatedMetrics::U64(MetricData::Sum(sum)) = metric.data() else {
+                        continue;
+                    };
+                    match metric.name() {
+                        "workhorse.worker.heartbeat.round_failure" => {
+                            assert_eq!(metric.unit(), "{round}");
+                            for point in sum.data_points() {
+                                let attributes: Vec<_> = point
+                                    .attributes()
+                                    .map(|attribute| {
+                                        (
+                                            attribute.key.as_str().to_owned(),
+                                            attribute.value.as_str().into_owned(),
+                                        )
+                                    })
+                                    .collect();
+                                points.push((attributes, point.value()));
+                            }
+                        }
+                        "workhorse.worker.heartbeat.failure" => {
+                            verdicts += sum.data_points().count()
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        }
+        assert_eq!(
+            points,
+            [(vec![("workhorse.heartbeat.failure_reason".to_owned(), "timeout".to_owned())], 1)]
+        );
+        assert_eq!(verdicts, 0, "a failed round counted as a heartbeat verdict");
+    }
+
     // A busy lease that left or was replaced before its retry is not retried, and its replacement
     // waits for the regular slot.
     #[tokio::test(start_paused = true)]
@@ -1223,7 +1502,8 @@ mod tests {
         // The quarter of a 750 ms round is about 187 ms, so a 300 ms delay fails the check.
         let round = worker.0.send_heartbeats(&members, Instant::now() + Duration::from_millis(750));
         let error = SETTINGS_DELAY.scope(Duration::from_millis(300), round).await.unwrap_err();
-        assert_eq!(error.to_string(), BEFORE_THE_STATEMENT);
+        assert_eq!(error.error.to_string(), BEFORE_THE_STATEMENT);
+        assert_eq!(error.reason, RoundFailureReason::Timeout);
         // The settings statement came last before the ROLLBACK, so no heartbeat statement went out.
         assert_eq!(activity(&observer, backend).await, ("idle".into(), "ROLLBACK".into()));
         assert_eq!(reserved_backend(&worker).await, Some(backend), "the round discarded it");
@@ -1250,7 +1530,8 @@ mod tests {
         let backend = reserved_backend(&worker).await.expect("no reserved connection");
         let deadline = Instant::now() + MINIMUM_REMAINING - Duration::from_millis(1);
         let error = worker.0.send_heartbeats(&unowned(), deadline).await.unwrap_err();
-        assert_eq!(error.to_string(), BEFORE_THE_STATEMENT);
+        assert_eq!(error.error.to_string(), BEFORE_THE_STATEMENT);
+        assert_eq!(error.reason, RoundFailureReason::Timeout);
         let latest = ("idle".into(), "SELECT pg_backend_pid()".into());
         assert_eq!(activity(&observer, backend).await, latest, "the round sent a statement");
         assert_eq!(reserved_backend(&worker).await, Some(backend), "the round discarded it");

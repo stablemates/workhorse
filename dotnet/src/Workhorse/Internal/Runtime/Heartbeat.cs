@@ -3,6 +3,7 @@ using System.Runtime.CompilerServices;
 using System.Text.Json;
 using Npgsql;
 using Workhorse.Internal.Database;
+using Workhorse.Internal.Telemetry;
 
 namespace Workhorse.Internal.Runtime;
 
@@ -100,10 +101,12 @@ internal sealed class Heartbeat
 
     /// <summary>
     /// A heartbeat whose statements go to <paramref name="fixedRound"/>, with the worker ID and the
-    /// lease payload, instead of PostgreSQL. A test uses it to control what each batch sees.
+    /// lease payload, instead of PostgreSQL. A test uses it to control what each batch sees. With
+    /// <paramref name="dedicated"/>, the rounds follow the rules of the dedicated connection, but the
+    /// heartbeat opens no connection.
     /// </summary>
-    internal Heartbeat(NpgsqlDataSource dataSource, Func<string, string, IReadOnlyList<Row>> fixedRound)
-        : this(dataSource, dedicated: false) => _fixedRound = fixedRound;
+    internal Heartbeat(NpgsqlDataSource dataSource, Func<string, string, IReadOnlyList<Row>> fixedRound, bool dedicated = false)
+        : this(dataSource, dedicated) => _fixedRound = fixedRound;
 
     /// <summary>One running attempt.</summary>
     internal interface IMember
@@ -319,7 +322,7 @@ internal sealed class Heartbeat
     /// <summary>Starts the checkout task, unless one runs, a connection is held, or nothing needs one.</summary>
     private void StartCheckoutLocked()
     {
-        if (!_dedicated || _held is not null || _checkingOut || !WantedLocked())
+        if (!_dedicated || _fixedRound is not null || _held is not null || _checkingOut || !WantedLocked())
         {
             return;
         }
@@ -708,10 +711,17 @@ internal sealed class Heartbeat
     /// back busy. On the dedicated connection, a batch that would start after the deadline is not
     /// sent, a failed batch throws, and a batch that expires before its heartbeat statement ends the
     /// round without a throw. A borrowing round sends every batch and skips a failed one.
+    /// <para>
+    /// A round that fails before PostgreSQL gives the statuses of a batch adds one to
+    /// <c>workhorse.worker.heartbeat.round_failure</c>, at most once for each round. A dedicated round
+    /// that reaches its deadline before a batch goes out leaves that batch unrenewed, so it counts as
+    /// a <c>timeout</c>, as in the Go, Ruby, and JVM workers.
+    /// </para>
     /// </summary>
     private List<IMember> SendBatches(List<Batch> batches, int first, long deadline)
     {
         _roundExpired = false;
+        var failed = false;
         var busy = new List<IMember>();
         for (var index = 0; index < batches.Count; index++)
         {
@@ -719,6 +729,14 @@ internal sealed class Heartbeat
             var sentAt = Monotonic.Now();
             if (_dedicated && deadline - sentAt <= 0)
             {
+                // The round reached its deadline, and this batch and the batches after it stay
+                // unrenewed. The round counts once, also when an earlier batch already counted.
+                if (!failed)
+                {
+                    failed = true;
+                    WorkerTelemetry.HeartbeatRoundReachedDeadline();
+                }
+
                 return busy;
             }
 
@@ -740,13 +758,34 @@ internal sealed class Heartbeat
                     : _dedicated ? SendOnHeld(deadline, parameters)
                     : SendBorrowed(parameters);
             }
-            catch (RoundExpiredException) when (_dedicated)
+            catch (RoundExpiredException error) when (_dedicated)
             {
                 _roundExpired = true;
+                // A round that got its new connection during its wait sent nothing, and a full round
+                // runs on that connection at once. It did not fail.
+                if (!_freshConnection)
+                {
+                    WorkerTelemetry.HeartbeatRoundFailed(error, deadlineReached: true);
+                }
+
                 return busy;
             }
-            catch (Exception) when (!_dedicated)
+            catch (Exception error) when (_dedicated)
             {
+                // Only the dedicated round has a deadline that a driver timeout can follow.
+                WorkerTelemetry.HeartbeatRoundFailed(error, deadlineReached: Monotonic.Now() - deadline >= 0);
+                throw;
+            }
+            catch (Exception error) when (!_dedicated)
+            {
+                // A borrowing round sends its other batches, and counts once with its first failure.
+                // It has no round deadline, so a driver timeout there is a connection failure.
+                if (!failed)
+                {
+                    failed = true;
+                    WorkerTelemetry.HeartbeatRoundFailed(error, deadlineReached: false);
+                }
+
                 continue;
             }
 
@@ -780,7 +819,7 @@ internal sealed class Heartbeat
         _sent = connection;
         if (connection is null)
         {
-            throw new TimeoutException("The heartbeat got no connection before the round's deadline");
+            throw new RoundDeadlineException("The heartbeat got no connection before the round's deadline");
         }
 
         if (waited)

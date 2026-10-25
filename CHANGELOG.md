@@ -20,6 +20,21 @@ upgrade steps.
 
 ## Unreleased
 
+### Every worker counts a failed heartbeat round
+
+A heartbeat round can fail before PostgreSQL answers, for example when the connection drops. Only
+the TypeScript worker counted such a round. The Go and Rust workers wrote a warning log record, and
+the Python, Ruby, JVM, and .NET workers wrote nothing. The operator first saw the problem when
+leases expired (SM-1704).
+
+Now every worker counts each failed round once in `workhorse.worker.heartbeat.round_failure`, by
+the bounded attribute `workhorse.heartbeat.failure_reason`: `timeout`, `connection`, `database`, or
+`other`. Every SDK uses the same names, the same unit `{round}`, and the same rule for the reason.
+The TypeScript worker now also reports the `pg-pool` wait limit as `connection`, not `other`.
+In the .NET worker, the dedicated heartbeat connection and `SharedHeartbeats` both count a failed
+round. A failed round still gives no ownership verdict, so `workhorse.worker.heartbeat.failure` does
+not change. The new instrument is an addition in each SDK.
+
 ### The TypeScript client measures signal and human wait values as PostgreSQL does
 
 PostgreSQL limits a signal payload, a human wait context, and a human wait result to 65,536 bytes of
@@ -385,7 +400,7 @@ TypeScript worker counts each such round in the new counter
 `workhorse.worker.heartbeat.round_failure`, by the bounded attribute
 `workhorse.heartbeat.failure_reason`: `timeout`, `connection`, `database`, or `other`. A failed
 round still gives no ownership verdict, so `workhorse.worker.heartbeat.failure` does not change.
-The other SDKs do not record the counter yet. The new instrument is an addition.
+The new instrument is an addition.
 
 ### The dashboard server names a mutation that the host does not provide
 

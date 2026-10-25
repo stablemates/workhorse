@@ -5,6 +5,18 @@ other SDKs carry, because every tag names one release of all of them.
 
 ## Unreleased
 
+### The worker counts each failed heartbeat round
+
+A heartbeat round can fail before PostgreSQL answers, for example when the connection breaks or the
+round reaches its deadline. Before this change, such a round left no metric (SM-1704).
+
+Now the worker counts each failed round once in the new counter
+`workhorse.worker.heartbeat.round_failure`, with the unit `{round}`. The bounded attribute
+`workhorse.heartbeat.failure_reason` gives the reason: `timeout`, `connection`, `database`, or
+`other`. This applies to the reserved heartbeat connection and to `shared_heartbeats: true`. A
+failed round still gives no ownership verdict, so `workhorse.worker.heartbeat.failure` does not
+change. The worker adds no log record. The new instrument is an addition.
+
 ### The worker waits longer after each not_due expiry answer
 
 When the local timer of a deadline or an execution timeout fires, the worker asks PostgreSQL to

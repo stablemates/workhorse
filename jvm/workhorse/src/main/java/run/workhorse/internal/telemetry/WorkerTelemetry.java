@@ -227,6 +227,23 @@ public final class WorkerTelemetry {
   }
 
   /**
+   * Counts one heartbeat round on {@code telemetry} that failed before PostgreSQL returned a status
+   * for its leases. {@code reason} is {@code timeout}, {@code connection}, {@code database}, or
+   * {@code other}. The round gives no ownership verdict, so {@code
+   * workhorse.worker.heartbeat.failure} does not count it. The heartbeat records one value for each
+   * failed round, so the rate stays bounded by the heartbeat interval and its busy retries.
+   */
+  public static void heartbeatRoundFailed(Telemetry telemetry, String reason) {
+    telemetry.add(
+        Instrument.HEARTBEAT_ROUND_FAILURE, 1, Map.of(Names.HEARTBEAT_FAILURE_REASON, reason));
+  }
+
+  /** The telemetry that this worker telemetry records to. */
+  public Telemetry telemetry() {
+    return telemetry;
+  }
+
+  /**
    * Runs one maintenance pass in a {@code workhorse.maintenance} span with a {@code
    * workhorse.recovery} span inside it. {@link #maintenancePhase} adds each phase row to the pass.
    */

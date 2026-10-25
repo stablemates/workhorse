@@ -291,6 +291,19 @@ SDK compatibility floor rises from schema 75 to 76. Run `workhorse schema migrat
 process of this release starts. A 0.9 process keeps working on schema 76. The migration changes no
 stored data.
 
+### The worker counts a failed heartbeat round
+
+A heartbeat round that failed before PostgreSQL answered left no metric. For example, the
+connection broke or the round reached its deadline. Now the worker counts each such round once in
+the new counter `workhorse.worker.heartbeat.round_failure`, by the bounded attribute
+`workhorse.heartbeat.failure_reason`: `timeout`, `connection`, `database`, or `other`. The
+TypeScript worker uses the same rule (SM-1704).
+
+The shared dedicated heartbeat sends the leases of every worker on a `DataSource` in one round. A
+failed round counts once for each distinct `WorkhorseTelemetry` of those workers. A failed round
+still gives no ownership verdict, so `workhorse.worker.heartbeat.failure` does not change. Every
+attempt keeps running, and the next round retries. The new instrument is an addition.
+
 ## 0.9.0 — 2026-10-20
 
 This is the first release of the JVM SDK. The npm packages, Python distribution, Go module, Rust

@@ -117,13 +117,6 @@ class TelemetrySurfaceTest {
           "workhorse.tasks.enqueued",
           "workhorse.tasks.redrive");
 
-  /**
-   * The TypeScript-only counter of failed heartbeat rounds and its attribute. SM-1704 adds them to
-   * the Java worker and removes this group.
-   */
-  private static final List<String> HEARTBEAT_ROUND_FAILURE =
-      List.of("workhorse.heartbeat.failure_reason", "workhorse.worker.heartbeat.round_failure");
-
   /** The names of {@code api/telemetry.txt} that the Java SDK does not emit. */
   private static final List<List<String>> NOT_EMITTED =
       List.of(
@@ -132,8 +125,7 @@ class TelemetrySurfaceTest {
           SINGLE_HEARTBEAT,
           POLICY_SYNC,
           FUSED_COMPLETION,
-          QUEUE_AND_ADMIN,
-          HEARTBEAT_ROUND_FAILURE);
+          QUEUE_AND_ADMIN);
 
   private static final TelemetrySurface SURFACE = TelemetrySurface.read();
 

@@ -11,6 +11,19 @@ adds.
 
 ## Unreleased
 
+### The worker counts each failed heartbeat round
+
+A heartbeat round can fail before PostgreSQL gives a verdict for its leases. Before this change, the
+Rust worker only logged such a round at warn level. A metric did not show how often rounds failed
+or why (SM-1704).
+
+Now the worker counts each failed round once in the new counter
+`workhorse.worker.heartbeat.round_failure`, with the unit `{round}`. The bounded attribute
+`workhorse.heartbeat.failure_reason` gives the cause: `timeout`, `connection`, `database`, or
+`other`. A failed round gives no ownership verdict, so `workhorse.worker.heartbeat.failure` does not
+change. The warn log stays. The new instrument is an addition, and it records only with the
+`opentelemetry` feature.
+
 ### The Rust client measures signal and human wait values as PostgreSQL does
 
 PostgreSQL limits a signal payload, a human wait context, and a human wait result to 65,536 bytes of

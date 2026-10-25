@@ -55,6 +55,7 @@ public final class Names {
   public static final String HANDLER_BATCH_MAX_SIZE = "workhorse.handler.batch.max_size";
   public static final String HANDLER_DURATION_MS = "workhorse.handler.duration_ms";
   public static final String HANDLER_OUTCOME = "workhorse.handler.outcome";
+  public static final String HEARTBEAT_FAILURE_REASON = "workhorse.heartbeat.failure_reason";
   public static final String HEARTBEAT_STATUS = "workhorse.heartbeat.status";
   public static final String HUMAN_WAIT_NAME = "workhorse.human_wait.name";
   public static final String HUMAN_WAIT_STATUS = "workhorse.human_wait.status";

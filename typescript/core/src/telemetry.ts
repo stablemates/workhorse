@@ -458,6 +458,9 @@ const CONNECTION_ERROR_CODES = new Set([
   "EAI_AGAIN",
 ]);
 
+/** The error of `pg-pool` when no connection is free before its `connectionTimeoutMillis`. */
+const PG_POOL_WAIT_TIMEOUT_MESSAGE = "timeout exceeded when trying to connect";
+
 /** The error, its `cause` chain, and the members of an `AggregateError`, outermost first. */
 function* errorChain(
   error: unknown,
@@ -476,7 +479,8 @@ function* errorChain(
 /**
  * The category of a rejected heartbeat round. A round deadline, `statement_timeout` (`57014`), and
  * `idle_in_transaction_session_timeout` (`25P03`) are `timeout`. A socket error, SQLSTATE class
- * `08`, a server shutdown (`57P01` to `57P03`), and a terminated `pg` connection are `connection`.
+ * `08`, a server shutdown (`57P01` to `57P03`), a terminated `pg` connection, and a `pg-pool` wait
+ * that ends at the pool's own limit are `connection`.
  * Any other SQLSTATE is `database`. Everything else is `other`.
  */
 export function heartbeatRoundFailureReason(error: unknown): HeartbeatRoundFailureReason {
@@ -492,7 +496,9 @@ export function heartbeatRoundFailureReason(error: unknown): HeartbeatRoundFailu
     chain.some(
       (entry) =>
         (typeof entry.code === "string" && CONNECTION_ERROR_CODES.has(entry.code)) ||
-        (typeof entry.message === "string" && entry.message.startsWith("Connection terminated")),
+        (typeof entry.message === "string" &&
+          (entry.message.startsWith("Connection terminated") ||
+            entry.message === PG_POOL_WAIT_TIMEOUT_MESSAGE)),
     )
   ) {
     return "connection";

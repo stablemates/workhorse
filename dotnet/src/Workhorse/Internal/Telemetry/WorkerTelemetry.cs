@@ -1,6 +1,8 @@
 using System.Diagnostics;
+using System.Net.Sockets;
 using System.Runtime.CompilerServices;
 using System.Text.Json;
+using Npgsql;
 using Workhorse.Internal.Database;
 using Workhorse.Internal.Runtime;
 using static Workhorse.Internal.Telemetry.Instrumentation;
@@ -253,6 +255,145 @@ internal static class WorkerTelemetry
         {
             HeartbeatFailure.Add(1, new KeyValuePair<string, object?>(Names.HeartbeatStatus, status));
         }
+    }
+
+    /// <summary>
+    /// Records one heartbeat round that failed with <paramref name="error"/> before PostgreSQL gave
+    /// a status for its leases. The round gives no ownership verdict, so
+    /// <c>workhorse.worker.heartbeat.failure</c> does not count it. The heartbeat records one value
+    /// for each failed round, so the rate stays bounded by the heartbeat interval and its busy
+    /// retries.
+    /// </summary>
+    /// <remarks>
+    /// <paramref name="deadlineReached"/> is <c>true</c> when the round failed at or after its own
+    /// deadline. Only then is a driver <see cref="TimeoutException"/> the round deadline.
+    /// </remarks>
+    internal static void HeartbeatRoundFailed(Exception error, bool deadlineReached)
+    {
+        if (HeartbeatRoundFailure.Enabled)
+        {
+            RecordHeartbeatRoundFailure(HeartbeatRoundFailureReason(error, deadlineReached));
+        }
+    }
+
+    /// <summary>
+    /// Records one heartbeat round that reached its deadline before a batch went out, as a
+    /// <c>timeout</c>. No statement failed, so no exception gives the reason.
+    /// </summary>
+    internal static void HeartbeatRoundReachedDeadline()
+    {
+        if (HeartbeatRoundFailure.Enabled)
+        {
+            RecordHeartbeatRoundFailure("timeout");
+        }
+    }
+
+    private static void RecordHeartbeatRoundFailure(string reason) =>
+        HeartbeatRoundFailure.Add(1, new KeyValuePair<string, object?>(Names.HeartbeatFailureReason, reason));
+
+    /// <summary>
+    /// The bounded <c>workhorse.heartbeat.failure_reason</c> of a failed heartbeat round, with the
+    /// rule of every SDK. The check reads <paramref name="error"/>, its
+    /// <see cref="Exception.InnerException"/> chain, and each member of an
+    /// <see cref="AggregateException"/>, at most 16 exceptions and each one once.
+    /// </summary>
+    /// <remarks>
+    /// <list type="number">
+    /// <item><c>timeout</c>: the round deadline only. That is a <see cref="RoundLostException"/>, a
+    /// <see cref="RoundExpiredException"/>, a <see cref="RoundDeadlineException"/>, or any other
+    /// <see cref="TimeoutException"/> when <paramref name="deadlineReached"/> is <c>true</c>. A
+    /// command timeout that a dedicated round sets from its deadline thus stays a <c>timeout</c>.
+    /// SQLSTATE <c>57014</c> (<c>statement_timeout</c>) and <c>25P03</c>
+    /// (<c>idle_in_transaction_session_timeout</c>) are also <c>timeout</c>.</item>
+    /// <item><c>connection</c>: the round did not reach PostgreSQL or lost its connection. That is a
+    /// SQLSTATE that starts with <c>08</c>, a server shutdown (<c>57P01</c> to <c>57P03</c>), a
+    /// <see cref="SocketException"/>, an <see cref="IOException"/> (also
+    /// <see cref="EndOfStreamException"/>), or a transient <see cref="NpgsqlException"/> that is not a
+    /// <see cref="PostgresException"/>. Npgsql marks such an exception transient when it wraps an I/O
+    /// failure or a timeout. Any other <see cref="TimeoutException"/> is also <c>connection</c>: a
+    /// connect timeout, or a pool wait that ends at the data source's <c>Timeout</c>. A borrowing
+    /// round sets no deadline, so each driver timeout of that round is <c>connection</c>.</item>
+    /// <item><c>database</c>: any other SQLSTATE, from a <see cref="NpgsqlException"/> or a
+    /// <see cref="DatabaseException"/>.</item>
+    /// <item><c>other</c>: everything else.</item>
+    /// </list>
+    /// <para>
+    /// The check for <c>timeout</c> runs before the check for <c>connection</c>, and the first
+    /// SQLSTATE in the chain counts. A heartbeat round takes no cancellation token, so a worker
+    /// shutdown never cancels a round. An <see cref="OperationCanceledException"/> comes only from a
+    /// statement cancel, and without a SQLSTATE in its chain it is <c>other</c>.
+    /// </para>
+    /// </remarks>
+    internal static string HeartbeatRoundFailureReason(Exception error, bool deadlineReached)
+    {
+        var chain = ErrorChain(error);
+        if (chain.Exists(entry => entry is RoundLostException or RoundExpiredException or RoundDeadlineException
+            || (deadlineReached && entry is TimeoutException)))
+        {
+            return "timeout";
+        }
+
+        var sqlState = chain.Select(SqlStateOf).FirstOrDefault(state => state is not null);
+        if (sqlState is "57014" or "25P03")
+        {
+            return "timeout";
+        }
+
+        if (sqlState is "57P01" or "57P02" or "57P03"
+            || sqlState?.StartsWith("08", StringComparison.Ordinal) == true
+            || chain.Exists(entry => entry is SocketException or IOException or TimeoutException
+                || entry is NpgsqlException { IsTransient: true } and not PostgresException))
+        {
+            return "connection";
+        }
+
+        return sqlState is null ? "other" : "database";
+    }
+
+    /// <summary>The SQLSTATE that <paramref name="error"/> itself carries, or <c>null</c>.</summary>
+    private static string? SqlStateOf(Exception error) => error switch
+    {
+        NpgsqlException driver => driver.SqlState,
+        DatabaseException database => database.SqlState,
+        _ => null,
+    };
+
+    /// <summary>
+    /// <paramref name="error"/>, the members of each <see cref="AggregateException"/>, and each
+    /// <see cref="Exception.InnerException"/>, outermost first. A cycle or a deep chain ends the
+    /// walk after 16 exceptions.
+    /// </summary>
+    private static List<Exception> ErrorChain(Exception error)
+    {
+        const int Limit = 16;
+        var chain = new List<Exception>();
+        var seen = new HashSet<Exception>(ReferenceEqualityComparer.Instance);
+        var pending = new Stack<Exception>();
+        pending.Push(error);
+        while (pending.Count > 0 && chain.Count < Limit)
+        {
+            var entry = pending.Pop();
+            if (!seen.Add(entry))
+            {
+                continue;
+            }
+
+            chain.Add(entry);
+            if (entry.InnerException is { } inner)
+            {
+                pending.Push(inner);
+            }
+
+            if (entry is AggregateException aggregate)
+            {
+                for (var index = aggregate.InnerExceptions.Count - 1; index >= 0; index--)
+                {
+                    pending.Push(aggregate.InnerExceptions[index]);
+                }
+            }
+        }
+
+        return chain;
     }
 
     /// <summary>

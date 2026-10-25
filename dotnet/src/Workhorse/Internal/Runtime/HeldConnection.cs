@@ -290,7 +290,7 @@ internal sealed class HeldConnection
             // A COMMIT that ends after the deadline does not count as a renewal.
             if (Monotonic.Now() - deadline >= 0)
             {
-                throw new TimeoutException("Heartbeat round reached its deadline");
+                throw new RoundDeadlineException("Heartbeat round reached its deadline");
             }
 
             return rows;
@@ -302,7 +302,7 @@ internal sealed class HeldConnection
                 // A rollback that fails or ends after the deadline did not end in the round's bound,
                 // so the connection is discarded, as in every SDK.
                 _broken = true;
-                throw new TimeoutException("Heartbeat round reached its deadline");
+                throw new RoundDeadlineException("Heartbeat round reached its deadline");
             }
 
             throw;
@@ -408,6 +408,21 @@ internal sealed class RoundExpiredException : Exception
     public RoundExpiredException(string message) : base(message) { }
 
     public RoundExpiredException(string message, Exception innerException) : base(message, innerException) { }
+}
+
+/// <summary>
+/// A round that ended at or after its deadline without a lost connection: its <c>COMMIT</c> or its
+/// <c>ROLLBACK</c> ended too late, or it got no connection in time. It is a
+/// <see cref="TimeoutException"/>, so each existing <c>catch</c> still matches it. The worker's
+/// telemetry reads the type to report the round as a <c>timeout</c>.
+/// </summary>
+internal sealed class RoundDeadlineException : TimeoutException
+{
+    public RoundDeadlineException() { }
+
+    public RoundDeadlineException(string message) : base(message) { }
+
+    public RoundDeadlineException(string message, Exception innerException) : base(message, innerException) { }
 }
 
 /// <summary>The round bound ended while the round's statement still ran, so the connection is lost.</summary>

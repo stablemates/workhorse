@@ -62,7 +62,7 @@ Queue and worker operations emit these synchronous instruments:
 | `workhorse.schedule.fired`                 | counter, `{occurrence}` | One `fire_schedule_v1` call that returns a task ID, by schedule namespace and name.                                                                                                                                                              |
 | `workhorse.schedule.lag`                   | histogram, `s`          | Delay from the planned occurrence to the successful fire, with the schedule attributes.                                                                                                                                                          |
 | `workhorse.worker.heartbeat.failure`       | counter, `{heartbeat}`  | Every per-task `heartbeat_many_v2` status other than `accepted`, `busy` too, by `workhorse.heartbeat.status`. TypeScript also counts the answers of `Queue.heartbeatStatus` and `Queue.tryHeartbeat`.                                            |
-| `workhorse.worker.heartbeat.round_failure` | counter, `{round}`      | One TypeScript heartbeat round that rejected before PostgreSQL returned a status, by the bounded `workhorse.heartbeat.failure_reason`.                                                                                                           |
+| `workhorse.worker.heartbeat.round_failure` | counter, `{round}`      | One heartbeat round that failed before PostgreSQL returned a status, by the bounded `workhorse.heartbeat.failure_reason`. Every worker records it.                                                                                               |
 | `workhorse.maintenance.runs`               | counter, `{run}`        | Each maintenance result, by loop, phase, and skipped-lock flag.                                                                                                                                                                                  |
 | `workhorse.maintenance.rows`               | counter, `{row}`        | Rows affected by the same result and attributes.                                                                                                                                                                                                 |
 | `workhorse.maintenance.duration`           | histogram, `ms`         | SQL-reported duration for the same result and attributes.                                                                                                                                                                                        |
@@ -77,19 +77,70 @@ round gives no ownership verdict. Thus `workhorse.worker.heartbeat.failure` does
 every handler keeps running. The next regular round retries, and the lease watchdog of each attempt
 still aborts it when its last accepted renewal is one full lease old.
 
-The TypeScript worker counts each rejected round once in `workhorse.worker.heartbeat.round_failure`.
-The worker sends at most one round at a time, so the count rate stays bounded by the heartbeat
-interval and the busy retries. The counter adds no log record. `heartbeatRoundFailureReason` in
-`typescript/core/src/telemetry.ts` sets `workhorse.heartbeat.failure_reason`:
+Every worker counts each failed round once in `workhorse.worker.heartbeat.round_failure`. A round
+is the unit that the heartbeat scheduler of the SDK sends:
 
-| Value        | Failure                                                                                                                               |
-| ------------ | ------------------------------------------------------------------------------------------------------------------------------------- |
-| `timeout`    | The round deadline (`HeartbeatRoundTimeoutError`), `statement_timeout` (`57014`), or `idle_in_transaction_session_timeout` (`25P03`)  |
-| `connection` | A socket or DNS error code, a SQLSTATE that starts with `08`, a server shutdown (`57P01` to `57P03`), or a terminated `pg` connection |
-| `database`   | Any other SQLSTATE                                                                                                                    |
-| `other`      | A failure without a SQLSTATE or a connection code                                                                                     |
+- The TypeScript, Go, Python, and Rust workers each send their own round. In Go, Python, and Rust,
+  the rounds of several workers can go out in one statement on the shared heartbeat connection. Then
+  each worker counts its own round, with the same reason.
+- The Ruby, JVM, and .NET workers on one pool share one dedicated heartbeat. Its round carries the
+  leases of every worker on the pool, so the round counts once. The JVM counts it once for each
+  distinct `WorkhorseTelemetry` among the workers of the round.
+- Under the shared heartbeats opt-out, a round can send several batches. If more than one batch
+  fails, the round counts once, with the reason of the first failure.
 
-Only the TypeScript worker records this counter. The other workers do not count a failed round yet.
+A scheduler sends at most one round at a time, so the count rate stays bounded by the heartbeat
+interval and the busy retries. The counter adds no log record. The Go and Rust workers keep their
+existing warning log record of a failed round.
+
+Every SDK sets `workhorse.heartbeat.failure_reason` with the same rule. The rule reads the error and
+its chain of causes. The first row that matches gives the value:
+
+| Value        | Failure                                                                                                                                                                                                                                                                                                                |
+| ------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `timeout`    | The round deadline of the SDK, `statement_timeout` (`57014`), or `idle_in_transaction_session_timeout` (`25P03`)                                                                                                                                                                                                       |
+| `connection` | The round did not reach PostgreSQL or lost its connection: a socket, I/O, DNS, or closed-connection error of the driver, a connect or socket timeout that the round deadline did not cause, a pool wait that ends at the pool's own limit, a SQLSTATE that starts with `08`, or a server shutdown (`57P01` to `57P03`) |
+| `database`   | Any other SQLSTATE                                                                                                                                                                                                                                                                                                     |
+| `other`      | A failure without a SQLSTATE, a deadline, or a connection error                                                                                                                                                                                                                                                        |
+
+A real socket, I/O, or closed-connection error in the chain gives `connection`, also next to another
+SQLSTATE. A driver wrapper type, such as a connect error type that carries a server error, gives
+`connection` only when the chain has no SQLSTATE. For example, if PostgreSQL refuses the password of
+a new pool connection (`28P01`), the reason is `database`, also when the driver wraps that error.
+
+The classifier of each SDK maps its driver types to these rows:
+
+| SDK        | Classifier                                                               | `timeout`                                                                                                                                                | `connection`                                                                                                                                                                                        |
+| ---------- | ------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| TypeScript | `heartbeatRoundFailureReason` in `typescript/core/src/telemetry.ts`      | `HeartbeatRoundTimeoutError`                                                                                                                             | A socket or DNS error code (`ECONNRESET`, `ECONNREFUSED`, `ETIMEDOUT`, and others), a terminated `pg` connection, or the `pg-pool` wait limit                                                       |
+| Go         | `heartbeatRoundFailureReason` in `go/heartbeat_round_failure.go`         | `errHeartbeatRoundExpired`, or `context.DeadlineExceeded` after the round deadline                                                                       | `*pgconn.ConnectError`, `pgconn.ErrConnClosed`, a `net.Error`, `io.EOF`, `io.ErrUnexpectedEOF`, or `context.DeadlineExceeded` before the round deadline, such as a pgx connect timeout              |
+| Python     | `heartbeat_round_failure_reason` in `python/src/workhorse/_telemetry.py` | `HeartbeatRoundExpired`                                                                                                                                  | An `OSError` (`ConnectionError`, `BrokenPipeError`, `socket.gaierror`, and a socket `TimeoutError`), a psycopg `OperationalError` without a SQLSTATE, `PoolTimeout`, or a closed asyncpg connection |
+| Rust       | `heartbeat_round_failure_reason` in `rust/src/worker/heartbeat.rs`       | The deadline errors of the round                                                                                                                         | `std::io::Error`, a closed `tokio_postgres::Error`, `PoolError::Closed`, or any `PoolError::Timeout`                                                                                                |
+| Ruby       | `Telemetry.heartbeat_round_failure_reason`                               | `Worker::Heartbeat::RoundTimeout` or `RoundExpired`                                                                                                      | `PG::ConnectionBad`, `PG::UnableToSend`, `IOError`, `SystemCallError`, `SocketError`, or a pool error of `connection_pool`, Sequel, or Active Record that gives no connection                       |
+| JVM        | `Heartbeat.roundFailureReason`                                           | `RoundExpired`, `RoundDeadline`, or a driver `SQLTimeoutException`, `SocketTimeoutException`, or `TimeoutException` at the deadline of a dedicated round | An `IOException`, `SQLNonTransientConnectionException`, `SQLTransientConnectionException`, or a driver timeout before the deadline                                                                  |
+| .NET       | `WorkerTelemetry.HeartbeatRoundFailureReason`                            | `RoundLostException`, `RoundExpiredException`, `RoundDeadlineException`, or a `TimeoutException` at the deadline of a dedicated round                    | `SocketException`, `IOException`, a transient `NpgsqlException` that is not a `PostgresException`, or another `TimeoutException`, such as a pool wait                                               |
+
+A socket timeout counts as `timeout` only when the round deadline causes it. The Go worker gives pgx
+a context with the round deadline, and pgx then reports `context.DeadlineExceeded`. The worker
+counts that error as `timeout` only after the round deadline, because a pgx connect timeout reports
+the same error. The JVM worker
+sets the network timeout of the dedicated heartbeat connection to the round deadline, so a driver
+timeout after that deadline is `timeout`. A JDBC login timeout before the deadline is `connection`. The .NET worker does the same for a
+`TimeoutException`. A dial timeout, a driver socket timeout
+before the deadline, or a socket timeout in a borrowing round is `connection`. The Python worker
+converts each of its own deadline waits to `HeartbeatRoundExpired`. Thus a plain `TimeoutError` there
+is a socket failure, and it counts as `connection`, as `ETIMEDOUT` does in TypeScript.
+
+A round that reaches its deadline before it sends a statement counts as `timeout`. A round that ends
+before its heartbeat statement only because it got a new heartbeat connection does not count. It
+sent nothing, and a full round runs on the new connection at once. A borrowing round counts its
+first failed batch at once, before its other batches end.
+
+The Python classifier also reads `__context__` and the members of an `ExceptionGroup`. The JVM
+classifier also reads suppressed exceptions and `SQLException.getNextException`. The .NET classifier
+also reads the members of an `AggregateException`. On the shared heartbeat connection of the Rust
+worker, the worker that sends the statement classifies the error once. Each worker that joined the
+statement gets the same reason.
 
 Each lifecycle event reaches exactly one instrument. `workhorse.handler.executions` counts a handler
 activation, and `workhorse.handler.duration` times it. Both are dimensioned by outcome. The queue
@@ -105,7 +156,7 @@ The Go worker emits these instruments from the table:
 - `workhorse.leases.expired`
 - `workhorse.claim.duration`
 - all five `workhorse.handler.*` instruments
-- `workhorse.worker.heartbeat.failure`
+- `workhorse.worker.heartbeat.failure` and `workhorse.worker.heartbeat.round_failure`
 
 It uses the same units and attribute keys as the TypeScript runtime. Recovery cannot recover the
 original queue and type from its aggregate SQL result. Thus its retry count uses `unknown` for both
@@ -115,14 +166,14 @@ bounded dimensions. This matches the TypeScript fallback.
 
 The Rust worker records metrics only when the crate's `opentelemetry` feature is on.
 `rust/src/telemetry.rs` binds the instruments to the global meter provider when the worker is
-built. The Rust worker emits these 12 instruments from the table:
+built. The Rust worker emits these 13 instruments from the table:
 
 - `workhorse.tasks.claimed`, `workhorse.tasks.completed`, `workhorse.tasks.failed`, and
   `workhorse.tasks.retried`
 - `workhorse.leases.expired`
 - `workhorse.claim.duration`
 - all five `workhorse.handler.*` instruments
-- `workhorse.worker.heartbeat.failure`
+- `workhorse.worker.heartbeat.failure` and `workhorse.worker.heartbeat.round_failure`
 
 It uses the same units, descriptions, and attribute keys as the TypeScript runtime. The Rust worker
 does not record `workhorse.schedule.*`, `workhorse.maintenance.*`, enqueue, cancellation, or redrive
@@ -136,14 +187,14 @@ count of the result is larger than the number of entries, recovery adds the diff
 ### Ruby worker metrics
 
 The Ruby worker records metrics only when the application loads `opentelemetry-metrics-api` and a
-global meter provider exists. `Stablemates::Workhorse::Telemetry` declares these 18 instruments:
+global meter provider exists. `Stablemates::Workhorse::Telemetry` declares these 19 instruments:
 
 - `workhorse.tasks.claimed`, `workhorse.tasks.completed`, `workhorse.tasks.failed`, and
   `workhorse.tasks.retried`
 - `workhorse.leases.expired`
 - `workhorse.claim.duration`
 - all five `workhorse.handler.*` instruments
-- `workhorse.worker.heartbeat.failure`
+- `workhorse.worker.heartbeat.failure` and `workhorse.worker.heartbeat.round_failure`
 - `workhorse.schedule.fired` and `workhorse.schedule.lag`
 - `workhorse.maintenance.runs`, `workhorse.maintenance.rows`, `workhorse.maintenance.duration`, and
   `workhorse.maintenance.errors`
@@ -160,7 +211,7 @@ By default, `run.workhorse.internal.telemetry.Telemetry` reads `GlobalOpenTeleme
 telemetry does nothing and loads no OpenTelemetry code. The Kotlin module and the Spring Boot
 starter run the same Java worker.
 
-The Java worker emits the 18 instruments of the Ruby worker and `workhorse.maintenance.drift`. The
+The Java worker emits the 19 instruments of the Ruby worker and `workhorse.maintenance.drift`. The
 `Instrument` enum declares them with the same units and descriptions, and `WorkerTelemetry` records
 the same attribute keys. Recovery uses `unknown` for the queue and the task type of a retry that its
 result does not attribute. The worker records `workhorse.maintenance.drift` with the `tick` loop and
@@ -174,7 +225,7 @@ runtime supplies that type, so the core has no OpenTelemetry package dependency.
 an instrument records nothing. An application that uses OpenTelemetry adds the meter with
 `AddMeter("workhorse")`.
 
-The .NET worker emits the 19 instruments of the JVM worker.
+The .NET worker emits the 20 instruments of the JVM worker.
 `Workhorse.Internal.Telemetry.Instrumentation` declares them with the same units and descriptions,
 and `WorkerTelemetry` records the same attribute keys. Recovery uses `unknown` for the queue and the
 task type of a retry that its result does not attribute. The worker records
@@ -985,7 +1036,7 @@ The Python worker records these worker instruments:
 - `workhorse.claim.duration`
 - `workhorse.handler.duration`, `workhorse.handler.runtime`, `workhorse.handler.executions`,
   `workhorse.handler.batch.size`, and `workhorse.handler.batch.linger`
-- `workhorse.worker.heartbeat.failure`
+- `workhorse.worker.heartbeat.failure` and `workhorse.worker.heartbeat.round_failure`
 
 Maintenance and schedule firing also record these instruments:
 

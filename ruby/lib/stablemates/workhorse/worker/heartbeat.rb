@@ -686,22 +686,30 @@ module Stablemates
         # row names its batch by its 1-based position in the payload, so the statuses go back to
         # the members of that batch. A round that expires before its heartbeat statement
         # (+RoundExpired+) renews nothing, and the caller keeps the connection. RoundTimeout and
-        # PG::Error go to the caller, which discards the connection.
+        # PG::Error go to the caller, which discards the connection. Each round that gets no
+        # statuses, also one with no time left after serialization, counts once in
+        # +workhorse.worker.heartbeat.round_failure+.
         def send_pooled(batches, deadline)
           sent_at = Process.clock_gettime(Process::CLOCK_MONOTONIC)
           payload = batches.map { |worker_id, group| {"workerId" => worker_id, "leases" => leases(group)} }
           params = [JSON.generate(payload)]
           timeout = deadline - Process.clock_gettime(Process::CLOCK_MONOTONIC)
-          return [] unless timeout.positive?
+          unless timeout.positive?
+            Telemetry.record_heartbeat_round_failure(RoundExpired.new)
+            return []
+          end
 
           rows = begin
             yield SqlCatalogue::HEARTBEAT_POOL_V1, params, timeout
-          rescue RoundExpired
+          rescue RoundExpired => e
+            Telemetry.record_heartbeat_round_failure(e)
             return []
-          rescue RoundTimeout, PG::Error
+          rescue RoundTimeout, PG::Error => e
+            Telemetry.record_heartbeat_round_failure(e)
             raise
-          rescue
-            # A skipped round is silent: the lease watchdog handles rounds that keep failing.
+          rescue => e
+            # A skipped round sends no log record: the lease watchdog handles rounds that keep failing.
+            Telemetry.record_heartbeat_round_failure(e)
             return []
           end
           statuses = Array.new(batches.size) { {} }
@@ -714,14 +722,20 @@ module Stablemates
 
         # Sends one heartbeat_many_v2 statement for each batch through the executor, and returns the
         # busy members. A batch whose statement fails gets nothing, and the other batches still go.
+        # A round with one or more failed statements counts once in
+        # +workhorse.worker.heartbeat.round_failure+, with the reason of its first failure. The count
+        # occurs when that failure occurs, so a later batch that stalls does not delay it.
         def send_each(batches, deadline)
+          failed = false
           batches.flat_map do |worker_id, group|
             sent_at = Process.clock_gettime(Process::CLOCK_MONOTONIC)
             params = [worker_id, JSON.generate(leases(group))]
             rows = begin
               yield SqlCatalogue::HEARTBEAT_MANY_V2, params, deadline - Process.clock_gettime(Process::CLOCK_MONOTONIC)
-            rescue
-              # A skipped round is silent: the lease watchdog handles rounds that keep failing.
+            rescue => e
+              # A skipped round sends no log record: the lease watchdog handles rounds that keep failing.
+              Telemetry.record_heartbeat_round_failure(e) unless failed
+              failed = true
               next []
             end
             settle(group, rows.to_h { |row| [row["task_id"], row["status"]] }, sent_at)

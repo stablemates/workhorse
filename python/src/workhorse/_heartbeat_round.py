@@ -24,6 +24,18 @@ def heartbeat_round_bound_ms(heartbeat_ms: int) -> int:
     return max(1, heartbeat_ms * 3 // 4, min(50, heartbeat_ms))
 
 
+class HeartbeatRoundExpired(TimeoutError):
+    """A heartbeat round reached its deadline."""
+
+
+class HeartbeatRoundExpiredCleanly(HeartbeatRoundExpired):
+    """A heartbeat round reached its deadline before it sent its heartbeat statement.
+
+    The round sent nothing, or its ROLLBACK ended before the deadline. So nothing of the round runs
+    on the server, and the next round can use the connection.
+    """
+
+
 # A bounded round with less time than this left, in milliseconds, fails before it sends its
 # heartbeat.
 MINIMUM_ROUND_REMAINING_MS = 8

@@ -11,6 +11,7 @@ import {
   taskMetricAttributes,
   recordHandlerExecution,
   recordHeartbeatFailure,
+  recordHeartbeatRoundFailure,
   telemetryMetrics,
 } from "../src/telemetry.js";
 
@@ -56,8 +57,7 @@ recordHandlerExecution(task.queue, task.type, "succeeded");
 telemetryMetrics.handlerBatchSize.record(1, batchAttributes);
 telemetryMetrics.handlerBatchLinger.record(1, batchAttributes);
 recordHeartbeatFailure("stale");
-// TypeScript-only for now: `workhorse.worker.heartbeat.round_failure` (recordHeartbeatRoundFailure)
-// stays out of this cross-SDK catalogue until SM-1704 adds it to the other workers.
+recordHeartbeatRoundFailure(Object.assign(new Error("read ECONNRESET"), { code: "ECONNRESET" }));
 
 await provider.forceFlush();
 const catalog = Object.fromEntries(

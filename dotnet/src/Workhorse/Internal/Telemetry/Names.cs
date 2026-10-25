@@ -39,6 +39,7 @@ internal static class Names
     internal const string EnqueueOutcome = "workhorse.enqueue.outcome";
     internal const string HandlerBatchFull = "workhorse.handler.batch.full";
     internal const string HandlerOutcome = "workhorse.handler.outcome";
+    internal const string HeartbeatFailureReason = "workhorse.heartbeat.failure_reason";
     internal const string HeartbeatStatus = "workhorse.heartbeat.status";
     internal const string MaintenanceLoop = "workhorse.maintenance.loop";
     internal const string MaintenanceOperation = "workhorse.maintenance.operation";
