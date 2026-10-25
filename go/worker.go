@@ -2482,30 +2482,17 @@ func (worker *Worker) execute(
 	if handlerError != nil {
 		span.RecordError(handlerTelemetryError(handlerError, task.RedactErrorDetails))
 		span.SetStatus(codes.Error, handlerFailedSpanStatusMessage)
-		state, err := worker.failWithState(ctx, executor, task, handlerError)
+		failed, err := worker.failAttempt(ctx, executor, task, handlerError)
 		if err != nil {
 			return err
 		}
-		switch state {
-		case workerFailureReady, workerFailureScheduled:
-			outcome = handlerOutcomeRetry
-		case workerFailureFailed:
-			outcome = handlerOutcomeFailed
-		case workerFailureCancelRequested:
-			outcome = handlerOutcomeCanceled
-		case workerFailureDeadline:
-			outcome = handlerOutcomeDeadlineExceeded
-		case workerFailureTimeout:
-			outcome = handlerOutcomeTimeout
-		default:
-			outcome = handlerOutcomeLeaseLost
-		}
+		outcome = failed
 		return nil
 	}
 	outcome = handlerOutcomeSucceeded
 	if err := worker.complete(ctx, executor, task, encodedResult); errors.Is(err, ErrStaleLease) {
-		outcome = handlerOutcomeLeaseLost
-		return worker.reconcileRejectedSettlement(ctx, executor, task, err)
+		outcome, err = worker.reconcileRejectedSettlement(ctx, executor, task, err)
+		return err
 	} else {
 		return err
 	}
@@ -3300,30 +3287,38 @@ func (worker *Worker) acknowledgeCancellation(ctx context.Context, executor Exec
 	return nil
 }
 
+// reconcileRejectedSettlement explains a settlement that PostgreSQL refused. It settles the
+// cancellation or expiry that won the fence and returns that cause as the handler outcome. Only a
+// lost lease returns handlerOutcomeLeaseLost with settlementError.
 func (worker *Worker) reconcileRejectedSettlement(
 	ctx context.Context,
 	executor Executor,
 	task ClaimedTask,
 	settlementError error,
-) error {
+) (handlerOutcome, error) {
 	accepted, err := worker.cancellationAccepted(ctx, executor, task)
 	if err != nil {
-		return err
+		return handlerOutcomeLeaseLost, err
 	}
 	if accepted {
-		return nil
+		return handlerOutcomeCanceled, nil
 	}
 	status, err := worker.expireOwnership(ctx, task)
 	if err != nil {
-		return err
+		return handlerOutcomeLeaseLost, err
 	}
 	switch status {
 	case workerOwnershipCancelRequested:
-		return worker.acknowledgeCancellation(ctx, executor, task)
-	case workerOwnershipDeadline, workerOwnershipTimeout:
-		return nil
+		if err := worker.acknowledgeCancellation(ctx, executor, task); err != nil {
+			return handlerOutcomeLeaseLost, err
+		}
+		return handlerOutcomeCanceled, nil
+	case workerOwnershipDeadline:
+		return handlerOutcomeDeadlineExceeded, nil
+	case workerOwnershipTimeout:
+		return handlerOutcomeTimeout, nil
 	default:
-		return settlementError
+		return handlerOutcomeLeaseLost, settlementError
 	}
 }
 
@@ -3508,9 +3503,9 @@ func (worker *Worker) settleAfterShutdown(
 			outcome = handlerOutcomeSucceeded
 		} else if errors.Is(err, ErrStaleLease) {
 			// As after a normal completion, a cancellation request or an expiry may have won the
-			// fence. Reconciling acknowledges or settles it, so only a lost lease reaches recovery.
-			outcome = handlerOutcomeLeaseLost
-			err = worker.reconcileRejectedSettlement(settleContext, executor, task, err)
+			// fence. Reconciling acknowledges or settles it and reports it as the outcome, so only a
+			// lost lease reaches recovery.
+			outcome, err = worker.reconcileRejectedSettlement(settleContext, executor, task, err)
 		}
 	} else {
 		err = worker.releaseOwned(settleContext, executor, task, func(released handlerOutcome) {
@@ -3528,7 +3523,8 @@ func (worker *Worker) settleAfterShutdown(
 }
 
 // releaseOwned hands an owned task back through release_owned_v1 without charging its attempt.
-// It reports the handler outcome the release status implies before it settles that status.
+// It reports the handler outcome the release status implies before it settles that status. A stale
+// status is reconciled first, so the outcome names the cause that settled the attempt.
 func (worker *Worker) releaseOwned(
 	ctx context.Context,
 	executor Executor,
@@ -3553,6 +3549,7 @@ func (worker *Worker) releaseOwned(
 		return errors.New(invalidReleaseResultMessage)
 	}
 	outcome := handlerOutcomeLeaseLost
+	var settleError error
 	switch status {
 	case workerReleaseReleased:
 		outcome = handlerOutcomeReleased
@@ -3562,7 +3559,16 @@ func (worker *Worker) releaseOwned(
 		outcome = handlerOutcomeDeadlineExceeded
 	case workerFailureTimeout:
 		outcome = handlerOutcomeTimeout
-	case workerFailureStale, workerReleaseNotDue:
+	case workerFailureStale:
+		// A lease that lapsed under an unchanged fence can still settle a cancellation or an
+		// expiry, so the reconciled cause is the outcome.
+		outcome, settleError = worker.reconcileRejectedSettlement(
+			ctx,
+			executor,
+			task,
+			&StaleLeaseError{TaskID: task.ID},
+		)
+	case workerReleaseNotDue:
 	default:
 		return fmt.Errorf(rejectedReleaseStatusFormat, status)
 	}
@@ -3577,18 +3583,10 @@ func (worker *Worker) releaseOwned(
 			return append(taskLogAttributes(task, worker.workerID), slog.String(releaseStatusAttribute, status))
 		},
 	)
-	switch status {
-	case workerFailureCancelRequested:
+	if status == workerFailureCancelRequested {
 		return worker.acknowledgeCancellation(ctx, executor, task)
-	case workerFailureStale:
-		return worker.reconcileRejectedSettlement(
-			ctx,
-			executor,
-			task,
-			&StaleLeaseError{TaskID: task.ID},
-		)
 	}
-	return nil
+	return settleError
 }
 
 // validWorkerInterval reports whether a maintenance, routine, or registry interval is a whole number
@@ -3644,35 +3642,38 @@ func durableReplayConflictName(err error) string {
 	}
 }
 
-func (worker *Worker) failWithState(
+// failAttempt settles a failed attempt through fail_v1 and returns the handler outcome of the
+// state that PostgreSQL settled. A stale answer is reconciled, so a cancellation or expiry that won
+// the fence reports its cause.
+func (worker *Worker) failAttempt(
 	ctx context.Context,
 	executor Executor,
 	task ClaimedTask,
 	handlerError error,
-) (string, error) {
+) (handlerOutcome, error) {
 	envelope := handlerErrorEnvelope(handlerError, task.RedactErrorDetails)
 	encoded, err := json.Marshal(envelope)
 	if err != nil {
-		return emptyString, err
+		return handlerOutcomeUnknown, err
 	}
 	lease := worker.fencedLease(task)
 	var delay any
 	if durableReplayConflictName(handlerError) != emptyString {
 		delay = int64(-1)
 	} else if delay, err = worker.retryDelayOverride(task); err != nil {
-		return emptyString, err
+		return handlerOutcomeUnknown, err
 	}
 	arguments := append(lease.parameters(), encoded, delay)
 	rows, err := queryFencedWrite(ctx, executor, protocolStatementRegistry[failStatementName], arguments...)
 	if err != nil {
-		return emptyString, err
+		return handlerOutcomeUnknown, err
 	}
 	if len(rows) != 1 {
-		return emptyString, errors.New(invalidFailureResultMessage)
+		return handlerOutcomeUnknown, errors.New(invalidFailureResultMessage)
 	}
 	state, ok := rows[0][rowStateField].(string)
 	if !ok {
-		return emptyString, errors.New(invalidFailureResultMessage)
+		return handlerOutcomeUnknown, errors.New(invalidFailureResultMessage)
 	}
 	if worker.metrics.enabled {
 		worker.metrics.failed.Add(
@@ -3699,21 +3700,25 @@ func (worker *Worker) failWithState(
 		},
 	)
 	switch state {
-	case workerFailureReady, workerFailureScheduled, workerFailureFailed:
-		return state, nil
+	case workerFailureReady, workerFailureScheduled:
+		return handlerOutcomeRetry, nil
+	case workerFailureFailed:
+		return handlerOutcomeFailed, nil
 	case workerFailureCancelRequested:
-		return state, worker.acknowledgeCancellation(ctx, executor, task)
-	case workerFailureDeadline, workerFailureTimeout:
-		return state, nil
+		return handlerOutcomeCanceled, worker.acknowledgeCancellation(ctx, executor, task)
+	case workerFailureDeadline:
+		return handlerOutcomeDeadlineExceeded, nil
+	case workerFailureTimeout:
+		return handlerOutcomeTimeout, nil
 	case workerFailureStale:
-		return state, worker.reconcileRejectedSettlement(
+		return worker.reconcileRejectedSettlement(
 			ctx,
 			executor,
 			task,
 			&StaleLeaseError{TaskID: task.ID},
 		)
 	default:
-		return emptyString, fmt.Errorf(rejectedFailureStateFormat, state)
+		return handlerOutcomeUnknown, fmt.Errorf(rejectedFailureStateFormat, state)
 	}
 }
 

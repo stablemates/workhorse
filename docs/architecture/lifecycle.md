@@ -1667,6 +1667,12 @@ The SDKs differ in what a refusal does after the handler has returned.
     It writes `deadline_exceeded` or `timeout_exceeded`, or acknowledges a `cancel_requested` answer
     with `acknowledge_cancel_v1`. Go `reconcileRejectedSettlement` does the same.
   - A `stale` or `not_due` answer leaves the task to recovery. Python raises `StaleLeaseError`.
+  - Go `reconcileRejectedSettlement` returns the cause that it settled as the handler outcome of
+    the span and of `workhorse.handler.executions`: `deadline_exceeded`, `timeout`, or `canceled`.
+    Only a `stale` or `not_due` answer keeps `lease_lost`. `settleAfterShutdown` reports the same
+    outcomes. A `stale` answer from `fail_v1` or `release_owned_v1` goes to the same
+    reconciliation. A lease that expired under an unchanged fence can still settle a due deadline
+    or attempt timeout (SM-1811).
 - Ruby `reconcile_rejected_completion`, JVM `reconcileRejectedCompletion`, and .NET
   `ReconcileRejectedCompletionAsync` do the same after `complete_v1` or the fast-tier completion
   refuses the write. They call `expire_owned_telemetry_v1` under the attempt's fence before the
