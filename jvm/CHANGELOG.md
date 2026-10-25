@@ -47,6 +47,14 @@ adds.
 
 ### Fixes
 
+- **The worker waits longer after each `not_due` expiry answer.** When PostgreSQL answers
+  `not_due` to an expiry request, the worker asked again every 5 ms. Each request locks the task
+  row, so the heartbeat of the same attempt answered `busy`. The attempt could then lose its lease
+  before the database expiry.
+
+  Now the first retry waits 5 ms. Each later retry waits twice as long, to a maximum of 1 s. The
+  TypeScript, Go, and Rust workers already use this schedule (SM-1701).
+
 - **The JVM client measures signal and human wait values as PostgreSQL does.** PostgreSQL limits a
   signal payload, a human wait context, and a human wait result to 65,536 bytes of
   `octet_length(value::jsonb::text)`. That text has a space after each `:` and `,`, so it can be

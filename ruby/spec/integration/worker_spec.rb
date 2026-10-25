@@ -415,6 +415,52 @@ RSpec.describe "Worker against PostgreSQL" do
     expect(output.string).to include(%("workhorse.handler.outcome":"lease_lost"))
   end
 
+  # The handler moves the attempt timeout 2.5 s later in PostgreSQL only, so the worker clock runs
+  # ahead by more than the 2 s lease. PostgreSQL answers not_due until its own clock reaches the
+  # timeout. Each expiry request locks the task row, and a heartbeat in that time answers busy. If the
+  # renewals stop, the lease lapses and the reason is lease_lost. With the backoff, the worker sends
+  # about 11 requests. A fixed 5 ms retry sends hundreds, so the count bound fails (SM-1701). The
+  # timeout of 1.5 s gives the handler time to move the stored value before the local timer fires.
+  it "keeps renewals while the worker clock leads the attempt timeout by more than one lease" do
+    @connection.exec(<<~SQL)
+      CREATE SEQUENCE public.workhorse_test_expiry_asks;
+      ALTER FUNCTION workhorse.expire_owned_v1(uuid, text, bigint) RENAME TO expire_owned_v1__counted;
+      CREATE FUNCTION workhorse.expire_owned_v1(p_task_id uuid, p_worker_id text, p_fence_token bigint)
+      RETURNS text LANGUAGE plpgsql AS $counted$
+      BEGIN
+        PERFORM nextval('public.workhorse_test_expiry_asks');
+        RETURN workhorse.expire_owned_v1__counted(p_task_id, p_worker_id, p_fence_token);
+      END;
+      $counted$;
+    SQL
+    task_id = queue.enqueue("slow", {}, max_attempts: 1, execution_timeout: 1.5).task_id
+    reason = nil
+    expiry = nil
+    after_expiry = nil
+    subject = worker(lease: 2, heartbeat: 0.2, maintenance_interval: 3600).handle("slow") do |_payload, context|
+      expiry = @connection.exec_params("UPDATE workhorse.task_runtime SET attempt_timeout_at = attempt_timeout_at +
+        interval '2500 milliseconds' WHERE task_id = $1 AND attempt_timeout_at > clock_timestamp()
+        RETURNING attempt_timeout_at::text", [task_id]).getvalue(0, 0)
+      context.cancellation.wait(30)
+      after_expiry = @connection.exec_params("SELECT clock_timestamp() >= $1::timestamptz", [expiry]).getvalue(0, 0)
+      reason = context.cancellation.reason
+      context.cancellation.check!
+    end
+    subject.run_once
+
+    asks = Integer(@connection.exec("SELECT last_value FROM public.workhorse_test_expiry_asks").getvalue(0, 0), 10)
+    expect(reason).to eq(:execution_timeout)
+    expect(after_expiry).to eq("t")
+    expect(status(task_id)["state"]).to eq("failed")
+    expect(asks).to be <= 20
+  ensure
+    @connection.exec(<<~SQL)
+      DROP FUNCTION IF EXISTS workhorse.expire_owned_v1(uuid, text, bigint);
+      ALTER FUNCTION workhorse.expire_owned_v1__counted(uuid, text, bigint) RENAME TO expire_owned_v1;
+      DROP SEQUENCE IF EXISTS public.workhorse_test_expiry_asks;
+    SQL
+  end
+
   it "rejects a result that breaks the task type's registered contract" do
     task_type = "typed.#{@queue_name}"
     version = W::TaskContractVersion.new(result_schema: {"type" => "object", "required" => ["ok"]})

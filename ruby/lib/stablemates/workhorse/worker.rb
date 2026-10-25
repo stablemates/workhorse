@@ -30,6 +30,7 @@ module Stablemates
       UNWIND_WINDOW = 0.25
       THREAD_RETURN_WAIT = 0.001
       EXPIRATION_RETRY = 0.005
+      EXPIRATION_RETRY_MAX = 1.0
       REDACTED_NAME = "RedactedTaskError"
       REDACTED_MESSAGE = "Task handler failed; details redacted"
       PROTOCOL = "5"
@@ -68,7 +69,7 @@ module Stablemates
       UNSTORABLE_ESCAPE_START = /\\u(?:0000|[dD])/
       JSON_ESCAPE = /\\(?:u(\h{4})|.)/m
       private_constant :MAX_EMPTY_POLL_MS, :NOTIFICATION_POLL_MS, :NOTIFICATION_CLAIM_DELAY, :UNWIND_WINDOW,
-        :THREAD_RETURN_WAIT, :EXPIRATION_RETRY, :REDACTED_NAME, :REDACTED_MESSAGE, :PROTOCOL, :LANGUAGE, :MIN_POOL_SIZE,
+        :THREAD_RETURN_WAIT, :EXPIRATION_RETRY, :EXPIRATION_RETRY_MAX, :REDACTED_NAME, :REDACTED_MESSAGE, :PROTOCOL, :LANGUAGE, :MIN_POOL_SIZE,
         :STARTUP_BUDGET_FLOOR, :STARTUP_STOP_CHECK, :COMPLETION_BATCH_LIMIT, :TIER_PROBE_INTERVAL, :DATABASE_NOW,
         :STATUS_OUTCOMES, :TELEMETRY_OUTCOMES, :SPAN_OUTCOMES, :CANCEL_REASONS, :EXPONENT_NUMBER,
         :UNSTORABLE_ESCAPE_START, :JSON_ESCAPE
@@ -1740,10 +1741,14 @@ module Stablemates
       end
 
       # Ends an attempt locally when its lease lapses unrenewed, and asks PostgreSQL to settle a
-      # deadline or an attempt timeout when one passes.
+      # deadline or an attempt timeout when one passes. While PostgreSQL answers not_due, the first
+      # retry waits EXPIRATION_RETRY and each later one waits twice as long, up to
+      # EXPIRATION_RETRY_MAX. Each request locks the task row, so a short fixed retry makes the
+      # heartbeat of the attempt answer busy (SM-1701).
       def watch_expiration(task, ownership, arbiter, cancellation, parent, fail_attempt)
         expiration_at = [task.deadline_at, task.attempt_timeout_at].compact.min
         retry_at = nil
+        retry_delay = EXPIRATION_RETRY
         loop do
           delay = if retry_at
             retry_at - monotonic
@@ -1765,7 +1770,8 @@ module Stablemates
           status = ownership.settlement.synchronize { settle_expiration(task, arbiter, cancellation, parent) }
           return unless status == "not_due"
 
-          retry_at = monotonic + EXPIRATION_RETRY
+          retry_at = monotonic + retry_delay
+          retry_delay = [retry_delay * 2, EXPIRATION_RETRY_MAX].min
         end
       rescue => e
         fail_attempt.call(e)

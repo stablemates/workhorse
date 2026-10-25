@@ -383,7 +383,8 @@ The worker sets one local timer at the earlier of `deadline_at` and `attempt_tim
 
 `expire_owned_v1(p_task_id, p_worker_id, p_fence_token)` returns one of `not_due`,
 `cancel_requested`, `deadline_exceeded`, `timeout_exceeded`, or `stale`. After `not_due`, the
-handler keeps running under its lease, and the worker asks again.
+handler keeps running under its lease, and the worker asks again. The first retry waits 5 ms.
+Each later retry waits twice as long, to a maximum of 1 s.
 
 - The completed transition fences every late completion, failure, heartbeat, checkpoint, or wait
   write.
