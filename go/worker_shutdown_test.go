@@ -53,7 +53,7 @@ func TestWorkerReturnsWhenAHandlerIgnoresItsCancellation(t *testing.T) {
 	runContext, stop := context.WithCancel(ctx)
 	runResult := make(chan error, 1)
 	go func() { runResult <- worker.Run(runContext) }()
-	<-started
+	awaitSignal(t, started, "the handler to start", stop)
 	stop()
 
 	select {
@@ -71,7 +71,7 @@ func TestWorkerReturnsWhenAHandlerIgnoresItsCancellation(t *testing.T) {
 	default:
 	}
 	close(release)
-	<-finished
+	awaitSignal(t, finished, "the abandoned handler to finish after its release")
 }
 
 func TestWorkerWaitsForAHandlerThatHonoursItsCancellation(t *testing.T) {
@@ -113,7 +113,7 @@ func TestWorkerWaitsForAHandlerThatHonoursItsCancellation(t *testing.T) {
 	runContext, stop := context.WithCancel(ctx)
 	runResult := make(chan error, 1)
 	go func() { runResult <- worker.Run(runContext) }()
-	<-started
+	awaitSignal(t, started, "the handler to start", stop)
 	stop()
 
 	select {

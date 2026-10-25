@@ -220,7 +220,7 @@ func runRefusedSettlement(
 	case <-timeout:
 		t.Fatalf("%s: RunOnce never returned", cause)
 	}
-	if err := <-handlerFailure; err != nil {
+	if err := awaitSignal(t, handlerFailure, "the task change from the handler"); err != nil {
 		t.Fatalf("%s: the handler could not change its task: %v", cause, err)
 	}
 	return taskID

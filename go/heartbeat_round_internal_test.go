@@ -122,12 +122,12 @@ func TestWaitingRoundsJoinTheLeaderUnlessTheirDeadlineIsEarlier(t *testing.T) {
 		member.result <- heartbeatResult{err: failure}
 	}
 	for _, done := range []<-chan error{laterDone, equalDone} {
-		if err := <-done; !errors.Is(err, failure) {
+		if err := awaitSignal(t, done, "each joined round to return"); !errors.Is(err, failure) {
 			t.Fatalf("a joined round got %v; want the failure of the transaction", err)
 		}
 	}
 	connection.handOff()
-	if err := <-earlierDone; !errors.Is(err, errLed) {
+	if err := awaitSignal(t, earlierDone, "the round with the earlier deadline to lead"); !errors.Is(err, errLed) {
 		t.Fatalf("the round with the earlier deadline got %v; want it to lead the next transaction", err)
 	}
 	connection.mu.Lock()
@@ -149,11 +149,11 @@ func TestTheWaitingRoundWithTheEarliestDeadlineLeadsTheNextTransaction(t *testin
 	_, firstDone := waitingRequest(t, connection, now.Add(3*time.Second), "first")
 	_, secondDone := waitingRequest(t, connection, now.Add(2*time.Second), "second")
 	connection.handOff()
-	if err := <-secondDone; !errors.Is(err, errLed) {
+	if err := awaitSignal(t, secondDone, "the round with the earliest deadline to lead"); !errors.Is(err, errLed) {
 		t.Fatalf("the round with the earliest deadline got %v; want it to lead", err)
 	}
 	connection.handOff()
-	if err := <-firstDone; !errors.Is(err, errLed) {
+	if err := awaitSignal(t, firstDone, "the last round to lead"); !errors.Is(err, errLed) {
 		t.Fatalf("the last round got %v; want it to lead", err)
 	}
 	connection.handOff()
@@ -173,7 +173,7 @@ func TestAWaitingRoundThatReachesItsDeadlineLeavesTheQueue(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, done := waitingRequest(t, connection, time.Now().Add(20*time.Millisecond), "expired")
-	if err := <-done; !errors.Is(err, context.DeadlineExceeded) {
+	if err := awaitSignal(t, done, "the expired round to return"); !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("the expired round got %v; want its deadline", err)
 	}
 	connection.mu.Lock()

@@ -149,7 +149,7 @@ func TestAWorkerOnAWarmingPoolStartsWithItsHeartbeatConnection(t *testing.T) {
 		t.Fatal("the worker on a warming pool claimed no task")
 	}
 	stopRun()
-	if err := <-runResult; err != nil {
+	if err := awaitSignal(t, runResult, "Run to return after the stop"); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -223,7 +223,7 @@ func TestAWorkerWithoutItsHeartbeatConnectionClaimsWhenTheConnectionReturns(t *t
 		t.Fatal("the worker did not claim after its heartbeat connection returned")
 	}
 	stopRun()
-	if err := <-runResult; err != nil {
+	if err := awaitSignal(t, runResult, "Run to return after the stop"); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -262,7 +262,7 @@ func TestRepeatedWaiterTimeoutsStartOneHeartbeatConnect(t *testing.T) {
 			t.Fatal("a round finished while the connect was blocked")
 		}
 	}
-	<-started
+	awaitSignal(t, started, "the blocked connect to start")
 	// The delay between two failed attempts is at most one second, so a second connect would have
 	// started by now if a waiter's deadline ended the first.
 	time.Sleep(1500 * time.Millisecond)
@@ -293,7 +293,7 @@ func TestAReleaseDuringAPendingConnectLeavesTheConnectionToThePool(t *testing.T)
 	if err := connection.QueryRound(context.Background(), 50*time.Millisecond, "SELECT 1"); err == nil {
 		t.Fatal("a round finished while the connect was blocked")
 	}
-	<-started
+	awaitSignal(t, started, "the blocked connect to start")
 	connection.Release()
 	release()
 	deadline := time.Now().Add(5 * time.Second)
@@ -389,7 +389,7 @@ func TestAStalledListenerDoesNotKeepAWorkerFromStarting(t *testing.T) {
 	releaseListen()
 	stopRun()
 	for range 2 {
-		if err := <-results; err != nil {
+		if err := awaitSignal(t, results, "each Run to return after the stop"); err != nil {
 			t.Fatal(err)
 		}
 	}

@@ -92,7 +92,7 @@ func releaseDuringRound(ctx context.Context, t *testing.T, pool *pgxpool.Pool) r
 			<-finish
 		})
 	}()
-	<-entered
+	awaitSignal(t, entered, "the reserved round to start", hold.Release)
 	hold.Release()
 	return released
 }
@@ -123,7 +123,7 @@ func TestANewHeartbeatHolderWaitsForTheReleasedRoundToReturnItsConnection(t *tes
 	}
 
 	first.finish()
-	if err := <-first.done; err != nil {
+	if err := awaitSignal(t, first.done, "the first round to return after it finishes"); err != nil {
 		t.Fatal(err)
 	}
 	if err := second.Reserve(ctx); err != nil {
@@ -156,7 +156,7 @@ func TestStartupsThatEndWhileAReleasedRoundRunsLeaveNoWaiter(t *testing.T) {
 	}
 
 	first.finish()
-	if err := <-first.done; err != nil {
+	if err := awaitSignal(t, first.done, "the first round to return after it finishes"); err != nil {
 		t.Fatal(err)
 	}
 	next := workhorse.HoldHeartbeatConnectionForTest(pool)
@@ -185,7 +185,7 @@ func TestANewHeartbeatHolderWaitsForALateConnectionOfTheReleasedHolder(t *testin
 		<-deliver
 		return pool.Acquire(context.Background())
 	})
-	<-entered
+	awaitSignal(t, entered, "the slow connect to start", first.Release)
 	first.Release()
 
 	second := workhorse.HoldHeartbeatConnectionForTest(pool)
@@ -307,7 +307,7 @@ func TestAReplacementHeartbeatConnectionRenewsWhileTheDiscardedOneCloses(t *test
 		t.Fatalf("the replacement round ran on the discarded backend %v", discarded)
 	}
 	if roundEnded != nil {
-		roundErr = <-roundEnded
+		roundErr = awaitSignal(t, roundEnded, "the failing round to return")
 	}
 	if roundErr == nil || roundErr.Error() != "the heartbeat failed" {
 		t.Fatalf("the failing round returned %v, want its own error", roundErr)
@@ -403,6 +403,8 @@ func TestAStopKeepsTheHeartbeatReservationUntilAClaimInItsSQLSettles(t *testing.
 	case <-inSQL:
 	case err := <-stopped:
 		t.Fatalf("Run returned before its first claim: %v", err)
+	case <-time.After(workhorse.SignalDeadlineForTest):
+		t.Fatalf("no signal after %s: the test waited for the first claim to enter its SQL", workhorse.SignalDeadlineForTest)
 	}
 
 	stop()
@@ -414,6 +416,8 @@ func TestAStopKeepsTheHeartbeatReservationUntilAClaimInItsSQLSettles(t *testing.
 		}
 	case err := <-stopped:
 		t.Fatalf("Run returned with %v while a claim was inside its SQL", err)
+	case <-time.After(workhorse.SignalDeadlineForTest):
+		t.Fatalf("no signal after %s: the test waited for the stop path to report the claim", workhorse.SignalDeadlineForTest)
 	}
 	if !worker.HeartbeatConnectionHeldForTest() {
 		t.Fatal("the worker released its heartbeat reservation while a claim was inside its SQL")

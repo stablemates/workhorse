@@ -110,7 +110,7 @@ func TestWorkerFailsAnUnstorableResultUnderItsRetryPolicyAndKeepsRunning(t *test
 			go func() { result <- worker.Run(runContext) }()
 			outcomes := waitForTierOutcomes(t, pool, fast, taskIDs, result)
 			stop()
-			if err := <-result; err != nil {
+			if err := awaitSignal(t, result, "Run to return after the stop"); err != nil {
 				t.Fatalf("Run returned %v", err)
 			}
 
@@ -204,7 +204,7 @@ func TestWorkerSettlesAnUnstorableHandlerErrorByItsRetryPolicy(t *testing.T) {
 			go func() { result <- worker.Run(runContext) }()
 			outcomes := waitForTierOutcomes(t, pool, fast, taskIDs, result)
 			stop()
-			if err := <-result; err != nil {
+			if err := awaitSignal(t, result, "Run to return after the stop"); err != nil {
 				t.Fatalf("Run returned %v", err)
 			}
 			want := tierOutcome{

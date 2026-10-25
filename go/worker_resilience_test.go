@@ -63,7 +63,7 @@ func TestWorkerRunKeepsRunningAfterALeaseLoss(t *testing.T) {
 	workerResult := make(chan error, 1)
 	go func() { workerResult <- worker.Run(runContext) }()
 
-	<-started
+	awaitSignal(t, started, "the handler to start")
 	if _, err := pool.Exec(
 		ctx,
 		"UPDATE workhorse.task_runtime SET expires_at = clock_timestamp() - interval '1 millisecond' WHERE task_id = $1::uuid",
@@ -97,7 +97,7 @@ func TestWorkerRunKeepsRunningAfterALeaseLoss(t *testing.T) {
 		t.Fatal("worker did not claim after a lease loss")
 	}
 	stop()
-	if err := <-workerResult; err != nil {
+	if err := awaitSignal(t, workerResult, "Run to return after the stop"); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -165,7 +165,7 @@ func TestWorkerLogsAFailingMaintenancePhaseAndKeepsRunning(t *testing.T) {
 		t.Fatal("worker did not claim after a maintenance phase error")
 	}
 	stop()
-	if err := <-workerResult; err != nil {
+	if err := awaitSignal(t, workerResult, "Run to return after the stop"); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -206,7 +206,7 @@ func TestWorkerWithoutALoggerWritesToTheDefaultLogger(t *testing.T) {
 	}
 	waitForWorkerLog(t, &logs, "notification listener unavailable")
 	stop()
-	if err := <-workerResult; err != nil {
+	if err := awaitSignal(t, workerResult, "Run to return after the stop"); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -376,7 +376,7 @@ func TestSlowExpirationDoesNotStallHeartbeatsForOtherTasks(t *testing.T) {
 		t.Fatal("worker did not claim after a slow expiry")
 	}
 	stop()
-	if err := <-workerResult; err != nil {
+	if err := awaitSignal(t, workerResult, "Run to return after the stop"); err != nil {
 		t.Fatal(err)
 	}
 }

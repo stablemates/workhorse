@@ -201,7 +201,7 @@ func TestOverlappingCheckpointCallsCompareTheirInputs(t *testing.T) {
 		}, CheckpointOptions{Input: chargeInput})
 		initiator <- checkpointResult{value, err}
 	}()
-	<-entered
+	awaitSignal(t, entered, "the checkpoint operation to start", func() { close(release) })
 	requireInFlight(t, handler, "charge-card")
 
 	_, err := handler.Checkpoint("charge-card", refusedOperation(t), CheckpointOptions{Input: discountedInput})

@@ -89,13 +89,13 @@ func runFastWorkerUntil(t *testing.T, pool *pgxpool.Pool, worker *workhorse.Work
 	for len(fastOutcomes(t, pool, taskIDs)) != len(taskIDs) {
 		if time.Now().After(deadline) {
 			stop()
-			<-result
+			awaitSignal(t, result, "Run to return after the stop")
 			t.Fatal("worker did not finish the fast tasks in time")
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
 	stop()
-	if err := <-result; err != nil {
+	if err := awaitSignal(t, result, "Run to return after the stop"); err != nil {
 		t.Fatal(err)
 	}
 }

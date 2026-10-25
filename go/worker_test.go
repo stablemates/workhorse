@@ -343,14 +343,14 @@ func TestHandlerContextReturnsTypedFenceErrorsForCheckpointAndWait(t *testing.T)
 	if !processed || runError != nil {
 		t.Fatalf("expected the worker to survive a competing completion: processed=%t err=%v", processed, runError)
 	}
-	checkpointErr := <-checkpointError
+	checkpointErr := awaitSignal(t, checkpointError, "the checkpoint error from the handler")
 	var checkpointLeaseLost *workhorse.CheckpointLeaseLostError
 	if !errors.As(checkpointErr, &checkpointLeaseLost) || checkpointLeaseLost.TaskID != taskID ||
 		checkpointLeaseLost.CheckpointName != "stale-checkpoint" ||
 		!errors.Is(checkpointErr, workhorse.ErrLeaseLost) {
 		t.Fatalf("unexpected checkpoint fence error: %#v", checkpointErr)
 	}
-	waitErr := <-waitError
+	waitErr := awaitSignal(t, waitError, "the wait error from the handler")
 	var waitLeaseLost *workhorse.WaitLeaseLostError
 	if !errors.As(waitErr, &waitLeaseLost) || waitLeaseLost.TaskID != taskID ||
 		waitLeaseLost.WaitName != "stale-wait" || !errors.Is(waitErr, workhorse.ErrLeaseLost) {
@@ -585,7 +585,7 @@ func TestHandlerContextCoalescesWaitsAndCancelsOnSuspension(t *testing.T) {
 	if err != nil || !processed {
 		t.Fatalf("coalesced wait: processed=%t err=%v", processed, err)
 	}
-	if cause := <-causes; cause == nil {
+	if cause := awaitSignal(t, causes, "the cancellation cause from the handler"); cause == nil {
 		t.Fatal("scheduled wait did not cancel the handler context")
 	}
 	var state string
@@ -1110,7 +1110,7 @@ func TestWorkersCannotClaimTheSameTaskConcurrently(t *testing.T) {
 		}
 		firstResult <- err
 	}()
-	<-started
+	awaitSignal(t, started, "the handler of the first worker to start", func() { close(release) })
 
 	processed, err := second.RunOnce(ctx)
 	if err != nil {
@@ -1120,7 +1120,7 @@ func TestWorkersCannotClaimTheSameTaskConcurrently(t *testing.T) {
 		t.Fatal("second worker claimed a task already owned by the first worker")
 	}
 	close(release)
-	if err := <-firstResult; err != nil {
+	if err := awaitSignal(t, firstResult, "RunOnce of the first worker to return"); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -1171,27 +1171,27 @@ func TestWorkerRunBoundsConcurrencyAndRefillsSlots(t *testing.T) {
 	runContext, stop := context.WithCancel(ctx)
 	runResult := make(chan error, 1)
 	go func() { runResult <- worker.Run(runContext) }()
-	first := <-started
+	first := awaitSignal(t, started, "the first handler to start", stop)
 	secondRunContext, stopSecondRun := context.WithCancel(ctx)
 	secondRunResult := make(chan error, 1)
 	go func() { secondRunResult <- worker.Run(secondRunContext) }()
-	second := <-started
+	second := awaitSignal(t, started, "the second handler of the first Run to start", stop, stopSecondRun)
 	select {
 	case sequence := <-started:
 		t.Fatalf("worker exceeded its concurrency bound by starting task %d", sequence)
 	case <-time.After(100 * time.Millisecond):
 	}
 	close(releases[first])
-	third := <-started
+	third := awaitSignal(t, started, "the handler of the refilled slot to start", stop, stopSecondRun)
 	for _, sequence := range []int{second, third} {
 		close(releases[sequence])
 	}
 	stopSecondRun()
-	if err := <-secondRunResult; err != nil {
+	if err := awaitSignal(t, secondRunResult, "the concurrent Run to return after its stop", stop); err != nil {
 		t.Fatalf("concurrent Run did not stop while waiting for the worker: %v", err)
 	}
 	stop()
-	if err := <-runResult; err != nil {
+	if err := awaitSignal(t, runResult, "Run to return after the stop"); err != nil {
 		t.Fatal(err)
 	}
 	stateMu.Lock()
@@ -1249,7 +1249,7 @@ func TestWorkerRunRotatesClaimsAcrossQueues(t *testing.T) {
 		}
 	}
 	stop()
-	if err := <-runResult; err != nil {
+	if err := awaitSignal(t, runResult, "Run to return after the stop"); err != nil {
 		t.Fatal(err)
 	}
 	if strings.Join(order, ",") != "busy,quiet,busy,busy" {
@@ -1301,8 +1301,8 @@ func TestWorkerRunStopsClaimsAndDrainsWithinTheGracePeriod(t *testing.T) {
 	runContext, stop := context.WithCancel(ctx)
 	runResult := make(chan error, 1)
 	go func() { runResult <- worker.Run(runContext) }()
-	first := <-started
-	second := <-started
+	first := awaitSignal(t, started, "the first handler to start", stop)
+	second := awaitSignal(t, started, "the second handler to start", stop)
 	stop()
 	select {
 	case sequence := <-finished:
@@ -1371,7 +1371,7 @@ func TestWorkerRecordsARejectedSettlementAsALeaseLoss(t *testing.T) {
 		_, err := worker.RunOnce(ctx)
 		workerResult <- err
 	}()
-	<-started
+	awaitSignal(t, started, "the handler to start", func() { close(release) })
 
 	var fence int64
 	if err := pool.QueryRow(
@@ -1396,7 +1396,7 @@ func TestWorkerRecordsARejectedSettlementAsALeaseLoss(t *testing.T) {
 		t.Fatal("fault-injection settlement was rejected")
 	}
 	close(release)
-	if err := <-workerResult; err != nil {
+	if err := awaitSignal(t, workerResult, "RunOnce to return after the release"); err != nil {
 		t.Fatalf("expected the worker to survive a rejected settlement, received %v", err)
 	}
 	if !strings.Contains(logs.String(), "workhorse.handler.outcome=lease_lost") {
@@ -1471,7 +1471,7 @@ func executeWorkerHeartbeatFixture(t *testing.T, fixture workerRuntimeFixture) {
 		processed, err := worker.RunOnce(ctx)
 		workerResult <- workerRunResult{processed: processed, err: err}
 	}()
-	<-started
+	awaitSignal(t, started, "the handler to start")
 	tracer.waitForCalls(t, 1)
 	time.Sleep(2 * time.Duration(fixture.HeartbeatMS) * time.Millisecond)
 	calls, _ := tracer.snapshot()
@@ -1488,7 +1488,7 @@ func executeWorkerHeartbeatFixture(t *testing.T, fixture workerRuntimeFixture) {
 	renewed := leaseExpiry(t, ctx, observer, taskID)
 	waitForLeaseRenewal(t, ctx, observer, taskID, renewed, 5*time.Second)
 	releaseHandler()
-	result := <-workerResult
+	result := awaitSignal(t, workerResult, "RunOnce to return after the release")
 	processed, err := result.processed, result.err
 	if err != nil || !processed {
 		t.Fatalf("long-running attempt: processed=%t err=%v", processed, err)
@@ -1547,12 +1547,15 @@ func executeWorkerCancellationFixture(t *testing.T, fixture workerRuntimeFixture
 		cause <- context.Cause(handlerContext)
 		return nil, nil
 	})
+	// A timeout cancels the run, so the handler returns and the pool can close.
+	runContext, stopRun := context.WithCancel(ctx)
+	defer stopRun()
 	workerResult := make(chan error, 1)
 	go func() {
-		_, err := worker.RunOnce(ctx)
+		_, err := worker.RunOnce(runContext)
 		workerResult <- err
 	}()
-	<-started
+	awaitSignal(t, started, "the handler to start", stopRun)
 	requestedBy := "go-test"
 	cancelResult, err := queue.Cancel(ctx, taskID, workhorse.CancellationRequest{
 		RequestedBy: &requestedBy,
@@ -1566,10 +1569,10 @@ func executeWorkerCancellationFixture(t *testing.T, fixture workerRuntimeFixture
 		t.Fatalf("unexpected cancellation result: %#v", cancelResult)
 	}
 
-	if err := <-workerResult; err != nil {
+	if err := awaitSignal(t, workerResult, "RunOnce to return after the cancellation"); err != nil {
 		t.Fatal(err)
 	}
-	observed := <-cause
+	observed := awaitSignal(t, cause, "the cancellation cause from the handler")
 	if !errors.Is(observed, workhorse.ErrCancellationRequested) {
 		t.Fatalf("expected typed cancellation cause, received %v", observed)
 	}
@@ -1687,7 +1690,7 @@ func executeWorkerExpirationFixture(t *testing.T, fixture workerRuntimeFixture) 
 				err       error
 			}{processed: processed, err: err}
 		}()
-		run := <-result
+		run := awaitSignal(t, result, "RunOnce to return from the expiration attempt")
 		processed, err := run.processed, run.err
 		if err != nil || !processed {
 			t.Fatalf("expiration attempt: processed=%t err=%v", processed, err)
@@ -1696,13 +1699,13 @@ func executeWorkerExpirationFixture(t *testing.T, fixture workerRuntimeFixture) 
 	}
 	observedCauses := make([]string, 0, len(fixture.ExpectedAbortReasons))
 	for range fixture.ExpectedAbortReasons {
-		observedCauses = append(observedCauses, lifecycleCauseName(<-causes))
+		observedCauses = append(observedCauses, lifecycleCauseName(awaitSignal(t, causes, "the expiration cause from the handler")))
 	}
 	if strings.Join(observedCauses, ",") != strings.Join(fixture.ExpectedAbortReasons, ",") {
 		t.Fatalf("unexpected expiration causes: %v", observedCauses)
 	}
 	for attempt := range fixture.ExpectedAbortReasons {
-		if after := <-afterExpiry; after != fixture.ExpectedCancelledAfterDatabaseExpiry {
+		if after := awaitSignal(t, afterExpiry, "the database clock reading from the handler"); after != fixture.ExpectedCancelledAfterDatabaseExpiry {
 			t.Fatalf("attempt %d: cancelled after the database expiry = %t", attempt+1, after)
 		}
 	}
@@ -1821,12 +1824,15 @@ func executeWorkerLeaseLossFixture(t *testing.T, fixture workerRuntimeFixture) {
 		processed bool
 		err       error
 	}
+	// A timeout cancels the run, so the handler returns and the pool can close.
+	runContext, stopRun := context.WithCancel(ctx)
+	defer stopRun()
 	workerResult := make(chan runOnceResult, 1)
 	go func() {
-		processed, err := worker.RunOnce(ctx)
+		processed, err := worker.RunOnce(runContext)
 		workerResult <- runOnceResult{processed: processed, err: err}
 	}()
-	<-started
+	awaitSignal(t, started, "the handler to start", stopRun)
 	var staleFence int64
 	if err := pool.QueryRow(
 		ctx,
@@ -1852,14 +1858,14 @@ func executeWorkerLeaseLossFixture(t *testing.T, fixture workerRuntimeFixture) {
 	}
 	releaseHeartbeat()
 
-	run := <-workerResult
+	run := awaitSignal(t, workerResult, "RunOnce to return after the lease loss")
 	if fixture.ExpectedRunOutcome != "processed" || !run.processed || run.err != nil {
 		t.Fatalf(
 			"expected run outcome %q, received processed=%t err=%v",
 			fixture.ExpectedRunOutcome, run.processed, run.err,
 		)
 	}
-	observed := <-cause
+	observed := awaitSignal(t, cause, "the lease-loss cause from the handler")
 	if !errors.Is(observed, workhorse.ErrLeaseLost) {
 		t.Fatalf("expected lease-loss cancellation cause, received %v", observed)
 	}
@@ -1870,7 +1876,7 @@ func executeWorkerLeaseLossFixture(t *testing.T, fixture workerRuntimeFixture) {
 	if observed.Error() != fixture.ExpectedAbortMessage {
 		t.Fatalf("expected lease-loss message %q, received %q", fixture.ExpectedAbortMessage, observed)
 	}
-	results := <-rejectedWrites
+	results := awaitSignal(t, rejectedWrites, "the rejected durable writes from the handler")
 	if strings.Join(results.names, ",") != strings.Join(fixture.PortableRejectedWrites, ",") {
 		t.Fatalf("durable writes did not all reject the stale fence")
 	}
@@ -1982,7 +1988,7 @@ func executeWorkerRefusedCompletionFixture(t *testing.T, fixture workerRuntimeFi
 		if calls := handled.Load(); calls != 1 {
 			t.Fatalf("%s: the handler ran %d times, want 1", testCase.Cause, calls)
 		}
-		if err := <-handlerFailure; err != nil {
+		if err := awaitSignal(t, handlerFailure, "the task change from the handler"); err != nil {
 			t.Fatalf("%s: the handler could not change its task: %v", testCase.Cause, err)
 		}
 		// The attempt settled its cause before the run returned, without a maintenance pass.
@@ -2220,7 +2226,7 @@ func TestWorkerRegistryDeliversRemotePauseAndDeregisters(t *testing.T) {
 	}
 
 	cancel()
-	if err := <-runResult; err != nil {
+	if err := awaitSignal(t, runResult, "Run to return after the cancel"); err != nil {
 		t.Fatal(err)
 	}
 	var registrations int
@@ -2255,7 +2261,7 @@ func TestWorkerRegistryDeliversRemotePauseAndDeregisters(t *testing.T) {
 		t.Fatalf("expected a fresh worker instance, received first=%s second=%s", firstInstanceID, secondInstanceID)
 	}
 	stopRestart()
-	if err := <-restartResult; err != nil {
+	if err := awaitSignal(t, restartResult, "the restarted Run to return after its stop"); err != nil {
 		t.Fatal(err)
 	}
 	processed, err := worker.RunOnce(context.Background())
@@ -2326,7 +2332,7 @@ func TestWorkerMaintenanceCadenceDoesNotWaitForAHandler(t *testing.T) {
 	runContext, stop := context.WithCancel(ctx)
 	workerResult := make(chan error, 1)
 	go func() { workerResult <- worker.Run(runContext) }()
-	<-started
+	awaitSignal(t, started, "the handler to start", stop)
 	if _, err := pool.Exec(
 		ctx,
 		"UPDATE workhorse.task_runtime SET expires_at = clock_timestamp() - interval '1 millisecond' WHERE task_id = $1::uuid",
@@ -2358,7 +2364,7 @@ func TestWorkerMaintenanceCadenceDoesNotWaitForAHandler(t *testing.T) {
 	deadline.Stop()
 	ticker.Stop()
 	stop()
-	if err := <-workerResult; err != nil {
+	if err := awaitSignal(t, workerResult, "Run to return after the stop"); err != nil {
 		t.Fatalf("expected a clean drain after recovery assertion, received %v", err)
 	}
 }
@@ -2605,7 +2611,7 @@ func TestWorkerNotificationsWakeClaimsAndReconnectAfterListenerLoss(t *testing.T
 	assertHandledBeforePoll(t, handled, "during-reconnect")
 
 	stop()
-	if err := <-workerResult; err != nil {
+	if err := awaitSignal(t, workerResult, "Run to return after the stop"); err != nil {
 		t.Fatal(err)
 	}
 	connections := make([]*pgxpool.Conn, 0, config.MaxConns)
@@ -2673,7 +2679,7 @@ func TestWorkerPollingOnlyFallbackLogsAndClaimsOnThePollInterval(t *testing.T) {
 	assertHandledWithin(t, handled, "fallback", time.Second)
 
 	stop()
-	if err := <-workerResult; err != nil {
+	if err := awaitSignal(t, workerResult, "Run to return after the stop"); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -2763,7 +2769,7 @@ func TestWorkerPollingContinuesDuringNotificationReconnectBackoff(t *testing.T) 
 	releaseReconnect()
 	waitForNotificationListener(t, ctx, pool, listenerPID)
 	stop()
-	if err := <-workerResult; err != nil {
+	if err := awaitSignal(t, workerResult, "Run to return after the stop"); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -3182,7 +3188,7 @@ func TestWorkerRunDeliversJSONStringValuesUnchanged(t *testing.T) {
 		}
 	}
 	stop()
-	if err := <-runResult; err != nil {
+	if err := awaitSignal(t, runResult, "Run to return after the stop"); err != nil {
 		t.Fatalf("Run returned %v", err)
 	}
 	expected := map[string]any{

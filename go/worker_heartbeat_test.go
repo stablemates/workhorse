@@ -1365,7 +1365,7 @@ func TestWorkerEndsATimedOutHeartbeatStatementOnTheServer(t *testing.T) {
 				t.Fatal(err)
 			}
 			close(release)
-			if err := <-workerResult; err != nil {
+			if err := awaitSignal(t, workerResult, "RunOnce to return after the release"); err != nil {
 				t.Fatal(err)
 			}
 			if !seen {
@@ -1501,7 +1501,7 @@ func TestAHeartbeatRoundReportsALockedRowAsBusy(t *testing.T) {
 		t.Fatal("an accepted round did not renew the lease")
 	}
 	closeRelease()
-	if err := <-workerResult; err != nil {
+	if err := awaitSignal(t, workerResult, "RunOnce to return after the release"); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -1663,7 +1663,7 @@ func TestWorkerKeepsARenewalMarginAfterOneTimedOutHeartbeatRound(t *testing.T) {
 	if !processed {
 		t.Fatal("worker did not process the heartbeat-margin task")
 	}
-	if err := <-handlerErr; err != nil {
+	if err := awaitSignal(t, handlerErr, "the heartbeat-margin result from the handler"); err != nil {
 		if strings.HasPrefix(err.Error(), "precondition not met") {
 			t.Fatal(err)
 		}
@@ -1972,7 +1972,7 @@ func TestAHeartbeatRoundAnswersEachLeaseItSent(t *testing.T) {
 		t.Fatal("the accepted lease was not renewed")
 	}
 	closeRelease()
-	if err := <-workerResult; err != nil {
+	if err := awaitSignal(t, workerResult, "RunOnce to return after the release"); err != nil {
 		t.Fatal(err)
 	}
 }

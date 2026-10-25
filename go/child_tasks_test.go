@@ -403,7 +403,7 @@ func TestRunChildrenReturnsTypedJoinedResultLimitError(t *testing.T) {
 	}
 
 	var limitError *workhorse.ChildResultLimitExceededError
-	err = <-returned
+	err = awaitSignal(t, returned, "the child result error from the handler")
 	if !errors.As(err, &limitError) || limitError.ParentTaskID != parentID || limitError.ResultBytes != 2 || limitError.ResultLimitBytes != 1 {
 		t.Fatalf("unexpected joined-result limit error: %#v", err)
 	}

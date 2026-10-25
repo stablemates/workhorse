@@ -77,11 +77,19 @@ func TestRunOnceReleasesItsReservationBeforeTheNextInvocationRuns(t *testing.T) 
 		_, err := worker.RunOnce(context.Background())
 		result <- err
 	}()
-	worker.runPermit <- struct{}{}
+	select {
+	case worker.runPermit <- struct{}{}:
+	case <-time.After(SignalDeadlineForTest):
+		t.Fatalf("no signal after %s: the test waited for RunOnce to take the run permit", SignalDeadlineForTest)
+	}
 	// The test takes the permit only while it holds the reservation lock, so an invocation that
 	// returned the permit first cannot release its reservation before the test looks.
 	var lease *heartbeatConnectionLease
+	permitDeadline := time.Now().Add(SignalDeadlineForTest)
 	for taken := false; !taken; {
+		if time.Now().After(permitDeadline) {
+			t.Fatalf("no signal after %s: the test waited for RunOnce to return the run permit", SignalDeadlineForTest)
+		}
 		worker.heartbeatMu.Lock()
 		select {
 		case <-worker.runPermit:
@@ -94,7 +102,7 @@ func TestRunOnceReleasesItsReservationBeforeTheNextInvocationRuns(t *testing.T) 
 	if lease != nil {
 		t.Fatal("the next invocation took the run permit while the previous one still held its reservation")
 	}
-	if err := <-result; err == nil {
+	if err := awaitSignal(t, result, "RunOnce against the unreachable pool to return"); err == nil {
 		t.Fatal("RunOnce against an unreachable pool returned no error")
 	}
 	if holders := heartbeatHolders(worker); holders != 0 {

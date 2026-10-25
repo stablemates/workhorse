@@ -162,7 +162,7 @@ func TestWorkerFailsAnOversizedResultAndKeepsRunning(t *testing.T) {
 	waitForOutcome(validID)
 
 	stop()
-	if err := <-result; err != nil {
+	if err := awaitSignal(t, result, "Run to return after the stop"); err != nil {
 		t.Fatalf("Run returned %v", err)
 	}
 	if state, name := taskOutcomeError(t, pool, oversizedID); state != "failed" || name != "TaskValueSizeLimitError" {
