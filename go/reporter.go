@@ -1,6 +1,7 @@
 package workhorse
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 	"sync"
@@ -34,20 +35,41 @@ func (failures *reporterFailures) admit(now time.Time) (bool, int) {
 	return true, suppressed
 }
 
+// reporterCallback names one reporter callback: its option name for the log text, and its bounded
+// workhorse.worker.reporter value, which every SDK shares.
+type reporterCallback struct {
+	name  string
+	value string
+}
+
 // callReporter calls an application reporter callback so that its panic never reaches the run. A
 // reporter observes the worker. It is not part of the dispatch contract, so its failure must not
 // stop claims or change the result of the run. The logger is the diagnostic path, so the worker
 // never calls the failed reporter again for its own failure.
-func callReporter(logger *slog.Logger, name string, failures *reporterFailures, call func()) {
+func callReporter(
+	logger *slog.Logger,
+	workerID string,
+	callback reporterCallback,
+	failures *reporterFailures,
+	call func(),
+) {
 	defer func() {
 		if failure := recover(); failure != nil {
-			reportReporterFailure(logger, name, failures, failure)
+			reportReporterFailure(logger, workerID, callback, failures, failure)
 		}
 	}()
 	call()
 }
 
-func reportReporterFailure(logger *slog.Logger, name string, failures *reporterFailures, failure any) {
+// reportReporterFailure logs workhorse.worker.reporter_failed with the callback and the type of the
+// panic value. It never logs the panic value itself, because that value can hold an error message.
+func reportReporterFailure(
+	logger *slog.Logger,
+	workerID string,
+	callback reporterCallback,
+	failures *reporterFailures,
+	failure any,
+) {
 	report, suppressed := failures.admit(time.Now())
 	if !report {
 		return
@@ -58,5 +80,18 @@ func reportReporterFailure(logger *slog.Logger, name string, failures *reporterF
 	if suppressed > 0 {
 		detail = fmt.Sprintf(reporterFailureDetail, suppressed)
 	}
-	logger.Error(fmt.Sprintf(reporterFailureMessage, name, detail), reporterFailureErrorKey, failure)
+	logWorkerEvent(
+		context.Background(),
+		logger,
+		slog.LevelError,
+		reporterFailedEvent,
+		fmt.Sprintf(reporterFailureMessage, callback.name, detail),
+		func() []any {
+			return []any{
+				slog.String(workerIDAttribute, workerID),
+				slog.String(workerReporterAttribute, callback.value),
+				slog.String(errorTypeAttribute, fmt.Sprintf(goTypeFormat, failure)),
+			}
+		},
+	)
 }

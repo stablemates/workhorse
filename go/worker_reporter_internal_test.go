@@ -19,6 +19,7 @@ func (failingRegistryExecutor) Query(context.Context, string, ...any) ([]Row, er
 
 func reporterTestWorker(output *bytes.Buffer, reporter func(error)) *Worker {
 	return &Worker{
+		workerID:            "reporter-worker",
 		registryEnabled:     true,
 		logger:              slog.New(slog.NewTextHandler(output, nil)),
 		onRegistrationError: reporter,
@@ -47,8 +48,21 @@ func TestWorkerIsolatesAPanickingRegistrationReporter(t *testing.T) {
 	if count := strings.Count(logged, "Workhorse worker OnRegistrationError reporter failed"); count != 1 {
 		t.Fatalf("expected one bounded report, received %d:\n%s", count, logged)
 	}
-	if !strings.Contains(logged, "alert client is offline") {
-		t.Fatalf("expected the panic value in the report:\n%s", logged)
+	// SM-1726: the report is the catalogued event with the callback and the panic type. It never
+	// carries the panic value, because that value can hold an error message.
+	for _, field := range []string{
+		"level=ERROR",
+		"event.name=workhorse.worker.reporter_failed",
+		"workhorse.worker.id=reporter-worker",
+		"workhorse.worker.reporter=registration_error",
+		"error.type=string",
+	} {
+		if !strings.Contains(logged, field) {
+			t.Fatalf("expected %s in the report:\n%s", field, logged)
+		}
+	}
+	if strings.Contains(logged, "alert client is offline") {
+		t.Fatalf("the report must not carry the panic value:\n%s", logged)
 	}
 
 	// After the interval, the next report states the failures that the worker did not log.

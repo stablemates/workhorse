@@ -49,6 +49,10 @@ internal static partial class WorkerLog
         Message = "Worker registration failed")]
     internal static partial void RegistrationFailed(ILogger logger, Exception error);
 
+    [LoggerMessage(EventName = "workhorse.worker.reporter_failed", Level = LogLevel.Error,
+        Message = "Worker {WorkerId} reporter {Reporter} failed with {ErrorType} after {Unreported} unreported failures")]
+    internal static partial void ReporterFailed(ILogger logger, string workerId, string reporter, string errorType, long unreported);
+
     [LoggerMessage(EventName = "workhorse.worker.notification_failed", Level = LogLevel.Warning,
         Message = "The notification listener failed; the worker polls until it listens again")]
     internal static partial void NotificationFailed(ILogger logger, Exception error);

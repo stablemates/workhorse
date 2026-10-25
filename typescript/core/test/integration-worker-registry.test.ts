@@ -382,7 +382,12 @@ describe("worker registry", () => {
       expect(consoleError).toHaveBeenCalledOnce();
       expect(consoleError).toHaveBeenCalledWith(
         "Workhorse worker onRegistrationError reporter failed",
-        registrationFailure,
+        {
+          "event.name": "workhorse.worker.reporter_failed",
+          "workhorse.worker.id": workerId,
+          "workhorse.worker.reporter": "registration_error",
+          "error.type": registrationFailure.name,
+        },
       );
     } finally {
       consoleError.mockRestore();

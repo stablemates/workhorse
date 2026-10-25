@@ -20,6 +20,25 @@ upgrade steps.
 
 ## Unreleased
 
+### A failed reporter callback gives a catalogued log record
+
+A reporter callback, such as `onRegistrationError`, can throw. The TypeScript worker wrote that
+failure only to the console, and the .NET worker wrote no record (SM-1726). Thus an operator could
+not find a broken callback in the logs.
+
+Now every worker emits `workhorse.worker.reporter_failed` for the failure. The record carries
+`workhorse.worker.id`, `workhorse.worker.reporter` (`registration_error`, `notification_error`, or
+`maintenance`), and `error.type`. It never carries the error message. The bound does not change:
+for each callback, the first failure, then at most one in each 60 s.
+
+- The TypeScript worker emits the record at warn through the telemetry provider. The
+  `console.error` line keeps its text, and its second argument is now these attributes instead of
+  the error.
+- The .NET worker logs the record at error through its `ILogger`, with the template values
+  `WorkerId`, `Reporter`, `ErrorType`, and `Unreported`.
+
+The new event name and the new attribute are additions.
+
 ### The worker refuses `pollMs: 0`
 
 Before this change, `new Worker(queue, { pollMs: 0 })` passed construction, and the worker waited

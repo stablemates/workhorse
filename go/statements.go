@@ -612,13 +612,22 @@ const (
 
 const invalidWorkerRegistrationResultMessage = "PostgreSQL returned an invalid worker registration result"
 
-// The log text of a failed reporter callback, and the callback names it reports.
+// The log event of a failed reporter callback, its text, and its attributes.
 const (
-	reporterFailureMessage       = "Workhorse worker %s reporter failed%s"
-	reporterFailureDetail        = " after %d unreported failures"
-	reporterFailureErrorKey      = "error"
-	registrationReporterCallback = "OnRegistrationError"
+	reporterFailedEvent     = "workhorse.worker.reporter_failed"
+	reporterFailureMessage  = "Workhorse worker %s reporter failed%s"
+	reporterFailureDetail   = " after %d unreported failures"
+	workerReporterAttribute = "workhorse.worker.reporter"
+	errorTypeAttribute      = "error.type"
+	// The fmt verb that gives the Go type of a panic value, such as string.
+	goTypeFormat = "%T"
 )
+
+// The registration reporter callback, by its option name and its workhorse.worker.reporter value.
+var registrationReporterCallback = reporterCallback{
+	name:  "OnRegistrationError",
+	value: "registration_error",
+}
 
 const (
 	invalidPolicyResultMessage      = "PostgreSQL returned an invalid policy result"

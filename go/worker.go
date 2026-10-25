@@ -1622,7 +1622,7 @@ func (worker *Worker) reportRegistrationError(err error) {
 	if worker.onRegistrationError == nil {
 		return
 	}
-	callReporter(worker.logger, registrationReporterCallback, &worker.registrationReporter, func() {
+	callReporter(worker.logger, worker.workerID, registrationReporterCallback, &worker.registrationReporter, func() {
 		worker.onRegistrationError(err)
 	})
 }

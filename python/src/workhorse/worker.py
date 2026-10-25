@@ -1603,7 +1603,7 @@ class Worker:
         self._notification_listening = Event()
         self._on_notification_error = on_notification_error
         self._on_registration_error = on_registration_error
-        self._reporter_failures = _ReporterFailures()
+        self._reporter_failures = _ReporterFailures(self.worker_id)
         if not 100 <= lease_ms <= 86_400_000:
             raise ValueError("lease_ms must be between 100 and 86400000")
         self.lease_ms = lease_ms

@@ -5,6 +5,14 @@ other SDKs carry, because every tag names one release of all of them.
 
 ## Unreleased
 
+### A failed reporter callback gives a catalogued log record
+
+A raise from `on_registration_error` or `on_notification_error` gave a log line with the error
+message and no event name (SM-1726). Now the line is the `workhorse.worker.reporter_failed` event
+with `workhorse.worker.id`, `workhorse.worker.reporter` (`registration_error` or
+`notification_error`), and `error.type`. It no longer carries the error message. The logger level,
+the standard error fallback, and the bound do not change.
+
 ### The worker refuses a `poll_interval` above 2,147,483.647 seconds
 
 Before this change, `poll_interval:` had no upper limit (SM-1778). Now `Worker.new` raises

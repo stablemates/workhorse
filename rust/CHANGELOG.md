@@ -11,6 +11,14 @@ adds.
 
 ## Unreleased
 
+### A failed reporter callback gives a catalogued log event
+
+A panic of `on_registration_error` gave a `tracing` event with the panic message and no event name
+(SM-1726). Now the event has `event.name` `workhorse.worker.reporter_failed`,
+`workhorse.worker.id`, `workhorse.worker.reporter` (`registration_error`), and `error.type`
+`panic`. It no longer carries the panic message, because that message can hold application data.
+The level and the bound do not change.
+
 ### The worker checks its poll interval
 
 Before this change, `Worker::new` did not check `WorkerOptions::poll_interval` (SM-1778). A value

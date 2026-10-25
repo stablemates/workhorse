@@ -4,6 +4,7 @@ require "logger"
 require "spec_helper"
 
 # SM-1696: a reporter callback that raises never stops the worker, and its report is bounded.
+# SM-1726: the report is the catalogued workhorse.worker.reporter_failed record.
 RSpec.describe "A worker reporter callback that raises" do
   # A pool whose every statement fails, as a short database outage does.
   let(:offline_pool) do
@@ -24,7 +25,7 @@ RSpec.describe "A worker reporter callback that raises" do
   end
 
   def worker(**options)
-    W::Worker.new(offline_pool, queues: ["default"], polling_only: true, **options)
+    W::Worker.new(offline_pool, queues: ["default"], polling_only: true, worker_id: "reporter-worker", **options)
   end
 
   it "does not stop registration, and reports once in each interval" do
@@ -36,7 +37,9 @@ RSpec.describe "A worker reporter callback that raises" do
     expect(calls.map(&:class)).to eq([IOError] * 3)
     expect(subject.instance_variable_get(:@registered)).not_to be_true
     expect(Kernel).to have_received(:warn).once.with(
-      "workhorse: Workhorse worker on_registration_error reporter failed: RuntimeError: alert client is offline"
+      "workhorse: workhorse.worker.reporter_failed: Workhorse worker on_registration_error reporter failed " \
+      '{"workhorse.worker.id":"reporter-worker","workhorse.worker.reporter":"registration_error",' \
+      '"error.type":"RuntimeError"}'
     )
 
     # After the interval, the next report states the failures that the worker did not log.
@@ -45,9 +48,12 @@ RSpec.describe "A worker reporter callback that raises" do
     failures[:on_registration_error] = [reported_at - 60.0, count]
     subject.send(:refresh_registration, force: true)
     expect(Kernel).to have_received(:warn).with(
-      "workhorse: Workhorse worker on_registration_error reporter failed after 2 unreported failures: " \
-      "RuntimeError: alert client is offline"
+      a_string_starting_with(
+        "workhorse: workhorse.worker.reporter_failed: " \
+        "Workhorse worker on_registration_error reporter failed after 2 unreported failures {"
+      )
     )
+    expect(Kernel).not_to have_received(:warn).with(a_string_including("alert client is offline"))
   end
 
   it "reports a notification reporter failure through the logger" do
@@ -60,11 +66,19 @@ RSpec.describe "A worker reporter callback that raises" do
     end
 
     expect(output.string.scan("Workhorse worker on_notification_error reporter failed").size).to eq(1)
+    expect(output.string).to include("ERROR")
+    expect(output.string).to include(
+      "workhorse.worker.reporter_failed: Workhorse worker on_notification_error reporter failed " \
+      '{"workhorse.worker.id":"reporter-worker","workhorse.worker.reporter":"notification_error",' \
+      '"error.type":"RuntimeError"}'
+    )
+    expect(output.string).not_to include("alert client is offline")
   end
 
   it "ignores a logger that raises while it reports" do
     logger = Logger.new(StringIO.new)
-    allow(logger).to receive(:error).and_raise(IOError, "formatter broke")
+    allow(logger).to receive(:add).and_raise(IOError, "formatter broke")
+    allow(Kernel).to receive(:warn)
     subject = worker(on_registration_error: reporter, logger: logger)
 
     expect { subject.send(:refresh_registration, force: true) }.not_to raise_error

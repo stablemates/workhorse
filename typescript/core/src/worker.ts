@@ -110,7 +110,7 @@ export function dispatchRefillBatch(concurrency: number): number {
  * A tier change reaches a running worker within this interval.
  */
 const TIER_PROBE_INTERVAL_MS = 30_000;
-// A reporter callback that always fails writes to the console at most once in this interval.
+// A reporter callback that always fails writes at most one report in this interval.
 const REPORTER_FAILURE_REPORT_INTERVAL_MS = 60_000;
 // The longest base delay before a busy retry. The retry waits base × (1 + random), with
 // base = min(BUSY_RETRY_BASE_MS, heartbeatMs / 8).
@@ -122,9 +122,16 @@ const BUSY_RETRY_MINIMUM_MS = MINIMUM_REMAINING_MS + BUSY_RETRY_MARGIN_MS;
 
 type ReporterName = "onRegistrationError" | "onNotificationError" | "onMaintenance";
 
+// The workhorse.worker.reporter value of each reporter callback. Every SDK uses the same values.
+const REPORTER_ATTRIBUTE_VALUES: Readonly<Record<ReporterName, string>> = {
+  onRegistrationError: "registration_error",
+  onNotificationError: "notification_error",
+  onMaintenance: "maintenance",
+};
+
 interface ReporterFailureState {
   reportedAt: number;
-  // Failures since reportedAt that the worker did not write to the console.
+  // Failures since reportedAt that the worker did not report.
   suppressed: number;
 }
 
@@ -733,7 +740,7 @@ export class Worker {
     | { activeSlots: number; draining: boolean; paused: boolean }
     | undefined;
   private readonly latestMaintenance = new Map<string, WorkerMaintenanceTelemetry>();
-  // For each reporter callback, when the worker last wrote a failure of it to the console.
+  // For each reporter callback, when the worker last reported a failure of it.
   private readonly reporterFailures = new Map<ReporterName, ReporterFailureState>();
   private stopping = false;
   private locallyPaused = false;
@@ -2147,8 +2154,9 @@ export class Worker {
     }
   }
 
-  // The console is the diagnostic path, so a failed reporter is never called again for its own
-  // failure. The interval bounds the output of a reporter that always fails.
+  // The log record and the console are the diagnostic path, so a failed reporter is never called
+  // again for its own failure. The interval bounds the output of a reporter that always fails.
+  // The report names the error type only, never the error message.
   private reporterFailed(name: ReporterName, failure: unknown): void {
     const nowMs = monotonicNow();
     const state = this.reporterFailures.get(name);
@@ -2159,10 +2167,32 @@ export class Worker {
     const suppressed = state?.suppressed ?? 0;
     this.reporterFailures.set(name, { reportedAt: nowMs, suppressed: 0 });
     const detail = suppressed > 0 ? ` after ${suppressed} unreported failures` : "";
+    const body = `Workhorse worker ${name} reporter failed${detail}`;
+    let attributes: Record<string, string>;
     try {
-      console.error(`Workhorse worker ${name} reporter failed${detail}`, failure);
+      attributes = {
+        "workhorse.worker.id": this.workerId,
+        "workhorse.worker.reporter": REPORTER_ATTRIBUTE_VALUES[name],
+        "error.type": failure instanceof Error ? failure.name : typeof failure,
+      };
     } catch {
-      // Inspecting the failure can throw. The diagnostic path must not become a second failure.
+      // Reading the name of the failure can throw. The report then names no error type.
+      attributes = {
+        "workhorse.worker.id": this.workerId,
+        "workhorse.worker.reporter": REPORTER_ATTRIBUTE_VALUES[name],
+      };
+    }
+    // Each path has its own guard, so a failure of one path does not stop the other. The
+    // diagnostic path must not become a second failure.
+    try {
+      logWarn("workhorse.worker.reporter_failed", body, attributes);
+    } catch {
+      // The telemetry provider failed.
+    }
+    try {
+      console.error(body, { "event.name": "workhorse.worker.reporter_failed", ...attributes });
+    } catch {
+      // The console failed.
     }
   }
 
