@@ -8,6 +8,15 @@ fleet, and watch its health. Some of these concerns have their own page. This pa
 pages. It also explains the concerns that no other page owns: rolling statistics, telemetry, fleet
 controls, and the terminal tools.
 
+## Prepare before you deploy
+
+Do these steps before the first production deployment:
+
+1. Read [Core concepts](/docs/concepts) to find the effects that must be safe to run again.
+2. Configure [worker processes](/docs/worker-processes) for shutdown.
+3. Configure health checks and incident response with the sections of this page.
+4. Read [Compatibility](/docs/compatibility) before you choose a release or upgrade an installation.
+
 ## Supervise worker processes
 
 [Worker processes](/docs/worker-processes) explains startup, termination signals, drain behavior,

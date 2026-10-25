@@ -52,6 +52,19 @@ describe("the docs diagram", () => {
     ]);
   });
 
+  it("shows only the narrow image in the column of a narrow diagram, and the wide one in the dialog", () => {
+    const markup = renderToStaticMarkup(<Diagram narrow name="query-reads" alt="One read" />);
+    const [narrowWidth] = diagramSizes["query-reads-narrow"];
+    const [width] = diagramSizes["query-reads"];
+    expect(tags(markup, "source")).toEqual([]);
+    expect(tags(markup, "img").map((image) => [image.get("src"), image.get("width")])).toEqual([
+      ["/diagrams/query-reads-narrow-light.png", String(narrowWidth)],
+      ["/diagrams/query-reads-narrow-dark.png", String(narrowWidth)],
+      ["/diagrams/query-reads-light.png", String(width)],
+      ["/diagrams/query-reads-dark.png", String(width)],
+    ]);
+  });
+
   it("refuses a diagram that the generator does not write", () => {
     expect(() => renderToStaticMarkup(<Diagram name="no-such-diagram" alt="None" />)).toThrow(
       /No diagram named no-such-diagram/,

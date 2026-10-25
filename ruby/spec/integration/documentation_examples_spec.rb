@@ -135,6 +135,12 @@ RSpec.describe "Documentation examples against PostgreSQL" do
       policies, budgets = DocsExamples.concurrency_policies(queue, id("msg"), id("tenant"))
       expect(policies.map(&:queue)).to include("mail")
       expect(budgets.map(&:name)).to include("vendor-api")
+      order_id = id("order")
+      DocsExamples.overview_warehouse_limit(queue, order_id, "warehouse-berlin")
+      expect(queue.list_concurrency_policies(queues: ["fulfillment"]).map(&:max_active_per_key)).to eq([2])
+      expect(@connection.exec_params(
+        "SELECT queue_name, concurrency_key FROM workhorse.task WHERE payload->>'orderId' = $1", [order_id]
+      ).values).to eq([["fulfillment", "warehouse-berlin"]])
       expect(DocsExamples.rate_limits(queue).map(&:queue)).to include("provider-api")
       expect(DocsExamples.schedules(queue, @pool, "0 2 * * *")).to be_a(W::Worker)
       DocsExamples::ExampleSchedule.run_billing_worker(@pool)
@@ -301,6 +307,21 @@ RSpec.describe "Documentation examples against PostgreSQL" do
       expect([external, signal, human, release].map { |task_id| result(task_id) }).to eq([
         {"approved" => true}, {"approved" => true}, {"approved" => true}, {"published" => true}
       ])
+    end
+
+    it "fulfills an order after the packed signal and charges one time" do
+      subject = worker
+      subject.handle("doc.fulfill") { |order, context| DocsExamples.overview_fulfill(context, order) }
+      allow(DocsExamples::Payments).to receive(:charge).and_call_original
+      fulfill = queue.enqueue("doc.fulfill", {"id" => "order-9"}).task_id
+      drain(subject, fulfill)
+      expect(status(fulfill)["state"]).to eq("scheduled")
+
+      queue.send_signal(fulfill, "packed", {"parcelId" => "parcel-3"}, idempotency_key: "p-1", requested_by: "spec")
+      drain(subject, fulfill)
+
+      expect(status(fulfill)["state"]).to eq("succeeded")
+      expect(DocsExamples::Payments).to have_received(:charge).once
     end
 
     it "joins child tasks" do

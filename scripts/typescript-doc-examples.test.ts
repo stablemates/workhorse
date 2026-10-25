@@ -27,6 +27,7 @@ declare global {
   const queue: Queue;
   const worker: Worker;
   const orderId: string;
+  const warehouseId: string;
   function chargeCard(orderId: string): Promise<{ chargeId: string }>;
   function printLabel(orderId: string): Promise<{ labelId: string }>;
 }
@@ -35,7 +36,20 @@ declare global {
 const contracts: readonly FenceContract[] = [
   { file: "typescript/core/README.md", fence: 1 },
   { file: "site/content/docs/index.mdx", fence: 1 },
-  { file: "site/content/docs/index.mdx", fence: 2 },
+  {
+    file: "site/content/docs/index.mdx",
+    fence: 2,
+    wrap: (source) =>
+      `import type { HandlerContext } from "@stablemates/workhorse";\n\n` +
+      `declare const payments: {\n` +
+      `  charge(orderId: string, options: { idempotencyKey: string }): Promise<{ id: string }>;\n` +
+      `};\n` +
+      `declare const logistics: {\n` +
+      `  createShipment(orderId: string, chargeId: string): Promise<{ id: string }>;\n` +
+      `};\n\n` +
+      `export async function handler(payload: { orderId: string }, ctx: HandlerContext) {\n` +
+      `${source}\n  return { chargeId: charge.id, shipmentId: shipment.id };\n}\n`,
+  },
   { file: "docs/guides/170-child-tasks.md", fence: 1 },
   {
     file: "docs/guides/170-child-tasks.md",
@@ -46,8 +60,11 @@ const contracts: readonly FenceContract[] = [
   },
 ];
 
+/** Each `ts` fence, in order. A fence indented inside an MDX tab loses its indent. */
 function typescriptFences(contents: string): string[] {
-  return [...contents.matchAll(/^```ts\n([\s\S]*?)^```$/gm)].map((match) => match[1]!);
+  return [...contents.matchAll(/^([ \t]*)```ts\n([\s\S]*?)^\1```$/gm)].map(([, indent, body]) =>
+    body!.replace(new RegExp(`^${indent}`, "gm"), ""),
+  );
 }
 
 const compilerOptions: ts.CompilerOptions = {

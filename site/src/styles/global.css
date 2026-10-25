@@ -364,6 +364,49 @@ html:has(.wh-diagram-dialog[open]) {
   tab-size: 2;
 }
 
+/*
+ * The copy button sits over the top right corner of the code. The padding keeps
+ * the end of a line out from under it.
+ */
+.wh-docs-body figure.shiki pre {
+  padding-right: 2.25rem;
+}
+
+/*
+ * A language tab bar wraps to a second row when the names do not fit. A row
+ * that scrolls sideways hides the last languages, and a reader on a phone does
+ * not see that they exist.
+ */
+.wh-docs-body [role="tablist"] {
+  flex-wrap: wrap;
+  row-gap: 0;
+}
+
+/*
+ * On a phone the column holds about 45 characters of code, and most examples
+ * are wider. A long line wraps there, so the reader sees each statement without
+ * a scroll inside the code block. A wider screen keeps each line on one row.
+ *
+ * A wrapped part starts four columns to the right of its line, so it does not
+ * look like a new statement. The break comes only between words. A word that is
+ * wider than the block keeps its line, and the block scrolls sideways.
+ */
+@media (max-width: 640px) {
+  .wh-docs-body figure.shiki pre {
+    /* Fumadocs sizes the block to its longest line, which stops the wrap. */
+    width: 100%;
+    font-size: 0.75rem;
+    white-space: pre-wrap;
+    overflow-wrap: normal;
+  }
+
+  .wh-docs-body figure.shiki pre .line {
+    /* `--padding-left` is the inset that Fumadocs gives each line. */
+    padding-left: calc(var(--padding-left) + 4ch);
+    text-indent: -4ch;
+  }
+}
+
 .wh-docs-body figure.shiki > div[class~="flex"] {
   height: 2.5rem;
   border-color: var(--wh-docs-code-border);
