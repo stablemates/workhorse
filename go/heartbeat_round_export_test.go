@@ -40,3 +40,18 @@ func RecordHeartbeatRoundsForTest(worker *Worker) func() []HeartbeatRoundForTest
 		return append([]HeartbeatRoundForTest(nil), rounds...)
 	}
 }
+
+// FailNextHeartbeatRoundForTest makes the next heartbeat round of worker fail with err before it
+// sends anything. Later rounds send their statements. Call it before the worker runs.
+func FailNextHeartbeatRoundForTest(worker *Worker, err error) {
+	var failed sync.Once
+	send := worker.heartbeatRound
+	worker.heartbeatRound = func(members []*heartbeatMember, deadline time.Time) ([]ownershipStatus, error) {
+		failure := error(nil)
+		failed.Do(func() { failure = err })
+		if failure != nil {
+			return nil, failure
+		}
+		return send(members, deadline)
+	}
+}

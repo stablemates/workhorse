@@ -5,8 +5,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"net"
+	"os"
 	"os/exec"
 	"slices"
+	"syscall"
 	"testing"
 	"time"
 
@@ -60,6 +63,7 @@ func TestGoWorkerMetricsMatchTypeScriptInstrumentCatalog(t *testing.T) {
 	emitGoBatchMetrics(t, ctx, pool)
 	emitGoRecoveryMetrics(t, ctx, pool)
 	emitGoHeartbeatFailureMetric(t, ctx, pool, reader)
+	emitGoHeartbeatRoundFailureMetric(t, ctx, pool, reader)
 
 	var collected metricdata.ResourceMetrics
 	if err := reader.Collect(ctx, &collected); err != nil {
@@ -302,6 +306,48 @@ func emitGoHeartbeatFailureMetric(
 			t.Fatalf("Go worker did not record workhorse.worker.heartbeat.failure within %s", heartbeatMetricWait)
 		}
 		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+// emitGoHeartbeatRoundFailureMetric makes the first heartbeat round of a worker fail with a socket
+// error. The handler waits until the worker counts the round, and the next round renews the lease.
+func emitGoHeartbeatRoundFailureMetric(
+	t *testing.T,
+	ctx context.Context,
+	pool *pgxpool.Pool,
+	reader *sdkmetric.ManualReader,
+) {
+	t.Helper()
+	queueName := "go-worker-catalog-heartbeat-round"
+	queue := workhorse.NewQueue(workhorse.NewPGXExecutor(pool), queueName)
+	if _, err := queue.Enqueue(ctx, "catalog-heartbeat-round", nil); err != nil {
+		t.Fatal(err)
+	}
+	worker, err := workhorse.NewWorker(pool, workhorse.WorkerOptions{
+		Queue: queueName, WorkerID: "go-catalog-heartbeat-round", LeaseDuration: 30 * time.Second,
+		HeartbeatInterval: 100 * time.Millisecond,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	workhorse.FailNextHeartbeatRoundForTest(worker, &net.OpError{
+		Op: "read", Net: "tcp", Err: os.NewSyscallError("read", syscall.ECONNRESET),
+	})
+	worker.Handle("catalog-heartbeat-round", func(context.Context, any, *workhorse.HandlerContext) (any, error) {
+		deadline := time.Now().Add(heartbeatMetricWait)
+		for !collectedMetric(t, ctx, reader, "workhorse.worker.heartbeat.round_failure") {
+			if time.Now().After(deadline) {
+				return nil, fmt.Errorf("go worker did not record workhorse.worker.heartbeat.round_failure within %s", heartbeatMetricWait)
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+		return nil, nil
+	})
+	if worked, err := worker.RunOnce(ctx); err != nil || !worked {
+		t.Fatalf("RunOnce() = %v, %v", worked, err)
+	}
+	if !collectedMetric(t, ctx, reader, "workhorse.worker.heartbeat.round_failure") {
+		t.Fatal("Go worker did not record workhorse.worker.heartbeat.round_failure")
 	}
 }
 

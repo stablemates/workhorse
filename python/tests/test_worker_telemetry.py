@@ -39,6 +39,7 @@ from workhorse._telemetry import (
     record_batch,
     record_failure,
     record_heartbeat_failure,
+    record_heartbeat_round_failure,
     record_recovery,
 )
 
@@ -150,6 +151,7 @@ def test_worker_telemetry_matches_the_typescript_contract(database_url: str) -> 
     record_recovery(1, 0, [])
     record_batch(catalog_task.queue, catalog_task.type, 1, 0, True)
     record_heartbeat_failure("stale")
+    record_heartbeat_round_failure(ConnectionResetError("reset"))
 
     expected_metrics = _typescript_worker_metric_catalog()
     exported_metrics = {
@@ -373,3 +375,84 @@ def test_worker_warns_when_a_handler_swallows_a_suspension_signal(database_url: 
         record.log_record.event_name == "workhorse.task.completed"
         for record in LOG_EXPORTER.get_finished_logs()
     )
+
+
+def _counter_values(name: str) -> dict[tuple[tuple[str, Any], ...], float]:
+    """The cumulative value of each attribute set of the counter `name`. Empty before any data."""
+    if METRIC_READER.get_metrics_data() is None:
+        return {}
+    return {
+        tuple(sorted(point.attributes.items())): point.value
+        for metric in _metrics()
+        if metric.name == name
+        for point in metric.data.data_points
+    }
+
+
+def test_a_failed_heartbeat_round_counts_by_reason_and_the_task_completes(
+    database_url: str,
+) -> None:
+    """A round that fails before PostgreSQL gives a verdict counts once in round_failure.
+
+    The task keeps running, and the next rounds renew its lease. The failed round gives no
+    ownership verdict, so `workhorse.worker.heartbeat.failure` does not count it.
+    """
+    with psycopg.connect(database_url) as connection:
+        task_id = Queue(connection, "round-failure").enqueue("round.failure", {})
+        connection.commit()
+    round_failures_before = _counter_values("workhorse.worker.heartbeat.round_failure")
+    heartbeat_failures_before = _counter_values("workhorse.worker.heartbeat.failure")
+
+    worker = Worker(
+        worker_pool,
+        queue="round-failure",
+        worker_id="python-round-failure",
+        lease_ms=3_000,
+        heartbeat_ms=100,
+    )
+    send_round = worker._heartbeat_rows
+    rounds: list[str] = []
+    later_rounds = threading.Event()
+
+    def heartbeat_rows(*args: Any, **kwargs: Any) -> Any:
+        rounds.append("sent")
+        if len(rounds) == 1:
+            raise psycopg.OperationalError("consuming input failed: server closed the connection")
+        rows = send_round(*args, **kwargs)
+        if len(rounds) >= 3:
+            later_rounds.set()
+        return rows
+
+    worker._heartbeat_rows = heartbeat_rows  # type: ignore[method-assign]
+
+    def handle(_payload: object, context: HandlerContext) -> None:
+        assert later_rounds.wait(10), "the rounds after the failed round did not run"
+        assert not context.cancellation.cancelled
+
+    worker.handle("round.failure", handle)
+    assert worker.run_once() is True
+
+    with psycopg.connect(database_url) as connection:
+        row = connection.execute(
+            "SELECT state FROM workhorse.task_outcome WHERE task_id = %s", (task_id,)
+        ).fetchone()
+    assert row == ("succeeded",)
+
+    round_failure = next(
+        (
+            metric
+            for metric in _metrics()
+            if metric.name == "workhorse.worker.heartbeat.round_failure"
+        ),
+        None,
+    )
+    assert round_failure is not None, "the failed round was not counted"
+    assert round_failure.unit == "{round}"
+    round_failures = _counter_values("workhorse.worker.heartbeat.round_failure")
+    added = {
+        attributes: value - round_failures_before.get(attributes, 0)
+        for attributes, value in round_failures.items()
+        if value != round_failures_before.get(attributes, 0)
+    }
+    assert added == {(("workhorse.heartbeat.failure_reason", "connection"),): 1}
+    assert _counter_values("workhorse.worker.heartbeat.failure") == heartbeat_failures_before

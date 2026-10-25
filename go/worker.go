@@ -3000,7 +3000,10 @@ func (worker *Worker) refreshOwnershipMany(members []*heartbeatMember, deadline 
 	sentAt := time.Now()
 	statuses, err := worker.heartbeatRound(members, deadline)
 	if err != nil {
+		// The deadline check comes before the log record, so a slow logger cannot change the reason.
+		deadlineReached := !time.Now().Before(deadline)
 		worker.logger.Warn(heartbeatRoundFailedLogMessage, errorLogField, err)
+		worker.recordHeartbeatRoundFailure(context.Background(), err, deadlineReached)
 		return nil
 	}
 	// A result counts only for the member that the round sent. A member that left or was

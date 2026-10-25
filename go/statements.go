@@ -323,6 +323,12 @@ const (
 	fastTierUnsupportedSQLState         = "P1007"
 	deadlockDetectedSQLState            = "40P01"
 	inFailedSQLTransactionSQLState      = "25P02"
+	queryCanceledSQLState               = "57014"
+	idleInTransactionTimeoutSQLState    = "25P03"
+	connectionExceptionSQLStateClass    = "08"
+	adminShutdownSQLState               = "57P01"
+	crashShutdownSQLState               = "57P02"
+	cannotConnectNowSQLState            = "57P03"
 	fastTierUnsupportedFormat           = "fast-tier queue %s does not support %s"
 	fastTierBatchedCompletionFeature    = "batched completion"
 	fastTierProgressFeature             = "progress"
@@ -457,6 +463,7 @@ const (
 	telemetryLeaseUnit           = "{lease}"
 	telemetryExecutionUnit       = "{execution}"
 	telemetryHeartbeatUnit       = "{heartbeat}"
+	telemetryRoundUnit           = "{round}"
 	telemetryMillisecondsUnit    = "ms"
 	telemetryUnknownValue        = "unknown"
 	telemetrySucceededValue      = "succeeded"
@@ -481,6 +488,7 @@ const (
 	handlerBatchSizeInstrument           = "workhorse.handler.batch.size"
 	handlerBatchLingerInstrument         = "workhorse.handler.batch.linger"
 	heartbeatFailuresInstrument          = "workhorse.worker.heartbeat.failure"
+	heartbeatRoundFailuresInstrument     = "workhorse.worker.heartbeat.round_failure"
 	tasksClaimedDescription              = "Tasks claimed for handler execution"
 	tasksCompletedDescription            = "Tasks completed under a valid lease"
 	tasksFailedDescription               = "Handler failures submitted to PostgreSQL"
@@ -493,6 +501,7 @@ const (
 	handlerBatchSizeDescription          = "Tasks delivered in one batch handler invocation"
 	handlerBatchLingerDescription        = "Time from the first batch member arriving until dispatch"
 	heartbeatFailuresDescription         = "Worker heartbeats rejected by PostgreSQL ownership or timing checks"
+	heartbeatRoundFailuresDescription    = "Worker heartbeat rounds that failed before PostgreSQL gave a verdict"
 	workerMetricCreationErrorFormat      = "create worker metrics: %w"
 	workerHeartbeatCapacityErrorFormat   = "worker cannot reserve a dedicated heartbeat connection: MaxConns is %d; need at least 3 (set SharedHeartbeats to opt out)"
 	workerStartupConnectionErrorFormat   = "worker cannot start: pool %s (MaxConns %d): %s did not complete within the startup budget of %s: %w (check that the database accepts connections, grow the pool, or set SharedHeartbeats to opt out)"
@@ -523,6 +532,7 @@ const (
 	attemptOutcomeAttribute        = "workhorse.attempt.outcome"
 	claimResultAttribute           = "workhorse.claim.result"
 	heartbeatStatusAttribute       = "workhorse.heartbeat.status"
+	heartbeatReasonAttribute       = "workhorse.heartbeat.failure_reason"
 	releaseStatusAttribute         = "workhorse.release.status"
 	batchFullAttribute             = "workhorse.handler.batch.full"
 	batchSizeAttribute             = "workhorse.handler.batch.size"
@@ -586,6 +596,15 @@ const (
 	rowBudgetNameField       = "budget_name"
 	rowScheduleNameField     = "schedule_name"
 	rowRevisionField         = "revision"
+)
+
+// The bounded workhorse.heartbeat.failure_reason values of a failed heartbeat round. Every SDK uses
+// the same four values.
+const (
+	heartbeatRoundFailureTimeout    = "timeout"
+	heartbeatRoundFailureConnection = "connection"
+	heartbeatRoundFailureDatabase   = "database"
+	heartbeatRoundFailureOther      = "other"
 )
 
 const invalidWorkerRegistrationResultMessage = "PostgreSQL returned an invalid worker registration result"

@@ -10,6 +10,19 @@ adds.
 
 ## Unreleased
 
+### The worker counts each failed heartbeat round
+
+A heartbeat round can fail before PostgreSQL returns a status for its leases, for example when the
+connection closes or the round reaches its deadline. Before this change, the Python worker left no
+log record and no metric for such a round (SM-1704).
+
+Now the worker counts each failed round once in the new counter
+`workhorse.worker.heartbeat.round_failure`, by the bounded attribute
+`workhorse.heartbeat.failure_reason`: `timeout`, `connection`, `database`, or `other`. The
+TypeScript worker uses the same counter and the same rules. A failed round still gives no ownership
+verdict, so `workhorse.worker.heartbeat.failure` does not change. The new instrument is an
+addition.
+
 ### The worker waits longer after each not_due expiry answer
 
 When the local timer of a deadline or an execution timeout fires, the worker asks PostgreSQL to

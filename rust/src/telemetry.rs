@@ -13,6 +13,7 @@ pub(crate) enum Counter {
     LeasesExpired,
     HandlerExecutions,
     HeartbeatFailures,
+    HeartbeatRoundFailures,
     /// A millisecond counter, so it is the one fractional counter.
     HandlerRuntime,
 }
@@ -47,6 +48,13 @@ impl Metrics {
             #[cfg(feature = "opentelemetry")]
             instruments: otel::Instruments::new(),
         }
+    }
+
+    /// Instruments on `meter` instead of the global meter provider, so a test reads only its own
+    /// worker.
+    #[cfg(all(test, feature = "opentelemetry"))]
+    pub(crate) fn with_meter(meter: &opentelemetry::metrics::Meter) -> Self {
+        Self { instruments: otel::Instruments::with_meter(meter) }
     }
 
     #[cfg_attr(not(feature = "opentelemetry"), allow(unused_variables))]
@@ -105,7 +113,10 @@ mod otel {
 
     impl Instruments {
         pub(super) fn new() -> Self {
-            let meter = opentelemetry::global::meter("workhorse");
+            Self::with_meter(&opentelemetry::global::meter("workhorse"))
+        }
+
+        pub(super) fn with_meter(meter: &opentelemetry::metrics::Meter) -> Self {
             let counter = |name: &'static str, description: &'static str, unit: &'static str| {
                 meter.u64_counter(name).with_description(description).with_unit(unit).build()
             };
@@ -148,6 +159,11 @@ mod otel {
                         "workhorse.worker.heartbeat.failure",
                         "Worker heartbeats rejected by PostgreSQL ownership or timing checks",
                         "{heartbeat}",
+                    ),
+                    counter(
+                        "workhorse.worker.heartbeat.round_failure",
+                        "Worker heartbeat rounds that failed before PostgreSQL gave a verdict",
+                        "{round}",
                     ),
                 ],
                 runtime: meter

@@ -56,6 +56,8 @@ from ._heartbeat_round import (
     ROUND_COMMIT as _ROUND_COMMIT,
     ROUND_ROLLBACK as _ROUND_ROLLBACK,
     ROUND_TIMEOUTS as _ROUND_TIMEOUTS,
+    HeartbeatRoundExpired as _HeartbeatRoundExpired,
+    HeartbeatRoundExpiredCleanly as _HeartbeatRoundExpiredCleanly,
     busy_retry_delay_ms as _busy_retry_delay_ms,
     heartbeat_round_bound_ms as _heartbeat_round_bound_ms,
 )
@@ -95,6 +97,7 @@ from ._telemetry import (
     record_failure as _record_failure,
     record_handler_execution as _record_handler_execution,
     record_heartbeat_failure as _record_heartbeat_failure,
+    record_heartbeat_round_failure as _record_heartbeat_round_failure,
     record_maintenance as _record_maintenance,
     record_recovery as _record_recovery,
     record_retry as _record_retry,
@@ -187,18 +190,6 @@ def _round_timeouts(remaining_ms: float) -> tuple[str, str]:
     """
     quarter = str(max(1, int(remaining_ms // 4)))
     return quarter, quarter
-
-
-class _HeartbeatRoundExpired(TimeoutError):
-    """A heartbeat round reached its deadline."""
-
-
-class _HeartbeatRoundExpiredCleanly(_HeartbeatRoundExpired):
-    """A heartbeat round reached its deadline before it sent its heartbeat statement.
-
-    The round sent nothing, or its ROLLBACK ended before the deadline. So nothing of the round runs
-    on the server, and the next round can use the connection.
-    """
 
 
 class _ServerBoundedExecutor:
@@ -1847,10 +1838,11 @@ class Worker:
                     ],
                     deadline,
                 )
-            except Exception:
+            except Exception as error:
                 # A failed round proves nothing about ownership, so every task keeps running and
                 # the next regular round retries. Each attempt's lease watchdog ends it once its
                 # last accepted renewal is a full lease old.
+                _record_heartbeat_round_failure(error)
                 continue
             try:
                 statuses = {str(row["task_id"]): row["status"] for row in rows}

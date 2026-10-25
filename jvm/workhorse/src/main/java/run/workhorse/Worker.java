@@ -57,6 +57,7 @@ import run.workhorse.internal.Sql;
 import run.workhorse.internal.SqlCatalogue;
 import run.workhorse.internal.Suspension;
 import run.workhorse.internal.Values;
+import run.workhorse.internal.telemetry.Telemetry;
 import run.workhorse.internal.telemetry.WorkerTelemetry;
 
 /**
@@ -3886,6 +3887,11 @@ public final class Worker implements AutoCloseable {
           @Override
           public void renew(long sentAt) {
             acceptRenewal(ownership, arbiter, cancellation, sentAt);
+          }
+
+          @Override
+          public Telemetry telemetry() {
+            return telemetry.telemetry();
           }
 
           @Override

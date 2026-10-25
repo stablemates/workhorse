@@ -34,6 +34,11 @@ public enum Instrument {
       Kind.COUNTER,
       "{heartbeat}",
       "Worker heartbeats rejected by PostgreSQL ownership or timing checks"),
+  HEARTBEAT_ROUND_FAILURE(
+      "workhorse.worker.heartbeat.round_failure",
+      Kind.COUNTER,
+      "{round}",
+      "Worker heartbeat rounds that failed before PostgreSQL gave a verdict"),
   SCHEDULE_FIRED(
       "workhorse.schedule.fired",
       Kind.COUNTER,

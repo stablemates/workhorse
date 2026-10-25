@@ -36,6 +36,8 @@ type workerMetrics struct {
 	batchSize         otelmetric.Int64Histogram
 	batchLinger       otelmetric.Float64Histogram
 	heartbeatFailures otelmetric.Int64Counter
+	// heartbeatRoundFailures counts the rounds that failed before PostgreSQL gave a verdict.
+	heartbeatRoundFailures otelmetric.Int64Counter
 }
 
 var (
@@ -159,12 +161,21 @@ func newWorkerMetrics() (*workerMetrics, error) {
 	if err != nil {
 		return nil, err
 	}
+	heartbeatRoundFailures, err := meter.Int64Counter(
+		heartbeatRoundFailuresInstrument,
+		otelmetric.WithDescription(heartbeatRoundFailuresDescription),
+		otelmetric.WithUnit(telemetryRoundUnit),
+	)
+	if err != nil {
+		return nil, err
+	}
 	return &workerMetrics{
 		enabled: true, claimed: claimed, completed: completed, failed: failed, retried: retried,
 		expiredLeases: expiredLeases, claimDuration: claimDuration,
 		handlerDuration: handlerDuration, handlerRuntime: handlerRuntime,
 		handlerExecutions: handlerExecutions, batchSize: batchSize,
 		batchLinger: batchLinger, heartbeatFailures: heartbeatFailures,
+		heartbeatRoundFailures: heartbeatRoundFailures,
 	}, nil
 }
 

@@ -73,6 +73,7 @@ describe("heartbeat round failure reason", () => {
     ["SQLSTATE class 08", withCode("connection failure", "08006"), "connection"],
     ["a server shutdown", withCode("terminating connection", "57P01"), "connection"],
     ["a terminated pg client", new Error("Connection terminated unexpectedly"), "connection"],
+    ["a pool wait limit", new Error("timeout exceeded when trying to connect"), "connection"],
     ["another SQLSTATE", withCode("deadlock detected", "40P01"), "database"],
     ["an error without a code", new Error("unexpected"), "other"],
     ["a non-error value", "unexpected", "other"],

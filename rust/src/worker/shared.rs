@@ -22,7 +22,7 @@ use tokio::task::JoinHandle;
 use tokio::time::{timeout, timeout_at, Instant};
 use tokio_util::sync::CancellationToken as StopToken;
 
-use super::heartbeat::heartbeat_round_bound_for;
+use super::heartbeat::{self, heartbeat_round_bound_for, RoundFailure};
 use super::{lock, notifications, until};
 use crate::Error;
 
@@ -413,7 +413,7 @@ enum Reply {
     /// The round leads the next transaction. It gets its batches back.
     Lead(Vec<serde_json::Value>),
     /// The transaction that the round joined ended with this result.
-    Rows(Result<RoundRows, Error>),
+    Rows(Result<RoundRows, RoundFailure>),
 }
 
 impl Group {
@@ -438,7 +438,7 @@ pub(super) enum Turn<'a> {
     /// The round leads a transaction.
     Lead(Lead<'a>),
     /// The round joined the transaction of another round, which ended with this result.
-    Joined(Result<RoundRows, Error>),
+    Joined(Result<RoundRows, RoundFailure>),
 }
 
 /// A round that waits in the group. Dropping it removes the round, or hands on a lead that it got.
@@ -497,7 +497,8 @@ impl Lead<'_> {
         serde_json::Value::Array(self.batches.clone())
     }
 
-    /// Gives each joined round its rows, or the same failure, and returns the result of the lead.
+    /// Gives each joined round its rows, or the same failure with the reason of the original error
+    /// (`RoundFailure::shared`), and returns the result of the lead.
     /// `rows` holds the 1-based batch position, the task ID, and the status of each lease.
     pub(super) fn answer(
         &mut self,
@@ -508,7 +509,7 @@ impl Lead<'_> {
             Ok(rows) => rows,
             Err(error) => {
                 for round in joined {
-                    let _ = round.reply.send(Reply::Rows(Err(error.share())));
+                    let _ = round.reply.send(Reply::Rows(Err(RoundFailure::shared(&error))));
                 }
                 return Err(error);
             }
@@ -677,7 +678,7 @@ impl HeartbeatConnection {
         let mut waiting = Waiting { group: &self.group, id, reply: answer, answered: false };
         let reply = timeout_at(deadline, &mut waiting.reply)
             .await
-            .map_err(|_| Error::invalid("heartbeat round exceeded its deadline"))?;
+            .map_err(|_| Error::invalid(heartbeat::DEADLINE_EXCEEDED))?;
         waiting.answered = true;
         match reply {
             Ok(Reply::Lead(batches)) => Ok(Turn::Lead(lead(batches))),
@@ -1017,7 +1018,7 @@ mod tests {
         worker: &'static str,
         batches: usize,
         deadline: Instant,
-    ) -> JoinHandle<Result<RoundRows, Error>> {
+    ) -> JoinHandle<Result<RoundRows, RoundFailure>> {
         let connection = Arc::clone(connection);
         tokio::spawn(async move {
             match connection.turn(vec![batch(worker); batches], deadline).await? {
@@ -1119,7 +1120,42 @@ mod tests {
         assert_eq!(error.to_string(), "the statement failed");
         drop(first);
         let error = joined.await.unwrap().unwrap_err();
-        assert_eq!(error.to_string(), "the statement failed");
+        assert_eq!(error.error.to_string(), "the statement failed");
+    }
+
+    // A joined round counts the reason of the original failure, not of its text copy.
+    #[tokio::test]
+    async fn a_joined_round_gets_the_failure_reason_of_the_transaction() {
+        use super::heartbeat::RoundFailureReason;
+
+        let failures = [
+            (Error::database(Some("40P01"), None, std::fmt::Error), RoundFailureReason::Database),
+            (
+                Error::database(
+                    None,
+                    None,
+                    std::io::Error::from(std::io::ErrorKind::ConnectionReset),
+                ),
+                RoundFailureReason::Connection,
+            ),
+        ];
+        for (failure, reason) in failures {
+            let connection = group_connection();
+            let deadline = Instant::now() + WAIT;
+            let mut first = lead(connection.turn(vec![batch("a")], deadline).await);
+            let joined = joining(&connection, "b", 1, deadline);
+            waiting(&connection, 1).await;
+            first.join();
+            let text = failure.share().to_string();
+            assert_eq!(
+                heartbeat::RoundFailure::from(first.answer(Err(failure)).unwrap_err()).reason,
+                reason
+            );
+            drop(first);
+            let error = joined.await.unwrap().unwrap_err();
+            assert_eq!(error.error.to_string(), text, "the joined round kept the text");
+            assert_eq!(error.reason, reason, "{text}");
+        }
     }
 
     // A dropped round cannot stop the group: a dropped lead hands the lead on, a dropped waiting
@@ -1155,7 +1191,7 @@ mod tests {
         next.join();
         drop(next);
         let error = joined.await.unwrap().unwrap_err();
-        assert_eq!(error.to_string(), "the heartbeat transaction ended without an answer");
+        assert_eq!(error.error.to_string(), "the heartbeat transaction ended without an answer");
         drop(lead(connection.turn(vec![batch("z")], deadline).await));
     }
 

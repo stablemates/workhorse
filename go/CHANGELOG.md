@@ -10,6 +10,19 @@ adds.
 
 ## Unreleased
 
+### The worker counts a failed heartbeat round
+
+A heartbeat round can fail before PostgreSQL answers, for example when the connection drops. Before
+this change, the Go worker wrote only a warning log record, and no metric showed the failed round
+(SM-1704).
+
+Now the worker counts each such round once in the new counter
+`workhorse.worker.heartbeat.round_failure`, by the bounded attribute
+`workhorse.heartbeat.failure_reason`: `timeout`, `connection`, `database`, or `other`. The names, the
+unit, and the values are the same as in the TypeScript worker. A failed round still gives no
+ownership verdict, so `workhorse.worker.heartbeat.failure` does not change. The new instrument is an
+addition.
+
 ### The worker reports the settled cause after PostgreSQL refuses a completion
 
 PostgreSQL refuses a completion write when the deadline or the attempt timeout is due, or when a

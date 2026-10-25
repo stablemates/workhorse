@@ -1,17 +1,28 @@
 package run.workhorse.internal;
 
+import java.io.IOException;
+import java.net.SocketException;
+import java.net.SocketTimeoutException;
+import java.net.UnknownHostException;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.SQLException;
+import java.sql.SQLNonTransientConnectionException;
 import java.sql.SQLTimeoutException;
+import java.sql.SQLTransientConnectionException;
+import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HashMap;
+import java.util.IdentityHashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.locks.Condition;
 import java.util.concurrent.locks.ReentrantLock;
@@ -19,6 +30,8 @@ import java.util.function.BooleanSupplier;
 import javax.sql.DataSource;
 import org.jspecify.annotations.Nullable;
 import run.workhorse.ConnectionSource;
+import run.workhorse.internal.telemetry.Telemetry;
+import run.workhorse.internal.telemetry.WorkerTelemetry;
 
 /**
  * Renews the leases of running attempts on a dedicated platform thread. Internal to the SDK; the
@@ -127,7 +140,25 @@ public final class Heartbeat {
 
     /** Records an error that {@link #settle} threw. */
     void fail(Exception error);
+
+    /**
+     * The telemetry of the worker, which counts a round of this member that failed before
+     * PostgreSQL returned a status ({@link #roundFailed}).
+     */
+    default Telemetry telemetry() {
+      return Telemetry.NOOP;
+    }
   }
+
+  /** The most exceptions that {@link #roundFailureReason} reads in one failure. */
+  private static final int FAILURE_CHAIN_LIMIT = 16;
+
+  /**
+   * How much earlier than the round deadline the network timeout of a dedicated round can end.
+   * {@code boundUntil} rounds the time left down to whole milliseconds, so the read can time out up
+   * to 1 ms before the deadline.
+   */
+  private static final long NETWORK_TIMEOUT_SLACK_NANOS = TimeUnit.MILLISECONDS.toNanos(1);
 
   private final DataSource dataSource;
   private final boolean dedicated;
@@ -738,7 +769,7 @@ public final class Heartbeat {
     }
     sent = connection;
     if (connection == null) {
-      throw new SQLTimeoutException("The heartbeat got no connection before the round's deadline");
+      throw new RoundDeadline("The heartbeat got no connection before the round's deadline");
     }
     if (waited) {
       Runnable received = onConnectionInRound;
@@ -950,12 +981,23 @@ public final class Heartbeat {
    *
    * <p>A borrowing round sends one {@code heartbeat_many_v2} statement for each batch, and skips a
    * failed one.
+   *
+   * <p>A round that fails before PostgreSQL returns its statuses counts once in {@code
+   * workhorse.worker.heartbeat.round_failure} ({@link #roundFailed}).
    */
   List<Member> sendBatches(List<Batch> batches, long deadline, Round round) throws SQLException {
     roundExpired = false;
     List<Member> busy = new ArrayList<>();
     if (dedicated) {
-      if (batches.isEmpty() || deadline - System.nanoTime() <= 0) {
+      if (batches.isEmpty()) {
+        return busy;
+      }
+      if (deadline - System.nanoTime() <= 0) {
+        // The round reached its deadline before it sent anything, so its members get no status.
+        roundFailed(
+            batches,
+            new RoundExpired("Heartbeat round reached its deadline before it sent its leases"),
+            true);
         return busy;
       }
       long sentAt = System.nanoTime();
@@ -965,7 +1007,18 @@ public final class Heartbeat {
         rows = round.send(deadline - System.nanoTime(), SqlCatalogue.HEARTBEAT_POOL_V1, payload);
       } catch (RoundExpired expired) {
         roundExpired = true;
+        // A round that got a new connection sends nothing and runs again at once on it. It did
+        // not fail. Any other expired round reached its deadline before PostgreSQL gave a status.
+        if (!freshConnection) {
+          roundFailed(batches, expired, true);
+        }
         return busy;
+      } catch (SQLException | RuntimeException error) {
+        // The network timeout of the connection ends the read at the round deadline. A socket
+        // timeout before that comes from a driver or pool setting, and is a connection failure.
+        boolean deadlineReached = System.nanoTime() - deadline + NETWORK_TIMEOUT_SLACK_NANOS >= 0;
+        roundFailed(batches, error, deadlineReached);
+        throw error;
       }
       // The statement numbers the batches from 1, in the order of the payload.
       List<Map<String, String>> statuses = new ArrayList<>();
@@ -983,6 +1036,10 @@ public final class Heartbeat {
       }
       return busy;
     }
+    // The first failed batch fails the round, which counts at once and only once. The other
+    // batches still go out and settle. A borrowing round has no network timeout of its own, so a
+    // socket timeout is never its deadline.
+    boolean failed = false;
     for (Batch batch : batches) {
       long sentAt = System.nanoTime();
       List<Row> rows;
@@ -991,6 +1048,10 @@ public final class Heartbeat {
         long remaining = deadline - System.nanoTime();
         rows = round.send(remaining, SqlCatalogue.HEARTBEAT_MANY_V2, batch.workerId(), payload);
       } catch (SQLException | RuntimeException error) {
+        if (!failed) {
+          failed = true;
+          roundFailed(batches, error, false);
+        }
         continue;
       }
       Map<String, String> statuses = new HashMap<>();
@@ -1000,6 +1061,144 @@ public final class Heartbeat {
       settle(batch.members(), statuses, sentAt, busy);
     }
     return busy;
+  }
+
+  /**
+   * Counts one round that failed with {@code error} before PostgreSQL returned a status, once on
+   * each distinct telemetry of the members of {@code batches}. A dedicated round carries the leases
+   * of every worker on the data source, so workers that share one telemetry count the round once.
+   * The round gives no ownership verdict, so {@code workhorse.worker.heartbeat.failure} does not
+   * count it. Nothing else changes: the members keep running, and the next round retries. {@code
+   * deadlineReached} is true when the round deadline of a dedicated round has passed ({@link
+   * #roundFailureReason}).
+   */
+  private static void roundFailed(List<Batch> batches, Throwable error, boolean deadlineReached) {
+    String reason = roundFailureReason(error, deadlineReached);
+    Set<Telemetry> targets = Collections.newSetFromMap(new IdentityHashMap<>());
+    for (Batch batch : batches) {
+      for (Member member : batch.members()) {
+        targets.add(member.telemetry());
+      }
+    }
+    for (Telemetry target : targets) {
+      WorkerTelemetry.heartbeatRoundFailed(target, reason);
+    }
+  }
+
+  /**
+   * The {@code workhorse.heartbeat.failure_reason} of a round that failed with {@code error}, with
+   * the rule of the TypeScript {@code heartbeatRoundFailureReason}. The rule reads {@code error},
+   * its causes, its suppressed exceptions, and its {@link SQLException#getNextException} chain,
+   * outermost first, each exception once and at most {@value #FAILURE_CHAIN_LIMIT}. The SQLSTATE is
+   * the first non-null {@link SQLException#getSQLState} in that order. The first rule that matches
+   * gives the value, so a timeout is checked before a connection failure:
+   *
+   * <ol>
+   *   <li>{@code timeout}: the round deadline. The heartbeat throws {@link RoundExpired} and {@link
+   *       RoundDeadline} only for its own deadline, so they are {@code timeout} in every case. A
+   *       {@link SQLTimeoutException}, {@link SocketTimeoutException}, or {@link TimeoutException}
+   *       from a driver or a pool is {@code timeout} only when {@code deadlineReached} is true. A
+   *       dedicated round sets the network timeout of its connection to the time left of its bound,
+   *       so a socket timeout at its deadline is the round deadline. PgJDBC reports that timeout as
+   *       {@code 08006} with a {@link SocketTimeoutException} cause. No round waits on a {@code
+   *       Future}, so no {@link TimeoutException} of the heartbeat's own comes from a round.
+   *       SQLSTATE {@code 57014} ({@code statement_timeout}) and {@code 25P03} ({@code
+   *       idle_in_transaction_session_timeout}) are also {@code timeout}.
+   *   <li>{@code connection}: a SQLSTATE that starts with {@code 08}; a server shutdown, {@code
+   *       57P01}, {@code 57P02}, or {@code 57P03}; or any {@link IOException} in the chain, which
+   *       includes {@link SocketException}, {@code ConnectException}, {@link UnknownHostException},
+   *       {@code EOFException}, and a {@link SocketTimeoutException} before the round deadline. An
+   *       {@link IOException} is a real socket or I/O failure, so it wins over a SQLSTATE that
+   *       names no connection failure, as in the TypeScript rule.
+   *   <li>{@code database}: any other SQLSTATE. A SQLSTATE in the chain decides before the type of
+   *       a wrapper, so a pool exception around a refused login ({@code 28P01}) is {@code
+   *       database}.
+   *   <li>{@code connection}, when the chain has no SQLSTATE: a {@link
+   *       SQLNonTransientConnectionException} or {@link SQLTransientConnectionException}, which a
+   *       pool or a driver uses for a connection that it could not open or that closed; or a driver
+   *       or pool timeout before the round deadline. A borrowing round sets no network timeout and
+   *       has no deadline of its own, so its caller passes {@code deadlineReached} as false. A
+   *       login timeout of {@code DataSource.getConnection}, a pool checkout timeout, a driver
+   *       {@code socketTimeout}, and a driver {@code connectTimeout} are thus connection failures
+   *       there.
+   *   <li>{@code other}: everything else.
+   * </ol>
+   */
+  static String roundFailureReason(Throwable error, boolean deadlineReached) {
+    List<Throwable> chain = failureChain(error);
+    @Nullable String state = null;
+    for (Throwable entry : chain) {
+      if (entry instanceof SQLException sql && sql.getSQLState() != null) {
+        state = sql.getSQLState();
+        break;
+      }
+    }
+    for (Throwable entry : chain) {
+      if (entry instanceof RoundExpired
+          || entry instanceof RoundDeadline
+          || (deadlineReached
+              && (entry instanceof SQLTimeoutException
+                  || entry instanceof SocketTimeoutException
+                  || entry instanceof TimeoutException))) {
+        return "timeout";
+      }
+    }
+    if ("57014".equals(state) || "25P03".equals(state)) {
+      return "timeout";
+    }
+    if (state != null
+        && (state.startsWith("08")
+            || state.equals("57P01")
+            || state.equals("57P02")
+            || state.equals("57P03"))) {
+      return "connection";
+    }
+    for (Throwable entry : chain) {
+      // A real I/O failure wins over any other SQLSTATE. A SocketTimeoutException is an
+      // IOException; here it came before the round deadline.
+      if (entry instanceof IOException) {
+        return "connection";
+      }
+    }
+    if (state != null) {
+      // A server SQLSTATE decides before a wrapper type, such as a pool exception around a
+      // refused login.
+      return "database";
+    }
+    for (Throwable entry : chain) {
+      // Here every driver or pool timeout came before the round deadline.
+      if (entry instanceof SQLTimeoutException
+          || entry instanceof TimeoutException
+          || entry instanceof SQLNonTransientConnectionException
+          || entry instanceof SQLTransientConnectionException) {
+        return "connection";
+      }
+    }
+    return "other";
+  }
+
+  /** {@code error} and the exceptions it links to, outermost first, each one once. */
+  private static List<Throwable> failureChain(Throwable error) {
+    Set<Throwable> seen = Collections.newSetFromMap(new IdentityHashMap<>());
+    ArrayDeque<Throwable> pending = new ArrayDeque<>();
+    pending.add(error);
+    List<Throwable> chain = new ArrayList<>();
+    while (!pending.isEmpty() && chain.size() < FAILURE_CHAIN_LIMIT) {
+      Throwable entry = pending.removeFirst();
+      if (!seen.add(entry)) {
+        continue;
+      }
+      chain.add(entry);
+      Throwable cause = entry.getCause();
+      if (cause != null) {
+        pending.add(cause);
+      }
+      Collections.addAll(pending, entry.getSuppressed());
+      if (entry instanceof SQLException sql && sql.getNextException() != null) {
+        pending.add(sql.getNextException());
+      }
+    }
+    return chain;
   }
 
   /**
@@ -1106,6 +1305,25 @@ public final class Heartbeat {
     }
   }
 
+  /**
+   * A round that its own deadline ended with a statement in flight or without a connection, or
+   * whose {@code ROLLBACK} after {@link RoundExpired} did not end cleanly in its bound. Only the
+   * heartbeat throws it, so {@link #roundFailureReason} names it {@code timeout} in every case. A
+   * {@link SQLTimeoutException} from a driver or a pool is the round deadline only when the
+   * deadline has passed.
+   */
+  static final class RoundDeadline extends SQLTimeoutException {
+    private static final long serialVersionUID = 1L;
+
+    RoundDeadline(@Nullable String message) {
+      super(message);
+    }
+
+    RoundDeadline(@Nullable String message, Throwable cause) {
+      super(message, cause);
+    }
+  }
+
   interface Round {
     /** Sends one statement within {@code timeoutNanos}, the time left of the round's bound. */
     List<Row> send(
@@ -1202,7 +1420,7 @@ public final class Heartbeat {
         connection.commit();
         // A COMMIT that ends after the deadline does not count as a renewal.
         if (System.nanoTime() - deadline >= 0) {
-          throw new SQLTimeoutException("Heartbeat round reached its deadline");
+          throw new RoundDeadline("Heartbeat round reached its deadline");
         }
         return rows;
       } catch (RoundExpired expired) {
@@ -1214,7 +1432,7 @@ public final class Heartbeat {
           } catch (SQLException rollback) {
             // The heartbeat statement did not go out, but the transaction state is not known.
             abort();
-            SQLTimeoutException failed = new SQLTimeoutException(expired.getMessage(), rollback);
+            SQLTimeoutException failed = new RoundDeadline(expired.getMessage(), rollback);
             failed.addSuppressed(expired);
             throw failed;
           }
@@ -1222,7 +1440,7 @@ public final class Heartbeat {
           // connection is discarded, as in every SDK.
           if (System.nanoTime() - deadline >= 0) {
             abort();
-            SQLTimeoutException late = new SQLTimeoutException(expired.getMessage());
+            SQLTimeoutException late = new RoundDeadline(expired.getMessage());
             late.addSuppressed(expired);
             throw late;
           }
@@ -1278,7 +1496,7 @@ public final class Heartbeat {
     private void boundUntil(long deadline) throws SQLException {
       long remaining = deadline - System.nanoTime();
       if (remaining <= 0) {
-        throw new SQLTimeoutException("Heartbeat round reached its deadline");
+        throw new RoundDeadline("Heartbeat round reached its deadline");
       }
       int timeout =
           (int) Math.min(Integer.MAX_VALUE, Math.max(1, TimeUnit.NANOSECONDS.toMillis(remaining)));
