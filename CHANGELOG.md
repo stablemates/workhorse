@@ -31,6 +31,8 @@ Migration 0087 (`0087-show-the-last-schedule-skip-on-the-dashboard.sql`) moves t
 `lastSkippedCount`, and `lastSkippedThrough` on each application schedule. The `dashboard/v1` cron
 document gains the three keys, an additive change. The Schedules page shows a `Skipped` badge with
 the count and the time of the last skip. Its tooltip also shows the newest skipped occurrence.
+Nothing clears the record when later occurrences fire, so the page shows the badge only while the
+last skip is less than 24 hours old.
 
 The migration does not raise the SDK compatibility floor and changes no rows. Run
 `workhorse schema migrate`. On a schema below 86, the page shows no skip.

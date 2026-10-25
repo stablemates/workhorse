@@ -2,11 +2,13 @@ import { MantineProvider } from "@mantine/core";
 import type { DashboardCronPage } from "@stablemates/workhorse-dashboard-server/wire";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 Object.defineProperty(globalThis, "localStorage", {
   value: { getItem: () => null, setItem: () => undefined },
 });
+
+afterEach(() => vi.useRealTimers());
 
 const page: DashboardCronPage = {
   capturedAt: "2026-08-26T12:00:00.000Z",
@@ -99,6 +101,8 @@ describe("schedules page", () => {
   });
 
   it("shows the last skip of a schedule, and nothing before the first skip", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date(page.capturedAt));
     const { CronPage, scheduleSkipSummary } = await import("./pages/schedules.js");
     const { formatExact } = await import("./preferences.js");
     const [invoices] = page.schedules;
@@ -126,7 +130,7 @@ describe("schedules page", () => {
       lastSkippedCount: 4,
       lastSkippedThrough: "2026-08-25T02:00:00.000Z",
     });
-    expect(skipped).toContain("Skipped 4 · ");
+    expect(skipped).toContain("Skipped 4 · 9h ago");
     expect(skipped).toContain(
       `aria-label="Last skip: At ${formatExact("2026-08-26T02:10:00.000Z")}, Workhorse skipped 4 missed occurrences older than the supported delay. The newest skipped occurrence is ${formatExact("2026-08-25T02:00:00.000Z")}."`,
     );
@@ -148,6 +152,41 @@ describe("schedules page", () => {
     expect(capped?.detail).toContain("skipped 10,000 or more missed occurrences");
     // A database below schema 86 returns no skip keys.
     expect(scheduleSkipSummary({})).toBeNull();
+  });
+
+  it("hides the skip badge once the last skip is 24 hours old", async () => {
+    const { CronPage, scheduleSkipSummary } = await import("./pages/schedules.js");
+    const [invoices] = page.schedules;
+    const skip = {
+      lastSkippedAt: "2026-08-26T02:10:00.000Z",
+      lastSkippedCount: 4,
+      lastSkippedThrough: "2026-08-25T02:00:00.000Z",
+    };
+    const skippedAt = Date.parse(skip.lastSkippedAt);
+    const hour = 3_600_000;
+
+    expect(scheduleSkipSummary(skip, skippedAt + 23 * hour)?.label).toBe("Skipped 4 · 23h ago");
+    expect(scheduleSkipSummary(skip, skippedAt + 24 * hour - 1)).not.toBeNull();
+    expect(scheduleSkipSummary(skip, skippedAt + 24 * hour)).toBeNull();
+    expect(scheduleSkipSummary(skip, skippedAt + 3 * 24 * hour)).toBeNull();
+
+    // The page reads the same clock as its relative times.
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(skippedAt + 24 * hour);
+    const markup = renderToStaticMarkup(
+      createElement(
+        MantineProvider,
+        null,
+        createElement(CronPage, {
+          data: { ...page, schedules: [{ ...invoices!, ...skip }] },
+          togglingSchedule: null,
+          setSchedulePaused: () => undefined,
+          scheduleTasksHref: () => "/tasks",
+        }),
+      ),
+    );
+    expect(markup).not.toContain("Skipped");
+    expect(markup).not.toContain("Last skip");
   });
 
   it("explains that a maintenance destination is not a queue", async () => {

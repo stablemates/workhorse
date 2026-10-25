@@ -31,24 +31,31 @@ export const resumeScheduleWarnings = {
   all: "Workhorse may enqueue missed occurrences in bounded batches as soon as a worker evaluates this schedule. It will continue until the schedule catches up. Tasks already enqueued are unchanged.",
 } as const;
 
+// Nothing clears the skip keys after later fires, so an older skip is history, not a current gap.
+const SKIP_BADGE_WINDOW_MS = 86_400_000;
+
 /**
- * The last skip of a `skip` schedule, or null before the first one. A database below schema 86
- * returns no skip keys, so the page shows no skip there. Workhorse stops the count at 10,000, so
- * that value means 10,000 or more.
+ * The last skip of a `skip` schedule, or null before the first one and once that skip is 24 hours
+ * old. A database below schema 86 returns no skip keys, so the page shows no skip there. Workhorse
+ * stops the count at 10,000, so that value means 10,000 or more.
  */
-export function scheduleSkipSummary(schedule: {
-  lastSkippedAt?: string | null;
-  lastSkippedCount?: number | null;
-  lastSkippedThrough?: string | null;
-}): { label: string; detail: string } | null {
+export function scheduleSkipSummary(
+  schedule: {
+    lastSkippedAt?: string | null;
+    lastSkippedCount?: number | null;
+    lastSkippedThrough?: string | null;
+  },
+  now = Date.now(),
+): { label: string; detail: string } | null {
   const skippedAt = schedule.lastSkippedAt ?? null;
   const skipped = schedule.lastSkippedCount ?? null;
   if (skippedAt === null || skipped === null) return null;
+  if (now - new Date(skippedAt).getTime() >= SKIP_BADGE_WINDOW_MS) return null;
   const capped = skipped >= 10_000;
   const count = formatCount(Math.min(skipped, 10_000));
   const occurrences = skipped === 1 ? "occurrence" : "occurrences";
   return {
-    label: `Skipped ${count}${capped ? "+" : ""} · ${formatRelative(skippedAt)}`,
+    label: `Skipped ${count}${capped ? "+" : ""} · ${formatRelative(skippedAt, now)}`,
     detail: `At ${formatExact(skippedAt)}, Workhorse skipped ${count}${capped ? " or more" : ""} missed ${occurrences} older than the supported delay. The newest skipped occurrence is ${formatExact(schedule.lastSkippedThrough)}.`,
   };
 }
