@@ -10,6 +10,9 @@ require "uri"
 # `sql/schema/current.sql` into it, and `spec_helper.rb` drops it after the suite. `pnpm db:sweep`
 # recognizes the same name shape if that hook never runs.
 #
+# The scratch database and each extra database set `synchronous_commit = off`, so a host I/O stall
+# does not add a WAL flush wait to each commit of a test (SM-1809).
+#
 # Without `DATABASE_URL_TEST` a local run skips with a visible reason. CI, or
 # `WORKHORSE_REQUIRE_DATABASE=1`, turns that skip into a failure, and a database that is set but
 # unreachable always fails.
@@ -99,10 +102,16 @@ module ScratchDatabase
     end
 
     # Create +name+ afresh and install the current schema into it.
+    #
+    # A scratch database is for tests only, so its commits do not wait for the WAL flush. A host
+    # I/O stall can make one flush take seconds, and a lease of a few seconds then lapses although
+    # the worker is correct (SM-1809). Visibility and order do not change. Only a server crash can
+    # lose such a commit, and no Ruby test restarts PostgreSQL or reads the WAL.
     def install(name)
       with_admin do |admin|
         drop_database(admin, name)
         admin.exec("CREATE DATABASE #{PG::Connection.quote_ident(name)}")
+        admin.exec("ALTER DATABASE #{PG::Connection.quote_ident(name)} SET synchronous_commit = off")
       end
       scratch_url = replace_database(@source, name)
       connection = PG.connect(scratch_url, connect_timeout: CONNECT_TIMEOUT)

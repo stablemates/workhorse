@@ -126,7 +126,6 @@ func createDemoWorkerDatabase(t *testing.T, sourceURL string) string {
 	adminURL := *parsed
 	adminURL.Path = "/postgres"
 	ctx := context.Background()
-	quotedName := pgx.Identifier{databaseName}.Sanitize()
 	admin, err := pgx.Connect(ctx, adminURL.String())
 	if err != nil {
 		t.Fatal(err)
@@ -135,7 +134,7 @@ func createDemoWorkerDatabase(t *testing.T, sourceURL string) string {
 		_ = admin.Close(ctx)
 		t.Fatal(err)
 	}
-	if _, err := admin.Exec(ctx, "CREATE DATABASE "+quotedName); err != nil {
+	if err := testdatabase.Create(ctx, admin, databaseName); err != nil {
 		_ = admin.Close(ctx)
 		t.Fatal(err)
 	}

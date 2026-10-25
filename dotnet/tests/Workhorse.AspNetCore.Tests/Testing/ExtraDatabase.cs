@@ -38,7 +38,7 @@ internal sealed class ExtraDatabase : IAsyncDisposable
             builder.CommandTimeout = 300;
         });
         await ExecuteAsync(admin, $"DROP DATABASE IF EXISTS \"{name}\"", cancellationToken);
-        await ExecuteAsync(admin, $"CREATE DATABASE \"{name}\"", cancellationToken);
+        await ScratchDatabase.CreateDatabaseAsync(admin, name, cancellationToken);
 
         var dataSource = scratch.CreateDataSource(builder =>
         {

@@ -447,8 +447,7 @@ func scratchDatabase(t *testing.T, ctx context.Context, sourceURL string) string
 	if err != nil {
 		t.Fatal(err)
 	}
-	quotedName := pgx.Identifier{databaseName}.Sanitize()
-	if _, err := admin.Exec(ctx, "CREATE DATABASE "+quotedName); err != nil {
+	if err := testdatabase.Create(ctx, admin, databaseName); err != nil {
 		_ = admin.Close(ctx)
 		t.Fatal(err)
 	}

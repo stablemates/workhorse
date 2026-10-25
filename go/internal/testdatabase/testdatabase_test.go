@@ -1,9 +1,20 @@
 package testdatabase
 
 import (
+	"context"
+	"crypto/sha256"
+	"errors"
+	"fmt"
+	"net/url"
+	"os"
 	"runtime"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 )
 
 const databaseURL = "postgres://workhorse:workhorse@localhost:5432/workhorse_test"
@@ -102,5 +113,67 @@ func TestDatabaseURLIsReturnedWhenSet(t *testing.T) {
 		if result.outcome != "" || value != databaseURL {
 			t.Fatalf("environment %v: outcome %q, value %q, want the URL", environment, result.outcome, value)
 		}
+	}
+}
+
+// A host I/O stall can make a WAL flush take seconds, so a commit in a test does not wait for it
+// (SM-1809). A new session of a database that Create makes takes the setting.
+func TestCreateCommitsWithoutWaitingForTheWalFlush(t *testing.T) {
+	parsed, err := url.Parse(SourceURL(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	sourceName := strings.TrimPrefix(parsed.Path, "/")
+	if !strings.Contains(sourceName, "test") {
+		t.Fatal("DATABASE_URL_TEST must name a test database")
+	}
+	digest := fmt.Sprintf("%x", sha256.Sum256([]byte(t.Name()+strconv.Itoa(os.Getpid()))))[:10]
+	databaseName := sourceName[:min(len(sourceName), 44)] + "_go_" + digest
+	adminURL := *parsed
+	adminURL.Path = "/postgres"
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	admin, err := pgx.Connect(ctx, adminURL.String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = admin.Close(ctx) }()
+	drop := func() error {
+		statement := "DROP DATABASE IF EXISTS " + pgx.Identifier{databaseName}.Sanitize()
+		for attempt := 1; ; attempt++ {
+			_, err := admin.Exec(ctx, statement)
+			var databaseError *pgconn.PgError
+			if err == nil || !errors.As(err, &databaseError) || databaseError.Code != "55006" || attempt >= 10 {
+				return err
+			}
+			time.Sleep(100 * time.Millisecond)
+		}
+	}
+	if err := drop(); err != nil {
+		t.Fatal(err)
+	}
+	if err := Create(ctx, admin, databaseName); err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := drop(); err != nil {
+			t.Errorf("drop %s: %v; run pnpm db:sweep", databaseName, err)
+		}
+	}()
+
+	databaseURL := *parsed
+	databaseURL.Path = "/" + databaseName
+	connection, err := pgx.Connect(ctx, databaseURL.String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var commit string
+	err = connection.QueryRow(ctx, "SHOW synchronous_commit").Scan(&commit)
+	_ = connection.Close(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if commit != "off" {
+		t.Fatalf("the scratch database has synchronous_commit %q; want off", commit)
 	}
 }

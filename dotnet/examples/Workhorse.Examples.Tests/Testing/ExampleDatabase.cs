@@ -48,9 +48,8 @@ public sealed class ExampleDatabase : IAsyncDisposable
         var source = scratch.Name!.Split("_dotnet_")[0];
         var name = $"{source[..Math.Min(source.Length, 43)]}_dx_{Convert.ToHexStringLower(RandomNumberGenerator.GetBytes(5))}";
         await using (var admin = scratch.CreateDataSource(builder => { builder.Database = "postgres"; builder.Pooling = false; }))
-        await using (var create = admin.CreateCommand($"CREATE DATABASE \"{name}\""))
         {
-            await create.ExecuteNonQueryAsync();
+            await ScratchDatabase.CreateDatabaseAsync(admin, name);
         }
 
         var dataSource = scratch.CreateDataSource(builder => builder.Database = name);
