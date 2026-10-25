@@ -51,7 +51,7 @@ func TestWorkerReleasesATaskWhoseHandlerStopsForShutdown(t *testing.T) {
 	runContext, stop := context.WithCancel(ctx)
 	runResult := make(chan error, 1)
 	go func() { runResult <- worker.Run(runContext) }()
-	<-started
+	awaitSignal(t, started, "the handler to start", stop)
 	stop()
 	select {
 	case err := <-runResult:
@@ -131,7 +131,7 @@ func TestRunOnceReleasesATaskWhenItsCallerCancelsWithACause(t *testing.T) {
 		_, err := worker.RunOnce(runContext)
 		runResult <- err
 	}()
-	<-started
+	awaitSignal(t, started, "the handler to start", func() { stop(nil) })
 	stop(errors.New("the caller is shutting down"))
 	select {
 	case <-runResult:
@@ -188,7 +188,7 @@ func TestWorkerKeepsAPanicAfterShutdownUnreleased(t *testing.T) {
 	runContext, stop := context.WithCancel(ctx)
 	runResult := make(chan error, 1)
 	go func() { runResult <- worker.Run(runContext) }()
-	<-started
+	awaitSignal(t, started, "the handler to start", stop)
 	stop()
 	select {
 	case <-runResult:
@@ -261,7 +261,7 @@ func testWorkerCompletesAfterShutdown(t *testing.T, tier workhorse.QueueTier) {
 	runContext, stop := context.WithCancel(ctx)
 	runResult := make(chan error, 1)
 	go func() { runResult <- worker.Run(runContext) }()
-	<-started
+	awaitSignal(t, started, "the handler to start", stop)
 	stop()
 	select {
 	case err := <-runResult:
@@ -339,7 +339,7 @@ func TestRunOnceCompletesATaskWhenItsHandlerReturnsAValueAfterTheStop(t *testing
 		_, err := worker.RunOnce(runContext)
 		runResult <- err
 	}()
-	<-started
+	awaitSignal(t, started, "the handler to start", func() { stop(nil) })
 	stop(errors.New("the caller is shutting down"))
 	select {
 	case <-runResult:
@@ -396,7 +396,7 @@ func TestWorkerAcknowledgesACancellationThatRejectsItsShutdownCompletion(t *test
 	runContext, stop := context.WithCancel(ctx)
 	runResult := make(chan error, 1)
 	go func() { runResult <- worker.Run(runContext) }()
-	<-started
+	awaitSignal(t, started, "the handler to start", stop)
 	stop()
 	select {
 	case <-runResult:

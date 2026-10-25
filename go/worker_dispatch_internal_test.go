@@ -219,7 +219,7 @@ func (harness *dispatchHarness) stop(pending []fakeClaimCall, executions []fakeE
 	select {
 	case outcome := <-harness.outcome:
 		for range outcome.active {
-			<-harness.results
+			awaitSignal(harness.t, harness.results, "the result of each execution after the stop")
 		}
 		return outcome.err
 	case <-time.After(2 * time.Second):
@@ -314,7 +314,7 @@ func TestDispatchRestartsTheBackoffWhenTheSubscriptionIsLost(t *testing.T) {
 	for range 6 {
 		harness.expectClaim(1).respond <- fakeClaimResponse{}
 		// The loop chooses the wait of the empty claim when it settles the claim.
-		<-harness.settled
+		awaitSignal(t, harness.settled, "the empty claim to settle")
 		harness.notification <- struct{}{}
 	}
 
@@ -399,7 +399,7 @@ func TestDispatchReportsAClaimErrorAfterLaunchingItsTasks(t *testing.T) {
 	select {
 	case outcome := <-harness.outcome:
 		for range outcome.active {
-			<-harness.results
+			awaitSignal(t, harness.results, "the result of each execution after the stop")
 		}
 		if outcome.err != claimErr {
 			t.Fatalf("dispatch returned %v, want the claim error", outcome.err)
@@ -634,7 +634,7 @@ func TestAFastCompletionOfAnEndedRunClaimsNothingForTheNextRun(t *testing.T) {
 	ended.expectClaim(2).respond <- fakeClaimResponse{tasks: ended.tasks(2, dispatchTaskType)}
 	abandoned := ended.expectExecutions(2)
 	ended.cancel()
-	outcome := <-ended.outcome
+	outcome := awaitSignal(t, ended.outcome, "the ended dispatch loop to return")
 	if outcome.active != 2 {
 		t.Fatalf("the ended run left %d executions, want 2", outcome.active)
 	}
@@ -642,7 +642,7 @@ func TestAFastCompletionOfAnEndedRunClaimsNothingForTheNextRun(t *testing.T) {
 	next := startDispatchWith(t, ended.worker, fastTierQueue)
 	// The second handler returns. Its slot is the one free slot of the next run (SM-1582).
 	abandoned[1].finish <- nil
-	<-ended.results
+	awaitSignal(t, ended.results, "the result of the second abandoned execution")
 	pending := next.expectClaim(1)
 	recorder := claimLimitRecorder{limits: make(chan int, 1)}
 	completed := make(chan error, 1)
@@ -652,17 +652,17 @@ func TestAFastCompletionOfAnEndedRunClaimsNothingForTheNextRun(t *testing.T) {
 		)
 		completed <- err
 	}()
-	if limit := <-recorder.limits; limit != 0 {
+	if limit := awaitSignal(t, recorder.limits, "the claim limit of the ended run's completion"); limit != 0 {
 		t.Fatalf("the ended run's completion claimed %d tasks for the next run", limit)
 	}
-	if err := <-completed; err != nil {
+	if err := awaitSignal(t, completed, "the ended run's completion to return"); err != nil {
 		t.Fatal(err)
 	}
 	if err := next.stop([]fakeClaimCall{pending}, nil); err != nil {
 		t.Fatal(err)
 	}
 	abandoned[0].finish <- nil
-	<-ended.results
+	awaitSignal(t, ended.results, "the result of the first abandoned execution")
 }
 
 // endRunWithAbandonedExecutions stands in for a Run that returned ErrShutdownIncomplete: its
@@ -674,7 +674,7 @@ func endRunWithAbandonedExecutions(t *testing.T, concurrency int) (*dispatchHarn
 	ended.expectClaim(concurrency).respond <- fakeClaimResponse{tasks: ended.tasks(concurrency, dispatchTaskType)}
 	abandoned := ended.expectExecutions(concurrency)
 	ended.cancel()
-	if outcome := <-ended.outcome; outcome.active != concurrency {
+	if outcome := awaitSignal(t, ended.outcome, "the ended dispatch loop to return"); outcome.active != concurrency {
 		t.Fatalf("the ended run left %d executions, want %d", outcome.active, concurrency)
 	}
 	finish := make([]func(), len(abandoned))
@@ -684,7 +684,7 @@ func endRunWithAbandonedExecutions(t *testing.T, concurrency int) (*dispatchHarn
 		finish[index] = func() {
 			once.Do(func() {
 				execution.finish <- nil
-				<-ended.results
+				awaitSignal(t, ended.results, "the result of an abandoned execution")
 			})
 		}
 		t.Cleanup(finish[index])
@@ -721,7 +721,7 @@ func TestTheNextRunClaimsOnlyTheSlotsThatTheHandlersOfAnEndedRunFree(t *testing.
 		t.Fatalf("the next run claimed %d tasks while the ended run's handlers held 1 of 2 slots", call.limit)
 	}
 	started[0].finish <- nil
-	<-next.results
+	awaitSignal(t, next.results, "the result of the next run's execution")
 }
 
 // SM-1582: when a handler of an ended run returns, the next run claims its slot at once. The poll
@@ -824,7 +824,7 @@ func TestAFastCompletionOfAnEndedRunDoesNotJoinTheNextRunsBatch(t *testing.T) {
 	}
 
 	nextCompleted := complete("b-next", next)
-	if ids := <-executor.sent; fmt.Sprint(ids) != "[b-next]" {
+	if ids := awaitSignal(t, executor.sent, "the next run's completion statement"); fmt.Sprint(ids) != "[b-next]" {
 		t.Fatalf("the next run's statement named %v", ids)
 	}
 	endedCompleted := complete("a-ended", ended)
@@ -838,7 +838,7 @@ func TestAFastCompletionOfAnEndedRunDoesNotJoinTheNextRunsBatch(t *testing.T) {
 	}
 	release()
 	for _, completed := range []chan error{nextCompleted, endedCompleted} {
-		if err := <-completed; err != nil {
+		if err := awaitSignal(t, completed, "each completion to return after the release"); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -888,7 +888,7 @@ func TestBatchedCompletionNamesTasksInIDOrderAndRetriesADeadlock(t *testing.T) {
 		t.Fatalf("named the tasks as %v", executor.sent[0])
 	}
 	for _, entry := range chunk {
-		if answer := <-entry.answer; answer.err != nil || !answer.accepted {
+		if answer := awaitSignal(t, entry.answer, "the answer of each task in the chunk"); answer.err != nil || !answer.accepted {
 			t.Fatalf("task %s answered %#v", entry.task.ID, answer)
 		}
 	}
@@ -896,7 +896,7 @@ func TestBatchedCompletionNamesTasksInIDOrderAndRetriesADeadlock(t *testing.T) {
 	executor = &deadlockingExecutor{deadlocks: fencedWriteDeadlockAttempts}
 	chunk = completionChunk(executor, "a")
 	worker.completeChunk("defaults", chunk)
-	if answer := <-chunk[0].answer; !hasSQLState(answer.err, deadlockDetectedSQLState) {
+	if answer := awaitSignal(t, chunk[0].answer, "the answer of the deadlocked chunk"); !hasSQLState(answer.err, deadlockDetectedSQLState) {
 		t.Fatalf("a chunk that kept deadlocking answered %#v", answer)
 	}
 	if len(executor.sent) != fencedWriteDeadlockAttempts {
@@ -934,7 +934,7 @@ func TestDispatchStartsTheShutdownBeforeWaitingForAStalledClaim(t *testing.T) {
 		})
 		outcome <- dispatchOutcome{active: active, err: err}
 	}()
-	<-claimStarted
+	awaitSignal(t, claimStarted, "the stalled claim to start")
 	maintenanceErr := fmt.Errorf("maintenance failed")
 	maintenanceErrors <- maintenanceErr
 	select {

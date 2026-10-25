@@ -185,7 +185,7 @@ func TestManyWorkersOnASmallPoolKeepEveryLeaseWhenEachRoundTripTakes80Ms(t *test
 	t.Cleanup(func() {
 		stop()
 		for _, result := range results {
-			if err := <-result; err != nil && !errors.Is(err, context.Canceled) {
+			if err := awaitSignal(t, result, "each Run to return after the stop"); err != nil && !errors.Is(err, context.Canceled) {
 				t.Error(err)
 			}
 		}

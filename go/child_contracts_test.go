@@ -195,7 +195,7 @@ func TestGoParentRejectsAnInvalidContractedChildPayload(t *testing.T) {
 	}
 	for _, label := range []string{"RunChild", "RunChildren"} {
 		var validation *workhorse.TaskContractValidationError
-		if err := <-returned; !errors.As(err, &validation) ||
+		if err := awaitSignal(t, returned, "the child contract error from the handler"); !errors.As(err, &validation) ||
 			validation.TaskType != "go.contracted-child" || validation.Version != "v1" {
 			t.Fatalf("%s returned %#v, expected a payload contract validation error", label, err)
 		}

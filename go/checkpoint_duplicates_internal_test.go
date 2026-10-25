@@ -82,7 +82,7 @@ func TestCheckpointPanicReleasesEveryDuplicate(t *testing.T) {
 			panic("operation failed")
 		})
 	}()
-	<-entered
+	awaitSignal(t, entered, "the checkpoint operation to start", func() { close(release) })
 	requireInFlight(t, handler, "step")
 	duplicates := []<-chan checkpointResult{
 		startDuplicate(handler, "step"),
@@ -93,7 +93,7 @@ func TestCheckpointPanicReleasesEveryDuplicate(t *testing.T) {
 	awaitJoiners(t, handler, "step", 2)
 	close(release)
 
-	if recovered := <-panicked; recovered != "operation failed" {
+	if recovered := awaitSignal(t, panicked, "the initiator to recover the operation panic"); recovered != "operation failed" {
 		t.Fatalf("the initiator recovered %v, want the operation panic", recovered)
 	}
 	for _, duplicate := range duplicates {
@@ -124,7 +124,7 @@ func TestCheckpointDuplicateReturnsWhenTheHandlerContextEnds(t *testing.T) {
 			return "late", nil
 		})
 	}()
-	<-entered
+	awaitSignal(t, entered, "the checkpoint operation to start")
 	requireInFlight(t, handler, "step")
 	duplicate := startDuplicate(handler, "step")
 	// End the handler context only after the duplicate found the in-flight entry, so the

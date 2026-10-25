@@ -338,7 +338,7 @@ func TestAnAcceptedResultForAReplacedLeaseDoesNotMoveTheNewWatchdog(t *testing.T
 	second := superviseAttempt(t, worker, "task", 2)
 	endBefore := *second.member().leaseEnd.Load()
 	close(proceed)
-	<-answered
+	awaitSignal(t, answered, "the held round to answer")
 	time.Sleep(50 * time.Millisecond)
 	if member := second.member(); member == nil || !member.leaseEnd.Load().Equal(endBefore) {
 		t.Fatal("an accepted result for the replaced attempt moved the new attempt's watchdog")
@@ -490,7 +490,7 @@ func TestARenewalAndABusyRetrySelectionDoNotRace(t *testing.T) {
 		}
 	}
 	close(stop)
-	<-renewed
+	awaitSignal(t, renewed, "the renewal goroutine to stop")
 	if attempt.cause() != nil {
 		t.Fatalf("the renewals ended the attempt: %v", attempt.cause())
 	}

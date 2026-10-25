@@ -13,7 +13,15 @@ import (
 
 // workerRunDeadline bounds a test run of Worker.Run. A run that reaches it fails the test instead of
 // waiting for the go test timeout.
-const workerRunDeadline = time.Minute
+const workerRunDeadline = workhorse.SignalDeadlineForTest
+
+// awaitSignal returns the next value from signal, with the deadline and the failure of
+// workhorse.AwaitSignalForTest. Name the wait in waitingFor, and pass the stop of a running worker
+// in onTimeout.
+func awaitSignal[T any](t testing.TB, signal <-chan T, waitingFor string, onTimeout ...func()) T {
+	t.Helper()
+	return workhorse.AwaitSignalForTest(t, signal, waitingFor, onTimeout...)
+}
 
 // runWorkerWithDeadline runs worker until runContext ends. If runContext does not end within
 // workerRunDeadline, it stops the worker and fails the test with waitingFor. Use it when a handler

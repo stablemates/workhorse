@@ -276,7 +276,7 @@ func executeWorkerPollCadenceFixture(t *testing.T, fixture workerRuntimeFixture)
 		t.Fatal("worker did not claim after the polling backoff")
 	}
 	stop()
-	if err := <-runResult; err != nil {
+	if err := awaitSignal(t, runResult, "Run to return after the stop"); err != nil {
 		t.Fatal(err)
 	}
 	tracer.mu.Lock()
@@ -456,7 +456,7 @@ func executeWorkerSubscriptionRecoveryFixture(t *testing.T, fixture workerRuntim
 		releaseClaim()
 		releaseListen()
 		stop()
-		if err := <-runResult; err != nil {
+		if err := awaitSignal(t, runResult, "Run to return after the stop"); err != nil {
 			t.Error(err)
 		}
 	}
@@ -688,7 +688,7 @@ func executeWorkerGracefulDrainFixture(t *testing.T, fixture workerRuntimeFixtur
 	case <-time.After(time.Duration(fixture.SettleCheckMS) * time.Millisecond):
 	}
 	close(release)
-	if err := <-runResult; err != nil {
+	if err := awaitSignal(t, runResult, "Run to return after the release"); err != nil {
 		t.Fatal(err)
 	}
 	states := map[string]int{}
@@ -847,15 +847,19 @@ func executeBudgetAdmissionRaceFixture(t *testing.T, fixture workerRuntimeFixtur
 	late := acquireBudgetRaceConnection(t, ctx, pool)
 	holder := acquireBudgetRaceConnection(t, ctx, pool)
 	var lateClaim chan budgetRaceClaimResult
+	// A timeout cancels the late claim, so its connection is free before the release.
+	lateContext, cancelLateClaim := context.WithCancel(ctx)
+	defer cancelLateClaim()
 	defer func() {
+		// The releases are deferred, so they run also when the wait for the late claim fails.
+		defer holder.Release()
+		defer late.Release()
+		defer blocker.Release()
 		_, _ = blocker.Exec(ctx, "ROLLBACK")
 		_, _ = holder.Exec(ctx, "ROLLBACK")
 		if lateClaim != nil {
-			<-lateClaim
+			awaitSignal(t, lateClaim, "the late claim to return after the rollback", cancelLateClaim)
 		}
-		blocker.Release()
-		late.Release()
-		holder.Release()
 	}()
 
 	var latePID uint32
@@ -874,7 +878,7 @@ func executeBudgetAdmissionRaceFixture(t *testing.T, fixture workerRuntimeFixtur
 	lateClaim = make(chan budgetRaceClaimResult, 1)
 	var lateSettled atomic.Bool
 	go func() {
-		claims, err := countClaimRows(ctx, late.Conn(), lateQueue, name+"-late", fixture.LeaseMS)
+		claims, err := countClaimRows(lateContext, late.Conn(), lateQueue, name+"-late", fixture.LeaseMS)
 		lateSettled.Store(true)
 		lateClaim <- budgetRaceClaimResult{claims: claims, err: err}
 	}()
@@ -904,7 +908,7 @@ func executeBudgetAdmissionRaceFixture(t *testing.T, fixture workerRuntimeFixtur
 	if _, err := holder.Exec(ctx, "COMMIT"); err != nil {
 		t.Fatal(err)
 	}
-	result := <-lateClaim
+	result := awaitSignal(t, lateClaim, "the late claim to return after the commit", cancelLateClaim)
 	lateClaim = nil
 	if result.err != nil {
 		t.Fatal(result.err)
@@ -1160,7 +1164,7 @@ func executeWorkerMissingHandlerFixture(t *testing.T, fixture workerRuntimeFixtu
 	if processed, err := newer.RunOnce(ctx); err != nil || !processed {
 		t.Fatalf("the registered worker did not handle the released task: processed=%t err=%v", processed, err)
 	}
-	if received := <-handled; !reflect.DeepEqual(received, map[string]any{"index": float64(1)}) {
+	if received := awaitSignal(t, handled, "the payload from the handler"); !reflect.DeepEqual(received, map[string]any{"index": float64(1)}) {
 		t.Fatalf("unexpected payload %#v", received)
 	}
 	assertWorkerFixtureTaskState(t, ctx, pool, taskID, fixture.ExpectedAfterHandled)
@@ -1204,7 +1208,7 @@ func executeWorkerReleaseWaitFixture(t *testing.T, fixture workerRuntimeFixture)
 	listenErr := pool.QueryRow(ctx, `SELECT count(*)::integer FROM pg_stat_activity
 		WHERE datname = current_database() AND query = 'LISTEN workhorse_tasks'`).Scan(&listeners)
 	stop()
-	if err := <-runResult; err != nil {
+	if err := awaitSignal(t, runResult, "Run to return after the stop"); err != nil {
 		t.Fatal(err)
 	}
 	if listenErr != nil {
@@ -1355,7 +1359,7 @@ func executeWorkerShutdownCancellationFixture(t *testing.T, fixture workerRuntim
 	runContext, stop := context.WithCancel(ctx)
 	runResult := make(chan error, 1)
 	go func() { runResult <- worker.Run(runContext) }()
-	<-started
+	awaitSignal(t, started, "the handler to start", stop)
 	stop()
 	select {
 	case err := <-runResult:
@@ -1414,7 +1418,7 @@ func executeWorkerJSONRoundTripFixture(t *testing.T, fixture workerRuntimeFixtur
 	if processed, err := worker.RunOnce(ctx); err != nil || !processed {
 		t.Fatalf("worker did not process the round-trip task: processed=%t err=%v", processed, err)
 	}
-	if handled := <-received; !reflect.DeepEqual(handled, payload) {
+	if handled := awaitSignal(t, received, "the payload from the handler"); !reflect.DeepEqual(handled, payload) {
 		t.Fatalf("the handler received %#v, expected %#v", handled, payload)
 	}
 
@@ -1504,7 +1508,7 @@ func executeWorkerHeartbeatFailureFixture(t *testing.T, fixture workerRuntimeFix
 	waitForLeaseRenewal(t, ctx, observer, taskID, renewed, within)
 
 	close(release)
-	if err := <-workerResult; err != nil {
+	if err := awaitSignal(t, workerResult, "RunOnce to return after the release"); err != nil {
 		t.Fatal(err)
 	}
 	if len(cancellations) != fixture.ExpectedCancellations {
@@ -1675,7 +1679,7 @@ func executeWorkerHeartbeatBusyFixture(t *testing.T, fixture workerRuntimeFixtur
 			waitForLeaseRenewal(t, ctx, observer, taskID, leaseExpiry(t, ctx, observer, taskID), within)
 		})
 	}()
-	if err := <-workerResult; err != nil {
+	if err := awaitSignal(t, workerResult, "RunOnce to return after the release"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1934,7 +1938,7 @@ func executeWorkerSlotRefillFixture(t *testing.T, fixture workerRuntimeFixture) 
 		tracer.release()
 		openAll()
 		stop()
-		if err := <-runResult; err != nil {
+		if err := awaitSignal(t, runResult, "Run to return after the stop"); err != nil {
 			t.Error(err)
 		}
 	}

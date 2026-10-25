@@ -47,7 +47,7 @@ func TestDispatchClaimsNothingWithoutTheHeartbeatConnectionAndWakesWhenItReturns
 func TestDispatchSkipsAStartedClaimWhenTheGateCloses(t *testing.T) {
 	harness := startDispatchOn(t, WorkerOptions{Concurrency: 1, PollInterval: time.Minute}, false, fullTierQueue)
 	harness.expectClaim(1).respond <- fakeClaimResponse{}
-	if skipped := <-harness.settled; skipped {
+	if skipped := awaitSignal(t, harness.settled, "the first claim to settle"); skipped {
 		t.Fatal("the first claim settled as skipped")
 	}
 	entered := make(chan struct{})
@@ -113,7 +113,7 @@ func TestFusedCompletionClaimsNothingWithoutTheHeartbeatConnection(t *testing.T)
 	chunk := completionChunk(executor, "a")
 	chunk[0].limit = 3
 	worker.completeChunk("defaults", chunk)
-	if answer := <-chunk[0].answer; answer.err != nil || !answer.accepted {
+	if answer := awaitSignal(t, chunk[0].answer, "the answer of the completion"); answer.err != nil || !answer.accepted {
 		t.Fatalf("the completion answered %#v", answer)
 	}
 
@@ -121,7 +121,7 @@ func TestFusedCompletionClaimsNothingWithoutTheHeartbeatConnection(t *testing.T)
 	chunk = completionChunk(executor, "b")
 	chunk[0].limit = 3
 	worker.completeChunk("defaults", chunk)
-	if answer := <-chunk[0].answer; answer.err != nil || !answer.accepted {
+	if answer := awaitSignal(t, chunk[0].answer, "the answer of the completion"); answer.err != nil || !answer.accepted {
 		t.Fatalf("the completion answered %#v", answer)
 	}
 	if len(executor.limits) != 2 || executor.limits[0] != 0 || executor.limits[1] != 3 {
@@ -296,10 +296,10 @@ func TestAClaimThatWaitedForItsConnectionSendsNothingAfterTheHeartbeatConnection
 		_, err := worker.claimNextMany(context.Background(), executor, 1, 1)
 		result <- err
 	}()
-	<-borrowing
+	awaitSignal(t, borrowing, "the claim to borrow the heartbeat connection", func() { close(lend) })
 	loseHeartbeatConnection(connection)
 	close(lend)
-	if err := <-result; !errors.Is(err, errHeartbeatClaimGateClosed) || executor.statements != 0 {
+	if err := awaitSignal(t, result, "the claim to return after the gate closes"); !errors.Is(err, errHeartbeatClaimGateClosed) || executor.statements != 0 {
 		t.Fatalf("statements %d, err %v; want no statement and the closed gate", executor.statements, err)
 	}
 }
@@ -322,11 +322,11 @@ func TestAFusedCompletionThatWaitedForItsConnectionClaimsNothingAfterTheHeartbea
 		worker.completeChunk("defaults", chunk)
 		close(done)
 	}()
-	<-borrowing
+	awaitSignal(t, borrowing, "the completion to borrow the heartbeat connection", func() { close(lend) })
 	loseHeartbeatConnection(connection)
 	close(lend)
-	<-done
-	if answer := <-chunk[0].answer; answer.err != nil || !answer.accepted || len(answer.rows) != 0 {
+	awaitSignal(t, done, "the completion chunk to return after the gate closes")
+	if answer := awaitSignal(t, chunk[0].answer, "the answer of the completion"); answer.err != nil || !answer.accepted || len(answer.rows) != 0 {
 		t.Fatalf("the completion answered %#v", answer)
 	}
 	if len(executor.limits) != 1 || executor.limits[0] != 0 || chunk[0].limit != 0 {
@@ -373,7 +373,7 @@ func TestAFusedCompletionResendClaimsNothingAfterTheHeartbeatConnectionWentAway(
 	chunk := completionChunk(executor, "a")
 	chunk[0].limit = 3
 	worker.completeChunk("defaults", chunk)
-	if answer := <-chunk[0].answer; answer.err != nil || !answer.accepted || len(answer.rows) != 0 {
+	if answer := awaitSignal(t, chunk[0].answer, "the answer of the completion"); answer.err != nil || !answer.accepted || len(answer.rows) != 0 {
 		t.Fatalf("the completion answered %#v", answer)
 	}
 	if len(executor.statements) != 2 || executor.statements[0][5] != 3 || executor.statements[1][5] != 0 {

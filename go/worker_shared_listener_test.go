@@ -68,8 +68,8 @@ func TestWorkersOnOnePoolShareOneNotificationListener(t *testing.T) {
 	t.Cleanup(func() {
 		stopFirst()
 		stopSecond()
-		<-firstResult
-		<-secondResult
+		awaitSignal(t, firstResult, "the first Run to return after its stop")
+		awaitSignal(t, secondResult, "the second Run to return after its stop")
 	})
 
 	enqueue := func(queueName, taskType string) string {
@@ -173,7 +173,7 @@ func TestLastWorkerLogsAFailedUnlisten(t *testing.T) {
 
 	waitForNotificationListener(t, ctx, pool, 0)
 	stop()
-	if err := <-result; err != nil {
+	if err := awaitSignal(t, result, "Run to return after the stop"); err != nil {
 		t.Fatal(err)
 	}
 	if contents := logs.String(); !strings.Contains(contents, "notification listener unavailable") {
