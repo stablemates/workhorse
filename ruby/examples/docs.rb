@@ -29,6 +29,18 @@ module DocsExamples
     def follow_up(to) = {"deliveredTo" => to, "kind" => "follow-up"}
   end
 
+  module Workspaces
+    module_function
+
+    def create(account_id, idempotency_key) = {"id" => "ws-#{account_id}", "idempotencyKey" => idempotency_key}
+  end
+
+  module OnboardingMail
+    module_function
+
+    def welcome(email, workspace) = {"deliveredTo" => email, "workspace" => workspace}
+  end
+
   module Payments
     module_function
 
@@ -411,21 +423,36 @@ module DocsExamples
     shipment
   end
 
-  def overview_fulfill(context, order)
-    # docs:start overview-fulfill
-    charge = context.checkpoint("charge") { Payments.charge(order.fetch("id"), "charge:#{order.fetch("id")}") }
-    context.wait_for_signal("packed")
-    shipment = context.checkpoint("shipment") { Logistics.create_shipment(order.fetch("id"), charge) }
-    # docs:end
-    shipment
-  end
-
-  def overview_warehouse_limit(queue, order_id, warehouse_id)
-    # docs:start overview-warehouse-limit
-    queue.sync_concurrency_policies("shop", [
-      Stablemates::Workhorse::ConcurrencyPolicyDefinition.new(queue: "fulfillment", max_active: 20, max_active_per_key: 2)
+  def overview_onboard(queue, worker, account_id, email, tenant_id)
+    # docs:start overview-onboard
+    # Step 1: allow three active onboardings per tenant, across all workers.
+    # PostgreSQL applies this limit when a worker claims a task.
+    queue.sync_concurrency_policies("accounts", [
+      Stablemates::Workhorse::ConcurrencyPolicyDefinition.new(queue: "onboarding", max_active: 20, max_active_per_key: 3)
     ], prune: false)
-    queue.enqueue("order.fulfill", {"orderId" => order_id}, queue: "fulfillment", concurrency_key: warehouse_id)
+
+    # Enqueue the task. The tenant is the concurrency key.
+    queue.enqueue("account.onboard", {"accountId" => account_id, "email" => email},
+      queue: "onboarding", concurrency_key: tenant_id)
+
+    worker.handle("account.onboard") do |account, context|
+      # Step 2: create the workspace. The checkpoint stores it.
+      # On a later run, it returns the stored workspace, and the handler
+      # does not create a second one.
+      id = account.fetch("accountId")
+      workspace = context.checkpoint("workspace") { Workspaces.create(id, "workspace:#{id}") }
+
+      # Step 3: wait until the user verifies the email address. The task
+      # releases its worker, and it does not count against the tenant limit.
+      context.wait_for_signal("email-verified")
+
+      # Step 4: the signal arrived. The handler ran again from its first line,
+      # and the "workspace" checkpoint gave back the stored workspace.
+
+      # Step 5: send the welcome email.
+      context.checkpoint("welcome") { OnboardingMail.welcome(account.fetch("email"), workspace) }
+      workspace
+    end
     # docs:end
   end
 

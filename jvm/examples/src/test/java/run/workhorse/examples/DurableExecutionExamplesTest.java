@@ -41,19 +41,6 @@ class DurableExecutionExamplesTest {
   }
 
   @Test
-  void theFulfillmentWaitsForTheWarehouseAndChargesOneTime() throws Exception {
-    try (Worker worker = examples().registerFulfillment(driver.builder(dataSource)).build()) {
-      UUID taskId = driver.enqueue("order.fulfill", Map.of("orderId", "ord-9"));
-      driver.deliverSignal(worker, taskId, "packed", Map.of("parcelId", "parcel-3"));
-      TaskDetail task = driver.finish(worker, taskId);
-      assertEquals(TaskState.SUCCEEDED, task.state());
-      assertEquals(2, task.currentAttempt(), "the first shipment call failed");
-      assertEquals(List.of("charge ord-9 charge:ord-9", "ship ord-9", "ship ord-9"), calls);
-      assertEquals(Map.of("shipmentId", "ship-ord-9", "chargeId", "ch-ord-9"), task.result());
-    }
-  }
-
-  @Test
   void theFollowUpWaitsForItsTimeAndTheWelcomeRunsOneTime() throws Exception {
     try (Worker worker = examples().registerFollowUp(driver.builder(dataSource)).build()) {
       Instant followUpAt = Instant.now().plusMillis(500);

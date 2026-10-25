@@ -110,22 +110,6 @@ public sealed class PolicyExamplesTests(ScratchDatabase scratch)
     }
 
     [Fact]
-    public async Task TheWarehouseLimitStoresThePolicyAndTheKey()
-    {
-        await using var db = await ExampleDatabase.CreateIsolatedAsync(scratch);
-        var orderId = $"csharp-{Guid.NewGuid()}";
-        await new ConcurrencyPoliciesExamples(db.Queue).LimitEachWarehouseAsync(orderId, "warehouse-berlin");
-        var policy = Assert.Single(await db.Queue.ListConcurrencyPoliciesAsync(Token));
-        Assert.Equal("shop", policy.Namespace);
-        Assert.Equal("fulfillment", policy.Queue);
-        Assert.Equal(20, policy.MaxActive);
-        Assert.Equal(2, policy.MaxActivePerKey);
-        var task = await db.TaskAsync("order.fulfill", "orderId", orderId);
-        Assert.Equal("fulfillment", task.Queue);
-        Assert.Equal("warehouse-berlin", task.ConcurrencyKey);
-    }
-
-    [Fact]
     public async Task OneBudgetCoversTasksOnTwoQueues()
     {
         await using var db = await ExampleDatabase.CreateIsolatedAsync(scratch);

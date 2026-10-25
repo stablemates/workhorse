@@ -58,29 +58,6 @@ public final class DurableExecutionExamples {
         });
   }
 
-  /**
-   * Registers the {@code order.fulfill} handler of the "What is Workhorse?" page, which waits for
-   * the warehouse between two checkpoints.
-   */
-  public Worker.Builder registerFulfillment(Worker.Builder builder) {
-    return builder.handle(
-        "order.fulfill",
-        Map.class,
-        (context, payload) -> {
-          String orderId = String.valueOf(payload.get("orderId"));
-          // docs:start java-overview-fulfill
-          Object charge =
-              context.checkpoint(
-                  "charge", Object.class, () -> payments.charge(orderId, "charge:" + orderId));
-          context.waitForSignal("packed", Map.class, null);
-          Object shipment =
-              context.checkpoint(
-                  "shipment", Object.class, () -> logistics.createShipment(orderId, charge));
-          // docs:end
-          return shipment;
-        });
-  }
-
   /** Registers the {@code trial.follow-up} handler, which waits for a time between two emails. */
   public Worker.Builder registerFollowUp(Worker.Builder builder) {
     return builder.handle(

@@ -353,7 +353,13 @@ html:has(.wh-diagram-dialog[open]) {
   margin-block: -1rem;
 }
 
+/*
+ * Fumadocs limits a code block to 600 px and scrolls the rest inside it. A
+ * reader then misses the end of an example and sees no sign that it exists, so
+ * a docs code block shows all of its lines.
+ */
 .wh-docs-body figure.shiki > div[role="region"] {
+  max-height: none;
   padding-block: 1rem;
   line-height: 1.65;
 }

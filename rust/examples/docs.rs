@@ -59,6 +59,26 @@ mod mailer {
     }
 }
 
+mod workspaces {
+    use serde_json::{json, Value};
+
+    use super::HandlerError;
+
+    pub async fn create(account_id: &str, idempotency_key: String) -> Result<Value, HandlerError> {
+        Ok(json!({ "id": format!("ws-{account_id}"), "idempotencyKey": idempotency_key }))
+    }
+}
+
+mod onboarding_mail {
+    use serde_json::{json, Value};
+
+    use super::HandlerError;
+
+    pub async fn welcome(email: &str, workspace: &Value) -> Result<Value, HandlerError> {
+        Ok(json!({ "deliveredTo": email, "workspace": workspace }))
+    }
+}
+
 mod payments {
     use serde_json::{json, Value};
     use workhorse::HandlerError;
@@ -75,6 +95,13 @@ mod logistics {
     pub async fn create_shipment(order_id: &str, charge: &Value) -> Result<Value, HandlerError> {
         Ok(json!({ "orderId": order_id, "charge": charge }))
     }
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct Account {
+    account_id: String,
+    email: String,
 }
 
 struct Order {
@@ -808,49 +835,63 @@ async fn durable_checkpoints(
     Ok(shipment)
 }
 
-async fn overview_fulfill(
-    context: HandlerContext,
-    order: Order,
-) -> std::result::Result<Value, HandlerError> {
-    // docs:start overview-fulfill
-    let charge: Value = context
-        .checkpoint("charge", || payments::charge(&order.id, format!("charge:{}", order.id)))
-        .await?;
-    context.wait_for_signal::<Value>("packed", None).await?;
-    let shipment: Value =
-        context.checkpoint("shipment", || logistics::create_shipment(&order.id, &charge)).await?;
-    // docs:end
-    Ok(shipment)
-}
-
-async fn overview_warehouse_limit(
+async fn overview_onboard(
     queue: &Queue<Client>,
-    order_id: &str,
-    warehouse_id: &str,
+    worker: &Worker,
+    account_id: &str,
+    email: &str,
+    tenant_id: &str,
 ) -> Result {
-    // docs:start overview-warehouse-limit
+    // docs:start overview-onboard
+    // Step 1: allow three active onboardings per tenant, across all workers.
+    // PostgreSQL applies this limit when a worker claims a task.
     queue
         .sync_concurrency_policies(
-            "shop",
+            "accounts",
             &[ConcurrencyPolicyDefinition {
-                queue: "fulfillment".into(),
+                queue: "onboarding".into(),
                 max_active: 20,
-                max_active_per_key: Some(2),
+                max_active_per_key: Some(3),
             }],
             false,
         )
         .await?;
+
+    // Enqueue the task. The tenant is the concurrency key.
     queue
         .enqueue(
-            "order.fulfill",
-            &json!({ "orderId": order_id }),
+            "account.onboard",
+            &json!({ "accountId": account_id, "email": email }),
             EnqueueOptions {
-                queue: Some("fulfillment".into()),
-                concurrency_key: Some(warehouse_id.into()),
+                queue: Some("onboarding".into()),
+                concurrency_key: Some(tenant_id.into()),
                 ..Default::default()
             },
         )
         .await?;
+
+    worker.handle("account.onboard", |account: Account, context| async move {
+        // Step 2: create the workspace. The checkpoint stores it.
+        // On a later run, it returns the stored workspace, and the handler
+        // does not create a second one.
+        let key = format!("workspace:{}", account.account_id);
+        let workspace: Value = context
+            .checkpoint("workspace", || workspaces::create(&account.account_id, key))
+            .await?;
+
+        // Step 3: wait until the user verifies the email address. The task
+        // releases its worker, and it does not count against the tenant limit.
+        context.wait_for_signal::<Value>("email-verified", None).await?;
+
+        // Step 4: the signal arrived. The handler ran again from its first line,
+        // and the "workspace" checkpoint gave back the stored workspace.
+
+        // Step 5: send the welcome email.
+        let _: Value = context
+            .checkpoint("welcome", || onboarding_mail::welcome(&account.email, &workspace))
+            .await?;
+        Ok(workspace)
+    });
     // docs:end
     Ok(())
 }

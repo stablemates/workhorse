@@ -45,21 +45,6 @@ public sealed class DurableExecutionExamplesTests(ScratchDatabase scratch) : IPa
     }
 
     [Fact(Timeout = 120_000)]
-    public async Task TheFulfillmentWaitsForTheWarehouseAndChargesOneTime()
-    {
-        var driver = new DurableFlowDriver(_db);
-        await using var worker = driver.CreateWorker();
-        new DurableExecutionExamples(this, this, this).RegisterFulfillment(worker);
-        var taskId = await driver.EnqueueAsync("order.fulfill", new { orderId = "ord-9" }, TestContext.Current.CancellationToken);
-        await driver.DeliverSignalAsync(worker, taskId, "packed", new { parcelId = "parcel-3" });
-        var task = await driver.FinishAsync(worker, taskId);
-        Assert.Equal(TaskState.Succeeded, task.State);
-        Assert.Equal(2, task.CurrentAttempt);
-        Assert.Equal(["charge ord-9 charge:ord-9", "ship ord-9", "ship ord-9"], _calls);
-        JsonAssert.Equal("""{"shipmentId":"ship-ord-9","chargeId":"ch-ord-9"}""", task.Result);
-    }
-
-    [Fact(Timeout = 120_000)]
     public async Task TheFollowUpWaitsForItsTimeAndTheWelcomeRunsOneTime()
     {
         var driver = new DurableFlowDriver(_db);
