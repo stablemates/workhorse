@@ -159,19 +159,25 @@ RSpec.describe "Failed heartbeat rounds" do
       end
     end
 
-    def instruments_cache = W::Telemetry.instance_variable_get(:@instruments)
+    # W::Telemetry keeps each instrument for the life of the process. An example gets an empty
+    # instrument map, so the worker creates every instrument on the stub provider. The hook restores
+    # the original map after the example, so no later example records into the stub provider (SM-1816).
+    around do |example|
+      shared = W::Telemetry.instance_variable_get(:@instruments)
+      W::Telemetry.instance_variable_set(:@instruments, Concurrent::Map.new)
+      example.run
+    ensure
+      W::Telemetry.instance_variable_set(:@instruments, shared)
+    end
 
     before do
       allow(W::Telemetry).to receive(:meter_provider).and_return(provider)
-      [round_failure, verdict_failure].each { |name| instruments_cache.delete(name) }
       pending << {
         "task_id" => task_id, "task_type" => "round-failure", "priority" => "0", "payload" => "{}",
         "contract_version" => nil, "result_max_bytes" => "1048576", "attempt" => "1", "max_attempts" => "1",
         "fence_token" => "1", "lease_expires_at" => "2099-01-01 00:00:00+00"
       }
     end
-
-    after { [round_failure, verdict_failure].each { |name| instruments_cache.delete(name) } }
 
     def run_until_three_heartbeats(**options)
       aborted = nil
