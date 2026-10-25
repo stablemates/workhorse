@@ -2485,6 +2485,26 @@ clock that runs ahead cannot end an attempt before the database expiry. The shar
 in `protocol/v1/runtime.json` check this. Each one compares the database clock at the cancellation
 with the expiry that PostgreSQL holds.
 
+While the handler runs, every SDK waits longer after each `not_due` answer. The first retry waits
+5 ms. Each later retry waits twice as long, to a maximum of 1 s. Each `expire_owned_v1` request
+locks the task row, and a heartbeat that finds the row locked answers `busy`. A fixed short retry
+thus can prevent each renewal until the lease ends (SM-1701). The schedule restarts at 5 ms for
+each attempt.
+
+| SDK        | Retry wait after `not_due`                                                           | Owner                                           |
+| ---------- | ------------------------------------------------------------------------------------ | ----------------------------------------------- |
+| TypeScript | `EXPIRATION_RETRY_MIN_MS` (5 ms), doubles to `EXPIRATION_RETRY_MAX_MS` (1 s)         | `TaskAttempt.requestExpiration`                 |
+| Go         | `expirationRetryInterval` (5 ms), doubles to `expirationRetryMaximum` (1 s)          | the ownership supervisor in `go/worker.go`      |
+| Rust       | `EXPIRATION_RETRY` (5 ms), doubles to `EXPIRATION_RETRY_MAXIMUM` (1 s)               | the select loop in `rust/src/worker/execute.rs` |
+| .NET       | `ExpirationRetryNanos` (5 ms), doubles to `ExpirationRetryMaxNanos` (1 s)            | `Worker.AskForExpirationAsync`                  |
+| JVM        | `EXPIRATION_RETRY_NANOS` (5 ms), doubles to `EXPIRATION_RETRY_MAX_NANOS` (1 s)       | `Worker.watchExpiration`                        |
+| Python     | `_EXPIRATION_RETRY_SECONDS` (5 ms), doubles to `_EXPIRATION_RETRY_MAX_SECONDS` (1 s) | `watch_expiration` in `Worker`                  |
+| Ruby       | `EXPIRATION_RETRY` (5 ms), doubles to `EXPIRATION_RETRY_MAX` (1 s)                   | `Worker#watch_expiration`                       |
+
+The Python `AsyncWorker` runs the attempts of a `Worker`, so it uses the same schedule. After the
+handler returns, the Go `expireOwnership` and the Rust `expire_ownership` settle an expiry with a
+fixed 5 ms retry inside a budget of 1 s. That path does not use this schedule.
+
 The TypeScript `TaskAttempt` does not use the wall clock of the worker for that timer:
 
 1. The claim's database time is `leaseExpiresAt` minus the worker's `leaseMs`, because PostgreSQL
@@ -2504,8 +2524,8 @@ The TypeScript `TaskAttempt` does not use the wall clock of the worker for that 
    after the same backoff. The lease watchdog still ends an attempt whose lease nobody renews.
 
 The .NET worker converts the earlier of `deadline_at` and `attempt_timeout_at` to a due time on
-`Monotonic.Now()` once, when the attempt starts its expiry watch. After a `not_due` answer, it asks
-again 5 ms later on the same clock. Thus, if the wall clock of the worker steps forward or backward,
+`Monotonic.Now()` once, when the attempt starts its expiry watch. After a `not_due` answer, it waits
+for the retry backoff on the same clock. Thus, if the wall clock of the worker steps forward or backward,
 neither wait changes.
 
 A `deadline_exceeded` or `timeout_exceeded` heartbeat answer is already the verdict of the database.

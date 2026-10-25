@@ -90,6 +90,7 @@ public final class Worker implements AutoCloseable {
   private static final long UNWIND_WINDOW_NANOS = TimeUnit.MILLISECONDS.toNanos(250);
   private static final long IDLE_CHECK_NANOS = TimeUnit.MILLISECONDS.toNanos(50);
   private static final long EXPIRATION_RETRY_NANOS = TimeUnit.MILLISECONDS.toNanos(5);
+  private static final long EXPIRATION_RETRY_MAX_NANOS = TimeUnit.SECONDS.toNanos(1);
 
   /**
    * The floor of the startup budget, in milliseconds. The budget is {@code max(heartbeat, 5 s)}:
@@ -3945,7 +3946,10 @@ public final class Worker implements AutoCloseable {
 
   /**
    * Ends an attempt locally when its lease lapses unrenewed, and asks PostgreSQL to settle a
-   * deadline or an attempt timeout when one passes.
+   * deadline or an attempt timeout when one passes. While PostgreSQL answers {@code not_due}, the
+   * first retry waits {@link #EXPIRATION_RETRY_NANOS} and each later one waits twice as long, up to
+   * {@link #EXPIRATION_RETRY_MAX_NANOS}. Each request locks the task row, so a short fixed retry
+   * makes the heartbeat of the attempt answer {@code busy} (SM-1701).
    */
   private void watchExpiration(
       ClaimedTask task,
@@ -3955,6 +3959,7 @@ public final class Worker implements AutoCloseable {
       Consumer<Exception> failAttempt) {
     Instant expirationAt = earliest(task.deadlineAt(), task.attemptTimeoutAt());
     Long retryAt = null;
+    long retry = EXPIRATION_RETRY_NANOS;
     try {
       while (true) {
         Long delay;
@@ -3992,7 +3997,8 @@ public final class Worker implements AutoCloseable {
         if (!"not_due".equals(status)) {
           return;
         }
-        retryAt = System.nanoTime() + EXPIRATION_RETRY_NANOS;
+        retryAt = System.nanoTime() + retry;
+        retry = Math.min(retry * 2, EXPIRATION_RETRY_MAX_NANOS);
       }
     } catch (InterruptedException interrupted) {
       Thread.currentThread().interrupt();

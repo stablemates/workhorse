@@ -10,6 +10,17 @@ adds.
 
 ## Unreleased
 
+### The worker waits longer after each not_due expiry answer
+
+When the local timer of a deadline or an execution timeout fires, the worker asks PostgreSQL to
+expire the attempt. If the clock of PostgreSQL has not reached its expiry, PostgreSQL answers
+`not_due`. Before this change, the worker asked again every 5 ms. Each request locks the task row,
+so the heartbeat of the same attempt answered `busy`. If the worker clock ran ahead by more than one
+lease, the attempt could lose its lease before the database expiry (SM-1701).
+
+Now the first retry waits 5 ms, and each later retry waits twice as long, to a maximum of 1 s. The
+TypeScript, Go, and Rust workers already use this schedule.
+
 ### The Python client measures signal and human wait values as PostgreSQL does
 
 PostgreSQL limits a signal payload, a human wait context, and a human wait result to 65,536 bytes of

@@ -28,7 +28,7 @@ public sealed class WorkerExpirationClockTests
             },
             timeout.Token);
 
-        // Each retry waits 5 ms. A wait on the wall clock would take 10 minutes for each step.
+        // The retries wait 5 ms and 10 ms. A wait on the wall clock would take 10 minutes for each step.
         Assert.Equal(3, asks);
         Assert.True(watch.Elapsed < TimeSpan.FromSeconds(10), $"the retries took {watch.Elapsed}");
     }

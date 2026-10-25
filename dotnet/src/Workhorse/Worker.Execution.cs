@@ -16,6 +16,7 @@ public sealed partial class Worker
 {
     private const int CauseDepth = 16;
     private static readonly long ExpirationRetryNanos = Monotonic.Millis(5);
+    private static readonly long ExpirationRetryMaxNanos = Monotonic.Millis(1000);
     private static readonly TimeSpan MaxDelaySlice = TimeSpan.FromDays(1);
 
     /// <summary>The compiled result schema of each contract version, or the reason that it is unusable.</summary>
@@ -564,7 +565,7 @@ public sealed partial class Worker
 
     /// <summary>
     /// Asks PostgreSQL to settle the task's deadline or the attempt's execution timeout when one
-    /// passes, and asks again shortly while PostgreSQL answers <c>not_due</c>.
+    /// passes, and asks again after a backoff while PostgreSQL answers <c>not_due</c>.
     /// </summary>
     private async Task WatchDeadlineAsync(Active task, Ownership ownership, Arbiter arbiter)
     {
@@ -603,8 +604,11 @@ public sealed partial class Worker
     }
 
     /// <summary>
-    /// Calls <paramref name="ask"/> at <paramref name="expirationAt"/>, and again after
-    /// <see cref="ExpirationRetryNanos"/> while it answers <c>not_due</c>. The expiry is a database
+    /// Calls <paramref name="ask"/> at <paramref name="expirationAt"/>, and again while it answers
+    /// <c>not_due</c>. The first retry waits <see cref="ExpirationRetryNanos"/>, and each later one
+    /// waits twice as long, up to <see cref="ExpirationRetryMaxNanos"/>. Each request locks the task
+    /// row, so a short fixed retry makes the heartbeat of the attempt answer <c>busy</c> (SM-1701).
+    /// The expiry is a database
     /// timestamp, so <paramref name="wallClock"/> converts it to a monotonic due time once. Every
     /// wait reads only the monotonic clock, so a step of the wall clock does not change it (SM-1688).
     /// </summary>
@@ -618,6 +622,7 @@ public sealed partial class Worker
         // future due time. Monotonic values wrap, so DelayUntilAsync compares by difference.
         var delay = Math.Max(0, Monotonic.Nanos(expirationAt - wallClock.GetUtcNow()));
         var dueAt = unchecked(Monotonic.Now() + delay);
+        var retry = ExpirationRetryNanos;
         while (true)
         {
             await DelayUntilAsync(dueAt, cancellationToken).ConfigureAwait(false);
@@ -626,7 +631,8 @@ public sealed partial class Worker
                 return;
             }
 
-            dueAt = unchecked(Monotonic.Now() + ExpirationRetryNanos);
+            dueAt = unchecked(Monotonic.Now() + retry);
+            retry = Math.Min(retry * 2, ExpirationRetryMaxNanos);
         }
     }
 

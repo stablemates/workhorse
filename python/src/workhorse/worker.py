@@ -453,6 +453,11 @@ _REDACTED_ERROR_MESSAGE = "Task handler failed; details redacted"
 # it claims again, so a task enqueued into a quiet queue is never delayed past it.
 _MAX_EMPTY_POLL_MS = 5_000
 _NOTIFICATION_CLAIM_DELAY_SECONDS = 0.05
+# While PostgreSQL answers not_due, the expiry watch asks again after this wait. The wait doubles
+# after each answer, up to the maximum. Each request locks the task row, so a short fixed retry
+# makes the heartbeat of the attempt answer busy (SM-1701).
+_EXPIRATION_RETRY_SECONDS = 0.005
+_EXPIRATION_RETRY_MAX_SECONDS = 1.0
 
 
 def _dispatch_refill_batch(concurrency: int) -> int:
@@ -3851,6 +3856,7 @@ class Worker:
         def watch_expiration() -> None:
             expiration_at = _earliest_expiration(task)
             expiration_retry_at: float | None = None
+            expiration_retry = _EXPIRATION_RETRY_SECONDS
             while True:
                 expiration_delay = _expiration_delay(expiration_at, expiration_retry_at)
                 lease_delay = lease_deadline() - monotonic()
@@ -3878,7 +3884,8 @@ class Worker:
                             return
                         status = settle_expiration()
                     if status == "not_due":
-                        expiration_retry_at = monotonic() + 0.005
+                        expiration_retry_at = monotonic() + expiration_retry
+                        expiration_retry = min(expiration_retry * 2, _EXPIRATION_RETRY_MAX_SECONDS)
                         continue
                     return
                 except BaseException as error:

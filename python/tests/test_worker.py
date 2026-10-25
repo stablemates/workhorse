@@ -1716,6 +1716,115 @@ def test_worker_classifies_an_execution_timeout(database_url: str) -> None:
         assert outcome == ("failed", "ExecutionTimeout")
 
 
+def test_worker_keeps_renewing_while_its_clock_leads_the_database_expiry(
+    database_url: str,
+) -> None:
+    """The heartbeat renews the lease while PostgreSQL answers not_due (SM-1701).
+
+    The handler moves the stored attempt timeout 2.5 s later, so the worker clock leads it by
+    more than the 2 s lease. The worker asks for the expiry until PostgreSQL reaches it. Each ask
+    locks the task row, and a locked row makes the heartbeat answer busy. The handler must see
+    the execution timeout, not a lost lease. The retry wait doubles from 5 ms up to 1 s, so the
+    worker asks about 11 times. A fixed 5 ms retry asks hundreds of times and fails the bound.
+    The timeout of 1.5 s gives the handler time to move the stored value before the local timer
+    fires.
+    """
+    observed_reasons: list[BaseException | None] = []
+    database_expiries: list[datetime] = []
+    cancelled_after_expiry: list[bool] = []
+    run_results: list[bool] = []
+    run_errors: list[BaseException] = []
+
+    with (
+        psycopg.connect(database_url) as enqueue_connection,
+        psycopg.connect(database_url, autocommit=True) as worker_connection,
+        psycopg.connect(database_url, autocommit=True) as handler_connection,
+    ):
+        # Count each expiry request in SQL. Each test has its own scratch database, so the
+        # replaced function does not reach another test.
+        worker_connection.execute("CREATE SEQUENCE workhorse_test_expiry_asks")
+        worker_connection.execute(
+            "ALTER FUNCTION workhorse.expire_owned_v1(uuid, text, bigint) "
+            "RENAME TO expire_owned_v1__counted"
+        )
+        worker_connection.execute(
+            """
+            CREATE FUNCTION workhorse.expire_owned_v1(
+              p_task_id uuid, p_worker_id text, p_fence_token bigint
+            ) RETURNS text LANGUAGE plpgsql AS $$
+            BEGIN
+              PERFORM nextval('workhorse_test_expiry_asks');
+              RETURN workhorse.expire_owned_v1__counted(p_task_id, p_worker_id, p_fence_token);
+            END
+            $$
+            """
+        )
+        task_id = Queue(enqueue_connection).enqueue(
+            "timeout.leading-clock",
+            {},
+            EnqueueOptions(execution_timeout_ms=1_500, max_attempts=1),
+        )
+        enqueue_connection.commit()
+
+        def wait_for_timeout(_payload: object, context: HandlerContext) -> None:
+            moved = handler_connection.execute(
+                "UPDATE workhorse.task_runtime "
+                "SET attempt_timeout_at = attempt_timeout_at + interval '2500 milliseconds' "
+                "WHERE task_id = %s AND attempt_timeout_at > clock_timestamp() "
+                "RETURNING attempt_timeout_at",
+                (task_id,),
+            ).fetchone()
+            assert moved is not None
+            database_expiries.append(moved[0])
+            assert context.cancellation.wait(timeout=10)
+            reached = handler_connection.execute(
+                "SELECT clock_timestamp() >= %s", (moved[0],)
+            ).fetchone()
+            assert reached is not None
+            cancelled_after_expiry.append(reached[0])
+            observed_reasons.append(context.cancellation.reason)
+            context.cancellation.raise_if_cancelled()
+
+        worker = Worker(
+            worker_pool,
+            worker_id="python-leading-clock-worker",
+            lease_ms=2_000,
+            heartbeat_ms=200,
+            # Only the worker's own expiry request settles the timeout.
+            maintenance_interval_ms=3_600_000,
+        ).handle("timeout.leading-clock", wait_for_timeout)
+
+        def run_worker() -> None:
+            try:
+                run_results.append(worker.run_once())
+            except BaseException as error:
+                run_errors.append(error)
+
+        thread = Thread(target=run_worker)
+        thread.start()
+        thread.join(timeout=30)
+        if thread.is_alive():
+            worker.stop()
+            thread.join(timeout=5)
+            pytest.fail("the worker did not settle the timeout in 30 s")
+        assert run_errors == []
+        assert run_results == [True]
+        assert len(observed_reasons) == 1
+        assert isinstance(observed_reasons[0], ExecutionTimeoutError)
+        assert len(database_expiries) == 1
+        assert cancelled_after_expiry == [True]
+        outcome = worker_connection.execute(
+            "SELECT state, error->>'name' FROM workhorse.task_outcome WHERE task_id = %s",
+            (task_id,),
+        ).fetchone()
+        assert outcome == ("failed", "ExecutionTimeout")
+        asks = worker_connection.execute(
+            "SELECT last_value FROM workhorse_test_expiry_asks"
+        ).fetchone()
+        assert asks is not None
+        assert asks[0] <= 20, f"the worker asked for the expiry {asks[0]} times"
+
+
 def test_worker_keeps_running_after_a_lease_loss(database_url: str) -> None:
     handler_started = Event()
     observed_reasons: list[BaseException | None] = []

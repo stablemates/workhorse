@@ -14,6 +14,7 @@ import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
+import java.sql.Statement;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
@@ -1669,6 +1670,108 @@ class WorkerDatabaseTest {
 
     assertEquals(CancellationReason.EXECUTION_TIMEOUT, reason.get());
     assertEquals("failed", status(taskId).state());
+  }
+
+  /**
+   * The worker clock runs ahead of PostgreSQL by more than one lease. The handler moves the stored
+   * attempt timeout 2.5 s later, and the lease is 2 s. The local timer fires first, and PostgreSQL
+   * answers {@code not_due} until its clock reaches the stored value. The heartbeats must renew the
+   * lease in that time, so the attempt ends on its execution timeout, not on a lost lease.
+   *
+   * <p>A wrapper counts each call of {@code workhorse.expire_owned_v1}. The retry starts at 5 ms
+   * and doubles up to 1 s, so the worker asks about 11 times. A fixed 5 ms retry asks hundreds of
+   * times, and each request locks the task row against the heartbeat (SM-1701). The maintenance
+   * interval of one hour lets only the worker's own request settle the timeout. The timeout of 1.5
+   * s gives the handler time to move the stored value before the local timer fires.
+   */
+  @Test
+  void backsOffItsExpiryRequestsWhilePostgresqlAnswersNotDue() throws Exception {
+    try (Connection setup = ScratchDatabase.connect();
+        Statement statement = setup.createStatement()) {
+      statement.execute("CREATE SEQUENCE workhorse_test_expiry_asks");
+      statement.execute(
+          "ALTER FUNCTION workhorse.expire_owned_v1(uuid, text, bigint)"
+              + " RENAME TO expire_owned_v1__counted");
+      statement.execute(
+          "CREATE FUNCTION workhorse.expire_owned_v1("
+              + "p_task_id uuid, p_worker_id text, p_fence_token bigint) RETURNS text"
+              + " LANGUAGE plpgsql AS $$ BEGIN PERFORM nextval('workhorse_test_expiry_asks');"
+              + " RETURN workhorse.expire_owned_v1__counted(p_task_id, p_worker_id, p_fence_token);"
+              + " END $$");
+    }
+    ExecutorService runner = Executors.newSingleThreadExecutor();
+    try {
+      UUID taskId =
+          enqueue(
+              "skewed",
+              Map.of(),
+              EnqueueOptions.builder().executionTimeout(Duration.ofMillis(1500)).maxAttempts(1));
+      AtomicReference<@Nullable CancellationReason> reason = new AtomicReference<>();
+      AtomicBoolean afterDatabaseExpiry = new AtomicBoolean();
+      Worker worker =
+          worker()
+              .lease(Duration.ofSeconds(2))
+              .heartbeat(Duration.ofMillis(200))
+              .maintenanceInterval(Duration.ofHours(1))
+              .handle(
+                  "skewed",
+                  Object.class,
+                  (ctx, payload) -> {
+                    String expiry;
+                    try (Connection connection = ScratchDatabase.connect();
+                        PreparedStatement move =
+                            connection.prepareStatement(
+                                "UPDATE workhorse.task_runtime SET attempt_timeout_at ="
+                                    + " attempt_timeout_at + interval '2500 milliseconds'"
+                                    + " WHERE task_id = ?::uuid AND attempt_timeout_at > clock_timestamp()"
+                                    + " RETURNING attempt_timeout_at::text")) {
+                      move.setString(1, taskId.toString());
+                      try (ResultSet moved = move.executeQuery()) {
+                        assertTrue(moved.next(), "the handler moves the stored attempt timeout");
+                        expiry = moved.getString(1);
+                      }
+                    }
+                    ctx.cancellation().await(WAIT);
+                    try (Connection connection = ScratchDatabase.connect();
+                        PreparedStatement passed =
+                            connection.prepareStatement(
+                                "SELECT clock_timestamp() >= ?::timestamptz")) {
+                      passed.setString(1, expiry);
+                      try (ResultSet row = passed.executeQuery()) {
+                        row.next();
+                        afterDatabaseExpiry.set(row.getBoolean(1));
+                      }
+                    }
+                    reason.set(ctx.cancellation().reason());
+                    return null;
+                  })
+              .build();
+
+      assertTrue(runner.submit(worker::runOnce).get(30, TimeUnit.SECONDS));
+
+      assertEquals(CancellationReason.EXECUTION_TIMEOUT, reason.get(), "the lease stays renewed");
+      assertTrue(afterDatabaseExpiry.get(), "the cancellation comes after the database expiry");
+      assertEquals("failed", status(taskId).state());
+      long asks;
+      try (Connection connection = ScratchDatabase.connect();
+          Statement statement = connection.createStatement();
+          ResultSet row =
+              statement.executeQuery("SELECT last_value FROM workhorse_test_expiry_asks")) {
+        row.next();
+        asks = row.getLong(1);
+      }
+      assertTrue(asks <= 20, "the worker asks " + asks + " times, more than 20");
+    } finally {
+      runner.shutdownNow();
+      try (Connection teardown = ScratchDatabase.connect();
+          Statement statement = teardown.createStatement()) {
+        statement.execute("DROP FUNCTION workhorse.expire_owned_v1(uuid, text, bigint)");
+        statement.execute(
+            "ALTER FUNCTION workhorse.expire_owned_v1__counted(uuid, text, bigint)"
+                + " RENAME TO expire_owned_v1");
+        statement.execute("DROP SEQUENCE workhorse_test_expiry_asks");
+      }
+    }
   }
 
   /**
