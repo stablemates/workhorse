@@ -111,6 +111,7 @@ internal sealed class RuntimeFixtures : IAsyncDisposable
             "batch" => BatchAsync(fixture),
             "suspension-replay" => SuspensionReplayAsync(fixture),
             "lease-loss" => LeaseLossAsync(fixture),
+            "refused-completion" => RefusedCompletionAsync(fixture),
             "replay-conflict" => ReplayConflictAsync(fixture),
             var kind => throw new Failure($"unknown runtime fixture kind {Matcher.Render(kind)}"),
         };
@@ -976,6 +977,105 @@ internal sealed class RuntimeFixtures : IAsyncDisposable
         Failure.Check(Matcher.Same(rejected.ToList(), fixture.GetValueOrDefault("portableRejectedWrites")), $"rejected writes [{string.Join(", ", rejected)}]");
         await ExpectStateAsync(taskId, Get(fixture, "expectedState"));
         await ExpectOutcomesAsync(taskId, [fixture.GetValueOrDefault("expectedAttemptOutcome")]);
+    }
+
+    /// <summary>
+    /// Each case changes its task in PostgreSQL from the handler, and the handler then returns at
+    /// once. The enqueued boundaries are an hour away, and the heartbeat does not run during the
+    /// handler. Thus the worker's own timers cannot fire, and PostgreSQL refuses the completion
+    /// write. The worker's maintenance interval is an hour, so only the tick before the claim runs.
+    /// No tick can settle the moved boundary before the completion write (SM-1792).
+    /// </summary>
+    private async Task RefusedCompletionAsync(OrderedDictionary<string, object?> fixture)
+    {
+        foreach (var item in (List<object?>)fixture["cases"]!)
+        {
+            var entry = Runner.Object(item, "case");
+            var cause = Runner.Text(entry.GetValueOrDefault("cause"));
+            var name = $"{QueueName(fixture)}-{cause}";
+            var taskId = await EnqueueAsync(
+                TaskType(fixture),
+                Json.Members(),
+                Options(name) with { MaxAttempts = 1, Deadline = DateTimeOffset.UtcNow.AddHours(1), ExecutionTimeout = TimeSpan.FromHours(1) });
+            var handled = 0;
+            // A failed check in the handler would fail the attempt, so the runner checks the status later.
+            var cancelStatuses = new List<CancelStatus>();
+            var grace = TimeSpan.Zero;
+            await using (var pool = Intercept.Create(_database, Intercept.Hook.None))
+            {
+                var options = BaseOptions(name, $"dotnet-{name}");
+                options.PollInterval = TimeSpan.FromMilliseconds(5);
+                options.Lease = Millis(fixture, "leaseMs");
+                options.Heartbeat = Millis(fixture, "heartbeatMs");
+                options.MaintenanceInterval = TimeSpan.FromHours(1);
+                grace = options.ShutdownGrace;
+
+                // The runner does not dispose the worker, because DisposeAsync waits for the run without a bound (SM-1802).
+                var subject = new Worker(pool.DataSource, options);
+                subject.Handle<JsonElement, object?>(TaskType(fixture), async (context, _) =>
+                {
+                    Interlocked.Increment(ref handled);
+                    switch (cause)
+                    {
+                        case "deadline":
+                        case "attempt-timeout":
+                            var column = cause == "deadline" ? "deadline_at" : "attempt_timeout_at";
+                            await UpdateAsync($"UPDATE workhorse.task_runtime SET {column} = clock_timestamp() - interval '1 second' WHERE task_id = '{context.Task.Id}'");
+                            break;
+                        case "cancellation":
+                            var cancel = await _queue.CancelAsync(context.Task.Id, new CancelOptions { RequestedBy = "runtime-fixture" });
+                            lock (cancelStatuses)
+                            {
+                                cancelStatuses.Add(cancel.Status);
+                            }
+
+                            break;
+                        case "moved-fence":
+                            await UpdateAsync(
+                                $"UPDATE workhorse.task_runtime SET fence_token = fence_token + 1, deadline_at = clock_timestamp() - interval '1 second' WHERE task_id = '{context.Task.Id}'");
+                            break;
+                        default:
+                            throw new InvalidOperationException($"unknown refused-completion cause {cause}");
+                    }
+
+                    return Json.Members(("late", true));
+                });
+                var result = Running(subject, () => subject.RunOnceAsync());
+                try
+                {
+                    Failure.Check(await JoinAsync(result), $"{cause}: the worker did not report a processed task");
+                }
+                finally
+                {
+                    subject.Stop();
+                    await StoppedAsync(result, grace);
+                }
+            }
+
+            Failure.Check(Volatile.Read(ref handled) == 1, $"{cause}: the handler ran {handled} times, want 1");
+            CancelStatus[] expectedCancelStatuses = cause == "cancellation" ? [CancelStatus.CancelRequested] : [];
+            lock (cancelStatuses)
+            {
+                Failure.Check(
+                    cancelStatuses.SequenceEqual(expectedCancelStatuses),
+                    $"{cause}: cancel statuses [{string.Join(", ", cancelStatuses)}]");
+            }
+
+            // The attempt settled its cause before the run returned, without a maintenance pass.
+            var expected = Runner.Object(entry.GetValueOrDefault("expectedState"), "expectedState");
+            try
+            {
+                await ExpectStateAsync(taskId, expected);
+                var detail = await new Admin(_database.DataSource).GetTaskAsync(taskId);
+                Failure.Check(detail is not null, $"task {taskId} has no snapshot");
+                Failure.Check(detail!.Result is null or { ValueKind: JsonValueKind.Null }, $"result {detail.Result}, want null");
+                await ExpectOutcomesAsync(taskId, (List<object?>)entry["expectedAttemptOutcomes"]!);
+            }
+            catch (Failure failure)
+            {
+                throw new Failure($"{cause}: {failure.Message}");
+            }
+        }
     }
 
     /// <summary>Each durable write that a handler can try after its lease is gone, by its portable name.</summary>

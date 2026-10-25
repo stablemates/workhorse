@@ -156,6 +156,29 @@ export interface LeaseLossRuntimeFixture extends RuntimeFixtureBase {
   expectedRunOutcome: "processed";
 }
 
+/**
+ * The handler changes its task in PostgreSQL and returns a value at once, so PostgreSQL refuses the
+ * completion write. The worker's own timers wait for the claimed boundaries, and the heartbeat does
+ * not run in between. The worker settles a due deadline or attempt timeout under the attempt's
+ * fence before the run returns. The worker acknowledges a cancellation request. After a moved
+ * fence, the worker leaves the task to lease recovery. No cause stores the refused result.
+ */
+export interface RefusedCompletionRuntimeFixture extends RuntimeFixtureBase {
+  kind: "refused-completion";
+  leaseMs: number;
+  heartbeatMs: number;
+  cases: Array<{
+    /**
+     * `deadline` and `attempt-timeout` move that boundary one second into the past. `cancellation`
+     * requests a cancellation. `moved-fence` adds one to the fence token and moves the deadline one
+     * second into the past.
+     */
+    cause: "deadline" | "attempt-timeout" | "cancellation" | "moved-fence";
+    expectedState: ExpectedRuntimeState;
+    expectedAttemptOutcomes: TaskAttemptOutcome[];
+  }>;
+}
+
 export interface HeartbeatCadenceRuntimeFixture extends RuntimeFixtureBase {
   kind: "heartbeat-cadence";
   leaseMs: number;
@@ -426,6 +449,7 @@ export type RuntimeFixture =
   | CooperativeCancellationRuntimeFixture
   | ExpirationRuntimeFixture
   | LeaseLossRuntimeFixture
+  | RefusedCompletionRuntimeFixture
   | HeartbeatCadenceRuntimeFixture
   | PollCadenceRuntimeFixture
   | SubscriptionRecoveryRuntimeFixture

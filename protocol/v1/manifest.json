@@ -80,6 +80,7 @@
     "execution-timeout-settlement",
     "database-authoritative-expiration",
     "lease-loss-fencing",
+    "refused-completion-settlement",
     "non-overlapping-heartbeats",
     "empty-claim-backoff",
     "subscription-poll-base",

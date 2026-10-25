@@ -51,6 +51,7 @@ import type {
   JsonRoundTripRuntimeFixture,
   JsonValue,
   LeaseLossRuntimeFixture,
+  RefusedCompletionRuntimeFixture,
   MaintenancePhaseErrorRuntimeFixture,
   MissingHandlerRuntimeFixture,
   OversizedResultRuntimeFixture,
@@ -562,6 +563,92 @@ async function executeLeaseLossRuntimeFixture(
     allowHeartbeat.resolve();
     await execution?.catch(() => undefined);
     heartbeat.mockRestore();
+  }
+}
+
+async function executeRefusedCompletionRuntimeFixture(
+  queue: Queue,
+  admin: Admin,
+  database: Queryable,
+  fixture: RefusedCompletionRuntimeFixture,
+): Promise<void> {
+  for (const testCase of fixture.cases) {
+    const queueName = `runtime-${fixture.id}-${testCase.cause}`;
+    // The enqueued boundaries are far away, so the worker's own timers cannot reach them.
+    const id = await queue.enqueue(
+      fixture.taskType,
+      {},
+      {
+        queue: queueName,
+        maxAttempts: 1,
+        deadline: new Date(Date.now() + 3_600_000),
+        executionTimeoutMs: 3_600_000,
+      },
+    );
+    let handled = 0;
+    // An assertion in the handler would fail the attempt, so the runner checks the status later.
+    const cancelStatuses: string[] = [];
+    // With an interval of one hour, only the tick before the claim runs. A later tick could settle
+    // the changed boundary before the completion write.
+    const worker = new Worker(queue, {
+      workerId: `runtime-${fixture.id}-${testCase.cause}`,
+      queue: queueName,
+      leaseMs: fixture.leaseMs,
+      heartbeatMs: fixture.heartbeatMs,
+      registryIntervalMs: 0,
+      maintenanceIntervalMs: 3_600_000,
+    }).handle(fixture.taskType, async (_payload, context) => {
+      handled += 1;
+      switch (testCase.cause) {
+        case "deadline":
+        case "attempt-timeout":
+          await database.query(
+            `UPDATE workhorse.task_runtime
+                SET ${testCase.cause === "deadline" ? "deadline_at" : "attempt_timeout_at"}
+                    = clock_timestamp() - interval '1 second'
+              WHERE task_id = $1::uuid`,
+            [context.task.id],
+          );
+          break;
+        case "cancellation":
+          cancelStatuses.push((await queue.cancel(context.task.id)).status);
+          break;
+        case "moved-fence":
+          await database.query(
+            `UPDATE workhorse.task_runtime
+                SET fence_token = fence_token + 1,
+                    deadline_at = clock_timestamp() - interval '1 second'
+              WHERE task_id = $1::uuid`,
+            [context.task.id],
+          );
+          break;
+      }
+      return { late: true };
+    });
+
+    // Each comparison names the cause, so a failure shows which case broke.
+    const { cause } = testCase;
+    const processed = await worker.runOnce();
+    expect({ cause, processed, handled, cancelStatuses }).toEqual({
+      cause,
+      processed: true,
+      handled: 1,
+      cancelStatuses: cause === "cancellation" ? ["cancel_requested"] : [],
+    });
+    // The attempt settled its cause before the run returned, without a maintenance pass.
+    const task = await admin.getTask(id);
+    expect({ cause, task }).toMatchObject({
+      cause,
+      task: {
+        state: testCase.expectedState.state,
+        currentAttempt: testCase.expectedState.attempt,
+        result: null,
+        ...(testCase.expectedState.errorName === undefined
+          ? {}
+          : { error: { name: testCase.expectedState.errorName } }),
+      },
+    });
+    await expectAttemptOutcome(database, id, testCase.expectedAttemptOutcomes);
   }
 }
 
@@ -1796,6 +1883,9 @@ async function executeRuntimeFixture(
     }
     case "lease-loss":
       await executeLeaseLossRuntimeFixture(queue, admin, database, fixture);
+      break;
+    case "refused-completion":
+      await executeRefusedCompletionRuntimeFixture(queue, admin, database, fixture);
       break;
     case "heartbeat-cadence":
       await executeHeartbeatCadenceRuntimeFixture(queue, fixture);

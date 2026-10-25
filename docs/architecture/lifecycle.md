@@ -1682,6 +1682,18 @@ The SDKs differ in what a refusal does after the handler has returned.
     reconciliation holds the lock for its statements. The Ruby heartbeat thread delivers each
     status inline. Thus the Ruby reconciliation takes the lock only to wait, and a status that
     takes the lock after `Ownership#release` changes nothing.
+- The shared runtime fixture `a-refused-completion-settles-its-cause` checks this path in all seven
+  SDKs (SM-1695). For each cause, the handler changes its task in PostgreSQL and returns at once.
+  The worker's timers wait for the claimed boundaries, and the heartbeat does not run in between, so
+  `complete_v1` refuses the write. After one single pass, the fixture reads the task and its
+  `attempt_history` rows. No cause stores the result.
+
+  | Cause             | Change before the completion                      | State      | Attempt outcome     |
+  | ----------------- | ------------------------------------------------- | ---------- | ------------------- |
+  | `deadline`        | `deadline_at` one second in the past              | `failed`   | `deadline_exceeded` |
+  | `attempt-timeout` | `attempt_timeout_at` one second in the past       | `failed`   | `timeout`           |
+  | `cancellation`    | a cancellation request                            | `canceled` | `canceled`          |
+  | `moved-fence`     | `fence_token` plus one, `deadline_at` in the past | `active`   | none                |
 
 Python ends supervision in one outer `finally` in `_execute_claimed_task_within_span`, on every
 path, including a `BaseException` from the handler.

@@ -234,12 +234,12 @@ functions:
 every fixture through `Worker`. Python, Go, Rust, Ruby, JVM, and .NET runtimes must run the same
 fixtures.
 
-| Fixture      | Pins                                                                                                                                                                                                 |
-| ------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Batch        | Priority order, positional outcomes, retries, terminal failures, and independent attempt state.                                                                                                      |
-| Suspension   | Durable-timer suspension, immediate worker-slot release, replay within one logical attempt, and reuse of completed checkpoints.                                                                      |
-| Ownership    | Cooperative cancellation, database-authoritative deadline and execution-timeout settlement, lease-loss fencing, non-overlapping worker heartbeat batches, and graceful drain without further claims. |
-| Poll cadence | The empty-claim backoff step, and the polling-only base while a configured subscription is not live.                                                                                                 |
+| Fixture      | Pins                                                                                                                                                                                                                                              |
+| ------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Batch        | Priority order, positional outcomes, retries, terminal failures, and independent attempt state.                                                                                                                                                   |
+| Suspension   | Durable-timer suspension, immediate worker-slot release, replay within one logical attempt, and reuse of completed checkpoints.                                                                                                                   |
+| Ownership    | Cooperative cancellation, database-authoritative deadline and execution-timeout settlement, lease-loss fencing, the cause that a refused completion settles, non-overlapping worker heartbeat batches, and graceful drain without further claims. |
+| Poll cadence | The empty-claim backoff step, and the polling-only base while a configured subscription is not live.                                                                                                                                              |
 
 In the poll-cadence fixture, `emptyPollsBeforeEnqueue` names the step under test. Each language
 holds its worker at the end of every empty claim. Thus the enqueue occurs on that step, not on the
