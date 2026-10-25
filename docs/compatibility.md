@@ -535,10 +535,10 @@ for the version, provided so a Python or Go developer with no Node.js toolchain 
 development database with `psql -f schema.sql`. It applies none of the CLI's guards, so deployments
 run `workhorse schema install` or `workhorse schema migrate` instead.
 
-The GitHub release becomes public only after the `crates-io`, `rubygems`, and `maven-central` jobs
-succeed. A crate, gem, or JVM artifact whose version does not match the tag skips publication, and
-its job still succeeds, so the release still appears. A failed crate, gem, or Maven Central
-publication ends the run before the release exists.
+The GitHub release becomes public only after the `crates-io`, `rubygems`, `maven-central`, and
+`nuget` jobs succeed. If the version of a crate, gem, JVM artifact, or .NET package does not match
+the tag, that line skips publication, and its job still succeeds. The release then still appears. A failed
+crate, gem, Maven Central, or nuget.org publication ends the run before the release exists.
 
 The asset is reachable at
 `https://github.com/stablemates/workhorse/releases/download/vX.Y.Z/schema.sql`. `support.json`
@@ -926,9 +926,10 @@ describes.
    server precedes the dashboard facade.
    [ADR 0085](decisions/0085-publish-npm-packages-in-dependency-order.md) records this order. Every
    package's provenance is verified. The same run then publishes the Rust crate and the Ruby gem,
-   and uploads the three JVM artifacts to Maven Central. Each version is verified on its registry
-   before the train continues. The run creates the public GitHub release last, after the
-   `crates-io`, `rubygems`, and `maven-central` jobs succeed.
+   and uploads the three JVM artifacts to Maven Central. Each of these versions is verified on its
+   registry before the train continues. The same run also pushes the four .NET packages to
+   nuget.org. The run creates the public GitHub release last, after the `crates-io`, `rubygems`,
+   `maven-central`, and `nuget` jobs succeed.
 4. Publish Go last. The `go/vX.Y.Z` tag is pushed after the gate passes, and the version is
    verified through the public module proxy.
 
@@ -937,13 +938,16 @@ of the exact public version in a clean environment. It then runs a minimal enque
 test against a fresh PostgreSQL database. Any failure stops the release train: the defect is filed,
 the remaining stages stay blocked, and the fix ships as a new candidate.
 
-The release check stops a candidate that leaves one line behind. In `release.yml`, the crate, the
-gem, and the JVM artifacts skip publication when their version does not match the tag, and the run
-still succeeds. So the check must refuse the candidate before the first registry receives it. The
-release check reads no secret. If a `maven-central` secret is missing, the JVM artifacts also skip
-publication after npm publishes, and the run still succeeds. `pnpm release:check <npm|python|go>
-<tag>` runs the same checks for each tag. `pnpm npm:release-check`, `pnpm python:release-check`, and
-`pnpm go:release-check` call it first. It fails, and lists each problem, if one of these is true:
+The release check stops a candidate that leaves one line behind. In `release.yml`, if the version
+of the crate, the gem, the JVM artifacts, or the .NET packages differs from the tag, they skip
+publication. The run still succeeds. So the check must refuse the candidate before the first
+registry receives it. The check does not read `dotnet/Directory.Build.props` yet. If the .NET
+version differs from the tag, only a notice of the `nuget` job reports it.
+
+The release check reads no secret. If a `maven-central` secret is missing, the JVM artifacts also
+skip publication after npm publishes, and the run still succeeds. `pnpm release:check
+<npm|python|go> <tag>` runs the same checks for each tag. `pnpm npm:release-check`,
+`pnpm python:release-check`, and `pnpm go:release-check` call it first. It fails, and lists each problem, if one of these is true:
 
 1. A file does not carry the release version. The files are every published `package.json`,
    `typescript/core/src/version.ts`, `python/pyproject.toml`, `python/src/workhorse/_version.py`,
@@ -1296,8 +1300,8 @@ The .NET SDK has four packages for nuget.org: `Workhorse`, `Workhorse.Hosting`,
 ([ADR 0107](decisions/0107-shape-the-dotnet-sdk-as-a-csharp-core-with-hosting-ef-core-and-asp-net-core-packages.md)).
 The four always carry one version, the train version that `dotnet/Directory.Build.props` sets. Like
 the crate, the gem, and the JVM artifacts, they have no tag of their own and publish from the npm
-`v*` tag. nuget.org does not serve them yet. The `nuget` job of `.github/workflows/release.yml` is
-prepared, and it is off until the maintainer finishes SM-1441.
+`v*` tag. nuget.org does not serve them yet. The `nuget` job of `.github/workflows/release.yml`
+publishes them from each `v*` tag that has the version of `dotnet/Directory.Build.props`.
 
 `pnpm dotnet:package-check` is the dry run. It publishes nothing and reads no secret. The CI
 `dotnet` job runs it on the first entry of its matrix on every .NET change.
@@ -1323,7 +1327,10 @@ prepared, and it is off until the maintainer finishes SM-1441.
 `pnpm dotnet:release-check` runs `pnpm dotnet:lint`, `pnpm dotnet-api:check`, `pnpm dotnet:vuln`,
 and then the dry run.
 
-When the `nuget` job is on, it works in this sequence after npm publishes:
+The `nuget` job runs in the protected `nuget` environment. No step starts until the required
+reviewer of that environment approves the run. The version check is a step, so each `v*` run waits
+for the reviewer, even a run that pushes nothing. After npm publishes and the reviewer approves, the
+`nuget` job works in this sequence:
 
 1. It compares the version in `dotnet/Directory.Build.props` with the tag. A mismatch writes a
    notice and publishes nothing. The job also writes a notice and publishes nothing while the
@@ -1339,23 +1346,23 @@ When the `nuget` job is on, it works in this sequence after npm publishes:
 nuget.org never deletes a published version. It can only unlist one. The required reviewer of the
 `nuget` environment is therefore the person between the push and a permanent version.
 
-The condition of the `nuget` job starts with `false &&`, so no run starts it. To turn it on after SM-1441, the
-maintainer removes `false &&` and adds `nuget` to the `needs` of the `github-release` job, in one
-pull request. Until then `github-release` does not wait for the `nuget` job, because GitHub would
-then skip the GitHub release too. SM-1441 lists the maintainer steps: the nuget.org
-organization `stablemates`, the prefix `Workhorse.*`, the trusted publishing policy, and the
-protected `nuget` environment with the `NUGET_USER` secret. Nothing in this repository performs
-them.
+The `github-release` job needs the `nuget` job, so the GitHub release announces a version only after
+nuget.org has the packages. A version mismatch or a missing `NUGET_USER` secret ends the `nuget` job
+with success, so the GitHub release still appears. If the reviewer rejects the run, the `nuget` job
+fails, and the GitHub release does not appear. SM-1441 records the maintainer setup: the
+nuget.org organization `stablemates`, the prefix `Workhorse.*`, the trusted publishing policy, and
+the protected `nuget` environment with the `NUGET_USER` secret. Nothing in this repository performs
+it.
 
 ### Release tags
 
 Each tag prefix publishes a fixed set of packages:
 
-| Tag         | Publishes                                                             | Workflow                                |
-| ----------- | --------------------------------------------------------------------- | --------------------------------------- |
-| `v*`        | The ten npm packages, the crate, the gem, and the three JVM artifacts | `.github/workflows/release.yml`         |
-| `python/v*` | The PyPI distribution                                                 | `.github/workflows/release-python.yml`  |
-| `go/v*`     | The Go module, through the module proxy                               | None; `scripts/release-go.sh` pushes it |
+| Tag         | Publishes                                                                                     | Workflow                                |
+| ----------- | --------------------------------------------------------------------------------------------- | --------------------------------------- |
+| `v*`        | The ten npm packages, the crate, the gem, the three JVM artifacts, and the four .NET packages | `.github/workflows/release.yml`         |
+| `python/v*` | The PyPI distribution                                                                         | `.github/workflows/release-python.yml`  |
+| `go/v*`     | The Go module, through the module proxy                                                       | None; `scripts/release-go.sh` pushes it |
 
 Two repository tag rulesets cover `refs/tags/v*`, `refs/tags/python/v*`, and `refs/tags/go/v*`.
 
@@ -1364,12 +1371,13 @@ Two repository tag rulesets cover `refs/tags/v*`, `refs/tags/python/v*`, and `re
 - "Lock release tags" (ruleset 24047194) blocks update, deletion, and non-fast-forward pushes. It has
   no bypass actor, so a published tag cannot move or disappear.
 
-The Ruby gem and the JVM artifacts publish from `v*`, which both rulesets already cover. If one of
-them ever moves to a different tag prefix, add that prefix to both rulesets in the same change.
+The Ruby gem, the JVM artifacts, and the .NET packages publish from `v*`, which both rulesets
+already cover. If one of them ever moves to a different tag prefix, add that prefix to both
+rulesets in the same change.
 
 The public repository requires pull requests and `CI / required` on `main`. Outside collaborators
-require workflow approval. The protected `npm`, `pypi`, `crates-io`, `rubygems`, and
-`maven-central` environments require review, and all five prevent administrator bypass.
+require workflow approval. The protected `npm`, `pypi`, `crates-io`, `rubygems`, `maven-central`,
+and `nuget` environments require review, and all six prevent administrator bypass.
 
 ### Publication credentials
 
