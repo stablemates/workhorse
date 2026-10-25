@@ -203,7 +203,7 @@ public sealed class DemoWorkerTests(ScratchDatabase database) : IClassFixture<Sc
         Assert.Equal(["demo-dotnet", "demo-shared", "demo-dotnet-fast"], [settings["Workhorse:Worker:Queues:0"], settings["Workhorse:Worker:Queues:1"], settings["Workhorse:Worker:Queues:2"]]);
         Assert.Equal("workhorse-demo", settings["Workhorse:Worker:ScheduleNamespaces:0"]);
         Assert.Equal("workhorse-demo-fast-tier", settings["Workhorse:Worker:ScheduleNamespaces:1"]);
-        Assert.Equal("3", settings["Workhorse:Worker:Concurrency"]);
+        Assert.Equal("6", settings["Workhorse:Worker:Concurrency"]);
         Assert.Equal("00:00:25", settings["Workhorse:Worker:ShutdownGrace"]);
         Assert.False(settings.ContainsKey("Workhorse:Worker:PollInterval"));
         Assert.Equal("00:00:00.0150000", WorkerSettings(TimeSpan.FromMilliseconds(15), "id")["Workhorse:Worker:PollInterval"]);
@@ -236,7 +236,7 @@ public sealed class DemoWorkerTests(ScratchDatabase database) : IClassFixture<Sc
         Assert.Equal("demo primary", builder.Database);
         Assert.Equal(SslMode.Disable, builder.SslMode);
         Assert.Equal("demo", builder.ApplicationName);
-        Assert.Equal(7, builder.MaxPoolSize);
+        Assert.Equal(10, builder.MaxPoolSize);
         Assert.Equal(
             GssEncryptionMode.Disable,
             new NpgsqlConnectionStringBuilder(ConnectionString("postgres://h/d?gssencmode=disable")).GssEncryptionMode);

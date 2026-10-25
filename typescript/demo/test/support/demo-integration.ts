@@ -181,8 +181,10 @@ async function waitForRegisteredWorker(
       value.workers.filter((worker) => worker.registered).length === DEMO_WORKER_CONCURRENCY.length,
   );
   const registered = page.workers.filter((worker) => worker.registered);
-  const defaultQueueWorker = registered.find((worker) => worker.concurrency === 3);
-  expect(defaultQueueWorker, "a worker with three declared slots").toBeDefined();
+  const defaultQueueWorker = registered.find(
+    (worker) => worker.concurrency === DEMO_WORKER_CONCURRENCY[0],
+  );
+  expect(defaultQueueWorker, "a worker with the declared demo slots").toBeDefined();
   return defaultQueueWorker!;
 }
 
@@ -227,6 +229,7 @@ export interface DemoTestRuntimeOptions {
   registryIntervalMs?: number;
   maintenanceRoutinePollMs?: number;
   longRunningTaskMs?: number;
+  reportExportMs?: number;
   durableStepMs?: number;
   durableTimerWaitMs?: number;
   onDurableStepOperation?: (
@@ -252,8 +255,8 @@ export type TestApplicationOptions = CreateDemoApplicationOptions & DemoTestRunt
  */
 export function createDemoIntegrationSuite(fileUrl: string) {
   // Four connections is what the whole suite took as one file, and each piece still runs the same
-  // three-slot workers, so the cost of the split is that several pieces hold four at once rather
-  // than one piece holding four. Vitest bounds that: no more pieces run than the lane has workers.
+  // demo workers, so the cost of the split is that several pieces hold four at once rather than one
+  // piece holding four. Vitest bounds that: no more pieces run than the lane has workers.
   const harness = createDatabaseTestHarness(fileUrl, { max: 4 });
   assertLocalDatabasePurpose(harness.databaseUrl, "test");
   const pool = harness.pool;
@@ -300,6 +303,7 @@ export function createDemoIntegrationSuite(fileUrl: string) {
               durableStepMs: options.durableStepMs,
               durableTimerWaitMs: options.durableTimerWaitMs,
               longRunningTaskMs: options.longRunningTaskMs,
+              reportExportMs: options.reportExportMs,
               onDurableStepOperation: options.onDurableStepOperation,
               onDurableTimerOperation: options.onDurableTimerOperation,
             }),
@@ -345,6 +349,7 @@ export function createDemoIntegrationSuite(fileUrl: string) {
       workerPollMs: 15,
       registryIntervalMs: TEST_REGISTRY_INTERVAL_MS,
       longRunningTaskMs: 25,
+      reportExportMs: 25,
       durableStepMs: 0,
       ...options,
     };

@@ -137,7 +137,7 @@ export const DEMO_DOTNET_FAST_TIER_QUEUE = {
   schedule: "5-59/10 * * * *",
 } as const;
 export const REPRESENTATIVE_SEED_NAME = "default-dashboard-v8";
-export const LONG_RUNNING_SEED_NAME = "long-running-dashboard-v2";
+export const LONG_RUNNING_SEED_NAME = "long-running-dashboard-v3";
 export const HISTORICAL_SEED_NAME = "historical-dashboard-v1";
 export const HISTORICAL_TASK_COUNT = 362;
 export const DEMO_WORKER_POLL_MS = 15_000;
@@ -151,8 +151,12 @@ export const DEMO_WORKER_POLL_MS = 15_000;
  * presenting an accidental throughput benchmark. The production launchers name their workers by
  * runtime so the polyglot topology is visible; the integration harness still exercises generated
  * identities independently.
+ *
+ * Six slots come from the load calculation in SM-1818. The TypeScript worker alone serves `demo`
+ * and `report-exports`. With `report-exports` at its cap, it keeps three slots for `demo`, and the
+ * steady `demo` load uses less than one. Each worker's pool holds its slots plus a few connections.
  */
-export const DEMO_WORKER_CONCURRENCY = [3, 3, 3, 3, 3, 3, 3] as const;
+export const DEMO_WORKER_CONCURRENCY = [6, 6, 6, 6, 6, 6, 6] as const;
 /**
  * Worker identities attached to the seeded historical attempts.
  *
@@ -180,15 +184,38 @@ export const DEMO_TIMING_TIMEOUT_MS = 1_000;
 export const DEMO_TIMING_HANDLER_MS = 5_000;
 export const DEMO_TIMING_POLICY_TIMEOUT_MS = 90_000;
 export const DEMO_CONCURRENCY_POLICY_NAMESPACE = "workhorse-demo";
+/**
+ * The concurrency policy showcase: a report export queue that one noisy tenant tries to fill.
+ *
+ * The policy limits only this queue, so the `demo` queue is limited by worker slots alone. Each
+ * customer is a concurrency key. Three customers export every two minutes. Twice an hour, on an odd
+ * minute, a driver on `demo` enqueues a burst of exports for the noisy tenant. Its key is full, so
+ * the other exports of the burst stay ready while the other customers' exports still run. At the
+ * even minutes during the burst, the queue cap holds one steady export too.
+ */
+export const DEMO_REPORT_EXPORT_QUEUE = "report-exports";
 export const DEMO_CONCURRENCY_MAX_ACTIVE = 3;
 export const DEMO_CONCURRENCY_MAX_ACTIVE_PER_KEY = 1;
+export const REPORT_EXPORT_TASK_TYPE = "demo.report-export";
+export const REPORT_EXPORT_BURST_TASK_TYPE = "demo.report-export-burst";
+export const DEMO_REPORT_EXPORT_MS = 10_000;
+export const DEMO_REPORT_EXPORT_CUSTOMERS = [
+  { customer: "customer-acme", scheduleName: "report-export.acme" },
+  { customer: "customer-globex", scheduleName: "report-export.globex" },
+  { customer: "customer-initech", scheduleName: "report-export.initech" },
+] as const;
+export const DEMO_REPORT_EXPORT_SCHEDULE = "*/2 * * * *";
+export const DEMO_REPORT_EXPORT_NOISY_CUSTOMER = "customer-northwind";
+export const DEMO_REPORT_EXPORT_BURST_SCHEDULE_NAME = "report-export.noisy-tenant";
+export const DEMO_REPORT_EXPORT_BURST_SCHEDULE = "13,43 * * * *";
+export const DEMO_REPORT_EXPORT_BURST_SIZE = 20;
 export const DEMO_RATE_LIMIT_QUEUE = "partner-api";
 export const DEMO_RATE_LIMIT_POLICY_NAMESPACE = "workhorse-demo-rate-limits";
 export const DEMO_RATE_LIMIT_SEED_NAME = "rate-limit-dashboard-v1";
 export const DEMO_RATE_LIMIT = { limit: 2, intervalMs: 60 * 60_000, burst: 2 } as const;
 export const DEMO_RATE_LIMIT_PER_KEY = { limit: 1, intervalMs: 60 * 60_000, burst: 1 } as const;
 /**
- * One named budget spans the main demo queue and the partner API queue.
+ * One named budget spans the report export queue and the partner API queue.
  *
  * The seeded long-running tasks and the partner catalog pages all name it, so the dashboard shows
  * a cap that neither queue's own policy could express and a health reason when it saturates.
@@ -205,10 +232,10 @@ export const DEMO_RATE_LIMIT_SEED_TASKS = [
   { label: "globex-catalog-page-2", concurrencyKey: "customer-globex" },
 ] as const;
 /**
- * Three long-running tasks make both policy levels visible.
+ * Three long-running tasks on `report-exports` make both policy levels visible.
  *
  * The first two share a customer key, so PostgreSQL admits them one at a time. The third uses a
- * different key and can overlap while every active demo task still consumes the shared queue budget.
+ * different key and can overlap while every active export still consumes the shared queue cap.
  */
 export const DEMO_LONG_RUNNING_SEED_TASKS = [
   { label: "archive-validation", concurrencyKey: "customer-acme" },

@@ -68,7 +68,7 @@ public final class DemoWorkerProgram {
 
   static final String SCHEDULE_NAMESPACE = "workhorse-demo";
   static final String FAST_TIER_SCHEDULE_NAMESPACE = "workhorse-demo-fast-tier";
-  static final int WORKER_CONCURRENCY = 3;
+  static final int WORKER_CONCURRENCY = 6;
   static final long DEFAULT_POLL_MS = 15_000;
   static final Duration SCHEMA_RETRY = Duration.ofMillis(500);
   static final int DEFAULT_PORT = 5432;

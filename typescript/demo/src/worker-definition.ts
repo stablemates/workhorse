@@ -56,6 +56,7 @@ export function createDemoWorkerDefinition(
         durableStepMs: options.durableStepMs,
         durableTimerWaitMs: options.durableTimerWaitMs,
         longRunningTaskMs: options.longRunningTaskMs,
+        reportExportMs: options.reportExportMs,
         onDurableStepOperation: options.onDurableStepOperation,
         onDurableTimerOperation: options.onDurableTimerOperation,
       });

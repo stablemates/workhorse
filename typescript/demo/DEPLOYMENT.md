@@ -297,6 +297,14 @@ TypeScript worker for staging, with two execution slots and its own connection p
 maps the secondary URL to that child process only and sets `WORKHORSE_DEMO_WORKSPACE=staging`.
 The container supervises and drains this worker alongside the primary workers.
 
+The primary workspace shows its concurrency policy on the `report-exports` queue. The policy in
+the `workhorse-demo` namespace admits three exports at a time and one for each customer key. Startup
+syncs that namespace, so it removes the earlier policy on the whole `demo` queue. Only the TypeScript
+worker serves `report-exports`. A seed step marked `long-running-dashboard-v3` enqueues the three
+seeded long-running tasks on that queue. A primary database that carries the earlier marker
+`long-running-dashboard-v2` runs this step once, with no migration and no reset. Its earlier
+long-running tasks stay on `demo`.
+
 Staging stays read-only in the dashboard but executes a smaller release-validation seed and one
 report every ten minutes. Its seed covers dependencies, retry recovery, durable timers, cancellation,
 scheduled work, and expired deadlines. Startup markers prevent repeated seed insertion. The primary workspace also runs a fast-tier seed step,
@@ -395,6 +403,35 @@ surge at the upper size of `traffic.surge`, and continuous dashboard reads. The 
 The largest V8 heap in use was 41 MiB, in the server, and the largest old space was 26 MiB. Thus
 each Node process used at most about half of its ceiling.
 
+The six-slot figures came from the same image limits and both workspaces, with six execution slots
+in each worker and the `report-exports` policy. The load was the demo's own schedules plus a
+backlog of 2,506 tasks on `demo`, in the mix of the `demo` schedules. The backlog drained in about
+45 minutes, mostly because of its 533 twenty-second `demo.long-running` tasks. The container
+peaked at 496 MiB, and no process was killed. The server peaked at 153 MiB, the TypeScript worker at
+147 MiB, the .NET worker at 106 MiB, and the JVM worker at 76 MiB. The demo held at most 58
+database connections, under the sum below.
+
+Each demo process also holds its own connection pool, so the PostgreSQL server must accept the sum of the
+pool ceilings. Each language worker has six execution slots. Its pool holds one connection for each
+slot and a few for the heartbeat, the notification listener, the dispatch loop, and the registry
+refresh.
+
+| Process                    | Database  | Connections                                                          |
+| -------------------------- | --------- | -------------------------------------------------------------------- |
+| Server                     | primary   | 10, pool ceiling                                                     |
+| Server                     | secondary | 3, pool ceiling                                                      |
+| TypeScript worker          | primary   | 10, slots + 4                                                        |
+| Staging worker             | secondary | 6, two slots + 4                                                     |
+| Python worker              | primary   | 9, slots + 3                                                         |
+| Go, Ruby, and .NET workers | primary   | 10 each, slots + 4                                                   |
+| Rust worker                | primary   | 11, slots + 4 and one listener outside the pool                      |
+| JVM worker                 | primary   | about 10; it has no pool and opens one connection for each operation |
+
+The sum is about 80 connections to the primary database and 9 to the secondary database, about 89
+in total. The JVM value is an expected peak, not a ceiling. Give the demo roles a margin above that
+sum on the PostgreSQL server, in addition to its reserved and other connections. The
+schema wait at startup opens one more short connection for each worker.
+
 The demo answers a fixed public surface. `GET /up` and `GET /robots.txt` respond without touching
 the dashboard host. `GET` requests under the dashboard path serve the application shell, and `GET`
 requests under `assets/` serve packaged files. Every dashboard RPC is a `POST` to
@@ -438,7 +475,9 @@ mutation back.
 
 The three admissions that create tasks — `enqueueTest`, `redriveTask`, and `redriveDeadLetters` —
 share a budget of fifty tasks ready or running, so a flood of distinct clients cannot pile work on
-the demo fleet faster than it drains. The budget counts both tiers. A fast-tier task delayed to a
+the demo fleet faster than it drains. The budget counts both tiers. It also counts the demo's own work in
+every queue. Thus a traffic spike, or a noisy-tenant burst that keeps about 19 exports ready for a
+few minutes, leaves less room for operator admissions. A fast-tier task delayed to a
 future run time does not count, like a scheduled full-tier task. An admission refuses unless the
 budget has room for every task it creates; a feature example that seeds three tasks needs three. A
 bulk redrive is clipped to the room left and returns a continuation cursor for the rest. Those

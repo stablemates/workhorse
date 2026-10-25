@@ -104,9 +104,9 @@ single-administrator login and demonstrate the authentication flow.
 The earlier representative layer still seeds one successful transactional order, one named durable timer, fixed, exponential, and
 decorrelated-jitter retry examples, one checkpointed recoverable retry, three recoverable multi-step
 durable pipelines, three intentionally persistent durable pipelines, one terminal failure, one future
-scheduled task, three timing examples, and three long-running concurrency examples. Two long-running
-tasks share one customer key and serialize. The third uses another key and can overlap within the queue
-budget. The timing examples include a materialized expired deadline,
+scheduled task, three timing examples, and three long-running concurrency examples on `report-exports`.
+Two long-running tasks share one customer key and serialize. The third uses another key and can overlap
+within the queue cap. The timing examples include a materialized expired deadline,
 an active handler that cooperatively reaches a one-second execution timeout, and a future scheduled task
 with a later absolute deadline plus a 90-second per-attempt budget. The durable pipelines cover order
 fulfillment, customer onboarding, and report publication.
@@ -171,15 +171,29 @@ application shell keeps the header and responsive sidebar in place while browser
 `/tasks`, `/cron`, `/system`, and `/workers`. Task filters are nested under Current Tasks and persist as
 the `filter` query parameter, with pagination persisted as `page`.
 
-The demo runs **five** named worker processes with three execution slots each. The TypeScript
-worker claims application tasks from `demo` and rate-limited work from `partner-api`. Python, Go,
-Rust, and Ruby claim their runtime-specific tasks from `demo-python`, `demo-go`, `demo-rust`, and
-`demo-ruby`. Each runtime also claims its own fast-tier queue: `demo-fast`, `demo-python-fast`,
-`demo-go-fast`, `demo-rust-fast`, and `demo-ruby-fast`. All five workers also compete for
+The demo runs **seven** named worker processes with six execution slots each. The TypeScript
+worker claims application tasks from `demo`, report exports from `report-exports`, and rate-limited
+work from `partner-api`. Python, Go, Rust, Ruby, JVM, and .NET claim their runtime-specific tasks from
+`demo-python`, `demo-go`, `demo-rust`, `demo-ruby`, `demo-jvm`, and `demo-dotnet`. Each runtime also
+claims its own fast-tier queue: `demo-fast`, `demo-python-fast`, `demo-go-fast`, `demo-rust-fast`,
+`demo-ruby-fast`, `demo-jvm-fast`, and `demo-dotnet-fast`. All seven workers also compete for
 `demo-shared`, whose single handler has the same contract in every SDK.
 
-The production identities begin with `demo-typescript-`, `demo-python-`, `demo-go-`, `demo-rust-`, and
-`demo-ruby-`, so the
+The concurrency policy showcase is the `report-exports` queue. Its policy in the `workhorse-demo`
+namespace admits three exports at a time and one for each customer, because the customer is the
+concurrency key. Every two minutes, `customer-acme`, `customer-globex`, and `customer-initech` each
+enqueue one ten-second export. At minutes 13 and 43, a `demo.report-export-burst` driver on `demo`
+enqueues 20 exports for the noisy tenant `customer-northwind`. Its key is full, so the other exports of
+the burst stay ready as `blockedReady`, and the exports of the other customers still run. At the even
+minutes during the burst, the queue cap also holds one steady export. The `demo` queue has no
+concurrency policy, so only the worker slots limit it.
+
+The slot count comes from the demo's own load. The TypeScript worker alone serves `demo` and
+`report-exports`. When `report-exports` is at its cap, the worker keeps three slots for `demo`, and
+the steady `demo` load uses less than one slot. SM-1818 records the calculation.
+
+The production identities begin with `demo-typescript-`, `demo-python-`, `demo-go-`, `demo-rust-`,
+`demo-ruby-`, `demo-jvm-`, and `demo-dotnet-`, so the
 Workers page makes the runtime topology explicit while every overlapping deployment process keeps a
 unique lease owner. The dashboard still discovers them entirely through
 PostgreSQL; the mount passes no declared worker list. Worker status is explicit: `busy` owns an active lease,
@@ -194,10 +208,10 @@ Pausing a worker from the dashboard writes to `workhorse.worker_registry` rather
 on a local object, so it reaches the worker process. Like cancellation it is cooperative: claiming stops
 at the worker's next registration refresh and any handler already running finishes.
 
-The demo declares three slots for each worker. Each worker shares those slots between its owned
+The demo declares six slots for each worker. Each worker shares those slots between its owned
 queue or queues and `demo-shared`.
 Core workers may configure an integer from 1 through 100 and publish
-`{ concurrency, activeSlots, draining }` to the registry, but the demo's five-worker shape is for
+`{ concurrency, activeSlots, draining }` to the registry, but the demo's seven-worker shape is for
 lifecycle and queue visibility, not a measured throughput comparison. Use the
 `worker-concurrency` lifecycle benchmark against a `_bench` database for invariant-gated concurrency
 evidence, and do not infer performance from the dashboard.
@@ -231,14 +245,14 @@ changes only that occurrence, not the schedule or its next fire.
 Startup synchronizes a namespaced one-minute heartbeat, a five-minute report, a one-minute lightweight
 long-running schedule, the staggered feature-family definitions, and three traffic tiers through
 `Queue.syncSchedules`. Each traffic occurrence runs a `demo.traffic-burst` driver that enqueues a burst
-of `demo.shared-worker` tasks on `demo-shared`, so all five workers drain it. A trickle of 2 to 6 tasks
+of `demo.shared-worker` tasks on `demo-shared`, so all seven workers drain it. A trickle of 2 to 6 tasks
 runs every minute, spikes of 40 to 120 tasks land three times an hour, and surges of 200 to 400 tasks
 land six times a day. Twice an hour, the `task-group` schedule runs a `demo.task-group-driver`. The
 driver creates one sealed task group with one member on each of `demo-python`, `demo-go`,
 `demo-rust`, and `demo-ruby`. One group in three has a misrouted Ruby member, so that group finishes
 with the result `failed`. Each group finishes when its members finish, and it enqueues two of its
 three callbacks on `demo-shared`. The driver adds about 340 tasks a day.
-All five workers evaluate due schedules in-process with advisory-lock coordination and SQL-level
+All seven workers evaluate due schedules in-process with advisory-lock coordination and SQL-level
 occurrence deduplication. The Schedules view reports the live evaluator count for each namespace.
 Its maintenance rows use `Maintenance` as the destination because workers call those PostgreSQL
 functions directly; they are not tasks sent to a queue. The view distinguishes the application heartbeat from four worker-owned maintenance entries: the fast tick, partition preparation, daily history retention at the configured local time, and terminal/idempotency cleanup. PostgreSQL stores the global IANA maintenance timezone, local retention time, and routine due state. The heartbeat's
@@ -255,7 +269,7 @@ For the deployable production shape, build and start the compiled demo explicitl
 pnpm demo:production
 ```
 
-That path creates the optimized dashboard bundle, then starts the Hono process and all five worker
+That path creates the optimized dashboard bundle, then starts the Hono process and all seven worker
 processes without Vite, HMR, or React Grab. It does not reset the database, which makes it suitable
 as the basis for future public deployment work.
 

@@ -42,6 +42,10 @@ import {
   DEMO_HUMAN_WAIT_NAME,
   DEMO_LONG_RUNNING_MS,
   DEMO_RECURRING_WAIT_TIMEOUT_MS,
+  DEMO_REPORT_EXPORT_BURST_SIZE,
+  DEMO_REPORT_EXPORT_MS,
+  DEMO_REPORT_EXPORT_NOISY_CUSTOMER,
+  DEMO_REPORT_EXPORT_QUEUE,
   DEMO_SIGNAL_NAME,
   DEMO_SIGNAL_SENDER_DELAY_MS,
   DURABLE_TIMER_TASK_TYPE,
@@ -53,6 +57,8 @@ import {
   LANGUAGE_WORKER_TASK_TYPE,
   ORDER_TASK_TYPE,
   RECURRING_TASK_TYPE,
+  REPORT_EXPORT_BURST_TASK_TYPE,
+  REPORT_EXPORT_TASK_TYPE,
   REPORT_TASK_TYPE,
   RETRY_CHECKPOINT_NAME,
   RETRY_TASK_TYPE,
@@ -91,6 +97,7 @@ export interface DemoHandlerDependencies {
   durableStepMs?: number;
   durableTimerWaitMs?: number;
   longRunningTaskMs?: number;
+  reportExportMs?: number;
   onDurableStepOperation?: (
     scenario: DurableDemoScenario,
     stepName: string,
@@ -141,6 +148,28 @@ export function trafficBurstRequests(
     payload: { source: "traffic-burst", tier: payload.tier, member },
     options: { queue: DEMO_SHARED_QUEUE, maxAttempts: 1 },
     tags: ["traffic", payload.tier],
+  }));
+}
+
+/**
+ * Build the exports one noisy-tenant burst enqueues on `report-exports`. Every export carries the
+ * same customer key, so the policy admits one of them at a time.
+ */
+export function reportExportBurstRequests(driverTaskId: string): EnqueueRequest[] {
+  return Array.from({ length: DEMO_REPORT_EXPORT_BURST_SIZE }, (_, member) => ({
+    type: REPORT_EXPORT_TASK_TYPE,
+    payload: {
+      source: "noisy-tenant-burst",
+      customer: DEMO_REPORT_EXPORT_NOISY_CUSTOMER,
+      burst: driverTaskId,
+      member,
+    },
+    options: {
+      queue: DEMO_REPORT_EXPORT_QUEUE,
+      concurrencyKey: DEMO_REPORT_EXPORT_NOISY_CUSTOMER,
+      maxAttempts: 1,
+    },
+    tags: ["report-export", "noisy-tenant", "concurrency-policy"],
   }));
 }
 
@@ -378,6 +407,18 @@ export function registerDemoHandlers(worker: Worker, deps: DemoHandlerDependenci
     const taskIds = await queue.enqueueMany(trafficBurstRequests(task.id, payload));
     return { tier: payload.tier, enqueued: taskIds.length };
   });
+  worker.handle(REPORT_EXPORT_BURST_TASK_TYPE, async (_payload, { task }) => {
+    const taskIds = await queue.enqueueMany(reportExportBurstRequests(task.id));
+    return { customer: DEMO_REPORT_EXPORT_NOISY_CUSTOMER, enqueued: taskIds.length };
+  });
+  const reportExportMs = deps.reportExportMs ?? DEMO_REPORT_EXPORT_MS;
+  worker.handle<{ customer: string; source: string }>(
+    REPORT_EXPORT_TASK_TYPE,
+    async ({ customer, source }, { signal }) => {
+      await sleep(reportExportMs, undefined, { signal });
+      return { customer, source, exported: true };
+    },
+  );
   worker.handle(TASK_GROUP_DRIVER_TASK_TYPE, async (_payload, { task }) => {
     const result = demoTaskGroupDriverResult(task.id);
     const { group, tasks } = await queue.taskGroup(
