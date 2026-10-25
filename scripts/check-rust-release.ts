@@ -20,12 +20,11 @@
  */
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
-import { copyFile, mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { copyFile, mkdir, mkdtemp, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { Client } from "pg";
-import { dropLocalDatabase } from "../typescript/core/src/drop-local-database.js";
 import { verifyRelease } from "./verify-release.js";
+import { withReleaseScratchDatabase } from "./release-scratch-database.js";
 
 const root = path.resolve(import.meta.dirname, "..");
 const consumerSource = path.join(root, "rust", "release-consumer", "main.rs");
@@ -186,68 +185,39 @@ function databaseUrl(): string | undefined {
   return undefined;
 }
 
-function withDatabase(url: string, database: string): string {
-  const parsed = new URL(url);
-  parsed.pathname = `/${database}`;
-  return parsed.toString();
-}
-
 async function runTaskThroughConsumer(
   binary: string,
   sourceUrl: string,
   transport = "tokio",
 ): Promise<void> {
   const source = decodeURIComponent(new URL(sourceUrl).pathname.slice(1));
-  if (!source.includes("test")) throw new Error(`${source} is not a test database`);
   const scratch = scratchDatabaseName(source, process.pid);
-  const identifier = `"${scratch.replaceAll('"', '""')}"`;
-  const scratchUrl = withDatabase(sourceUrl, scratch);
-
-  const admin = new Client({ connectionString: sourceUrl });
-  await admin.connect();
-  try {
-    await dropLocalDatabase(admin, scratch);
-    await admin.query(`CREATE DATABASE ${identifier}`);
-    try {
-      const database = new Client({ connectionString: scratchUrl });
-      await database.connect();
-      try {
-        await database.query(
-          await readFile(path.join(root, "sql", "schema", "current.sql"), "utf8"),
-        );
-        const taskId = (await run(binary, [scratchUrl, transport], { capture: true })).trim();
-        const { rows } = await database.query<{
-          queue_name: string;
-          task_type: string;
-          state: string | null;
-          packaged: boolean | null;
-        }>(
-          `SELECT task.queue_name, task.task_type, outcome.state,
-                  (outcome.result -> 'echo' ->> 'packaged')::boolean AS packaged
-             FROM workhorse.task task
-             LEFT JOIN workhorse.task_outcome outcome ON outcome.task_id = task.id
-            WHERE task.id = $1::uuid`,
-          [taskId],
-        );
-        const row = rows[0];
-        if (row?.queue_name !== consumerQueue || row.task_type !== consumerTaskType) {
-          throw new Error(`The consumer reported task ${taskId}, but no matching row exists`);
-        }
-        if (row.state !== "succeeded" || row.packaged !== true) {
-          throw new Error(`The consumer's worker left task ${taskId} in state ${row.state}`);
-        }
-        console.log(
-          `The packaged crate ${transport} transport enqueued and ran task ${taskId} in ${scratch}`,
-        );
-      } finally {
-        await database.end();
-      }
-    } finally {
-      await dropLocalDatabase(admin, scratch);
+  await withReleaseScratchDatabase(sourceUrl, scratch, async (scratchUrl, database) => {
+    const taskId = (await run(binary, [scratchUrl, transport], { capture: true })).trim();
+    const { rows } = await database.query<{
+      queue_name: string;
+      task_type: string;
+      state: string | null;
+      packaged: boolean | null;
+    }>(
+      `SELECT task.queue_name, task.task_type, outcome.state,
+              (outcome.result -> 'echo' ->> 'packaged')::boolean AS packaged
+         FROM workhorse.task task
+         LEFT JOIN workhorse.task_outcome outcome ON outcome.task_id = task.id
+        WHERE task.id = $1::uuid`,
+      [taskId],
+    );
+    const row = rows[0];
+    if (row?.queue_name !== consumerQueue || row.task_type !== consumerTaskType) {
+      throw new Error(`The consumer reported task ${taskId}, but no matching row exists`);
     }
-  } finally {
-    await admin.end();
-  }
+    if (row.state !== "succeeded" || row.packaged !== true) {
+      throw new Error(`The consumer's worker left task ${taskId} in state ${row.state}`);
+    }
+    console.log(
+      `The packaged crate ${transport} transport enqueued and ran task ${taskId} in ${scratch}`,
+    );
+  });
 }
 
 async function checkRustRelease(argv: readonly string[]): Promise<void> {

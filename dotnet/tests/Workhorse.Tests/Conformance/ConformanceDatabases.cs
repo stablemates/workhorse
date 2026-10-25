@@ -34,7 +34,7 @@ internal sealed class ConformanceDatabases(ScratchDatabase scratch)
             // CREATE DATABASE waits for the template, and a busy shared server can hold it.
             builder.CommandTimeout = 300;
         });
-        await ExecuteAsync(admin, $"DROP DATABASE IF EXISTS \"{name}\" WITH (FORCE)");
+        await ScratchTemplate.DropAsync(admin, name);
         var lease = await scratch.CreateDatabaseAsync(name);
         var database = new ConformanceDatabase(scratch, admin, lease, name, configure);
         try
@@ -107,7 +107,7 @@ internal sealed class ConformanceDatabase : IAsyncDisposable
         await DataSource.DisposeAsync();
         try
         {
-            await ConformanceDatabases.ExecuteAsync(_admin, $"DROP DATABASE IF EXISTS \"{_name}\" WITH (FORCE)");
+            await ScratchTemplate.DropAsync(_admin, _name);
         }
         catch (PostgresException error)
         {

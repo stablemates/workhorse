@@ -456,32 +456,68 @@ async def demo(database_url: str) -> None:
     print(json.dumps({"task": task_id, "local_credit": 7, "framework": VERSION}))
 
 
-async def main() -> None:
-    source = urlsplit(os.environ["DATABASE_URL_TEST"])
+# Shared with `scratchLeaseStatement` in `typescript/core/test/support/schema-template.ts`.
+SCRATCH_LEASE = "SELECT pg_advisory_lock_shared(hashtextextended(%s, 0))"
+SCRATCH_DROP_ATTEMPTS = 10
+
+
+@asynccontextmanager
+async def scratch_database(source_url: str) -> AsyncIterator[str]:
+    """Create a scratch database with the current schema, and drop it when the block ends.
+
+    The admin session holds the lease of the name from before the creation until after the drop,
+    because the demo has no session on the database at times. ``pnpm db:sweep`` skips a scratch
+    database under this shared lock. If the process stops, PostgreSQL ends the session and its
+    lock, and the sweep can drop the database (SM-1813).
+    """
+    source = urlsplit(source_url)
     if source.hostname not in {"localhost", "127.0.0.1", "::1"} or "test" not in source.path:
         raise RecipeRejected("Example requires the checkout's loopback test database URL")
     name = f"{source.path[1:40]}_pai_{uuid4().hex[:10]}"
     admin_url = urlunsplit(source._replace(path="/postgres"))
     scratch_url = urlunsplit(source._replace(path=f"/{name}"))
     async with await psycopg.AsyncConnection.connect(admin_url, autocommit=True) as admin:
+        await admin.execute(SCRATCH_LEASE, (name,))
         await admin.execute(
             psycopg.sql.SQL("CREATE DATABASE {}").format(psycopg.sql.Identifier(name))
         )
-    try:
-        async with await psycopg.AsyncConnection.connect(
-            scratch_url, autocommit=True
-        ) as connection:
-            await connection.execute(
-                (Path(__file__).parents[2] / "sql/schema/current.sql").read_text()
-            )
-        await demo(scratch_url)
-    finally:
-        async with await psycopg.AsyncConnection.connect(admin_url, autocommit=True) as admin:
-            await admin.execute(
-                psycopg.sql.SQL("DROP DATABASE {} WITH (FORCE)").format(
-                    psycopg.sql.Identifier(name)
+        try:
+            async with await psycopg.AsyncConnection.connect(
+                scratch_url, autocommit=True
+            ) as connection:
+                await connection.execute(
+                    (Path(__file__).parents[2] / "sql/schema/current.sql").read_text()
                 )
+            yield scratch_url
+        finally:
+            await drop_scratch_database(admin, name)
+
+
+async def drop_scratch_database(admin: psycopg.AsyncConnection[Any], name: str) -> None:
+    """Drop without ``WITH (FORCE)``, which the test role may not use while autovacuum runs.
+
+    Terminate only the sessions of this role, then try again while other sessions end.
+    """
+    for attempt in range(1, SCRATCH_DROP_ATTEMPTS + 1):
+        await admin.execute(
+            "SELECT pg_terminate_backend(pid) FROM pg_stat_activity "
+            "WHERE datname = %s AND usename = current_user AND pid <> pg_backend_pid()",
+            (name,),
+        )
+        try:
+            await admin.execute(
+                psycopg.sql.SQL("DROP DATABASE IF EXISTS {}").format(psycopg.sql.Identifier(name))
             )
+            return
+        except psycopg.errors.ObjectInUse:
+            if attempt == SCRATCH_DROP_ATTEMPTS:
+                raise
+        await asyncio.sleep(0.1)
+
+
+async def main() -> None:
+    async with scratch_database(os.environ["DATABASE_URL_TEST"]) as scratch_url:
+        await demo(scratch_url)
 
 
 if __name__ == "__main__":

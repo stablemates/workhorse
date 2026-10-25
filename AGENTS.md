@@ -218,7 +218,8 @@ database a checkout owns and every database a session still holds open. It also 
 template of each worktree's current schema. It skips a template that a test harness copies at that
 time, and each scratch database or template of a test process that still runs. Each SDK harness
 holds a shared advisory lock on the name of its scratch database from creation to drop, on a session
-of the `postgres` database. That session ends with the process, so the sweep can drop the
+of the `postgres` database. The release package checks and the PydanticAI example hold the same
+lock on their scratch databases. That session ends with the process, so the sweep can drop the
 databases that a stopped process left. A .NET class database is the exception: its lease ends with
 its class, because no test uses it after that. The run drops it at its end, or the sweep drops it
 earlier.

@@ -47,9 +47,9 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { parseArgs } from "node:util";
 import { inflateRawSync } from "node:zlib";
-import { Client } from "pg";
-import { dropLocalDatabase } from "../typescript/core/src/drop-local-database.js";
+import type { Client } from "pg";
 import { tagVersion } from "./check-jvm-release.js";
+import { withReleaseScratchDatabase } from "./release-scratch-database.js";
 
 const root = path.resolve(import.meta.dirname, "..");
 const dotnetDirectory = path.join(root, "dotnet");
@@ -378,33 +378,7 @@ async function withScratchDatabase(
   use: (scratchUrl: string, database: Client) => Promise<void>,
 ): Promise<void> {
   const source = decodeURIComponent(new URL(sourceUrl).pathname.slice(1));
-  if (!source.includes("test")) throw new Error(`${source} is not a test database`);
-  const scratch = scratchDatabaseName(source, process.pid);
-  const scratchUrl = new URL(sourceUrl);
-  scratchUrl.pathname = `/${scratch}`;
-
-  const admin = new Client({ connectionString: sourceUrl });
-  await admin.connect();
-  try {
-    await dropLocalDatabase(admin, scratch);
-    await admin.query(`CREATE DATABASE "${scratch.replaceAll('"', '""')}"`);
-    try {
-      const database = new Client({ connectionString: scratchUrl.toString() });
-      await database.connect();
-      try {
-        await database.query(
-          await readFile(path.join(root, "sql", "schema", "current.sql"), "utf8"),
-        );
-        await use(scratchUrl.toString(), database);
-      } finally {
-        await database.end();
-      }
-    } finally {
-      await dropLocalDatabase(admin, scratch);
-    }
-  } finally {
-    await admin.end();
-  }
+  await withReleaseScratchDatabase(sourceUrl, scratchDatabaseName(source, process.pid), use);
 }
 
 /** Reads back the task the consumer reports, and refuses it unless its handler echoed the payload. */
