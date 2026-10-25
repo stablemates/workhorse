@@ -195,6 +195,7 @@ export async function verifyDashboardConformanceFixtures(
  * Require the fixtures to exercise the whole procedure surface: a successful exchange for every
  * procedure, plus the cross-origin rejection and read-only FORBIDDEN behavior for every mutation,
  * at least one exchange for each error envelope status the contract names, and a refused host.
+ * A read must also be refused for a foreign Origin and served without an Origin header (SM-1675).
  */
 function assertConformanceCoverage(
   fixtures: DashboardConformanceFixtures,
@@ -205,6 +206,8 @@ function assertConformanceCoverage(
   const readOnlyForbidden = new Set<string>();
   const errorStatuses = new Set<number>();
   let foreignHostRefused = false;
+  let crossOriginReadRefused = false;
+  let originlessReadServed = false;
 
   for (const scenario of fixtures.scenarios) {
     for (const exchange of scenario.exchanges ?? []) {
@@ -213,6 +216,13 @@ function assertConformanceCoverage(
       const status = exchange.expect.status;
       if (status >= 400) errorStatuses.add(status);
       if (status === 421 && exchange.host === "foreign") foreignHostRefused = true;
+      const read = manifest.procedures[exchange.procedure]?.mutation === false;
+      if (read && mode === "writable" && origin === "cross" && status === 403) {
+        crossOriginReadRefused = true;
+      }
+      if (read && mode === "writable" && origin === "none" && status < 300) {
+        originlessReadServed = true;
+      }
       if (status < 300 && mode === "writable" && origin === "same") {
         succeeded.add(exchange.procedure);
       }
@@ -239,6 +249,9 @@ function assertConformanceCoverage(
     if (!errorStatuses.has(status)) missing.push(`no exchange covers status ${status}`);
   }
   if (!foreignHostRefused) missing.push("no exchange refuses a foreign host with status 421");
+  if (!crossOriginReadRefused)
+    missing.push("no exchange refuses a cross-origin read with status 403");
+  if (!originlessReadServed) missing.push("no exchange serves a read without an Origin header");
   if (missing.length > 0) {
     throw new Error(`Dashboard conformance fixtures lack coverage:\n${missing.join("\n")}`);
   }

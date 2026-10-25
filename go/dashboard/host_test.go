@@ -104,12 +104,119 @@ func TestHandlerRejectsCrossOriginMutation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	request := httptest.NewRequest(http.MethodPost, "https://example.test/workhorse/rpc/dashboard/purgeQueue", io.NopCloser(strings.NewReader(`{"json":{"queue":"default","audit":{"actor":"fake","reason":"x","requestId":"r"}}}`)))
-	request.Header.Set("Origin", "https://attacker.test")
-	response := httptest.NewRecorder()
-	handler.ServeHTTP(response, request)
-	if response.Code != http.StatusForbidden || !strings.Contains(response.Body.String(), "same-origin") {
-		t.Fatalf("response = %d %s", response.Code, response.Body.String())
+	// A relative Origin such as "null" must not resolve against the request URL.
+	for _, origin := range []string{"https://attacker.test", "null", "not a url"} {
+		request := httptest.NewRequest(http.MethodPost, "https://example.test/workhorse/rpc/dashboard/purgeQueue", io.NopCloser(strings.NewReader(`{"json":{"queue":"default","audit":{"actor":"fake","reason":"x","requestId":"r"}}}`)))
+		request.Header.Set("Origin", origin)
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, request)
+		if response.Code != http.StatusForbidden || !strings.Contains(response.Body.String(), "same-origin mutation") {
+			t.Fatalf("Origin %q: response = %d %s", origin, response.Code, response.Body.String())
+		}
+	}
+}
+
+// A host CORS policy with credentials would let a foreign page read these responses.
+func TestHandlerRejectsCrossOriginRead(t *testing.T) {
+	handler := testHandler(t, func(*http.Request) Authorization {
+		return Authorization{Principal: &Principal{Actor: "operator@example.test"}}
+	})
+	reads := []struct{ method, path string }{
+		{http.MethodGet, "/workhorse"},
+		{http.MethodGet, "/workhorse/tasks"},
+		{http.MethodGet, "/workhorse/assets/index.js"},
+		{http.MethodPost, "/workhorse/rpc/dashboard/meta"},
+	}
+	for _, read := range reads {
+		for _, origin := range []string{"https://attacker.test", "null", "not a url", ""} {
+			request := httptest.NewRequest(read.method, "https://example.test"+read.path, strings.NewReader(`{"json":null}`))
+			request.Header.Set("Origin", origin)
+			response := httptest.NewRecorder()
+			handler.ServeHTTP(response, request)
+			if response.Code != http.StatusForbidden || strings.TrimSpace(response.Body.String()) != `{"error":"A same-origin request is required"}` {
+				t.Fatalf("%s %s with Origin %q = %d %s", read.method, read.path, origin, response.Code, response.Body.String())
+			}
+		}
+	}
+}
+
+func TestHandlerComparesTheOriginWithoutLetterCaseOrDefaultPort(t *testing.T) {
+	handler := testHandler(t, func(*http.Request) Authorization {
+		return Authorization{Principal: &Principal{Actor: "operator@example.test"}}
+	})
+	cases := map[string]int{
+		"https://example.test":      http.StatusOK,
+		"HTTPS://example.test":      http.StatusOK,
+		"https://example.test/":     http.StatusForbidden,
+		"https://user@example.test": http.StatusForbidden,
+		"https://example.test?x=1":  http.StatusForbidden,
+		"https://example.test:8443": http.StatusForbidden,
+		"http://example.test":       http.StatusForbidden,
+	}
+	for origin, want := range cases {
+		request := httptest.NewRequest(http.MethodGet, "https://example.test/workhorse/tasks", nil)
+		request.Host = "EXAMPLE.test:443"
+		request.Header.Set("Origin", origin)
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, request)
+		if response.Code != want {
+			t.Fatalf("Origin %q = %d, want %d", origin, response.Code, want)
+		}
+	}
+}
+
+// Two Origin headers name no single origin, so a foreign second value cannot hide behind the first.
+func TestHandlerRejectsTwoOriginHeaders(t *testing.T) {
+	handler, err := newHandler(HandlerOptions{
+		Executor:  rejectingExecutor{},
+		Authorize: func(*http.Request) Authorization { return Authorization{Principal: &Principal{Actor: "trusted"}} },
+		Procedures: map[string]Procedure{
+			"meta":       func(context.Context, any, string) (any, error) { return map[string]any{"environment": "test"}, nil },
+			"purgeQueue": func(context.Context, any, string) (any, error) { return map[string]any{"deletedCount": 1}, nil },
+		},
+	}, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{"/workhorse/tasks", "/workhorse/rpc/dashboard/meta", "/workhorse/rpc/dashboard/purgeQueue"} {
+		method := http.MethodPost
+		if path == "/workhorse/tasks" {
+			method = http.MethodGet
+		}
+		request := httptest.NewRequest(method, "https://example.test"+path, strings.NewReader(`{"json":{"queue":"default","audit":{"actor":"fake","reason":"x","requestId":"r"}}}`))
+		request.Header.Add("Origin", "https://example.test")
+		request.Header.Add("Origin", "https://attacker.test")
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, request)
+		if response.Code != http.StatusForbidden {
+			t.Fatalf("%s = %d %s", path, response.Code, response.Body.String())
+		}
+	}
+}
+
+func TestHandlerServesAReadWithoutOriginOrFromTheSameOrigin(t *testing.T) {
+	handler := testHandler(t, func(*http.Request) Authorization {
+		return Authorization{Principal: &Principal{Actor: "operator@example.test"}}
+	})
+	for _, origin := range []string{"", "https://example.test"} {
+		send := func(method, path string) *httptest.ResponseRecorder {
+			request := httptest.NewRequest(method, "https://example.test"+path, strings.NewReader(`{"json":null}`))
+			if origin != "" {
+				request.Header.Set("Origin", origin)
+			}
+			response := httptest.NewRecorder()
+			handler.ServeHTTP(response, request)
+			return response
+		}
+		if response := send(http.MethodGet, "/workhorse"); response.Code != http.StatusFound {
+			t.Fatalf("redirect with Origin %q = %d", origin, response.Code)
+		}
+		if response := send(http.MethodGet, "/workhorse/tasks"); response.Code != http.StatusOK {
+			t.Fatalf("page with Origin %q = %d %s", origin, response.Code, response.Body.String())
+		}
+		if response := send(http.MethodPost, "/workhorse/rpc/dashboard/meta"); response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"environment":"test"`) {
+			t.Fatalf("read with Origin %q = %d %s", origin, response.Code, response.Body.String())
+		}
 	}
 }
 

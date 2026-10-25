@@ -18,7 +18,7 @@ import type { DashboardMaintenanceLoopCadences } from "../wire.js";
 import { dashboardAssetsDirectory } from "./assets.js";
 import { createSingleAdminAuthentication } from "./authentication.js";
 import { renderDashboardHtml } from "./html.js";
-import { rejectCrossOriginMutation } from "./same-origin.js";
+import { rejectCrossOriginMutation, rejectCrossOriginRead } from "./same-origin.js";
 import { dashboardRouter, isDashboardMutation } from "./router.js";
 import { createDashboardQueueHealthReader, type DashboardQueueHealthReader } from "./read-model.js";
 import { boundedQueryable, DASHBOARD_STATEMENT_TIMEOUT_MS, dashboardDatabase } from "./sql.js";
@@ -628,6 +628,9 @@ export function createDashboardHost(options: DashboardHostOptions): DashboardHos
           : (options.auditActor ?? "dashboard");
 
       if (!workspace) {
+        // The redirect names the default workspace, so a foreign page must not read it either.
+        const rejection = rejectCrossOriginRead(request);
+        if (rejection) return rejection;
         if (pathname === (path || "/") || pathname === `${path}/`) {
           // A relative Location keeps the redirect correct behind proxies that rewrite the host
           // or terminate TLS, which an absolute URL built from the inbound request would not.
@@ -672,12 +675,12 @@ export function createDashboardHost(options: DashboardHostOptions): DashboardHos
         // The oRPC matcher ignores the method, and the demo's operator throttles count only POST
         // as a mutation, so any other method must be refused before it can reach a procedure.
         if (request.method !== "POST") return methodNotSupported();
+        const rejection = isDashboardMutation(procedure)
+          ? rejectCrossOriginMutation(request)
+          : rejectCrossOriginRead(request);
+        if (rejection) return rejection;
         if (Number(request.headers.get("content-length")) > MAX_RPC_BODY_BYTES) {
           return payloadTooLarge();
-        }
-        if (isDashboardMutation(procedure)) {
-          const rejection = rejectCrossOriginMutation(request);
-          if (rejection) return rejection;
         }
         const startedAt = performance.now();
         const { response } = await rpc.handle(request, {
@@ -705,6 +708,9 @@ export function createDashboardHost(options: DashboardHostOptions): DashboardHos
         logRpcRequest(procedure, performance.now() - startedAt, response.status, workspace.name);
         return compressRpcResponse(response, request);
       }
+
+      const rejection = rejectCrossOriginRead(request);
+      if (rejection) return rejection;
 
       if (pathname.startsWith(`${basePath}/assets/`)) {
         return staticAssets.serve(pathname.slice(`${basePath}/`.length), request);

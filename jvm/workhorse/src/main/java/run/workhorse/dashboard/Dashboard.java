@@ -18,6 +18,7 @@ import java.nio.charset.CodingErrorAction;
 import java.nio.charset.StandardCharsets;
 import java.sql.Connection;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
@@ -226,13 +227,16 @@ public final class Dashboard implements Filter {
       return refusal;
     }
 
+    String rpcPrefix = basePath + "/rpc/dashboard/";
+    if (!path.startsWith(rpcPrefix) && crossOriginRead(request)) {
+      return json(403, Map.of("error", "A same-origin request is required"));
+    }
     if (path.equals(basePath) || path.equals(basePath + "/")) {
       return new Reply(302, Map.of("Location", context + basePath + "/tasks"), new byte[0]);
     }
     if (path.startsWith(basePath + "/assets/")) {
       return asset(path.substring(basePath.length() + 1));
     }
-    String rpcPrefix = basePath + "/rpc/dashboard/";
     if (path.startsWith(rpcPrefix)) {
       return rpc(request, path.substring(rpcPrefix.length()), actor);
     }
@@ -276,6 +280,9 @@ public final class Dashboard implements Filter {
   private Reply rpc(HttpServletRequest request, String procedure, String actor) throws IOException {
     if (!"POST".equals(request.getMethod())) {
       return rpcError(405, "METHOD_NOT_SUPPORTED", "Method Not Supported", null);
+    }
+    if (!MUTATIONS.contains(procedure) && crossOriginRead(request)) {
+      return json(403, Map.of("error", "A same-origin request is required"));
     }
     if (MUTATIONS.contains(procedure)) {
       if (!sameOrigin(request)) {
@@ -439,7 +446,20 @@ public final class Dashboard implements Filter {
     }
   }
 
+  /**
+   * Whether the {@code Origin} header names another origin. A browser sends {@code Origin} on every
+   * cross-origin fetch, so a host CORS policy cannot expose a read to a foreign page. A top-level
+   * navigation sends none.
+   */
+  private boolean crossOriginRead(HttpServletRequest request) {
+    return request.getHeader("Origin") != null && !sameOrigin(request);
+  }
+
   private boolean sameOrigin(HttpServletRequest request) {
+    // Two Origin headers name no single origin, so neither one can pass.
+    if (Collections.list(request.getHeaders("Origin")).size() != 1) {
+      return false;
+    }
     String origin = request.getHeader("Origin");
     if (origin == null) {
       return false;
@@ -455,14 +475,19 @@ public final class Dashboard implements Filter {
     if (scheme == null || host == null || host.isEmpty()) {
       return false;
     }
-    String rest =
-        origin.startsWith(scheme + "://") ? origin.substring(scheme.length() + 3) : origin;
-    String netloc = rest.split("[/?#]", 2)[0];
-    return (scheme + "://" + netloc)
+    // An origin is a scheme and an authority, with no path, query, fragment, or user.
+    if (!origin.startsWith(scheme + "://")) {
+      return false;
+    }
+    String netloc = origin.substring(scheme.length() + 3);
+    if (netloc.isEmpty() || netloc.matches(".*[/?#@].*")) {
+      return false;
+    }
+    // Letter case and a default port do not change an origin.
+    return canonicalHost(netloc, scheme.toLowerCase(Locale.ROOT))
         .equals(
-            request.getScheme()
-                + "://"
-                + Objects.requireNonNullElse(request.getHeader("Host"), ""));
+            canonicalHost(
+                Objects.requireNonNullElse(request.getHeader("Host"), ""), request.getScheme()));
   }
 
   private Reply application(String context, String actor) {

@@ -53,3 +53,31 @@ embed, unchanged from ADR 0023.
   contract changes with review, not silent regeneration.
 - Python and Go embedded backends ship only when the shared conformance runner proves every
   procedure, error envelope, cross-origin rejection, and read-only mutation rejection.
+
+## Amendment: every backend refuses a cross-origin read (2026-10-25)
+
+SM-1675 records this amendment. The decision text does not change.
+
+Each backend is a handler that the host mounts in its own middleware stack. A host CORS policy can
+add `Access-Control-Allow-Origin` and `Access-Control-Allow-Credentials` to each dashboard
+response. Then a page on another origin can read task data, payloads included, with the
+operator's cookies. Before this amendment, only the .NET backend (SM-1623) refused such a read.
+
+1. Every backend refuses a page, an asset, or a read procedure whose `Origin` header names another
+   origin. It answers 403 with `{"error":"A same-origin request is required"}`, after
+   authorization and the schema compatibility check. An `Origin` that does not parse, such as
+   `null`, also gets this answer.
+2. A request without `Origin` passes, because a top-level navigation sends none. A same-origin
+   request passes.
+3. A mutation keeps its own rule: it needs a same-origin `Origin`, and a missing one also fails.
+4. Each backend uses the comparison of its mutation check. It does not add a second comparison.
+5. The `cross-origin-read` conformance scenario holds the rule for read procedures in every
+   backend, and the verifier requires it. The unit tests of each backend hold it for pages and
+   assets, because a conformance exchange posts only an RPC envelope.
+
+Rejected options:
+
+- Refuse only where a host CORS policy can reach the mount. Each framework can wrap the mount, so
+  the protection would then depend on the current behavior of each framework.
+- Record the risk in the documentation only. A host CORS policy with credentials would then expose
+  task data, payloads included.

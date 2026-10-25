@@ -210,6 +210,35 @@ RSpec.describe W::Dashboard do
       expect(rpc(dashboard, "setQueuePaused", {}, origin: nil)[0]).to eq(403)
     end
 
+    # A host CORS policy with credentials would let a foreign page read these responses.
+    it "refuses a page, an asset, or a read whose Origin names another origin" do
+      ["http://attacker.test", "null", "not a url", ""].each do |origin|
+        ["/workhorse", "/workhorse/tasks", "/workhorse/assets/index.js"].each do |path|
+          status, _, chunks = dashboard.call(env_for(path, origin: origin))
+          expect([status, JSON.parse(chunks.join)]).to eq([403, {"error" => "A same-origin request is required"}])
+        end
+        expect(rpc(dashboard, "meta", nil, origin: origin)).to eq([403, {"error" => "A same-origin request is required"}])
+      end
+    end
+
+    it "compares the Origin without letter case or the default port, but refuses a path or a user" do
+      ["http://dashboard.test", "HTTP://dashboard.test"].each do |origin|
+        expect(dashboard.call(env_for("/workhorse/tasks", origin: origin, host: "DASHBOARD.test:80"))[0]).to eq(200)
+      end
+      ["http://dashboard.test/", "http://user@dashboard.test", "http://dashboard.test, http://attacker.test"].each do |origin|
+        expect(dashboard.call(env_for("/workhorse/tasks", origin: origin))[0]).to eq(403)
+      end
+    end
+
+    it "serves a page and a read without Origin or from the same origin" do
+      [nil, :same].each do |origin|
+        expect(dashboard.call(env_for("/workhorse", origin: origin))[0]).to eq(302)
+        expect(dashboard.call(env_for("/workhorse/tasks", origin: origin))[0]).to eq(200)
+        status, body = rpc(dashboard(environment: "production"), "meta", nil, origin: origin)
+        expect([status, body]).to eq([200, {"json" => {"environment" => "production"}}])
+      end
+    end
+
     it "refuses a mutation on a read-only dashboard" do
       status, body = rpc(dashboard(read_only: true), "setQueuePaused",
         {"queue" => "mail", "paused" => true, "audit" => audit})

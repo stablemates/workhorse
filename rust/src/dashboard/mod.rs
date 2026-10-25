@@ -335,6 +335,10 @@ impl<E: Executor> Host<E> {
             return compatibility_failure(&error);
         }
 
+        let rpc = path.starts_with(&format!("{}/rpc/dashboard/", self.base_path));
+        if !rpc && cross_origin_read(&parts, scheme, host) {
+            return cross_origin_refusal();
+        }
         let mount_root = if self.base_path.is_empty() { "/" } else { &self.base_path };
         if path == mount_root {
             let mut response = http::Response::new(Full::default());
@@ -389,8 +393,13 @@ impl<E: Executor> Host<E> {
         if request.parts.method != Method::POST {
             return rpc_error(RpcError::new(405, "METHOD_NOT_SUPPORTED", "Method Not Supported"));
         }
+        if !MUTATIONS.contains(&name)
+            && cross_origin_read(request.parts, request.scheme, request.host)
+        {
+            return cross_origin_refusal();
+        }
         if MUTATIONS.contains(&name) {
-            if !same_origin(&request) {
+            if !same_origin(request.parts, request.scheme, request.host) {
                 let error = json!({ "error": "A same-origin mutation request is required" });
                 return json_response(403, &error);
             }
@@ -570,17 +579,39 @@ fn validate_input(name: &str, input: &Value) -> Result<(), String> {
 }
 
 /// A mutation's `Origin` must name this request's scheme and host.
-fn same_origin(request: &RpcRequest<'_>) -> bool {
-    let origin = request.parts.headers.get(ORIGIN).and_then(|value| value.to_str().ok());
-    let Some(origin) = origin.and_then(|origin| origin.parse::<http::Uri>().ok()) else {
+fn same_origin(parts: &http::request::Parts, scheme: &str, host: &str) -> bool {
+    // Two `Origin` headers name no single origin, so neither one can pass.
+    if parts.headers.get_all(ORIGIN).iter().count() != 1 {
+        return false;
+    }
+    let Some(raw) = parts.headers.get(ORIGIN).and_then(|value| value.to_str().ok()) else {
+        return false;
+    };
+    let Ok(origin) = raw.parse::<http::Uri>() else {
         return false;
     };
     match (origin.scheme_str(), origin.authority()) {
-        (Some(scheme), Some(authority)) => {
-            scheme == request.scheme && authority.as_str() == request.host
+        // An origin is a scheme and an authority, with no path, query, fragment, or user.
+        (Some(origin_scheme), Some(authority))
+            if raw.eq_ignore_ascii_case(&format!("{origin_scheme}://{authority}"))
+                && !authority.as_str().contains('@') =>
+        {
+            // Letter case and a default port do not change an origin.
+            canonical_host(authority.as_str(), &origin_scheme.to_ascii_lowercase())
+                == canonical_host(host, scheme)
         }
         _ => false,
     }
+}
+
+/// A browser sends `Origin` on every cross-origin fetch, so a host CORS policy cannot expose a
+/// read to a foreign page. A top-level navigation sends none.
+fn cross_origin_read(parts: &http::request::Parts, scheme: &str, host: &str) -> bool {
+    parts.headers.contains_key(ORIGIN) && !same_origin(parts, scheme, host)
+}
+
+fn cross_origin_refusal() -> Response {
+    json_response(403, &json!({ "error": "A same-origin request is required" }))
 }
 
 fn asset(name: &str) -> Response {

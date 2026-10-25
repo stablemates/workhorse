@@ -264,8 +264,78 @@ async fn a_mutation_requires_the_same_origin() {
         assert_eq!(status, StatusCode::FORBIDDEN, "{origin}");
         assert_eq!(body, json!({ "error": "A same-origin mutation request is required" }));
     }
+    let mut doubled = mutation(uri, "https://example.test", input.clone());
+    doubled.headers_mut().append(header::ORIGIN, "https://attacker.test".parse().unwrap());
+    let (status, _) = send_json(dashboard.clone(), doubled).await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "a mutation with two Origin headers");
     let (status, _) = send_json(dashboard, request("POST", uri, input)).await;
     assert_eq!(status, StatusCode::FORBIDDEN, "a mutation without an Origin header");
+}
+
+/// A host CORS policy with credentials would let a foreign page read these responses.
+#[tokio::test]
+async fn a_page_an_asset_or_a_read_requires_the_same_origin_when_it_names_one() {
+    let Some(database) = support::scratch_database("dashboard_http_read_origin").await else {
+        return;
+    };
+    let mut options = options(pool(database.url()), "operator");
+    reporting_meta(&mut options);
+    let dashboard = dashboard::handler(options).unwrap();
+    let refusal = json!({ "error": "A same-origin request is required" });
+    let base = "https://example.test/workhorse";
+    for origin in ["https://attacker.test", "null", "not a url", ""] {
+        for path in ["", "/tasks", "/assets/index.js"] {
+            let mut request = request("GET", &format!("{base}{path}"), Value::Null);
+            request.headers_mut().insert(header::ORIGIN, origin.parse().unwrap());
+            let (status, body) = send_json(dashboard.clone(), request).await;
+            assert_eq!((status, body), (StatusCode::FORBIDDEN, refusal.clone()), "{path} {origin}");
+        }
+        let read = mutation(&format!("{base}/rpc/dashboard/meta"), origin, json!({}));
+        let (status, body) = send_json(dashboard.clone(), read).await;
+        assert_eq!((status, body), (StatusCode::FORBIDDEN, refusal.clone()), "meta {origin}");
+    }
+
+    // Letter case and a default port do not change an origin, but a path or a user does.
+    for (origin, want) in [
+        ("https://example.test", StatusCode::OK),
+        ("HTTPS://example.test", StatusCode::OK),
+        ("https://example.test/", StatusCode::FORBIDDEN),
+        ("https://user@example.test", StatusCode::FORBIDDEN),
+    ] {
+        let mut request = request("GET", &format!("{base}/tasks"), Value::Null);
+        request.headers_mut().insert(header::HOST, "EXAMPLE.test:443".parse().unwrap());
+        request.headers_mut().insert(header::ORIGIN, origin.parse().unwrap());
+        let (status, _) = send(dashboard.clone(), request).await;
+        assert_eq!(status, want, "{origin}");
+    }
+
+    // Two Origin headers name no single origin, so a foreign second value cannot hide.
+    for (method, path) in [("GET", "/tasks"), ("POST", "/rpc/dashboard/meta")] {
+        let mut request = request(method, &format!("{base}{path}"), json!({}));
+        request.headers_mut().append(header::ORIGIN, "https://example.test".parse().unwrap());
+        request.headers_mut().append(header::ORIGIN, "https://attacker.test".parse().unwrap());
+        let (status, _) = send(dashboard.clone(), request).await;
+        assert_eq!(status, StatusCode::FORBIDDEN, "{path} with two Origin headers");
+    }
+
+    // A navigation sends no Origin, and a same-origin fetch names this origin.
+    for origin in [None, Some("https://example.test")] {
+        let send_with = |method: &str, path: &str| {
+            let mut request = request(method, &format!("{base}{path}"), json!({}));
+            if let Some(origin) = origin {
+                request.headers_mut().insert(header::ORIGIN, origin.parse().unwrap());
+            }
+            request
+        };
+        let (status, _) = send(dashboard.clone(), send_with("GET", "")).await;
+        assert_eq!(status, StatusCode::FOUND, "{origin:?}");
+        let (status, _) = send(dashboard.clone(), send_with("GET", "/tasks")).await;
+        assert_eq!(status, StatusCode::OK, "{origin:?}");
+        let read = send_with("POST", "/rpc/dashboard/meta");
+        let (status, body) = send_json(dashboard.clone(), read).await;
+        assert_eq!(status, StatusCode::OK, "{origin:?}");
+        assert_eq!(body["json"]["environment"], "test");
+    }
 }
 
 #[tokio::test]

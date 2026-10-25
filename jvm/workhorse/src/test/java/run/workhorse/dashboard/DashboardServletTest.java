@@ -11,6 +11,7 @@ import java.sql.PreparedStatement;
 import java.sql.SQLException;
 import java.time.Duration;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.CopyOnWriteArrayList;
@@ -84,6 +85,85 @@ class DashboardServletTest {
       assertEquals("public, max-age=31536000, immutable", response.header("Cache-Control"));
       assertTrue(response.header("Content-Type").startsWith("text/javascript"));
       assertEquals(404, server.get("/workhorse/assets/missing.js").status());
+    }
+  }
+
+  /** A host CORS policy with credentials would let a foreign page read these responses. */
+  @Test
+  void refusesAPageAnAssetOrAReadWhoseOriginNamesAnotherOrigin() throws Exception {
+    String asset =
+        Bundle.files().keySet().stream()
+            .filter(name -> name.startsWith("app/assets/") && name.endsWith(".js"))
+            .findFirst()
+            .orElseThrow()
+            .substring("app/".length());
+    try (TestServer server = new TestServer("", builder().build())) {
+      String host = "localhost:" + server.port;
+      for (String origin : List.of("https://attacker.test", "null", "not a url", "")) {
+        for (String path : List.of("/workhorse", "/workhorse/tasks", "/workhorse/" + asset)) {
+          TestServer.Response response =
+              server.request("GET", path, Map.of("Host", host, "Origin", origin), new byte[0]);
+          assertEquals(403, response.status(), path + " " + origin);
+          assertEquals("{\"error\":\"A same-origin request is required\"}", response.text());
+        }
+        TestServer.Response read =
+            server.request(
+                "POST",
+                "/workhorse/rpc/dashboard/meta",
+                Map.of("Host", host, "Origin", origin, "Content-Type", "application/json"),
+                "{\"json\":null}".getBytes(StandardCharsets.UTF_8));
+        assertEquals(403, read.status(), origin);
+        assertEquals("{\"error\":\"A same-origin request is required\"}", read.text());
+      }
+
+      // Two Origin headers name no single origin, so a foreign second value cannot hide. The map
+      // keys differ in case, so the request carries two header lines.
+      Map<String, String> doubled =
+          Map.of(
+              "Host",
+              host,
+              "Origin",
+              "http://" + host,
+              "origin",
+              "https://attacker.test",
+              "Content-Type",
+              "application/json");
+      assertEquals(403, server.request("GET", "/workhorse/tasks", doubled, new byte[0]).status());
+      for (String procedure : List.of("meta", "purgeQueue")) {
+        TestServer.Response response =
+            server.request(
+                "POST",
+                "/workhorse/rpc/dashboard/" + procedure,
+                doubled,
+                "{\"json\":null}".getBytes(StandardCharsets.UTF_8));
+        assertEquals(403, response.status(), procedure);
+      }
+
+      // Letter case does not change an origin, but a path or a user does.
+      Map<String, Integer> origins =
+          Map.of(
+              "http://" + host, 200,
+              "http://" + host + "/", 403,
+              "http://user@" + host, 403);
+      for (Map.Entry<String, Integer> origin : origins.entrySet()) {
+        Map<String, String> headers =
+            Map.of("Host", host.toUpperCase(Locale.ROOT), "Origin", origin.getKey());
+        assertEquals(
+            origin.getValue(),
+            server.request("GET", "/workhorse/tasks", headers, new byte[0]).status(),
+            origin.getKey());
+      }
+
+      // A navigation sends no Origin, and a same-origin fetch names this origin.
+      for (Map<String, String> headers :
+          List.of(Map.of("Host", host), Map.of("Host", host, "Origin", "http://" + host))) {
+        assertEquals(302, server.request("GET", "/workhorse", headers, new byte[0]).status());
+        assertEquals(200, server.request("GET", "/workhorse/tasks", headers, new byte[0]).status());
+        assertEquals(
+            200, server.request("GET", "/workhorse/" + asset, headers, new byte[0]).status());
+      }
+      TestServer.Response meta = server.post("/workhorse/rpc/dashboard/meta", "{\"json\":null}");
+      assertEquals(200, meta.status(), meta.text());
     }
   }
 

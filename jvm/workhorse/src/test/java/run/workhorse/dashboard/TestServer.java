@@ -53,7 +53,7 @@ final class TestServer implements AutoCloseable {
 
   private final Tomcat tomcat = new Tomcat();
   private final Path baseDirectory;
-  private final int port;
+  final int port;
 
   TestServer(String contextPath, Dashboard dashboard) throws IOException, LifecycleException {
     baseDirectory = Files.createTempDirectory("workhorse-dashboard-tomcat");

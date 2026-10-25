@@ -111,13 +111,66 @@ cannot differ.
 
 1. SQL seed steps put a newly installed schema in a known state.
 2. Golden request/response exchanges cover every procedure, the error envelope, the same-origin
-   mutation rejection, and read-only `FORBIDDEN` behavior.
+   mutation rejection, the cross-origin read refusal, and read-only `FORBIDDEN` behavior.
 
 `scripts/verify-dashboard-conformance.ts` executes the fixtures and enforces that coverage.
 `typescript/dashboard-server/test/conformance.test.ts` binds the TypeScript server as the reference
 implementation that must pass them. `pnpm dashboard-conformance:generate` regenerates the golden
 `expect` blocks from that server. `dashboard/v1/README.md` specifies the fixture format and the
 harness a backend under test must present.
+
+### Cross-origin reads
+
+A host can put a CORS policy in front of a dashboard backend. If that policy allows credentials,
+a page on another origin can read the dashboard with the operator's cookies. Thus every backend
+refuses a read from another origin (ADR 0029, SM-1675).
+
+A browser sends `Origin` on each cross-origin fetch. A top-level navigation sends no `Origin`. Each
+backend applies these rules after authorization and the schema compatibility check:
+
+1. A page, an asset, or the mount redirect with an `Origin` header that does not name the request
+   origin answers 403 with `{"error":"A same-origin request is required"}`. An empty or unparsable
+   `Origin`, such as `null`, gets the same answer. Two `Origin` headers also get it.
+2. A read procedure answers the same 403 for the same `Origin`. This check follows the 405 method
+   check and comes before the 413 body check. A mutation keeps the mutation rule, and its body is
+   `A same-origin mutation request is required`.
+3. A request without `Origin`, or with the request origin, continues.
+
+The TypeScript host with named workspaces also applies rule 1 to the mount redirect and to an
+unknown workspace. It answers both before the schema compatibility check, because neither request
+names a database.
+
+Each backend reuses the comparison of its mutation check:
+
+| Backend    | Read check                                         | Comparison                   |
+| ---------- | -------------------------------------------------- | ---------------------------- |
+| TypeScript | `rejectCrossOriginRead` in `same-origin.ts`        | `isSameOrigin`               |
+| Python     | `DashboardHost._cross_origin_read`                 | `DashboardHost._same_origin` |
+| Go         | `crossOriginRead` in `go/dashboard/host.go`        | `sameOrigin`                 |
+| Rust       | `cross_origin_read` in `rust/src/dashboard/mod.rs` | `same_origin`                |
+| Ruby       | `Dashboard#cross_origin_read?`                     | `Dashboard#same_origin?`     |
+| JVM        | `Dashboard.crossOriginRead`                        | `Dashboard.sameOrigin`       |
+| .NET       | `DashboardHost.ReplyAsync` and `RpcAsync`          | `DashboardHost.SameOrigin`   |
+
+Each comparison applies the same rules:
+
+1. `Origin` must be a scheme and an authority. A path, a query, a fragment, or user information
+   fails, and so does a trailing `/`.
+2. Letter case and the default port of the scheme do not change the host. The Python, Go, Rust,
+   Ruby, and JVM comparisons use the host canonicalizer of the allowed hosts check.
+3. More than one `Origin` header fails. The Go, Rust, JVM, and .NET comparisons count the headers.
+   The TypeScript, Python, and Ruby hosts receive the values joined by a comma, which fails rule 1.
+
+The Go `sameOrigin` parses `Origin` with `url.Parse`. A relative reference such as `null` thus
+does not resolve against the request URL.
+
+The conformance scenario `cross-origin-read` holds rule 2 and rule 3 for read procedures. Its
+exchanges are `meta-cross-origin`, `tasks-cross-origin`, and `meta-missing-origin`. The unit tests
+of each backend hold rule 1, because a conformance exchange posts only an RPC envelope.
+
+A host behind a proxy that ends TLS must give each backend the scheme that the browser used, as the
+mutation check already requires. Otherwise a module script or a fetch from the dashboard page
+carries an `Origin` that does not match, and the backend refuses it.
 
 ### Python backend
 
@@ -140,7 +193,8 @@ The host handles a request in this order:
 1. A non-empty `allowed_hosts` refuses any other `HTTP_HOST` with 421.
 2. `authorize` runs.
 3. `assert_sync_compatible` runs.
-4. The host rejects cross-origin mutations, before decoding input.
+4. The host refuses a cross-origin read (see [Cross-origin reads](#cross-origin-reads)). It rejects
+   a cross-origin mutation, before decoding input.
 5. It validates through `dashboard_v1.validate_input`.
 6. It overwrites `audit.actor`.
 7. It calls the private `workhorse.dashboard._backend.DashboardBackend`.
@@ -149,8 +203,8 @@ The backend's `procedures()` implements the database-owned contract procedures t
 dashboard views and lifecycle functions. `previewRetentionPolicy` calls
 `dashboard_retention_preview_v1`, as every host does. The host supplies `enqueueTest` and
 `setSchedulePaused`. The behavior of these two procedures belongs to the embedding runtime.
-`python/tests/test_dashboard_conformance.py` executes all six scenarios and all 81 exchanges
-against both writable and read-only hosts.
+`python/tests/test_dashboard_conformance.py` executes every scenario and every exchange against
+both writable and read-only hosts.
 
 ### Procedure document functions
 
@@ -247,8 +301,9 @@ The filter handles a request that it owns in this order:
 1. A non-empty `allowedHosts` refuses any other `Host` with 421, before `authorize` runs.
 2. `authorize` runs. A `deny()` or a `response` ends the request here.
 3. The schema compatibility check runs. The filter caches only a passing answer.
-4. The filter rejects a mutation that is not same-origin with 403, before it decodes the input. It
-   then rejects a mutation on a read-only host with 403.
+4. The filter refuses a cross-origin read with 403 (see [Cross-origin reads](#cross-origin-reads)).
+   It rejects a mutation that is not same-origin with 403, before it decodes the input. It then
+   rejects a mutation on a read-only host with 403.
 5. It reads at most 2 MiB of request body, and answers 413 for a larger body.
    It answers 400 for a body that is not JSON, or for a number token with more than 1,000
    characters after an optional minus sign. The limit also applies to `signalTask.payload` and
@@ -328,7 +383,7 @@ The backend handles a request under the mount path in this order:
 1. A non-empty `AllowedHosts` refuses any other `Host` with 421, before `Authorize` runs.
 2. `Authorize` runs. A `Deny()` or a `Response` ends the request here.
 3. The schema compatibility check runs. The backend caches only a passing answer.
-4. The backend rejects a cross-origin request with 403. It rejects a mutation that is not
+4. The backend refuses a cross-origin read with 403 (see [Cross-origin reads](#cross-origin-reads)). It rejects a mutation that is not
    same-origin with 403, before it decodes the input, and a mutation on a read-only host with 403.
 5. It reads at most 2 MiB of request body, and answers 413 for a larger body. It answers 400 for a
    body that is not JSON, or for a number token with more than 1,000 characters after an optional
@@ -1892,6 +1947,11 @@ list.
 For every mutation, `rejectCrossOriginMutation` requires an `Origin` header whose parsed origin
 exactly matches the request URL origin. An absent or malformed `Origin` fails with `403`. The
 single-admin logout applies the same check (see [Sessions](#sessions)).
+
+For every other owned request, `rejectCrossOriginRead` refuses an `Origin` header that does not
+name the request URL origin, with `403` and `{"error":"A same-origin request is required"}`. A
+request without `Origin` passes. Both functions use `isSameOrigin`. The single-admin login and
+logout routes answer before this check. See [Cross-origin reads](#cross-origin-reads).
 
 The authenticated actor comes from one of these sources:
 

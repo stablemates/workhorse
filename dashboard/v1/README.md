@@ -135,6 +135,13 @@ reorder authorization behind procedure execution:
    with `{ "error": "A same-origin mutation request is required" }` before the procedure runs.
    This is the dashboard's CSRF protection; it relies on the browser sending `Origin` on
    cross-origin POSTs and assumes cookie-authenticated deployments stay same-origin.
+   Every other owned request (a page, an asset, the mount redirect, or a read procedure) that
+   carries an `Origin` header naming another origin answers 403 with
+   `{ "error": "A same-origin request is required" }`. An empty or unparsable `Origin`, such as
+   `null`, gets the same answer, and the comparison is the one the mutation check uses. A request
+   without `Origin` continues, because a top-level navigation sends none. Thus a host CORS policy
+   that allows credentials cannot let a page on another origin read the dashboard (ADR 0029).
+   For a procedure, this check follows the 405 method check.
 5. **Input validation**, then the procedure.
 
 <picture>
@@ -227,9 +234,14 @@ timestamps in the fixtures are clock-derived and match through `{"$type":
 "timestamp"}`, which hides a format difference; the fixed far-future `run_at` of a task waiting at
 a durable signal is committed literally and does not.
 
-The fixtures must cover every procedure in `manifest.json` with a successful exchange, every
-mutation with both a cross-origin rejection and a read-only `FORBIDDEN` exchange, the 400,
-404, and 405 error envelopes, and a 421 refusal of a foreign host; the verifier fails the run when any of that coverage is missing.
+The fixtures must cover each of these cases. The verifier fails the run when one is missing.
+
+- Every procedure in `manifest.json` has a successful exchange.
+- Every mutation has a cross-origin rejection and a read-only `FORBIDDEN` exchange.
+- An exchange covers each of the 400, 404, and 405 error envelopes.
+- An exchange refuses a foreign host with 421.
+- An exchange refuses a read procedure with a cross-origin `Origin` with 403.
+- A read procedure without `Origin` succeeds.
 
 The `harness` block is part of the contract for the backend under test: authorize every request
 as `authenticatedActor` (the fixtures pin server-assigned attribution to it), report
