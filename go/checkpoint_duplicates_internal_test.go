@@ -27,8 +27,9 @@ type checkpointResult struct {
 	err   error
 }
 
-// startDuplicate calls Checkpoint once the initiator is inside its operation and reports when the
-// duplicate has registered as a waiter on the in-flight entry.
+// startDuplicate calls Checkpoint in a goroutine and returns the channel that receives its result.
+// Call it once the initiator is inside its operation, and use awaitJoiners to wait until the
+// duplicate found the in-flight entry.
 func startDuplicate(handler *HandlerContext, name string) <-chan checkpointResult {
 	result := make(chan checkpointResult, 1)
 	go func() {
@@ -87,8 +88,9 @@ func TestCheckpointPanicReleasesEveryDuplicate(t *testing.T) {
 		startDuplicate(handler, "step"),
 		startDuplicate(handler, "step"),
 	}
-	// Let both duplicates block on the in-flight entry before the operation panics.
-	time.Sleep(100 * time.Millisecond)
+	// Release the operation only after both duplicates found the in-flight entry, so each one
+	// waits for the panic instead of starting a call of its own.
+	awaitJoiners(t, handler, "step", 2)
 	close(release)
 
 	if recovered := <-panicked; recovered != "operation failed" {
@@ -125,8 +127,9 @@ func TestCheckpointDuplicateReturnsWhenTheHandlerContextEnds(t *testing.T) {
 	<-entered
 	requireInFlight(t, handler, "step")
 	duplicate := startDuplicate(handler, "step")
-	// Let the duplicate block on the in-flight entry before the handler context ends.
-	time.Sleep(100 * time.Millisecond)
+	// End the handler context only after the duplicate found the in-flight entry, so the
+	// duplicate waits for the initiator when the context ends.
+	awaitJoiners(t, handler, "step", 1)
 	lost := errors.New("lease lost")
 	cancel(lost)
 
