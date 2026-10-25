@@ -93,10 +93,11 @@ More detail: [Task lifecycle: Batch handlers](../architecture/lifecycle.md#batch
 ## Enqueue ordinary tasks for a batch handler
 
 A producer does not change for a batch handler. The app enqueues one ordinary task for each email.
-The producer cannot see that a batch handler runs the task.
+It enqueues each task on the queue `email`, because the worker reads only that queue. The producer
+cannot see that a batch handler runs the task.
 
 ```ts
-await queue.enqueue("email.send", { to: "person@example.com" });
+await queue.enqueue("email.send", { to: "person@example.com" }, { queue: "email" });
 ```
 
 The worker makes each batch in its own process. A batch never contains tasks from two worker

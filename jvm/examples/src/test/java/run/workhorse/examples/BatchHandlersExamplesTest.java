@@ -3,18 +3,15 @@ package run.workhorse.examples;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-import java.sql.SQLException;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.TimeUnit;
-import javax.sql.DataSource;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 import org.junit.jupiter.api.extension.ExtendWith;
-import run.workhorse.ConnectionSource;
 import run.workhorse.EnqueueOptions;
 import run.workhorse.Queue;
 import run.workhorse.TaskDetail;
@@ -27,8 +24,6 @@ import run.workhorse.testing.ScratchDatabase;
 // Each test creates and drops its own database, which is slow on a loaded host.
 @Timeout(value = 240, unit = TimeUnit.SECONDS)
 class BatchHandlersExamplesTest {
-  private final DataSource dataSource = ExampleDatabase.dataSource();
-  private final Queue queue = new Queue(ConnectionSource.of(dataSource));
   private final List<Integer> requests = new CopyOnWriteArrayList<>();
   private final BatchEmailProvider emailProvider =
       emails -> {
@@ -43,8 +38,6 @@ class BatchHandlersExamplesTest {
         }
         return deliveries;
       };
-  private final BatchHandlersExamples examples =
-      new BatchHandlersExamples(dataSource, queue, emailProvider);
 
   @Test
   void theBatchHandlerSendsTwentySevenTasksInBatchesOfAtMostTwenty() throws Exception {
@@ -82,13 +75,22 @@ class BatchHandlersExamplesTest {
   }
 
   @Test
-  void theProducerEnqueuesAnOrdinaryTask() throws SQLException {
-    int before = ExampleDatabase.tasks("email.send", "to", "person@example.com").size();
-    examples.enqueueEmail();
-    List<UUID> after = ExampleDatabase.tasks("email.send", "to", "person@example.com");
-    assertEquals(before + 1, after.size());
-    TaskDetail task = ExampleDatabase.detail(after.getLast());
-    assertEquals(TaskState.READY, task.state());
-    queue.cancel(task.id(), "docs-example", "the test ends");
+  void theWorkerOfThePageClaimsTheTaskOfTheProducer() throws Exception {
+    // The worker reads only `email`, so the producer must enqueue there. The test has its own
+    // database, because other snippet tests also use `email`.
+    try (IsolatedExampleDatabase database =
+        IsolatedExampleDatabase.create("batch-handlers-producer-java")) {
+      BatchHandlersExamples isolated =
+          new BatchHandlersExamples(database.dataSource(), database.queue(), emailProvider);
+      isolated.enqueueEmail();
+      List<UUID> tasks = database.tasks("email.send", "to", "person@example.com");
+      assertEquals(1, tasks.size());
+      try (Worker worker = isolated.batchWorker()) {
+        worker.start();
+        TaskDetail task = database.awaitTerminal(tasks.getFirst());
+        assertEquals(TaskState.SUCCEEDED, task.state());
+        assertEquals(Map.of("providerId", "msg-person@example.com"), task.result());
+      }
+    }
   }
 }

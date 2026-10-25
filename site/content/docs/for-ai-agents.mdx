@@ -241,9 +241,13 @@ under load, not a deployment failure. Use the deployment command and the startup
 
 **Do not let a handler repeat an external effect.** For example, a handler sends the email and then
 fails. If the send is not in a checkpoint, each retry sends the email again. Put the send in a
-checkpoint. The checkpoint stores the result of the first send, and a later run uses the stored
-result. If a checkpoint does not fit, use an idempotency key on the remote call. You can also use an
-outbox, an inbox, or a compensating action.
+checkpoint. After Workhorse saves the result of the send, a later run uses the stored result and
+skips the send.
+
+A checkpoint does not make the send run exactly once. If the worker stops after the send and before
+Workhorse saves the result, the next attempt sends again. If the provider must send one email only,
+also give the provider a stable idempotency key. You can also use an outbox, an inbox, or a
+compensating action.
 
 ## Integrate one task from enqueue to result
 
@@ -288,7 +292,7 @@ Each example does these steps:
     const worker = new Worker(queue).handle(
       "order.created",
       async (payload: { orderId: string }, context) => {
-        // The send runs once. A replay reuses the recorded receipt.
+        // After Workhorse saves the receipt, a replay reuses it and skips the send.
         const receipt = await context.checkpoint("confirmation-email", () =>
           sendConfirmationEmail(payload.orderId),
         );
@@ -320,7 +324,7 @@ Each example does these steps:
 
 
     def handle_order_created(payload: Any, context: HandlerContext) -> Json:
-        # The send runs once. A replay reuses the recorded receipt.
+        # After Workhorse saves the receipt, a replay reuses it and skips the send.
         receipt = context.checkpoint(
             "confirmation-email",
             lambda: send_confirmation_email(payload["orderId"]),
@@ -432,7 +436,7 @@ Each example does these steps:
     		handler *workhorse.HandlerContext,
     	) (any, error) {
     		orderID := order.OrderID
-    		// The send runs once. A replay reuses the recorded receipt.
+    		// After Workhorse saves the receipt, a replay reuses it and skips the send.
     		receipt, err := handler.Checkpoint("confirmation-email", func() (any, error) {
     			return sendConfirmationEmail(orderID)
     		})
@@ -495,7 +499,7 @@ Each example does these steps:
             Worker::new(pool.clone(), WorkerOptions { polling_only: true, ..Default::default() })?;
         worker.handle("order.created", |payload: Value, context| async move {
             let order_id = payload["orderId"].as_str().unwrap_or_default().to_owned();
-            // The send runs once. A replay reuses the recorded receipt.
+            // After Workhorse saves the receipt, a replay reuses it and skips the send.
             let receipt: String =
                 context.checkpoint("confirmation-email", || send_confirmation_email(&order_id)).await?;
             Ok(json!({ "processedOrderId": order_id, "receipt": receipt }))
@@ -533,7 +537,7 @@ Each example does these steps:
     worker = Stablemates::Workhorse::Worker.new(pool, polling_only: true)
     worker.handle("order.created") do |payload, context|
       order_id = payload.fetch("orderId")
-      # The send runs once. A replay reuses the recorded receipt.
+      # After Workhorse saves the receipt, a replay reuses it and skips the send.
       receipt = context.checkpoint("confirmation-email") { send_confirmation_email(order_id) }
       {"processedOrderId" => order_id, "receipt" => receipt}
     end
@@ -590,7 +594,7 @@ Each example does these steps:
                   Map.class,
                   (context, payload) -> {
                     String orderId = String.valueOf(payload.get("orderId"));
-                    // The send runs once. A replay reuses the recorded receipt.
+                    // After Workhorse saves the receipt, a replay reuses it and skips the send.
                     String receipt =
                         context.checkpoint(
                             "confirmation-email", String.class, () -> sendConfirmationEmail(orderId));
@@ -646,7 +650,7 @@ Each example does these steps:
           pollingOnly = true
           handle<Map<String, Any?>>("order.created") { context, payload ->
             val orderId = payload["orderId"] as String
-            // The send runs once. A replay reuses the recorded receipt.
+            // After Workhorse saves the receipt, a replay reuses it and skips the send.
             val receipt = context.checkpoint("confirmation-email") { sendConfirmationEmail(orderId) }
             mapOf("processedOrderId" to orderId, "receipt" to receipt)
           }

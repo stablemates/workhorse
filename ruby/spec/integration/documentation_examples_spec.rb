@@ -82,7 +82,6 @@ RSpec.describe "Documentation examples against PostgreSQL" do
       later = Time.now + 3600
       expect(DocsExamples.enqueue_basic(queue, id("inv"), later).outcome).to eq(:accepted)
       expect(DocsExamples.enqueue_options(queue, later).outcome).to eq(:accepted)
-      expect(DocsExamples.batch_handlers_enqueue(queue).outcome).to eq(:accepted)
       expect(DocsExamples.priority(queue, id("inv")).outcome).to eq(:accepted)
       expect(DocsExamples.retries(queue, id("acct")).outcome).to eq(:accepted)
       expect(DocsExamples.deadlines(queue, id("quote"), later, id("report"), 30, 3).outcome).to eq(:accepted)
@@ -259,6 +258,19 @@ RSpec.describe "Documentation examples against PostgreSQL" do
 
       expect(task_ids.map { |task_id| status(task_id)["state"] }).to eq(%w[succeeded] * 3)
       expect(task_ids.map { |task_id| result(task_id) }).to eq(payloads)
+    end
+
+    it "claims the task of the batch-handler producer with the batch-handler worker" do
+      # The page's worker reads only the queue `email`, so the producer must enqueue there.
+      subject = W::Worker.new(@pool, queues: ["email"], concurrency: 20, polling_only: true, poll_interval: 0.01,
+        disable_registry: true)
+      DocsExamples.batch_handlers(subject)
+      enqueued = DocsExamples.batch_handlers_enqueue(queue)
+      expect(enqueued.outcome).to eq(:accepted)
+      drain(subject, enqueued.task_id)
+
+      expect(status(enqueued.task_id)["state"]).to eq("succeeded")
+      expect(result(enqueued.task_id)).to eq({"sent" => true})
     end
 
     it "suspends on a durable sleep" do

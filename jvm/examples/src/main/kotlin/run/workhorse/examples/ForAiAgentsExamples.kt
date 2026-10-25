@@ -53,7 +53,7 @@ object ForAiAgentsKotlinExamples {
         pollingOnly = true
         handle<Map<String, Any?>>("order.created") { context, payload ->
           val orderId = payload["orderId"] as String
-          // The send runs once. A replay reuses the recorded receipt.
+          // After Workhorse saves the receipt, a replay reuses it and skips the send.
           val receipt = context.checkpoint("confirmation-email") { sendConfirmationEmail(orderId) }
           mapOf("processedOrderId" to orderId, "receipt" to receipt)
         }
