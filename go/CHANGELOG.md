@@ -10,6 +10,19 @@ adds.
 
 ## Unreleased
 
+### The worker reports the settled cause after PostgreSQL refuses a completion
+
+PostgreSQL refuses a completion write when the deadline or the attempt timeout is due, or when a
+cancellation request waits. The worker then settles that cause. Before this change, the handler
+span, the `workhorse.task.execution_finished` log, and the `workhorse.handler.executions` metric
+recorded `workhorse.handler.outcome=lease_lost` for each cause (SM-1811).
+
+Now the worker records `deadline_exceeded`, `timeout`, or `canceled`. The outcome stays
+`lease_lost` only when the fence moved, or when the lease expired and no cause was due. A completion
+that the worker writes after the stop reports the same outcomes. PostgreSQL can refuse a failure or
+a shutdown release after the lease expired. The worker then also reports the deadline or attempt
+timeout that it settles. The outcome names do not change.
+
 ### The Go client measures signal and human wait values as PostgreSQL does
 
 PostgreSQL limits a signal payload, a human wait context, and a human wait result to 65,536 bytes of
