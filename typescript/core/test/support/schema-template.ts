@@ -58,6 +58,7 @@ export async function copySchemaTemplate(
     await session.query(
       `CREATE DATABASE ${identifier(copy.targetName)} TEMPLATE ${identifier(copy.templateName)}`,
     );
+    await session.query(withoutWalFlushWait(copy.targetName));
   } finally {
     await session.query("SELECT pg_advisory_unlock_shared(hashtextextended($1, 0))", [lockName]);
   }
@@ -94,6 +95,18 @@ async function buildSchemaTemplate(
     await session.query("SELECT pg_advisory_lock_shared(hashtextextended($1, 0))", [lockName]);
     await session.query("SELECT pg_advisory_unlock(hashtextextended($1, 0))", [lockName]);
   }
+}
+
+/**
+ * The statement that lets the commits of a scratch database skip the wait for the WAL flush.
+ *
+ * A host I/O stall can make one flush take seconds, and a lease of a few seconds then lapses
+ * although the worker is correct (SM-1809). Visibility and order do not change. Only a server crash
+ * can lose such a commit, and no test that uses a scratch database restarts PostgreSQL or reads the
+ * WAL. A copy of a template does not take this setting from the template, so each creation sets it.
+ */
+export function withoutWalFlushWait(name: string): string {
+  return `ALTER DATABASE ${identifier(name)} SET synchronous_commit = off`;
 }
 
 async function databaseExists(session: SchemaTemplateSession, name: string): Promise<boolean> {

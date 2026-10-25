@@ -200,6 +200,12 @@ def copy_schema_template(admin: psycopg.Connection, source: SplitResult, target:
             build_schema_template(admin, source, name)
         drop_scratch_database(admin, target)
         admin.execute(f'CREATE DATABASE "{target}" TEMPLATE "{name}"')
+        # A host I/O stall can make one WAL flush take seconds, and a lease of a few seconds then
+        # lapses although the worker is correct (SM-1809). Visibility and order do not change.
+        # Only a server crash can lose such a commit, and no test that uses a scratch database
+        # restarts PostgreSQL or reads the WAL. A copy does not take this setting from the
+        # template, so each copy sets it.
+        admin.execute(f'ALTER DATABASE "{target}" SET synchronous_commit = off')
     finally:
         admin.execute("SELECT pg_advisory_unlock_shared(hashtextextended(%s, 0))", (name,))
 

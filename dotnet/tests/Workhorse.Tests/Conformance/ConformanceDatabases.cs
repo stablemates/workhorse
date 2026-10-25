@@ -35,7 +35,7 @@ internal sealed class ConformanceDatabases(ScratchDatabase scratch)
             builder.CommandTimeout = 300;
         });
         await ExecuteAsync(admin, $"DROP DATABASE IF EXISTS \"{name}\" WITH (FORCE)");
-        await ExecuteAsync(admin, $"CREATE DATABASE \"{name}\"");
+        await ScratchDatabase.CreateDatabaseAsync(admin, name);
         var database = new ConformanceDatabase(scratch, admin, name, configure);
         await ExecuteAsync(database.DataSource, await File.ReadAllTextAsync(Repository.Path("sql/schema/current.sql")));
         return database;

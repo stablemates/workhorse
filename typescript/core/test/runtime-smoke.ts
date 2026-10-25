@@ -34,6 +34,9 @@ const adminDatabase = new Client({ connectionString: testDatabaseUrl });
 await adminDatabase.connect();
 await adminDatabase.query(`DROP DATABASE IF EXISTS "${smokeDatabase}"`);
 await adminDatabase.query(`CREATE DATABASE "${smokeDatabase}"`);
+// A host I/O stall can make one WAL flush take seconds, and the worker then misses its lease
+// (SM-1809). The smoke test does not restart PostgreSQL, so its commits do not wait for the flush.
+await adminDatabase.query(`ALTER DATABASE "${smokeDatabase}" SET synchronous_commit = off`);
 await adminDatabase.end();
 
 const smokeUrl = new URL(testDatabaseUrl);

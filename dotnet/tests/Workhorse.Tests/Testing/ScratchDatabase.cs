@@ -17,6 +17,9 @@ namespace Workhorse.Tests.Testing;
 /// digest, and installs <c>sql/schema/current.sql</c> into it. It drops the database when the test
 /// run ends. <c>pnpm db:sweep</c> recognizes the same name shape if the drop never runs.
 ///
+/// <see cref="CreateDatabaseAsync"/> creates this database and every other .NET scratch database,
+/// so their commits do not wait for the WAL flush (SM-1809).
+///
 /// Without <c>DATABASE_URL_TEST</c> a local run skips each database test with a visible reason.
 /// <c>CI</c> or <c>WORKHORSE_REQUIRE_DATABASE=1</c> turns that skip into a failure.
 /// </remarks>
@@ -95,10 +98,7 @@ public sealed class ScratchDatabase : IAsyncLifetime
         var admin = new NpgsqlConnectionStringBuilder(builder.ConnectionString) { Database = "postgres", Pooling = false };
         _admin = NpgsqlDataSource.Create(admin);
         await DropAsync(_admin, Name).ConfigureAwait(false);
-        await using (var create = _admin.CreateCommand($"CREATE DATABASE {QuoteIdentifier(Name)}"))
-        {
-            await create.ExecuteNonQueryAsync().ConfigureAwait(false);
-        }
+        await CreateDatabaseAsync(_admin, Name).ConfigureAwait(false);
 
         _connectionString = new NpgsqlConnectionStringBuilder(builder.ConnectionString) { Database = Name };
         _dataSource = NpgsqlDataSource.Create(_connectionString);
@@ -138,6 +138,24 @@ public sealed class ScratchDatabase : IAsyncLifetime
         {
             await _admin.DisposeAsync().ConfigureAwait(false);
         }
+    }
+
+    /// <summary>Creates the empty scratch database <paramref name="name"/> on an admin data source.</summary>
+    /// <remarks>
+    /// A scratch database is for tests only, so its commits do not wait for the WAL flush. A host
+    /// I/O stall can make one flush take seconds, and a lease of a few seconds then lapses although
+    /// the worker is correct (SM-1809). Visibility and order do not change. Only a server crash can
+    /// lose such a commit, and no .NET test restarts PostgreSQL or reads the WAL.
+    /// </remarks>
+    public static async Task CreateDatabaseAsync(NpgsqlDataSource admin, string name, CancellationToken cancellationToken = default)
+    {
+        await using (var create = admin.CreateCommand($"CREATE DATABASE {QuoteIdentifier(name)}"))
+        {
+            await create.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+        }
+
+        await using var asynchronous = admin.CreateCommand($"ALTER DATABASE {QuoteIdentifier(name)} SET synchronous_commit = off");
+        await asynchronous.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
     }
 
     private static bool Required() =>

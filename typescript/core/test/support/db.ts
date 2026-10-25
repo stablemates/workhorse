@@ -10,7 +10,7 @@ import {
   localDatabaseUrl,
   namedTestDatabaseUrl,
 } from "../../src/local-database.js";
-import { copySchemaTemplate, schemaTemplateName } from "./schema-template.js";
+import { copySchemaTemplate, schemaTemplateName, withoutWalFlushWait } from "./schema-template.js";
 
 const schemaUrl = new URL("../../../../sql/schema/current.sql", import.meta.url);
 
@@ -218,7 +218,8 @@ export async function dropTestDatabase(sourceUrl: string, name: string): Promise
 
 /**
  * Create a database only if it is missing. Poolers hold server connections to configured
- * databases, so a scratch database behind a pooler must not be dropped out from under it.
+ * databases, so a scratch database behind a pooler must not be dropped out from under it. The
+ * setting applies also to a database that an earlier run or the pooling fixture created.
  */
 export async function ensureTestDatabase(sourceUrl: string, name: string): Promise<void> {
   const target = new URL(sourceUrl);
@@ -228,6 +229,7 @@ export async function ensureTestDatabase(sourceUrl: string, name: string): Promi
   try {
     const exists = await admin.query("SELECT 1 FROM pg_database WHERE datname = $1", [name]);
     if (exists.rowCount === 0) await admin.query(`CREATE DATABASE ${identifier(name)}`);
+    await admin.query(withoutWalFlushWait(name));
   } finally {
     await admin.end();
   }
@@ -261,6 +263,7 @@ async function recreateDatabase(databaseUrl: string): Promise<void> {
   try {
     await dropDatabaseWithAdmin(admin, name);
     await admin.query(`CREATE DATABASE ${identifier(name)}`);
+    await admin.query(withoutWalFlushWait(name));
   } finally {
     await admin.end();
   }

@@ -25,6 +25,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	_ "github.com/jackc/pgx/v5/stdlib"
 	workhorse "github.com/stablemates/workhorse/go"
+	"github.com/stablemates/workhorse/go/internal/testdatabase"
 )
 
 type protocolFixtureManifest struct {
@@ -859,12 +860,11 @@ func createConformanceDatabase(t *testing.T, sourceURL, adapter string) string {
 	if err != nil {
 		t.Fatal(err)
 	}
-	quotedName := pgx.Identifier{databaseName}.Sanitize()
 	if err := dropScratchDatabase(ctx, admin, databaseName); err != nil {
 		_ = admin.Close(ctx)
 		t.Fatal(err)
 	}
-	if _, err := admin.Exec(ctx, "CREATE DATABASE "+quotedName); err != nil {
+	if err := testdatabase.Create(ctx, admin, databaseName); err != nil {
 		_ = admin.Close(ctx)
 		t.Fatal(err)
 	}
