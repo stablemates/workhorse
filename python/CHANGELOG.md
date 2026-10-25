@@ -23,6 +23,17 @@ TypeScript worker uses the same counter and the same rules. A failed round still
 verdict, so `workhorse.worker.heartbeat.failure` does not change. The new instrument is an
 addition.
 
+### A canceled task leaves its batch while it waits
+
+A batch handler waits up to its linger for a partial batch. Before this change, a waiting task
+stayed in the batch after a cancel request or a lease loss cancelled its `cancellation` token. The
+batch handler then got a task that the worker no longer owned, and the task settled only after the
+linger (SM-1709).
+
+Now the worker removes such a task from the batch at once. The task raises the reason of the token,
+and the batch handler never gets it. The other waiting tasks keep their order and dispatch. The
+TypeScript, Go, and Rust workers already remove such a task.
+
 ### The worker waits longer after each not_due expiry answer
 
 When the local timer of a deadline or an execution timeout fires, the worker asks PostgreSQL to

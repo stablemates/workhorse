@@ -999,6 +999,21 @@ coordinator removes that task from the batch at once. The task settles with the 
 the callback never gets it. If no task waits after the removal, the coordinator clears the linger
 timer. The other waiting tasks keep their arrival order and their dispatch.
 
+The workers of the other six SDKs apply the same rule to a waiting task. Each SDK section of the
+schema and SQL protocol page names the error that the removed task settles with:
+[Python](schema-and-protocol.md#python-batch-handlers),
+[Ruby](schema-and-protocol.md#ruby-batch-handlers),
+[JVM](schema-and-protocol.md#jvm-batch-handlers), and
+[.NET](schema-and-protocol.md#net-batch-handlers). The Go and Rust workers return the cancellation
+error of the task.
+
+In the Go, Rust, Ruby, JVM, and .NET workers, the rule also applies to the shutdown cancellation at
+the end of the drain grace. A task that still waits at that point leaves its batch, and the callback
+does not run it. In Ruby, the JVM, and .NET, the drain flush dispatches a lingering batch before that
+point when all its tasks have arrived. Those three workers release a task that left for the shutdown
+to its queue without a charged attempt. The Python worker cancels no token when it stops, because its
+stop deadline ends the process.
+
 A task stops waiting when the coordinator selects it for a batch. After the selection, the callback
 owns the outcome of the task, also while the dispatch evidence is written. If the signal of a
 selected task aborts, the callback gets the task. The callback can read the abort signal in its

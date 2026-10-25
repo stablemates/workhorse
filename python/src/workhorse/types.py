@@ -241,6 +241,7 @@ class CancellationToken:
         self._event = Event()
         self._lock = Lock()
         self._reason: BaseException | None = None
+        self._callbacks: list[Callable[[BaseException], None]] = []
 
     @property
     def cancelled(self) -> bool:
@@ -266,7 +267,23 @@ class CancellationToken:
                 return False
             self._reason = reason
             self._event.set()
-            return True
+            callbacks, self._callbacks = self._callbacks, []
+        for callback in callbacks:
+            callback(reason)
+        return True
+
+    def _on_cancel(self, callback: Callable[[BaseException], None]) -> None:
+        """Call ``callback`` with the reason once the token is cancelled, or at once if it is.
+
+        The callback runs on the thread that cancels the token, without the token lock. It runs at
+        most one time.
+        """
+        with self._lock:
+            reason = self._reason
+            if reason is None:
+                self._callbacks.append(callback)
+                return
+        callback(reason)
 
 
 class AsyncCancellationToken:

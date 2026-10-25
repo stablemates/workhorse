@@ -8,8 +8,10 @@ namespace Workhorse.Internal.Runtime;
 /// Each member runs on its own handler task, under its own lease, and joins its queue's waiting
 /// list. The member that fills a batch, or whose linger ends first, runs the handler for the whole
 /// batch. The others wait for their outcomes. Each member then settles its own attempt with its own
-/// outcome. A member waits for its outcome even when its own token is cancelled, because another
-/// member can already have taken it into a batch whose handler runs its payload.
+/// outcome. A cancellation or a lease loss removes a member that no batch took yet, and the member
+/// settles with the cancellation of its own token. The handler never gets it. A member that a batch
+/// already took waits for its outcome even when its own token is cancelled, because the handler of
+/// that batch runs its payload.
 /// </remarks>
 internal sealed class BatchCoordinator
 {
@@ -117,6 +119,7 @@ internal sealed class BatchCoordinator
             _entered.Add((context.Task.Id, context.Task.FenceToken));
         }
 
+        context.CancellationToken.ThrowIfCancellationRequested();
         var member = new Member(context, decode(), _host.ClaimOrder(context.Task));
         var queue = member.Task.Queue;
         List<Member> batch;
@@ -137,10 +140,12 @@ internal sealed class BatchCoordinator
             }
 
             waiting.Insert(index, member);
-            firstArrivedAt = waiting.Min(other => other.ArrivedAt);
+            DropCancelled(queue);
+            firstArrivedAt = waiting.Count == 0 ? member.ArrivedAt : waiting.Min(other => other.ArrivedAt);
             batch = waiting.Count >= _maxSize ? Take(queue) : [];
         }
 
+        var cancellation = context.CancellationToken.Register(() => LeaveCancelled(member, queue));
         try
         {
             await DispatchAsync(batch).ConfigureAwait(false);
@@ -153,6 +158,7 @@ internal sealed class BatchCoordinator
                     List<Member>? next;
                     lock (_lock)
                     {
+                        DropCancelled(queue);
                         next = _pending.TryGetValue(queue, out var waiting) && waiting.Contains(member) ? Take(queue) : null;
                     }
 
@@ -169,6 +175,7 @@ internal sealed class BatchCoordinator
         }
         finally
         {
+            await cancellation.DisposeAsync().ConfigureAwait(false);
             lock (_lock)
             {
                 // A member that leaves on an unexpected error must not join a later batch.
@@ -178,6 +185,30 @@ internal sealed class BatchCoordinator
                 }
             }
         }
+    }
+
+    /// <summary>
+    /// Removes <paramref name="member"/> from the waiting list of <paramref name="queue"/> after its
+    /// token was cancelled, and settles it with that cancellation. Its linger then ends at once. A
+    /// member that a batch already took stays in that batch.
+    /// </summary>
+    private void LeaveCancelled(Member member, string queue)
+    {
+        lock (_lock)
+        {
+            if (!_pending.TryGetValue(queue, out var waiting) || !waiting.Remove(member))
+            {
+                return;
+            }
+
+            if (waiting.Count == 0)
+            {
+                _pending.Remove(queue);
+            }
+        }
+
+        member.Result.TrySetException(new OperationCanceledException(member.Context.CancellationToken));
+        Signal();
     }
 
     /// <summary>Descending task priority, then claim order.</summary>
@@ -232,7 +263,38 @@ internal sealed class BatchCoordinator
         }
     }
 
-    /// <summary>Removes the next batch from a queue's waiting list. The caller holds the lock.</summary>
+    /// <summary>
+    /// Removes each member whose token is cancelled from the waiting list of <paramref name="queue"/>,
+    /// and settles it with that cancellation. Its registration runs on the thread pool and can come
+    /// later, so a selection never takes it. The caller holds the lock.
+    /// </summary>
+    private void DropCancelled(string queue)
+    {
+        if (!_pending.TryGetValue(queue, out var waiting))
+        {
+            return;
+        }
+
+        waiting.RemoveAll(member =>
+        {
+            if (!member.Context.CancellationToken.IsCancellationRequested)
+            {
+                return false;
+            }
+
+            member.Result.TrySetException(new OperationCanceledException(member.Context.CancellationToken));
+            return true;
+        });
+        if (waiting.Count == 0)
+        {
+            _pending.Remove(queue);
+        }
+    }
+
+    /// <summary>
+    /// Removes the next batch from a queue's waiting list. The caller holds the lock, and it drops the
+    /// cancelled members first, so one check decides each selection.
+    /// </summary>
     private List<Member> Take(string queue)
     {
         if (!_pending.TryGetValue(queue, out var waiting))
