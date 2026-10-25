@@ -71,4 +71,27 @@ public sealed class WorkerIntervalBoundariesTests
             typeof(WorkerOptions).GetProperty(option)!.SetValue(options, interval)));
         Assert.Contains(option, error.Message, StringComparison.Ordinal);
     }
+
+    // SM-1778 (ADR 0112): every SDK accepts an explicit poll interval from 1 through 2,147,483,647
+    // ms. A null PollInterval keeps the default.
+    [Theory]
+    [InlineData(TimeSpan.TicksPerMillisecond)]
+    [InlineData(TimeSpan.TicksPerMillisecond / 2)]
+    [InlineData(2_147_483_647L * TimeSpan.TicksPerMillisecond)]
+    public async Task APollIntervalFrom1MsThroughTheSqlIntegerLimitIsAccepted(long ticks)
+    {
+        await using var worker = UnconnectedWorker(options => options.PollInterval = TimeSpan.FromTicks(ticks));
+    }
+
+    [Theory]
+    [InlineData(0L)]
+    [InlineData(4_000L)]
+    [InlineData(2_147_483_648L * TimeSpan.TicksPerMillisecond)]
+    [InlineData(-TimeSpan.TicksPerMillisecond)]
+    public void APollIntervalOutsideTheRangeIsRefused(long ticks)
+    {
+        var error = Assert.Throws<ArgumentException>(() =>
+            UnconnectedWorker(options => options.PollInterval = TimeSpan.FromTicks(ticks)));
+        Assert.Contains(nameof(WorkerOptions.PollInterval), error.Message, StringComparison.Ordinal);
+    }
 }

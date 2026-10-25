@@ -280,6 +280,11 @@ supply:
 demo mode and environment labels, the single-admin credentials, telemetry, seeding, and the shutdown
 grace period.
 
+`WORKHORSE_WORKER_POLL_MS` is optional. It sets the idle poll delay of the demo workers in
+milliseconds, and the default is 15,000. Set an integer from 1 through 2,147,483,647. If the value
+is 0, the TypeScript and Python workers stop at startup. Thus a deployment that set 0 to get a 1 ms
+wait must set 1.
+
 The primary URL must not require TLS. The Rust worker connects without TLS, so it accepts a URL whose
 `sslmode` is `disable` or `prefer`, or a Unix socket, and refuses `sslmode=require`. A refused
 connection stops the Rust worker, and the entry point then stops the container. The secondary URL

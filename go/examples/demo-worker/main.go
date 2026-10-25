@@ -96,9 +96,10 @@ func pollInterval() (time.Duration, error) {
 	if value == "" {
 		return defaultPollMilliseconds * time.Millisecond, nil
 	}
+	// Zero keeps the SDK default. The limit keeps the multiplication below from an overflow.
 	milliseconds, err := strconv.Atoi(value)
-	if err != nil || milliseconds < 0 {
-		return 0, errors.New("WORKHORSE_WORKER_POLL_MS must be a non-negative integer")
+	if err != nil || milliseconds < 0 || milliseconds > 2147483647 {
+		return 0, errors.New("WORKHORSE_WORKER_POLL_MS must be an integer from 0 through 2147483647")
 	}
 	return time.Duration(milliseconds) * time.Millisecond, nil
 }

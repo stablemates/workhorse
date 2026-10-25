@@ -1579,12 +1579,13 @@ class Worker:
         ):
             raise ValueError("cohorts must be an integer between 1 and concurrency")
         resolved_poll_ms = poll_ms if poll_ms is not None else 250
+        # Every SDK accepts an explicit poll interval from 1 through 2147483647 ms (ADR 0112).
         if (
             isinstance(resolved_poll_ms, bool)
             or not isinstance(resolved_poll_ms, int)
-            or resolved_poll_ms < 1
+            or not 1 <= resolved_poll_ms <= _MAX_INTERVAL_MS
         ):
-            raise ValueError("poll_ms must be a positive integer")
+            raise ValueError("poll_ms must be an integer between 1 and 2147483647")
         self._executor = _executor or _PooledSyncExecutor(pool)
         self._compatibility = _CachedCompatibilityCheck(self._executor)
         self._handlers: dict[str, Handler] = {}

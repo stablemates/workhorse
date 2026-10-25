@@ -336,6 +336,38 @@ func TestWorkerRefusesAMaintenanceOrRegistryIntervalOutsideTheRange(t *testing.T
 	}
 }
 
+// SM-1778 (ADR 0112): every SDK accepts an explicit poll interval from 1 through 2147483647 whole
+// milliseconds. Zero selects the default, because Go cannot tell it from an unset option.
+func TestWorkerAcceptsAPollIntervalFrom1MsThroughTheSQLLimit(t *testing.T) {
+	for _, testCase := range []struct {
+		poll time.Duration
+		want time.Duration
+	}{
+		{0, 5 * time.Second},
+		{time.Millisecond, time.Millisecond},
+		{2147483647 * time.Millisecond, 2147483647 * time.Millisecond},
+	} {
+		worker := newDefaultWorker(t, WorkerOptions{PollInterval: testCase.poll})
+		if worker.pollInterval != testCase.want {
+			t.Fatalf("poll %s: got %s, want %s", testCase.poll, worker.pollInterval, testCase.want)
+		}
+	}
+}
+
+func TestWorkerRefusesAPollIntervalOutsideTheRange(t *testing.T) {
+	for _, poll := range []time.Duration{
+		-time.Millisecond, time.Nanosecond, 500 * time.Microsecond, 1500 * time.Microsecond,
+		2147483648 * time.Millisecond, time.Duration(math.MaxInt64),
+	} {
+		_, err := NewWorker(unconnectedPool(t), WorkerOptions{
+			Queue: "defaults", WorkerID: "defaults-worker", SharedHeartbeats: true, PollInterval: poll,
+		})
+		if err == nil || err.Error() != workerPollRangeMessage {
+			t.Fatalf("poll %s: got %v, want %q", poll, err, workerPollRangeMessage)
+		}
+	}
+}
+
 // SM-1668 PAR-09 (ADR 0112): with a live subscription, an explicit PollInterval is the fallback
 // interval, so the 5 s cap does not apply. Without one, the cap applies before the ±10% jitter.
 func TestWorkerCapsAnExplicitPollIntervalOnlyWhileItPolls(t *testing.T) {

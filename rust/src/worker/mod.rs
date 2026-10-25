@@ -54,6 +54,7 @@ const MAX_LEASE: Duration = Duration::from_secs(24 * 60 * 60);
 const MAX_SHUTDOWN_GRACE: Duration = Duration::from_secs(24 * 60 * 60);
 const GRACE_RANGE: &str =
     "worker shutdown grace period must be a whole number of milliseconds between 1 and 86400000";
+const POLL_RANGE: &str = "worker poll interval must be between 1 and 2147483647 whole milliseconds";
 const LISTENING_POLL: Duration = Duration::from_secs(5);
 const POLLING_POLL: Duration = Duration::from_millis(250);
 const MAX_EMPTY_POLL: Duration = Duration::from_secs(5);
@@ -162,7 +163,7 @@ pub struct WorkerOptions {
     pub heartbeat_interval: Option<Duration>,
     /// The wait after an empty claim. Defaults to 5s while the notification listener is connected.
     /// Without a connected listener, it defaults to 250ms, which doubles toward 5s after each empty
-    /// claim.
+    /// claim. An explicit value takes whole milliseconds from 1ms through 2147483647ms (ADR 0112).
     pub poll_interval: Option<Duration>,
     /// The maintenance tick cadence. Defaults to 1s. This interval, `maintenance_routine_interval`,
     /// and `registry_interval` each take whole milliseconds from 100ms through 2147483647ms
@@ -308,6 +309,13 @@ fn validate(
         .unwrap_or_else(|| Duration::from_millis((lease.as_millis() / 3).max(100) as u64));
     if !whole_millis(heartbeat) || heartbeat.is_zero() || heartbeat >= lease {
         return invalid("worker heartbeat interval must be a whole number of milliseconds greater than zero and shorter than the lease duration");
+    }
+    // Every SDK accepts the same explicit poll range. It also keeps the jitter and the `Instant`
+    // arithmetic of the wait from an overflow (ADR 0112).
+    if options.poll_interval.is_some_and(|poll| {
+        !whole_millis(poll) || !(Duration::from_millis(1)..=MAX_INTERVAL).contains(&poll)
+    }) {
+        return invalid(POLL_RANGE);
     }
     if !valid_interval(options.maintenance_interval) {
         return invalid(
@@ -2138,6 +2146,25 @@ mod tests {
                     ),
                 );
             }
+        }
+    }
+
+    // SM-1778 (ADR 0112): an explicit poll interval takes 1 through 2147483647 whole ms in every
+    // SDK. Before, Rust did not check it, so a value near `Duration::MAX` overflowed in the wait.
+    #[tokio::test]
+    async fn an_explicit_poll_interval_accepts_1_ms_through_the_sql_integer_limit() {
+        for poll in [Duration::from_millis(1), MAX_INTERVAL] {
+            let options = WorkerOptions { poll_interval: Some(poll), ..Default::default() };
+            assert_eq!(Worker::new(pool(4), options).unwrap().0.poll_interval, poll);
+        }
+        for poll in [
+            Duration::ZERO,
+            Duration::from_micros(500),
+            Duration::from_micros(1_500),
+            MAX_INTERVAL + Duration::from_millis(1),
+            Duration::MAX,
+        ] {
+            rejects(WorkerOptions { poll_interval: Some(poll), ..Default::default() }, POLL_RANGE);
         }
     }
 

@@ -5,7 +5,7 @@
 - **Related:** [ADR 0011](0011-daily-retention-and-split-maintenance.md),
   [ADR 0017](0017-durable-worker-registry.md),
   [ADR 0072](0072-converge-the-worker-runtime-defaults.md)
-- **Issue:** SM-1668 (PAR-09)
+- **Issue:** SM-1668 (PAR-09), SM-1778 (amendment)
 
 ## Context
 
@@ -66,3 +66,36 @@ them for each SDK.
 - Each SDK has focused cases for the poll wait order and for 99 ms, 100 ms, the limit, and one
   above it.
 - The SQL functions do not change.
+
+## Amendment: one explicit poll interval range (2026-10-25)
+
+The decision above left the explicit poll interval with a range of its own in each SDK. TypeScript
+accepted `pollMs: 0` and waited 1 ms. Go read zero as the default and accepted a value below 1 ms.
+Rust did not check `poll_interval`, so a value near `Duration::MAX` could overflow the jitter or the
+`Instant` arithmetic of the wait. Python and Ruby had no upper limit. SM-1778 records this
+amendment, and the maintainer chose the rule on 2026-10-25.
+
+1. Every SDK accepts an explicit poll interval from 1 through 2,147,483,647 ms. The upper limit is
+   the PostgreSQL `integer` maximum, so the worker can write the value to `worker_registry.poll_ms`.
+   Each SDK refuses another value at construction with its usual argument error.
+2. TypeScript, Python, Ruby, Rust, the JVM, and .NET refuse zero. An unset option (`undefined`,
+   `None`, `nil`, or `null`) keeps the default.
+3. Go reads a zero `PollInterval` as the default, because it cannot tell zero from an unset option.
+   Go refuses a negative value.
+4. Go and Rust refuse a value that is not a whole number of milliseconds, as they do for the other
+   intervals. Ruby, the JVM, and .NET round to the nearest millisecond before the check.
+
+Rejected options:
+
+- Zero as a 1 ms wait in every SDK. It hides a configuration mistake, and Go cannot follow it.
+- Zero as the default in every SDK. An existing TypeScript `pollMs: 0` would change from 1 ms to
+  250 ms without an error. The other SDKs already have a separate way to say "not set".
+
+Consequences:
+
+- TypeScript `pollMs: 0` fails at construction. `pollMs: 1` gives the same wait.
+- Rust refuses zero and a value that is not a whole number of milliseconds. Go refuses a nonzero
+  value that is not a whole number of milliseconds. Go, Rust, Python, and Ruby refuse a value above
+  2,147,483,647 ms. Each SDK changelog states the change.
+- The JVM and .NET do not change.
+- Each SDK has focused cases for zero, 1 ms, the limit, and one above it.

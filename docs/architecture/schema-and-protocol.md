@@ -797,7 +797,7 @@ statement.
 | `concurrency`                 | 1                                             | Integers from 1 through 100.                                                                                                                                             |
 | `lease_ms`                    | 30,000 milliseconds per claim                 | 100 through 86,400,000.                                                                                                                                                  |
 | `heartbeat_ms`                | The greater of 100 or one third of `lease_ms` | Positive values less than `lease_ms`.                                                                                                                                    |
-| `poll_ms`                     | 250                                           | Integers of at least 1. Replaces both the 250 ms and the 5,000 ms base.                                                                                                  |
+| `poll_ms`                     | 250                                           | Integers from 1 through 2,147,483,647. Replaces both the 250 ms and the 5,000 ms base.                                                                                   |
 | `maintenance_interval_ms`     | 1000                                          | Integers from 100 through 2,147,483,647.                                                                                                                                 |
 | `maintenance_routine_poll_ms` | 60000                                         | Integers from 100 through 2,147,483,647. Bounds how often the worker offers the slow retention routines.                                                                 |
 | `registry_interval_ms`        | 5000                                          | 0, which turns off registration, or integers from 100 through 2,147,483,647.                                                                                             |
@@ -809,7 +809,7 @@ The smallest supported `heartbeat_ms` is 100. The worker accepts a shorter value
 `register_worker_v1` takes the three interval options as PostgreSQL `integer` values, so `Worker`
 raises `ValueError` at construction for a value outside the range
 ([ADR 0112](../decisions/0112-define-the-poll-wait-order-and-the-worker-interval-range.md)).
-`poll_ms` has no upper limit.
+`Worker` also raises `ValueError` for a `poll_ms` outside its range. `None` keeps the default.
 
 `retry_delay_ms` reports the delay of one failed attempt to `fail_v1`. This delay replaces the
 choice of the persisted retry policy. If a fixed value is not an integer in the range, `Worker`
@@ -1691,7 +1691,7 @@ other. Thus they cannot multiply the concurrency budget or race the queue cursor
 | `WorkerOptions.WorkerID`                   | Host name, process ID, and a random suffix                                                        |                                                                                    |
 | `WorkerOptions.Concurrency`                | 1                                                                                                 | Integers from 1 through 100                                                        |
 | `WorkerOptions.LeaseDuration`              | 30,000 milliseconds                                                                               | Whole-millisecond values from 100 through 86,400,000                               |
-| `WorkerOptions.PollInterval`               | 5,000 milliseconds while the listener is live, else 250 milliseconds, doubling toward 5 seconds   | 0, which selects the default, or positive values                                   |
+| `WorkerOptions.PollInterval`               | 5,000 milliseconds while the listener is live, else 250 milliseconds, doubling toward 5 seconds   | 0, which selects the default, or whole milliseconds from 1 through 2,147,483,647   |
 | `WorkerOptions.HeartbeatInterval`          | The larger of 100 milliseconds and one third of `LeaseDuration`, truncated to a whole millisecond | Positive values shorter than the lease                                             |
 | `WorkerOptions.MaintenanceInterval`        | 1,000 milliseconds                                                                                | 0, which selects the default, or whole milliseconds from 100 through 2,147,483,647 |
 | `WorkerOptions.MaintenanceRoutineInterval` | 60,000 milliseconds                                                                               | 0, which selects the default, or whole milliseconds from 100 through 2,147,483,647 |
@@ -1718,7 +1718,8 @@ and it does not abandon the handlers at once. Thus `RegistryInterval` cannot tur
 check refuses a value below 100. Thus `NewWorker` refuses a value outside the range
 ([ADR 0112](../decisions/0112-define-the-poll-wait-order-and-the-worker-interval-range.md)).
 `NewWorker` refuses a `ShutdownGracePeriod` above 86,400,000 milliseconds (one day), the limit that
-Ruby, the JVM, and .NET use. `PollInterval` has no upper limit.
+Ruby, the JVM, and .NET use. It also refuses a negative `PollInterval`, a `PollInterval` that is
+not a whole number of milliseconds, and one above 2,147,483,647 milliseconds.
 
 Option behavior:
 
@@ -2092,7 +2093,7 @@ least 2. Otherwise the run logs `workhorse.worker.polling_only` once and polls.
 | `concurrency`                  |                                                                                            | Integers from 1 through 100                                      |
 | `lease`                        | 30 seconds                                                                                 | 0.1 through 86,400 seconds                                       |
 | `heartbeat`                    | The larger of 100 milliseconds and a third of the lease                                    | Values shorter than the lease                                    |
-| `poll_interval`                | Unset: 5 seconds with a listener; 250 milliseconds, doubling toward 5 seconds, without one | 0.001 seconds and more                                           |
+| `poll_interval`                | Unset: 5 seconds with a listener; 250 milliseconds, doubling toward 5 seconds, without one | 0.001 through 2,147,483.647 seconds                              |
 | `maintenance_interval`         | 1 second                                                                                   | 0.1 through 2,147,483.647 seconds                                |
 | `maintenance_routine_interval` | 60 seconds                                                                                 | 0.1 through 2,147,483.647 seconds                                |
 | `registry_interval`            | 5 seconds                                                                                  | 0.1 through 2,147,483.647 seconds                                |
@@ -2106,7 +2107,7 @@ Durations are finite Numeric seconds. The worker rounds each duration to the nea
 before the range check. `register_worker_v1` takes the three interval options as PostgreSQL
 `integer` milliseconds, so the worker refuses a value outside the range
 ([ADR 0112](../decisions/0112-define-the-poll-wait-order-and-the-worker-interval-range.md)).
-`poll_interval` has no upper limit. `disable_registry: true` turns off registration, and the worker
+The worker also refuses a `poll_interval` outside its range. `disable_registry: true` turns off registration, and the worker
 then does not check `registry_interval`. A zero `shutdown_grace` sets the stop deadline
 when dispatch ends. Thus the stop steps below wait for no running handler and cancel the rest at
 once. The final deadline is still one unwind window later.
@@ -2576,7 +2577,7 @@ crate. Then it tests the default consumer.
 | `concurrency`                  | 1                                                                                           | 1 through 100                                                                                                              |
 | `lease_duration`               | 30 seconds                                                                                  | Whole milliseconds from 100 milliseconds through 24 hours                                                                  |
 | `heartbeat_interval`           | The larger of 100 milliseconds and one third of the lease, truncated to a whole millisecond | Positive values shorter than the lease                                                                                     |
-| `poll_interval`                | 5 seconds while the listener is connected, else 250 milliseconds, doubling toward 5 seconds | Any value; not checked. A wait is at least 1 millisecond                                                                   |
+| `poll_interval`                | 5 seconds while the listener is connected, else 250 milliseconds, doubling toward 5 seconds | `None`, which keeps the default, or whole milliseconds from 1 through 2,147,483,647                                        |
 | `maintenance_interval`         | 1 second                                                                                    | Whole milliseconds from 100 through 2,147,483,647                                                                          |
 | `maintenance_routine_interval` | 60 seconds                                                                                  | Whole milliseconds from 100 through 2,147,483,647                                                                          |
 | `registry_interval`            | 5 seconds                                                                                   | Whole milliseconds from 100 through 2,147,483,647                                                                          |
@@ -2594,7 +2595,8 @@ check refuses a value below 100, so `Worker::new` refuses a value outside the ra
 ([ADR 0112](../decisions/0112-define-the-poll-wait-order-and-the-worker-interval-range.md)).
 `Worker::new` refuses a zero `shutdown_grace_period` with `Error::InvalidArgument`. It also refuses
 a grace above 86,400,000 milliseconds (one day), the limit that Ruby, the JVM, and .NET use. Thus
-the run cannot overflow its deadline arithmetic.
+the run cannot overflow its deadline arithmetic. `Worker::new` refuses a `poll_interval` outside
+its range, so the wait cannot overflow its jitter or its deadline arithmetic.
 
 The worker expects a listener only when all of these conditions are true:
 
@@ -3824,21 +3826,21 @@ before any statement.
 the options, so a later change to the `WorkerOptions` object has no effect. An invalid option throws
 `ArgumentException` or `ArgumentOutOfRangeException`. Durations round to whole milliseconds.
 
-| Property                     | Default                                                                                                                                      | Accepts                                        |
-| ---------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------- |
-| `Queues`                     | `["default"]`                                                                                                                                | Non-empty names                                |
-| `WorkerId`                   | The host name, the process ID, and a random suffix                                                                                           | A non-empty string                             |
-| `Concurrency`                | 1                                                                                                                                            | 1 through 100                                  |
-| `Cohorts`                    | 0, which selects 1 below concurrency 8, and otherwise concurrency divided by 8, rounded up, from 2 through 8, then capped by `Max Pool Size` | 1 through `Concurrency`                        |
-| `Lease`                      | 30 seconds                                                                                                                                   | 100 milliseconds through 1 day                 |
-| `Heartbeat`                  | `null`, which selects the larger of 100 milliseconds and a third of the lease                                                                | 1 millisecond and more, shorter than the lease |
-| `PollInterval`               | `null`: 5 seconds with a listener; 250 milliseconds, doubling toward 5 seconds, without one                                                  | 1 millisecond and more                         |
-| `MaintenanceInterval`        | 1 second                                                                                                                                     | 100 milliseconds and more                      |
-| `MaintenanceRoutineInterval` | 60 seconds                                                                                                                                   | 100 milliseconds and more                      |
-| `RegistryInterval`           | 5 seconds                                                                                                                                    | 100 milliseconds and more                      |
-| `ScheduleNamespaces`         | Empty                                                                                                                                        | Non-empty names                                |
-| `ScheduleCatchupLimit`       | 100                                                                                                                                          | 1 through 10,000                               |
-| `ShutdownGrace`              | 25 seconds                                                                                                                                   | 0 through 1 day                                |
+| Property                     | Default                                                                                                                                      | Accepts                                           |
+| ---------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------- |
+| `Queues`                     | `["default"]`                                                                                                                                | Non-empty names                                   |
+| `WorkerId`                   | The host name, the process ID, and a random suffix                                                                                           | A non-empty string                                |
+| `Concurrency`                | 1                                                                                                                                            | 1 through 100                                     |
+| `Cohorts`                    | 0, which selects 1 below concurrency 8, and otherwise concurrency divided by 8, rounded up, from 2 through 8, then capped by `Max Pool Size` | 1 through `Concurrency`                           |
+| `Lease`                      | 30 seconds                                                                                                                                   | 100 milliseconds through 1 day                    |
+| `Heartbeat`                  | `null`, which selects the larger of 100 milliseconds and a third of the lease                                                                | 1 millisecond and more, shorter than the lease    |
+| `PollInterval`               | `null`: 5 seconds with a listener; 250 milliseconds, doubling toward 5 seconds, without one                                                  | 1 millisecond through `int.MaxValue` milliseconds |
+| `MaintenanceInterval`        | 1 second                                                                                                                                     | 100 milliseconds and more                         |
+| `MaintenanceRoutineInterval` | 60 seconds                                                                                                                                   | 100 milliseconds and more                         |
+| `RegistryInterval`           | 5 seconds                                                                                                                                    | 100 milliseconds and more                         |
+| `ScheduleNamespaces`         | Empty                                                                                                                                        | Non-empty names                                   |
+| `ScheduleCatchupLimit`       | 100                                                                                                                                          | 1 through 10,000                                  |
+| `ShutdownGrace`              | 25 seconds                                                                                                                                   | 0 through 1 day                                   |
 
 Each upper bound of "and more" is `int.MaxValue` milliseconds. `DisableRegistry = true` turns off
 the worker registry. `SharedHeartbeats = true` makes each heartbeat round open its own connection.

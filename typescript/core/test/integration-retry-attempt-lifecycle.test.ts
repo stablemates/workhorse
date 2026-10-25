@@ -247,7 +247,7 @@ describe("retry and attempt lifecycle", () => {
     const worker = new Worker(queue, {
       workerId: "callback-worker",
       queue: "callback",
-      pollMs: 0,
+      pollMs: 1,
       retryDelayMs: () => 0,
     }).handle("callback", () => {
       throw new Error("retry");
@@ -283,7 +283,7 @@ describe("retry and attempt lifecycle", () => {
     const observed: Array<{ attempt: number; type: string; payload: unknown }> = [];
     const worker = new Worker(queue, {
       workerId: "task-aware-retry-worker",
-      pollMs: 0,
+      pollMs: 1,
       retryDelayMs: (attempt, task) => {
         observed.push({ attempt, type: task.type, payload: task.payload });
         return (task.payload as { retryDelayMs: number }).retryDelayMs;

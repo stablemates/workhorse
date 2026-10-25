@@ -74,4 +74,30 @@ class WorkerIntervalBoundariesTest {
       }
     }
   }
+
+  // SM-1778 (ADR 0112): every SDK accepts an explicit poll interval from 1 through 2,147,483,647
+  // ms. Without the option, the worker keeps the default.
+  @Test
+  void acceptsAPollIntervalFrom1MsThroughTheSqlIntegerLimit() {
+    for (Duration accepted :
+        List.of(
+            Duration.ofMillis(1),
+            Duration.ofNanos(500_000),
+            Duration.ofMillis(Integer.MAX_VALUE))) {
+      assertDoesNotThrow(() -> builder().pollInterval(accepted).build(), accepted::toString);
+    }
+  }
+
+  @Test
+  void refusesAPollIntervalOutsideTheRange() {
+    for (Duration refused :
+        List.of(
+            Duration.ZERO,
+            Duration.ofNanos(400_000),
+            Duration.ofMillis(Integer.MAX_VALUE + 1L),
+            Duration.ofMillis(-1))) {
+      assertThrows(
+          IllegalArgumentException.class, () -> builder().pollInterval(refused), refused::toString);
+    }
+  }
 }

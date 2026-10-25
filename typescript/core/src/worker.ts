@@ -497,7 +497,8 @@ export interface WorkerOptions {
    * subscription is live. Without a live subscription, it starts at 250 milliseconds and backs off
    * after each empty claim, up to five seconds. An explicit value replaces both bases. While the
    * subscription is live, the worker waits the explicit value without the five-second cap. Each
-   * wait has ±10% jitter. `runOnce()` does not wait: it claims on each call.
+   * wait has ±10% jitter. `runOnce()` does not wait: it claims on each call. An explicit value is
+   * a safe integer from 1 through 2147483647.
    */
   pollMs?: number;
   /** Minimum delay between worker-owned maintenance and recurring schedule passes. */
@@ -1114,7 +1115,9 @@ export class Worker {
       throw new Error("leaseMs must be a safe integer between 100 and 86400000");
     requireTimerInterval("heartbeatMs", this.heartbeatMs, 1);
     if (this.heartbeatMs >= this.leaseMs) throw new Error("heartbeatMs must be less than leaseMs");
-    requireTimerInterval("pollMs", this.pollMs, 0);
+    // Every SDK accepts an explicit poll interval from 1 ms through the PostgreSQL integer limit,
+    // which is also the timer maximum (ADR 0112).
+    requireTimerInterval("pollMs", this.pollMs, 1);
     requireTimerInterval("maintenanceIntervalMs", this.maintenanceIntervalMs, 100);
     requireTimerInterval("maintenanceRoutinePollMs", this.maintenanceRoutinePollMs, 100);
     if (this.registryIntervalMs !== 0)

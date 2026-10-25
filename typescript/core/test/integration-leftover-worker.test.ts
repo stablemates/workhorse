@@ -38,7 +38,7 @@ describe.runIf(fixture)("leftover worker fixture", () => {
     const worker = new Worker(queue, {
       workerId: "leftover-worker",
       concurrency: 8,
-      pollMs: 0,
+      pollMs: 1,
       registryIntervalMs: 100,
     }).handle("leftover", async () => {
       handled.resolve();

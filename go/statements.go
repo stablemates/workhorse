@@ -350,7 +350,7 @@ const (
 	workerConcurrencyRangeMessage       = "worker concurrency must be between 1 and %d"
 	workerCohortsRangeMessage           = "worker cohorts must be between 1 and the concurrency"
 	workerLeaseRangeMessage             = "worker lease duration must be a whole number of milliseconds between %s and %s"
-	negativeWorkerPollMessage           = "worker poll interval must not be negative"
+	workerPollRangeMessage              = "worker poll interval must be between 1 and 2147483647 whole milliseconds"
 	workerHeartbeatRangeMessage         = "worker heartbeat interval must be a whole number of milliseconds greater than zero and shorter than the lease duration"
 	workerMaintenanceRangeMessage       = "worker maintenance interval must be between 100 and 2147483647 whole milliseconds"
 	workerScheduleNamespacesMessage     = "worker schedule namespaces must contain only non-empty names"

@@ -338,8 +338,8 @@ every delay until a caller says otherwise.
 ## Poll, interval, and shutdown boundaries
 
 The defaults above agree, but an explicit value meets a boundary too. This section states three
-boundaries: the order of the poll wait steps, the accepted maintenance intervals, and what a zero
-shutdown grace does. [ADR 0112](decisions/0112-define-the-poll-wait-order-and-the-worker-interval-range.md)
+boundaries: the order of the poll wait steps, the accepted maintenance and poll intervals, and what
+a zero shutdown grace does. [ADR 0112](decisions/0112-define-the-poll-wait-order-and-the-worker-interval-range.md)
 sets one rule for the first two. The per-SDK option tables in
 [Schema and protocol](architecture/schema-and-protocol.md) own the exact ranges.
 
@@ -384,8 +384,22 @@ option. Each SDK keeps its own way to turn registration off.
 | JVM        | `disableRegistry(true)`  |
 | .NET       | `DisableRegistry`        |
 
-The poll interval keeps a range of its own in each SDK. TypeScript accepts 0, Go reads 0 as the
-default, Rust does not check it, and Python, Ruby, the JVM, and .NET refuse 0.
+### Accepted poll intervals
+
+An explicit poll interval accepts 1 through 2,147,483,647 ms in all seven SDKs. The upper limit is
+the PostgreSQL `integer` maximum, so the worker can write the value to `worker_registry.poll_ms`.
+Each SDK refuses another value at construction, and an unset option keeps the default. Go reads a zero `PollInterval` as the default, because it cannot
+tell zero from an unset option. The other six SDKs refuse zero.
+
+| SDK        | Option                         | Zero                | Value that is not a whole millisecond |
+| ---------- | ------------------------------ | ------------------- | ------------------------------------- |
+| TypeScript | `pollMs`                       | Refused             | Refused                               |
+| Python     | `poll_ms`                      | Refused             | Refused                               |
+| Go         | `WorkerOptions.PollInterval`   | Selects the default | Refused                               |
+| Rust       | `WorkerOptions::poll_interval` | Refused             | Refused                               |
+| Ruby       | `poll_interval:`               | Refused             | Rounded to the nearest millisecond    |
+| JVM        | `Worker.Builder.pollInterval`  | Refused             | Rounded to the nearest millisecond    |
+| .NET       | `WorkerOptions.PollInterval`   | Refused             | Rounded to the nearest millisecond    |
 
 ### Zero shutdown grace
 

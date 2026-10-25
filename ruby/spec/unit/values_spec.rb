@@ -54,10 +54,10 @@ RSpec.describe W::Values do
       def with = raise("unit specs never check out a connection")
     end
 
-    # The maintenance, routine, and registry intervals end at the SQL integer limit (ADR 0112).
+    # The poll, maintenance, routine, and registry intervals end at the SQL integer limit (ADR 0112).
     {
       heartbeat: [0, "of at least 0.001"],
-      poll_interval: [0, "of at least 0.001"],
+      poll_interval: [0, "between 0.001 and 2147483.647"],
       maintenance_interval: [0.05, "between 0.1 and 2147483.647"],
       maintenance_routine_interval: [0.05, "between 0.1 and 2147483.647"],
       registry_interval: [0.05, "between 0.1 and 2147483.647"]

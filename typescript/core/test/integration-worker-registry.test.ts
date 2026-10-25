@@ -124,7 +124,7 @@ describe("worker registry", () => {
       workerId: "multi-queue-worker",
       queues: [firstQueue, secondQueue],
       concurrency: 2,
-      pollMs: 0,
+      pollMs: 1,
     }).handle("multi-queue", (_payload, { task }) => {
       handled.push(task.queue);
       return null;
@@ -862,7 +862,7 @@ describe("worker registry", () => {
     const worker = new Worker(queue, {
       workerId: "bounded-batch-worker",
       concurrency: 5,
-      pollMs: 0,
+      pollMs: 1,
     }).handle("bounded-batch", async () => {
       active += 1;
       maxActive = Math.max(maxActive, active);
@@ -945,7 +945,7 @@ describe("worker registry", () => {
     for (const sequence of [1, 2]) await queue.enqueue("serialized-run-once", { sequence });
     const worker = new Worker(queue, {
       workerId: "serialized-run-once-worker",
-      pollMs: 0,
+      pollMs: 1,
     }).handle<{ sequence: number }>("serialized-run-once", async ({ sequence }) => {
       started.push(sequence);
       await (sequence === 1 ? firstRelease.promise : secondRelease.promise);
@@ -977,7 +977,7 @@ describe("worker registry", () => {
       workerId: "paused-concurrency-worker",
       concurrency: 2,
       ...loadSafeHeartbeat,
-      pollMs: 0,
+      pollMs: 1,
     }).handle("paused-concurrency", async () => {
       await release.promise;
       return null;
@@ -1039,7 +1039,7 @@ describe("worker registry", () => {
       // No round renews while the test holds the first one. A lease of 500 ms could end before a
       // loaded host starts the handlers, so the lease is long enough not to end in the test.
       leaseMs: 30_000,
-      pollMs: 0,
+      pollMs: 1,
     }).handle("slow-heartbeat", async () => {
       await releaseHandlers.promise;
       return null;
@@ -1100,7 +1100,7 @@ describe("worker registry", () => {
     const worker = new Worker(queue, {
       workerId: "graceful-concurrency-drain-worker",
       concurrency: 2,
-      pollMs: 0,
+      pollMs: 1,
     }).handle("graceful-concurrency-drain", async () => {
       await release.promise;
       return null;
@@ -1164,7 +1164,7 @@ describe("worker registry", () => {
       workerId: "signal-abort-drain-worker",
       concurrency: 2,
       ...loadSafeHeartbeat,
-      pollMs: 0,
+      pollMs: 1,
     }).handle<{ sequence: number }>("signal-abort-drain", async ({ sequence }, context) => {
       startedIds.push(context.task.id);
       if (startedIds.length === 2) bothStarted.resolve();
@@ -1254,7 +1254,7 @@ describe("worker registry", () => {
     const claim = vi.spyOn(queue, "claimMany");
     const worker = new Worker(queue, {
       workerId: "queued-run-stop-worker",
-      pollMs: 0,
+      pollMs: 1,
     }).handle("queued-run-stop", async () => {
       started.resolve();
       await release.promise;
@@ -1303,7 +1303,7 @@ describe("worker registry", () => {
         concurrency: 3,
         leaseMs: 10_000,
         heartbeatMs: 1_000,
-        pollMs: 0,
+        pollMs: 1,
         failpoint: (point, task) => {
           const shouldCrash =
             point === "beforeHandler" && (task.payload as { sequence: number }).sequence === 1;
