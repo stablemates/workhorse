@@ -13,11 +13,13 @@ namespace Workhorse.AspNetCore.Tests.Testing;
 internal sealed class ExtraDatabase : IAsyncDisposable
 {
     private readonly NpgsqlDataSource _admin;
+    private readonly ScratchDatabaseLease _lease;
     private readonly string _name;
 
-    private ExtraDatabase(NpgsqlDataSource admin, NpgsqlDataSource dataSource, string name)
+    private ExtraDatabase(NpgsqlDataSource admin, ScratchDatabaseLease lease, NpgsqlDataSource dataSource, string name)
     {
         _admin = admin;
+        _lease = lease;
         DataSource = dataSource;
         _name = name;
     }
@@ -38,17 +40,26 @@ internal sealed class ExtraDatabase : IAsyncDisposable
             builder.CommandTimeout = 300;
         });
         await ExecuteAsync(admin, $"DROP DATABASE IF EXISTS \"{name}\"", cancellationToken);
-        await ScratchDatabase.CreateDatabaseAsync(admin, name, cancellationToken);
+        var lease = await scratch.CreateDatabaseAsync(name, cancellationToken);
 
         var dataSource = scratch.CreateDataSource(builder =>
         {
             builder.Database = name;
             builder.CommandTimeout = 300;
         });
-        var database = new ExtraDatabase(admin, dataSource, name);
+        var database = new ExtraDatabase(admin, lease, dataSource, name);
         if (install)
         {
-            await database.InstallAsync(cancellationToken);
+            try
+            {
+                await database.InstallAsync(cancellationToken);
+            }
+            catch
+            {
+                // The caller gets no database to dispose, so the drop and the end of the lease run here.
+                await database.DisposeAsync();
+                throw;
+            }
         }
 
         return database;
@@ -79,6 +90,8 @@ internal sealed class ExtraDatabase : IAsyncDisposable
         }
         finally
         {
+            // The lease ends after the drop. If the drop failed, the sweep can drop the database.
+            await _lease.DisposeAsync();
             await _admin.DisposeAsync();
         }
     }

@@ -5,6 +5,12 @@
 //! `sql/schema/current.sql` into it, and drops it when the guard goes out of scope. `pnpm db:sweep`
 //! recognizes the same name shape if a teardown never runs.
 //!
+//! A session on `postgres` holds the lease of the scratch database from before its creation until
+//! after its drop: a shared advisory lock on `hashtextextended(<name>, 0)`. A test can have no
+//! session on the scratch database, and `pnpm db:sweep` skips a scratch database under that lock.
+//! If the process stops or crashes, PostgreSQL ends the session and its lock, so the sweep can
+//! drop the database again (SM-1702).
+//!
 //! The scratch database sets `synchronous_commit = off`. Its commits do not wait for the WAL flush,
 //! so a host I/O stall does not add a flush wait to each commit of a test.
 //!
@@ -32,11 +38,16 @@ const SCHEMA: &str = include_str!("../../../sql/schema/current.sql");
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 const DROP_ATTEMPTS: u32 = 40;
 const DROP_RETRY: Duration = Duration::from_millis(25);
+/// Shared with `scratchLeaseStatement` in `typescript/core/test/support/schema-template.ts`.
+const LEASE: &str = "SELECT pg_advisory_lock_shared(hashtextextended($1, 0))";
 
 pub struct ScratchDatabase {
     name: String,
     url: String,
     admin: Config,
+    /// The session that holds the lease. Rust drops the fields after `Drop::drop`, so the lease
+    /// ends after the drop of the database.
+    lease: Client,
 }
 
 impl ScratchDatabase {
@@ -126,6 +137,10 @@ pub async fn scratch_database(test: &str) -> Option<ScratchDatabase> {
     let url = replace_database(&source, &name);
 
     let client = connect(&admin).await;
+    client
+        .execute(LEASE, &[&name])
+        .await
+        .unwrap_or_else(|error| panic!("take the lease of scratch database {name}: {error:?}"));
     drop_database(&client, &name)
         .await
         .unwrap_or_else(|error| panic!("drop stale scratch database {name}: {error:?}"));
@@ -134,11 +149,12 @@ pub async fn scratch_database(test: &str) -> Option<ScratchDatabase> {
         .await
         .unwrap_or_else(|error| panic!("create scratch database {name}: {error:?}"));
     // Owned from here on, so a failed schema install still drops the database.
-    let scratch = ScratchDatabase { name, url, admin };
+    let scratch = ScratchDatabase { name, url, admin, lease: client };
     // The scratch database is for tests only, so its commits do not wait for the WAL flush. A host
     // I/O stall can make one flush take seconds and break the time bounds of a test. Visibility
     // and order do not change. Only a server crash can lose such a commit, and no test needs it.
-    client
+    scratch
+        .lease
         .batch_execute(&format!(
             "ALTER DATABASE {} SET synchronous_commit = off",
             quote(&scratch.name)

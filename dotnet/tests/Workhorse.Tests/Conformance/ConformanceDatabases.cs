@@ -35,9 +35,19 @@ internal sealed class ConformanceDatabases(ScratchDatabase scratch)
             builder.CommandTimeout = 300;
         });
         await ExecuteAsync(admin, $"DROP DATABASE IF EXISTS \"{name}\" WITH (FORCE)");
-        await ScratchDatabase.CreateDatabaseAsync(admin, name);
-        var database = new ConformanceDatabase(scratch, admin, name, configure);
-        await ExecuteAsync(database.DataSource, await File.ReadAllTextAsync(Repository.Path("sql/schema/current.sql")));
+        var lease = await scratch.CreateDatabaseAsync(name);
+        var database = new ConformanceDatabase(scratch, admin, lease, name, configure);
+        try
+        {
+            await ExecuteAsync(database.DataSource, await File.ReadAllTextAsync(Repository.Path("sql/schema/current.sql")));
+        }
+        catch
+        {
+            // The caller gets no database to dispose, so the drop and the end of the lease run here.
+            await database.DisposeAsync();
+            throw;
+        }
+
         return database;
     }
 
@@ -53,13 +63,15 @@ internal sealed class ConformanceDatabase : IAsyncDisposable
 {
     private readonly ScratchDatabase _scratch;
     private readonly NpgsqlDataSource _admin;
+    private readonly ScratchDatabaseLease _lease;
     private readonly string _name;
     private readonly Action<NpgsqlConnectionStringBuilder>? _configure;
 
-    internal ConformanceDatabase(ScratchDatabase scratch, NpgsqlDataSource admin, string name, Action<NpgsqlConnectionStringBuilder>? configure)
+    internal ConformanceDatabase(ScratchDatabase scratch, NpgsqlDataSource admin, ScratchDatabaseLease lease, string name, Action<NpgsqlConnectionStringBuilder>? configure)
     {
         _scratch = scratch;
         _admin = admin;
+        _lease = lease;
         _name = name;
         _configure = configure;
         DataSource = CreateDataSource();
@@ -103,6 +115,8 @@ internal sealed class ConformanceDatabase : IAsyncDisposable
         }
         finally
         {
+            // The lease ends after the drop. If the drop failed, the sweep can drop the database.
+            await _lease.DisposeAsync();
             await _admin.DisposeAsync();
         }
     }

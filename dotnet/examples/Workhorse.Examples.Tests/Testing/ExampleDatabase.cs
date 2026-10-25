@@ -19,10 +19,12 @@ public sealed class ExampleDatabase : IAsyncDisposable
 
     private readonly ScratchDatabase _scratch;
     private readonly string? _isolatedName;
+    private readonly ScratchDatabaseLease? _lease;
 
-    private ExampleDatabase(ScratchDatabase scratch, NpgsqlDataSource dataSource, string? isolatedName)
+    private ExampleDatabase(ScratchDatabase scratch, NpgsqlDataSource dataSource, string? isolatedName, ScratchDatabaseLease? lease)
     {
         _scratch = scratch;
+        _lease = lease;
         DataSource = dataSource;
         _isolatedName = isolatedName;
         Queue = new Queue(dataSource);
@@ -39,7 +41,7 @@ public sealed class ExampleDatabase : IAsyncDisposable
     public Admin Admin { get; }
 
     /// <summary>The shared scratch database of the process. Disposing it does nothing.</summary>
-    public static ExampleDatabase Shared(ScratchDatabase scratch) => new(scratch, scratch.DataSource, null);
+    public static ExampleDatabase Shared(ScratchDatabase scratch) => new(scratch, scratch.DataSource, null, null);
 
     /// <summary>A new database with the schema, which <see cref="DisposeAsync"/> drops.</summary>
     public static async Task<ExampleDatabase> CreateIsolatedAsync(ScratchDatabase scratch)
@@ -47,19 +49,21 @@ public sealed class ExampleDatabase : IAsyncDisposable
         _ = scratch.DataSource;
         var source = scratch.Name!.Split("_dotnet_")[0];
         var name = $"{source[..Math.Min(source.Length, 43)]}_dx_{Convert.ToHexStringLower(RandomNumberGenerator.GetBytes(5))}";
-        await using (var admin = scratch.CreateDataSource(builder => { builder.Database = "postgres"; builder.Pooling = false; }))
+        var lease = await scratch.CreateDatabaseAsync(name);
+
+        var database = new ExampleDatabase(scratch, scratch.CreateDataSource(builder => builder.Database = name), name, lease);
+        try
         {
-            await ScratchDatabase.CreateDatabaseAsync(admin, name);
+            await database.ExecuteAsync(await File.ReadAllTextAsync(SchemaPath()));
+        }
+        catch
+        {
+            // The caller gets no database to dispose, so the drop and the end of the lease run here.
+            await database.DisposeAsync();
+            throw;
         }
 
-        var dataSource = scratch.CreateDataSource(builder => builder.Database = name);
-        var schema = await File.ReadAllTextAsync(SchemaPath());
-        await using (var install = dataSource.CreateCommand(schema))
-        {
-            await install.ExecuteNonQueryAsync();
-        }
-
-        return new ExampleDatabase(scratch, dataSource, name);
+        return database;
     }
 
     /// <summary>Runs one SQL statement with positional parameters.</summary>
@@ -137,9 +141,17 @@ public sealed class ExampleDatabase : IAsyncDisposable
 
         await DataSource.DisposeAsync();
         NpgsqlConnection.ClearAllPools();
-        await using var admin = _scratch.CreateDataSource(builder => { builder.Database = "postgres"; builder.Pooling = false; });
-        await using var drop = admin.CreateCommand($"DROP DATABASE IF EXISTS \"{_isolatedName}\"");
-        await drop.ExecuteNonQueryAsync();
+        try
+        {
+            await using var admin = _scratch.CreateDataSource(builder => { builder.Database = "postgres"; builder.Pooling = false; });
+            await using var drop = admin.CreateCommand($"DROP DATABASE IF EXISTS \"{_isolatedName}\"");
+            await drop.ExecuteNonQueryAsync();
+        }
+        finally
+        {
+            // The lease ends after the drop. If the drop failed, the sweep can drop the database.
+            await _lease!.DisposeAsync();
+        }
     }
 
     private NpgsqlCommand Command(string sql, params object[] parameters)

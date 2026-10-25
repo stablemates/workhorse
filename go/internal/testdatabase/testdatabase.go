@@ -7,7 +7,7 @@
 // reads the two variables in a different way.
 //
 // Create makes the scratch databases of the Go tests, so each one commits without a wait for the
-// WAL flush.
+// WAL flush, and holds the lease that keeps pnpm db:sweep from dropping it.
 package testdatabase
 
 import (
@@ -56,13 +56,35 @@ type Executor interface {
 	Exec(ctx context.Context, sql string, arguments ...any) (pgconn.CommandTag, error)
 }
 
+// LeaseStatement takes the lease of a scratch database on a session of the postgres database.
+//
+// A live test can have no session on its scratch database, for example after it closes a pool.
+// pnpm db:sweep takes the exclusive lock of the name with no wait before it drops a scratch
+// database, so it skips a database under this shared lock. The TypeScript harness holds the same
+// lease (SM-1702).
+const LeaseStatement = "SELECT pg_advisory_lock_shared(hashtextextended($1, 0))"
+
 // Create creates the empty scratch database name on an admin connection.
+//
+// Before it creates the database, Create opens a session on adminURL that holds the lease of
+// name. A cleanup of t closes that session. The caller registers its drop of the database after
+// Create returns, so the session ends after the drop. If the process stops or crashes, PostgreSQL
+// ends the session and its lock, and the sweep can drop the database again.
 //
 // A scratch database is for tests only, so its commits do not wait for the WAL flush. A host I/O
 // stall can make one flush take seconds, and a lease of a few seconds then lapses although the
 // worker is correct (SM-1809). Visibility and order do not change. Only a server crash can lose
 // such a commit, and no Go test restarts PostgreSQL or reads the WAL.
-func Create(ctx context.Context, admin Executor, name string) error {
+func Create(t testing.TB, ctx context.Context, admin Executor, adminURL string, name string) error {
+	t.Helper()
+	lease, err := pgx.Connect(ctx, adminURL)
+	if err != nil {
+		return fmt.Errorf("open the lease session of %s: %w", name, err)
+	}
+	t.Cleanup(func() { _ = lease.Close(context.Background()) })
+	if _, err := lease.Exec(ctx, LeaseStatement, name); err != nil {
+		return fmt.Errorf("take the lease of %s: %w", name, err)
+	}
 	quoted := pgx.Identifier{name}.Sanitize()
 	if _, err := admin.Exec(ctx, "CREATE DATABASE "+quoted); err != nil {
 		return err

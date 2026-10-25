@@ -68,6 +68,39 @@ async fn postgres_scratch_database_is_isolated_and_dropped() {
 }
 
 #[tokio::test]
+async fn postgres_scratch_database_keeps_the_sweep_lock_until_its_guard_drops() {
+    let Some(database) = support::scratch_database("postgres_scratch_lease").await else {
+        return;
+    };
+    let name = database.name().to_owned();
+    let (sweep, connection) = database.admin().connect(tokio_postgres::NoTls).await.unwrap();
+    tokio::spawn(connection);
+    // `pnpm db:sweep` takes this lock with no wait before it drops a scratch database. No session
+    // of the test is on the scratch database now, so only the lease keeps the sweep away.
+    let try_lock = "SELECT pg_try_advisory_lock(hashtextextended($1, 0))";
+    let unlock = "SELECT pg_advisory_unlock(hashtextextended($1, 0))";
+    let locked: bool = sweep.query_one(try_lock, &[&name]).await.unwrap().get(0);
+    if locked {
+        sweep.execute(unlock, &[&name]).await.unwrap();
+    }
+    assert!(!locked, "the sweep took the lock of the live scratch database {name}");
+
+    drop(database);
+
+    // The lease session ends after the drop, so the lock becomes free.
+    let mut freed = false;
+    for _ in 0..200 {
+        freed = sweep.query_one(try_lock, &[&name]).await.unwrap().get(0);
+        if freed {
+            sweep.execute(unlock, &[&name]).await.unwrap();
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+    }
+    assert!(freed, "the lease of {name} outlived its guard");
+}
+
+#[tokio::test]
 async fn postgres_scratch_database_commits_without_waiting_for_the_wal_flush() {
     let Some(database) = support::scratch_database("postgres_scratch_async_commit").await else {
         return;

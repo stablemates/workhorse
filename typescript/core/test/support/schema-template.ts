@@ -98,6 +98,18 @@ async function buildSchemaTemplate(
 }
 
 /**
+ * The statement that holds the lease of a scratch database on a `postgres` session.
+ *
+ * A live test process can have no session on its scratch database, for example after a pool
+ * closes its idle clients. `pnpm db:sweep` takes the exclusive lock of the name with no wait
+ * before it drops a scratch database, so it skips a database under this shared lock. The harness
+ * takes the lock before it creates the database and ends the session after it drops it. If the
+ * process stops or crashes, PostgreSQL ends the session and its lock, and the sweep can drop the
+ * database again (SM-1702).
+ */
+export const scratchLeaseStatement = "SELECT pg_advisory_lock_shared(hashtextextended($1, 0))";
+
+/**
  * The statement that lets the commits of a scratch database skip the wait for the WAL flush.
  *
  * A host I/O stall can make one flush take seconds, and a lease of a few seconds then lapses

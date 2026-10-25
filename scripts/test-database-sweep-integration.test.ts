@@ -13,9 +13,11 @@ import {
   type SweepContext,
   testFamilyRoots,
 } from "./test-database-sweep.js";
+import { createDatabaseTestHarness } from "../typescript/core/test/support/db.js";
 import {
   copySchemaTemplate,
   schemaTemplatePrefix,
+  scratchLeaseStatement,
 } from "../typescript/core/test/support/schema-template.js";
 
 // Two databases shaped exactly like the scratch databases `test/support/db.ts` creates. One is
@@ -28,6 +30,9 @@ const liveName = `${sourceName.slice(0, 52)}_5b0eafed02`;
 // A retired template of this process only, so the test never touches a template a checkout uses.
 const templateName = `${schemaTemplatePrefix}${randomBytes(8).toString("hex")}_00000000`;
 const copyName = `${sourceName.slice(0, 52)}_5b0eafed03`;
+
+// A scratch database whose process stopped while its lease session was open.
+const stoppedName = `${sourceName.slice(0, 52)}_5b0eafed05`;
 
 // The JVM harness names its per-process template with the scratch shape `<source>_jvm_<digest>`.
 const jvmTemplateName = `${sourceName.slice(0, 43)}_jvm_5b0eafed04`;
@@ -67,6 +72,7 @@ afterAll(async () => {
     `${templateName}_building`,
     copyName,
     jvmTemplateName,
+    stoppedName,
   ]) {
     await dropLocalDatabase(admin, name);
   }
@@ -104,6 +110,56 @@ describe("sweeping leaked scratch databases", () => {
       /no longer classified as a retired database/,
     );
     expect(await databaseExists(admin, sourceName)).toBe(true);
+  });
+});
+
+describe("sweeping the scratch database of a running test process", () => {
+  it("skips the database of a live harness that has no session on it", dropWait, async () => {
+    const harness = createDatabaseTestHarness(import.meta.url, { poolOwner: "caller" });
+    const name = databaseName(harness.databaseUrl);
+    try {
+      await harness.setup();
+      // The pool closes its clients, as an idle pool does. The process still needs the database.
+      await harness.pool.end();
+      const inventory = (await readDatabaseInventory(admin)).filter((entry) => entry.name === name);
+      const plan = planTestDatabaseSweep(inventory, context);
+      expect(plan.drop.map((entry) => ({ name: entry.name, kind: entry.kind }))).toEqual([
+        { name, kind: "scratch" },
+      ]);
+
+      const outcome = await dropRetiredDatabases(admin, plan, context);
+
+      expect(outcome.dropped).toEqual([]);
+      expect(outcome.skipped.map((entry) => entry.name)).toEqual([name]);
+      expect(await databaseExists(admin, name)).toBe(true);
+    } finally {
+      await harness.teardown();
+    }
+    expect(await databaseExists(admin, name)).toBe(false);
+  });
+
+  it("drops the database after the session of its lease ends", dropWait, async () => {
+    await dropLocalDatabase(admin, stoppedName);
+    const owner = new Client({ connectionString: adminUrl(sourceUrl) });
+    await owner.connect();
+    try {
+      await owner.query(scratchLeaseStatement, [stoppedName]);
+      await admin.query(`CREATE DATABASE ${identifier(stoppedName)}`);
+      const inventory = (await readDatabaseInventory(admin)).filter(
+        (entry) => entry.name === stoppedName,
+      );
+      const plan = planTestDatabaseSweep(inventory, context);
+      expect((await dropRetiredDatabases(admin, plan, context)).skipped).toHaveLength(1);
+
+      // A process that stops or crashes ends its session, and PostgreSQL releases the lock.
+      await owner.end();
+      const stopped = await dropRetiredDatabases(admin, plan, context);
+
+      expect(stopped.dropped.map((entry) => entry.name)).toEqual([stoppedName]);
+      expect(await databaseExists(admin, stoppedName)).toBe(false);
+    } finally {
+      await owner.end().catch(() => {});
+    }
   });
 });
 

@@ -67,3 +67,18 @@ def test_sweep_cannot_take_the_template_lock_during_the_copy(
     finally:
         drop_scratch_database(admin, target)
         drop_scratch_database(admin, template)
+
+
+def test_sweep_cannot_take_the_lease_of_a_live_scratch_database(database_url: str) -> None:
+    # No session of the test is on the scratch database now. The sweep takes this lock with no
+    # wait before it drops a scratch database, so the lease of the fixture must make it fail.
+    parsed = urlsplit(database_url)
+    name = parsed.path.removeprefix("/")
+    with psycopg.connect(urlunsplit(parsed._replace(path="/postgres")), autocommit=True) as sweep:
+        row = sweep.execute(
+            "SELECT pg_try_advisory_lock(hashtextextended(%s, 0))", (name,)
+        ).fetchone()
+        assert row is not None
+        if row[0]:
+            sweep.execute("SELECT pg_advisory_unlock(hashtextextended(%s, 0))", (name,))
+        assert row[0] is False

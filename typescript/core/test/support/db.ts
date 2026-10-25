@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { setTimeout as sleep } from "node:timers/promises";
-import { Pool, type PoolClient } from "pg";
+import { Client, Pool, type PoolClient } from "pg";
 import { dropLocalDatabase } from "../../src/drop-local-database.js";
 import { installSchema } from "../../src/index.js";
 import {
@@ -10,7 +10,12 @@ import {
   localDatabaseUrl,
   namedTestDatabaseUrl,
 } from "../../src/local-database.js";
-import { copySchemaTemplate, schemaTemplateName, withoutWalFlushWait } from "./schema-template.js";
+import {
+  copySchemaTemplate,
+  schemaTemplateName,
+  scratchLeaseStatement,
+  withoutWalFlushWait,
+} from "./schema-template.js";
 
 const schemaUrl = new URL("../../../../sql/schema/current.sql", import.meta.url);
 
@@ -50,11 +55,13 @@ export function createDatabaseTestHarness(
       : namedTestDatabaseUrl(sourceUrl, options.nameSuffix);
   const isolatedName = databaseName(isolatedUrl);
   const pool = new Pool({ connectionString: isolatedUrl, max: options.max });
+  let lease: Client | undefined;
 
   return {
     databaseUrl: isolatedUrl,
     pool,
     async setup() {
+      lease ??= await leaseScratchDatabase(isolatedUrl, isolatedName);
       if (options.schemaProvisioning === "install") {
         await recreateDatabase(isolatedUrl);
         await installSchema(pool);
@@ -105,8 +112,14 @@ export function createDatabaseTestHarness(
       ]);
     },
     async teardown() {
-      if (options.poolOwner !== "caller") await pool.end();
-      await dropDatabase(isolatedUrl, isolatedName);
+      try {
+        if (options.poolOwner !== "caller") await pool.end();
+        await dropDatabase(isolatedUrl, isolatedName);
+      } finally {
+        // The lease ends after the drop. If the drop failed, the sweep can drop the database.
+        await lease?.end();
+        lease = undefined;
+      }
     },
   };
 }
@@ -270,6 +283,25 @@ async function recreateDatabase(databaseUrl: string): Promise<void> {
 }
 
 /**
+ * Open the session that holds the lease of the scratch database `name` until the teardown. A
+ * pooled client can close when it is idle and end its lock with it, so the lease is a client of
+ * its own. If PostgreSQL ends the session, only the protection from the sweep ends, so its error
+ * does not stop the test process.
+ */
+async function leaseScratchDatabase(databaseUrl: string, name: string): Promise<Client> {
+  const lease = new Client({ connectionString: adminUrlFor(databaseUrl) });
+  lease.on("error", () => {});
+  await lease.connect();
+  try {
+    await lease.query(scratchLeaseStatement, [name]);
+  } catch (error) {
+    await lease.end();
+    throw error;
+  }
+  return lease;
+}
+
+/**
  * Copy the template of the current schema into `targetName`. One checked-out client holds the
  * advisory locks, because a pool can close an idle client and end its session locks with it.
  */
@@ -316,6 +348,10 @@ async function dropDatabaseWithAdmin(admin: Pool, name: string): Promise<void> {
 }
 
 function adminPool(databaseUrl: string): Pool {
+  return new Pool({ connectionString: adminUrlFor(databaseUrl), max: 1 });
+}
+
+function adminUrlFor(databaseUrl: string): string {
   assertLocalDatabasePurpose(databaseUrl, "test");
   const url = new URL(databaseUrl);
   if (
@@ -329,7 +365,7 @@ function adminPool(databaseUrl: string): Pool {
     );
   }
   url.pathname = "/postgres";
-  return new Pool({ connectionString: url.toString(), max: 1 });
+  return url.toString();
 }
 
 function identifier(value: string): string {
