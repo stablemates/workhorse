@@ -5,6 +5,13 @@ other SDKs carry, because every tag names one release of all of them.
 
 ## Unreleased
 
+### The worker refuses a `poll_interval` above 2,147,483.647 seconds
+
+Before this change, `poll_interval:` had no upper limit (SM-1778). Now `Worker.new` raises
+`ArgumentError` for a value above 2,147,483.647 seconds, the limit of the registry column. Every
+SDK accepts an explicit poll interval from 1 through 2,147,483,647 ms (ADR 0112). Zero stays
+refused, and `nil` keeps the default.
+
 ### A busy fast-tier queue no longer keeps the worker from its other queues
 
 While one fast-tier queue had a backlog, the fused refill of each completion kept every slot, so the

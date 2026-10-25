@@ -290,7 +290,9 @@ type WorkerOptions struct {
 	// be shorter than LeaseDuration. The smallest supported value is 100 ms. The worker accepts a
 	// shorter value, but on a loaded host it can renew no lease.
 	HeartbeatInterval time.Duration
-	PollInterval      time.Duration
+	// PollInterval is the wait after an empty claim. It accepts a whole number of milliseconds from
+	// 1 ms through 2147483647 ms, and zero selects the default (ADR 0112).
+	PollInterval time.Duration
 	// MaintenanceInterval sets the tick cadence. It defaults to one second. MaintenanceInterval,
 	// MaintenanceRoutineInterval, and RegistryInterval each accept a whole number of milliseconds
 	// from 100 ms through 2147483647 ms, and zero selects the default (ADR 0112).
@@ -529,8 +531,11 @@ func NewWorker(pool *pgxpool.Pool, options WorkerOptions) (*Worker, error) {
 			pollInterval = defaultWorkerPollInterval
 		}
 	}
-	if pollInterval < 0 {
-		return nil, errors.New(negativeWorkerPollMessage)
+	// Every SDK accepts an explicit poll interval from 1 through 2147483647 whole milliseconds. Zero
+	// selects the default, because Go cannot tell it from an unset option (ADR 0112).
+	if pollInterval < time.Millisecond || pollInterval > 2147483647*time.Millisecond ||
+		pollInterval%time.Millisecond != 0 {
+		return nil, errors.New(workerPollRangeMessage)
 	}
 	maintenanceInterval := options.MaintenanceInterval
 	if maintenanceInterval == 0 {

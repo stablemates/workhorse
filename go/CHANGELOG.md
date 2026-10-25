@@ -10,6 +10,15 @@ adds.
 
 ## Unreleased
 
+### The worker refuses a poll interval outside 1 through 2,147,483,647 ms
+
+Before this change, `NewWorker` refused only a negative `WorkerOptions.PollInterval` (SM-1778). It
+accepted a value below 1 ms and a value above the limit of the registry column.
+
+Now `NewWorker` refuses a `PollInterval` that is not a whole number of milliseconds from 1 through
+2,147,483,647 with its usual option error. Every SDK accepts this range (ADR 0112). A zero
+`PollInterval` still selects the default.
+
 ### A busy fast-tier queue no longer keeps the worker from its other queues
 
 While one fast-tier queue had a backlog, the fused refill of each completion kept every slot, so the

@@ -11,6 +11,16 @@ adds.
 
 ## Unreleased
 
+### The worker checks its poll interval
+
+Before this change, `Worker::new` did not check `WorkerOptions::poll_interval` (SM-1778). A value
+near `Duration::MAX` passed construction and could overflow the jitter or the deadline of the wait.
+
+Now `Worker::new` refuses a `poll_interval` that is not a whole number of milliseconds from 1
+through 2,147,483,647 with `Error::InvalidArgument`. Every SDK accepts this range (ADR 0112). A
+caller who passed zero or a value below 1 ms gets an error at construction. `None` keeps the
+default.
+
 ### A busy fast-tier queue no longer keeps the worker from its other queues
 
 While one fast-tier queue had a backlog, the fused refill of each completion kept every slot, so the

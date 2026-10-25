@@ -4,6 +4,7 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 
 	workhorse "github.com/stablemates/workhorse/go"
 )
@@ -75,5 +76,24 @@ func TestWorkerIDExposesRuntimeAndStaysProcessUnique(t *testing.T) {
 	}
 	if !strings.HasPrefix(first, "demo-go-") {
 		t.Fatalf("worker ID does not expose Go runtime: %q", first)
+	}
+}
+
+// SM-1778: a value above 2147483647 ms could wrap the time.Duration multiplication to a value in
+// the SDK range, so the demo refuses it first.
+func TestPollIntervalReadsTheEnvironment(t *testing.T) {
+	for value, want := range map[string]time.Duration{
+		"0": 0, "15": 15 * time.Millisecond, "2147483647": 2147483647 * time.Millisecond,
+	} {
+		t.Setenv("WORKHORSE_WORKER_POLL_MS", value)
+		if got, err := pollInterval(); err != nil || got != want {
+			t.Fatalf("%s: got %s, %v; want %s", value, got, err, want)
+		}
+	}
+	for _, value := range []string{"-1", "2147483648", "288230376151711745", "soon"} {
+		t.Setenv("WORKHORSE_WORKER_POLL_MS", value)
+		if _, err := pollInterval(); err == nil {
+			t.Fatalf("%s: got no error", value)
+		}
 	}
 }

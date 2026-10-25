@@ -65,6 +65,20 @@ RSpec.describe W::Worker do
     expect(pool.statements).to be_empty
   end
 
+  # SM-1778 (ADR 0112): every SDK accepts an explicit poll interval from 1 through 2147483647 ms.
+  # nil keeps the default.
+  it "accepts a poll interval from 0.001 s through 2147483.647 s" do
+    [[0.001, 1], [Rational(2_147_483_647, 1000), 2_147_483_647]].each do |seconds, milliseconds|
+      expect(worker(poll_interval: seconds).instance_variable_get(:@poll_ms)).to eq(milliseconds)
+    end
+    expect(worker(poll_interval: nil).instance_variable_get(:@poll_ms)).to eq(250)
+    [0, 0.0004, Rational(2_147_483_648, 1000), -1].each do |seconds|
+      expect { worker(poll_interval: seconds) }
+        .to raise_error(ArgumentError, /poll_interval must be .* between 0.001 and 2147483.647/)
+    end
+    expect(pool.statements).to be_empty
+  end
+
   # SM-1668 PAR-09 (ADR 0112): with a live subscription, an explicit poll interval is the fallback
   # interval, so the 5,000 ms cap does not apply. Without one, the cap applies before the jitter. A
   # worker that registers then cuts the wait to its registry interval.

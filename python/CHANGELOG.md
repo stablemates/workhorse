@@ -10,6 +10,13 @@ adds.
 
 ## Unreleased
 
+### The worker refuses a `poll_ms` above 2,147,483,647
+
+Before this change, `poll_ms` had no upper limit (SM-1778). Now `Worker` and `AsyncWorker` raise
+`ValueError` for a `poll_ms` above 2,147,483,647, the limit of the registry column. Every SDK
+accepts an explicit poll interval from 1 through 2,147,483,647 ms (ADR 0112). Zero stays refused,
+and `None` keeps the default.
+
 ### A busy fast-tier queue no longer keeps the worker from its other queues
 
 While one fast-tier queue had a backlog, the fused refill of each completion kept every slot, so the

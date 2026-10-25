@@ -93,6 +93,19 @@ def test_a_worker_refuses_an_interval_outside_the_range(option: str, value: obje
         _worker(**{option: value})
 
 
+# SM-1778 (ADR 0112): every SDK accepts an explicit poll interval from 1 through 2,147,483,647 ms.
+# None keeps the default.
+@pytest.mark.parametrize("value", [1, 2_147_483_647])
+def test_a_worker_accepts_a_poll_interval_from_1_through_the_sql_integer_limit(value: int) -> None:
+    assert _worker(poll_ms=value).poll_ms == value
+
+
+@pytest.mark.parametrize("value", [0, 2_147_483_648, -1, 1.5, True])
+def test_a_worker_refuses_a_poll_interval_outside_the_range(value: object) -> None:
+    with pytest.raises(ValueError, match="poll_ms must be an integer between 1 and 2147483647"):
+        _worker(poll_ms=value)
+
+
 def test_a_zero_registry_interval_turns_off_registration_and_other_zeros_are_refused() -> None:
     worker = _worker(registry_interval_ms=0)
     assert worker.registry_interval_ms == 0

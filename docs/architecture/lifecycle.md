@@ -886,7 +886,7 @@ infinities, and fractions throw before any queue operation.
 | -------------------------- | ---------------------------------------------------------------- |
 | `leaseMs`                  | 100 through 86,400,000.                                          |
 | `heartbeatMs`              | 1 through 2,147,483,647, and less than `leaseMs`.                |
-| `pollMs`                   | 0 through 2,147,483,647.                                         |
+| `pollMs`                   | 1 through 2,147,483,647.                                         |
 | fixed `retryDelayMs`       | 0 through 2,147,483,647.                                         |
 | `maintenanceIntervalMs`    | 100 through 2,147,483,647.                                       |
 | `maintenanceRoutinePollMs` | 100 through 2,147,483,647.                                       |

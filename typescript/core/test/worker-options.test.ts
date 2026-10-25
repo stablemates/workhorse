@@ -32,7 +32,9 @@ function recordingQueue() {
 const invalid: Array<[keyof WorkerOptions, number[]]> = [
   ["leaseMs", [Number.NaN, Infinity, -1, 0, 1.5, 99, 86_400_001]],
   ["heartbeatMs", [Number.NaN, Infinity, -1, 0, 1.5, overTimerMaximum]],
-  ["pollMs", [Number.NaN, Infinity, -1, 1.5, overTimerMaximum]],
+  // SM-1778 (ADR 0112): every SDK refuses an explicit poll interval of 0. Before, TypeScript
+  // accepted it and waited 1 ms.
+  ["pollMs", [Number.NaN, Infinity, -1, 0, 1.5, overTimerMaximum]],
   ["maintenanceIntervalMs", [Number.NaN, Infinity, -1, 99, 100.5, overTimerMaximum]],
   ["maintenanceRoutinePollMs", [Number.NaN, Infinity, -1, 99, 100.5, overTimerMaximum]],
   ["registryIntervalMs", [Number.NaN, Infinity, -1, 99, 100.5, overTimerMaximum]],
@@ -72,7 +74,7 @@ describe("Worker timing and limit options", () => {
       () =>
         new Worker(queue, {
           registryIntervalMs: 0,
-          pollMs: 0,
+          pollMs: 1,
           retryDelayMs: 0,
           scheduleCatchupLimit: 10_000,
           maintenanceIntervalMs: 100,

@@ -269,7 +269,8 @@ module Stablemates
         @heartbeat_ms = heartbeat.nil? ? [100, @lease_ms / 3].max : Values.milliseconds(heartbeat, "heartbeat", 1..)
         raise ArgumentError, "heartbeat must be positive and less than lease" unless @heartbeat_ms < @lease_ms
 
-        @poll_ms = poll_interval.nil? ? 250 : Values.milliseconds(poll_interval, "poll_interval", 1..)
+        # Every SDK accepts an explicit poll interval from 1 through 2147483647 ms (ADR 0112).
+        @poll_ms = poll_interval.nil? ? 250 : Values.milliseconds(poll_interval, "poll_interval", 1..2_147_483_647)
         @notification_poll_ms = poll_interval.nil? ? NOTIFICATION_POLL_MS : @poll_ms
         @polling_only = polling_only ? true : false
         @maintenance_ms = Values.milliseconds(maintenance_interval, "maintenance_interval", INTERVAL_RANGE)

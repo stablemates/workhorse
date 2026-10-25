@@ -1044,7 +1044,7 @@ async function executeGracefulDrainRuntimeFixture(
     workerId: `runtime-${fixture.id}`,
     queue: queueName,
     concurrency: fixture.concurrency,
-    pollMs: 0,
+    pollMs: 1,
     registryIntervalMs: 0,
   }).handle(fixture.taskType, async () => {
     await releaseHandlers.promise;
@@ -1453,7 +1453,7 @@ async function executeShutdownCancellationRuntimeFixture(
   const worker = new Worker(queue, {
     workerId: `runtime-${fixture.id}`,
     queue: queueName,
-    pollMs: 0,
+    pollMs: 1,
     registryIntervalMs: 0,
   }).handle(fixture.taskType, async (_payload, context) => {
     started.resolve();

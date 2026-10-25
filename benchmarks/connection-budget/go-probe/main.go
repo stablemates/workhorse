@@ -88,6 +88,10 @@ func main() {
 	queue := setting("WH_BENCH_QUEUE")
 	workers := count("WH_BENCH_WORKERS")
 	pollMs := optionalCount("WH_BENCH_POLL_MS")
+	// The limit keeps the conversion to a time.Duration from an overflow.
+	if pollMs > 2147483647 {
+		fail(fmt.Errorf("WH_BENCH_POLL_MS must be at most 2147483647"))
+	}
 	shutdownGraceMs := count("WH_BENCH_SHUTDOWN_GRACE_MS")
 	config, err := pgxpool.ParseConfig(setting("WH_BENCH_DATABASE_URL"))
 	if err != nil {

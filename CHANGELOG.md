@@ -20,6 +20,16 @@ upgrade steps.
 
 ## Unreleased
 
+### The worker refuses `pollMs: 0`
+
+Before this change, `new Worker(queue, { pollMs: 0 })` passed construction, and the worker waited
+1 ms after each empty claim (SM-1778). Python, Ruby, the JVM, and .NET refused 0.
+
+Now the constructor throws for `pollMs: 0`. Every SDK accepts an explicit poll interval from 1
+through 2,147,483,647 ms (ADR 0112). An unset `pollMs` keeps the default.
+
+Upgrade step: replace `pollMs: 0` with `pollMs: 1`. The wait does not change.
+
 ### A busy fast-tier queue no longer keeps a worker from its other queues
 
 A worker can serve several queues. On the fast tier, a completion claims the next task of its own

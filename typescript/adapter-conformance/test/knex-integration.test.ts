@@ -346,7 +346,7 @@ describe("released Knex native route and Objection recipe", () => {
     );
     const worker = new Worker(new Queue(workerPool), {
       workerId: "separate-knex-worker",
-      pollMs: 0,
+      pollMs: 1,
     }).handle("account.created", handled);
     try {
       const created = await connection.transaction(async (transaction) => {

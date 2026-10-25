@@ -64,6 +64,6 @@ describe("the wait after an empty claim", () => {
 
   it("bounds the jittered wait at the timer maximum and waits at least 1 ms", () => {
     expect(waits(worker({ pollMs: MAX_TIMER_DELAY_MS }, true))[1]).toBe(MAX_TIMER_DELAY_MS);
-    expect(waits(worker({ pollMs: 0 }, true))).toEqual([1, 1]);
+    expect(waits(worker({ pollMs: 1 }, true))).toEqual([1, 1]);
   });
 });
