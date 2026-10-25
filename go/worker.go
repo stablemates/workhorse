@@ -42,6 +42,8 @@ const (
 	// The deadline sits under the 30 second termination grace a container platform gives a process
 	// by default, so the worker finishes its own shutdown before the platform sends SIGKILL.
 	defaultShutdownGracePeriod = 25 * time.Second
+	// Ruby, the JVM, and .NET refuse a longer grace too.
+	maximumShutdownGracePeriod = 24 * time.Hour
 	minimumWorkerLease         = 100 * time.Millisecond
 	maximumWorkerLease         = 24 * time.Hour
 	maximumWorkerConcurrency   = 100
@@ -592,7 +594,8 @@ func NewWorker(pool *pgxpool.Pool, options WorkerOptions) (*Worker, error) {
 	if shutdownGracePeriod == 0 {
 		shutdownGracePeriod = defaultShutdownGracePeriod
 	}
-	if shutdownGracePeriod < time.Millisecond || shutdownGracePeriod%time.Millisecond != 0 {
+	if shutdownGracePeriod < time.Millisecond || shutdownGracePeriod > maximumShutdownGracePeriod ||
+		shutdownGracePeriod%time.Millisecond != 0 {
 		return nil, errors.New(workerShutdownGraceRangeMessage)
 	}
 	logger := options.Logger

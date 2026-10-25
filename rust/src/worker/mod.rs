@@ -51,6 +51,9 @@ use handler::ErasedHandler;
 const DEFAULT_LEASE: Duration = Duration::from_secs(30);
 const MIN_LEASE: Duration = Duration::from_millis(100);
 const MAX_LEASE: Duration = Duration::from_secs(24 * 60 * 60);
+const MAX_SHUTDOWN_GRACE: Duration = Duration::from_secs(24 * 60 * 60);
+const GRACE_RANGE: &str =
+    "worker shutdown grace period must be a whole number of milliseconds between 1 and 86400000";
 const LISTENING_POLL: Duration = Duration::from_secs(5);
 const POLLING_POLL: Duration = Duration::from_millis(250);
 const MAX_EMPTY_POLL: Duration = Duration::from_secs(5);
@@ -179,7 +182,7 @@ pub struct WorkerOptions {
     pub schedule_catchup_limit: i32,
     /// How long shutdown may take before running handlers see their cancellation, counted from the
     /// moment the worker observes shutdown. Draining claims and refreshing the registration spend
-    /// from the same period.
+    /// from the same period. `Worker::new` accepts whole milliseconds from 1 ms through one day.
     pub shutdown_grace_period: Duration,
     /// Never opens the `LISTEN` connection.
     pub polling_only: bool,
@@ -328,11 +331,11 @@ fn validate(
     if !(1..=MAX_CATCHUP_LIMIT).contains(&options.schedule_catchup_limit) {
         return invalid("worker schedule catch-up limit must be between 1 and 10000");
     }
+    // The upper limit is the one Ruby, the JVM, and .NET use. It also keeps `Instant::now() +
+    // grace` in the run from an overflow.
     let grace = options.shutdown_grace_period;
-    if !whole_millis(grace) || grace.is_zero() {
-        return invalid(
-            "worker shutdown grace period must be a positive whole number of milliseconds",
-        );
+    if !whole_millis(grace) || grace.is_zero() || grace > MAX_SHUTDOWN_GRACE {
+        return invalid(GRACE_RANGE);
     }
     let capacity = pool.status().max_size;
     if capacity < MIN_DEDICATED_POOL && !options.shared_heartbeats {
@@ -2144,15 +2147,28 @@ mod tests {
         // SM-1668 PAR-09: Rust refuses a zero grace. It does not read zero as the default.
         rejects(
             WorkerOptions { shutdown_grace_period: Duration::ZERO, ..Default::default() },
-            "worker shutdown grace period must be a positive whole number of milliseconds",
+            GRACE_RANGE,
         );
         rejects(
             WorkerOptions {
                 shutdown_grace_period: Duration::from_micros(1_500),
                 ..Default::default()
             },
-            "worker shutdown grace period must be a positive whole number of milliseconds",
+            GRACE_RANGE,
         );
+        // SM-1778: `Worker::new` refuses a grace above one day, as Ruby, the JVM, and .NET do.
+        // Before, a grace near `Duration::MAX` passed and the run panicked on `Instant::now() +
+        // grace`.
+        for grace in [MAX_SHUTDOWN_GRACE + Duration::from_millis(1), Duration::from_secs(u64::MAX)]
+        {
+            rejects(
+                WorkerOptions { shutdown_grace_period: grace, ..Default::default() },
+                GRACE_RANGE,
+            );
+        }
+        let limit =
+            WorkerOptions { shutdown_grace_period: MAX_SHUTDOWN_GRACE, ..Default::default() };
+        assert!(Worker::new(pool(4), limit).is_ok());
         let error = Worker::new(pool(2), WorkerOptions::default()).unwrap_err();
         assert!(error.to_string().starts_with(
             "worker cannot reserve a dedicated heartbeat connection: max pool size is 2"
