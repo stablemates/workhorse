@@ -421,8 +421,8 @@ function validateContractValue(
 }
 
 // PostgreSQL enforces the limit on octet_length(value::jsonb::text), so the client measures the
-// same text. That text is never shorter than the compact JSON and, without exponent notation, at
-// most twice as long, which lets most values skip the exact measure.
+// same text from the JSON it sends. Without exponent notation that text is at most twice as long
+// as the compact JSON, which lets most values skip the exact measure.
 function serializeJsonWithinLimit(
   taskType: string,
   kind: "payload" | "result",
@@ -432,15 +432,16 @@ function serializeJsonWithinLimit(
   const serialized = JSON.stringify(value);
   const compactBytes = Buffer.byteLength(serialized, "utf8");
   if (compactBytes * 2 <= maxBytes && !EXPONENT_NUMBER.test(serialized)) return serialized;
-  const actualBytes = jsonbTextBytes(JSON.parse(serialized) as Json);
+  const actualBytes = jsonbTextBytes(serialized);
   if (actualBytes > maxBytes) {
     throw new TaskValueSizeLimitError(taskType, kind, actualBytes, maxBytes);
   }
   return serialized;
 }
 
-// JSON.stringify writes a number in exponent notation with an explicit exponent sign.
-const EXPONENT_NUMBER = /\de[+-]/;
+// A number token in exponent notation. JSON.stringify writes an explicit exponent sign, and a
+// JSON.rawJSON number can omit it or use an upper-case E.
+const EXPONENT_NUMBER = /\d[eE][+-]?\d/;
 
 // PostgreSQL refuses a jsonb string or key that holds NUL or a surrogate outside a pair, and that
 // refusal would stop the worker rather than fail the attempt. The error carries no part of the
@@ -489,46 +490,157 @@ export function hasUnstorableEscape(serialized: string): boolean {
   return lowExpectedAt >= 0;
 }
 
-/**
- * Returns the UTF-8 length of PostgreSQL's jsonb text for a parsed JSON value. That text puts a
- * space after each `:` and `,`, escapes strings as JSON.stringify does, and writes numbers in
- * plain decimal notation. The walk keeps its own stack, so any nesting that JSON.parse produced
- * measures without a stack overflow.
- */
-export function jsonbTextBytes(value: Json): number {
-  let bytes = 0;
-  const pending: Json[] = [value];
-  while (pending.length > 0) {
-    const item = pending.pop()!;
-    if (item === null) bytes += 4;
-    else if (typeof item === "boolean") bytes += item ? 4 : 5;
-    else if (typeof item === "number") bytes += numericTextBytes(JSON.stringify(item));
-    else if (typeof item === "string") bytes += Buffer.byteLength(JSON.stringify(item), "utf8");
-    else if (Array.isArray(item)) {
-      bytes += item.length === 0 ? 2 : 2 + (item.length - 1) * 2;
-      for (const element of item) pending.push(element);
-    } else {
-      const keys = Object.keys(item);
-      bytes += keys.length === 0 ? 2 : 2 + (keys.length - 1) * 2;
-      for (const key of keys) {
-        bytes += Buffer.byteLength(JSON.stringify(key), "utf8") + 2;
-        pending.push(item[key]!);
-      }
-    }
-  }
-  return bytes;
+interface OpenContainer {
+  object: boolean;
+  /** The bytes of each member by key, so that a later member replaces an earlier one. */
+  members: Map<string, number>;
+  bytes: number;
+  count: number;
+  key: string;
+  /** The jsonb text bytes of `key` and the `": "` after it. */
+  keyBytes: number;
 }
 
-// numeric_out writes every digit of the integer part and as many fraction digits as the input
-// had after its decimal point, shifted by the exponent.
+/**
+ * Returns the UTF-8 length of PostgreSQL's jsonb text for valid JSON text. That text puts a space
+ * after each `:` and `,`. It escapes strings as JSON.stringify does. It keeps the last member of
+ * each key. It writes each number in plain decimal notation with the scale of its token. The walk
+ * reads tokens, so a JSON.rawJSON number such as `0.0` keeps its scale. It keeps its own stack,
+ * so any nesting measures without a stack overflow.
+ */
+export function jsonbTextBytes(serialized: string): number {
+  const stack: OpenContainer[] = [];
+  let result = 0;
+  let expectKey = false;
+  const add = (bytes: number): void => {
+    const top = stack.at(-1);
+    if (top === undefined) result = bytes;
+    else if (top.object) top.members.set(top.key, top.keyBytes + bytes);
+    else {
+      top.bytes += bytes;
+      top.count += 1;
+    }
+  };
+  for (let index = 0; index < serialized.length;) {
+    const code = serialized.charCodeAt(index);
+    if (code === OPEN_BRACE || code === OPEN_BRACKET) {
+      stack.push({
+        object: code === OPEN_BRACE,
+        members: new Map(),
+        bytes: 0,
+        count: 0,
+        key: "",
+        keyBytes: 0,
+      });
+      expectKey = code === OPEN_BRACE;
+      index += 1;
+    } else if (code === CLOSE_BRACE || code === CLOSE_BRACKET) {
+      const top = stack.pop()!;
+      let { bytes, count } = top;
+      if (top.object) {
+        count = top.members.size;
+        for (const member of top.members.values()) bytes += member;
+      }
+      add(2 + bytes + (count > 0 ? 2 * (count - 1) : 0));
+      expectKey = false;
+      index += 1;
+    } else if (code === COMMA) {
+      expectKey = stack.at(-1)?.object === true;
+      index += 1;
+    } else if (code === QUOTE) {
+      let end = index + 1;
+      let escaped = false;
+      for (
+        let next = serialized.charCodeAt(end);
+        next !== QUOTE;
+        next = serialized.charCodeAt(end)
+      ) {
+        if (next === BACKSLASH) {
+          escaped = true;
+          end += 2;
+        } else end += 1;
+      }
+      const token = serialized.slice(index, end + 1);
+      const text = escaped ? (JSON.parse(token) as string) : undefined;
+      // JSON.stringify writes an unescaped string as it is, so the token is its own jsonb text.
+      const bytes = text === undefined ? Buffer.byteLength(token, "utf8") : jsonbStringBytes(text);
+      if (expectKey) {
+        const top = stack.at(-1)!;
+        top.key = text ?? token.slice(1, -1);
+        top.keyBytes = bytes + 2;
+        expectKey = false;
+      } else add(bytes);
+      index = end + 1;
+    } else if (code === LETTER_T || code === LETTER_N) {
+      add(4);
+      index += 4;
+    } else if (code === LETTER_F) {
+      add(5);
+      index += 5;
+    } else if (isNumberCharacter(code)) {
+      let end = index + 1;
+      while (end < serialized.length && isNumberCharacter(serialized.charCodeAt(end))) end += 1;
+      add(numericTextBytes(serialized.slice(index, end)));
+      index = end;
+    } else {
+      // Whitespace and `:` add nothing to the measure.
+      index += 1;
+    }
+  }
+  return result;
+}
+
+const OPEN_BRACE = 0x7b;
+const CLOSE_BRACE = 0x7d;
+const OPEN_BRACKET = 0x5b;
+const CLOSE_BRACKET = 0x5d;
+const COMMA = 0x2c;
+const QUOTE = 0x22;
+const BACKSLASH = 0x5c;
+const LETTER_T = 0x74;
+const LETTER_N = 0x6e;
+const LETTER_F = 0x66;
+
+// A character that a JSON number token can hold: a digit, a sign, `.`, `e`, or `E`.
+function isNumberCharacter(code: number): boolean {
+  return (
+    (code >= 0x30 && code <= 0x39) ||
+    code === 0x2d ||
+    code === 0x2b ||
+    code === 0x2e ||
+    code === 0x65 ||
+    code === 0x45
+  );
+}
+
+// escape_json escapes the same characters as JSON.stringify, with the same text.
+function jsonbStringBytes(text: string): number {
+  return Buffer.byteLength(JSON.stringify(text), "utf8");
+}
+
+const NEGATIVE_ZERO = /^-0(?:\.0*)?$/;
+
+// numeric_out writes the integer part without leading zeros and as many fraction digits as the
+// token had after its decimal point, less the exponent. Zero has no sign.
 function numericTextBytes(token: string): number {
-  const match = /^(-?)(\d+)(?:\.(\d+))?e([+-]\d+)$/.exec(token);
+  if (!/[eE]/.test(token)) return NEGATIVE_ZERO.test(token) ? token.length - 1 : token.length;
+  const match = /^(-?)(\d+)(?:\.(\d+))?(?:[eE]([+-]?\d+))?$/.exec(token);
   if (!match) return token.length;
-  const [, sign, integerDigits, fractionDigits = "", exponentText] = match;
+  const [, sign, integerDigits, fractionDigits = "", exponentText = "0"] = match;
   const exponent = Number(exponentText);
+  // PostgreSQL refuses an exponent this large, so the database reports the value.
+  if (!Number.isSafeInteger(exponent)) return token.length;
+  const digits = integerDigits! + fractionDigits;
+  const point = integerDigits!.length + exponent;
+  let integerLength = 1;
+  if (point > 0) {
+    const available = Math.min(point, digits.length);
+    const leadingZeros = /^0*/.exec(digits.slice(0, available))![0].length;
+    if (leadingZeros < available) integerLength = point - leadingZeros;
+  }
   const scale = Math.max(0, fractionDigits.length - exponent);
-  const integerLength = Math.max(1, integerDigits!.length + exponent);
-  return sign!.length + integerLength + (scale > 0 ? 1 + scale : 0);
+  const negative = sign === "-" && /[1-9]/.test(digits);
+  return (negative ? 1 : 0) + integerLength + (scale > 0 ? 1 + scale : 0);
 }
 
 interface TaskAcceptance {
