@@ -889,6 +889,28 @@ export const PARITY_WORKER_ROWS: readonly ParityRow[] = [
     },
   },
   {
+    capability: "Fused refill gives the other queues of a worker a claim",
+    dotnet: {
+      file: "Workhorse.Tests/WorkerFastTierTests.cs",
+      test: "AnotherQueueGetsAClaimWhileAFastQueueKeepsABacklog",
+    },
+    jvm: {
+      file: "run/workhorse/WorkerFastTierDatabaseTest.java",
+      test: "givesAnotherQueueAClaimWhileAFastQueueKeepsABacklog",
+    },
+    ruby: {
+      file: "integration/worker_fast_tier_spec.rb",
+      example: "gives another queue a claim while a fast queue keeps a backlog",
+    },
+    rust: { fixtures: ["runtime/a-fused-refill-gives-the-other-queues-a-claim"] },
+    typescript: { file: "worker-dispatch.test.ts", pattern: "gives another queue a claim" },
+    python: { file: "test_worker_dispatch.py", pattern: "another_queue_gets_a_claim" },
+    go: {
+      file: "worker_dispatch_internal_test.go",
+      pattern: "GivesAnotherQueueAClaimWhileAFastQueueKeepsABacklog",
+    },
+  },
+  {
     capability: "Unhandled task type released to its queue",
     dotnet: {
       fixtures: [

@@ -193,6 +193,179 @@ public sealed class WorkerFastTierTests(ScratchDatabase database) : IClassFixtur
         Assert.Equal(0, worker.ActiveAttempts);
     }
 
+    /// <summary>
+    /// A fused claim asks only the completing task's queue. While that queue has a backlog, each
+    /// completion refills the slot, so no plain claim asks the other queues (SM-1676).
+    /// </summary>
+    [Fact]
+    public async Task AnotherQueueGetsAClaimWhileAFastQueueKeepsABacklog()
+    {
+        const int backlog = 100;
+        await WarmUpFusedCompletionsAsync();
+        var hot = UniqueQueue("fair-hot");
+        var cold = UniqueQueue("fair-cold");
+        await FastTierAsync(database.DataSource, hot);
+        await FastTierAsync(database.DataSource, cold);
+        // The first plain claim asks the second queue, so it asks the hot queue first.
+        await using var worker = new Worker(database.DataSource, Options(hot, options =>
+        {
+            options.Queues = [cold, hot];
+            options.Concurrency = 1;
+            options.DisableRegistry = true;
+        }));
+        // Each handler start and the claim limit of each fused completion, in order.
+        var events = new ConcurrentQueue<string>();
+        worker.FusedStatementHook = statement =>
+        {
+            if (statement.Completions > 0)
+            {
+                events.Enqueue($"fused:{statement.ClaimLimit}");
+            }
+        };
+        worker.Handle<Order, Total>("work", async (context, order) =>
+        {
+            var isCold = context.Task.Queue == cold;
+            events.Enqueue(isCold ? "cold" : "hot");
+            if (!isCold)
+            {
+                await Task.Delay(2);
+            }
+
+            return new Total(order.OrderId);
+        });
+        for (var order = 0; order < backlog; order++)
+        {
+            await EnqueueAsync(database.DataSource, hot, "work", new { orderId = order });
+        }
+
+        await EnqueueAsync(database.DataSource, cold, "work", new { orderId = backlog });
+
+        await using (var run = new RunningWorker(worker))
+        {
+            await EventuallyAsync(() => events.Contains("cold"), "the cold task starts");
+            await run.StopAsync();
+        }
+
+        // Once the cold queue has waited a poll interval, one hot completion claims nothing. Its slot
+        // goes to a plain claim, which asks the cold queue next. Each earlier completion refilled.
+        // A slow start can make the first completion the one that skips.
+        var seen = events.ToList();
+        var coldAt = seen.IndexOf("cold");
+        Assert.InRange(seen.Take(coldAt).Count(entry => entry == "hot"), 1, (backlog / 2) - 1);
+        var fused = seen.Take(coldAt).Where(entry => entry.StartsWith("fused:", StringComparison.Ordinal)).ToList();
+        Assert.Equal("fused:0", seen[coldAt - 1]);
+        Assert.All(fused[..^1], entry => Assert.Equal("fused:1", entry));
+    }
+
+    /// <summary>
+    /// After a completion skips its refill for fairness, a plain claim in flight for another cohort
+    /// keeps a new plain claim from starting. The next completion of the first cohort must not take
+    /// the slot that the skip gave back, or every slot fills again and the other queue starves.
+    /// </summary>
+    [Fact]
+    public async Task KeepsTheSlotOfAFairnessSkipFreeForAPlainClaim()
+    {
+        var hot = UniqueQueue("skip-hot");
+        var cold = UniqueQueue("skip-cold");
+        await FastTierAsync(database.DataSource, hot);
+        await FastTierAsync(database.DataSource, cold);
+        await using var worker = new Worker(database.DataSource, Options(hot, options =>
+        {
+            options.Queues = [hot, cold];
+            options.Concurrency = 4;
+            options.Cohorts = 2;
+            options.PollInterval = TimeSpan.FromMilliseconds(40);
+            options.DisableRegistry = true;
+        }));
+        var limits = new ConcurrentQueue<int>();
+        worker.FusedStatementHook = statement =>
+        {
+            if (statement.Completions > 0)
+            {
+                limits.Enqueue(statement.ClaimLimit);
+            }
+        };
+        var holding = false;
+        var heldClaim = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var claimHeld = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        worker.PlainClaimHook = () =>
+        {
+            if (!Volatile.Read(ref holding))
+            {
+                return Task.CompletedTask;
+            }
+
+            claimHeld.TrySetResult();
+            return heldClaim.Task;
+        };
+        // Each handler waits until the test finishes its task, or until the test opens every handler.
+        var started = new ConcurrentQueue<int>();
+        var finishes = new ConcurrentDictionary<int, TaskCompletionSource>();
+        var open = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        TaskCompletionSource Finish(int order) => finishes.GetOrAdd(order, _ => new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously));
+        worker.Handle<Order, Total>("work", async (_, order) =>
+        {
+            started.Enqueue(order.OrderId);
+            await Task.WhenAny(Finish(order.OrderId).Task, open.Task);
+            return new Total(order.OrderId);
+        });
+        for (var order = 0; order < 20; order++)
+        {
+            await EnqueueAsync(database.DataSource, hot, "work", new { orderId = order });
+        }
+
+        await using (var run = new RunningWorker(worker))
+        {
+            try
+            {
+                // The first plain claim fills cohort 0 with tasks 0 and 1, the second fills cohort 1
+                // with tasks 2 and 3.
+                await EventuallyAsync(() => started.Count == 4, "four tasks start");
+                Assert.Equal([0, 1, 2, 3], started.Order());
+                Volatile.Write(ref holding, true);
+                // The cold queue waits a fairness interval. A cohort 1 completion then skips its
+                // refill, and the plain claim that takes its slot stays in flight.
+                await Task.Delay(100, TestContext.Current.CancellationToken);
+                Finish(2).SetResult();
+                await claimHeld.Task.WaitAsync(Patience, TestContext.Current.CancellationToken);
+                // That claim has not asked the cold queue, so a cohort 0 completion skips too.
+                Finish(0).SetResult();
+                await EventuallyAsync(() => limits.Count == 2, "the second fused completion");
+                Finish(1).SetResult();
+                await EventuallyAsync(() => limits.Count == 3, "the third fused completion");
+                // The skip is pending, so the third completion asks only for its own slot, not 2.
+                Assert.Equal([0, 0, 1], limits);
+            }
+            finally
+            {
+                open.TrySetResult();
+                heldClaim.TrySetResult();
+                await run.StopAsync();
+            }
+        }
+    }
+
+    /// <summary>
+    /// Runs one fused completion in this process first, so the first run of the code does not use up
+    /// the poll interval of a test that measures it.
+    /// </summary>
+    private async Task WarmUpFusedCompletionsAsync()
+    {
+        var queue = UniqueQueue("fair-warm");
+        await FastTierAsync(database.DataSource, queue);
+        await using var worker = new Worker(database.DataSource, Options(queue, options => options.DisableRegistry = true));
+        worker.Handle<Order, Total>("work", (_, order) => Task.FromResult(new Total(order.OrderId)));
+        var ids = new List<Guid>();
+        for (var order = 0; order < 2; order++)
+        {
+            ids.Add(await EnqueueAsync(database.DataSource, queue, "work", new { orderId = order }));
+        }
+
+        await using var running = new RunningWorker(worker);
+        await EventuallyAsync(async () => await CountAsync("fast_task_outcome", ids) == 2, "the warm-up outcomes");
+        await running.StopAsync();
+    }
+
     [Fact]
     public async Task AFastClaimStartsItsLeaseWindowAfterTheWaitForThePool()
     {

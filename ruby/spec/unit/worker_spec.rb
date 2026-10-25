@@ -388,4 +388,44 @@ RSpec.describe W::Worker do
       expect(expiries).to eq(0)
     end
   end
+
+  # SM-1676: while a fairness skip waits for its plain claim, a later completion of the same cohort
+  # must not take the slot that the skip gave back.
+  describe "a fused claim while a fairness skip is pending" do
+    slots_class = described_class.const_get(:DispatchSlots)
+    handlers_class = Struct.new(:active_count, :max_length)
+    task_class = Struct.new(:id, :queue)
+
+    it "keeps the slot of a fairness skip free for a plain claim" do
+      pool.capacity = 6
+      subject = worker(queues: %w[a b], concurrency: 4, cohorts: 2, poll_interval: 0.01)
+      handlers = handlers_class.new(4, 8)
+      gate = Struct.new(:ready?).new(true)
+      slots = slots_class.new(4, 2, nil, subject.send(:stop_version), [], handlers, gate)
+      tasks = Array.new(4) { |index| task_class.new("t#{index}", "a") }
+      tasks.each_with_index { |task, index| slots.thread_cohorts[task.id] = index / 2 }
+      slots.cohort_active.replace([2, 2])
+      subject.instance_variable_set(:@dispatch_slots, slots)
+      # Queue b had no claim for more than the poll interval.
+      subject.instance_variable_set(:@queue_asked_at, {"a" => subject.send(:monotonic), "b" => subject.send(:monotonic) - 1})
+      # Task t3 returned, and a plain claim for cohort 1 holds its slot in flight.
+      slots.thread_cohorts.delete("t3")
+      slots.cohort_active[1] -= 1
+      handlers.active_count -= 1
+      slots.reserved += 1
+      slots.cohort_reserved[1] += 1
+      slots.cohort_claims[1] += 1
+
+      # The first cohort 0 completion skips its refill, and its handler then returns.
+      expect(subject.send(:reserve_completion_claim, tasks[0]).limit).to eq(0)
+      expect(slots.fairness_skip_pending).to be(true)
+      slots.thread_cohorts.delete("t0")
+      slots.cohort_active[0] -= 1
+      handlers.active_count -= 1
+
+      # Two slots of cohort 0 are free now, but the next completion asks only for its own slot.
+      expect(slots.cohort_free(0)).to eq(1)
+      expect(subject.send(:reserve_completion_claim, tasks[1]).limit).to eq(1)
+    end
+  end
 end

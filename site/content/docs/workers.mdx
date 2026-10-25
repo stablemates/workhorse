@@ -486,6 +486,12 @@ across its queues, so a busy queue cannot hide the tasks of another queue.
 
 Thus, each queue of the worker gets claims in turn.
 
+On the fast tier, a completion can claim the next task of its own queue in the same statement. Thus,
+a busy fast-tier queue can keep every slot of the worker. If another queue of the worker had no claim
+for one poll interval, the next completion claims no task. Its slot becomes free, and the next claim
+continues the queue rotation. If that claim asks the busy queue first, a second completion gives up
+its claim, and the claim after it asks the other queue.
+
 Give `queue` for one queue name or `queues` for several names. If you give neither option, the
 worker uses the default queue of the queue client. A [batch handler](/docs/batch-handlers) receives
 tasks from one queue at a time.

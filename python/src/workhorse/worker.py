@@ -520,6 +520,9 @@ class _DispatchSlots:
     # A single pass ends at its first claim that made no progress.
     pass_ended: bool = False
     claim_error: BaseException | None = None
+    # Set when a completion skipped its fused claim so that a plain claim can ask the other
+    # queues. The next plain claim clears it, so only one completion at a time gives up its claim.
+    fairness_skip_pending: bool = False
     # Closed once the loop stops starting claims, so no completion claims for it either.
     open: bool = True
 
@@ -1648,6 +1651,10 @@ class Worker:
         self._hostname = socket.gethostname() or "python-worker"
         self._registered = False
         self._next_queue_index = 0
+        # The monotonic time when a claim last asked each queue for tasks, plain or fused. A worker
+        # with more than one queue reads it so a fused claim cannot keep the other queues from a
+        # claim (ADR 0076, rule 17).
+        self._queue_asked_at: dict[str, float] = {}
         # Queues that rejected a fast claim, with the monotonic time to probe them again.
         self._full_tier_until: dict[str, float] = {}
         # Tasks claimed from a queue that answered as fast-tier. Their handlers get the fast-tier
@@ -2565,6 +2572,10 @@ class Worker:
         )
         with self._state_lock:
             self._dispatch_slots = slots
+            # A queue counts as asked when the run starts, so the first completions keep their
+            # fused claims.
+            run_started_at = monotonic()
+            self._queue_asked_at = dict.fromkeys(self.queues, run_started_at)
         # Each claim in flight, with its limit, its cohort (None for the whole worker), and the
         # slots it reserved in that cohort.
         claims: dict[int, tuple[int, int | None, int]] = {}
@@ -2628,6 +2639,7 @@ class Worker:
                 # together. A worker whose last claim found work would claim now anyway, so it
                 # skips the delay.
                 delayed = notified and slots.consecutive_empty_claims > 0
+                slots.fairness_skip_pending = False
                 slots.reserved += limit
                 if cohort is None:
                     slots.whole_claims += 1
@@ -2877,6 +2889,7 @@ class Worker:
             with self._state_lock:
                 queue_name = self.queues[self._next_queue_index]
                 self._next_queue_index = (self._next_queue_index + 1) % len(self.queues)
+                self._queue_asked_at[queue_name] = monotonic()
             claim_started_at = monotonic()
             with _start_span(
                 "workhorse.claim",
@@ -2972,7 +2985,7 @@ class Worker:
         for it. A queue that left the fast tier after the claim rejects that statement, so the
         attempt completes through complete_v1 instead.
         """
-        reservation = self._reserve_completion_claim()
+        reservation = self._reserve_completion_claim(task.queue)
         pending = _PendingCompletion(task, encoded_result, reservation.limit, Event())
         try:
             self._send_batched_completion(pending, (task.queue, reservation.cohort))
@@ -2995,13 +3008,15 @@ class Worker:
             )
         return pending.accepted
 
-    def _reserve_completion_claim(self) -> _CompletionClaim:
+    def _reserve_completion_claim(self, queue_name: str) -> _CompletionClaim:
         """Set aside the slots a completion's fused claim may fill (ADR 0076, rules 12 and 13).
 
-        The claim asks for the free slots of the task's cohort plus the slot the task leaves. It
-        claims nothing while the worker stops, pauses, waits after an empty claim, or holds no
-        usable heartbeat reservation, and it waits
-        for the cohort's refill batch while another claim for the cohort is in flight.
+        The claim asks queue_name for the free slots of the task's cohort plus the slot the task
+        leaves. It claims nothing while the worker stops, pauses, waits after an empty claim, or
+        holds no usable heartbeat reservation, and it waits
+        for the cohort's refill batch while another claim for the cohort is in flight. It also
+        claims nothing when another queue of the worker has waited a poll interval for a claim
+        (ADR 0076, rule 17).
         """
         running = current_thread()
         # Without a usable heartbeat reservation the completion claims nothing (ADR 0071, rule 6).
@@ -3023,16 +3038,42 @@ class Worker:
                 or slots.empty_wait is not None
             ):
                 return _CompletionClaim(cohort, 0, wake_version)
-            limit = min(slots.free_slots(len(self._active_threads)), slots.cohort_free(cohort)) + 1
+            free = min(slots.free_slots(len(self._active_threads)), slots.cohort_free(cohort)) + 1
             if (
                 slots.whole_claims > 0 or slots.cohort_claims[cohort] > 0
-            ) and limit < slots.refill_batch:
+            ) and free < slots.refill_batch:
                 return _CompletionClaim(cohort, 0, wake_version)
+            # The completion gives its slot back, so the loop's next plain claim continues the
+            # rotation.
+            now = monotonic()
+            if not slots.fairness_skip_pending and self._other_queue_waiting(queue_name, now):
+                slots.fairness_skip_pending = True
+                return _CompletionClaim(cohort, 0, wake_version)
+            # Until that plain claim starts, a fused claim refills only its own slot, so it cannot
+            # take the slot that the skipped completion gave back.
+            limit = 1 if slots.fairness_skip_pending else free
+            self._queue_asked_at[queue_name] = now
             slots.reserved += limit
             slots.cohort_reserved[cohort] += limit
             slots.handed_over[running] = cohort
             slots.cohort_handed_over[cohort] += 1
             return _CompletionClaim(cohort, limit, wake_version)
+
+    def _other_queue_waiting(self, queue_name: str, now: float) -> bool:
+        """Return whether a queue other than queue_name has had no claim for a poll interval.
+
+        A fused claim asks only its own queue. While that queue has a backlog, its completions
+        would keep every slot, and no plain claim would ask the other queues. The caller holds the
+        state lock.
+        """
+        if len(self.queues) < 2:
+            return False
+        interval = self.poll_ms / 1000
+        return any(
+            now - self._queue_asked_at.get(other, now) >= interval
+            for other in self.queues
+            if other != queue_name
+        )
 
     def _settle_completion_claim(
         self,

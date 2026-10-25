@@ -59,6 +59,7 @@ import type {
   PollCadenceRuntimeFixture,
   ReleaseWaitRuntimeFixture,
   SlotRefillRuntimeFixture,
+  QueueFairnessRuntimeFixture,
   SubscriptionRecoveryRuntimeFixture,
   RuntimeFunctionInjection,
   RuntimeWriteOperation,
@@ -1159,6 +1160,56 @@ async function executeSlotRefillRuntimeFixture(
   }
 }
 
+// A fused refill asks only its own queue. The cold queue's task must still run before the hot
+// queue's backlog ends (ADR 0076, rule 17).
+async function executeQueueFairnessRuntimeFixture(
+  queue: Queue,
+  admin: Admin,
+  fixture: QueueFairnessRuntimeFixture,
+): Promise<void> {
+  const hot = `runtime-${fixture.id}-hot`;
+  const cold = `runtime-${fixture.id}-cold`;
+  for (const queueName of [hot, cold]) {
+    await admin.setQueueTier(queueName, "fast", {
+      actor: "runtime-fixture",
+      reason: fixture.id,
+      requestId: `${fixture.id}-${queueName}`,
+    });
+  }
+  await Promise.all(
+    Array.from({ length: fixture.hotTaskCount }, (_, sequence) =>
+      queue.enqueue(fixture.taskType, { sequence }, { queue: hot }),
+    ),
+  );
+  const started: string[] = [];
+  const worker = new Worker(queue, {
+    workerId: `runtime-${fixture.id}`,
+    queues: [hot, cold],
+    concurrency: fixture.concurrency,
+    pollMs: fixture.pollMs,
+    registryIntervalMs: 0,
+  }).handle(fixture.taskType, async (_payload, context) => {
+    started.push(context.task.queue);
+    if (context.task.queue === hot) await sleep(fixture.hotHandlerMs);
+    return null;
+  });
+  const running = worker.run();
+  try {
+    // The cold task arrives while fused refills already hold the slots, so the result does not
+    // depend on which queue the first plain claim asks.
+    await waitUntil(
+      () => started.length >= fixture.coldEnqueueAfterHotStarts,
+      `${fixture.id} never started its hot tasks`,
+    );
+    await queue.enqueue(fixture.taskType, { cold: true }, { queue: cold });
+    await waitUntil(() => started.includes(cold), `${fixture.id} never ran the cold task`);
+    expect(started.indexOf(cold)).toBeLessThanOrEqual(fixture.expectedMaximumHotTasksBeforeCold);
+  } finally {
+    worker.stop();
+    await running;
+  }
+}
+
 async function releaseEvidence(
   database: Queryable,
   taskId: string,
@@ -1901,6 +1952,9 @@ async function executeRuntimeFixture(
       break;
     case "slot-refill":
       await executeSlotRefillRuntimeFixture(database, admin, fixture);
+      break;
+    case "queue-fairness":
+      await executeQueueFairnessRuntimeFixture(queue, admin, fixture);
       break;
     case "trace-propagation":
       await executeTracePropagationRuntimeFixture(queue, database, fixture);

@@ -18,9 +18,11 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.BooleanSupplier;
 import org.jspecify.annotations.Nullable;
@@ -303,6 +305,173 @@ class WorkerFastTierDatabaseTest {
     }
     assertTrue(completing.stream().anyMatch(statement -> statement.claimed() > 0));
     assertTrue(peak.get() <= 8, "peak " + peak.get() + " stays within the concurrency");
+  }
+
+  // SM-1676: a fused completion claim asks only the completing task's queue. While that queue had
+  // a backlog, each completion refilled the slot, and no plain claim reached the other queues.
+  @Test
+  void givesAnotherQueueAClaimWhileAFastQueueKeepsABacklog() throws SQLException {
+    String hot = queueName + "-hot";
+    String cold = queueName + "-cold";
+    for (String name : List.of(hot, cold)) {
+      try (Connection connection = ScratchDatabase.connect()) {
+        Sql.rows(connection, SqlCatalogue.SET_QUEUE_TIER_V1, name, "fast", "jvm-test", "test");
+      }
+    }
+    int backlog = 100;
+    for (int index = 0; index < backlog; index++) {
+      queue.enqueue(
+          "fairness", Map.of("index", index), EnqueueOptions.builder().queue(hot).build());
+    }
+    UUID coldTask =
+        queue
+            .enqueue("fairness", Map.of("index", -1), EnqueueOptions.builder().queue(cold).build())
+            .taskId();
+    List<UUID> ran = new CopyOnWriteArrayList<>();
+    List<Worker.FusedStatement> statements = new CopyOnWriteArrayList<>();
+    Worker worker =
+        Worker.builder(dataSource)
+            .queues(hot, cold)
+            .concurrency(1)
+            .pollingOnly(true)
+            // The interval leaves a margin for the first completions on a loaded host. With a
+            // 5 ms handler, fewer than half of the backlog fits in it.
+            .pollInterval(Duration.ofMillis(150))
+            .disableRegistry(true)
+            .handle(
+                "fairness",
+                Object.class,
+                (ctx, payload) -> {
+                  ran.add(ctx.task().id());
+                  Thread.sleep(5);
+                  return Map.of();
+                })
+            .build();
+    worker.fusedStatementHook = statements::add;
+
+    runUntil(worker, "the cold task ran", () -> ran.contains(coldTask));
+
+    // Once the cold queue has waited a poll interval, one hot completion claims nothing. Its slot
+    // goes to a plain claim, which asks the cold queue next. Every hot completion before it, if
+    // any, still refills its slot. On a loaded host the first completion can already skip. With
+    // one slot, the completions arrive in the start order.
+    int coldAt = ran.indexOf(coldTask);
+    assertTrue(coldAt < backlog / 2, "the cold task started at position " + coldAt);
+    List<Worker.FusedStatement> completing =
+        statements.stream().filter(statement -> statement.completions() > 0).toList();
+    int skip = -1;
+    for (int index = 0; index < completing.size(); index++) {
+      if (completing.get(index).claimLimit() == 0) {
+        skip = index;
+        break;
+      }
+    }
+    assertTrue(skip >= 0, "a hot completion skips its refill: " + completing);
+    assertEquals(coldAt - 1, skip, "the completion just before the cold task skips its refill");
+    for (Worker.FusedStatement statement : completing.subList(0, skip)) {
+      assertEquals(1, statement.claimLimit(), "completion " + statement + " refills its slot");
+    }
+  }
+
+  // SM-1676: while a plain claim for one cohort is in flight, no other plain claim starts. A fused
+  // claim of the other cohort must not take the slot that a fairness skip gave back.
+  @Test
+  void keepsTheSlotOfAFairnessSkipFreeForAPlainClaim() throws Exception {
+    String hot = queueName + "-hot";
+    String cold = queueName + "-cold";
+    for (String name : List.of(hot, cold)) {
+      try (Connection connection = ScratchDatabase.connect()) {
+        Sql.rows(connection, SqlCatalogue.SET_QUEUE_TIER_V1, name, "fast", "jvm-test", "test");
+      }
+    }
+    for (int index = 0; index < 100; index++) {
+      queue.enqueue("skip", Map.of("index", index), EnqueueOptions.builder().queue(hot).build());
+    }
+    // Each handler waits until the test finishes its task, or until the test ends.
+    Map<Integer, CountDownLatch> finishes = new ConcurrentHashMap<>();
+    CountDownLatch finishAll = new CountDownLatch(1);
+    List<Integer> started = new CopyOnWriteArrayList<>();
+    CountDownLatch release = new CountDownLatch(1);
+    AtomicInteger heldClaims = new AtomicInteger();
+    AtomicBoolean hold = new AtomicBoolean();
+    List<Worker.FusedStatement> statements = new CopyOnWriteArrayList<>();
+    Worker worker =
+        Worker.builder(dataSource)
+            .queues(hot, cold)
+            .concurrency(4)
+            .cohorts(2)
+            .pollingOnly(true)
+            .pollInterval(Duration.ofMillis(40))
+            .disableRegistry(true)
+            .shutdownGrace(Duration.ofSeconds(5))
+            .handle(
+                "skip",
+                Object.class,
+                (ctx, payload) -> {
+                  int index = index(payload);
+                  CountDownLatch finish =
+                      finishes.computeIfAbsent(index, ignored -> new CountDownLatch(1));
+                  started.add(index);
+                  while (!finish.await(5, TimeUnit.MILLISECONDS)) {
+                    if (finishAll.getCount() == 0) {
+                      break;
+                    }
+                  }
+                  return Map.of();
+                })
+            .build();
+    worker.fusedStatementHook = statements::add;
+    worker.beforeQueueClaim =
+        name -> {
+          if (hold.get() && name.equals(hot)) {
+            heldClaims.incrementAndGet();
+            try {
+              release.await(WAIT.toMillis(), TimeUnit.MILLISECONDS);
+            } catch (InterruptedException interrupted) {
+              Thread.currentThread().interrupt();
+            }
+          }
+        };
+    BooleanSupplier completing =
+        () -> statements.stream().filter(statement -> statement.completions() > 0).count() > 0;
+    worker.start();
+    try {
+      // The first plain claim fills cohort 0 with tasks 0 and 1, the second fills cohort 1 with
+      // tasks 2 and 3.
+      waitUntil("every slot runs a task", () -> started.size() == 4);
+      assertEquals(List.of(0, 1, 2, 3), started.stream().sorted().toList());
+      hold.set(true);
+      // The cold queue waits a fairness interval. Task 0 then skips its refill, and the plain
+      // claim that takes its slot is held.
+      Thread.sleep(60);
+      finishes.get(0).countDown();
+      waitUntil(
+          "the plain claim is held", () -> heldClaims.get() == 1 && completing.getAsBoolean());
+      // The cold queue waits a fairness interval again while that claim is in flight. Task 2
+      // skips its refill, and task 3 completes in the same cohort while the skip is pending.
+      Thread.sleep(60);
+      finishes.get(2).countDown();
+      waitUntil("task 2 completed", () -> completed(statements) == 2);
+      finishes.get(3).countDown();
+      waitUntil("task 3 completed", () -> completed(statements) == 3);
+
+      assertEquals(
+          List.of(0, 0, 1),
+          statements.stream()
+              .filter(statement -> statement.completions() > 0)
+              .map(Worker.FusedStatement::claimLimit)
+              .toList(),
+          "until the plain claim starts, a fused claim refills only its own slot");
+    } finally {
+      hold.set(false);
+      release.countDown();
+      finishAll.countDown();
+      worker.close();
+    }
+  }
+
+  private static long completed(List<Worker.FusedStatement> statements) {
+    return statements.stream().mapToInt(Worker.FusedStatement::completions).sum();
   }
 
   @Test

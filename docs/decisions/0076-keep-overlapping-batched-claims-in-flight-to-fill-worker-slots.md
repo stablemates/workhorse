@@ -3,6 +3,7 @@
 - **Status:** Accepted
 - **Date:** 2026-09-23
 - **Amended by:** SM-919 (a worker that batches completions splits its slots into cohorts; see below)
+- **Amended by:** SM-1676 (a fused refill gives the other queues of a worker a claim; see below)
 - **Amended by:** [ADR 0078](0078-start-a-long-running-workers-first-claim-beside-its-startup-maintenance-pass.md)
   (a long-running worker starts its first claim beside its startup maintenance pass)
 - **Related:** [ADR 0071](0071-give-every-worker-a-pool-and-a-dedicated-heartbeat-connection.md),
@@ -134,6 +135,46 @@ count at the spare connections gave 4 cohorts on a 6-connection pool and 2 on a 
 which ran about 1.4 times the throughput of one. Rule 11 therefore caps the default by the pool size
 when the worker can read it.
 
+### Queue fairness for fused refills
+
+_Amended by [SM-1676](https://linear.app/stablemates/issue/SM-1676)._ Rule 12 lets a fast-tier
+completion refill its slot in the same statement. That fused claim asks only the queue of the
+completed task. A worker can serve several queues, and its plain claims rotate across them. But a
+plain claim starts only for a free slot. While one fast-tier queue has a backlog, its completions
+refill every slot, so no plain claim starts, and the other queues get no claim until the backlog
+ends.
+
+**Example.**
+
+1. A worker serves fast-tier queues `a` and `b`, with concurrency 1.
+2. Queue `a` holds 100 ready tasks. Queue `b` holds 1 task.
+3. Each `a` completion claims the next `a` task, so the slot never becomes free.
+4. Before this amendment, the `b` task ran after the last `a` task.
+
+The amendment adds rule 17.
+
+17. **Queue fairness.** A worker with more than one queue records when a claim last asked each
+    queue. A plain claim records each queue that its rotation asks. A fused claim records its own
+    queue when its limit is above 0. At the start of a run, every queue counts as asked. If another
+    queue had no claim for one fairness interval, the next fast-tier completion claims with limit 0.
+    Its slot becomes free, and the next plain claim continues the rotation. Only one completion at a
+    time gives up its refill, until the next plain claim starts. Until then, a fused claim refills
+    only the slot of its own task, so it cannot take the slot that the skip gave back. The fairness
+    interval is the explicit poll interval, or 250 ms without one. A worker with one queue does not
+    change.
+
+The plain claim keeps the rotation, so it can ask the busy queue first and fill its limit there.
+Then the next completion gives up its refill at once, and the plain claim after it asks the other
+queue. With two queues, a ready task on the other queue waits at most about one fairness interval,
+plus two handler runs and two claim round trips. The cost is at most two plain claim round trips for
+each fairness interval, and only for a worker with more than one queue. During each round trip, the
+slot that gave up its refill is idle. The fixture `a-fused-refill-gives-the-other-queues-a-claim` pins
+the rule in every SDK.
+
+The rule uses time and not a count of tasks, so its cost does not grow with the task rate. A count,
+such as one skipped refill after each `concurrency` completions, would send every second task
+through a plain claim at concurrency 1.
+
 ## Consequences
 
 ### Positive
@@ -171,6 +212,39 @@ one claim in flight at most.
 It was rejected because it leaves slots idle by design. At concurrency 4 the batch is one slot,
 which is the old loop. At concurrency 16 four slots sit idle for a full round trip before each
 refill. Overlapping claims keep the same batch size but refill while earlier claims are still out.
+
+### Accept the starvation and advise one worker per hot queue
+
+SM-1676 considered keeping rule 12 as it was. The ADR would then advise a separate worker for each
+fast-tier queue with a continuous backlog.
+
+It was rejected because the wait of the other queues has no bound and no signal. Nothing in the
+dashboard or the logs shows why a task on the other queue does not run. The `queues` option also
+promises one budget that rotates across the queues.
+
+### Fuse the refill with the next queue in rotation
+
+A fused completion could claim from the next fast-tier queue in rotation instead of its own queue.
+
+It was rejected because each SDK batches completions by queue and cohort. The batch key would have
+to follow the claim queue in seven SDKs. If the next queue is empty, the fused claim returns no task,
+and the slot waits for a plain claim round trip. A full-tier queue cannot take part, because
+`complete_many_and_claim_v1` rejects a queue that is not on the fast tier.
+
+### Claim across several queues in one fused statement
+
+A new version of `complete_many_and_claim_v1` could take a list of queues and claim from them in
+rotation.
+
+It was rejected because it needs a new SQL protocol version and a change in every SDK for the same
+result as rule 17. It still could not claim from a full-tier queue.
+
+### Give each queue a fixed share of the slots
+
+A worker could split its slots by queue, and a fused refill could fill only its queue's share.
+
+It was rejected because the slots of an idle queue stay empty, which lowers throughput for most
+workers. It is a new feature, not a correction of rule 12.
 
 ### Run one dispatch loop per slot
 

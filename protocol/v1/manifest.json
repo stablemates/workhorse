@@ -86,6 +86,7 @@
     "subscription-poll-base",
     "graceful-drain",
     "batched-slot-refill",
+    "fused-refill-queue-fairness",
     "enqueue-trace-propagation",
     "budget-admission-serialization",
     "missing-handler-release",

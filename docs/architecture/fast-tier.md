@@ -702,6 +702,50 @@ queue left the fast tier. The worker then uses `complete_v1`.
 Every SDK worker fuses a completion with a refill claim, for `freeSlots() + 1` tasks under the
 refill-batch rule. It transfers the slot directly.
 
+#### Queue fairness
+
+A fused claim asks only the queue of the completed task. If that queue always has ready tasks, its
+completions can refill every slot. Then no slot becomes free, and no plain claim asks the other
+queues of the worker. Every SDK worker therefore applies [ADR 0076 rule
+17](../decisions/0076-keep-overlapping-batched-claims-in-flight-to-fill-worker-slots.md#queue-fairness-for-fused-refills)
+when it has more than one queue:
+
+1. The worker records the monotonic time when a claim last asked each queue. A plain claim records
+   each queue that its rotation asks. A fused claim records its own queue when its limit is above 0.
+   At the start of a dispatch run, every queue counts as asked.
+2. The fairness interval is the explicit poll interval. Without one, it is the polling-only base of
+   250 ms, also when the worker listens for notifications.
+3. If another queue of the worker had no claim for one fairness interval, the next fast-tier
+   completion claims with limit 0. Its slot becomes free, and the next plain claim continues the
+   queue rotation.
+4. Only one completion at a time gives up its refill. The start of the next plain claim ends that
+   state. Until then, a fused claim asks only for the slot of its own task. Thus no completion can
+   take the slot that the skipped refill gave back, and the next plain claim gets it.
+5. A worker with one queue never gives up a refill.
+
+The plain claim does not always ask the waiting queue first, because the rotation does not change.
+If it asks the busy queue first and fills its limit there, the other queue still waits. The next
+completion then gives up its refill at once, and the plain claim after it asks the other queue.
+With two queues, a ready task on the other queue thus waits at most about one fairness interval, two
+handler runs, and two claim round trips. With more queues, each other queue can need one more
+skipped refill.
+
+| SDK        | Fused claim reservation                    | Queue claim times                 |
+| ---------- | ------------------------------------------ | --------------------------------- |
+| TypeScript | `reserveCompletionClaim` in `dispatchLoop` | `queueAskedAt`                    |
+| Python     | `Worker._reserve_completion_claim`         | `_queue_asked_at`                 |
+| Go         | `reserveCompletionClaim` in `dispatch`     | `queueAskedAt`                    |
+| Rust       | `Ticket::reserve`                          | `asked_at` in the slot accounting |
+| Ruby       | `Worker#reserve_completion_claim`          | `@queue_asked_at`                 |
+| JVM        | `Worker.reserveCompletionClaim`            | `queueAskedAt`                    |
+| .NET       | `Worker.ReserveCompletionClaim`            | `_queueAskedAt`                   |
+
+The runtime fixture `a-fused-refill-gives-the-other-queues-a-claim` pins the rule in every SDK. At
+concurrency 1, a worker serves a hot and a cold fast-tier queue with a 50 ms poll interval. The hot
+queue holds 200 tasks, and each hot handler runs for 5 ms. The runner enqueues the cold task after 3
+hot tasks started, so fused refills already hold the slot. The cold task must start before the 101st
+hot task. Without the rule, it starts after all 200.
+
 #### Dispatch cohorts
 
 Every SDK worker splits its slots into cohorts so that fused completions do not run in lockstep

@@ -260,6 +260,18 @@
     "expectedMaximumClaimsPerTask": 0.75
   },
   {
+    "id": "a-fused-refill-gives-the-other-queues-a-claim",
+    "kind": "queue-fairness",
+    "covers": ["fused-refill-queue-fairness"],
+    "taskType": "protocol.queue-fairness",
+    "concurrency": 1,
+    "pollMs": 50,
+    "hotTaskCount": 200,
+    "hotHandlerMs": 5,
+    "coldEnqueueAfterHotStarts": 3,
+    "expectedMaximumHotTasksBeforeCold": 100
+  },
+  {
     "id": "budget-admission-holds-across-queues",
     "kind": "budget-admission-race",
     "covers": ["budget-admission-serialization"],
