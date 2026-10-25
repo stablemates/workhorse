@@ -168,8 +168,8 @@ Python, and Ruby notes list their changes. ADR 0111 records the rule for all sev
 ### A fast-tier attempt timeout reports its retry
 
 `expire_owned_telemetry_v1` settles a due deadline or attempt timeout for a live worker and returns
-`status` and `retry_state`. The TypeScript, Python, Ruby, JVM, and .NET workers use `retry_state`
-to record a `workhorse.retry` span and one `workhorse.tasks.retried` count. Before migration 0086,
+`status` and `retry_state`. The workers use `retry_state` to record a `workhorse.retry` span and
+one `workhorse.tasks.retried` count. Before migration 0086,
 the function reads `retry_state` only from the full tier. If an attempt timeout retries a fast-tier
 task, the function returns null, and the worker records no retry. The task state is correct
 (SM-1694).
@@ -177,12 +177,30 @@ task, the function returns null, and the worker records no retry. The task state
 Migration 0086 (`0086-report-the-fast-tier-retry-of-an-expired-timeout.sql`) moves the schema to
 version 85. `expire_owned_telemetry_v1` now returns `ready` or `scheduled` for a fast-tier timeout
 retry. A ready fast-tier task with a future run time gives `scheduled`. The full tier keeps its
-values. The Go and Rust workers do not read `retry_state`, so this change does not add timeout
-retry telemetry to them.
+values.
 
 The migration does not raise the SDK compatibility floor, and no signature or result shape
 changes. Run `workhorse schema migrate`. Every process gets the new result when the migration
 commits.
+
+### The Go and Rust workers record the retry span
+
+The Go and Rust workers recorded no `workhorse.retry` span. They also read only `status` from
+`expire_owned_telemetry_v1` (SM-1734).
+
+**Example.**
+
+1. A task has `max_attempts` 3 and an execution timeout. A Go worker claims it.
+2. The attempt timeout of attempt 1 becomes due. The worker calls `expire_owned_telemetry_v1`.
+3. PostgreSQL retries the task and returns `timeout_exceeded` with `retry_state` `ready`.
+4. Before this change, the worker recorded no `workhorse.retry` span and no
+   `workhorse.tasks.retried` count. The task state was correct.
+
+Now the Go and Rust workers record the `workhorse.retry` span, as the TypeScript worker does. The
+span is a child of the handler span. It carries the task ID, the task type, the attempt, and
+`workhorse.retry.outcome`. The worker records it for each `fail_v1` write, and for each attempt
+timeout that `expire_owned_telemetry_v1` retries. A timeout retry also adds one to
+`workhorse.tasks.retried`. Both tiers behave the same. No telemetry name is new.
 
 ### History-day and schedule occurrence locks are unambiguous
 

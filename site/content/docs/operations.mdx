@@ -519,7 +519,7 @@ names:
   `workhorse.complete`, `workhorse.recovery`, and `workhorse.maintenance`.
 - The Java queue and worker: the same six spans and `workhorse.enqueue`.
 - The .NET queue and worker: the same six spans and `workhorse.enqueue`.
-- The Go and Rust workers: only `workhorse.handler`.
+- The Go and Rust workers: `workhorse.handler` and `workhorse.retry`.
 
 More detail: [Telemetry: Trace context propagation](https://github.com/stablemates/workhorse/blob/main/docs/architecture/telemetry.md#trace-context-propagation), [Telemetry: TypeScript spans](https://github.com/stablemates/workhorse/blob/main/docs/architecture/telemetry.md#typescript-spans), [Telemetry: Python spans](https://github.com/stablemates/workhorse/blob/main/docs/architecture/telemetry.md#python-spans), [Telemetry: Go spans](https://github.com/stablemates/workhorse/blob/main/docs/architecture/telemetry.md#go-spans), [Telemetry: Rust spans](https://github.com/stablemates/workhorse/blob/main/docs/architecture/telemetry.md#rust-spans), [Telemetry: Ruby spans](https://github.com/stablemates/workhorse/blob/main/docs/architecture/telemetry.md#ruby-spans), [Telemetry: JVM spans](https://github.com/stablemates/workhorse/blob/main/docs/architecture/telemetry.md#jvm-spans), [Schema and SQL protocol: JVM telemetry](https://github.com/stablemates/workhorse/blob/main/docs/architecture/schema-and-protocol.md#jvm-telemetry), and [Schema and SQL protocol: .NET telemetry](https://github.com/stablemates/workhorse/blob/main/docs/architecture/schema-and-protocol.md#net-telemetry).
 

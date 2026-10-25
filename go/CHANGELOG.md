@@ -10,6 +10,18 @@ adds.
 
 ## Unreleased
 
+### The worker records the retry span
+
+Before this change, the Go worker recorded no `workhorse.retry` span. When an attempt timeout
+retried a task through `expire_owned_telemetry_v1`, the worker read only `status`, so it also added
+nothing to `workhorse.tasks.retried` (SM-1734).
+
+Now the worker starts the `workhorse.retry` span around each `fail_v1` write, as the TypeScript
+worker does. When `expire_owned_telemetry_v1` returns a `retry_state`, the worker records the span
+and adds one to `workhorse.tasks.retried`. The span is a child of the `workhorse.handler` span. It
+carries `workhorse.task.id`, `workhorse.task.type`, `workhorse.task.attempt`, and
+`workhorse.retry.outcome`. Both tiers behave the same. The span is an addition.
+
 ### The worker counts a failed heartbeat round
 
 A heartbeat round can fail before PostgreSQL answers, for example when the connection drops. Before
