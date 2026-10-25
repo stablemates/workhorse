@@ -30,237 +30,373 @@ A real task often waits for another system, shares a limited resource with other
 continue after a worker stops. Workhorse keeps all three in PostgreSQL. Thus, the handler stays
 ordinary code.
 
-**Example.** A shop fulfills orders from several warehouses. The API of each warehouse accepts two
-requests at a time. The `order.fulfill` task charges the card, waits until the warehouse packs the
-parcel, and creates the shipment.
+**Example.** A SaaS application onboards each new account. Each tenant can have three onboardings
+active at a time, so one large tenant does not use all the workers. The onboarding creates a
+workspace, waits until the user verifies their email address, and then sends a welcome email.
 
-1. The application stores a concurrency policy of two active tasks for each warehouse. It enqueues
-   `order.fulfill` with the concurrency key `warehouse-berlin`.
-2. A worker claims the task. The handler charges the card, and the `charge` checkpoint stores the
-   result.
-3. The handler waits for the signal `packed`. Workhorse releases the worker. The waiting task does
-   not count against the limit of `warehouse-berlin`.
-4. Two hours later, the warehouse system sends `packed`. A worker claims the task and runs the
-   handler again from its first line. The `charge` checkpoint returns the stored result, so the
-   card is not charged again.
-5. The handler creates the shipment, and the task succeeds.
+1. The application stores a concurrency policy of three active tasks for each tenant. It enqueues
+   `account.onboard` with the concurrency key `tenant-42`.
+2. A worker claims the task. The handler creates the workspace, and the `workspace` checkpoint
+   stores it.
+3. The handler waits for the signal `email-verified`. Workhorse releases the worker, and the waiting
+   task does not count against the limit of `tenant-42`.
+4. An hour later, the user clicks the link in the email, and the application sends
+   `email-verified`. A worker runs the handler again from its first line. The `workspace`
+   checkpoint returns the stored workspace, so the handler does not create a second one.
+5. The handler sends the welcome email, and the task succeeds.
 
 If a worker stops at any step, its lease expires. Then another worker claims the task and continues
 it in the same way.
 
-Store the policy and enqueue the task:
-
 <Tabs items={["TypeScript", "Python", "Go", "Rust", "Ruby", "Java", "Kotlin", "C#"]}>
   <Tab value="TypeScript">
     ```ts
-    await queue.syncConcurrencyPolicies("shop", [
-      { queue: "fulfillment", maxActive: 20, maxActivePerKey: 2 },
+    // Step 1: allow three active onboardings per tenant, across all workers.
+    // PostgreSQL applies this limit when a worker claims a task.
+    await queue.syncConcurrencyPolicies("accounts", [
+      { queue: "onboarding", maxActive: 20, maxActivePerKey: 3 },
     ]);
+
+    // Enqueue the task. The tenant is the concurrency key.
     await queue.enqueue(
-      "order.fulfill",
-      { orderId },
-      { queue: "fulfillment", concurrencyKey: warehouseId },
+      "account.onboard",
+      { accountId, email },
+      { queue: "onboarding", concurrencyKey: tenantId },
+    );
+
+    worker.handle(
+      "account.onboard",
+      async ({ accountId, email }: { accountId: string; email: string }, ctx) => {
+        // Step 2: create the workspace. The checkpoint stores it.
+        // On a later run, it returns the stored workspace, and the handler
+        // does not create a second one.
+        const workspace = await ctx.checkpoint("workspace", () =>
+          workspaces.create(accountId, { idempotencyKey: `workspace:${accountId}` }),
+        );
+
+        // Step 3: wait until the user verifies the email address. The task
+        // releases its worker, and it does not count against the tenant limit.
+        await ctx.waitForSignal("email-verified");
+
+        // Step 4: the signal arrived. The handler ran again from its first line,
+        // and the "workspace" checkpoint gave back the stored workspace.
+
+        // Step 5: send the welcome email.
+        await ctx.checkpoint("welcome", () => mailer.welcome(email, workspace.url));
+        return { workspaceId: workspace.id };
+      },
     );
     ```
+
   </Tab>
   <Tab value="Python">
     ```python
+    # Step 1: allow three active onboardings per tenant, across all workers.
+    # PostgreSQL applies this limit when a worker claims a task.
     queue.sync_concurrency_policies(
-        "shop",
-        [
-            ConcurrencyPolicyDefinition(
-                queue="fulfillment", max_active=20, max_active_per_key=2
-            )
-        ],
+        "accounts",
+        [ConcurrencyPolicyDefinition(queue="onboarding", max_active=20, max_active_per_key=3)],
     )
+
+    # Enqueue the task. The tenant is the concurrency key.
     queue.enqueue(
-        "order.fulfill",
-        {"orderId": order_id},
-        EnqueueOptions(queue="fulfillment", concurrency_key=warehouse_id),
+        "account.onboard",
+        {"accountId": account_id, "email": email},
+        EnqueueOptions(queue="onboarding", concurrency_key=tenant_id),
     )
+
+
+    def onboard(account: Json, context: HandlerContext) -> Json:
+        # Step 2: create the workspace. The checkpoint stores it.
+        # On a later run, it returns the stored workspace, and the handler
+        # does not create a second one.
+        account_id = account["accountId"]
+        workspace = context.checkpoint(
+            "workspace",
+            lambda: workspaces.create(account_id, idempotency_key=f"workspace:{account_id}"),
+        )
+
+        # Step 3: wait until the user verifies the email address. The task
+        # releases its worker, and it does not count against the tenant limit.
+        context.wait_for_signal("email-verified")
+
+        # Step 4: the signal arrived. The handler ran again from its first line,
+        # and the "workspace" checkpoint gave back the stored workspace.
+
+        # Step 5: send the welcome email.
+        context.checkpoint("welcome", lambda: mailer.welcome(account["email"], workspace["url"]))
+        return {"workspaceId": workspace["id"]}
+
+
+    worker.handle("account.onboard", onboard)
     ```
+
   </Tab>
   <Tab value="Go">
     ```go
-    maxActivePerKey := 2
-    if _, err := queue.SyncConcurrencyPolicies(ctx, "shop", []workhorse.ConcurrencyPolicyDefinition{{
-    	Queue: "fulfillment", MaxActive: 20, MaxActivePerKey: &maxActivePerKey,
+    // Step 1: allow three active onboardings per tenant, across all workers.
+    // PostgreSQL applies this limit when a worker claims a task.
+    maxActivePerKey := 3
+    if _, err := queue.SyncConcurrencyPolicies(ctx, "accounts", []workhorse.ConcurrencyPolicyDefinition{{
+    	Queue: "onboarding", MaxActive: 20, MaxActivePerKey: &maxActivePerKey,
     }}); err != nil {
     	return err
     }
-    _, err := queue.Enqueue(ctx, "order.fulfill", map[string]any{
-    	"orderId": orderID,
-    }, workhorse.EnqueueOptions{Queue: "fulfillment", ConcurrencyKey: warehouseID})
+
+    // Enqueue the task. The tenant is the concurrency key.
+    if _, err := queue.Enqueue(ctx, "account.onboard", map[string]any{
+    	"accountId": accountID, "email": email,
+    }, workhorse.EnqueueOptions{Queue: "onboarding", ConcurrencyKey: tenantID}); err != nil {
+    	return err
+    }
+
+    worker.Handle("account.onboard", workhorse.Typed(func(
+    	_ context.Context, account Account, handler *workhorse.HandlerContext,
+    ) (any, error) {
+    	// Step 2: create the workspace. The checkpoint stores it.
+    	// On a later run, it returns the stored workspace, and the handler
+    	// does not create a second one.
+    	workspace, err := handler.Checkpoint("workspace", func() (any, error) {
+    		return workspaces.Create(account.AccountID, "workspace:"+account.AccountID)
+    	})
+    	if err != nil {
+    		return nil, err
+    	}
+
+    	// Step 3: wait until the user verifies the email address. The task
+    	// releases its worker, and it does not count against the tenant limit.
+    	if _, err := handler.WaitForSignal("email-verified"); err != nil {
+    		return nil, err
+    	}
+
+    	// Step 4: the signal arrived. The handler ran again from its first line,
+    	// and the "workspace" checkpoint gave back the stored workspace.
+
+    	// Step 5: send the welcome email.
+    	if _, err := handler.Checkpoint("welcome", func() (any, error) {
+    		return mailer.Welcome(account.Email, workspace)
+    	}); err != nil {
+    		return nil, err
+    	}
+    	return workspace, nil
+    }))
     ```
+
   </Tab>
   <Tab value="Rust">
     ```rust
+    // Step 1: allow three active onboardings per tenant, across all workers.
+    // PostgreSQL applies this limit when a worker claims a task.
     queue
         .sync_concurrency_policies(
-            "shop",
+            "accounts",
             &[ConcurrencyPolicyDefinition {
-                queue: "fulfillment".into(),
+                queue: "onboarding".into(),
                 max_active: 20,
-                max_active_per_key: Some(2),
+                max_active_per_key: Some(3),
             }],
             false,
         )
         .await?;
+
+    // Enqueue the task. The tenant is the concurrency key.
     queue
         .enqueue(
-            "order.fulfill",
-            &json!({ "orderId": order_id }),
+            "account.onboard",
+            &json!({ "accountId": account_id, "email": email }),
             EnqueueOptions {
-                queue: Some("fulfillment".into()),
-                concurrency_key: Some(warehouse_id.into()),
+                queue: Some("onboarding".into()),
+                concurrency_key: Some(tenant_id.into()),
                 ..Default::default()
             },
         )
         .await?;
+
+    worker.handle("account.onboard", |account: Account, context| async move {
+        // Step 2: create the workspace. The checkpoint stores it.
+        // On a later run, it returns the stored workspace, and the handler
+        // does not create a second one.
+        let key = format!("workspace:{}", account.account_id);
+        let workspace: Value = context
+            .checkpoint("workspace", || workspaces::create(&account.account_id, key))
+            .await?;
+
+        // Step 3: wait until the user verifies the email address. The task
+        // releases its worker, and it does not count against the tenant limit.
+        context.wait_for_signal::<Value>("email-verified", None).await?;
+
+        // Step 4: the signal arrived. The handler ran again from its first line,
+        // and the "workspace" checkpoint gave back the stored workspace.
+
+        // Step 5: send the welcome email.
+        let _: Value = context
+            .checkpoint("welcome", || onboarding_mail::welcome(&account.email, &workspace))
+            .await?;
+        Ok(workspace)
+    });
     ```
+
   </Tab>
   <Tab value="Ruby">
     ```ruby
-    queue.sync_concurrency_policies("shop", [
-      Stablemates::Workhorse::ConcurrencyPolicyDefinition.new(queue: "fulfillment", max_active: 20, max_active_per_key: 2)
+    # Step 1: allow three active onboardings per tenant, across all workers.
+    # PostgreSQL applies this limit when a worker claims a task.
+    queue.sync_concurrency_policies("accounts", [
+      Stablemates::Workhorse::ConcurrencyPolicyDefinition.new(queue: "onboarding", max_active: 20, max_active_per_key: 3)
     ], prune: false)
-    queue.enqueue("order.fulfill", {"orderId" => order_id}, queue: "fulfillment", concurrency_key: warehouse_id)
+
+    # Enqueue the task. The tenant is the concurrency key.
+    queue.enqueue("account.onboard", {"accountId" => account_id, "email" => email},
+      queue: "onboarding", concurrency_key: tenant_id)
+
+    worker.handle("account.onboard") do |account, context|
+      # Step 2: create the workspace. The checkpoint stores it.
+      # On a later run, it returns the stored workspace, and the handler
+      # does not create a second one.
+      id = account.fetch("accountId")
+      workspace = context.checkpoint("workspace") { Workspaces.create(id, "workspace:#{id}") }
+
+      # Step 3: wait until the user verifies the email address. The task
+      # releases its worker, and it does not count against the tenant limit.
+      context.wait_for_signal("email-verified")
+
+      # Step 4: the signal arrived. The handler ran again from its first line,
+      # and the "workspace" checkpoint gave back the stored workspace.
+
+      # Step 5: send the welcome email.
+      context.checkpoint("welcome") { OnboardingMail.welcome(account.fetch("email"), workspace) }
+      workspace
+    end
     ```
+
   </Tab>
   <Tab value="Java">
     ```java
+    // Step 1: allow three active onboardings per tenant, across all workers.
+    // PostgreSQL applies this limit when a worker claims a task.
     queue.syncConcurrencyPolicies(
-        "shop", List.of(new ConcurrencyPolicyDefinition("fulfillment", 20, 2)));
+        "accounts", List.of(new ConcurrencyPolicyDefinition("onboarding", 20, 3)));
+
+    // Enqueue the task. The tenant is the concurrency key.
     queue.enqueue(
-        "order.fulfill",
-        Map.of("orderId", orderId),
-        EnqueueOptions.builder().queue("fulfillment").concurrencyKey(warehouseId).build());
+        "account.onboard",
+        Map.of("accountId", accountId, "email", email),
+        EnqueueOptions.builder().queue("onboarding").concurrencyKey(tenantId).build());
+
+    builder.handle(
+        "account.onboard",
+        Map.class,
+        (context, account) -> {
+          String id = String.valueOf(account.get("accountId"));
+
+          // Step 2: create the workspace. The checkpoint stores it.
+          // On a later run, it returns the stored workspace, and the handler
+          // does not create a second one.
+          Object workspace =
+              context.checkpoint(
+                  "workspace", Object.class, () -> workspaces.create(id, "workspace:" + id));
+
+          // Step 3: wait until the user verifies the email address. The task
+          // releases its worker, and it does not count against the tenant limit.
+          context.waitForSignal("email-verified", Map.class, null);
+
+          // Step 4: the signal arrived. The handler ran again from its first line,
+          // and the "workspace" checkpoint gave back the stored workspace.
+
+          // Step 5: send the welcome email.
+          String address = String.valueOf(account.get("email"));
+          context.checkpoint("welcome", Object.class, () -> mailer.welcome(address, workspace));
+          return workspace;
+        });
     ```
+
   </Tab>
   <Tab value="Kotlin">
     ```kotlin
+    // Step 1: allow three active onboardings per tenant, across all workers.
+    // PostgreSQL applies this limit when a worker claims a task.
     queue.syncConcurrencyPoliciesSuspend(
-      "shop",
-      listOf(ConcurrencyPolicyDefinition("fulfillment", 20, 2)),
+      "accounts",
+      listOf(ConcurrencyPolicyDefinition("onboarding", 20, 3)),
     )
+
+    // Enqueue the task. The tenant is the concurrency key.
     queue.enqueueSuspend(
-      "order.fulfill",
-      mapOf("orderId" to orderId),
-      EnqueueOptions.builder().queue("fulfillment").concurrencyKey(warehouseId).build(),
+      "account.onboard",
+      mapOf("accountId" to accountId, "email" to email),
+      EnqueueOptions.builder().queue("onboarding").concurrencyKey(tenantId).build(),
     )
+
+    scope.handle<Map<String, Any?>>("account.onboard") { ctx, account ->
+      val id = account.getValue("accountId") as String
+
+      // Step 2: create the workspace. The checkpoint stores it.
+      // On a later run, it returns the stored workspace, and the handler
+      // does not create a second one.
+      val workspace =
+        ctx.checkpoint<Map<String, Any?>>("workspace") { workspaces.create(id, "workspace:$id") }
+
+      // Step 3: wait until the user verifies the email address. The task
+      // releases its worker, and it does not count against the tenant limit.
+      ctx.waitForSignal<Map<String, Any?>>("email-verified")
+
+      // Step 4: the signal arrived. The handler ran again from its first line,
+      // and the "workspace" checkpoint gave back the stored workspace.
+
+      // Step 5: send the welcome email.
+      val address = account.getValue("email") as String
+      ctx.checkpoint<Map<String, Any?>>("welcome") { mailer.welcome(address, workspace) }
+      workspace
+    }
     ```
+
   </Tab>
   <Tab value="C#">
     ```csharp
+    // Step 1: allow three active onboardings per tenant, across all workers.
+    // PostgreSQL applies this limit when a worker claims a task.
     await queue.SyncConcurrencyPoliciesAsync(
-        "shop",
-        [new ConcurrencyPolicyDefinition { Queue = "fulfillment", MaxActive = 20, MaxActivePerKey = 2 }]);
+        "accounts",
+        [new ConcurrencyPolicyDefinition { Queue = "onboarding", MaxActive = 20, MaxActivePerKey = 3 }]);
+
+    // Enqueue the task. The tenant is the concurrency key.
     await queue.EnqueueAsync(
-        "order.fulfill",
-        new { orderId },
-        new EnqueueOptions { Queue = "fulfillment", ConcurrencyKey = warehouseId });
-    ```
-  </Tab>
-</Tabs>
+        "account.onboard",
+        new AccountPayload(accountId, email),
+        new EnqueueOptions { Queue = "onboarding", ConcurrencyKey = tenantId });
 
-Write the handler:
+    worker.Handle<AccountPayload, Workspace>(
+        "account.onboard",
+        async (context, account) =>
+        {
+            // Step 2: create the workspace. The checkpoint stores it.
+            // On a later run, it returns the stored workspace, and the handler
+            // does not create a second one.
+            var workspace = await context.CheckpointAsync(
+                "workspace",
+                ct => workspaces.CreateAsync(account.AccountId, $"workspace:{account.AccountId}", ct));
 
-<Tabs items={["TypeScript", "Python", "Go", "Rust", "Ruby", "Java", "Kotlin", "C#"]}>
-  <Tab value="TypeScript">
-    ```ts
-    const { orderId } = payload;
-    const charge = await ctx.checkpoint("charge", () =>
-      payments.charge(orderId, { idempotencyKey: `charge:${orderId}` }),
-    );
-    await ctx.waitForSignal("packed");
-    const shipment = await ctx.checkpoint("shipment", () =>
-      logistics.createShipment(orderId, charge.id),
-    );
+            // Step 3: wait until the user verifies the email address. The task
+            // releases its worker, and it does not count against the tenant limit.
+            await context.WaitForSignalAsync<object>("email-verified", null);
+
+            // Step 4: the signal arrived. The handler ran again from its first line,
+            // and the "workspace" checkpoint gave back the stored workspace.
+
+            // Step 5: send the welcome email.
+            await context.CheckpointAsync("welcome", ct => mailer.WelcomeAsync(account.Email, workspace, ct));
+            return workspace;
+        });
     ```
-  </Tab>
-  <Tab value="Python">
-    ```python
-    charge = context.checkpoint(
-        "charge",
-        lambda: payments.charge(
-            payload["orderId"], idempotency_key=f"charge:{payload['orderId']}"
-        ),
-    )
-    context.wait_for_signal("packed")
-    shipment = context.checkpoint(
-        "shipment",
-        lambda: logistics.create_shipment(payload["orderId"], charge["id"]),
-    )
-    ```
-  </Tab>
-  <Tab value="Go">
-    ```go
-    charge, err := handler.Checkpoint("charge", func() (any, error) {
-    	return payments.Charge(payload.OrderID, "charge:"+payload.OrderID)
-    })
-    if err != nil {
-    	return nil, err
-    }
-    if _, err := handler.WaitForSignal("packed"); err != nil {
-    	return nil, err
-    }
-    shipment, err := handler.Checkpoint("shipment", func() (any, error) {
-    	return logistics.CreateShipment(payload.OrderID, charge)
-    })
-    ```
-  </Tab>
-  <Tab value="Rust">
-    ```rust
-    let charge: Value = context
-        .checkpoint("charge", || payments::charge(&order.id, format!("charge:{}", order.id)))
-        .await?;
-    context.wait_for_signal::<Value>("packed", None).await?;
-    let shipment: Value =
-        context.checkpoint("shipment", || logistics::create_shipment(&order.id, &charge)).await?;
-    ```
-  </Tab>
-  <Tab value="Ruby">
-    ```ruby
-    charge = context.checkpoint("charge") { Payments.charge(order.fetch("id"), "charge:#{order.fetch("id")}") }
-    context.wait_for_signal("packed")
-    shipment = context.checkpoint("shipment") { Logistics.create_shipment(order.fetch("id"), charge) }
-    ```
-  </Tab>
-  <Tab value="Java">
-    ```java
-    Object charge =
-        context.checkpoint(
-            "charge", Object.class, () -> payments.charge(orderId, "charge:" + orderId));
-    context.waitForSignal("packed", Map.class, null);
-    Object shipment =
-        context.checkpoint(
-            "shipment", Object.class, () -> logistics.createShipment(orderId, charge));
-    ```
-  </Tab>
-  <Tab value="Kotlin">
-    ```kotlin
-    val charge =
-      ctx.checkpoint<Map<String, Any?>>("charge") { payments.charge(orderId, "charge:$orderId") }
-    ctx.waitForSignal<Map<String, Any?>>("packed")
-    val shipment =
-      ctx.checkpoint<Map<String, Any?>>("shipment") { logistics.createShipment(orderId, charge) }
-    ```
-  </Tab>
-  <Tab value="C#">
-    ```csharp
-    var charge = await context.CheckpointAsync(
-        "charge", ct => payments.ChargeAsync(orderId, $"charge:{orderId}", ct));
-    await context.WaitForSignalAsync<Parcel>("packed", null);
-    var shipment = await context.CheckpointAsync(
-        "shipment", ct => logistics.CreateShipmentAsync(orderId, charge, ct));
-    ```
+
   </Tab>
 </Tabs>
 
 A handler runs outside a database transaction. Thus, Workhorse runs each task at least one time, and
-a handler can run two times after a crash. If the process stops after the provider charges the card
-but before Workhorse stores the checkpoint, the charge can occur again. Thus, the example gives the
-provider an idempotency key that does not change between attempts.
+a handler can run two times after a crash. If the process stops after the workspace exists but
+before Workhorse stores the checkpoint, the next run asks for the workspace again. Thus, the example
+gives the workspace service an idempotency key that does not change between attempts. Then the
+service returns the first workspace.
 
 <details>
 <summary>Reference: the core promise</summary>

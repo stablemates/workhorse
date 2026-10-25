@@ -23,20 +23,6 @@ public sealed class ConcurrencyPoliciesExamples(Queue queue)
         // docs:end
     }
 
-    /// <summary>The policy and the enqueue of the "What is Workhorse?" page.</summary>
-    public async Task LimitEachWarehouseAsync(string orderId, string warehouseId)
-    {
-        // docs:start csharp-overview-warehouse-limit
-        await queue.SyncConcurrencyPoliciesAsync(
-            "shop",
-            [new ConcurrencyPolicyDefinition { Queue = "fulfillment", MaxActive = 20, MaxActivePerKey = 2 }]);
-        await queue.EnqueueAsync(
-            "order.fulfill",
-            new { orderId },
-            new EnqueueOptions { Queue = "fulfillment", ConcurrencyKey = warehouseId });
-        // docs:end
-    }
-
     public async Task<IReadOnlyList<Budget>> BudgetsAsync()
     {
         // docs:start csharp-concurrency-policies-budget

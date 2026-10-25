@@ -34,20 +34,6 @@ class DurableExecutionKotlinExamplesTest {
   }
 
   @Test
-  fun theFulfillmentWaitsForTheWarehouseAndChargesOneTime() {
-    durableFlowWorker(dataSource, driver) { examples().registerFulfillment(this) }
-      .use { worker ->
-        val taskId = driver.enqueue("order.fulfill", mapOf("orderId" to "ord-9"))
-        driver.deliverSignal(worker, taskId, "packed", mapOf("parcelId" to "parcel-3"))
-        val task = driver.finish(worker, taskId)
-        assertEquals(TaskState.SUCCEEDED, task.state())
-        assertEquals(2, task.currentAttempt(), "the first shipment call failed")
-        assertEquals(listOf("charge ord-9 charge:ord-9", "ship ord-9", "ship ord-9"), calls)
-        assertEquals(mapOf("shipmentId" to "ship-ord-9", "chargeId" to "ch-ord-9"), task.result())
-      }
-  }
-
-  @Test
   fun theFollowUpWaitsForItsTimeAndTheWelcomeRunsOneTime() {
     durableFlowWorker(dataSource, driver) { examples().registerFollowUp(this) }
       .use { worker ->
