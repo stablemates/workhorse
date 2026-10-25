@@ -29,6 +29,10 @@ import run.workhorse.internal.SqlCatalogue;
  * after its attempt ended. The member keeps the interrupt. It sets the interrupt again just before
  * it calls the handler, so a handler that this member runs still sees the drain, and again before
  * it returns.
+ *
+ * <p>A cancellation or a lease loss removes a member that no batch took yet. The member then fails
+ * with the {@link CancelledException} of its reason, and the handler never gets it. A member that a
+ * batch already took stays in that batch, and the handler reads its cancellation.
  */
 final class BatchCoordinator {
   /** How often a lingering member checks for the last arrival while the worker stops. */
@@ -89,6 +93,7 @@ final class BatchCoordinator {
    */
   @Nullable Object run(Worker.Active task, @Nullable Object payload, HandlerContext context)
       throws Exception {
+    context.cancellation().throwIfCancelled();
     boolean interrupted = Thread.interrupted();
     Member member = new Member(task, payload, new BatchMemberContext(context));
     String queue = task.task().queue();
@@ -104,6 +109,7 @@ final class BatchCoordinator {
         index++;
       }
       waiting.add(index, member);
+      dropCancelled(queue);
       batch = waiting.size() >= maxSize ? take(queue) : List.of();
       firstArrivedAt = member.arrivedAt;
       for (Member other : pending.getOrDefault(queue, List.of())) {
@@ -112,6 +118,8 @@ final class BatchCoordinator {
     } finally {
       lock.unlock();
     }
+    AutoCloseable cancellation =
+        context.cancellation().onCancel(() -> leave(member, queue, context));
     try {
       interrupted |= dispatch(batch, interrupted);
       // A member that the full batch left behind lingers too. Once its linger ends, it runs every
@@ -130,6 +138,7 @@ final class BatchCoordinator {
           List<Member> next;
           lock.lock();
           try {
+            dropCancelled(queue);
             List<Member> waiting = pending.get(queue);
             next = waiting != null && waiting.contains(member) ? take(queue) : null;
           } finally {
@@ -143,6 +152,7 @@ final class BatchCoordinator {
       }
       return outcome(member);
     } finally {
+      cancellation.close();
       if (interrupted) {
         Thread.currentThread().interrupt();
       }
@@ -185,7 +195,64 @@ final class BatchCoordinator {
     }
   }
 
-  /** Removes the next batch from a queue's waiting list. The caller holds {@link #lock}. */
+  /**
+   * Removes {@code member} from its queue's waiting list after a cancellation or a lease loss, and
+   * fails it with the reason. Its linger then ends at once. A member that a batch already took
+   * stays in that batch.
+   */
+  private void leave(Member member, String queue, HandlerContext context) {
+    CancellationReason reason = context.cancellation().reason();
+    if (reason == null) {
+      return;
+    }
+    lock.lock();
+    try {
+      List<Member> waiting = pending.get(queue);
+      if (waiting == null || !waiting.remove(member)) {
+        return;
+      }
+      if (waiting.isEmpty()) {
+        pending.remove(queue);
+      }
+      member.result.completeExceptionally(new CancelledException(reason));
+      changed.signalAll();
+    } finally {
+      lock.unlock();
+    }
+  }
+
+  /**
+   * Removes each member whose token is cancelled from a queue's waiting list, and fails it with the
+   * reason. Its callback runs on another thread and can come later, so a selection never takes it.
+   * The caller holds {@link #lock}.
+   */
+  private void dropCancelled(String queue) {
+    List<Member> waiting = pending.get(queue);
+    if (waiting == null) {
+      return;
+    }
+    boolean dropped =
+        waiting.removeIf(
+            member -> {
+              CancellationReason reason = member.context.cancellation().reason();
+              if (reason == null) {
+                return false;
+              }
+              member.result.completeExceptionally(new CancelledException(reason));
+              return true;
+            });
+    if (waiting.isEmpty()) {
+      pending.remove(queue);
+    }
+    if (dropped) {
+      changed.signalAll();
+    }
+  }
+
+  /**
+   * Removes the next batch from a queue's waiting list. The caller holds {@link #lock}, and it
+   * drops the cancelled members first, so one check decides each selection.
+   */
   private List<Member> take(String queue) {
     List<Member> waiting = pending.get(queue);
     if (waiting == null) {

@@ -2278,6 +2278,72 @@ class WorkerDatabaseTest {
     assertEquals("ConflictException", Json.object(json(failed.error())).get("name"));
   }
 
+  // SM-1709: a cancellation or a lease loss removes a batch member that waits for its linger. The
+  // handler never gets it, and the other members keep their order and dispatch.
+  @Test
+  void removesACanceledWaitingBatchMemberAndKeepsTheOrderOfItsPeers() throws Exception {
+    UUID first =
+        enqueue("lingering", Map.of("name", "first"), EnqueueOptions.builder().priority(3));
+    UUID canceled =
+        enqueue("lingering", Map.of("name", "canceled"), EnqueueOptions.builder().priority(2));
+    UUID last = enqueue("lingering", Map.of("name", "last"), EnqueueOptions.builder().priority(1));
+    List<List<@Nullable Object>> batches = new CopyOnWriteArrayList<>();
+    Worker worker = lingeringBatchWorker(Duration.ofSeconds(5), batches);
+    worker.start();
+    try {
+      for (UUID taskId : List.of(first, canceled, last)) {
+        waitForState(taskId, "active");
+      }
+      queue.cancel(canceled, "test", "member canceled");
+      waitForState(canceled, "canceled");
+      assertEquals(List.of(), batches, "the member left before the linger ended");
+      waitForState(first, "succeeded");
+      waitForState(last, "succeeded");
+    } finally {
+      worker.close();
+    }
+    assertEquals(List.of(List.of("first", "last")), batches);
+    assertEquals("first", json(status(first).result()));
+    assertEquals("last", json(status(last).result()));
+  }
+
+  // SM-1709: when the last waiting member leaves, its linger ends. It does not wait 60 s.
+  @Test
+  void endsTheLingerWhenTheLastWaitingBatchMemberIsCanceled() throws Exception {
+    UUID only = enqueue("lingering", Map.of("name", "only"));
+    List<List<@Nullable Object>> batches = new CopyOnWriteArrayList<>();
+    Worker worker = lingeringBatchWorker(Duration.ofSeconds(60), batches);
+    worker.start();
+    try {
+      waitForState(only, "active");
+      queue.cancel(only, "test", "member canceled");
+      waitForState(only, "canceled");
+    } finally {
+      worker.close();
+    }
+    assertEquals(List.of(), batches);
+  }
+
+  private Worker lingeringBatchWorker(Duration linger, List<List<@Nullable Object>> batches) {
+    return worker()
+        .concurrency(4)
+        .lease(Duration.ofSeconds(30))
+        .heartbeat(Duration.ofMillis(100))
+        .handleBatch(
+            "lingering",
+            Object.class,
+            new BatchOptions(4, linger),
+            items -> {
+              List<@Nullable Object> names =
+                  items.stream()
+                      .<@Nullable Object>map(item -> ((Map<?, ?>) item.payload()).get("name"))
+                      .toList();
+              batches.add(names);
+              return names.stream().<BatchHandlerOutcome>map(BatchSucceeded::new).toList();
+            })
+        .build();
+  }
+
   // SM-1525 (m3): a logger that throws before the batch handler fails each member, and no member
   // on another thread waits forever.
   @Test

@@ -2041,9 +2041,29 @@ class Worker:
         pending_lock = Lock()
         pending_queues: dict[str, list[_PendingBatchMember]] = {}
 
+        def drop_cancelled(queue_name: str) -> None:
+            # Callers hold pending_lock. A member whose token was cancelled before its callback
+            # removed it leaves here, so a selection never takes it.
+            pending = pending_queues.get(queue_name)
+            if not pending:
+                return
+            cancelled = [
+                waiting for waiting in pending if waiting.item.context.cancellation.cancelled
+            ]
+            if not cancelled:
+                return
+            pending[:] = [
+                waiting for waiting in pending if not any(waiting is member for member in cancelled)
+            ]
+            for member in cancelled:
+                member.result.set_exception(member.item.context.cancellation.reason)
+            if not pending:
+                del pending_queues[queue_name]
+
         def take_batch(queue_name: str) -> list[_PendingBatchMember]:
             # Callers hold pending_lock, and every member enters through insort, so the waiting
             # list is already in dispatch order. The prefix is both the group and its ordering.
+            # Callers drop the cancelled members first, so one check decides each selection.
             pending = pending_queues.get(queue_name)
             if not pending:
                 return []
@@ -2139,7 +2159,26 @@ class Worker:
                 else:
                     member.result.set_exception(outcome["error"])
 
+        def leave_batch(member: _PendingBatchMember, reason: BaseException) -> None:
+            # A cancellation or a lease loss ends the wait of a member that no batch took yet. The
+            # member settles with the reason, and the batch callback never gets it. A member that a
+            # batch already took stays in that batch.
+            queue_name = member.item.context.task.queue
+            with pending_lock:
+                pending = pending_queues.get(queue_name)
+                index = next(
+                    (index for index, waiting in enumerate(pending or ()) if waiting is member),
+                    None,
+                )
+                if pending is None or index is None:
+                    return
+                del pending[index]
+                if not pending:
+                    del pending_queues[queue_name]
+            member.result.set_exception(reason)
+
         def batch_member_handler(payload: Any, context: HandlerContext) -> Json:
+            context.cancellation.raise_if_cancelled()
             member = _PendingBatchMember(
                 arrival_order=self._claim_order(context.task),
                 arrived_at=monotonic(),
@@ -2149,14 +2188,18 @@ class Worker:
             with pending_lock:
                 pending = pending_queues.setdefault(context.task.queue, [])
                 insort(pending, member, key=_batch_member_order)
-                batch = take_batch(context.task.queue) if len(pending) >= max_size else []
+                drop_cancelled(context.task.queue)
+                full = len(pending_queues.get(context.task.queue, ())) >= max_size
+                batch = take_batch(context.task.queue) if full else []
                 first_arrived_at = (
                     min(waiting.arrived_at for waiting in pending) if pending else member.arrived_at
                 )
+            context.cancellation._on_cancel(lambda reason: leave_batch(member, reason))
             if batch:
                 dispatch(batch)
             elif linger_ms == 0:
                 with pending_lock:
+                    drop_cancelled(context.task.queue)
                     batch = take_batch(context.task.queue)
                 if batch:
                     dispatch(batch)
@@ -2166,6 +2209,7 @@ class Worker:
                     return member.result.result(timeout=remaining)
                 except FutureTimeoutError:
                     with pending_lock:
+                        drop_cancelled(context.task.queue)
                         batch = take_batch(context.task.queue)
                     if batch:
                         dispatch(batch)

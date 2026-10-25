@@ -1243,6 +1243,16 @@ holds one type and queue. The coordinator then orders the selected tasks by desc
 Each task uses its own handler thread. Thus the dispatcher stamps a claim sequence before that
 thread starts. The coordinator ranks by that sequence, not by the order in which threads get to it.
 
+A cancel request or a lease loss can cancel the `cancellation` token of a waiting task. Then the
+coordinator removes that task from its waiting list at once. The task raises the
+reason of the token, and the handler never gets it. If the token is cancelled before the task
+arrives, the task raises the reason and does not join a batch. The other waiting tasks keep their
+order and their linger deadline. A task that the coordinator selected for a batch stays in that
+batch, and the handler reads its `cancellation`.
+
+The Python worker cancels no token when it stops. Its stop deadline ends the process, so a stop
+does not remove a waiting task.
+
 #### Items and outcomes
 
 The handler receives a sequence of `BatchHandlerItem` values. Each item contains `payload` and a
@@ -2281,6 +2291,18 @@ When `drain` starts, it calls `BatchCoordinator#flush!`. From then on, a waiting
 lingering when `Worker#batch_arrivals_complete?` finds every admitted task of its type and queue in
 the coordinator. It checks again every 50 ms.
 
+A cancel request or a lease loss can cancel the `CancellationToken` of a waiting task. Then the
+coordinator removes that task from its waiting list at once. The task raises the
+`CancelledError` of the token reason, and the block never gets it. If the token is cancelled before
+the task arrives, the task raises that error and does not join a batch. The other waiting tasks
+keep their order and their linger deadline. A task that the coordinator selected for a batch stays
+in that batch, and the block reads its `cancellation`.
+
+The rule also applies to the `:shutdown` cancellation at the end of the shutdown grace. Before that
+point, the drain flush dispatches a lingering batch when all its tasks have arrived. A task that still
+waits at the end of the grace leaves its batch, and the worker releases it to its queue without a
+charged attempt. The block does not run it.
+
 #### Items and outcomes
 
 The worker calls the block as `handler.call(items)`, with one `BatchHandlerItem` for each task in
@@ -3157,6 +3179,18 @@ and then by claim order. A full batch dispatches at once. Otherwise the linger d
 waiting task dispatches it. During a drain, a lingering task stops when every admitted task of its
 type and queue has arrived. The worker checks again every 50 ms.
 
+A cancel request or a lease loss can cancel the `CancellationToken` of a waiting task. Then the
+worker removes that task from its waiting list at once. The task throws the
+`CancelledException` of its reason, and the handler never gets it. If the token is cancelled before
+the task arrives, the task throws that exception and does not join a batch. The other waiting tasks
+keep their order and their linger deadline. A task that the worker selected for a batch stays in
+that batch, and the handler reads its `cancellation()`.
+
+The rule also applies to the `SHUTDOWN` cancellation at the drain deadline. Before that point, the
+drain flush dispatches a lingering batch when all its tasks have arrived. A task that still waits at
+the deadline leaves its batch, and the worker releases it to its queue without a charged attempt.
+The handler does not run it.
+
 `BatchHandler.handle(items)` receives one `BatchHandlerItem` for each task. Each item holds the
 `payload` and its own `BatchHandlerContext`. The handler returns one `BatchHandlerOutcome` for each
 item, in the same order: `new BatchSucceeded(result)` or `new BatchFailed(exception)`.
@@ -3951,6 +3985,18 @@ The worker groups the waiting tasks of one type by queue. It orders a batch by d
 and then by claim order. A full batch dispatches at once. Otherwise the linger deadline of the first
 waiting task dispatches it. During a drain, a lingering task stops when every admitted task of its
 type and queue has arrived. The worker checks again every 50 ms.
+
+A cancel request or a lease loss can cancel the `CancellationToken` of a waiting task. Then the
+worker removes that task from its waiting list at once. The task settles with an
+`OperationCanceledException` of its own token, and the handler never gets it. If the token is
+cancelled before the task arrives, the task settles in the same way and does not join a batch. The
+other waiting tasks keep their order and their linger deadline. A task that the worker selected for
+a batch stays in that batch, and the handler reads its `CancellationToken`.
+
+The rule also applies to the `CancelReason.Shutdown` cancellation at the drain deadline. Before that
+point, the drain flush dispatches a lingering batch when all its tasks have arrived. A task that still
+waits at the deadline leaves its batch, and the worker releases it to its queue without a charged
+attempt. The handler does not run it.
 
 Each `BatchHandlerItem` holds the `Payload` and its own `BatchHandlerContext`. The handler returns
 one outcome for each item, in item order: `new BatchSucceeded(result)` or `new BatchFailed(error)`.

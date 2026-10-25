@@ -103,6 +103,7 @@ module Stablemates
 
         def run(payload, context)
           task = context.task
+          context.cancellation.check!
           member = PendingBatchMember.new(@worker.claim_order(task), monotonic, payload, context,
             Concurrent::Promises.resolvable_future)
           queue = task.queue
@@ -111,13 +112,15 @@ module Stablemates
             waiting = (@pending[queue] ||= [])
             # Every member enters in order, so the waiting list's prefix is the next batch.
             waiting.insert(waiting.bsearch_index { |other| (order(other) <=> order(member)).positive? } || waiting.size, member)
+            drop_cancelled(queue)
             [(waiting.size >= @max_size) ? take(queue) : [], waiting.map(&:arrived_at).min || member.arrived_at]
           end
+          context.cancellation.observe { |reason| leave(member, queue, reason) }
           dispatch(batch)
           # A member the full batch left behind lingers too. Once its linger ends, it runs every
           # batch ahead of it and then its own, so no member waits for a later arrival.
           unless linger(member, queue, first_arrived_at + @linger)
-            while (batch = @lock.synchronize { @pending[queue]&.include?(member) ? take(queue) : nil })
+            while (batch = next_batch(member, queue))
               dispatch(batch)
             end
           end
@@ -143,10 +146,54 @@ module Stablemates
           end
         end
 
+        # Removes +member+ from its queue's waiting list after a cancellation or a lease loss, and
+        # rejects it with the CancelledError of +reason+. The handler never gets the member, and its
+        # linger ends at once. A member that a batch already took stays in that batch. The observer
+        # can run twice, so a second call finds nothing to remove.
+        def leave(member, queue, reason)
+          left = @lock.synchronize do
+            waiting = @pending[queue]
+            index = waiting&.index { |other| other.equal?(member) }
+            next false if index.nil?
+
+            waiting.delete_at(index)
+            @pending.delete(queue) if waiting.empty?
+            true
+          end
+          member.result.reject(CancelledError.new(reason)) if left
+        end
+
         # Ranks a waiting member by descending task priority, then by claim order.
         def order(member) = [-member.context.task.priority, member.arrival_order]
 
-        # Removes the next batch from a queue's waiting list. The caller holds @lock.
+        # The next batch of +queue+, while +member+ still waits in it, or nil.
+        def next_batch(member, queue)
+          @lock.synchronize do
+            drop_cancelled(queue)
+            @pending[queue]&.include?(member) ? take(queue) : nil
+          end
+        end
+
+        # Removes each member whose token is cancelled from a queue's waiting list, and rejects it
+        # with the CancelledError of its reason. Its observer may not have run yet, so a selection
+        # never takes it. The caller holds @lock.
+        def drop_cancelled(queue)
+          waiting = @pending[queue]
+          return if waiting.nil?
+
+          waiting.reject! do |member|
+            reason = member.context.cancellation.reason
+            next false if reason.nil?
+
+            member.result.reject(CancelledError.new(reason))
+            true
+          end
+          @pending.delete(queue) if waiting.empty?
+          nil
+        end
+
+        # Removes the next batch from a queue's waiting list. The caller holds @lock, and it drops
+        # the cancelled members first, so one check decides each selection.
         def take(queue)
           waiting = @pending[queue]
           return [] if waiting.nil?

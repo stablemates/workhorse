@@ -137,6 +137,17 @@ registers: the `Queue`, the `Admin`, and the hosted `Worker`. A .NET `Worker` in
 handler. The Generic Host stops it when the process gets a stop signal. The "Graceful stop and
 signal drain" cell cites the test that drains a hosted worker when the host stops.
 
+The "Batch handler delivery" cells agree on a task that waits for its batch. A cancel request or a
+lease loss can cancel a waiting task. In all seven SDKs, the worker then removes that task from the
+batch at once. The task settles with its cancellation, and the batch handler never gets it. The
+other waiting tasks keep their order and dispatch.
+
+In the Go, Rust, Ruby, JVM, and .NET workers, the shutdown cancellation at the end of the drain
+grace has the same effect. A task that still waits then leaves its batch, and the handler does not
+run it. The
+[Batch handlers](architecture/lifecycle.md#batch-handlers) section of the lifecycle page states the
+rule.
+
 ## Reporter callback failures
 
 A reporter callback is a worker option that observes the worker, such as the registration error

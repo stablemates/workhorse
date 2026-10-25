@@ -257,6 +257,10 @@ The worker makes each batch in its own process. A batch never contains tasks fro
 processes. It contains tasks of one queue and one task type. [`Queue.enqueueMany`](/docs/enqueue#enqueue-many-tasks-in-one-call) writes several tasks
 in one transaction, but it does not decide which tasks share a batch.
 
+If a task is canceled or loses its lease while it waits for its batch, the worker removes the task
+at once. The handler never gets that task. The other waiting tasks keep their order and their
+place in the next batch.
+
 <details>
 <summary>Reference: batch selection</summary>
 
@@ -265,6 +269,8 @@ in one transaction, but it does not decide which tasks share a batch.
 3. A full batch dispatches immediately.
 4. A partial batch dispatches when its first task has waited `lingerMs`.
 5. The coordinator orders the tasks in the batch by priority, highest first, then by arrival order.
+6. If the cancellation of a waiting task fires, the coordinator removes the task at once. The task
+   settles with its cancellation, and the handler never gets it.
 
 More detail: [Task lifecycle: Batch handlers](https://github.com/stablemates/workhorse/blob/main/docs/architecture/lifecycle.md#batch-handlers) and [Schema and SQL protocol: Go batch handlers](https://github.com/stablemates/workhorse/blob/main/docs/architecture/schema-and-protocol.md#go-batch-handlers).
 

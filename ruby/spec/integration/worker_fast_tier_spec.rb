@@ -383,6 +383,36 @@ RSpec.describe "Worker on the fast tier against PostgreSQL" do
       [PG::TextEncoder::Array.new.encode(task_ids)]).getvalue(0, 0)).to eq("2")
   end
 
+  # SM-1709: at the end of the shutdown grace, the drain cancels each token with :shutdown. A member
+  # that still lingers then leaves its batch, and its task goes back to its queue without a charged
+  # attempt. The block never runs a payload after the deadline. The stub models an admitted member
+  # that has not reached the coordinator, so the drain flush cannot dispatch the batch first.
+  it "returns a member that still lingers at the shutdown deadline to its queue" do
+    task_ids = Array.new(2) { queue.enqueue("deadline", {}, max_attempts: 1).task_id }
+    calls = Concurrent::Array.new
+    subject = worker(concurrency: 3, shutdown_grace: 0.05)
+    subject.handle_batch("deadline", max_size: 3, linger: 30) do |items|
+      calls << items.size
+      items.map { {status: :succeeded, result: {}} }
+    end
+    allow(subject).to receive(:batch_arrivals_complete?).and_return(false)
+    active = subject.instance_variable_get(:@active)
+
+    expect(run_until(subject) { active.size == 2 }).to be_nil
+    expect(calls).to be_empty
+    states = @connection.exec_params(<<~SQL, [PG::TextEncoder::Array.new.encode(task_ids)]).values
+      SELECT runtime.state, runtime.current_attempt::text
+        FROM workhorse.task_runtime runtime
+       WHERE runtime.task_id = ANY($1::uuid[])
+    SQL
+    expect(states).to eq([%w[ready 1], %w[ready 1]])
+    task_ids.each do |task_id|
+      events = @connection.exec_params("SELECT event_type FROM workhorse.task_event WHERE task_id = $1 ORDER BY occurred_at, event_id",
+        [task_id]).column_values(0)
+      expect(events).to eq(%w[enqueued claimed released])
+    end
+  end
+
   it "gives each batch member its own cancellation token" do
     2.times { queue.enqueue("cancel", {}, max_attempts: 1) }
     reasons = Concurrent::Array.new

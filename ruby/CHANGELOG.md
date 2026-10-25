@@ -17,6 +17,22 @@ Now the worker counts each failed round once in the new counter
 failed round still gives no ownership verdict, so `workhorse.worker.heartbeat.failure` does not
 change. The worker adds no log record. The new instrument is an addition.
 
+### A canceled task leaves its batch while it waits
+
+A batch handler waits up to its linger for a partial batch. Before this change, a waiting task
+stayed in the batch after a cancel request or a lease loss cancelled its cancellation token. The
+batch handler then got a task that the worker no longer owned, and the task settled only after the
+linger (SM-1709).
+
+Now the worker removes such a task from the batch at once. The task raises the `CancelledError` of
+the token reason, and the batch handler never gets it. The other waiting tasks keep their order and
+dispatch. The TypeScript, Go, and Rust workers already remove such a task.
+
+This includes the `:shutdown` cancellation at the end of the shutdown grace. Before, a task that
+still waited then dispatched, and the batch handler ran its payload after the deadline. Now the task
+goes back to its queue without a charged attempt. Before the deadline, the drain still dispatches a
+lingering batch when all its tasks have arrived.
+
 ### The worker waits longer after each not_due expiry answer
 
 When the local timer of a deadline or an execution timeout fires, the worker asks PostgreSQL to

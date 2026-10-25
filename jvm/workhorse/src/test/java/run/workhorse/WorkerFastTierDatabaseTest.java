@@ -566,13 +566,14 @@ class WorkerFastTierDatabaseTest {
   }
 
   /**
-   * The drain interrupts a member that has not dispatched the batch yet. The member passes the
-   * interrupt to the handler. The test waits for the settled states, and not for close ({@link
+   * At the drain deadline, the drain cancels each token with {@link CancellationReason#SHUTDOWN}
+   * and interrupts its thread. A member that still lingers then leaves its batch, and its task goes
+   * back to its queue without a charged attempt. The handler never runs a payload after the
+   * deadline (SM-1709). The test waits for the settled states, and not for close ({@link
    * #closeAndWaitUntilSettled}).
    */
   @Test
-  void aMemberThatTheDrainInterruptedBeforeItDispatchedPassesTheInterruptToTheHandler()
-      throws Exception {
+  void aMemberThatStillLingersAtTheDrainDeadlineGoesBackToItsQueue() throws Exception {
     List<UUID> taskIds =
         List.of(
             enqueue("lingered", Map.of("slow", false), EnqueueOptions.builder().maxAttempts(1)),
@@ -605,7 +606,7 @@ class WorkerFastTierDatabaseTest {
             return standard.decode(json, type);
           }
         };
-    List<Boolean> interrupted = new CopyOnWriteArrayList<>();
+    AtomicInteger handled = new AtomicInteger();
     Worker worker =
         worker()
             .concurrency(3)
@@ -616,11 +617,7 @@ class WorkerFastTierDatabaseTest {
                 Object.class,
                 new BatchOptions(3, Duration.ofSeconds(30)),
                 items -> {
-                  try {
-                    never.await();
-                  } catch (InterruptedException drained) {
-                    interrupted.add(true);
-                  }
+                  handled.incrementAndGet();
                   return items.stream()
                       .<BatchHandlerOutcome>map(item -> new BatchSucceeded("done"))
                       .toList();
@@ -632,8 +629,29 @@ class WorkerFastTierDatabaseTest {
 
     closeAndWaitUntilSettled(worker, taskIds);
 
-    assertEquals(List.of(true), interrupted, "the handler received the drain interrupt");
-    assertEquals(List.of("succeeded"), fullStates(taskIds).values().stream().distinct().toList());
+    assertEquals(0, handled.get(), "the handler did not run after the deadline");
+    assertEquals(List.of("ready"), fullStates(taskIds).values().stream().distinct().toList());
+    for (UUID taskId : taskIds) {
+      assertEquals(
+          List.of("enqueued", "claimed", "released"), events(taskId), "the attempt is not charged");
+    }
+  }
+
+  private static List<String> events(UUID taskId) throws SQLException {
+    List<String> events = new ArrayList<>();
+    try (Connection connection = ScratchDatabase.connect();
+        PreparedStatement statement =
+            connection.prepareStatement(
+                "SELECT event_type FROM workhorse.task_event WHERE task_id = ?::uuid"
+                    + " ORDER BY occurred_at, event_id")) {
+      statement.setString(1, taskId.toString());
+      try (ResultSet result = statement.executeQuery()) {
+        while (result.next()) {
+          events.add(result.getString(1));
+        }
+      }
+    }
+    return events;
   }
 
   @Test
