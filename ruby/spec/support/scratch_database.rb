@@ -10,6 +10,12 @@ require "uri"
 # `sql/schema/current.sql` into it, and `spec_helper.rb` drops it after the suite. `pnpm db:sweep`
 # recognizes the same name shape if that hook never runs.
 #
+# A session on `postgres` holds the lease of the scratch database and of each extra database from
+# before its creation until after its drop: a shared advisory lock on `hashtextextended(<name>, 0)`.
+# A test can have no session on a scratch database, and `pnpm db:sweep` skips a scratch database
+# under that lock. If the process stops or crashes, PostgreSQL ends the session and its locks, so
+# the sweep can drop the databases again (SM-1702).
+#
 # The scratch database and each extra database set `synchronous_commit = off`, so a host I/O stall
 # does not add a WAL flush wait to each commit of a test (SM-1809).
 #
@@ -22,6 +28,9 @@ module ScratchDatabase
   DROP_ATTEMPTS = 40
   DROP_RETRY = 0.025
   CONNECT_TIMEOUT = 10
+  # Shared with `scratchLeaseStatement` in `typescript/core/test/support/schema-template.ts`.
+  LEASE = "SELECT pg_advisory_lock_shared(hashtextextended($1, 0))"
+  RELEASE = "SELECT pg_advisory_unlock_shared(hashtextextended($1, 0))"
 
   class << self
     # The scratch database URL, created on first use; nil when a local run has no database.
@@ -68,6 +77,9 @@ module ScratchDatabase
       discard(@name)
     ensure
       @name = nil
+      # The lease ends after the drops. If a drop failed, the sweep can drop the database.
+      @lease&.close
+      @lease = nil
     end
 
     private
@@ -95,6 +107,7 @@ module ScratchDatabase
 
       @source = source
       @source_name = source_name
+      @lease = PG.connect(replace_database(source, "postgres"), connect_timeout: CONNECT_TIMEOUT)
       name = scratch_name(source_name, Process.pid)
       # Owned before it exists, so a failed schema install still drops the database.
       @name = name
@@ -108,6 +121,7 @@ module ScratchDatabase
     # the worker is correct (SM-1809). Visibility and order do not change. Only a server crash can
     # lose such a commit, and no Ruby test restarts PostgreSQL or reads the WAL.
     def install(name)
+      @lease.exec_params(LEASE, [name])
       with_admin do |admin|
         drop_database(admin, name)
         admin.exec("CREATE DATABASE #{PG::Connection.quote_ident(name)}")
@@ -126,6 +140,7 @@ module ScratchDatabase
 
     def discard(name)
       with_admin { |admin| drop_database(admin, name) }
+      @lease.exec_params(RELEASE, [name])
       report("dropped scratch database #{name}")
     rescue PG::Error => e
       report("could not drop scratch database #{name}: #{e.message}; run pnpm db:sweep")

@@ -117,7 +117,8 @@ func TestDatabaseURLIsReturnedWhenSet(t *testing.T) {
 }
 
 // A host I/O stall can make a WAL flush take seconds, so a commit in a test does not wait for it
-// (SM-1809). A new session of a database that Create makes takes the setting.
+// (SM-1809). A new session of a database that Create makes takes the setting. The database is also
+// under the lease that keeps pnpm db:sweep from dropping it (SM-1702).
 func TestCreateCommitsWithoutWaitingForTheWalFlush(t *testing.T) {
 	parsed, err := url.Parse(SourceURL(t))
 	if err != nil {
@@ -152,7 +153,7 @@ func TestCreateCommitsWithoutWaitingForTheWalFlush(t *testing.T) {
 	if err := drop(); err != nil {
 		t.Fatal(err)
 	}
-	if err := Create(ctx, admin, databaseName); err != nil {
+	if err := Create(t, ctx, admin, adminURL.String(), databaseName); err != nil {
 		t.Fatal(err)
 	}
 	defer func() {
@@ -175,5 +176,16 @@ func TestCreateCommitsWithoutWaitingForTheWalFlush(t *testing.T) {
 	}
 	if commit != "off" {
 		t.Fatalf("the scratch database has synchronous_commit %q; want off", commit)
+	}
+
+	// No session of the test is on the scratch database now. pnpm db:sweep takes this lock with no
+	// wait before it drops a scratch database, so the lease of Create must make it fail (SM-1702).
+	var locked bool
+	if err := admin.QueryRow(ctx, "SELECT pg_try_advisory_lock(hashtextextended($1, 0))", databaseName).Scan(&locked); err != nil {
+		t.Fatal(err)
+	}
+	if locked {
+		_, _ = admin.Exec(ctx, "SELECT pg_advisory_unlock(hashtextextended($1, 0))", databaseName)
+		t.Fatalf("the sweep took the lock of %s; want the lease of Create to hold it", databaseName)
 	}
 }

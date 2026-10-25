@@ -110,20 +110,29 @@ def database_url(request: pytest.FixtureRequest) -> Iterator[str]:
     database_name = f"{source_name[:45]}_py_{digest}"
     admin_url = urlunsplit(parsed._replace(path="/postgres"))
     isolated_url = urlunsplit(parsed._replace(path=f"/{database_name}"))
+    # This session holds the lease of the scratch database from before the copy until after the
+    # drop. A test can have no session on its database, for example between two pools, and
+    # `pnpm db:sweep` skips a scratch database under this shared lock. If the process stops or
+    # crashes, PostgreSQL ends the session and its lock, so the sweep can drop the database. The
+    # TypeScript harness holds the same lease (SM-1702).
     with psycopg.connect(admin_url, autocommit=True) as admin:
+        admin.execute(SCRATCH_LEASE, (database_name,))
         copy_schema_template(admin, parsed, database_name)
-    try:
-        with psycopg.connect(isolated_url, autocommit=True) as connection:
-            connection.execute(REFRESH_INSTALL_CLOCK)
-        yield isolated_url
-    finally:
-        with psycopg.connect(admin_url, autocommit=True) as admin:
+        try:
+            with psycopg.connect(isolated_url, autocommit=True) as connection:
+                connection.execute(REFRESH_INSTALL_CLOCK)
+            yield isolated_url
+        finally:
             try:
                 drop_scratch_database(admin, database_name)
             except psycopg.Error as error:
                 raise RuntimeError(
                     f"could not drop scratch database {database_name}; run pnpm db:sweep"
                 ) from error
+
+
+# Shared with `scratchLeaseStatement` in `typescript/core/test/support/schema-template.ts`.
+SCRATCH_LEASE = "SELECT pg_advisory_lock_shared(hashtextextended(%s, 0))"
 
 
 SCHEMA = REPOSITORY / "sql/schema/current.sql"

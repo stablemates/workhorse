@@ -18,10 +18,12 @@ public sealed class ScenarioDatabase : IAsyncDisposable
 
     private readonly ScratchDatabase _scratch;
     private readonly string _name;
+    private readonly ScratchDatabaseLease _lease;
 
-    private ScenarioDatabase(ScratchDatabase scratch, NpgsqlDataSource dataSource, string name, string url)
+    private ScenarioDatabase(ScratchDatabase scratch, NpgsqlDataSource dataSource, ScratchDatabaseLease lease, string name, string url)
     {
         _scratch = scratch;
+        _lease = lease;
         _name = name;
         DataSource = dataSource;
         Url = url;
@@ -47,22 +49,25 @@ public sealed class ScenarioDatabase : IAsyncDisposable
         _ = scratch.DataSource;
         var source = scratch.Name!.Split("_dotnet_")[0];
         var name = $"{source[..Math.Min(source.Length, 43)]}_dp_{Convert.ToHexStringLower(RandomNumberGenerator.GetBytes(5))}";
-        await using (var admin = scratch.CreateDataSource(builder => { builder.Database = "postgres"; builder.Pooling = false; }))
-        {
-            await ScratchDatabase.CreateDatabaseAsync(admin, name);
-        }
-
-        var dataSource = scratch.CreateDataSource(builder => builder.Database = name);
-        var schema = await File.ReadAllTextAsync(SchemaPath());
-        await using (var install = dataSource.CreateCommand(schema))
-        {
-            await install.ExecuteNonQueryAsync();
-        }
+        var lease = await scratch.CreateDatabaseAsync(name);
 
         // The scratch fixture accepts DATABASE_URL_TEST only, so the program gets the same URL with
         // the name of this database.
         var url = new UriBuilder(Environment.GetEnvironmentVariable("DATABASE_URL_TEST")!) { Path = "/" + name };
-        return new ScenarioDatabase(scratch, dataSource, name, url.Uri.AbsoluteUri);
+        var database = new ScenarioDatabase(scratch, scratch.CreateDataSource(builder => builder.Database = name), lease, name, url.Uri.AbsoluteUri);
+        try
+        {
+            await using var install = database.DataSource.CreateCommand(await File.ReadAllTextAsync(SchemaPath()));
+            await install.ExecuteNonQueryAsync();
+        }
+        catch
+        {
+            // The caller gets no database to dispose, so the drop and the end of the lease run here.
+            await database.DisposeAsync();
+            throw;
+        }
+
+        return database;
     }
 
     /// <summary>The detail of one task.</summary>
@@ -106,9 +111,17 @@ public sealed class ScenarioDatabase : IAsyncDisposable
     {
         await DataSource.DisposeAsync();
         NpgsqlConnection.ClearAllPools();
-        await using var admin = _scratch.CreateDataSource(builder => { builder.Database = "postgres"; builder.Pooling = false; });
-        await using var drop = admin.CreateCommand($"DROP DATABASE IF EXISTS \"{_name}\"");
-        await drop.ExecuteNonQueryAsync();
+        try
+        {
+            await using var admin = _scratch.CreateDataSource(builder => { builder.Database = "postgres"; builder.Pooling = false; });
+            await using var drop = admin.CreateCommand($"DROP DATABASE IF EXISTS \"{_name}\"");
+            await drop.ExecuteNonQueryAsync();
+        }
+        finally
+        {
+            // The lease ends after the drop. If the drop failed, the sweep can drop the database.
+            await _lease.DisposeAsync();
+        }
     }
 
     private static string SchemaPath() =>

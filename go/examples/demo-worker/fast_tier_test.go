@@ -134,7 +134,7 @@ func createDemoWorkerDatabase(t *testing.T, sourceURL string) string {
 		_ = admin.Close(ctx)
 		t.Fatal(err)
 	}
-	if err := testdatabase.Create(ctx, admin, databaseName); err != nil {
+	if err := testdatabase.Create(t, ctx, admin, adminURL.String(), databaseName); err != nil {
 		_ = admin.Close(ctx)
 		t.Fatal(err)
 	}

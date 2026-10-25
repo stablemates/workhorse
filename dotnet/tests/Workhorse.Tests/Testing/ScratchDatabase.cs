@@ -18,7 +18,8 @@ namespace Workhorse.Tests.Testing;
 /// run ends. <c>pnpm db:sweep</c> recognizes the same name shape if the drop never runs.
 ///
 /// <see cref="CreateDatabaseAsync"/> creates this database and every other .NET scratch database,
-/// so their commits do not wait for the WAL flush (SM-1809).
+/// so their commits do not wait for the WAL flush (SM-1809). It also returns the lease that keeps
+/// <c>pnpm db:sweep</c> from dropping the database while the process needs it (SM-1702).
 ///
 /// Without <c>DATABASE_URL_TEST</c> a local run skips each database test with a visible reason.
 /// <c>CI</c> or <c>WORKHORSE_REQUIRE_DATABASE=1</c> turns that skip into a failure.
@@ -32,6 +33,7 @@ public sealed class ScratchDatabase : IAsyncLifetime
     private NpgsqlConnectionStringBuilder? _connectionString;
     private NpgsqlDataSource? _admin;
     private NpgsqlDataSource? _dataSource;
+    private ScratchDatabaseLease? _lease;
     private string? _skipReason;
 
     /// <summary>The scratch database name, or <c>null</c> when the run has no database.</summary>
@@ -95,12 +97,11 @@ public sealed class ScratchDatabase : IAsyncLifetime
         }
 
         Name = ScratchName(sourceName);
-        var admin = new NpgsqlConnectionStringBuilder(builder.ConnectionString) { Database = "postgres", Pooling = false };
-        _admin = NpgsqlDataSource.Create(admin);
-        await DropAsync(_admin, Name).ConfigureAwait(false);
-        await CreateDatabaseAsync(_admin, Name).ConfigureAwait(false);
-
         _connectionString = new NpgsqlConnectionStringBuilder(builder.ConnectionString) { Database = Name };
+        _admin = AdminDataSource();
+        await DropAsync(_admin, Name).ConfigureAwait(false);
+        _lease = await CreateDatabaseAsync(Name).ConfigureAwait(false);
+
         _dataSource = NpgsqlDataSource.Create(_connectionString);
         var schema = await File.ReadAllTextAsync(SchemaPath()).ConfigureAwait(false);
         await using (var install = _dataSource.CreateCommand(schema))
@@ -136,26 +137,63 @@ public sealed class ScratchDatabase : IAsyncLifetime
         }
         finally
         {
+            // The lease ends after the drop. If the drop failed, the sweep can drop the database.
+            if (_lease is not null)
+            {
+                await _lease.DisposeAsync().ConfigureAwait(false);
+            }
+
             await _admin.DisposeAsync().ConfigureAwait(false);
         }
     }
 
-    /// <summary>Creates the empty scratch database <paramref name="name"/> on an admin data source.</summary>
+    /// <summary>
+    /// Creates the empty scratch database <paramref name="name"/>, and returns its lease. The caller
+    /// disposes the lease after it drops the database.
+    /// </summary>
     /// <remarks>
+    /// A session on <c>postgres</c> takes the lease before it creates the database: a shared advisory
+    /// lock on <c>hashtextextended(name, 0)</c>. A test can have no session on its scratch database,
+    /// for example after a pool prunes its idle connections. <c>pnpm db:sweep</c> takes the exclusive
+    /// lock with no wait before it drops a scratch database, so it skips a database under the lease.
+    /// If the process stops or crashes, PostgreSQL ends the session and its lock, and the sweep can
+    /// drop the database again (SM-1702).
+    ///
     /// A scratch database is for tests only, so its commits do not wait for the WAL flush. A host
     /// I/O stall can make one flush take seconds, and a lease of a few seconds then lapses although
     /// the worker is correct (SM-1809). Visibility and order do not change. Only a server crash can
     /// lose such a commit, and no .NET test restarts PostgreSQL or reads the WAL.
     /// </remarks>
-    public static async Task CreateDatabaseAsync(NpgsqlDataSource admin, string name, CancellationToken cancellationToken = default)
+    public async Task<ScratchDatabaseLease> CreateDatabaseAsync(string name, CancellationToken cancellationToken = default)
     {
-        await using (var create = admin.CreateCommand($"CREATE DATABASE {QuoteIdentifier(name)}"))
+        var lease = await ScratchDatabaseLease.TakeAsync(AdminDataSource(), name, cancellationToken).ConfigureAwait(false);
+        try
         {
-            await create.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+            await lease.ExecuteAsync($"CREATE DATABASE {QuoteIdentifier(name)}", cancellationToken).ConfigureAwait(false);
+            await lease.ExecuteAsync($"ALTER DATABASE {QuoteIdentifier(name)} SET synchronous_commit = off", cancellationToken).ConfigureAwait(false);
+        }
+        catch
+        {
+            await lease.DisposeAsync().ConfigureAwait(false);
+            throw;
         }
 
-        await using var asynchronous = admin.CreateCommand($"ALTER DATABASE {QuoteIdentifier(name)} SET synchronous_commit = off");
-        await asynchronous.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+        return lease;
+    }
+
+    /// <summary>
+    /// A data source for the <c>postgres</c> database without a pool. CREATE DATABASE waits for its
+    /// template, and a busy shared server can hold it, so a command can take up to 300 s.
+    /// </summary>
+    private NpgsqlDataSource AdminDataSource()
+    {
+        var builder = new NpgsqlConnectionStringBuilder(_connectionString!.ConnectionString)
+        {
+            Database = "postgres",
+            Pooling = false,
+            CommandTimeout = 300,
+        };
+        return NpgsqlDataSource.Create(builder);
     }
 
     private static bool Required() =>
@@ -245,4 +283,58 @@ public sealed class ScratchDatabase : IAsyncLifetime
     }
 
     private static string QuoteIdentifier(string name) => $"\"{name.Replace("\"", "\"\"", StringComparison.Ordinal)}\"";
+}
+
+/// <summary>
+/// The session on <c>postgres</c> that holds the shared advisory lock of one scratch database, so
+/// <c>pnpm db:sweep</c> skips it. Disposing the lease ends the session and the lock.
+/// </summary>
+public sealed class ScratchDatabaseLease : IAsyncDisposable
+{
+    private readonly NpgsqlDataSource _admin;
+    private readonly NpgsqlConnection _session;
+
+    private ScratchDatabaseLease(NpgsqlDataSource admin, NpgsqlConnection session)
+    {
+        _admin = admin;
+        _session = session;
+    }
+
+    /// <summary>Opens a session on <paramref name="admin"/> and takes the lock of <paramref name="name"/>. The lease owns <paramref name="admin"/>.</summary>
+    internal static async Task<ScratchDatabaseLease> TakeAsync(NpgsqlDataSource admin, string name, CancellationToken cancellationToken)
+    {
+        NpgsqlConnection? session = null;
+        try
+        {
+            session = await admin.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
+            await using var command = new NpgsqlCommand("SELECT pg_advisory_lock_shared(hashtextextended($1, 0))", session);
+            command.Parameters.Add(new NpgsqlParameter { Value = name });
+            await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+            return new ScratchDatabaseLease(admin, session);
+        }
+        catch
+        {
+            if (session is not null)
+            {
+                await session.DisposeAsync().ConfigureAwait(false);
+            }
+
+            await admin.DisposeAsync().ConfigureAwait(false);
+            throw;
+        }
+    }
+
+    internal async Task ExecuteAsync(string sql, CancellationToken cancellationToken)
+    {
+        await using var command = new NpgsqlCommand(sql, _session);
+        await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <inheritdoc />
+    public async ValueTask DisposeAsync()
+    {
+        // The data source has no pool, so closing the connection ends the session and its lock.
+        await _session.DisposeAsync().ConfigureAwait(false);
+        await _admin.DisposeAsync().ConfigureAwait(false);
+    }
 }

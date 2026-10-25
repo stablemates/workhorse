@@ -71,7 +71,7 @@ func bunFixture(t *testing.T) (*bun.DB, *sql.DB, *queryRecorder, string) {
 	}
 	defer admin.Close(ctx)
 	quotedName := pgx.Identifier{name}.Sanitize()
-	if err := testdatabase.Create(ctx, admin, name); err != nil {
+	if err := testdatabase.Create(t, ctx, admin, adminURL.String(), name); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() {

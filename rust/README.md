@@ -203,7 +203,8 @@ The PostgreSQL tests in `rust/tests/postgres.rs`, `rust/tests/enqueue_postgres.r
 `sql/schema/current.sql`, and drops the database afterward.
 The scratch database sets `synchronous_commit = off`, so a host I/O stall does not add a WAL
 flush wait to each commit in a test.
-`pnpm db:sweep` finds any scratch database that a failed teardown leaves behind.
+`pnpm db:sweep` finds any scratch database that a failed teardown leaves behind. It skips the
+scratch database of a test process that still runs, because the process holds a lock on its name.
 
 Without `DATABASE_URL_TEST` a local `pnpm rust:test` skips those tests and prints the reason.
 `pnpm rust:integration` and any run with `CI` set fail instead. A database that is set but

@@ -18,4 +18,29 @@ RSpec.describe "The scratch databases of the Ruby tests" do
       ScratchDatabase.drop_extra("synchronous_commit")
     end
   end
+
+  # `pnpm db:sweep` takes this lock with no wait before it drops a scratch database. A test can have
+  # no session on a scratch database, so only the lease keeps the sweep away (SM-1702).
+  def sweep_locks?(sweep, url)
+    name = URI.parse(url).path.delete_prefix("/")
+    locked = sweep.exec_params("SELECT pg_try_advisory_lock(hashtextextended($1, 0))", [name]).getvalue(0, 0) == "t"
+    sweep.exec_params("SELECT pg_advisory_unlock(hashtextextended($1, 0))", [name]) if locked
+    locked
+  end
+
+  it "keeps the sweep away from the scratch database and an extra database until their drop" do
+    admin = URI.parse(ScratchDatabase.url)
+    admin.path = "/postgres"
+    sweep = PG.connect(admin.to_s)
+    begin
+      expect(sweep_locks?(sweep, ScratchDatabase.url)).to be(false)
+
+      extra = ScratchDatabase.extra("sweep_lease")
+      expect(sweep_locks?(sweep, extra)).to be(false)
+      ScratchDatabase.drop_extra("sweep_lease")
+      expect(sweep_locks?(sweep, extra)).to be(true)
+    ensure
+      sweep.close
+    end
+  end
 end

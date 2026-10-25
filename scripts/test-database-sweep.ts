@@ -58,7 +58,10 @@ export interface SweepContext {
 export interface DatabaseInventoryEntry {
   name: string;
   sizeBytes: number;
-  /** Whether a backend is connected, which is the only evidence an owner is still alive. */
+  /**
+   * Whether a backend is connected. A live owner can also have no session, so the drop checks the
+   * advisory lock of the harness too.
+   */
   inUse: boolean;
 }
 
@@ -260,8 +263,11 @@ export function planTestDatabaseSweep(
  * a live owner, and the sweep skips the database. The TypeScript and Python harnesses hold the lock
  * of a shared template from the existence check until the copy ends. The JVM harness holds the
  * lock of its per-process template until the process drops it, because no session stays connected
- * to a template. One session holds the lock and runs the drop, because a session advisory lock
- * belongs to one connection.
+ * to a template. The harness of each SDK holds the lock of each scratch database from before its
+ * creation until after its drop, because a live test process can have no session on it (SM-1702).
+ * Each harness takes its locks on a `postgres` session, as the sweep does, because an advisory lock
+ * belongs to one database. One session holds the lock and runs the drop, because a session advisory
+ * lock belongs to one connection.
  */
 export async function dropRetiredDatabases(
   admin: Pool,
