@@ -20,6 +20,9 @@ public sealed class HeartbeatRoundFailureTelemetryTests(ScratchDatabase database
 {
     private const string RoundFailure = "workhorse.worker.heartbeat.round_failure";
 
+    /// <summary>The reasons the failed-round test accepts: the injected failure, and a later round that reaches its deadline.</summary>
+    private static readonly string[] Reasons = ["connection", "timeout"];
+
     private readonly ScratchDatabase _database = database;
 
     /// <summary>
@@ -27,6 +30,13 @@ public sealed class HeartbeatRoundFailureTelemetryTests(ScratchDatabase database
     /// does. The worker counts that round once as a <c>connection</c> failure. The round gives no
     /// ownership verdict, so the ownership counter stays empty. The next rounds renew the lease, and
     /// the task completes. Both the dedicated heartbeat and the shared heartbeats count the round.
+    /// <para>
+    /// SM-1817: with a 100 ms heartbeat, each round of the dedicated heartbeat has a 75 ms bound and a
+    /// server budget of about 18 ms. On a loaded host, a later round can reach that bound and count
+    /// once as <c>timeout</c>. That is a second failed round, so the test accepts it. A borrowing round
+    /// of the shared heartbeats has no round deadline. The injected failure is an
+    /// <see cref="IOException"/> with no timeout in its chain, so it can only count as <c>connection</c>.
+    /// </para>
     /// </summary>
     [Theory]
     [InlineData(false)]
@@ -66,18 +76,19 @@ public sealed class HeartbeatRoundFailureTelemetryTests(ScratchDatabase database
         }));
         worker.Handle<object?, object?>("email.send", async (_, _) =>
         {
-            // Rounds run one at a time, so a third statement starts only after the second round ended.
-            await EventuallyAsync(() => Volatile.Read(ref heartbeats) >= 3, "a heartbeat round runs after the failed one");
+            // A round after the failed one commits a renewal in PostgreSQL before the handler returns.
+            // Only a committed renewal ends this wait (SM-1817).
+            await EventuallyAsync(() => RenewedAsync(taskId), "a heartbeat round after the failed one renews the lease");
             return new { done = true };
         });
         Assert.True(await worker.RunOnceAsync(Token));
 
         Assert.Equal("succeeded", (await TaskAsync(DataSource, taskId)).Text("state"));
-        var point = Assert.Single(Recorder.Of(RoundFailure));
+        var points = Recorder.Of(RoundFailure);
+        var point = Assert.Single(points, point => Reason(point) == "connection");
         Assert.Equal(1, point.Value);
-        var tag = Assert.Single(point.Tags);
-        Assert.Equal(Names.HeartbeatFailureReason, tag.Key);
-        Assert.Equal("connection", tag.Value);
+        // A later round that reaches its deadline is a second failed round (SM-1817).
+        Assert.All(points, point => Assert.Contains(Reason(point), Reasons));
         Assert.Equal("{round}", Recorder.Instruments[RoundFailure].Unit);
         Assert.Empty(Recorder.Of("workhorse.worker.heartbeat.failure"));
         Recorder.AssertGoverned(Surface);
@@ -100,6 +111,24 @@ public sealed class HeartbeatRoundFailureTelemetryTests(ScratchDatabase database
         var error = Assert.ThrowsAny<WorkhorseException>(() => DataSources.Open(pool));
         Assert.Contains(ErrorChain(error), entry => entry is TimeoutException);
         Assert.Equal("connection", WorkerTelemetry.HeartbeatRoundFailureReason(error, deadlineReached: false));
+    }
+
+    /// <summary>
+    /// Whether a heartbeat has renewed the lease of <paramref name="taskId"/> since its claim. The
+    /// claim sets <c>heartbeat_at</c> to <c>acquired_at</c>, and only a committed renewal moves it later.
+    /// </summary>
+    private async Task<bool> RenewedAsync(Guid taskId) =>
+        await ScalarAsync(
+            DataSource,
+            "SELECT heartbeat_at > acquired_at FROM workhorse.task_runtime WHERE task_id = $1",
+            taskId) is true;
+
+    /// <summary>The failure reason of <paramref name="point"/>, its only tag.</summary>
+    private static string? Reason(TelemetryRecorder.Measurement point)
+    {
+        var tag = Assert.Single(point.Tags);
+        Assert.Equal(Names.HeartbeatFailureReason, tag.Key);
+        return (string?)tag.Value;
     }
 
     private static IEnumerable<Exception> ErrorChain(Exception? error)
