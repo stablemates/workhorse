@@ -38,7 +38,51 @@ internal sealed class RuntimeFixtures : IAsyncDisposable
         [CancelReason.Requested] = "CancellationRequestedError",
         [CancelReason.DeadlineExceeded] = "DeadlineExceededError",
         [CancelReason.ExecutionTimeout] = "ExecutionTimeoutError",
+        [CancelReason.LeaseLost] = "LeaseLostError",
     };
+
+    /// <summary>
+    /// Puts a wrapper in front of <c>expire_owned_telemetry_v1</c>. The wrapper writes each answer to
+    /// <c>workhorse.test_expiry_answers</c>, so the test can read what the worker got.
+    /// </summary>
+    private const string RecordExpiryAnswers = """
+        ALTER FUNCTION workhorse.expire_owned_telemetry_v1(uuid, text, bigint)
+          RENAME TO expire_owned_telemetry_v1_recorded;
+        CREATE TABLE workhorse.test_expiry_answers (answered bigserial PRIMARY KEY, status text);
+        DO $$
+        BEGIN
+          EXECUTE format(
+            'CREATE FUNCTION workhorse.expire_owned_telemetry_v1(p_task_id uuid, p_worker_id text, '
+              || 'p_fence_token bigint) RETURNS %s LANGUAGE sql AS %L',
+            pg_get_function_result(
+              'workhorse.expire_owned_telemetry_v1_recorded(uuid, text, bigint)'::regprocedure),
+            'WITH answer AS (SELECT * FROM workhorse.expire_owned_telemetry_v1_recorded('
+              || 'p_task_id, p_worker_id, p_fence_token)), '
+              || 'recorded AS (INSERT INTO workhorse.test_expiry_answers (status) '
+              || 'SELECT answer.status FROM answer) SELECT * FROM answer');
+        END
+        $$
+        """;
+
+    private const string StopRecordingExpiryAnswers = """
+        DROP FUNCTION workhorse.expire_owned_telemetry_v1(uuid, text, bigint);
+        ALTER FUNCTION workhorse.expire_owned_telemetry_v1_recorded(uuid, text, bigint)
+          RENAME TO expire_owned_telemetry_v1;
+        DROP TABLE workhorse.test_expiry_answers
+        """;
+
+    private const string FirstExpiryAnswer =
+        "SELECT status FROM workhorse.test_expiry_answers ORDER BY answered LIMIT 1";
+
+    /// <summary>
+    /// A maintenance tick calls <c>timeout_owned_v1</c> for an overdue attempt. This statement does the
+    /// same after it waits until PostgreSQL's clock reaches the attempt timeout.
+    /// </summary>
+    private static string TimeOutWhenDue(Guid taskId) =>
+        "WITH due AS (SELECT task_id, worker_id, fence_token, pg_sleep(GREATEST(0, EXTRACT(EPOCH FROM "
+        + "attempt_timeout_at - clock_timestamp())) + 0.01) FROM workhorse.task_runtime "
+        + $"WHERE task_id = '{taskId}' AND state = 'active') "
+        + "SELECT workhorse.timeout_owned_v1(task_id, worker_id, fence_token)::text FROM due";
 
     private static readonly TimeSpan Patience = TimeSpan.FromSeconds(10);
 
@@ -93,7 +137,9 @@ internal sealed class RuntimeFixtures : IAsyncDisposable
         {
             "trace-propagation" => TraceAsync(fixture),
             "cooperative-cancellation" => CancellationAsync(fixture),
-            "expiration" => ExpirationAsync(fixture),
+            "expiration" => fixture.GetValueOrDefault("databaseTimesOutFirst") is true
+                ? StaleExpirationAsync(fixture)
+                : ExpirationAsync(fixture),
             "heartbeat-cadence" => HeartbeatCadenceAsync(fixture),
             "poll-cadence" => PollCadenceAsync(fixture),
             "graceful-drain" => GracefulDrainAsync(fixture),
@@ -289,6 +335,27 @@ internal sealed class RuntimeFixtures : IAsyncDisposable
     }
 
     /// <summary>
+    /// Records each answer to the expiry requests while the expiration attempts run. The runner shares
+    /// its database between fixtures, so the wrapper ends with this fixture.
+    /// </summary>
+    private async Task StaleExpirationAsync(OrderedDictionary<string, object?> fixture)
+    {
+        await UpdateAsync(RecordExpiryAnswers);
+        try
+        {
+            await ExpirationAsync(fixture);
+
+            // An attempt that PostgreSQL timed out first leaves the late local timer no active attempt.
+            var first = await ValueAsync(FirstExpiryAnswer);
+            Failure.Check(first == "stale", $"the first expiry answer {first}, want stale");
+        }
+        finally
+        {
+            await UpdateAsync(StopRecordingExpiryAnswers);
+        }
+    }
+
+    /// <summary>
     /// The local timer reads the claimed row, so a claim that returns an earlier expiration models a
     /// clock that runs ahead of PostgreSQL. The runner wraps <c>claim_many_v1</c> in PostgreSQL to
     /// shift the value, because Npgsql has no hook that changes a value the worker reads.
@@ -342,13 +409,20 @@ internal sealed class RuntimeFixtures : IAsyncDisposable
 
             // A maintenance tick during the attempt can fail it in PostgreSQL first. Then the timer's
             // settlement answers stale, and the handler sees LeaseLost (SM-1684, SM-1687). With a
-            // long interval only the first pass ticks, before its claim, so the local timer is the
-            // only settler, which is what the fixture pins.
+            // long interval only the first pass ticks, before its claim. Thus only the local timer
+            // settles the attempt, except in a fixture that times out the attempt in PostgreSQL first.
             worker.MaintenanceInterval = TimeSpan.FromHours(1);
         });
+        var timesOutFirst = fixture.GetValueOrDefault("databaseTimesOutFirst") is true;
         subject.Handle<JsonElement>(TaskType(fixture), async (context, _) =>
         {
             expiries.Enqueue(await ValueAsync($"SELECT {column}::text FROM workhorse.task_runtime WHERE task_id = '{taskId}'"));
+            if (timesOutFirst)
+            {
+                var timedOut = await ValueAsync(TimeOutWhenDue(taskId));
+                Failure.Check(timedOut == "true", "PostgreSQL did not time out the attempt first");
+            }
+
             await WaitForCancellationAsync("the expiration never reached the handler", context.CancellationToken);
             cancelledAt.Enqueue(await ValueAsync("SELECT clock_timestamp()::text"));
             reasons.Enqueue(CancelNames.GetValueOrDefault(context.CancelReason ?? CancelReason.Suspended));

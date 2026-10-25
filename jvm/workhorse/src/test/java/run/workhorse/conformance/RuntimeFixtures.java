@@ -112,7 +112,54 @@ final class RuntimeFixtures {
       Map.of(
           CancellationReason.REQUESTED, "CancellationRequestedError",
           CancellationReason.DEADLINE_EXCEEDED, "DeadlineExceededError",
-          CancellationReason.EXECUTION_TIMEOUT, "ExecutionTimeoutError");
+          CancellationReason.EXECUTION_TIMEOUT, "ExecutionTimeoutError",
+          CancellationReason.LEASE_LOST, "LeaseLostError");
+
+  /**
+   * A maintenance tick calls {@code timeout_owned_v1} for an overdue attempt. This statement does
+   * the same after it waits until PostgreSQL's clock reaches the attempt timeout.
+   */
+  private static String timeOutWhenDue(UUID taskId) {
+    return "WITH due AS (SELECT task_id, worker_id, fence_token, pg_sleep(GREATEST(0, EXTRACT(EPOCH"
+        + " FROM attempt_timeout_at - clock_timestamp())) + 0.01) FROM workhorse.task_runtime"
+        + " WHERE task_id = '"
+        + taskId
+        + "' AND state = 'active') SELECT"
+        + " workhorse.timeout_owned_v1(task_id, worker_id, fence_token)::text FROM due";
+  }
+
+  /**
+   * Puts a wrapper in front of {@code expire_owned_telemetry_v1}. The wrapper writes each answer to
+   * {@code workhorse.test_expiry_answers}, so the test can read what the worker got.
+   */
+  private static final String RECORD_EXPIRY_ANSWERS =
+      """
+      ALTER FUNCTION workhorse.expire_owned_telemetry_v1(uuid, text, bigint)
+        RENAME TO expire_owned_telemetry_v1_recorded;
+      CREATE TABLE workhorse.test_expiry_answers (answered bigserial PRIMARY KEY, status text);
+      DO $$
+      BEGIN
+        EXECUTE format(
+          'CREATE FUNCTION workhorse.expire_owned_telemetry_v1(p_task_id uuid, p_worker_id text, '
+            || 'p_fence_token bigint) RETURNS %s LANGUAGE sql AS %L',
+          pg_get_function_result(
+            'workhorse.expire_owned_telemetry_v1_recorded(uuid, text, bigint)'::regprocedure),
+          'WITH answer AS (SELECT * FROM workhorse.expire_owned_telemetry_v1_recorded('
+            || 'p_task_id, p_worker_id, p_fence_token)), '
+            || 'recorded AS (INSERT INTO workhorse.test_expiry_answers (status) '
+            || 'SELECT answer.status FROM answer) SELECT * FROM answer');
+      END
+      $$""";
+
+  private static final String STOP_RECORDING_EXPIRY_ANSWERS =
+      """
+      DROP FUNCTION workhorse.expire_owned_telemetry_v1(uuid, text, bigint);
+      ALTER FUNCTION workhorse.expire_owned_telemetry_v1_recorded(uuid, text, bigint)
+        RENAME TO expire_owned_telemetry_v1;
+      DROP TABLE workhorse.test_expiry_answers""";
+
+  private static final String FIRST_EXPIRY_ANSWER =
+      "SELECT status FROM workhorse.test_expiry_answers ORDER BY answered LIMIT 1";
 
   private final Connections.Opener opener;
   private final Connection connection;
@@ -353,6 +400,23 @@ final class RuntimeFixtures {
   }
 
   private void expiration(Map<String, @Nullable Object> fixture) throws Exception {
+    if (!Boolean.TRUE.equals(fixture.get("databaseTimesOutFirst"))) {
+      expirationAttempts(fixture);
+      return;
+    }
+    // The runner shares its database between fixtures, so the wrapper ends with this fixture.
+    update(RECORD_EXPIRY_ANSWERS);
+    try {
+      expirationAttempts(fixture);
+      // An attempt that PostgreSQL timed out first leaves the late local timer no active attempt.
+      String first = value(FIRST_EXPIRY_ANSWER);
+      check("stale".equals(first), "the first expiry answer " + first + ", want stale");
+    } finally {
+      update(STOP_RECORDING_EXPIRY_ANSWERS);
+    }
+  }
+
+  private void expirationAttempts(Map<String, @Nullable Object> fixture) throws Exception {
     boolean deadline = "deadline".equals(fixture.get("mode"));
     long duration = (Long) fixture.get("durationMs");
     long lead = (Long) fixture.get("localClockLeadMs");
@@ -427,6 +491,11 @@ final class RuntimeFixtures {
                   taskType(fixture),
                   Object.class,
                   (ctx, payload) -> {
+                    if (Boolean.TRUE.equals(fixture.get("databaseTimesOutFirst"))
+                        && !"true".equals(value(timeOutWhenDue(taskId)))) {
+                      throw new IllegalStateException(
+                          "PostgreSQL did not time out the attempt first");
+                    }
                     if (!ctx.cancellation().await(Duration.ofSeconds(5))) {
                       throw new IllegalStateException("the expiration never reached the handler");
                     }

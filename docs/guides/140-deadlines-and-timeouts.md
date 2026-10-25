@@ -239,6 +239,11 @@ Thus, a limit does not stop JavaScript code. The worker asks PostgreSQL to close
 then it aborts the signal of the handler. If PostgreSQL answers that the limit is not yet due, the
 handler continues, and the worker asks again later.
 
+Maintenance can close an overdue attempt before the local timer fires. Then PostgreSQL answers that
+the worker no longer owns the attempt. The worker aborts the signal with the lease-loss reason, not
+the timeout reason, because that answer does not prove a timeout. The task still records the
+timeout that maintenance committed.
+
 If the handler does not obey the signal, its code can continue. But the fence token of the attempt
 is no longer current, so Workhorse refuses each later write of the handler. Heartbeats and
 maintenance close the attempt if the process or the timer cannot do it. For the signal, see
@@ -249,10 +254,11 @@ maintenance close the attempt if the process or the timer cannot do it. For the 
 
 The worker sets one local timer at the earlier of `deadline_at` and `attempt_timeout_at`.
 
-| Boundary          | Abort reason (TypeScript)                | `expire_owned_v1` status |
-| ----------------- | ---------------------------------------- | ------------------------ |
-| Deadline          | `DeadlineExceededError(taskId)`          | `deadline_exceeded`      |
-| Execution timeout | `ExecutionTimeoutError(taskId, attempt)` | `timeout_exceeded`       |
+| Boundary               | Abort reason (TypeScript)                | `expire_owned_v1` status |
+| ---------------------- | ---------------------------------------- | ------------------------ |
+| Deadline               | `DeadlineExceededError(taskId)`          | `deadline_exceeded`      |
+| Execution timeout      | `ExecutionTimeoutError(taskId, attempt)` | `timeout_exceeded`       |
+| Attempt already closed | `Error("Task lease was lost")`           | `stale`                  |
 
 `expire_owned_v1(p_task_id, p_worker_id, p_fence_token)` returns one of `not_due`,
 `cancel_requested`, `deadline_exceeded`, `timeout_exceeded`, or `stale`. After `not_due`, the

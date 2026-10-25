@@ -2504,6 +2504,26 @@ clock that runs ahead cannot end an attempt before the database expiry. The shar
 in `protocol/v1/runtime.json` check this. Each one compares the database clock at the cancellation
 with the expiry that PostgreSQL holds.
 
+Another actor can end the attempt before the local timer fires. For example, a maintenance tick
+calls `timeout_owned_v1` for the overdue attempt. Then the expiry request finds no active attempt
+under the fence of the worker, and it answers `stale`. Every SDK then gives the handler the
+lease-loss reason, not the timeout reason. A `stale` answer is not timeout evidence, because another
+worker can already hold the expired lease. The worker writes nothing more for the attempt.
+
+ADR 0013 records this rule. The shared case `execution-timeout-reports-lease-loss-after-stale-expiry`
+checks it in the conformance runner of every SDK. Each runner also checks that the first expiry answer is
+`stale`. The table gives the SDK names of the lease-loss reason.
+
+| SDK        | Lease-loss reason after a `stale` expiry answer                    |
+| ---------- | ------------------------------------------------------------------ |
+| TypeScript | An `Error` with the text `Task lease was lost` on `context.signal` |
+| Python     | `StaleLeaseError` as `context.cancellation.reason`                 |
+| Go         | `*LeaseLostError` as `context.Cause`                               |
+| Rust       | `CancelReason::LeaseLost`                                          |
+| Ruby       | `:lease_lost` as `context.cancellation.reason`                     |
+| JVM        | `CancellationReason.LEASE_LOST`                                    |
+| .NET       | `CancelReason.LeaseLost` as `context.CancelReason`                 |
+
 While the handler runs, every SDK waits longer after each `not_due` answer. The first retry waits
 5 ms. Each later retry waits twice as long, to a maximum of 1 s. Each `expire_owned_v1` request
 locks the task row, and a heartbeat that finds the row locked answers `busy`. A fixed short retry
