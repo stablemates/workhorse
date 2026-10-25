@@ -174,6 +174,36 @@
     "expectedRunOutcome": "processed"
   },
   {
+    "id": "a-refused-completion-settles-its-cause",
+    "kind": "refused-completion",
+    "covers": ["refused-completion-settlement"],
+    "taskType": "protocol.refused-completion",
+    "leaseMs": 60000,
+    "heartbeatMs": 30000,
+    "cases": [
+      {
+        "cause": "deadline",
+        "expectedState": { "state": "failed", "attempt": 1, "errorName": "DeadlineExceeded" },
+        "expectedAttemptOutcomes": ["deadline_exceeded"]
+      },
+      {
+        "cause": "attempt-timeout",
+        "expectedState": { "state": "failed", "attempt": 1, "errorName": "ExecutionTimeout" },
+        "expectedAttemptOutcomes": ["timeout"]
+      },
+      {
+        "cause": "cancellation",
+        "expectedState": { "state": "canceled", "attempt": 1 },
+        "expectedAttemptOutcomes": ["canceled"]
+      },
+      {
+        "cause": "moved-fence",
+        "expectedState": { "state": "active", "attempt": 1 },
+        "expectedAttemptOutcomes": []
+      }
+    ]
+  },
+  {
     "id": "heartbeats-never-overlap",
     "kind": "heartbeat-cadence",
     "covers": ["non-overlapping-heartbeats"],

@@ -48,6 +48,9 @@ fixtures pin batch ordering and settlement as well as durable-wait suspension, s
 single-logical-attempt replay, and checkpoint reuse when a handler restarts. They also pin
 cooperative cancellation, deadline and execution-timeout settlement against the database clock,
 lease-loss fencing, serialized worker-level heartbeat batches, and graceful drain without further claims.
+Its refused-completion fixture pins what a worker does when PostgreSQL refuses a completion write.
+A due deadline or attempt timeout fails the task before the run returns, and a cancellation request
+cancels it. A moved fence leaves the task active for lease recovery.
 Its poll-cadence fixture pins the empty-claim backoff step, and every language holds its worker at
 the end of each empty claim so the step in force at the enqueue is the fixture's, not the runner's.
 Its subscription-recovery fixture holds the `LISTEN` of a worker that can listen. It checks that

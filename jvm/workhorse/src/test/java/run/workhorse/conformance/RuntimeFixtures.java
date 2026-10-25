@@ -166,6 +166,7 @@ final class RuntimeFixtures {
         case "batch" -> batch(fixture);
         case "suspension-replay" -> suspensionReplay(fixture);
         case "lease-loss" -> leaseLoss(fixture);
+        case "refused-completion" -> refusedCompletion(fixture);
         case "replay-conflict" -> replayConflict(fixture);
         default ->
             throw new Failure(
@@ -1055,6 +1056,96 @@ final class RuntimeFixtures {
         "rejected writes " + rejected);
     expectState(taskId, object(fixture, "expectedState"));
     expectOutcomes(taskId, List.of(fixture.get("expectedAttemptOutcome")));
+  }
+
+  /**
+   * The handler changes its own task in PostgreSQL and then returns, so PostgreSQL refuses the
+   * completion write. The enqueued deadline and execution timeout are an hour away, so the worker's
+   * own timers cannot reach them. The run settles the cause of the refusal before it returns,
+   * without a maintenance pass.
+   */
+  private void refusedCompletion(Map<String, @Nullable Object> fixture) throws Exception {
+    for (Object entry : (List<?>) Objects.requireNonNull(fixture.get("cases"), "cases")) {
+      Map<String, @Nullable Object> testCase = Runner.object(entry, "case");
+      String cause = (String) testCase.get("cause");
+      try {
+        refusedCompletion(fixture, testCase, cause);
+      } catch (Failure failure) {
+        throw new Failure(cause + ": " + failure.getMessage());
+      }
+    }
+  }
+
+  private void refusedCompletion(
+      Map<String, @Nullable Object> fixture, Map<String, @Nullable Object> testCase, String cause)
+      throws Exception {
+    String queueName = queueName(fixture) + "-" + cause;
+    UUID taskId =
+        enqueue(
+            taskType(fixture),
+            Map.of(),
+            options(queueName)
+                .maxAttempts(1)
+                .deadline(Instant.now().plus(Duration.ofHours(1)))
+                .executionTimeout(Duration.ofHours(1)));
+    AtomicInteger handled = new AtomicInteger();
+    List<CancelStatus> cancels = new CopyOnWriteArrayList<>();
+    try (Intercept pool = new Intercept(opener, new Intercept.Hook() {})) {
+      Worker subject =
+          worker(pool, fixture)
+              .queues(queueName)
+              .workerId("jvm-" + queueName)
+              .lease(millis(fixture, "leaseMs"))
+              .heartbeat(millis(fixture, "heartbeatMs"))
+              .maintenanceInterval(Duration.ofHours(1))
+              .handle(
+                  taskType(fixture),
+                  Object.class,
+                  (ctx, payload) -> {
+                    handled.incrementAndGet();
+                    switch (cause) {
+                      case "deadline", "attempt-timeout" ->
+                          update(
+                              "UPDATE workhorse.task_runtime SET "
+                                  + ("deadline".equals(cause)
+                                      ? "deadline_at"
+                                      : "attempt_timeout_at")
+                                  + " = clock_timestamp() - interval '1 second' WHERE task_id = '"
+                                  + taskId
+                                  + "'");
+                      case "cancellation" -> {
+                        synchronized (connection) {
+                          cancels.add(queue.cancel(taskId, "runtime-fixture", null).status());
+                        }
+                      }
+                      case "moved-fence" ->
+                          update(
+                              "UPDATE workhorse.task_runtime SET fence_token = fence_token + 1,"
+                                  + " deadline_at = clock_timestamp() - interval '1 second'"
+                                  + " WHERE task_id = '"
+                                  + taskId
+                                  + "'");
+                      default -> throw new Failure("unknown refused-completion cause " + cause);
+                    }
+                    return Map.of("late", true);
+                  })
+              .build();
+      check(subject.runOnce(), "the worker did not report the processed task");
+    }
+    check(handled.get() == 1, "the handler ran " + handled.get() + " times");
+    check(
+        cancels.equals(
+            "cancellation".equals(cause) ? List.of(CancelStatus.CANCEL_REQUESTED) : List.of()),
+        "cancel returned " + cancels);
+    expectState(taskId, object(testCase, "expectedState"));
+    String result =
+        value(
+            "SELECT outcome.result::text FROM workhorse.task task LEFT JOIN workhorse.task_outcome"
+                + " outcome ON outcome.task_id = task.id WHERE task.id = '"
+                + taskId
+                + "'");
+    check(result == null, "the stored result is " + result);
+    expectOutcomes(taskId, (List<?>) testCase.get("expectedAttemptOutcomes"));
   }
 
   /** One durable write a handler may attempt after its lease is gone. */

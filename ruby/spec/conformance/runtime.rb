@@ -95,6 +95,7 @@ module Conformance
       when "maintenance-phase-error" then maintenance_phase_error(fixture)
       when "suspension-replay" then suspension_replay(fixture)
       when "lease-loss" then lease_loss(fixture)
+      when "refused-completion" then refused_completion(fixture)
       when "batch" then batch(fixture)
       when "replay-conflict" then replay_conflict(fixture)
       else raise Failure, "unknown runtime fixture kind #{Matcher.render(fixture["kind"])}"
@@ -1205,6 +1206,68 @@ module Conformance
       check(rejected.to_a == fixture["portableRejectedWrites"], "rejected writes #{rejected.to_a}")
       expect_state(task_id, fixture["expectedState"])
       expect_outcomes(task_id, [fixture["expectedAttemptOutcome"]])
+    end
+
+    # The handler changes its task in PostgreSQL and returns at once, so PostgreSQL refuses the
+    # completion write. The enqueued boundaries are an hour away, and the heartbeat does not run
+    # during the handler, so the worker's own timers cannot reach them. A maintenance interval of
+    # one hour lets only the tick before the first claim run, so no tick settles the task (SM-1795).
+    def refused_completion(fixture)
+      admin = W::Admin.new(@connection)
+      fixture.fetch("cases").each do |example|
+        cause = example["cause"]
+        name = "#{queue_name(fixture)}-#{cause}"
+        task_id = queue.enqueue(fixture["taskType"], {}, queue: name, max_attempts: 1, deadline: Time.now + 3600,
+          execution_timeout: 3600).task_id
+        handled = Concurrent::AtomicFixnum.new
+        statuses = Concurrent::Array.new
+        with_pool do |pool|
+          subject = W::Worker.new(pool, queues: [name], worker_id: "ruby-#{fixture["id"]}-#{cause}",
+            polling_only: true, disable_registry: true, poll_interval: 0.005, lease: fixture["leaseMs"] / 1000.0,
+            heartbeat: fixture["heartbeatMs"] / 1000.0, maintenance_interval: ONE_TICK_INTERVAL)
+          subject.handle(fixture["taskType"]) do
+            handled.increment
+            statuses << refuse_completion(task_id, cause)
+            {"late" => true}
+          end
+          check(subject.run_once == true, "#{cause}: the worker did not run the task")
+        end
+        check(handled.value == 1, "#{cause}: the handler ran #{handled.value} times, want 1")
+        if cause == "cancellation"
+          check(statuses.to_a == [:cancel_requested], "#{cause}: the cancellation returned #{statuses.to_a}")
+        end
+        # The attempt settled its cause before the run returned, without a maintenance pass.
+        expected = example.fetch("expectedState")
+        task = admin.get_task(task_id)
+        actual = {"state" => task.state.to_s, "attempt" => task.current_attempt, "result" => task.result}
+        want = {"state" => expected["state"], "attempt" => expected["attempt"], "result" => nil}
+        if expected.key?("errorName")
+          actual["errorName"] = task.error&.fetch("name", nil)
+          want["errorName"] = expected["errorName"]
+        end
+        check(actual == want, "#{cause}: task #{Matcher.render(actual)}, want #{Matcher.render(want)}")
+        outcomes = @connection.exec_params("SELECT outcome::text FROM workhorse.attempt_history WHERE task_id = $1 " \
+          "ORDER BY attempt", [task_id]).column_values(0)
+        check(outcomes == example["expectedAttemptOutcomes"],
+          "#{cause}: attempt outcomes #{outcomes}, want #{example["expectedAttemptOutcomes"]}")
+      end
+    end
+
+    # Changes +task_id+ in PostgreSQL so that the completion write meets +cause+. It returns the
+    # status of a requested cancellation, which the runner checks after the run.
+    def refuse_completion(task_id, cause)
+      case cause
+      when "deadline", "attempt-timeout"
+        column = (cause == "deadline") ? "deadline_at" : "attempt_timeout_at"
+        @connection.exec_params("UPDATE workhorse.task_runtime SET #{column} = clock_timestamp() - " \
+          "interval '1 second' WHERE task_id = $1", [task_id])
+      when "cancellation"
+        queue.cancel(task_id, requested_by: "runtime-fixture").status
+      when "moved-fence"
+        @connection.exec_params("UPDATE workhorse.task_runtime SET fence_token = fence_token + 1, " \
+          "deadline_at = clock_timestamp() - interval '1 second' WHERE task_id = $1", [task_id])
+      else raise Failure, "unknown refused-completion cause #{Matcher.render(cause)}"
+      end
     end
 
     # ----- support -------------------------------------------------------------------------------

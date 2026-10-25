@@ -77,6 +77,7 @@ SYNC_ONLY_RUNTIME_FIXTURE_KINDS = frozenset(
         "lease-loss",
         "oversized-result",
         "poll-cadence",
+        "refused-completion",
         "slot-refill",
         "suspension-replay",
         "replay-conflict",
@@ -134,6 +135,7 @@ def execute_runtime_fixture(
         "cooperative-cancellation": execute_cancellation_fixture,
         "expiration": execute_expiration_fixture,
         "lease-loss": execute_lease_loss_fixture,
+        "refused-completion": execute_refused_completion_fixture,
         "heartbeat-cadence": execute_heartbeat_fixture,
         # The held poll owns the worker's connection, so the enqueue needs its own.
         "poll-cadence": lambda enqueue_connection, poll_fixture: execute_poll_cadence_fixture(
@@ -563,6 +565,88 @@ def execute_lease_loss_fixture(
     assert set(rejected_writes.values()) == {fixture["expectedRejectedWriteError"]}
     assert_task_states(connection, {"task": task_id}, {"task": fixture["expectedState"]})
     assert_attempt_outcomes(connection, task_id, [fixture["expectedAttemptOutcome"]])
+
+
+def execute_refused_completion_fixture(
+    connection: psycopg.Connection[Any], fixture: Mapping[str, Any]
+) -> None:
+    admin = Admin(connection)
+    for case in fixture["cases"]:
+        cause = case["cause"]
+        queue_name = f"{runtime_queue(fixture)}-{cause}"
+        # The enqueued boundaries are far away, so the worker's own timers cannot reach them.
+        task_id = Queue(connection).enqueue(
+            fixture["taskType"],
+            {},
+            EnqueueOptions(
+                queue=queue_name,
+                max_attempts=1,
+                deadline=datetime.now(UTC) + timedelta(hours=1),
+                execution_timeout_ms=3_600_000,
+            ),
+        )
+        assert cause in ("deadline", "attempt-timeout", "cancellation", "moved-fence"), cause
+        handled = 0
+        # An assertion in the handler would fail the attempt, so the runner checks the status later.
+        cancel_statuses: list[str] = []
+
+        def handler(
+            _payload: object, context: HandlerContext, cause: str = cause
+        ) -> dict[str, bool]:
+            nonlocal handled
+            handled += 1
+            if cause in ("deadline", "attempt-timeout"):
+                column = "deadline_at" if cause == "deadline" else "attempt_timeout_at"
+                connection.execute(
+                    f"UPDATE workhorse.task_runtime "
+                    f"SET {column} = clock_timestamp() - interval '1 second' WHERE task_id = %s",
+                    (context.task.id,),
+                )
+            elif cause == "cancellation":
+                cancellation = Queue(connection).cancel(
+                    context.task.id, requested_by="runtime-fixture"
+                )
+                cancel_statuses.append(cancellation.status)
+            else:
+                connection.execute(
+                    "UPDATE workhorse.task_runtime SET fence_token = fence_token + 1, "
+                    "deadline_at = clock_timestamp() - interval '1 second' WHERE task_id = %s",
+                    (context.task.id,),
+                )
+            # PostgreSQL refuses this completion write.
+            return {"late": True}
+
+        worker = Worker(
+            worker_pool,
+            queue=queue_name,
+            worker_id=f"python-{fixture['id']}-{cause}",
+            lease_ms=fixture["leaseMs"],
+            heartbeat_ms=fixture["heartbeatMs"],
+            registry_interval_ms=0,
+            # With an interval of one hour, only the tick before the claim runs. A later tick could
+            # settle the changed boundary before the completion write.
+            maintenance_interval_ms=3_600_000,
+        ).handle(fixture["taskType"], handler)
+        assert worker.run_once() is True, cause
+        assert handled == 1, cause
+        assert cancel_statuses == (["cancel_requested"] if cause == "cancellation" else []), cause
+        # The attempt settled its cause before the run returned, without a maintenance pass.
+        snapshot = admin.get_task(task_id)
+        assert snapshot is not None, cause
+        expected = case["expectedState"]
+        assert (snapshot.state, snapshot.current_attempt) == (
+            expected["state"],
+            expected["attempt"],
+        ), cause
+        assert snapshot.result is None, cause
+        if "errorName" in expected:
+            assert isinstance(snapshot.error, dict), cause
+            assert snapshot.error["name"] == expected["errorName"], cause
+        try:
+            assert_attempt_outcomes(connection, task_id, case["expectedAttemptOutcomes"])
+        except AssertionError as error:
+            error.add_note(f"cause {cause}")
+            raise
 
 
 class HeldHeartbeats:
@@ -2662,12 +2746,14 @@ def stop_budget_seconds() -> float:
 
     A run can spend its stop budget on a claim in flight before it releases its connections. A
     worker without a heartbeat interval uses ``max(100, lease_ms // 3)``, and most runner workers
-    keep the default lease, so their budget comes from that lease.
+    keep the default lease, so their budget comes from that lease. The refused-completion worker
+    runs on the test thread, never in a joined run thread, so its long heartbeat sets no budget.
     """
     default_lease_ms = inspect.signature(Worker).parameters["lease_ms"].default
     intervals = [
         fixture.get("heartbeatMs", max(100, fixture.get("leaseMs", default_lease_ms) // 3))
         for fixture in read_json("protocol/v1/runtime.json")
+        if fixture["kind"] != "refused-completion"
     ]
     return connection_budget_ms(max([*intervals, max(100, default_lease_ms // 3)])) / 1000
 

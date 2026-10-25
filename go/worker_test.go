@@ -28,8 +28,16 @@ type replayConflictCase struct {
 	ExpectedErrorNames map[string]string `json:"expectedErrorNames"`
 }
 
+// refusedCompletionCase is one cause that makes PostgreSQL refuse a handler's completion write.
+type refusedCompletionCase struct {
+	Cause                   string                 `json:"cause"`
+	ExpectedState           workerFixtureTaskState `json:"expectedState"`
+	ExpectedAttemptOutcomes []string               `json:"expectedAttemptOutcomes"`
+}
+
 type workerRuntimeFixture struct {
-	Cases                                []replayConflictCase              `json:"cases"`
+	// Cases holds the per-kind case list. Each executor decodes it with decodeWorkerFixtureCases.
+	Cases                                json.RawMessage                   `json:"cases"`
 	ID                                   string                            `json:"id"`
 	Kind                                 string                            `json:"kind"`
 	Covers                               []string                          `json:"covers"`
@@ -148,6 +156,16 @@ type workerFixtureTaskState struct {
 	State     string `json:"state"`
 	Attempt   int    `json:"attempt"`
 	ErrorName string `json:"errorName"`
+}
+
+// decodeWorkerFixtureCases decodes the case list of a fixture kind into that kind's case type.
+func decodeWorkerFixtureCases[T any](t *testing.T, fixture workerRuntimeFixture) []T {
+	t.Helper()
+	var cases []T
+	if err := json.Unmarshal(fixture.Cases, &cases); err != nil {
+		t.Fatalf("decode the cases of runtime fixture %s: %v", fixture.ID, err)
+	}
+	return cases
 }
 
 func executeWorkerSuspensionReplayFixture(t *testing.T, fixture workerRuntimeFixture) {
@@ -1881,6 +1899,111 @@ func executeWorkerLeaseLossFixture(t *testing.T, fixture workerRuntimeFixture) {
 	}
 	if accepted {
 		t.Fatal("PostgreSQL accepted settlement under the recovered stale fence")
+	}
+}
+
+func executeWorkerRefusedCompletionFixture(t *testing.T, fixture workerRuntimeFixture) {
+	databaseURL := createConformanceDatabase(t, testDatabaseURL(t), "worker-refused-completion")
+	ctx := context.Background()
+	pool, err := pgxpool.New(ctx, databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(pool.Close)
+	// The handler changes its task through a separate pool, outside the worker's connections.
+	control, err := pgxpool.New(ctx, databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(control.Close)
+
+	for _, testCase := range decodeWorkerFixtureCases[refusedCompletionCase](t, fixture) {
+		queueName := "runtime-" + fixture.ID + "-" + testCase.Cause
+		queue := workhorse.NewQueue(workhorse.NewPGXExecutor(pool), queueName)
+		controlQueue := workhorse.NewQueue(workhorse.NewPGXExecutor(control), queueName)
+		// The enqueued boundaries are far away, so the worker's own timers cannot reach them.
+		deadline := time.Now().Add(time.Hour)
+		taskID, err := queue.Enqueue(ctx, fixture.TaskType, map[string]any{}, workhorse.EnqueueOptions{
+			MaxAttempts:        1,
+			Deadline:           &deadline,
+			ExecutionTimeoutMS: int(time.Hour / time.Millisecond),
+		})
+		if err != nil {
+			t.Fatalf("%s: %v", testCase.Cause, err)
+		}
+		worker, err := workhorse.NewWorker(pool, workhorse.WorkerOptions{
+			Queue:             queueName,
+			WorkerID:          queueName,
+			LeaseDuration:     time.Duration(fixture.LeaseMS) * time.Millisecond,
+			HeartbeatInterval: time.Duration(fixture.HeartbeatMS) * time.Millisecond,
+			DisableRegistry:   true,
+			// With an interval of one hour, only the tick before the claim runs. A later tick could
+			// settle the changed boundary before the completion write.
+			MaintenanceInterval: time.Hour,
+		})
+		if err != nil {
+			t.Fatalf("%s: %v", testCase.Cause, err)
+		}
+		var handled atomic.Int32
+		handlerFailure := make(chan error, 1)
+		worker.Handle(fixture.TaskType, func(_ context.Context, _ any, durability *workhorse.HandlerContext) (any, error) {
+			handled.Add(1)
+			var change error
+			switch testCase.Cause {
+			case "deadline", "attempt-timeout":
+				column := "deadline_at"
+				if testCase.Cause == "attempt-timeout" {
+					column = "attempt_timeout_at"
+				}
+				_, change = control.Exec(ctx, "UPDATE workhorse.task_runtime SET "+column+
+					" = clock_timestamp() - interval '1 second' WHERE task_id = $1::uuid", durability.Task.ID)
+			case "cancellation":
+				var result workhorse.CancelResult
+				result, change = controlQueue.Cancel(ctx, durability.Task.ID, workhorse.CancellationRequest{})
+				if change == nil && result.Status != workhorse.CancelRequested {
+					change = fmt.Errorf("cancel status %q, want %q", result.Status, workhorse.CancelRequested)
+				}
+			case "moved-fence":
+				_, change = control.Exec(ctx, `UPDATE workhorse.task_runtime
+					SET fence_token = fence_token + 1,
+					    deadline_at = clock_timestamp() - interval '1 second'
+					WHERE task_id = $1::uuid`, durability.Task.ID)
+			default:
+				change = fmt.Errorf("unknown refused-completion cause %q", testCase.Cause)
+			}
+			handlerFailure <- change
+			return map[string]any{"late": true}, nil
+		})
+
+		processed, err := worker.RunOnce(ctx)
+		if err != nil || !processed {
+			t.Fatalf("%s: RunOnce() = %t, %v; want true, nil", testCase.Cause, processed, err)
+		}
+		if calls := handled.Load(); calls != 1 {
+			t.Fatalf("%s: the handler ran %d times, want 1", testCase.Cause, calls)
+		}
+		if err := <-handlerFailure; err != nil {
+			t.Fatalf("%s: the handler could not change its task: %v", testCase.Cause, err)
+		}
+		// The attempt settled its cause before the run returned, without a maintenance pass.
+		actual := workerFixtureTaskStateFor(t, ctx, pool, taskID)
+		expected := testCase.ExpectedState
+		if actual.State != expected.State || actual.Attempt != expected.Attempt ||
+			(expected.ErrorName != "" && actual.ErrorName != expected.ErrorName) {
+			t.Fatalf("%s: expected task state %#v, received %#v", testCase.Cause, expected, actual)
+		}
+		var hasResult bool
+		if err := pool.QueryRow(ctx, `SELECT EXISTS (
+			SELECT 1 FROM workhorse.task_outcome WHERE task_id = $1::uuid AND result IS NOT NULL)`,
+			taskID).Scan(&hasResult); err != nil {
+			t.Fatalf("%s: %v", testCase.Cause, err)
+		}
+		if hasResult {
+			t.Fatalf("%s: the refused completion stored a result", testCase.Cause)
+		}
+		t.Run(testCase.Cause, func(t *testing.T) {
+			assertWorkerFixtureAttemptOutcomes(t, ctx, pool, taskID, testCase.ExpectedAttemptOutcomes)
+		})
 	}
 }
 

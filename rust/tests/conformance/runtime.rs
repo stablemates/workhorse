@@ -55,6 +55,7 @@ pub async fn run_runtime(fixture: &Value) -> Outcome {
             "suspension-replay" => suspension_replay(database, fixture).await,
             "replay-conflict" => replay_conflict(database, fixture).await,
             "lease-loss" => lease_loss(database, fixture).await,
+            "refused-completion" => refused_completion(database, fixture).await,
             "batch" => batch(database, fixture).await,
             "cooperative-cancellation" => cooperative_cancellation(database, fixture).await,
             "expiration" => expiration(database, fixture).await,
@@ -2551,6 +2552,120 @@ async fn lease_loss(database: &ScratchDatabase, fixture: &Value) -> Checked {
         .map_err(sql)?
         .get(0);
     check(!accepted, || "PostgreSQL accepted settlement under the stale fence".into())
+}
+
+/// The handler changes its task in PostgreSQL and returns at once, so PostgreSQL refuses the
+/// completion write. Each case checks how the single run settles the cause of that refusal.
+async fn refused_completion(database: &ScratchDatabase, fixture: &Value) -> Checked {
+    let client = database.connect().await;
+    let admin = Admin::connect(database.url()).await.map_err(driver)?;
+    let task_type = text(fixture, "taskType");
+    for case in fixture["cases"].as_array().ok_or("the fixture declares no cases")? {
+        let cause = text(case, "cause").to_owned();
+        refused_completion_case(database, &client, &admin, fixture, task_type, &cause, case)
+            .await
+            .map_err(|error| format!("{cause}: {error}"))?;
+    }
+    Ok(())
+}
+
+async fn refused_completion_case(
+    database: &ScratchDatabase,
+    client: &Client,
+    admin: &Admin<Client>,
+    fixture: &Value,
+    task_type: &str,
+    cause: &str,
+    case: &Value,
+) -> Checked {
+    let queue_name = format!("{}-{cause}", queue_name(fixture));
+    let queue = Arc::new(Queue::connect(database.url(), &queue_name).await.map_err(driver)?);
+    // The enqueued boundaries are far away, so the worker's own timers cannot reach them.
+    let options = EnqueueOptions {
+        max_attempts: 1,
+        deadline: Some(chrono::Utc::now() + chrono::Duration::hours(1)),
+        execution_timeout_ms: Some(3_600_000),
+        ..Default::default()
+    };
+    let task = queue.enqueue(task_type, &json!({}), options).await.map_err(driver)?.task_id;
+    let worker = worker(
+        database,
+        4,
+        WorkerOptions {
+            queues: vec![queue_name.clone()],
+            worker_id: Some(format!("rust-{}-{cause}", text(fixture, "id"))),
+            // With an interval of one hour, only the tick before the claim runs. A later tick
+            // could settle the changed boundary before the completion write.
+            maintenance_interval: Duration::from_secs(3600),
+            ..lease_options(fixture)
+        },
+    )?;
+    let statement = match cause {
+        "deadline" | "attempt-timeout" => {
+            let column = if cause == "deadline" { "deadline_at" } else { "attempt_timeout_at" };
+            Some(format!(
+                "UPDATE workhorse.task_runtime SET {column} = clock_timestamp() - interval '1 second'
+                  WHERE task_id = $1"
+            ))
+        }
+        "moved-fence" => Some(
+            "UPDATE workhorse.task_runtime
+                SET fence_token = fence_token + 1,
+                    deadline_at = clock_timestamp() - interval '1 second'
+              WHERE task_id = $1"
+                .to_owned(),
+        ),
+        "cancellation" => None,
+        other => return Err(format!("the Rust runner does not know cause {other}")),
+    };
+    let handled = Arc::new(AtomicUsize::new(0));
+    let cancel_status = Arc::new(Mutex::new(None));
+    let url = database.url().to_owned();
+    {
+        let (handled, cancel_status, queue) =
+            (Arc::clone(&handled), Arc::clone(&cancel_status), Arc::clone(&queue));
+        worker.handle(task_type, move |_: Value, context: HandlerContext| {
+            let (handled, cancel_status, queue) =
+                (Arc::clone(&handled), Arc::clone(&cancel_status), Arc::clone(&queue));
+            let (url, statement) = (url.clone(), statement.clone());
+            async move {
+                handled.fetch_add(1, Ordering::SeqCst);
+                let id = context.task().id;
+                match statement {
+                    Some(statement) => {
+                        let (client, connection) = tokio_postgres::connect(&url, NoTls).await?;
+                        tokio::spawn(connection);
+                        client.execute(&statement, &[&id]).await?;
+                    }
+                    None => {
+                        let cancel = queue.cancel(id, Some("rust-runtime-fixture"), None).await?;
+                        *cancel_status.lock().unwrap() = Some(cancel.status);
+                    }
+                }
+                Ok(json!({ "late": true }))
+            }
+        });
+    }
+    run_once(&worker, true).await?;
+    let handled = handled.load(Ordering::SeqCst);
+    check(handled == 1, || format!("the handler ran {handled} times, want 1"))?;
+    if cause == "cancellation" {
+        let status = *cancel_status.lock().unwrap();
+        check(status == Some(CancelStatus::CancelRequested), || {
+            format!("cancel returned {status:?}, want CancelRequested")
+        })?;
+    }
+    // The attempt settled its cause before the run returned, without a maintenance pass.
+    assert_state(client, task, &case["expectedState"]).await?;
+    let snapshot = admin
+        .get_task(task)
+        .await
+        .map_err(driver)?
+        .ok_or_else(|| format!("task {task} is gone"))?;
+    check(snapshot.result.as_ref().is_none_or(Value::is_null), || {
+        format!("task {task} stored the refused result {:?}", snapshot.result)
+    })?;
+    assert_outcomes(client, task, &strings(&case["expectedAttemptOutcomes"])).await
 }
 
 async fn maintenance_phase_error(database: &ScratchDatabase, fixture: &Value) -> Checked {

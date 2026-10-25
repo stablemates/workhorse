@@ -88,6 +88,7 @@ func TestGoWorkerSatisfiesEverySharedRuntimeFixture(t *testing.T) {
 		"cooperative-cancellation": executeWorkerCancellationFixture,
 		"expiration":               executeWorkerExpirationFixture,
 		"lease-loss":               executeWorkerLeaseLossFixture,
+		"refused-completion":       executeWorkerRefusedCompletionFixture,
 		"heartbeat-cadence":        executeWorkerHeartbeatFixture,
 		"poll-cadence":             executeWorkerPollCadenceFixture,
 		"subscription-recovery":    executeWorkerSubscriptionRecoveryFixture,
@@ -2004,7 +2005,7 @@ func executeReplayConflictFixture(t *testing.T, fixture workerRuntimeFixture) {
 		t.Fatal(err)
 	}
 	t.Cleanup(pool.Close)
-	for _, entry := range fixture.Cases {
+	for _, entry := range decodeWorkerFixtureCases[replayConflictCase](t, fixture) {
 		t.Run(entry.ErrorKind, func(t *testing.T) {
 			queueName := "runtime-" + fixture.ID + "-" + entry.ErrorKind
 			queue := workhorse.NewQueue(workhorse.NewPGXExecutor(pool), queueName)
