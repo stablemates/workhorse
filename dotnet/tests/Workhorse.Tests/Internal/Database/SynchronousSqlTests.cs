@@ -10,7 +10,7 @@ namespace Workhorse.Tests.Internal.Database;
 /// The synchronous helpers that the heartbeat and the listener use on their dedicated threads
 /// (ADR 0107, "Concurrency").
 /// </summary>
-public sealed class SynchronousSqlTests(ScratchDatabase database)
+public sealed class SynchronousSqlTests(ScratchDatabase database) : IClassFixture<ScratchDatabase>
 {
     [Fact]
     public void OpensOutsideAnAmbientTransactionScope()

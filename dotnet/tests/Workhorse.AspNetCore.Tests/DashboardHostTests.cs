@@ -12,7 +12,7 @@ using Workhorse.Tests.Testing;
 namespace Workhorse.AspNetCore.Tests;
 
 /// <summary>The dashboard in Kestrel: mounting, authorization, the 503 rule, and procedure errors.</summary>
-public sealed class DashboardHostTests(ScratchDatabase database)
+public sealed class DashboardHostTests(ScratchDatabase database) : IClassFixture<ScratchDatabase>
 {
     /// <summary>A data source whose every connection fails, with an address in the driver error.</summary>
     internal static NpgsqlDataSource Unreachable() =>

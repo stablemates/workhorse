@@ -11,14 +11,17 @@ import java.security.NoSuchAlgorithmException;
 import java.sql.Connection;
 import java.sql.DriverManager;
 import java.sql.PreparedStatement;
+import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Statement;
+import java.util.ArrayList;
 import java.util.HexFormat;
 import java.util.List;
 import java.util.Properties;
 import org.jspecify.annotations.Nullable;
 import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.extension.BeforeAllCallback;
+import org.junit.jupiter.api.extension.BeforeEachCallback;
 import org.junit.jupiter.api.extension.ExtensionContext;
 
 /**
@@ -41,13 +44,103 @@ import org.junit.jupiter.api.extension.ExtensionContext;
  * commits do not wait for the WAL flush. Thus a host I/O stall does not add a flush wait to each
  * commit of a test (SM-1804).
  *
+ * <p>All test classes of the process share the scratch database, so {@link #reset} runs before each
+ * test. Otherwise a test can see the rows, the {@code maintenance_state} values, and the policy
+ * rows that an earlier test left, and its result depends on the order (SM-1732).
+ *
  * <p>Without {@code DATABASE_URL_TEST} a local run skips with a visible reason. {@code CI} or
  * {@code WORKHORSE_REQUIRE_DATABASE=1} turns that skip into a failure.
  */
-public final class ScratchDatabase implements BeforeAllCallback {
+public final class ScratchDatabase implements BeforeAllCallback, BeforeEachCallback {
   private static final List<String> LOOPBACK = List.of("localhost", "127.0.0.1", "::1", "[::1]");
   private static final int DROP_ATTEMPTS = 40;
   private static final String OBJECT_IN_USE = "55006";
+  // 55P03 is lock_not_available, the error of an expired lock_timeout.
+  private static final String LOCK_NOT_AVAILABLE = "55P03";
+  private static final long RESET_LOCK_WAIT_NANOS = 30_000_000_000L;
+
+  // The statements of `reset`. They come from `createDatabaseTestHarness` in
+  // `typescript/core/test/support/db.ts`, and the Ruby and .NET test support use the same text. The
+  // TypeScript reset keeps the three policy tables. This reset empties them and inserts the rows
+  // that POLICY_SNAPSHOT read after the schema install.
+  static final String RESET_TABLES =
+      """
+      SELECT format('%I.%I', namespace.nspname, relation.relname) AS table_name
+        FROM pg_class AS relation
+        JOIN pg_namespace AS namespace ON namespace.oid = relation.relnamespace
+       WHERE namespace.nspname = 'workhorse'
+         AND relation.relkind IN ('r', 'p')
+         AND relation.relname <> ALL (ARRAY[
+           'schema_version', 'schema_migration', 'protocol_version', 'maintenance_state',
+           'task_stat_state'
+         ])
+         AND NOT EXISTS (SELECT 1 FROM pg_inherits WHERE inhrelid = relation.oid)
+       ORDER BY relation.relname
+      """;
+  static final String MAINTENANCE_STATE_RESET =
+      """
+      UPDATE workhorse.maintenance_state SET
+        last_started_at = NULL,
+        last_completed_at = NULL,
+        last_completed_local_date = NULL,
+        history_retained_before = CASE WHEN routine_name = 'history_retention'
+          THEN date_trunc('day', clock_timestamp() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC'
+            - interval '14 days'
+          ELSE NULL END,
+        terminal_prune_dependency_starved = false,
+        terminal_prune_fast_first = false,
+        terminal_cleanup_backlog_since = NULL,
+        lease_recovery_started_at = NULL,
+        updated_at = clock_timestamp()
+      """;
+
+  /** The columns of maintenance_state that {@link #MAINTENANCE_STATE_RESET} knows. */
+  static final List<String> MAINTENANCE_COLUMNS =
+      List.of(
+          "history_retained_before",
+          "last_completed_at",
+          "last_completed_local_date",
+          "last_started_at",
+          "lease_recovery_started_at",
+          "routine_name",
+          "terminal_cleanup_backlog_since",
+          "terminal_prune_dependency_starved",
+          "terminal_prune_fast_first",
+          "updated_at");
+
+  static final String POLICY_SNAPSHOT =
+      """
+      SELECT jsonb_build_object(
+        'maintenance_policy', (SELECT to_jsonb(policy) FROM workhorse.maintenance_policy AS policy),
+        'queue_health_policy', (SELECT to_jsonb(policy) FROM workhorse.queue_health_policy AS policy),
+        'retention_policy', (SELECT to_jsonb(policy) FROM workhorse.retention_policy AS policy)
+      )::text
+      """;
+  private static final String POLICY_RESTORE =
+      """
+      WITH policies AS (SELECT $1::jsonb AS value),
+      maintenance AS (
+        INSERT INTO workhorse.maintenance_policy
+        SELECT * FROM jsonb_populate_record(
+          NULL::workhorse.maintenance_policy, (SELECT value -> 'maintenance_policy' FROM policies)
+        )
+      ),
+      queue_health AS (
+        INSERT INTO workhorse.queue_health_policy
+        SELECT * FROM jsonb_populate_record(
+          NULL::workhorse.queue_health_policy, (SELECT value -> 'queue_health_policy' FROM policies)
+        )
+      )
+      INSERT INTO workhorse.retention_policy
+      SELECT * FROM jsonb_populate_record(
+        NULL::workhorse.retention_policy, (SELECT value -> 'retention_policy' FROM policies)
+      )
+      """;
+  private static final String LOCK_HOLDERS =
+      """
+      SELECT pid, state, left(query, 200) AS query FROM pg_stat_activity
+       WHERE datname = current_database() AND pid <> pg_backend_pid()
+      """;
 
   private static final Object LOCK = new Object();
   private static @Nullable Database database;
@@ -74,6 +167,107 @@ public final class ScratchDatabase implements BeforeAllCallback {
       }
       Assumptions.assumeTrue(database.url != null, "DATABASE_URL_TEST is unset");
     }
+  }
+
+  @Override
+  public void beforeEach(ExtensionContext context) throws Exception {
+    synchronized (LOCK) {
+      if (database == null || database.url == null) {
+        return;
+      }
+    }
+    try (Connection connection = connect()) {
+      reset(connection);
+    }
+  }
+
+  /**
+   * Returns the scratch database to its install state on {@code connection}, a session of that
+   * database.
+   *
+   * <p>The reset runs in one transaction. It empties every table apart from the version tables and
+   * the routine state. It returns each maintenance_state column to its install value. Then it
+   * inserts the policy rows that the extension read after the schema install.
+   *
+   * <p>TRUNCATE locks each table in list order, and a worker statement of an earlier test can lock
+   * the same tables in another order. PostgreSQL looks for a deadlock only after {@code
+   * deadlock_timeout}, and the lock wait of each attempt ends before that. The reset then rolls
+   * back and tries again (SM-1436). If the locks stay held, the error names the sessions.
+   */
+  static void reset(Connection connection) throws SQLException, InterruptedException {
+    String policies;
+    synchronized (LOCK) {
+      if (database == null || database.policies == null) {
+        throw new IllegalStateException("Extend the test class with ScratchDatabase");
+      }
+      policies = database.policies;
+    }
+    int lockTimeoutMs;
+    List<String> tables = new ArrayList<>();
+    try (Statement statement = connection.createStatement()) {
+      try (ResultSet result =
+          statement.executeQuery(
+              "SELECT setting::integer FROM pg_settings WHERE name = 'deadlock_timeout'")) {
+        result.next();
+        lockTimeoutMs = Math.max(1, Math.min(200, result.getInt(1) / 5));
+      }
+      try (ResultSet result = statement.executeQuery(RESET_TABLES)) {
+        while (result.next()) {
+          tables.add(result.getString(1));
+        }
+      }
+    }
+    long deadline = System.nanoTime() + RESET_LOCK_WAIT_NANOS;
+    boolean autoCommit = connection.getAutoCommit();
+    connection.setAutoCommit(false);
+    try {
+      for (; ; ) {
+        try (Statement statement = connection.createStatement();
+            // The text is the same in the three SDKs, and pgjdbc binds `?`, not `$1`.
+            PreparedStatement restore =
+                connection.prepareStatement(POLICY_RESTORE.replace("$1", "?"))) {
+          statement.execute("SET LOCAL lock_timeout = " + lockTimeoutMs);
+          statement.execute("TRUNCATE " + String.join(", ", tables) + " RESTART IDENTITY CASCADE");
+          statement.execute(MAINTENANCE_STATE_RESET);
+          restore.setString(1, policies);
+          restore.execute();
+          connection.commit();
+          return;
+        } catch (SQLException error) {
+          connection.rollback();
+          if (!LOCK_NOT_AVAILABLE.equals(error.getSQLState())) {
+            throw error;
+          }
+          if (System.nanoTime() >= deadline) {
+            throw new SQLException(
+                "The reset could not lock the tables within 30 s. Sessions of the scratch"
+                    + " database: "
+                    + lockHolders(connection),
+                error);
+          }
+        }
+        Thread.sleep(20);
+      }
+    } finally {
+      connection.setAutoCommit(autoCommit);
+    }
+  }
+
+  private static String lockHolders(Connection connection) throws SQLException {
+    StringBuilder holders = new StringBuilder();
+    try (Statement statement = connection.createStatement();
+        ResultSet result = statement.executeQuery(LOCK_HOLDERS)) {
+      while (result.next()) {
+        holders
+            .append("\n  pid ")
+            .append(result.getInt("pid"))
+            .append(" ")
+            .append(result.getString("state"))
+            .append(": ")
+            .append(result.getString("query"));
+      }
+    }
+    return holders.toString();
   }
 
   /** A new connection to the scratch database. The caller closes it. */
@@ -241,7 +435,7 @@ public final class ScratchDatabase implements BeforeAllCallback {
                 + " (CI or WORKHORSE_REQUIRE_DATABASE=1)");
       }
       report("SKIPPED database tests: DATABASE_URL_TEST is unset");
-      return new Database(null, null, new Properties(), "");
+      return new Database(null, null, new Properties(), "", null);
     }
 
     URI uri = URI.create(source);
@@ -271,7 +465,7 @@ public final class ScratchDatabase implements BeforeAllCallback {
     String name = scratchName(sourceName);
 
     Database created =
-        new Database(base + name + query, base + "postgres" + query, credentials, name);
+        new Database(base + name + query, base + "postgres" + query, credentials, name, null);
     // Owned before it exists, so a failed schema install still drops the database.
     database = created;
     synchronized (LEASE_LOCK) {
@@ -282,12 +476,17 @@ public final class ScratchDatabase implements BeforeAllCallback {
       dropDatabase(admin, name);
       createDatabase(admin, name, "");
     }
+    String policies;
     try (Connection connection = DriverManager.getConnection(created.url, credentials);
         Statement statement = connection.createStatement()) {
       statement.execute(Files.readString(schema()));
+      try (ResultSet result = statement.executeQuery(POLICY_SNAPSHOT)) {
+        result.next();
+        policies = result.getString(1);
+      }
     }
     report("running against scratch database " + name);
-    return created;
+    return new Database(created.url, created.adminUrl, credentials, name, policies);
   }
 
   private static void drop() throws SQLException {
@@ -464,6 +663,11 @@ public final class ScratchDatabase implements BeforeAllCallback {
     System.err.println("[workhorse jvm db] " + message);
   }
 
+  /** The scratch database, with the policy rows that the reset inserts again. */
   private record Database(
-      @Nullable String url, @Nullable String adminUrl, Properties credentials, String name) {}
+      @Nullable String url,
+      @Nullable String adminUrl,
+      Properties credentials,
+      String name,
+      @Nullable String policies) {}
 }

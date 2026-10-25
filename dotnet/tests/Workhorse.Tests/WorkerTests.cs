@@ -9,7 +9,7 @@ using static Workhorse.Tests.Testing.WorkerHarness;
 namespace Workhorse.Tests;
 
 /// <summary>The C# worker against PostgreSQL: claim, run, settle, fences, cancellation, and drain.</summary>
-public sealed class WorkerTests(ScratchDatabase database)
+public sealed class WorkerTests(ScratchDatabase database) : IClassFixture<ScratchDatabase>
 {
     private static readonly string[] RequiredValue = ["value"];
 
@@ -531,9 +531,9 @@ public sealed class WorkerTests(ScratchDatabase database)
     public async Task AMaintenancePassRunsTheRetentionRoutines()
     {
         // SM-1738: one session at a time runs a routine. A pass that does not get the routine's
-        // try-lock skips it and writes no completion time. Each worker of a parallel test runs the
-        // routines of the shared scratch database, and a stopped worker can leave its pass running.
-        // So this test uses a database of its own, where only its own worker runs maintenance.
+        // try-lock skips it and writes no completion time. A stopped worker of an earlier test of this
+        // class can leave its pass running on the class database. So this test uses a database of
+        // its own, where only its own worker runs maintenance.
         await using var own = await new ConformanceDatabases(database).CreateAsync("retention_maintenance");
 
         // The routine runs again only after its interval, so the test marks it as never run.

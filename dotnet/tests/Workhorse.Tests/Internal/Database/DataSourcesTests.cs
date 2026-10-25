@@ -7,7 +7,7 @@ using Workhorse.Tests.Testing;
 namespace Workhorse.Tests.Internal.Database;
 
 /// <summary>The data source rules of ADR 0107, "Connection model".</summary>
-public sealed class DataSourcesTests(ScratchDatabase database)
+public sealed class DataSourcesTests(ScratchDatabase database) : IClassFixture<ScratchDatabase>
 {
     [Fact]
     public void RefusesMultiplexing()

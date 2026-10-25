@@ -10,7 +10,7 @@ namespace Workhorse.AspNetCore.Tests;
 /// <see cref="DashboardOptions.Authorize"/> before any other work, so a refused request reaches no
 /// procedure and no database.
 /// </summary>
-public sealed class AuthorizationTests(ScratchDatabase database)
+public sealed class AuthorizationTests(ScratchDatabase database) : IClassFixture<ScratchDatabase>
 {
     private static readonly string[] Pages = ["/workhorse", "/workhorse/tasks", "/workhorse/assets/missing.js"];
 

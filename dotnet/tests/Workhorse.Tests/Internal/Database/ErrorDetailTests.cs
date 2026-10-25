@@ -9,7 +9,7 @@ namespace Workhorse.Tests.Internal.Database;
 /// <c>Include Error Detail=true</c>. PostgreSQL also sends the JSON of P1001 to P1010 in the HINT,
 /// so the translation fills the typed values with the default settings (ADR 0107).
 /// </summary>
-public sealed class ErrorDetailTests(ScratchDatabase database)
+public sealed class ErrorDetailTests(ScratchDatabase database) : IClassFixture<ScratchDatabase>
 {
     private const string Redacted =
         "Detail redacted as it may contain sensitive data. Specify 'Include Error Detail' in the connection string to include this information.";

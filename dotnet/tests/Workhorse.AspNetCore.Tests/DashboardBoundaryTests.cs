@@ -10,7 +10,7 @@ namespace Workhorse.AspNetCore.Tests;
 /// The boundary of the mount: CORS, the same-origin check, parent route groups, host procedure
 /// errors, and recovery after a compatibility refusal.
 /// </summary>
-public sealed class DashboardBoundaryTests(ScratchDatabase database)
+public sealed class DashboardBoundaryTests(ScratchDatabase database) : IClassFixture<ScratchDatabase>
 {
     private int _authorizations;
 

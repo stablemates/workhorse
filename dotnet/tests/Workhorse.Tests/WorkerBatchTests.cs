@@ -5,7 +5,7 @@ using static Workhorse.Tests.Testing.WorkerHarness;
 namespace Workhorse.Tests;
 
 /// <summary>Batch delivery against PostgreSQL: grouping, order, per-member outcomes, payload types, and drain.</summary>
-public sealed class WorkerBatchTests(ScratchDatabase database)
+public sealed class WorkerBatchTests(ScratchDatabase database) : IClassFixture<ScratchDatabase>
 {
     private static readonly TimeSpan LongLinger = TimeSpan.FromSeconds(60);
 

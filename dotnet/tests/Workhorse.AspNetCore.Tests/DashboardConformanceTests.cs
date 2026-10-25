@@ -17,7 +17,7 @@ namespace Workhorse.AspNetCore.Tests;
 /// <c>dashboard_conformance_spec.rb</c>. <c>scripts/verify-dashboard-conformance.ts</c> is the
 /// authority on the semantics of the file.
 /// </summary>
-public sealed partial class DashboardConformanceTests(ScratchDatabase database)
+public sealed partial class DashboardConformanceTests(ScratchDatabase database) : IClassFixture<ScratchDatabase>
 {
     private readonly Dictionary<string, JsonNode?> _references = new(StringComparer.Ordinal);
 

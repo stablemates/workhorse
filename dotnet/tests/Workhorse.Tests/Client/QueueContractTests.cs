@@ -6,7 +6,7 @@ using static Workhorse.Tests.Client.QueueTesting;
 namespace Workhorse.Tests.Client;
 
 /// <summary>Payload contracts in the restricted profile of ADR 0039.</summary>
-public sealed class QueueContractTests(ScratchDatabase database)
+public sealed class QueueContractTests(ScratchDatabase database) : IClassFixture<ScratchDatabase>
 {
     private sealed record Email(string Recipient);
 

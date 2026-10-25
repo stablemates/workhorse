@@ -219,7 +219,24 @@ template of each worktree's current schema. It skips a template that a test harn
 time, and each scratch database or template of a test process that still runs. Each SDK harness
 holds a shared advisory lock on the name of its scratch database from creation to drop, on a session
 of the `postgres` database. That session ends with the process, so the sweep can drop the
-databases that a stopped process left.
+databases that a stopped process left. A .NET class database is the exception: its lease ends with
+its class, because no test uses it after that. The run drops it at its end, or the sweep drops it
+earlier.
+
+A database test must not read rows or state that another test wrote. Each SDK harness keeps the
+tests apart:
+
+- TypeScript gives each test file a database of its own. `createIntegrationTestContext` resets it
+  before each test.
+- Ruby and the JVM reset the database of the process before each test.
+- .NET `Workhorse.Tests` and `Workhorse.AspNetCore.Tests` give each test class a database of its
+  own, and they reset that database after each test. A test class there that uses PostgreSQL
+  declares `IClassFixture<ScratchDatabase>`.
+- The two .NET examples projects share one database for each process, with no reset. Each
+  `DROP DATABASE` forces a checkpoint of the shared server, so a database for each class made them
+  much slower. A snippet test that runs a worker on a fixed queue uses
+  `ExampleDatabase.CreateIsolatedAsync`.
+- Python, Go, and Rust create a database for each test.
 
 ## Never substitute a pinned tool
 

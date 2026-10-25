@@ -13,7 +13,7 @@ namespace Workhorse.Tests.Hosting;
 /// The <c>Workhorse:*</c> configuration keys. <c>ConfigurationKeys.json</c> lists each key with its
 /// type and default, and the API snapshot reads it, so these tests hold it to the binder.
 /// </summary>
-public sealed class ConfigurationTests(ScratchDatabase database)
+public sealed class ConfigurationTests(ScratchDatabase database) : IClassFixture<ScratchDatabase>
 {
     /// <summary>The option properties that configuration cannot express. Code sets them.</summary>
     private static readonly string[] CodeOnly = [nameof(WorkerOptions.Json), nameof(WorkerOptions.LoggerFactory), nameof(WorkerOptions.RetryDelay)];

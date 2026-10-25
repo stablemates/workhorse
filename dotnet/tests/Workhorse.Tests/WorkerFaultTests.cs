@@ -10,7 +10,7 @@ namespace Workhorse.Tests;
 /// gate at the round bound B. The worker does not wait for <see cref="NpgsqlCommand.Cancel"/>, which
 /// can block for the connection timeout, or without limit with <c>Cancellation Timeout=0</c>.
 /// </summary>
-public sealed class WorkerFaultTests(ScratchDatabase database)
+public sealed class WorkerFaultTests(ScratchDatabase database) : IClassFixture<ScratchDatabase>
 {
     /// <summary>
     /// The longest delay after B that the test accepts for the gate to close. The heartbeat thread

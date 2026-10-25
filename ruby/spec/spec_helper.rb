@@ -34,13 +34,15 @@ end
 
 require_relative "support/fake_connections"
 
-# An example that runs against the process's scratch database. Each example uses its own queue, so
-# examples share one schema without observing each other's tasks.
+# An example that runs against the process's scratch database. The examples run one at a time, and
+# each example starts after a reset of the database to its install state (SM-1732). Each example
+# also uses its own queue.
 RSpec.shared_context "with a scratch database" do
   before do
     reason = ScratchDatabase.skip_reason
     skip(reason) if reason
     @connection = ScratchDatabase.connect
+    ScratchDatabase.reset(@connection)
     @queue_name = "rb-#{SecureRandom.hex(6)}"
   end
 

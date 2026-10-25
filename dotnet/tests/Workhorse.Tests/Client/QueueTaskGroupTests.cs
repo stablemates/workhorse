@@ -4,7 +4,7 @@ using static Workhorse.Tests.Client.QueueTesting;
 namespace Workhorse.Tests.Client;
 
 /// <summary>Task groups with completion callbacks (ADR 0095).</summary>
-public sealed class QueueTaskGroupTests(ScratchDatabase database)
+public sealed class QueueTaskGroupTests(ScratchDatabase database) : IClassFixture<ScratchDatabase>
 {
     [Fact]
     public async Task CreatesAddsListsFindsAndSealsAGroup()

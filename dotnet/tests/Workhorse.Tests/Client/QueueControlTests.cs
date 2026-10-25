@@ -5,7 +5,7 @@ using static Workhorse.Tests.Client.QueueTesting;
 namespace Workhorse.Tests.Client;
 
 /// <summary>Cancel, signals, human waits, health, and the compatibility check.</summary>
-public sealed class QueueControlTests(ScratchDatabase database)
+public sealed class QueueControlTests(ScratchDatabase database) : IClassFixture<ScratchDatabase>
 {
     [Fact]
     public async Task CancelsAReadyTask()

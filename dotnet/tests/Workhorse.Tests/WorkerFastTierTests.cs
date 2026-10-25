@@ -11,7 +11,7 @@ namespace Workhorse.Tests;
 /// The fast task tier (ADR 0077) and the fused completion in slot cohorts (ADR 0076, rules 10 to 16)
 /// against PostgreSQL.
 /// </summary>
-public sealed class WorkerFastTierTests(ScratchDatabase database)
+public sealed class WorkerFastTierTests(ScratchDatabase database) : IClassFixture<ScratchDatabase>
 {
     private sealed record Order(int OrderId);
 

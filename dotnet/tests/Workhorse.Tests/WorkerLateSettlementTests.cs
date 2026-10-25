@@ -10,7 +10,7 @@ namespace Workhorse.Tests;
 /// returns, as in Java. The run's statement token ends it at the latest lease end. A second
 /// connection locks the task row, so the statement waits past the window on any host load.
 /// </summary>
-public sealed class WorkerLateSettlementTests(ScratchDatabase database)
+public sealed class WorkerLateSettlementTests(ScratchDatabase database) : IClassFixture<ScratchDatabase>
 {
     /// <summary>The lease of the bound test. The last renewal comes before the run returns.</summary>
     private static readonly TimeSpan BoundLease = TimeSpan.FromSeconds(3);
