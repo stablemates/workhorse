@@ -32,6 +32,9 @@ const page: DashboardCronPage = {
       occurrenceCount: 1,
       lastFiredAt: "2026-08-26T02:00:00.000Z",
       evaluatorCount: 2,
+      lastSkippedAt: null,
+      lastSkippedCount: null,
+      lastSkippedThrough: null,
     },
   ],
   scheduleCount: 1,
@@ -93,6 +96,58 @@ describe("schedules page", () => {
       );
     expect(render(1)).not.toContain("Showing");
     expect(render(1_200)).toContain("Showing 1 of 1,200 schedules");
+  });
+
+  it("shows the last skip of a schedule, and nothing before the first skip", async () => {
+    const { CronPage, scheduleSkipSummary } = await import("./pages/schedules.js");
+    const { formatExact } = await import("./preferences.js");
+    const [invoices] = page.schedules;
+    const render = (schedule: DashboardCronPage["schedules"][number]) =>
+      renderToStaticMarkup(
+        createElement(
+          MantineProvider,
+          null,
+          createElement(CronPage, {
+            data: { ...page, schedules: [schedule] },
+            togglingSchedule: null,
+            setSchedulePaused: () => undefined,
+            scheduleTasksHref: () => "/tasks",
+          }),
+        ),
+      );
+
+    const unskipped = render(invoices!);
+    expect(unskipped).not.toContain("Skipped");
+    expect(unskipped).not.toContain("Last skip");
+
+    const skipped = render({
+      ...invoices!,
+      lastSkippedAt: "2026-08-26T02:10:00.000Z",
+      lastSkippedCount: 4,
+      lastSkippedThrough: "2026-08-25T02:00:00.000Z",
+    });
+    expect(skipped).toContain("Skipped 4 · ");
+    expect(skipped).toContain(
+      `aria-label="Last skip: At ${formatExact("2026-08-26T02:10:00.000Z")}, Workhorse skipped 4 missed occurrences older than the supported delay. The newest skipped occurrence is ${formatExact("2026-08-25T02:00:00.000Z")}."`,
+    );
+    expect(skipped).toContain("--badge-bg:var(--mantine-color-yellow-light)");
+
+    expect(
+      scheduleSkipSummary({
+        lastSkippedAt: "2026-08-26T02:10:00.000Z",
+        lastSkippedCount: 1,
+        lastSkippedThrough: "2026-08-25T02:00:00.000Z",
+      })?.detail,
+    ).toContain("skipped 1 missed occurrence older");
+    const capped = scheduleSkipSummary({
+      lastSkippedAt: "2026-08-26T02:10:00.000Z",
+      lastSkippedCount: 10_000,
+      lastSkippedThrough: "2026-08-25T02:00:00.000Z",
+    });
+    expect(capped?.label).toMatch(/^Skipped 10,000\+ · /);
+    expect(capped?.detail).toContain("skipped 10,000 or more missed occurrences");
+    // A database below schema 86 returns no skip keys.
+    expect(scheduleSkipSummary({})).toBeNull();
   });
 
   it("explains that a maintenance destination is not a queue", async () => {

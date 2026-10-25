@@ -20,6 +20,21 @@ upgrade steps.
 
 ## Unreleased
 
+### The Schedules page shows the last skip of a schedule
+
+A `skip` schedule drops the missed occurrences that are older than its supported delay. Migration
+0083 records each skip on the schedule row, but the dashboard did not read the record, so an operator
+could see a skip only with SQL (SM-1708).
+
+Migration 0087 (`0087-show-the-last-schedule-skip-on-the-dashboard.sql`) moves the schema to version 86. It appends `last_skipped_at`, `last_skipped_count`, and `last_skipped_through` to
+`dashboard_schedule_definition_v1`. `dashboard_cron_v1` returns them as `lastSkippedAt`,
+`lastSkippedCount`, and `lastSkippedThrough` on each application schedule. The `dashboard/v1` cron
+document gains the three keys, an additive change. The Schedules page shows a `Skipped` badge with
+the count and the time of the last skip. Its tooltip also shows the newest skipped occurrence.
+
+The migration does not raise the SDK compatibility floor and changes no rows. Run
+`workhorse schema migrate`. On a schema below 86, the page shows no skip.
+
 ### Every worker counts a failed heartbeat round
 
 A heartbeat round can fail before PostgreSQL answers, for example when the connection drops. Only

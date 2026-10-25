@@ -490,24 +490,27 @@ type DashboardScheduleRow struct {
 		Namespace string `json:"namespace"`
 		Name      string `json:"name"`
 	} `json:"identity"`
-	Namespace         string  `json:"namespace"`
-	Name              string  `json:"name"`
-	Cron              string  `json:"cron"`
-	Queue             string  `json:"queue"`
-	Type              string  `json:"type"`
-	Priority          float64 `json:"priority"`
-	CatchupPolicy     string  `json:"catchupPolicy"`
-	ConfiguredEnabled bool    `json:"configuredEnabled"`
-	Paused            bool    `json:"paused"`
-	PausedBy          *string `json:"pausedBy"`
-	PausedReason      *string `json:"pausedReason"`
-	PausedAt          *string `json:"pausedAt"`
-	Active            bool    `json:"active"`
-	Revision          string  `json:"revision"`
-	UpdatedAt         string  `json:"updatedAt"`
-	OccurrenceCount   float64 `json:"occurrenceCount"`
-	LastFiredAt       *string `json:"lastFiredAt"`
-	EvaluatorCount    float64 `json:"evaluatorCount"`
+	Namespace          string   `json:"namespace"`
+	Name               string   `json:"name"`
+	Cron               string   `json:"cron"`
+	Queue              string   `json:"queue"`
+	Type               string   `json:"type"`
+	Priority           float64  `json:"priority"`
+	CatchupPolicy      string   `json:"catchupPolicy"`
+	ConfiguredEnabled  bool     `json:"configuredEnabled"`
+	Paused             bool     `json:"paused"`
+	PausedBy           *string  `json:"pausedBy"`
+	PausedReason       *string  `json:"pausedReason"`
+	PausedAt           *string  `json:"pausedAt"`
+	Active             bool     `json:"active"`
+	Revision           string   `json:"revision"`
+	UpdatedAt          string   `json:"updatedAt"`
+	OccurrenceCount    float64  `json:"occurrenceCount"`
+	LastFiredAt        *string  `json:"lastFiredAt"`
+	EvaluatorCount     float64  `json:"evaluatorCount"`
+	LastSkippedAt      *string  `json:"lastSkippedAt,omitempty"`
+	LastSkippedCount   *float64 `json:"lastSkippedCount,omitempty"`
+	LastSkippedThrough *string  `json:"lastSkippedThrough,omitempty"`
 }
 
 type DashboardSetQueueTierResult struct {

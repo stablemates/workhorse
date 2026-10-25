@@ -697,6 +697,9 @@ export function presentSchedules(page: DashboardCronPage): PresentedScheduleRow[
     occurrenceCount: null,
     evaluatorCount: null,
     lastFiredAt,
+    lastSkippedAt: null,
+    lastSkippedCount: null,
+    lastSkippedThrough: null,
     maintenance: details,
   });
   return [

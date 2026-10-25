@@ -912,6 +912,24 @@
           }
         },
         {
+          "id": "record-schedule-skip",
+          "sql": "UPDATE workhorse.schedule_definition SET last_skipped_at = $3::timestamptz, last_skipped_count = $4::integer, last_skipped_through = $5::timestamptz WHERE namespace = $1 AND schedule_name = $2 RETURNING last_skipped_count AS skipped",
+          "parameters": [
+            "conformance",
+            "nightly-report",
+            "2026-09-14T03:10:00.000Z",
+            4,
+            "2026-09-13T03:00:00.000Z"
+          ],
+          "expect": {
+            "rows": [
+              {
+                "skipped": 4
+              }
+            ]
+          }
+        },
+        {
           "id": "create-task-group",
           "sql": "SELECT jsonb_build_object('groupId', min(group_id::text), 'members', count(task_id)) AS value FROM workhorse.create_task_group_v1($1::jsonb, $2::jsonb, $3::boolean)",
           "parameters": [
@@ -3225,9 +3243,12 @@
                     "lastFiredAt": null,
                     "pausedReason": null,
                     "catchupPolicy": "skip",
+                    "lastSkippedAt": "2026-09-14T03:10:00.000Z",
                     "evaluatorCount": 1,
                     "occurrenceCount": 0,
-                    "configuredEnabled": true
+                    "lastSkippedCount": 4,
+                    "configuredEnabled": true,
+                    "lastSkippedThrough": "2026-09-13T03:00:00.000Z"
                   }
                 ],
                 "capturedAt": {

@@ -518,6 +518,32 @@ describe("cron schedules", () => {
       [null, null, null],
       ["2026-09-14T10:05:30.000Z", 4, "2026-09-14T10:04:00.000Z"],
     ]);
+    // The dashboard Schedules page reads the same skip record through dashboard_cron_v1.
+    const cron = await pool.query<{
+      document: {
+        schedules: {
+          namespace: string;
+          name: string;
+          lastSkippedAt: string | null;
+          lastSkippedCount: number | null;
+          lastSkippedThrough: string | null;
+        }[];
+      };
+    }>("SELECT workhorse.dashboard_cron_v1('{}'::jsonb) AS document");
+    expect(
+      cron.rows[0]!.document.schedules.filter(
+        (schedule) => schedule.namespace === "catchup-policies",
+      ).map((schedule) => [
+        schedule.name,
+        schedule.lastSkippedAt,
+        schedule.lastSkippedCount,
+        schedule.lastSkippedThrough,
+      ]),
+    ).toEqual([
+      ["all", null, null, null],
+      ["latest", null, null, null],
+      ["skip", "2026-09-14T10:05:30.000Z", 4, "2026-09-14T10:04:00.000Z"],
+    ]);
 
     await queue.fireDueSchedules(["catchup-policies"], new Date("2026-09-14T10:05:30Z"), 2, 1_000);
     await queue.fireDueSchedules(["catchup-policies"], new Date("2026-09-14T10:05:30Z"), 2, 1_000);

@@ -550,6 +550,15 @@
         "schedules[].lastFiredAt": {
           "type": "null|string"
         },
+        "schedules[].lastSkippedAt": {
+          "type": "null|string"
+        },
+        "schedules[].lastSkippedCount": {
+          "type": "null|number"
+        },
+        "schedules[].lastSkippedThrough": {
+          "type": "null|string"
+        },
         "schedules[].name": {
           "type": "string"
         },

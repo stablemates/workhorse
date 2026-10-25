@@ -608,6 +608,13 @@ export const SCHEMA_MIGRATIONS: readonly SchemaMigrationStep[] = [
     description: "report the fast-tier retry of an expired timeout",
     kind: "additive",
   },
+  {
+    fromVersion: 85,
+    toVersion: 86,
+    file: "0087-show-the-last-schedule-skip-on-the-dashboard.sql",
+    description: "show the last schedule skip on the dashboard",
+    kind: "additive",
+  },
 ];
 
 /**

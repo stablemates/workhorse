@@ -19514,7 +19514,8 @@ CREATE OR REPLACE VIEW workhorse.dashboard_retention_policy_v1 AS
 CREATE OR REPLACE VIEW workhorse.dashboard_schedule_definition_v1 AS
   SELECT namespace, schedule_name, cron_expression, timezone, queue_name, task_type,
          configured_enabled, paused, paused_by, paused_reason, paused_at, revision,
-         updated_at, priority, catchup_policy FROM workhorse.schedule_definition;
+         updated_at, priority, catchup_policy, last_skipped_at, last_skipped_count,
+         last_skipped_through FROM workhorse.schedule_definition;
 CREATE OR REPLACE VIEW workhorse.dashboard_schedule_occurrence_v1 AS
   SELECT namespace, schedule_name, occurrence_at, fired_at FROM workhorse.schedule_occurrence;
 CREATE OR REPLACE VIEW workhorse.dashboard_worker_registry_v1 AS
@@ -20515,6 +20516,8 @@ AS $$
            definition.configured_enabled, definition.paused, definition.paused_by,
            definition.paused_reason, definition.paused_at,
            definition.revision, definition.updated_at,
+           definition.last_skipped_at, definition.last_skipped_count,
+           definition.last_skipped_through,
            count(occurrence.occurrence_at)::integer AS occurrence_count,
            max(occurrence.fired_at) AS last_fired_at,
            (SELECT count(*)::integer
@@ -20531,7 +20534,9 @@ AS $$
               definition.catchup_policy,
               definition.configured_enabled, definition.paused, definition.paused_by,
               definition.paused_reason, definition.paused_at,
-              definition.revision, definition.updated_at
+              definition.revision, definition.updated_at,
+              definition.last_skipped_at, definition.last_skipped_count,
+              definition.last_skipped_through
      ORDER BY definition.namespace, definition.schedule_name
      LIMIT 50
   ), schedules AS (
@@ -20549,7 +20554,10 @@ AS $$
       'updatedAt', workhorse.dashboard_iso_v1(updated_at),
       'occurrenceCount', occurrence_count,
       'lastFiredAt', workhorse.dashboard_iso_v1(last_fired_at),
-      'evaluatorCount', evaluator_count
+      'evaluatorCount', evaluator_count,
+      'lastSkippedAt', workhorse.dashboard_iso_v1(last_skipped_at),
+      'lastSkippedCount', last_skipped_count,
+      'lastSkippedThrough', workhorse.dashboard_iso_v1(last_skipped_through)
     ) ORDER BY namespace, schedule_name), '[]'::jsonb) AS value FROM schedule_rows
   ), policy AS (
     SELECT * FROM workhorse.dashboard_maintenance_policy_v1 WHERE singleton
@@ -22769,10 +22777,11 @@ INSERT INTO workhorse.schema_migration(version, description) VALUES
   (82, 'fire skip schedules within the supported delay'),
   (83, 'recheck terminal cleanup references and continue lease scans'),
   (84, 'make the day and schedule lock keys unambiguous'),
-  (85, 'report the fast-tier retry of an expired timeout')
+  (85, 'report the fast-tier retry of an expired timeout'),
+  (86, 'show the last schedule skip on the dashboard')
 ON CONFLICT DO NOTHING;
 
-INSERT INTO workhorse.schema_version(version) VALUES (85) ON CONFLICT DO NOTHING;
+INSERT INTO workhorse.schema_version(version) VALUES (86) ON CONFLICT DO NOTHING;
 
 INSERT INTO workhorse.protocol_version(version) VALUES (5) ON CONFLICT DO NOTHING;
 SELECT workhorse.create_history_day_v1(
