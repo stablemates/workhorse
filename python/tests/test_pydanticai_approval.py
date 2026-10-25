@@ -3,12 +3,14 @@ from __future__ import annotations
 import asyncio
 import importlib.util
 import json
+import os
 import subprocess
 import sys
 import time
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit, urlunsplit
 from uuid import UUID
 
 import psycopg
@@ -34,6 +36,7 @@ from pydantic_ai.messages import (
 )
 from pydantic_ai.models.function import FunctionModel
 from pydantic_ai.models.test import TestModel
+from required_database import source_database_url
 
 from workhorse import AsyncWorker, EnqueueOptions, HumanWaitIdempotencyConflictError, Queue
 
@@ -801,3 +804,34 @@ async def test_admission_owns_one_caller_transaction_and_rolls_back_together(
         assert observer.execute("SELECT task_id FROM pydanticai_conversation").fetchone() == (
             UUID(committed),
         )
+
+
+def sweep_can_lock(name: str) -> bool:
+    """Whether ``pnpm db:sweep`` could take the exclusive lock it takes before it drops ``name``."""
+    admin_url = urlunsplit(urlsplit(source_database_url(os.environ))._replace(path="/postgres"))
+    with psycopg.connect(admin_url, autocommit=True) as sweep:
+        row = sweep.execute(
+            "SELECT pg_try_advisory_lock(hashtextextended(%s, 0))", (name,)
+        ).fetchone()
+    assert row is not None
+    return bool(row[0])
+
+
+def database_exists(name: str) -> bool:
+    admin_url = urlunsplit(urlsplit(source_database_url(os.environ))._replace(path="/postgres"))
+    with psycopg.connect(admin_url) as admin:
+        return (
+            admin.execute("SELECT 1 FROM pg_database WHERE datname = %s", (name,)).fetchone()
+            is not None
+        )
+
+
+@pytest.mark.integration
+async def test_demo_database_holds_the_sweep_lease() -> None:
+    async with recipe.scratch_database(source_database_url(os.environ)) as scratch_url:
+        name = urlsplit(scratch_url).path.removeprefix("/")
+        assert "_pai_" in name
+        # The demo has no session on the database between its connections.
+        assert not await asyncio.to_thread(sweep_can_lock, name)
+    assert not await asyncio.to_thread(database_exists, name)
+    assert await asyncio.to_thread(sweep_can_lock, name)

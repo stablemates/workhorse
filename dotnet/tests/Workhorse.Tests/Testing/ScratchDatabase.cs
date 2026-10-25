@@ -466,6 +466,12 @@ public sealed class ScratchDatabase : IAsyncLifetime
     public Task<ScratchDatabaseLease> CreateDatabaseAsync(string name, CancellationToken cancellationToken = default) =>
         _template.CreateDatabaseAsync(name, null, cancellationToken);
 
+    /// <summary>
+    /// Drops another scratch database through <paramref name="admin"/>, a data source for the
+    /// <c>postgres</c> database. See <see cref="ScratchTemplate.DropAsync"/>.
+    /// </summary>
+    public static Task DropDatabaseAsync(NpgsqlDataSource admin, string name) => ScratchTemplate.DropAsync(admin, name);
+
     /// <inheritdoc />
     public async ValueTask InitializeAsync()
     {

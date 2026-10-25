@@ -60,9 +60,9 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { parseArgs } from "node:util";
-import { Client } from "pg";
-import { dropLocalDatabase } from "../typescript/core/src/drop-local-database.js";
+import type { Client } from "pg";
 import { consumerProperties, jdbcUrl, verifyRelease } from "./verify-release.js";
+import { withReleaseScratchDatabase } from "./release-scratch-database.js";
 
 const root = path.resolve(import.meta.dirname, "..");
 const jvmDirectory = path.join(root, "jvm");
@@ -828,12 +828,6 @@ function databaseUrl(): string | undefined {
   return undefined;
 }
 
-function withDatabase(url: string, database: string): string {
-  const parsed = new URL(url);
-  parsed.pathname = `/${database}`;
-  return parsed.toString();
-}
-
 /** Each consumer, run from the staging directory with the pinned Gradle and JDK. */
 function consumerRunner(
   directory: string,
@@ -861,33 +855,7 @@ async function withScratchDatabase(
   use: (scratchUrl: string, database: Client) => Promise<void>,
 ): Promise<void> {
   const source = decodeURIComponent(new URL(sourceUrl).pathname.slice(1));
-  if (!source.includes("test")) throw new Error(`${source} is not a test database`);
-  const scratch = scratchDatabaseName(source, process.pid);
-  const identifier = `"${scratch.replaceAll('"', '""')}"`;
-  const scratchUrl = withDatabase(sourceUrl, scratch);
-
-  const admin = new Client({ connectionString: sourceUrl });
-  await admin.connect();
-  try {
-    await dropLocalDatabase(admin, scratch);
-    await admin.query(`CREATE DATABASE ${identifier}`);
-    try {
-      const database = new Client({ connectionString: scratchUrl });
-      await database.connect();
-      try {
-        await database.query(
-          await readFile(path.join(root, "sql", "schema", "current.sql"), "utf8"),
-        );
-        await use(scratchUrl, database);
-      } finally {
-        await database.end();
-      }
-    } finally {
-      await dropLocalDatabase(admin, scratch);
-    }
-  } finally {
-    await admin.end();
-  }
+  await withReleaseScratchDatabase(sourceUrl, scratchDatabaseName(source, process.pid), use);
 }
 
 /** Reads back the task a consumer reports, and refuses it unless its handler echoed the payload. */

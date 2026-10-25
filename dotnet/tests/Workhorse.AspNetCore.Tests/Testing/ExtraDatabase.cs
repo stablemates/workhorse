@@ -39,7 +39,7 @@ internal sealed class ExtraDatabase : IAsyncDisposable
             // CREATE DATABASE waits for the template, and a busy shared server can hold it.
             builder.CommandTimeout = 300;
         });
-        await ExecuteAsync(admin, $"DROP DATABASE IF EXISTS \"{name}\"", cancellationToken);
+        await ScratchDatabase.DropDatabaseAsync(admin, name);
         var lease = await scratch.CreateDatabaseAsync(name, cancellationToken);
 
         var dataSource = scratch.CreateDataSource(builder =>
@@ -82,7 +82,7 @@ internal sealed class ExtraDatabase : IAsyncDisposable
         await DataSource.DisposeAsync();
         try
         {
-            await ExecuteAsync(_admin, $"DROP DATABASE IF EXISTS \"{_name}\" WITH (FORCE)", CancellationToken.None);
+            await ScratchDatabase.DropDatabaseAsync(_admin, _name);
         }
         catch (PostgresException error)
         {
