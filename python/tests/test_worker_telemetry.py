@@ -26,6 +26,7 @@ from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 from opentelemetry.trace import StatusCode
 
+from eventual_conditions import eventually
 from workhorse import (
     AsyncHandlerContext,
     AsyncWorker,
@@ -396,6 +397,12 @@ def test_a_failed_heartbeat_round_counts_by_reason_and_the_task_completes(
 
     The task keeps running, and the next rounds renew its lease. The failed round gives no
     ownership verdict, so `workhorse.worker.heartbeat.failure` does not count it.
+
+    SM-1817: a 100 ms heartbeat gives each round a 75 ms bound and a server budget of about
+    18 ms. On a loaded host, a later round can reach that bound and count once as `timeout`.
+    That is a second failed round, so the test accepts it. The injected failure is an
+    `OperationalError` without a SQLSTATE or a timeout in its chain, so it can only count as
+    `connection`.
     """
     with psycopg.connect(database_url) as connection:
         task_id = Queue(connection, "round-failure").enqueue("round.failure", {})
@@ -412,21 +419,24 @@ def test_a_failed_heartbeat_round_counts_by_reason_and_the_task_completes(
     )
     send_round = worker._heartbeat_rows
     rounds: list[str] = []
-    later_rounds = threading.Event()
 
     def heartbeat_rows(*args: Any, **kwargs: Any) -> Any:
         rounds.append("sent")
         if len(rounds) == 1:
             raise psycopg.OperationalError("consuming input failed: server closed the connection")
-        rows = send_round(*args, **kwargs)
-        if len(rounds) >= 3:
-            later_rounds.set()
-        return rows
+        return send_round(*args, **kwargs)
 
     worker._heartbeat_rows = heartbeat_rows  # type: ignore[method-assign]
 
     def handle(_payload: object, context: HandlerContext) -> None:
-        assert later_rounds.wait(10), "the rounds after the failed round did not run"
+        # A round after the failed one commits a renewal in PostgreSQL before the handler
+        # returns. Only a committed renewal ends this wait (SM-1817).
+        with psycopg.connect(database_url, autocommit=True) as connection:
+            eventually(
+                lambda: _renewed(connection, task_id),
+                "a heartbeat round after the failed one renewed the lease",
+                timeout_s=10,
+            )
         assert not context.cancellation.cancelled
 
     worker.handle("round.failure", handle)
@@ -454,5 +464,21 @@ def test_a_failed_heartbeat_round_counts_by_reason_and_the_task_completes(
         for attributes, value in round_failures.items()
         if value != round_failures_before.get(attributes, 0)
     }
-    assert added == {(("workhorse.heartbeat.failure_reason", "connection"),): 1}
+    connection_reason = (("workhorse.heartbeat.failure_reason", "connection"),)
+    timeout_reason = (("workhorse.heartbeat.failure_reason", "timeout"),)
+    assert added.get(connection_reason) == 1, added
+    # A later round that reaches its deadline is a second failed round (SM-1817).
+    assert set(added) <= {connection_reason, timeout_reason}, added
     assert _counter_values("workhorse.worker.heartbeat.failure") == heartbeat_failures_before
+
+
+def _renewed(connection: psycopg.Connection[Any], task_id: str) -> bool:
+    """Whether a heartbeat has renewed the lease of `task_id` since its claim.
+
+    The claim sets `heartbeat_at` to `acquired_at`, and only a committed renewal moves it later.
+    """
+    row = connection.execute(
+        "SELECT heartbeat_at > acquired_at FROM workhorse.task_runtime WHERE task_id = %s",
+        (task_id,),
+    ).fetchone()
+    return row is not None and row[0] is True
