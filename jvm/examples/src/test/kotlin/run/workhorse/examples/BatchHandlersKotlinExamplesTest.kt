@@ -9,9 +9,7 @@ import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.Timeout
 import org.junit.jupiter.api.extension.ExtendWith
-import run.workhorse.ConnectionSource
 import run.workhorse.EnqueueOptions
-import run.workhorse.Queue
 import run.workhorse.TaskState
 import run.workhorse.kotlin.enqueueSuspend
 import run.workhorse.testing.ScratchDatabase
@@ -21,8 +19,6 @@ import run.workhorse.testing.ScratchDatabase
 // Each test creates and drops its own database, which is slow on a loaded host.
 @Timeout(value = 240, unit = TimeUnit.SECONDS)
 class BatchHandlersKotlinExamplesTest {
-  private val dataSource = ExampleDatabase.dataSource()
-  private val queue = Queue(ConnectionSource.of(dataSource))
   private val requests = CopyOnWriteArrayList<Int>()
   private val emailProvider = BatchEmailProvider { emails ->
     requests.add(emails.size)
@@ -67,13 +63,19 @@ class BatchHandlersKotlinExamplesTest {
   }
 
   @Test
-  fun theProducerEnqueuesAnOrdinaryTask() {
-    val before = ExampleDatabase.tasks("email.send", "to", "person@example.com").size
-    runBlocking { BatchHandlersKotlinExamples.enqueueEmail(queue) }
-    val after = ExampleDatabase.tasks("email.send", "to", "person@example.com")
-    assertEquals(before + 1, after.size)
-    val task = ExampleDatabase.detail(after.last())
-    assertEquals(TaskState.READY, task.state())
-    queue.cancel(task.id(), "docs-example", "the test ends")
+  fun theWorkerOfThePageClaimsTheTaskOfTheProducer() {
+    // The worker reads only `email`, so the producer must enqueue there. The test has its own
+    // database, because other snippet tests also use `email`.
+    IsolatedExampleDatabase.create("batch-handlers-producer-kotlin").use { database ->
+      runBlocking { BatchHandlersKotlinExamples.enqueueEmail(database.queue()) }
+      val tasks = database.tasks("email.send", "to", "person@example.com")
+      assertEquals(1, tasks.size)
+      BatchHandlersKotlinExamples.batchWorker(database.dataSource(), emailProvider).use { worker ->
+        worker.start()
+        val task = database.awaitTerminal(tasks.single())
+        assertEquals(TaskState.SUCCEEDED, task.state())
+        assertEquals(mapOf("providerId" to "msg-person@example.com"), task.result())
+      }
+    }
   }
 }

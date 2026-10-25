@@ -373,7 +373,7 @@ module DocsExamples
 
   def batch_handlers_enqueue(queue)
     # docs:start batch-handlers-enqueue
-    queue.enqueue("email.send", {"to" => "person@example.com"})
+    queue.enqueue("email.send", {"to" => "person@example.com"}, queue: "email")
     # docs:end
   end
 

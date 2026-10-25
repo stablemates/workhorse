@@ -257,9 +257,13 @@ under load, not a deployment failure. Use the deployment command and the startup
 
 **Do not let a handler repeat an external effect.** For example, a handler sends the email and then
 fails. If the send is not in a checkpoint, each retry sends the email again. Put the send in a
-checkpoint. The checkpoint stores the result of the first send, and a later run uses the stored
-result. If a checkpoint does not fit, use an idempotency key on the remote call. You can also use an
-outbox, an inbox, or a compensating action.
+checkpoint. After Workhorse saves the result of the send, a later run uses the stored result and
+skips the send.
+
+A checkpoint does not make the send run exactly once. If the worker stops after the send and before
+Workhorse saves the result, the next attempt sends again. If the provider must send one email only,
+also give the provider a stable idempotency key. You can also use an outbox, an inbox, or a
+compensating action.
 
 ## Integrate one task from enqueue to result
 

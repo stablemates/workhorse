@@ -71,14 +71,30 @@ public sealed class BatchHandlersExamplesTests(ScratchDatabase scratch)
         Assert.All(requests, size => Assert.True(size <= 20, $"requests: {string.Join(", ", requests)}"));
     }
 
-    [Fact]
-    public async Task TheProducerEnqueuesAnOrdinaryTask()
+    [Fact(Timeout = 240_000)]
+    public async Task TheWorkerOfThePageClaimsTheTaskOfTheProducer()
     {
-        // The enqueue snippet of the enqueue page writes the same task, so this test has its own database.
+        // The worker reads only `email`, so the producer must enqueue there. The enqueue snippet of
+        // the enqueue page writes the same task, so this test has its own database.
         await using var db = await ExampleDatabase.CreateIsolatedAsync(scratch);
-        await new BatchHandlersExamples(db.DataSource, db.Queue, new RecordingProvider()).EnqueueEmailAsync();
+        var examples = new BatchHandlersExamples(db.DataSource, db.Queue, new RecordingProvider());
+        await examples.EnqueueEmailAsync();
         var tasks = await db.TasksAsync("email.send", "to", "person@example.com");
-        Assert.Single(tasks);
-        Assert.Equal(TaskState.Ready, (await db.DetailAsync(tasks[0])).State);
+        var task = Assert.Single(tasks);
+
+        await using var worker = examples.BatchWorker();
+        using var stop = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+        var running = worker.RunAsync(stop.Token);
+        try
+        {
+            var detail = await db.TerminalAsync(task);
+            Assert.Equal(TaskState.Succeeded, detail.State);
+            Assert.Equal("msg-person@example.com", detail.Result!.Value.GetProperty("providerId").GetString());
+        }
+        finally
+        {
+            await stop.CancelAsync();
+            await running;
+        }
     }
 }

@@ -9,6 +9,7 @@ import run.workhorse.BatchHandlerItem;
 import run.workhorse.BatchHandlerOutcome;
 import run.workhorse.BatchOptions;
 import run.workhorse.BatchSucceeded;
+import run.workhorse.EnqueueOptions;
 import run.workhorse.Queue;
 import run.workhorse.Worker;
 
@@ -59,7 +60,10 @@ public final class BatchHandlersExamples {
   /** Enqueues one ordinary task for the batch handler. */
   public void enqueueEmail() {
     // docs:start java-batch-handlers-enqueue
-    queue.enqueue("email.send", Map.of("to", "person@example.com"));
+    queue.enqueue(
+        "email.send",
+        Map.of("to", "person@example.com"),
+        EnqueueOptions.builder().queue("email").build());
     // docs:end
   }
 }

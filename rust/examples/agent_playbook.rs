@@ -41,7 +41,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Worker::new(pool.clone(), WorkerOptions { polling_only: true, ..Default::default() })?;
     worker.handle("order.created", |payload: Value, context| async move {
         let order_id = payload["orderId"].as_str().unwrap_or_default().to_owned();
-        // The send runs once. A replay reuses the recorded receipt.
+        // After Workhorse saves the receipt, a replay reuses it and skips the send.
         let receipt: String =
             context.checkpoint("confirmation-email", || send_confirmation_email(&order_id)).await?;
         Ok(json!({ "processedOrderId": order_id, "receipt": receipt }))

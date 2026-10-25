@@ -63,7 +63,7 @@ public final class ForAiAgentsExamples {
                 Map.class,
                 (context, payload) -> {
                   String orderId = String.valueOf(payload.get("orderId"));
-                  // The send runs once. A replay reuses the recorded receipt.
+                  // After Workhorse saves the receipt, a replay reuses it and skips the send.
                   String receipt =
                       context.checkpoint(
                           "confirmation-email", String.class, () -> sendConfirmationEmail(orderId));

@@ -29,7 +29,7 @@ public sealed class BatchHandlersExamples(NpgsqlDataSource dataSource, Queue que
     public async Task EnqueueEmailAsync()
     {
         // docs:start csharp-batch-handlers-enqueue
-        await queue.EnqueueAsync("email.send", new { to = "person@example.com" });
+        await queue.EnqueueAsync("email.send", new { to = "person@example.com" }, new EnqueueOptions { Queue = "email" });
         // docs:end
     }
 }

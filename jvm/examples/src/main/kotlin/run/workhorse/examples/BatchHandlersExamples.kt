@@ -8,6 +8,7 @@ import run.workhorse.BatchFailed
 import run.workhorse.BatchHandlerOutcome
 import run.workhorse.BatchOptions
 import run.workhorse.BatchSucceeded
+import run.workhorse.EnqueueOptions
 import run.workhorse.Queue
 import run.workhorse.Worker
 import run.workhorse.kotlin.enqueueSuspend
@@ -39,7 +40,11 @@ object BatchHandlersKotlinExamples {
   /** Enqueues one ordinary task for the batch handler. */
   suspend fun enqueueEmail(queue: Queue) {
     // docs:start kotlin-batch-handlers-enqueue
-    queue.enqueueSuspend("email.send", mapOf("to" to "person@example.com"))
+    queue.enqueueSuspend(
+      "email.send",
+      mapOf("to" to "person@example.com"),
+      EnqueueOptions.builder().queue("email").build(),
+    )
     // docs:end
   }
 }

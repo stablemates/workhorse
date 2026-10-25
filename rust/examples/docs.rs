@@ -751,7 +751,11 @@ fn batch_handlers(worker: &Worker) {
 async fn batch_handlers_enqueue(queue: &Queue<Client>) -> Result {
     // docs:start batch-handlers-enqueue
     queue
-        .enqueue("email.send", &json!({ "to": "person@example.com" }), EnqueueOptions::default())
+        .enqueue(
+            "email.send",
+            &json!({ "to": "person@example.com" }),
+            EnqueueOptions { queue: Some("email".into()), ..Default::default() },
+        )
         .await?;
     // docs:end
     Ok(())

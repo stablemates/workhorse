@@ -26,7 +26,7 @@ end
 worker = Stablemates::Workhorse::Worker.new(pool, polling_only: true)
 worker.handle("order.created") do |payload, context|
   order_id = payload.fetch("orderId")
-  # The send runs once. A replay reuses the recorded receipt.
+  # After Workhorse saves the receipt, a replay reuses it and skips the send.
   receipt = context.checkpoint("confirmation-email") { send_confirmation_email(order_id) }
   {"processedOrderId" => order_id, "receipt" => receipt}
 end

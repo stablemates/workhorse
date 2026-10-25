@@ -204,51 +204,63 @@ More detail: [Task lifecycle: Batch handlers](https://github.com/stablemates/wor
 ## Enqueue ordinary tasks for a batch handler
 
 A producer does not change for a batch handler. The app enqueues one ordinary task for each email.
-The producer cannot see that a batch handler runs the task.
+It enqueues each task on the queue `email`, because the worker reads only that queue. The producer
+cannot see that a batch handler runs the task.
 
 <Tabs items={["TypeScript", "Python", "Go", "Rust", "Ruby", "Java", "Kotlin", "C#"]}>
   <Tab value="TypeScript">
     ```ts
-    await queue.enqueue("email.send", { to: "person@example.com" });
+    await queue.enqueue("email.send", { to: "person@example.com" }, { queue: "email" });
     ```
   </Tab>
   <Tab value="Python">
     ```python
-    queue.enqueue("email.send", {"to": "person@example.com"})
+    queue.enqueue("email.send", {"to": "person@example.com"}, EnqueueOptions(queue="email"))
     ```
   </Tab>
   <Tab value="Go">
     ```go
     _, err := queue.Enqueue(ctx, "email.send", map[string]any{
     	"to": "person@example.com",
-    }, workhorse.EnqueueOptions{})
+    }, workhorse.EnqueueOptions{Queue: "email"})
     ```
   </Tab>
   <Tab value="Rust">
     ```rust
     queue
-        .enqueue("email.send", &json!({ "to": "person@example.com" }), EnqueueOptions::default())
+        .enqueue(
+            "email.send",
+            &json!({ "to": "person@example.com" }),
+            EnqueueOptions { queue: Some("email".into()), ..Default::default() },
+        )
         .await?;
     ```
   </Tab>
   <Tab value="Ruby">
     ```ruby
-    queue.enqueue("email.send", {"to" => "person@example.com"})
+    queue.enqueue("email.send", {"to" => "person@example.com"}, queue: "email")
     ```
   </Tab>
   <Tab value="Java">
     ```java
-    queue.enqueue("email.send", Map.of("to", "person@example.com"));
+    queue.enqueue(
+        "email.send",
+        Map.of("to", "person@example.com"),
+        EnqueueOptions.builder().queue("email").build());
     ```
   </Tab>
   <Tab value="Kotlin">
     ```kotlin
-    queue.enqueueSuspend("email.send", mapOf("to" to "person@example.com"))
+    queue.enqueueSuspend(
+      "email.send",
+      mapOf("to" to "person@example.com"),
+      EnqueueOptions.builder().queue("email").build(),
+    )
     ```
   </Tab>
   <Tab value="C#">
     ```csharp
-    await queue.EnqueueAsync("email.send", new { to = "person@example.com" });
+    await queue.EnqueueAsync("email.send", new { to = "person@example.com" }, new EnqueueOptions { Queue = "email" });
     ```
   </Tab>
 </Tabs>
