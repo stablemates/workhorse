@@ -1,4 +1,4 @@
-FROM node:24-alpine@sha256:44fce696f38ba8c987c4db89954051000bbd05ffd8d8659ba15ed4a8602e937f AS build
+FROM node:24-alpine@sha256:06d7adf3e0ef61a13f1d28682726366f97a15aa1888c934d3ecec86c33918b53 AS build
 
 ENV PNPM_HOME=/pnpm
 ENV PATH=$PNPM_HOME:$PATH
@@ -41,7 +41,7 @@ RUN pnpm --filter @stablemates/workhorse deploy --prod --legacy /dependencies/co
   && pnpm --filter @stablemates/workhorse-dashboard-server deploy --prod --legacy /dependencies/dashboard-server \
   && pnpm --filter @stablemates/workhorse-dashboard deploy --prod --legacy /dependencies/dashboard
 
-FROM node:24-alpine@sha256:44fce696f38ba8c987c4db89954051000bbd05ffd8d8659ba15ed4a8602e937f AS production-dependencies
+FROM node:24-alpine@sha256:06d7adf3e0ef61a13f1d28682726366f97a15aa1888c934d3ecec86c33918b53 AS production-dependencies
 
 WORKDIR /opt/workhorse
 COPY --from=build /dependencies/core/node_modules/ ./node_modules/
@@ -64,7 +64,7 @@ RUN set -eu \
   done \
   && rm -rf /artifacts
 
-FROM node:24-alpine@sha256:44fce696f38ba8c987c4db89954051000bbd05ffd8d8659ba15ed4a8602e937f AS runtime
+FROM node:24-alpine@sha256:06d7adf3e0ef61a13f1d28682726366f97a15aa1888c934d3ecec86c33918b53 AS runtime
 
 ENV NODE_ENV=production
 WORKDIR /opt/workhorse

@@ -1,5 +1,5 @@
 import { isDeepStrictEqual } from "node:util";
-import { checkpointInputFingerprint } from "./checkpoint-fingerprint.js";
+import { canonicalText, checkpointInputFingerprint } from "./checkpoint-fingerprint.js";
 import { WorkhorseError } from "./errors.js";
 import type {
   CheckpointOptions,
@@ -500,7 +500,7 @@ class Replay {
     const requested = childRequestJson(request);
     const stored = this.stored("child", request.name);
     if (stored === undefined) return;
-    if (!isDeepStrictEqual(requested, childRequestJson(stored))) {
+    if (requested !== childRequestJson(stored)) {
       this.fail("conflict", at, "the child request differs from the stored request");
     }
     if (stored.set !== set) {
@@ -612,14 +612,28 @@ function joinCall(set: ChildJoinMode | undefined): string {
   return set === "settled" ? "runChildren" : "runChildrenAll";
 }
 
-function childRequestJson(request: { type: string; payload: unknown; options?: unknown }): unknown {
+function childRequestJson(request: { type: string; payload: unknown; options?: unknown }): string {
   return toJson({ type: request.type, payload: request.payload, options: request.options ?? {} });
 }
 
-function toJson(value: unknown): unknown {
-  return JSON.parse(JSON.stringify(value)) as unknown;
+// This writes the JSON.stringify text of a value with the keys of each object in sorted order, so
+// two values are equal as JSON exactly when their texts are equal. It reads the text with
+// canonicalText and does not copy the value through JSON.parse, because JSON.parse before Node
+// 24.22.1 and 26.12.1 can read an escaped key as a key that an earlier parse made
+// (nodejs/node#63785).
+function toJson(value: unknown): string {
+  const text = JSON.stringify(value);
+  if (text === undefined) throw new TypeError("A replayed value must be JSON serializable");
+  return canonicalText(text, (decoded) => decoded, replayedNumber);
+}
+
+// A JSON.rawJSON token can hold -0 or a number beyond the double range. JSON.parse reads them as
+// -0 and as an infinity, which differ from 0 and from null, so their texts differ too.
+function replayedNumber(value: number): string {
+  if (Object.is(value, -0)) return "-0";
+  return Number.isFinite(value) ? JSON.stringify(value) : String(value);
 }
 
 function sameJson(left: unknown, right: unknown): boolean {
-  return isDeepStrictEqual(toJson(left), toJson(right));
+  return toJson(left) === toJson(right);
 }

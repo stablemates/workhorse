@@ -124,6 +124,36 @@ const overlapsTwoLabelSets: Handler<Order> = async (payload, ctx) =>
 const readsTheLookupFingerprint: Handler<Order> = async (payload, ctx) =>
   (await ctx.getCheckpoint("lookup"))?.inputFingerprint ?? null;
 
+const rawJSON = (JSON as unknown as { rawJSON(text: string): Json }).rawJSON;
+
+// A human context whose number is a JSON.rawJSON token, and a stored context with the same key.
+const approvesCopies =
+  (token: string): Handler<Order> =>
+  async (payload, ctx) =>
+    ctx.waitForHuman("approve", { copies: rawJSON(token) });
+const storedCopies = (copies: Json): DurableState => ({
+  humanWaits: { approve: { context: { copies }, result: "approved" } },
+});
+
+// A child request and a human context with one escaped key, and the stored values of the same
+// request. The stored values put the key first, so they do not have the shape of the request.
+const asksFor =
+  (key: string): Handler<Order> =>
+  async (payload, ctx) => {
+    await ctx.runChild("label", "label.print", { printerId: "p-1", [key]: 1 });
+    return ctx.waitForHuman("approve", { approverId: "a-1", [key]: 1 });
+  };
+const storedFor = (key: string): DurableState => ({
+  children: {
+    label: {
+      type: "label.print",
+      payload: { [key]: 1, printerId: "p-1" },
+      outcome: { status: "succeeded", result: "label-1" },
+    },
+  },
+  humanWaits: { approve: { context: { [key]: 1, approverId: "a-1" }, result: "approved" } },
+});
+
 function storedLabel(set: "settled" | "all_success" | undefined): DurableState {
   return {
     children: {
@@ -291,6 +321,63 @@ describe("replayHandler", () => {
       reason: "conflict",
       at: { kind: "humanWait", name: "approve" },
     });
+  });
+
+  it("compares a stored child request and a human context with escaped keys", async () => {
+    // Before Node 24.22.1 and 26.12.1, JSON.parse can read the key '"' as the key "\\" that an
+    // earlier parse made after the same key. The key names occur in no other test of this file.
+    const completed = { outcome: { status: "completed", result: "approved" } };
+
+    await expect(
+      replayHandler(asksFor("\\"), { orderId: "o-1" }, storedFor("\\")),
+    ).resolves.toMatchObject(completed);
+    await expect(
+      replayHandler(asksFor('"'), { orderId: "o-1" }, storedFor('"')),
+    ).resolves.toMatchObject(completed);
+    await expect(
+      replayHandler(asksFor('"'), { orderId: "o-1" }, storedFor("\\")),
+    ).rejects.toMatchObject({
+      problem: { reason: "conflict", at: { kind: "child", name: "label" } },
+    });
+  });
+
+  it("compares a human context as JSON.stringify writes it", async () => {
+    // A raw JSON number and a getter that reads an earlier getter keep their JSON.stringify value.
+    let copies = 1;
+    const context = {
+      get printed() {
+        copies = 2;
+        return rawJSON("1.0");
+      },
+      get copies() {
+        return copies;
+      },
+    };
+    const approves: Handler<Order> = async (payload, ctx) => ctx.waitForHuman("approve", context);
+    const state: DurableState = {
+      humanWaits: { approve: { context: { copies: 2, printed: 1 }, result: "approved" } },
+    };
+
+    await expect(replayHandler(approves, { orderId: "o-1" }, state)).resolves.toMatchObject({
+      outcome: { status: "completed", result: "approved" },
+    });
+  });
+
+  it("keeps -0 and a number beyond the double range apart from 0 and null", async () => {
+    for (const [token, copies] of [
+      ["-0", 0],
+      ["1e400", null],
+      ["-1e400", null],
+    ] as const) {
+      await expect(
+        replayHandler(approvesCopies(token), { orderId: "o-1" }, storedCopies(copies)),
+      ).rejects.toMatchObject({
+        problem: { reason: "conflict", at: { kind: "humanWait", name: "approve" } },
+      });
+    }
+    await expect(
+      replayHandler(approvesCopies("1e400"), { orderId: "o-1" }, storedCopies(rawJSON("1e999"))),
+    ).resolves.toMatchObject({ outcome: { status: "completed", result: "approved" } });
   });
 
   it("accepts an added version checkpoint that allowNew names", async () => {

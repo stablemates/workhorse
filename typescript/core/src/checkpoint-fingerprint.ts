@@ -45,7 +45,7 @@ function canonicalJson(input: Json): string {
     return nested;
   });
   if (encoded === undefined) throw new TypeError("Checkpoint input must be JSON serializable");
-  return canonicalText(encoded);
+  return canonicalText(encoded, wellFormed, (value) => JSON.stringify(value));
 }
 
 // JSON.stringify gives a boxed Number to the replacer as an object, then writes its value. The
@@ -59,11 +59,22 @@ function unboxedNumber(value: unknown): unknown {
   }
 }
 
-// This reads the JSON.stringify output and writes its canonical form. It does not use JSON.parse,
-// because JSON.parse in V8 13.6 and 14.6 (Node 24 and 26) can read an escaped key as a key that an
-// earlier parse made (nodejs/node#63785). Then one input could have two fingerprints. The text is
-// always JSON.stringify output, so it has no whitespace and no duplicate keys.
-function canonicalText(text: string): string {
+/**
+ * Read JSON.stringify output and write its canonical form: the keys of each object in UTF-16 order,
+ * and each string in the JSON.stringify form. `checkString` sees each decoded string and key, and
+ * can refuse it. `writeNumber` writes each number, which is a token of a JSON.rawJSON value or the
+ * JSON.stringify form of a finite double.
+ *
+ * This does not use JSON.parse, because JSON.parse before Node 24.22.1 and 26.12.1 can read an
+ * escaped key as a key that an earlier parse made (nodejs/node#63785). Then one input could have two
+ * fingerprints. The text must be JSON.stringify output, so it has no whitespace and no duplicate
+ * keys.
+ */
+export function canonicalText(
+  text: string,
+  checkString: (text: string) => string,
+  writeNumber: (value: number) => string,
+): string {
   let index = 0;
 
   const readString = (): string => {
@@ -88,7 +99,7 @@ function canonicalText(text: string): string {
       start = index;
     }
     decoded += text.slice(start, index++);
-    return wellFormed(decoded);
+    return checkString(decoded);
   };
 
   const readValue = (): string => {
@@ -123,7 +134,7 @@ function canonicalText(text: string): string {
     const token = text.slice(start, index);
     return token === "true" || token === "false" || token === "null"
       ? token
-      : JSON.stringify(Number(token));
+      : writeNumber(Number(token));
   };
 
   return readValue();

@@ -154,7 +154,7 @@ describe("verificationSteps", () => {
       expect(step.environment).toMatchObject({
         DOTNET_NOLOGO: "1",
         MISE_DOTNET_VERSION: expect.any(String),
-        MISE_NODE_VERSION: "24",
+        MISE_NODE_VERSION: "24.22.1",
       });
     }
     expect(

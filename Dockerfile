@@ -38,7 +38,7 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
 
 # The Ruby worker runs on the runtime stage's Alpine Ruby, so its gems install on that same base. The
 # lockfile pins every gem and its checksum. pg's prebuilt musl gem carries libpq, so nothing compiles.
-FROM node:24-alpine@sha256:44fce696f38ba8c987c4db89954051000bbd05ffd8d8659ba15ed4a8602e937f AS ruby-build
+FROM node:24-alpine@sha256:06d7adf3e0ef61a13f1d28682726366f97a15aa1888c934d3ecec86c33918b53 AS ruby-build
 
 RUN apk add --no-cache ruby ruby-bundler
 WORKDIR /opt/workhorse-ruby
@@ -97,7 +97,7 @@ FROM ghcr.io/astral-sh/uv:0.13.5@sha256:32a7bb39b496babbd997b0a39a4d66c126bdaf56
 # The dependencies install on the runtime stage's base and its pinned python3, not on a Python
 # image, so the build and the runtime use one interpreter. uv leaves its install lock in the target
 # directory, and anyone can write that file, so the step removes it.
-FROM node:24-alpine@sha256:44fce696f38ba8c987c4db89954051000bbd05ffd8d8659ba15ed4a8602e937f AS python-build
+FROM node:24-alpine@sha256:06d7adf3e0ef61a13f1d28682726366f97a15aa1888c934d3ecec86c33918b53 AS python-build
 
 ARG ALPINE_PYTHON_VERSION
 RUN apk add --no-cache python3=${ALPINE_PYTHON_VERSION}
@@ -123,7 +123,7 @@ RUN uv export \
   && rm /opt/workhorse-python/.lock
 COPY python/src/workhorse/ /opt/workhorse-python/workhorse/
 
-FROM node:24-alpine@sha256:44fce696f38ba8c987c4db89954051000bbd05ffd8d8659ba15ed4a8602e937f AS build
+FROM node:24-alpine@sha256:06d7adf3e0ef61a13f1d28682726366f97a15aa1888c934d3ecec86c33918b53 AS build
 
 ENV PNPM_HOME=/pnpm
 ENV PATH=$PNPM_HOME:$PATH
@@ -174,7 +174,7 @@ RUN pnpm build:runtime && pnpm --filter @stablemates/workhorse-demo build
 RUN cd typescript/demo && npm pkg delete devDependencies
 RUN pnpm --filter @stablemates/workhorse-demo deploy --prod --legacy /opt/workhorse-demo
 
-FROM node:24-alpine@sha256:44fce696f38ba8c987c4db89954051000bbd05ffd8d8659ba15ed4a8602e937f AS runtime
+FROM node:24-alpine@sha256:06d7adf3e0ef61a13f1d28682726366f97a15aa1888c934d3ecec86c33918b53 AS runtime
 
 ENV NODE_ENV=production
 ENV PORT=3000

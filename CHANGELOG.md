@@ -22,6 +22,22 @@ upgrade steps.
 
 ## Unreleased
 
+### `replayHandler` compares stored values without `JSON.parse`
+
+`replayHandler` compares a child request and a human decision context with the stored value. Before
+this change, it copied both values with `JSON.stringify` and `JSON.parse`. On an affected Node.js
+release, `JSON.parse` can read an escaped object key as a key that an earlier parse made
+(nodejs/node#63785). Thus a replay could report a conflict for an equal child request, or miss a
+changed one (SM-1592).
+
+`replayHandler` now compares the `JSON.stringify` text of the two values, with the keys of each
+object in sorted order. Two values that were equal as JSON are still equal.
+
+The affected releases are Node.js 24.0.0 to 24.22.0 and 26.0.0 to 26.12.0. The database driver
+also reads jsonb values with `JSON.parse`, so a worker must run Node.js 22, 24.22.1 or later, or
+26.12.1 or later. [Node.js releases with a JSON.parse fault](docs/compatibility.md#nodejs-releases-with-a-jsonparse-fault)
+lists the releases. `engines.node` stays `>=22`.
+
 ### A failed reporter callback gives a catalogued log record
 
 A reporter callback, such as `onRegistrationError`, can throw. The TypeScript worker wrote that
