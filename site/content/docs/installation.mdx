@@ -128,7 +128,20 @@ its default PostgreSQL driver.
     `Workhorse.EntityFrameworkCore` gives a queue the connection and the transaction of an EF Core
     `DbContext`. `Workhorse.AspNetCore` puts the dashboard backend in an ASP.NET Core application.
 
-    NuGet does not serve the packages yet, so this page gives no install command for them.
+    nuget.org serves the packages from `0.10.0`. Add the core:
+
+    ```bash
+    dotnet add package Workhorse
+    ```
+
+    Add each other package that your application uses:
+
+    ```bash
+    dotnet add package Workhorse.Hosting
+    dotnet add package Workhorse.EntityFrameworkCore
+    dotnet add package Workhorse.AspNetCore
+    ```
+
     [Compatibility](/docs/compatibility) gives the .NET, Npgsql, EF Core, and ASP.NET Core versions
     that they support.
 

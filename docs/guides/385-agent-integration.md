@@ -168,6 +168,7 @@ go get github.com/stablemates/workhorse/go
 cargo add workhorse
 bundle add stablemates-workhorse
 bundle add connection_pool
+dotnet add package Workhorse
 ```
 
 The Ruby SDK also needs the `connection_pool` gem.
@@ -175,8 +176,8 @@ The Ruby SDK also needs the `connection_pool` gem.
 Maven Central serves the three JVM artifacts from `0.9.0`. The JVM SDK has no install command
 here. Its README names the three artifacts and their supported versions.
 
-[Installation](https://workhorse.run/docs/installation.md) names the four packages of the .NET SDK.
-NuGet does not serve them yet, so the .NET SDK has no install command here.
+`dotnet add package Workhorse` adds the core of the .NET SDK from nuget.org.
+[Installation](https://workhorse.run/docs/installation.md) names the other three .NET packages.
 
 ### Enqueue in the transaction of your application data
 

@@ -30,7 +30,20 @@ The .NET SDK has four NuGet packages. All four use one version.
 | `Workhorse.EntityFrameworkCore` | An enqueue in the transaction of a `DbContext`                         |
 | `Workhorse.AspNetCore`          | The embedded dashboard backend, mapped as ASP.NET Core endpoints       |
 
-NuGet does not serve these packages yet. This page gives no install command to copy.
+nuget.org serves the four packages from `0.10.0`. Add the core:
+
+```bash
+dotnet add package Workhorse
+```
+
+Add each other package that the application uses:
+
+```bash
+dotnet add package Workhorse.Hosting
+dotnet add package Workhorse.EntityFrameworkCore
+dotnet add package Workhorse.AspNetCore
+```
+
 [Compatibility](https://workhorse.run/docs/compatibility) states the supported .NET, Npgsql,
 EF Core, and ASP.NET Core versions.
 

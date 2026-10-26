@@ -7,8 +7,8 @@
   stays the default topology),
   [ADR 0107](0107-shape-the-dotnet-sdk-as-a-csharp-core-with-hosting-ef-core-and-asp-net-core-packages.md) (three .NET
   framework packages, `Workhorse.Hosting`, `Workhorse.EntityFrameworkCore`, and `Workhorse.AspNetCore`;
-  a worker runs only in a process that calls `AddWorkhorseWorker`; NuGet does not serve the packages
-  yet)
+  a worker runs only in a process that calls `AddWorkhorseWorker`; nuget.org serves the
+  packages from `0.10.0`)
 - **Related:** [ADR 0012](0012-dedicated-worker-processes.md), [ADR 0018](0018-framework-neutral-dashboard-host.md)
 
 ## Context

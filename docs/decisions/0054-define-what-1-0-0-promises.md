@@ -12,8 +12,8 @@
   eleventh, and the three JVM artifacts ride the 1.0.0 train),
   [ADR 0106](0106-keep-the-release-lines-in-lockstep-after-1-0-0.md) (the lines stay in lockstep after 1.0.0),
   [ADR 0107](0107-shape-the-dotnet-sdk-as-a-csharp-core-with-hosting-ef-core-and-asp-net-core-packages.md) (the C# API
-  is a twelfth governed surface, and the four .NET packages join the 1.0.0 train; NuGet does not
-  serve them yet)
+  is a twelfth governed surface, and the four .NET packages join the 1.0.0 train; nuget.org serves
+  them from `0.10.0`)
 - **Related:** [ADR 0053](0053-start-migrations-at-0-1-0-and-keep-them-additive.md),
   [ADR 0056](0056-set-the-1-0-0-exit-criteria.md),
   WH-578,

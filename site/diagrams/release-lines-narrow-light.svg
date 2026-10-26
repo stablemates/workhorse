@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 232" width="400" height="232" role="img" aria-labelledby="release-lines-narrow-light-title release-lines-narrow-light-desc">
 <title id="release-lines-narrow-light-title">The location of the defect decides which lines change in a release train</title>
-<desc id="release-lines-narrow-light-desc">Each fix ships in a release train that publishes the npm packages, Python, Go, Rust, Ruby, and JVM lines at one version. If the defect is in the SQL schema or in the protocol that the SDKs share, each line gets the fix. If the defect is in one SDK, for example Python, that line gets the fix. Each other line publishes the same version with no change. Each fix ships only on the highest published minor release of the current major.</desc>
+<desc id="release-lines-narrow-light-desc">Each fix ships in a release train that publishes the npm packages, Python, Go, Rust, Ruby, JVM, and .NET lines at one version. If the defect is in the SQL schema or in the protocol that the SDKs share, each line gets the fix. If the defect is in one SDK, for example Python, that line gets the fix. Each other line publishes the same version with no change. Each fix ships only on the highest published minor release of the current major.</desc>
 <defs><marker id="arrow-light" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#4e5359"/></marker></defs>
 <rect width="400" height="232" fill="#f9fafb"/>
 <text x="24" y="49" fill="#1a2027" font-size="9" font-family="Geist Mono">schema</text>
