@@ -1,9 +1,9 @@
 ---
 title: Releases
-description: The current published version of the TypeScript, Python, Go, Rust, Ruby, and JVM lines, when each shipped, and which versions receive fixes.
+description: The current published version of the TypeScript, Python, Go, Rust, Ruby, JVM, and .NET lines, when each shipped, and which versions receive fixes.
 ---
 
-Workhorse publishes six release lines from one source commit:
+Workhorse publishes seven release lines from one source commit:
 
 - ten npm packages, which release together with one version,
 - one Python distribution,
@@ -11,13 +11,12 @@ Workhorse publishes six release lines from one source commit:
 - one Rust crate,
 - one Ruby gem,
 - three JVM artifacts on Maven Central for Java, Kotlin, and Spring Boot, which release together
-  with one version.
+  with one version,
+- four .NET packages on nuget.org, `Workhorse`, `Workhorse.Hosting`,
+  `Workhorse.EntityFrameworkCore`, and `Workhorse.AspNetCore`, which release together with one
+  version.
 
-The four .NET packages `Workhorse`, `Workhorse.Hosting`, `Workhorse.EntityFrameworkCore`, and
-`Workhorse.AspNetCore` join the same release train. NuGet does not serve them yet, so the .NET row
-of the table shows no version.
-
-Every release publishes all six lines at one version, before and after 1.0.0. This page shows the
+Every release publishes all seven lines at one version, before and after 1.0.0. This page shows the
 current version of each line. You need it to apply the support policy below.
 
 The site build reads each version on this page from the changelog of its line. Nobody types a

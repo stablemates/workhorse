@@ -114,6 +114,5 @@ export const releaseLines: readonly ReleaseLine[] = [
     registry: "nuget.org",
     registryUrl: "https://www.nuget.org/packages/Workhorse",
     changelog: "dotnet/CHANGELOG.md",
-    unpublished: true,
   },
 ];

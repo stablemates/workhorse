@@ -512,9 +512,9 @@ rest are optional TypeScript packages.
 | `@stablemates/workhorse-prisma`             | Prisma ORM provider                               | `@stablemates/workhorse`, `@prisma/client` >= 6 and < 8                                                       |
 | `@stablemates/workhorse-typeorm`            | TypeORM provider                                  | `@stablemates/workhorse`, `typeorm` >= 0.3 and < 2                                                            |
 | `@stablemates/workhorse-kysely`             | Kysely provider                                   | `@stablemates/workhorse`, `kysely` >= 0.29 and < 0.30                                                         |
-| `@stablemates/workhorse-knex`               | PostgreSQL Knex provider                          | `@stablemates/workhorse` >= 0.9 and < 0.10, `knex` 3.3.0, `pg` 8.23.1                                         |
+| `@stablemates/workhorse-knex`               | PostgreSQL Knex provider                          | `@stablemates/workhorse` >= 0.10 and < 0.11, `knex` 3.3.0, `pg` 8.23.1                                        |
 | `@stablemates/workhorse-otel`               | OpenTelemetry adapter                             | `@stablemates/workhorse`, `@opentelemetry/api` >= 1.9 and < 2, `@opentelemetry/api-logs` >= 0.200 and < 0.300 |
-| `@stablemates/workhorse-dashboard`          | Operator dashboard and its framework-neutral host | `@stablemates/workhorse` >= 0.9.0 and < 0.10, React 19                                                        |
+| `@stablemates/workhorse-dashboard`          | Operator dashboard and its framework-neutral host | `@stablemates/workhorse` >= 0.10.0 and < 0.11, React 19                                                       |
 | `@stablemates/workhorse-dashboard-server`   | Authenticated standalone dashboard server         | `@stablemates/workhorse-dashboard-contract`                                                                   |
 | `@stablemates/workhorse-dashboard-contract` | Type-only dashboard server boundary               | None                                                                                                          |
 | `stablemates-workhorse`                     | Python clients, workers, and WSGI dashboard       | None; includes Psycopg >= 3.3 and < 4; `asyncpg` extra supports >= 0.31 and < 1                               |
@@ -527,7 +527,7 @@ range. SQL protocol 5 and schema version 76 are their compatibility boundary ins
 still match the npm packages, because every line releases from one commit.
 
 Every release publishes one version to npm, PyPI, the Go module proxy, crates.io, RubyGems, Maven
-Central, and nuget.org from one source commit. The current release is `0.9.0`. “Public beta” means the release is usable for evaluation and early production adoption without a
+Central, and nuget.org from one source commit. The current release is `0.10.0`. “Public beta” means the release is usable for evaluation and early production adoption without a
 0.x compatibility promise. The label is retired at 1.0.0 and replaced by “stable”; see
 [What SemVer governs](#what-semver-governs).
 
@@ -1256,9 +1256,9 @@ The three always carry one version. Like the crate and the gem, they have no tag
 publish from the npm `v*` tag. The first version that Maven Central serves is `0.9.0`. The
 maintainer steps at the end of this section came before that first publish.
 
-A Gradle build adds the core with `implementation("run.workhorse:workhorse:0.9.0")`. A Maven
+A Gradle build adds the core with `implementation("run.workhorse:workhorse:0.10.0")`. A Maven
 build adds
-`<dependency><groupId>run.workhorse</groupId><artifactId>workhorse</artifactId><version>0.9.0</version></dependency>`.
+`<dependency><groupId>run.workhorse</groupId><artifactId>workhorse</artifactId><version>0.10.0</version></dependency>`.
 For the Kotlin module or the starter, replace the artifact ID with `workhorse-kotlin` or
 `workhorse-spring-boot-starter`. `support.json` states the two commands as `install.gradle` and
 `install.maven`.
@@ -1571,9 +1571,9 @@ benchmarked configuration is not a statement that other supported versions are s
 Requirements for making a performance claim at all are in [`benchmarking.md`](benchmarking.md);
 until a scenario has a recorded live artifact, no performance claim is made for any version.
 
-## Upgrade from 0.9.x to the next release
+## Upgrade from 0.9.x to 0.10.0
 
-The next release lets a producer throttle an enqueue into a fast-tier queue. Its dashboard hosts
+0.10.0 lets a producer throttle an enqueue into a fast-tier queue. Its dashboard hosts
 read the retention preview through the new `dashboard_retention_preview_v1`. Its workers deregister
 through the new `deregister_worker_v2`. Thus the schema floor rises. The upgrade is a rolling
 deployment, and a mixed fleet is supported while it runs.
@@ -1605,7 +1605,7 @@ The SDK schema floor rises from 73 to 76. Every SDK statement catalogue names
 `dashboard_retention_preview_v1`, which schema version 75 adds, and `deregister_worker_v2`, which
 schema version 76 adds. If the schema is below version 76, a new worker refuses to start. A new SDK
 refuses each mutation, and a new dashboard host refuses each request. Thus the migrations must run
-before the first new process starts.
+before the first new process starts. 0.10.0 freezes `sql/releases/0086.sql`.
 
 Schema version 77 does not raise the floor. Migration 0078 changes only the HINT of the P1001 to
 P1010 errors, and DETAIL does not change.

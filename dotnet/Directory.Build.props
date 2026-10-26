@@ -2,7 +2,7 @@
   <!-- The build settings of every project in the solution (ADR 0107, "Build tool"). -->
   <PropertyGroup>
     <!-- The train version. Every .NET package uses it (ADR 0106, ADR 0107). -->
-    <Version>0.9.0</Version>
+    <Version>0.10.0</Version>
     <!-- The informational version holds no commit suffix, so the SDK reports the train version. -->
     <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
     <TargetFramework>net10.0</TargetFramework>
