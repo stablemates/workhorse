@@ -157,6 +157,42 @@ public sealed partial class Worker
     /// <summary>An empty-claim wait. A <c>null</c> version marks a release wait, which a wake does not end.</summary>
     private sealed record EmptyWait(long Deadline, long? Version);
 
+    /// <summary>The latest run, whose empty-claim wait <see cref="EmptyWaitForTests"/> reads.</summary>
+    private volatile RunState? _latestRun;
+
+    /// <summary>
+    /// The empty-claim wait of the latest run, or <c>null</c> without one. <c>Deadline</c> is a
+    /// <see cref="System.Diagnostics.Stopwatch"/> timestamp, and <c>Wakeable</c> is set when a wake
+    /// can end the wait. A test reads it.
+    /// </summary>
+    internal (long Deadline, bool Wakeable)? EmptyWaitForTests
+    {
+        get
+        {
+            if (_latestRun is not { } run)
+            {
+                return null;
+            }
+
+            EmptyWait? wait;
+            lock (_stateLock)
+            {
+                wait = run.EmptyWait;
+            }
+
+            if (wait is null)
+            {
+                return null;
+            }
+
+            // Monotonic.Now() is the Stopwatch timestamp in nanoseconds, so the deadline converts
+            // without a second clock read.
+            var frequency = System.Diagnostics.Stopwatch.Frequency;
+            var deadline = frequency == 1_000_000_000 ? wait.Deadline : (long)(wait.Deadline * (frequency / 1e9));
+            return (deadline, wait.Version is not null);
+        }
+    }
+
     private bool StopRequested(long version) => Interlocked.Read(ref _stopVersion) != version;
 
     private bool StopRequested(RunState run) => run.Failed || StopRequested(run.Version);
@@ -180,7 +216,9 @@ public sealed partial class Worker
         {
             _registered = false;
             _remotelyPaused = false;
-            return new RunState(version, Interlocked.Increment(ref _generation));
+            var run = new RunState(version, Interlocked.Increment(ref _generation));
+            _latestRun = run;
+            return run;
         }
     }
 

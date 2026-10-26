@@ -398,6 +398,8 @@ pub(crate) struct Inner {
     late: Mutex<Vec<JoinHandle<()>>>,
     /// When the worker last logged a panic of `on_registration_error`.
     registration_reporter: Mutex<ReporterFailures>,
+    /// The empty wait of the dispatch loop: its deadline, and whether a notification can end it.
+    empty_wait: Mutex<Option<(Instant, bool)>>,
 }
 
 /// A reporter callback that always fails logs at most once in this interval.
@@ -723,11 +725,21 @@ impl Worker {
             run_gate: Mutex::default(),
             late: Mutex::default(),
             registration_reporter: Mutex::default(),
+            empty_wait: Mutex::default(),
         })))
     }
 
     pub fn worker_id(&self) -> &str {
         &self.0.worker_id
+    }
+
+    /// The empty wait of the dispatch loop: its deadline, and whether a notification can end it.
+    /// `None` without a wait.
+    ///
+    /// Public only so the conformance runner can read it; not part of the API.
+    #[doc(hidden)]
+    pub fn empty_wait_for_test(&self) -> Option<(std::time::Instant, bool)> {
+        lock(&self.0.empty_wait).map(|(deadline, wakeable)| (deadline.into_std(), wakeable))
     }
 
     /// Registers the handler for `task_type`, replacing any earlier one.
@@ -961,6 +973,10 @@ impl dispatch::Dispatch for WorkerDispatch {
 
     fn poll_delay(&self, consecutive_empty: u32, listening: bool) -> Duration {
         self.inner.poll_delay(consecutive_empty, listening)
+    }
+
+    fn observe_empty_wait(&self, wait: Option<(Instant, bool)>) {
+        *lock(&self.inner.empty_wait) = wait;
     }
 
     fn claims_allowed(&self) -> bool {

@@ -53,6 +53,9 @@ pub(super) trait Dispatch: Send + Sync + 'static {
     /// The wait after `consecutive_empty` claims found nothing to run, with the subscription live
     /// or not.
     fn poll_delay(&self, consecutive_empty: u32, listening: bool) -> Duration;
+    /// Receives the empty wait each time the loop changes it: its deadline, and whether a
+    /// notification can end it.
+    fn observe_empty_wait(&self, _wait: Option<(Instant, bool)>) {}
     /// Whether the claim gate is open.
     fn claims_allowed(&self) -> bool {
         true
@@ -430,8 +433,14 @@ impl<D: Dispatch> Dispatcher<D> {
     }
 
     fn set_empty_wait(&mut self, empty_wait: Option<(Instant, Option<u64>)>) {
+        let changed = self.empty_wait != empty_wait;
         self.empty_wait = empty_wait;
         lock(&self.shared.slots).waiting = empty_wait.is_some();
+        if changed {
+            self.worker.observe_empty_wait(
+                empty_wait.map(|(deadline, version)| (deadline, version.is_some())),
+            );
+        }
     }
 
     fn fill(&mut self) {

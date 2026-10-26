@@ -384,13 +384,8 @@ func (tracer *subscriptionRecoveryQueryTracer) snapshot() []pollCadenceClaim {
 	return slices.Clone(tracer.claims)
 }
 
-const (
-	// The shortest wait at the notification base: 5 s less its jitter of 10 %.
-	notificationWaitMinimum = 4500 * time.Millisecond
-	// The longest wait at the polling-only base after the backoff restarts is 275 ms. A worker
-	// that makes no claim for this time after an empty claim waits at the notification base.
-	quietBeforeLoss = time.Second
-)
+// The shortest wait at the notification base: 5 s less its jitter of 10 %.
+const notificationWaitMinimum = 4500 * time.Millisecond
 
 func executeWorkerSubscriptionRecoveryFixture(t *testing.T, fixture workerRuntimeFixture) {
 	databaseURL := createConformanceDatabase(t, testDatabaseURL(t), "worker-subscription-recovery")
@@ -439,6 +434,7 @@ func executeWorkerSubscriptionRecoveryFixture(t *testing.T, fixture workerRuntim
 	if err != nil {
 		t.Fatal(err)
 	}
+	emptyWait := workhorse.ObserveEmptyWaitForTest(worker)
 	handled := make(chan string, 3)
 	worker.Handle(fixture.TaskType, func(_ context.Context, payload any, _ *workhorse.HandlerContext) (any, error) {
 		task, _ := payload.(map[string]any)["task"].(string)
@@ -497,9 +493,8 @@ func executeWorkerSubscriptionRecoveryFixture(t *testing.T, fixture workerRuntim
 	recoveryEnd := len(tracer.snapshot())
 
 	// The next empty claim starts a new wait at the notification base. Then the runner ends the
-	// live listener session and holds the next LISTEN, so the subscription is lost. The wait is
-	// internal to the worker. Thus the runner first waits until the worker has made no claim for
-	// quietBeforeLoss after an empty claim. A loss before the worker chose its wait gives the
+	// live listener session and holds the next LISTEN, so the subscription is lost. The runner
+	// first waits until the worker has installed that wait. A loss before that moment gives the
 	// polling base without a wake.
 	waitUntil := func(message string, condition func() bool) {
 		t.Helper()
@@ -514,10 +509,11 @@ func executeWorkerSubscriptionRecoveryFixture(t *testing.T, fixture workerRuntim
 	waitUntil("the worker made no empty claim after the second task", func() bool {
 		return slices.ContainsFunc(tracer.snapshot()[recoveryEnd:], func(claim pollCadenceClaim) bool { return !claim.found })
 	})
+	emptyIndex := slices.IndexFunc(tracer.snapshot()[recoveryEnd:], func(claim pollCadenceClaim) bool { return !claim.found })
+	emptyEnd := tracer.snapshot()[recoveryEnd+emptyIndex].returned
 	waitUntil("the worker did not wait at the notification base after the second task", func() bool {
-		claims := tracer.snapshot()
-		last := claims[len(claims)-1]
-		return !last.found && time.Since(last.returned) >= quietBeforeLoss
+		wait := emptyWait()
+		return wait.Wakeable && !wait.Deadline.Before(emptyEnd.Add(notificationWaitMinimum))
 	})
 	holdListen()
 	tracer.mu.Lock()
@@ -525,6 +521,7 @@ func executeWorkerSubscriptionRecoveryFixture(t *testing.T, fixture workerRuntim
 	// The loss starts when the runner ends the session. The tracer holds the first empty claim
 	// after that moment, which is the claim that the loss wakes. The worker thus cannot advance
 	// its backoff before the runner enqueues the third task.
+	waitEnd := emptyWait()
 	lostAt := time.Now()
 	tracer.holdFrom = lostAt
 	tracer.mu.Unlock()
@@ -601,17 +598,15 @@ func executeWorkerSubscriptionRecoveryFixture(t *testing.T, fixture workerRuntim
 	if delay := claims[afterLoss].started.Sub(lostAt); delay > maximumAfterLoss {
 		t.Fatalf("the first claim after the subscription was lost waited %s, want at most %s", delay, maximumAfterLoss)
 	}
-	// The claim before the woken one found no task. The worker made no claim for quietBeforeLoss
-	// after it, so it waited at the notification base. The woken claim started before the shortest
-	// wait at that base ended, so the loss started it.
+	// When the runner ended the session, the claim before the woken one had installed a wait at
+	// the notification base. The woken claim started before that wait ended, so the loss started it.
 	before := claims[afterLoss-1]
-	if before.found || lostAt.Sub(before.returned) < quietBeforeLoss {
-		t.Fatalf("the claim before the loss returned %s before it, want an empty claim at least %s before",
-			lostAt.Sub(before.returned), quietBeforeLoss)
+	if !waitEnd.Wakeable || waitEnd.Deadline.Before(before.returned.Add(notificationWaitMinimum)) {
+		t.Fatal("the claim before the loss did not install a wait at the notification base")
 	}
-	if delay := claims[afterLoss].started.Sub(before.returned); delay >= notificationWaitMinimum {
-		t.Fatalf("the first claim after the subscription was lost started %s after the claim before it, "+
-			"so the wait at the notification base, not the loss, started it", delay)
+	if !claims[afterLoss].started.Before(waitEnd.Deadline) {
+		t.Fatalf("the first claim after the subscription was lost started %s after the end of its wait, "+
+			"so the wait, not the loss, started it", claims[afterLoss].started.Sub(waitEnd.Deadline))
 	}
 	if delay := claims[third].started.Sub(enqueuedAfterLoss); delay > maximumAfterLoss {
 		t.Fatalf("the claim that found the third task waited %s after the subscription was lost, want at most %s",
