@@ -7,7 +7,9 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import com.zaxxer.hikari.HikariDataSource;
 import java.io.IOException;
+import java.io.PrintWriter;
 import java.net.InetSocketAddress;
 import java.net.StandardProtocolFamily;
 import java.net.URLEncoder;
@@ -22,8 +24,10 @@ import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
+import java.sql.SQLFeatureNotSupportedException;
 import java.sql.Statement;
 import java.time.Duration;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -32,6 +36,8 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.logging.Logger;
+import javax.sql.DataSource;
 import org.jspecify.annotations.Nullable;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
@@ -40,6 +46,7 @@ import org.junit.jupiter.api.io.TempDir;
 import org.postgresql.PGConnection;
 import org.postgresql.PGNotification;
 import org.postgresql.ds.PGSimpleDataSource;
+import run.workhorse.ConnectionSource;
 import run.workhorse.EnqueueOptions;
 import run.workhorse.JsonCodec;
 import run.workhorse.Queue;
@@ -137,6 +144,7 @@ class DemoWorkerProgramTest {
     assertEquals("disable", dataSource.getSslMode());
     assertEquals("demo+jvm", dataSource.getApplicationName());
     assertEquals(7, dataSource.getConnectTimeout());
+    assertEquals("15", dataSource.getAssumeMinServerVersion());
 
     PGSimpleDataSource bare = DemoWorkerProgram.dataSource("postgresql://localhost/demo");
     assertEquals("localhost", bare.getServerNames()[0]);
@@ -231,6 +239,11 @@ class DemoWorkerProgramTest {
     assertEquals(6543, dataSource.getPortNumbers()[0]);
     assertEquals("demo", dataSource.getDatabaseName());
     assertEquals("app", dataSource.getUser());
+    assertEquals("15", dataSource.getAssumeMinServerVersion());
+    assertEquals(
+        "16",
+        DemoWorkerProgram.dataSource("jdbc:postgresql://db/demo?assumeMinServerVersion=16")
+            .getAssumeMinServerVersion());
   }
 
   @Test
@@ -329,6 +342,42 @@ class DemoWorkerProgramTest {
         running.get(ExampleDatabase.WAIT.toSeconds(), TimeUnit.SECONDS);
         worker.close();
       }
+    }
+  }
+
+  /**
+   * SM-1832: on a {@code PGSimpleDataSource}, the worker opened a session for each statement. The
+   * pool opens at most {@link DemoWorkerProgram#POOL_SIZE} sessions while the worker runs tasks.
+   */
+  @Test
+  void itReusesThePoolConnectionsWhileItRunsTasks() throws Exception {
+    try (IsolatedExampleDatabase db = IsolatedExampleDatabase.create("demo-worker-pool")) {
+      CountingDataSource connections =
+          new CountingDataSource(DemoWorkerProgram.dataSource(db.jdbcUrl()));
+      try (HikariDataSource pool = DemoWorkerProgram.pool(connections)) {
+        assertEquals(DemoWorkerProgram.POOL_SIZE, pool.getMaximumPoolSize());
+        Queue queue = new Queue(ConnectionSource.of(pool));
+        Worker worker =
+            DemoWorkerProgram.buildWorker(
+                pool, Optional.of(Duration.ofMillis(20)), "demo-jvm-test-" + UUID.randomUUID());
+        CompletableFuture<Void> running = CompletableFuture.runAsync(worker::run);
+        try {
+          List<UUID> tasks = new ArrayList<>();
+          for (int index = 0; index < 40; index++) {
+            tasks.add(enqueue(queue, DemoWorkerProgram.JVM_QUEUE, "language", "jvm", null));
+          }
+          for (UUID task : tasks) {
+            assertEquals(TaskState.SUCCEEDED, db.awaitTerminal(task).state());
+          }
+        } finally {
+          worker.stop();
+          running.get(ExampleDatabase.WAIT.toSeconds(), TimeUnit.SECONDS);
+          worker.close();
+        }
+      }
+      assertTrue(
+          connections.opened() <= DemoWorkerProgram.POOL_SIZE,
+          "the pool opened " + connections.opened() + " sessions");
     }
   }
 
@@ -486,6 +535,67 @@ class DemoWorkerProgramTest {
         channel.close();
       }
       Files.deleteIfExists(path);
+    }
+  }
+
+  /** A {@link DataSource} that counts the sessions it opens. */
+  private static final class CountingDataSource implements DataSource {
+    private final DataSource delegate;
+    private final AtomicInteger opened = new AtomicInteger();
+
+    CountingDataSource(DataSource delegate) {
+      this.delegate = delegate;
+    }
+
+    int opened() {
+      return opened.get();
+    }
+
+    @Override
+    public Connection getConnection() throws SQLException {
+      opened.incrementAndGet();
+      return delegate.getConnection();
+    }
+
+    @Override
+    public Connection getConnection(String user, String password) throws SQLException {
+      opened.incrementAndGet();
+      return delegate.getConnection(user, password);
+    }
+
+    @Override
+    public PrintWriter getLogWriter() throws SQLException {
+      return delegate.getLogWriter();
+    }
+
+    @Override
+    public void setLogWriter(PrintWriter out) throws SQLException {
+      delegate.setLogWriter(out);
+    }
+
+    @Override
+    public void setLoginTimeout(int seconds) throws SQLException {
+      delegate.setLoginTimeout(seconds);
+    }
+
+    @Override
+    public int getLoginTimeout() throws SQLException {
+      return delegate.getLoginTimeout();
+    }
+
+    @Override
+    public Logger getParentLogger() throws SQLFeatureNotSupportedException {
+      return delegate.getParentLogger();
+    }
+
+    @Override
+    public <T> T unwrap(Class<T> type) throws SQLException {
+      return delegate.unwrap(type);
+    }
+
+    @Override
+    public boolean isWrapperFor(Class<?> type) throws SQLException {
+      return delegate.isWrapperFor(type);
     }
   }
 }

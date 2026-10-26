@@ -33,6 +33,12 @@ dependencies {
   implementation(project(":workhorse"))
   implementation(project(":workhorse-kotlin"))
   implementation(libs.pgjdbc)
+  // The demo worker's connection pool (SM-1832). HikariCP is the pool of the core's pool tests and
+  // the Spring Boot default. slf4j-jdk14 writes the HikariCP log where the SDK's System.Logger
+  // writes, so a pool warning reaches the demo log.
+  implementation(libs.hikaricp)
+  implementation(libs.slf4j.api)
+  runtimeOnly(libs.slf4j.jdk14)
 
   testImplementation(coreTests)
   testImplementation(exampleTests)

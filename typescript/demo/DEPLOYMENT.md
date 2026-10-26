@@ -431,23 +431,25 @@ database connections, under the sum below.
 Each demo process also holds its own connection pool, so the PostgreSQL server must accept the sum of the
 pool ceilings. Each language worker has six execution slots. Its pool holds one connection for each
 slot and a few for the heartbeat, the notification listener, the dispatch loop, and the registry
-refresh.
+refresh. The JVM worker's pool is HikariCP. At startup, it opens one connection, then it opens
+the others in the background, and it keeps them open. It replaces an idle connection after 30
+minutes, which is the HikariCP default. It replaces a connection that the worker holds, such as the
+listener, only when the worker gives it back.
 
-| Process                    | Database  | Connections                                                          |
-| -------------------------- | --------- | -------------------------------------------------------------------- |
-| Server                     | primary   | 10, pool ceiling                                                     |
-| Server                     | secondary | 3, pool ceiling                                                      |
-| TypeScript worker          | primary   | 10, slots + 4                                                        |
-| Staging worker             | secondary | 6, two slots + 4                                                     |
-| Python worker              | primary   | 9, slots + 3                                                         |
-| Go, Ruby, and .NET workers | primary   | 10 each, slots + 4                                                   |
-| Rust worker                | primary   | 11, slots + 4 and one listener outside the pool                      |
-| JVM worker                 | primary   | about 10; it has no pool and opens one connection for each operation |
+| Process                    | Database  | Connections                                     |
+| -------------------------- | --------- | ----------------------------------------------- |
+| Server                     | primary   | 10, pool ceiling                                |
+| Server                     | secondary | 3, pool ceiling                                 |
+| TypeScript worker          | primary   | 10, slots + 4                                   |
+| Staging worker             | secondary | 6, two slots + 4                                |
+| Python worker              | primary   | 9, slots + 3                                    |
+| Go, Ruby, and .NET workers | primary   | 10 each, slots + 4                              |
+| Rust worker                | primary   | 11, slots + 4 and one listener outside the pool |
+| JVM worker                 | primary   | 10, slots + 4                                   |
 
-The sum is about 80 connections to the primary database and 9 to the secondary database, about 89
-in total. The JVM value is an expected peak, not a ceiling. Give the demo roles a margin above that
-sum on the PostgreSQL server, in addition to its reserved and other connections. The
-schema wait at startup opens one more short connection for each worker.
+The sum is 80 connections to the primary database and 9 to the secondary database, 89 in total.
+Give the demo roles a margin above that sum on the PostgreSQL server, in addition to its reserved
+and other connections. Each worker checks the schema at startup with a connection of its pool.
 
 The demo answers a fixed public surface. `GET /up` and `GET /robots.txt` respond without touching
 the dashboard host. `GET` requests under the dashboard path serve the application shell, and `GET`

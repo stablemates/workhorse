@@ -98,6 +98,10 @@ workhorseWorker(dataSource) {
   .use { worker -> check(worker.runOnce()) { "the worker ran no handler" } }
 ```
 
+These examples use `PGSimpleDataSource`, which is not a pool. It opens a new connection for each
+statement. In production, give `Queue` and `Worker` a pooled `DataSource`, such as HikariCP. Then
+declare the pool size with `poolMaxSize`, because a `DataSource` does not report it.
+
 Handlers receive at-least-once delivery. Use stable provider idempotency keys around external
 effects. In production, run the worker with `WorkerProcess.runWorkerProcess(worker)`, or with the
 Spring Boot starter.
