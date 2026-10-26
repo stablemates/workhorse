@@ -27,12 +27,14 @@
  * together, so the check refuses packages whose newest published versions differ. `--baseline`
  * gives the version, or `none`, and the check then reads nothing from nuget.org.
  *
- * Unless `--no-consumers` is set, the check then restores `dotnet/release-consumer` in a temporary
- * directory. Its `nuget.config` takes the four packages only from the output directory and every
- * other package from nuget.org, and the restore uses an empty package folder. The consumer prints
- * the informational version of each package assembly. With a test database, it also enqueues one
- * task into a scratch database and runs it through the hosted worker of `Workhorse.Hosting`, and
- * the check reads that row back.
+ * Unless `--no-consumers` is set, the check then runs `pnpm release:verify nuget` with the output
+ * directory as its feed, so a post-publish check that the packages cannot satisfy fails before the
+ * push. The target restores `dotnet/release-consumer` with an empty package folder. Its
+ * `nuget.config` takes the four packages only from the output directory and every other package
+ * from nuget.org. The consumer prints the informational version of each package assembly. It then
+ * enqueues one task into a scratch database and runs it through the hosted worker of
+ * `Workhorse.Hosting`, and the check reads that row back. Without a test database, the check skips
+ * the consumer.
  *
  * The check publishes nothing and reads no secret. `--output <directory>` keeps the packages, so the
  * `nuget` job of `.github/workflows/release.yml` pushes the files that the consumer ran.
@@ -42,7 +44,7 @@
  */
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
-import { cp, mkdir, mkdtemp, readFile, readdir, realpath, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, realpath, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { parseArgs } from "node:util";
@@ -50,25 +52,17 @@ import { inflateRawSync } from "node:zlib";
 import type { Client } from "pg";
 import { tagVersion } from "./check-jvm-release.js";
 import { withReleaseScratchDatabase } from "./release-scratch-database.js";
+import { dotnetPackages, verifyRelease } from "./verify-release.js";
 
 const root = path.resolve(import.meta.dirname, "..");
 const dotnetDirectory = path.join(root, "dotnet");
 const solution = path.join(dotnetDirectory, "Workhorse.slnx");
-const consumerDirectory = path.join(dotnetDirectory, "release-consumer");
 const targetFramework = "net10.0";
 const repositoryUrl = "https://github.com/stablemates/workhorse";
 const sourceLinkPrefix = "https://raw.githubusercontent.com/stablemates/workhorse/";
 const nugetFlatContainer = "https://api.nuget.org/v3-flatcontainer";
 const consumerQueue = "release-consumer";
 const consumerTaskType = "release.consumer";
-
-/** The four packages of ADR 0107, in the order that they publish. Nothing else may pack. */
-export const publishedPackages = [
-  "Workhorse",
-  "Workhorse.Hosting",
-  "Workhorse.EntityFrameworkCore",
-  "Workhorse.AspNetCore",
-] as const;
 
 function run(
   command: string,
@@ -148,7 +142,7 @@ export function packageBaseline(
   published: ReadonlyMap<string, readonly string[]>,
   version: string,
 ): string | undefined {
-  const baselines = publishedPackages.map((id) => {
+  const baselines = dotnetPackages.map((id) => {
     const earlier = (published.get(id) ?? []).filter(
       (candidate) => compareVersions(candidate, version) < 0,
     );
@@ -156,7 +150,7 @@ export function packageBaseline(
   });
   if (new Set(baselines).size > 1) {
     throw new Error(
-      `The newest published versions below ${version} differ: ${publishedPackages
+      `The newest published versions below ${version} differ: ${dotnetPackages
         .map((id, index) => `${id} ${baselines[index] ?? "none"}`)
         .join(", ")}`,
     );
@@ -180,7 +174,7 @@ async function nugetVersions(id: string): Promise<string[]> {
 
 /** The problems with the file list of the output directory. */
 export function packageFileProblems(files: readonly string[], version: string): string[] {
-  const expected = publishedPackages.flatMap((id) => [
+  const expected = dotnetPackages.flatMap((id) => [
     `${id}.${version}.nupkg`,
     `${id}.${version}.snupkg`,
   ]);
@@ -269,7 +263,7 @@ export function nuspecProblems(
   for (const dependency of nuspec.matchAll(/<dependency\s[^>]*\/>/g)) {
     const dependencyId = attribute(dependency[0], "id") ?? "";
     if (!dependencyId.startsWith("Workhorse")) continue;
-    if (!(publishedPackages as readonly string[]).includes(dependencyId)) {
+    if (!(dotnetPackages as readonly string[]).includes(dependencyId)) {
       problems.push(`${id}: the nuspec depends on ${dependencyId}, which is not a package`);
     }
     expect(`dependency on ${dependencyId}`, attribute(dependency[0], "version"), version);
@@ -316,47 +310,6 @@ export function symbolProblems(
   return problems;
 }
 
-/** The Npgsql connection string of a `postgres://` URL. */
-export function connectionString(url: string): string {
-  const parsed = new URL(url);
-  const parts: [string, string][] = [
-    ["Host", decodeURIComponent(parsed.hostname)],
-    ["Port", parsed.port || "5432"],
-    ["Database", decodeURIComponent(parsed.pathname.slice(1))],
-  ];
-  if (parsed.username) parts.push(["Username", decodeURIComponent(parsed.username)]);
-  if (parsed.password) parts.push(["Password", decodeURIComponent(parsed.password)]);
-  return parts.map(([key, value]) => `${key}='${value.replaceAll("'", "''")}'`).join(";");
-}
-
-/** The `nuget.config` that takes the four packages only from the local feed. */
-export function consumerNugetConfig(feed: string): string {
-  const value = feed.replaceAll("&", "&amp;").replaceAll('"', "&quot;");
-  return `<?xml version="1.0" encoding="utf-8"?>
-<configuration>
-  <packageSources>
-    <clear />
-    <add key="workhorse-release" value="${value}" />
-    <add key="nuget.org" value="https://api.nuget.org/v3/index.json" protocolVersion="3" />
-  </packageSources>
-  <packageSourceMapping>
-    <packageSource key="workhorse-release">
-      <package pattern="Workhorse" />
-      <package pattern="Workhorse.*" />
-    </packageSource>
-    <packageSource key="nuget.org">
-      <package pattern="*" />
-    </packageSource>
-  </packageSourceMapping>
-</configuration>
-`;
-}
-
-/** The line the consumer prints first: the informational version of each package assembly. */
-export function consumerVersionLine(version: string): string {
-  return publishedPackages.map((id) => `${id}=${version}`).join(" ");
-}
-
 /** A scratch name `pnpm db:sweep` recognizes: the source name, a tag, and a ten-digit digest. */
 export function scratchDatabaseName(source: string, pid: number): string {
   const digest = createHash("sha256").update(`dotnet-release:${pid}`).digest("hex");
@@ -381,91 +334,51 @@ async function withScratchDatabase(
   await withReleaseScratchDatabase(sourceUrl, scratchDatabaseName(source, process.pid), use);
 }
 
-/** Reads back the task the consumer reports, and refuses it unless its handler echoed the payload. */
-async function requireConsumerTask(database: Client, taskId: string): Promise<void> {
+/** Refuses the scratch database unless it holds one task, the one that the consumer echoed. */
+async function requireConsumerTask(database: Client): Promise<string> {
   const { rows } = await database.query<{
+    id: string;
     queue_name: string;
     task_type: string;
     state: string | null;
     packaged: boolean | null;
   }>(
-    `SELECT task.queue_name, task.task_type, outcome.state,
+    `SELECT task.id::text AS id, task.queue_name, task.task_type, outcome.state,
             (outcome.result -> 'echo' ->> 'packaged')::boolean AS packaged
        FROM workhorse.task task
-       LEFT JOIN workhorse.task_outcome outcome ON outcome.task_id = task.id
-      WHERE task.id = $1::uuid`,
-    [taskId],
+       LEFT JOIN workhorse.task_outcome outcome ON outcome.task_id = task.id`,
   );
   const row = rows[0];
-  if (row?.queue_name !== consumerQueue || row.task_type !== consumerTaskType) {
-    throw new Error(`The .NET consumer reported task ${taskId}, but no matching row exists`);
+  if (
+    rows.length !== 1 ||
+    row?.queue_name !== consumerQueue ||
+    row.task_type !== consumerTaskType
+  ) {
+    throw new Error(
+      `The scratch database holds ${rows.length} tasks, not the one ${consumerTaskType} task of the .NET consumer`,
+    );
   }
   if (row.state !== "succeeded" || row.packaged !== true) {
-    throw new Error(`The .NET consumer left task ${taskId} in state ${row.state}`);
+    throw new Error(`The .NET consumer left task ${row.id} in state ${row.state}`);
   }
+  return row.id;
 }
 
-/** Restores the consumer from the feed, checks where each package came from, and runs it. */
-async function runConsumer(version: string, feed: string, temporary: string): Promise<void> {
+/** Runs `pnpm release:verify nuget` against the feed in a scratch database, and reads the task back. */
+async function runConsumer(version: string, feed: string): Promise<void> {
   const url = databaseUrl();
-  const directory = path.join(temporary, "consumer");
-  await cp(consumerDirectory, directory, {
-    recursive: true,
-    filter: (source) => !["bin", "obj"].includes(path.basename(source)),
-  });
-  const config = path.join(directory, "nuget.config");
-  await writeFile(config, consumerNugetConfig(feed));
-  const packages = path.join(temporary, "packages");
-  const environment = { ...process.env, NUGET_PACKAGES: packages };
-  const project = path.join(directory, "ReleaseConsumer.csproj");
-  const versionProperty = `-p:WorkhorseVersion=${version}`;
-
-  await run("dotnet", ["restore", project, "--configfile", config, versionProperty], {
-    env: environment,
-  });
-  for (const id of publishedPackages) {
-    const metadata = path.join(packages, id.toLowerCase(), version, ".nupkg.metadata");
-    const source = (JSON.parse(await readFile(metadata, "utf8")) as { source?: string }).source;
-    if (path.resolve(source ?? "") !== path.resolve(feed)) {
-      throw new Error(`The consumer restored ${id} ${version} from ${source}, not ${feed}`);
-    }
-  }
-  const consume = async (args: readonly string[]) =>
-    (
-      await run(
-        "dotnet",
-        [
-          "run",
-          "--project",
-          project,
-          "--no-restore",
-          "-c",
-          "Release",
-          versionProperty,
-          ...(args.length ? ["--", ...args] : []),
-        ],
-        { capture: true, env: environment },
-      )
-    )
-      .trim()
-      .split("\n");
-  const expectedVersions = consumerVersionLine(version);
-  const requireVersions = (line: string | undefined) => {
-    if (line?.trim() !== expectedVersions) {
-      throw new Error(`The .NET consumer loaded ${line}, not ${expectedVersions}`);
-    }
-  };
-
   if (!url) {
-    requireVersions((await consume([]))[0]);
-    console.log("SKIPPED the .NET consumer task: DATABASE_URL_TEST is unset");
+    console.log("SKIPPED the .NET consumer and release:verify nuget: DATABASE_URL_TEST is unset");
     return;
   }
   await withScratchDatabase(url, async (scratchUrl, database) => {
-    const lines = await consume([connectionString(scratchUrl)]);
-    requireVersions(lines[0]);
-    const taskId = lines.at(-1)?.trim() ?? "";
-    await requireConsumerTask(database, taskId);
+    await verifyRelease(
+      "nuget",
+      version,
+      { nugetFeed: feed },
+      { ...process.env, WORKHORSE_VERIFY_DATABASE_URL: scratchUrl },
+    );
+    const taskId = await requireConsumerTask(database);
     console.log(`The .NET consumer restored the four packages ${version} and ran task ${taskId}`);
   });
 }
@@ -493,7 +406,7 @@ export async function checkDotnetRelease(options: {
         packageBaseline(
           new Map(
             await Promise.all(
-              publishedPackages.map(async (id) => [id, await nugetVersions(id)] as const),
+              dotnetPackages.map(async (id) => [id, await nugetVersions(id)] as const),
             ),
           ),
           version,
@@ -521,7 +434,7 @@ export async function checkDotnetRelease(options: {
     const files = (await readdir(feed)).toSorted();
     const problems = packageFileProblems(files, version);
     if (problems.length === 0) {
-      for (const id of publishedPackages) {
+      for (const id of dotnetPackages) {
         const contents = readZip(await readFile(path.join(feed, `${id}.${version}.nupkg`)));
         problems.push(
           ...packageContentProblems(id, [...contents.keys()]),
@@ -540,12 +453,12 @@ export async function checkDotnetRelease(options: {
     }
     if (problems.length > 0) throw new Error(problems.join("\n"));
     console.log(
-      `Packed and checked ${publishedPackages.join(", ")} ${version} at ${commit}, with package validation ${
+      `Packed and checked ${dotnetPackages.join(", ")} ${version} at ${commit}, with package validation ${
         baseline === undefined ? "without a baseline" : `against ${baseline}`
       }`,
     );
 
-    if (options.consumers) await runConsumer(version, feed, temporary);
+    if (options.consumers) await runConsumer(version, feed);
   } finally {
     await rm(temporary, { recursive: true, force: true });
   }

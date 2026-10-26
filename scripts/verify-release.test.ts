@@ -1,6 +1,13 @@
 import { describe, expect, it } from "vitest";
 import { corePackage, publishedPackages } from "./packages.js";
-import { pythonProvenanceProblems, render, verificationSteps } from "./verify-release.js";
+import {
+  connectionString,
+  consumerNugetConfig,
+  consumerVersionLine,
+  pythonProvenanceProblems,
+  render,
+  verificationSteps,
+} from "./verify-release.js";
 
 describe("verificationSteps", () => {
   it("checks the public Python version attribute and the distribution metadata", async () => {
@@ -119,6 +126,107 @@ describe("verificationSteps", () => {
     );
   });
 
+  it("restores the four .NET packages from nuget.org and runs a task for the cold install", async () => {
+    const steps = await verificationSteps(
+      "nuget",
+      "1.2.3",
+      {},
+      { WORKHORSE_VERIFY_DATABASE_URL: "postgres://user:secret@db:5432/app" },
+    );
+    const config = steps.find((step) => step.args.includes("consumer/nuget.config"));
+    const restore = steps.find((step) => step.args[0] === "restore");
+    const run = steps.at(-1);
+
+    expect(config?.args.at(-1)).toBe(consumerNugetConfig());
+    // An empty package folder and no HTTP cache, so a restore after a publish asks nuget.org again.
+    expect(restore?.args).toEqual([
+      "restore",
+      "consumer/ReleaseConsumer.csproj",
+      "--configfile",
+      "consumer/nuget.config",
+      "--packages",
+      "packages",
+      "--no-http-cache",
+      "-p:WorkhorseVersion=1.2.3",
+    ]);
+    // The scratch directory is outside the checkout, so each dotnet and node step names the pins.
+    for (const step of steps.filter((entry) => ["dotnet", "node"].includes(entry.command))) {
+      expect(step.environment).toMatchObject({
+        DOTNET_NOLOGO: "1",
+        MISE_DOTNET_VERSION: expect.any(String),
+        MISE_NODE_VERSION: "24",
+      });
+    }
+    expect(
+      steps.filter((step) => step.args[0] === "-p").map((step) => [step.args[1], step.expect]),
+    ).toEqual(
+      [
+        "workhorse",
+        "workhorse.hosting",
+        "workhorse.entityframeworkcore",
+        "workhorse.aspnetcore",
+      ].map((id) => [
+        `JSON.parse(require("node:fs").readFileSync("packages/${id}/1.2.3/.nupkg.metadata", "utf8")).source`,
+        "https://api.nuget.org/v3/index.json",
+      ]),
+    );
+    expect(run?.args.slice(0, 8)).toEqual([
+      "run",
+      "--project",
+      "consumer/ReleaseConsumer.csproj",
+      "--no-restore",
+      "-c",
+      "Release",
+      "-p:WorkhorseVersion=1.2.3",
+      "--",
+    ]);
+    expect(run?.args.at(-1)).toBe(
+      "Host='db';Port='5432';Database='app';Username='user';Password='secret'",
+    );
+    expect(render(run!)).toContain("Password=***");
+    expect(render(run!)).not.toContain("secret");
+    // The consumer prints the version of each package assembly, then the id of the task it ran.
+    const versions = consumerVersionLine("1.2.3");
+    expect(run?.expectPattern?.test(`${versions}\n0b0e6d1e-5c1a-4d3e-9f00-1a2b3c4d5e6f`)).toBe(
+      true,
+    );
+    expect(run?.expectPattern?.test(versions)).toBe(false);
+    expect(
+      run?.expectPattern?.test(
+        `${consumerVersionLine("1.2.4")}\n0b0e6d1e-5c1a-4d3e-9f00-1a2b3c4d5e6f`,
+      ),
+    ).toBe(false);
+  });
+
+  it("refuses a .NET cold install without a database to run the task in", async () => {
+    await expect(verificationSteps("nuget", "1.2.3", {}, {})).rejects.toThrow(
+      "The nuget target needs WORKHORSE_VERIFY_DATABASE_URL",
+    );
+  });
+
+  it("takes the four .NET packages from the local feed for the rehearsal", async () => {
+    const steps = await verificationSteps(
+      "nuget",
+      "1.2.3",
+      { nugetFeed: "/tmp/feed" },
+      { WORKHORSE_VERIFY_DATABASE_URL: "postgres://localhost/app" },
+    );
+
+    expect(steps.find((step) => step.args.includes("consumer/nuget.config"))?.args.at(-1)).toBe(
+      consumerNugetConfig("/tmp/feed"),
+    );
+    expect(steps.find((step) => step.args[0] === "restore")?.args).not.toContain("--no-http-cache");
+    expect(steps.filter((step) => step.args[0] === "-p").map((step) => step.expect)).toEqual([
+      "/tmp/feed",
+      "/tmp/feed",
+      "/tmp/feed",
+      "/tmp/feed",
+    ]);
+    await expect(verificationSteps("maven", "1.2.3", { nugetFeed: "/tmp/feed" })).rejects.toThrow(
+      "--nuget-feed applies only to the nuget target",
+    );
+  });
+
   it("installs every packed tarball instead of the npm release for the rehearsal", async () => {
     const packages = await publishedPackages();
     const steps = await verificationSteps("npm", "1.2.3", { tarballs: "/dist" });
@@ -160,6 +268,40 @@ describe("verificationSteps", () => {
     );
     await expect(verificationSteps("npm", "1.2.3", { goProxy: "/tmp/p" })).rejects.toThrow(
       "--go-proxy applies only to the go target",
+    );
+  });
+});
+
+describe("the .NET release consumer", () => {
+  it("takes the four packages only from nuget.org, or only from the local feed", () => {
+    const registry = consumerNugetConfig();
+    expect(registry).toContain("<clear />");
+    expect(registry).toContain(
+      '<add key="nuget.org" value="https://api.nuget.org/v3/index.json" protocolVersion="3" />',
+    );
+    expect(registry).not.toContain("workhorse-release");
+
+    const config = consumerNugetConfig("/tmp/feed & co");
+    expect(config).toContain("<clear />");
+    expect(config).toContain('<add key="workhorse-release" value="/tmp/feed &amp; co" />');
+    expect(config).toMatch(
+      /<packageSource key="workhorse-release">\s*<package pattern="Workhorse" \/>\s*<package pattern="Workhorse\.\*" \/>\s*<\/packageSource>/,
+    );
+    expect(config).toMatch(/<packageSource key="nuget.org">\s*<package pattern="\*" \/>/);
+  });
+
+  it("expects the train version from each package assembly", () => {
+    expect(consumerVersionLine("0.9.0")).toBe(
+      "Workhorse=0.9.0 Workhorse.Hosting=0.9.0 Workhorse.EntityFrameworkCore=0.9.0 Workhorse.AspNetCore=0.9.0",
+    );
+  });
+
+  it("passes the database to Npgsql as a quoted connection string", () => {
+    expect(connectionString("postgres://work%40horse:pa'ss@localhost:5433/workhorse_test_x")).toBe(
+      "Host='localhost';Port='5433';Database='workhorse_test_x';Username='work@horse';Password='pa''ss'",
+    );
+    expect(connectionString("postgres://localhost/workhorse_test")).toBe(
+      "Host='localhost';Port='5432';Database='workhorse_test'",
     );
   });
 });

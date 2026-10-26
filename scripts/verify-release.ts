@@ -16,12 +16,14 @@ import { corePackage, publishedPackages, repositoryRoot } from "./packages.js";
  * attestation from this repository's release workflow on every published file; the dry run proves
  * the same upload path with `scripts/check-attestation-upload.ts`. The Maven target builds the Java
  * and Kotlin consumers of `jvm/release-consumer`, the cold install of ADR 0103, against Maven
- * Central or against the staging directory that `scripts/check-jvm-release.ts` writes. The npm, crates.io, and Go
- * provenance review and the enqueue-and-worker smoke stay with the maintainer;
+ * Central or against the staging directory that `scripts/check-jvm-release.ts` writes. The NuGet
+ * target restores `dotnet/release-consumer` with an empty package folder, from nuget.org or from the
+ * local feed that `scripts/check-dotnet-release.ts` packs, and runs one task through it. The npm,
+ * crates.io, and Go provenance review and the enqueue-and-worker smoke stay with the maintainer;
  * `docs/compatibility.md` → Release train lists them.
  */
 
-type VerifyTarget = "crate" | "go" | "maven" | "npm" | "python";
+type VerifyTarget = "crate" | "go" | "maven" | "npm" | "nuget" | "python";
 
 export interface VerificationStep {
   /** Program, resolved from PATH unless it names a path inside the scratch directory. */
@@ -50,6 +52,8 @@ export interface VerificationOptions {
   readonly goProxy?: string;
   /** maven: a staged Maven repository that serves `run.workhorse` instead of Maven Central. */
   readonly mavenRepo?: string;
+  /** nuget: a directory of packed `.nupkg` files that serves the four packages instead of nuget.org. */
+  readonly nugetFeed?: string;
 }
 
 type ArtifactOption = keyof VerificationOptions;
@@ -59,6 +63,7 @@ const artifactOptions: Readonly<Record<VerifyTarget, ArtifactOption>> = {
   go: "goProxy",
   maven: "mavenRepo",
   npm: "tarballs",
+  nuget: "nugetFeed",
   python: "wheel",
 };
 
@@ -67,6 +72,7 @@ const artifactFlags: Readonly<Record<ArtifactOption, string>> = {
   crate: "--crate",
   goProxy: "--go-proxy",
   mavenRepo: "--maven-repo",
+  nugetFeed: "--nuget-feed",
   tarballs: "--tarballs",
   wheel: "--wheel",
 };
@@ -213,18 +219,28 @@ export async function consumerProperties(version: string): Promise<string[]> {
  * The scratch directory is outside the checkout, where a mise shim finds no pinned version. These
  * variables give the shims the versions of `mise.toml`. A CI runner without mise ignores them.
  */
-async function jvmToolchainEnvironment(): Promise<Record<string, string>> {
+async function toolchainEnvironment(tools: readonly string[]): Promise<Record<string, string>> {
   const pins = await readFile(path.join(repositoryRoot, "mise.toml"), "utf8");
   const environment: Record<string, string> = {};
-  for (const tool of ["gradle", "java"]) {
+  for (const tool of tools) {
     const value = new RegExp(`^${tool} = "([^"]+)"$`, "m").exec(pins)?.[1];
     if (value) environment[`MISE_${tool.toUpperCase()}_VERSION`] = value;
   }
   return environment;
 }
 
-/** The PostgreSQL database that the Maven target runs its tasks in. */
+/** The PostgreSQL database that the Maven and NuGet targets run their tasks in. */
 const verifyDatabaseVariable = "WORKHORSE_VERIFY_DATABASE_URL";
+
+function verifyDatabase(target: VerifyTarget, ambient: NodeJS.ProcessEnv): string {
+  const database = ambient[verifyDatabaseVariable];
+  if (!database) {
+    throw new Error(
+      `The ${target} target needs ${verifyDatabaseVariable}, the URL of a PostgreSQL database with the Workhorse schema`,
+    );
+  }
+  return database;
+}
 
 /** A JDBC URL for a `postgres://` URL, with the credentials as parameters. */
 export function jdbcUrl(url: string): string {
@@ -247,13 +263,8 @@ async function mavenSteps(
   options: VerificationOptions,
   ambient: NodeJS.ProcessEnv,
 ): Promise<VerificationStep[]> {
-  const database = ambient[verifyDatabaseVariable];
-  if (!database) {
-    throw new Error(
-      `The maven target needs ${verifyDatabaseVariable}, the URL of a PostgreSQL database with the Workhorse schema`,
-    );
-  }
-  const environment = await jvmToolchainEnvironment();
+  const database = verifyDatabase("maven", ambient);
+  const environment = await toolchainEnvironment(["gradle", "java"]);
   const properties = [
     ...(await consumerProperties(version)),
     ...(options.mavenRepo === undefined ? [] : [`-PworkhorseRepository=${options.mavenRepo}`]),
@@ -284,6 +295,153 @@ async function mavenSteps(
       ),
     },
   ]);
+}
+
+/** The four .NET packages of ADR 0107, in the order that they publish. */
+export const dotnetPackages = [
+  "Workhorse",
+  "Workhorse.Hosting",
+  "Workhorse.EntityFrameworkCore",
+  "Workhorse.AspNetCore",
+] as const;
+
+const nugetSource = "https://api.nuget.org/v3/index.json";
+
+/** The Npgsql connection string of a `postgres://` URL. */
+export function connectionString(url: string): string {
+  const parsed = new URL(url);
+  const parts: [string, string][] = [
+    ["Host", decodeURIComponent(parsed.hostname)],
+    ["Port", parsed.port || "5432"],
+    ["Database", decodeURIComponent(parsed.pathname.slice(1))],
+  ];
+  if (parsed.username) parts.push(["Username", decodeURIComponent(parsed.username)]);
+  if (parsed.password) parts.push(["Password", decodeURIComponent(parsed.password)]);
+  return parts.map(([key, value]) => `${key}='${value.replaceAll("'", "''")}'`).join(";");
+}
+
+/**
+ * The `nuget.config` of the release consumer. It clears every source of the user and the machine.
+ * Without a feed, nuget.org is the only source. With a feed, the four packages come only from the
+ * feed, and every other package comes from nuget.org.
+ */
+export function consumerNugetConfig(feed?: string): string {
+  const nugetOrg = `    <add key="nuget.org" value="${nugetSource}" protocolVersion="3" />`;
+  if (feed === undefined) {
+    return `<?xml version="1.0" encoding="utf-8"?>
+<configuration>
+  <packageSources>
+    <clear />
+${nugetOrg}
+  </packageSources>
+</configuration>
+`;
+  }
+  const value = feed.replaceAll("&", "&amp;").replaceAll('"', "&quot;");
+  return `<?xml version="1.0" encoding="utf-8"?>
+<configuration>
+  <packageSources>
+    <clear />
+    <add key="workhorse-release" value="${value}" />
+${nugetOrg}
+  </packageSources>
+  <packageSourceMapping>
+    <packageSource key="workhorse-release">
+      <package pattern="Workhorse" />
+      <package pattern="Workhorse.*" />
+    </packageSource>
+    <packageSource key="nuget.org">
+      <package pattern="*" />
+    </packageSource>
+  </packageSourceMapping>
+</configuration>
+`;
+}
+
+/** The line the consumer prints first: the informational version of each package assembly. */
+export function consumerVersionLine(version: string): string {
+  return dotnetPackages.map((id) => `${id}=${version}`).join(" ");
+}
+
+/**
+ * The consumer restores the four packages at the exact version into an empty package folder in the
+ * scratch directory, so no package of an earlier restore takes the place of a published file. Each
+ * package must come from nuget.org, or from the feed for the rehearsal. The consumer then runs one
+ * task in the database that `WORKHORSE_VERIFY_DATABASE_URL` names through the hosted worker of
+ * `Workhorse.Hosting`. It checks that the task succeeded, and prints the versions and the task id.
+ */
+async function nugetSteps(
+  version: string,
+  options: VerificationOptions,
+  ambient: NodeJS.ProcessEnv,
+): Promise<VerificationStep[]> {
+  const database = verifyDatabase("nuget", ambient);
+  const environment = {
+    DOTNET_NOLOGO: "1",
+    ...(await toolchainEnvironment(["dotnet", "node"])),
+  };
+  const project = "consumer/ReleaseConsumer.csproj";
+  const versionProperty = `-p:WorkhorseVersion=${version}`;
+  const source = options.nugetFeed ?? nugetSource;
+  return [
+    {
+      command: "cp",
+      args: ["-R", path.join(repositoryRoot, "dotnet", "release-consumer"), "consumer"],
+    },
+    { command: "rm", args: ["-rf", "consumer/bin", "consumer/obj"] },
+    {
+      command: "node",
+      args: [
+        "-e",
+        'require("node:fs").writeFileSync(process.argv[1], process.argv[2])',
+        "consumer/nuget.config",
+        consumerNugetConfig(options.nugetFeed),
+      ],
+      environment,
+    },
+    {
+      command: "dotnet",
+      // After a publish, NuGet asks nuget.org again instead of trusting a cached version list.
+      args: [
+        "restore",
+        project,
+        "--configfile",
+        "consumer/nuget.config",
+        "--packages",
+        "packages",
+        ...(options.nugetFeed === undefined ? ["--no-http-cache"] : []),
+        versionProperty,
+      ],
+      environment,
+    },
+    ...dotnetPackages.map((id) => ({
+      command: "node",
+      args: [
+        "-p",
+        `JSON.parse(require("node:fs").readFileSync("packages/${id.toLowerCase()}/${version.toLowerCase()}/.nupkg.metadata", "utf8")).source`,
+      ],
+      environment,
+      expect: source,
+    })),
+    {
+      command: "dotnet",
+      args: [
+        "run",
+        "--project",
+        project,
+        "--no-restore",
+        "-c",
+        "Release",
+        versionProperty,
+        "--",
+        connectionString(database),
+      ],
+      environment,
+      expectPattern: new RegExp(
+        `^${consumerVersionLine(version).replaceAll(".", "\\.")}\\n[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`,
+      ),
+    },
+  ];
 }
 
 /**
@@ -407,13 +565,15 @@ export async function verificationSteps(
       return goSteps(version, options);
     case "maven":
       return await mavenSteps(version, options, ambient);
+    case "nuget":
+      return await nugetSteps(version, options, ambient);
   }
 }
 
 /** The step as a shell line, with a database password replaced. */
 export function render(step: VerificationStep): string {
   const quoted = [step.command, ...step.args]
-    .map((part) => part.replace(/password=[^&\s]+/g, "password=***"))
+    .map((part) => part.replace(/(password=)('(?:[^']|'')*'|[^&;\s]+)/gi, "$1***"))
     .map((part) =>
       /^[\w@=./:+-]+$/.test(part) ? part : `'${part.replaceAll("'", String.raw`'\''`)}'`,
     );
@@ -502,6 +662,7 @@ function isTarget(value: string | undefined): value is VerifyTarget {
     value === "go" ||
     value === "maven" ||
     value === "npm" ||
+    value === "nuget" ||
     value === "python"
   );
 }
@@ -518,9 +679,9 @@ if (process.argv[1] && path.resolve(process.argv[1]) === path.resolve(import.met
   const artifactValid = flag === undefined || (option !== undefined && artifact !== undefined);
   if (!isTarget(target) || !version || !artifactValid || rest.length > 0) {
     process.stderr.write(
-      "Usage: pnpm release:verify <python|npm|crate|go|maven> <X.Y.Z> " +
+      "Usage: pnpm release:verify <python|npm|crate|go|maven|nuget> <X.Y.Z> " +
         "[--wheel <file> | --tarballs <directory> | --crate <directory> | --go-proxy <directory> | " +
-        "--maven-repo <directory>]\n",
+        "--maven-repo <directory> | --nuget-feed <directory>]\n",
     );
     process.exitCode = 64;
   } else {
