@@ -289,8 +289,12 @@ jobs:
   # `MAVEN_CENTRAL_PASSWORD` in the step that uploads. No other step receives them. Until the
   # maintainer adds them, the job writes a notice and publishes nothing.
   #
-  # The upload uses `publishingType=USER_MANAGED`. The Portal validates the deployment and holds it,
-  # and the maintainer publishes it in the Portal. Central never deletes a published version.
+  # The upload uses `publishingType=AUTOMATIC` (SM-1837). The Portal validates the deployment and,
+  # if it passes, publishes it to Central with no Portal step by a person. Central never deletes a
+  # published version, so the checks come before the upload: the reviewer of the `maven-central`
+  # environment approves the job, the release consumers run the bytes that the job uploads, and the
+  # Portal validates the bundle. The upload step ends only when the Portal reports `PUBLISHED`, and
+  # fails on `FAILED` or after 60 minutes. Thus `github-release` runs only after a real publish.
   #
   # The job uploads the bytes that its own consumers ran (SM-1506). One step signs the artifacts and
   # writes the bundle. The next step, without a secret, runs the release consumers from the same
@@ -299,8 +303,8 @@ jobs:
     if: startsWith(github.ref, 'refs/tags/v') && inputs.dry-run != true
     needs: publish
     runs-on: depot-ubuntu-24.04
-    # The consumers and the Portal validation, which can take 15 minutes.
-    timeout-minutes: 45
+    # The consumers, then up to 60 minutes of Portal validation and publishing.
+    timeout-minutes: 90
     environment: maven-central
     permissions:
       contents: read

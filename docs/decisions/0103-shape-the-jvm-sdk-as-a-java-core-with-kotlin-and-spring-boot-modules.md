@@ -1038,7 +1038,8 @@ SM-1384.
 
 Maven Central never deletes a published version. `USER_MANAGED` therefore keeps a human check
 before a version becomes permanent. After two clean releases, the maintainer can change the stage
-to `AUTOMATIC`. That changes no governed surface.
+to `AUTOMATIC`. That changes no governed surface. SM-1837 made that change after the clean 0.9.0 and 0.10.0
+releases. The upload step now waits until the Portal reports `PUBLISHED`.
 
 `docs/compatibility.md` gains a JVM section that mirrors the Ruby gem section.
 
