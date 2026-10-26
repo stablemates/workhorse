@@ -456,16 +456,38 @@ RSpec.describe "Worker runtime against PostgreSQL" do
   it "registers the worker process and stops claiming while an operator pauses it" do
     admin = W::Admin.new(@connection)
     subject = worker(registry_interval: 0.1, disable_registry: false).handle("echo") { |payload| payload }
+    # A pause stops later claims. A claim that starts before the worker reads the pause still runs
+    # the tasks it returns (SM-1797). So the example counts the claims that start and are in flight.
+    # A claim thread ends with one push of its outcome to the results queue of the dispatch loop.
+    started = Concurrent::AtomicFixnum.new
+    in_flight = Concurrent::AtomicFixnum.new
+    allow(subject).to receive(:start_claim).and_wrap_original do |original, *arguments|
+      started.increment
+      in_flight.increment
+      results = arguments[5]
+      settled = Object.new
+      settled.define_singleton_method(:<<) do |outcome|
+        in_flight.decrement
+        results << outcome
+      end
+      arguments[5] = settled
+      original.call(*arguments)
+    end
     running(subject) do
       entry = nil
       wait_until { entry = admin.list_workers.find { |candidate| candidate.worker_id == subject.worker_id } }
       expect([entry.pid, entry.queues, entry.concurrency]).to eq([Process.pid, [@queue_name], 1])
 
       expect(admin.set_worker_paused(subject.worker_id, true, audit: audit)).not_to be_nil
-      sleep 0.3
+      # The dispatch loop reads the pause before it starts a claim. So after paused?, the claims in
+      # flight started before the pause read. The example enqueues only after each of them answers.
+      wait_until { subject.paused? }
+      wait_until { in_flight.value.zero? }
+      claims_before_enqueue = started.value
       task_id = queue.enqueue("echo", {}).task_id
       sleep 0.5
       expect(state(task_id)).to eq("ready")
+      expect(started.value).to eq(claims_before_enqueue)
 
       admin.set_worker_paused(subject.worker_id, false, audit: audit)
       wait_until { state(task_id) == "succeeded" }

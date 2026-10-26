@@ -398,6 +398,25 @@ describe("worker registry", () => {
     // The pause is written through a separate Queue instance holding no reference to the worker
     // object, which is exactly the situation of a dashboard running outside the worker process.
     const handled: number[] = [];
+    // A pause stops later claims. A claim that starts before the worker reads the pause still runs
+    // the tasks it returns (SM-1797). So the test counts the claims that start and are in flight.
+    let claimsStarted = 0;
+    let claimsInFlight = 0;
+    const counted =
+      <Args extends unknown[]>(claim: (...args: Args) => Promise<ClaimedTask[]>) =>
+      async (...args: Args) => {
+        claimsStarted += 1;
+        claimsInFlight += 1;
+        try {
+          return await claim(...args);
+        } finally {
+          claimsInFlight -= 1;
+        }
+      };
+    const realClaimMany = queue.claimMany.bind(queue);
+    const realClaimFast = queue.claimFast.bind(queue);
+    const claimMany = vi.spyOn(queue, "claimMany").mockImplementation(counted(realClaimMany));
+    const claimFast = vi.spyOn(queue, "claimFast").mockImplementation(counted(realClaimFast));
     const worker = new Worker(queue, {
       workerId: "registry-remote-pause",
       pollMs: 10,
@@ -428,14 +447,17 @@ describe("worker registry", () => {
         locallyPaused: false,
       });
 
-      // Let a claim already submitted before the remote pause finish against the empty queue.
-      // A local resume must then leave the remote pause latched for subsequently enqueued work.
+      // The worker reads the pause before it starts a claim. So after isPaused(), the claims in
+      // flight started before the pause read. The test enqueues only after each of them answers.
+      await vi.waitFor(() => expect(claimsInFlight).toBe(0), stallWait);
+      const claimsBeforeEnqueue = claimsStarted;
+      // A local resume must leave the remote pause latched for subsequently enqueued work.
       worker.resume();
-      await sleep(300);
       expect(worker.isPaused()).toBe(true);
       await queue.enqueue("registry-remote-pause", { sequence: 1 });
       await sleep(300);
       expect(handled).toEqual([]);
+      expect(claimsStarted).toBe(claimsBeforeEnqueue);
       expect(worker.isPaused()).toBe(true);
 
       await admin.setWorkerPaused("registry-remote-pause", false, adminAudit("resume worker"));
@@ -443,7 +465,12 @@ describe("worker registry", () => {
       expect(worker.runtimeState()).toMatchObject({ paused: false, remotelyPaused: false });
     } finally {
       worker.stop();
-      await running;
+      try {
+        await running;
+      } finally {
+        claimMany.mockRestore();
+        claimFast.mockRestore();
+      }
     }
   });
 
