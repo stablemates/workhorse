@@ -90,7 +90,7 @@ RUN --mount=type=cache,target=/root/.nuget/packages \
       -p:UseAppHost=false
 
 # The .NET runtime that runs the .NET worker. It matches the runtime of the SDK above.
-FROM mcr.microsoft.com/dotnet/runtime:10.0.13-alpine3.24@sha256:6a97a629f6c44e7263b41175e79cb9aeb1df631d3714e74e80a4ddd016258646 AS dotnet-runtime
+FROM mcr.microsoft.com/dotnet/runtime:10.0.14-alpine3.24@sha256:54d48f739ebffdef82388056d420af37ed39c722b8d5ee5dedca6878537c2737 AS dotnet-runtime
 
 FROM ghcr.io/astral-sh/uv:0.13.5@sha256:32a7bb39b496babbd997b0a39a4d66c126bdaf5661b302bf6f06abda8deca6ff AS uv
 
