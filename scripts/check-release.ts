@@ -5,11 +5,12 @@ import { publishedPackages, repositoryRoot } from "./packages.js";
 /**
  * The release check that every release tag runs before anything publishes.
  *
- * One release puts one version on npm, PyPI, the Go module proxy, crates.io, RubyGems, and Maven
- * Central from one commit. The crate, gem, and Maven Central jobs of `.github/workflows/release.yml`
- * skip publication when their version disagrees with the tag, and the job still succeeds. So this check, not the publish jobs,
- * has to refuse a candidate that leaves one line behind. It reads every file that carries the
- * release version and reports every disagreement at once, whichever tag runs it.
+ * One release puts one version on npm, PyPI, the Go module proxy, crates.io, RubyGems, Maven
+ * Central, and nuget.org from one commit. The crate, gem, Maven Central, and nuget.org jobs of
+ * `.github/workflows/release.yml` skip publication when their version disagrees with the tag, and
+ * the job still succeeds. So this check, not the publish jobs, has to refuse a candidate that
+ * leaves one line behind. It reads every file that carries the release version and reports every
+ * disagreement at once, whichever tag runs it.
  */
 
 const releaseVersionPattern = "[0-9]+\\.[0-9]+\\.[0-9]+(?:[ab][0-9]+|rc[0-9]+|-[-0-9A-Za-z.]+)?";
@@ -18,7 +19,7 @@ type ReleaseTarget = "go" | "npm" | "python";
 
 /** One release, spelled the way each ecosystem requires. */
 interface TrainVersion {
-  /** SemVer: npm, Go, crates.io, Maven Central, and the Ruby `VERSION` constant. */
+  /** SemVer: npm, Go, crates.io, Maven Central, nuget.org, and the Ruby `VERSION` constant. */
   readonly semver: string;
   /** PEP 440: the Python distribution. */
   readonly pep440: string;
@@ -209,6 +210,23 @@ async function rubyLockfiles(root: string): Promise<string[]> {
   ];
 }
 
+/**
+ * The four .NET packages share one version. The `nuget` job reads every `<Version>` element of the
+ * file with `sed` and publishes only when the result equals the tag, so the file must hold one.
+ */
+async function checkDotnetVersion(files: ReleaseFiles, version: TrainVersion): Promise<void> {
+  const relativePath = "dotnet/Directory.Build.props";
+  const contents = await files.read(relativePath);
+  if (contents === undefined) return;
+  const declared = [...contents.matchAll(/<Version>([^<]*)<\/Version>/g)].map((match) => match[1]);
+  if (declared.length === 0) files.problems.push(`${relativePath} declares no Version`);
+  else if (declared.length > 1) {
+    files.problems.push(`${relativePath} declares ${declared.length} Version elements, not one`);
+  } else if (declared[0] !== version.semver) {
+    files.problems.push(`${relativePath} is ${declared[0]} but the tag is ${version.semver}`);
+  }
+}
+
 async function checkOtherLines(files: ReleaseFiles, version: TrainVersion): Promise<void> {
   await files.requireVersion(
     "python/pyproject.toml",
@@ -238,6 +256,7 @@ async function checkOtherLines(files: ReleaseFiles, version: TrainVersion): Prom
   }
   // The three JVM artifacts share one version (ADR 0103).
   await files.requireVersion("jvm/gradle.properties", /^version=(\S+)$/m, version.semver);
+  await checkDotnetVersion(files, version);
   await files.requireVersion(
     "ruby/lib/stablemates/workhorse/version.rb",
     /^\s*VERSION = "([^"]+)"$/m,
