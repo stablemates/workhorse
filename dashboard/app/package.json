@@ -76,7 +76,7 @@
     "react-dom": "^19.3.1",
     "react-grab": "^0.2.0",
     "typescript": "^5.8.3",
-    "vite": "^8.3.4",
+    "vite": "^8.3.5",
     "vitest": "^4.1.12"
   },
   "peerDependencies": {
