@@ -32,6 +32,7 @@ const commands: Array<{
       ...process.env,
       PORT: String(publicPort),
       WORKHORSE_DEMO_MODE: mode,
+      WORKHORSE_DEMO_SERVICE_NAME: "workhorse-demo-server",
       NODE_OPTIONS: nodeOptions,
     },
   },
@@ -165,6 +166,31 @@ for (const signal of ["SIGINT", "SIGTERM"] as const) {
     shutdownRequested = true;
     stop(signal);
   });
+}
+
+// Each process connects under its service name, so `pg_stat_activity` names the process that holds a
+// session (SM-1819). The name replaces an `application_name` in the URL. The other parameters keep
+// their text, because a form encoder writes a space as `+`, which libpq does not decode. A fragment
+// stays last, so the driver does not read the name as fragment text.
+function withApplicationName(url: string, name: string) {
+  const hash = url.indexOf("#");
+  const fragment = hash === -1 ? "" : url.slice(hash);
+  const head = hash === -1 ? url : url.slice(0, hash);
+  const start = head.indexOf("?");
+  const parameters = start === -1 ? [] : head.slice(start + 1).split("&");
+  const kept = parameters.filter(
+    (pair) => pair !== "" && pair.split("=")[0] !== "application_name",
+  );
+  const base = start === -1 ? head : head.slice(0, start);
+  return `${base}?${[...kept, `application_name=${encodeURIComponent(name)}`].join("&")}${fragment}`;
+}
+
+for (const { env } of commands) {
+  const name = env.WORKHORSE_DEMO_SERVICE_NAME;
+  for (const variable of ["DATABASE_URL_PRIMARY", "DATABASE_URL_SECONDARY"]) {
+    const url = env[variable];
+    if (url && name) env[variable] = withApplicationName(url, name);
+  }
 }
 
 for (const { command, arguments: arguments_, env } of commands) {

@@ -7,7 +7,10 @@ import { describe, expect, it } from "vitest";
 async function launchPlan(
   path: string,
   secondary?: string,
-  { serverAnswers = true }: { serverAnswers?: boolean } = {},
+  {
+    serverAnswers = true,
+    primary = "postgres://primary/demo",
+  }: { serverAnswers?: boolean; primary?: string } = {},
 ) {
   const launches: { command: string; args: string[]; env: NodeJS.ProcessEnv }[] = [];
   // How many processes had started when the launcher first asked the server for `/up`.
@@ -22,7 +25,7 @@ async function launchPlan(
   await runInNewContext(`(async () => { ${code} })()`, {
     process: {
       env: {
-        DATABASE_URL_PRIMARY: "postgres://primary/demo",
+        DATABASE_URL_PRIMARY: primary,
         ...(secondary ? { DATABASE_URL_SECONDARY: secondary } : {}),
       },
       execPath: "node",
@@ -65,15 +68,41 @@ describe.each(["scripts/dev.ts", "typescript/demo/container-entrypoint.mjs"])("%
     const staging = withStaging.filter(({ env }) => env.WORKHORSE_DEMO_WORKSPACE === "staging");
     expect(staging).toHaveLength(1);
     expect(staging[0]!.env).toMatchObject({
-      DATABASE_URL_PRIMARY: "postgres://secondary/staging",
+      DATABASE_URL_PRIMARY:
+        "postgres://secondary/staging?application_name=workhorse-demo-worker-staging",
       WORKHORSE_DEMO_SERVICE_NAME: "workhorse-demo-worker-staging",
     });
     expect(
       withStaging
         .slice(0, 8)
-        .every(({ env }) => env.DATABASE_URL_PRIMARY === "postgres://primary/demo"),
+        .every(({ env }) => env.DATABASE_URL_PRIMARY?.startsWith("postgres://primary/demo?")),
     ).toBe(true);
     expect(staging[0]!.args).toEqual(withStaging[1]!.args);
+  });
+
+  // `pg_stat_activity` must name the process of each session, for example the one that holds
+  // `LISTEN workhorse_tasks` (SM-1819).
+  it("connects each process under its service name and keeps the other URL parameters", async () => {
+    const { launches } = await launchPlan(
+      path,
+      "postgres://secondary/staging?sslmode=disable#note",
+      {
+        primary:
+          "postgres://user:p%2Bw@/demo?host=/run/postgresql&application_name=operator&options=-c%20statement_timeout%3D0",
+      },
+    );
+    for (const { env } of launches) {
+      const name = env.WORKHORSE_DEMO_SERVICE_NAME ?? "workhorse-demo-server";
+      const suffix = `application_name=${name}`;
+      const secondary = `postgres://secondary/staging?sslmode=disable&${suffix}#note`;
+      const primary =
+        env.WORKHORSE_DEMO_WORKSPACE === "staging"
+          ? secondary
+          : `postgres://user:p%2Bw@/demo?host=/run/postgresql&options=-c%20statement_timeout%3D0&${suffix}`;
+      expect(env.DATABASE_URL_PRIMARY).toBe(primary);
+      expect(env.DATABASE_URL_SECONDARY).toBe(secondary);
+    }
+    expect(new Set(launches.map(({ env }) => env.DATABASE_URL_PRIMARY)).size).toBe(launches.length);
   });
 });
 

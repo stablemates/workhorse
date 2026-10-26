@@ -237,9 +237,10 @@ public sealed class DemoWorkerTests(ScratchDatabase database) : IClassFixture<Sc
         Assert.Equal(SslMode.Disable, builder.SslMode);
         Assert.Equal("demo", builder.ApplicationName);
         Assert.Equal(10, builder.MaxPoolSize);
+        Assert.Equal(GssEncryptionMode.Disable, builder.GssEncryptionMode);
         Assert.Equal(
-            GssEncryptionMode.Disable,
-            new NpgsqlConnectionStringBuilder(ConnectionString("postgres://h/d?gssencmode=disable")).GssEncryptionMode);
+            GssEncryptionMode.Prefer,
+            new NpgsqlConnectionStringBuilder(ConnectionString("postgres://h/d?gssencmode=prefer")).GssEncryptionMode);
 
         var socket = new NpgsqlConnectionStringBuilder(ConnectionString("postgresql://demo@/demo?host=/run/demo-postgres"));
         Assert.Equal("/run/demo-postgres", socket.Host);

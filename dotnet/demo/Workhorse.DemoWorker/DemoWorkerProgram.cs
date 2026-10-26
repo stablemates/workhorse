@@ -205,6 +205,12 @@ internal static partial class DemoWorkerProgram
     /// <c>+</c>. The pool holds a connection for each handler slot, the heartbeat, the notification
     /// listener, and the dispatch loop at once.
     /// </summary>
+    /// <remarks>
+    /// GSS encryption is off unless the URL names <c>gssencmode</c>. Under Npgsql's default,
+    /// <c>Prefer</c>, each TCP connection loads <c>libgssapi_krb5.so.2</c>. The image does not
+    /// contain it, so the runtime writes a load error to standard error and Npgsql connects without
+    /// GSS encryption. The other demo workers do not use GSS encryption either (SM-1819).
+    /// </remarks>
     /// <exception cref="ArgumentException">The URL is not a PostgreSQL URL, or it names a parameter the program does not map.</exception>
     internal static string ConnectionString(string url)
     {
@@ -228,6 +234,7 @@ internal static partial class DemoWorkerProgram
             Port = uri.IsDefaultPort || uri.Port < 0 ? 5432 : uri.Port,
             Database = Uri.UnescapeDataString(uri.AbsolutePath.TrimStart('/')),
             MaxPoolSize = WorkerConcurrency + 4,
+            GssEncryptionMode = GssEncryptionMode.Disable,
         };
         var userInfo = uri.UserInfo.Split(':', 2);
         if (userInfo[0].Length > 0)
