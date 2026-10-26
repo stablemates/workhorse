@@ -27,7 +27,7 @@ Now `NewWorker` refuses a `PollInterval` that is not a whole number of milliseco
 2,147,483,647 with its usual option error. Every SDK accepts this range (ADR 0112). A zero
 `PollInterval` still selects the default.
 
-### The dashboard handler refuses a cross-origin read and an `Origin: null` mutation
+### Security fix: the dashboard handler refuses a cross-origin read and an `Origin: null` mutation
 
 A wrapping handler can add CORS headers to `dashboard.NewHandler` responses. If that policy allowed
 credentials, a page on another origin could read the dashboard, task payloads included, with the
@@ -35,10 +35,18 @@ operator's cookies (SM-1675). Now the handler answers 403 with
 `{"error":"A same-origin request is required"}` for a page, an asset, or a read procedure whose
 `Origin` header names another origin.
 
-The same-origin check also resolved a relative `Origin` against the request URL. A sandboxed frame
-sends `Origin: null`, so the check accepted a mutation from it. Now it parses `Origin` on its own
-and refuses it. It also refuses a request with more than one `Origin` header, also
-for a mutation, because the check read only the first one.
+This entry is a security fix. The same-origin check resolved a relative `Origin` against the
+request URL. A sandboxed frame on another site sends `Origin: null`. If the request URL had a
+scheme and the host of the `Host` header, `null` resolved to the request origin. The check then
+accepted a mutation from that frame, such as `purgeQueue`, with the operator's cookie.
+
+For a normal request, the `net/http` server gives a URL with only a path. But an absolute request
+target, a wrapping handler, or the `net/http/cgi` and `net/http/fcgi` adapters can give a scheme
+and a host. Versions `0.1.0-beta.1` through `0.9.0` have this defect, and a GitHub security
+advisory describes it.
+
+Now the check parses `Origin` on its own and refuses `null`. It also refuses a request with more
+than one `Origin` header, also for a mutation, because the check read only the first one.
 
 The same-origin check compared the `Host` text exactly, so `Host: example.test:443` with
 `Origin: https://example.test` failed. Now letter case and the default port do not matter, as in
