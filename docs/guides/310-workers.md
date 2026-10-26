@@ -139,7 +139,8 @@ More detail: [Task lifecycle: Dispatch loop](../architecture/lifecycle.md#dispat
 ## Serve several queues from one worker
 
 One worker can serve several queues with one identity and one budget of slots. The worker rotates
-across its queues, so a busy queue cannot hide the tasks of another queue.
+across its queues, so a busy queue cannot hide the tasks of another queue. The fast tier has one
+limit to this rule, which this section also explains.
 
 **Example.** `mailer-1` serves `email` and `billing`. The `email` queue always has ready tasks. One
 `billing` task arrives.
@@ -151,10 +152,8 @@ across its queues, so a busy queue cannot hide the tasks of another queue.
 Thus, each queue of the worker gets claims in turn.
 
 On the fast tier, a completion can claim the next task of its own queue in the same statement. Thus,
-a busy fast-tier queue can keep every slot of the worker. If another queue of the worker had no claim
-for one poll interval, the next completion claims no task. Its slot becomes free, and the next claim
-continues the queue rotation. If that claim asks the busy queue first, a second completion gives up
-its claim, and the claim after it asks the other queue.
+a fast-tier queue that always has ready tasks can keep every slot of the worker. Then the other
+queues of the worker wait until that backlog ends. Give such a queue a worker of its own.
 
 Give `queue` for one queue name or `queues` for several names. If you give neither option, the
 worker uses the default queue of the queue client. A [batch handler](315-batch-handlers.md) receives
@@ -178,22 +177,11 @@ worker option. On the fast tier, a busy worker in each language divides its slot
 
 One worker identity, one pause state, and one `concurrency` budget cover the whole queue set.
 
-More detail: [Task lifecycle: Queue set](../architecture/lifecycle.md#queue-set).
+- A fused fast-tier claim asks only the queue of the completed task. A plain claim starts only for a
+  free slot. Thus, while one fast-tier queue always has ready tasks, the other queues of the worker
+  can get no claim.
 
-</details>
-
-<details>
-<summary>Reference: queue fairness on the fast tier</summary>
-
-- The worker records when a claim last asked each queue. The rule applies only to a worker with
-  more than one queue.
-- The fairness interval is the explicit poll interval. Without one, it is 250 ms, also while the
-  worker listens for notifications.
-- If another queue had no claim for one fairness interval, the next fast-tier completion claims with
-  limit 0. Only one completion at a time gives up its claim, until the next plain claim starts.
-- Until that plain claim starts, a fused claim asks only for the slot of its own task.
-
-More detail: [Fast tier: Queue fairness](../architecture/fast-tier.md#queue-fairness).
+More detail: [Task lifecycle: Queue set](../architecture/lifecycle.md#queue-set) and [Fast tier: Fused completion](../architecture/fast-tier.md#fused-completion).
 
 </details>
 

@@ -148,7 +148,7 @@ module Stablemates
         attr_reader :concurrency, :refill_batch, :cohort_capacity, :listener, :version, :run_errors, :handlers, :gate,
           :cohort_active, :cohort_handed_over, :cohort_reserved, :cohort_claims, :handed_over, :thread_cohorts
         attr_accessor :whole_claims, :reserved, :empty, :empty_wait, :pass_ended, :claimed_any, :claim_error, :open,
-          :listened_at_last_wait, :fairness_skip_pending
+          :listened_at_last_wait
 
         def initialize(concurrency, cohorts, listener, version, run_errors, handlers, gate)
           @concurrency = concurrency
@@ -179,9 +179,6 @@ module Stablemates
           @claimed_any = false
           @claim_error = nil
           @open = true
-          # Set when a completion skipped its fused refill so that a plain claim can ask the other
-          # queues. The next plain claim clears it, so only one completion at a time gives up its refill.
-          @fairness_skip_pending = false
         end
 
         def free_slots = [@concurrency - @handlers.active_count + @handed_over.size - @reserved, thread_room].min
@@ -322,11 +319,6 @@ module Stablemates
         # Counts state changes, so an empty-claim wait ends when one arrives during its claim.
         @wake_version = 0
         @full_tier_until = {}
-        # The monotonic time when a claim last asked each queue for tasks, plain or fused. A worker
-        # with more than one queue reads it so a fused refill cannot keep the other queues from a
-        # claim (ADR 0076, rule 17). The interval is the poll interval, 250 ms by default.
-        @queue_asked_at = {}
-        @fairness_interval = @poll_ms / 1000.0
         @fast_tier_queues = Set.new
         @fast_task_ids = Set.new
         @tier_reads = {}
@@ -714,12 +706,7 @@ module Stablemates
       # usable heartbeat connection. A busy or rejected lease does not close it.
       def dispatch(continuous, version, handlers, listener, startup, run_errors, maintenance_errors, gate)
         slots = DispatchSlots.new(@concurrency, @cohorts, listener, version, run_errors, handlers, gate)
-        @state_lock.synchronize do
-          @dispatch_slots = slots
-          # A queue counts as asked when the run starts, so the first completions keep their refills.
-          started_at = monotonic
-          @queues.each { |queue| @queue_asked_at[queue] = started_at }
-        end
+        @state_lock.synchronize { @dispatch_slots = slots }
         # Each claim in flight, with its limit, its cohort (nil for the whole worker), and the
         # slots it reserved in that cohort.
         claims = {}
@@ -853,7 +840,6 @@ module Stablemates
           next nil if plan.nil?
 
           limit, cohort, cohort_limit = plan
-          slots.fairness_skip_pending = false
           slots.reserved += limit
           if cohort.nil?
             slots.whole_claims += 1
@@ -940,7 +926,6 @@ module Stablemates
           break if claimed.size >= limit || !gate.ready?
 
           queue = @queues[(start + offset) % @queues.size]
-          @state_lock.synchronize { @queue_asked_at[queue] = monotonic } unless @queues.one?
           claimed.concat(claim(queue, limit - claimed.size, fast_limit - claimed.size, gate))
         end
       end
@@ -1105,8 +1090,7 @@ module Stablemates
       # claim asks for the free slots of the task's cohort plus the slot the task leaves. It claims
       # nothing while the worker stops, pauses, waits after an empty claim, or has no usable
       # heartbeat connection, and it waits for the cohort's refill batch while another claim for the
-      # cohort is in flight. It also claims nothing when another queue of the worker has waited a
-      # fairness interval for a claim (rule 17).
+      # cohort is in flight.
       def reserve_completion_claim(task)
         @state_lock.synchronize do
           slots = @dispatch_slots
@@ -1122,31 +1106,12 @@ module Stablemates
           claiming = slots.whole_claims.positive? || slots.cohort_claims[cohort].positive?
           next idle if limit <= 0 || (claiming && limit < slots.refill_batch)
 
-          # The completion gives its slot back, so the next plain claim continues the rotation.
-          if !slots.fairness_skip_pending && other_queue_waiting?(task.queue)
-            slots.fairness_skip_pending = true
-            next idle
-          end
-          # Until that plain claim starts, a fused claim refills only its own slot, so it cannot take
-          # the slot that the skipped completion gave back.
-          limit = 1 if slots.fairness_skip_pending
-          @queue_asked_at[task.queue] = monotonic unless @queues.one?
           slots.reserved += limit
           slots.cohort_reserved[cohort] += limit
           slots.handed_over[task.id] = cohort
           slots.cohort_handed_over[cohort] += 1
           CompletionClaim.new(limit, cohort, @wake_version, slots.gate)
         end
-      end
-
-      # Whether a queue other than +queue+ had no claim for the fairness interval. A fused claim asks
-      # only its own queue, so while that queue has a backlog its completions would keep every slot,
-      # and no plain claim would ask the other queues. The caller holds @state_lock.
-      def other_queue_waiting?(queue)
-        return false if @queues.one?
-
-        now = monotonic
-        @queues.any? { |other| other != queue && now - @queue_asked_at.fetch(other, now) >= @fairness_interval }
       end
 
       # Releases a fused claim's reservation and starts the tasks it claimed in its cohort.

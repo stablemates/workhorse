@@ -82,19 +82,6 @@ Upgrade step: if a proxy in front of the host ends TLS, the host must see the sc
 browser used. Otherwise the dashboard page's own module scripts carry an `Origin` that does not
 match, and the host refuses them.
 
-### A busy fast-tier queue no longer keeps a worker from its other queues
-
-A worker can serve several queues. On the fast tier, a completion claims the next task of its own
-queue in the same statement. While one fast-tier queue had a backlog, its completions refilled every
-slot, so the worker did not claim from its other queues until the backlog ended (SM-1676).
-
-Now a worker with more than one queue records when it last asked each queue for tasks. If another
-queue had no claim for one poll interval, the next fast-tier completion claims no task. Its slot
-becomes free, and the next claim continues the queue rotation. The interval is the explicit
-`pollMs`, or 250 ms without one. ADR 0076 rule 17 records the rule for every SDK, and the runtime
-fixture `a-fused-refill-gives-the-other-queues-a-claim` pins it. A worker with one queue does not
-change. The change needs no migration.
-
 ### The Schedules page shows the last skip of a schedule
 
 A `skip` schedule drops the missed occurrences that are older than its supported delay. Migration

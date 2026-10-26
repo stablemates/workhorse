@@ -947,14 +947,6 @@ impl dispatch::Dispatch for WorkerDispatch {
         self.inner.options.queues.len()
     }
 
-    fn queue_index(&self, task: &ClaimedTask) -> usize {
-        self.inner.options.queues.iter().position(|queue| *queue == task.queue).unwrap_or(0)
-    }
-
-    fn fairness_interval(&self) -> Duration {
-        self.inner.options.poll_interval.unwrap_or(POLLING_POLL)
-    }
-
     fn paused(&self) -> bool {
         self.inner.paused.load(Ordering::SeqCst)
     }
@@ -991,12 +983,10 @@ impl dispatch::Dispatch for WorkerDispatch {
         &self,
         limit: usize,
         fast_limit: usize,
-        asked: dispatch::AskedQueues<ClaimedTask>,
     ) -> impl Future<Output = Vec<ClaimedTask>> + Send + 'static {
         let inner = Arc::clone(&self.inner);
         async move {
-            let asked = |queue| asked.record(queue);
-            let (tasks, error) = inner.claim_asking(limit, fast_limit, &asked).await;
+            let (tasks, error) = inner.claim(limit, fast_limit).await;
             if let Some(error) = error {
                 tracing::warn!(error = %error, workhorse.worker.id = %inner.worker_id, "task claim failed");
             }
@@ -1586,17 +1576,6 @@ impl Inner {
     ///
     /// Tasks claimed before an error are returned with it, so the caller still owns them.
     async fn claim(&self, limit: usize, fast_limit: usize) -> (Vec<ClaimedTask>, Option<Error>) {
-        self.claim_asking(limit, fast_limit, &|_| {}).await
-    }
-
-    /// Claims as [`Inner::claim`] does, and calls `asked` with the index of each queue it asks
-    /// when it sends that queue's claim (ADR 0076, rule 17).
-    async fn claim_asking(
-        &self,
-        limit: usize,
-        fast_limit: usize,
-        asked: &(dyn Fn(usize) + Sync),
-    ) -> (Vec<ClaimedTask>, Option<Error>) {
         // The claim keeps the gate of the run that started it.
         let Some(gate) = self.run_gate() else { return (Vec::new(), None) };
         let queues = &self.options.queues;
@@ -1609,10 +1588,8 @@ impl Inner {
             if remaining == 0 || !gate.is_open() {
                 break;
             }
-            let index = self.next_queue.fetch_add(1, Ordering::SeqCst) % queues.len();
-            let queue = &queues[index];
+            let queue = &queues[self.next_queue.fetch_add(1, Ordering::SeqCst) % queues.len()];
             let sent_at = Instant::now();
-            asked(index);
             let fast_remaining = fast_limit.saturating_sub(tasks.len());
             let claimed =
                 self.claim_queue(&gate, queue, remaining, fast_remaining, lease, sent_at).await;

@@ -91,7 +91,6 @@ module Conformance
       when "subscription-recovery" then subscription_recovery(fixture)
       when "graceful-drain" then graceful_drain(fixture)
       when "slot-refill" then slot_refill(fixture)
-      when "queue-fairness" then queue_fairness(fixture)
       when "budget-admission-race" then budget_race(fixture)
       when "missing-handler" then missing_handler(fixture)
       when "release-wait" then release_wait(fixture)
@@ -758,45 +757,6 @@ module Conformance
         ensure
           release_held.call
           open_all.call
-          subject.stop
-          check(thread.join(RUN_WAIT), "the worker did not stop")
-        end
-      end
-    end
-
-    # A fused refill asks only its own queue. The cold queue's task must still run before the hot
-    # queue's backlog ends (ADR 0076, rule 17).
-    def queue_fairness(fixture)
-      hot = "#{queue_name(fixture)}-hot"
-      cold = "#{queue_name(fixture)}-cold"
-      admin = W::Admin.new(@connection)
-      [hot, cold].each do |name|
-        admin.set_queue_tier(name, :fast, audit: W::AdminAudit.new("runtime-fixture", fixture["id"], "#{fixture["id"]}-#{name}"))
-      end
-      fixture["hotTaskCount"].times { |sequence| queue.enqueue(fixture["taskType"], {"sequence" => sequence}, queue: hot) }
-      started = Concurrent::Array.new
-      with_pool(6) do |pool|
-        # The hot queue comes first, so the first plain claim asks it and its completions refill.
-        subject = W::Worker.new(pool, queues: [hot, cold], worker_id: "ruby-#{fixture["id"]}", polling_only: true,
-          disable_registry: true, poll_interval: fixture["pollMs"] / 1000.0, concurrency: fixture["concurrency"],
-          shared_heartbeats: true, shutdown_grace: JOIN_GRACE)
-          .handle(fixture["taskType"]) do |_payload, context|
-          started << context.task.queue
-          sleep(fixture["hotHandlerMs"] / 1000.0) if context.task.queue == hot
-          {}
-        end
-        thread = Thread.new { subject.run }
-        begin
-          # The cold task arrives while fused refills already hold the slots, so the result does not
-          # depend on which queue the first plain claim asks.
-          eventually("#{fixture["id"]} never started its hot tasks", 7) do
-            started.size >= fixture["coldEnqueueAfterHotStarts"]
-          end
-          queue.enqueue(fixture["taskType"], {"cold" => true}, queue: cold)
-          eventually("#{fixture["id"]} never ran the cold task", 7) { started.include?(cold) }
-          position = started.index(cold)
-          check(position <= fixture["expectedMaximumHotTasksBeforeCold"], "#{position} hot tasks started before the cold task")
-        ensure
           subject.stop
           check(thread.join(RUN_WAIT), "the worker did not stop")
         end

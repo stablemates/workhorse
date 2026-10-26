@@ -3,7 +3,9 @@
 - **Status:** Accepted
 - **Date:** 2026-09-23
 - **Amended by:** SM-919 (a worker that batches completions splits its slots into cohorts; see below)
-- **Amended by:** SM-1676 (a fused refill gives the other queues of a worker a claim; see below)
+- **Amended by:** SM-1676 (a fused refill gives the other queues of a worker a claim; see below).
+  Rule 17 is not shipped: SM-1834 removed it before 0.10.0, and
+  [SM-1833](https://linear.app/stablemates/issue/SM-1833) owns a corrected rule.
 - **Amended by:** [ADR 0078](0078-start-a-long-running-workers-first-claim-beside-its-startup-maintenance-pass.md)
   (a long-running worker starts its first claim beside its startup maintenance pass)
 - **Related:** [ADR 0071](0071-give-every-worker-a-pool-and-a-dedicated-heartbeat-connection.md),
@@ -136,6 +138,16 @@ which ran about 1.4 times the throughput of one. Rule 11 therefore caps the defa
 when the worker can read it.
 
 ### Queue fairness for fused refills
+
+**Status of rule 17: not shipped.** No release contains rule 17. A measurement in the private
+performance lab ([SM-1821](https://linear.app/stablemates/issue/SM-1821)) did not confirm the cost
+estimate below for every worker. Thus the maintainer decided not to ship rule 17 in 0.10.0, and
+[SM-1834](https://linear.app/stablemates/issue/SM-1834) removed it from every
+SDK worker. Every worker again behaves as rule 12 states: while one fast-tier queue has a backlog,
+the other queues of the worker can get no claim until that backlog ends. The fixture
+`a-fused-refill-gives-the-other-queues-a-claim` is also removed.
+[SM-1833](https://linear.app/stablemates/issue/SM-1833) owns a corrected rule. The text below
+records the decision of SM-1676 and the rejected options without change.
 
 _Amended by [SM-1676](https://linear.app/stablemates/issue/SM-1676)._ Rule 12 lets a fast-tier
 completion refill its slot in the same statement. That fused claim asks only the queue of the

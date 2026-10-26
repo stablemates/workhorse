@@ -83,13 +83,6 @@ public sealed partial class Worker
         /// <summary>The fused claims of fast-tier completions in flight. It changes under the state lock.</summary>
         internal int FusedClaims;
 
-        /// <summary>
-        /// True after a completion skipped its fused refill so that a plain claim can ask the other
-        /// queues. The next plain claim clears it, so only one completion at a time skips. It changes
-        /// under the state lock.
-        /// </summary>
-        internal bool FairnessSkipPending;
-
         /// <summary>The end of the shutdown grace, or 0 until the run stops claiming.</summary>
         internal long Deadline;
 
