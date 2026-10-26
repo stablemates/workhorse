@@ -941,8 +941,8 @@ the remaining stages stay blocked, and the fix ships as a new candidate.
 The release check stops a candidate that leaves one line behind. In `release.yml`, if the version
 of the crate, the gem, the JVM artifacts, or the .NET packages differs from the tag, they skip
 publication. The run still succeeds. So the check must refuse the candidate before the first
-registry receives it. The check does not read `dotnet/Directory.Build.props` yet. If the .NET
-version differs from the tag, only a notice of the `nuget` job reports it.
+registry receives it. The check also reads `dotnet/Directory.Build.props`, so it refuses a .NET
+version that differs from the tag.
 
 The release check reads no secret. If a `maven-central` secret is missing, the JVM artifacts also
 skip publication after npm publishes, and the run still succeeds. `pnpm release:check
@@ -952,7 +952,8 @@ skip publication after npm publishes, and the run still succeeds. `pnpm release:
 1. A file does not carry the release version. The files are every published `package.json`,
    `typescript/core/src/version.ts`, `python/pyproject.toml`, `python/src/workhorse/_version.py`,
    `python/uv.lock`, `go/version.go`, `rust/Cargo.toml`, `Cargo.lock`,
-   `ruby/lib/stablemates/workhorse/version.rb`, each Ruby lockfile, and `jvm/gradle.properties`.
+   `ruby/lib/stablemates/workhorse/version.rb`, each Ruby lockfile, `jvm/gradle.properties`, and
+   `dotnet/Directory.Build.props`.
 2. A peer range on a published package does not cover the release. For a `0.x` release, the range
    is the release's minor line. From the first major release, the range is its major line. The
    check reads every published `package.json` and `dashboard/app/package.json`.

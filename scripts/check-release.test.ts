@@ -137,6 +137,7 @@ async function writeFixture(root: string, version: string, pep440 = version): Pr
     "ruby/lib/stablemates/workhorse/version.rb": `module Stablemates\n  module Workhorse\n    VERSION = "${version}"\n  end\nend\n`,
     "ruby/Gemfile.lock": `PATH\n  specs:\n    stablemates-workhorse (${version.replace("-", ".pre.")})\n`,
     "jvm/gradle.properties": `# The train version.\nversion=${version}\norg.gradle.daemon=false\n`,
+    "dotnet/Directory.Build.props": `<Project>\n  <PropertyGroup>\n    <Version>${version}</Version>\n  </PropertyGroup>\n</Project>\n`,
     "ruby/gemfiles/rails_8_0.gemfile.lock": `PATH\n  specs:\n    stablemates-workhorse (${version.replace("-", ".pre.")})\n`,
     "support.json": JSON.stringify({
       install: {
@@ -201,6 +202,7 @@ describe("checkRelease across the release train", () => {
     ["support.json", "download/v0.8.0/", "download/v0.7.1/"],
     ["support.json", "workhorse@0.8.0 ", "workhorse@0.7.1 "],
     ["jvm/gradle.properties", "version=0.8.0", "version=0.7.1"],
+    ["dotnet/Directory.Build.props", "<Version>0.8.0<", "<Version>0.7.1<"],
     ["support.json", "workhorse:0.8.0", "workhorse:0.7.1"],
     ["support.json", "<version>0.8.0<", "<version>0.7.1<"],
   ])("rejects %s when it carries another version", async (relativePath, from, to) => {
@@ -217,6 +219,25 @@ describe("checkRelease across the release train", () => {
     await edit("rust/Cargo.toml", /version = .*\n/, "");
     await expect(checkRelease("npm", "v0.8.0", root)).rejects.toThrow(
       "rust/Cargo.toml declares no workhorse version",
+    );
+  });
+
+  it("rejects a .NET build file that declares no Version", async () => {
+    await edit("dotnet/Directory.Build.props", /\s*<Version>.*<\/Version>/, "");
+    await expect(checkRelease("npm", "v0.8.0", root)).rejects.toThrow(
+      "dotnet/Directory.Build.props declares no Version",
+    );
+  });
+
+  it("rejects a .NET build file that declares a second Version", async () => {
+    // The `nuget` job reads both values, so it would skip publication although the first matches.
+    await edit(
+      "dotnet/Directory.Build.props",
+      "</Project>",
+      `  <PropertyGroup Condition="'$(Configuration)' == 'Release'">\n    <Version>0.7.1</Version>\n  </PropertyGroup>\n</Project>`,
+    );
+    await expect(checkRelease("npm", "v0.8.0", root)).rejects.toThrow(
+      "dotnet/Directory.Build.props declares 2 Version elements, not one",
     );
   });
 
@@ -297,5 +318,21 @@ describe("checkRelease across the release train", () => {
     await expect(checkRelease("python", "python/v0.9.0-rc.1", root)).rejects.toThrow(
       "Expected the Python tag to spell 0.9.0-rc.1 as 0.9.0rc1",
     );
+  });
+
+  it("requires the SemVer spelling of a prerelease in dotnet/Directory.Build.props", async () => {
+    // The `nuget` job publishes only when `v<Version>` equals the tag.
+    await rm(root, { force: true, recursive: true });
+    await writeFixture(root, "0.9.0-rc.1", "0.9.0rc1");
+    await edit("dotnet/Directory.Build.props", "<Version>0.9.0-rc.1<", "<Version>0.9.0rc1<");
+    for (const [target, tag] of [
+      ["npm", "v0.9.0-rc.1"],
+      ["python", "python/v0.9.0rc1"],
+      ["go", "go/v0.9.0-rc.1"],
+    ] as const) {
+      await expect(checkRelease(target, tag, root)).rejects.toThrow(
+        "dotnet/Directory.Build.props is 0.9.0rc1 but the tag is 0.9.0-rc.1",
+      );
+    }
   });
 });
