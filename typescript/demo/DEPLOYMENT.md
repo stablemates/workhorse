@@ -294,7 +294,19 @@ The JVM and .NET workers read the same `postgres://` URL. Each maps the host, po
 credentials, and the parameters `sslmode`, `application_name`, `connect_timeout`, and `options` to
 its own driver. Both workers also map the `host` and `port` parameters. As in libpq, a `host` value
 that starts with `/` is the directory of the server's Unix socket. If the URL names another
-parameter, the worker stops.
+parameter, the worker stops. The .NET worker also maps `gssencmode`. If the URL does not name it,
+the .NET worker connects without GSS encryption, as the other workers do. The image does not
+contain the GSSAPI library.
+
+Both launchers set the `application_name` parameter of `DATABASE_URL_PRIMARY` and
+`DATABASE_URL_SECONDARY` for each process to its service name, for example
+`workhorse-demo-worker-dotnet`. Thus `pg_stat_activity` names the process of each session. If the
+URL names `application_name`, the launcher replaces that value.
+
+Each primary worker holds one notification listener session. To find these sessions, do not filter
+`pg_stat_activity` on `query = 'LISTEN workhorse_tasks'`. That column shows the last statement of
+the session. The .NET listener runs `SELECT 1` as its keepalive after a quiet poll interval, so its
+session then shows `SELECT 1`.
 
 Each demo workspace should have a dedicated role and database. The primary workspace runs TypeScript,
 Python, Go, Rust, Ruby, JVM, and .NET workers. When `DATABASE_URL_SECONDARY` is set, both launchers add one dedicated
