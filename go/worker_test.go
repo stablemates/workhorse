@@ -765,24 +765,31 @@ func (buffer *lockedBuffer) String() string {
 type heartbeatQueryTracer struct {
 	mu    sync.Mutex
 	delay time.Duration
-	// delayedCalls is the number of calls the tracer delays. Zero delays every call.
-	delayedCalls int
-	calls        int
-	active       int
-	maxOverlap   int
-	started      chan struct{}
+	// firstGate, if not nil, holds the first call until releaseFirst closes it, and no later call
+	// waits.
+	firstGate   chan struct{}
+	releaseOnce sync.Once
+	calls       int
+	active      int
+	maxOverlap  int
+	started     chan struct{}
 }
 
 func newHeartbeatQueryTracer(delay time.Duration) *heartbeatQueryTracer {
 	return &heartbeatQueryTracer{delay: delay, started: make(chan struct{}, 16)}
 }
 
-// newFirstHeartbeatQueryTracer delays only the first heartbeat statement, so the later rounds can
-// renew the lease in PostgreSQL.
-func newFirstHeartbeatQueryTracer(delay time.Duration) *heartbeatQueryTracer {
-	tracer := newHeartbeatQueryTracer(delay)
-	tracer.delayedCalls = 1
+// newFirstHeartbeatGateTracer holds only the first heartbeat statement, until releaseFirst. The
+// later rounds are not held, so they can renew the lease in PostgreSQL.
+func newFirstHeartbeatGateTracer() *heartbeatQueryTracer {
+	tracer := newHeartbeatQueryTracer(0)
+	tracer.firstGate = make(chan struct{})
 	return tracer
+}
+
+// releaseFirst lets the held first statement continue. A second call has no effect.
+func (tracer *heartbeatQueryTracer) releaseFirst() {
+	tracer.releaseOnce.Do(func() { close(tracer.firstGate) })
 }
 
 func (tracer *heartbeatQueryTracer) TraceQueryStart(
@@ -797,17 +804,17 @@ func (tracer *heartbeatQueryTracer) TraceQueryStart(
 	tracer.calls++
 	tracer.active++
 	tracer.maxOverlap = max(tracer.maxOverlap, tracer.active)
-	delay := tracer.delay
-	if tracer.delayedCalls > 0 && tracer.calls > tracer.delayedCalls {
-		delay = 0
-	}
+	held := tracer.firstGate != nil && tracer.calls == 1
 	tracer.mu.Unlock()
 	// waitForCalls reads the counter after each signal, so a dropped signal loses no call.
 	select {
 	case tracer.started <- struct{}{}:
 	default:
 	}
-	time.Sleep(delay)
+	if held {
+		<-tracer.firstGate
+	}
+	time.Sleep(tracer.delay)
 	return context.WithValue(ctx, heartbeatQueryContextKey{}, true)
 }
 
@@ -1427,15 +1434,18 @@ func executeWorkerHeartbeatFixture(t *testing.T, fixture workerRuntimeFixture) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// The first round is blocked for longer than its bound, so it fails. The later rounds are not
-	// delayed, so they renew the lease in PostgreSQL.
-	tracer := newFirstHeartbeatQueryTracer(3 * time.Duration(fixture.HeartbeatMS) * time.Millisecond)
+	// The runner holds the first round past its bound, so it fails. The later rounds are not held,
+	// so they renew the lease in PostgreSQL.
+	tracer := newFirstHeartbeatGateTracer()
 	config.ConnConfig.Tracer = tracer
 	pool, err := pgxpool.NewWithConfig(ctx, config)
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(pool.Close)
+	// A failed check ends the test while the first round is held. This cleanup runs before
+	// pool.Close, which waits for the held connection.
+	t.Cleanup(tracer.releaseFirst)
 
 	queue := workhorse.NewQueue(workhorse.NewPGXExecutor(pool), "go-worker-heartbeat")
 	taskID, err := queue.Enqueue(ctx, fixture.TaskType, nil)
@@ -1478,6 +1488,8 @@ func executeWorkerHeartbeatFixture(t *testing.T, fixture workerRuntimeFixture) {
 	}()
 	awaitSignal(t, started, "the handler to start")
 	tracer.waitForCalls(t, 1)
+	// The first round stays held until the release, so the next interval passes while it runs,
+	// however slowly the host runs the worker.
 	time.Sleep(2 * time.Duration(fixture.HeartbeatMS) * time.Millisecond)
 	calls, _ := tracer.snapshot()
 	if calls != fixture.ExpectedCallsWhileBlocked {
@@ -1487,6 +1499,7 @@ func executeWorkerHeartbeatFixture(t *testing.T, fixture workerRuntimeFixture) {
 			calls,
 		)
 	}
+	tracer.releaseFirst()
 	tracer.waitForCalls(t, fixture.ExpectedMinimumCallsBeforeSettlement)
 	// The rounds after the blocked one renew the lease until the handler returns, so a renewal after
 	// any reading proves that they reach PostgreSQL.
