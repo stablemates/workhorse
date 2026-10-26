@@ -74,7 +74,7 @@ FROM eclipse-temurin:25.0.4_7-jre-alpine@sha256:2ca9adf44f5c29d28ecd26cf92d75cc0
 
 # The .NET worker, published framework-dependent and without an app host, so one build serves every
 # architecture. The SDK tag is the version that mise.toml pins.
-FROM mcr.microsoft.com/dotnet/sdk:10.0.402-alpine3.24@sha256:496914451b05ac5a24592024362ec370c3a2d3c3fe817f864e4aa55c4c194a56 AS dotnet-build
+FROM mcr.microsoft.com/dotnet/sdk:10.0.403-alpine3.24@sha256:cc02b814237a76c4735fb6eeee87181597b5e56f2ce458a435e527674d91f4d7 AS dotnet-build
 
 WORKDIR /workhorse
 ARG BUILD_CONCURRENCY=4
