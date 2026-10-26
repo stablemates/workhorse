@@ -33,6 +33,10 @@ Both Dockerfiles pin every base image by its multi-platform manifest digest. Whe
 image, resolve the new tag to a digest and commit both values together. The tag documents the
 intended release; the digest prevents a registry-side tag change from altering a build.
 
+The `node:24-alpine` digest must hold Node.js 24.22.1 or later. Earlier Node.js 24 releases have a
+`JSON.parse` fault that can change an escaped object key (SM-1592). `docs/compatibility.md` lists
+the affected releases.
+
 Both build stages prepare the pnpm version `packageManager` names. That version is written out in
 each Dockerfile as well, so it lives in three places: `package.json`, `mise.toml`, and the
 Dockerfiles. Move all of them together.

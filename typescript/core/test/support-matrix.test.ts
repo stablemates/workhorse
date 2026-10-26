@@ -393,8 +393,9 @@ describe("supported version constants", () => {
       ]),
     );
 
+    const nodeMajor = manifest.toolchains.node.split(".")[0]!;
     expect(Object.fromEntries(majors)).toEqual(
-      Object.fromEntries(containers.map((name) => [name, [manifest.toolchains.node]])),
+      Object.fromEntries(containers.map((name) => [name, [nodeMajor]])),
     );
   });
 

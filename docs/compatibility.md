@@ -141,6 +141,35 @@ after the provider ships. ASP.NET Core is a shared framework. The installed runt
 patches, so its floor is a major version. An operator must run a serviced .NET 10 or .NET 11
 runtime.
 
+### Node.js releases with a JSON.parse fault
+
+`JSON.parse` in some Node.js releases can read an escaped object key as a different key
+(nodejs/node#63785). The fault can change a value without an error, so run a release that does not
+have it.
+
+**Example.** A worker on Node.js 24.22.0 claims a task with the payload `{"orderId":7,"\\":1}`. Later
+it claims a task with the payload `{"orderId":7,"\"":1}`. The handler can then receive the key `\`
+in place of `"`.
+
+The fault occurs only for a key that has an escape in its JSON text: a key with `"`, `\`, or a
+control character. A key without these characters and every string value are correct. The
+TypeScript worker, `Queue`, `Admin`, the adapters, and the dashboard server read jsonb values through
+the database driver, and the driver uses `JSON.parse`. Workhorse code also uses `JSON.parse` for a
+stored payload contract schema, and for the JSON files and arguments of the `workhorse` CLI. Thus
+Workhorse cannot prevent the fault on an affected release. Workhorse code does not use `JSON.parse`
+for a checkpoint input fingerprint or for the stored value comparison of `replayHandler`.
+
+| Node.js line | Affected releases | First fixed release |
+| ------------ | ----------------- | ------------------- |
+| 22           | None              | Not applicable      |
+| 24           | 24.0.0 to 24.22.0 | 24.22.1             |
+| 26           | 26.0.0 to 26.12.0 | 26.12.1             |
+
+Node.js 26 is not a supported line. It is in the table for an operator who runs it. `engines.node`
+stays `>=22`, so npm does not refuse an affected release, and the worker does not check the release
+when it starts. V8 fixed the fault in commit 93cd21e8, and Node.js 24.22.1 and 26.12.1 include that
+fix. `mise.toml` and the Node.js base image of each repository Dockerfile pin Node.js 24.22.1.
+
 ### Raising a floor
 
 Raising the Node.js, Python, Go, Ruby, Active Job, Java, Kotlin, Spring Boot, .NET, EF Core,
