@@ -48,7 +48,7 @@ internal sealed class RuntimeFixtures : IAsyncDisposable
     private const string RecordExpiryAnswers = """
         ALTER FUNCTION workhorse.expire_owned_telemetry_v1(uuid, text, bigint)
           RENAME TO expire_owned_telemetry_v1_recorded;
-        CREATE TABLE workhorse.test_expiry_answers (answered bigserial PRIMARY KEY, status text);
+        CREATE TABLE workhorse.test_expiry_answers (answered bigserial PRIMARY KEY, fence_token bigint, status text);
         DO $$
         BEGIN
           EXECUTE format(
@@ -58,8 +58,8 @@ internal sealed class RuntimeFixtures : IAsyncDisposable
               'workhorse.expire_owned_telemetry_v1_recorded(uuid, text, bigint)'::regprocedure),
             'WITH answer AS (SELECT * FROM workhorse.expire_owned_telemetry_v1_recorded('
               || 'p_task_id, p_worker_id, p_fence_token)), '
-              || 'recorded AS (INSERT INTO workhorse.test_expiry_answers (status) '
-              || 'SELECT answer.status FROM answer) SELECT * FROM answer');
+              || 'recorded AS (INSERT INTO workhorse.test_expiry_answers (fence_token, status) '
+              || 'SELECT p_fence_token, answer.status FROM answer) SELECT * FROM answer');
         END
         $$
         """;
@@ -73,6 +73,13 @@ internal sealed class RuntimeFixtures : IAsyncDisposable
 
     private const string FirstExpiryAnswer =
         "SELECT status FROM workhorse.test_expiry_answers ORDER BY answered LIMIT 1";
+
+    /// <summary>
+    /// Reads the first answer of each attempt, in attempt order. Each claim takes a new fence token, so
+    /// the token names the attempt.
+    /// </summary>
+    private const string FirstExpiryAnswerOfEachAttempt =
+        "SELECT DISTINCT ON (fence_token) status FROM workhorse.test_expiry_answers ORDER BY fence_token, answered";
 
     /// <summary>
     /// A maintenance tick calls <c>timeout_owned_v1</c> for an overdue attempt. This statement does the
@@ -137,8 +144,8 @@ internal sealed class RuntimeFixtures : IAsyncDisposable
         {
             "trace-propagation" => TraceAsync(fixture),
             "cooperative-cancellation" => CancellationAsync(fixture),
-            "expiration" => fixture.GetValueOrDefault("databaseTimesOutFirst") is true
-                ? StaleExpirationAsync(fixture)
+            "expiration" => fixture.GetValueOrDefault("databaseTimesOutFirst") is true || (long)fixture["localClockLeadMs"]! > 0
+                ? RecordedExpirationAsync(fixture)
                 : ExpirationAsync(fixture),
             "heartbeat-cadence" => HeartbeatCadenceAsync(fixture),
             "poll-cadence" => PollCadenceAsync(fixture),
@@ -338,7 +345,7 @@ internal sealed class RuntimeFixtures : IAsyncDisposable
     /// Records each answer to the expiry requests while the expiration attempts run. The runner shares
     /// its database between fixtures, so the wrapper ends with this fixture.
     /// </summary>
-    private async Task StaleExpirationAsync(OrderedDictionary<string, object?> fixture)
+    private async Task RecordedExpirationAsync(OrderedDictionary<string, object?> fixture)
     {
         await UpdateAsync(RecordExpiryAnswers);
         try
@@ -346,8 +353,24 @@ internal sealed class RuntimeFixtures : IAsyncDisposable
             await ExpirationAsync(fixture);
 
             // An attempt that PostgreSQL timed out first leaves the late local timer no active attempt.
-            var first = await ValueAsync(FirstExpiryAnswer);
-            Failure.Check(first == "stale", $"the first expiry answer {first}, want stale");
+            if (fixture.GetValueOrDefault("databaseTimesOutFirst") is true)
+            {
+                var first = await ValueAsync(FirstExpiryAnswer);
+                Failure.Check(first == "stale", $"the first expiry answer {first}, want stale");
+            }
+
+            // A local timer that leads the database asks before the expiry, so PostgreSQL first answers
+            // not_due. Without that answer, the fixture does not prove that the worker asks again.
+            if ((long)fixture["localClockLeadMs"]! > 0)
+            {
+                var firstAnswers = (await RowsAsync(FirstExpiryAnswerOfEachAttempt))
+                    .Select(row => Json.Object(row)!["status"] as string)
+                    .ToList();
+                var attempts = ((List<object?>)fixture["expectedAbortReasons"]!).Count;
+                Failure.Check(
+                    firstAnswers.SequenceEqual(Enumerable.Repeat("not_due", attempts)),
+                    $"the first expiry answer of each attempt [{string.Join(", ", firstAnswers)}], want not_due");
+            }
         }
         finally
         {

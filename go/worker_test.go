@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -1643,7 +1644,7 @@ SELECT workhorse.timeout_owned_v1(task_id, worker_id, fence_token) FROM due`
 // answer to workhorse.test_expiry_answers, so the test can read what the worker got.
 const recordExpiryAnswers = `ALTER FUNCTION workhorse.expire_owned_telemetry_v1(uuid, text, bigint)
   RENAME TO expire_owned_telemetry_v1_recorded;
-CREATE TABLE workhorse.test_expiry_answers (answered bigserial PRIMARY KEY, status text);
+CREATE TABLE workhorse.test_expiry_answers (answered bigserial PRIMARY KEY, fence_token bigint, status text);
 DO $$
 BEGIN
   EXECUTE format(
@@ -1653,12 +1654,17 @@ BEGIN
       'workhorse.expire_owned_telemetry_v1_recorded(uuid, text, bigint)'::regprocedure),
     'WITH answer AS (SELECT * FROM workhorse.expire_owned_telemetry_v1_recorded('
       || 'p_task_id, p_worker_id, p_fence_token)), '
-      || 'recorded AS (INSERT INTO workhorse.test_expiry_answers (status) '
-      || 'SELECT answer.status FROM answer) SELECT * FROM answer');
+      || 'recorded AS (INSERT INTO workhorse.test_expiry_answers (fence_token, status) '
+      || 'SELECT p_fence_token, answer.status FROM answer) SELECT * FROM answer');
 END
 $$`
 
 const firstExpiryAnswer = `SELECT status FROM workhorse.test_expiry_answers ORDER BY answered LIMIT 1`
+
+// firstExpiryAnswerOfEachAttempt reads the first answer of each attempt, in attempt order. Each
+// claim takes a new fence token, so the token names the attempt.
+const firstExpiryAnswerOfEachAttempt = `SELECT DISTINCT ON (fence_token) status
+  FROM workhorse.test_expiry_answers ORDER BY fence_token, answered`
 
 func executeWorkerExpirationFixture(t *testing.T, fixture workerRuntimeFixture) {
 	databaseURL := createConformanceDatabase(t, testDatabaseURL(t), "worker-"+fixture.Mode)
@@ -1687,7 +1693,7 @@ func executeWorkerExpirationFixture(t *testing.T, fixture workerRuntimeFixture) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	if fixture.DatabaseTimesOutFirst {
+	if fixture.DatabaseTimesOutFirst || fixture.LocalClockLeadMS > 0 {
 		if _, err := pool.Exec(ctx, recordExpiryAnswers); err != nil {
 			t.Fatal(err)
 		}
@@ -1778,6 +1784,21 @@ func executeWorkerExpirationFixture(t *testing.T, fixture workerRuntimeFixture) 
 		var first string
 		if err := pool.QueryRow(ctx, firstExpiryAnswer).Scan(&first); err != nil || first != "stale" {
 			t.Fatalf("the first expiry answer = %q, want stale: %v", first, err)
+		}
+	}
+	// A local timer that leads the database asks before the expiry, so PostgreSQL first answers
+	// not_due. Without that answer, the fixture does not prove that the worker asks again.
+	if fixture.LocalClockLeadMS > 0 {
+		rows, err := pool.Query(ctx, firstExpiryAnswerOfEachAttempt)
+		if err != nil {
+			t.Fatal(err)
+		}
+		firstAnswers, err := pgx.CollectRows(rows, pgx.RowTo[string])
+		if err != nil {
+			t.Fatal(err)
+		}
+		if want := slices.Repeat([]string{"not_due"}, len(fixture.ExpectedAbortReasons)); !slices.Equal(firstAnswers, want) {
+			t.Fatalf("the first expiry answer of each attempt = %v, want %v", firstAnswers, want)
 		}
 	}
 	assertWorkerFixtureAttemptOutcomes(t, ctx, pool, taskID, fixture.ExpectedAttemptOutcomes)
