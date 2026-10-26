@@ -77,7 +77,6 @@ SYNC_ONLY_RUNTIME_FIXTURE_KINDS = frozenset(
         "lease-loss",
         "oversized-result",
         "poll-cadence",
-        "queue-fairness",
         "refused-completion",
         "slot-refill",
         "suspension-replay",
@@ -144,7 +143,6 @@ def execute_runtime_fixture(
         ),
         "graceful-drain": execute_graceful_drain_fixture,
         "slot-refill": execute_slot_refill_fixture,
-        "queue-fairness": execute_queue_fairness_fixture,
         # The worker runs on a pool of its own, so the runner can hold its LISTEN.
         "subscription-recovery": lambda enqueue_connection, recovery_fixture: (
             execute_subscription_recovery_fixture(
@@ -1378,72 +1376,6 @@ def execute_slot_refill_fixture(
         join(thread)
     assert errors == []
     assert active_slots(worker) == 0
-
-
-# A fused refill asks only its own queue. The cold queue's task must still run before the hot
-# queue's backlog ends (ADR 0076, rule 17).
-def execute_queue_fairness_fixture(
-    connection: psycopg.Connection[Any], fixture: Mapping[str, Any]
-) -> None:
-    hot = f"{runtime_queue(fixture)}-hot"
-    cold = f"{runtime_queue(fixture)}-cold"
-    admin = Admin(connection)
-    for queue_name in (hot, cold):
-        audit = AdminAudit(
-            actor="runtime-fixture",
-            reason=fixture["id"],
-            request_id=f"{fixture['id']}-{queue_name}",
-        )
-        admin.set_queue_tier(queue_name, "fast", audit)
-    queue = Queue(connection)
-    for sequence in range(fixture["hotTaskCount"]):
-        queue.enqueue(fixture["taskType"], {"sequence": sequence}, EnqueueOptions(queue=hot))
-    started_lock = Lock()
-    started: list[str] = []
-
-    def handler(_payload: object, context: HandlerContext) -> None:
-        with started_lock:
-            started.append(context.task.queue)
-        if context.task.queue == hot:
-            sleep(fixture["hotHandlerMs"] / 1000)
-
-    def started_count() -> int:
-        with started_lock:
-            return len(started)
-
-    def cold_started() -> bool:
-        with started_lock:
-            return cold in started
-
-    errors: list[BaseException] = []
-    worker = Worker(
-        worker_pool,
-        queues=[hot, cold],
-        worker_id=f"python-{fixture['id']}",
-        concurrency=fixture["concurrency"],
-        poll_ms=fixture["pollMs"],
-        registry_interval_ms=0,
-    ).handle(fixture["taskType"], handler)
-    thread = run_in_thread(worker.run, errors)
-    try:
-        deadline = monotonic() + 7
-        while started_count() < fixture["coldEnqueueAfterHotStarts"]:
-            assert monotonic() < deadline, f"{fixture['id']} did not start the hot tasks"
-            sleep(0.005)
-        # The cold task arrives while fused refills already hold the slots, so the result does
-        # not depend on which queue the first plain claim asks.
-        queue.enqueue(fixture["taskType"], {"cold": True}, EnqueueOptions(queue=cold))
-        deadline = monotonic() + 7
-        while not cold_started():
-            assert monotonic() < deadline, f"{fixture['id']} never ran the cold task"
-            sleep(0.005)
-        with started_lock:
-            cold_at = started.index(cold)
-        assert cold_at <= fixture["expectedMaximumHotTasksBeforeCold"]
-    finally:
-        worker.stop()
-        join(thread)
-    assert errors == []
 
 
 CLAIM_V1 = SQL_STATEMENTS["claim_v1"][0]

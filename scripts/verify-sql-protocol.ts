@@ -256,28 +256,6 @@ export interface SlotRefillRuntimeFixture extends RuntimeFixtureBase {
   expectedMaximumClaimsPerTask: number;
 }
 
-/**
- * A worker consumes a hot and a cold fast-tier queue (ADR 0076, rule 17). The hot queue keeps a
- * backlog, so each hot completion could refill its slot from the hot queue. The cold queue's task
- * must still run before the hot backlog ends.
- */
-export interface QueueFairnessRuntimeFixture extends RuntimeFixtureBase {
-  kind: "queue-fairness";
-  concurrency: number;
-  /** The worker's poll interval, which is also its fairness interval. */
-  pollMs: number;
-  hotTaskCount: number;
-  /** How long each hot handler runs, so the hot backlog outlasts several fairness intervals. */
-  hotHandlerMs: number;
-  /**
-   * The runner enqueues the cold task only after this many hot tasks started. Then fused refills
-   * already hold the slots, whichever queue the first plain claim of the SDK asks.
-   */
-  coldEnqueueAfterHotStarts: number;
-  /** The most hot tasks that may start before the cold task starts. */
-  expectedMaximumHotTasksBeforeCold: number;
-}
-
 export interface TracePropagationRuntimeFixture extends RuntimeFixtureBase {
   kind: "trace-propagation";
 }
@@ -483,7 +461,6 @@ export type RuntimeFixture =
   | SubscriptionRecoveryRuntimeFixture
   | GracefulDrainRuntimeFixture
   | SlotRefillRuntimeFixture
-  | QueueFairnessRuntimeFixture
   | TracePropagationRuntimeFixture
   | BudgetAdmissionRaceRuntimeFixture
   | MissingHandlerRuntimeFixture

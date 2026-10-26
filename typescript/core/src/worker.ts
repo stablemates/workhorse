@@ -681,10 +681,6 @@ export class Worker {
   private readonly workerId: string;
   private readonly queueNames: readonly string[];
   private nextQueueIndex = 0;
-  // The monotonic time when a claim last asked each queue for tasks, plain or fused. A worker with
-  // more than one queue reads it so a fused refill cannot keep the other queues from a claim
-  // (ADR 0076, rule 17).
-  private readonly queueAskedAt = new Map<string, number>();
   private get workerQueueAttributes(): { "workhorse.worker.queues": string[] } {
     return { "workhorse.worker.queues": [...this.queueNames] };
   }
@@ -1513,7 +1509,6 @@ export class Worker {
           const queueName = this.queueNames[this.nextQueueIndex]!;
           this.nextQueueIndex = (this.nextQueueIndex + 1) % this.queueNames.length;
           const sentAt = monotonicNow();
-          this.queueAskedAt.set(queueName, sentAt);
           const task = await this.warnIfSlow("claim", () =>
             this.gated(() =>
               this.queue.claim(this.workerId, { queue: queueName, leaseMs: this.leaseMs }),
@@ -1536,7 +1531,6 @@ export class Worker {
       ) {
         const queueName = this.queueNames[this.nextQueueIndex]!;
         this.nextQueueIndex = (this.nextQueueIndex + 1) % this.queueNames.length;
-        this.queueAskedAt.set(queueName, monotonicNow());
         tasks.push(
           ...(await this.claimFromQueue(queueName, limit - tasks.length, fastLimit - tasks.length)),
         );
@@ -2470,24 +2464,6 @@ export class Worker {
     // release notifies the queue, so a wake does not end that wait: only its deadline, a stop, or a
     // pause does.
     let emptyWait: { deadline: number; wakeVersion: number; release?: true } | undefined;
-    // Set when a completion skipped its fused refill so that a plain claim can ask the other
-    // queues. The next plain claim clears it, so only one completion at a time gives up its refill.
-    let fairnessSkipPending = false;
-    // A queue counts as asked when the run starts, so the first completions keep their refills.
-    const runStartedAt = monotonicNow();
-    for (const queueName of this.queueNames) this.queueAskedAt.set(queueName, runStartedAt);
-    const fairnessIntervalMs = this.explicitPollMs ?? DEFAULT_POLL_MS;
-    // True when a queue other than `queueName` has had no claim for the fairness interval. A fused
-    // claim asks only its own queue, so while that queue has a backlog its completions would keep
-    // every slot, and no plain claim would ask the other queues (ADR 0076, rule 17).
-    const otherQueueWaiting = (queueName: string): boolean => {
-      if (this.queueNames.length < 2) return false;
-      const now = monotonicNow();
-      return this.queueNames.some(
-        (other) =>
-          other !== queueName && now - (this.queueAskedAt.get(other) ?? now) >= fairnessIntervalMs,
-      );
-    };
 
     const cohortFree = (cohort: number): number =>
       cohortCapacity[cohort]! -
@@ -2536,7 +2512,6 @@ export class Worker {
       );
     };
     const startClaim = (limit: number, cohort?: number, cohortLimit = 0): void => {
-      fairnessSkipPending = false;
       const claimId = nextClaimId;
       nextClaimId += 1;
       reserved += limit;
@@ -2614,8 +2589,7 @@ export class Worker {
     // the completing task's cohort is in flight, a completion claims only when that would fill at
     // least a refill batch of slots. A claim for another cohort does not hold a completion back.
     // A fused completion claims nothing while the heartbeat gate is closed: it runs with a claim
-    // limit of zero (ADR 0071 rule 6). It also claims nothing when another queue of the worker has
-    // waited a fairness interval for a claim (ADR 0076, rule 17).
+    // limit of zero (ADR 0071 rule 6).
     this.reserveCompletionClaim = (task) => {
       if (
         shouldStop() ||
@@ -2628,18 +2602,9 @@ export class Worker {
         return undefined;
       }
       const cohort = this.taskCohorts.get(task) ?? 0;
-      const free = Math.min(freeSlots(), cohortFree(cohort)) + 1;
-      if ((wholeClaims > 0 || cohortClaims[cohort]! > 0) && free < refillBatch) return undefined;
-      // The completion gives its slot back, so the loop's next plain claim continues the rotation.
-      if (!fairnessSkipPending && otherQueueWaiting(task.queue)) {
-        fairnessSkipPending = true;
-        return undefined;
-      }
-      // Until that plain claim starts, a fused claim refills only its own slot, so it cannot take
-      // the slot that the skipped completion gave back.
-      const limit = fairnessSkipPending ? 1 : free;
+      const limit = Math.min(freeSlots(), cohortFree(cohort)) + 1;
+      if ((wholeClaims > 0 || cohortClaims[cohort]! > 0) && limit < refillBatch) return undefined;
       const wakeVersion = this.dispatchWakeVersion;
-      this.queueAskedAt.set(task.queue, monotonicNow());
       reserved += limit;
       cohortReserved[cohort]! += limit;
       handedOver.add(task);

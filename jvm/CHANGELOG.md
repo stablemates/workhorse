@@ -42,14 +42,6 @@ exception and no event name (SM-1726). Now the worker logs `workhorse.worker.rep
 and `error.type`, the class name. The record no longer carries the exception. The worker also emits
 the event through OpenTelemetry at warn. The level and the bound do not change.
 
-### A busy fast-tier queue no longer keeps the worker from its other queues
-
-While one fast-tier queue had a backlog, the fused refill of each completion kept every slot, so the
-worker did not claim from its other queues until the backlog ended (SM-1676). Now, if another queue
-had no claim for one poll interval, the next fast-tier completion claims no task, and the next plain
-claim continues the queue rotation. The interval is the explicit poll interval, or 250 ms without
-one. A worker with one queue does not change. The change needs no migration.
-
 ### The dashboard Schedules page shows the last skip of a schedule
 
 Migration 0087 (`0087-show-the-last-schedule-skip-on-the-dashboard.sql`) moves the schema to version 86. The `dashboard/v1` cron document gains `lastSkippedAt`, `lastSkippedCount`, and

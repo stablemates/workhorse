@@ -595,47 +595,4 @@ RSpec.describe "Worker on the fast tier against PostgreSQL" do
     expect(outcomes(task_ids).map { |_, state, attempt| [state, attempt] }.uniq).to eq([%w[succeeded 1]])
     expect(errors).to be_empty
   end
-
-  # SM-1676: a fused completion claim asks only the completing task's queue. While that queue had
-  # a backlog, each completion refilled the slot, and no plain claim reached the other queues.
-  it "gives another queue a claim while a fast queue keeps a backlog" do
-    backlog = 100
-    hot = @queue_name
-    cold = "#{@queue_name}-cold"
-    [hot, cold].each { |name| make_fast(name) }
-    backlog.times { |index| queue.enqueue("fair", {"index" => index}) }
-    cold_id = queue.enqueue("fair", {"cold" => true}, queue: cold).task_id
-    ran = Concurrent::Array.new
-    # The first hot completion comes well inside one poll interval, and half the backlog takes
-    # longer than two intervals.
-    subject = W::Worker.new(@pool, queues: [hot, cold], concurrency: 1, polling_only: true, poll_interval: 0.1,
-      disable_registry: true, shared_heartbeats: true).handle("fair") do |_payload, context|
-      ran << context.task.id
-      sleep 0.005
-      {}
-    end
-    # The completed task and the claim limit of each fused claim on the hot queue, in order.
-    fused = Concurrent::Array.new
-    executor = subject.instance_variable_get(:@executor)
-    original = executor.method(:rows)
-    executor.define_singleton_method(:rows) do |sql, params = []|
-      sent = params
-      rows = original.call(sql, params.respond_to?(:call) ? -> { sent = params.call } : params)
-      completed = (sql == W::SqlCatalogue::COMPLETE_MANY_AND_CLAIM_V1) ? sent[1].delete("{}").split(",") : []
-      fused << [completed, Integer(sent[5], 10)] if completed.any? && sent[4] == hot
-      rows
-    end
-
-    run_until(subject) { ran.include?(cold_id) }
-
-    # Once the cold queue has waited a poll interval, one hot completion claims nothing. Its slot
-    # goes to a plain claim, which asks the cold queue next. Every hot completion before it refills.
-    # Under host load the first completion can come after one interval, so it can be the skip.
-    cold_at = ran.index(cold_id)
-    expect(cold_at).to be < backlog / 2
-    skip_at = fused.index { |_, limit| limit.zero? }
-    expect(skip_at).not_to be_nil
-    expect(fused.first(skip_at).map { |_, limit| limit }).to all(eq(1))
-    expect(fused[skip_at][0]).to eq([ran[cold_at - 1]])
-  end
 end

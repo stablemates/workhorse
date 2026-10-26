@@ -94,7 +94,6 @@ func TestGoWorkerSatisfiesEverySharedRuntimeFixture(t *testing.T) {
 		"subscription-recovery":    executeWorkerSubscriptionRecoveryFixture,
 		"graceful-drain":           executeWorkerGracefulDrainFixture,
 		"slot-refill":              executeWorkerSlotRefillFixture,
-		"queue-fairness":           executeWorkerQueueFairnessFixture,
 		"trace-propagation":        executeWorkerTracePropagationFixture,
 		"budget-admission-race":    executeBudgetAdmissionRaceFixture,
 		"missing-handler":          executeWorkerMissingHandlerFixture,
@@ -2103,105 +2102,5 @@ func executeReplayConflictFixture(t *testing.T, fixture workerRuntimeFixture) {
 				t.Fatalf("outcomes=%v", outcomes)
 			}
 		})
-	}
-}
-
-// executeWorkerQueueFairnessFixture gives one fast-tier queue a backlog and another fast-tier queue
-// one task. The fused claims of the hot queue must not keep the cold queue from a claim until the
-// backlog is empty (ADR 0076, rule 17).
-func executeWorkerQueueFairnessFixture(t *testing.T, fixture workerRuntimeFixture) {
-	databaseURL := createConformanceDatabase(t, testDatabaseURL(t), "worker-queue-fairness-fixture")
-	ctx := context.Background()
-	pool, err := pgxpool.New(ctx, databaseURL)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(pool.Close)
-
-	hot := "runtime-" + fixture.ID + "-hot"
-	cold := "runtime-" + fixture.ID + "-cold"
-	executor := workhorse.NewPGXExecutor(pool)
-	admin := workhorse.NewAdmin(executor)
-	for _, queueName := range []string{hot, cold} {
-		audit := workhorse.AdminAudit{Actor: "runtime-fixture", Reason: fixture.ID, RequestID: fixture.ID + "-" + queueName}
-		if _, err := admin.SetQueueTier(ctx, queueName, workhorse.QueueTierFast, audit); err != nil {
-			t.Fatal(err)
-		}
-	}
-	queue := workhorse.NewQueue(executor, hot)
-	for sequence := range fixture.HotTaskCount {
-		if _, err := queue.Enqueue(ctx, fixture.TaskType, map[string]any{"sequence": sequence}); err != nil {
-			t.Fatal(err)
-		}
-	}
-	// The hot queue comes first in the worker's queues.
-	worker, err := workhorse.NewWorker(pool, workhorse.WorkerOptions{
-		Queues:          []string{hot, cold},
-		WorkerID:        "go-" + fixture.ID,
-		Concurrency:     fixture.Concurrency,
-		PollInterval:    time.Duration(fixture.PollMS) * time.Millisecond,
-		DisableRegistry: true,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	var startedMu sync.Mutex
-	var started []string
-	worker.Handle(fixture.TaskType, func(_ context.Context, _ any, handler *workhorse.HandlerContext) (any, error) {
-		startedMu.Lock()
-		started = append(started, handler.Task.Queue)
-		startedMu.Unlock()
-		if handler.Task.Queue == hot {
-			time.Sleep(time.Duration(fixture.HotHandlerMS) * time.Millisecond)
-		}
-		return nil, nil
-	})
-	startedCount := func() int {
-		startedMu.Lock()
-		defer startedMu.Unlock()
-		return len(started)
-	}
-	coldAt := func() int {
-		startedMu.Lock()
-		defer startedMu.Unlock()
-		return slices.Index(started, cold)
-	}
-
-	runContext, stop := context.WithCancel(ctx)
-	runResult := make(chan error, 1)
-	go func() { runResult <- worker.Run(runContext) }()
-	defer func() {
-		stop()
-		if err := awaitSignal(t, runResult, "Run to return after the stop"); err != nil {
-			t.Error(err)
-		}
-	}()
-
-	deadline := time.Now().Add(7 * time.Second)
-	for startedCount() < fixture.ColdEnqueueAfterHotStarts && time.Now().Before(deadline) {
-		time.Sleep(5 * time.Millisecond)
-	}
-	if count := startedCount(); count < fixture.ColdEnqueueAfterHotStarts {
-		t.Fatalf("%s started %d hot tasks, want %d before the cold enqueue", fixture.ID, count, fixture.ColdEnqueueAfterHotStarts)
-	}
-	// The cold task arrives while fused refills already hold the slots, so the result does not
-	// depend on which queue the first plain claim asks.
-	if _, err := queue.Enqueue(ctx, fixture.TaskType, map[string]any{"cold": true}, workhorse.EnqueueOptions{
-		Queue: cold,
-	}); err != nil {
-		t.Fatal(err)
-	}
-	deadline = time.Now().Add(7 * time.Second)
-	for coldAt() < 0 && time.Now().Before(deadline) {
-		time.Sleep(10 * time.Millisecond)
-	}
-	position := coldAt()
-	if position < 0 {
-		t.Fatalf("%s never ran the cold task", fixture.ID)
-	}
-	t.Logf("the cold task started after %d hot tasks", position)
-	if position > fixture.ExpectedMaximumHotTasksBeforeCold {
-		t.Fatalf("the cold task started after %d hot tasks, want at most %d",
-			position, fixture.ExpectedMaximumHotTasksBeforeCold)
 	}
 }

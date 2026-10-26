@@ -226,8 +226,7 @@ public sealed partial class Worker
     /// Sets aside the slots that a completion's fused claim can fill (ADR 0076, rules 12 and 13). The
     /// claim asks for the free slots of the task's cohort plus the slot that the task leaves. It claims
     /// nothing while the worker stops, pauses, or waits after an empty claim, and it waits for the
-    /// refill batch while another claim for the cohort is in flight. It also claims nothing when
-    /// another queue of the worker has waited one poll interval for a claim (rule 17).
+    /// refill batch while another claim for the cohort is in flight.
     /// </summary>
     private CompletionClaim ReserveCompletionClaim(Active task)
     {
@@ -247,25 +246,6 @@ public sealed partial class Worker
             if (limit <= 0 || (claiming && limit < slots.RefillBatch))
             {
                 return idle;
-            }
-
-            // The completion gives its slot back, so the next plain claim continues the rotation.
-            if (!run.FairnessSkipPending && OtherQueueWaiting(task.Task.Queue))
-            {
-                run.FairnessSkipPending = true;
-                return idle;
-            }
-
-            // Until that plain claim starts, a fused claim refills only its own slot, so it cannot
-            // take the slot that the skipped completion gave back.
-            if (run.FairnessSkipPending)
-            {
-                limit = 1;
-            }
-
-            if (_queues.Length > 1)
-            {
-                _queueAskedAt[task.Task.Queue] = Monotonic.Now();
             }
 
             slots.ReservedTotal += limit;

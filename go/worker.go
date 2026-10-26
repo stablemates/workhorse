@@ -340,10 +340,6 @@ type Worker struct {
 	queues         []string
 	queueCursorMu  sync.Mutex
 	nextQueueIndex int
-	// queueAskedAt holds, per queue, when a claim last asked that queue for tasks, plain or fused.
-	// A worker with more than one queue reads it, so a fused refill cannot keep the other queues
-	// from a claim (ADR 0076, rule 17). queueCursorMu guards it because claims overlap.
-	queueAskedAt map[string]time.Time
 	// fullTierUntil holds, per queue, when the worker next tries a fast claim after PostgreSQL
 	// refused one. fullTierMu guards it because claims overlap.
 	fullTierMu    sync.Mutex
@@ -623,7 +619,6 @@ func NewWorker(pool *pgxpool.Pool, options WorkerOptions) (*Worker, error) {
 	worker := &Worker{
 		pool:                       pool,
 		queues:                     uniqueQueues,
-		queueAskedAt:               make(map[string]time.Time, len(uniqueQueues)),
 		workerID:                   workerID,
 		concurrency:                concurrency,
 		cohorts:                    cohorts,
@@ -1010,9 +1005,7 @@ type completionClaimer struct {
 }
 
 type completionRequest struct {
-	slot *dispatchSlot
-	// queue is the completing task's queue, the only queue its fused claim asks.
-	queue string
+	slot  *dispatchSlot
 	reply chan *completionReservation
 }
 
@@ -1042,7 +1035,7 @@ func (claimer *completionClaimer) reserve(task ClaimedTask) *completionReservati
 	}
 	reply := make(chan *completionReservation, 1)
 	select {
-	case claimer.requests <- completionRequest{slot: task.slot, queue: task.Queue, reply: reply}:
+	case claimer.requests <- completionRequest{slot: task.slot, reply: reply}:
 		return <-reply
 	case <-claimer.done:
 		return nil
@@ -1125,15 +1118,6 @@ func (worker *Worker) dispatch(ctx context.Context, environment dispatchEnvironm
 	}
 	stopping := false
 	var firstError error
-	// Set when a completion skipped its fused refill so that a plain claim can ask the other
-	// queues. The next plain claim clears it, so only one completion at a time gives up its refill.
-	fairnessSkipPending := false
-	// A queue counts as asked when the run starts, so the first completions keep their refills.
-	worker.markQueuesAsked(worker.queues...)
-	fairnessInterval := defaultWorkerPollInterval
-	if worker.explicitPollInterval {
-		fairnessInterval = worker.pollInterval
-	}
 	// Set by a claim that found nothing to run. No claim starts until its deadline or a wake that
 	// arrived after that claim started. A release wait follows a claim that released every task it
 	// claimed. Each release notifies the queue, so a wake does not end that wait: only its
@@ -1240,7 +1224,6 @@ func (worker *Worker) dispatch(ctx context.Context, environment dispatchEnvironm
 		}
 	}
 	startClaim := func(limit int, cohort int, cohortLimit int) {
-		fairnessSkipPending = false
 		reserved += limit
 		if cohort < 0 {
 			wholeClaims++
@@ -1339,10 +1322,8 @@ func (worker *Worker) dispatch(ctx context.Context, environment dispatchEnvironm
 	}
 	// The refill-batch rule applies to a fused claim as well: while a plain claim that can fill the
 	// completing task's cohort is in flight, a completion claims only when that would fill at least
-	// a refill batch of slots. A claim for another cohort does not hold a completion back. A
-	// completion also claims nothing when another queue of the worker has waited a fairness interval
-	// for a claim (ADR 0076, rule 17).
-	reserveCompletionClaim := func(slot *dispatchSlot, queue string) *completionReservation {
+	// a refill batch of slots. A claim for another cohort does not hold a completion back.
+	reserveCompletionClaim := func(slot *dispatchSlot) *completionReservation {
 		// A slot of another run never changes this loop's counters.
 		if slot.claimer != claimer {
 			return nil
@@ -1355,17 +1336,6 @@ func (worker *Worker) dispatch(ctx context.Context, environment dispatchEnvironm
 		if (wholeClaims > 0 || cohortClaims[cohort] > 0) && limit < refillBatch {
 			return nil
 		}
-		// The completion gives its slot back, so the loop's next plain claim continues the rotation.
-		if !fairnessSkipPending && worker.otherQueueWaiting(queue, fairnessInterval) {
-			fairnessSkipPending = true
-			return nil
-		}
-		// Until that plain claim starts, a fused claim refills only its own slot, so it cannot take
-		// the slot that the skipped completion gave back.
-		if fairnessSkipPending {
-			limit = 1
-		}
-		worker.markQueuesAsked(queue)
 		reserved += limit
 		cohortReserved[cohort] += limit
 		slot.handedOver = true
@@ -1484,7 +1454,7 @@ func (worker *Worker) dispatch(ctx context.Context, environment dispatchEnvironm
 		case settlement := <-claimResults:
 			settleClaim(settlement)
 		case request := <-claimer.requests:
-			request.reply <- reserveCompletionClaim(request.slot, request.queue)
+			request.reply <- reserveCompletionClaim(request.slot)
 		case settlement := <-claimer.settlements:
 			settleCompletionClaim(settlement)
 		case <-wakeAfter:
@@ -1893,43 +1863,13 @@ func (worker *Worker) claimNext(ctx context.Context, executor Executor) (*Claime
 	return &tasks[0], err
 }
 
-// nextClaimQueue advances the round-robin cursor and records that a claim asks the queue now.
-// Claims overlap, so the cursor is shared state.
+// nextClaimQueue advances the round-robin cursor. Claims overlap, so the cursor is shared state.
 func (worker *Worker) nextClaimQueue() string {
 	worker.queueCursorMu.Lock()
 	defer worker.queueCursorMu.Unlock()
 	queue := worker.queues[worker.nextQueueIndex]
 	worker.nextQueueIndex = (worker.nextQueueIndex + 1) % len(worker.queues)
-	worker.queueAskedAt[queue] = time.Now()
 	return queue
-}
-
-// markQueuesAsked records that a claim asks each of queues now.
-func (worker *Worker) markQueuesAsked(queues ...string) {
-	now := time.Now()
-	worker.queueCursorMu.Lock()
-	defer worker.queueCursorMu.Unlock()
-	for _, queue := range queues {
-		worker.queueAskedAt[queue] = now
-	}
-}
-
-// otherQueueWaiting reports whether a queue other than queue has had no claim for interval. A fused
-// claim asks only its own queue, so while that queue has a backlog its completions would keep every
-// slot, and no plain claim would ask the other queues (ADR 0076, rule 17). A single-queue worker
-// never waits.
-func (worker *Worker) otherQueueWaiting(queue string, interval time.Duration) bool {
-	if len(worker.queues) < 2 {
-		return false
-	}
-	worker.queueCursorMu.Lock()
-	defer worker.queueCursorMu.Unlock()
-	for _, other := range worker.queues {
-		if askedAt, asked := worker.queueAskedAt[other]; other != queue && asked && time.Since(askedAt) >= interval {
-			return true
-		}
-	}
-	return false
 }
 
 // claimNextMany fills up to limit slots from the configured queues in round-robin order. A

@@ -282,12 +282,11 @@ def scripted_worker(
     concurrency: int,
     poll_ms: int = 5_000,
     cohorts: int | None = None,
-    queues: Sequence[str] = ("dispatch",),
     **options: Any,
 ) -> Worker:
     worker = Worker(
         object(),  # type: ignore[arg-type]
-        queues=queues,
+        queue="dispatch",
         worker_id="python-dispatch",
         concurrency=concurrency,
         cohorts=cohorts,
@@ -305,7 +304,7 @@ def scripted_worker(
 
 @contextmanager
 def running(
-    worker: Worker, executions: Executions | FastExecutions | QueueExecutions
+    worker: Worker, executions: Executions | FastExecutions
 ) -> Iterator[list[BaseException]]:
     worker._execute_claimed_task = executions.execute  # type: ignore[method-assign]
     errors: list[BaseException] = []
@@ -607,147 +606,6 @@ def test_stop_runs_the_tasks_an_in_flight_fused_claim_returns() -> None:
     assert all(limit == 0 for _completions, limit in fused[1:])
     assert sum(completions for completions, _limit in fused) == 3
     assert claims.claim_limits() == [2]
-
-
-class QueueFastClaims:
-    """Answer complete_many_and_claim from one backlog for each queue, as fast-tier queues do.
-
-    Each fused call records its completed task and its claim limit, by queue. With holding set,
-    a plain claim waits until release_held.
-    """
-
-    def __init__(self, backlogs: dict[str, list[dict[str, object]]]) -> None:
-        self._lock = Lock()
-        self._backlogs = backlogs
-        self._held: list[Event] = []
-        self.holding = False
-        self.fused: dict[str, list[tuple[str, int]]] = {queue: [] for queue in backlogs}
-
-    def rows(self, statement: DriverStatement, parameters: Sequence[object] = ()) -> list[Any]:
-        if statement is not STATEMENTS.complete_many_and_claim:
-            return []
-        task_ids, queue, limit = parameters[1], parameters[4], parameters[5]
-        assert isinstance(task_ids, list)
-        assert isinstance(queue, str)
-        assert isinstance(limit, int)
-        release = Event()
-        with self._lock:
-            if self.holding and not task_ids:
-                self._held.append(release)
-            else:
-                release.set()
-        assert release.wait(timeout=5), "held claim was never released"
-        with self._lock:
-            self.fused[queue].extend((str(task_id), limit) for task_id in task_ids)
-            backlog = self._backlogs[queue]
-            claimed, self._backlogs[queue] = backlog[:limit], backlog[limit:]
-        rows: list[dict[str, object]] = [dict(row) for row in claimed] or [
-            dict.fromkeys(task_row(0, HANDLED))
-        ]
-        rows[0]["accepted"] = list(task_ids)
-        return rows
-
-    def fused_of(self, queue: str) -> list[tuple[str, int]]:
-        with self._lock:
-            return list(self.fused[queue])
-
-    def held(self) -> int:
-        with self._lock:
-            return len(self._held)
-
-    def release_held(self) -> None:
-        with self._lock:
-            self.holding = False
-            held, self._held = self._held, []
-        for release in held:
-            release.set()
-
-
-class QueueExecutions:
-    """Stand in for fast-tier handlers that record each task they start and run for 2 ms."""
-
-    def __init__(self, worker: Worker) -> None:
-        self._worker = worker
-        self._lock = Lock()
-        self.started: list[str] = []
-
-    def execute(self, task: ClaimedTask, _claim_sent_at: float) -> None:
-        with self._lock:
-            self.started.append(task.id)
-        sleep(0.002)
-        with self._worker._state_lock:
-            self._worker._fast_task_ids.discard(task.id)
-        self._worker._complete_fast_task(task, '"ok"')
-
-    def started_tasks(self) -> list[str]:
-        with self._lock:
-            return list(self.started)
-
-    def open_all(self) -> None:
-        pass
-
-
-# SM-1676: a fused completion claim asks only the completing task's queue. While that queue had a
-# backlog, each completion refilled the slot, and no plain claim reached the other queues.
-def test_another_queue_gets_a_claim_while_a_fast_queue_keeps_a_backlog() -> None:
-    backlog = 200
-    cold = task_row(backlog, HANDLED)
-    claims = QueueFastClaims({"a": handled_rows(backlog), "b": [cold]})
-    worker = scripted_worker(claims, concurrency=1, poll_ms=100, queues=("a", "b"))
-    executions = QueueExecutions(worker)
-    with running(worker, executions) as errors:
-        wait_for(lambda: cold["task_id"] in executions.started_tasks(), "the cold task did not run")
-    assert errors == []
-    # Once queue b has waited a poll interval, one a completion claims nothing. Its slot goes to a
-    # plain claim, which asks b next. Every other a completion still refills its slot. Under host
-    # load the first completion can already be the one that skips.
-    started = executions.started_tasks()
-    cold_at = started.index(str(cold["task_id"]))
-    assert cold_at < backlog // 2
-    fused = claims.fused_of("a")
-    skip = next(index for index, (_task_id, limit) in enumerate(fused) if limit == 0)
-    assert all(limit == 1 for _task_id, limit in fused[:skip])
-    assert fused[skip][0] == started[cold_at - 1]
-
-
-# SM-1676: while a plain claim was in flight, a fused claim of the skipping cohort took the slot
-# that the fairness skip gave back, so no plain claim reached the other queues.
-def test_slot_of_a_fairness_skip_stays_free_for_a_plain_claim() -> None:
-    claims = QueueFastClaims({"a": handled_rows(100), "b": []})
-    worker = scripted_worker(claims, concurrency=4, cohorts=2, poll_ms=40, queues=("a", "b"))
-    executions = FastExecutions(worker)
-
-    def active() -> int:
-        with worker._state_lock:
-            return len(worker._active_threads)
-
-    task_id = [str(row["task_id"]) for row in handled_rows(4)]
-    with running(worker, executions) as errors:
-        try:
-            # Cohort 0 runs tasks 0 and 1. Cohort 1 runs tasks 2 and 3.
-            wait_for(lambda: executions.running() == 4, "the worker did not fill its slots")
-            claims.holding = True
-            # A cohort 1 completion skips its fused claim, and the plain claim for its slot is held.
-            sleep(0.06)
-            executions.finish(task_id[2])
-            wait_for(lambda: claims.held() == 1, "no plain claim took the skipped slot")
-            # Queue b waits a fairness interval again while that claim is in flight.
-            sleep(0.06)
-            executions.finish(task_id[0])
-            wait_for(lambda: active() == 2, "the skipping handler did not end")
-            executions.finish(task_id[1])
-            wait_for(
-                lambda: any(task == task_id[1] for task, _limit in claims.fused_of("a")),
-                "the second cohort 0 completion did not send a statement",
-            )
-            cohort_zero = [
-                limit for task, limit in claims.fused_of("a") if task in (task_id[0], task_id[1])
-            ]
-            assert cohort_zero == [0, 1]
-        finally:
-            worker.stop()
-            claims.release_held()
-    assert errors == []
 
 
 class HeldTick(ScriptedClaims):

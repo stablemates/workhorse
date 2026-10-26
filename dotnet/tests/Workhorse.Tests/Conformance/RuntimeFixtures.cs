@@ -161,7 +161,6 @@ internal sealed class RuntimeFixtures : IAsyncDisposable
             "heartbeat-busy" => HeartbeatBusyAsync(fixture),
             "maintenance-phase-error" => MaintenancePhaseErrorAsync(fixture),
             "slot-refill" => SlotRefillAsync(fixture),
-            "queue-fairness" => QueueFairnessAsync(fixture),
             "batch" => BatchAsync(fixture),
             "suspension-replay" => SuspensionReplayAsync(fixture),
             "lease-loss" => LeaseLossAsync(fixture),
@@ -927,73 +926,6 @@ internal sealed class RuntimeFixtures : IAsyncDisposable
         {
             ReleaseHeld();
             OpenAll();
-            subject.Stop();
-            await StoppedAsync(run, grace);
-        }
-    }
-
-    /// <summary>
-    /// A fused refill asks only its own queue. The cold queue's task must still run before the hot
-    /// queue's backlog ends (ADR 0076, rule 17).
-    /// </summary>
-    private async Task QueueFairnessAsync(OrderedDictionary<string, object?> fixture)
-    {
-        var hot = $"{QueueName(fixture)}-hot";
-        var cold = $"{QueueName(fixture)}-cold";
-        await using (var connection = await _database.DataSource.OpenConnectionAsync())
-        {
-            foreach (var queue in new[] { hot, cold })
-            {
-                await Sql.RowsAsync(
-                    connection,
-                    SqlCatalogue.SetQueueTierV1,
-                    [Parameters.Text(queue), Parameters.Text("fast"), Parameters.Text("runtime-fixture"), Parameters.Text(Runner.Text(fixture["id"]))],
-                    CancellationToken.None);
-            }
-        }
-
-        var hotTaskCount = (long)fixture["hotTaskCount"]!;
-        for (long sequence = 0; sequence < hotTaskCount; sequence++)
-        {
-            await EnqueueAsync(TaskType(fixture), Json.Members(("sequence", sequence)), Options(hot));
-        }
-
-        var started = new ConcurrentQueue<string>();
-        var hotHandler = Millis(fixture, "hotHandlerMs");
-        await using var pool = Intercept.Create(_database, Intercept.Hook.None);
-        var grace = TimeSpan.Zero;
-        // The runner does not dispose the worker, because DisposeAsync waits for the run without a bound (SM-1801).
-        var subject = NewWorker(pool, fixture, options =>
-        {
-            options.Queues = [hot, cold];
-            options.Concurrency = checked((int)(long)fixture["concurrency"]!);
-            options.PollInterval = Millis(fixture, "pollMs");
-            grace = options.ShutdownGrace;
-        });
-        subject.Handle<JsonElement>(TaskType(fixture), async (context, _) =>
-        {
-            started.Enqueue(context.Task.Queue);
-            if (context.Task.Queue == hot)
-            {
-                await Task.Delay(hotHandler);
-            }
-        });
-        var run = Running(subject, () => subject.RunAsync(CancellationToken.None));
-        try
-        {
-            // The cold task arrives while fused refills already hold the slots, so the result does not
-            // depend on which queue the first plain claim asks.
-            var coldAfter = (long)fixture["coldEnqueueAfterHotStarts"]!;
-            await EventuallyAsync($"{Runner.Text(fixture["id"])} started fewer than {coldAfter} hot tasks", 7, () => started.Count >= coldAfter);
-            await EnqueueAsync(TaskType(fixture), Json.Members(("cold", true)), Options(cold));
-            await EventuallyAsync($"{Runner.Text(fixture["id"])} never ran the cold task", 7, () => started.Contains(cold));
-            var position = started.ToList().IndexOf(cold);
-            Failure.Check(
-                position <= (long)fixture["expectedMaximumHotTasksBeforeCold"]!,
-                $"{position} hot tasks started before the cold task");
-        }
-        finally
-        {
             subject.Stop();
             await StoppedAsync(run, grace);
         }
