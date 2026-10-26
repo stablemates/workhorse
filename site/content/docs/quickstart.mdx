@@ -92,8 +92,12 @@ Install the package for the language of your application.
 
     The .NET SDK has four packages: `Workhorse`, `Workhorse.Hosting`,
     `Workhorse.EntityFrameworkCore`, and `Workhorse.AspNetCore`. This quickstart uses only
-    `Workhorse`. NuGet does not serve the packages yet, so this step gives no install command.
+    `Workhorse`. nuget.org serves the packages from `0.10.0`.
     [Installation](/docs/installation) tells more.
+
+    ```bash
+    dotnet add package Workhorse
+    ```
 
     Your application never installs the schema. A deployment step installs it once, and that step
     runs on Node.js.

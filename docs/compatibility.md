@@ -118,8 +118,8 @@ floor is Jakarta Servlet 6.0. CI tests the dashboard backend in the Tomcat relea
 tested Spring Boot line manages.
 
 The .NET SDK has four packages: `Workhorse`, `Workhorse.Hosting`, `Workhorse.EntityFrameworkCore`,
-and `Workhorse.AspNetCore`. NuGet does not serve them yet. After the first publish, a project adds
-the core with `dotnet add package Workhorse`, and `support.json` states that command as
+and `Workhorse.AspNetCore`. nuget.org serves them from `0.10.0`. A project adds the core with
+`dotnet add package Workhorse`, and `support.json` states that command as
 `install.dotnet`. Every package targets `net10.0`, and a .NET 11 application runs it without a
 second target. A local build uses the .NET SDK that `mise.toml` pins, which carries the .NET 10
 runtime. Pull requests and pushes run the .NET suite on .NET 10 and on .NET 11, against the newest
@@ -1341,7 +1341,7 @@ The .NET SDK has four packages for nuget.org: `Workhorse`, `Workhorse.Hosting`,
 ([ADR 0107](decisions/0107-shape-the-dotnet-sdk-as-a-csharp-core-with-hosting-ef-core-and-asp-net-core-packages.md)).
 The four always carry one version, the train version that `dotnet/Directory.Build.props` sets. Like
 the crate, the gem, and the JVM artifacts, they have no tag of their own and publish from the npm
-`v*` tag. nuget.org does not serve them yet. The `nuget` job of `.github/workflows/release.yml`
+`v*` tag. nuget.org serves them from `0.10.0`. The `nuget` job of `.github/workflows/release.yml`
 publishes them from each `v*` tag that has the version of `dotnet/Directory.Build.props`.
 
 `pnpm dotnet:package-check` is the dry run. It publishes nothing and reads no secret. The CI

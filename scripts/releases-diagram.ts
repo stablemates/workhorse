@@ -16,29 +16,30 @@ type Kind = "focal" | "backend" | "store" | "external";
 
 const title = "The location of the defect decides which lines change in a release train";
 const description =
-  "Each fix ships in a release train that publishes the npm packages, Python, Go, Rust, Ruby, and " +
-  "JVM lines at one version. If the defect is in the SQL schema or in the protocol that the SDKs " +
+  "Each fix ships in a release train that publishes the npm packages, Python, Go, Rust, Ruby, " +
+  "JVM, and .NET lines at one version. If the defect is in the SQL schema or in the protocol that the SDKs " +
   "share, each line gets the fix. If the defect is in one SDK, for example Python, that line gets " +
   "the fix. Each other line publishes the same version with no change. Each fix ships only on " +
   "the highest published minor release of the current major.";
 
-const lines = ["npm packages", "Python", "Go", "Rust", "Ruby", "JVM"] as const;
+const lines = ["npm packages", "Python", "Go", "Rust", "Ruby", "JVM", ".NET"] as const;
 
 const rows: readonly (readonly [label: readonly [string, string], released: readonly boolean[]])[] =
   [
     [
       ["schema or protocol", "shared by the SDKs"],
-      [true, true, true, true, true, true],
+      [true, true, true, true, true, true, true],
     ],
     [
       ["one SDK", "for example Python"],
-      [false, true, false, false, false, false],
+      [false, true, false, false, false, false, false],
     ],
   ];
 
-const LEFT = 256;
-const WIDTH = 104;
-const GAP = 12;
+// Seven columns of 96 px with 10 px gaps end at x = 940, so the diagram keeps its 960 px width.
+const LEFT = 208;
+const WIDTH = 96;
+const GAP = 10;
 const x = (index: number): number => LEFT + index * (WIDTH + GAP);
 
 /** The release diagram: one row for each defect location, one column for each line. */

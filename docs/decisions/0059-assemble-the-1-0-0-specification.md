@@ -12,8 +12,8 @@
   Java API and the eleventh is the Kotlin API),
   [ADR 0106](0106-keep-the-release-lines-in-lockstep-after-1-0-0.md) (the lines stay in lockstep after 1.0.0),
   [ADR 0107](0107-shape-the-dotnet-sdk-as-a-csharp-core-with-hosting-ef-core-and-asp-net-core-packages.md) (the
-  specification assembles twelve surfaces; the twelfth is the C# API, whose packages NuGet does not
-  serve yet)
+  specification assembles twelve surfaces; the twelfth is the C# API, whose packages nuget.org serves
+  from `0.10.0`)
 - **Related:** [ADR 0054](0054-define-what-1-0-0-promises.md),
   [ADR 0055](0055-the-1-0-0-schema-boundary-adds-no-migration.md),
   [ADR 0056](0056-set-the-1-0-0-exit-criteria.md),

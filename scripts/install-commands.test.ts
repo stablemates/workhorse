@@ -33,9 +33,9 @@ import { publishedPackages, repositoryRoot } from "./packages.js";
 // their only surface until then.
 //
 // A NuGet package needs no version: `dotnet add package` adds the newest release, so
-// `install.dotnet` follows the no-version rule. It names the core, `Workhorse`. No README or site
-// page shows it before NuGet serves the packages (SM-1441), so `docs/compatibility.md` is its only
-// surface until then.
+// `install.dotnet` follows the no-version rule. It names the core, `Workhorse`. nuget.org serves
+// the four packages from 0.10.0 (SM-1826), so the .NET README, the install pages, and
+// `docs/compatibility.md` show it.
 
 const execFileAsync = promisify(execFile);
 
@@ -86,22 +86,46 @@ const governedSurfaces: readonly GovernedSurface[] = [
   { file: "rust/README.md", commands: ["rust", "schemaPinned"] },
   { file: "ruby/README.md", commands: ["ruby", "schemaPinned"] },
   { file: "jvm/README.md", commands: ["schemaPinned"] },
-  { file: "dotnet/README.md", commands: ["schemaPinned"] },
+  { file: "dotnet/README.md", commands: ["dotnet", "schemaPinned"] },
   {
     file: "site/content/docs/installation.mdx",
-    commands: ["go", "node", "python", "ruby", "rust", "schema", "schemaDownload", "schemaPinned"],
+    commands: [
+      "dotnet",
+      "go",
+      "node",
+      "python",
+      "ruby",
+      "rust",
+      "schema",
+      "schemaDownload",
+      "schemaPinned",
+    ],
   },
   {
     file: "site/content/docs/quickstart.mdx",
-    commands: ["go", "node", "python", "ruby", "rust", "schema", "schemaPinned"],
+    commands: ["dotnet", "go", "node", "python", "ruby", "rust", "schema", "schemaPinned"],
   },
   {
     file: "site/content/docs/for-ai-agents.mdx",
-    commands: ["go", "node", "python", "ruby", "rust", "schema", "schemaPinned"],
+    commands: ["dotnet", "go", "node", "python", "ruby", "rust", "schema", "schemaPinned"],
+  },
+  {
+    file: "docs/guides/385-agent-integration.md",
+    commands: ["dotnet", "go", "node", "python", "ruby", "rust"],
   },
   { file: "site/content/docs/api.mdx", commands: ["schema", "schemaPinned"] },
   { file: "docs/compatibility.md", commands: ["dotnet", "gradle", "maven"] },
 ];
+
+/** The .NET packages that a project adds beside `Workhorse` when it uses them (ADR 0107). */
+const optionalDotnetPackages = [
+  "Workhorse.Hosting",
+  "Workhorse.EntityFrameworkCore",
+  "Workhorse.AspNetCore",
+] as const;
+
+/** The pages that list the four .NET packages with an install command for each. */
+const dotnetPackagePages = ["dotnet/README.md", "site/content/docs/installation.mdx"] as const;
 
 /** Markdown wraps prose at will, so a sentence rule compares runs of whitespace as one space. */
 function collapse(contents: string): string {
@@ -277,13 +301,28 @@ describe("install commands", () => {
     );
   });
 
-  it("keeps the Gradle, Maven, and NuGet commands off the README and site pages until the registries serve them", async () => {
+  // `install.dotnet` names only the core. The other three packages of ADR 0107 are optional, so
+  // support.json does not state them, but the two pages that list all four must give each command.
+  it("gives the command of each optional .NET package on the pages that list all four", async () => {
+    const missing: string[] = [];
+
+    for (const file of dotnetPackagePages) {
+      const contents = await read(file);
+      for (const id of optionalDotnetPackages) {
+        if (!contents.includes(`dotnet add package ${id}\n`)) missing.push(`${file}: ${id}`);
+      }
+    }
+
+    expect(missing).toEqual([]);
+  });
+
+  it("keeps the Gradle and Maven commands off the README and site pages", async () => {
     const manifest = await readInstallManifest();
     const shown: string[] = [];
 
     for (const [file, contents] of await documentedSurfaces()) {
       if (!file.endsWith("README.md") && !file.startsWith("site/")) continue;
-      for (const key of ["dotnet", "gradle", "maven"] as const) {
+      for (const key of ["gradle", "maven"] as const) {
         if (contents.includes(manifest.install[key])) shown.push(`${file}: install.${key}`);
       }
     }
