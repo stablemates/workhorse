@@ -37,11 +37,15 @@ asks otherwise.
    until the fix is published, and the maintainers cap it at 90 days from acknowledgement: after
    that the advisory is published whether or not a fix has shipped, so an unfixed problem is not
    hidden indefinitely. A reporter who wants to disclose earlier should say so at triage.
-5. **Advisory.** GitHub is the CVE Numbering Authority for this repository, so publishing the
-   advisory requests a CVE. One vulnerability gets one CVE and one advisory per affected
-   ecosystem, because a GitHub advisory names a single ecosystem. Workhorse publishes to npm,
-   PyPI, the Go module proxy, crates.io, RubyGems, and Maven Central. Each fix is also recorded in
-   the affected changelog.
+5. **Advisory.** GitHub is the CVE Numbering Authority (CNA) for this repository. Publishing the
+   advisory does not request a CVE. When the maintainers publish the advisory, they also request
+   the CVE as a separate action. They click **Request CVE** on the advisory, or they call
+   `POST /repos/stablemates/workhorse/security-advisories/{ghsa_id}/cve`. GitHub reviews the
+   request. If the advisory is eligible, GitHub then assigns the CVE ID.
+
+   One vulnerability gets one CVE and one advisory per affected ecosystem, because a GitHub
+   advisory names a single ecosystem. Workhorse publishes to npm, PyPI, the Go module proxy,
+   crates.io, RubyGems, and Maven Central. Each fix is also recorded in the affected changelog.
 
 No third-party security audit of Workhorse has taken place. Every review referenced by this project
 is a maintainer review. The dashboard server is the one component that serves HTTP to a browser, and
