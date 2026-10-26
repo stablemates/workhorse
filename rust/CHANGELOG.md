@@ -9,7 +9,21 @@ Workhorse is a public beta. Any 0.x minor release may change behaviour. From `0.
 upgrades in place: every release ships ordered migrations, and inside a major line a migration only
 adds.
 
-## Unreleased
+## 0.10.0 — 2026-10-26
+
+The npm packages, Python distribution, Go module, Rust crate, Ruby gem, JVM artifacts, and .NET
+packages release from one source commit.
+
+Requires **schema v76**, Rust **1.89** or newer, and PostgreSQL **15** or newer.
+
+### Upgrade steps
+
+**Migrate the schema before starting updated processes.** Run `workhorse schema migrate` before any
+process of this release starts, producers too. Migrations 0075 through 0087 move the schema to
+version **86**. The SDK compatibility floor rises from 73 to **76**, because every SDK statement
+catalogue now names `dashboard_retention_preview_v1` and `deregister_worker_v2`. An updated worker
+refuses to start on a schema below version 76. A 0.9 process keeps working on version 86, because a
+migration inside a major line only adds.
 
 ### A failed reporter callback gives a catalogued log event
 

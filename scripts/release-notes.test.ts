@@ -393,6 +393,60 @@ describe("0.9.0 release notes", () => {
   });
 });
 
+/** The 0.10.0 release: the first entry whose notes cover migrations 0075 through 0087 and .NET. */
+const firstDotnet = "## 0.10.0 — 2026-10-26";
+
+describe("0.10.0 release notes", () => {
+  const withJvm = [...changelogs, "jvm/CHANGELOG.md"];
+
+  describe.each(changelogs)("%s", (path) => {
+    const section = entry(path, firstDotnet);
+
+    it("states the current schema, compatibility floor, and migration before rollout", () => {
+      expect(section).toMatch(/^Requires \*\*schema v76\*\*/m);
+      expect(section).toMatch(
+        phrase("Migrations 0075 through 0087 move the schema to version **86**"),
+      );
+      expect(section).toMatch(phrase("compatibility floor rises from 73 to **76**"));
+      expect(section).toMatch(phrase("Migrate the schema before starting updated processes"));
+    });
+  });
+
+  it("names every migration added after 0.9.0 in the root notes", () => {
+    // 0.9.0 shipped schema version 73, and 0.10.0 ships 86, so migrations 0075 through 0087 are
+    // new in 0.10.0.
+    const section = entry("CHANGELOG.md", firstDotnet);
+    const added = readdirSync(join(root, "sql/migrations"))
+      .map((name) => /^(\d{4})-/.exec(name)?.[1])
+      .filter(
+        (number): number is string =>
+          number !== undefined && Number(number) > 74 && Number(number) <= 87,
+      );
+    expect(added).toHaveLength(13);
+    for (const number of added) expect(section, `migration ${number}`).toContain(number);
+  });
+
+  it("state the schema and the Java and PostgreSQL floors in the JVM notes", () => {
+    const section = entry("jvm/CHANGELOG.md", firstDotnet);
+    expect(section).toMatch(
+      /^Requires \*\*schema v76\*\*, Java \*\*21\*\* or newer, and PostgreSQL \*\*15\*\* or newer\.$/m,
+    );
+  });
+
+  describe.each(withJvm)("%s", (path) => {
+    it("links only to files and headings that exist", () => {
+      const broken = links(path, entry(path, firstDotnet))
+        .filter(({ file, anchor }) => {
+          if (file === undefined) return false;
+          if (!existsSync(join(root, file))) return true;
+          return anchor !== undefined && file.endsWith(".md") && !anchors(file).has(anchor);
+        })
+        .map(({ target }) => target);
+      expect(broken).toEqual([]);
+    });
+  });
+});
+
 /**
  * The first entry of the .NET changelog, the oldest one. It stays `## Unreleased` until the
  * release candidate of the first .NET publish dates it.

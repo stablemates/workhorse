@@ -4331,14 +4331,14 @@ it, the consumer type-checks it under the same strict settings.
 
 `support.json` also owns the install commands under its `install` key:
 
-| Key            | Command                                                               |
-| -------------- | --------------------------------------------------------------------- |
-| `node`         | `npm install @stablemates/workhorse`                                  |
-| `python`       | `pip install stablemates-workhorse`                                   |
-| `go`           | `go get github.com/stablemates/workhorse/go`                          |
-| `rust`         | `cargo add workhorse`                                                 |
-| `schema`       | `npm exec --no -- workhorse schema install`                           |
-| `schemaPinned` | `npx --package @stablemates/workhorse@0.9.0 workhorse schema install` |
+| Key            | Command                                                                |
+| -------------- | ---------------------------------------------------------------------- |
+| `node`         | `npm install @stablemates/workhorse`                                   |
+| `python`       | `pip install stablemates-workhorse`                                    |
+| `go`           | `go get github.com/stablemates/workhorse/go`                           |
+| `rust`         | `cargo add workhorse`                                                  |
+| `schema`       | `npm exec --no -- workhorse schema install`                            |
+| `schemaPinned` | `npx --package @stablemates/workhorse@0.10.0 workhorse schema install` |
 
 The four language commands have no version. The two schema commands are the deployment tool, not an
 adoption step. Their version must be equal to the SDK that the application depends on:
