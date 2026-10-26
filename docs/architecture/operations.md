@@ -119,7 +119,8 @@ These failures stop the worker. `run()` rejects, and the process runner starts i
 - A startup refusal. The reserved heartbeat connection is not ready within the startup budget, or
   the schema compatibility check refuses the installed schema. The startup budget is the larger of
   `heartbeatMs` and 5 seconds.
-- A failed claim statement.
+- A failed claim statement. [Task lifecycle: Claim errors](lifecycle.md#claim-errors) states this
+  rule for each SDK. A Rust worker continues after a claim error.
 - A failed maintenance statement: `tick_v1`, the schedule firing, or a maintenance routine.
 - A failed settlement write of a handler result.
 

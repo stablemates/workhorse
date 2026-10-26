@@ -1125,6 +1125,86 @@ These process-local controls do not apply queue weights. `concurrency_policy` en
 active-work budget across worker processes. `rate_limit_policy` enforces a durable start-rate budget
 across worker processes.
 
+#### Claim errors
+
+A claim error is an error from a claim statement: `claim_many_v1`, or the fast-tier claim that
+sends `complete_many_and_claim_v1` with no completion. A lost connection, a failed connection
+checkout, and a cancelled statement are examples. A claim error ends the worker run in every SDK
+except Rust. Thus the caller and the process runner see the database failure.
+
+**Example.**
+
+1. A TypeScript worker loses its heartbeat connection.
+2. A wake starts a claim before the heartbeat gate closes.
+3. The claim fails because its connection does not connect.
+4. `dispatchLoop` in `typescript/core/src/worker.ts` records the claim error, starts no other claim,
+   and drains.
+5. `Worker.run()` rejects with the claim error.
+
+In TypeScript, Python, Go, Ruby, the JVM, and .NET, a claim error has these results:
+
+1. The worker records the first claim error of the run. It starts no other claim, and it gives no
+   new claim reservation to a fused completion. A fused completion that already has a reservation
+   can still claim tasks.
+2. Each task that the failed claim or another claim already returned still runs, because it holds a
+   lease ([Dispatch loop](#dispatch-loop)).
+3. The run waits for its claims in flight. Then it drains its active handlers as a stop does
+   ([Pause, resume, and stop](#pause-resume-and-stop) and [Statement bounds](#statement-bounds)).
+4. The run then gives the claim error to its caller. Only TypeScript and Go can add other errors, as
+   the list below states. The run does not back off and claim again.
+
+| SDK        | Function that records the error                                                      | Run that ends                                                |
+| ---------- | ------------------------------------------------------------------------------------ | ------------------------------------------------------------ |
+| TypeScript | `claimNextMany`, then `settleClaim` in `dispatchLoop`, or `runBatch` for `runOnce()` | `Worker.run()` and `Worker.runOnce()` reject                 |
+| Python     | `_run_dispatch_claim`, then `_settle_claim_progress`                                 | `Worker.run()`, `Worker.run_once()`, and `AsyncWorker` raise |
+| Go         | `settleClaim` in `dispatch`, or `runOnce`                                            | `Worker.Run` and `Worker.RunOnce` return the error           |
+| Ruby       | `start_claim`, then `settle_claim_progress`, raised by `dispatch`                    | `Worker#run` and `Worker#run_once` raise                     |
+| JVM        | `startClaim`, then `settleClaimProgress`, thrown by `dispatch`                       | `Worker.run()` and `Worker.runOnce()` throw                  |
+| .NET       | `StartClaim`, then `SettleClaimProgress`, thrown by `DispatchAsync`                  | `Worker.RunAsync` and `Worker.RunOnceAsync` throw            |
+
+If the run also has another failure, each SDK gives one error to its caller:
+
+- TypeScript gives the first failure that the run observes. A failed settlement write that comes
+  after a claim error does not replace it. If the stop path of `run()` also fails, for example at
+  the deregistration, `run()` rejects with an `AggregateError` that holds each failure.
+- Python raises a maintenance error first, then a failed settlement write, then the claim error.
+- Go returns the first failure that `dispatch` observes. If the context of `Run` ended before the
+  claim error, `Run` does not return it, but the run still ends. If the drain abandoned a handler,
+  `Run` joins the error with `ErrShutdownIncomplete`.
+- Ruby, the JVM, and .NET give the claim error. It replaces a maintenance error, a failed settlement
+  write, and the shutdown-incomplete error.
+- In a single pass, TypeScript `runOnce()` and Go `RunOnce` give a failed settlement write before the
+  claim error. The single passes of the other SDKs use the order of their run.
+
+Each SDK reports a claim error as follows:
+
+- In a continuous run, TypeScript calls `reportWorkerFailure` when it first observes the error.
+  Python calls `_report_fatal_error`. The worker process runner of these two SDKs then starts its
+  shutdown deadline at once ([Python worker processes](schema-and-protocol.md#python-worker-processes)).
+- Go, Ruby, the JVM, and .NET log no event for the claim error. The caller of the run receives it.
+
+**Rust.** A claim error does not end the Rust worker run. `WorkerDispatch::claim` logs the warning
+"task claim failed" and keeps the tasks that the claim returned. If the claim returned no task that
+the worker can run, `Dispatcher::settle` waits as after an empty claim. The run continues.
+`Worker::run_once` returns the claim error if the claim returned no task. [ADR 0076](../decisions/0076-keep-overlapping-batched-claims-in-flight-to-fill-worker-slots.md),
+rule 9, records this difference and leaves its alignment to a separate decision.
+
+These failures are not claim errors, and the run continues:
+
+- The heartbeat gate closes after the claim borrowed its connection. The claim returns the tasks it
+  already claimed. TypeScript `HeartbeatGateClosedError`, Python `_ClaimGateClosed`, Go
+  `errHeartbeatClaimGateClosed`, Ruby `ClaimWithdrawn`, and .NET `ClaimWithdrawnException` mark this
+  case. In Rust and the JVM, the claim returns no error.
+- The fast-tier claim fails with SQLSTATE `P1007` on a full-tier queue. The worker claims from that
+  queue through `claim_many_v1` instead.
+- In the JVM and .NET, a claim fails with `IsolationLevelException`, SQLSTATE `0A000`. The worker logs
+  `workhorse.worker.claim_isolation` and treats the claim as empty. In TypeScript, Python, Go, and
+  Ruby, a `0A000` claim error ends the run.
+
+A failed `complete_many_and_claim_v1` that completes a task is a failed settlement write, not a claim
+error. Except in Rust, it ends the run as a failed settlement write does
+([Database failures that stop a worker](operations.md#database-failures-that-stop-a-worker)).
+
 #### Statement bounds
 
 A maintenance pass and a claim can wait for a lock that another session holds. This section states

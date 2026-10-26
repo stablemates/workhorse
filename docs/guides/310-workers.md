@@ -132,7 +132,7 @@ heartbeat connection, the rounds of the workers on one pool share one transactio
 
 `claim_v1` is the same call as `claim_many_v1` with a limit of 1.
 
-More detail: [Task lifecycle: Dispatch loop](../architecture/lifecycle.md#dispatch-loop), [Task lifecycle: Worker options](../architecture/lifecycle.md#worker-options), [Task lifecycle: Claim](../architecture/lifecycle.md#claim), [Task lifecycle: Busy retry](../architecture/lifecycle.md#busy-retry), and [Task lifecycle: Pool renewal](../architecture/lifecycle.md#pool-renewal).
+More detail: [Task lifecycle: Dispatch loop](../architecture/lifecycle.md#dispatch-loop), [Task lifecycle: Claim errors](../architecture/lifecycle.md#claim-errors), [Task lifecycle: Worker options](../architecture/lifecycle.md#worker-options), [Task lifecycle: Claim](../architecture/lifecycle.md#claim), [Task lifecycle: Busy retry](../architecture/lifecycle.md#busy-retry), and [Task lifecycle: Pool renewal](../architecture/lifecycle.md#pool-renewal).
 
 </details>
 
