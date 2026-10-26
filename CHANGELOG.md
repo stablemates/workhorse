@@ -5,10 +5,12 @@ from one tag:
 `@stablemates/workhorse`, `@stablemates/workhorse-drizzle`, `@stablemates/workhorse-prisma`, `@stablemates/workhorse-typeorm`,
 `@stablemates/workhorse-kysely`, `@stablemates/workhorse-knex`, `@stablemates/workhorse-otel`, `@stablemates/workhorse-dashboard`,
 `@stablemates/workhorse-dashboard-server`, and `@stablemates/workhorse-dashboard-contract`. The Python distribution, Go module, Rust crate, Ruby
-gem, and three JVM artifacts release from that same commit, so their notes live in
+gem, three JVM artifacts, and four .NET packages release from that same commit. Their notes live in
 [`python/CHANGELOG.md`](python/CHANGELOG.md), [`go/CHANGELOG.md`](go/CHANGELOG.md),
-[`rust/CHANGELOG.md`](rust/CHANGELOG.md), [`ruby/CHANGELOG.md`](ruby/CHANGELOG.md), and
-[`jvm/CHANGELOG.md`](jvm/CHANGELOG.md). Each entry states its required schema version and upgrade steps.
+[`rust/CHANGELOG.md`](rust/CHANGELOG.md), [`ruby/CHANGELOG.md`](ruby/CHANGELOG.md),
+[`jvm/CHANGELOG.md`](jvm/CHANGELOG.md), and [`dotnet/CHANGELOG.md`](dotnet/CHANGELOG.md). The .NET
+packages are `Workhorse`, `Workhorse.Hosting`, `Workhorse.EntityFrameworkCore`, and
+`Workhorse.AspNetCore`. Each entry states its required schema version and upgrade steps.
 
 The supported Node.js and PostgreSQL versions, the schema compatibility guarantees, and the release
 process are in [`docs/compatibility.md`](docs/compatibility.md).

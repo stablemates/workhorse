@@ -25,14 +25,14 @@ const newestFrozen = Math.max(
 // A line that has not released yet has only `## Unreleased` in its changelog. The release candidate
 // of its first release adds the entry, so until then the tree is not a release of that line.
 const firstReleasePending = !/^## \d/m.test(
-  await readFile(path.join(repositoryRoot, "jvm/CHANGELOG.md"), "utf8"),
+  await readFile(path.join(repositoryRoot, "dotnet/CHANGELOG.md"), "utf8"),
 );
 
 // After an x.y.0 release, main can carry a schema that the next minor freezes. The tree then is no
 // longer that release, so the freeze error for the newer schema is expected. A real x.y.0 tag commit
 // has its artifact, and the fixture test below checks that a missing one fails.
 const expectedProblems = [
-  ...(firstReleasePending ? [`jvm/CHANGELOG.md has no ${current} release entry`] : []),
+  ...(firstReleasePending ? [`dotnet/CHANGELOG.md has no ${current} release entry`] : []),
   ...(schemaVersion > newestFrozen && current.endsWith(".0")
     ? [
         `sql/releases/${String(schemaVersion).padStart(4, "0")}.sql is missing, but release ${current} must freeze schema version ${schemaVersion}`,
@@ -154,6 +154,7 @@ async function writeFixture(root: string, version: string, pep440 = version): Pr
     "rust/CHANGELOG.md": `# Changelog\n\n## ${version} — 2026-10-20\n`,
     "ruby/CHANGELOG.md": `# Changelog\n\n## ${version} — 2026-10-20\n`,
     "jvm/CHANGELOG.md": `# Changelog\n\n## ${version} — 2026-10-20\n`,
+    "dotnet/CHANGELOG.md": `# Changelog\n\n## ${version} — 2026-10-20\n`,
   };
   for (const [relativePath, contents] of Object.entries(files)) {
     await mkdir(path.dirname(path.join(root, relativePath)), { recursive: true });
@@ -264,6 +265,7 @@ describe("checkRelease across the release train", () => {
     "rust/CHANGELOG.md",
     "ruby/CHANGELOG.md",
     "jvm/CHANGELOG.md",
+    "dotnet/CHANGELOG.md",
     "typescript/otel/CHANGELOG.md",
   ])("rejects %s without a release entry", async (relativePath) => {
     await edit(relativePath, "## 0.8.0 —", "## Unreleased —");

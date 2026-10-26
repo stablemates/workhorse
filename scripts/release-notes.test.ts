@@ -392,3 +392,66 @@ describe("0.9.0 release notes", () => {
     });
   });
 });
+
+/**
+ * The first entry of the .NET changelog, the oldest one. It stays `## Unreleased` until the
+ * release candidate of the first .NET publish dates it.
+ */
+function firstDotnetEntry(): { heading: string; section: string } {
+  const heading = read("dotnet/CHANGELOG.md")
+    .split("\n")
+    .findLast((line) => line.startsWith("## "));
+  expect(heading, "dotnet/CHANGELOG.md has no entry").toBeDefined();
+  return { heading: heading!, section: entry("dotnet/CHANGELOG.md", heading!) };
+}
+
+describe("the first .NET release notes", () => {
+  const packages = [
+    "Workhorse",
+    "Workhorse.Hosting",
+    "Workhorse.EntityFrameworkCore",
+    "Workhorse.AspNetCore",
+  ];
+
+  it("name the .NET packages and the .NET changelog in the header of the root changelog", () => {
+    const header = read("CHANGELOG.md").split(/^## /m)[0]!;
+    expect(header).toContain("[`dotnet/CHANGELOG.md`](dotnet/CHANGELOG.md)");
+    expect(header).toMatch(phrase("four .NET packages"));
+    for (const name of packages) expect(header).toContain(`\`${name}\``);
+  });
+
+  it("state the four packages, the schema floor, and the .NET and PostgreSQL floors", () => {
+    const { section } = firstDotnetEntry();
+    expect(section).toMatch(phrase("This is the first release of the .NET SDK"));
+    const floor =
+      /^Requires \*\*schema v(\d+)\*\*, \.NET \*\*10\*\* or newer, and PostgreSQL \*\*15\*\* or newer\.$/m.exec(
+        section,
+      )?.[1];
+    expect(floor).toBeDefined();
+    expect(section).toMatch(phrase(`compatibility floor is schema version **${floor}**`));
+    for (const name of packages) expect(section).toContain(`\`${name}\``);
+  });
+
+  it("state the floor that the .NET SDK refuses to run below until the entry is dated", () => {
+    const { heading, section } = firstDotnetEntry();
+    if (heading !== "## Unreleased") return;
+    // A dated entry is immutable, so only the undated entry follows the generated catalogue.
+    const minimum = /MinimumSchemaVersion = (\d+);/.exec(
+      read("dotnet/src/Workhorse/Internal/SqlCatalogue.g.cs"),
+    )?.[1];
+    expect(minimum).toBeDefined();
+    expect(section).toContain(`Requires **schema v${minimum}**`);
+  });
+
+  it("links only to files and headings that exist", () => {
+    const { section } = firstDotnetEntry();
+    const broken = links("dotnet/CHANGELOG.md", section)
+      .filter(({ file, anchor }) => {
+        if (file === undefined) return false;
+        if (!existsSync(join(root, file))) return true;
+        return anchor !== undefined && file.endsWith(".md") && !anchors(file).has(anchor);
+      })
+      .map(({ target }) => target);
+    expect(broken).toEqual([]);
+  });
+});

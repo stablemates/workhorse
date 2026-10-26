@@ -31,4 +31,5 @@ Add only the packages that your application uses. Each package other than `Workh
 - Documentation: https://workhorse.run/docs
 - Installation: https://workhorse.run/docs/installation
 - Source code and issues: https://github.com/stablemates/workhorse
+- Release notes: https://github.com/stablemates/workhorse/blob/main/dotnet/CHANGELOG.md
 - License: Apache-2.0, https://github.com/stablemates/workhorse/blob/main/LICENSE
