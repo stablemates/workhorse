@@ -314,6 +314,33 @@ public final class Worker implements AutoCloseable {
    */
   volatile @Nullable Runnable afterRunStarted;
 
+  /** The latest run, whose empty-claim wait {@link #installedEmptyWait} reads. */
+  private volatile @Nullable RunState latestRun;
+
+  /**
+   * The empty-claim wait of a run: its deadline in {@link System#nanoTime} units, and whether a
+   * wake can end it.
+   */
+  record EmptyWaitView(long deadline, boolean wakeable) {}
+
+  /**
+   * Reads the empty-claim wait of the latest run, or {@code null} without one. Only tests read it,
+   * and no public API reaches it.
+   */
+  @Nullable EmptyWaitView installedEmptyWait() {
+    RunState run = latestRun;
+    if (run == null) {
+      return null;
+    }
+    stateLock.lock();
+    try {
+      EmptyWait wait = run.emptyWait;
+      return wait == null ? null : new EmptyWaitView(wait.deadline, wait.version != null);
+    } finally {
+      stateLock.unlock();
+    }
+  }
+
   /**
    * A test hook that runs when a run ends while a claim statement of the run still holds a permit,
    * so the run's reservation stays open until that statement settles. It is {@code null} in
@@ -1019,6 +1046,7 @@ public final class Worker implements AutoCloseable {
     registryLock.lock();
     try {
       run = new RunState(version, generation.incrementAndGet());
+      latestRun = run;
       registered.set(false);
       remotelyPaused.set(false);
     } finally {

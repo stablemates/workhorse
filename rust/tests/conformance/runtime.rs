@@ -6,7 +6,7 @@
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use serde_json::{json, Value};
 use tokio::sync::{mpsc, oneshot, watch};
@@ -1024,9 +1024,21 @@ fn gap(earlier: i64, later: i64) -> Duration {
 /// The shortest wait at the notification base: 5 s less its jitter of 10 %.
 const NOTIFICATION_WAIT_MINIMUM: Duration = Duration::from_millis(4_500);
 
-/// The longest wait at the polling-only base after the backoff restarts is 275 ms. A worker that
-/// makes no claim for this time after an empty claim waits at the notification base.
-const QUIET_BEFORE_LOSS: Duration = Duration::from_secs(1);
+/// The end of the empty wait that `worker` has installed, in microseconds from the Unix epoch, if a
+/// notification can end that wait. PostgreSQL runs on the clock of this host, so the value compares
+/// with the times that PostgreSQL records.
+fn wakeable_wait_end(worker: &Worker) -> Option<i64> {
+    let (deadline, wakeable) = worker.empty_wait_for_test()?;
+    if !wakeable {
+        return None;
+    }
+    // The wall clock is read first, so a pause between the two reads makes the end earlier, not
+    // later. An earlier end can only make the checks stricter.
+    let wall = SystemTime::now();
+    let now = std::time::Instant::now();
+    let end = if deadline >= now { wall + (deadline - now) } else { wall - (now - deadline) };
+    i64::try_from(end.duration_since(UNIX_EPOCH).ok()?.as_micros()).ok()
+}
 
 /// The bounds after the loss start at events that the runner controls, not at the moment the
 /// runner sees them. A loaded runner sees an event late, and the worker's backoff grows in that
@@ -1107,8 +1119,7 @@ async fn subscription_recovery(database: &ScratchDatabase, fixture: &Value) -> C
 
         // The next empty claim starts a new wait at the notification base. Then the proxy closes
         // the live listener connection and holds the next one, so the subscription is lost. The
-        // wait is internal to the worker. Thus the runner first waits until the worker has made no
-        // claim for QUIET_BEFORE_LOSS after an empty claim. A loss before the worker chose its wait
+        // runner first waits until the worker has installed that wait. A loss before that moment
         // gives the polling base without a wake.
         eventually_within(
             Duration::from_secs(7),
@@ -1127,22 +1138,25 @@ async fn subscription_recovery(database: &ScratchDatabase, fixture: &Value) -> C
             },
         )
         .await?;
-        let quiet = i64::try_from(QUIET_BEFORE_LOSS.as_micros()).unwrap_or(i64::MAX);
+        let empty_end: i64 = client
+            .query_one(
+                "SELECT (extract(epoch FROM finished) * 1000000)::bigint
+                   FROM workhorse.runtime_poll_claims
+                  WHERE NOT found AND (extract(epoch FROM finished) * 1000000)::bigint > $1
+                  ORDER BY finished LIMIT 1",
+                &[&recovery_end],
+            )
+            .await
+            .map_err(sql)?
+            .get(0);
+        let notification_wait =
+            i64::try_from(NOTIFICATION_WAIT_MINIMUM.as_micros()).unwrap_or(i64::MAX);
         eventually_within(
             Duration::from_secs(7),
             "the worker did not wait at the notification base after the second task",
             || async {
-                let row = client
-                    .query_one(
-                        &format!(
-                            "SELECT NOT found AND {now} - (extract(epoch FROM finished) * 1000000)::bigint >= $1
-                               FROM workhorse.runtime_poll_claims ORDER BY finished DESC LIMIT 1"
-                        ),
-                        &[&quiet],
-                    )
-                    .await
-                    .map_err(sql)?;
-                Ok(row.get::<_, bool>(0))
+                Ok(wakeable_wait_end(&worker)
+                    .is_some_and(|end| end - empty_end >= notification_wait))
             },
         )
         .await?;
@@ -1150,9 +1164,12 @@ async fn subscription_recovery(database: &ScratchDatabase, fixture: &Value) -> C
         // The loss starts when the proxy closes the connection. From that moment the wrapper holds
         // each empty claim. The first one is the claim that the loss wakes, so the worker cannot
         // advance its backoff before the runner enqueues the third task.
+        let wait_end = wakeable_wait_end(&worker);
         let lost_at: i64 = client
             .query_one(
-                &format!("UPDATE workhorse.runtime_poll_control SET hold_claims = true RETURNING {now}"),
+                &format!(
+                    "UPDATE workhorse.runtime_poll_control SET hold_claims = true RETURNING {now}"
+                ),
                 &[],
             )
             .await
@@ -1168,10 +1185,7 @@ async fn subscription_recovery(database: &ScratchDatabase, fixture: &Value) -> C
             "the worker made no claim after the subscription was lost",
             || async {
                 let row = client
-                    .query_one(
-                        "SELECT is_called FROM workhorse.runtime_poll_reached",
-                        &[],
-                    )
+                    .query_one("SELECT is_called FROM workhorse.runtime_poll_reached", &[])
                     .await
                     .map_err(sql)?;
                 Ok(row.get::<_, bool>(0))
@@ -1205,7 +1219,7 @@ async fn subscription_recovery(database: &ScratchDatabase, fixture: &Value) -> C
             .iter()
             .map(|row| (row.get::<_, i64>(0), row.get::<_, i64>(1), row.get::<_, bool>(2)))
             .collect::<Vec<_>>();
-        Ok::<_, String>((claims, recovery_end, lost_at, enqueued_after_loss))
+        Ok::<_, String>((claims, recovery_end, lost_at, wait_end, enqueued_after_loss))
     }
     .await;
     // A failure above must not leave the LISTEN or a claim held, or the worker running.
@@ -1213,7 +1227,7 @@ async fn subscription_recovery(database: &ScratchDatabase, fixture: &Value) -> C
     let _ = release_claims(&client).await;
     let _ = stop.send(());
     let stopped = running.await.map_err(|error| error.to_string());
-    let (claims, recovery_end, lost_at, enqueued_after_loss) = observed?;
+    let (claims, recovery_end, lost_at, wait_end, enqueued_after_loss) = observed?;
     stopped?.map_err(driver)?;
 
     let found: Vec<usize> = (0..claims.len()).filter(|&index| claims[index].2).collect();
@@ -1246,17 +1260,15 @@ async fn subscription_recovery(database: &ScratchDatabase, fixture: &Value) -> C
     check(waited <= maximum, || {
         format!("the first claim after the subscription was lost waited {waited:?}, want at most {maximum:?}")
     })?;
-    // The claim before the woken one found no task. The worker made no claim for
-    // QUIET_BEFORE_LOSS after it, so it waited at the notification base. The woken claim started
-    // before the shortest wait at that base ended, so the loss started it.
+    // When the runner ended the session, the claim before the woken one had installed a wait at
+    // the notification base. The woken claim started before that wait ended, so the loss started it.
     let before = claims[woken - 1];
-    let quiet = gap(before.1, lost_at);
-    check(!before.2 && quiet >= QUIET_BEFORE_LOSS, || {
-        format!("the claim before the loss returned {quiet:?} before it, want an empty claim at least {QUIET_BEFORE_LOSS:?} before")
+    let wait_end = wait_end.ok_or("the worker had no empty-claim wait when the session ended")?;
+    check(gap(before.1, wait_end) >= NOTIFICATION_WAIT_MINIMUM, || {
+        "the claim before the loss did not install a wait at the notification base".into()
     })?;
-    let since = gap(before.1, claims[woken].0);
-    check(since < NOTIFICATION_WAIT_MINIMUM, || {
-        format!("the first claim after the subscription was lost started {since:?} after the claim before it, so the wait at the notification base, not the loss, started it")
+    check(claims[woken].0 < wait_end, || {
+        "the first claim after the subscription was lost started when the wait ended, so the wait, not the loss, started it".into()
     })?;
     let waited = gap(enqueued_after_loss, claims[third].0);
     check(waited <= maximum, || {

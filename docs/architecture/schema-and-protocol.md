@@ -266,17 +266,17 @@ loaded runner sees an event late, and the worker's backoff grows in that time. T
 obeys these rules:
 
 1. The runner ends the listener session only when the worker is in its wait at the notification
-   base. A loss before the worker chose that wait gives the polling-only base without a wake. The
-   Python, TypeScript, and Ruby runners read the wait and its deadline from the worker.
-2. The Go, JVM, .NET, and Rust runners cannot read the wait. They wait until the worker has made
-   no claim for 1 s after an empty claim. A wait at the polling-only base after the backoff
-   restarts is at most 275 ms. If the worker cannot run for 1 s between that claim and its choice
-   of wait, this check cannot see the wait.
+   base. A loss before the worker chose that wait gives the polling-only base without a wake. Each
+   runner reads the wait from the worker. The runner waits until a wait that a wake can end ends
+   at least the shortest wait at that base, 4,500 ms, after the empty claim.
+2. The Go, JVM, .NET, and Rust workers give tests a view of the installed wait: its deadline, and
+   whether a wake can end it. The view is not part of the governed surface of the SDK. Go gives it
+   through an `_export_test.go` file, the JVM through a package-private method that a test source
+   reads, .NET through an `internal` member, and Rust through a `#[doc(hidden)]` method.
 3. The loss starts just before the runner ends the session.
 4. The runner holds the first empty claim after the loss until it has enqueued the third task.
-5. The first claim after the loss must start before its wait at the notification base ends, so
-   the loss, not that wait, started the claim. A runner that reads the wait compares with its
-   deadline. The other runners compare with the shortest wait at that base, 4,500 ms.
+5. The first claim after the loss must start before the deadline of the wait that the worker had
+   installed when the runner ended the session. Thus the loss, not that wait, started the claim.
 
 ### Durable replay conflicts
 

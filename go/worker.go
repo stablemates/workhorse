@@ -408,7 +408,10 @@ type Worker struct {
 	// expireOwned asks PostgreSQL once to expire an attempt while its handler runs
 	// (expireOwnedOnce). Internal tests replace it to order its answer against heartbeat answers.
 	expireOwned func(ctx context.Context, task ClaimedTask) (ownershipStatus, error)
-	completions completionBatcher
+	// observeEmptyWait receives the empty-claim wait before the dispatch loop waits: its deadline,
+	// and whether a wake can end it. A zero deadline means no wait. It is nil outside tests.
+	observeEmptyWait func(deadline time.Time, wakeable bool)
+	completions      completionBatcher
 	// claimConnection is holdClaimConnection outside tests. A claim and a fused completion take
 	// their connection through it before they read the claim gate.
 	claimConnection func(ctx context.Context, executor Executor) (Executor, func(), error)
@@ -1454,6 +1457,13 @@ func (worker *Worker) dispatch(ctx context.Context, environment dispatchEnvironm
 					}
 					startClaim(limit, cohort, cohortLimit)
 				}
+			}
+		}
+		if worker.observeEmptyWait != nil {
+			if emptyWait == nil {
+				worker.observeEmptyWait(time.Time{}, false)
+			} else {
+				worker.observeEmptyWait(emptyWait.deadline, !emptyWait.release)
 			}
 		}
 
