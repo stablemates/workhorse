@@ -967,7 +967,7 @@ skip publication after npm publishes, and the run still succeeds. `pnpm release:
 The Python files and `python/CHANGELOG.md` use the PEP 440 spelling of a prerelease, and the other
 files use the SemVer spelling. The check changes no publication step of a workflow.
 
-`pnpm release:verify <python|npm|crate|go|maven> X.Y.Z` holds the version checks as exact commands and
+`pnpm release:verify <python|npm|crate|go|maven|nuget> X.Y.Z` holds the version checks as exact commands and
 the output each must print. After each stage publishes, the handoff runs that stage's target
 instead of restating commands. Each target installs the public version into a fresh scratch
 directory:
@@ -986,6 +986,10 @@ directory:
   consumer runs one task in the database that `WORKHORSE_VERIFY_DATABASE_URL` names, and checks
   that it succeeded. That database must have the Workhorse schema. Each consumer prints the file
   name of the jar it loaded, which must name the version, and the id of the task.
+- `nuget` restores `dotnet/release-consumer` with the four .NET packages from nuget.org into an
+  empty package folder, with no HTTP cache. Each package must come from nuget.org. The consumer
+  prints the version of each package assembly. It then runs one task in the database that
+  `WORKHORSE_VERIFY_DATABASE_URL` names, and checks that it succeeded.
 
 The script covers registry visibility, signatures or checksums, and clean installation. It also
 covers PyPI provenance. The maintainer still reviews provenance on the npm, crates.io, and RubyGems
@@ -1004,6 +1008,8 @@ substitutes the artifact about to ship for the registry release:
   scratch module cache.
 - `--maven-repo <directory>` makes the consumers take `run.workhorse` only from the staging
   directory that `pnpm jvm:package-check` writes. They take every other module from Maven Central.
+- `--nuget-feed <directory>` makes the .NET consumer take the four packages only from the packed
+  files that `pnpm dotnet:package-check` writes. It takes every other package from nuget.org.
 
 A check the artifact cannot satisfy therefore fails the rehearsal, not the train after the tag.
 
@@ -1319,10 +1325,9 @@ publishes them from each `v*` tag that has the version of `dotnet/Directory.Buil
    Workhorse package at another version. Each nuspec must have the license expression `Apache-2.0`,
    the README `dotnet/PACKAGE.md`, the project URL, and the repository URL and the commit of the
    build. Each PDB must have a SourceLink map to that commit and no path in the checkout.
-4. The check restores `dotnet/release-consumer` in a temporary directory with an empty package
-   folder. Its `nuget.config` takes `Workhorse` and `Workhorse.*` only from the packed files. The
-   consumer prints the informational version of each package assembly. With PostgreSQL available,
-   it enqueues one task, and the hosted worker of `Workhorse.Hosting` runs it.
+4. The check runs `pnpm release:verify nuget` with `--nuget-feed` and the packed files, in a scratch
+   database. The hosted worker of `Workhorse.Hosting` runs the task of the consumer, and the check
+   reads the task back. Without PostgreSQL, the check skips the consumer.
 
 `pnpm dotnet:release-check` runs `pnpm dotnet:lint`, `pnpm dotnet-api:check`, `pnpm dotnet:vuln`,
 and then the dry run.
@@ -1342,6 +1347,8 @@ for the reviewer, even a run that pushes nothing. After npm publishes and the re
 4. `dotnet nuget push --skip-duplicate` pushes `Workhorse` first and then the other three packages.
    Each push also sends the symbol package. nuget.org signs each package, so the `nuget` job adds no
    author signature.
+5. Verify the public version with `pnpm release:verify nuget X.Y.Z`. Set
+   `WORKHORSE_VERIFY_DATABASE_URL` to a database with the Workhorse schema first.
 
 nuget.org never deletes a published version. It can only unlist one. The required reviewer of the
 `nuget` environment is therefore the person between the push and a permanent version.

@@ -5,20 +5,17 @@ import { describe, expect, it } from "vitest";
 
 import {
   compareVersions,
-  connectionString,
-  consumerNugetConfig,
-  consumerVersionLine,
   dotnetTrainVersion,
   nuspecProblems,
   packageBaseline,
   packageContentProblems,
   packageFileProblems,
-  publishedPackages,
   readZip,
   scratchDatabaseName,
   symbolProblems,
 } from "./check-dotnet-release.js";
 import { classifyTestDatabase, testFamilyRoots } from "./test-database-sweep.js";
+import { dotnetPackages } from "./verify-release.js";
 
 const root = path.resolve(import.meta.dirname, "..");
 const commit = "bf4b884c4ea870100c859095de27a819e00d06c6";
@@ -93,7 +90,7 @@ describe("the .NET train version", () => {
   });
 
   it("packs nothing but the four packages of ADR 0107", async () => {
-    expect(publishedPackages).toEqual([
+    expect(dotnetPackages).toEqual([
       "Workhorse",
       "Workhorse.Hosting",
       "Workhorse.EntityFrameworkCore",
@@ -127,20 +124,20 @@ describe("versions and the package validation baseline", () => {
   it("uses no baseline before the first publish", () => {
     expect(packageBaseline(new Map(), "0.9.0")).toBeUndefined();
     // A re-run of the first release finds only the train version, which is not a baseline.
-    const first = new Map(publishedPackages.map((id) => [id, ["0.9.0"]]));
+    const first = new Map(dotnetPackages.map((id) => [id, ["0.9.0"]]));
     expect(packageBaseline(first, "0.9.0")).toBeUndefined();
   });
 
   it("uses the newest published version below the train version after the first publish", () => {
     const published = new Map(
-      publishedPackages.map((id) => [id, ["0.9.0", "1.0.0-rc.1", "1.0.0", "1.1.0"]]),
+      dotnetPackages.map((id) => [id, ["0.9.0", "1.0.0-rc.1", "1.0.0", "1.1.0"]]),
     );
     expect(packageBaseline(published, "1.1.0")).toBe("1.0.0");
     expect(packageBaseline(published, "1.0.0")).toBe("1.0.0-rc.1");
   });
 
   it("refuses packages whose newest published versions differ", () => {
-    const published = new Map(publishedPackages.map((id) => [id, ["1.0.0"]]));
+    const published = new Map(dotnetPackages.map((id) => [id, ["1.0.0"]]));
     published.set("Workhorse.AspNetCore", []);
     expect(() => packageBaseline(published, "1.1.0")).toThrow(
       "Workhorse 1.0.0, Workhorse.Hosting 1.0.0, Workhorse.EntityFrameworkCore 1.0.0, Workhorse.AspNetCore none",
@@ -149,7 +146,7 @@ describe("versions and the package validation baseline", () => {
 });
 
 describe("the packed files", () => {
-  const all = publishedPackages.flatMap((id) => [`${id}.0.9.0.nupkg`, `${id}.0.9.0.snupkg`]);
+  const all = dotnetPackages.flatMap((id) => [`${id}.0.9.0.nupkg`, `${id}.0.9.0.snupkg`]);
 
   it("accepts the four packages and their symbol packages at the train version", () => {
     expect(packageFileProblems(all, "0.9.0")).toEqual([]);
@@ -247,32 +244,7 @@ describe("the packed files", () => {
   });
 });
 
-describe("the release consumer", () => {
-  it("takes the four packages only from the local feed", () => {
-    const config = consumerNugetConfig("/tmp/feed & co");
-    expect(config).toContain("<clear />");
-    expect(config).toContain('<add key="workhorse-release" value="/tmp/feed &amp; co" />');
-    expect(config).toMatch(
-      /<packageSource key="workhorse-release">\s*<package pattern="Workhorse" \/>\s*<package pattern="Workhorse\.\*" \/>\s*<\/packageSource>/,
-    );
-    expect(config).toMatch(/<packageSource key="nuget.org">\s*<package pattern="\*" \/>/);
-  });
-
-  it("expects the train version from each package assembly", () => {
-    expect(consumerVersionLine("0.9.0")).toBe(
-      "Workhorse=0.9.0 Workhorse.Hosting=0.9.0 Workhorse.EntityFrameworkCore=0.9.0 Workhorse.AspNetCore=0.9.0",
-    );
-  });
-
-  it("passes the scratch database to Npgsql as a quoted connection string", () => {
-    expect(connectionString("postgres://work%40horse:pa'ss@localhost:5433/workhorse_test_x")).toBe(
-      "Host='localhost';Port='5433';Database='workhorse_test_x';Username='work@horse';Password='pa''ss'",
-    );
-    expect(connectionString("postgres://localhost/workhorse_test")).toBe(
-      "Host='localhost';Port='5432';Database='workhorse_test'",
-    );
-  });
-
+describe("the scratch database of the release consumer", () => {
   it("names its scratch database in the shape pnpm db:sweep retires", () => {
     const source = "workhorse_test_sm_1629_dotnet_release_s_8d0dc6d4";
     const name = scratchDatabaseName(source, 4242);

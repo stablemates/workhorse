@@ -1,9 +1,9 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <!--
-    The release consumer of `pnpm dotnet:package-check` (ADR 0107, "Governed surface and release").
-    It references the four packages at WorkhorseVersion. The check copies it to a temporary
-    directory and restores the four packages only from the local feed of the packed files. It is not
-    in the solution, and it never ships.
+    The release consumer of `pnpm release:verify nuget` and `pnpm dotnet:package-check` (ADR 0107,
+    "Governed surface and release"). It references the four packages at WorkhorseVersion. The target
+    copies it to a scratch directory and restores the four packages from nuget.org, or only from the
+    local feed of the packed files. It is not in the solution, and it never ships.
   -->
   <PropertyGroup>
     <OutputType>Exe</OutputType>
