@@ -55,7 +55,7 @@ COPY ruby/examples/demo_worker.rb ./
 
 # The JVM worker's jars. The build reads the core's sources and the dashboard bundle that the core
 # jar carries. The runtime stage needs no Gradle and no JDK, only the JRE stage below.
-FROM gradle:9.8.1-jdk25-alpine@sha256:88b059d39a3971709550fc721c029b0c54ab785dfe4fa4169ae04017cf2c22a4 AS jvm-build
+FROM gradle:9.8.2-jdk25-alpine@sha256:80143a78c558d1298d392339ea51236bea816131afe2916ef465a76ff2579809 AS jvm-build
 
 WORKDIR /workhorse
 ARG BUILD_CONCURRENCY=4
@@ -74,7 +74,7 @@ FROM eclipse-temurin:25.0.4_7-jre-alpine@sha256:2ca9adf44f5c29d28ecd26cf92d75cc0
 
 # The .NET worker, published framework-dependent and without an app host, so one build serves every
 # architecture. The SDK tag is the version that mise.toml pins.
-FROM mcr.microsoft.com/dotnet/sdk:10.0.402-alpine3.24@sha256:496914451b05ac5a24592024362ec370c3a2d3c3fe817f864e4aa55c4c194a56 AS dotnet-build
+FROM mcr.microsoft.com/dotnet/sdk:10.0.403-alpine3.24@sha256:cc02b814237a76c4735fb6eeee87181597b5e56f2ce458a435e527674d91f4d7 AS dotnet-build
 
 WORKDIR /workhorse
 ARG BUILD_CONCURRENCY=4
@@ -90,7 +90,7 @@ RUN --mount=type=cache,target=/root/.nuget/packages \
       -p:UseAppHost=false
 
 # The .NET runtime that runs the .NET worker. It matches the runtime of the SDK above.
-FROM mcr.microsoft.com/dotnet/runtime:10.0.13-alpine3.24@sha256:6a97a629f6c44e7263b41175e79cb9aeb1df631d3714e74e80a4ddd016258646 AS dotnet-runtime
+FROM mcr.microsoft.com/dotnet/runtime:10.0.14-alpine3.24@sha256:54d48f739ebffdef82388056d420af37ed39c722b8d5ee5dedca6878537c2737 AS dotnet-runtime
 
 FROM ghcr.io/astral-sh/uv:0.13.5@sha256:32a7bb39b496babbd997b0a39a4d66c126bdaf5661b302bf6f06abda8deca6ff AS uv
 

@@ -113,7 +113,7 @@
   },
   "toolchains": {
     "go": "1.26.10",
-    "gradle": "9.8.1",
+    "gradle": "9.8.2",
     "java": "temurin-25.0.4",
     "node": "24.22.1",
     "pnpm": "10.18.3",
