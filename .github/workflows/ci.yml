@@ -97,7 +97,7 @@ jobs:
       # (SM-1484).
       - uses: gradle/actions/setup-gradle@3f5f9adaf7d9fecd50b5935e54106014257a94e6 # v6.4.0
         with:
-          gradle-version: 9.8.1 # Pinned to the gradle version in mise.toml.
+          gradle-version: 9.8.2 # Pinned to the gradle version in mise.toml.
       - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
@@ -143,7 +143,7 @@ jobs:
         env:
           DOTNET_INSTALL_DIR: ${{ runner.temp }}/dotnet
         with:
-          dotnet-version: 10.0.402 # Pinned to the dotnet version in mise.toml.
+          dotnet-version: 10.0.403 # Pinned to the dotnet version in mise.toml.
       - run: pnpm install --frozen-lockfile
       # `pnpm npm:release-check` runs knip before it builds, so run knip here with no `dist/` too. A
       # knip config that loads a build output passes after the build and fails the release (SM-1292).
@@ -659,7 +659,7 @@ jobs:
       # (SM-1484).
       - uses: gradle/actions/setup-gradle@3f5f9adaf7d9fecd50b5935e54106014257a94e6 # v6.4.0
         with:
-          gradle-version: 9.8.1 # Pinned to the gradle version in mise.toml.
+          gradle-version: 9.8.2 # Pinned to the gradle version in mise.toml.
       - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
@@ -728,7 +728,7 @@ jobs:
         env:
           DOTNET_INSTALL_DIR: ${{ runner.temp }}/dotnet
         with:
-          dotnet-version: 10.0.402 # Pinned to the dotnet version in mise.toml.
+          dotnet-version: 10.0.403 # Pinned to the dotnet version in mise.toml.
       # A lane for a later release installs its .NET and ASP.NET Core runtimes beside the pinned
       # SDK. The SDK stays the only SDK, so the build does not change (ADR 0107, "Floors").
       - if: matrix.runtime != 'sdk'
@@ -780,7 +780,7 @@ jobs:
       # (SM-1484).
       - uses: gradle/actions/setup-gradle@3f5f9adaf7d9fecd50b5935e54106014257a94e6 # v6.4.0
         with:
-          gradle-version: 9.8.1 # Pinned to the gradle version in mise.toml.
+          gradle-version: 9.8.2 # Pinned to the gradle version in mise.toml.
       - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
@@ -829,7 +829,7 @@ jobs:
       # (SM-1484).
       - uses: gradle/actions/setup-gradle@3f5f9adaf7d9fecd50b5935e54106014257a94e6 # v6.4.0
         with:
-          gradle-version: 9.8.1 # Pinned to the gradle version in mise.toml.
+          gradle-version: 9.8.2 # Pinned to the gradle version in mise.toml.
       - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
@@ -880,7 +880,7 @@ jobs:
       # (SM-1484).
       - uses: gradle/actions/setup-gradle@3f5f9adaf7d9fecd50b5935e54106014257a94e6 # v6.4.0
         with:
-          gradle-version: 9.8.1 # Pinned to the gradle version in mise.toml.
+          gradle-version: 9.8.2 # Pinned to the gradle version in mise.toml.
       - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
@@ -1010,7 +1010,7 @@ jobs:
       # comment in the `static` job gives the reason (SM-1484).
       - uses: gradle/actions/setup-gradle@3f5f9adaf7d9fecd50b5935e54106014257a94e6 # v6.4.0
         with:
-          gradle-version: 9.8.1 # Pinned to the gradle version in mise.toml.
+          gradle-version: 9.8.2 # Pinned to the gradle version in mise.toml.
       - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
@@ -1034,7 +1034,7 @@ jobs:
         env:
           DOTNET_INSTALL_DIR: ${{ runner.temp }}/dotnet
         with:
-          dotnet-version: 10.0.402 # Pinned to the dotnet version in mise.toml.
+          dotnet-version: 10.0.403 # Pinned to the dotnet version in mise.toml.
       # The development demo starts its Ruby worker with `bundle exec`. The demo smoke test runs a
       # copy of the tracked files, which lacks the ignored `ruby/.bundle/config` naming the bundle
       # path, so the smoke step names the installed bundle itself.

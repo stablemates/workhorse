@@ -1404,28 +1404,28 @@ describe("continuous integration", () => {
   });
 
   // Mantine ships one version across its packages, so a lone `@mantine/core` bump cannot build.
-  // The `mantine` group exists to carry them together. Dependabot assigns a dependency to the most
-  // specific group that matches it, so the broader npm groups claim every `@mantine/*` package
-  // unless they exclude it, and this group silently stops existing. Nothing in a passing CI run
-  // reports that, so the exclusions are asserted here instead.
-  it("keeps the Mantine group reachable in the Dependabot configuration", async () => {
+  // OpenTelemetry JS releases its API and SDK packages as one line with narrow peer ranges, so a
+  // lone `@opentelemetry/*` bump cannot install cleanly. A group exists for each to carry its
+  // packages together. Dependabot assigns a dependency to the most specific group that matches it,
+  // so the broader `npm` group claims every such package unless it excludes it, and the narrower
+  // group silently stops existing. Nothing in a passing CI run reports that, so the exclusions are
+  // asserted here instead.
+  it("keeps the Mantine and OpenTelemetry groups reachable in the Dependabot configuration", async () => {
     const dependabot = await read(".github/dependabot.yml");
-    const groups = ["npm-development", "npm-production"];
 
     expect(dependabot).toMatch(/ {6}mantine:\n {8}patterns: \["@mantine\/\*"\]/);
-    for (const group of groups) {
-      const heading = `      ${group}:\n`;
-      const start = dependabot.indexOf(heading);
-      expect(start).toBeGreaterThan(-1);
-      const rules = dependabot.slice(start + heading.length);
-      const next = rules.search(/^ {0,6}\S/m);
-      expect(`${group} rules: ${next === -1 ? rules : rules.slice(0, next)}`).toContain(
-        'exclude-patterns: ["@mantine/*"]',
-      );
-    }
+    expect(dependabot).toMatch(/ {6}opentelemetry:\n {8}patterns: \["@opentelemetry\/\*"\]/);
+    const heading = "      npm:\n";
+    const start = dependabot.indexOf(heading);
+    expect(start).toBeGreaterThan(-1);
+    const rules = dependabot.slice(start + heading.length);
+    const next = rules.search(/^ {0,6}\S/m);
+    expect(`npm rules: ${next === -1 ? rules : rules.slice(0, next)}`).toContain(
+      'exclude-patterns: ["@mantine/*", "@opentelemetry/*"]',
+    );
   });
 
-  // Each line that `pnpm check` scans for advisories also receives Dependabot's weekly updates, so
+  // Each line that `pnpm check` scans for advisories also receives Dependabot's monthly updates, so
   // a reported advisory arrives with a pull request that fixes it.
   it("updates every scanned language line through Dependabot", async () => {
     const dependabot = await read(".github/dependabot.yml");

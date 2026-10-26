@@ -19,7 +19,7 @@
     "@stablemates/workhorse-typeorm": "workspace:*",
     "drizzle-orm": "^0.45.4",
     "knex": "3.3.0",
-    "kysely": "0.29.6",
+    "kysely": "0.29.7",
     "magicast": "0.5.5",
     "objection": "3.9.1",
     "pg": "8.23.1",
