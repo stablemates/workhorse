@@ -70,7 +70,7 @@ RUN --mount=type=cache,target=/var/cache/gradle \
 
 # The JRE that runs the JVM worker. Its tag is the Temurin release that mise.toml pins. It is an
 # Alpine build, so it runs on the musl C library of the runtime stage's base.
-FROM eclipse-temurin:25.0.4_7-jre-alpine@sha256:2ca9adf44f5c29d28ecd26cf92d75cc0c66b7f32bfd839a4439e363a8b428af8 AS jre
+FROM eclipse-temurin:27_35-jre-alpine@sha256:0faf24c1d1e778bbc0700fc71c53b081c9432f1e51e6e41c86c63840e8b89ac1 AS jre
 
 # The .NET worker, published framework-dependent and without an app host, so one build serves every
 # architecture. The SDK tag is the version that mise.toml pins.
