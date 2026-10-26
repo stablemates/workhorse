@@ -1425,6 +1425,22 @@ describe("continuous integration", () => {
     );
   });
 
+  // Dependabot validates `.github/dependabot.yml` only after it lands on `main`, and it rejects the
+  // whole file for one unsupported key. Then no ecosystem gets a version update, and no check on a
+  // pull request reports it. `github-actions` and `docker` versions are not semantic versions, so
+  // their cooldown accepts only `default-days`. SM-1839 set `semver-major-days` on both.
+  it("sets only the cooldown keys each Dependabot ecosystem supports", async () => {
+    const dependabot = await read(".github/dependabot.yml");
+    const entries = dependabot.split(/^ {2}- package-ecosystem: /m).slice(1);
+    const ecosystems = entries.map((entry) => entry.slice(0, entry.indexOf("\n")));
+    expect(ecosystems).toEqual(expect.arrayContaining(["github-actions", "docker"]));
+    for (const entry of entries) {
+      const ecosystem = entry.slice(0, entry.indexOf("\n"));
+      if (ecosystem !== "github-actions" && ecosystem !== "docker") continue;
+      expect(`${ecosystem}: ${entry}`).not.toMatch(/^ {6}semver-\w+-days:/m);
+    }
+  });
+
   // Each line that `pnpm check` scans for advisories also receives Dependabot's monthly updates, so
   // a reported advisory arrives with a pull request that fixes it.
   it("updates every scanned language line through Dependabot", async () => {
