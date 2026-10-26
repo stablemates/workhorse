@@ -1195,8 +1195,11 @@ describe("continuous integration", () => {
     expect(stepReading("MAVEN_CENTRAL_PASSWORD")).toEqual(upload);
     expect(upload[0]).toContain("scripts/upload-maven-central.ts");
     expect(upload[0]).not.toContain("SIGNING");
-    expect(await read("scripts/upload-maven-central.ts")).toContain(
-      'publishingType: "USER_MANAGED"',
+    // The Portal publishes a valid deployment, and the upload waits for PUBLISHED (SM-1837).
+    const uploadScript = await read("scripts/upload-maven-central.ts");
+    expect(uploadScript).toContain('publishingType: "AUTOMATIC"');
+    expect(workflow.slice(workflow.indexOf("\n  github-release:"))).toMatch(
+      /needs: \[[^\]]*\bmaven-central\b[^\]]*\]/,
     );
   });
 

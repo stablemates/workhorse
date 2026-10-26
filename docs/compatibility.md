@@ -1303,18 +1303,26 @@ for example `requireFeature("opentelemetry")` or `requireFeature("servlet")`.
    `pnpm jvm:package-check --consumers-only`. Thus the stage uploads the jars that its consumers
    ran, not a second build.
 6. `scripts/upload-maven-central.ts` uploads the bundle to the Central Publisher Portal with
-   `publishingType=USER_MANAGED`. The job waits until the Portal reports the deployment as
-   `VALIDATED`. The script retries a status request that fails with a network error, HTTP 429, or
+   `publishingType=AUTOMATIC`. The Portal validates the deployment and, if it passes, publishes it
+   to Maven Central. No person selects Publish in the Portal. The job waits until the Portal
+   reports the deployment as `PUBLISHED`. It fails if the Portal reports `FAILED` or a state that
+   the Portal API does not document. It also fails if the deployment is not `PUBLISHED` after 60
+   minutes. The script retries a status request that fails with a network error, HTTP 429, or
    HTTP 5xx, and fails after five such failures in a row.
-7. Open the deployment at <https://central.sonatype.com/publishing/deployments>, check it, and
-   select Publish. Maven Central never deletes a published version, so this step keeps a person
-   between the upload and a permanent version. After two clean releases, a maintainer can change
-   the stage to `publishingType=AUTOMATIC`.
-8. Verify the public version with `pnpm release:verify maven X.Y.Z`. Set
+7. Verify the public version with `pnpm release:verify maven X.Y.Z`. Set
    `WORKHORSE_VERIFY_DATABASE_URL` to a database with the Workhorse schema first.
+   `repo1.maven.org` can serve the version some minutes after the Portal reports `PUBLISHED`.
 
-The `github-release` job waits for the `maven-central` job. A failed upload or a failed validation
-therefore ends the run before the GitHub release exists.
+Maven Central never deletes a published version. Thus the person who approves the `maven-central`
+environment is the human check before a version becomes permanent. After that approval, three
+checks stop a defective bundle before the Portal publishes it: the release check of the build job,
+the release consumers on the bytes of the bundle, and the Portal validation. For 0.9.0 and 0.10.0
+the stage used `publishingType=USER_MANAGED`, and the maintainer selected Publish in the Portal.
+Both releases were clean, so SM-1837 changed the stage to `AUTOMATIC`.
+
+The `github-release` job waits for the `maven-central` job. A failed upload, a failed validation, a
+failed publish, or a publish that did not end in 60 minutes therefore ends the run before the GitHub
+release exists.
 [Recover from a failed Maven Central upload](#recover-from-a-failed-maven-central-upload) states
 what to do then.
 
@@ -1532,26 +1540,43 @@ finds the orphaned packages on npm can tell why they exist.
 #### Recover from a failed Maven Central upload
 
 The `maven-central` job runs after npm publishes. If it fails after the Central Portal accepted the
-bundle, the Portal keeps that deployment. The deployment can still reach `VALIDATED`, but nothing
-publishes it. The log of the failed run names the deployment in the line "The Portal accepted
-deployment".
+bundle, the Portal keeps that deployment. The upload uses `publishingType=AUTOMATIC`, so the Portal
+can still publish the deployment after the job ends. The log of the failed run names the deployment
+in the line "The Portal accepted deployment". Each line "Deployment ... is" gives a state that the
+`maven-central` job read, and the last of these lines gives the last known state.
 
-If the `maven-central` job failed for a transient reason, for example a Portal outage or a
-validation that took more than 15 minutes, do these steps:
+Do not re-run the `maven-central` job before you know the state of each deployment of the
+version. Maven Central refuses a second deployment of a version that it already has. Do these
+steps:
 
-1. Re-run the failed `maven-central` job. The `maven-central` environment asks for a review first.
-   The job stages, signs, and tests the artifacts again, and uploads a second deployment of the
-   same version.
-2. When the job ends, open <https://central.sonatype.com/publishing/deployments>.
-3. Drop the deployment of the failed run. Find it by the ID in the log of the failed run.
-4. Publish the deployment of the re-run, as step 7 of [JVM artifacts](#jvm-artifacts) describes.
-   Publish only one deployment of a version.
+1. Open <https://central.sonatype.com/publishing/deployments>. Find the deployment by the ID in the
+   log. If the log has no line "The Portal accepted deployment", look for a deployment with the name
+   `workhorse-jvm-vX.Y.Z` that the Portal created during the failed run. The Portal can accept the
+   bundle while the `maven-central` job fails before it reads the ID. If the Portal has no
+   deployment of the version, re-run the failed `maven-central` job. The `maven-central`
+   environment asks for a review first.
+2. If the state is `PENDING`, `VALIDATING`, `VALIDATED`, or `PUBLISHING`, the Portal still works on
+   the deployment. Wait, and read the state again. You cannot drop a deployment in `PUBLISHING`.
+3. If the state is `PUBLISHED`, Maven Central has the version permanently. Do not re-run the
+   `maven-central` job. Run `pnpm release:verify maven X.Y.Z`, as step 7 of
+   [JVM artifacts](#jvm-artifacts) describes. Then do the work of the `github-release` job
+   yourself, because the run skipped it:
+   1. Make sure that the `publish`, `crates-io`, `rubygems`, and `nuget` jobs of the same run
+      succeeded. If one of them failed, do its recovery first. The GitHub release must not announce
+      a version that a registry of the train does not have.
+   2. From a checkout of the `vX.Y.Z` tag, run `pnpm install --frozen-lockfile` and
+      `pnpm schema:generate`.
+   3. Run the `gh release create` command of the `github-release` job in
+      `.github/workflows/release.yml`, with the same title, notes, and `sql/schema.sql`.
+4. If the state is `FAILED`, read the `errors` of the deployment in the log or in the Portal.
 
-The `github-release` job runs after the re-run succeeds.
-
-If the Portal reports the deployment as `FAILED`, a re-run cannot fix it. Drop the deployment. The
-failure is a defect of the candidate, and [Release train](#release-train) states what to do with a
-defect.
+If the errors name a defect of the bundle, for example a missing signature or a POM without the
+required metadata, a re-run cannot fix it. The failure is a defect of the candidate, and
+[Release train](#release-train) states what to do with a defect. If the errors name no defect of
+the bundle, ask Central Support with the deployment ID. Do not drop the deployment before you ask,
+because Central Support uses its files. When Central Support confirms that the Portal published
+nothing, drop the deployment and re-run the failed `maven-central` job. The `github-release` job
+runs after the re-run succeeds.
 
 ## Benchmark validation is not the support boundary
 
