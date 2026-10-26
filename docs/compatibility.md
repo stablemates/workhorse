@@ -960,7 +960,8 @@ skip publication after npm publishes, and the run still succeeds. `pnpm release:
 3. An `install` command in `support.json` names another version.
 4. A changelog has no `## X.Y.Z` entry for the release. The changelogs are `CHANGELOG.md`,
    `python/CHANGELOG.md`, `go/CHANGELOG.md`, `rust/CHANGELOG.md`, `ruby/CHANGELOG.md`,
-   `jvm/CHANGELOG.md`, and the changelog of each published npm package that has one.
+   `jvm/CHANGELOG.md`, `dotnet/CHANGELOG.md`, and the changelog of each published npm package that
+   has one.
 5. The release is a minor or major release, and `sql/releases/<NNNN>.sql` does not exist for
    `WORKHORSE_SCHEMA_VERSION`. The first major release adds no migration, so the last `0.x` minor
    already froze its artifact.
@@ -1031,6 +1032,10 @@ The Ruby gem keeps its own [`ruby/CHANGELOG.md`](../ruby/CHANGELOG.md), which th
 [Ruby gem](#ruby-gem) checklist bumps with every release. The three JVM artifacts keep one
 [`jvm/CHANGELOG.md`](../jvm/CHANGELOG.md), which the [JVM artifacts](#jvm-artifacts) checklist bumps
 with every release.
+The four .NET packages keep one [`dotnet/CHANGELOG.md`](../dotnet/CHANGELOG.md). The release
+candidate moves its `## Unreleased` entries under a `## X.Y.Z` heading, as for the JVM artifacts.
+For the first release, the candidate also removes `unpublished` from the .NET line in
+`site/lib/releases.ts`.
 
 ### npm packages
 

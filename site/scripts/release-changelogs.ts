@@ -12,7 +12,7 @@ import {
  *
  * `/docs/releases` prints the current version of each line so a reader can
  * apply the support policy without visiting npm, PyPI, the Go module proxy,
- * crates.io, RubyGems, and Maven Central.
+ * crates.io, RubyGems, Maven Central, and nuget.org.
  * A hand-maintained table would make that policy a false statement the first
  * time a release shipped without the page being edited, so the table is
  * generated from the files the release commit already updates

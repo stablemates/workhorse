@@ -13,7 +13,7 @@ Host integration, EF Core transactions, and an ASP.NET Core dashboard backend.
 
 > **Public beta:** Workhorse is usable for evaluation and early production adoption. A 0.x minor
 > release may change behaviour, so read the
-> [changelog](https://github.com/stablemates/workhorse/blob/main/CHANGELOG.md) before you upgrade.
+> [changelog](https://github.com/stablemates/workhorse/blob/main/dotnet/CHANGELOG.md) before you upgrade.
 > It does not ask you to recreate your database. Migrations are ordered, and inside a major line a
 > migration only adds. Thus a running deployment upgrades in place.
 
