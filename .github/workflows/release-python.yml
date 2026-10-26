@@ -82,7 +82,7 @@ jobs:
         with:
           node-version: 22
           package-manager-cache: false
-      - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+      - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
         with:
           version: 0.12.21 # Pinned to the uv version in mise.toml.
           enable-cache: false
@@ -113,7 +113,7 @@ jobs:
         with:
           node-version: 22
           package-manager-cache: false
-      - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+      - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
         with:
           version: 0.12.21 # Pinned to the uv version in mise.toml.
           enable-cache: false
@@ -122,7 +122,7 @@ jobs:
         with:
           name: python-distributions
           path: python/dist
-      - uses: astral-sh/attest-action@f589a42a7efb6fe400b4f400de60b4bc90390027 # v0.0.6
+      - uses: astral-sh/attest-action@39b6ce43875c196a579e31635b11aa2a2036384a # v0.0.7
         with:
           paths: python/dist/*
       - run: node scripts/check-attestation-upload.ts python/dist
@@ -136,7 +136,7 @@ jobs:
     permissions:
       id-token: write
     steps:
-      - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+      - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
         with:
           version: 0.12.21 # Pinned to the uv version in mise.toml.
           enable-cache: false
@@ -145,7 +145,7 @@ jobs:
         with:
           name: python-distributions
           path: python/dist
-      - uses: astral-sh/attest-action@f589a42a7efb6fe400b4f400de60b4bc90390027 # v0.0.6
+      - uses: astral-sh/attest-action@39b6ce43875c196a579e31635b11aa2a2036384a # v0.0.7
         with:
           paths: python/dist/*
       - run: uv publish --trusted-publishing always python/dist/*
