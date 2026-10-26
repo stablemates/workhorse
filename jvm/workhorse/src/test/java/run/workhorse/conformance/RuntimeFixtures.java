@@ -137,7 +137,7 @@ final class RuntimeFixtures {
       """
       ALTER FUNCTION workhorse.expire_owned_telemetry_v1(uuid, text, bigint)
         RENAME TO expire_owned_telemetry_v1_recorded;
-      CREATE TABLE workhorse.test_expiry_answers (answered bigserial PRIMARY KEY, status text);
+      CREATE TABLE workhorse.test_expiry_answers (answered bigserial PRIMARY KEY, fence_token bigint, status text);
       DO $$
       BEGIN
         EXECUTE format(
@@ -147,8 +147,8 @@ final class RuntimeFixtures {
             'workhorse.expire_owned_telemetry_v1_recorded(uuid, text, bigint)'::regprocedure),
           'WITH answer AS (SELECT * FROM workhorse.expire_owned_telemetry_v1_recorded('
             || 'p_task_id, p_worker_id, p_fence_token)), '
-            || 'recorded AS (INSERT INTO workhorse.test_expiry_answers (status) '
-            || 'SELECT answer.status FROM answer) SELECT * FROM answer');
+            || 'recorded AS (INSERT INTO workhorse.test_expiry_answers (fence_token, status) '
+            || 'SELECT p_fence_token, answer.status FROM answer) SELECT * FROM answer');
       END
       $$""";
 
@@ -161,6 +161,14 @@ final class RuntimeFixtures {
 
   private static final String FIRST_EXPIRY_ANSWER =
       "SELECT status FROM workhorse.test_expiry_answers ORDER BY answered LIMIT 1";
+
+  /**
+   * Reads the first answer of each attempt, in attempt order. Each claim takes a new fence token,
+   * so the token names the attempt.
+   */
+  private static final String FIRST_EXPIRY_ANSWER_OF_EACH_ATTEMPT =
+      "SELECT DISTINCT ON (fence_token) status FROM workhorse.test_expiry_answers"
+          + " ORDER BY fence_token, answered";
 
   private final Connections.Opener opener;
   private final Connection connection;
@@ -401,23 +409,40 @@ final class RuntimeFixtures {
   }
 
   private void expiration(Map<String, @Nullable Object> fixture) throws Exception {
-    if (!Boolean.TRUE.equals(fixture.get("databaseTimesOutFirst"))) {
+    boolean timesOutFirst = Boolean.TRUE.equals(fixture.get("databaseTimesOutFirst"));
+    boolean leads = (Long) fixture.get("localClockLeadMs") > 0;
+    if (!timesOutFirst && !leads) {
       expirationAttempts(fixture);
       return;
     }
     // The runner shares its database between fixtures, so the wrapper ends with this fixture.
     update(RECORD_EXPIRY_ANSWERS);
     try {
-      expirationAttempts(fixture);
+      int attempts = expirationAttempts(fixture);
       // An attempt that PostgreSQL timed out first leaves the late local timer no active attempt.
-      String first = value(FIRST_EXPIRY_ANSWER);
-      check("stale".equals(first), "the first expiry answer " + first + ", want stale");
+      if (timesOutFirst) {
+        String first = value(FIRST_EXPIRY_ANSWER);
+        check("stale".equals(first), "the first expiry answer " + first + ", want stale");
+      }
+      // A local timer that leads the database asks before the expiry, so PostgreSQL first answers
+      // not_due. Without that answer, the fixture does not prove that the worker asks again.
+      if (leads) {
+        List<@Nullable Object> firstAnswers = new ArrayList<>();
+        synchronized (connection) {
+          Runner.sql(connection, FIRST_EXPIRY_ANSWER_OF_EACH_ATTEMPT)
+              .forEach(row -> firstAnswers.add(row.get("status")));
+        }
+        check(
+            firstAnswers.equals(java.util.Collections.nCopies(attempts, "not_due")),
+            "the first expiry answer of each attempt " + firstAnswers + ", want not_due");
+      }
     } finally {
       update(STOP_RECORDING_EXPIRY_ANSWERS);
     }
   }
 
-  private void expirationAttempts(Map<String, @Nullable Object> fixture) throws Exception {
+  /** Runs the expiration attempts and returns how many attempts the handler saw. */
+  private int expirationAttempts(Map<String, @Nullable Object> fixture) throws Exception {
     boolean deadline = "deadline".equals(fixture.get("mode"));
     long duration = (Long) fixture.get("durationMs");
     long lead = (Long) fixture.get("localClockLeadMs");
@@ -537,6 +562,7 @@ final class RuntimeFixtures {
                 cancelledAt.size(), fixture.get("expectedCancelledAfterDatabaseExpiry"))),
         "cancellation after the database expiry: " + afterExpiry);
     expectOutcomes(taskId, (List<?>) fixture.get("expectedAttemptOutcomes"));
+    return cancelledAt.size();
   }
 
   private void heartbeatCadence(Map<String, @Nullable Object> fixture) throws Exception {

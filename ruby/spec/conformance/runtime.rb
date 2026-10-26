@@ -246,8 +246,10 @@ module Conformance
       # The expiry PostgreSQL holds for each attempt, and its clock when the handler saw cancellation.
       expiries = Concurrent::Array.new
       cancelled_at = Concurrent::Array.new
-      # What PostgreSQL answered to each expiry request, in order.
+      # What PostgreSQL answered to each expiry request, in order, and to each attempt's requests.
+      # Each claim takes a new fence token, so the token names the attempt.
       expiry_answers = Concurrent::Array.new
+      attempt_answers = Concurrent::Hash.new
       with_pool do |pool|
         subject = worker(pool, fixture, lease: fixture["leaseMs"] / 1000.0, heartbeat: fixture["heartbeatMs"] / 1000.0,
           shared_heartbeats: true)
@@ -266,7 +268,10 @@ module Conformance
         # or behind PostgreSQL.
         wrap_rows(subject) do |original, sql, params|
           rows = original.call(sql, params)
-          rows.each { |row| expiry_answers << row["status"] } if sql == W::SqlCatalogue::EXPIRE_OWNED_TELEMETRY_V1
+          if sql == W::SqlCatalogue::EXPIRE_OWNED_TELEMETRY_V1
+            rows.each { |row| expiry_answers << row["status"] }
+            (attempt_answers[params[2]] ||= []).concat(rows.map { |row| row["status"] })
+          end
           next rows unless sql == W::SqlCatalogue::CLAIM_MANY_V1 && rows.any?
 
           field = deadline ? "deadline_at" : "attempt_timeout_at"
@@ -292,6 +297,12 @@ module Conformance
       # An attempt that PostgreSQL timed out first leaves the late local timer no active attempt.
       if fixture["databaseTimesOutFirst"]
         check(expiry_answers.first == "stale", "expiry answers #{expiry_answers.to_a}")
+      end
+      # A local timer that leads the database asks before the expiry, so PostgreSQL first answers
+      # not_due. Without that answer, the fixture does not prove that the worker asks again.
+      if fixture["localClockLeadMs"].positive?
+        check(attempt_answers.values.map(&:first) == ["not_due"] * cancelled_at.size,
+          "expiry answers #{attempt_answers}")
       end
       # Both times come from the database clock, so the worker clock cannot move either one.
       check(expiries.size == cancelled_at.size, "#{expiries.size} claims, #{cancelled_at.size} cancellations")

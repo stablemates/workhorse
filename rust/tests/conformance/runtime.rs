@@ -579,7 +579,7 @@ const TIME_OUT_WHEN_DUE: &str = "WITH due AS (
 const RECORD_EXPIRY_ANSWERS: &str =
     "ALTER FUNCTION workhorse.expire_owned_telemetry_v1(uuid, text, bigint)
        RENAME TO expire_owned_telemetry_v1_recorded;
-     CREATE TABLE workhorse.test_expiry_answers (answered bigserial PRIMARY KEY, status text);
+     CREATE TABLE workhorse.test_expiry_answers (answered bigserial PRIMARY KEY, fence_token bigint, status text);
      DO $$
      BEGIN
        EXECUTE format(
@@ -589,13 +589,18 @@ const RECORD_EXPIRY_ANSWERS: &str =
            'workhorse.expire_owned_telemetry_v1_recorded(uuid, text, bigint)'::regprocedure),
          'WITH answer AS (SELECT * FROM workhorse.expire_owned_telemetry_v1_recorded('
            || 'p_task_id, p_worker_id, p_fence_token)), '
-           || 'recorded AS (INSERT INTO workhorse.test_expiry_answers (status) '
-           || 'SELECT answer.status FROM answer) SELECT * FROM answer');
+           || 'recorded AS (INSERT INTO workhorse.test_expiry_answers (fence_token, status) '
+           || 'SELECT p_fence_token, answer.status FROM answer) SELECT * FROM answer');
      END
      $$";
 
 const FIRST_EXPIRY_ANSWER: &str =
     "SELECT status FROM workhorse.test_expiry_answers ORDER BY answered LIMIT 1";
+
+/// Reads the first answer of each attempt, in attempt order. Each claim takes a new fence token, so
+/// the token names the attempt.
+const FIRST_EXPIRY_ANSWER_OF_EACH_ATTEMPT: &str = "SELECT DISTINCT ON (fence_token) status
+       FROM workhorse.test_expiry_answers ORDER BY fence_token, answered";
 
 /// Holds the database's expiry `localClockLeadMs` away from the one the worker was told, so the
 /// local timer and PostgreSQL disagree about when the attempt ends.
@@ -643,7 +648,7 @@ async fn expiration(database: &ScratchDatabase, fixture: &Value) -> Checked {
     let column = if deadline { "deadline_at" } else { "attempt_timeout_at" };
     let lead = number(fixture, "localClockLeadMs") as f64;
     let times_out_first = fixture["databaseTimesOutFirst"] == json!(true);
-    if times_out_first {
+    if times_out_first || lead > 0.0 {
         client.batch_execute(RECORD_EXPIRY_ANSWERS).await.map_err(sql)?;
     }
     let reasons = Arc::new(Mutex::new(Vec::new()));
@@ -708,6 +713,20 @@ async fn expiration(database: &ScratchDatabase, fixture: &Value) -> Checked {
             client.query_opt(FIRST_EXPIRY_ANSWER, &[]).await.map_err(sql)?.map(|row| row.get(0));
         check(first.as_deref() == Some("stale"), || {
             format!("the first expiry answer {first:?}, want stale")
+        })?;
+    }
+    // A local timer that leads the database asks before the expiry, so PostgreSQL first answers
+    // `not_due`. Without that answer, the fixture does not prove that the worker asks again.
+    if lead > 0.0 {
+        let first_answers: Vec<String> = client
+            .query(FIRST_EXPIRY_ANSWER_OF_EACH_ATTEMPT, &[])
+            .await
+            .map_err(sql)?
+            .iter()
+            .map(|row| row.get(0))
+            .collect();
+        check(first_answers == vec!["not_due"; reasons.len()], || {
+            format!("the first expiry answer of each attempt {first_answers:?}, want not_due")
         })?;
     }
     assert_outcomes(&client, task, &strings(&fixture["expectedAttemptOutcomes"])).await

@@ -426,8 +426,10 @@ def execute_expiration_fixture(
     # The expiry PostgreSQL holds for each attempt, and its clock when the handler saw cancellation.
     database_expiries: list[datetime] = []
     cancelled_at: list[datetime] = []
-    # What PostgreSQL answered to each expiry request, in order.
+    # What PostgreSQL answered to each expiry request, in order, and to each attempt's requests.
+    # Each claim takes a new fence token, so the token names the attempt.
     expiry_answers: list[object] = []
+    attempt_answers: dict[object, list[object]] = {}
     worker: Worker
 
     def handler(_payload: object, context: HandlerContext) -> None:
@@ -458,6 +460,7 @@ def execute_expiration_fixture(
         rows = original_rows(statement, parameters)
         if statement is STATEMENTS.expire_owned:
             expiry_answers.extend(row["status"] for row in rows)
+            attempt_answers.setdefault(parameters[2], []).extend(row["status"] for row in rows)
         if statement is STATEMENTS.claim_many and rows:
             claimed = dict(rows[0])
             if fixture["mode"] == "deadline":
@@ -488,6 +491,11 @@ def execute_expiration_fixture(
     # An attempt that PostgreSQL timed out first leaves the late local timer no active attempt.
     if fixture.get("databaseTimesOutFirst"):
         assert expiry_answers[:1] == ["stale"], f"expiry answers {expiry_answers}"
+    # A local timer that leads the database asks before the expiry, so PostgreSQL first answers
+    # not_due. Without that answer, the fixture does not prove that the worker asks again.
+    if fixture["localClockLeadMs"] > 0:
+        first_answers = [answers[0] for answers in attempt_answers.values()]
+        assert first_answers == ["not_due"] * len(cancelled_at), f"expiry answers {attempt_answers}"
     # Both times come from the database clock, so the worker clock cannot move either one.
     assert len(database_expiries) == len(cancelled_at)
     assert [at >= expiry for at, expiry in zip(cancelled_at, database_expiries, strict=True)] == [
