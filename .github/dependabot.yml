@@ -12,7 +12,10 @@
 #   dependency still gets a pull request at once.
 # - The cooldown makes a release wait before Dependabot proposes it. A release that its maintainers
 #   replace with a fix in the first days then never opens a pull request. The cooldown does not
-#   apply to security updates.
+#   apply to security updates. A major waits 30 days, except in `github-actions` and `docker`:
+#   Dependabot rejects the whole file if those two ecosystems set `semver-major-days` or another
+#   `semver-*-days` key, and then it opens no version update for any ecosystem. That happened
+#   from SM-1839 until its fix.
 # - Updates are grouped so one month produces a few reviewable pull requests rather than thirty.
 #   Majors stay ungrouped: they change behavior and deserve their own review.
 #
@@ -25,7 +28,6 @@ updates:
       interval: monthly
     cooldown:
       default-days: 7
-      semver-major-days: 30
     open-pull-requests-limit: 5
     groups:
       actions:
@@ -200,7 +202,6 @@ updates:
       interval: monthly
     cooldown:
       default-days: 7
-      semver-major-days: 30
     open-pull-requests-limit: 5
     # One pull request for the images that remain after the ignore list below. One pull request per
     # image ran the full CI once for each image.
