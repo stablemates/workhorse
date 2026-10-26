@@ -497,8 +497,8 @@ The Python package, the Go module, the Rust crate, the Ruby gem, and the JVM SDK
 range. SQL protocol 5 and schema version 76 are their compatibility boundary instead. Their version numbers
 still match the npm packages, because every line releases from one commit.
 
-Every release publishes one version to npm, PyPI, the Go module proxy, crates.io, RubyGems, and
-Maven Central from one source commit. The current release is `0.9.0`. “Public beta” means the release is usable for evaluation and early production adoption without a
+Every release publishes one version to npm, PyPI, the Go module proxy, crates.io, RubyGems, Maven
+Central, and nuget.org from one source commit. The current release is `0.9.0`. “Public beta” means the release is usable for evaluation and early production adoption without a
 0.x compatibility promise. The label is retired at 1.0.0 and replaced by “stable”; see
 [What SemVer governs](#what-semver-governs).
 
@@ -549,8 +549,8 @@ the first release that carries one is `v0.1.0`.
 
 Each line carries its own tag on that one commit, because npm, PyPI, and the Go module proxy have
 separate build and publication identities. The Go module proxy also resolves a subdirectory module
-only from a `go/`-prefixed tag. The crate, the gem, and the JVM artifacts publish from the
-TypeScript `vX.Y.Z` tag, so six registries share three tags.
+only from a `go/`-prefixed tag. The crate, the gem, the JVM artifacts, and the .NET packages publish
+from the TypeScript `vX.Y.Z` tag, so seven registries share three tags.
 [ADR 0050](decisions/0050-release-0-1-0-without-a-prerelease-suffix.md) records that the tags name
 one commit and one version number.
 
@@ -874,8 +874,8 @@ for the distribution being published.
 ### Release train
 
 Every release publishes the same version from one source commit, in one controlled window, in a
-fixed order. The registries are npm, PyPI, the Go module proxy, crates.io, RubyGems, and Maven
-Central. Dates go into the changelogs before the
+fixed order. The registries are npm, PyPI, the Go module proxy, crates.io, RubyGems, Maven
+Central, and nuget.org. Dates go into the changelogs before the
 candidate is cut, and a slipped date means a new candidate. The candidate commit is a commit on
 `main`, and every tag of the train points to it, so every tag names the candidate commit. Other
 commits can land on `main` during the release. Thus the maintainer must create each tag on the
@@ -1377,11 +1377,14 @@ rulesets in the same change.
 
 The public repository requires pull requests and `CI / required` on `main`. Outside collaborators
 require workflow approval. The protected `npm`, `pypi`, `crates-io`, `rubygems`, `maven-central`,
-and `nuget` environments require review, and all six prevent administrator bypass.
+and `nuget` environments require review, and all six prevent administrator bypass. The
+repository has one maintainer. That maintainer is the only required reviewer of each environment,
+and can approve a run of their own tag. Thus the review is a second step of that maintainer, not a
+check by a second person.
 
 ### Publication credentials
 
-Five of the six registries hold no credential that this repository stores, and none of those five
+Six of the seven registries hold no credential that this repository stores, and none of those six
 holds one that can expire. Maven Central is the exception, as the last paragraph of this section
 describes.
 
@@ -1418,6 +1421,14 @@ identity for a short-lived API key. RubyGems.org mints that key only for the tru
 registered on the `stablemates-workhorse` gem: this repository, `release.yml`, and the `rubygems`
 environment. Renaming the workflow file, the environment, or the repository breaks publication until
 an owner updates the trusted publisher on RubyGems.org.
+
+nuget.org publication stores no credential. `NuGet/login` exchanges the `nuget` job's OIDC identity
+for an API key that is valid for one hour. nuget.org mints that key only for the trusted publishing
+policy of the `stablemates` organization: this repository, `release.yml`, and the `nuget`
+environment. The `NUGET_USER` secret of the `nuget` environment holds the nuget.org profile name
+that `NuGet/login` sends with the exchange. It is a user name, not a credential, and it does not
+expire. Renaming the workflow file, the environment, or the repository stops publication until an
+owner updates the trusted publishing policy on nuget.org.
 
 The Go module proxy needs no credential at all. `scripts/release-go.sh` pushes a tag, and the proxy
 serves what the public repository already holds.
@@ -1462,7 +1473,7 @@ npm's constraint: npm would still accept the packages that did not publish at th
 Completing a partial train from the same commit is not an allowed recovery. `pnpm npm:publish`
 refuses to resume a version the registry partly holds, and no other path publishes npm packages.
 [ADR 0050](decisions/0050-release-0-1-0-without-a-prerelease-suffix.md) requires one version across
-the six registries, so every package moves, not only the ones that failed. The packages that did
+the seven registries, so every package moves, not only the ones that failed. The packages that did
 publish stay published, because removal is unavailable and would break anyone who installed them.
 Deprecate each with `npm deprecate <name>@<version>` so an installer is pointed at the version that
 replaces it.
