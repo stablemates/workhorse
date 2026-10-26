@@ -1,5 +1,7 @@
 package run.workhorse.examples.programs;
 
+import com.zaxxer.hikari.HikariConfig;
+import com.zaxxer.hikari.HikariDataSource;
 import java.io.Closeable;
 import java.io.IOException;
 import java.io.InputStream;
@@ -69,9 +71,20 @@ public final class DemoWorkerProgram {
   static final String SCHEDULE_NAMESPACE = "workhorse-demo";
   static final String FAST_TIER_SCHEDULE_NAMESPACE = "workhorse-demo-fast-tier";
   static final int WORKER_CONCURRENCY = 6;
+
+  /**
+   * The connections of the pool: one for each execution slot, plus the notification listener, the
+   * heartbeat, the dispatch loop, and the registry refresh. The other demo workers use the same
+   * sum.
+   */
+  static final int POOL_SIZE = WORKER_CONCURRENCY + 4;
+
   static final long DEFAULT_POLL_MS = 15_000;
   static final Duration SCHEMA_RETRY = Duration.ofMillis(500);
   static final int DEFAULT_PORT = 5432;
+
+  /** The oldest PostgreSQL major version that Workhorse supports. */
+  static final String MIN_SERVER_VERSION = "15";
 
   /** The start of a URL with an empty host, such as {@code postgresql://app@/demo}. */
   private static final Pattern EMPTY_HOST =
@@ -95,6 +108,11 @@ public final class DemoWorkerProgram {
    * reads no {@code postgres://} URL, so the program maps its parts to the data source. Each value
    * uses percent decoding only, as libpq decodes it, so a {@code +} stays a {@code +}.
    *
+   * <p>The data source assumes PostgreSQL 15, the oldest server that Workhorse supports, unless a
+   * {@code jdbc:} URL names {@code assumeMinServerVersion}. PgJDBC then sends {@code
+   * application_name} in the startup packet. Without it, PgJDBC sends {@code SET application_name}
+   * after the startup, and {@code pg_stat_activity} shows the session without a name until then.
+   *
    * <p>As in libpq, a {@code host} parameter replaces the host of the URL, and a host that starts
    * with {@code /} is the directory of the server's Unix socket. PgJDBC connects over TCP only, so
    * the data source then opens that socket through {@link UnixSocketFactory}.
@@ -106,8 +124,12 @@ public final class DemoWorkerProgram {
     PGSimpleDataSource dataSource = new PGSimpleDataSource();
     if (url.startsWith("jdbc:")) {
       dataSource.setURL(url);
+      if (dataSource.getAssumeMinServerVersion() == null) {
+        dataSource.setAssumeMinServerVersion(MIN_SERVER_VERSION);
+      }
       return dataSource;
     }
+    dataSource.setAssumeMinServerVersion(MIN_SERVER_VERSION);
     // libpq reads an empty host with a host parameter as a Unix socket URL, but URI then reads the
     // authority as a registry name and drops the credentials. A placeholder host lets URI parse
     // it, and the host parameter must replace it.
@@ -196,6 +218,20 @@ public final class DemoWorkerProgram {
       dataSource.setServerNames(new String[] {host});
     }
     return dataSource;
+  }
+
+  /**
+   * Builds the connection pool over {@code connections}. A {@code PGSimpleDataSource} opens a new
+   * session for each statement, and each session costs a SCRAM key derivation in the worker and a
+   * new backend process in PostgreSQL (SM-1832). The pool keeps {@link #POOL_SIZE} sessions open
+   * and lends them to the worker.
+   */
+  static HikariDataSource pool(DataSource connections) {
+    HikariConfig config = new HikariConfig();
+    config.setDataSource(connections);
+    config.setPoolName("workhorse-demo-worker-jvm");
+    config.setMaximumPoolSize(POOL_SIZE);
+    return new HikariDataSource(config);
   }
 
   private static String decode(String value) {
@@ -309,6 +345,7 @@ public final class DemoWorkerProgram {
             .queues(JVM_QUEUE, SHARED_QUEUE, JVM_FAST_QUEUE)
             .workerId(workerId)
             .concurrency(WORKER_CONCURRENCY)
+            .poolMaxSize(POOL_SIZE)
             .scheduleNamespaces(SCHEDULE_NAMESPACE, FAST_TIER_SCHEDULE_NAMESPACE)
             .maintenanceInterval(Duration.ofSeconds(1))
             .registryInterval(Duration.ofMillis(250))
@@ -330,11 +367,12 @@ public final class DemoWorkerProgram {
     Map<String, String> environment = System.getenv();
     Optional<Duration> poll = pollInterval(environment);
     boolean waits = waitsForSchema(environment);
-    PGSimpleDataSource dataSource = dataSource(databaseUrl(environment));
+    // The process exits when the worker stops, and PostgreSQL then ends the pool's sessions.
+    HikariDataSource pool = pool(dataSource(databaseUrl(environment)));
     if (waits) {
-      waitForSchema(dataSource, SCHEMA_RETRY);
+      waitForSchema(pool, SCHEMA_RETRY);
     }
-    WorkerProcess.runWorkerProcess(buildWorker(dataSource, poll, workerId()));
+    WorkerProcess.runWorkerProcess(buildWorker(pool, poll, workerId()));
   }
 
   /**

@@ -388,6 +388,11 @@ examples read the table `workhorse.task_outcome` directly, so the quickstart nee
 dependency. These two languages also have `Admin` clients for the same reads. The Rust and Ruby
 examples read the outcome through their `Admin` clients.
 
+The Java and Kotlin examples use `PGSimpleDataSource`, which is not a pool. It opens a new
+connection for each statement. In production, give `Queue` and `Worker` a pooled `DataSource`, such
+as HikariCP. Then declare the pool size with `poolMaxSize`, because a `DataSource` does not report
+it.
+
 ## 4. Stop the worker, and see the task finish
 
 This step shows that a task continues after its worker stops. The handler does two parts of work.
