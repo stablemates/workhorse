@@ -27,18 +27,8 @@ module DocsExamples
     def welcome(to) = {"deliveredTo" => to, "kind" => "welcome"}
 
     def follow_up(to) = {"deliveredTo" => to, "kind" => "follow-up"}
-  end
 
-  module Workspaces
-    module_function
-
-    def create(account_id, idempotency_key) = {"id" => "ws-#{account_id}", "idempotencyKey" => idempotency_key}
-  end
-
-  module OnboardingMail
-    module_function
-
-    def welcome(email, workspace) = {"deliveredTo" => email, "workspace" => workspace}
+    def receipt(to, charge, tracking_number) = {"deliveredTo" => to, "charge" => charge, "trackingNumber" => tracking_number}
   end
 
   module Payments
@@ -423,35 +413,35 @@ module DocsExamples
     shipment
   end
 
-  def overview_onboard(queue, worker, account_id, email, tenant_id)
-    # docs:start overview-onboard
-    # Step 1: allow three active onboardings per tenant, across all workers.
+  def overview_fulfill(queue, worker, order_id, email, merchant_id)
+    # docs:start overview-fulfill
+    # Step 1: allow three active fulfillments per merchant, across all workers.
     # PostgreSQL applies this limit when a worker claims a task.
-    queue.sync_concurrency_policies("accounts", [
-      Stablemates::Workhorse::ConcurrencyPolicyDefinition.new(queue: "onboarding", max_active: 20, max_active_per_key: 3)
+    queue.sync_concurrency_policies("shop", [
+      Stablemates::Workhorse::ConcurrencyPolicyDefinition.new(queue: "fulfillment", max_active: 20, max_active_per_key: 3)
     ], prune: false)
 
-    # Enqueue the task. The tenant is the concurrency key.
-    queue.enqueue("account.onboard", {"accountId" => account_id, "email" => email},
-      queue: "onboarding", concurrency_key: tenant_id)
+    # Enqueue the task. The merchant is the concurrency key.
+    queue.enqueue("order.fulfill", {"orderId" => order_id, "email" => email},
+      queue: "fulfillment", concurrency_key: merchant_id)
 
-    worker.handle("account.onboard") do |account, context|
-      # Step 2: create the workspace. The checkpoint stores it.
-      # On a later run, it returns the stored workspace, and the handler
-      # does not create a second one.
-      id = account.fetch("accountId")
-      workspace = context.checkpoint("workspace") { Workspaces.create(id, "workspace:#{id}") }
+    worker.handle("order.fulfill") do |order, context|
+      # Step 2: charge the card. The checkpoint stores the charge.
+      # On a later run, it returns the stored charge, and the handler
+      # does not charge the card a second time.
+      id = order.fetch("orderId")
+      charge = context.checkpoint("charge") { Payments.charge(id, "charge:#{id}") }
 
-      # Step 3: wait until the user verifies the email address. The task
-      # releases its worker, and it does not count against the tenant limit.
-      context.wait_for_signal("email-verified")
+      # Step 3: wait until the carrier ships the parcel. The task releases
+      # its worker, and it does not count against the merchant limit.
+      tracking_number = context.wait_for_signal("order-shipped").fetch("trackingNumber")
 
       # Step 4: the signal arrived. The handler ran again from its first line,
-      # and the "workspace" checkpoint gave back the stored workspace.
+      # and the "charge" checkpoint gave back the stored charge.
 
-      # Step 5: send the welcome email.
-      context.checkpoint("welcome") { OnboardingMail.welcome(account.fetch("email"), workspace) }
-      workspace
+      # Step 5: send the receipt with the tracking number.
+      context.checkpoint("receipt") { Mailer.receipt(order.fetch("email"), charge, tracking_number) }
+      {"charge" => charge, "trackingNumber" => tracking_number}
     end
     # docs:end
   end

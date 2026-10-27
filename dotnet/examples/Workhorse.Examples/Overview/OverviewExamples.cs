@@ -1,68 +1,77 @@
 namespace Workhorse.Examples.Overview;
 
-/// <summary>The payload of the <c>account.onboard</c> task.</summary>
-public sealed record AccountPayload(string AccountId, string Email);
+/// <summary>The payload of the <c>order.fulfill</c> task.</summary>
+public sealed record OrderPayload(string OrderId, string Email);
 
-/// <summary>The workspace of a new account.</summary>
-public sealed record Workspace(string Id, string Url);
+/// <summary>The charge that the payment provider made for an order.</summary>
+public sealed record Charge(string Id);
 
-/// <summary>The result of the welcome email.</summary>
-public sealed record WelcomeResult(bool Sent);
+/// <summary>The payload of the <c>order-shipped</c> signal.</summary>
+public sealed record Shipped(string TrackingNumber);
 
-/// <summary>The service that creates the workspace of a new account.</summary>
-public interface IWorkspaces
+/// <summary>The result of the <c>order.fulfill</c> task.</summary>
+public sealed record Fulfillment(Charge Charge, string TrackingNumber);
+
+/// <summary>The result of the receipt email.</summary>
+public sealed record ReceiptResult(bool Sent);
+
+/// <summary>The payment provider that charges the card of an order.</summary>
+public interface IPayments
 {
-    Task<Workspace> CreateAsync(string accountId, string idempotencyKey, CancellationToken cancellationToken);
+    Task<Charge> ChargeAsync(string orderId, string idempotencyKey, CancellationToken cancellationToken);
 }
 
-/// <summary>The service that sends the welcome email.</summary>
+/// <summary>The service that sends the receipt.</summary>
 public interface IMailer
 {
-    Task<WelcomeResult> WelcomeAsync(string email, Workspace workspace, CancellationToken cancellationToken);
+    Task<ReceiptResult> ReceiptAsync(
+        string email, Charge charge, string trackingNumber, CancellationToken cancellationToken);
 }
 
 /// <summary>The C# tab of the site page "What is Workhorse?".</summary>
-public sealed class OverviewExamples(IWorkspaces workspaces, IMailer mailer)
+public sealed class OverviewExamples(IPayments payments, IMailer mailer)
 {
-    /// <summary>Stores the tenant limit, enqueues one onboarding, and registers its handler.</summary>
-    public async Task OnboardAsync(Queue queue, Worker worker, string accountId, string email, string tenantId)
+    /// <summary>Stores the merchant limit, enqueues one fulfillment, and registers its handler.</summary>
+    public async Task FulfillAsync(Queue queue, Worker worker, string orderId, string email, string merchantId)
     {
         ArgumentNullException.ThrowIfNull(queue);
         ArgumentNullException.ThrowIfNull(worker);
-        // docs:start csharp-overview-onboard
-        // Step 1: allow three active onboardings per tenant, across all workers.
+        // docs:start csharp-overview-fulfill
+        // Step 1: allow three active fulfillments per merchant, across all workers.
         // PostgreSQL applies this limit when a worker claims a task.
         await queue.SyncConcurrencyPoliciesAsync(
-            "accounts",
-            [new ConcurrencyPolicyDefinition { Queue = "onboarding", MaxActive = 20, MaxActivePerKey = 3 }]);
+            "shop",
+            [new ConcurrencyPolicyDefinition { Queue = "fulfillment", MaxActive = 20, MaxActivePerKey = 3 }]);
 
-        // Enqueue the task. The tenant is the concurrency key.
+        // Enqueue the task. The merchant is the concurrency key.
         await queue.EnqueueAsync(
-            "account.onboard",
-            new AccountPayload(accountId, email),
-            new EnqueueOptions { Queue = "onboarding", ConcurrencyKey = tenantId });
+            "order.fulfill",
+            new OrderPayload(orderId, email),
+            new EnqueueOptions { Queue = "fulfillment", ConcurrencyKey = merchantId });
 
-        worker.Handle<AccountPayload, Workspace>(
-            "account.onboard",
-            async (context, account) =>
+        worker.Handle<OrderPayload, Fulfillment>(
+            "order.fulfill",
+            async (context, order) =>
             {
-                // Step 2: create the workspace. The checkpoint stores it.
-                // On a later run, it returns the stored workspace, and the handler
-                // does not create a second one.
-                var workspace = await context.CheckpointAsync(
-                    "workspace",
-                    ct => workspaces.CreateAsync(account.AccountId, $"workspace:{account.AccountId}", ct));
+                // Step 2: charge the card. The checkpoint stores the charge.
+                // On a later run, it returns the stored charge, and the handler
+                // does not charge the card a second time.
+                var charge = await context.CheckpointAsync(
+                    "charge",
+                    ct => payments.ChargeAsync(order.OrderId, $"charge:{order.OrderId}", ct));
 
-                // Step 3: wait until the user verifies the email address. The task
-                // releases its worker, and it does not count against the tenant limit.
-                await context.WaitForSignalAsync<object>("email-verified", null);
+                // Step 3: wait until the carrier ships the parcel. The task releases
+                // its worker, and it does not count against the merchant limit.
+                var shipped = await context.WaitForSignalAsync<Shipped>("order-shipped", null);
 
                 // Step 4: the signal arrived. The handler ran again from its first line,
-                // and the "workspace" checkpoint gave back the stored workspace.
+                // and the "charge" checkpoint gave back the stored charge.
 
-                // Step 5: send the welcome email.
-                await context.CheckpointAsync("welcome", ct => mailer.WelcomeAsync(account.Email, workspace, ct));
-                return workspace;
+                // Step 5: send the receipt with the tracking number.
+                await context.CheckpointAsync(
+                    "receipt",
+                    ct => mailer.ReceiptAsync(order.Email, charge, shipped.TrackingNumber, ct));
+                return new Fulfillment(charge, shipped.TrackingNumber);
             });
         // docs:end
     }

@@ -315,25 +315,26 @@ RSpec.describe "Documentation examples against PostgreSQL" do
       ])
     end
 
-    it "onboards an account after the email-verified signal and creates one workspace" do
+    it "fulfills an order after the order-shipped signal and charges the card one time" do
       subject = worker
-      enqueued = id("acct")
-      allow(DocsExamples::Workspaces).to receive(:create).and_call_original
-      DocsExamples.overview_onboard(queue, subject, enqueued, "ada@example.com", "tenant-42")
-      expect(queue.list_concurrency_policies(queues: ["onboarding"]).map(&:max_active_per_key)).to eq([3])
+      enqueued = id("order")
+      allow(DocsExamples::Payments).to receive(:charge).and_call_original
+      DocsExamples.overview_fulfill(queue, subject, enqueued, "ada@example.com", "merchant-42")
+      expect(queue.list_concurrency_policies(queues: ["fulfillment"]).map(&:max_active_per_key)).to eq([3])
       expect(@connection.exec_params(
-        "SELECT queue_name, concurrency_key FROM workhorse.task WHERE payload->>'accountId' = $1", [enqueued]
-      ).values).to eq([["onboarding", "tenant-42"]])
+        "SELECT queue_name, concurrency_key FROM workhorse.task WHERE payload->>'orderId' = $1", [enqueued]
+      ).values).to eq([["fulfillment", "merchant-42"]])
 
-      onboarding = queue.enqueue("account.onboard", {"accountId" => "acct-9", "email" => "ada@example.com"}).task_id
-      drain(subject, onboarding)
-      expect(status(onboarding)["state"]).to eq("scheduled")
+      order = queue.enqueue("order.fulfill", {"orderId" => "order-9", "email" => "ada@example.com"}).task_id
+      drain(subject, order)
+      expect(status(order)["state"]).to eq("scheduled")
 
-      queue.send_signal(onboarding, "email-verified", {"verified" => true}, idempotency_key: "v-1", requested_by: "spec")
-      drain(subject, onboarding)
+      queue.send_signal(order, "order-shipped", {"trackingNumber" => "TRK-1"}, idempotency_key: "s-1", requested_by: "spec")
+      drain(subject, order)
 
-      expect(status(onboarding)["state"]).to eq("succeeded")
-      expect(DocsExamples::Workspaces).to have_received(:create).once
+      expect(status(order)["state"]).to eq("succeeded")
+      expect(result(order)["trackingNumber"]).to eq("TRK-1")
+      expect(DocsExamples::Payments).to have_received(:charge).once
     end
 
     it "joins child tasks" do

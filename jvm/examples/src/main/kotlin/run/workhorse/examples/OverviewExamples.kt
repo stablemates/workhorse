@@ -9,54 +9,54 @@ import run.workhorse.kotlin.WorkerScope
 import run.workhorse.kotlin.enqueueSuspend
 import run.workhorse.kotlin.syncConcurrencyPoliciesSuspend
 
-/** The onboarding of the page, with the services of the Java tab. */
+/** The fulfillment of the page, with the services of the Java tab. */
 class OverviewKotlinExamples(
-  private val workspaces: OverviewExamples.Workspaces,
+  private val payments: OverviewExamples.Payments,
   private val mailer: OverviewExamples.Mailer,
 ) {
-  /** Stores the tenant limit, enqueues one onboarding, and registers its handler. */
-  suspend fun onboard(
+  /** Stores the merchant limit, enqueues one fulfillment, and registers its handler. */
+  suspend fun fulfill(
     queue: Queue,
     scope: WorkerScope,
-    accountId: String,
+    orderId: String,
     email: String,
-    tenantId: String,
+    merchantId: String,
   ) {
-    // docs:start kotlin-overview-onboard
-    // Step 1: allow three active onboardings per tenant, across all workers.
+    // docs:start kotlin-overview-fulfill
+    // Step 1: allow three active fulfillments per merchant, across all workers.
     // PostgreSQL applies this limit when a worker claims a task.
     queue.syncConcurrencyPoliciesSuspend(
-      "accounts",
-      listOf(ConcurrencyPolicyDefinition("onboarding", 20, 3)),
+      "shop",
+      listOf(ConcurrencyPolicyDefinition("fulfillment", 20, 3)),
     )
 
-    // Enqueue the task. The tenant is the concurrency key.
+    // Enqueue the task. The merchant is the concurrency key.
     queue.enqueueSuspend(
-      "account.onboard",
-      mapOf("accountId" to accountId, "email" to email),
-      EnqueueOptions.builder().queue("onboarding").concurrencyKey(tenantId).build(),
+      "order.fulfill",
+      mapOf("orderId" to orderId, "email" to email),
+      EnqueueOptions.builder().queue("fulfillment").concurrencyKey(merchantId).build(),
     )
 
-    scope.handle<Map<String, Any?>>("account.onboard") { ctx, account ->
-      val id = account.getValue("accountId") as String
+    scope.handle<Map<String, Any?>>("order.fulfill") { ctx, order ->
+      val id = order.getValue("orderId") as String
 
-      // Step 2: create the workspace. The checkpoint stores it.
-      // On a later run, it returns the stored workspace, and the handler
-      // does not create a second one.
-      val workspace =
-        ctx.checkpoint<Map<String, Any?>>("workspace") { workspaces.create(id, "workspace:$id") }
+      // Step 2: charge the card. The checkpoint stores the charge.
+      // On a later run, it returns the stored charge, and the handler
+      // does not charge the card a second time.
+      val charge = ctx.checkpoint<Map<String, Any?>>("charge") { payments.charge(id, "charge:$id") }
 
-      // Step 3: wait until the user verifies the email address. The task
-      // releases its worker, and it does not count against the tenant limit.
-      ctx.waitForSignal<Map<String, Any?>>("email-verified")
+      // Step 3: wait until the carrier ships the parcel. The task releases
+      // its worker, and it does not count against the merchant limit.
+      val shipped = ctx.waitForSignal<Map<String, Any?>>("order-shipped")
+      val tracking = shipped.getValue("trackingNumber") as String
 
       // Step 4: the signal arrived. The handler ran again from its first line,
-      // and the "workspace" checkpoint gave back the stored workspace.
+      // and the "charge" checkpoint gave back the stored charge.
 
-      // Step 5: send the welcome email.
-      val address = account.getValue("email") as String
-      ctx.checkpoint<Map<String, Any?>>("welcome") { mailer.welcome(address, workspace) }
-      workspace
+      // Step 5: send the receipt with the tracking number.
+      val address = order.getValue("email") as String
+      ctx.checkpoint<Map<String, Any?>>("receipt") { mailer.receipt(address, charge, tracking) }
+      mapOf("charge" to charge, "trackingNumber" to tracking)
     }
     // docs:end
   }
