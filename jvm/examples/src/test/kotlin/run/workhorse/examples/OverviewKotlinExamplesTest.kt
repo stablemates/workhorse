@@ -14,7 +14,7 @@ import run.workhorse.Queue
 import run.workhorse.TaskState
 import run.workhorse.testing.ScratchDatabase
 
-/** Runs the Kotlin onboarding of the site page "What is Workhorse?". */
+/** Runs the Kotlin fulfillment of the site page "What is Workhorse?". */
 @ExtendWith(ScratchDatabase::class)
 @Timeout(value = 120, unit = TimeUnit.SECONDS)
 class OverviewKotlinExamplesTest {
@@ -22,53 +22,56 @@ class OverviewKotlinExamplesTest {
   private val queue = Queue(ConnectionSource.of(dataSource))
   private val driver = DurableFlowDriver(dataSource)
   private val calls = CopyOnWriteArrayList<String>()
-  private val welcomes = AtomicInteger()
+  private val receipts = AtomicInteger()
 
   @Test
-  fun theOnboardingWaitsForTheEmailAndCreatesOneWorkspace() {
+  fun theFulfillmentWaitsForTheParcelAndChargesTheCardOneTime() {
     val enqueued = "kotlin-${UUID.randomUUID()}"
     val examples =
       OverviewKotlinExamples(
-        { accountId, idempotencyKey ->
-          calls.add("workspace $accountId $idempotencyKey")
-          mapOf("id" to "ws-$accountId")
+        { orderId, idempotencyKey ->
+          calls.add("charge $orderId $idempotencyKey")
+          mapOf("id" to "ch-$orderId")
         },
-        { email, _ ->
-          calls.add("welcome $email")
-          check(welcomes.incrementAndGet() > 1) { "the mail service is not available" }
+        { email, _, trackingNumber ->
+          calls.add("receipt $email $trackingNumber")
+          check(receipts.incrementAndGet() > 1) { "the mail service is not available" }
           mapOf("sent" to true)
         },
       )
     durableFlowWorker(dataSource, driver) {
         val scope = this
-        runBlocking { examples.onboard(queue, scope, enqueued, "ada@example.com", "tenant-42") }
+        runBlocking { examples.fulfill(queue, scope, enqueued, "ada@example.com", "merchant-42") }
       }
       .use { worker ->
-        val policy = queue.listConcurrencyPolicies(listOf("onboarding"))[0]
-        assertEquals("accounts", policy.namespace)
+        val policy = queue.listConcurrencyPolicies(listOf("fulfillment"))[0]
+        assertEquals("shop", policy.namespace)
         assertEquals(3, policy.maxActivePerKey)
-        val stored = ExampleDatabase.task("account.onboard", "accountId", enqueued)
-        assertEquals("onboarding", stored.queue)
-        assertEquals("tenant-42", stored.concurrencyKey)
+        val stored = ExampleDatabase.task("order.fulfill", "orderId", enqueued)
+        assertEquals("fulfillment", stored.queue)
+        assertEquals("merchant-42", stored.concurrencyKey)
 
         val taskId =
           driver.enqueue(
-            "account.onboard",
-            mapOf("accountId" to "acct-9", "email" to "ada@example.com"),
+            "order.fulfill",
+            mapOf("orderId" to "order-9", "email" to "ada@example.com"),
           )
-        driver.deliverSignal(worker, taskId, "email-verified", mapOf("verified" to true))
+        driver.deliverSignal(worker, taskId, "order-shipped", mapOf("trackingNumber" to "TRK-1"))
         val task = driver.finish(worker, taskId)
         assertEquals(TaskState.SUCCEEDED, task.state())
-        assertEquals(2, task.currentAttempt(), "the first welcome email failed")
+        assertEquals(2, task.currentAttempt(), "the first receipt failed")
         assertEquals(
           listOf(
-            "workspace acct-9 workspace:acct-9",
-            "welcome ada@example.com",
-            "welcome ada@example.com",
+            "charge order-9 charge:order-9",
+            "receipt ada@example.com TRK-1",
+            "receipt ada@example.com TRK-1",
           ),
           calls,
         )
-        assertEquals(mapOf("id" to "ws-acct-9"), task.result())
+        assertEquals(
+          mapOf("charge" to mapOf("id" to "ch-order-9"), "trackingNumber" to "TRK-1"),
+          task.result(),
+        )
       }
   }
 }

@@ -38,18 +38,17 @@ const contracts: readonly FenceContract[] = [
     file: "site/content/docs/index.mdx",
     fence: 1,
     wrap: (source) =>
-      `declare const workspaces: {\n` +
-      `  create(\n` +
-      `    accountId: string,\n` +
+      `declare const payments: {\n` +
+      `  charge(\n` +
+      `    orderId: string,\n` +
       `    options: { idempotencyKey: string },\n` +
-      `  ): Promise<{ id: string; url: string }>;\n` +
+      `  ): Promise<{ id: string }>;\n` +
       `};\n` +
       `declare const mailer: {\n` +
-      `  welcome(email: string, url: string): Promise<{ sent: boolean }>;\n` +
+      `  receipt(email: string, chargeId: string, trackingNumber: string): Promise<{ sent: boolean }>;\n` +
       `};\n` +
-      `declare const accountId: string;\n` +
       `declare const email: string;\n` +
-      `declare const tenantId: string;\n\n` +
+      `declare const merchantId: string;\n\n` +
       `${source}\n`,
   },
   { file: "docs/guides/170-child-tasks.md", fence: 1 },

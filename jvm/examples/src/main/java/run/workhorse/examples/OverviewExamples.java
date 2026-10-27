@@ -1,5 +1,6 @@
 package run.workhorse.examples;
 
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import org.jspecify.annotations.Nullable;
@@ -10,66 +11,71 @@ import run.workhorse.Worker;
 
 /** The Java tab of the site page "What is Workhorse?". */
 public final class OverviewExamples {
-  /** The service that creates the workspace of a new account. */
-  public interface Workspaces {
-    /** Creates the workspace of the account, and returns the workspace. */
-    Map<String, @Nullable Object> create(String accountId, String idempotencyKey);
+  /** The payment provider that charges the card of an order. */
+  public interface Payments {
+    /** Charges the card of the order, and returns the charge. */
+    Map<String, @Nullable Object> charge(String orderId, String idempotencyKey);
   }
 
-  /** The service that sends the welcome email. */
+  /** The service that sends the receipt. */
   public interface Mailer {
-    /** Sends the welcome email for the workspace, and returns the result. */
-    Map<String, @Nullable Object> welcome(String email, @Nullable Object workspace);
+    /** Sends the receipt for the charge and the parcel, and returns the result. */
+    Map<String, @Nullable Object> receipt(
+        String email, @Nullable Object charge, String trackingNumber);
   }
 
-  private final Workspaces workspaces;
+  private final Payments payments;
   private final Mailer mailer;
 
   /** The handler of the page uses these services. */
-  public OverviewExamples(Workspaces workspaces, Mailer mailer) {
-    this.workspaces = workspaces;
+  public OverviewExamples(Payments payments, Mailer mailer) {
+    this.payments = payments;
     this.mailer = mailer;
   }
 
-  /** Stores the tenant limit, enqueues one onboarding, and registers its handler. */
-  public Worker.Builder onboard(
-      Queue queue, Worker.Builder builder, String accountId, String email, String tenantId) {
-    // docs:start java-overview-onboard
-    // Step 1: allow three active onboardings per tenant, across all workers.
+  /** Stores the merchant limit, enqueues one fulfillment, and registers its handler. */
+  public Worker.Builder fulfill(
+      Queue queue, Worker.Builder builder, String orderId, String email, String merchantId) {
+    // docs:start java-overview-fulfill
+    // Step 1: allow three active fulfillments per merchant, across all workers.
     // PostgreSQL applies this limit when a worker claims a task.
     queue.syncConcurrencyPolicies(
-        "accounts", List.of(new ConcurrencyPolicyDefinition("onboarding", 20, 3)));
+        "shop", List.of(new ConcurrencyPolicyDefinition("fulfillment", 20, 3)));
 
-    // Enqueue the task. The tenant is the concurrency key.
+    // Enqueue the task. The merchant is the concurrency key.
     queue.enqueue(
-        "account.onboard",
-        Map.of("accountId", accountId, "email", email),
-        EnqueueOptions.builder().queue("onboarding").concurrencyKey(tenantId).build());
+        "order.fulfill",
+        Map.of("orderId", orderId, "email", email),
+        EnqueueOptions.builder().queue("fulfillment").concurrencyKey(merchantId).build());
 
     builder.handle(
-        "account.onboard",
+        "order.fulfill",
         Map.class,
-        (context, account) -> {
-          String id = String.valueOf(account.get("accountId"));
+        (context, order) -> {
+          String id = String.valueOf(order.get("orderId"));
 
-          // Step 2: create the workspace. The checkpoint stores it.
-          // On a later run, it returns the stored workspace, and the handler
-          // does not create a second one.
-          Object workspace =
-              context.checkpoint(
-                  "workspace", Object.class, () -> workspaces.create(id, "workspace:" + id));
+          // Step 2: charge the card. The checkpoint stores the charge.
+          // On a later run, it returns the stored charge, and the handler
+          // does not charge the card a second time.
+          Object charge =
+              context.checkpoint("charge", Object.class, () -> payments.charge(id, "charge:" + id));
 
-          // Step 3: wait until the user verifies the email address. The task
-          // releases its worker, and it does not count against the tenant limit.
-          context.waitForSignal("email-verified", Map.class, null);
+          // Step 3: wait until the carrier ships the parcel. The task releases
+          // its worker, and it does not count against the merchant limit.
+          Map<?, ?> shipped = context.waitForSignal("order-shipped", Map.class, null);
+          String tracking = String.valueOf(shipped.get("trackingNumber"));
 
           // Step 4: the signal arrived. The handler ran again from its first line,
-          // and the "workspace" checkpoint gave back the stored workspace.
+          // and the "charge" checkpoint gave back the stored charge.
 
-          // Step 5: send the welcome email.
-          String address = String.valueOf(account.get("email"));
-          context.checkpoint("welcome", Object.class, () -> mailer.welcome(address, workspace));
-          return workspace;
+          // Step 5: send the receipt with the tracking number.
+          String address = String.valueOf(order.get("email"));
+          context.checkpoint(
+              "receipt", Object.class, () -> mailer.receipt(address, charge, tracking));
+          Map<String, @Nullable Object> result = new HashMap<>();
+          result.put("charge", charge);
+          result.put("trackingNumber", tracking);
+          return result;
         });
     // docs:end
     return builder;
