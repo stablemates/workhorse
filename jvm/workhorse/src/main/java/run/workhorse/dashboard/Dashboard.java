@@ -522,7 +522,7 @@ public final class Dashboard implements Filter {
                 java.util.regex.Matcher.quoteReplacement(modules.toString()));
     return new Reply(
         200,
-        Map.of("Content-Type", "text/html; charset=utf-8"),
+        Map.of("Content-Type", "text/html; charset=utf-8", "Cache-Control", "no-store"),
         html.getBytes(StandardCharsets.UTF_8));
   }
 

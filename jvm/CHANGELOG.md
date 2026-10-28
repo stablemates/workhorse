@@ -38,6 +38,17 @@ records the sha256 `f234a7d60a362c841becc2522ff8dd750958136873ccda90461c26f45f9b
 
 The `dashboard/v1` procedures and the read surface version do not change (SM-1858).
 
+### The dashboard page tells each cache not to store it
+
+The dashboard page holds `window.workhorseDashboard`, which contains the `auditActor` of the
+operator. Before this change, the JVM dashboard backend sent the page with only `Content-Type`. A
+shared cache in front of the application could store the page by heuristic. A later visitor could
+then get the stored page and see the actor name of an earlier operator. A browser could also show
+the page from its cache after logout (SM-1870).
+
+Now the JVM dashboard backend sends the page with `Cache-Control: no-store`, as the TypeScript host
+does. Each asset keeps `Cache-Control: public, max-age=31536000, immutable`.
+
 ## 0.10.0 — 2026-10-26
 
 The npm packages, Python distribution, Go module, Rust crate, Ruby gem, JVM artifacts, and .NET

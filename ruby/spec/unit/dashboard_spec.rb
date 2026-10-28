@@ -53,6 +53,7 @@ RSpec.describe W::Dashboard do
 
       expect(status).to eq(200)
       expect(headers["content-type"]).to eq("text/html; charset=utf-8")
+      expect(headers["cache-control"]).to eq("no-store")
       expect(chunks.join).to include(%("basePath":"/workhorse"), %("auditActor":"operator"), %("demoTools":false))
     end
 

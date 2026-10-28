@@ -42,6 +42,17 @@ with the error. The worker still starts the later threads of the claim, because 
 holds a lease. The task of the failed thread stays leased until lease recovery returns it to its
 queue.
 
+### The dashboard page tells each cache not to store it
+
+The dashboard page holds `window.workhorseDashboard`, which contains the `auditActor` of the
+operator. Before this change, the Python dashboard backend sent the page with only `Content-Type`. A
+shared cache in front of the application could store the page by heuristic. A later visitor could
+then get the stored page and see the actor name of an earlier operator. A browser could also show
+the page from its cache after logout (SM-1870).
+
+Now the Python dashboard backend sends the page with `Cache-Control: no-store`, as the TypeScript
+host does. Each asset keeps `Cache-Control: public, max-age=31536000, immutable`.
+
 ## 0.10.0 — 2026-10-26
 
 The npm packages, Python distribution, Go module, Rust crate, Ruby gem, JVM artifacts, and .NET

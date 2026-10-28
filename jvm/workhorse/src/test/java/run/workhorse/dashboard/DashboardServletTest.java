@@ -55,6 +55,7 @@ class DashboardServletTest {
       TestServer.Response shell = server.get("/app/ops/workhorse/tasks/abc");
       assertEquals(200, shell.status());
       assertTrue(shell.header("Content-Type").startsWith("text/html"));
+      assertEquals("no-store", shell.header("Cache-Control"));
       assertTrue(shell.text().contains("\"basePath\":\"/app/ops/workhorse\""), shell.text());
       assertTrue(shell.text().contains("\"rpcUrl\":\"/app/ops/workhorse/rpc\""));
 

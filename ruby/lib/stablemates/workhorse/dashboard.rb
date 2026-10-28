@@ -322,7 +322,7 @@ module Stablemates
             "window.workhorseDashboard = #{JSON.generate(config).gsub(/[<>&  ]/, SCRIPT_ESCAPES)}"
           }
           .sub("<!--__WORKHORSE_BROWSER_MODULES__-->") { modules }
-        [200, {"content-type" => "text/html; charset=utf-8"}, [html]]
+        [200, {"content-type" => "text/html; charset=utf-8", "cache-control" => "no-store"}, [html]]
       end
 
       def asset(name)

@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -53,6 +54,18 @@ func TestHandlerServesApplicationAndRPC(t *testing.T) {
 	handler.ServeHTTP(page, httptest.NewRequest(http.MethodGet, "https://example.test/workhorse/tasks", nil))
 	if page.Code != http.StatusOK || !strings.Contains(page.Body.String(), `"auditActor":"operator@example.test"`) || !strings.Contains(page.Body.String(), `"workhorseVersion":"`+workhorse.Version+`"`) {
 		t.Fatalf("page = %d %s", page.Code, page.Body.String())
+	}
+	if cacheControl := page.Header().Get("Cache-Control"); cacheControl != "no-store" {
+		t.Fatalf("page Cache-Control = %q", cacheControl)
+	}
+	asset := regexp.MustCompile(`\./assets/[^"]+\.js`).FindString(page.Body.String())
+	if asset == "" {
+		t.Fatalf("the page names no script asset: %s", page.Body.String())
+	}
+	assetResponse := httptest.NewRecorder()
+	handler.ServeHTTP(assetResponse, httptest.NewRequest(http.MethodGet, "https://example.test/workhorse"+asset[1:], nil))
+	if cacheControl := assetResponse.Header().Get("Cache-Control"); assetResponse.Code != http.StatusOK || cacheControl != "public, max-age=31536000, immutable" {
+		t.Fatalf("asset = %d Cache-Control %q", assetResponse.Code, cacheControl)
 	}
 
 	rpc := httptest.NewRecorder()

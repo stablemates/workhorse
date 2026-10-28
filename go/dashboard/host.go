@@ -420,6 +420,7 @@ func (host *handler) serveApplication(response http.ResponseWriter, actor string
 	page := strings.Replace(template, "/*__WORKHORSE_RUNTIME_CONFIG__*/", "window.workhorseDashboard = "+string(encoded), 1)
 	page = strings.Replace(page, "<!--__WORKHORSE_BROWSER_MODULES__-->", modules.String(), 1)
 	response.Header().Set("Content-Type", "text/html; charset=utf-8")
+	response.Header().Set("Cache-Control", "no-store")
 	_, _ = io.WriteString(response, page)
 }
 

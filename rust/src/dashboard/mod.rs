@@ -475,7 +475,9 @@ impl<E: Executor> Host<E> {
                 &format!("window.workhorseDashboard = {}", script_json(&config)),
             )
             .replace("<!--__WORKHORSE_BROWSER_MODULES__-->", &modules);
-        response(200, "text/html; charset=utf-8", html.into())
+        let mut response = response(200, "text/html; charset=utf-8", html.into());
+        response.headers_mut().insert(CACHE_CONTROL, http::HeaderValue::from_static("no-store"));
+        response
     }
 }
 

@@ -136,8 +136,12 @@ async fn a_nested_service_falls_through_to_the_host_routes() {
     assert_eq!(redirect.status(), StatusCode::FOUND);
     assert_eq!(location(&redirect), "/workhorse/tasks");
 
-    let (status, page) = send(app.clone(), request("GET", "/workhorse/tasks", Value::Null)).await;
-    assert_eq!(status, StatusCode::OK);
+    let response =
+        app.clone().oneshot(request("GET", "/workhorse/tasks", Value::Null)).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(response.headers()[header::CACHE_CONTROL], "no-store");
+    let page = String::from_utf8(response.into_body().collect().await.unwrap().to_bytes().to_vec())
+        .expect("the page is UTF-8");
     assert!(page.contains(r#""auditActor":"operator@example.test""#), "{page}");
     assert!(page.contains(r#""basePath":"/workhorse""#), "{page}");
     let version = format!(r#""workhorseVersion":"{}""#, env!("CARGO_PKG_VERSION"));
@@ -151,7 +155,7 @@ async fn a_nested_service_falls_through_to_the_host_routes() {
     let response = app.clone().oneshot(request("GET", &asset, Value::Null)).await.unwrap();
     assert_eq!(response.status(), StatusCode::OK);
     assert_eq!(response.headers()[header::CONTENT_TYPE], "text/javascript; charset=utf-8");
-    assert!(response.headers()[header::CACHE_CONTROL].to_str().unwrap().contains("immutable"));
+    assert_eq!(response.headers()[header::CACHE_CONTROL], "public, max-age=31536000, immutable");
 
     let (status, body) =
         send(app.clone(), request("POST", "/workhorse/rpc/dashboard/meta", json!({}))).await;

@@ -172,6 +172,38 @@ A host behind a proxy that ends TLS must give each backend the scheme that the b
 mutation check already requires. Otherwise a module script or a fetch from the dashboard page
 carries an `Origin` that does not match, and the backend refuses it.
 
+### Page cache rule
+
+The dashboard page holds `window.workhorseDashboard`. That runtime configuration names the operator
+in `auditActor`. If a shared cache keeps the page, a later visitor can see the actor name of an
+earlier operator. The browser can also show the page from its cache after logout (SM-1870).
+
+Thus each backend sends its responses with these `Cache-Control` values:
+
+| Response                                | `Cache-Control`                       |
+| --------------------------------------- | ------------------------------------- |
+| The dashboard page, `index.html`        | `no-store`                            |
+| The TypeScript login page, `login.html` | `no-store`                            |
+| An asset under `{basePath}/assets/`     | `public, max-age=31536000, immutable` |
+
+Each asset name contains a content hash, so a cache can keep an asset. Task data does not reach a
+cache through the page. An RPC read is a `POST` request, and each RPC request goes through
+authorization.
+
+The backends set the page value at these places:
+
+| Backend    | Page response                                        |
+| ---------- | ---------------------------------------------------- |
+| TypeScript | `serveApplication` in `createDashboardHost`          |
+| Python     | `DashboardHost._application`                         |
+| Go         | `handler.serveApplication` in `go/dashboard/host.go` |
+| Rust       | `Host::application` in `rust/src/dashboard/mod.rs`   |
+| Ruby       | `Dashboard#application`                              |
+| JVM        | `Dashboard.application`                              |
+| .NET       | `DashboardHost.Application`                          |
+
+The HTTP tests of the Python, Go, Rust, Ruby, JVM, and .NET backends assert both values.
+
 ### Python backend
 
 `workhorse.dashboard.DashboardHost` is the Python WSGI backend. Its constructor takes one
