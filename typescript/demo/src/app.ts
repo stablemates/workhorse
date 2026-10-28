@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { setTimeout as delay } from "node:timers/promises";
 import { ORPCError } from "@orpc/server";
 import { createDrizzleAdapter } from "@stablemates/workhorse-drizzle";
 import {
@@ -1824,8 +1825,50 @@ function textArrayValue(values: readonly string[]) {
   )}]::text[]`;
 }
 
+/**
+ * Each lock request of the historical seed waits at most this long. Partition creation locks the
+ * attempt_history parent and then the task_event parent. A worker tick holds task_event and then
+ * asks for attempt_history, so an unbounded wait can deadlock with it (SM-1879). The limit is
+ * shorter than deadlock_timeout, so the seed stops its wait before the deadlock check runs. This
+ * is the limit that prepare_history_partitions_v1 sets for the same locks.
+ */
+const HISTORICAL_SEED_LOCK_TIMEOUT = "250ms";
+const HISTORICAL_SEED_ATTEMPTS = 40;
+const HISTORICAL_SEED_RETRY_DELAY_MS = 250;
+/** lock_not_available and deadlock_detected roll the seed back, so the seed can run again. */
+const HISTORICAL_SEED_RETRY_CODES = new Set(["55P03", "40P01"]);
+
+function postgresErrorCode(error: unknown): string | undefined {
+  for (let current = error; current instanceof Error; current = current.cause) {
+    const code = (current as { code?: unknown }).code;
+    if (typeof code === "string") return code;
+  }
+  return undefined;
+}
+
 async function seedHistoricalDemoData(database: DemoDatabase): Promise<number> {
+  for (let attempt = 1; ; attempt += 1) {
+    try {
+      return await seedHistoricalDemoDataOnce(database);
+    } catch (error) {
+      const code = postgresErrorCode(error);
+      if (
+        attempt >= HISTORICAL_SEED_ATTEMPTS ||
+        code === undefined ||
+        !HISTORICAL_SEED_RETRY_CODES.has(code)
+      ) {
+        throw error;
+      }
+      await delay(HISTORICAL_SEED_RETRY_DELAY_MS);
+    }
+  }
+}
+
+async function seedHistoricalDemoDataOnce(database: DemoDatabase): Promise<number> {
   return database.transaction(async (transaction) => {
+    await transaction.execute(
+      sql`SELECT set_config('lock_timeout', ${HISTORICAL_SEED_LOCK_TIMEOUT}, true)`,
+    );
     // Prepare every UTC day touched by the seven-day seed window so session-local current_date
     // cannot leave the previous UTC day in the default partition near midnight.
     await transaction.execute(sql`
