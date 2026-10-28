@@ -143,10 +143,11 @@ migration only adds:
 - A migration can add a function, a view, a column, a table, or an index.
 - To replace a function, a migration adds a new function next to the old one.
 
-A client refuses an installed schema that is below its minimum version. It also refuses a schema
-that no longer serves the protocol of the client. A major release does not stop serving a protocol.
-The schema stops serving it only when you run the contract step, after all of your processes use
-the new release. The contract step is the one migration that removes old functions and protocols.
+The compatibility check of a client refuses an installed schema that is below its minimum version.
+It also refuses a schema that no longer serves the protocol of the client. A major release does not
+stop serving a protocol. The schema stops serving it only when you run the contract step, after all
+of your processes use the new release. The contract step is the one migration that removes old
+functions and protocols.
 
 The minimum with no maximum inside a major line makes a rolling upgrade possible:
 

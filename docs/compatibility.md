@@ -842,16 +842,17 @@ The durable protocol is the PostgreSQL schema, not the TypeScript API. Its guara
 - **The runtime declares a floor; the database declares the ceiling.** A runtime accepts the single
   row in `workhorse.schema_version` when it is at or above `MINIMUM_SCHEMA_VERSION`, and applies no
   upper bound of its own. That floor is the version that introduced the newest schema object the
-  release calls, across its statement catalogues and the dashboard host it ships, so a schema the
-  release would fail on is refused at startup rather than on the first call. A release raises the
+  release calls, across its statement catalogues and the dashboard host it ships. Thus the
+  compatibility check refuses a schema that the release fails on. A process that runs the check at
+  startup stops before its first call. A release raises the
   floor when it starts calling something newer, which is why the deployment pipeline migrates
   before any process from the new release starts. A schema that is merely newer still carries every function the runtime
   calls, because inside a major line a migration only adds, so refusing it would make every rolling
   deployment an outage. The ceiling is `workhorse.protocol_version`, where the installed schema
   lists the client protocols it still answers; a contract step drops the ones it stops serving, and
-  every older runtime then refuses at once. That narrowing is a contract step the operator runs,
-  never something a release performs on their behalf, so a mixed fleet mid-deploy is supported at
-  every version boundary including a major one. Migration 0025 is the one exception: 0.5.0 ships it
+  the compatibility check of an older runtime then refuses the schema. That narrowing is a contract
+  step the operator runs, never something a release performs on their behalf, so a mixed fleet
+  mid-deploy is supported at every version boundary including a major one. Migration 0025 is the one exception: 0.5.0 ships it
   as a contract step that retires protocols 1 through 4. A database from before 0.5.0 therefore
   crosses it offline, with every worker and producer stopped, as
   [the fast-tier cutover](schema-lifecycle.md#the-fast-tier-cutover) describes.
@@ -1628,9 +1629,15 @@ error:
 
 The SDK schema floor rises from 73 to 76. Every SDK statement catalogue names
 `dashboard_retention_preview_v1`, which schema version 75 adds, and `deregister_worker_v2`, which
-schema version 76 adds. If the schema is below version 76, a new worker refuses to start. A new SDK
-refuses each mutation, and a new dashboard host refuses each request. Thus the migrations must run
-before the first new process starts. 0.10.0 freezes `sql/releases/0086.sql`.
+schema version 76 adds. Thus the migrations must run before the first new process starts. 0.10.0
+freezes `sql/releases/0086.sql`.
+
+If the schema is below version 76, a new dashboard host refuses its requests. A new worker refuses
+to start, but a TypeScript worker checks the schema only in `run`, and only without
+`sharedHeartbeats: true`. `runOnce` does not check it. The Go, Python, Ruby, Rust, JVM, and .NET
+`Queue` and `Admin` refuse each mutation. The TypeScript `Queue` and `Admin` do not check the
+schema, so their statements run against the older schema. To get the refusal in a TypeScript
+process, call `assertSchemaCompatible` before the first mutation.
 
 Schema version 77 does not raise the floor. Migration 0078 changes only the HINT of the P1001 to
 P1010 errors, and DETAIL does not change.
@@ -1738,8 +1745,8 @@ A 0.8.0 database is at schema version 71. The migrations only add:
 | `0074-skip-a-locked-row-in-a-one-lease-heartbeat.sql` | 73             | `heartbeat_v2`, which reports a locked lease as `busy`      |
 
 The SDK schema floor rises from 69 to 73. Every SDK statement catalogue names `heartbeat_many_v2`
-and `heartbeat_v2`. A new process refuses a schema below version 73 at startup. Thus the migrations
-must run before the first new process starts. 0.9.0 freezes `sql/releases/0073.sql`.
+and `heartbeat_v2`. The compatibility check of 0.9.0 refuses a schema below version 73. Thus the
+migrations must run before the first new process starts. 0.9.0 freezes `sql/releases/0073.sql`.
 
 A 0.8 process keeps working on schema version 73. It calls `heartbeat_many_v1` and `heartbeat_v1`,
 which do not change, so it still waits for a locked row. A new worker calls `heartbeat_many_v2` and
@@ -1790,9 +1797,9 @@ every invalid Workhorse index.
 
 The SDK schema floor rises from 54 to 69. Every SDK statement catalogue names `save_checkpoint_v2`,
 which schema version 68 adds. Schema version 69 also fences a member add: on an earlier schema, a
-worker whose lease expired can still add tasks to the group of its member task. A 0.8.0 process
-refuses a schema below version 69 at startup. Thus the
-migration must run before the first 0.8.0 process starts.
+worker whose lease expired can still add tasks to the group of its member task. The compatibility
+check of 0.8.0 refuses a schema below version 69. Thus the migration must run before the first
+0.8.0 process starts.
 
 Schema versions 70 and 71 do not raise the floor, so it stays 69. Migration 0071 changes only the
 lock order of a queue purge. Migration 0072 changes what a purge does with a task that a dependent
