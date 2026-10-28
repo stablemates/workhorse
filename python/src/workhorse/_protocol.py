@@ -28,6 +28,8 @@ from .types import (
 
 DEFAULT_MAX_ATTEMPTS = 25
 DEFAULT_IDEMPOTENCY_TTL_MS = 86_400_000
+# PostgreSQL's prerequisite fan-in limit for one task.
+MAX_TASK_DEPENDENCIES = 100
 
 
 def compatibility_refusal(
@@ -284,6 +286,10 @@ def _dependencies(value: Dependencies | None) -> dict[str, Json] | None:
     ids = sorted(value.prerequisite_task_ids)
     if not ids or len(ids) != len(set(ids)):
         raise ValueError("dependencies must contain unique prerequisite_task_ids")
+    if len(ids) > MAX_TASK_DEPENDENCIES:
+        raise ValueError(
+            f"dependencies accepts at most {MAX_TASK_DEPENDENCIES} prerequisite task IDs"
+        )
     return {
         "prerequisiteTaskIds": cast(list[Json], ids),
         "onSuccess": value.on_success,

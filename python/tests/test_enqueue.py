@@ -11,6 +11,7 @@ from psycopg.rows import tuple_row
 from test_protocol_conformance import assert_value
 
 from workhorse import (
+    Dependencies,
     EnqueueOptions,
     EnqueueRequest,
     Idempotency,
@@ -161,14 +162,7 @@ def test_refuses_a_max_attempts_outside_the_range_before_the_enqueue(max_attempt
         schedule="0 0 * * *",
         task=ScheduledTask(type="attempts", payload={}, max_attempts=max_attempts),
     )
-    connection = Connection(
-        [
-            [
-                {"kind": "schema", "version": MINIMUM_SCHEMA_VERSION},
-                {"kind": "protocol", "version": PROTOCOL_VERSION},
-            ]
-        ]
-    )
+    connection = Connection([])
 
     with pytest.raises(ValueError, match=message):
         Queue(connection).enqueue("attempts", {}, options)
@@ -176,8 +170,7 @@ def test_refuses_a_max_attempts_outside_the_range_before_the_enqueue(max_attempt
         serialize_child_request(parent, "attempts.child", {}, options)
     with pytest.raises(ValueError, match=message):
         serialize_schedules([schedule], "default")
-    assert len(connection.calls) == 1
-    assert "enqueue_many_v1" not in connection.calls[0][0]
+    assert connection.calls == []
 
 
 @pytest.mark.parametrize(("ttl_ms", "expected"), [(0, 86_400_000), (1, 1), (60_000, 60_000)])
@@ -187,6 +180,29 @@ def test_reads_a_zero_idempotency_ttl_as_the_default(ttl_ms: int, expected: int)
     root = serialize_request(EnqueueRequest("ttl", {}, options), "default")
 
     assert root["idempotency"] == {"key": "ttl", "scope": "default", "ttlMs": expected}
+
+
+def test_accepts_100_prerequisite_task_ids() -> None:
+    ids = [f"00000000-0000-4000-8000-{index:012d}" for index in range(100)]
+    options = EnqueueOptions(dependencies=Dependencies(ids, "release", "cancel", "fail"))
+
+    root = serialize_request(EnqueueRequest("dependent", {}, options), "default")
+
+    assert cast(dict[str, Any], root["dependencies"])["prerequisiteTaskIds"] == ids
+
+
+def test_refuses_101_prerequisite_task_ids_before_the_enqueue() -> None:
+    ids = [f"00000000-0000-4000-8000-{index:012d}" for index in range(101)]
+    options = EnqueueOptions(dependencies=Dependencies(ids, "release", "cancel", "fail"))
+    message = "dependencies accepts at most 100 prerequisite task IDs"
+    connection = Connection([])
+    queue = Queue(connection)
+
+    with pytest.raises(ValueError, match=message):
+        queue.enqueue("dependent", {}, options)
+    with pytest.raises(ValueError, match=message):
+        queue.enqueue_many([EnqueueRequest("valid", {}), EnqueueRequest("dependent", {}, options)])
+    assert connection.calls == []
 
 
 def test_refuses_an_incompatible_schema_before_enqueueing() -> None:

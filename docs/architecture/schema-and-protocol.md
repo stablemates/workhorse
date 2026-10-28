@@ -730,6 +730,7 @@ key raises `HumanWaitIdempotencyConflictError`.
 | Delivery idempotency keys                          | 1 through 512 UTF-8 bytes                               |
 | `requested_by`                                     | 1 through 200 characters                                |
 | Enqueue batches                                    | At most 1,000 requests                                  |
+| `Dependencies.prerequisite_task_ids`               | 1 through 100 unique prerequisite task IDs              |
 
 Canonical JSONB text is the text that `octet_length(value::jsonb::text)` measures. It puts a space
 after each `:` and `,`, so it can be longer than compact JSON. It writes each number in plain decimal
@@ -770,6 +771,9 @@ sends the timestamp inputs below as UTC text that ends in `Z`. `_timestamp` in
 Every non-empty Python mutation first runs
 `SELECT version FROM workhorse.schema_version ORDER BY version`. `Queue` and `AsyncQueue` enqueue
 through a cached check for each queue instead. Thus a warm enqueue sends only `enqueue_many_v1`.
+`Queue` and `AsyncQueue` serialize the batch before the compatibility check, as Go does. If
+`serialize_request` in `_protocol.py` refuses an option, the call raises `ValueError` and sends no
+statement. PostgreSQL checks the other limits.
 
 `python/src/workhorse/_protocol.py` accepts schema version 76 or newer and client protocol 5. Before
 the mutating statement, it refuses an unreadable, missing, older, or newer schema.

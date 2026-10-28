@@ -184,6 +184,8 @@ class Queue:
         ``submit`` receives the encoded batch and the serialized values. On a contract mismatch,
         PostgreSQL enqueued nothing: the client reloads the named contracts and submits once more.
         """
+        # Serialization checks the options first, so an invalid request sends no statement.
+        values = _serialize_batch(requests, self.default_queue)
         self._compatibility.assert_compatible()
         # An operator can select a version the cached definition rejects after sync_contracts().
         # That payload never reaches enqueue_many_v1, so a type reloads before the queue reports
@@ -192,12 +194,9 @@ class Queue:
         # A concurrent load can publish an older read and win the shared cache from this call's
         # load, so later items of this call validate against the definition this call read.
         definitions: dict[str, _Row | None] = {}
-        for _attempt in range(2):
-            trace_context = _inject_trace_context()
-            values = [
-                _serialize_request(request, self.default_queue, trace_context)
-                for request in requests
-            ]
+        for attempt in range(2):
+            if attempt:
+                values = _serialize_batch(requests, self.default_queue)
             for request, value in zip(requests, values, strict=True):
                 if request.type in definitions:
                     definition = definitions[request.type]
@@ -593,6 +592,8 @@ class AsyncQueue:
         ``submit`` receives the encoded batch and the serialized values. On a contract mismatch,
         PostgreSQL enqueued nothing: the client reloads the named contracts and submits once more.
         """
+        # Serialization checks the options first, so an invalid request sends no statement.
+        values = _serialize_batch(requests, self.default_queue)
         await self._compatibility.assert_compatible()
         # An operator can select a version the cached definition rejects after sync_contracts().
         # That payload never reaches enqueue_many_v1, so a type reloads before the queue reports
@@ -601,12 +602,9 @@ class AsyncQueue:
         # A concurrent load can publish an older read and win the shared cache from this call's
         # load, so later items of this call validate against the definition this call read.
         definitions: dict[str, _Row | None] = {}
-        for _attempt in range(2):
-            trace_context = _inject_trace_context()
-            values = [
-                _serialize_request(request, self.default_queue, trace_context)
-                for request in requests
-            ]
+        for attempt in range(2):
+            if attempt:
+                values = _serialize_batch(requests, self.default_queue)
             for request, value in zip(requests, values, strict=True):
                 if request.type in definitions:
                     definition = definitions[request.type]
@@ -958,6 +956,13 @@ def _cancel_result(row: _Row, task_id: str) -> CancelResult:
 
 
 _CONTRACT_POLICY_CHANGED = "contract policy changed again while retrying enqueue"
+
+
+def _serialize_batch(
+    requests: Sequence[EnqueueRequest], default_queue: str
+) -> list[dict[str, Json]]:
+    trace_context = _inject_trace_context()
+    return [_serialize_request(request, default_queue, trace_context) for request in requests]
 
 
 class _ContractCache:
