@@ -358,21 +358,21 @@ describe("reserved heartbeat connection", () => {
   it("destroys a client whose transaction resends after a deadlock, even before the next heartbeat", async () => {
     const { pool, clients, answer } = fakePool();
     const connection = new ReservedConnection(asDatabase(pool));
-    const clock = shiftedClock();
+    vi.useFakeTimers({ toFake: ["performance", "setTimeout", "clearTimeout"] });
     try {
+      // The fake clock moves only when the test moves it, so this is the round's own deadline.
+      const deadline = performance.now() + 1_000;
       answer.current = async (text) => {
         if (text === HEARTBEAT) {
           // The resend has too little time left, but the first heartbeat statement already ran.
-          clock.shiftTo(clock.deadline - 5);
+          vi.advanceTimersByTime(deadline - 5 - performance.now());
           throw deadlock();
         }
         return emptyResult;
       };
-      const round = renew(connection, 1_000);
-      clock.deadline = performance.now() + 1_000;
-      await expect(round).rejects.toThrow(/reached its deadline$/);
+      await expect(renew(connection, 1_000)).rejects.toThrow(/reached its deadline$/);
     } finally {
-      clock.restore();
+      vi.useRealTimers();
     }
     await connection.close();
 
