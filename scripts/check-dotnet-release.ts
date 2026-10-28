@@ -51,6 +51,7 @@ import { parseArgs } from "node:util";
 import { inflateRawSync } from "node:zlib";
 import type { Client } from "pg";
 import { tagVersion } from "./check-jvm-release.js";
+import { retryStep } from "./command-retry.js";
 import { withReleaseScratchDatabase } from "./release-scratch-database.js";
 import { dotnetPackages, verifyRelease } from "./verify-release.js";
 
@@ -158,18 +159,47 @@ export function packageBaseline(
   return baselines[0];
 }
 
-/** The versions nuget.org serves for one package ID. A package that does not exist has none. */
-async function nugetVersions(id: string): Promise<string[]> {
-  const response = await fetch(`${nugetFlatContainer}/${id.toLowerCase()}/index.json`);
-  if (response.status === 404) return [];
-  if (!response.ok) {
-    throw new Error(`nuget.org answered ${response.status} for the versions of ${id}`);
-  }
-  const body = (await response.json()) as { versions?: unknown };
-  if (!Array.isArray(body.versions) || body.versions.some((value) => typeof value !== "string")) {
-    throw new Error(`nuget.org wrote no version list for ${id}`);
-  }
-  return body.versions as string[];
+type NugetReadOverrides = Omit<Parameters<typeof retryStep>[1], "label"> & {
+  readonly fetch?: (url: string, init?: RequestInit) => Promise<Response>;
+};
+
+/**
+ * The versions nuget.org serves for one package ID. A package that does not exist has none.
+ *
+ * A read can time out for a short time (SM-1871). Each try stops after 15 s, and `retryStep` tries
+ * at most 3 times with a wait between tries, so a permanent failure fails within about 60 s. A 404
+ * answer is a result, not a failure, so it gets no retry.
+ */
+export async function nugetVersions(
+  id: string,
+  overrides: NugetReadOverrides = {},
+): Promise<string[]> {
+  const url = `${nugetFlatContainer}/${id.toLowerCase()}/index.json`;
+  const { fetch: read = fetch, ...retry } = overrides;
+  return await retryStep(
+    async () => {
+      let response: Response;
+      let body: { versions?: unknown };
+      try {
+        response = await read(url, { signal: AbortSignal.timeout(15_000) });
+        if (response.status === 404) return [];
+        if (!response.ok) throw new Error(`answered ${response.status}`);
+        body = (await response.json()) as { versions?: unknown };
+      } catch (error) {
+        const cause = error instanceof Error && error.cause instanceof Error ? error.cause : error;
+        const reason = cause instanceof Error ? cause.message : String(cause);
+        throw new Error(`GET ${url} failed: ${reason}`, { cause: error });
+      }
+      if (
+        !Array.isArray(body.versions) ||
+        body.versions.some((value) => typeof value !== "string")
+      ) {
+        throw new Error(`nuget.org wrote no version list for ${id}`);
+      }
+      return body.versions as string[];
+    },
+    { ...retry, label: `GET ${url}` },
+  );
 }
 
 /** The problems with the file list of the output directory. */
