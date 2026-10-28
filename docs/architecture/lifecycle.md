@@ -1117,6 +1117,12 @@ A worker has two pause sources, and either one stops claims:
   PostgreSQL into `remotelyPaused`. A failed refresh keeps the last value. `resume()` does not clear
   an operator pause that is still in effect.
 
+The registry refresh must not delay a stop. A Ruby worker sends each registry write on its own
+thread, and each write waits for the write before it. The dispatch loop starts a periodic refresh
+only when no registry write still runs, and it does not wait for that refresh. The deregistration
+thus runs after every registration write of the run. [Ruby running and
+stopping](schema-and-protocol.md#running-and-stopping-1) states the deadlines.
+
 These process-local controls do not apply queue weights. `concurrency_policy` enforces a durable
 active-work budget across worker processes. `rate_limit_policy` enforces a durable start-rate budget
 across worker processes.

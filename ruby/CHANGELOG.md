@@ -69,6 +69,19 @@ for the default 24 hours without a warning (SM-1857).
 Now the queue raises `ArgumentError` for a TTL that is not 0 and rounds to 0 ms. An exact 0 still
 selects the default. ADR 0115 records the rule for all seven SDKs.
 
+### A stalled registration refresh no longer delays a stop
+
+A worker refreshes its `worker_registry` row at each registry interval. Before this change, the
+dispatch loop sent that refresh itself, with no time limit. If the statement stalled, for example on
+a lock, `stop` could not start the stop path until the statement returned. Also, the draining
+registration and the deregistration ran on two threads in no order. If the registration committed
+last, the row of the stopped worker came back until the registry prune removed it (SM-1868).
+
+Now each registry write runs on its own thread, after the write before it. The dispatch loop starts
+a periodic refresh only when no registry write still runs, and it does not wait for the refresh.
+Thus `run` returns within `shutdown_grace` plus the unwind window, and the deregistration runs
+after every registration write of the run.
+
 ## 0.10.0 — 2026-10-26
 
 The npm packages, Python distribution, Go module, Rust crate, Ruby gem, JVM artifacts, and .NET

@@ -495,6 +495,138 @@ RSpec.describe "Worker runtime against PostgreSQL" do
     expect(admin.list_workers.map(&:worker_id)).not_to include(subject.worker_id)
   end
 
+  # SM-1868: the periodic registration refresh runs on its own thread, so a refresh that stalls
+  # does not delay the stop path.
+  it "stops within the shutdown grace and the unwind window while a periodic registration stalls" do
+    grace = 0.2
+    subject = worker(registry_interval: 0.1, disable_registry: false, shutdown_grace: grace)
+    writes = Concurrent::AtomicFixnum.new
+    stalled = Concurrent::Event.new
+    release = Concurrent::Event.new
+    allow(subject.instance_variable_get(:@executor)).to receive(:rows).and_wrap_original do |original, sql, *arguments|
+      # The first write is the startup registration. The second write is the first periodic refresh.
+      if sql == W::SqlCatalogue::REGISTER_WORKER_V1 && writes.increment == 2
+        stalled.set
+        release.wait(10)
+      end
+      original.call(sql, *arguments)
+    end
+    thread = Thread.new { subject.run }
+    expect(stalled.wait(5)).to be(true)
+    stopped_at = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+    subject.stop
+    bound = grace + W::Worker.const_get(:UNWIND_WINDOW) + 0.5
+    returned = thread.join(bound)
+    elapsed = Process.clock_gettime(Process::CLOCK_MONOTONIC) - stopped_at
+    expect(returned).not_to be_nil
+    expect(elapsed).to be <= bound
+  ensure
+    subject&.stop
+    release&.set
+    thread&.join(10)
+    # The registry writes outlive the run, so they must end before the pool closes.
+    subject&.instance_variable_get(:@stop_statements)&.each { |statement| statement.join(10) }
+  end
+
+  # SM-1868: the deregistration runs after every registration write of the run, so a late
+  # registration cannot recreate the registry row of a stopped worker.
+  it "deletes the registry row of a stopped run after its last registration write" do
+    admin = W::Admin.new(@connection)
+    subject = worker(registry_interval: 60, disable_registry: false, shutdown_grace: 0.1)
+    held = Concurrent::Event.new
+    release = Concurrent::Event.new
+    allow(subject.instance_variable_get(:@executor)).to receive(:rows).and_wrap_original do |original, sql, *arguments|
+      # The stop registration is the only registration write that reports draining (argument 15).
+      if sql == W::SqlCatalogue::REGISTER_WORKER_V1 && arguments.first[14] == "true"
+        held.set
+        release.wait(10)
+      end
+      result = original.call(sql, *arguments)
+      # The held write commits only after a deregistration that ran first has deleted the row.
+      release.set if sql == W::SqlCatalogue::DEREGISTER_WORKER_V2
+      result
+    end
+    thread = Thread.new { subject.run }
+    wait_until { admin.list_workers.any? { |entry| entry.worker_id == subject.worker_id } }
+    subject.stop
+    expect(thread.join(5)).not_to be_nil
+    expect(held).to be_set
+    release.set
+    subject.instance_variable_get(:@stop_statements).each { |statement| expect(statement.join(5)).not_to be_nil }
+    expect(admin.list_workers.map(&:worker_id)).not_to include(subject.worker_id)
+  ensure
+    release&.set
+    thread&.join(10)
+    subject&.instance_variable_get(:@stop_statements)&.each { |statement| statement.join(10) }
+  end
+
+  # SM-1868: a periodic refresh that ends with an error other than a StandardError ends the run, as
+  # it did on the dispatch thread. The stop path still deregisters, and the next run starts.
+  it "ends the run with the failure of a periodic refresh and still deregisters" do
+    admin = W::Admin.new(@connection)
+    subject = worker(registry_interval: 0.1, disable_registry: false, shutdown_grace: 0.1)
+    writes = Concurrent::AtomicFixnum.new
+    allow(subject.instance_variable_get(:@executor)).to receive(:rows).and_wrap_original do |original, sql, *arguments|
+      if sql == W::SqlCatalogue::REGISTER_WORKER_V1 && writes.increment == 2
+        raise NotImplementedError, "registry driver"
+      end
+
+      original.call(sql, *arguments)
+    end
+
+    thread = Thread.new do
+      subject.run
+    rescue NotImplementedError => e
+      e
+    end
+    expect(thread.join(5)).not_to be_nil
+    expect(thread.value).to have_attributes(class: NotImplementedError, message: "registry driver")
+    subject.instance_variable_get(:@stop_statements).each { |statement| expect(statement.join(5)).not_to be_nil }
+    expect(admin.list_workers.map(&:worker_id)).not_to include(subject.worker_id)
+    later = Thread.new { subject.run_once }
+    expect(later.join(10)).not_to be_nil
+    expect(later.value).to be(false)
+  ensure
+    subject&.stop
+    thread&.join(10)
+    later&.join(10)
+  end
+
+  # SM-1868: a periodic refresh that fails after the last dispatch pass still ends the run with its
+  # failure, after the stop path deregisters.
+  it "raises the failure of a periodic refresh that ends during the stop" do
+    admin = W::Admin.new(@connection)
+    subject = worker(registry_interval: 0.1, disable_registry: false, shutdown_grace: 1)
+    writes = Concurrent::AtomicFixnum.new
+    stalled = Concurrent::AtomicReference.new
+    release = Concurrent::Event.new
+    allow(subject.instance_variable_get(:@executor)).to receive(:rows).and_wrap_original do |original, sql, *arguments|
+      if sql == W::SqlCatalogue::REGISTER_WORKER_V1 && writes.increment == 2
+        stalled.set(Thread.current)
+        release.wait(10)
+        raise NotImplementedError, "registry driver"
+      end
+
+      original.call(sql, *arguments)
+    end
+    thread = Thread.new do
+      subject.run
+    rescue NotImplementedError => e
+      e
+    end
+    wait_until { stalled.get }
+    subject.stop
+    # The stop registration replaces the stalled refresh as the newest write only after dispatch ends.
+    wait_until { !subject.instance_variable_get(:@registry_write).equal?(stalled.get) }
+    release.set
+    expect(thread.join(5)).not_to be_nil
+    expect(thread.value).to have_attributes(class: NotImplementedError, message: "registry driver")
+    expect(admin.list_workers.map(&:worker_id)).not_to include(subject.worker_id)
+  ensure
+    release&.set
+    thread&.join(10)
+  end
+
   it "runs terminal storage maintenance" do
     completed = "SELECT last_completed_at IS NOT NULL FROM workhorse.maintenance_state
                   WHERE routine_name = 'terminal_storage'"

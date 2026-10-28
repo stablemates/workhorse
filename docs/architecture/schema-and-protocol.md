@@ -2193,6 +2193,28 @@ starts a budget of its own:
 
 Thus the stop path takes at most `shutdown_grace` plus the unwind window.
 
+Each registry write of a run runs on its own thread (`Worker#registry_step`): the first
+registration, each periodic refresh, the draining registration, and the deregistration. Each write
+waits for the write before it. Thus the deregistration runs after every registration write of the
+run, and a late registration cannot recreate the row of a stopped instance. The run waits for its
+first registration before it starts dispatch.
+
+The dispatch loop starts a periodic refresh (`Worker#refresh_registration_if_due`) only when the
+registry interval elapsed and no registry write still runs. Thus at most one registry statement is
+in flight. The dispatch loop does not wait for the refresh. If a refresh stalls, the draining
+registration and the deregistration wait for it within their deadlines. The stop path thus keeps
+its bound. Before SM-1868, the dispatch loop sent each periodic refresh itself, so a refresh that
+stalled delayed the start of the stop. A write takes the thread of the write before it out of a
+holder before it waits. A dead Ruby thread keeps its block, so this keeps each earlier write
+collectable.
+
+The registration logs and reports a `StandardError` itself, and the deregistration ignores one. A
+write thread records any other error, such as `NotImplementedError`, and does not end with it. Thus
+the next write still runs. The run keeps the first recorded error and raises it at the first of
+these points: after the first registration, at the next dispatch pass, or after the deregistration.
+A write that has not ended by the final deadline cannot fail the run, and its error does not reach
+a later run.
+
 `deregister_worker_v2` deletes the registry row only while the row names the instance of the run
 that stops. A late registration write of an ended run could still replace the row of a later run of
 the same worker, and its operator pause state with it. So the next `run` or `run_once` of that

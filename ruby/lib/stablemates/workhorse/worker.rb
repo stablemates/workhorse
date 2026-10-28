@@ -310,6 +310,11 @@ module Stablemates
         @last_routine_at = -Float::INFINITY
         @last_registry_at = -Float::INFINITY
         @registered = Concurrent::AtomicBoolean.new(false)
+        # The newest registry write thread (+registry_step+). Each write waits for the one before it.
+        @registry_lock = Mutex.new
+        @registry_write = nil
+        # The first error of the run that ended the body of a registry write (+registry_step+).
+        @registry_failure = Concurrent::AtomicReference.new
         @instance_id = nil
         @draining = false
         # Guards the dispatch slots, the queue tiers, and the claim order that handler threads share
@@ -521,20 +526,45 @@ module Stablemates
       # at most the shutdown grace plus the unwind window in total.
       def remaining(deadline) = [deadline - monotonic, 0].max
 
-      # Runs +block+ on its own thread named +name+ and waits for it until +deadline+. A block that
-      # is still running then finishes on its own thread, which keeps its connection until its
-      # statement ends. The stop path sends its registration statements this way. The next run of
-      # this worker waits for these threads (+await_previous_stop+).
-      def within(deadline, name, &block)
-        thread = Thread.new do
-          Thread.current.name = name
-          block.call
-        rescue
-          nil
-        end
+      # Waits for the registry write +thread+ (+registry_step+) until +deadline+. A write that is
+      # still running then finishes on its own thread, which keeps its connection until its statement
+      # ends. The stop path sends its registration statements this way. The next run of this worker
+      # waits for these threads (+await_previous_stop+). Each write waits for the write before it,
+      # so these threads also outlast every periodic refresh of the run.
+      def within(deadline, thread)
         @stop_statements << thread
         thread.join(remaining(deadline))
         nil
+      end
+
+      # Starts a registry write on its own thread named +name+ and returns the thread. The write
+      # first waits for the write before it, so the registrations and the deregistration of a run
+      # reach PostgreSQL in that order. The thread takes the earlier write out of its holder before
+      # it waits. Thus no write keeps each earlier write reachable (SM-1846, SM-1847).
+      #
+      # The thread never ends with an error. Otherwise the wait of the next write, and +within+,
+      # would raise it, and the chain and the stop path would end there. The write records the
+      # first error of the run in @registry_failure instead, and the run raises it
+      # (+raise_registry_failure+). Only an error that is not a StandardError gets there: the
+      # registration logs and reports a StandardError, and the deregistration ignores one.
+      def registry_step(name, &body)
+        @registry_lock.synchronize do
+          before = [@registry_write]
+          @registry_write = Thread.new do
+            Thread.current.name = name
+            before.pop&.join
+            body.call
+          rescue Exception => e # rubocop:disable Lint/RescueException
+            @registry_failure.compare_and_set(nil, e)
+            nil
+          end
+        end
+      end
+
+      # Raises the first error that ended the body of a registry write of this run, if one did.
+      def raise_registry_failure
+        failure = @registry_failure.get
+        raise failure if failure
       end
 
       # Waits until every stop statement of the previous run of this worker has ended, at most
@@ -566,6 +596,9 @@ module Stablemates
       def run_reserved(continuous, version, gate)
         @instance_id = SecureRandom.uuid
         @registered.make_false
+        # Every registry write of the previous run has ended (+await_previous_stop+), so a failure
+        # that one of them recorded after its run ended does not reach this run.
+        @registry_failure.set(nil)
         @draining = false
         run_errors = Concurrent::Array.new
         maintenance_errors = Concurrent::Array.new
@@ -578,7 +611,8 @@ module Stablemates
             listener = Listener.shared(@pool).subscribe(@queues, on_wake: method(:notify),
               on_error: ->(error) { call_reporter(:on_notification_error, @on_notification_error, error) })
           end
-          refresh_registration(force: true)
+          registry_step("workhorse-registration") { refresh_registration(force: true) }.join
+          raise_registry_failure
           log(:info, "workhorse.worker.started", "Worker started",
             "workhorse.worker.concurrency" => @concurrency, "workhorse.worker.queues" => @queues)
           if continuous && !stop_requested?(version)
@@ -604,15 +638,18 @@ module Stablemates
           startup&.join(remaining(stop_deadline))
           listener&.close(remaining(stop_deadline))
           @draining = true
-          within(stop_deadline, "workhorse-stop-registration") { refresh_registration(force: true) }
+          within(stop_deadline, registry_step("workhorse-stop-registration") { refresh_registration(force: true) })
           abandoned = drain(handlers, stop_deadline, final_deadline)
           # A handler's completion may admit tasks until the drain ends, so the slots outlive it.
           @state_lock.synchronize { @dispatch_slots = nil }
           instance_id = @instance_id
-          within(final_deadline, "workhorse-deregistration") { deregister(instance_id) }
+          within(final_deadline, registry_step("workhorse-deregistration") { deregister(instance_id) })
           log(:info, "workhorse.worker.stopped", "Worker stopped",
             "workhorse.worker.active_slots" => abandoned, "workhorse.worker.queues" => @queues)
         end
+        # A registry write that failed after the last dispatch pass raises only now, so the drain and
+        # the deregistration still ran. A write that has not ended by the final deadline is not known.
+        raise_registry_failure
         raise ShutdownIncompleteError.new(abandoned) if abandoned.positive?
         raise maintenance_errors.first unless maintenance_errors.empty?
         raise run_errors.first unless run_errors.empty?
@@ -735,7 +772,7 @@ module Stablemates
           loop do
             @wake.reset
             settle.call(results.pop) until results.empty?
-            refresh_registration
+            refresh_registration_if_due
             claim_error, pass_ended, empty, empty_wait, wake_version = @state_lock.synchronize do
               [slots.claim_error, slots.pass_ended, slots.empty, slots.empty_wait, @wake_version]
             end
@@ -1380,6 +1417,20 @@ module Stablemates
       end
 
       # --- Registration and maintenance -------------------------------------------------------
+
+      # Starts the periodic registration refresh on its own thread when its interval elapsed and no
+      # registry write still runs. Thus at most one registry statement is in flight, and a refresh
+      # that stalls blocks neither dispatch nor the stop path. Only the dispatch loop calls it. The
+      # error that ended an earlier refresh raises here, so it ends the run as it did on the dispatch
+      # thread.
+      def refresh_registration_if_due
+        return if @registry_ms.zero?
+
+        raise_registry_failure
+        return if monotonic - @last_registry_at < @registry_ms / 1000.0 || @registry_write&.alive?
+
+        registry_step("workhorse-registration") { refresh_registration }
+      end
 
       def refresh_registration(force: false)
         return if @registry_ms.zero?
