@@ -585,10 +585,10 @@ one commit and one version number.
 
 The Python package releases from its own `python/vX.Y.Z` tag. The tag must match
 `python/pyproject.toml` and a heading in `python/CHANGELOG.md`. `.github/workflows/release-python.yml`
-requires a successful `main` CI run on the tagged commit. It then runs `pnpm python:release-check`,
-which builds a source distribution and universal wheel with uv. It runs no Rust check. The required
-`main` CI run includes `pnpm rust:gates`, and the build job of `release.yml` runs
-`pnpm rust:release-check` before any npm, crate, or gem publish.
+requires a successful `main` CI push run on the tagged commit that planned every CI lane. It then
+runs `pnpm python:release-check`, which builds a source distribution and universal wheel with uv.
+It runs no Rust check. The required `main` CI run includes `pnpm rust:gates`, and the build job of
+`release.yml` runs `pnpm rust:release-check` before any npm, crate, or gem publish.
 A separate `pypi` environment publishes those artifacts through PyPI trusted publishing with
 `id-token: write`.
 Before publication, the publish task generates a PEP 740 attestation beside each distribution.
@@ -598,9 +598,9 @@ The Go module releases from its own `go/vX.Y.Z` tag. `scripts/release-go.sh X.Y.
 a clean worktree and a matching `go/CHANGELOG.md` heading. It also requires that `HEAD` is an
 ancestor of `origin/main`, and that `vX.Y.Z` and `python/vX.Y.Z` on origin point to `HEAD`. It
 rehearses the module release and resets the test database. If the `origin` repository has a
-successful `main` CI push run for exactly `HEAD`, the script runs only `pnpm go:test` and
-`pnpm go:vuln`. If not, it runs `pnpm check`. It then creates an annotated tag and pushes that tag
-to `origin`.
+successful `main` CI push run for exactly `HEAD` that planned every CI lane, the script runs only
+`pnpm go:test` and `pnpm go:vuln`. If not, it runs `pnpm check`. It then creates an annotated tag
+and pushes that tag to `origin`.
 
 ## What SemVer governs
 
@@ -912,6 +912,52 @@ every `protocol/v1` fixture category through `rust/tests/protocol_conformance.rs
 Every release is a tag that points to a green public CI commit. Each tag then runs the focused gate
 for the distribution being published.
 
+### Main CI run that planned every CI lane
+
+The release workflows publish a commit only after a full `main` CI run checked it. A push run on
+`main` plans only the CI lanes that its changed files select, so a successful push run can skip CI
+lanes. A release candidate commit changes release files, so its push run plans every CI lane.
+
+**Example.**
+
+1. A maintainer tags a commit that changed only Python files, by mistake.
+2. The `main` push run of that commit planned only the Python CI lane and the always-run CI lanes,
+   and it passed.
+3. The build job of `release.yml` reads the plan of that run. It fails before it builds a release
+   artifact, and it names the run and each CI lane that the run skipped.
+
+The `plan` CI job of each push run uploads the plan that the run used as the `lane-plan` artifact.
+The build job of `release.yml` and of `release-python.yml` runs `scripts/check-main-ci-plan.ts`
+before any publish step. A dry run does the same. The check reads the plan of the run. It does not
+compute the plan again from the changed files. `scripts/release-go.sh` uses the same check, and it
+runs the full `pnpm check` when the check fails.
+
+The artifact expires after the artifact retention period of the repository. Tag the release
+candidate commit before then, or make a new release candidate commit.
+
+<details>
+<summary>Reference: when the release check of the main CI run fails</summary>
+
+The check fails, and the release publishes nothing, in each of these conditions:
+
+1. GitHub cannot list the `CI` runs of the commit.
+2. No successful, completed `CI` run on `main` with the `push` event exists for the commit.
+3. The `lane-plan` artifact of each such run is missing, expired, or cannot be downloaded.
+4. The plan file `lane-plan.json` is not JSON, has a `version` other than 1, or names an `event`
+   other than `push` or a `sha` other than the commit.
+5. The plan names another run in `runId`. Or its `runAttempt` is newer than the successful attempt
+   of the run, because a later attempt replaced the plan after GitHub listed the result.
+6. The plan gives no boolean for a CI lane in `LANE_NAMES`, or names a CI lane that `LANE_NAMES`
+   does not hold.
+7. No run gives `true` for each CI lane of `FULL_PUSH_LANES` in `scripts/ci-lanes.ts`. These are
+   all CI lanes except the weekly CI lanes.
+
+The error output names each run and the reason, or the CI lanes that the run did not plan.
+
+More detail: [ADR 0083](decisions/0083-run-each-language-suite-once-per-change.md)
+
+</details>
+
 ### Release train
 
 Every release publishes the same version from one source commit, in one controlled window, in a
@@ -922,7 +968,8 @@ candidate is cut, and a slipped date means a new candidate. The candidate commit
 commits can land on `main` during the release. Thus the maintainer must create each tag on the
 candidate SHA, for example `git tag --annotate vX.Y.Z <sha>`, not on the current tip of `main`.
 Nobody may cancel the `main` CI push run of the candidate commit, because each release workflow
-requires that run to succeed.
+requires that run to succeed and to have
+[planned every CI lane](#main-ci-run-that-planned-every-ci-lane).
 
 The rule does not change at a major release. If the defect is in one SDK, the fix ships in a
 release train like any other release. Each other line publishes the same version with no change, a
@@ -1088,8 +1135,8 @@ For the first release, the candidate also removes `unpublished` from the .NET li
 1. Update all TypeScript package versions in lockstep and add the `CHANGELOG.md` entry for the release,
    including upgrade notes for any breaking change.
 2. Tag the candidate SHA with `git tag --annotate vX.Y.Z <sha>`, then push the tag. The workflow
-   requires a successful `main` CI push run for that commit. It refuses a tag that fails the
-   [release check](#release-train) for any line.
+   requires a [main CI run that planned every CI lane](#main-ci-run-that-planned-every-ci-lane) for
+   that commit. It refuses a tag that fails the [release check](#release-train) for any line.
 3. `pnpm npm:release-check` validates generated package assets, lint, dependencies, types, and unit
    behavior. It builds every tarball once, then installs and exercises those exact files in clean
    consumers against PostgreSQL. It then runs `pnpm release:verify npm` against those tarballs, so
@@ -1117,7 +1164,8 @@ pipeline.
 
 1. Update `python/pyproject.toml` and add the same version to `python/CHANGELOG.md`.
 2. Tag the candidate SHA with `git tag --annotate python/vX.Y.Z <sha>`, then push the tag. The
-   workflow requires a successful `main` CI push run for that commit.
+   workflow requires a [main CI run that planned every CI lane](#main-ci-run-that-planned-every-ci-lane)
+   for that commit.
 3. `pnpm python:release-check` runs the [release check](#release-train). It rebuilds the embedded
    dashboard bundle, checks Python format, lint, types, and dependencies, then runs every Python
    test against PostgreSQL. It builds the wheel and source distribution once and tests those exact
@@ -1164,15 +1212,15 @@ attribute. For 0.4.0, `importlib.metadata.version("stablemates-workhorse")` is t
    `pnpm release:verify go` against that proxy, so a post-publish check the module cannot satisfy
    fails before the tag.
 5. The script asks GitHub with `gh api` for a successful run of the `CI` workflow on `main` for
-   exactly `HEAD`, with the `push` event. A push run executes every CI job, and ADR 0043 and ADR 0102
-   make it the release gate. The query names the github.com repository of the `origin` URL, so
-   `GH_REPO` cannot change it.
-   1. If such a run exists, the script prints its URL. It then runs only `pnpm go:test` and
-      `pnpm go:vuln`.
-   2. If no such run exists, the script runs the full `pnpm check`. A canceled, failed, or
-      unfinished run does not count. The script also runs the full check in these conditions:
-      `gh` is missing or fails, `origin` is not one github.com URL, or `origin` has a different or
-      a second push URL.
+   exactly `HEAD`, with the `push` event. ADR 0043 and ADR 0102 make that run the release gate. The
+   query names the github.com repository of the `origin` URL, so `GH_REPO` cannot change it.
+   1. If such a run exists, the script runs `scripts/check-main-ci-plan.ts`. If a successful run
+      [planned every CI lane](#main-ci-run-that-planned-every-ci-lane), the script runs only
+      `pnpm go:test` and `pnpm go:vuln`.
+   2. If no such run exists, or no run planned every CI lane, the script runs the full
+      `pnpm check`. A canceled, failed, or unfinished run does not count. The script also runs the
+      full check in these conditions: `gh` is missing or fails, `origin` is not one github.com URL,
+      or `origin` has a different or a second push URL.
 6. The script creates `go/vX.Y.Z` on `HEAD`, and pushes the tag only after the gate passes.
 
 ### Rust crate

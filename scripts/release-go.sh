@@ -121,20 +121,31 @@ successful_main_ci_run() {
 
 pnpm go:release-check "$version"
 
-# ADR 0043 and ADR 0102 make the successful main CI push run of the candidate the release gate. That
-# run executes every CI job, so the full local check repeats it. The script then runs only the Go
-# checks. Without such a run, the script runs the full check.
-ci_run=$(successful_main_ci_run "$head_commit" "$(origin_github_repository)")
-if [ -n "$ci_run" ]; then
-  echo "HEAD $head_commit passed the main CI run $ci_run. Running only the Go checks."
-  pnpm db:reset:test
-  pnpm go:test
-  pnpm go:vuln
-else
+# ADR 0043 and ADR 0102 make the successful main CI push run of the candidate the release gate. A
+# push run plans only the lanes that its changed files select (SM-1878), so the script reuses the
+# run only if scripts/check-main-ci-plan.ts finds a successful run that planned every lane
+# (SM-1886). The full local check would repeat that run, so the script runs only the Go checks.
+# Without such a run, or if no plan can be read, the script runs the full check.
+repository=$(origin_github_repository)
+ci_run=$(successful_main_ci_run "$head_commit" "$repository")
+if [ -z "$ci_run" ]; then
   echo "No successful main CI run for HEAD $head_commit. Running the full pnpm check."
+  full_check=1
+elif ! pnpm --silent exec tsx scripts/check-main-ci-plan.ts "$repository" "$head_commit" >&2; then
+  echo "No main CI run that planned every lane for HEAD $head_commit. Running the full pnpm check."
+  full_check=1
+else
+  echo "HEAD $head_commit passed a main CI run that planned every lane. Running only the Go checks."
+  full_check=
+fi
+if [ -n "$full_check" ]; then
   pnpm db:reset:test
   pnpm db:reset:test-packed
   pnpm check
+else
+  pnpm db:reset:test
+  pnpm go:test
+  pnpm go:vuln
 fi
 
 require_clean_worktree "The release gate changed tracked files; review them before tagging."

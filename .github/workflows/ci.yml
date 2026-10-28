@@ -82,7 +82,18 @@ jobs:
       - id: lanes
         env:
           SCHEDULE: ${{ github.event.schedule }}
+          LANE_PLAN_PATH: ${{ runner.temp }}/lane-plan.json
         run: pnpm --silent exec tsx scripts/ci-lanes.ts "$GITHUB_EVENT_NAME" "$SCHEDULE" >> "$GITHUB_OUTPUT"
+      # The release workflows publish a commit only after a successful push run that planned every
+      # lane. scripts/check-main-ci-plan.ts downloads this artifact to read the plan that the run
+      # used (SM-1886). If the upload fails, the run fails, so a successful push run has a plan.
+      - if: github.event_name == 'push'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: lane-plan
+          path: ${{ runner.temp }}/lane-plan.json
+          if-no-files-found: error
+          overwrite: true
 
   static:
     name: format, generated files, lint, security, types

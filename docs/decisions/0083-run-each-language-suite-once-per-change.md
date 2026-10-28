@@ -195,6 +195,29 @@ set, and the `jvm` lane builds and checks the sources.
 `pnpm format:check`, and `pnpm typecheck` to a step, and checks that each file a language step reads
 selects the lane of that step.
 
+_Amended by [SM-1886](https://linear.app/stablemates/issue/SM-1886)._ A successful push run that
+skipped lanes did not check every line. Before this amendment, the release workflows accepted that
+run for the tagged commit. Now the release workflows also require that the run planned every lane
+that a push runs, `FULL_PUSH_LANES` in `scripts/ci-lanes.ts`.
+
+The `plan` job of each push run writes the plan that the run uses to `lane-plan.json`. It uploads
+the file as the `lane-plan` artifact. If the upload fails, the run fails. The build job of
+`release.yml` and of `release-python.yml` runs `scripts/check-main-ci-plan.ts` before it builds an
+artifact for publication. The script downloads the artifact of each successful push run of the
+tagged commit and reads the plan. It does not compute the plan again from the changed files. The
+release fails in these conditions, and the message names each run and its missing lanes:
+
+- GitHub cannot list the runs, or no successful push run on `main` exists for the commit.
+- The artifact is missing, expired, or cannot be downloaded.
+- The plan is not JSON, has another version, or is for another event or commit.
+- The plan is for another run, or for an attempt newer than the successful attempt of the run.
+- The plan gives no boolean for a lane that the commit knows, or names a lane that it does not know.
+- No run planned each lane of `FULL_PUSH_LANES`.
+
+`scripts/release-go.sh` uses the same check before it reuses a main CI run. If the check fails, the
+script runs the full `pnpm check`. `scripts/check-main-ci-plan.test.ts` holds the check to these
+conditions and holds the workflows to the step.
+
 ## Consequences
 
 A change gets one result per language, and the Rust and Go lanes stop setting the wait for every
@@ -233,4 +256,11 @@ On 2026-10-28, 20 of the last 60 commits on `main` changed a changelog. A push r
 the lanes that its pull request skipped. Thus an input that the map omits
 hides a failure until the next release candidate, the next change to a shared input, or the weekly
 run. A tag on a commit that is not the release candidate commit can have a push run that skipped
-lanes. The release workflows accept that run, so a maintainer must tag the release candidate commit.
+lanes.
+
+_Amended by [SM-1886](https://linear.app/stablemates/issue/SM-1886)._ The release workflows refuse
+a tag whose push runs did not plan every lane, so a tag on another commit fails before any publish.
+The artifact expires after the artifact retention period of the repository. Then the check cannot
+read the plan, and the release fails. A `workflow_dispatch` run of CI does not replace the push
+run, because the check accepts only a push run. Thus a maintainer must tag the release candidate
+commit before its artifact expires, or make a new release candidate commit.

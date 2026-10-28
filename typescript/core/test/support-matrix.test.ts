@@ -965,7 +965,9 @@ describe("continuous integration", () => {
 
     expect(workflow).toContain('tags: ["v*"]');
     expect(workflow).toContain("actions: read");
-    expect(workflow).toContain("actions/workflows/ci.yml/runs?head_sha=$GITHUB_SHA");
+    expect(workflow).toContain(
+      'pnpm --silent exec tsx scripts/check-main-ci-plan.ts "$GITHUB_REPOSITORY" "$GITHUB_SHA"',
+    );
     expect(workflow).toContain("DATABASE_URL_TEST_PACKED:");
     expect(workflow).toContain("pnpm npm:release-check");
     expect(workflow).not.toContain("pnpm check");
@@ -1314,7 +1316,9 @@ describe("continuous integration", () => {
 
     expect(workflow).toContain('tags: ["python/v*"]');
     expect(workflow).toContain("actions: read");
-    expect(workflow).toContain("actions/workflows/ci.yml/runs?head_sha=$GITHUB_SHA");
+    expect(workflow).toContain(
+      'pnpm --silent exec tsx scripts/check-main-ci-plan.ts "$GITHUB_REPOSITORY" "$GITHUB_SHA"',
+    );
     expect(workflow).toContain("DATABASE_URL_TEST:");
     expect(workflow).toContain("pnpm python:release-check");
     expect(workflow).not.toContain("pnpm check");
