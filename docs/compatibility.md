@@ -1176,8 +1176,14 @@ release, crates.io held only the `0.0.0` placeholder that reserved the name.
 3. After npm publishes, the `crates-io` job compares the crate version with the tag. A mismatch
    writes a notice and publishes nothing, so a release that leaves the crate behind still succeeds.
    The [release check](#release-train) in the build job refuses that tag before npm publishes.
-4. On a match, the job exchanges its OIDC identity for a crates.io token and runs
-   `cargo publish --package workhorse --locked`, which verifies the package again before the upload.
+4. On a match, the job packages the crate with `cargo package`. `scripts/check-registry-version.ts`
+   then asks crates.io for the version. If crates.io serves it with the SHA-256 checksum of the
+   packaged crate, the job uploads nothing and succeeds. If the checksum differs, the job fails. Thus
+   a re-run finishes after an earlier run uploaded the crate, as
+   [Re-run a failed crates-io or rubygems job](#re-run-a-failed-crates-io-or-rubygems-job) states.
+5. If crates.io does not serve the version, the job exchanges its OIDC identity for a crates.io
+   token and runs `cargo publish --package workhorse --locked`, which verifies the package again
+   before the upload.
 
 The job can publish only after a crate owner registers the workflow on crates.io:
 
@@ -1212,11 +1218,16 @@ crate, it has no tag of its own and publishes from the npm `v*` tag. It joined t
 3. After npm publishes, the `rubygems` job compares the gem version with the tag. A mismatch writes a
    notice and publishes nothing, so a release that leaves the gem behind still succeeds.
    The [release check](#release-train) in the build job refuses that tag before npm publishes.
-4. On a match, `rubygems/release-gem` exchanges the job's OIDC identity for a RubyGems API key and
-   runs `rake release` in `ruby/`. That task builds the gem and pushes it with a Sigstore
-   attestation. It finds the train tag already in place, so it pushes no tag. The action then waits
-   until RubyGems.org serves the new version.
-5. Verify the public version with `gem install stablemates-workhorse -v X.Y.Z` in an empty gem home,
+4. On a match, the job builds the gem with `gem build`. `scripts/check-registry-version.ts` then
+   asks RubyGems.org for the version. If RubyGems.org serves it with the SHA-256 checksum of the
+   built gem, the job uploads nothing and succeeds. If the checksum differs, the job fails. Thus a
+   re-run finishes after an earlier run pushed the gem, as
+   [Re-run a failed crates-io or rubygems job](#re-run-a-failed-crates-io-or-rubygems-job) states.
+5. If RubyGems.org does not serve the version, `rubygems/release-gem` exchanges the job's OIDC
+   identity for a RubyGems API key and runs `rake release` in `ruby/`. That task builds the gem and
+   pushes it with a Sigstore attestation. It finds the train tag already in place, so it pushes no
+   tag. The action then waits until RubyGems.org serves the new version.
+6. Verify the public version with `gem install stablemates-workhorse -v X.Y.Z` in an empty gem home,
    and review the attestation on the gem's RubyGems.org page.
 
 Both jobs install the locked bundle beside the release credentials. A frozen bundle pins each gem
@@ -1541,6 +1552,30 @@ therefore end up complete on PyPI, partial on npm, and absent from the module pr
 The half-published version is never completed and never reused. Its number is spent. Record what
 happened in [`CHANGELOG.md`](../CHANGELOG.md) under the version that replaces it, so a reader who
 finds the orphaned packages on npm can tell why they exist.
+
+#### Re-run a failed crates-io or rubygems job
+
+crates.io and RubyGems.org never accept a version twice. The `crates-io` or `rubygems` job can fail
+after the registry accepts the upload, for example in the wait step of `rubygems/release-gem` or at
+the job timeout. The `github-release` job then does not run.
+
+Re-run the failed job. Its environment asks for a review first. The job builds the crate or the gem
+from the tag again, and `scripts/check-registry-version.ts` asks the registry for the version:
+
+1. If the registry does not serve the version, the job uploads the artifact.
+2. If the registry serves the version with the SHA-256 checksum of the new build, the job uploads
+   nothing and succeeds. `cargo package` and `gem build` make the same bytes from the same tag, so
+   this is the case after an upload of an earlier run. The run summary names the checksum.
+3. If the registry serves the version with a different checksum, the job fails and uploads nothing.
+   The registry has bytes that this tag did not build. Do not re-run the job again. Compare the
+   published artifact with a build of the tag before you continue the release.
+
+If a request to the registry fails with a network error, HTTP 429, or HTTP 5xx, the script tries
+again, up to five requests in a row. Each other failure stops the job before the upload. The
+`github-release` job runs after the re-run, if the other publication jobs of the run succeeded.
+
+A re-run uses the workflow and the scripts of the tag, not of `main`. SM-1860 adds the check before
+0.11.0 is tagged, so a re-run of an earlier tag still fails on a published version.
 
 #### Recover from a failed Maven Central upload
 
