@@ -109,25 +109,6 @@ function deferred() {
   return { promise, resolve };
 }
 
-/**
- * A monotonic clock that a test moves forward. `deadline` is the test's own estimate of the
- * round's deadline, and `shiftTo` moves the clock so that it reads `at` now.
- */
-function shiftedClock() {
-  const now = performance.now.bind(performance);
-  let offset = 0;
-  const spy = vi.spyOn(performance, "now").mockImplementation(() => now() + offset);
-  return {
-    deadline: Number.POSITIVE_INFINITY,
-    shiftTo(at: number): void {
-      offset = at - now();
-    },
-    restore(): void {
-      spy.mockRestore();
-    },
-  };
-}
-
 function never(): Promise<never> {
   return new Promise<never>(() => {
     // A statement stuck behind a lock never answers.
@@ -265,18 +246,18 @@ describe("reserved heartbeat connection", () => {
   it("keeps the connection when less than the round minimum is left after BEGIN", async () => {
     const { pool, clients, answer } = fakePool();
     const connection = new ReservedConnection(asDatabase(pool));
-    const clock = shiftedClock();
+    vi.useFakeTimers({ toFake: ["performance", "setTimeout", "clearTimeout"] });
     try {
+      // The fake clock moves only when the test moves it, so this is the round's own deadline.
+      const deadline = performance.now() + 1_000;
       answer.current = async (text) => {
         // BEGIN answers with 5 ms of the round left.
-        if (text === "BEGIN") clock.shiftTo(clock.deadline - 5);
+        if (text === "BEGIN") vi.advanceTimersByTime(deadline - 5 - performance.now());
         return emptyResult;
       };
-      const round = renew(connection, 1_000);
-      clock.deadline = performance.now() + 1_000;
-      await expect(round).rejects.toThrow(/before its heartbeat/);
+      await expect(renew(connection, 1_000)).rejects.toThrow(/before its heartbeat/);
     } finally {
-      clock.restore();
+      vi.useRealTimers();
     }
     expect(sent(clients[0]!)).toEqual(["BEGIN", "ROLLBACK"]);
     expect(clients[0]!.release).not.toHaveBeenCalled();
@@ -292,17 +273,18 @@ describe("reserved heartbeat connection", () => {
     const { pool, clients } = fakePool();
     const connection = new ReservedConnection(asDatabase(pool));
     await renew(connection, 1_000);
-    const clock = shiftedClock();
+    vi.useFakeTimers({ toFake: ["performance", "setTimeout", "clearTimeout"] });
     try {
-      clock.deadline = performance.now() + 1_000;
+      // The fake clock moves only when the test moves it, so this is the round's own deadline.
+      const deadline = performance.now() + 1_000;
       const round = connection.renew(1_000, () => {
         // The payload takes all but 5 ms of the round before the first statement.
-        clock.shiftTo(clock.deadline - 5);
+        vi.advanceTimersByTime(deadline - 5 - performance.now());
         return [batch("worker-a")];
       });
       await expect(round).rejects.toThrow(/before its heartbeat/);
     } finally {
-      clock.restore();
+      vi.useRealTimers();
     }
     expect(sent(clients[0]!)).toEqual(bounded);
     expect(clients[0]!.release).not.toHaveBeenCalled();
@@ -334,19 +316,23 @@ describe("reserved heartbeat connection", () => {
   it("destroys a client whose ROLLBACK ends after the deadline of a round that expired before its heartbeat", async () => {
     const { pool, clients, answer } = fakePool();
     const connection = new ReservedConnection(asDatabase(pool));
-    const clock = shiftedClock();
+    vi.useFakeTimers({ toFake: ["performance", "setTimeout", "clearTimeout"] });
+    const now = vi.spyOn(performance, "now");
     try {
+      // The fake clock moves only when the test moves it, so this is the round's own deadline.
+      const deadline = performance.now() + 1_000;
       answer.current = async (text) => {
         // BEGIN answers with 5 ms of the round left, and ROLLBACK answers after the deadline.
-        if (text === "BEGIN") clock.shiftTo(clock.deadline - 5);
-        if (text === "ROLLBACK") clock.shiftTo(clock.deadline + 1);
+        if (text === "BEGIN") vi.advanceTimersByTime(deadline - 5 - performance.now());
+        // On a loaded host the round timer can fire after the clock passes the deadline. The spy
+        // moves only the clock, so the round timer does not fire first.
+        if (text === "ROLLBACK") now.mockReturnValue(deadline + 1);
         return emptyResult;
       };
-      const round = renew(connection, 1_000);
-      clock.deadline = performance.now() + 1_000;
-      await expect(round).rejects.toThrow(/reached its deadline$/);
+      await expect(renew(connection, 1_000)).rejects.toThrow(/reached its deadline$/);
     } finally {
-      clock.restore();
+      now.mockRestore();
+      vi.useRealTimers();
     }
     await connection.close();
 
