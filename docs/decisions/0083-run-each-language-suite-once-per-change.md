@@ -133,6 +133,35 @@ runs under `rust:test`.
 checks. Neither gates pull request feedback. `pnpm go:release-check` now runs the release tag and
 changelog checks, then the same staged-proxy check as `pnpm go:package-check`.
 
+_Amended by [SM-1877](https://linear.app/stablemates/issue/SM-1877)._ The `static` lane still runs
+on every change, but a pull request runs only the static steps that the change can affect. Before
+this amendment, a Python-only change set up Java, .NET, Rust, and Ruby, and ran the JVM and .NET
+lint, the JVM, .NET, Go, and Ruby API checks, and each vulnerability scan.
+
+A static step that reads the files of one language has a step-level `if:` on the plan output. It
+runs only when the plan selects the filtered lane of that language: `python`, `go`, `ruby`, `jvm`,
+or `dotnet`. `pnpm rust:vuln` and the cargo-deny setup run only with the `rust` lane. The Java,
+Gradle, .NET, and Ruby setup steps run only with their lanes. Thus the inputs of a filtered lane
+must also hold each file that the static steps of its language read. For example, the `rust` lane
+names `deny.toml`, because cargo-deny reads it.
+
+The static job runs the parts of `pnpm format:check` and `pnpm lint` as separate steps, so that
+the part of one language can skip. The cross-language checks run on every change: oxfmt, oxlint,
+knip, the generated SQL and dashboard catalogues, the TypeScript API, and `pnpm typecheck`. The
+catalogues format their Go, Rust, and Python output, so the Go, Rust, and uv setup steps also run on
+every change. `pnpm go:fmt:check` and `pnpm go:lint` also read
+`benchmarks/connection-budget/go-probe`, which the `go` lane does not read, so they run on every
+change. A shared input selects every lane, so it runs every static step.
+
+The `jvm-verification-metadata` lane runs only for a change to the files that decide which plugins
+and libraries Gradle resolves: each `*.gradle.kts` file under `jvm/`, `jvm/gradle/`,
+`jvm/gradle.properties`, and `jvm/release-consumer/`. A change to a JVM source cannot change that
+set, and the `jvm` lane builds and checks the sources.
+
+`scripts/ci-lanes.test.ts` holds each static step to its lane, holds each part of `pnpm lint`,
+`pnpm format:check`, and `pnpm typecheck` to a step, and checks that each file a language step reads
+selects the lane of that step.
+
 ## Consequences
 
 A change gets one result per language, and the Rust and Go lanes stop setting the wait for every
@@ -157,3 +186,9 @@ costs one lane less. A docs-only merge that skips its push run costs no `main` r
 tested its merge commit on the base of that time. If another change lands first and makes a doc
 check fail, such as a guide reference value that no longer matches its architecture page, the next
 full run on `main` or the weekly run reports it.
+
+_Amended by [SM-1877](https://linear.app/stablemates/issue/SM-1877)._ A pull request that changes
+one language skips the static steps and the setup of the other languages, and a change to a JVM
+source skips the JVM verification metadata lane. A file that a language step reads and that its
+lane does not name hides a failure until a run that selects every lane. Pushes to `main`, the
+weekly run, and a change to a shared input run every static step.

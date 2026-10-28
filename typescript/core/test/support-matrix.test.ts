@@ -859,11 +859,16 @@ describe("continuous integration", () => {
     expect(scripts["rust:test:no-features"]).toContain("cargo test --workspace");
     expect(scripts["rust:test:no-features"]).not.toContain("--features");
     expect(scripts["rust:gates"]).toContain("pnpm rust:test");
-    // All five language lines are scanned for advisories in the same task, or one line's tree
-    // silently stops being checked.
-    expect(workflow).toContain(
-      "- run: pnpm npm:vuln\n      - run: pnpm python:vuln\n      - run: pnpm go:vuln\n      - run: pnpm rust:vuln\n      - run: pnpm ruby:vuln",
+    // All five language lines are scanned for advisories in the static job, or one line's tree
+    // silently stops being checked. A pull request runs the scan of one language only when the
+    // plan selects that language, and scripts/ci-lanes.test.ts holds each scan to its lane
+    // (SM-1877).
+    const staticJob = workflow.slice(
+      workflow.indexOf("\n  static:\n"),
+      workflow.indexOf("\n  unit:\n"),
     );
+    for (const scan of ["npm:vuln", "python:vuln", "go:vuln", "rust:vuln", "ruby:vuln"])
+      expect(staticJob).toMatch(new RegExp(`\\n {6}- (?:if: .*\\n {8})?run: pnpm ${scan}\\n`));
   });
 
   it("exposes each language check through structured package scripts", async () => {
@@ -1131,9 +1136,14 @@ describe("continuous integration", () => {
     expect(job).toContain(
       "    if: fromJSON(needs.plan.outputs.lanes)['jvm-verification-metadata']\n",
     );
-    // SM-1548: a pull request runs the job when it changes a JVM input or a Gradle file.
+    // SM-1877: a pull request runs the job when it changes a file that decides which plugins and
+    // libraries Gradle resolves, and not for a change to a JVM source.
+    expect(
+      planLanes("pull_request", "", ["jvm/workhorse/src/main/java/run/workhorse/Worker.java"]).plan[
+        "jvm-verification-metadata"
+      ],
+    ).toBe(false);
     const files = [
-      "jvm/workhorse/src/main/java/run/workhorse/Worker.java",
       "jvm/gradle/verification-metadata.xml",
       "jvm/gradle/libs.versions.toml",
       "jvm/build.gradle.kts",
