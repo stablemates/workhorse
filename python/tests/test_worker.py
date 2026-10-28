@@ -1745,7 +1745,7 @@ def test_worker_classifies_an_absolute_deadline(
     observed_reason: list[BaseException] = []
     expiration_due = Event()
 
-    def release_expiration(_expiration_at: datetime | None, _retry_at: float | None) -> float:
+    def release_expiration(_expiration_due: float | None, _retry_at: float | None) -> float:
         assert expiration_due.wait(timeout=5)
         return 0
 
@@ -1794,6 +1794,65 @@ def test_worker_classifies_an_absolute_deadline(
         assert outcome == ("failed", "DeadlineExceeded")
 
 
+def test_a_wall_clock_that_steps_back_does_not_delay_the_first_expiry_request(
+    database_url: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """SM-1869: the worker converts the expiry to a monotonic due time once.
+
+    The wall clock steps back 10 minutes after its first read, while the expiration thread waits
+    on the lease window. The first expiry request still comes at the original due time.
+    """
+    expiration_seconds = 2.5
+    due_at: list[float] = []
+
+    def expiry_at_watch_start(_task: object) -> datetime:
+        # The expiration thread reads the expiry when its watch starts. The lease window is at
+        # most 1.5 s then, so the first wait is a lease wait. PostgreSQL has no deadline, so no
+        # heartbeat round settles the attempt first.
+        due_at.append(monotonic() + expiration_seconds)
+        return datetime.now(UTC) + timedelta(seconds=expiration_seconds)
+
+    monkeypatch.setattr(worker_module, "_earliest_expiration", expiry_at_watch_start)
+    wall_reads: list[datetime] = []
+
+    def stepping_wall_clock() -> datetime:
+        now = datetime.now(UTC)
+        wall_reads.append(now)
+        return now if len(wall_reads) == 1 else now - timedelta(minutes=10)
+
+    monkeypatch.setattr(worker_module, "_wall_now", stepping_wall_clock)
+    asked_at: list[float] = []
+    asked = Event()
+
+    with psycopg.connect(database_url) as enqueue_connection:
+        Queue(enqueue_connection).enqueue("expiry.wall-clock-step", {})
+        enqueue_connection.commit()
+
+    def wait_for_request(_payload: object, _context: HandlerContext) -> None:
+        asked.wait(timeout=expiration_seconds + 5)
+
+    worker = Worker(
+        worker_pool,
+        worker_id="python-expiry-wall-clock-worker",
+        # Each lease wait is shorter than the expiry, so the thread waits on the lease first.
+        lease_ms=1_500,
+        heartbeat_ms=300,
+    ).handle("expiry.wall-clock-step", wait_for_request)
+
+    def record_request(_task: object, _parent_context: object) -> object:
+        if current_thread().name.startswith("workhorse-expiration-"):
+            asked_at.append(monotonic())
+            asked.set()
+        return "not_due"
+
+    worker._expire_owned_task = record_request  # type: ignore[method-assign]
+
+    assert worker.run_once() is True
+    assert asked_at, "the expiration thread made no expiry request"
+    # A wait on the wall clock would put the first request 10 minutes late.
+    assert due_at[0] - 0.05 <= asked_at[0] < due_at[0] + 2.0
+
+
 def test_worker_reports_its_own_deadline_settlement_before_a_later_stale_heartbeat(
     database_url: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -1806,7 +1865,7 @@ def test_worker_reports_its_own_deadline_settlement_before_a_later_stale_heartbe
     expiration_due = Event()
     heartbeat_answered = Event()
 
-    def release_expiration(_expiration_at: datetime | None, _retry_at: float | None) -> float:
+    def release_expiration(_expiration_due: float | None, _retry_at: float | None) -> float:
         assert expiration_due.wait(timeout=5)
         return 0
 

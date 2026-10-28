@@ -3942,11 +3942,11 @@ class Worker:
             cancellation._cancel(StaleLeaseError(task.id))
 
         def watch_expiration() -> None:
-            expiration_at = _earliest_expiration(task)
+            expiration_due = _expiration_due(_earliest_expiration(task))
             expiration_retry_at: float | None = None
             expiration_retry = _EXPIRATION_RETRY_SECONDS
             while True:
-                expiration_delay = _expiration_delay(expiration_at, expiration_retry_at)
+                expiration_delay = _expiration_delay(expiration_due, expiration_retry_at)
                 lease_delay = lease_deadline() - monotonic()
                 if expiration_delay is None or lease_delay < expiration_delay:
                     if lease_delay > 0:
@@ -4485,12 +4485,24 @@ def _earliest_expiration(task: ClaimedTask) -> datetime | None:
     return min(candidates) if candidates else None
 
 
-def _expiration_delay(expiration_at: datetime | None, retry_at: float | None) -> float | None:
-    if retry_at is not None:
-        return retry_at - monotonic()
+def _expiration_due(expiration_at: datetime | None) -> float | None:
+    """The monotonic time of a database expiry, or None if the attempt has no expiry.
+
+    The watch reads the wall clock only here, once, so a step of the wall clock does not move the
+    first expiry request (SM-1869). A past expiry is due now.
+    """
     if expiration_at is None:
         return None
-    return (expiration_at - datetime.now(UTC)).total_seconds()
+    return monotonic() + max(0.0, (expiration_at - _wall_now()).total_seconds())
+
+
+def _expiration_delay(expiration_due: float | None, retry_at: float | None) -> float | None:
+    due = retry_at if retry_at is not None else expiration_due
+    return None if due is None else due - monotonic()
+
+
+def _wall_now() -> datetime:
+    return datetime.now(UTC)
 
 
 _NUMBER_EXPONENT = re.compile(r"\de[+-]")

@@ -325,6 +325,61 @@ RSpec.describe W::Worker do
       expect([arbiter.outcome, cancellation.reason, ownership.stop.set?]).to eq([nil, nil, false])
     end
   end
+  # SM-1869: the watch converts the expiry to a monotonic due time once. A wall clock that steps
+  # back during a lease wait does not delay the first expiry request.
+  describe "the expiry watch" do
+    ownership_class = described_class.const_get(:Ownership)
+
+    def monotonic = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+
+    it "asks at the monotonic due time when the wall clock steps back during a lease wait" do
+      subject = worker
+      expiration_seconds = 1.5
+      # Each lease wait is shorter than the expiry, so the watch waits on the lease first. The lease
+      # is 25 renewals long, so a slow host does not end it.
+      ownership = ownership_class.new(monotonic, 0.5)
+      allow(ownership).to receive(:lease_remaining).and_call_original
+      renewer = Thread.new { ownership.renew(monotonic) until ownership.stop.wait(0.02) }
+      wall_reads = 0
+      allow(Time).to receive(:now).and_wrap_original do |original|
+        wall_reads += 1
+        (wall_reads == 1) ? original.call : original.call - 600
+      end
+      asked_at = nil
+      allow(subject).to receive(:settle_expiration) do
+        asked_at ||= monotonic
+        "deadline_exceeded"
+      end
+      errors = []
+      due_at = nil
+
+      watch = Thread.new do
+        # The watch reads the expiry at once, so the whole expiry is still ahead of it. The deadline
+        # does not read Time.now, so the first stubbed read is the read of the watch.
+        due_at = monotonic + expiration_seconds
+        deadline_at = Time.at(Process.clock_gettime(Process::CLOCK_REALTIME)) + expiration_seconds
+        task = W::ClaimedTask.new(
+          id: "00000000-0000-4000-8000-000000000002", queue: "default", type: "t", priority: 0, payload: {},
+          contract_version: nil, result_max_bytes: nil, redact_error_details: false, trace_context: nil,
+          attempt: 1, max_attempts: 3, retry_policy: nil, deadline_at:,
+          execution_timeout_ms: nil, attempt_timeout_at: nil, fence_token: 7, lease_expires_at: nil
+        )
+        subject.send(:watch_expiration, task, ownership, W::Arbiter.new, W::CancellationToken.new, nil,
+          ->(error) { errors << error })
+      end
+      watch.join(expiration_seconds + 5)
+      ownership.abandon
+      [watch, renewer].each(&:join)
+
+      expect(errors).to be_empty
+      # The watch read the lease window again after a lease wait, before it asked.
+      expect(ownership).to have_received(:lease_remaining).at_least(2).times
+      # A wait on the wall clock would put the first request 10 minutes late.
+      expect(asked_at).not_to be_nil
+      expect(asked_at).to be_between(due_at - 0.05, due_at + 2.0)
+    end
+  end
+
   # SM-1649: a heartbeat round that read the membership before the release can settle the attempt
   # while PostgreSQL refuses its completion. The reconciliation waits for that settlement, and a
   # round after the release changes nothing. The heartbeat thread delivers statuses inline, so the

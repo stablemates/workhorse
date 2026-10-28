@@ -2676,10 +2676,21 @@ The TypeScript `TaskAttempt` does not use the wall clock of the worker for that 
 5. A failed request is not a confirmation either. The handler continues to run. The timer asks again
    after the same backoff. The lease watchdog still ends an attempt whose lease nobody renews.
 
-The .NET worker converts the earlier of `deadline_at` and `attempt_timeout_at` to a due time on
-`Monotonic.Now()` once, when the attempt starts its expiry watch. After a `not_due` answer, it waits
-for the retry backoff on the same clock. Thus, if the wall clock of the worker steps forward or backward,
-neither wait changes.
+Every other SDK converts the earlier of `deadline_at` and `attempt_timeout_at` to a monotonic due
+time once, when the attempt starts its expiry watch. A past expiry is due at once. Go and Rust add
+1 ms to each due time, so that the clock of PostgreSQL agrees that the expiry passed. After that, the
+wait for the expiry and each retry wait after `not_due` read only the monotonic clock. Thus, if the
+wall clock of the worker steps forward or backward, no wait changes (SM-1688, SM-1869). The table
+names the clock and the function that does the conversion.
+
+| SDK    | Monotonic clock                | Conversion                                      |
+| ------ | ------------------------------ | ----------------------------------------------- |
+| Go     | the `time.Timer` runtime clock | `ownershipExpirationTimer` in `go/worker.go`    |
+| Rust   | `tokio::time::Instant`         | `instant_at` in `rust/src/worker/execute.rs`    |
+| .NET   | `Monotonic.Now()`              | `Worker.AskForExpirationAsync`                  |
+| JVM    | `System.nanoTime()`            | `Worker.watchExpiration`                        |
+| Python | `time.monotonic()`             | `_expiration_due`, called by `watch_expiration` |
+| Ruby   | `Process::CLOCK_MONOTONIC`     | `Worker#watch_expiration`                       |
 
 A `deadline_exceeded` or `timeout_exceeded` heartbeat answer is already the verdict of the database.
 The worker then aborts the handler at once and calls `expire_owned_v1` in the background. The
