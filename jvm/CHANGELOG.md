@@ -9,6 +9,26 @@ Workhorse is a public beta. Any 0.x minor release may change behaviour. From `0.
 upgrades in place: every release ships ordered migrations, and inside a major line a migration only
 adds.
 
+## Unreleased
+
+### A long-running worker no longer keeps every ended registry write
+
+Each registry write runs on its own virtual thread, and it first waits for the write before it.
+Before this change, the write kept a reference to that earlier thread after the wait. An ended
+virtual thread keeps its task, so every ended registry thread stayed reachable from the newest one.
+The worker heap grew by one thread for each registry write and never got the memory back (SM-1846).
+
+The public demo worker refreshes its registration four times a second with a 32 MiB heap. It ran out
+of heap and restarted about every six hours. With the default interval of 5 s, a worker kept about
+17,000 ended threads each day.
+
+Now a registry write clears its reference to the earlier thread before it waits. The writes still
+reach PostgreSQL in order.
+
+A registry write also becomes the current write only after its thread starts. Before, a write whose
+thread did not start became current anyway. The next write then waited for that write and not for
+the earlier one, so the two writes that still ran could reach PostgreSQL out of order.
+
 ## 0.10.0 — 2026-10-26
 
 The npm packages, Python distribution, Go module, Rust crate, Ruby gem, JVM artifacts, and .NET

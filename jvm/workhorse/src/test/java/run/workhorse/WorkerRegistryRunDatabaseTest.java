@@ -3,6 +3,8 @@ package run.workhorse;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import java.lang.ref.WeakReference;
+import java.lang.reflect.Field;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 import java.lang.reflect.Proxy;
@@ -11,11 +13,13 @@ import java.sql.PreparedStatement;
 import java.sql.SQLException;
 import java.time.Duration;
 import java.util.Map;
+import java.util.Objects;
 import java.util.UUID;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.BooleanSupplier;
 import javax.sql.DataSource;
 import org.jspecify.annotations.Nullable;
@@ -30,6 +34,8 @@ import run.workhorse.testing.ScratchDatabase;
 /**
  * SM-1580: a registry response applies only to the run that sent it. A late response of an ended
  * run does not change the remote pause of a later run of the same worker.
+ *
+ * <p>SM-1846: a registry write waits for the write before it, but does not keep it.
  */
 @ExtendWith(ScratchDatabase.class)
 @Timeout(value = 60, unit = TimeUnit.SECONDS)
@@ -191,5 +197,53 @@ class WorkerRegistryRunDatabaseTest {
       registry.release.countDown();
       worker.close();
     }
+  }
+
+  /**
+   * SM-1846: each registry write runs on its own virtual thread and first joins the write before
+   * it. An ended virtual thread keeps its task, so a task that kept the earlier thread made every
+   * ended registry thread reachable from the newest one. A demo worker that wrote four times a
+   * second filled a 32 MiB heap in about six hours. Once later writes ran, an early registry thread
+   * must be collectable.
+   */
+  @Test
+  void aRegistryWriteDoesNotKeepTheWritesBeforeIt() throws Exception {
+    Registry registry = new Registry();
+    Worker worker =
+        Worker.builder(registry.dataSource())
+            .queues("jvm-registry-chain")
+            .workerId("jvm-registry-chain-" + UUID.randomUUID())
+            .pollingOnly(true)
+            .registryInterval(Duration.ofMillis(100))
+            .shutdownGrace(Duration.ZERO)
+            .handle("quick", Object.class, (ctx, payload) -> Map.of())
+            .build();
+    worker.start();
+    try {
+      waitUntil("the first refresh registered", () -> registry.registered.get() >= 2);
+      WeakReference<Thread> early = currentRegistryWrite(worker);
+      int registered = registry.registered.get();
+      waitUntil("three later writes registered", () -> registry.registered.get() >= registered + 3);
+      waitUntil(
+          "the early registry thread is collected",
+          () -> {
+            System.gc();
+            return early.get() == null;
+          });
+    } finally {
+      worker.close();
+    }
+  }
+
+  /**
+   * A weak reference to the newest registry write of {@code worker}. The strong reference ends with
+   * this method, so the caller holds the thread only weakly.
+   */
+  private static WeakReference<Thread> currentRegistryWrite(Worker worker) throws Exception {
+    Field field = Worker.class.getDeclaredField("registryWrite");
+    field.setAccessible(true);
+    @SuppressWarnings("unchecked")
+    AtomicReference<@Nullable Thread> write = (AtomicReference<@Nullable Thread>) field.get(worker);
+    return new WeakReference<>(Objects.requireNonNull(write.get()));
   }
 }

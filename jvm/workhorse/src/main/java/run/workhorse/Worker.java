@@ -2256,27 +2256,35 @@ public final class Worker implements AutoCloseable {
   /**
    * Starts a registry write on a virtual thread. The write first waits for the write before it, so
    * the draining registration and the deregistration reach PostgreSQL in that order.
+   *
+   * <p>The write clears its holder of the earlier thread before it waits. An ended virtual thread
+   * keeps its task, so a task that kept the earlier thread would keep every ended registry thread
+   * reachable from the newest one (SM-1846).
+   *
+   * <p>The write becomes the current write only after it starts. If the start fails, the earlier
+   * write stays current, so the next write still waits for it.
    */
   private Thread registryStep(Runnable body) {
     Thread next;
     registryLock.lock();
     try {
-      Thread before = registryWrite.get();
+      AtomicReference<@Nullable Thread> before = new AtomicReference<>(registryWrite.get());
       next =
           Thread.ofVirtual()
               .name("workhorse-registry")
               .unstarted(
                   () -> {
-                    if (before != null) {
-                      joinQuietly(before);
+                    Thread earlier = before.getAndSet(null);
+                    if (earlier != null) {
+                      joinQuietly(earlier);
                     }
                     body.run();
                   });
+      next.start();
       registryWrite.set(next);
     } finally {
       registryLock.unlock();
     }
-    next.start();
     return next;
   }
 
