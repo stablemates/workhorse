@@ -154,28 +154,6 @@ func keepsConnection(err error) bool {
 	return errors.Is(err, errHeartbeatRoundExpiredBeforeHeartbeat)
 }
 
-// runBoundedOnPool runs one round on a connection acquired from pool, bounded by the deadline of ctx.
-// A round that fails closes the connection, because its state is not known. A round that expired
-// before its heartbeat statement and left the connection clean returns it to the pool open.
-func runBoundedOnPool(
-	ctx context.Context,
-	pool *pgxpool.Pool,
-	round func(context.Context, Executor) error,
-) error {
-	held, err := pool.Acquire(ctx)
-	if err != nil {
-		return err
-	}
-	defer held.Release()
-	if err := round(ctx, serverBoundedExecutor{conn: held.Conn()}); err != nil {
-		if !keepsConnection(err) {
-			_ = held.Conn().Close(context.Background())
-		}
-		return err
-	}
-	return nil
-}
-
 // heartbeatConnection keeps one pooled connection for heartbeats, with every round bounded in time.
 //
 // Handlers that hold every other pooled connection cannot delay a heartbeat queued behind them,

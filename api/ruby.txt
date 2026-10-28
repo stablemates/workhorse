@@ -550,7 +550,7 @@ class Stablemates::Workhorse::ValueSizeLimitError
   def task_type
 
 class Stablemates::Workhorse::Worker
-  def initialize(pool, queues: ["default"], worker_id: nil, concurrency: 1, lease: 30, heartbeat: nil, poll_interval: nil, polling_only: false, maintenance_interval: 1, maintenance_routine_interval: 60, registry_interval: 5, disable_registry: false, schedule_namespaces: [], schedule_catchup_limit: 100, shutdown_grace: 25, shared_heartbeats: false, retry_delay: nil, on_registration_error: nil, on_notification_error: nil, cohorts: nil, logger: nil)
+  def initialize(pool, queues: ["default"], worker_id: nil, concurrency: 1, lease: 30, heartbeat: nil, poll_interval: nil, polling_only: false, maintenance_interval: 1, maintenance_routine_interval: 60, registry_interval: 5, disable_registry: false, schedule_namespaces: [], schedule_catchup_limit: 100, shutdown_grace: 25, retry_delay: nil, on_registration_error: nil, on_notification_error: nil, cohorts: nil, logger: nil, **removed)
   def cohorts
   def concurrency
   def handle(task_type, &handler)

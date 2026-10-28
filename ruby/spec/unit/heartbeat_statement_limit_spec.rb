@@ -3,9 +3,9 @@
 require "logger"
 require "spec_helper"
 
-# SM-1495: one heartbeat_many_v2 statement accepts at most 100 leases. A fused completion claim
-# registers its tasks before the completing attempts unregister, so a round can hold more members
-# than the concurrency limit.
+# SM-1495: one batch of a heartbeat_pool_v1 statement accepts at most 100 leases. A fused completion
+# claim registers its tasks before the completing attempts unregister, so a round can hold more
+# members than the concurrency limit.
 RSpec.describe "Worker heartbeat statement limit" do
   heartbeat_class = W::Worker.const_get(:Heartbeat)
 
@@ -20,20 +20,29 @@ RSpec.describe "Worker heartbeat statement limit" do
     )
   end
 
-  let(:executor) do
-    FakeExecutor.new do |sql, params|
-      next [] unless sql == W::SqlCatalogue::HEARTBEAT_MANY_V2
-
-      leases = JSON.parse(params[1])
-      raise PG::RaiseException, "leases must contain between 1 and 100 entries" if leases.size > 100
-
-      leases.map { |lease| {"task_id" => lease["taskId"], "status" => "accepted"} }
+  # The size of each batch of each heartbeat_pool_v1 statement.
+  let(:batch_sizes) { Concurrent::Array.new }
+  # A pool that lends the heartbeat a connection that refuses a batch of more than 100 leases, as
+  # heartbeat_pool_v1 does.
+  let(:pool) do
+    sizes = batch_sizes
+    connection_class = Class.new(FakeHeartbeatConnection) do
+      define_method(:get_last_result) do
+        kind, params, sql = @pending
+        if kind == :heartbeat && sql == W::SqlCatalogue::HEARTBEAT_POOL_V1
+          batches = JSON.parse(params[0]).map { |batch| batch["leases"].size }
+          sizes.concat(batches)
+          raise PG::RaiseException, "leases must contain between 1 and 100 entries" if batches.max > 100
+        end
+        super()
+      end
     end
+    Class.new { define_method(:with) { |&block| connection_class.lend(&block) } }.new
   end
-  let(:heartbeat) { heartbeat_class.new(executor, dedicated: false) }
+  let(:heartbeat) { heartbeat_class.new(pool) }
   let(:renewals) { Concurrent::Array.new }
 
-  it "sends at most 100 leases in each statement and renews every member" do
+  it "sends at most 100 leases in each batch and renews every member" do
     tasks = (1..150).map { |number| claimed(number) }
     leaves = tasks.map do |task|
       heartbeat.register(
@@ -51,8 +60,7 @@ RSpec.describe "Worker heartbeat statement limit" do
     expect(thread.join(2)).not_to be_nil if thread
 
     expect(renewals.uniq.size).to eq(tasks.size)
-    sizes = executor.statements.select { |sql, _| sql == W::SqlCatalogue::HEARTBEAT_MANY_V2 }
-      .map { |_, params| JSON.parse(params[1]).size }
-    expect(sizes.max).to be <= 100
+    expect(batch_sizes.max).to eq(100)
+    expect(batch_sizes).to include(50)
   end
 end

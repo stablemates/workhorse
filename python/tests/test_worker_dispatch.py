@@ -10,6 +10,7 @@ from time import monotonic, sleep
 from typing import Any, ClassVar
 
 import pytest
+from reservations import Compatible, ScriptedHeartbeats, ScriptedPool
 
 import workhorse.worker as worker_module
 from workhorse import ClaimedTask, Worker
@@ -285,18 +286,19 @@ def scripted_worker(
     **options: Any,
 ) -> Worker:
     worker = Worker(
-        object(),  # type: ignore[arg-type]
+        ScriptedPool(),  # type: ignore[arg-type]
         queue="dispatch",
         worker_id="python-dispatch",
         concurrency=concurrency,
         cohorts=cohorts,
         poll_ms=poll_ms,
         registry_interval_ms=options.pop("registry_interval_ms", 0),
-        shared_heartbeats=True,
-        _executor=claims,
+        _executor=Compatible(claims),
+        _heartbeat_executor_factory=options.pop(
+            "_heartbeat_executor_factory", ScriptedHeartbeats().open
+        ),
         **options,
     )
-    worker._compatibility.assert_compatible = lambda: None  # type: ignore[method-assign]
     # No listener, so the empty-claim wait follows the poll interval.
     worker._listens = False
     return worker.handle(HANDLED, lambda _payload, _context: None)
@@ -494,21 +496,16 @@ def test_default_cohorts_follow_concurrency_and_spare_connections() -> None:
     assert capped.cohorts == 3
     explicit = Worker(SizedPool(), queue="dispatch", concurrency=64, cohorts=6)  # type: ignore[arg-type]
     assert explicit.cohorts == 6
-    # Without a dedicated heartbeat connection, only the listener holds a pooled connection.
-    shared = Worker(SizedPool(), queue="dispatch", concurrency=64, shared_heartbeats=True)  # type: ignore[arg-type]
-    assert shared.cohorts == 4
 
-    class SinglePool:
-        max_size = 1
+    class SmallestPool:
+        max_size = 3
 
-    # A pool of one lends no listener, so the polling worker keeps its one connection for claims.
-    polling = Worker(SinglePool(), queue="dispatch", concurrency=16, shared_heartbeats=True)  # type: ignore[arg-type]
-    assert polling.cohorts == 1
+    # The smallest pool a worker accepts keeps one connection for claims, so one cohort.
+    smallest = Worker(SmallestPool(), queue="dispatch", concurrency=16)  # type: ignore[arg-type]
+    assert smallest.cohorts == 1
     for invalid in (0, 65, True):
         with pytest.raises(ValueError, match="cohorts must be an integer"):
-            Worker(
-                object(), queue="dispatch", concurrency=64, cohorts=invalid, shared_heartbeats=True
-            )  # type: ignore[arg-type]
+            Worker(SizedPool(), queue="dispatch", concurrency=64, cohorts=invalid)  # type: ignore[arg-type]
 
 
 def test_cohort_shares_give_the_remainder_to_the_first_cohorts() -> None:

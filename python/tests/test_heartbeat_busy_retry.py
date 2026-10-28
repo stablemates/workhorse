@@ -254,7 +254,6 @@ def _worker() -> Worker:
         worker_id="busy-retry-worker",
         lease_ms=60_000,
         heartbeat_ms=HEARTBEAT_MS,
-        shared_heartbeats=True,
     )
 
 

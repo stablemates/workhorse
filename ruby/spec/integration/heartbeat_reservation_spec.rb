@@ -47,7 +47,7 @@ RSpec.describe "Worker heartbeat reservation against PostgreSQL" do
     wait_until { holding.value == 3 }
 
     started = monotonic
-    expect { worker.run_once }.to raise_error(W::WorkerStartupError, /ConnectionPool \(size 3\).*0\.5 s.*shared_heartbeats: true/)
+    expect { worker.run_once }.to raise_error(W::WorkerStartupError, /ConnectionPool \(size 3\).*0\.5 s; grow the pool, or check that the database accepts connections/)
     expect(monotonic - started).to be_between(0.5, 2)
 
     release.set

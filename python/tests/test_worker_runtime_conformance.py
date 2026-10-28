@@ -15,7 +15,7 @@ from pathlib import Path
 from queue import Empty, SimpleQueue
 from threading import Event, Lock, Thread
 from time import monotonic, sleep
-from typing import Any
+from typing import Any, cast
 
 import asyncpg
 import psycopg
@@ -363,7 +363,6 @@ def execute_cancellation_fixture(
         worker_id=f"python-{fixture['id']}",
         lease_ms=fixture["leaseMs"],
         heartbeat_ms=fixture["heartbeatMs"],
-        shared_heartbeats=True,
     ).handle(fixture["taskType"], handler)
     thread = run_in_thread(worker.run_once, errors)
     assert started.wait(timeout=5)
@@ -395,6 +394,13 @@ SELECT workhorse.timeout_owned_v1(task_id, worker_id, fence_token) FROM due
 
 # The Python worker reports a lost lease as StaleLeaseError.
 ABORT_REASON_NAMES = {"StaleLeaseError": "LeaseLostError"}
+
+
+class RowsHook:
+    """Send each statement of a worker through `rows`."""
+
+    def __init__(self, rows: Callable[[DriverStatement, Any], list[Mapping[str, object]]]) -> None:
+        self.rows = rows
 
 
 def execute_expiration_fixture(
@@ -444,15 +450,7 @@ def execute_expiration_fixture(
         worker.pause()
         raise reason
 
-    worker = Worker(
-        worker_pool,
-        queue=queue_name,
-        worker_id=f"python-{fixture['id']}",
-        lease_ms=fixture["leaseMs"],
-        heartbeat_ms=fixture["heartbeatMs"],
-        shared_heartbeats=True,
-    ).handle(fixture["taskType"], handler)
-    original_rows = worker._executor.rows
+    original_rows = PooledSyncExecutor(worker_pool).rows
 
     def early_claim(statement: DriverStatement, parameters: Any = ()) -> list[Mapping[str, object]]:
         rows = original_rows(statement, parameters)
@@ -480,7 +478,16 @@ def execute_expiration_fixture(
             return [claimed]
         return rows
 
-    worker._executor.rows = early_claim  # type: ignore[method-assign]
+    # The hook has no `checked` method, so the worker gates each claim around it, and the hook
+    # sees the claims too.
+    worker = Worker(
+        worker_pool,
+        queue=queue_name,
+        worker_id=f"python-{fixture['id']}",
+        lease_ms=fixture["leaseMs"],
+        heartbeat_ms=fixture["heartbeatMs"],
+        _executor=RowsHook(early_claim),
+    ).handle(fixture["taskType"], handler)
     for expected in fixture["expectedAfterRuns"]:
         worker.resume()
         assert worker.run_once() is True
@@ -693,7 +700,7 @@ class HeldHeartbeats:
 
     # A round on the reserved connection also sends BEGIN, its timeouts, and COMMIT.
     _FORWARDED = frozenset({"command", "connection", "dialect", "prepare"})
-    _HEARTBEATS = (STATEMENTS.heartbeat_many, STATEMENTS.heartbeat_pool)
+    _HEARTBEATS = (STATEMENTS.heartbeat_pool,)
 
     def __init__(self, executor: Any, released: Event, statuses: list[object]) -> None:
         self._executor = executor
@@ -713,6 +720,29 @@ class HeldHeartbeats:
         if heartbeat:
             self._statuses.extend(row["status"] for row in rows)
         return rows
+
+
+class DelayedHeartbeats:
+    """Send each statement of a round on the worker's own heartbeat executor through `rows`."""
+
+    # A round on the reserved connection also sends BEGIN, its timeouts, and COMMIT.
+    _FORWARDED = HeldHeartbeats._FORWARDED
+
+    def __init__(
+        self,
+        executor: Any,
+        rows: Callable[[Any, DriverStatement, Any], list[Mapping[str, object]]],
+    ) -> None:
+        self._executor = executor
+        self._rows = rows
+
+    def __getattr__(self, name: str) -> Any:
+        if name not in self._FORWARDED:
+            raise AttributeError(name)
+        return getattr(self._executor, name)
+
+    def rows(self, statement: DriverStatement, parameters: Any = ()) -> list[Mapping[str, object]]:
+        return self._rows(self._executor, statement, parameters)
 
 
 def execute_heartbeat_fixture(
@@ -740,16 +770,17 @@ def execute_heartbeat_fixture(
         worker_id=f"python-{fixture['id']}",
         lease_ms=fixture["leaseMs"],
         heartbeat_ms=fixture["heartbeatMs"],
-        shared_heartbeats=True,
     ).handle(fixture["taskType"], handler)
-    original_rows = worker._executor.rows
+    # The rounds run on the worker's dedicated heartbeat connection. The wrapper delays the
+    # heartbeat statement of the first round, and counts the statements that overlap it.
+    open_heartbeat_executor = worker_module._psycopg_pool_heartbeat_executor_factory(worker_pool)
 
     def delayed_heartbeat(
-        statement: DriverStatement, parameters: Any = ()
+        executor: Any, statement: DriverStatement, parameters: Any = ()
     ) -> list[Mapping[str, object]]:
         nonlocal heartbeat_calls, active_heartbeats, maximum_overlap
-        if statement is not STATEMENTS.heartbeat_many:
-            return original_rows(statement, parameters)
+        if statement is not STATEMENTS.heartbeat_pool:
+            return cast(list[Mapping[str, object]], executor.rows(statement, parameters))
         with counter_lock:
             heartbeat_calls += 1
             call = heartbeat_calls
@@ -759,12 +790,16 @@ def execute_heartbeat_fixture(
             if call == 1:
                 first_heartbeat_started.set()
                 assert release_first_heartbeat.wait(timeout=5)
-            return original_rows(statement, parameters)
+            return cast(list[Mapping[str, object]], executor.rows(statement, parameters))
         finally:
             with counter_lock:
                 active_heartbeats -= 1
 
-    worker._executor.rows = delayed_heartbeat  # type: ignore[method-assign]
+    def open_delayed_heartbeat_executor() -> tuple[Any, Callable[[], None]]:
+        executor, close = open_heartbeat_executor()
+        return DelayedHeartbeats(executor, delayed_heartbeat), close
+
+    worker._heartbeat_executor_factory = open_delayed_heartbeat_executor
     thread = run_in_thread(worker.run_once, errors)
     assert handler_started.wait(timeout=5)
     assert first_heartbeat_started.wait(timeout=5)
@@ -1332,7 +1367,6 @@ def execute_slot_refill_fixture(
         worker_id=f"python-{fixture['id']}",
         concurrency=fixture["concurrency"],
         registry_interval_ms=0,
-        shared_heartbeats=True,
         _executor=executor,
     ).handle(fixture["taskType"], handler)
     thread = run_in_thread(worker.run, errors)

@@ -778,41 +778,6 @@ func TestRepeatStarvedFinalizationStopsAtTheLimit(t *testing.T) {
 	}
 }
 
-// TestNewWorkerRefusesAPoolThatCannotLendAHeartbeatConnection pins the construction refusal and its
-// opt-out, so an operator learns about the risk instead of inheriting it silently.
-func TestNewWorkerRefusesAPoolThatCannotLendAHeartbeatConnection(t *testing.T) {
-	databaseURL := createConformanceDatabase(t, testDatabaseURL(t), "worker-heartbeat-capacity")
-	ctx := context.Background()
-	config, err := pgxpool.ParseConfig(databaseURL)
-	if err != nil {
-		t.Fatal(err)
-	}
-	config.MaxConns = 2
-	pool, err := pgxpool.NewWithConfig(ctx, config)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(pool.Close)
-
-	if _, err := workhorse.NewWorker(pool, workhorse.WorkerOptions{
-		Queue: "go-worker-heartbeat-capacity",
-	}); err == nil {
-		t.Fatal("expected a pool of 2 connections to refuse a worker")
-	} else {
-		for _, fragment := range []string{"MaxConns", "2", "SharedHeartbeats"} {
-			if !strings.Contains(err.Error(), fragment) {
-				t.Fatalf("refusal does not name %q: %v", fragment, err)
-			}
-		}
-	}
-	if _, err := workhorse.NewWorker(pool, workhorse.WorkerOptions{
-		Queue:            "go-worker-heartbeat-capacity",
-		SharedHeartbeats: true,
-	}); err != nil {
-		t.Fatalf("expected the opt-out to run on a pool of 2 connections: %v", err)
-	}
-}
-
 // retryLeaseDuration is the lease of the retry test. It is many heartbeat intervals long, so a few
 // rounds that the load ends do not let the lease expire.
 const retryLeaseDuration = 10 * time.Second
@@ -1280,106 +1245,98 @@ func TestHeldConnectionFailureHelper(t *testing.T) {
 // TestWorkerEndsATimedOutHeartbeatStatementOnTheServer pins the server bound of a heartbeat round
 // (SM-1442). Closing a connection does not stop its statement, so each round that timed out used to
 // leave one more backend waiting on the same lock. PostgreSQL now ends the transaction by the
-// round's deadline, on the reserved connection and on a shared round alike. A row lock now makes
-// the round report the lease busy at once (SM-1443), so the test holds a table lock instead.
+// round's deadline on the dedicated heartbeat connection. A row lock now makes the round report the
+// lease busy at once (SM-1443), so the test holds a table lock instead.
 func TestWorkerEndsATimedOutHeartbeatStatementOnTheServer(t *testing.T) {
-	for _, shared := range []bool{false, true} {
-		name := "reserved"
-		if shared {
-			name = "shared"
+	const name = "reserved"
+	databaseURL := createConformanceDatabase(t, testDatabaseURL(t), "worker-heartbeat-bound-"+name)
+	ctx := context.Background()
+	pool, err := pgxpool.New(ctx, databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(pool.Close)
+	observer := observeDatabase(t, ctx, databaseURL)
+	blocker := observeDatabase(t, ctx, databaseURL)
+
+	const interval = 200 * time.Millisecond
+	queueName := "go-worker-heartbeat-bound-" + name
+	queue := workhorse.NewQueue(workhorse.NewPGXExecutor(pool), queueName)
+	if _, err := queue.Enqueue(ctx, "heartbeat-bound", nil); err != nil {
+		t.Fatal(err)
+	}
+	worker, err := workhorse.NewWorker(pool, workhorse.WorkerOptions{
+		Queue:               queueName,
+		WorkerID:            "heartbeat-bound-worker-" + name,
+		LeaseDuration:       30 * time.Second,
+		HeartbeatInterval:   interval,
+		PollInterval:        5 * time.Millisecond,
+		MaintenanceInterval: time.Second,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	started := make(chan struct{})
+	release := make(chan struct{})
+	worker.Handle("heartbeat-bound", func(context.Context, any, *workhorse.HandlerContext) (any, error) {
+		close(started)
+		<-release
+		return nil, nil
+	})
+	workerResult := make(chan error, 1)
+	go func() {
+		processed, err := worker.RunOnce(ctx)
+		if err == nil && !processed {
+			err = errors.New("worker did not process the heartbeat-bound task")
 		}
-		t.Run(name, func(t *testing.T) {
-			databaseURL := createConformanceDatabase(t, testDatabaseURL(t), "worker-heartbeat-bound-"+name)
-			ctx := context.Background()
-			pool, err := pgxpool.New(ctx, databaseURL)
-			if err != nil {
-				t.Fatal(err)
-			}
-			t.Cleanup(pool.Close)
-			observer := observeDatabase(t, ctx, databaseURL)
-			blocker := observeDatabase(t, ctx, databaseURL)
+		workerResult <- err
+	}()
+	select {
+	case <-started:
+	case <-time.After(5 * time.Second):
+		close(release)
+		t.Fatal("worker did not start the handler")
+	}
 
-			const interval = 200 * time.Millisecond
-			queueName := "go-worker-heartbeat-bound-" + name
-			queue := workhorse.NewQueue(workhorse.NewPGXExecutor(pool), queueName)
-			if _, err := queue.Enqueue(ctx, "heartbeat-bound", nil); err != nil {
-				t.Fatal(err)
-			}
-			worker, err := workhorse.NewWorker(pool, workhorse.WorkerOptions{
-				Queue:               queueName,
-				WorkerID:            "heartbeat-bound-worker-" + name,
-				LeaseDuration:       30 * time.Second,
-				HeartbeatInterval:   interval,
-				PollInterval:        5 * time.Millisecond,
-				MaintenanceInterval: time.Second,
-				SharedHeartbeats:    shared,
-			})
-			if err != nil {
-				t.Fatal(err)
-			}
-			started := make(chan struct{})
-			release := make(chan struct{})
-			worker.Handle("heartbeat-bound", func(context.Context, any, *workhorse.HandlerContext) (any, error) {
-				close(started)
-				<-release
-				return nil, nil
-			})
-			workerResult := make(chan error, 1)
-			go func() {
-				processed, err := worker.RunOnce(ctx)
-				if err == nil && !processed {
-					err = errors.New("worker did not process the heartbeat-bound task")
-				}
-				workerResult <- err
-			}()
-			select {
-			case <-started:
-			case <-time.After(5 * time.Second):
-				close(release)
-				t.Fatal("worker did not start the handler")
-			}
-
-			// Hold a table lock that conflicts with the first lock step of heartbeat_many_v2, so
-			// every heartbeat round waits until its deadline.
-			lockFastRuntimeTable(t, ctx, blocker)
-			maxCount, maxAge, seen := 0, 0.0, false
-			until := time.Now().Add(8 * interval)
-			for time.Now().Before(until) {
-				var count int
-				var age float64
-				if err := observer.QueryRow(
-					ctx,
-					`SELECT count(*)::int,
-					        COALESCE(max(extract(epoch FROM clock_timestamp() - query_start) * 1000), 0)::float8
-					   FROM pg_stat_activity
-					  WHERE datname = current_database() AND pid <> pg_backend_pid() AND state = 'active'
-					    AND query LIKE '%workhorse.heartbeat_many_v2%'`,
-				).Scan(&count, &age); err != nil {
-					t.Fatal(err)
-				}
-				seen = seen || count > 0
-				maxCount, maxAge = max(maxCount, count), max(maxAge, age)
-				time.Sleep(20 * time.Millisecond)
-			}
-			if _, err := blocker.Exec(ctx, "COMMIT"); err != nil {
-				t.Fatal(err)
-			}
-			close(release)
-			if err := awaitSignal(t, workerResult, "RunOnce to return after the release"); err != nil {
-				t.Fatal(err)
-			}
-			if !seen {
-				t.Fatal("no heartbeat statement waited on the locked table")
-			}
-			if maxCount > 1 {
-				t.Fatalf("%d heartbeat statements were active at once; want at most 1", maxCount)
-			}
-			// A statement ends by its round's deadline. The slack allows for a slow host, and stays
-			// far below the 1.6 s that the lock was held.
-			if limit := float64(5 * interval / time.Millisecond); maxAge >= limit {
-				t.Fatalf("a heartbeat statement ran for %.0f ms; want less than %.0f ms", maxAge, limit)
-			}
-		})
+	// Hold a table lock that conflicts with the first lock step of heartbeat_many_v2, so
+	// every heartbeat round waits until its deadline.
+	lockFastRuntimeTable(t, ctx, blocker)
+	maxCount, maxAge, seen := 0, 0.0, false
+	until := time.Now().Add(8 * interval)
+	for time.Now().Before(until) {
+		var count int
+		var age float64
+		if err := observer.QueryRow(
+			ctx,
+			`SELECT count(*)::int,
+			        COALESCE(max(extract(epoch FROM clock_timestamp() - query_start) * 1000), 0)::float8
+			   FROM pg_stat_activity
+			  WHERE datname = current_database() AND pid <> pg_backend_pid() AND state = 'active'
+			    AND query LIKE '%workhorse.heartbeat_many_v2%'`,
+		).Scan(&count, &age); err != nil {
+			t.Fatal(err)
+		}
+		seen = seen || count > 0
+		maxCount, maxAge = max(maxCount, count), max(maxAge, age)
+		time.Sleep(20 * time.Millisecond)
+	}
+	if _, err := blocker.Exec(ctx, "COMMIT"); err != nil {
+		t.Fatal(err)
+	}
+	close(release)
+	if err := awaitSignal(t, workerResult, "RunOnce to return after the release"); err != nil {
+		t.Fatal(err)
+	}
+	if !seen {
+		t.Fatal("no heartbeat statement waited on the locked table")
+	}
+	if maxCount > 1 {
+		t.Fatalf("%d heartbeat statements were active at once; want at most 1", maxCount)
+	}
+	// A statement ends by its round's deadline. The slack allows for a slow host, and stays
+	// far below the 1.6 s that the lock was held.
+	if limit := float64(5 * interval / time.Millisecond); maxAge >= limit {
+		t.Fatalf("a heartbeat statement ran for %.0f ms; want less than %.0f ms", maxAge, limit)
 	}
 }
 
@@ -1842,35 +1799,6 @@ func TestARoundThatExpiresBeforeItsHeartbeatKeepsTheReservedConnection(t *testin
 	}
 
 	if err := connection.QueryRound(ctx, 2*time.Second, "SELECT 'next round'"); err != nil {
-		t.Fatal(err)
-	}
-	if pid := roundBackend(t, tracer.take(0)); pid != backend {
-		t.Fatalf("the next round ran on backend %d; want the kept backend %d", pid, backend)
-	}
-}
-
-// TestARoundOnThePoolThatExpiresBeforeItsHeartbeatReturnsItsConnectionOpen pins SM-1492 for
-// SharedHeartbeats: the round returns the clean connection to the pool without closing it.
-func TestARoundOnThePoolThatExpiresBeforeItsHeartbeatReturnsItsConnectionOpen(t *testing.T) {
-	pool, tracer := newRoundStatementPool(t, "heartbeat-pool-clean-expiry")
-	ctx := context.Background()
-
-	if err := workhorse.BoundedPoolQueryForTest(ctx, pool, 2*time.Second, "SELECT 'first round'"); err != nil {
-		t.Fatal(err)
-	}
-	backend := roundBackend(t, tracer.take(300*time.Millisecond))
-
-	err := workhorse.BoundedPoolQueryForTest(ctx, pool, 800*time.Millisecond, "SELECT 'expired round'")
-	if err == nil || !workhorse.RoundKeptItsConnectionForTest(err) {
-		t.Fatalf("the round that expired after BEGIN returned %v; want a clean expiry", err)
-	}
-	statements := tracer.take(0)
-	assertCleanExpiry(t, statements, "expired round")
-	if pid := roundBackend(t, statements); pid != backend {
-		t.Fatalf("the expired round ran on backend %d; want %d", pid, backend)
-	}
-
-	if err := workhorse.BoundedPoolQueryForTest(ctx, pool, 2*time.Second, "SELECT 'next round'"); err != nil {
 		t.Fatal(err)
 	}
 	if pid := roundBackend(t, tracer.take(0)); pid != backend {

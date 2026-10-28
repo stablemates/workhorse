@@ -23,6 +23,23 @@ from version 86 to version **89**. They replace function bodies and change no st
 compatibility floor stays at **76**. A 0.10 process keeps working on version 89, because a
 migration inside a major line only adds.
 
+**Give each worker a pool with a known maximum size of at least 3.** `Worker` and `AsyncWorker`
+no longer accept `shared_heartbeats`. Remove the option. If a worker pool reports a maximum size
+below 3, or reports no maximum size, set its `max_size` to 3 or more. Each worker process needs 3
+connections: the listener, the heartbeat connection, and one statement connection (SM-1901).
+
+### Breaking changes
+
+- **`shared_heartbeats` is removed.** Every worker now reserves a dedicated heartbeat connection
+  on its pool (ADR 0071). Before, `shared_heartbeats=True` let heartbeat rounds borrow ordinary
+  pool connections and let a pool below 3 run. Then a heartbeat could wait behind claims and
+  settlements, so a lease could expire and a task could run twice. Now `Worker`,
+  `AsyncWorker.from_psycopg`, and `AsyncWorker.from_asyncpg` raise `TypeError` when they get
+  `shared_heartbeats`, and the message names the removal. A worker on a pool with a maximum size
+  below 3, or with no reported maximum size, raises `ValueError` at construction. The worker no
+  longer logs `workhorse.worker.polling_only`, because its pool always has a connection for the
+  listener (SM-1901).
+
 ### Behavior changes
 
 These changes can make code that worked on 0.10 act differently:

@@ -13,6 +13,7 @@ from uuid import uuid4
 import psycopg
 import psycopg.errors
 from psycopg_pool import ConnectionPool
+from reservations import ScriptedPool
 
 from workhorse import Admin, AdminAudit, ClaimedTask, EnqueueOptions, Queue, Worker
 from workhorse._drivers import SyncExecutor
@@ -64,11 +65,10 @@ class ScriptedCompletions:
 
 def complete(executor: ScriptedCompletions, *sequences: int) -> list[_PendingCompletion]:
     worker = Worker(
-        object(),  # type: ignore[arg-type]
+        ScriptedPool(),  # type: ignore[arg-type]
         queue="fast",
         worker_id="python-completion",
         registry_interval_ms=0,
-        shared_heartbeats=True,
         _executor=executor,
     )
     batch = [_PendingCompletion(claimed(sequence), '"ok"', 0, Event()) for sequence in sequences]
@@ -201,11 +201,10 @@ def persisted(database_url: str, task_id: str) -> dict[str, list[tuple[object, .
 
 def connection_worker(connection: psycopg.Connection, queue_name: str) -> Worker:
     return Worker(
-        object(),  # type: ignore[arg-type]
+        ScriptedPool(),  # type: ignore[arg-type]
         queue=queue_name,
         worker_id="python-deadlock",
         registry_interval_ms=0,
-        shared_heartbeats=True,
         _executor=SyncExecutor(connection),
     )
 

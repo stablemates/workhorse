@@ -24,14 +24,14 @@ RSpec.describe "Worker heartbeat batches" do
 
   it "puts the members of each worker in batches of at most 100 leases" do
     members = Array.new(250) { |index| member.new("a", index) } + [member.new("b", 250)]
-    batches = heartbeat_class.new(nil, dedicated: true).send(:batches, members)
+    batches = heartbeat_class.new(nil).send(:batches, members)
     expect(batches.map { |worker_id, group| [worker_id, group.size] }).to eq([["a", 100], ["a", 100], ["a", 50], ["b", 1]])
   end
 
   # SM-1633: the heartbeat statement and each idle gap get one quarter of the time that remains, and
   # one quarter is kept for the settings statement and COMMIT.
   it "gives the heartbeat statement and each idle gap one quarter, and at least 1 ms" do
-    heartbeat = heartbeat_class.new(nil, dedicated: true)
+    heartbeat = heartbeat_class.new(nil)
     expect([0.45, 0.1, 0.008, 0.003].map { |remaining| heartbeat.send(:round_timeouts, remaining) })
       .to eq([%w[112 112], %w[25 25], %w[2 2], %w[1 1]])
   end
@@ -81,7 +81,7 @@ RSpec.describe "Worker heartbeat round expiry" do
 
   it "sends nothing and keeps the connection when a round has less than 8 ms left before BEGIN" do
     connection = FakeHeartbeatConnection.new
-    heartbeat = heartbeat_class.new(nil, dedicated: true)
+    heartbeat = heartbeat_class.new(nil)
     expect { heartbeat.send(:bounded_rows, connection, W::SqlCatalogue::HEARTBEAT_MANY_V2, ["w", "[]"], 0.005) }
       .to raise_error(heartbeat_class.const_get(:RoundExpired))
     expect(connection.sent).to be_empty
@@ -91,7 +91,7 @@ RSpec.describe "Worker heartbeat round expiry" do
   it "rolls back a round whose settings statement used more than its quarter, and keeps the connection" do
     connection = FakeHeartbeatConnection.new { |kind, count| (kind == :settings && count.zero?) ? 0.2 : 0 }
     pool = FakeHeartbeatPool.new([connection])
-    heartbeat = heartbeat_class.new(pool, dedicated: true)
+    heartbeat = heartbeat_class.new(pool)
     @unregister = [heartbeat.register(member("w", 1, interval, renewals))]
     wait_until { renewals.any? }
     expect(rounds_of(connection).first(2)).to eq([%i[begin settings rollback], %i[begin settings heartbeat commit]])
@@ -109,7 +109,7 @@ RSpec.describe "Worker heartbeat round expiry" do
     end
     second = FakeHeartbeatConnection.new
     pool = FakeHeartbeatPool.new([first, second])
-    heartbeat = heartbeat_class.new(pool, dedicated: true)
+    heartbeat = heartbeat_class.new(pool)
     @unregister = [heartbeat.register(member("w", 1, interval, renewals))]
     wait_until { renewals.any? }
     expect(rounds_of(first)).to eq([%i[begin settings rollback]])
@@ -122,7 +122,7 @@ RSpec.describe "Worker heartbeat round expiry" do
     first = FakeHeartbeatConnection.new { |kind, _count| (kind == :heartbeat) ? 1 : 0 }
     second = FakeHeartbeatConnection.new
     pool = FakeHeartbeatPool.new([first, second])
-    heartbeat = heartbeat_class.new(pool, dedicated: true)
+    heartbeat = heartbeat_class.new(pool)
     @unregister = [heartbeat.register(member("w", 1, interval, renewals))]
     wait_until { renewals.any? }
     expect(rounds_of(first)).to eq([%i[begin settings heartbeat]])
@@ -134,7 +134,7 @@ RSpec.describe "Worker heartbeat round expiry" do
   it "renews the leases of every worker in one heartbeat statement in one transaction" do
     connection = FakeHeartbeatConnection.new
     pool = FakeHeartbeatPool.new([connection])
-    heartbeat = heartbeat_class.new(pool, dedicated: true)
+    heartbeat = heartbeat_class.new(pool)
     @unregister = %w[a b c].each_with_index.map { |worker_id, index| heartbeat.register(member(worker_id, index + 1, interval, renewals)) }
     wait_until { renewals.size >= 3 }
     expect(rounds_of(connection).first).to eq(%i[begin settings heartbeat commit])
@@ -147,7 +147,7 @@ RSpec.describe "Worker heartbeat round expiry" do
   it "renews no lease of a round that expires at its settings statement, and renews every worker in the next round" do
     connection = FakeHeartbeatConnection.new { |kind, count| (kind == :settings && count.zero?) ? 0.2 : 0 }
     pool = FakeHeartbeatPool.new([connection])
-    heartbeat = heartbeat_class.new(pool, dedicated: true)
+    heartbeat = heartbeat_class.new(pool)
     @unregister = %w[a b c].each_with_index.map { |worker_id, index| heartbeat.register(member(worker_id, index + 1, interval, renewals)) }
     wait_until { renewals.size >= 3 }
     expect(rounds_of(connection).first(2)).to eq([%i[begin settings rollback], %i[begin settings heartbeat commit]])
@@ -166,7 +166,7 @@ RSpec.describe "Worker heartbeat round expiry" do
     first = failing.new
     second = FakeHeartbeatConnection.new
     pool = FakeHeartbeatPool.new([first, second])
-    heartbeat = heartbeat_class.new(pool, dedicated: true)
+    heartbeat = heartbeat_class.new(pool)
     @unregister = %w[a b].each_with_index.map { |worker_id, index| heartbeat.register(member(worker_id, index + 1, interval, renewals)) }
     wait_until { renewals.size >= 2 }
     expect(rounds_of(first)).to eq([%i[begin settings heartbeat commit]])

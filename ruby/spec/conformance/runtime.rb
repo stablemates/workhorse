@@ -209,8 +209,8 @@ module Conformance
       started = Concurrent::Event.new
       reasons = Concurrent::Array.new
       with_pool do |pool|
-        subject = worker(pool, fixture, lease: fixture["leaseMs"] / 1000.0, heartbeat: fixture["heartbeatMs"] / 1000.0,
-          shared_heartbeats: true).handle(fixture["taskType"]) do |_payload, context|
+        subject = worker(pool, fixture, lease: fixture["leaseMs"] / 1000.0,
+          heartbeat: fixture["heartbeatMs"] / 1000.0).handle(fixture["taskType"]) do |_payload, context|
           started.set
           raise "the cancellation never reached the handler" unless context.cancellation.wait(5)
 
@@ -250,8 +250,7 @@ module Conformance
       expiry_answers = Concurrent::Array.new
       attempt_answers = Concurrent::Hash.new
       with_pool do |pool|
-        subject = worker(pool, fixture, lease: fixture["leaseMs"] / 1000.0, heartbeat: fixture["heartbeatMs"] / 1000.0,
-          shared_heartbeats: true)
+        subject = worker(pool, fixture, lease: fixture["leaseMs"] / 1000.0, heartbeat: fixture["heartbeatMs"] / 1000.0)
         subject.handle(fixture["taskType"]) do |_payload, context|
           if fixture["databaseTimesOutFirst"] && value(TIME_OUT_WHEN_DUE, task_id) != "true"
             raise "PostgreSQL did not time out the attempt first"
@@ -323,13 +322,15 @@ module Conformance
       counts = {calls: 0, active: 0, overlap: 0}
       calls = -> { lock.synchronize { counts[:calls] } }
       with_pool do |pool|
-        subject = worker(pool, fixture, lease: fixture["leaseMs"] / 1000.0, heartbeat: fixture["heartbeatMs"] / 1000.0,
-          shared_heartbeats: true).handle(fixture["taskType"]) do
+        subject = worker(pool, fixture, lease: fixture["leaseMs"] / 1000.0,
+          heartbeat: fixture["heartbeatMs"] / 1000.0).handle(fixture["taskType"]) do
           handler_started.set
           raise "the handler was never released" unless release_handler.wait(5)
         end
-        wrap_rows(subject) do |original, sql, params|
-          next original.call(sql, params) unless sql == W::SqlCatalogue::HEARTBEAT_MANY_V2
+        # The heartbeat thread sends each round on the dedicated heartbeat connection. The first
+        # heartbeat statement waits before it reaches PostgreSQL, so it holds no row lock meanwhile.
+        subject.instance_variable_get(:@heartbeat).define_singleton_method(:bounded_rows) do |*arguments|
+          next super(*arguments) unless arguments[1] == W::SqlCatalogue::HEARTBEAT_POOL_V1
 
           call = lock.synchronize do
             counts[:calls] += 1
@@ -342,7 +343,7 @@ module Conformance
               first_started.set
               raise "the first heartbeat was never released" unless release_first.wait(5)
             end
-            original.call(sql, params)
+            super(*arguments)
           ensure
             lock.synchronize { counts[:active] -= 1 }
           end
@@ -688,8 +689,7 @@ module Conformance
       started = -> { lock.synchronize { handlers.fetch(:started).length } }
       claim_count = -> { lock.synchronize { claims.fetch(:limits).length } }
       with_pool(6) do |pool|
-        subject = worker(pool, fixture, concurrency: fixture["concurrency"], shared_heartbeats: true,
-          shutdown_grace: JOIN_GRACE)
+        subject = worker(pool, fixture, concurrency: fixture["concurrency"], shutdown_grace: JOIN_GRACE)
           .handle(fixture["taskType"]) do
           finished = Concurrent::Event.new
           blocked = lock.synchronize do
@@ -1341,17 +1341,13 @@ module Conformance
     end
 
     # Makes each heartbeat statement on +connection+ wait until +released+ is set. The call waits
-    # before it reaches PostgreSQL, so it holds no row lock while it waits. A dedicated heartbeat
-    # sends heartbeat_pool_v1 with send_query_params, and a shared heartbeat sends
-    # heartbeat_many_v2 with exec_params.
+    # before it reaches PostgreSQL, so it holds no row lock while it waits. The heartbeat sends
+    # heartbeat_pool_v1 with send_query_params.
     def hold_heartbeats(connection, released)
-      heartbeats = [W::SqlCatalogue::HEARTBEAT_MANY_V2, W::SqlCatalogue::HEARTBEAT_POOL_V1]
-      %i[exec_params send_query_params].each do |name|
-        connection.define_singleton_method(name) do |sql, *rest|
-          raise "a held heartbeat was never released" if heartbeats.include?(sql) && !released.wait(5)
+      connection.define_singleton_method(:send_query_params) do |sql, *rest|
+        raise "a held heartbeat was never released" if sql == W::SqlCatalogue::HEARTBEAT_POOL_V1 && !released.wait(5)
 
-          super(sql, *rest)
-        end
+        super(sql, *rest)
       end
     end
 

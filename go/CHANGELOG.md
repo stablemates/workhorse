@@ -23,6 +23,21 @@ from version 86 to version **89**. They replace function bodies and change no st
 compatibility floor stays at **76**. A 0.10 process keeps working on version 89, because a
 migration inside a major line only adds.
 
+**Give each worker a pool with a `MaxConns` of at least 3.** `WorkerOptions` no longer has
+`SharedHeartbeats`. Remove the field. If a worker pool has a `MaxConns` below 3, set it to 3 or
+more. Each worker process needs 3 connections: the listener, the heartbeat connection, and one
+statement connection (SM-1901).
+
+### Breaking changes
+
+- **`WorkerOptions.SharedHeartbeats` is removed.** Every worker now reserves a dedicated
+  heartbeat connection on its pool (ADR 0071). Before, `SharedHeartbeats: true` let heartbeat
+  rounds borrow ordinary pool connections and let a pool below 3 run. Then a heartbeat could wait
+  behind claims and settlements, so a lease could expire and a task could run twice. Code that
+  sets the field no longer compiles. `NewWorker` returns an error for a pool with a `MaxConns`
+  below 3. The worker no longer warns that a pool below 2 makes it poll, because such a pool
+  cannot start a worker (SM-1901).
+
 ### Behavior changes
 
 These changes can make code that worked on 0.10 act differently:

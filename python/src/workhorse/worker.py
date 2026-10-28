@@ -16,14 +16,13 @@ from itertools import islice
 from queue import Empty, SimpleQueue
 from threading import Event, Lock, Thread, current_thread
 from time import monotonic, sleep
-from typing import TYPE_CHECKING, Any, Literal, TypeVar, cast
+from typing import TYPE_CHECKING, Any, Literal, Never, TypeVar, cast
 from uuid import uuid4
 
 from psycopg_pool import PoolTimeout as _PoolTimeout
 
 from ._checkpoint_input import checkpoint_input_fingerprint as _checkpoint_input_fingerprint
 from ._compatibility import (
-    CachedCompatibilityCheck as _CachedCompatibilityCheck,
     SyncRowExecutor as _SyncRowExecutor,
     assert_sync_compatible as _assert_sync_compatible,
 )
@@ -468,6 +467,28 @@ def _reported_pool_size(pool: object) -> object:
         if callable(get_max_size):
             capacity = get_max_size()
     return capacity
+
+
+_SHARED_HEARTBEATS_REMOVED = (
+    "shared_heartbeats was removed in 0.11.0. Every worker now reserves a dedicated heartbeat "
+    "connection. Remove the option, and give the worker a pool with a known maximum size of at "
+    "least 3."
+)
+
+
+def _reject_unknown_options(owner: str, options: Mapping[str, object]) -> None:
+    """Refuse the keywords a worker constructor collected in its ``Never``-typed variadic.
+
+    The variadic keeps a static checker refusing every unknown keyword. At run time the removed
+    ``shared_heartbeats`` option gets an error that names the removal, and any other keyword gets
+    the error that Python raises for an unexpected keyword argument.
+    """
+    # A misspelled keyword comes first, so the removal error never hides a typo.
+    for name in options:
+        if name != "shared_heartbeats":
+            raise TypeError(f"{owner}() got an unexpected keyword argument '{name}'")
+    if options:
+        raise TypeError(_SHARED_HEARTBEATS_REMOVED)
 
 
 def _dispatch_cohorts(concurrency: int, spare_connections: int | None = None) -> int:
@@ -1542,16 +1563,22 @@ class Worker:
         schedule_catchup_limit: int = 100,
         on_notification_error: Callable[[BaseException], None] | None = None,
         on_registration_error: Callable[[BaseException], None] | None = None,
-        shared_heartbeats: bool = False,
         _executor: _SyncRowExecutor | None = None,
         _heartbeat_executor_factory: _HeartbeatExecutorFactory | None = None,
+        **_removed: Never,
     ) -> None:
-        capacity = _reported_pool_size(pool)
-        if not shared_heartbeats and (not isinstance(capacity, int) or capacity < 3):
+        _reject_unknown_options("Worker.__init__", _removed)
+        reported = _reported_pool_size(pool)
+        # The listener and the dedicated heartbeat connection each hold one pooled connection,
+        # and claims and completions need at least one more (ADR 0071).
+        capacity = (
+            reported if isinstance(reported, int) and not isinstance(reported, bool) else None
+        )
+        if capacity is None or capacity < 3:
             found = "unknown" if capacity is None else str(capacity)
             raise ValueError(
-                f"Worker pool capacity must be at least 3 (found {found}); "
-                "set shared_heartbeats=True to opt out"
+                "Worker needs a pool with a known maximum size of at least 3 connections "
+                f"(found {found}). Give the worker a pool with a maximum size of at least 3."
             )
         if queue is not None and queues is not None:
             raise ValueError("queue and queues cannot be configured together")
@@ -1568,14 +1595,8 @@ class Worker:
         ):
             raise ValueError("concurrency must be an integer between 1 and 100")
         if cohorts is None:
-            # The listener and the heartbeat connection each hold a pooled connection. A pool
-            # smaller than 2 lends no listener, so the worker polls and reserves none for it.
-            cohorts = _dispatch_cohorts(
-                concurrency,
-                capacity - (1 if capacity >= 2 else 0) - (0 if shared_heartbeats else 1)
-                if isinstance(capacity, int) and not isinstance(capacity, bool)
-                else None,
-            )
+            # The listener and the heartbeat connection each hold a pooled connection.
+            cohorts = _dispatch_cohorts(concurrency, capacity - 2)
         elif (
             isinstance(cohorts, bool)
             or not isinstance(cohorts, int)
@@ -1591,7 +1612,6 @@ class Worker:
         ):
             raise ValueError("poll_ms must be an integer between 1 and 2147483647")
         self._executor = _executor or _PooledSyncExecutor(pool)
-        self._compatibility = _CachedCompatibilityCheck(self._executor)
         self._handlers: dict[str, Handler] = {}
         self.queues = unique_queues
         self.queue = unique_queues[0]
@@ -1602,7 +1622,6 @@ class Worker:
         self.poll_ms = resolved_poll_ms
         self._notification_poll_ms = poll_ms if poll_ms is not None else 5_000
         self._pool = pool
-        self._shared_heartbeats = shared_heartbeats
         self._notification_wake = Event()
         self._notification_listening = Event()
         self._on_notification_error = on_notification_error
@@ -1701,9 +1720,8 @@ class Worker:
         self._heartbeat_members: dict[str, _HeartbeatMember] = {}
         self._heartbeat_thread: Thread | None = None
         self._heartbeat_wake = Event()
-        # Without the opt-out, heartbeat rounds run on the heartbeat connection that every worker
-        # on the pool shares, so a slow handler statement cannot hold a lease renewal back.
-        self._dedicated_heartbeats = not shared_heartbeats
+        # Heartbeat rounds run on the heartbeat connection that every worker on the pool shares,
+        # so a slow handler statement cannot hold a lease renewal back.
         # A private source of heartbeat connections. Tests set it; the worker then reserves its
         # connections from it and shares them with no other worker.
         self._heartbeat_executor_factory = _heartbeat_executor_factory
@@ -1829,10 +1847,7 @@ class Worker:
                 # A busy retry ends by the next regular slot and by the end of the earliest local
                 # lease window in it, so it never renews a lease that the worker already gave up.
                 deadline = min(deadline, next_at, *(member.lease_ends_at() for member in members))
-                if (
-                    self._dedicated_heartbeats
-                    and (deadline - sent_at) * 1000 < _BUSY_RETRY_MINIMUM_MS
-                ):
+                if (deadline - sent_at) * 1000 < _BUSY_RETRY_MINIMUM_MS:
                     # A bounded retry with this little time would fail before its heartbeat. The
                     # regular slot renews every lease, the busy ones too.
                     continue
@@ -1909,17 +1924,6 @@ class Worker:
         self, batches: Sequence[Sequence[Mapping[str, object]]], deadline: float
     ) -> list[Mapping[str, object]]:
         """Renew the leases of `batches`, and return one row for each lease that has an answer."""
-        if not self._dedicated_heartbeats:
-            # Each batch is its own autocommit statement on a pool connection.
-            return [
-                row
-                for batch in batches
-                for row in _fenced_write_rows(
-                    self._executor,
-                    _STATEMENTS.heartbeat_many,
-                    (self.worker_id, json.dumps(batch, separators=(",", ":"))),
-                )
-            ]
         reservation = self._reservation
         if reservation is None:
             raise _HeartbeatRoundExpired("the worker holds no heartbeat reservation")
@@ -2360,10 +2364,8 @@ class Worker:
         hub = _SYNC_HUBS.attach(self._pool, _psycopg_pool_hub)
         return hub, lambda: _SYNC_HUBS.detach(hub)
 
-    def _heartbeat_reservation(self, hub: _PoolHub | None) -> _HeartbeatReservation | None:
-        """The heartbeat reservation of this run, or None with the opt-out."""
-        if not self._dedicated_heartbeats:
-            return None
+    def _heartbeat_reservation(self, hub: _PoolHub | None) -> _HeartbeatReservation:
+        """The heartbeat reservation of this run."""
         factory = self._heartbeat_executor_factory
         if factory is None:
             if hub is None:
@@ -2399,8 +2401,6 @@ class Worker:
 
         `generation` is the run that started the claim. Without it, the current run counts.
         """
-        if not self._dedicated_heartbeats:
-            return self._executor
         if generation is None:
             generation = self._current_generation()
 
@@ -2418,12 +2418,10 @@ class Worker:
     def _heartbeat_ready(self, generation: int | None = None) -> bool:
         """True while the run may claim (ADR 0071, rule 6).
 
-        With dedicated heartbeats, the run must still hold its reservation, the reservation must
-        hold a usable connection, and `generation`, when given, must be the current run. A run
-        that released its reservation keeps the gate closed for every claim it started.
+        The run must still hold its reservation, the reservation must hold a usable connection,
+        and `generation`, when given, must be the current run. A run that released its
+        reservation keeps the gate closed for every claim it started.
         """
-        if not self._dedicated_heartbeats:
-            return True
         with self._state_lock:
             reservation = self._reservation
             current = self._run_generation
@@ -2459,17 +2457,13 @@ class Worker:
 
         ADR 0071, rule 3: within the startup budget, the worker first reserves the shared
         heartbeat connection, then borrows one ordinary connection for the compatibility query.
-        If either step fails, the worker refuses to start. With the opt-out, only the
-        compatibility query runs, under the pool's own timeout.
+        If either step fails, the worker refuses to start.
         """
         deadline = monotonic() + self._connection_budget_seconds
         hub, detach = self._hub_source()
         subscription: _ReservationSubscription | None = None
         try:
             reservation = self._heartbeat_reservation(hub)
-            if reservation is None:
-                self._compatibility.assert_compatible()
-                return hub, detach, None
             subscription = reservation.subscribe(self.heartbeat_ms, self._wake_dispatcher)
             if not reservation.wait_ready(deadline):
                 raise TimeoutError(
@@ -2500,8 +2494,8 @@ class Worker:
     def _startup_failure(self, step: str) -> str:
         return (
             f"Worker could not {step} from pool {_pool_label(self._pool)} within its startup "
-            f"budget of {round(self._connection_budget_seconds * 1000)} ms. Grow the pool, or set "
-            "shared_heartbeats=True to opt out."
+            f"budget of {round(self._connection_budget_seconds * 1000)} ms. Grow the pool, or "
+            "check that the database accepts connections."
         )
 
     def _run_loop(self, *, continuous: bool, requested_stop_version: int) -> bool:
@@ -3187,11 +3181,7 @@ class Worker:
             sent_limit[0] = limit
             return (*sent[:5], limit, *sent[6:])
 
-        executor = (
-            self._gated_executor(gate_the_claim)
-            if claim_limit > 0 and self._dedicated_heartbeats
-            else self._executor
-        )
+        executor = self._gated_executor(gate_the_claim) if claim_limit > 0 else self._executor
         try:
             # A send that only completes claims nothing, so only a send that claims is watched.
             with self._statement_watch.watch("claim") if claim_limit > 0 else nullcontext():
@@ -3628,7 +3618,7 @@ class Worker:
         self, hub: _PoolHub | None
     ) -> _NotificationSubscription | None:
         """Subscribe to the listener that every worker on the pool shares (ADR 0071, rule 1)."""
-        if not self._listens or hub is None or not self._pool_lends_listener():
+        if not self._listens or hub is None:
             return None
         listener = cast(_SharedTaskNotificationListener, hub.listener)
         return listener.subscribe(
@@ -3644,38 +3634,6 @@ class Worker:
         if reporter is None:
             return None
         return lambda error: self._reporter_failures.call("on_notification_error", reporter, error)
-
-    def _pool_lends_listener(self) -> bool:
-        """Whether the pool can lend the shared listener a connection (SM-1585).
-
-        The listener holds one pooled connection for as long as it listens. With the opt-out, a
-        pool smaller than 3 is allowed, so the listener starts only on a pool that reports a
-        maximum size of at least 2. Otherwise it could hold the only connection, and the worker
-        polls instead. The run logs that once.
-
-        The worker reads the size again here, just before the listener subscribes, because the
-        application can resize the pool after it constructs the worker (SM-1677). Without the
-        opt-out, the constructor already refused a pool smaller than 3.
-        """
-        if not self._shared_heartbeats:
-            return True
-        reported = _reported_pool_size(self._pool)
-        capacity = (
-            reported if isinstance(reported, int) and not isinstance(reported, bool) else None
-        )
-        if capacity is not None and capacity >= 2:
-            return True
-        _emit_log(
-            "WARN",
-            "workhorse.worker.polling_only",
-            "Worker has no notification listener and dispatches by polling",
-            {
-                "workhorse.worker.id": self.worker_id,
-                "workhorse.worker.queues": self.queues,
-                "workhorse.worker.pool_max_size": "unknown" if capacity is None else capacity,
-            },
-        )
-        return False
 
     def _admit_claimed_task(
         self, task: ClaimedTask, claim_sent_at: float, cohort: int | None

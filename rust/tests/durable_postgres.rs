@@ -618,11 +618,9 @@ async fn a_replayed_parent_keeps_a_child_its_new_contract_would_reject() {
 
 #[tokio::test]
 async fn identical_replayed_calls_share_one_call_across_a_contract_change() {
-    // A reserved heartbeat connection stays out of the pool while its rounds succeed. The count
-    // below cannot tell it from a connection that the second call keeps. Shared rounds borrow a
-    // connection only for their statement, as the poll does.
-    let shared = WorkerOptions { shared_heartbeats: true, ..WorkerOptions::default() };
-    let Some(harness) = harness_with("durable_child_contract_advance", shared).await else {
+    let Some(harness) =
+        harness_with("durable_child_contract_advance", WorkerOptions::default()).await
+    else {
         return;
     };
     sync_contract(&harness, "counted", "v1", vec![("v1", counted_contract(4096))]).await;
@@ -660,8 +658,9 @@ async fn identical_replayed_calls_share_one_call_across_a_contract_change() {
             tokio::pin!(second);
             // The second call holds a pooled connection from its first poll until its lookup
             // returns, and it joins the first call without yielding in between. Only the first
-            // call's blocked statement then holds one. Every other pool user, the heartbeat rounds
-            // included, borrows one only for a statement, so the count drops to 1 between them.
+            // call's blocked statement and the reserved heartbeat connection then hold one. Every
+            // other pool user borrows one only for a statement, so the count drops to 2 between
+            // them.
             let in_use = || {
                 let status = pool.status();
                 status.size - status.available + status.waiting
@@ -677,7 +676,7 @@ async fn identical_replayed_calls_share_one_call_across_a_contract_change() {
                         }
                         () = tokio::time::sleep(Duration::from_millis(10)) => {}
                     }
-                    if in_use() <= 1 {
+                    if in_use() <= 2 {
                         return;
                     }
                 }

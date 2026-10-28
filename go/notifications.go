@@ -69,8 +69,8 @@ var taskNotificationHubs = struct {
 }
 
 // subscribeToTaskNotifications wakes the worker when a task becomes ready on one of its queues. It
-// returns nil when the worker polls instead: when it was configured to, or when its pool is too
-// small to lend the listener a connection.
+// returns nil when the worker was configured to poll instead. NewWorker refuses a pool below 3
+// connections, so the pool can always lend the listener one.
 func subscribeToTaskNotifications(
 	ctx context.Context,
 	pool *pgxpool.Pool,
@@ -81,10 +81,6 @@ func subscribeToTaskNotifications(
 ) *taskNotificationSubscription {
 	if pollingOnly {
 		logger.WarnContext(ctx, pollingOnlyListenerLogMessage)
-		return nil
-	}
-	if pool.Config().MaxConns < 2 {
-		logger.WarnContext(ctx, shortPoolListenerLogMessage)
 		return nil
 	}
 	taskNotificationHubs.mu.Lock()

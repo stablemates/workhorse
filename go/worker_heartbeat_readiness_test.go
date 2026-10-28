@@ -43,11 +43,14 @@ func expectStartupRefusal(t *testing.T, err error, elapsed time.Duration, pool *
 		t.Fatal("the worker started on a pool that could not lend its startup connections")
 	}
 	for _, fragment := range []string{
-		pool.Config().ConnConfig.Database, "MaxConns 3", step, "startup budget of 5s", "SharedHeartbeats",
+		pool.Config().ConnConfig.Database, "MaxConns 3", step, "startup budget of 5s", "grow the pool)",
 	} {
 		if !strings.Contains(err.Error(), fragment) {
 			t.Fatalf("the refusal does not name %q: %v", fragment, err)
 		}
+	}
+	if strings.Contains(err.Error(), "opt out") {
+		t.Fatalf("the refusal names an option that no longer exists: %v", err)
 	}
 	if elapsed < 4*time.Second || elapsed > 10*time.Second {
 		t.Fatalf("the refusal came after %s, want about the startup budget of 5s", elapsed)

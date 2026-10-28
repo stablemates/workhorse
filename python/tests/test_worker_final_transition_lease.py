@@ -12,6 +12,7 @@ from typing import Any
 import psycopg
 import pytest
 from psycopg_pool import ConnectionPool
+from reservations import Compatible, ScriptedHeartbeats, ScriptedPool
 from test_worker_dispatch import FullTierRejection, task_row
 
 from workhorse import AsyncWorker, EnqueueOptions, Queue, Worker
@@ -54,11 +55,6 @@ class HeldSettlement:
     def rows(self, statement: DriverStatement, parameters: Sequence[object] = ()) -> list[Any]:
         if statement is STATEMENTS.claim_many:
             return self._take()
-        if statement is STATEMENTS.heartbeat_many:
-            with self._lock:
-                self.heartbeat_rounds += 1
-            status = self.verdict if self.held.is_set() else "accepted"
-            return [{"task_id": task_row(1, TASK)["task_id"], "status": status}]
         if statement is STATEMENTS.acknowledge_cancel:
             with self._lock:
                 self.acknowledged_cancels += 1
@@ -96,6 +92,12 @@ class HeldSettlement:
             return [{"status": status, "retry_state": None}]
         return []
 
+    def heartbeat_status(self, _task_id: str) -> str:
+        """The status of the attempt's lease in one round on the dedicated heartbeat connection."""
+        with self._lock:
+            self.heartbeat_rounds += 1
+        return self.verdict if self.held.is_set() else "accepted"
+
     def _take(self) -> list[dict[str, object]]:
         with self._lock:
             claimed, self._backlog = self._backlog, []
@@ -119,7 +121,7 @@ class AsyncHeldSettlement:
         self._inner = inner
 
     async def rows(self, statement: DriverStatement, parameters: Sequence[object] = ()) -> Any:
-        return await asyncio.to_thread(self._inner.rows, statement, parameters)
+        return await asyncio.to_thread(Compatible(self._inner).rows, statement, parameters)
 
 
 def handler_for(outcome: str) -> Callable[[object, object], object]:
@@ -133,8 +135,9 @@ def handler_for(outcome: str) -> Callable[[object, object], object]:
     return handle
 
 
-def scripted(worker: Worker) -> Worker:
-    worker._compatibility.assert_compatible = lambda: None  # type: ignore[method-assign]
+def scripted(worker: Worker, executor: HeldSettlement) -> Worker:
+    # The rounds run on a scripted dedicated heartbeat connection, which reports the verdict.
+    worker._heartbeat_executor_factory = ScriptedHeartbeats(executor.heartbeat_status).open
     worker._listens = False
     return worker
 
@@ -142,16 +145,16 @@ def scripted(worker: Worker) -> Worker:
 def sync_worker(executor: HeldSettlement, lease_ms: int = LEASE_MS) -> Worker:
     return scripted(
         Worker(
-            object(),  # type: ignore[arg-type]
+            ScriptedPool(),  # type: ignore[arg-type]
             queue="dispatch",
             worker_id="python-final-transition",
             concurrency=1,
             lease_ms=lease_ms,
             heartbeat_ms=HEARTBEAT_MS,
             registry_interval_ms=0,
-            shared_heartbeats=True,
-            _executor=executor,
-        )
+            _executor=Compatible(executor),
+        ),
+        executor,
     )
 
 
@@ -215,9 +218,8 @@ async def test_async_worker_renews_the_lease_until_the_final_write_returns(
     executor = HeldSettlement(fast=fast)
     worker = AsyncWorker(
         AsyncHeldSettlement(executor),  # type: ignore[arg-type]
-        object(),
+        ScriptedPool(),
         "asyncpg",
-        shared_heartbeats=True,
         queue="dispatch",
         worker_id="python-final-transition-async",
         concurrency=1,
@@ -225,7 +227,7 @@ async def test_async_worker_renews_the_lease_until_the_final_write_returns(
         heartbeat_ms=HEARTBEAT_MS,
         registry_interval_ms=0,
     )
-    scripted(worker._inner)
+    scripted(worker._inner, executor)
     handle = handler_for(outcome)
 
     async def handle_async(payload: object, context: object) -> object:
@@ -407,9 +409,8 @@ async def test_async_worker_settles_a_boundary_due_during_the_final_write(
     executor = HeldSettlement(fast=fast, verdict=verdict)
     worker = AsyncWorker(
         AsyncHeldSettlement(executor),  # type: ignore[arg-type]
-        object(),
+        ScriptedPool(),
         "asyncpg",
-        shared_heartbeats=True,
         queue="dispatch",
         worker_id="python-final-transition-async",
         concurrency=1,
@@ -417,7 +418,7 @@ async def test_async_worker_settles_a_boundary_due_during_the_final_write(
         heartbeat_ms=HEARTBEAT_MS,
         registry_interval_ms=0,
     )
-    core = scripted(worker._inner)
+    core = scripted(worker._inner, executor)
     outcomes: list[object] = []
     reconcile = core._reconcile_rejected_completion
 

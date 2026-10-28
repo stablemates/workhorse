@@ -10,7 +10,7 @@ from itertools import count
 from queue import Empty, SimpleQueue
 from threading import Lock, Thread
 from time import monotonic
-from typing import Any, Literal, Protocol, TypeVar, cast
+from typing import Any, Literal, Never, Protocol, TypeVar, cast
 
 from ._compatibility import AsyncRowExecutor as _AsyncRowExecutor
 from ._drivers import (
@@ -59,7 +59,7 @@ from .types import (
     TaskWait,
     _NoInput,
 )
-from .worker import Worker, _CheckedExecutor
+from .worker import Worker, _CheckedExecutor, _reject_unknown_options
 
 AsyncHandler = Callable[[Any, AsyncHandlerContext], Awaitable[Json]]
 AsyncBatchHandler = Callable[
@@ -464,7 +464,6 @@ class AsyncWorker:
         *,
         on_notification_error: Callable[[BaseException], None] | None = None,
         on_registration_error: Callable[[BaseException], None] | None = None,
-        shared_heartbeats: bool = False,
         **worker_options: Any,
     ) -> None:
         self._bridge = _AsyncExecutorBridge(executor)
@@ -484,7 +483,6 @@ class AsyncWorker:
             on_notification_error=on_notification_error,
             on_registration_error=on_registration_error,
             _executor=self._bridge,
-            shared_heartbeats=shared_heartbeats,
             **worker_options,
         )
         # The async run attaches to the hub and listens on the event loop, so the core only
@@ -514,15 +512,15 @@ class AsyncWorker:
         schedule_catchup_limit: int = 100,
         on_notification_error: Callable[[BaseException], None] | None = None,
         on_registration_error: Callable[[BaseException], None] | None = None,
-        shared_heartbeats: bool = False,
+        **_removed: Never,
     ) -> AsyncWorker:
+        _reject_unknown_options("AsyncWorker.from_psycopg", _removed)
         return cls(
             _PooledAsyncPsycopgExecutor(pool),
             pool,
             "psycopg",
             on_notification_error=on_notification_error,
             on_registration_error=on_registration_error,
-            shared_heartbeats=shared_heartbeats,
             queue=queue,
             queues=queues,
             worker_id=worker_id,
@@ -558,15 +556,15 @@ class AsyncWorker:
         schedule_catchup_limit: int = 100,
         on_notification_error: Callable[[BaseException], None] | None = None,
         on_registration_error: Callable[[BaseException], None] | None = None,
-        shared_heartbeats: bool = False,
+        **_removed: Never,
     ) -> AsyncWorker:
+        _reject_unknown_options("AsyncWorker.from_asyncpg", _removed)
         return cls(
             _PooledAsyncpgExecutor(pool),
             pool,
             "asyncpg",
             on_notification_error=on_notification_error,
             on_registration_error=on_registration_error,
-            shared_heartbeats=shared_heartbeats,
             queue=queue,
             queues=queues,
             worker_id=worker_id,
@@ -720,8 +718,6 @@ class AsyncWorker:
     def _subscribe_listener(self) -> None:
         """Subscribe this run to the shared listener. The core calls this from its thread."""
         loop = self._require_loop()
-        if not self._inner._pool_lends_listener():
-            return
 
         async def subscribe() -> None:
             if not self._wants_listener or self._hub is None or self._subscription is not None:

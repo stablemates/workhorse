@@ -2,6 +2,7 @@ package workhorse
 
 import (
 	"context"
+	"fmt"
 	"math"
 	"reflect"
 	"strings"
@@ -31,7 +32,6 @@ func newDefaultWorker(t *testing.T, options WorkerOptions) *Worker {
 	t.Helper()
 	options.Queue = "defaults"
 	options.WorkerID = "defaults-worker"
-	options.SharedHeartbeats = true
 	worker, err := NewWorker(unconnectedPool(t), options)
 	if err != nil {
 		t.Fatal(err)
@@ -78,7 +78,7 @@ func TestTheDefaultHeartbeatIntervalIsAtLeastTheSmallestSupportedInterval(t *tes
 	}
 	// The floor is not less than the smallest lease, so the default must still be shorter.
 	if _, err := NewWorker(unconnectedPool(t), WorkerOptions{
-		Queue: "defaults", LeaseDuration: 100 * time.Millisecond, SharedHeartbeats: true,
+		Queue: "defaults", LeaseDuration: 100 * time.Millisecond,
 	}); err == nil {
 		t.Fatal("a 100ms lease with the default heartbeat interval was accepted")
 	}
@@ -176,7 +176,6 @@ func TestWorkerRejectsAnUnusableMaintenanceRoutineInterval(t *testing.T) {
 	if _, err := NewWorker(unconnectedPool(t), WorkerOptions{
 		Queue:                      "defaults",
 		WorkerID:                   "defaults-worker",
-		SharedHeartbeats:           true,
 		MaintenanceRoutineInterval: 500 * time.Microsecond,
 	}); err == nil {
 		t.Fatal("expected a sub-millisecond routine interval to be rejected")
@@ -278,7 +277,7 @@ func TestWorkerRefusesANegativeFractionalOrOverlongShutdownGrace(t *testing.T) {
 		24*time.Hour + time.Millisecond, time.Duration(math.MaxInt64 / int64(time.Millisecond) * int64(time.Millisecond)),
 	} {
 		_, err := NewWorker(unconnectedPool(t), WorkerOptions{
-			Queue: "defaults", WorkerID: "defaults-worker", SharedHeartbeats: true, ShutdownGracePeriod: grace,
+			Queue: "defaults", WorkerID: "defaults-worker", ShutdownGracePeriod: grace,
 		})
 		if err == nil || err.Error() != workerShutdownGraceRangeMessage {
 			t.Fatalf("grace %s: got %v, want %q", grace, err, workerShutdownGraceRangeMessage)
@@ -327,7 +326,7 @@ func TestWorkerRefusesAMaintenanceOrRegistryIntervalOutsideTheRange(t *testing.T
 			func(options *WorkerOptions, value time.Duration) { options.RegistryInterval = value }},
 	} {
 		for _, value := range refused {
-			options := WorkerOptions{Queue: "defaults", WorkerID: "defaults-worker", SharedHeartbeats: true}
+			options := WorkerOptions{Queue: "defaults", WorkerID: "defaults-worker"}
 			testCase.set(&options, value)
 			if _, err := NewWorker(unconnectedPool(t), options); err == nil || err.Error() != testCase.message {
 				t.Errorf("%s %s: got %v, want %q", testCase.option, value, err, testCase.message)
@@ -360,7 +359,7 @@ func TestWorkerRefusesAPollIntervalOutsideTheRange(t *testing.T) {
 		2147483648 * time.Millisecond, time.Duration(math.MaxInt64),
 	} {
 		_, err := NewWorker(unconnectedPool(t), WorkerOptions{
-			Queue: "defaults", WorkerID: "defaults-worker", SharedHeartbeats: true, PollInterval: poll,
+			Queue: "defaults", WorkerID: "defaults-worker", PollInterval: poll,
 		})
 		if err == nil || err.Error() != workerPollRangeMessage {
 			t.Fatalf("poll %s: got %v, want %q", poll, err, workerPollRangeMessage)
@@ -381,5 +380,37 @@ func TestWorkerCapsAnExplicitPollIntervalOnlyWhileItPolls(t *testing.T) {
 		if polling < 4500*time.Millisecond || polling > 5500*time.Millisecond {
 			t.Fatalf("explicit 30s poll while polling waited %s, want 4.5s to 5.5s", polling)
 		}
+	}
+}
+
+// poolOfSize builds an unconnected pool whose maximum size is maxConns.
+func poolOfSize(t *testing.T, maxConns int32) *pgxpool.Pool {
+	t.Helper()
+	config, err := pgxpool.ParseConfig("postgres://workhorse@127.0.0.1:1/workhorse")
+	if err != nil {
+		t.Fatal(err)
+	}
+	config.MaxConns = maxConns
+	pool, err := pgxpool.NewWithConfig(context.Background(), config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(pool.Close)
+	return pool
+}
+
+// SM-1901 (ADR 0071): every worker reserves a dedicated heartbeat connection, so NewWorker refuses a
+// pool whose maximum size is below 3. No option lets a smaller pool run.
+func TestNewWorkerRefusesAPoolBelowThreeConnections(t *testing.T) {
+	for _, maxConns := range []int32{1, 2} {
+		_, err := NewWorker(poolOfSize(t, maxConns), WorkerOptions{Queue: "pool-size"})
+		want := fmt.Sprintf("worker needs a pool with a known maximum size of at least 3 connections (found %d); "+
+			"give the worker a pool with a maximum size of at least 3", maxConns)
+		if err == nil || err.Error() != want {
+			t.Errorf("MaxConns %d: got %v, want %q", maxConns, err, want)
+		}
+	}
+	if _, err := NewWorker(poolOfSize(t, 3), WorkerOptions{Queue: "pool-size"}); err != nil {
+		t.Fatalf("MaxConns 3: %v", err)
 	}
 }

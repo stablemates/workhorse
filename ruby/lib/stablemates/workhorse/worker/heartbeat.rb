@@ -11,9 +11,7 @@ module Stablemates
       # never delay a lease round. A checkout thread borrows that connection (+Acquisition+), and the
       # heartbeat thread waits for it at most one round bound. The heartbeat replaces a lost
       # connection at once, with a backoff capped at the interval. A connection that arrives late
-      # has one owner, which hands it over or returns it to the pool. With
-      # +shared_heartbeats: true+ a worker has its own heartbeat, which borrows a connection from
-      # the executor for each round instead.
+      # has one owner, which hands it over or returns it to the pool.
       class Heartbeat # :nodoc:
         # One running attempt. +renew+ takes the monotonic send time of an accepted round;
         # +settle+ takes a status other than +accepted+ and +busy+; +fail+ takes an error +settle+
@@ -175,14 +173,11 @@ module Stablemates
         # statement, plus a margin for the payload, the wait for the connection, and BEGIN.
         BUSY_RETRY_MARGIN = 0.012
         BUSY_RETRY_MINIMUM = MINIMUM_REMAINING + BUSY_RETRY_MARGIN
-        # The wait after a shared round raised an unexpected error, in seconds, so that an error that
-        # repeats cannot keep the thread busy.
-        FAILED_ROUND_DELAY = 0.1
         # heartbeat_many_v2 raises an error for more leases than this in one call, so a batch of
         # heartbeat_pool_v1 holds at most this many leases too.
         STATEMENT_LEASE_LIMIT = 100
         private_constant :STRINGS, :ROUND_TIMEOUTS, :MINIMUM_REMAINING, :REACQUIRE_BASE, :PROBE_INTERVAL, :RELEASE_WAIT,
-          :BUSY_RETRY_BASE, :BUSY_RETRY_MARGIN, :BUSY_RETRY_MINIMUM, :FAILED_ROUND_DELAY, :STATEMENT_LEASE_LIMIT
+          :BUSY_RETRY_BASE, :BUSY_RETRY_MARGIN, :BUSY_RETRY_MINIMUM, :STATEMENT_LEASE_LIMIT
 
         # The deadline of one round, in seconds, for an +interval+ in seconds. It is three quarters
         # of the interval, so that one timed-out round leaves a renewal margin when 2 × interval +
@@ -213,12 +208,11 @@ module Stablemates
 
         # The heartbeat every worker on +pool+ shares.
         def self.dedicated(pool)
-          @dedicated_lock.synchronize { @dedicated[pool] ||= new(pool, dedicated: true) }
+          @dedicated_lock.synchronize { @dedicated[pool] ||= new(pool) }
         end
 
-        def initialize(source, dedicated:)
+        def initialize(source)
           @source = source
-          @dedicated = dedicated
           @lock = Mutex.new
           @members = {}
           @users = {}.compare_by_identity
@@ -344,7 +338,7 @@ module Stablemates
           # failed round does not start a new schedule.
           @previous = Process.clock_gettime(Process::CLOCK_MONOTONIC)
           @busy = nil
-          @dedicated ? run_dedicated : run_shared
+          run_dedicated
         ensure
           lost
         end
@@ -367,21 +361,6 @@ module Stablemates
             probe.done.set
           end
           probe
-        end
-
-        # Runs the rounds of a borrowing heartbeat. An unexpected error does not end the thread while
-        # a member remains: the thread ends only through +stop_if_idle+, so a register that races
-        # the end starts a new thread.
-        def run_shared
-          loop do
-            return if rounds { |sql, params, _timeout| Executor.for(@source).rows(sql, params) }
-          rescue
-            @busy = nil
-            return if stop_if_idle
-
-            @wake.wait(FAILED_ROUND_DELAY)
-            @wake.reset
-          end
         end
 
         # Holds one connection across rounds, also while no member remains and a worker still
@@ -597,7 +576,7 @@ module Stablemates
         # member interval after the previous regular round started; a wake recomputes that from the
         # current members. A round that ends after its next slot starts one overdue round at once,
         # and the interval after it counts from that start, so missed slots are never replayed. A
-        # failed round raises only from a dedicated connection, so the caller can replace it.
+        # failed round raises, so the caller can replace the connection.
         #
         # Between two regular rounds, a busy retry (+take_busy_retry+) sends only the members that
         # the latest round reported busy. It runs on the same thread, so it is a round for the
@@ -642,7 +621,7 @@ module Stablemates
               deadline = retry_deadline(selection, interval, regular_at, started)
               # A bounded retry with too little time left would fail before its heartbeat statement.
               # It sends nothing, and the next regular round renews every lease, the busy ones too.
-              next if @dedicated && deadline - started < BUSY_RETRY_MINIMUM
+              next if deadline - started < BUSY_RETRY_MINIMUM
 
               send_round(selection, deadline, interval, &)
               next
@@ -665,9 +644,7 @@ module Stablemates
         #
         # On the dedicated connection, one heartbeat_pool_v1 statement in one transaction renews
         # every batch of every worker, by the one +deadline+ (+send_pooled+). The round is
-        # all-or-nothing: if the statement or COMMIT fails, no lease of the round counts. A
-        # borrowing heartbeat has no deadline, and sends one heartbeat_many_v2 statement for each
-        # batch (+send_each+).
+        # all-or-nothing: if the statement or COMMIT fails, no lease of the round counts.
         #
         # A round replaces the pending busy retry. If one or more members are busy, it schedules one
         # retry for them. A round that raises or expires schedules none, and the next regular round
@@ -675,7 +652,7 @@ module Stablemates
         def send_round(members, deadline, interval, &)
           @busy = nil
           batches = batches(members)
-          busy = @dedicated ? send_pooled(batches, deadline, &) : send_each(batches, deadline, &)
+          busy = send_pooled(batches, deadline, &)
           return if busy.empty?
 
           @busy = busy
@@ -720,29 +697,7 @@ module Stablemates
           batches.each_with_index.flat_map { |(_worker_id, group), index| settle(group, statuses[index], sent_at) }
         end
 
-        # Sends one heartbeat_many_v2 statement for each batch through the executor, and returns the
-        # busy members. A batch whose statement fails gets nothing, and the other batches still go.
-        # A round with one or more failed statements counts once in
-        # +workhorse.worker.heartbeat.round_failure+, with the reason of its first failure. The count
-        # occurs when that failure occurs, so a later batch that stalls does not delay it.
-        def send_each(batches, deadline)
-          failed = false
-          batches.flat_map do |worker_id, group|
-            sent_at = Process.clock_gettime(Process::CLOCK_MONOTONIC)
-            params = [worker_id, JSON.generate(leases(group))]
-            rows = begin
-              yield SqlCatalogue::HEARTBEAT_MANY_V2, params, deadline - Process.clock_gettime(Process::CLOCK_MONOTONIC)
-            rescue => e
-              # A skipped round sends no log record: the lease watchdog handles rounds that keep failing.
-              Telemetry.record_heartbeat_round_failure(e) unless failed
-              failed = true
-              next []
-            end
-            settle(group, rows.to_h { |row| [row["task_id"], row["status"]] }, sent_at)
-          end
-        end
-
-        # The lease objects of heartbeat_many_v2 for the members of one batch.
+        # The lease objects of one batch of heartbeat_pool_v1.
         def leases(group)
           group.map do |member|
             {"taskId" => member.task.id, "fenceToken" => member.task.fence_token.to_s, "leaseMs" => member.lease_ms}
@@ -768,8 +723,7 @@ module Stablemates
 
         # A busy retry ends by its own round bound, by the next regular slot, and by the end of the
         # earliest local lease window in it, so it never renews a lease that the worker has already
-        # given up. A borrowing heartbeat ignores the deadline, as in its regular rounds. +started+ is
-        # the monotonic start of the retry.
+        # given up. +started+ is the monotonic start of the retry.
         def retry_deadline(selection, interval, regular_at, started)
           ends = selection.map { |member| member.lease_ends_at.call || started }
           [started + round_bound(interval), regular_at, *ends].min
@@ -826,43 +780,25 @@ module Stablemates
           @lock.synchronize { @members[[member.worker_id, member.task.id]].equal?(member) }
         end
 
-        # Ends a borrowing heartbeat thread when no member and no worker remains, and returns true
-        # then. A register that races this starts a new one.
-        def stop_if_idle
-          @lock.synchronize do
-            unused = @members.empty? && @users.empty?
-            if unused
-              @thread = nil
-              clear_mark
-            end
-            unused
-          end
-        end
-
         # The shortest member interval; an Idle with the shortest worker interval when only workers
-        # remain; or nil when nothing remains. Nil also ends a borrowing heartbeat thread. The read
-        # and the end take one lock, so a register between them cannot find a thread that is about
-        # to end. A dedicated thread ends later, in +interval_or_stop+, after the pool has its
-        # connection back.
+        # remain; or nil when nothing remains. The thread does not end here: it ends later, in
+        # +interval_or_stop+, after the pool has its connection back.
         def shortest_interval_or_stop
           @lock.synchronize do
             next @members.each_value.map(&:interval).min unless @members.empty?
             next Idle.new(@users.each_key.map(&:interval).min) unless @users.empty?
 
-            @thread = nil unless @dedicated
             nil
           end
         end
 
         # The current members; an empty Array when only workers remain; or nil when nothing
-        # remains. Nil also ends a borrowing heartbeat thread, under the same lock as the read
-        # (+shortest_interval_or_stop+).
+        # remains (+shortest_interval_or_stop+).
         def members_or_stop
           @lock.synchronize do
             next @members.values unless @members.empty?
             next [] unless @users.empty?
 
-            @thread = nil unless @dedicated
             nil
           end
         end

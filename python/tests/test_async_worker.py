@@ -576,20 +576,14 @@ async def test_a_failed_listener_removal_still_releases_the_connection(
 # SM-1074: the core falls back to a Psycopg pool heartbeat factory, which cannot open a sync
 # connection from an async pool. Dedicated heartbeats must use the hub of the async pool.
 @pytest.mark.parametrize("driver", ["psycopg", "asyncpg"])
-@pytest.mark.parametrize("shared_heartbeats", [False, True])
 async def test_async_worker_heartbeats_never_use_the_core_pool_factory(
-    driver: str, shared_heartbeats: bool, async_psycopg_pool, asyncpg_pool
+    driver: str, async_psycopg_pool, asyncpg_pool
 ) -> None:
     worker = (
-        AsyncWorker.from_psycopg(
-            async_psycopg_pool, queue="sm-1074-heartbeats", shared_heartbeats=shared_heartbeats
-        )
+        AsyncWorker.from_psycopg(async_psycopg_pool, queue="sm-1074-heartbeats")
         if driver == "psycopg"
-        else AsyncWorker.from_asyncpg(
-            asyncpg_pool, queue="sm-1074-heartbeats", shared_heartbeats=shared_heartbeats
-        )
+        else AsyncWorker.from_asyncpg(asyncpg_pool, queue="sm-1074-heartbeats")
     )
 
     assert worker._inner._heartbeat_executor_factory is None
-    assert worker._inner._dedicated_heartbeats is not shared_heartbeats
     assert worker._inner._hub_source == worker._core_hub

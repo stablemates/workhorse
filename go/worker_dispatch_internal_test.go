@@ -450,8 +450,8 @@ func TestDefaultDispatchCohortsKeepOneSpareConnectionEach(t *testing.T) {
 
 func TestWorkerCapsOnlyTheDefaultCohortsAtThePool(t *testing.T) {
 	worker := newDefaultWorker(t, WorkerOptions{Concurrency: 64})
-	// Shared heartbeats leave the listener as the only connection the worker holds itself.
-	spare := int(worker.pool.Config().MaxConns) - 1
+	// The listener and the dedicated heartbeat connection each hold one pooled connection.
+	spare := int(worker.pool.Config().MaxConns) - 2
 	if want := min(8, spare); worker.cohorts != want {
 		t.Errorf("default cohorts at concurrency 64: got %d, want %d", worker.cohorts, want)
 	}

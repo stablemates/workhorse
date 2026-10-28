@@ -24,6 +24,20 @@ from version 86 to version **89**. They replace function bodies and change no st
 compatibility floor stays at **76**. A 0.10 process keeps working on version 89, because a
 migration inside a major line only adds.
 
+**Give each worker a pool with a maximum size of at least 3.** `WorkerOptions` no longer has
+`shared_heartbeats`. Remove the field. If a worker pool has a maximum size below 3, set it to 3 or
+more. The pool needs the heartbeat connection and at least two statement connections. The
+notification listener opens its connection outside the pool (SM-1901).
+
+### Breaking changes
+
+- **`WorkerOptions::shared_heartbeats` is removed.** Every worker now reserves a dedicated
+  heartbeat connection on its pool (ADR 0071). Before, `shared_heartbeats: true` let heartbeat
+  rounds borrow ordinary pool connections and let a pool below 3 run. Then a heartbeat could wait
+  behind claims and settlements, so a lease could expire and a task could run twice. Code that
+  sets the field no longer compiles. `Worker::new` returns `Error::InvalidArgument` for a pool with
+  a maximum size below 3 (SM-1901).
+
 ### Behavior changes
 
 These changes can make code that worked on 0.10 act differently:

@@ -154,10 +154,49 @@ RSpec.describe W::Worker do
     end
   end
 
-  it "refuses a pool too small to keep a heartbeat connection unless heartbeats share it" do
-    pool.capacity = 2
-    expect { worker }.to raise_error(ArgumentError, /capacity must be at least 3 \(found 2\)/)
-    expect { worker(shared_heartbeats: true) }.not_to raise_error
+  # SM-1901: every worker reserves a dedicated heartbeat connection (ADR 0071), so a pool must
+  # report a maximum size of at least 3.
+  it "refuses a pool whose maximum size is below 3 or unknown" do
+    [[1, "1"], [2, "2"], [nil, "unknown"], [2.5, "unknown"], ["3", "unknown"]].each do |size, found|
+      sized = pool_class.new.tap { |made| made.define_singleton_method(:size) { size } }
+      expect { described_class.new(sized, queues: ["default"]) }.to raise_error(ArgumentError,
+        "Worker needs a pool with a known maximum size of at least 3 connections (found #{found}). " \
+        "Give the worker a pool with a maximum size of at least 3.")
+      expect(sized.statements).to be_empty
+    end
+  end
+
+  it "refuses a pool that does not report a size" do
+    sizeless = Class.new(FakeExecutor) { def with = raise("unit specs never check out a connection") }.new
+    expect { described_class.new(sizeless, queues: ["default"]) }.to raise_error(ArgumentError,
+      "Worker needs a pool with a known maximum size of at least 3 connections (found unknown). " \
+      "Give the worker a pool with a maximum size of at least 3.")
+  end
+
+  it "refuses the removed shared_heartbeats option with a message that names its replacement" do
+    [true, false, nil].each do |value|
+      expect { worker(shared_heartbeats: value) }.to raise_error(ArgumentError,
+        "shared_heartbeats was removed in 0.11.0. Every worker now reserves a dedicated heartbeat connection. " \
+        "Remove the option, and give the worker a pool with a known maximum size of at least 3.")
+    end
+    expect(pool.statements).to be_empty
+  end
+
+  it "refuses another unknown keyword as Ruby does" do
+    expect { worker(unknown_option: 1) }.to raise_error(ArgumentError, "unknown keyword: :unknown_option")
+    expect { worker(unknown_option: 1, other_option: 2) }
+      .to raise_error(ArgumentError, "unknown keywords: :unknown_option, :other_option")
+  end
+
+  it "names a misspelled keyword and not the removed option" do
+    expect { worker(capacty: 3) }.to raise_error(ArgumentError, "unknown keyword: :capacty") { |error|
+      expect(error.message).not_to include("shared_heartbeats")
+    }
+  end
+
+  it "names a misspelled keyword before the removed option" do
+    expect { worker(capacty: 3, shared_heartbeats: true) }.to raise_error(ArgumentError, "unknown keyword: :capacty")
+    expect { worker(shared_heartbeats: true, capacty: 3) }.to raise_error(ArgumentError, "unknown keyword: :capacty")
   end
 
   # A completion's fused claim hands its slot to a task it claims while the handler thread still
@@ -252,10 +291,12 @@ RSpec.describe W::Worker do
     pool.capacity = 4
     # A listening worker leaves one connection to the listener and one to the heartbeat.
     expect(worker(concurrency: 64, polling_only: false).cohorts).to eq(2)
-    expect(worker(concurrency: 64, polling_only: false, shared_heartbeats: true).cohorts).to eq(3)
     # A polling-only worker opens no listener, so it reserves no connection for one.
     expect(worker(concurrency: 64).cohorts).to eq(3)
-    expect(worker(concurrency: 64, shared_heartbeats: true).cohorts).to eq(4)
+    # The smallest pool keeps one claim connection for the one cohort.
+    pool.capacity = 3
+    expect(worker(concurrency: 64, polling_only: false).cohorts).to eq(1)
+    expect(worker(concurrency: 64).cohorts).to eq(2)
     [0, 9, 2.0, "2"].each do |cohorts|
       expect { worker(concurrency: 8, cohorts: cohorts) }.to raise_error(ArgumentError, /cohorts/)
     end

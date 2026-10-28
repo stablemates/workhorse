@@ -13,7 +13,8 @@ module Stablemates
     # smallest supported +heartbeat+ is 0.1. The worker accepts a shorter value, but on a loaded
     # host it can renew no lease.
     #
-    # Unless +shared_heartbeats+ is set, each run first reserves the heartbeat connection that the
+    # The pool must report a maximum +size+ of at least 3: the heartbeat connection, the listener,
+    # and one connection for claims. Each run first reserves the heartbeat connection that the
     # workers on the pool share, and then borrows one other connection for the compatibility query.
     # Both steps must end within max(+heartbeat+, 5 s), or the run raises WorkerStartupError. The
     # worker claims nothing while the pool has no usable heartbeat connection.
@@ -207,20 +208,13 @@ module Stablemates
         :gate) # :nodoc:
       private_constant :PendingCompletion
 
-      # The claim gate of a run under shared_heartbeats, which never closes. A run with the
-      # dedicated heartbeat connection uses its Heartbeat::Reservation as its gate.
-      OPEN_GATE = Object.new.tap do |gate|
-        gate.define_singleton_method(:ready?) { true }
-        gate.define_singleton_method(:enter) { true }
-        gate.define_singleton_method(:leave) { nil }
-      end.freeze
-      # The gate of a fused completion that no running dispatch admitted.
+      # A run uses its Heartbeat::Reservation as its claim gate. The gate of a fused completion that no running dispatch admitted.
       CLOSED_GATE = Object.new.tap do |gate|
         gate.define_singleton_method(:ready?) { false }
         gate.define_singleton_method(:enter) { false }
         gate.define_singleton_method(:leave) { nil }
       end.freeze
-      private_constant :OPEN_GATE, :CLOSED_GATE
+      private_constant :CLOSED_GATE
 
       # Raised before a claim statement when the claim gate is closed at send time. The claim sends
       # nothing.
@@ -232,6 +226,14 @@ module Stablemates
         def with = yield(connection)
       end
       private_constant :Borrowed
+
+      POOL_SIZE_REFUSAL = "Worker needs a pool with a known maximum size of at least #{MIN_POOL_SIZE} connections " \
+        "(found %s). Give the worker a pool with a maximum size of at least #{MIN_POOL_SIZE}."
+      # Every worker reserves a dedicated heartbeat connection since 0.11.0 (ADR 0071, SM-1901).
+      SHARED_HEARTBEATS_REMOVED = "shared_heartbeats was removed in 0.11.0. Every worker now reserves a dedicated " \
+        "heartbeat connection. Remove the option, and give the worker a pool with a known maximum size of at least " \
+        "#{MIN_POOL_SIZE}."
+      private_constant :POOL_SIZE_REFUSAL, :SHARED_HEARTBEATS_REMOVED
 
       RETRY_DELAY_RANGE = (0..2_147_483_647)
       RETRY_DELAY_REFUSAL = "retry_delay must be a finite Numeric count of seconds between 0 and 2147483.647"
@@ -247,9 +249,10 @@ module Stablemates
       def initialize(pool, queues: ["default"], worker_id: nil, concurrency: 1, lease: 30, heartbeat: nil,
         poll_interval: nil, polling_only: false, maintenance_interval: 1, maintenance_routine_interval: 60,
         registry_interval: 5, disable_registry: false, schedule_namespaces: [], schedule_catchup_limit: 100,
-        shutdown_grace: 25, shared_heartbeats: false, retry_delay: nil, on_registration_error: nil,
-        on_notification_error: nil, cohorts: nil, logger: nil)
-        @executor = worker_executor(pool, shared_heartbeats)
+        shutdown_grace: 25, retry_delay: nil, on_registration_error: nil, on_notification_error: nil,
+        cohorts: nil, logger: nil, **removed)
+        refuse_removed_options(removed)
+        @executor = worker_executor(pool)
         @pool = pool
         @queues = unique_names(queues, "queues")
         raise ArgumentError, "queues must contain at least one non-empty queue name" if @queues.empty?
@@ -258,7 +261,7 @@ module Stablemates
           concurrency.is_a?(Integer) && concurrency.between?(1, 100)
 
         @concurrency = concurrency
-        @cohorts = dispatch_cohorts(cohorts, pool, shared_heartbeats, polling_only)
+        @cohorts = dispatch_cohorts(cohorts, pool, polling_only)
         @worker_id = worker_id || "#{Socket.gethostname}-#{Process.pid}-#{SecureRandom.hex(4)}"
         raise ArgumentError, "worker_id must be a non-empty String" unless @worker_id.is_a?(String) && !@worker_id.empty?
 
@@ -292,8 +295,7 @@ module Stablemates
         @reporter_failures_lock = Mutex.new
         @logger = logger
         @queue = Queue.new(@executor, default_queue: @queues.first)
-        @heartbeat = shared_heartbeats ? Heartbeat.new(@executor, dedicated: false) : Heartbeat.dedicated(pool)
-        @shared_heartbeats = shared_heartbeats ? true : false
+        @heartbeat = Heartbeat.dedicated(pool)
         @handlers = Concurrent::Map.new
         @batch_coordinators = Concurrent::Map.new
         @contracts = Concurrent::Map.new
@@ -391,14 +393,25 @@ module Stablemates
 
       private
 
-      def worker_executor(pool, shared_heartbeats)
+      # Raises the ArgumentError of a keyword that +initialize+ does not take. Any keyword other
+      # than the removed +shared_heartbeats+ gets the message Ruby gives for an unknown keyword, and
+      # it comes first, so the removal message never hides a typo. The removed option alone gets a
+      # message that names its replacement.
+      def refuse_removed_options(removed)
+        unknown = removed.keys - [:shared_heartbeats]
+        unless unknown.empty?
+          raise ArgumentError, "unknown keyword#{"s" if unknown.size > 1}: #{unknown.map(&:inspect).join(", ")}"
+        end
+        raise ArgumentError, SHARED_HEARTBEATS_REMOVED unless removed.empty?
+      end
+
+      def worker_executor(pool)
         raise ArgumentError, "Worker pool must be a ConnectionPool, not a PG::Connection" if pool.is_a?(PG::Connection)
         raise ArgumentError, "Worker pool must respond to with" unless pool.respond_to?(:with)
 
         capacity = pool.respond_to?(:size) ? pool.size : nil
-        if !shared_heartbeats && !(capacity.is_a?(Integer) && capacity >= MIN_POOL_SIZE)
-          raise ArgumentError, "Worker pool capacity must be at least #{MIN_POOL_SIZE} " \
-            "(found #{capacity.nil? ? "unknown" : capacity}); set shared_heartbeats: true to opt out"
+        unless capacity.is_a?(Integer) && capacity >= MIN_POOL_SIZE
+          raise ArgumentError, format(POOL_SIZE_REFUSAL, capacity.is_a?(Integer) ? capacity : "unknown")
         end
         Executor.for(pool)
       end
@@ -407,7 +420,7 @@ module Stablemates
       # pooled connection per cohort after the listener and the heartbeat connection, which every
       # worker on the pool shares. A polling-only worker opens no listener, so it keeps that
       # connection for its cohorts.
-      def dispatch_cohorts(cohorts, pool, shared_heartbeats, polling_only)
+      def dispatch_cohorts(cohorts, pool, polling_only)
         unless cohorts.nil?
           raise ArgumentError, "cohorts must be an integer between 1 and concurrency" unless
             cohorts.is_a?(Integer) && cohorts.between?(1, @concurrency)
@@ -418,7 +431,7 @@ module Stablemates
         capacity = pool.respond_to?(:size) ? pool.size : nil
         return default unless capacity.is_a?(Integer)
 
-        spare = capacity - (polling_only ? 0 : 1) - (shared_heartbeats ? 0 : 1)
+        spare = capacity - (polling_only ? 0 : 1) - 1
         spare.clamp(1, default)
       end
 
@@ -512,13 +525,13 @@ module Stablemates
         return false if reservation == :stopped
 
         begin
-          run_reserved(continuous, version, reservation || OPEN_GATE)
+          run_reserved(continuous, version, reservation)
         ensure
           # The run's members renew until the drain ends, so the reservation outlives it. Its
           # release waits only within the stop deadline of the run.
           final = @final_deadline || monotonic
           @final_deadline = nil
-          reservation&.close([final - monotonic, 0].max)
+          reservation.close([final - monotonic, 0].max)
         end
       end
 
@@ -607,7 +620,7 @@ module Stablemates
         startup = nil
         claimed_any = false
         begin
-          if continuous && !@polling_only && pool_lends_listener?
+          if continuous && !@polling_only
             listener = Listener.shared(@pool).subscribe(@queues, on_wake: method(:notify),
               on_error: ->(error) { call_reporter(:on_notification_error, @on_notification_error, error) })
           end
@@ -659,15 +672,10 @@ module Stablemates
 
       # Reserves the heartbeat connection of the pool, then borrows one other connection for the
       # compatibility query and returns it at once, both within the startup budget. Returns the
-      # Heartbeat::Reservation, or nil under shared_heartbeats. A failure releases the reservation
-      # and raises WorkerStartupError, or CompatibilityError for an incompatible schema. A stop
-      # issued after +version+ ends the wait for the reservation, closes it, and returns :stopped.
+      # Heartbeat::Reservation. A failure releases the reservation and raises WorkerStartupError, or
+      # CompatibilityError for an incompatible schema. A stop issued after +version+ ends the wait
+      # for the reservation, closes it, and returns :stopped.
       def start_heartbeat(version, deadline, budget)
-        if @shared_heartbeats
-          @queue.assert_compatible
-          return nil
-        end
-
         reservation = @heartbeat.reserve(@heartbeat_ms / 1000.0, method(:wake_dispatcher))
         begin
           loop do
@@ -710,25 +718,12 @@ module Stablemates
         raise startup_error("could not borrow a connection for its readiness check", budget), cause: probe.error
       end
 
-      # Whether the pool can lend the shared listener a connection (SM-1585). The listener holds one
-      # pooled connection while it listens. With the opt-out, a pool smaller than MIN_POOL_SIZE is
-      # allowed, so the listener starts only on a pool that reports a size of at least 2. Otherwise
-      # it could hold the only connection, and the worker polls instead. The run logs that once.
-      def pool_lends_listener?
-        size = @pool.respond_to?(:size) ? @pool.size : nil
-        return true if size.is_a?(Integer) && size >= 2
-
-        log(:warn, "workhorse.worker.polling_only", "Worker has no notification listener and dispatches by polling",
-          "workhorse.worker.queues" => @queues, "workhorse.worker.pool_max_size" => size.is_a?(Integer) ? size : "unknown")
-        false
-      end
-
       def startup_error(failure, budget)
         name = @pool.name if @pool.respond_to?(:name)
         size = @pool.respond_to?(:size) ? @pool.size : "unknown"
         pool = "#{@pool.class.name}#{" #{name.inspect}" if name} (size #{size})"
         WorkerStartupError.new("Worker #{failure} from pool #{pool} within the startup budget of " \
-          "#{budget.round(3)} s; set shared_heartbeats: true to opt out")
+          "#{budget.round(3)} s; grow the pool, or check that the database accepts connections")
       end
 
       # Keeps the slots full without one serial claim round trip per task (ADR 0076). A claim
@@ -738,9 +733,8 @@ module Stablemates
       # fast-tier completion claims too, from the same accounting. On the fast tier the slots split
       # into cohorts, and plain claims leave one at a time, each for the roomiest cohort.
       #
-      # +gate+ is the claim gate of this run. Under shared_heartbeats it is always open. Otherwise it
-      # is the run's Heartbeat::Reservation: open while the run holds it and the pool holds a
-      # usable heartbeat connection. A busy or rejected lease does not close it.
+      # +gate+ is the claim gate of this run, the run's Heartbeat::Reservation: open while the run
+      # holds it and the pool holds a usable heartbeat connection. A busy or rejected lease does not close it.
       def dispatch(continuous, version, handlers, listener, startup, run_errors, maintenance_errors, gate)
         slots = DispatchSlots.new(@concurrency, @cohorts, listener, version, run_errors, handlers, gate)
         @state_lock.synchronize { @dispatch_slots = slots }

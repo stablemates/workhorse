@@ -1900,7 +1900,6 @@ def test_worker_reports_its_own_deadline_settlement_before_a_later_stale_heartbe
             worker_id="python-stale-heartbeat-worker",
             lease_ms=5000,
             heartbeat_ms=200,
-            shared_heartbeats=True,
         ).handle("deadline.stale-heartbeat", wait_for_deadline)
         original_heartbeat_rows = worker._heartbeat_rows
         original_expire = worker._expire_owned_task

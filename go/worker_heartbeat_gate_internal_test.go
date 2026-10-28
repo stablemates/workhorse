@@ -105,7 +105,6 @@ func (executor *claimLimitExecutor) Query(_ context.Context, _ string, arguments
 // zero. With the heartbeat connection back, it claims up to its reservation again.
 func TestFusedCompletionClaimsNothingWithoutTheHeartbeatConnection(t *testing.T) {
 	worker := newDefaultWorker(t, WorkerOptions{})
-	worker.sharedHeartbeats = false
 	connection := &heartbeatConnection{pool: worker.pool}
 	worker.heartbeatLease = &heartbeatConnectionLease{pool: worker.pool, connection: connection}
 	executor := &claimLimitExecutor{}
@@ -149,7 +148,6 @@ func TestDispatchClaimsAtOnceWhenTheHeartbeatConnectionReturnsDuringAPollWait(t 
 func TestAGatedFusedCompletionDoesNotCountAsAnEmptyClaim(t *testing.T) {
 	harness := startDispatchOn(t, WorkerOptions{Concurrency: 2, PollInterval: time.Minute}, false, fastTierQueue)
 	worker := harness.worker
-	worker.sharedHeartbeats = false
 	connection := &heartbeatConnection{pool: worker.pool}
 	worker.heartbeatMu.Lock()
 	worker.heartbeatLease = &heartbeatConnectionLease{pool: worker.pool, connection: connection}
@@ -205,7 +203,6 @@ func (executor *statementCounter) Query(context.Context, string, ...any) ([]Row,
 // that waited for the pool sends nothing after the heartbeat connection went away.
 func TestAClaimSendsNoStatementWhileTheGateIsClosed(t *testing.T) {
 	worker := newDefaultWorker(t, WorkerOptions{})
-	worker.sharedHeartbeats = false
 	connection := &heartbeatConnection{pool: worker.pool}
 	worker.heartbeatLease = &heartbeatConnectionLease{pool: worker.pool, connection: connection}
 	executor := &statementCounter{}
@@ -244,7 +241,6 @@ func TestAClaimThatEndsAtTheClosedGateRunsTheTasksItClaimed(t *testing.T) {
 func gatedWorker(t *testing.T) (*Worker, *heartbeatConnection) {
 	t.Helper()
 	worker := newDefaultWorker(t, WorkerOptions{})
-	worker.sharedHeartbeats = false
 	connection := &heartbeatConnection{pool: worker.pool, conn: new(pgxpool.Conn)}
 	worker.heartbeatLease = &heartbeatConnectionLease{pool: worker.pool, connection: connection}
 	return worker, connection

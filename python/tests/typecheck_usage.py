@@ -293,6 +293,18 @@ def unsupported_connections_are_rejected() -> None:
     AsyncWorker.from_asyncpg(object())  # type: ignore[arg-type]
 
 
+def unknown_worker_keywords_are_rejected(
+    pool: ConnectionPool, async_pool: AsyncConnectionPool, asyncpg_pool: asyncpg.Pool
+) -> None:
+    # strict mypy fails an unused ignore, so each line proves that the checker refuses the keyword.
+    Worker(pool, capacty=3)  # type: ignore[arg-type]
+    Worker(pool, shared_heartbeats=True)  # type: ignore[arg-type]
+    AsyncWorker.from_psycopg(async_pool, capacty=3)  # type: ignore[arg-type]
+    AsyncWorker.from_psycopg(async_pool, shared_heartbeats=True)  # type: ignore[arg-type]
+    AsyncWorker.from_asyncpg(asyncpg_pool, capacty=3)  # type: ignore[arg-type]
+    AsyncWorker.from_asyncpg(asyncpg_pool, shared_heartbeats=True)  # type: ignore[arg-type]
+
+
 def renamed_types_keep_their_deprecated_aliases() -> None:
     policy: DependencyTerminalPolicy = "release"
     deprecated_policy: TerminalPolicy = policy

@@ -11,6 +11,7 @@ from typing import Any
 import psycopg
 import pytest
 from psycopg_pool import ConnectionPool
+from reservations import Compatible, ScriptedHeartbeats, ScriptedPool
 from test_worker_dispatch import FullTierRejection, task_row
 
 from workhorse import Admin, AdminAudit, EnqueueOptions, Queue, TaskValueSizeLimitError, Worker
@@ -92,13 +93,6 @@ class Settlements:
             with self._lock:
                 self.failed[str(parameters[0])] = json.loads(str(parameters[3]))
             return [{"state": "failed"}]
-        if statement is STATEMENTS.heartbeat_many:
-            # The heartbeat thread can renew a lease at once when a task starts just after the
-            # previous one ends. A missing row reads as a stale lease, so accept every lease the
-            # way PostgreSQL accepts a live one.
-            leases = json.loads(str(parameters[1]))
-            assert isinstance(leases, list)
-            return [{"task_id": lease["taskId"], "status": "accepted"} for lease in leases]
         return []
 
     def _take(self, limit: int) -> list[dict[str, object]]:
@@ -129,15 +123,17 @@ def task_id(sequence: int) -> str:
 
 def scripted_worker(executor: Settlements, results: dict[int, object]) -> Worker:
     worker = Worker(
-        object(),  # type: ignore[arg-type]
+        ScriptedPool(),  # type: ignore[arg-type]
         queue="dispatch",
         worker_id="python-result-limit",
         concurrency=1,
         registry_interval_ms=0,
-        shared_heartbeats=True,
-        _executor=executor,
+        _executor=Compatible(executor),
+        # The heartbeat thread can renew a lease at once when a task starts just after the
+        # previous one ends. A missing row reads as a stale lease, so the scripted heartbeat
+        # connection accepts every lease the way PostgreSQL accepts a live one.
+        _heartbeat_executor_factory=ScriptedHeartbeats().open,
     )
-    worker._compatibility.assert_compatible = lambda: None  # type: ignore[method-assign]
     worker._listens = False
 
     def handle(payload: object, _context: object) -> object:

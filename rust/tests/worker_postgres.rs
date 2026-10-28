@@ -520,8 +520,6 @@ async fn a_dropped_run_once_stops_renewing_its_lease() {
 enum AfterWatchdog {
     /// The handler ignores its cancellation and never returns.
     KeepsRunning,
-    /// Rounds run without a client bound, so the round that the table lock held answers late.
-    AnswersLate,
     /// The handler ignores its cancellation, then returns a result.
     ReturnsLate,
 }
@@ -536,7 +534,6 @@ async fn assert_watchdog_stops_renewals(name: &str, after: AfterWatchdog) {
     let mut observer = harness.database.connect().await;
     // The run continues, so its own maintenance would recover the lapsed lease before the test.
     let worker = harness.worker(WorkerOptions {
-        shared_heartbeats: after == AfterWatchdog::AnswersLate,
         maintenance_interval: Duration::from_secs(3600),
         ..lapsing_options()
     });
@@ -573,43 +570,21 @@ async fn assert_watchdog_stops_renewals(name: &str, after: AfterWatchdog) {
     let reason =
         tokio::time::timeout(WAIT, reasons.recv()).await.expect("the watchdog never fired");
     assert_eq!(reason, Some(Some(CancelReason::LeaseLost)));
-    let renewed: std::time::SystemTime = lock
-        .query_one(
+    let renewed = lock
+        .execute(
             "UPDATE workhorse.task_runtime
                 SET heartbeat_at = clock_timestamp(),
                     expires_at = clock_timestamp() + interval '1 second'
-              WHERE task_id = $1
-          RETURNING heartbeat_at",
+              WHERE task_id = $1",
             &[&task],
         )
         .await
-        .unwrap()
-        .get(0);
+        .unwrap();
+    assert_eq!(renewed, 1, "the test renewed no lease");
     lock.commit().await.unwrap();
 
     match after {
         AfterWatchdog::KeepsRunning => {}
-        AfterWatchdog::AnswersLate => {
-            // The held round renews after the lock, and its accepted answer reaches the worker.
-            tokio::time::timeout(WAIT, async {
-                loop {
-                    let beat: std::time::SystemTime = observer
-                        .query_one(
-                            "SELECT heartbeat_at FROM workhorse.task_runtime WHERE task_id = $1",
-                            &[&task],
-                        )
-                        .await
-                        .unwrap()
-                        .get(0);
-                    if beat > renewed {
-                        break;
-                    }
-                    tokio::time::sleep(Duration::from_millis(20)).await;
-                }
-            })
-            .await
-            .expect("the held round never renewed the lease");
-        }
         AfterWatchdog::ReturnsLate => {
             gate.add_permits(1);
             tokio::time::timeout(WAIT, returned.recv()).await.expect("the handler never returned");
@@ -630,11 +605,6 @@ async fn assert_watchdog_stops_renewals(name: &str, after: AfterWatchdog) {
 #[tokio::test]
 async fn a_lapsed_watchdog_stops_renewing_while_the_handler_keeps_running() {
     assert_watchdog_stops_renewals("worker_watchdog_running", AfterWatchdog::KeepsRunning).await;
-}
-
-#[tokio::test]
-async fn a_renewal_answered_after_the_watchdog_does_not_restore_renewals() {
-    assert_watchdog_stops_renewals("worker_watchdog_late_answer", AfterWatchdog::AnswersLate).await;
 }
 
 #[tokio::test]
@@ -937,7 +907,6 @@ async fn shutdown_discards_the_connection_of_a_claim_it_abandons() {
     let grace = Duration::from_millis(100);
     let options = WorkerOptions {
         disable_registry: true,
-        shared_heartbeats: true,
         maintenance_interval: Duration::from_secs(600),
         maintenance_routine_interval: Duration::from_secs(600),
         shutdown_grace_period: grace,
@@ -3322,7 +3291,9 @@ async fn a_worker_on_a_full_pool_refuses_to_start_within_the_startup_budget() {
     assert!(
         message.starts_with(
             "worker could not reserve its heartbeat connection within the startup budget of 5s"
-        ) && message.contains("set shared_heartbeats to opt out"),
+        ) && message.ends_with(
+            "; the workers on one pool need one heartbeat connection and at least one more connection"
+        ),
         "{message}"
     );
 }
