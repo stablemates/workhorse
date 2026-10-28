@@ -19,6 +19,9 @@ Install the integration together with Kysely and node-postgres.
 pnpm add @stablemates/workhorse-kysely kysely pg
 ```
 
+Install the Workhorse schema before the first enqueue. If the schema is missing, the queue refuses
+the enqueue. [Installation](/docs/installation) gives the command.
+
 Give the Kysely database to `createKyselyAdapter`. The `PostgresDialect` of Kysely holds a
 node-postgres pool, but Kysely does not make this pool available. If the same process runs workers,
 give that pool as the `pool` option. The worker takes its heartbeat connection and its listen

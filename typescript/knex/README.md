@@ -14,6 +14,9 @@ The exception is migration 0025, crossed offline when upgrading from before 0.5.
 npm install @stablemates/workhorse @stablemates/workhorse-knex knex@3.3.0 pg@8.23.1
 ```
 
+Install the Workhorse schema with [Workhorse core](https://workhorse.run/docs/installation) before
+the first enqueue. If the schema is missing, the queue refuses the enqueue.
+
 This package is part of the next Workhorse release train. A source checkout can use its workspace package.
 The verified baseline is Knex 3.3.0 and pg 8.23.1, with Objection 3.9.1 for the recipe.
 Only PostgreSQL with `client: "pg"` is supported. Other versions and drivers are not certified.

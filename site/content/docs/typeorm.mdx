@@ -19,6 +19,9 @@ Install the integration together with TypeORM.
 pnpm add @stablemates/workhorse-typeorm typeorm
 ```
 
+Install the Workhorse schema before the first enqueue. If the schema is missing, the queue refuses
+the enqueue. [Installation](/docs/installation) gives the command.
+
 Give an initialized data source to `createTypeOrmAdapter`. The `close` callback is optional. By
 default, the adapter does not destroy a data source that the caller owns.
 

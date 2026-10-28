@@ -20,6 +20,9 @@ uses.
 pnpm add @stablemates/workhorse-drizzle drizzle-orm pg
 ```
 
+Install the Workhorse schema before the first enqueue. If the schema is missing, the queue refuses
+the enqueue. [Installation](/docs/installation) gives the command.
+
 Give the Drizzle database to `createDrizzleAdapter`.
 
 ```ts

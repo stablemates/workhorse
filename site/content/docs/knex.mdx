@@ -16,6 +16,9 @@ Install the adapter together with the tested versions of Knex and node-postgres.
 pnpm add @stablemates/workhorse @stablemates/workhorse-knex knex@3.3.0 pg@8.23.1
 ```
 
+Install the Workhorse schema before the first enqueue. If the schema is missing, the queue refuses
+the enqueue. [Installation](/docs/installation) gives the command.
+
 Give the Knex instance to `createKnexAdapter`. Then enqueue through `forTransaction` in a Knex
 transaction.
 

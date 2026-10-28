@@ -629,14 +629,18 @@ datasource db {
     `import assert from "node:assert/strict";
 import { metrics } from "@opentelemetry/api";
 import { AggregationTemporality, InMemoryMetricExporter, MeterProvider, PeriodicExportingMetricReader } from "@opentelemetry/sdk-metrics";
-import { Queue } from "@stablemates/workhorse";
+import { installSchema, Pool, Queue } from "@stablemates/workhorse";
 import { registerOpenTelemetry } from "@stablemates/workhorse-otel";
 
+// Queue checks the schema version before its first statement, so the smoke needs a real schema.
+const pool = new Pool({ connectionString: process.env.DATABASE_URL_TEST, max: 1 });
+await pool.query("DROP SCHEMA IF EXISTS workhorse CASCADE");
+await installSchema(pool);
 const exporter = new InMemoryMetricExporter(AggregationTemporality.CUMULATIVE);
 const provider = new MeterProvider({ readers: [new PeriodicExportingMetricReader({ exporter, exportIntervalMillis: 60000 })] });
 metrics.setGlobalMeterProvider(provider);
 const unregister = registerOpenTelemetry();
-const queue = new Queue({ query: async () => ({ rows: [{ ordinal: 1, task_id: "task-1", outcome: "accepted" }] }) });
+const queue = new Queue(pool);
 await queue.enqueue("packed.telemetry", null);
 await provider.forceFlush();
 const names = exporter.getMetrics().flatMap((resource) => resource.scopeMetrics).flatMap((scope) => scope.metrics).map((metric) => metric.descriptor.name);
@@ -644,6 +648,7 @@ assert.ok(names.includes("workhorse.tasks.enqueued"));
 unregister();
 await provider.shutdown();
 metrics.disable();
+await pool.end();
 `,
   );
   // The host refuses a database that does not serve the protocol this build speaks, so the stand-in
@@ -869,7 +874,9 @@ try {
   await run("node", ["knex-integration.mjs"], consumer, {
     DATABASE_URL_TEST: packedDatabaseUrl,
   });
-  await run("node", ["otel-smoke.mjs"], consumer);
+  await run("node", ["otel-smoke.mjs"], consumer, {
+    DATABASE_URL_TEST: packedDatabaseUrl,
+  });
   await run("node", ["dashboard-development.mjs"], consumer);
   for (const example of typescriptExamples) {
     // Examples are independent published-consumer entry points. Reset between them so a ready task

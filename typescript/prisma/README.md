@@ -13,6 +13,9 @@ The Prisma ORM provider for enqueuing Workhorse tasks through Prisma transaction
 npm install @stablemates/workhorse @stablemates/workhorse-prisma @prisma/client
 ```
 
+Install the Workhorse schema with [Workhorse core](https://workhorse.run/docs/installation) before
+the first enqueue. If the schema is missing, the queue refuses the enqueue.
+
 The adapter supports Prisma Client 6 and 7. Prisma 7 requires a driver adapter, such as
 `@prisma/adapter-pg`, in the `PrismaClient` constructor.
 
