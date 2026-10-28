@@ -1408,6 +1408,19 @@ The function also returns `tags`, `humanWait`, and `canCompleteHumanWait`. The h
 `canCompleteHumanWait` from its operator mode and completion capability. The shared SPA uses these
 fields for the same action menu shown in task listings.
 
+Since schema version 90, the function also returns `group`, the [task group](task-groups.md) of a
+member task. A task is a member of one group at most. `group` comes from `task_group_member` and
+`task_group`:
+
+| Key        | Column                       | Value                                         |
+| ---------- | ---------------------------- | --------------------------------------------- |
+| `id`       | `task_group.id`              | The group ID                                  |
+| `position` | `task_group_member.position` | The position of the member, 1 through 100,000 |
+| `state`    | `task_group.state`           | `open`, `sealed`, or `finished`               |
+
+`group` is null for a task that is not a member, also for a callback task of a group. A database
+below schema version 90 returns no `group` key.
+
 The concurrency utilization of a live task comes from the supplied `health` document. When the
 caller supplied none, it comes from `queue_health_v1()`.
 

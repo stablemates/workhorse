@@ -474,6 +474,7 @@ interface DashboardTaskGroupCounts
 interface DashboardTaskGroupDetail
 interface DashboardTaskGroupEvent
 interface DashboardTaskGroupMember
+interface DashboardTaskGroupMembership
 type DashboardTaskGroupStateFilter
 interface DashboardTaskGroupsPage
 interface DashboardTaskRow
@@ -678,6 +679,7 @@ interface DashboardTaskGroupCounts
 interface DashboardTaskGroupDetail
 interface DashboardTaskGroupEvent
 interface DashboardTaskGroupMember
+interface DashboardTaskGroupMembership
 type DashboardTaskGroupStateFilter
 interface DashboardTaskGroupsPage
 interface DashboardTaskRow
@@ -2618,6 +2620,11 @@ interface DashboardTaskDetail {
   tags: string[];
   humanWait: DashboardHumanWaitSummary | null;
   canCompleteHumanWait: boolean;
+  /**
+  * The task group that this task is a member of, or null when it is not a member. Absent when the
+  * installed schema predates version 90, which this dashboard still accepts.
+  */
+  group?: DashboardTaskGroupMembership | null;
   identity: {
     id: string;
     queue: string;
@@ -2916,6 +2923,13 @@ interface DashboardTaskGroupMember {
   outcome: DashboardTerminalState | null;
   addedAt: string;
   countedAt: string | null;
+}
+
+interface DashboardTaskGroupMembership {
+  id: string;
+  /** The position of the member in the group, from 1 through 100,000. */
+  position: number;
+  state: DashboardTaskGroup["state"];
 }
 
 type DashboardTaskGroupStateFilter = (typeof dashboardTaskGroupStateFilters)[number];
@@ -3691,7 +3705,7 @@ interface LiveProtocolWorker {
 
 const MAXIMUM_PROTOCOL_VERSION = 5;
 
-const MAXIMUM_SCHEMA_VERSION = 89;
+const MAXIMUM_SCHEMA_VERSION = 90;
 
 const MAX_CANCELLATION_REASON_CHARACTERS = 2000;
 
@@ -5439,7 +5453,7 @@ class TypeOrmQueryError extends QueryError {
 
 const WORKHORSE_SCHEMA_BASELINE_VERSION = 6;
 
-const WORKHORSE_SCHEMA_VERSION = 89;
+const WORKHORSE_SCHEMA_VERSION = 90;
 
 const WORKHORSE_VERSION = "0.11.0";
 

@@ -3,6 +3,15 @@
 `stablemates-workhorse` gem versions and release notes live here. The gem carries the version the
 other SDKs carry, because every tag names one release of all of them.
 
+## Unreleased
+
+### The dashboard task detail shows the task group of a member task
+
+Migration 0091 (`0091-show-the-task-group-in-the-task-detail.sql`) moves the schema to version 90.
+The `dashboard/v1` task detail document gains `group`, with the group ID, the member position, and
+the group state of a member task, an additive change. The migration does not raise the SDK
+compatibility floor.
+
 ## 0.11.0 — 2026-10-28
 
 The npm packages, Python distribution, Go module, Rust crate, Ruby gem, JVM artifacts, and .NET

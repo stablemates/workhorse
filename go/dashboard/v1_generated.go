@@ -801,9 +801,10 @@ type DashboardTaskCursor struct {
 }
 
 type DashboardTaskDetail struct {
-	Tags                 []string                   `json:"tags"`
-	HumanWait            *DashboardHumanWaitSummary `json:"humanWait"`
-	CanCompleteHumanWait bool                       `json:"canCompleteHumanWait"`
+	Tags                 []string                      `json:"tags"`
+	HumanWait            *DashboardHumanWaitSummary    `json:"humanWait"`
+	CanCompleteHumanWait bool                          `json:"canCompleteHumanWait"`
+	Group                *DashboardTaskGroupMembership `json:"group,omitempty"`
 	Identity             struct {
 		ID                  string   `json:"id"`
 		Queue               string   `json:"queue"`
@@ -1031,6 +1032,12 @@ type DashboardTaskGroupMember struct {
 	Outcome   any     `json:"outcome"`
 	AddedAt   string  `json:"addedAt"`
 	CountedAt *string `json:"countedAt"`
+}
+
+type DashboardTaskGroupMembership struct {
+	ID       string  `json:"id"`
+	Position float64 `json:"position"`
+	State    string  `json:"state"`
 }
 
 type DashboardTaskGroupsPage struct {

@@ -4288,7 +4288,7 @@
               "examples": {
                 "conformance": {
                   "summary": "Request",
-                  "description": "Taken from conformance.json. Generated identifiers, timestamps, and measurements are replaced by placeholders: 00000000-0000-7000-8000-000000000000 stands for a UUID, 2026-01-01T00:00:00.000Z for a timestamp, 0 and \"string\" for a measured number or text. Fixture: task-detail.",
+                  "description": "Taken from conformance.json. Generated identifiers, timestamps, and measurements are replaced by placeholders: 00000000-0000-7000-8000-000000000000 stands for a UUID, 2026-01-01T00:00:00.000Z for a timestamp, 0 and \"string\" for a measured number or text. Fixture: task-detail-group-member.",
                   "value": {
                     "json": {
                       "id": "00000000-0000-7000-8000-000000000000"
@@ -4318,12 +4318,17 @@
                 "examples": {
                   "conformance": {
                     "summary": "Response",
-                    "description": "Taken from conformance.json. Generated identifiers, timestamps, and measurements are replaced by placeholders: 00000000-0000-7000-8000-000000000000 stands for a UUID, 2026-01-01T00:00:00.000Z for a timestamp, 0 and \"string\" for a measured number or text. Fixture: task-detail.",
+                    "description": "Taken from conformance.json. Generated identifiers, timestamps, and measurements are replaced by placeholders: 00000000-0000-7000-8000-000000000000 stands for a UUID, 2026-01-01T00:00:00.000Z for a timestamp, 0 and \"string\" for a measured number or text. Fixture: task-detail-group-member.",
                     "value": {
                       "json": {
                         "tags": [
                           "conformance"
                         ],
+                        "group": {
+                          "id": "00000000-0000-7000-8000-000000000000",
+                          "state": "sealed",
+                          "position": 1
+                        },
                         "waits": [],
                         "events": [
                           {
@@ -4346,17 +4351,7 @@
                             "details": {
                               "worker_id": "conformance-worker",
                               "expires_at": "2026-01-01T00:00:00.000Z",
-                              "fence_token": "1"
-                            },
-                            "occurredAt": "2026-01-01T00:00:00.000Z"
-                          },
-                          {
-                            "id": "00000000-0000-7000-8000-000000000000",
-                            "type": "checkpoint_saved",
-                            "attempt": 1,
-                            "details": {
-                              "name": "conformance-step",
-                              "fence_token": "1"
+                              "fence_token": "8"
                             },
                             "occurredAt": "2026-01-01T00:00:00.000Z"
                           },
@@ -4365,7 +4360,7 @@
                             "type": "succeeded",
                             "attempt": 1,
                             "details": {
-                              "fence_token": "1"
+                              "fence_token": "8"
                             },
                             "occurredAt": "2026-01-01T00:00:00.000Z"
                           }
@@ -4386,7 +4381,7 @@
                           "runtime": null
                         },
                         "payload": {
-                          "step": 1
+                          "member": 1
                         },
                         "attempts": [
                           {
@@ -4404,8 +4399,8 @@
                         ],
                         "identity": {
                           "id": "00000000-0000-7000-8000-000000000000",
-                          "type": "conformance.succeed",
-                          "queue": "conformance",
+                          "type": "conformance.group-member",
+                          "queue": "conformance-groups",
                           "state": "succeeded",
                           "priority": 0,
                           "createdAt": "2026-01-01T00:00:00.000Z",
@@ -4431,25 +4426,12 @@
                         },
                         "durability": null,
                         "signalWait": null,
-                        "checkpoints": [
-                          {
-                            "name": "conformance-step",
-                            "value": {
-                              "stage": "prepared"
-                            },
-                            "attempt": 1,
-                            "workerId": "conformance-worker",
-                            "createdAt": "2026-01-01T00:00:00.000Z",
-                            "fenceToken": "1",
-                            "valueBytes": 21,
-                            "valueOmitted": false
-                          }
-                        ],
+                        "checkpoints": [],
                         "childLineage": {
                           "records": [],
                           "truncated": false
                         },
-                        "payloadBytes": 11,
+                        "payloadBytes": 13,
                         "payloadOmitted": false,
                         "redriveLineage": {
                           "records": [],
@@ -11969,6 +11951,16 @@
           "canCompleteHumanWait": {
             "type": "boolean"
           },
+          "group": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DashboardTaskGroupMembership"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "identity": {
             "type": "object",
             "properties": {
@@ -13307,6 +13299,29 @@
           "outcome",
           "addedAt",
           "countedAt"
+        ]
+      },
+      "DashboardTaskGroupMembership": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "position": {
+            "type": "number"
+          },
+          "state": {
+            "enum": [
+              "finished",
+              "open",
+              "sealed"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "position",
+          "state"
         ]
       },
       "DashboardTaskGroupsPage": {

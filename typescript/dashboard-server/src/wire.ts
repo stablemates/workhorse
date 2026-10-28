@@ -1136,6 +1136,11 @@ export interface DashboardTaskDetail {
   tags: string[];
   humanWait: DashboardHumanWaitSummary | null;
   canCompleteHumanWait: boolean;
+  /**
+   * The task group that this task is a member of, or null when it is not a member. Absent when the
+   * installed schema predates version 90, which this dashboard still accepts.
+   */
+  group?: DashboardTaskGroupMembership | null;
   identity: {
     id: string;
     queue: string;
@@ -1414,6 +1419,14 @@ export interface DashboardSignalWaitRow {
 export interface DashboardSignalWaitSummary {
   name: string;
   deadlineAt: string;
+}
+
+/** The membership of one task in a task group. A task is a member of one group at most. */
+export interface DashboardTaskGroupMembership {
+  id: string;
+  /** The position of the member in the group, from 1 through 100,000. */
+  position: number;
+  state: DashboardTaskGroup["state"];
 }
 
 export interface DashboardHumanWaitSummary {

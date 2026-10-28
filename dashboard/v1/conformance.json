@@ -5954,6 +5954,7 @@
                 "tags": [
                   "conformance"
                 ],
+                "group": null,
                 "waits": [],
                 "events": [
                   {
@@ -6120,6 +6121,183 @@
                   "truncated": false
                 },
                 "payloadBytes": 11,
+                "payloadOmitted": false,
+                "redriveLineage": {
+                  "records": [],
+                  "truncated": false
+                },
+                "batchExecutions": [],
+                "concurrencyPolicy": null,
+                "dependencyLineage": {
+                  "records": [],
+                  "truncated": false
+                },
+                "canCompleteHumanWait": true
+              }
+            }
+          }
+        },
+        {
+          "id": "task-detail-group-member",
+          "procedure": "taskDetail",
+          "request": {
+            "json": {
+              "id": {
+                "$ref": "groupMemberTask"
+              }
+            }
+          },
+          "expect": {
+            "status": 200,
+            "body": {
+              "json": {
+                "tags": [
+                  "conformance"
+                ],
+                "group": {
+                  "id": {
+                    "$ref": "taskGroup"
+                  },
+                  "state": "sealed",
+                  "position": 1
+                },
+                "waits": [],
+                "events": [
+                  {
+                    "id": {
+                      "$type": "uuid"
+                    },
+                    "type": "enqueued",
+                    "attempt": null,
+                    "details": {
+                      "state": "ready",
+                      "run_at": {
+                        "$type": "timestamp"
+                      },
+                      "priority": 0,
+                      "deadline_at": null,
+                      "execution_timeout_ms": null
+                    },
+                    "occurredAt": {
+                      "$type": "timestamp"
+                    }
+                  },
+                  {
+                    "id": {
+                      "$type": "uuid"
+                    },
+                    "type": "claimed",
+                    "attempt": 1,
+                    "details": {
+                      "worker_id": "conformance-worker",
+                      "expires_at": {
+                        "$type": "timestamp"
+                      },
+                      "fence_token": "8"
+                    },
+                    "occurredAt": {
+                      "$type": "timestamp"
+                    }
+                  },
+                  {
+                    "id": {
+                      "$type": "uuid"
+                    },
+                    "type": "succeeded",
+                    "attempt": 1,
+                    "details": {
+                      "fence_token": "8"
+                    },
+                    "occurredAt": {
+                      "$type": "timestamp"
+                    }
+                  }
+                ],
+                "current": {
+                  "error": null,
+                  "outcome": {
+                    "error": null,
+                    "state": "succeeded",
+                    "result": {
+                      "ok": true
+                    },
+                    "attempt": 1,
+                    "finishedAt": {
+                      "$type": "timestamp"
+                    },
+                    "resultBytes": 12,
+                    "resultOmitted": false
+                  },
+                  "runtime": null
+                },
+                "payload": {
+                  "member": 1
+                },
+                "attempts": [
+                  {
+                    "error": null,
+                    "attempt": 1,
+                    "outcome": "succeeded",
+                    "workerId": "conformance-worker",
+                    "claimedAt": {
+                      "$type": "timestamp"
+                    },
+                    "elapsedMs": {
+                      "$type": "number"
+                    },
+                    "startedAt": {
+                      "$type": "timestamp"
+                    },
+                    "durationMs": {
+                      "$type": "number"
+                    },
+                    "finishedAt": {
+                      "$type": "timestamp"
+                    },
+                    "executionMs": {
+                      "$type": "number"
+                    }
+                  }
+                ],
+                "identity": {
+                  "id": {
+                    "$ref": "groupMemberTask"
+                  },
+                  "type": "conformance.group-member",
+                  "queue": "conformance-groups",
+                  "state": "succeeded",
+                  "priority": 0,
+                  "createdAt": {
+                    "$type": "timestamp"
+                  },
+                  "deadlineAt": null,
+                  "maxAttempts": 25,
+                  "retryPolicy": null,
+                  "blockedReason": null,
+                  "concurrencyKey": null,
+                  "dependencyPolicy": null,
+                  "executionTimeoutMs": null,
+                  "prerequisiteTaskId": null,
+                  "prerequisiteTaskIds": [],
+                  "dependencyReleasedAt": null
+                },
+                "progress": null,
+                "canSignal": true,
+                "humanWait": null,
+                "truncated": {
+                  "waits": false,
+                  "events": false,
+                  "attempts": false,
+                  "checkpoints": false
+                },
+                "durability": null,
+                "signalWait": null,
+                "checkpoints": [],
+                "childLineage": {
+                  "records": [],
+                  "truncated": false
+                },
+                "payloadBytes": 13,
                 "payloadOmitted": false,
                 "redriveLineage": {
                   "records": [],
@@ -13047,6 +13225,7 @@
                 "tags": [
                   "conformance"
                 ],
+                "group": null,
                 "waits": [],
                 "events": [
                   {
