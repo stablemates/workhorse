@@ -1,11 +1,12 @@
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { deflateRawSync } from "node:zlib";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import {
   compareVersions,
   dotnetTrainVersion,
+  nugetVersions,
   nuspecProblems,
   packageBaseline,
   packageContentProblems,
@@ -142,6 +143,90 @@ describe("versions and the package validation baseline", () => {
     expect(() => packageBaseline(published, "1.1.0")).toThrow(
       "Workhorse 1.0.0, Workhorse.Hosting 1.0.0, Workhorse.EntityFrameworkCore 1.0.0, Workhorse.AspNetCore none",
     );
+  });
+});
+
+const timedOut = () => new TypeError("fetch failed", { cause: new Error("connect ETIMEDOUT") });
+
+// A stubbed fetch answers each try from the list in order, and records its URL and signal.
+function stub(answers: readonly (Response | Error)[]) {
+  const calls: { url: string; signal: AbortSignal | null | undefined }[] = [];
+  const reports: string[] = [];
+  const waits: number[] = [];
+  const overrides = {
+    fetch: async (input: string, init?: RequestInit) => {
+      calls.push({ url: input, signal: init?.signal });
+      const answer = answers[calls.length - 1];
+      if (answer === undefined) throw new Error("no more answers");
+      if (answer instanceof Error) throw answer;
+      return answer;
+    },
+    report: (message: string) => reports.push(message),
+    wait: async (ms: number) => {
+      waits.push(ms);
+    },
+  };
+  return { calls, reports, waits, overrides };
+}
+
+describe("the version read from nuget.org", () => {
+  const url = "https://api.nuget.org/v3-flatcontainer/workhorse/index.json";
+  it("reads the versions after two failed tries", async () => {
+    const { calls, reports, waits, overrides } = stub([
+      timedOut(),
+      timedOut(),
+      Response.json({ versions: ["0.1.0", "0.2.0"] }),
+    ]);
+
+    await expect(nugetVersions("Workhorse", overrides)).resolves.toEqual(["0.1.0", "0.2.0"]);
+
+    expect(calls.map((call) => call.url)).toEqual([url, url, url]);
+    for (const call of calls) expect(call.signal).toBeInstanceOf(AbortSignal);
+    expect(waits).toHaveLength(2);
+    expect(reports).toHaveLength(2);
+    expect(reports[0]).toContain("api.nuget.org");
+  });
+
+  it("reads the versions again after a failed read of the body", async () => {
+    const { calls, waits, overrides } = stub([
+      new Response("{", { headers: { "content-type": "application/json" } }),
+      Response.json({ versions: ["0.1.0"] }),
+    ]);
+
+    await expect(nugetVersions("Workhorse", overrides)).resolves.toEqual(["0.1.0"]);
+
+    expect(calls).toHaveLength(2);
+    expect(waits).toHaveLength(1);
+  });
+
+  it("names api.nuget.org when each of the three tries fails", async () => {
+    const timeout = vi.spyOn(AbortSignal, "timeout");
+    const { calls, waits, overrides } = stub([timedOut(), timedOut(), timedOut(), timedOut()]);
+    let limits: unknown[][];
+
+    try {
+      await expect(nugetVersions("Workhorse", overrides)).rejects.toThrow(
+        /api\.nuget\.org.*ETIMEDOUT/,
+      );
+    } finally {
+      limits = [...timeout.mock.calls];
+      timeout.mockRestore();
+    }
+
+    expect(calls).toHaveLength(3);
+    // Each try gets its own 15 s limit, so the tries and the waits end within about 60 s.
+    expect(limits).toEqual([[15_000], [15_000], [15_000]]);
+    expect(new Set(calls.map((call) => call.signal)).size).toBe(3);
+    expect(3 * 15_000 + waits.reduce((sum, ms) => sum + ms, 0)).toBeLessThanOrEqual(60_000);
+  });
+
+  it("reads a 404 answer as no versions, with no retry", async () => {
+    const { calls, waits, overrides } = stub([new Response("", { status: 404 })]);
+
+    await expect(nugetVersions("Workhorse", overrides)).resolves.toEqual([]);
+
+    expect(calls).toHaveLength(1);
+    expect(waits).toEqual([]);
   });
 });
 
