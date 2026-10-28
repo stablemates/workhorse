@@ -3522,6 +3522,9 @@ class Worker:
             running = self._registration_call
             if running is not None and not running.done():
                 raise TimeoutError("an earlier registration refresh still runs")
+            # A failed call raises in this frame and its traceback keeps the frame, so a reference
+            # to the earlier call here would keep every failed call before it reachable.
+            running = None
             call: Future[list[_Row]] = Future()
             self._registration_call = call
 
