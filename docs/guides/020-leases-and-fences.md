@@ -231,9 +231,10 @@ If no heartbeat of a lease succeeds, no heartbeat reports a cancel request for i
 of a deadline or an execution timeout does not use the heartbeat. Its `expire_owned_v1` call can
 still return `cancel_requested`. If no such timer fires first, the lease watchdog ends the attempt.
 
-A round on the reserved connection sends one transaction for every worker on the pool. Its one
-`heartbeat_pool_v1` statement calls `heartbeat_many_v2` for each batch of up to 100 leases of one
-worker. Before the statement, the round sets `statement_timeout` and
+In every SDK except .NET, a round on the reserved connection sends one transaction for every worker
+on the pool. Its one `heartbeat_pool_v1` statement calls `heartbeat_many_v2` for each batch of up to
+100 leases of one worker. A .NET round sends one transaction with one `heartbeat_many_v2` statement
+for each batch instead. Before the statement, the round sets `statement_timeout` and
 `idle_in_transaction_session_timeout` each to one quarter of the time left before its deadline. The
 worker counts the renewals only after `COMMIT` succeeds. No setting bounds `COMMIT`.
 

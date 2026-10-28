@@ -170,9 +170,11 @@ checks the pool's shape, not its pooling mode, so it still reports the capabilit
   worker logs "PostgreSQL notification listener disabled; worker is using polling" instead. With
   `polling_only`, the Rust worker logs no listener warning.
 
-**Fallback poll.** A notification-capable `Worker.run()` polls every 5,000 ms by default, with ±10%
-jitter. An explicit `pollMs` replaces that base. While the listener is live, the worker waits the
-explicit value without the 5,000 ms cap.
+**Fallback poll.** A `Worker.run()` with a live listener polls every 5,000 ms by default, with ±10%
+jitter. Before its `LISTEN` succeeds, and while it reconnects, the worker starts at 250 ms instead.
+A lost listener wakes the worker, and its backoff restarts at 250 ms. An explicit `pollMs` replaces
+both bases. While the listener is live, the worker waits the explicit value without the 5,000 ms
+cap.
 
 More detail: [Operations and CLI: Polling-only cases](https://github.com/stablemates/workhorse/blob/main/docs/architecture/operations.md#polling-only-cases), [Operations and CLI: Polling cadence](https://github.com/stablemates/workhorse/blob/main/docs/architecture/operations.md#polling-cadence), [Overview: Listener under the opt-out](https://github.com/stablemates/workhorse/blob/main/docs/architecture/overview.md#listener-under-the-opt-out), and [Schema and SQL protocol: .NET connections](https://github.com/stablemates/workhorse/blob/main/docs/architecture/schema-and-protocol.md#net-connections).
 
@@ -357,13 +359,23 @@ claim at once.
 A TypeScript `WorkerQueueApi` that is not a `Queue` is not checked.
 
 **Bounded rounds.** The TypeScript worker bounds each round on the reserved connection by
-`heartbeatRoundMs`, a deadline of at most `heartbeatMs`. The round sends `heartbeat_many_v2` in its
-own transaction, and transaction-local server timeouts make PostgreSQL end the heartbeat by the same
-deadline. A round that fails destroys the connection, and asks the pool for a new one when it ends.
-The connect thus starts before the next round. If it is still pending when the next round starts,
-that round waits for it, and the rest of the wait counts against the deadline of that round.
+`heartbeatRoundMs`, a deadline of at most `heartbeatMs`. The round sends `BEGIN`, a settings
+statement, one `heartbeat_pool_v1` statement, and `COMMIT`. Transaction-local server timeouts make
+PostgreSQL end the heartbeat by the same deadline.
 
-More detail: [Overview: Connection budgets per language](https://github.com/stablemates/workhorse/blob/main/docs/architecture/overview.md#connection-budgets-per-language), [Task lifecycle: Heartbeat connection](https://github.com/stablemates/workhorse/blob/main/docs/architecture/lifecycle.md#heartbeat-connection), [Task lifecycle: Heartbeat readiness](https://github.com/stablemates/workhorse/blob/main/docs/architecture/lifecycle.md#heartbeat-readiness), [Task lifecycle: Heartbeat round deadline](https://github.com/stablemates/workhorse/blob/main/docs/architecture/lifecycle.md#heartbeat-round-deadline), [Schema and SQL protocol: Shared pool connections](https://github.com/stablemates/workhorse/blob/main/docs/architecture/schema-and-protocol.md#shared-pool-connections), [Schema and SQL protocol: JVM connections](https://github.com/stablemates/workhorse/blob/main/docs/architecture/schema-and-protocol.md#jvm-connections), and [Schema and SQL protocol: .NET connections](https://github.com/stablemates/workhorse/blob/main/docs/architecture/schema-and-protocol.md#net-connections).
+The rounds of the workers on the pool share that transaction. Before the first round sends
+`heartbeat_pool_v1`, each waiting round joins it if its deadline is not earlier than that of the
+first round. A round that does not join waits for the next transaction. Go, Python, and Rust share
+the transaction in the same way on their dedicated heartbeat connection. In Ruby and the JVM, one
+heartbeat thread for each pool sends one statement for every worker. The .NET worker still sends
+one transaction with one `heartbeat_many_v2` statement for each worker and each 100 leases.
+
+A TypeScript round that fails destroys the connection, and asks the pool for a new one when it
+ends. The connect thus starts before the next round. If the connect is still pending when the next
+round starts, that round waits for it. The rest of the wait counts against the deadline of that
+round.
+
+More detail: [Overview: Connection budgets per language](https://github.com/stablemates/workhorse/blob/main/docs/architecture/overview.md#connection-budgets-per-language), [Task lifecycle: Heartbeat connection](https://github.com/stablemates/workhorse/blob/main/docs/architecture/lifecycle.md#heartbeat-connection), [Task lifecycle: Heartbeat readiness](https://github.com/stablemates/workhorse/blob/main/docs/architecture/lifecycle.md#heartbeat-readiness), [Task lifecycle: Pool renewal](https://github.com/stablemates/workhorse/blob/main/docs/architecture/lifecycle.md#pool-renewal), [Task lifecycle: Heartbeat round deadline](https://github.com/stablemates/workhorse/blob/main/docs/architecture/lifecycle.md#heartbeat-round-deadline), [Schema and SQL protocol: Shared pool connections](https://github.com/stablemates/workhorse/blob/main/docs/architecture/schema-and-protocol.md#shared-pool-connections), [Schema and SQL protocol: JVM connections](https://github.com/stablemates/workhorse/blob/main/docs/architecture/schema-and-protocol.md#jvm-connections), and [Schema and SQL protocol: .NET connections](https://github.com/stablemates/workhorse/blob/main/docs/architecture/schema-and-protocol.md#net-connections).
 
 </details>
 
@@ -398,14 +410,15 @@ A `DataSource` reports no pool size, so the Java worker applies the third rule o
 
 **Spare connections**
 
-| Language     | Spare connections                                                                                            |
-| ------------ | ------------------------------------------------------------------------------------------------------------ |
-| TypeScript   | `options.max`, minus 1 for the listener when notifications are supported, minus 1 unless `sharedHeartbeats`. |
-| Go           | `MaxConns`, minus 1 unless `PollingOnly`, minus 1 unless `SharedHeartbeats`.                                 |
-| Python, Ruby | Pool size, minus 1 for the listener, minus 1 unless `shared_heartbeats`.                                     |
-| Rust         | `max_size`, minus 1 unless `shared_heartbeats`. The listener sits outside the pool.                          |
-| Java         | `poolMaxSize`, minus 1 for the listener when the worker listens, minus 1 unless `sharedHeartbeats`.          |
-| .NET         | `Max Pool Size`, minus 1 for the listener when the worker listens, minus 1 unless `SharedHeartbeats`.        |
+| Language   | Spare connections                                                                                            |
+| ---------- | ------------------------------------------------------------------------------------------------------------ |
+| TypeScript | `options.max`, minus 1 for the listener when notifications are supported, minus 1 unless `sharedHeartbeats`. |
+| Go         | `MaxConns`, minus 1 unless `PollingOnly`, minus 1 unless `SharedHeartbeats`.                                 |
+| Python     | Pool size, minus 1 for the listener when the size is at least 2, minus 1 unless `shared_heartbeats`.         |
+| Ruby       | Pool size, minus 1 unless `polling_only`, minus 1 unless `shared_heartbeats`.                                |
+| Rust       | `max_size`, minus 1 unless `shared_heartbeats`. The listener sits outside the pool.                          |
+| Java       | `poolMaxSize`, minus 1 for the listener when the worker listens, minus 1 unless `sharedHeartbeats`.          |
+| .NET       | `Max Pool Size`, minus 1 for the listener when the worker listens, minus 1 unless `SharedHeartbeats`.        |
 
 In TypeScript, pools of 3, 4, 6, and 10 connections give a concurrency-64 worker 1, 2, 4, and 8
 cohorts. A TypeScript database with an attached pool, such as a Prisma or Kysely adapter, runs

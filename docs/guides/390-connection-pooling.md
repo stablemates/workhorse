@@ -364,12 +364,19 @@ A TypeScript `WorkerQueueApi` that is not a `Queue` is not checked.
 **Bounded rounds.** The TypeScript worker bounds each round on the reserved connection by
 `heartbeatRoundMs`, a deadline of at most `heartbeatMs`. The round sends `BEGIN`, a settings
 statement, one `heartbeat_pool_v1` statement, and `COMMIT`. Transaction-local server timeouts make
-PostgreSQL end the heartbeat by the same deadline. The rounds of the workers on the pool share that
-transaction: a round that waits for the connection joins the next transaction, with the batches of
-every other waiting round. The other languages send the same transaction on their dedicated
-heartbeat connection. A round that fails destroys the connection, and asks the pool for a new one when it ends.
-The connect thus starts before the next round. If it is still pending when the next round starts,
-that round waits for it, and the rest of the wait counts against the deadline of that round.
+PostgreSQL end the heartbeat by the same deadline.
+
+The rounds of the workers on the pool share that transaction. Before the first round sends
+`heartbeat_pool_v1`, each waiting round joins it if its deadline is not earlier than that of the
+first round. A round that does not join waits for the next transaction. Go, Python, and Rust share
+the transaction in the same way on their dedicated heartbeat connection. In Ruby and the JVM, one
+heartbeat thread for each pool sends one statement for every worker. The .NET worker still sends
+one transaction with one `heartbeat_many_v2` statement for each worker and each 100 leases.
+
+A TypeScript round that fails destroys the connection, and asks the pool for a new one when it
+ends. The connect thus starts before the next round. If the connect is still pending when the next
+round starts, that round waits for it. The rest of the wait counts against the deadline of that
+round.
 
 More detail: [Overview: Connection budgets per language](../architecture/overview.md#connection-budgets-per-language), [Task lifecycle: Heartbeat connection](../architecture/lifecycle.md#heartbeat-connection), [Task lifecycle: Heartbeat readiness](../architecture/lifecycle.md#heartbeat-readiness), [Task lifecycle: Pool renewal](../architecture/lifecycle.md#pool-renewal), [Task lifecycle: Heartbeat round deadline](../architecture/lifecycle.md#heartbeat-round-deadline), [Schema and SQL protocol: Shared pool connections](../architecture/schema-and-protocol.md#shared-pool-connections), [Schema and SQL protocol: JVM connections](../architecture/schema-and-protocol.md#jvm-connections), and [Schema and SQL protocol: .NET connections](../architecture/schema-and-protocol.md#net-connections).
 
