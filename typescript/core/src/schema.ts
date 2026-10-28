@@ -630,6 +630,13 @@ export const SCHEMA_MIGRATIONS: readonly SchemaMigrationStep[] = [
     description: "settle cancel-requested timeouts and bound the dashboard schedule reads",
     kind: "additive",
   },
+  {
+    fromVersion: 88,
+    toVersion: 89,
+    file: "0090-settle-a-fast-tier-cancellation-at-its-deadline-after-its-timeout.sql",
+    description: "settle a fast-tier cancellation at its deadline after its timeout",
+    kind: "additive",
+  },
 ];
 
 /**

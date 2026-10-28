@@ -2727,6 +2727,12 @@ timeout scan. The timeout scan then calls `terminalize_deadline_v1`, which close
 `canceled` with event `source = deadline_reaper`. `fast_recover_expired_v1` skips the same rows in
 its candidate scan.
 
+On the fast tier, `fast_recover_expired_v1` gives an attempt with a pending cancellation and a
+passed deadline to `fast_terminalize_deadline_v1`. It does this also when the attempt timeout is
+earlier than the deadline. That function closes the task `canceled`. Before migration 0090, the
+deadline branch took the row only when the deadline was not later than the timeout. Thus recovery
+locked the row in each tick and settled nothing until the lease expired (SM-1881).
+
 The deadline, timeout, and lease scans compare against one `v_now` read at entry:
 
 - The deadline and timeout scans seek `task_runtime_deadline_idx` and `task_runtime_timeout_idx` to

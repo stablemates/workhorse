@@ -14,10 +14,10 @@ adds.
 ### Upgrade steps
 
 **Migrate the schema before starting updated processes.** Run `workhorse schema migrate` before any
-process of this release starts, producers too. Migrations 0088 and 0089 move the schema to version
-**88**. They replace function bodies and change no stored rows. The SDK compatibility floor stays at
-**76**. A 0.10 process keeps working on version 88, because a migration inside a major line only
-adds.
+process of this release starts, producers too. Migrations 0088 through 0090 move the schema to
+version **89**. They replace function bodies and change no stored rows. The SDK compatibility floor
+stays at **76**. A 0.10 process keeps working on version 89, because a migration inside a major line
+only adds.
 
 ### Row retention lag skips a member of an unfinished task group
 
@@ -55,6 +55,15 @@ timeout behind them waited for their leases to expire (SM-1866).
 Now the full-tier timeout scan skips such an attempt while its lease is live and its deadline is
 ahead, as the fast tier does. If the deadline passed after the timeout, recovery closes the task
 `canceled` at once.
+
+### Fast-tier recovery closes a canceled attempt when its deadline passes
+
+A fast-tier task has a pending cancellation and a live lease. Its execution timeout passes, and
+later its deadline passes. Before migration 0090, each maintenance tick locked that attempt and
+settled nothing until the lease expired. The cancellation blocks the timeout, and recovery took the
+deadline only when the deadline was not later than the timeout (SM-1881).
+
+Now fast-tier recovery closes the task `canceled` when its deadline passes, as the full tier does.
 
 ### The dashboard Schedules page reads a bounded number of occurrences
 

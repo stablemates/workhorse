@@ -168,7 +168,8 @@ The timeout is optional. In every SDK, an omitted timeout and an explicit 0 both
 - A pending cancellation request wins. The function then changes nothing.
 - `recover_expired_v1` does not lock a timed-out attempt with a pending cancellation while its
   lease is live and its deadline is ahead. If its deadline passed after the timeout,
-  `terminalize_deadline_v1` closes the task `canceled`.
+  `terminalize_deadline_v1` closes the task `canceled`. On the fast tier,
+  `fast_terminalize_deadline_v1` closes it `canceled`.
 
 When the deadline and the timeout have both passed, the earlier one settles the attempt. On a tie,
 the deadline wins.

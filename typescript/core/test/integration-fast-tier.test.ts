@@ -761,6 +761,44 @@ describe("fast task tier", () => {
     ).resolves.toMatchObject({ rows: [{ state: "active", attempt: 1 }] });
   });
 
+  it("cancels an attempt whose timeout passed before its deadline and its cancellation", async () => {
+    // The timeout is earlier than the deadline and the lease is live. The pending cancellation
+    // blocks the timeout, so the deadline must settle the row (SM-1881).
+    const queueName = "fast-timeout-then-deadline-cancel";
+    await makeFast(queueName);
+    const id = await queue.enqueue("timeout-then-deadline-cancel", null, {
+      queue: queueName,
+      deadline: new Date(Date.now() + 60_000),
+      executionTimeoutMs: 60_000,
+      maxAttempts: 3,
+    });
+    const claimed = await queue.claim("fast-timeout-then-deadline-cancel-worker", {
+      queue: queueName,
+      leaseMs: 60_000,
+    });
+    expect(claimed?.id).toBe(id);
+    expect((await queue.cancel(id, { reason: "operator won" })).status).toBe("cancel_requested");
+    await pool.query(
+      `UPDATE workhorse.fast_task_runtime
+          SET attempt_timeout_at = clock_timestamp() - interval '2 seconds',
+              deadline_at = clock_timestamp() - interval '1 second'
+        WHERE task_id = $1`,
+      [id],
+    );
+
+    const recovered = await pool.query<{ count: number }>(
+      "SELECT workhorse.recover_expired_v1() AS count",
+    );
+    expect(recovered.rows).toEqual([{ count: 1 }]);
+    expect(await admin.getTask(id)).toMatchObject({
+      state: "canceled",
+      error: { name: "CancellationRequested", reason: "operator won" },
+    });
+    await expect(
+      pool.query("SELECT 1 FROM workhorse.fast_task_runtime WHERE task_id = $1", [id]),
+    ).resolves.toMatchObject({ rowCount: 0 });
+  });
+
   it.each([4, 16, 64])(
     "loses no task and records one outcome each after a worker crash at concurrency %i",
     async (concurrency) => {

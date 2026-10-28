@@ -608,6 +608,12 @@ deadline_at)` through one range scan of `fast_task_runtime_active_due_idx`, both
 A lapsed lease's error is `{ name: "LeaseExpired", message: "worker lease
 expired" }`.
 
+An active row with a pending cancellation is a candidate only when its lease lapsed or its deadline
+passed. A passed attempt timeout does not settle it, because the cancellation wins. If its deadline
+passed, `fast_terminalize_deadline_v1` closes it `canceled`, also when the attempt timeout is
+earlier. Before migration 0090, the function locked such a row if the timeout was earlier than the
+deadline. It then settled nothing until the lease lapsed (SM-1881).
+
 ### Operator operations
 
 - `run_task_now_v1` moves a delayed fast-tier row's `run_at` to now.
