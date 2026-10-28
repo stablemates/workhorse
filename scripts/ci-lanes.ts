@@ -8,14 +8,17 @@
 //
 // The map fails open. If a changed file matches a shared input, or no entry of the map names it,
 // every lane runs. A docs-only pull request runs only the always-run lanes that check the
-// documentation (SM-1681). Pushes, `workflow_dispatch` runs, and the weekly schedule run every lane
-// that their event runs, whatever changed. scripts/ci-lanes.test.ts holds the map to the workflow
-// and to the files each lane names in its sources.
+// documentation (SM-1681). A push to `main` uses the same map for the files that it changes, but it
+// runs every lane if it changes a release file or if the plan cannot list its files (SM-1878). The
+// release workflows require a successful push run for the tagged commit, so the release candidate
+// commit must run every lane. `workflow_dispatch` runs and the weekly schedule run every lane that
+// their event runs, whatever changed. scripts/ci-lanes.test.ts holds the map to the workflow and to
+// the files each lane names in its sources.
 //
 // `tsx scripts/ci-lanes.ts --docs-only` reads changed paths from standard input and tells whether
 // the change is docs-only, for the merge rule in AGENTS.md.
 import { execFile } from "node:child_process";
-import { appendFile } from "node:fs/promises";
+import { appendFile, readFile } from "node:fs/promises";
 import { pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 import { WEEKLY_COMPATIBILITY_SCHEDULE } from "./ci-matrix.js";
@@ -218,6 +221,36 @@ export const ALWAYS_RUN_LANE_INPUTS = [
 ] as const;
 
 /**
+ * Files that a release candidate commit changes. A push to `main` that changes one of them runs
+ * every lane, because the release workflows accept the tagged commit only after a successful push
+ * run of this workflow, and that run must be a full run (SM-1878). The globs hold each file that
+ * scripts/check-release.ts reads for the release version or the frozen schema, each changelog, and
+ * each release workflow. Each release candidate changes every changelog, so a candidate always
+ * matches this list.
+ */
+export const RELEASE_FILES = [
+  "**/CHANGELOG.md",
+  // The npm manifests and their peer ranges, and the dashboard application manifest.
+  "**/package.json",
+  "typescript/core/src/version.ts",
+  "support.json",
+  "python/pyproject.toml",
+  "python/src/workhorse/_version.py",
+  "python/uv.lock",
+  "go/version.go",
+  "rust/Cargo.toml",
+  "Cargo.lock",
+  "jvm/gradle.properties",
+  "dotnet/Directory.Build.props",
+  "ruby/lib/stablemates/workhorse/version.rb",
+  "ruby/Gemfile.lock",
+  "ruby/gemfiles/*.lock",
+  // The frozen clean-install schema of each release.
+  "sql/releases/**",
+  ".github/workflows/release*.yml",
+] as const;
+
+/**
  * The documentation. If every file that a pull request changes matches one of these globs, the
  * change is docs-only. Each glob is also in {@link ALWAYS_RUN_LANE_INPUTS}, so a docs-only change
  * never runs every lane. AGENTS.md lets the squash merge of a docs-only change skip its push run.
@@ -308,8 +341,19 @@ export function selectLanes(changedFiles: readonly string[]): LaneSelection {
 }
 
 /**
- * Decides which lanes run. `changedFiles` is undefined when the event is not a pull request or
- * the plan could not list the changed files; then every lane that the event runs runs.
+ * Selects the filtered lanes that a push to `main` with these changed files must run. A release
+ * file runs every lane. Other files use the map, as for a pull request.
+ */
+export function selectPushLanes(changedFiles: readonly string[]): LaneSelection {
+  const release = changedFiles.find((file) => matchesAny(file, RELEASE_FILES));
+  if (release !== undefined) return { all: true, reason: `${release} is a release file` };
+  return selectLanes(changedFiles);
+}
+
+/**
+ * Decides which lanes run. `changedFiles` is undefined when the event is not a pull request or a
+ * push, or when the plan could not list the changed files; then every lane that the event runs
+ * runs.
  */
 export function planLanes(
   eventName: string,
@@ -322,10 +366,12 @@ export function planLanes(
   const eventRunsWeekly = eventName === "workflow_dispatch" || weekly;
 
   let selection: LaneSelection = { all: true, reason: `a ${eventName} event runs every lane` };
-  if (eventName === "pull_request")
+  if (eventName === "pull_request" || eventName === "push") {
+    const select = eventName === "push" ? selectPushLanes : selectLanes;
     selection = changedFiles
-      ? selectLanes(changedFiles)
+      ? select(changedFiles)
       : { all: true, reason: "the plan could not list the changed files" };
+  }
   const docsOnly = !selection.all && changedFiles !== undefined && isDocsOnlyChange(changedFiles);
 
   const plan = {} as LanePlan;
@@ -378,6 +424,75 @@ async function pullRequestFiles(): Promise<readonly string[] | undefined> {
   }
 }
 
+/** The fields of a `push` event payload that the plan reads. */
+interface PushEvent {
+  readonly before?: unknown;
+  readonly after?: unknown;
+  readonly forced?: unknown;
+  readonly created?: unknown;
+}
+
+const commitSha = /^[0-9a-f]{40}(?:[0-9a-f]{24})?$/;
+
+/**
+ * Finds the commit to compare a push with. A push that is not a fast-forward of an earlier `main`
+ * commit has no such commit: a new branch, a force push, or a `before` SHA that is missing or all
+ * zeros. Then the result has a reason and the plan runs every lane.
+ */
+export function pushBase(
+  event: unknown,
+  head: string,
+): { readonly base: string } | { readonly reason: string } {
+  if (typeof event !== "object" || event === null) return { reason: "the event has no payload" };
+  const { before, after, forced, created } = event as PushEvent;
+  if (created !== false && created !== undefined) return { reason: "the push creates the branch" };
+  if (forced !== false && forced !== undefined) return { reason: "the push is a force push" };
+  if (after !== head) return { reason: `the push does not end at ${head}` };
+  if (typeof before !== "string" || !commitSha.test(before) || /^0+$/.test(before))
+    return { reason: "the push names no commit before it" };
+  return { base: before };
+}
+
+/** Runs git with these arguments and gives its standard output. A failure rejects the promise. */
+export type Git = (args: readonly string[]) => Promise<string>;
+
+/** The number of commits of the pushed history that the plan fetches to find the `before` commit. */
+const PUSH_HISTORY_DEPTH = 50;
+
+/**
+ * Lists the files that a push to `main` changes. actions/checkout fetches only two commits, so the
+ * plan fetches more history of the pushed commit. The `before` commit must be an ancestor of the
+ * pushed commit in that history. Then the plan compares the two trees. Any failure lists no files,
+ * and then the plan runs every lane.
+ */
+export async function pushFiles(
+  eventPath: string | undefined,
+  git: Git,
+): Promise<readonly string[] | undefined> {
+  try {
+    if (!eventPath) throw new Error("GITHUB_EVENT_PATH is not set");
+    const event: unknown = JSON.parse(await readFile(eventPath, "utf8"));
+    const head = (await git(["rev-parse", "HEAD"])).trim();
+    const found = pushBase(event, head);
+    if ("reason" in found) throw new Error(found.reason);
+    await git(["fetch", "--no-tags", `--depth=${PUSH_HISTORY_DEPTH}`, "origin", head]);
+    // The command fails if the commit is not an ancestor, or if the fetched history does not hold
+    // it. A shallow history cannot make an ancestor of a commit that is not one.
+    await git(["merge-base", "--is-ancestor", found.base, head]);
+    const stdout = await git(["diff", "--name-only", "--no-renames", "-z", found.base, head]);
+    return stdout.split("\0").filter(Boolean);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    process.stderr.write(`Could not list the changed files: ${message}\n`);
+    return undefined;
+  }
+}
+
+async function runGit(args: readonly string[]): Promise<string> {
+  const { stdout } = await run("git", args, { maxBuffer: 64 * 1024 * 1024 });
+  return stdout;
+}
+
 /**
  * Reads changed file paths from standard input, one on each line, and tells whether the change is
  * docs-only. The exit code is 0 for a docs-only change and 1 for another change.
@@ -403,7 +518,12 @@ async function main(): Promise<void> {
   if (!eventName)
     throw new Error("Usage: scripts/ci-lanes.ts <event-name> [schedule] | --docs-only");
   const schedule = process.argv[3] ?? "";
-  const changedFiles = eventName === "pull_request" ? await pullRequestFiles() : undefined;
+  const changedFiles =
+    eventName === "pull_request"
+      ? await pullRequestFiles()
+      : eventName === "push"
+        ? await pushFiles(process.env.GITHUB_EVENT_PATH, runGit)
+        : undefined;
   const { plan, reason } = planLanes(eventName, schedule, changedFiles);
 
   process.stderr.write(`Lane plan: ${reason}\n`);

@@ -5,7 +5,8 @@
 # race detector and Rust without optional features, and every package check. A pull request runs a
 # lane only when it changes an input of that lane, as scripts/ci-lanes.ts maps them. A file that the
 # map does not name runs every lane. A docs-only pull request skips the unit lane, the one always-run
-# lane that reads no documentation.
+# lane that reads no documentation. A push to main uses the same map for the files that it changes,
+# but a push that changes a release file, such as a changelog, runs every lane.
 name: CI
 
 on:
@@ -66,7 +67,9 @@ jobs:
         with:
           persist-credentials: false
           # A pull request checks out its merge commit, whose first parent is the base branch. The
-          # lane plan compares the two to list the files that the pull request changes.
+          # lane plan compares the two to list the files that the pull request changes. For a push,
+          # the lane plan fetches more history and compares the `before` commit of the event with
+          # this commit.
           fetch-depth: 2
       - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0

@@ -1,7 +1,8 @@
 import { execFileSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterAll, describe, expect, it, vi } from "vitest";
 import { parse } from "yaml";
 import {
   ALWAYS_RUN_LANE_INPUTS,
@@ -15,6 +16,9 @@ import {
   isDocsOnlyChange,
   matchesGlob,
   planLanes,
+  pushBase,
+  pushFiles,
+  RELEASE_FILES,
   SHARED_INPUTS,
   selectLanes,
   WEEKLY_LANES,
@@ -768,8 +772,248 @@ describe("the JVM verification metadata lane", () => {
   });
 });
 
+describe("planning lanes for a push to main", () => {
+  const nonWeekly = Object.fromEntries(
+    LANE_NAMES.map((lane) => [lane, !(WEEKLY_LANES as readonly string[]).includes(lane)]),
+  );
+
+  // The files of the 0.11.0 release candidate commit: the version of each line, the changelog of
+  // each line, the documentation that names the version, and the frozen schema of the release.
+  const releaseCandidate = [
+    "CHANGELOG.md",
+    "Cargo.lock",
+    "api/go.txt",
+    "api/typescript.txt",
+    "dashboard/app/package.json",
+    "docs/compatibility.md",
+    "docs/schema-lifecycle.md",
+    "dotnet/CHANGELOG.md",
+    "dotnet/Directory.Build.props",
+    "dotnet/README.md",
+    "go/CHANGELOG.md",
+    "go/version.go",
+    "jvm/CHANGELOG.md",
+    "jvm/gradle.properties",
+    "python/CHANGELOG.md",
+    "python/pyproject.toml",
+    "python/src/workhorse/_version.py",
+    "python/uv.lock",
+    "ruby/CHANGELOG.md",
+    "ruby/Gemfile.lock",
+    "ruby/gemfiles/rails_8_0.gemfile.lock",
+    "ruby/lib/stablemates/workhorse/version.rb",
+    "rust/CHANGELOG.md",
+    "rust/Cargo.toml",
+    "site/content/docs/releases.mdx",
+    "sql/releases/0089.sql",
+    "support.json",
+    "typescript/core/package.json",
+    "typescript/core/src/version.ts",
+    "typescript/otel/CHANGELOG.md",
+    "typescript/otel/package.json",
+  ];
+
+  it("runs every lane for the release candidate commit", () => {
+    const { plan, reason } = planLanes("push", "", releaseCandidate);
+    expect(plan).toEqual(nonWeekly);
+    expect(reason).toMatch(/is a release file$/);
+  });
+
+  // Each kind of file that scripts/check-release.ts reads for the release version or the frozen
+  // schema, and each release workflow. Each one alone runs every lane.
+  it.each([
+    "CHANGELOG.md",
+    "python/CHANGELOG.md",
+    "go/CHANGELOG.md",
+    "rust/CHANGELOG.md",
+    "ruby/CHANGELOG.md",
+    "jvm/CHANGELOG.md",
+    "dotnet/CHANGELOG.md",
+    "typescript/otel/CHANGELOG.md",
+    "typescript/knex/package.json",
+    "dashboard/app/package.json",
+    "typescript/core/src/version.ts",
+    "support.json",
+    "python/pyproject.toml",
+    "python/src/workhorse/_version.py",
+    "python/uv.lock",
+    "go/version.go",
+    "rust/Cargo.toml",
+    "Cargo.lock",
+    "jvm/gradle.properties",
+    "dotnet/Directory.Build.props",
+    "ruby/lib/stablemates/workhorse/version.rb",
+    "ruby/Gemfile.lock",
+    "ruby/gemfiles/rails_8_0.gemfile.lock",
+    "sql/releases/0089.sql",
+    ".github/workflows/release.yml",
+    ".github/workflows/release-python.yml",
+  ])("runs every lane for a push that changes the release file %s", (file) => {
+    expect(RELEASE_FILES.some((glob) => matchesGlob(file, glob))).toBe(true);
+    expect(planLanes("push", "", [file]).plan).toEqual(nonWeekly);
+  });
+
+  // A file that the release check reads, a changelog, or a release workflow runs every lane when a
+  // push changes it, as a release file or as a shared input.
+  it("runs every lane for each file that the release check reads", () => {
+    const source = readFileSync(path.join(repository, "scripts/check-release.ts"), "utf8");
+    const named = [...source.matchAll(/"([\w./-]+\.\w+)"/g)]
+      .map((match) => match[1] ?? "")
+      .filter((file) => tracked.has(file));
+    const files = [
+      ...named,
+      ...trackedFiles.filter(
+        (file) =>
+          file.endsWith("CHANGELOG.md") ||
+          matchesGlob(file, ".github/workflows/release*.yml") ||
+          matchesGlob(file, "ruby/gemfiles/*.lock"),
+      ),
+    ];
+    expect(named.length).toBeGreaterThan(10);
+    const narrowed = files.filter(
+      (file) => JSON.stringify(planLanes("push", "", [file]).plan) !== JSON.stringify(nonWeekly),
+    );
+    expect(narrowed).toEqual([]);
+  });
+
+  it("runs only the Python lane and the always-run lanes for a Python-only push", () => {
+    const { plan, reason } = planLanes("push", "", [
+      "python/src/workhorse/worker.py",
+      "python/tests/test_worker.py",
+    ]);
+    expect(plan).toEqual(
+      Object.fromEntries(
+        LANE_NAMES.map((lane) => [
+          lane,
+          (ALWAYS_RUN_LANES as readonly string[]).includes(lane) || lane === "python",
+        ]),
+      ),
+    );
+    expect(reason).toBe("the change runs python");
+  });
+
+  it("runs the doc-check lanes for a docs-only push", () => {
+    const { plan } = planLanes("push", "", ["docs/architecture/overview.md"]);
+    expect(plan).toEqual(
+      Object.fromEntries(
+        LANE_NAMES.map((lane) => [lane, (DOC_CHECK_LANES as readonly string[]).includes(lane)]),
+      ),
+    );
+  });
+
+  it("runs every lane for a push that changes a shared input", () => {
+    expect(planLanes("push", "", ["scripts/ci-lanes.ts"]).plan).toEqual(nonWeekly);
+  });
+
+  it("runs every lane when a push cannot list its files", () => {
+    const { plan, reason } = planLanes("push", "", undefined);
+    expect(plan).toEqual(nonWeekly);
+    expect(reason).toBe("the plan could not list the changed files");
+  });
+
+  it("runs every lane for a push without files", () => {
+    expect(planLanes("push", "", []).plan).toEqual(nonWeekly);
+  });
+
+  const head = "b".repeat(40);
+  const before = "a".repeat(40);
+
+  it("compares a fast-forward push with the commit before it", () => {
+    expect(pushBase({ before, after: head, forced: false, created: false }, head)).toEqual({
+      base: before,
+    });
+  });
+
+  it.each([
+    ["a missing before SHA", { after: head }],
+    ["an empty before SHA", { before: "", after: head }],
+    ["an all-zero before SHA", { before: "0".repeat(40), after: head }],
+    ["a malformed before SHA", { before: "main", after: head }],
+    ["a new branch", { before, after: head, created: true }],
+    ["a force push", { before, after: head, forced: true }],
+    ["a push whose after SHA is not the checked-out commit", { before, after: "c".repeat(40) }],
+    ["a payload that is not an object", null],
+  ])("lists no files for %s", (_name, event) => {
+    expect(pushBase(event, head)).toHaveProperty("reason");
+  });
+});
+
+describe("listing the files of a push", () => {
+  const head = "b".repeat(40);
+  const before = "a".repeat(40);
+  const directory = mkdtempSync(path.join(tmpdir(), "ci-lanes-"));
+  afterAll(() => rmSync(directory, { recursive: true, force: true }));
+
+  function eventFile(name: string, contents: string): string {
+    const file = path.join(directory, name);
+    writeFileSync(file, contents);
+    return file;
+  }
+  const fastForward = eventFile(
+    "push.json",
+    JSON.stringify({ before, after: head, forced: false, created: false }),
+  );
+
+  // A git stand-in that fails the one command whose first argument is `fails`.
+  function fakeGit(fails?: string) {
+    const calls: string[][] = [];
+    const git = async (args: readonly string[]): Promise<string> => {
+      calls.push([...args]);
+      if (args[0] === fails) throw new Error(`git ${args[0]} failed`);
+      if (args[0] === "rev-parse") return `${head}\n`;
+      if (args[0] === "diff")
+        return "python/src/workhorse/worker.py\0python/tests/test_worker.py\0";
+      return "";
+    };
+    return { git, calls };
+  }
+
+  async function listed(eventPath: string | undefined, fails?: string) {
+    const stderr = vi.spyOn(process.stderr, "write").mockReturnValue(true);
+    try {
+      const fake = fakeGit(fails);
+      return { files: await pushFiles(eventPath, fake.git), calls: fake.calls };
+    } finally {
+      stderr.mockRestore();
+    }
+  }
+
+  it("lists the files between the before commit and the pushed commit", async () => {
+    const { files, calls } = await listed(fastForward);
+    expect(files).toEqual(["python/src/workhorse/worker.py", "python/tests/test_worker.py"]);
+    expect(calls).toContainEqual(["merge-base", "--is-ancestor", before, head]);
+    expect(calls.at(-1)).toEqual(["diff", "--name-only", "--no-renames", "-z", before, head]);
+  });
+
+  it.each(["rev-parse", "fetch", "merge-base", "diff"])(
+    "lists no files when git %s fails",
+    async (command) => {
+      expect((await listed(fastForward, command)).files).toBeUndefined();
+    },
+  );
+
+  it("lists no files without an event file", async () => {
+    expect((await listed(undefined)).files).toBeUndefined();
+    expect((await listed(path.join(directory, "missing.json"))).files).toBeUndefined();
+  });
+
+  it("lists no files for an event file that is not JSON", async () => {
+    expect((await listed(eventFile("bad.json", "not json"))).files).toBeUndefined();
+  });
+
+  it("fetches nothing for a force push", async () => {
+    const forced = eventFile(
+      "forced.json",
+      JSON.stringify({ before, after: head, forced: true, created: false }),
+    );
+    const { files, calls } = await listed(forced);
+    expect(files).toBeUndefined();
+    expect(calls.map((call) => call[0])).toEqual(["rev-parse"]);
+  });
+});
+
 describe("planning lanes for other events", () => {
-  it.each(["push", "workflow_dispatch"])("runs every lane on %s", (event) => {
+  it.each(["workflow_dispatch"])("runs every lane on %s", (event) => {
     const { plan } = planLanes(event, "", undefined);
     expect(plan).toEqual(
       Object.fromEntries(
