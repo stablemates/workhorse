@@ -25,6 +25,9 @@ pnpm add @stablemates/workhorse @stablemates/workhorse-kysely \
   @mikro-orm/core@7.2.3 @mikro-orm/postgresql@7.2.3 kysely@0.29.6 pg@8.23.0
 ```
 
+Install the Workhorse schema before the first enqueue. If the schema is missing, the queue refuses
+the enqueue. [Installation](/docs/installation) gives the command.
+
 Use a Node.js version that MikroORM accepts and that is also a Workhorse
 [supported runtime](/docs/installation).
 

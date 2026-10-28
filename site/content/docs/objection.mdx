@@ -15,6 +15,9 @@ The tested versions are Objection 3.9.1, Knex 3.3.0, and pg 8.23.1.
 pnpm add @stablemates/workhorse @stablemates/workhorse-knex objection@3.9.1 knex@3.3.0 pg@8.23.1
 ```
 
+Install the Workhorse schema before the first enqueue. If the schema is missing, the queue refuses
+the enqueue. [Installation](/docs/installation) gives the command.
+
 ## Commit a model write and a task together
 
 Migrate your application tables separately from the Workhorse schema. Give each table name its

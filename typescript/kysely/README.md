@@ -13,6 +13,9 @@ The Kysely provider for enqueuing Workhorse tasks through Kysely transactions.
 npm install @stablemates/workhorse @stablemates/workhorse-kysely kysely pg
 ```
 
+Install the Workhorse schema with [Workhorse core](https://workhorse.run/docs/installation) before
+the first enqueue. If the schema is missing, the queue refuses the enqueue.
+
 ## Enqueue in a transaction
 
 ```ts
