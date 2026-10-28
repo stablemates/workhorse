@@ -292,11 +292,12 @@ async function checkChangelogs(files: ReleaseFiles, version: TrainVersion): Prom
 }
 
 /**
- * A minor or major release freezes the clean-install artifact of the schema version it ships
- * (`docs/schema-lifecycle.md`). A patch release ships no new schema version to freeze.
+ * Every shipped schema version has a frozen clean-install artifact (`docs/schema-lifecycle.md`), so
+ * the release tree must carry the artifact of the schema version it ships. This applies to every
+ * release kind. A patch release that adds a migration freezes its new schema version, and a patch
+ * release without one ships a schema version that an earlier release froze.
  */
 async function checkFrozenSchema(files: ReleaseFiles, version: TrainVersion): Promise<void> {
-  if (version.patch !== 0) return;
   const catalogue = await files.read("typescript/core/src/queue/sql-catalogue.generated.ts");
   if (catalogue === undefined) return;
   const schemaVersion = /WORKHORSE_SCHEMA_VERSION = (\d+);/.exec(catalogue)?.[1];

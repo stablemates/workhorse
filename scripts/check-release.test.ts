@@ -28,12 +28,12 @@ const firstReleasePending = !/^## \d/m.test(
   await readFile(path.join(repositoryRoot, "dotnet/CHANGELOG.md"), "utf8"),
 );
 
-// After an x.y.0 release, main can carry a schema that the next minor freezes. The tree then is no
-// longer that release, so the freeze error for the newer schema is expected. A real x.y.0 tag commit
-// has its artifact, and the fixture test below checks that a missing one fails.
+// After a release, main can carry a schema that the next release freezes. The tree then is no
+// longer that release, so the freeze error for the newer schema is expected for every release kind.
+// A real tag commit has its artifact, and the fixture tests below check that a missing one fails.
 const expectedProblems = [
   ...(firstReleasePending ? [`dotnet/CHANGELOG.md has no ${current} release entry`] : []),
-  ...(schemaVersion > newestFrozen && current.endsWith(".0")
+  ...(schemaVersion > newestFrozen
     ? [
         `sql/releases/${String(schemaVersion).padStart(4, "0")}.sql is missing, but release ${current} must freeze schema version ${schemaVersion}`,
       ]
@@ -281,10 +281,33 @@ describe("checkRelease across the release train", () => {
     );
   });
 
-  it("does not require a frozen schema for a patch release", async () => {
+  it("accepts a patch release that ships no new schema version", async () => {
+    // Schema 72 is the newest frozen file, so the patch release has nothing to freeze.
     await rm(root, { force: true, recursive: true });
     await writeFixture(root, "0.8.1");
-    await rm(path.join(root, "sql/releases/0072.sql"));
+    await expect(checkRelease("npm", "v0.8.1", root)).resolves.toBeUndefined();
+  });
+
+  it("rejects a patch release that ships a schema version without its frozen file", async () => {
+    await rm(root, { force: true, recursive: true });
+    await writeFixture(root, "0.8.1");
+    await edit("typescript/core/src/queue/sql-catalogue.generated.ts", "= 72;", "= 73;");
+    for (const [target, tag] of [
+      ["npm", "v0.8.1"],
+      ["python", "python/v0.8.1"],
+      ["go", "go/v0.8.1"],
+    ] as const) {
+      await expect(checkRelease(target, tag, root)).rejects.toThrow(
+        "sql/releases/0073.sql is missing, but release 0.8.1 must freeze schema version 73",
+      );
+    }
+  });
+
+  it("accepts a patch release that ships a schema version with its frozen file", async () => {
+    await rm(root, { force: true, recursive: true });
+    await writeFixture(root, "0.8.1");
+    await edit("typescript/core/src/queue/sql-catalogue.generated.ts", "= 72;", "= 73;");
+    await writeFile(path.join(root, "sql/releases/0073.sql"), "-- frozen\n");
     await expect(checkRelease("npm", "v0.8.1", root)).resolves.toBeUndefined();
   });
 
