@@ -570,8 +570,8 @@ query stops after 1 s, so a blocked query cannot keep a cell past its end.
 Each probe starts W workers in one process on one pool. The payload of each task of a refill or a
 fault cell has a `handlerMs` value. Its handler returns after that time. A task without the value
 holds its slot. Every handler returns when the probe stops or the worker cancels the attempt, so
-the stop time measures the SDK and not the handler. The probe does not set `sharedHeartbeats`,
-`SharedHeartbeats`, or `shared_heartbeats`. Each pool opens a connection only when the SDK asks for
+the stop time measures the SDK and not the handler. Every worker reserves its
+dedicated heartbeat connection. Each pool opens a connection only when the SDK asks for
 one, so the count shows what the SDK needs. Each probe sets a fixed `application_name`,
 `wh-bench-<sdk>`, on every connection that it opens. The Rust probe gives each worker a
 `listen_config` with the same name, so the Rust listener connections outside the pool also count.

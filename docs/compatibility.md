@@ -487,8 +487,7 @@ transaction-mode pool must never serve a code path that leaves session state beh
 
 Connection budget: the workers on one pool share one listener connection and one heartbeat
 connection, for any number of `Queue` or `Worker` objects. A worker pool thus needs at least 3
-connections: the listener, the heartbeat, and one claim. Under the heartbeat opt-out, a TypeScript
-or Go pool limited to one connection stays polling-only. Behind a pooler that cannot deliver
+connections: the listener, the heartbeat, and one claim. Behind a pooler that cannot deliver
 notifications, the listener connection delivers nothing. It still counts against the client limit
 of the pooler and against the pool of your app. A Rust listener connection is outside the pool, so
 it counts only against the client limit. [Overview: Connection budgets per
@@ -1717,7 +1716,40 @@ floor. Thus the upgrade is a rolling deployment, and a mixed fleet is supported 
 
 1. Run `workhorse schema migrate`. It applies migrations 0088 through 0090 and leaves the schema at
    version 89.
-2. Roll out the new processes in any order.
+2. In the code and the configuration of each worker, remove the heartbeat opt-out. The table below
+   gives its name in each SDK.
+3. Give each worker a pool with a known size of at least 3.
+4. Roll out the new processes in any order.
+
+0.11.0 removes the heartbeat opt-out from every SDK. With the opt-out, heartbeat rounds borrowed
+ordinary pool connections. A round could then wait behind claims and settlements, a lease could
+expire, and a task could run twice. Now every worker reserves a dedicated heartbeat connection.
+A worker needs 3 connections: the listener, the heartbeat connection, and one statement. The Rust
+listener opens its connection outside the pool, so a Rust pool of 3 holds the heartbeat connection
+and two statement connections. A worker on
+a pool below 3, or on a pool of unknown size, fails at construction. Its error names the size that
+it found, the size that it needs, and the next step. [ADR
+0071](decisions/0071-give-every-worker-a-pool-and-a-dedicated-heartbeat-connection.md) records the
+decision.
+
+| SDK        | Remove                                                                                                                                   | Give the worker                                                                            |
+| ---------- | ---------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------ |
+| TypeScript | `sharedHeartbeats` from each `Worker` and `createWorker` call                                                                            | A node-postgres `Pool` with `max` of at least 3. An adapter takes it as the option `pool`. |
+| Python     | `shared_heartbeats` from `Worker`, `AsyncWorker.from_psycopg`, and `AsyncWorker.from_asyncpg`                                            | A pool that reports a maximum size of at least 3.                                          |
+| Go         | `WorkerOptions.SharedHeartbeats`                                                                                                         | A `*pgxpool.Pool` with `MaxConns` of at least 3.                                           |
+| Rust       | `WorkerOptions::shared_heartbeats`                                                                                                       | A pool with a maximum size of at least 3.                                                  |
+| Ruby       | `shared_heartbeats:` from `Worker.new`                                                                                                   | A pool that reports a `size` of at least 3.                                                |
+| JVM        | `Worker.Builder.sharedHeartbeats(boolean)`, Kotlin `sharedHeartbeats`, and the Spring Boot property `workhorse.worker.shared-heartbeats` | A `DataSource` pool of at least 3. If you declare `poolMaxSize`, declare the real size.    |
+| .NET       | `WorkerOptions.SharedHeartbeats` and the `Workhorse.Hosting` key `Workhorse:Worker:SharedHeartbeats`                                     | An `NpgsqlDataSource` with `Max Pool Size` of at least 3.                                  |
+
+A JVM `DataSource` with no declared `poolMaxSize` reports no size. A .NET data source with
+`Pooling=false` has no pool limit. In these two cases, the worker does not check a size at
+construction. The readiness check at the start of each run is then the guard. The worker must
+reserve the heartbeat connection and borrow one more connection within its startup budget. If it
+cannot, the run throws `WorkhorseException` on the JVM or `WorkerStartupException` in .NET.
+
+A caller that still gives the removed option gets a compile failure or an error that names the
+removal. A `Queue` does not change: it still takes a connection or a transaction.
 
 | Migration                                                                    | Schema version | Changes                                                                                                                                                                                            |
 | ---------------------------------------------------------------------------- | -------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -1790,7 +1822,8 @@ freezes `sql/releases/0086.sql`.
 If the schema is below version 76, the compatibility check refuses it. A new dashboard host refuses
 its requests, and a new worker refuses to start. A new `Queue` or `Admin` refuses each call before
 its first statement. The TypeScript SDK does this from 0.11.0. In 0.10.0, only
-`assertSchemaCompatible` and a TypeScript `Worker.run` without `sharedHeartbeats: true` refuse.
+`assertSchemaCompatible` and a TypeScript `Worker.run` with a dedicated heartbeat connection
+refuse.
 
 Schema version 77 does not raise the floor. Migration 0078 changes only the HINT of the P1001 to
 P1010 errors, and DETAIL does not change.

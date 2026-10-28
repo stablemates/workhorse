@@ -924,20 +924,22 @@ true for any number of subscribing `Queue` or `Worker` objects.
 
 The hub takes its connection from the pool of the queryable:
 
-| Adapter        | Pool source     |
-| -------------- | --------------- |
-| Drizzle        | `$client`       |
-| TypeORM        | `driver.master` |
-| Prisma, Kysely | `pool` option   |
+| Adapter              | Pool source                            |
+| -------------------- | -------------------------------------- |
+| Drizzle              | `pool` option, or else `$client`       |
+| TypeORM              | `pool` option, or else `driver.master` |
+| Prisma, Kysely, Knex | `pool` option                          |
 
 The key of the hub is that pool object. Its capacity is `options.max`.
 
 #### Polling-only cases
 
-- If the queryable has no pool, it stays polling-only.
-- A pool with a capacity of 1 also stays polling-only. Thus its only connection stays available
-  for claims.
-- A pool that has `connect()` and no `options.max` stays polling-only, because its capacity can be 1.
+- `listeningPool` supports notifications only for a pool with a known `options.max` above 1. A
+  queryable without a pool, or a pool with no `options.max`, has no listener.
+- A `Worker` on a Workhorse `Queue` needs a pool with a known `options.max` of at least 3, so its
+  queue always supports notifications. A worker never polls because its pool is small.
+- A custom `WorkerQueueApi` that returns no subscription has no listener. It has no
+  `subscribeToTaskNotifications`, or the method returns `null` for every queue.
 - If `Worker.run()` starts with no subscription, it logs `workhorse.worker.polling_only` at warn
   level once.
 

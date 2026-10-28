@@ -286,8 +286,7 @@ Seven rows carry a condition the setting name alone cannot.
 - **Dispatch cohorts.** A worker splits its slots into cohorts so fused fast-tier completions do
   not run in lockstep. The quotient rounds up, and a worker that knows its pool size caps the
   default at the connections left after its listener and heartbeat connection. A worker that
-  only polls reserves no listener connection, and a worker with shared heartbeats reserves no
-  heartbeat connection. A JVM `DataSource` reports no size, so the JVM worker caps the default only
+  only polls reserves no listener connection. Every worker reserves the heartbeat connection. A JVM `DataSource` reports no size, so the JVM worker caps the default only
   at a declared `poolMaxSize`. A .NET `NpgsqlDataSource` reports its `Max Pool Size` when pooling
   is on, so the .NET worker caps the default only on a pooled data source. An explicit cohort count
   is never capped.

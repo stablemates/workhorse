@@ -77,6 +77,9 @@ These changes can make code that worked on 0.10 act differently:
    deadline or attempt timeout at once. The worker reports `deadline_exceeded` or `timeout`, not
    `lease_lost` (SM-1884). See "A stale failure or release after a lapsed lease settles its
    cause".
+4. Every SDK removes the heartbeat opt-out (SM-1899, SM-1901, SM-1902). In TypeScript, a worker
+   that gives `sharedHeartbeats`, or that runs on a pool below 3 or of unknown size, now fails at
+   construction. See "Breaking changes".
 
 ### Row retention lag skips a member of an unfinished task group
 
@@ -108,8 +111,9 @@ keeps the first answer, a success or a refusal, so a later call sends no extra s
 not keep a driver error, so the next call queries again. The call gets that driver error unchanged,
 with its SQLSTATE. A method that takes a caller transaction runs the check on that transaction.
 
-`Worker.runOnce()` and `Worker.run()` with `sharedHeartbeats: true` now run the check before the
-first registration, and a refusal rejects them. If a test gives a `Queue` or an `Admin` a fake
+`Worker.runOnce()` now runs the check before its first registration, and a refusal rejects it.
+`Worker.run()` runs the check in its startup readiness check. 0.11.0 also removes
+`sharedHeartbeats`, so every `Worker.run()` on a Workhorse `Queue` runs that check. If a test gives a `Queue` or an `Admin` a fake
 database, the fake must now answer the `compatibility_state` statement.
 
 ### The worker records a cancellation that refuses a completion

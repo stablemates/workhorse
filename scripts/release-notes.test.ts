@@ -38,6 +38,15 @@ function entry(path: string, heading: string): string {
   return end === -1 ? rest : rest.slice(0, end);
 }
 
+/** One `###` subsection of an entry, from its heading to the next `###` heading. */
+function subsection(section: string, heading: string): string {
+  const start = section.indexOf(`\n${heading}\n`);
+  expect(start, `no "${heading}" heading`).toBeGreaterThanOrEqual(0);
+  const rest = section.slice(start + heading.length + 2);
+  const end = rest.search(/^### /m);
+  return end === -1 ? rest : rest.slice(0, end);
+}
+
 /** GitHub's heading anchor: lowercase, punctuation dropped, each space a hyphen. */
 function slug(heading: string): string {
   return heading
@@ -465,6 +474,17 @@ describe("0.11.0 release notes", () => {
       );
       expect(section).toMatch(phrase("compatibility floor stays at **76**"));
       for (const issue of ["SM-1857", "SM-1864", "SM-1884"]) expect(section).toContain(issue);
+    });
+
+    it("lists the heartbeat opt-out removal as a breaking change and as a behavior change", () => {
+      // SM-1900: every SDK removes the opt-out. Its own SDK issue is under "Breaking changes", and
+      // the behavior changes name all three SDK issues.
+      const breaking = subsection(section, "### Breaking changes");
+      expect(breaking).toMatch(/SM-(1899|1901|1902)/);
+      expect(breaking).toMatch(/heartbeat|sharedHeartbeats|SharedHeartbeats|shared_heartbeats/i);
+      const behavior = subsection(section, "### Behavior changes");
+      for (const issue of ["SM-1899", "SM-1901", "SM-1902"]) expect(behavior).toContain(issue);
+      expect(read(path)).not.toMatch(/^## Unreleased/m);
     });
   });
 

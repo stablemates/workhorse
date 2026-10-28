@@ -593,8 +593,6 @@ a call sends no extra statement.
 - `Worker.run()` runs the check in its startup readiness check, on the borrowed connection, as
   [Task lifecycle: Heartbeat readiness](lifecycle.md#heartbeat-readiness) describes. That check
   keeps its answer in the cache of the queue.
-- Under `sharedHeartbeats: true`, `Worker.run()` runs the check before its first registration,
-  without the startup budget.
 - A refusal rejects `run()` or `runOnce()` with the `SchemaCompatibilityError`. A worker on a custom
   `WorkerQueueApi` that is not a `Queue` runs no check.
 
@@ -877,12 +875,12 @@ empty without a claim between them.
 
 #### Heartbeats
 
-One worker heartbeat timer sends every active lease through `heartbeat_many_v2`. It schedules the
-next batch only after the prior call returns. A `busy` lease keeps running, and a busy retry sends
+One worker heartbeat timer sends every active lease through `heartbeat_pool_v1`, which calls
+`heartbeat_many_v2` once for each batch of 100 leases. It schedules the next round only after the
+prior round returns. A `busy` lease keeps running, and a busy retry sends
 it again before the next regular round ([Busy retry](lifecycle.md#busy-retry)).
 
-Unless `shared_heartbeats` is set, every worker on one pool object sends its rounds on the heartbeat
-connection that the pool's `HeartbeatReservation` holds
+Every worker on one pool object sends its rounds on the heartbeat connection that the pool's `HeartbeatReservation` holds
 ([Shared pool connections](#shared-pool-connections)). Thus a saturated pool cannot delay lease
 renewal.
 
@@ -900,7 +898,6 @@ renewal.
 - A round that fails on the connection discards it, and the reservation starts the replacement at
   once.
 - The reservation gives the connection back to the pool when the last worker on the pool stops.
-- With `shared_heartbeats`, each round borrows a pool connection, as any other statement does.
 
 `AsyncWorker` uses the reservation of its async pool, with the same lifecycle.
 
@@ -967,15 +964,14 @@ in order:
 
 One absolute deadline bounds both steps, and also the query itself and the return of its
 connection. If a step does not finish by that deadline, the worker raises `TimeoutError`. The error
-text names the pool, the budget, and `shared_heartbeats=True`. A `ValueError` of the heartbeat
+text names the step, the pool, and the budget. It asks to grow the pool or to check that the
+database accepts connections. A `ValueError` of the heartbeat
 connection, such as a pool without `autocommit=True`, raises at once. Every startup runs step 2,
 also a later run of the same worker, so it proves the headroom of the pool at that start. The
-listener subscribes only after both steps, and it stays best effort. Its failures go to `on_notification_error`, and the worker polls while the
-listener reconnects. With `shared_heartbeats`, only the compatibility query runs, under the pool's
-own timeout. With `shared_heartbeats`, the listener subscribes only when the pool reports a
-`max_size` or `get_max_size()` of at least 2. Otherwise the run logs `workhorse.worker.polling_only`
-once and polls, in each of the three domains. The worker reads that size at each start, just before
-the listener subscribes, so a resize after construction applies (SM-1677).
+listener subscribes only after both steps, and it stays best effort. Its failures go to
+`on_notification_error`, and the worker polls while the listener reconnects. The worker checks no
+pool size before the listener subscribes, because construction already refused a pool below 3 or of
+unknown size. The worker logs no polling warning.
 
 **Claim gate.** The reservation is ready while it holds its connection or lends it to a round
 within that round's time. While it is not ready, the worker starts no claim. Each run has a
@@ -1343,7 +1339,7 @@ the `children` array that `create_children_v1` returns. Thus both drivers join a
 
 - An `AsyncWorker` uses the `PoolHub` of its async pool
   ([Shared pool connections](#shared-pool-connections)). Each run subscribes to the heartbeat
-  reservation of the hub, unless `shared_heartbeats` is set. After the startup check, the run also
+  reservation of the hub. After the startup check, the run also
   subscribes to the listener of the hub.
 - The run does not own these connections. Every worker on the pool shares the one heartbeat
   connection and the one listener connection of the hub. The `AsyncConnectionOwner` of the hub
@@ -1358,8 +1354,9 @@ Both factories accept `queue`, `queues`, `worker_id`, `concurrency`, `poll_ms`, 
 `retry_delay_ms`, `schedule_namespaces`, and `schedule_catchup_limit`. These options have the same
 validation and limits as in `Worker`.
 
-They also accept `shared_heartbeats` and the `on_notification_error` and `on_registration_error`
-callbacks. Neither factory accepts a connection factory. The reason is that the worker takes its
+They also accept the `on_notification_error` and `on_registration_error` callbacks. They raise
+`TypeError` for the removed heartbeat opt-out, and the error text names the removal. Neither
+factory accepts a connection factory. The reason is that the worker takes its
 heartbeat and listener connections from the pool.
 
 `registry_interval_ms` defaults to 5,000. It accepts `0` to disable registration, or a non-boolean
@@ -1863,7 +1860,7 @@ wait at the first of the two.
 
 #### Notifications
 
-If the pool permits at least two connections, `Worker.Run` gets one dedicated connection and runs
+Unless `WorkerOptions.PollingOnly` is set, `Worker.Run` gets one dedicated connection and runs
 `LISTEN workhorse_tasks`. A payload equal to a configured queue name or `*` wakes the claim loop.
 The listener also wakes the loop after it connects. Thus polling finds work that was committed
 during a connection gap.
@@ -1872,11 +1869,12 @@ Listener failure never stops dispatch. The worker logs a warning through `Worker
 continues to poll. It reconnects after an exponential delay from 100 milliseconds through 5,000
 milliseconds.
 
-If the pool is limited to one connection, the worker logs once. It then uses polling and does not
-start the listener.
+`NewWorker` refuses a pool with a `MaxConns` below 3, so the pool always has a connection for the
+listener.
 
 PgBouncer transaction mode cannot keep the session that owns `LISTEN`. For that deployment,
-`WorkerOptions.PollingOnly` disables the listener and logs the polling fallback.
+`WorkerOptions.PollingOnly` disables the listener and logs "PostgreSQL notification listener
+disabled; worker is using polling".
 
 On clean shutdown, the listener gives `UNLISTEN workhorse_tasks` up to 1,000 milliseconds. Then it
 returns its connection to the pool. The last worker that leaves stops the listener. The logger of
@@ -1939,8 +1937,9 @@ the supervisor ends.
 #### Connections and maintenance
 
 `Worker.Run` borrows a pool connection for each claim or settlement query. While a handler runs, no
-connection stays checked out. If the pool has one connection, heartbeat, maintenance, claim, and
-settlement queries run safely one after the other.
+connection stays checked out. The heartbeat uses its reserved connection, and maintenance, claim,
+and settlement queries borrow ordinary connections. `NewWorker` refuses a pool with a `MaxConns`
+below 3.
 
 A separate maintenance goroutine calls `tick_v1(100, 100)` immediately. Then it repeats the call on
 every `MaintenanceInterval`. Handler duration and claim throughput do not delay it.
@@ -2117,13 +2116,13 @@ The Ruby SDK contains the worker and the handler context for Ruby.
 Ruby `Stablemates::Workhorse::Worker.new(pool, ...)` takes a `ConnectionPool`, or any object whose
 `with` yields a `PG::Connection`. It refuses a bare `PG::Connection`.
 
-Without `shared_heartbeats: true`, it requires an Integer pool `size` of at least 3. Thus it also
-refuses a missing or non-integer `size`. Every worker built on one pool shares one
+It requires an Integer pool `size` of at least 3, and raises `ArgumentError` otherwise. Thus it
+also refuses a missing or non-integer `size`. It raises `ArgumentError` for the removed heartbeat
+opt-out, and the error text names the removal. Every worker built on one pool shares one
 `Worker::Heartbeat`. That heartbeat holds one pool connection while a worker on the pool runs or a
 member remains. Each run reserves it before the worker registers, as
-[Heartbeat connection](lifecycle.md#heartbeat-connection) describes. With `shared_heartbeats: true`,
-a run subscribes to `Worker::Listener.shared(pool)` only when the pool `size` is an Integer of at
-least 2. Otherwise the run logs `workhorse.worker.polling_only` once and polls.
+[Heartbeat connection](lifecycle.md#heartbeat-connection) describes. A run subscribes to
+`Worker::Listener.shared(pool)` unless `polling_only` is set. The worker logs no polling warning.
 
 | Option                         | Default                                                                                    | Accepts                                                          |
 | ------------------------------ | ------------------------------------------------------------------------------------------ | ---------------------------------------------------------------- |
@@ -2660,12 +2659,10 @@ its range, so the wait cannot overflow its jitter or its deadline arithmetic.
 The worker expects a listener only when all of these conditions are true:
 
 - `listen_config` is set;
-- `polling_only` is false;
-- the pool permits at least two connections.
+- `polling_only` is false.
 
 `Worker::new` rejects a pool whose maximum size is below 3. The reason is that heartbeats reserve
-one connection in addition to one claim and one settlement. `shared_heartbeats` disables this
-reservation and sends heartbeat rounds through the shared pool.
+one connection in addition to one claim and one settlement. No option disables this reservation.
 
 #### Heartbeat fencing
 
@@ -3031,8 +3028,7 @@ throws `IllegalArgumentException` before any statement.
 The smallest supported `heartbeat` is 100 milliseconds. The worker accepts a shorter value
 ([Supported heartbeat interval](lifecycle.md#supported-heartbeat-interval)).
 
-`disableRegistry(true)` turns off the worker registry. `sharedHeartbeats(true)` makes heartbeat
-rounds borrow from the `DataSource`. `pollingOnly(true)` opens no listener. `retryDelay` takes a
+`disableRegistry(true)` turns off the worker registry. `pollingOnly(true)` opens no listener. `retryDelay` takes a
 `RetryDelay` that returns a delay of 0 through 2,147,483,647 milliseconds, or `null` for the
 persisted policy. The worker rounds the delay to the nearest millisecond, half up. A negative delay,
 or one that rounds above the limit, throws `IllegalArgumentException` before `fail_v1` (ADR 0111). A `DataSource` reports no pool size, so only a declared `poolMaxSize` caps the
@@ -3060,13 +3056,9 @@ Workers built on one `DataSource` object share one listener, `Listener.shared(da
 is the object itself, by reference identity, never by `equals`, so a wrapper of a pool is a key of
 its own. The listener holds one connection from the `DataSource` while the `run` or `start` of any
 of these workers runs. A worker under `pollingOnly(true)` or `runOnce` does not subscribe to it.
-Under `sharedHeartbeats(true)`, a worker subscribes only when the caller declares the pool size
-with `poolMaxSize`, and the declared size is at least 2. A `DataSource` reports no size, and the
-worker never probes it. Otherwise the worker logs `workhorse.worker.polling_only` once, with
-`workhorse.worker.pool_max_size` set to the declared size or `unknown`, and polls. The worker trusts
-the declared size. If an operator makes the pool smaller than that size, the listener can hold the
-last connection. Without the opt-out, `build()` refuses a declared size below 3 with
-`IllegalArgumentException`. A
+A `DataSource` reports no size, and the worker never probes it. `build()` refuses a declared
+`poolMaxSize` below 3 with `IllegalArgumentException`. The worker trusts the declared size. Without
+a declared size, the readiness check at the start of each run is the only check. A
 notification wakes each worker whose queues it names, and `*` wakes every worker. A callback that
 throws does not stop the wakes of another worker. After a listener failure, the listener calls the
 `onNotificationError` of each worker and reconnects with a backoff of 100 milliseconds through 5
@@ -3090,18 +3082,17 @@ default.
   3. The worker borrows one ordinary connection, runs the compatibility query, and returns the
      connection at once. This is the readiness check.
 
-  Thus a stalled listener does not use the time of the readiness check, and a pool of 2 still
-  fails the check, because the listener holds the second connection. If the reservation and the
-  readiness check together do not finish within the budget, the run throws
-  `WorkhorseException`. Its text names the `DataSource`, the budget, and the `sharedHeartbeats(true)`
-  opt-out. The budget is at least 3 connections: the listener, the heartbeat, and one statement. A
+  Thus a stalled listener does not use the time of the readiness check, and a pool of 2 still fails
+  the check, because the listener holds the second connection. If the reservation and the readiness
+  check together do not finish within the budget, the run throws `WorkhorseException`. Its text
+  names the `DataSource`, the budget, the size rule, and the declared `poolMaxSize` or that none is
+  declared. The budget is at least 3 connections: the listener, the heartbeat, and one statement. A
   worker that does not listen needs at least 2. The listener is best effort. If it does not listen
   when its wait ends, the worker logs `workhorse.worker.polling_only` once and polls, and the
-  listener keeps trying. The readiness check proves only the headroom at that moment. It does not prove later
-  availability, or the total budget of one physical pool across wrappers. As for the other steps
-  before the claims, a stop ends each wait when the stop deadline passes, and a stopping worker ends
-  its run without the error. A worker with `sharedHeartbeats(true)` reserves nothing, and runs its
-  compatibility check without the startup budget.
+  listener keeps trying. The readiness check proves only the headroom at that moment. It does not
+  prove later availability, or the total budget of one physical pool across wrappers. As for the
+  other steps before the claims, a stop ends each wait when the stop deadline passes, and a stopping
+  worker ends its run without the error.
 
 - **Rounds.** A round waits for a checkout only inside its round bound, 7.5 seconds by default. The
   shorter deadlines of a busy retry do not change. If no connection arrives by then, the round
@@ -3139,8 +3130,7 @@ default.
   `runOnce` ends while the gate is closed, so it does not wait for the database.
 
 [Task lifecycle: Heartbeat schedule](lifecycle.md#heartbeat-schedule) states the schedule. Every
-other statement borrows a connection for its own duration. A worker with `sharedHeartbeats(true)`
-borrows a connection for each round, and reserves none at start.
+other statement borrows a connection for its own duration.
 
 If a claim fails with SQLSTATE `0A000` because the connection does not use read committed
 isolation, the worker logs `workhorse.worker.claim_isolation`. It treats the claim as empty, and the
@@ -3724,12 +3714,11 @@ The worker connections follow
   shared heartbeat and listener of each data source, so it keeps no data source alive. The worker
   does not unwrap a data source.
 - Every worker on one data source shares one listener connection and one heartbeat connection.
-- The `Worker` constructor reads `Max Pool Size` from the connection string. If the size is below 3
-  and `SharedHeartbeats` is `false`, it throws `ArgumentException`. With `Pooling=false` the size is
-  unknown, and the readiness check is the only check.
-- `SharedHeartbeats = true` is the ADR 0071 opt-out. Heartbeat rounds then open a connection for each
-  round, and the worker reserves none. Under the opt-out, the listener starts only when the pool
-  size is known and at least 2. Otherwise the worker logs `workhorse.worker.polling_only` and polls.
+- The `Worker` constructor reads `Max Pool Size` from the connection string. If the size is below 3,
+  it throws `ArgumentException`. With `Pooling=false` the size is unknown, and the readiness check
+  is the only check.
+- Every worker reserves the heartbeat connection. 0.11.0 removed the ADR 0071 opt-out. The listener
+  starts unless `PollingOnly` is set, and it checks no pool size.
 
 The startup budget is the larger of `Heartbeat` and 5 seconds. The reservation and the readiness
 check share this one budget. In order:
@@ -3743,10 +3732,10 @@ check share this one budget. In order:
    connection. This is the readiness check.
 
 If the reservation or the readiness check does not end within the budget, `RunAsync` throws
-`WorkerStartupException`. Its text names the budget in milliseconds and the `SharedHeartbeats`
-opt-out. A worker that listens needs at least 3 connections: the listener, the heartbeat, and one
-statement. A worker that does not listen needs at least 2. A worker with `SharedHeartbeats` runs its
-compatibility check without the startup budget.
+`WorkerStartupException`. Its text names the budget in milliseconds, the size rule, and the `Max
+Pool Size` of the data source, or that the data source does not pool. A worker that listens needs
+at least 3 connections: the listener, the heartbeat, and one statement. A worker that does not
+listen needs at least 2.
 
 The heartbeat and the listener each run on a dedicated background thread, and they use the
 synchronous Npgsql API. Thus a thread pool that blocking handlers starve cannot delay a lease
@@ -3913,8 +3902,7 @@ the options, so a later change to the `WorkerOptions` object has no effect. An i
 | `ShutdownGrace`              | 25 seconds                                                                                                                                   | 0 through 1 day                                   |
 
 Each upper bound of "and more" is `int.MaxValue` milliseconds. `DisableRegistry = true` turns off
-the worker registry. `SharedHeartbeats = true` makes each heartbeat round open its own connection.
-`PollingOnly = true` opens no listener. On a pooled data source, `Max Pool Size` caps the default
+the worker registry. `PollingOnly = true` opens no listener. On a pooled data source, `Max Pool Size` caps the default
 `Cohorts` ([.NET worker](fast-tier.md#net-worker)). `RetryDelay` is a delegate over the attempt and the
 `ClaimedTask` that returns a `TimeSpan?`. The worker rounds the delay to the nearest millisecond,
 half up, and `null` keeps the persisted policy. A negative delay, or one that rounds above
@@ -4176,9 +4164,9 @@ The `Workhorse:*` configuration keys and their defaults:
 | `Workhorse:Worker:ScheduleNamespaces`         | `string[]`  | `[]`          |
 | `Workhorse:Worker:ScheduleCatchupLimit`       | `int`       | 100           |
 | `Workhorse:Worker:ShutdownGrace`              | `TimeSpan`  | `00:00:25`    |
-| `Workhorse:Worker:SharedHeartbeats`           | `bool`      | `false`       |
 
-A configured list key replaces its default list. `api/dotnet.txt` records each key in its last
+A configured list key replaces its default list. Binding refuses the key of the heartbeat opt-out,
+which 0.11.0 removed, with an `InvalidOperationException` that names the removal. `api/dotnet.txt` records each key in its last
 section.
 
 ### .NET EF Core transactions

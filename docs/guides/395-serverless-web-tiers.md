@@ -148,8 +148,7 @@ or Fargate service, or a
 [Cloud Run worker pool](https://docs.cloud.google.com/run/docs/overview/what-is-cloud-run#services-jobs-worker-pools).
 
 Give the worker a pool with space for its dedicated connections.
-[Connection pooling](390-connection-pooling.md) explains the budget. It also explains the opt-out
-for a pool that cannot give those connections.
+[Connection pooling](390-connection-pooling.md) explains the budget and the minimum pool size.
 
 [Workers](310-workers.md) explains the process definition, probes, termination signals, and drain.
 [Production telemetry](350-production-telemetry.md) explains how to observe the separate worker

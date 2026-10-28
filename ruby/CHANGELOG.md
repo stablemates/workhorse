@@ -48,6 +48,9 @@ These changes can make code that worked on 0.10 act differently:
    deadline or attempt timeout at once. The worker reports `deadline_exceeded` or `timeout`, not
    `lease_lost` (SM-1884). See "A stale failure or release after a lapsed lease settles its
    cause".
+4. Every SDK removes the heartbeat opt-out (SM-1899, SM-1901, SM-1902). In this SDK,
+   `Worker.new` raises `ArgumentError` for `shared_heartbeats:`, and for a pool with a size below
+   3 or with no reported size. See "Breaking changes".
 
 ### A step of the wall clock no longer moves the expiry request
 

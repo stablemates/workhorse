@@ -294,7 +294,7 @@ Let `R` be the number of worker replicas. Let `P` be the maximum of each node-po
 worker tier can open `R × P` client connections.
 
 - Notification-assisted dispatch reserves one connection in each pool for `LISTEN`.
-- Heartbeats reserve one more connection in each pool, unless you set `sharedHeartbeats`.
+- Heartbeats reserve one more connection in each pool. Thus each pool needs a `max` of at least 3.
 - So `R` replicas leave at most `R × (P - 2)` worker-pool slots for queries.
 
 **Example.** Two worker replicas each use a pool with `max: 10`.
