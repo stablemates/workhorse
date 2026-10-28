@@ -579,6 +579,26 @@ RSpec.describe "Worker on the fast tier against PostgreSQL" do
     expect(running[:peak]).to be <= 2
   end
 
+  # SM-1853: a task that the handler executor refuses never reaches run_claimed_task, so admit
+  # must clear the tier entries that the claim recorded for it.
+  {"fast" => true, "full" => false}.each do |tier, fast|
+    it "clears the tier entries of a #{tier}-tier task that the handler executor refuses" do
+      make_fast if fast
+      queue.enqueue("refused", {}, max_attempts: 1)
+      subject = worker(concurrency: 1).handle("refused") { raise "the handler must not run" }
+      allow(subject).to receive(:handler_executor).and_wrap_original do |original|
+        original.call.tap do |executor|
+          allow(executor).to receive(:post).and_raise(Concurrent::RejectedExecutionError, "the executor refused the task")
+        end
+      end
+
+      expect { subject.run_once }.to raise_error(Concurrent::RejectedExecutionError, "the executor refused the task")
+      expect(subject.instance_variable_get(:@fast_task_ids)).to be_empty
+      expect(subject.instance_variable_get(:@tier_reads)).to be_empty
+      expect(subject.instance_variable_get(:@active)).to be_empty
+    end
+  end
+
   it "keeps fused refills within the executor's threads while completions hand over in a row" do
     make_fast
     task_ids = Array.new(6) { |index| queue.enqueue("chain", {"index" => index}).task_id }

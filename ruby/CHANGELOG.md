@@ -14,6 +14,18 @@ the rebuilt `read-surface-1.tar.gz`. Its `bundle.json` records the sha256
 
 The `dashboard/v1` procedures and the read surface version do not change (SM-1858).
 
+### A worker no longer keeps the tier entries of a task that the executor refuses
+
+The worker records each claimed task in its dispatch state. A fast-tier claim records the task ID
+in `@fast_task_ids`. A full-tier claim records the task ID and a deferred tier read in
+`@tier_reads`. Only the end of a handler run removed these entries.
+
+Before this change, the handler executor could refuse a task, for example after its shutdown. The
+task then never ran, and the worker kept its tier entry for the life of the `Worker` object
+(SM-1853). Each refusal kept the entry of at most one task.
+
+Now the worker removes the task from both collections when the executor refuses the task.
+
 ## 0.10.0 — 2026-10-26
 
 The npm packages, Python distribution, Go module, Rust crate, Ruby gem, JVM artifacts, and .NET

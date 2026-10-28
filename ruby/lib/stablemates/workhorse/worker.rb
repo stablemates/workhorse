@@ -1300,6 +1300,8 @@ module Stablemates
         # A task the executor refused never runs, so the drain must not wait for it.
         @active.delete(task.id)
         @dispatch_order.delete(task.id)
+        @fast_task_ids.delete(task.id)
+        @tier_reads.delete(task.id)
         slots.cohort_active[cohort] -= 1 if slots.thread_cohorts.delete(task.id)
         raise
       end
