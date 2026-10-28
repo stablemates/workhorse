@@ -817,7 +817,16 @@ def test_batch_member_cancellation_does_not_disturb_its_peer(database_url: str) 
             # the lease is longer than that wait, so it cannot lapse first.
             lease_ms=60_000,
             heartbeat_ms=500,
-        ).handle_batch("batch.cancel", max_size=2, linger_ms=100, handler=handle_batch)
+        ).handle_batch(
+            "batch.cancel",
+            max_size=2,
+            # The batch must hold both members. A short linger dispatches a member alone when its
+            # peer starts late, as on a loaded host. Each handler call then finds no matching item,
+            # and next() raises StopIteration. A full batch dispatches as soon as its second member
+            # arrives, so the long linger costs no time.
+            linger_ms=60_000,
+            handler=handle_batch,
+        )
 
         assert worker.run_once() is True
         assert handler_errors == []
