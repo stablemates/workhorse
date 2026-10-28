@@ -10,7 +10,9 @@ use tokio_postgres::Row;
 use uuid::Uuid;
 
 use crate::admin::{validate_audit, Admin, AdminAudit};
-use crate::enqueue::{enqueue_results, EnqueueClient, TokioTransport};
+use crate::enqueue::{
+    enqueue_results, validate_callback, validate_requests, EnqueueClient, TokioTransport,
+};
 use crate::queue::{exactly_one, Executor, Queue};
 use crate::sql_catalogue_generated as sql;
 use crate::types::{string_enum, TaskState};
@@ -450,6 +452,8 @@ impl TaskGroupContext<'_> {
     pub async fn add(&self, requests: Vec<EnqueueRequest>) -> Result<Vec<EnqueueResult>, Error> {
         let context = self.context;
         context.check(Operation::AddToTaskGroup)?;
+        // Every request is checked before the membership read.
+        validate_add(&requests)?;
         let task = context.task();
         let group_id = match self.get().await? {
             Some(TaskGroupLink { role: TaskGroupRole::Member, group, .. }) => group.id,
@@ -480,6 +484,12 @@ async fn create<E: Executor>(
         ("onSuccess", &callbacks.on_success),
         ("onFailure", &callbacks.on_failure),
     ];
+    // Every callback and member request is checked before the first statement. Each callback is
+    // prepared with its own compatibility check and contract read.
+    for request in entries.iter().filter_map(|(_, request)| request.as_ref()) {
+        validate_callback(request)?;
+    }
+    validate_requests(requests)?;
     let mut known: Vec<&str> = requests.iter().map(|request| request.task_type.as_str()).collect();
     known.extend(
         entries
@@ -535,13 +545,7 @@ async fn add<E: Executor>(
     requests: &[EnqueueRequest],
     member: Member<'_>,
 ) -> Result<Vec<EnqueueResult>, Error> {
-    if requests.len() > sql::MAX_ENQUEUE_BATCH_SIZE {
-        return Err(Error::invalid(format!(
-            "a task group add accepts at most {} tasks",
-            sql::MAX_ENQUEUE_BATCH_SIZE
-        )));
-    }
-    validate_coalescing(requests)?;
+    validate_add(requests)?;
     if requests.is_empty() {
         return Ok(Vec::new());
     }
@@ -585,6 +589,18 @@ async fn find<E: Executor>(executor: &E, task_id: Uuid) -> Result<Option<TaskGro
             .transpose()?,
         group: task_group(row)?,
     }))
+}
+
+/// Checks the size of an add and the options of every request before the first statement.
+fn validate_add(requests: &[EnqueueRequest]) -> Result<(), Error> {
+    if requests.len() > sql::MAX_ENQUEUE_BATCH_SIZE {
+        return Err(Error::invalid(format!(
+            "a task group add accepts at most {} tasks",
+            sql::MAX_ENQUEUE_BATCH_SIZE
+        )));
+    }
+    validate_coalescing(requests)?;
+    validate_requests(requests)
 }
 
 /// A group add refuses debounce and throttle: they could return a task that is not a member.

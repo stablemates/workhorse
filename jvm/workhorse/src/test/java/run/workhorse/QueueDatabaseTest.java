@@ -21,8 +21,10 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 import org.jspecify.annotations.Nullable;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -167,6 +169,60 @@ class QueueDatabaseTest {
   }
 
   // Task groups with completion callbacks.
+
+  @Test
+  void aTaskGroupEncodesEachPayloadOneTime() throws SQLException {
+    // The option check before the first statement must not call the codec. A codec can write a
+    // value only once, for example an Iterator in the Jackson codec, or refuse null (SM-1883).
+    Map<String, AtomicInteger> encodes = new ConcurrentHashMap<>();
+    JsonCodec standard = JsonCodec.standard();
+    JsonCodec codec =
+        new JsonCodec() {
+          @Override
+          public String encode(@Nullable Object value) {
+            // The check before the first statement must not call the codec, also not with null.
+            if (value == null) {
+              throw new IllegalArgumentException("this codec refuses null");
+            }
+            if (value instanceof Map<?, ?> map && map.get("count") instanceof String key) {
+              encodes.computeIfAbsent(key, ignored -> new AtomicInteger()).incrementAndGet();
+            }
+            return standard.encode(value);
+          }
+
+          // JsonCodec fixes this signature: the type argument comes from the call site.
+          @SuppressWarnings("TypeParameterUnusedInFormals")
+          @Override
+          public <T extends @Nullable Object> T decode(String json, java.lang.reflect.Type type) {
+            return standard.decode(json, type);
+          }
+        };
+    Queue counted =
+        new Queue(ConnectionSource.of(dataSource), QueueOptions.builder().codec(codec).build());
+    String name = unique("group-payload");
+    TaskGroup open =
+        counted.createTaskGroup(
+            new TaskGroupCallbacks(
+                EnqueueRequest.of("done", Map.of("count", "callback"), queueOptions(name).build()),
+                null,
+                null));
+    counted.addToTaskGroup(
+        open.id(),
+        List.of(EnqueueRequest.of("member", Map.of("count", "added"), queueOptions(name).build())));
+    counted.taskGroup(
+        TaskGroupCallbacks.none(),
+        group ->
+            group.add(
+                List.of(
+                    EnqueueRequest.of(
+                        "member", Map.of("count", "member"), queueOptions(name).build()))));
+    assertEquals(
+        Map.of("callback", 1, "member", 1, "added", 1),
+        encodes.entrySet().stream()
+            .collect(
+                java.util.stream.Collectors.toMap(
+                    Map.Entry::getKey, entry -> entry.getValue().get())));
+  }
 
   @Test
   void createsAddsSealsAndReadsATaskGroup() throws SQLException {

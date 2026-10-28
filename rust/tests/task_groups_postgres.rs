@@ -176,6 +176,55 @@ async fn a_sealed_group_runs_its_callback_after_a_member_adds_a_task() {
     assert_eq!((member.role, member.callback), (TaskGroupRole::Member, None));
 }
 
+/// A create and an add check the options of every request before the first statement. Each call
+/// puts a valid request before an invalid one. The queue has a closed connection, so a statement
+/// before the refusal gives a connection error, not the refusal.
+#[tokio::test]
+async fn every_request_option_is_checked_before_any_statement() {
+    let Some(harness) = harness("task_groups_option_order").await else { return };
+    let (client, connection) =
+        tokio_postgres::connect(harness.database.url(), NoTls).await.unwrap();
+    drop(connection);
+    let closed = Queue::new(client, QUEUE);
+    let valid = request("member", json!({}));
+    let invalid = request("member", json!({}))
+        .with_options(EnqueueOptions { max_attempts: 101, ..Default::default() });
+    let refused = |result: Result<(), Error>| match result {
+        Err(Error::InvalidArgument(message)) => {
+            assert!(message.contains("max attempts must be between 1 and 100"), "got {message}");
+        }
+        other => panic!("expected a refusal before any statement, got {other:?}"),
+    };
+    let callbacks = TaskGroupCallbacks {
+        on_finish: Some(valid.clone()),
+        on_success: Some(invalid.clone()),
+        ..Default::default()
+    };
+    refused(closed.create_task_group(callbacks).await.map(|_| ()));
+    let callbacks = TaskGroupCallbacks { on_finish: Some(valid.clone()), ..Default::default() };
+    let members = vec![valid.clone(), invalid.clone()];
+    refused(closed.task_group(callbacks, members.clone()).await.map(|_| ()));
+    refused(closed.add_to_task_group(Uuid::new_v4(), members.clone()).await.map(|_| ()));
+
+    // The task is not a member. Its add is refused for the invalid option, so the membership read
+    // did not run first.
+    let worker = harness.worker();
+    let seen: Arc<Mutex<Option<Result<(), Error>>>> = Arc::default();
+    let reported = Arc::clone(&seen);
+    worker.handle("lonely", move |_: Value, context: HandlerContext| {
+        let reported = Arc::clone(&reported);
+        let members = members.clone();
+        async move {
+            let added = context.task_group().add(members).await.map(|_| ());
+            *reported.lock().unwrap() = Some(added);
+            Ok(json!(null))
+        }
+    });
+    harness.queue.enqueue("lonely", &json!({}), EnqueueOptions::default()).await.unwrap();
+    assert!(worker.run_once().await.unwrap());
+    refused(seen.lock().unwrap().take().expect("the handler ran"));
+}
+
 #[tokio::test]
 async fn an_operator_cancel_finishes_an_open_group_with_its_failure_callback() {
     let Some(harness) = harness("task_groups_cancel").await else { return };

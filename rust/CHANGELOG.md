@@ -105,6 +105,15 @@ Before migration 0089, `prune_worker_registry_v1` deleted expired kept pauses wi
 the planner could not match to `worker_pause_tombstone_expires_idx`. Each maintenance pass read the
 whole table. Now the delete reads only the expired rows through the index (SM-1866).
 
+### A task group checks every request before its first statement
+
+Before this change, `Queue::create_task_group` and `Queue::task_group` prepared each callback with
+its compatibility check and contract read before they checked the next callback and the members.
+`TaskGroupContext::add` read the membership of its task before it checked the requests (SM-1883).
+
+Now these calls check the options of every callback and request before their first statement. The
+errors do not change. Only their time changes.
+
 ## 0.10.0 — 2026-10-26
 
 The npm packages, Python distribution, Go module, Rust crate, Ruby gem, JVM artifacts, and .NET

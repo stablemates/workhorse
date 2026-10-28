@@ -659,6 +659,64 @@ describe("task groups", () => {
     });
   });
 
+  it("checks every request option of a create and an add before any statement", async () => {
+    const group = await queue.createTaskGroup({});
+    const { group: sealed } = await queue.taskGroup({}, (builder) =>
+      builder.add([member("checked-add-member", 1)]),
+    );
+    const running = (await claimAll("checked-add-member"))[0]!;
+    let queryCount = 0;
+    const countedDatabase: Queryable = {
+      query(statement, values) {
+        queryCount += 1;
+        return pool.query(statement, values as unknown[]);
+      },
+    };
+    // A new queue has no compatibility answer and no cached contract, so each read is a statement.
+    const countedQueue = new Queue(countedDatabase, "default");
+    const valid = member("checked-add", 1);
+    const invalid = member("checked-add", 2, { maxAttempts: 101 });
+    const message = "maxAttempts must be an integer between 1 and 100, or 0 for the default";
+
+    await expect(
+      countedQueue.createTaskGroup({
+        onFinish: { type: "cb", payload: null },
+        onSuccess: { type: "cb", payload: null, options: { priority: 101 } },
+      }),
+    ).rejects.toThrow("priority must be an integer between 0 and 100");
+    let built = false;
+    await expect(
+      countedQueue.taskGroup({}, (builder) => {
+        builder.add([valid, invalid]);
+        built = true;
+      }),
+    ).rejects.toThrow(message);
+    // The build runs to its end, as before. The options are checked after it.
+    expect(built).toBe(true);
+    await expect(
+      countedQueue.taskGroup(
+        { onFinish: { type: "cb", payload: null, options: { maxAttempts: 101 } } },
+        (builder) => builder.add([valid]),
+      ),
+    ).rejects.toThrow(message);
+    await expect(countedQueue.addToTaskGroup(group.id, [valid, invalid])).rejects.toThrow(message);
+    await expect(
+      countedQueue.addToTaskGroupAsMember(running, "group-worker", [valid, invalid]),
+    ).rejects.toThrow(message);
+    await expect(countedQueue.enqueueMany([valid, invalid])).rejects.toThrow(message);
+    // A JavaScript caller can pass null for a coalescing option.
+    for (const mode of ["idempotency", "debounce", "throttle"]) {
+      const nullMode = member("checked-add", 3, { [mode]: null });
+      await expect(countedQueue.enqueueMany([valid, nullMode])).rejects.toThrow(TypeError);
+    }
+    const nullKey = member("checked-add", 4, { idempotency: null });
+    await expect(countedQueue.addToTaskGroup(group.id, [valid, nullKey])).rejects.toThrow(
+      TypeError,
+    );
+    expect(queryCount).toBe(0);
+    await expect(queue.getTaskGroup(sealed.id)).resolves.toMatchObject({ counts: { total: 1 } });
+  });
+
   it("cancels a group: it seals, cancels live members, and finishes through onFailure", async () => {
     const group = await queue.createTaskGroup(callbacks("cancel-cb"));
     await queue.addToTaskGroup(group.id, [

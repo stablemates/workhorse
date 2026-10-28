@@ -90,6 +90,7 @@ import {
   TaskContractValidationError,
   TaskValueSizeLimitError,
   maxAttemptsValue,
+  validateEnqueueBatch,
   validateEnqueueOptions,
   validateQueueOptions,
   validateTaskPriority,
@@ -329,7 +330,9 @@ export class Queue {
     requests: readonly EnqueueRequest[],
     transaction: Queryable = this.database,
   ): Promise<string[]> {
-    // An empty batch sends no statement, so it needs no check.
+    // An empty batch sends no statement, so it needs no check. The options of every request are
+    // checked before the compatibility check.
+    validateEnqueueBatch(requests);
     if (requests.length > 0) await this.checkSchema(transaction);
     return this.modules.enqueueContracts.enqueueMany(requests, transaction);
   }
@@ -338,7 +341,9 @@ export class Queue {
     requests: readonly EnqueueRequest[],
     transaction: Queryable = this.database,
   ): Promise<EnqueueResult[]> {
-    // An empty batch sends no statement, so it needs no check.
+    // An empty batch sends no statement, so it needs no check. The options of every request are
+    // checked before the compatibility check.
+    validateEnqueueBatch(requests);
     if (requests.length > 0) await this.checkSchema(transaction);
     return this.modules.enqueueContracts.enqueueManyWithResults(requests, transaction);
   }
@@ -352,6 +357,7 @@ export class Queue {
     callbacks: TaskGroupCallbacks = {},
     transaction: Queryable = this.database,
   ): Promise<TaskGroup> {
+    this.modules.taskGroups.validateCreate(callbacks);
     await this.checkSchema(transaction);
     return this.modules.taskGroups.create(callbacks, transaction);
   }
@@ -365,8 +371,10 @@ export class Queue {
     build: (group: TaskGroupBuilder) => void | Promise<void>,
     transaction: Queryable = this.database,
   ): Promise<TaskGroupBlockResult> {
-    await this.checkSchema(transaction);
-    return this.modules.taskGroups.createSealed(callbacks, build, transaction);
+    // The group checks its callbacks and each added request before this compatibility check.
+    return this.modules.taskGroups.createSealed(callbacks, build, transaction, () =>
+      this.checkSchema(transaction),
+    );
   }
 
   /**
@@ -378,6 +386,7 @@ export class Queue {
     requests: readonly EnqueueRequest[],
     transaction: Queryable = this.database,
   ): Promise<EnqueueResult[]> {
+    this.modules.taskGroups.validateAdd(requests);
     await this.checkSchema(transaction);
     return this.modules.taskGroups.add(groupId, requests, transaction);
   }
@@ -388,6 +397,7 @@ export class Queue {
     workerId: string,
     requests: readonly EnqueueRequest[],
   ): Promise<EnqueueResult[]> {
+    this.modules.taskGroups.validateAdd(requests);
     await this.checkSchema();
     return this.modules.taskGroups.addAsMember(task, workerId, requests);
   }
@@ -942,6 +952,7 @@ export class Queue {
     payload: TPayload,
     options: ChildTaskOptions = {},
   ): Promise<CreateChildResult<TResult>> {
+    this.modules.childTasks.validateChild(workerId, name, options);
     await this.checkSchema();
     return this.modules.childTasks.createChild(parent, workerId, name, type, payload, options);
   }
@@ -951,6 +962,7 @@ export class Queue {
     workerId: string,
     children: readonly ChildTaskRequest[],
   ): Promise<CreateChildrenResult<ChildOutcomes<TResult>>> {
+    this.modules.childTasks.validateChildren(parent, workerId, children);
     await this.checkSchema();
     return this.modules.childTasks.createChildren<TResult>(parent, workerId, children);
   }
@@ -960,6 +972,7 @@ export class Queue {
     workerId: string,
     children: readonly ChildTaskRequest[],
   ): Promise<CreateChildrenResult<TResult>> {
+    this.modules.childTasks.validateChildren(parent, workerId, children);
     await this.checkSchema();
     return this.modules.childTasks.createChildrenAll<TResult>(parent, workerId, children);
   }

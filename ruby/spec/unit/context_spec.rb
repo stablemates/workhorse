@@ -150,6 +150,21 @@ RSpec.describe W::HandlerContext do
     expect(executor.statements).to be_empty
   end
 
+  it "checks every child and every added request before any statement" do
+    executor = RecordingExecutor.new
+    # The tier lookup can read PostgreSQL, so the option check must run before it.
+    ctx = described_class.new(executor: executor, queue: W::Queue.new(executor), task: task, worker_id: "w",
+      cancellation: token, arbiter: arbiter, fast_tier: -> { raise "the tier lookup must not run" })
+    valid = W::ChildTaskRequest.new(name: "valid", task_type: "t", payload: {})
+    invalid = W::ChildTaskRequest.new(name: "invalid", task_type: "t", payload: {}, options: {max_attempts: 101})
+    expect { ctx.run_children([valid, invalid]) }.to raise_error(ArgumentError, /max attempts/)
+    expect { ctx.run_children_all([valid, invalid]) }.to raise_error(ArgumentError, /max attempts/)
+    requests = [W::EnqueueRequest.new(task_type: "t", payload: {}),
+      W::EnqueueRequest.new(task_type: "t", payload: {}, priority: 101)]
+    expect { ctx.task_group.add(requests) }.to raise_error(ArgumentError, /enqueue request 2: .*priority/)
+    expect(executor.statements).to be_empty
+  end
+
   it "reads the task group one time for each activation" do
     executor = FakeExecutor.new { [] }
     ctx = context(executor)

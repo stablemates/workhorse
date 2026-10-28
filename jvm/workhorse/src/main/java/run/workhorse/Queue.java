@@ -387,6 +387,13 @@ public final class Queue {
             "task group callbacks cannot use enqueue idempotency, debounce, or throttle");
       }
     }
+    // The callbacks are serialized after the member contracts are read, so the options of every
+    // callback and member are checked here, before the first statement.
+    Instant now = Instant.now();
+    for (Map.Entry<TaskGroupCallbackKind, EnqueueRequest> entry : entries.entrySet()) {
+      callbackInput(entry.getKey(), withoutPayload(entry.getValue()), now);
+    }
+    checkRequests(requests);
     List<Row> rows =
         submitRequests(
             call,
@@ -439,13 +446,7 @@ public final class Queue {
     Map<String, @Nullable Object> document = new LinkedHashMap<>();
     for (Map.Entry<TaskGroupCallbackKind, EnqueueRequest> entry : entries.entrySet()) {
       EnqueueRequest request = entry.getValue();
-      String label = entry.getKey().name().toLowerCase(Locale.ROOT);
-      Map<String, @Nullable Object> input;
-      try {
-        input = serializeRequest(request, now);
-      } catch (IllegalArgumentException error) {
-        throw new IllegalArgumentException(label + " callback: " + error.getMessage(), error);
-      }
+      Map<String, @Nullable Object> input = callbackInput(entry.getKey(), request, now);
       if (request.options().runAt() == null) {
         input.remove("runAt");
       }
@@ -456,6 +457,16 @@ public final class Queue {
       document.put(callbackKey(entry.getKey()), input);
     }
     return Json.write(document);
+  }
+
+  private Map<String, @Nullable Object> callbackInput(
+      TaskGroupCallbackKind kind, EnqueueRequest request, Instant now) {
+    try {
+      return serializeRequest(request, now);
+    } catch (IllegalArgumentException error) {
+      String label = kind.name().toLowerCase(Locale.ROOT);
+      throw new IllegalArgumentException(label + " callback: " + error.getMessage(), error);
+    }
   }
 
   private static String callbackKey(TaskGroupCallbackKind kind) {
@@ -511,6 +522,8 @@ public final class Queue {
         null,
         call -> {
           validateGroupAdd(requests);
+          // Every request is checked before the membership read.
+          checkRequests(requests);
           Optional<TaskGroupLink> link = findTaskGroup(call, task.id());
           if (link.isEmpty() || link.get().role() != TaskGroupRole.MEMBER) {
             throw new IllegalArgumentException(
@@ -553,6 +566,49 @@ public final class Queue {
       EnqueueOptions options,
       Map<String, @Nullable PayloadContract> contracts,
       @Nullable ChildVersion stored) {
+    Map<String, @Nullable Object> input = childInput(parent, taskType, payload, options, stored);
+    String key =
+        stored == null ? "current:" + taskType : "stored:" + taskType + ":" + stored.version();
+    PayloadContract contract;
+    if (contracts.containsKey(key)) {
+      contract = contracts.get(key);
+    } else if (stored != null) {
+      String version = stored.version();
+      contract =
+          version == null
+              ? null
+              : Worker.withDeferredInterrupt(() -> Contracts.load(connection, taskType, version));
+      contracts.put(key, contract);
+    } else {
+      contract = Worker.withDeferredInterrupt(() -> Contracts.load(connection, taskType, null));
+      contracts.put(key, contract);
+      lock.lock();
+      try {
+        this.contracts.put(taskType, contract);
+      } finally {
+        lock.unlock();
+      }
+    }
+    stampContract(input, taskType, contract);
+    return input;
+  }
+
+  /**
+   * Checks a child request with no round trip. A child set checks every child with this before its
+   * first contract read.
+   */
+  void checkChildRequest(ClaimedTask parent, String taskType, EnqueueOptions options) {
+    // The payload is left out, so the codec encodes it one time, when the request is serialized.
+    childInput(parent, taskType, UNCHECKED_PAYLOAD, options, null);
+  }
+
+  /** The input of a child request, without its contract stamp. */
+  private Map<String, @Nullable Object> childInput(
+      ClaimedTask parent,
+      String taskType,
+      @Nullable Object payload,
+      EnqueueOptions options,
+      @Nullable ChildVersion stored) {
     if (options.idempotency() != null
         || options.debounce() != null
         || options.throttle() != null
@@ -587,29 +643,6 @@ public final class Queue {
     if (runAt != null) {
       input.put("runAt", Values.timestamp(runAt));
     }
-    String key =
-        stored == null ? "current:" + taskType : "stored:" + taskType + ":" + stored.version();
-    PayloadContract contract;
-    if (contracts.containsKey(key)) {
-      contract = contracts.get(key);
-    } else if (stored != null) {
-      String version = stored.version();
-      contract =
-          version == null
-              ? null
-              : Worker.withDeferredInterrupt(() -> Contracts.load(connection, taskType, version));
-      contracts.put(key, contract);
-    } else {
-      contract = Worker.withDeferredInterrupt(() -> Contracts.load(connection, taskType, null));
-      contracts.put(key, contract);
-      lock.lock();
-      try {
-        this.contracts.put(taskType, contract);
-      } finally {
-        lock.unlock();
-      }
-    }
-    stampContract(input, taskType, contract);
     return input;
   }
 
@@ -1396,19 +1429,11 @@ public final class Queue {
   }
 
   private String serializeRequests(Call call, List<EnqueueRequest> requests) {
-    Instant now = Instant.now();
     Map<String, @Nullable Object> trace = traceContext();
-    List<Map<String, @Nullable Object>> inputs = new ArrayList<>();
-    for (int index = 0; index < requests.size(); index++) {
-      try {
-        Map<String, @Nullable Object> input = serializeRequest(requests.get(index), now);
-        if (trace != null) {
-          input.put("traceContext", trace);
-        }
-        inputs.add(input);
-      } catch (IllegalArgumentException error) {
-        throw new IllegalArgumentException(
-            "enqueue request " + (index + 1) + ": " + error.getMessage(), error);
+    List<Map<String, @Nullable Object>> inputs = requestInputs(requests);
+    if (trace != null) {
+      for (Map<String, @Nullable Object> input : inputs) {
+        input.put("traceContext", trace);
       }
     }
     assertCompatible(call);
@@ -1416,6 +1441,46 @@ public final class Queue {
       applyContract(call, inputs.get(index), requests.get(index).taskType());
     }
     return Json.write(inputs);
+  }
+
+  /**
+   * The inputs of {@code requests}, without a round trip, so a batch refuses an invalid option of
+   * any request before its first statement.
+   */
+  private List<Map<String, @Nullable Object>> requestInputs(List<EnqueueRequest> requests) {
+    Instant now = Instant.now();
+    List<Map<String, @Nullable Object>> inputs = new ArrayList<>();
+    for (int index = 0; index < requests.size(); index++) {
+      try {
+        inputs.add(serializeRequest(requests.get(index), now));
+      } catch (IllegalArgumentException error) {
+        throw new IllegalArgumentException(
+            "enqueue request " + (index + 1) + ": " + error.getMessage(), error);
+      }
+    }
+    return inputs;
+  }
+
+  /**
+   * Checks the options of every request with no round trip, so a batch refuses an invalid option of
+   * any request before its first statement. The payloads are left out, so the codec encodes each
+   * payload one time, when the batch is serialized.
+   */
+  private void checkRequests(List<EnqueueRequest> requests) {
+    List<EnqueueRequest> withoutPayloads = new ArrayList<>(requests.size());
+    for (EnqueueRequest request : requests) {
+      withoutPayloads.add(withoutPayload(request));
+    }
+    requestInputs(withoutPayloads);
+  }
+
+  /** The payload of a request copy that only checks options. The codec never sees it. */
+  private static final class UncheckedPayload {}
+
+  private static final Object UNCHECKED_PAYLOAD = new UncheckedPayload();
+
+  private static EnqueueRequest withoutPayload(EnqueueRequest request) {
+    return new EnqueueRequest(request.taskType(), UNCHECKED_PAYLOAD, request.options());
   }
 
   /**
@@ -1510,7 +1575,8 @@ public final class Queue {
     String named = optionalBytes(queue, MAX_NAME_BYTES, "queue");
     input.put("queue", named == null ? defaultQueue : named);
     input.put("type", requiredString(taskType, "task type"));
-    input.put("payload", tree(payload, "payload"));
+    // An option check passes UNCHECKED_PAYLOAD, so it does not call the codec.
+    input.put("payload", payload instanceof UncheckedPayload ? null : tree(payload, "payload"));
     input.put("priority", range(priority, 0, 100, "priority"));
     input.put("concurrencyKey", optionalBytes(concurrencyKey, MAX_NAME_BYTES, "concurrency key"));
     input.put(

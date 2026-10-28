@@ -14,6 +14,7 @@ import type {
   TaskState,
 } from "../types.js";
 import type { EnqueueContractsModule, EnqueueRow } from "./enqueue-contracts.js";
+import { validateCallbackRequest, validateEnqueueRequests } from "./enqueue-contracts.js";
 import { QueueModule, type QueueModuleContext } from "./module-context.js";
 import { nullableRowTimestamp, rowTimestamp } from "./row-mapping.js";
 
@@ -341,6 +342,20 @@ function validateRequestCount(requests: readonly EnqueueRequest[]): void {
   }
 }
 
+// A task group checks every request of an add before its first statement. Thus an invalid option
+// of a later request is refused before a contract read or a membership read.
+function validateAddedRequests(requests: readonly EnqueueRequest[]): void {
+  validateRequestCount(requests);
+  validateEnqueueRequests(requests);
+}
+
+function validateCallbacks(callbacks: TaskGroupCallbacks): void {
+  for (const kind of ["onFinish", "onSuccess", "onFailure"] as const) {
+    const request = callbacks[kind];
+    if (request !== undefined) validateCallbackRequest(request);
+  }
+}
+
 function validateLimit(limit: number, maximum: number): void {
   if (!Number.isInteger(limit) || limit < 1 || limit > maximum) {
     throw new RangeError(`limit must be an integer from 1 to ${maximum}`);
@@ -371,6 +386,16 @@ export class TaskGroupsModule extends QueueModule {
     return `{${entries.join(",")}}`;
   }
 
+  /** Check the callbacks of a new group before the first statement. */
+  validateCreate(callbacks: TaskGroupCallbacks): void {
+    validateCallbacks(callbacks);
+  }
+
+  /** Check the requests of an add before the first statement. */
+  validateAdd(requests: readonly EnqueueRequest[]): void {
+    validateAddedRequests(requests);
+  }
+
   async create(
     callbacks: TaskGroupCallbacks = {},
     transaction: Queryable = this.context.database,
@@ -378,11 +403,16 @@ export class TaskGroupsModule extends QueueModule {
     return (await this.createWith(callbacks, [], false, transaction)).group;
   }
 
-  /** Create, add, and seal in one statement, so in one transaction. */
+  /**
+   * Create, add, and seal in one statement, so in one transaction. After `build` returns, each added
+   * request and the callbacks are checked before `beforeCreate`, which runs before the first
+   * statement.
+   */
   async createSealed(
     callbacks: TaskGroupCallbacks,
     build: (group: TaskGroupBuilder) => void | Promise<void>,
     transaction: Queryable = this.context.database,
+    beforeCreate: () => Promise<void> = async () => {},
   ): Promise<TaskGroupBlockResult> {
     const requests: EnqueueRequest[] = [];
     await build({
@@ -394,6 +424,10 @@ export class TaskGroupsModule extends QueueModule {
         requests.push(...added);
       },
     });
+    // The options are checked after the build, so a build sees the same refusals as before.
+    validateEnqueueRequests(requests);
+    validateCallbacks(callbacks);
+    await beforeCreate();
     return this.createWith(callbacks, requests, true, transaction);
   }
 
@@ -403,6 +437,7 @@ export class TaskGroupsModule extends QueueModule {
     seal: boolean,
     transaction: Queryable,
   ): Promise<TaskGroupBlockResult> {
+    validateCallbacks(callbacks);
     let groupId: string | null = null;
     // A contract mismatch of a member or a callback creates nothing, and the retry serializes the
     // callbacks again under the contract versions the mismatch refreshed.
@@ -430,7 +465,7 @@ export class TaskGroupsModule extends QueueModule {
     transaction: Queryable = this.context.database,
     member?: { task: ClaimedTask; workerId: string },
   ): Promise<EnqueueResult[]> {
-    validateRequestCount(requests);
+    validateAddedRequests(requests);
     if (requests.length === 0) return [];
     return translated(
       this.enqueueContracts.submitEnqueueRequests(
@@ -455,6 +490,7 @@ export class TaskGroupsModule extends QueueModule {
     workerId: string,
     requests: readonly EnqueueRequest[],
   ): Promise<EnqueueResult[]> {
+    validateAddedRequests(requests);
     const link = await this.forTask(task.id);
     if (link?.role !== "member") {
       throw new TypeError(`Task ${task.id} is not a member of a task group`);

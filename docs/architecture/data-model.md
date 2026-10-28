@@ -1323,6 +1323,10 @@ promotion preserve the value while moving the same row between live states.
 - Each SDK reads an omitted attempt limit or an explicit 0 as 25. This applies to an enqueue, a
   child task, and the task of a schedule. Each SDK refuses any other value outside 1 through 100
   before the statement that writes the task, as [ADR 0115](../decisions/0115-read-a-zero-max-attempts-and-a-zero-idempotency-ttl-as-the-default.md) records.
+- A child set, a task group create, and a task group add check the options of every request before
+  their first statement. That statement can be the compatibility query, a payload contract read, a
+  membership read, or a tier read. This applies to the attempt limit, the priority, and each other option that the SDK
+  checks. PostgreSQL still checks the options that the SDK does not check.
 - A failure or recovery retries only while the failed attempt number is below `max_attempts`.
   Otherwise the task fails.
 - Retry and recovery increment `current_attempt` while moving the same row back to ready or

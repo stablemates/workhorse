@@ -174,6 +174,17 @@ the page from its cache after logout (SM-1870).
 Now the Python dashboard backend sends the page with `Cache-Control: no-store`, as the TypeScript
 host does. Each asset keeps `Cache-Control: public, max-age=31536000, immutable`.
 
+### A child set and a member add check every request before their first read
+
+Before this change, `HandlerContext.run_children` and `run_children_all` checked the options of each
+child while they serialized it. Thus the first child could read its payload contract before the SDK
+refused the second child. `HandlerContext.add_to_task_group` read the membership of its task before
+it checked the requests. The async handler context did the same, because it calls the same code
+(SM-1883).
+
+Now these calls check the options of every request before their first statement. The errors do not
+change. Only their time changes.
+
 ## 0.10.0 — 2026-10-26
 
 The npm packages, Python distribution, Go module, Rust crate, Ruby gem, JVM artifacts, and .NET

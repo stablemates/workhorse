@@ -8,6 +8,10 @@ import { registerOpenTelemetry } from "@stablemates/workhorse-otel";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { Queue } from "../src/queue.js";
 import { Worker } from "../src/worker.js";
+import { createHandlerContext } from "../src/handler-context.js";
+import type { TaskAttempt } from "../src/task-attempt.js";
+import type { ClaimedTask, Queryable } from "../src/types.js";
+import type { WorkerQueueApi } from "../src/worker.js";
 import { readDashboardTaskDetail } from "../../dashboard-server/src/server/read-model.js";
 import { dashboardDatabase } from "../../dashboard-server/src/server/sql.js";
 import { readDependencyCounterDrift } from "./support/dependency-counter.js";
@@ -282,6 +286,71 @@ describe("child tasks", () => {
       ]),
     );
     expect(Object.fromEntries(stored)).toEqual({ zero: 25, one: 1 });
+  });
+
+  it("checks every child option of a child set before any statement", async () => {
+    const parentQueue = "checked-child-parents";
+    await queue.enqueue("checked-child-parent", null, { queue: parentQueue });
+    const parent = await queue.claim("checked-parent-worker", { queue: parentQueue });
+    let queryCount = 0;
+    const countedDatabase: Queryable = {
+      query(statement, values) {
+        queryCount += 1;
+        return pool.query(statement, values as unknown[]);
+      },
+    };
+    // A new queue has no compatibility answer and no cached contract, so each read is a statement.
+    const countedQueue = new Queue(countedDatabase, "default");
+    const valid = { name: "valid", type: "checked-child", payload: null };
+    for (const [options, error] of [
+      [{ maxAttempts: 101 }, RangeError],
+      [{ priority: 101 }, RangeError],
+      // A JavaScript caller can pass null.
+      [{ runAt: null as unknown as Date }, TypeError],
+    ] as const) {
+      const children = [valid, { name: "invalid", type: "checked-child", payload: null, options }];
+      await expect(
+        countedQueue.createChildren(parent!, "checked-parent-worker", children),
+      ).rejects.toThrow(error);
+      await expect(
+        countedQueue.createChildrenAll(parent!, "checked-parent-worker", children),
+      ).rejects.toThrow(error);
+    }
+    await expect(
+      countedQueue.createChild(parent!, "checked-parent-worker", "one", "checked-child", null, {
+        maxAttempts: 101,
+      }),
+    ).rejects.toThrow("maxAttempts must be an integer between 1 and 100, or 0 for the default");
+    expect(queryCount).toBe(0);
+  });
+
+  it("checks every child option of a set before the handler reads the queue tier", async () => {
+    const task = { id: "00000000-0000-4000-8000-000000001883", queue: "default" } as ClaimedTask;
+    // The tier read can query PostgreSQL, so the option check must run before it.
+    const context = createHandlerContext(
+      {} as WorkerQueueApi,
+      "worker",
+      task,
+      {} as TaskAttempt,
+      () => Promise.reject(new Error("the tier read must not run")),
+    );
+    const children = [
+      { name: "valid", type: "checked-child", payload: null },
+      { name: "invalid", type: "checked-child", payload: null, options: { maxAttempts: 101 } },
+    ];
+    const message = "maxAttempts must be an integer between 1 and 100, or 0 for the default";
+    await expect(context.runChildren(children)).rejects.toThrow(message);
+    await expect(context.runChildrenAll(children)).rejects.toThrow(message);
+    const nullRunAt = [
+      { name: "valid", type: "checked-child", payload: null },
+      {
+        name: "invalid",
+        type: "checked-child",
+        payload: null,
+        options: { runAt: null as unknown as Date },
+      },
+    ];
+    await expect(context.runChildren(nullRunAt)).rejects.toThrow(TypeError);
   });
 
   it.each([false, true])(

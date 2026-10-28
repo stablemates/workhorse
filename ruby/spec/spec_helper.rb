@@ -32,6 +32,22 @@ class FakeExecutor < W::Executor
   end
 end
 
+# An executor that records every statement, also the compatibility query and a contract read, and
+# answers each with no rows. An example uses it to assert that no statement ran.
+class RecordingExecutor < W::Executor
+  attr_reader :statements
+
+  def initialize
+    super(nil)
+    @statements = []
+  end
+
+  def rows(sql, _params = [])
+    @statements << sql
+    []
+  end
+end
+
 require_relative "support/fake_connections"
 
 # An example that runs against the process's scratch database. The examples run one at a time, and

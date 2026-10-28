@@ -2,7 +2,7 @@ import { isDeepStrictEqual } from "node:util";
 import { checkpointInputFingerprint } from "./checkpoint-fingerprint.js";
 import { FastTierUnsupportedError } from "./errors.js";
 import { CheckpointInputConflictError } from "./queue/checkpoints-progress-waits.js";
-import { ChildConflictError } from "./queue/child-tasks.js";
+import { ChildConflictError, validateChildSetOptions } from "./queue/child-tasks.js";
 import { encodeExternalWaitValue, type ExternalWaitOptions } from "./queue/external-waits.js";
 import type { TaskAttempt } from "./task-attempt.js";
 import type { TaskGroupLink } from "./queue/task-groups.js";
@@ -57,6 +57,17 @@ export function createHandlerContext(
     encodeExternalWaitValue(humanContext, "Human wait context");
     return guardedHumanWait(name, humanContext, options);
   }) as HandlerContext["waitForHuman"];
+  // The tier read can query PostgreSQL, so every child option of a set is checked before it.
+  const guardChildSet = <TOperation extends HandlerContext["runChildren" | "runChildrenAll"]>(
+    operation: TOperation,
+  ): TOperation => {
+    const guarded = guard("child tasks", operation);
+    if (fastTier === true) return guarded;
+    return (async (children: readonly ChildTaskRequest[]) => {
+      validateChildSetOptions(children);
+      return guarded(children);
+    }) as TOperation;
+  };
   return {
     ...context,
     setProgress: guard("progress", context.setProgress),
@@ -66,8 +77,8 @@ export function createHandlerContext(
     waitForSignal: guard("signal waits", context.waitForSignal),
     waitForHuman,
     runChild: guard("child tasks", context.runChild),
-    runChildren: guard("child tasks", context.runChildren),
-    runChildrenAll: guard("child tasks", context.runChildrenAll),
+    runChildren: guardChildSet(context.runChildren),
+    runChildrenAll: guardChildSet(context.runChildrenAll),
   };
 }
 
