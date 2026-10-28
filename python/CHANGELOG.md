@@ -21,6 +21,15 @@ refresh, the worker memory grew by one call for each refresh (SM-1847).
 Now a refresh clears its reference to the earlier call before it starts its own call. The worker
 keeps only the newest call, and the garbage collector removes each earlier one.
 
+### The dashboard bundle uses Mantine 9.7.4
+
+The Python dashboard backend serves the shared dashboard browser bundle. After 0.10.0, a dependency
+update moved the dashboard to Mantine 9.7.4 and rebuilt that bundle (SM-1839). The distribution now
+carries the rebuilt `read-surface-1.tar.gz`. Its `bundle.json` records the sha256
+`f234a7d60a362c841becc2522ff8dd750958136873ccda90461c26f45f9ba7d1`.
+
+The `dashboard/v1` procedures and the read surface version do not change (SM-1858).
+
 ## 0.10.0 — 2026-10-26
 
 The npm packages, Python distribution, Go module, Rust crate, Ruby gem, JVM artifacts, and .NET
