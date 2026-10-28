@@ -89,7 +89,10 @@ import {
   TaskContractUnavailableError,
   TaskContractValidationError,
   TaskValueSizeLimitError,
+  maxAttemptsValue,
+  validateEnqueueOptions,
   validateQueueOptions,
+  validateTaskPriority,
 } from "./queue/enqueue-contracts.js";
 import type {
   ScheduleCatchupPolicy,
@@ -304,6 +307,8 @@ export class Queue {
     options: EnqueueOptions = {},
     transaction: Queryable = this.database,
   ): Promise<string> {
+    // Refuse an invalid option before the compatibility check, so the refusal sends no statement.
+    validateEnqueueOptions(options);
     await this.checkSchema(transaction);
     return this.modules.enqueueContracts.enqueue(type, payload, options, transaction);
   }
@@ -314,6 +319,8 @@ export class Queue {
     options: EnqueueOptions = {},
     transaction: Queryable = this.database,
   ): Promise<EnqueueResult> {
+    // Refuse an invalid option before the compatibility check, so the refusal sends no statement.
+    validateEnqueueOptions(options);
     await this.checkSchema(transaction);
     return this.modules.enqueueContracts.enqueueWithResult(type, payload, options, transaction);
   }
@@ -695,6 +702,12 @@ export class Queue {
     definitions: readonly ScheduleDefinition[],
     options: { prune?: boolean } = {},
   ): Promise<void> {
+    // Refuse an invalid attempt limit or priority before the compatibility check, so the refusal
+    // sends no statement.
+    for (const definition of definitions) {
+      maxAttemptsValue(definition.task.maxAttempts);
+      validateTaskPriority(definition.task.priority);
+    }
     await this.checkSchema();
     return this.modules.cronSchedules.syncSchedules(namespace, definitions, options);
   }

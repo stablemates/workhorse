@@ -357,6 +357,54 @@ export function maxAttemptsValue(value: number | undefined): number {
   return value;
 }
 
+/**
+ * Check every option of one enqueue request. The check sends no statement, so a queue can refuse an
+ * invalid option before its schema compatibility check.
+ */
+export function validateEnqueueOptions(options: EnqueueOptions): void {
+  const coalescingModes = [options.idempotency, options.debounce, options.throttle].filter(
+    (mode) => mode !== undefined,
+  );
+  if (coalescingModes.length > 1) {
+    throw new TypeError("enqueue options cannot combine idempotency, debounce, or throttle");
+  }
+  if (options.debounce !== undefined && options.runAt !== undefined) {
+    throw new TypeError("debounced enqueue uses its PostgreSQL-owned window instead of runAt");
+  }
+  if (
+    (options.debounce !== undefined || options.throttle !== undefined) &&
+    (options.prerequisiteTaskId !== undefined || options.dependencies !== undefined)
+  ) {
+    throw new TypeError(
+      "enqueue options cannot combine debounce or throttle with prerequisiteTaskId or dependencies",
+    );
+  }
+  if (options.prerequisiteTaskId !== undefined && options.dependencies !== undefined) {
+    throw new TypeError("enqueue options cannot combine prerequisiteTaskId and dependencies");
+  }
+  const dependencies = options.dependencies;
+  if (dependencies !== undefined) {
+    if (
+      dependencies.prerequisiteTaskIds.length === 0 ||
+      dependencies.prerequisiteTaskIds.length > MAX_TASK_DEPENDENCIES
+    ) {
+      throw new RangeError(
+        `dependencies requires between 1 and ${MAX_TASK_DEPENDENCIES} prerequisiteTaskIds`,
+      );
+    }
+    if (
+      new Set(dependencies.prerequisiteTaskIds).size !== dependencies.prerequisiteTaskIds.length
+    ) {
+      throw new TypeError("dependencies prerequisiteTaskIds must be unique");
+    }
+  }
+  // An invalid Date throws RangeError here, as it does when the request is serialized.
+  options.runAt?.toISOString();
+  options.deadline?.toISOString();
+  validateTaskPriority(options.priority);
+  maxAttemptsValue(options.maxAttempts);
+}
+
 export function validateTaskPriority(value: number | undefined): number {
   if (value === undefined) return 0;
   if (!Number.isSafeInteger(value) || value < 0 || value > MAX_TASK_PRIORITY) {
@@ -1048,48 +1096,14 @@ export class EnqueueContractsModule extends QueueModule {
     transaction: Queryable,
     traceContext: ReturnType<typeof injectTraceContext>,
   ): Promise<SerializedEnqueueRequest> {
+    validateEnqueueOptions(options);
     const idempotency: Idempotency | undefined = options.idempotency;
-    const coalescingModes = [idempotency, options.debounce, options.throttle].filter(
-      (mode) => mode !== undefined,
-    );
-    if (coalescingModes.length > 1) {
-      throw new TypeError("enqueue options cannot combine idempotency, debounce, or throttle");
-    }
-    if (options.debounce !== undefined && options.runAt !== undefined) {
-      throw new TypeError("debounced enqueue uses its PostgreSQL-owned window instead of runAt");
-    }
-    if (
-      (options.debounce !== undefined || options.throttle !== undefined) &&
-      (options.prerequisiteTaskId !== undefined || options.dependencies !== undefined)
-    ) {
-      throw new TypeError(
-        "enqueue options cannot combine debounce or throttle with prerequisiteTaskId or dependencies",
-      );
-    }
     const { serializedPayload, acceptance } = await this.serializedTaskAcceptance(
       type,
       payload,
       transaction,
     );
-    if (options.prerequisiteTaskId !== undefined && options.dependencies !== undefined) {
-      throw new TypeError("enqueue options cannot combine prerequisiteTaskId and dependencies");
-    }
     const dependencies = options.dependencies;
-    if (dependencies !== undefined) {
-      if (
-        dependencies.prerequisiteTaskIds.length === 0 ||
-        dependencies.prerequisiteTaskIds.length > MAX_TASK_DEPENDENCIES
-      ) {
-        throw new RangeError(
-          `dependencies requires between 1 and ${MAX_TASK_DEPENDENCIES} prerequisiteTaskIds`,
-        );
-      }
-      if (
-        new Set(dependencies.prerequisiteTaskIds).size !== dependencies.prerequisiteTaskIds.length
-      ) {
-        throw new TypeError("dependencies prerequisiteTaskIds must be unique");
-      }
-    }
     const prerequisiteTaskIds = [...(dependencies?.prerequisiteTaskIds ?? [])];
     // oxlint-disable-next-line unicorn/no-array-sort -- ES2022 lacks Array.prototype.toSorted.
     prerequisiteTaskIds.sort();
