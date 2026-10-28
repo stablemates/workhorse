@@ -16,11 +16,13 @@ from workhorse import (
     Idempotency,
     ProtocolCompatibilityError,
     Queue,
+    ScheduleDefinition,
+    ScheduledTask,
     TaskContractValidationError,
     TaskContractVersion,
     TaskTypeContracts,
 )
-from workhorse._protocol import serialize_child_request, serialize_request
+from workhorse._protocol import serialize_child_request, serialize_request, serialize_schedules
 from workhorse._statements import MINIMUM_SCHEMA_VERSION, PROTOCOL_VERSION
 
 
@@ -128,6 +130,63 @@ def test_sends_no_execution_timeout_for_an_omitted_or_zero_value(
 
     assert root["executionTimeoutMs"] == expected
     assert child["executionTimeoutMs"] == expected
+
+
+@pytest.mark.parametrize(("max_attempts", "expected"), [(0, 25), (1, 1), (25, 25), (100, 100)])
+def test_reads_a_zero_max_attempts_as_the_default(max_attempts: int, expected: int) -> None:
+    options = EnqueueOptions(max_attempts=max_attempts)
+    parent = cast(Any, SimpleNamespace(queue="parents", trace_context=None))
+    schedule = ScheduleDefinition(
+        name="attempts",
+        schedule="0 0 * * *",
+        task=ScheduledTask(type="attempts", payload={}, max_attempts=max_attempts),
+    )
+
+    root = serialize_request(EnqueueRequest("attempts", {}, options), "default")
+    child = serialize_child_request(parent, "attempts.child", {}, options)
+    [scheduled] = serialize_schedules([schedule], "default")
+
+    assert root["maxAttempts"] == expected
+    assert child["maxAttempts"] == expected
+    assert scheduled["maxAttempts"] == expected
+
+
+@pytest.mark.parametrize("max_attempts", [-1, 101])
+def test_refuses_a_max_attempts_outside_the_range_before_the_enqueue(max_attempts: int) -> None:
+    message = "max_attempts must be between 1 and 100, or 0 for the default"
+    options = EnqueueOptions(max_attempts=max_attempts)
+    parent = cast(Any, SimpleNamespace(queue="parents", trace_context=None))
+    schedule = ScheduleDefinition(
+        name="attempts",
+        schedule="0 0 * * *",
+        task=ScheduledTask(type="attempts", payload={}, max_attempts=max_attempts),
+    )
+    connection = Connection(
+        [
+            [
+                {"kind": "schema", "version": MINIMUM_SCHEMA_VERSION},
+                {"kind": "protocol", "version": PROTOCOL_VERSION},
+            ]
+        ]
+    )
+
+    with pytest.raises(ValueError, match=message):
+        Queue(connection).enqueue("attempts", {}, options)
+    with pytest.raises(ValueError, match=message):
+        serialize_child_request(parent, "attempts.child", {}, options)
+    with pytest.raises(ValueError, match=message):
+        serialize_schedules([schedule], "default")
+    assert len(connection.calls) == 1
+    assert "enqueue_many_v1" not in connection.calls[0][0]
+
+
+@pytest.mark.parametrize(("ttl_ms", "expected"), [(0, 86_400_000), (1, 1), (60_000, 60_000)])
+def test_reads_a_zero_idempotency_ttl_as_the_default(ttl_ms: int, expected: int) -> None:
+    options = EnqueueOptions(idempotency=Idempotency(key="ttl", ttl_ms=ttl_ms))
+
+    root = serialize_request(EnqueueRequest("ttl", {}, options), "default")
+
+    assert root["idempotency"] == {"key": "ttl", "scope": "default", "ttlMs": expected}
 
 
 def test_refuses_an_incompatible_schema_before_enqueueing() -> None:

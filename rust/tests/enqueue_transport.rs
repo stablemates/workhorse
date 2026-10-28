@@ -143,11 +143,13 @@ async fn invalid_options_and_empty_or_oversized_batches_never_touch_transport() 
     let client = EnqueueClient::new("invalid");
     let mut transport = Scripted::new(vec![]);
     assert!(client.enqueue_many(&mut transport, vec![]).await.unwrap().is_empty());
-    let options = EnqueueOptions { max_attempts: -1, ..Default::default() };
-    assert!(matches!(
-        client.enqueue(&mut transport, "task", &json!({}), options).await,
-        Err(Error::InvalidArgument(_))
-    ));
+    for max_attempts in [-1, 101] {
+        let options = EnqueueOptions { max_attempts, ..Default::default() };
+        assert!(matches!(
+            client.enqueue(&mut transport, "task", &json!({}), options).await,
+            Err(Error::InvalidArgument(_))
+        ));
+    }
     let requests =
         vec![EnqueueRequest::new("task", json!({})); workhorse::MAX_ENQUEUE_BATCH_SIZE + 1];
     assert!(matches!(

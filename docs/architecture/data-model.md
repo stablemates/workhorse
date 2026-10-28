@@ -371,6 +371,11 @@ never persists raw keys.
 | Key     | None                     | 1 through 512 UTF-8 bytes                           |
 | TTL     | 86,400,000 ms (24 hours) | Integer from 1 through 31,536,000,000 ms (365 days) |
 
+Each SDK sends the default TTL for an omitted TTL or an explicit 0. Ruby, the JVM, and .NET take
+the TTL as a duration and round it to the nearest millisecond, half up. They refuse a nonzero
+duration that rounds to 0 ms, also a negative one. Thus 0.4 ms is refused, and 0.5 ms becomes 1 ms,
+as [ADR 0115](../decisions/0115-read-a-zero-max-attempts-and-a-zero-idempotency-ttl-as-the-default.md) records. A direct `enqueue_many_v1` call with a TTL of 0 is refused.
+
 #### Indexes
 
 - `enqueue_idempotency_expiry_idx` orders expired-key pruning.
@@ -1315,6 +1320,9 @@ index. Pending debounce replaces both values in one transaction. Retry, recovery
 promotion preserve the value while moving the same row between live states.
 
 - `max_attempts` is an integer from 1 through 100. `enqueue_batch_v1` defaults it to 25.
+- Each SDK reads an omitted attempt limit or an explicit 0 as 25. This applies to an enqueue, a
+  child task, and the task of a schedule. Each SDK refuses any other value outside 1 through 100
+  before the statement that writes the task, as [ADR 0115](../decisions/0115-read-a-zero-max-attempts-and-a-zero-idempotency-ttl-as-the-default.md) records.
 - A failure or recovery retries only while the failed attempt number is below `max_attempts`.
   Otherwise the task fails.
 - Retry and recovery increment `current_attempt` while moving the same row back to ready or
@@ -3792,6 +3800,7 @@ no row ([Busy occurrences](#busy-occurrences)), so the next pass records the sam
 - It validates and stores `catchup_policy`.
 - It validates each task definition. `priority` is an integer from 0 through 100 and defaults to 0.
   `maxAttempts` is 1 through 100 and defaults to 25. `concurrencyKey` is 1 through 256 UTF-8 bytes.
+  Each SDK sends 25 for an explicit `maxAttempts` of 0.
 - It updates `last_evaluated_at` when an evaluation boundary changes.
 - Any definition change increments the schedule revision once.
 

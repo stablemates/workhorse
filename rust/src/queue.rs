@@ -23,6 +23,7 @@ use crate::value_size::jsonb_text_bytes;
 use crate::{Error, Operation};
 
 const DEFAULT_MAX_ATTEMPTS: i32 = 25;
+const MAX_ATTEMPTS_LIMIT: i32 = 100;
 const MAX_TASK_DEPENDENCIES: usize = 100;
 const MAX_EXTERNAL_VALUE_BYTES: usize = 65_536;
 
@@ -367,6 +368,12 @@ impl<E: Executor> Queue<E> {
                         index + 1
                     )));
                 }
+                if !(0..=MAX_ATTEMPTS_LIMIT).contains(&definition.task.max_attempts) {
+                    return Err(Error::invalid(format!(
+                        "schedule definition {}: invalid schedule definition: max attempts must be between 1 and 100, or 0 for the default",
+                        index + 1
+                    )));
+                }
                 let task = &definition.task;
                 let mut input = task_input(
             self.enqueue.default_queue(),
@@ -522,8 +529,8 @@ pub(crate) fn validate_options(options: &EnqueueOptions) -> Result<(), &'static 
     if !(0..=100).contains(&options.priority) {
         return Err("priority must be between 0 and 100");
     }
-    if options.max_attempts < 0 {
-        return Err("max attempts must be positive");
+    if !(0..=MAX_ATTEMPTS_LIMIT).contains(&options.max_attempts) {
+        return Err("max attempts must be between 1 and 100, or 0 for the default");
     }
     if options.debounce.is_some() && options.run_at.is_some() {
         return Err("debounced enqueue uses its PostgreSQL-owned window instead of run at");

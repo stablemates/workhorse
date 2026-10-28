@@ -53,6 +53,17 @@ the page from its cache after logout (SM-1870).
 Now the Go dashboard backend sends the page with `Cache-Control: no-store`, as the TypeScript host
 does. Each asset keeps `Cache-Control: public, max-age=31536000, immutable`.
 
+### A MaxAttempts above 100 is refused in the SDK
+
+Before this change, `EnqueueOptions.MaxAttempts` and `ScheduledTask.MaxAttempts` above 100 reached
+PostgreSQL, and PostgreSQL refused the request. A negative `ScheduledTask.MaxAttempts` also
+reached PostgreSQL (SM-1857).
+
+Now an enqueue, a child task request, and `SyncSchedules` refuse a value outside 0 through 100
+before the statement that writes the task or the schedule. An enqueue returns
+`ErrInvalidEnqueueOptions`, and `SyncSchedules` returns `ErrInvalidScheduleDefinition`. Zero still
+selects 25 attempts. ADR 0115 records the rule for all seven SDKs.
+
 ## 0.10.0 — 2026-10-26
 
 The npm packages, Python distribution, Go module, Rust crate, Ruby gem, JVM artifacts, and .NET

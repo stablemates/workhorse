@@ -33,6 +33,19 @@ expiry, history release, and group finish. The health document keeps its keys, a
 does not change.
 Every process of every SDK version gets the new result when the migration commits.
 
+### A zero max_attempts and a zero idempotency TTL select the default
+
+**Behavior change.** Before this change, `max_attempts=0` raised `ValueError`, and an idempotency
+`ttl_ms=0` reached PostgreSQL, which refused the enqueue. Go, Rust, Ruby, the JVM, and .NET read 0
+as the default. Thus one task definition succeeded in one SDK and failed in another (SM-1857).
+
+Now `Queue`, `AsyncQueue`, a child task request, and `sync_schedules` send 25 attempts for
+`max_attempts=0`. An idempotency `ttl_ms=0` keeps the key for 86,400,000 ms, the same as the
+default. ADR 0115 records the rule for all seven SDKs.
+
+The client now refuses a `max_attempts` above 100 with `ValueError` before the statement that
+writes the task or the schedule. Before this change, PostgreSQL refused it.
+
 ### A worker no longer keeps every failed registration refresh
 
 A worker refreshes its registration at a fixed interval, and each refresh sends its statement on a

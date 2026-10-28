@@ -190,5 +190,77 @@
       "dependencies": null,
       "tags": []
     }
+  },
+  {
+    "id": "zero-max-attempts-request",
+    "application": {
+      "type": "protocol.max-attempts",
+      "payload": {},
+      "options": {
+        "maxAttempts": 0
+      }
+    },
+    "postgres": {
+      "queue": "default",
+      "type": "protocol.max-attempts",
+      "payload": {},
+      "priority": 0,
+      "contractVersion": null,
+      "payloadMaxBytes": 1048576,
+      "resultMaxBytes": 1048576,
+      "sensitivePayloadKeys": [],
+      "sensitiveResultKeys": [],
+      "runAt": {
+        "$type": "timestamp"
+      },
+      "deadline": null,
+      "concurrencyKey": null,
+      "budget": null,
+      "executionTimeoutMs": null,
+      "maxAttempts": 25,
+      "retryPolicy": null,
+      "prerequisiteTaskId": null,
+      "dependencies": null,
+      "tags": []
+    }
+  },
+  {
+    "id": "zero-idempotency-ttl-request",
+    "application": {
+      "type": "protocol.idempotency-ttl",
+      "payload": {},
+      "options": {
+        "idempotency": {
+          "scope": "protocol",
+          "key": "zero-ttl",
+          "ttlMs": 0
+        }
+      }
+    },
+    "postgres": {
+      "queue": "default",
+      "type": "protocol.idempotency-ttl",
+      "payload": {},
+      "priority": 0,
+      "contractVersion": null,
+      "payloadMaxBytes": 1048576,
+      "resultMaxBytes": 1048576,
+      "sensitivePayloadKeys": [],
+      "sensitiveResultKeys": [],
+      "deadline": null,
+      "concurrencyKey": null,
+      "budget": null,
+      "executionTimeoutMs": null,
+      "maxAttempts": 25,
+      "retryPolicy": null,
+      "prerequisiteTaskId": null,
+      "dependencies": null,
+      "tags": [],
+      "idempotency": {
+        "scope": "protocol",
+        "key": "zero-ttl",
+        "ttlMs": 86400000
+      }
+    }
   }
 ]

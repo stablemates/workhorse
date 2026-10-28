@@ -34,6 +34,15 @@ expiry, history release, and group finish. The health document keeps its keys, a
 does not change.
 Every process of every SDK version gets the new result when the migration commits.
 
+### An idempotency TTL that rounds to 0 ms is refused
+
+The queue rounds the `Duration` of `Idempotency.ttl` to the nearest millisecond. Before this change,
+a positive `Duration` below 0.5 ms rounded to 0, and the queue kept the key for the default one day
+without a warning (SM-1857).
+
+Now the queue throws `IllegalArgumentException` for a nonzero `Duration` that rounds to 0 ms.
+`Duration.ZERO` still selects the default. ADR 0115 records the rule for all seven SDKs.
+
 ### A long-running worker no longer keeps every ended registry write
 
 Each registry write runs on its own virtual thread, and it first waits for the write before it.

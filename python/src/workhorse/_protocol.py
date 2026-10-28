@@ -26,6 +26,9 @@ from .types import (
     Throttle,
 )
 
+DEFAULT_MAX_ATTEMPTS = 25
+DEFAULT_IDEMPOTENCY_TTL_MS = 86_400_000
+
 
 def compatibility_refusal(
     installed_schema_version: int | None,
@@ -118,7 +121,7 @@ def serialize_schedules(
                 "concurrencyKey": task.concurrency_key,
                 "type": task.type,
                 "payload": task.payload,
-                "maxAttempts": task.max_attempts,
+                "maxAttempts": _max_attempts(task.max_attempts),
                 "retryPolicy": dict(task.retry_policy) if task.retry_policy is not None else None,
                 "contractVersion": None,
                 "payloadMaxBytes": DEFAULT_VALUE_MAX_BYTES,
@@ -152,7 +155,7 @@ def serialize_request(
         "concurrencyKey": options.concurrency_key,
         "budget": options.budget,
         "executionTimeoutMs": _execution_timeout(options.execution_timeout_ms),
-        "maxAttempts": options.max_attempts,
+        "maxAttempts": _max_attempts(options.max_attempts),
         "retryPolicy": dict(options.retry_policy) if options.retry_policy is not None else None,
         "prerequisiteTaskId": None,
         "dependencies": dependencies,
@@ -196,7 +199,7 @@ def serialize_child_request(
         "concurrencyKey": options.concurrency_key,
         "budget": options.budget,
         "executionTimeoutMs": _execution_timeout(options.execution_timeout_ms),
-        "maxAttempts": options.max_attempts,
+        "maxAttempts": _max_attempts(options.max_attempts),
         "retryPolicy": dict(options.retry_policy) if options.retry_policy is not None else None,
         "prerequisiteTaskId": None,
         "dependencies": None,
@@ -215,8 +218,7 @@ def _validate_options(options: EnqueueOptions) -> None:
     if modes > 1:
         raise ValueError("enqueue options cannot combine idempotency, debounce, or throttle")
     _validate_priority(options.priority)
-    if options.max_attempts < 1:
-        raise ValueError("max_attempts must be positive")
+    _max_attempts(options.max_attempts)
     if options.debounce is not None and options.run_at is not None:
         raise ValueError("debounced enqueue uses its PostgreSQL-owned window instead of run_at")
     if (options.debounce is not None or options.throttle is not None) and options.dependencies:
@@ -226,6 +228,15 @@ def _validate_options(options: EnqueueOptions) -> None:
 def _execution_timeout(value: int | None) -> int | None:
     """Return the protocol value of an execution timeout. Zero means no timeout, as ``None``."""
     return None if value is None or value == 0 else value
+
+
+def _max_attempts(value: int) -> int:
+    """Return the protocol value of an attempt limit. Zero means the default of 25."""
+    if value == 0:
+        return DEFAULT_MAX_ATTEMPTS
+    if not 1 <= value <= 100:
+        raise ValueError("max_attempts must be between 1 and 100, or 0 for the default")
+    return value
 
 
 def _validate_priority(priority: int) -> None:
@@ -249,7 +260,9 @@ def _timestamp(
 
 
 def _idempotency(value: Idempotency) -> dict[str, Json]:
-    return {"key": value.key, "scope": value.scope, "ttlMs": value.ttl_ms}
+    # Zero means the default retention window, as it does in Go.
+    ttl_ms = DEFAULT_IDEMPOTENCY_TTL_MS if value.ttl_ms == 0 else value.ttl_ms
+    return {"key": value.key, "scope": value.scope, "ttlMs": ttl_ms}
 
 
 def _debounce(value: Debounce) -> dict[str, Json]:

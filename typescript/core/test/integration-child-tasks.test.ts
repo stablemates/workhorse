@@ -260,6 +260,30 @@ describe("child tasks", () => {
     expect(Object.fromEntries(stored)).toEqual({ zero: null, one: 1 });
   });
 
+  it("creates a child with 25 attempts for a zero maxAttempts", async () => {
+    const parentQueue = "attempts-child-parents";
+    const parentId = await queue.enqueue("attempts-child-parent", null, { queue: parentQueue });
+    const parent = await queue.claim("attempts-parent-worker", { queue: parentQueue });
+    await queue.createChildren(parent!, "attempts-parent-worker", [
+      { name: "zero", type: "attempts-child", payload: null, options: { maxAttempts: 0 } },
+      { name: "one", type: "attempts-child", payload: null, options: { maxAttempts: 1 } },
+    ]);
+    await expect(
+      queue.createChildren(parent!, "attempts-parent-worker", [
+        { name: "high", type: "attempts-child", payload: null, options: { maxAttempts: 101 } },
+      ]),
+    ).rejects.toThrow("maxAttempts must be an integer between 1 and 100, or 0 for the default");
+
+    const lineage = await admin.getChildLineage(parentId);
+    const stored = await Promise.all(
+      lineage.records.map(async (record) => [
+        record.name,
+        (await admin.getTask(record.childTaskId))?.maxAttempts,
+      ]),
+    );
+    expect(Object.fromEntries(stored)).toEqual({ zero: 25, one: 1 });
+  });
+
   it.each([false, true])(
     "replays a child request without a queue against a stored child on another queue (set=%s)",
     async (set) => {

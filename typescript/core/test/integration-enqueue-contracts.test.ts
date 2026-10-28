@@ -1197,6 +1197,58 @@ describe("enqueue contracts", () => {
     ).rejects.toThrow("priority must be an integer between 0 and 100");
   });
 
+  it("stores the default for a zero maxAttempts and a zero idempotency TTL", async () => {
+    const attempts = await queue.enqueue("attempts-zero", null, { maxAttempts: 0 });
+    const keyed = await queue.enqueue("ttl-zero", null, {
+      idempotency: { key: "zero-ttl", ttlMs: 0 },
+    });
+    await queue.syncSchedules("attempts-zero", [
+      {
+        name: "zero",
+        schedule: "0 0 * * *",
+        task: { type: "attempts-zero", payload: null, maxAttempts: 0 },
+      },
+    ]);
+
+    await expect(admin.getTask(attempts)).resolves.toMatchObject({ maxAttempts: 25 });
+    const scheduled = await pool.query<{ max_attempts: number }>(
+      "SELECT max_attempts FROM workhorse.schedule_definition WHERE namespace = 'attempts-zero'",
+    );
+    expect(scheduled.rows).toEqual([{ max_attempts: 25 }]);
+    const retained = await pool.query<{ ttl_ms: string }>(
+      "SELECT request_fingerprint ->> 'ttlMs' AS ttl_ms FROM workhorse.enqueue_idempotency WHERE task_id = $1::uuid",
+      [keyed],
+    );
+    expect(retained.rows).toEqual([{ ttl_ms: String(DEFAULT_IDEMPOTENCY_TTL_MS) }]);
+  });
+
+  it("refuses a maxAttempts outside 1 through 100 before any statement", async () => {
+    let queryCount = 0;
+    const countedDatabase: Queryable = {
+      query(statement, values) {
+        queryCount += 1;
+        return pool.query(statement, values as unknown[]);
+      },
+    };
+    const countedQueue = new Queue(countedDatabase, "default");
+    const message = "maxAttempts must be an integer between 1 and 100, or 0 for the default";
+    for (const maxAttempts of [-1, 101, 1.5]) {
+      await expect(countedQueue.enqueue("attempts-refused", null, { maxAttempts })).rejects.toThrow(
+        message,
+      );
+      await expect(
+        countedQueue.syncSchedules("attempts-refused", [
+          {
+            name: "refused",
+            schedule: "0 0 * * *",
+            task: { type: "attempts-refused", payload: null, maxAttempts },
+          },
+        ]),
+      ).rejects.toThrow(message);
+    }
+    expect(queryCount).toBe(0);
+  });
+
   it("stores no execution timeout for an omitted or zero value", async () => {
     expect(await storedExecutionTimeout(await queue.enqueue("timeout-omitted", null))).toBeNull();
     expect(
@@ -1790,7 +1842,7 @@ describe("enqueue contracts", () => {
     await expect(
       queue.enqueue("bounds", {}, { idempotency: { key: "scope", scope: "é".repeat(129) } }),
     ).rejects.toThrow(/256 UTF-8 bytes/);
-    for (const ttlMs of [0, 1.5, MAX_IDEMPOTENCY_TTL_MS + 1]) {
+    for (const ttlMs of [-1, 1.5, MAX_IDEMPOTENCY_TTL_MS + 1]) {
       await expect(
         queue.enqueue(
           "bounds",

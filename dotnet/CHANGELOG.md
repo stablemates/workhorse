@@ -54,6 +54,15 @@ browser could also show the page from its cache after logout (SM-1870).
 Now the `Workhorse.AspNetCore` dashboard backend sends the page with `Cache-Control: no-store`, as
 the TypeScript host does. Each asset keeps `Cache-Control: public, max-age=31536000, immutable`.
 
+### An idempotency TTL that rounds to 0 ms is refused
+
+The queue rounds `Idempotency.Ttl` to the nearest millisecond. Before this change, a positive
+`TimeSpan` below 0.5 ms rounded to 0, and the queue kept the key for the default one day without a
+warning (SM-1857).
+
+Now the queue throws `ArgumentException` for a nonzero `TimeSpan` that rounds to 0 ms.
+`TimeSpan.Zero` still selects the default. ADR 0115 records the rule for all seven SDKs.
+
 ## 0.10.0 — 2026-10-26
 
 ### The first publish of the .NET SDK

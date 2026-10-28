@@ -246,6 +246,41 @@ def test_stores_no_execution_timeout_for_an_omitted_or_zero_value(database_url: 
     assert stored == [(None,), (None,), (1,), (31_536_000_000,)]
 
 
+def test_stores_the_default_for_a_zero_max_attempts_and_a_zero_idempotency_ttl(
+    database_url: str,
+) -> None:
+    with psycopg.connect(database_url, autocommit=True) as connection:
+        queue = Queue(connection)
+        attempts = queue.enqueue("attempts", {}, EnqueueOptions(max_attempts=0))
+        keyed = queue.enqueue(
+            "ttl", {}, EnqueueOptions(idempotency=Idempotency(key="zero-ttl", ttl_ms=0))
+        )
+        queue.sync_schedules(
+            "attempts",
+            [
+                ScheduleDefinition(
+                    "zero", "0 0 * * *", ScheduledTask("attempts", {}, max_attempts=0)
+                )
+            ],
+        )
+        stored = connection.execute(
+            "SELECT max_attempts FROM workhorse.task WHERE id = %s::uuid", (attempts,)
+        ).fetchone()
+        scheduled = connection.execute(
+            "SELECT max_attempts FROM workhorse.schedule_definition "
+            "WHERE namespace = 'attempts' AND schedule_name = 'zero'"
+        ).fetchone()
+        retained = connection.execute(
+            "SELECT request_fingerprint ->> 'ttlMs' "
+            "FROM workhorse.enqueue_idempotency WHERE task_id = %s::uuid",
+            (keyed,),
+        ).fetchone()
+
+    assert stored == (25,)
+    assert scheduled == (25,)
+    assert retained == ("86400000",)
+
+
 def test_psycopg_asserts_schema_compatibility_at_startup(database_url: str) -> None:
     with psycopg.connect(database_url) as connection:
         assert_schema_compatible(connection)

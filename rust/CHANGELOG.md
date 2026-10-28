@@ -54,6 +54,16 @@ the page from its cache after logout (SM-1870).
 Now the Rust dashboard backend sends the page with `Cache-Control: no-store`, as the TypeScript host
 does. Each asset keeps `Cache-Control: public, max-age=31536000, immutable`.
 
+### A max_attempts above 100 is refused in the SDK
+
+Before this change, `EnqueueOptions::max_attempts` and `ScheduledTask::max_attempts` above 100
+reached PostgreSQL, and PostgreSQL refused the request. A negative `ScheduledTask::max_attempts`
+also reached PostgreSQL (SM-1857).
+
+Now an enqueue, a child task request, and `sync_schedules` refuse a value outside 0 through 100
+with `Error::InvalidArgument` before the statement that writes the task or the schedule. Zero
+still selects 25 attempts. ADR 0115 records the rule for all seven SDKs.
+
 ## 0.10.0 — 2026-10-26
 
 The npm packages, Python distribution, Go module, Rust crate, Ruby gem, JVM artifacts, and .NET

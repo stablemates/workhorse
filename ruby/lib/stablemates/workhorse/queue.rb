@@ -545,12 +545,19 @@ module Stablemates
       def idempotency_document(idempotency)
         raise ArgumentError, "idempotency must be an Idempotency" unless idempotency.is_a?(Idempotency)
 
-        ttl = Values.milliseconds(idempotency.ttl, "idempotency TTL", 0..MAX_DURATION_MS)
         {
           "key" => required_bytes(idempotency.key, MAX_KEY_BYTES, "idempotency key"),
           "scope" => scope(idempotency.scope),
-          "ttlMs" => ttl.zero? ? DEFAULT_IDEMPOTENCY_TTL_MS : ttl
+          "ttlMs" => idempotency_ttl(idempotency.ttl)
         }
+      end
+
+      # The protocol value of an idempotency TTL. An exact zero takes the default. A nonzero value
+      # that rounds to 0 ms is refused, so a unit mistake cannot select the default.
+      def idempotency_ttl(value)
+        return DEFAULT_IDEMPOTENCY_TTL_MS if value.is_a?(Numeric) && value.zero?
+
+        Values.milliseconds(value, "idempotency TTL", 1..MAX_DURATION_MS)
       end
 
       def debounce_document(debounce)

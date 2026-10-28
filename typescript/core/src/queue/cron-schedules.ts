@@ -2,7 +2,11 @@ import { SQL_STATEMENTS } from "./sql-catalogue.generated.js";
 import { expectOneRow } from "../errors.js";
 import { logDebug, logInfo, recordScheduleFired, withSpan } from "../telemetry.js";
 import type { Json, RetryPolicy } from "../types.js";
-import { validateTaskPriority, type EnqueueContractsModule } from "./enqueue-contracts.js";
+import {
+  maxAttemptsValue,
+  validateTaskPriority,
+  type EnqueueContractsModule,
+} from "./enqueue-contracts.js";
 import { QueueModule, type QueueModuleContext } from "./module-context.js";
 
 export interface ScheduledTask {
@@ -56,6 +60,10 @@ export class CronSchedulesModule extends QueueModule {
     definitions: readonly ScheduleDefinition[],
     options: { prune?: boolean } = {},
   ): Promise<void> {
+    // Check each attempt limit before the contract read, so a refused value runs no statement.
+    const maxAttempts = definitions.map((definition) =>
+      maxAttemptsValue(definition.task.maxAttempts),
+    );
     const acceptances = await this.enqueueContracts.currentTaskAcceptances(
       definitions.map((definition) => definition.task),
     );
@@ -71,7 +79,7 @@ export class CronSchedulesModule extends QueueModule {
       concurrencyKey: definition.task.concurrencyKey ?? null,
       type: definition.task.type,
       payload: definition.task.payload,
-      maxAttempts: definition.task.maxAttempts ?? 25,
+      maxAttempts: maxAttempts[index]!,
       retryPolicy: definition.task.retryPolicy ?? null,
     }));
     await withSpan(

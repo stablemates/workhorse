@@ -199,6 +199,34 @@ public sealed class QueueEnqueueTests(ScratchDatabase database) : IClassFixture<
     }
 
     [Fact]
+    public async Task RetainsAKeyForTheDefaultTtlForAZeroValue()
+    {
+        var queueName = UniqueName("ttl");
+        var queue = new Queue(database.DataSource, new QueueOptions { DefaultQueue = queueName });
+        async Task<long> Retained(TimeSpan ttl)
+        {
+            var idempotency = new Idempotency { Key = UniqueName("key"), Ttl = ttl };
+            var result = await queue.EnqueueAsync("t", 1, new EnqueueOptions { Idempotency = idempotency }, Token);
+            await using var command = database.DataSource.CreateCommand(
+                "SELECT (request_fingerprint ->> 'ttlMs')::bigint FROM workhorse.enqueue_idempotency WHERE task_id = $1");
+            command.Parameters.Add(new NpgsqlParameter { Value = result.TaskId });
+            return (long)(await command.ExecuteScalarAsync(Token))!;
+        }
+
+        Assert.Equal(86_400_000, await Retained(TimeSpan.Zero));
+        Assert.Equal(1, await Retained(TimeSpan.FromMilliseconds(1)));
+        Assert.Equal(1, await Retained(TimeSpan.FromTicks(5_000)));
+        foreach (var refused in new[] { TimeSpan.FromTicks(4_000), TimeSpan.FromTicks(-4_000), TimeSpan.FromMilliseconds(31_536_000_001) })
+        {
+            var idempotency = new Idempotency { Key = UniqueName("key"), Ttl = refused };
+            var error = await Assert.ThrowsAsync<ArgumentException>(() => queue.EnqueueAsync("t", 1, new EnqueueOptions { Idempotency = idempotency }, Token));
+            Assert.Equal("enqueue request 1: idempotency TTL must be a TimeSpan between 0.001 and 31536000 seconds", error.Message);
+        }
+
+        Assert.Equal(3, await CountAsync(database, queueName));
+    }
+
+    [Fact]
     public async Task ReplaysAnIdempotentEnqueueAndRefusesADifferentRequest()
     {
         var queue = new Queue(database.DataSource, new QueueOptions { DefaultQueue = UniqueName("idempotency") });
