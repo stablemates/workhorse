@@ -353,6 +353,8 @@ module Stablemates
         children.each { |child| child_name(child.name) }
         raise ArgumentError, "child names must be unique" unless children.map(&:name).uniq.length == children.length
 
+        # Every child is checked before the deferred tier read and the first contract read.
+        children.each { |child| @queue.check_child_request(@task, child.task_type, child.payload, child.options) }
         durable!("child tasks")
 
         build = lambda do |versions = {}|

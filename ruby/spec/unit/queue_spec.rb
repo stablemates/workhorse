@@ -125,6 +125,22 @@ RSpec.describe Stablemates::Workhorse::Queue do
     expect { described_class.new(Object.new) }.to raise_error(ArgumentError)
   end
 
+  it "checks every callback and member of a task group before any statement" do
+    executor = RecordingExecutor.new
+    queue = described_class.new(executor)
+    valid = W::EnqueueRequest.new(task_type: "t", payload: {})
+    invalid = W::EnqueueRequest.new(task_type: "t", payload: {}, max_attempts: 101)
+    expect { queue.create_task_group(on_finish: valid, on_success: invalid) }
+      .to raise_error(ArgumentError, /on_success callback: .*max attempts/)
+    expect { queue.task_group(on_finish: invalid) { |group| group.add([valid]) } }
+      .to raise_error(ArgumentError, /on_finish callback: .*max attempts/)
+    expect { queue.task_group { |group| group.add([valid, invalid]) } }
+      .to raise_error(ArgumentError, /enqueue request 2: .*max attempts/)
+    expect { queue.add_to_task_group("00000000-0000-4000-8000-000000000002", [valid, invalid]) }
+      .to raise_error(ArgumentError, /enqueue request 2: .*max attempts/)
+    expect(executor.statements).to be_empty
+  end
+
   it "sends each policy sync as its namespace, JSON definitions, and prune" do
     executor = FakeExecutor.new
     queue = described_class.new(executor)

@@ -314,7 +314,11 @@ Seven rows carry a condition the setting name alone cannot.
 - **Enqueue max attempts.** An omitted attempt limit and an explicit 0 both give 25 attempts, for
   an enqueue, a child task, and the task of a schedule. A Go caller cannot tell 0 from an omitted
   value, so all seven SDKs read 0 as Go does. Each SDK refuses any other value outside 1 through
-  100 before the statement that writes the task.
+  100 before the statement that writes the task. A child set, a task group create, and a task
+  group add check the options of every request before their first statement. That statement can
+  be the compatibility query, a payload contract read, a membership read, or a tier read. Thus an
+  option that the SDK refuses sends no statement in any SDK, also when a valid request comes first.
+  PostgreSQL still checks the options that the SDK does not check.
 - **Enqueue idempotency TTL.** An omitted TTL and an explicit 0 both keep the key for
   86,400,000 ms. TypeScript, Python, Go, and Rust take integer milliseconds, and PostgreSQL refuses
   a fraction or a value outside 1 through 31,536,000,000 ms. Ruby, the JVM, and .NET take a

@@ -154,6 +154,21 @@ Before migration 0089, `prune_worker_registry_v1` deleted expired kept pauses wi
 the planner could not match to `worker_pause_tombstone_expires_idx`. Each maintenance pass read the
 whole table. Now the delete reads only the expired rows through the index (SM-1866).
 
+### A child set and a task group check every request before their first statement
+
+Before this change, a child set and a task group checked the options of each request while they
+serialized it. A handler created two children, and the second child had `maxAttempts: 101`. The
+queue read the payload contract of the first child, and then it refused the second child. A task
+group also ran the compatibility query and read its callback contracts before it checked a
+callback. A member add read the membership of its task first (SM-1883).
+
+Now `Queue.createChildren`, `Queue.createChildrenAll`, `Queue.createChild`, `Queue.createTaskGroup`,
+`Queue.taskGroup`, `Queue.addToTaskGroup`, `Queue.addToTaskGroupAsMember`, and `Queue.enqueueMany`
+check the options of every request before their first statement. A handler's `ctx.runChildren` and
+`ctx.runChildrenAll` check every child option before they read the queue tier. A `Queue.taskGroup`
+block still runs to its end before the queue checks the options of its tasks. The errors and their
+messages do not change. Only their time changes.
+
 ## 0.10.0 — 2026-10-26
 
 The npm packages, Python distribution, Go module, Rust crate, Ruby gem, JVM artifacts, and .NET

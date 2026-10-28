@@ -120,6 +120,8 @@ module Stablemates
       # SDK.
       def add_to_task_group_as_member(task, worker_id, requests) # :nodoc:
         TaskGroups.validate_add(requests)
+        # Every request is checked before the membership read.
+        request_inputs(requests)
         link = find_task_group(task.id)
         raise ArgumentError, "Task #{task.id} is not a member of a task group" unless link&.role == :member
 
@@ -338,6 +340,32 @@ module Stablemates
       # queue of +parent+. Internal to the SDK.
       def serialize_child_request(parent, task_type, payload, options, contracts = {}, version: :current, # :nodoc:
         stored_queue: nil)
+        request, input = child_input(parent, task_type, payload, options, stored_queue)
+        key = (version == :current) ? request.task_type : [request.task_type, version]
+        contract = contracts.fetch(key) do
+          contracts[key] = if version != :current
+            version && Contracts.load(@executor, request.task_type, version)
+          else
+            Contracts.load(@executor, request.task_type).tap do |loaded|
+              @lock.synchronize { @contracts[request.task_type] = loaded }
+            end
+          end
+        end
+        stamp_contract(input, request, contract)
+        input
+      end
+
+      # Checks a child request with no round trip. A child set checks every child with this before
+      # its first contract read. Internal to the SDK.
+      def check_child_request(parent, task_type, payload, options) # :nodoc:
+        child_input(parent, task_type, payload, options, nil)
+        nil
+      end
+
+      private
+
+      # The request and the input of a child, without its contract stamp.
+      def child_input(parent, task_type, payload, options, stored_queue)
         request = EnqueueRequest.new(task_type: task_type, payload: payload, **options)
         if request.idempotency || request.debounce || request.throttle || request.dependencies
           raise ArgumentError, "Child tasks cannot use coalescing or dependency enqueue options"
@@ -354,21 +382,8 @@ module Stablemates
         input["tags"] = tags(request.tags)
         input["traceContext"] = parent.trace_context unless parent.trace_context.nil?
         input["runAt"] = Values.timestamp(request.run_at, "run at") if request.run_at
-        key = (version == :current) ? request.task_type : [request.task_type, version]
-        contract = contracts.fetch(key) do
-          contracts[key] = if version != :current
-            version && Contracts.load(@executor, request.task_type, version)
-          else
-            Contracts.load(@executor, request.task_type).tap do |loaded|
-              @lock.synchronize { @contracts[request.task_type] = loaded }
-            end
-          end
-        end
-        stamp_contract(input, request, contract)
-        input
+        [request, input]
       end
-
-      private
 
       # Serializes +requests+, passes their JSON document to the block, and returns the rows the block
       # returns. On a contract mismatch, PostgreSQL enqueued nothing: the client reloads the named
@@ -388,18 +403,23 @@ module Stablemates
       end
 
       def serialize_requests(requests)
-        now = Time.now
         trace_context = Telemetry.inject_trace_context
-        inputs = requests.each_with_index.map do |request, index|
-          input = serialize_request(request, now)
-          input["traceContext"] = trace_context if trace_context
-          input
-        rescue ArgumentError => e
-          raise ArgumentError, "enqueue request #{index + 1}: #{e.message}"
-        end
+        inputs = request_inputs(requests)
+        inputs.each { |input| input["traceContext"] = trace_context } if trace_context
         assert_compatible
         inputs.zip(requests) { |input, request| apply_contract(input, request) }
         JSON.generate(inputs)
+      end
+
+      # The inputs of +requests+, without a round trip, so a batch refuses an invalid option of any
+      # request before its first statement.
+      def request_inputs(requests)
+        now = Time.now
+        requests.each_with_index.map do |request, index|
+          serialize_request(request, now)
+        rescue ArgumentError => e
+          raise ArgumentError, "enqueue request #{index + 1}: #{e.message}"
+        end
       end
 
       # Creates a group with +requests+ as its member tasks, and seals it when +seal+ is true. A
@@ -413,6 +433,11 @@ module Stablemates
             raise ArgumentError, "task group callbacks cannot use enqueue idempotency, debounce, or throttle"
           end
         end
+        # The callbacks are serialized after the member contracts are read, so their options are
+        # checked here, before the first statement.
+        now = Time.now
+        callbacks.each { |kind, request| callback_input(kind, request, now) unless request.nil? }
+        request_inputs(requests)
         group_id = nil
         rows = submit_requests(requests) do |document|
           created = @executor.rows(SqlCatalogue::CREATE_TASK_GROUP_V1,
@@ -435,17 +460,19 @@ module Stablemates
         document = callbacks.each_with_object({}) do |(kind, request), entries|
           next if request.nil?
 
-          input = begin
-            serialize_request(request, now)
-          rescue ArgumentError => e
-            raise ArgumentError, "#{kind} callback: #{e.message}"
-          end
+          input = callback_input(kind, request, now)
           input.delete("runAt") if request.run_at.nil?
           input["traceContext"] = trace_context if trace_context
           apply_contract(input, request)
           entries[TaskGroups::CALLBACK_KEYS.fetch(kind)] = input
         end
         JSON.generate(document)
+      end
+
+      def callback_input(kind, request, now)
+        serialize_request(request, now)
+      rescue ArgumentError => e
+        raise ArgumentError, "#{kind} callback: #{e.message}"
       end
 
       # +member+ is the task ID, worker ID, and fence token of a running member task, or three nils.

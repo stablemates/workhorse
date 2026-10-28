@@ -107,7 +107,7 @@ from ._telemetry import (
     task_span_attributes as _task_span_attributes,
 )
 from ._version import WORKHORSE_VERSION as _WORKHORSE_VERSION
-from .client import Queue
+from .client import Queue, _serialize_batch
 from .errors import (
     CancellationRequestedError,
     CheckpointConflictError,
@@ -155,6 +155,7 @@ from .types import (
     TaskProgress,
     TaskWait,
     _NoInput,
+    _validate_task_group_add,
 )
 
 if TYPE_CHECKING:
@@ -835,6 +836,9 @@ class _HandlerDurability:
         if self._task_groups is None:
             raise TypeError("This worker does not support task groups")
         self._cancellation.raise_if_cancelled()
+        # Every request is checked before the membership read.
+        _validate_task_group_add(requests)
+        _serialize_batch(requests, self._task.queue)
         link = self.get_task_group()
         if link is None or link.role != "member":
             raise TypeError(f"Task {self._task.id} is not a member of a task group")
@@ -1277,6 +1281,9 @@ class _HandlerDurability:
             if child.name in names:
                 raise ValueError("Child names must be unique")
             names.add(child.name)
+        # Every child is checked before the first contract read of the set.
+        for child in children:
+            _serialize_child_request(self._task, child.type, child.payload, child.options)
 
         def build(versions: _ChildVersions | None) -> str:
             contracts: _ChildContracts = {}

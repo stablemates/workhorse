@@ -234,12 +234,7 @@ impl EnqueueClient {
         request: &EnqueueRequest,
     ) -> Result<Value, Error> {
         let options = &request.options;
-        if options.idempotency.is_some() || options.debounce.is_some() || options.throttle.is_some()
-        {
-            return Err(Error::invalid(
-                "task group callbacks cannot use enqueue idempotency, debounce, or throttle",
-            ));
-        }
+        validate_callback(request)?;
         let mut input = self
             .serialize_request(request, Utc::now(), trace_context().as_ref())
             .map_err(Error::invalid)?;
@@ -550,6 +545,32 @@ fn contract_mismatch(rows: &[EnqueueRow]) -> Result<Option<Vec<String>>, Error> 
         return Err(invalid_result());
     }
     Ok(Some(task_types))
+}
+
+/// Checks the options of every request of a batch, with the message `prepare` gives. A task group
+/// runs this before its first statement, so a later invalid request is refused before a read.
+pub(crate) fn validate_requests(requests: &[EnqueueRequest]) -> Result<(), Error> {
+    for (index, request) in requests.iter().enumerate() {
+        validate_options(&request.options).map_err(|message| {
+            Error::invalid(format!(
+                "enqueue request {}: invalid enqueue options: {message}",
+                index + 1
+            ))
+        })?;
+    }
+    Ok(())
+}
+
+/// Checks the options of a task group callback, with the message `prepare_callback` gives.
+pub(crate) fn validate_callback(request: &EnqueueRequest) -> Result<(), Error> {
+    let options = &request.options;
+    if options.idempotency.is_some() || options.debounce.is_some() || options.throttle.is_some() {
+        return Err(Error::invalid(
+            "task group callbacks cannot use enqueue idempotency, debounce, or throttle",
+        ));
+    }
+    validate_options(options)
+        .map_err(|message| Error::invalid(format!("invalid enqueue options: {message}")))
 }
 
 pub(crate) fn enqueue_results(

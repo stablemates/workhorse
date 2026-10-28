@@ -21,6 +21,7 @@ import {
   maxAttemptsValue,
   TaskContractValidationError,
   TaskValueSizeLimitError,
+  validateEnqueueOptions,
   validateTaskPriority,
 } from "./enqueue-contracts.js";
 
@@ -134,6 +135,38 @@ function validateChildName(name: string): void {
   }
 }
 
+/**
+ * Check the options of every child of a set. A handler context runs this before its tier read, so
+ * an invalid option of a later child sends no statement. A malformed set is left to the module.
+ */
+export function validateChildSetOptions(children: readonly ChildTaskRequest[]): void {
+  if (!Array.isArray(children)) return;
+  for (const child of children) validateChildOptions(child?.options ?? {});
+}
+
+function validateChildOptions(options: ChildTaskOptions): void {
+  const unsafe = options as EnqueueOptions;
+  if (
+    unsafe.idempotency !== undefined ||
+    unsafe.debounce !== undefined ||
+    unsafe.throttle !== undefined ||
+    unsafe.prerequisiteTaskId !== undefined ||
+    unsafe.dependencies !== undefined
+  ) {
+    throw new TypeError("Child tasks cannot use coalescing or dependency enqueue options");
+  }
+  validateEnqueueOptions(unsafe);
+  // A child request reads runAt when it is not undefined, so a JavaScript null throws here, as it
+  // does when the request is built, but before the first statement.
+  if (options.runAt !== undefined) (options.runAt as Date).toISOString();
+}
+
+function validateWorkerId(workerId: string): void {
+  if (typeof workerId !== "string" || workerId.length === 0) {
+    throw new TypeError("Worker ID must be a non-empty string");
+  }
+}
+
 /** Owns fenced child creation and result joining behind the Queue facade. */
 export class ChildTasksModule extends QueueModule {
   constructor(
@@ -151,16 +184,7 @@ export class ChildTasksModule extends QueueModule {
     version?: string | null,
     storedQueue?: string,
   ): Promise<Record<string, unknown>> {
-    const unsafe = options as EnqueueOptions;
-    if (
-      unsafe.idempotency !== undefined ||
-      unsafe.debounce !== undefined ||
-      unsafe.throttle !== undefined ||
-      unsafe.prerequisiteTaskId !== undefined ||
-      unsafe.dependencies !== undefined
-    ) {
-      throw new TypeError("Child tasks cannot use coalescing or dependency enqueue options");
-    }
+    validateChildOptions(options);
     const acceptance = await this.enqueueContracts.taskAcceptance(type, payload, version);
     return {
       // A request with no queue goes to the queue of the parent task. A replay keeps the queue of
@@ -249,6 +273,34 @@ export class ChildTasksModule extends QueueModule {
     return accepted === request ? row : write(accepted);
   }
 
+  /** Check a child request before the first statement of its creation. */
+  validateChild(workerId: string, name: string, options: ChildTaskOptions = {}): void {
+    validateChildName(name);
+    validateWorkerId(workerId);
+    validateChildOptions(options);
+  }
+
+  /**
+   * Check every request of a child set before the first statement, so an invalid option of a later
+   * child is refused before a contract read for an earlier child.
+   */
+  validateChildren(
+    parent: ClaimedTask,
+    workerId: string,
+    children: readonly ChildTaskRequest[],
+  ): void {
+    if (!Array.isArray(children)) throw new TypeError("Children must be an array");
+    validateWorkerId(workerId);
+    if (children.length > 100) throw new ChildLimitExceededError(parent.id);
+    const names = new Set<string>();
+    for (const { name, options = {} } of children) {
+      validateChildName(name);
+      if (names.has(name)) throw new TypeError("Child names must be unique");
+      names.add(name);
+      validateChildOptions(options);
+    }
+  }
+
   async createChild<TPayload extends Json, TResult extends Json = Json>(
     parent: ClaimedTask,
     workerId: string,
@@ -257,10 +309,7 @@ export class ChildTasksModule extends QueueModule {
     payload: TPayload,
     options: ChildTaskOptions = {},
   ): Promise<CreateChildResult<TResult>> {
-    validateChildName(name);
-    if (typeof workerId !== "string" || workerId.length === 0) {
-      throw new TypeError("Worker ID must be a non-empty string");
-    }
+    this.validateChild(workerId, name, options);
     const build: BuildChildRequest = async (versions) =>
       JSON.stringify(
         await this.childRequest(
@@ -325,17 +374,7 @@ export class ChildTasksModule extends QueueModule {
     children: readonly ChildTaskRequest[],
     mode: "settled" | "all_success",
   ): Promise<CreateChildrenResult<TResult>> {
-    if (!Array.isArray(children)) throw new TypeError("Children must be an array");
-    if (typeof workerId !== "string" || workerId.length === 0) {
-      throw new TypeError("Worker ID must be a non-empty string");
-    }
-    if (children.length > 100) throw new ChildLimitExceededError(parent.id);
-    const names = new Set<string>();
-    for (const { name } of children) {
-      validateChildName(name);
-      if (names.has(name)) throw new TypeError("Child names must be unique");
-      names.add(name);
-    }
+    this.validateChildren(parent, workerId, children);
     const build: BuildChildRequest = async (versions) =>
       JSON.stringify(
         await Promise.all(

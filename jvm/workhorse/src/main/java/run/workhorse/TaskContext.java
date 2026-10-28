@@ -509,6 +509,10 @@ final class TaskContext implements HandlerContext {
     if (names.size() != requests.size()) {
       throw new IllegalArgumentException("child names must be unique");
     }
+    // Every child is checked before the deferred tier read and the first contract read.
+    for (ChildRequest child : requests) {
+      worker.queue().checkChildRequest(task, child.taskType(), child.options());
+    }
     durable("child tasks");
     Function<Map<String, Queue.ChildVersion>, String> build =
         versions ->

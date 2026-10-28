@@ -315,6 +315,12 @@ func (handler *HandlerContext) createChildSet(children []ChildTaskRequest, mode 
 		}
 		names[child.Name] = struct{}{}
 	}
+	// Every child's options are checked before the first contract read of the set.
+	for index, child := range children {
+		if err := validateChildOptions(child.Options); err != nil {
+			return nil, fmt.Errorf(childRequestErrorFormat, index+1, err)
+		}
+	}
 	build := func(versions childVersions) ([]byte, error) {
 		requests := make([]childSetInput, len(children))
 		contracts := make(childContracts)
@@ -559,11 +565,8 @@ func (handler *HandlerContext) serializeChildRequest(
 	versions childVersions,
 	contracts childContracts,
 ) (childEnqueueInput, error) {
-	if err := validateEnqueueOptions(options); err != nil {
+	if err := validateChildOptions(options); err != nil {
 		return childEnqueueInput{}, err
-	}
-	if options.Idempotency != nil || options.Debounce != nil || options.Throttle != nil || options.Dependencies != nil {
-		return childEnqueueInput{}, fmt.Errorf(childKeyedOptionsMessage, ErrInvalidEnqueueOptions)
 	}
 	queueName := options.Queue
 	if stored, ok := versions[name]; ok && queueName == emptyString {
@@ -610,6 +613,17 @@ func (handler *HandlerContext) serializeChildRequest(
 	request.SensitivePayloadKeys = contract.sensitivePayloadKeys
 	request.SensitiveResultKeys = contract.sensitiveResultKeys
 	return request, nil
+}
+
+// validateChildOptions checks the enqueue options a child request can use.
+func validateChildOptions(options EnqueueOptions) error {
+	if err := validateEnqueueOptions(options); err != nil {
+		return err
+	}
+	if options.Idempotency != nil || options.Debounce != nil || options.Throttle != nil || options.Dependencies != nil {
+		return fmt.Errorf(childKeyedOptionsMessage, ErrInvalidEnqueueOptions)
+	}
+	return nil
 }
 
 // childContract loads the contract a child request carries, reusing loads within one build.

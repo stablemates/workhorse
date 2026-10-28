@@ -474,6 +474,11 @@ func validateTaskGroupCallbacks(callbacks TaskGroupCallbacks) error {
 		if options.Idempotency != nil || options.Debounce != nil || options.Throttle != nil {
 			return fmt.Errorf(taskGroupCallbackCoalescingMessage, ErrInvalidEnqueueOptions)
 		}
+		// A callback is serialized after the member contracts are read, so its options are checked
+		// here, before the first statement.
+		if err := validateEnqueueOptions(options); err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -809,6 +814,12 @@ func (handler *HandlerContext) GetTaskGroup() (*TaskGroupLink, error) {
 func (handler *HandlerContext) AddToTaskGroup(requests []EnqueueRequest) ([]EnqueueResult, error) {
 	if err := validateTaskGroupRequests(requests); err != nil {
 		return nil, err
+	}
+	// The options of every request are checked before the membership read.
+	for index, request := range requests {
+		if err := validateEnqueueOptions(request.Options); err != nil {
+			return nil, fmt.Errorf(enqueueRequestErrorFormat, index+1, err)
+		}
 	}
 	link, err := handler.GetTaskGroup()
 	if err != nil {

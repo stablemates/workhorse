@@ -133,6 +133,17 @@ the page from its cache after logout (SM-1870).
 Now the JVM dashboard backend sends the page with `Cache-Control: no-store`, as the TypeScript host
 does. Each asset keeps `Cache-Control: public, max-age=31536000, immutable`.
 
+### A child set and a task group check every request before their first statement
+
+Before this change, `HandlerContext.runChildren` and `runChildrenAll` checked the options of each
+child while they serialized it. Thus the first child could read its payload contract before the SDK
+refused the second child. `Queue.createTaskGroup` and `Queue.taskGroup` checked the callbacks after
+the compatibility query and the member contract reads. A member add through
+`HandlerContext.taskGroup()` read the membership of its task first (SM-1883).
+
+Now these calls check the options of every request before their first statement, also before the
+deferred tier read of a child set. The exceptions do not change. Only their time changes.
+
 ## 0.10.0 — 2026-10-26
 
 The npm packages, Python distribution, Go module, Rust crate, Ruby gem, JVM artifacts, and .NET

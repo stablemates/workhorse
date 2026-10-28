@@ -398,11 +398,18 @@ export function validateEnqueueOptions(options: EnqueueOptions): void {
       throw new TypeError("dependencies prerequisiteTaskIds must be unique");
     }
   }
-  // An invalid Date throws RangeError here, as it does when the request is serialized.
+  // A JavaScript null coalescing option throws TypeError here, as it does when the request is
+  // serialized. An invalid Date throws RangeError here for the same reason.
+  for (const mode of [options.idempotency, options.debounce, options.throttle]) coalescingKey(mode);
   options.runAt?.toISOString();
   options.deadline?.toISOString();
   validateTaskPriority(options.priority);
   maxAttemptsValue(options.maxAttempts);
+}
+
+/** The key of a coalescing option, read as serialization reads it. */
+function coalescingKey(mode: { key: string } | undefined): string | undefined {
+  return mode === undefined ? undefined : mode.key;
 }
 
 export function validateTaskPriority(value: number | undefined): number {
@@ -411,6 +418,37 @@ export function validateTaskPriority(value: number | undefined): number {
     throw new RangeError(`priority must be an integer between 0 and ${MAX_TASK_PRIORITY}`);
   }
   return value;
+}
+
+/**
+ * Check the options of every request in a batch. A batch runs this before its first statement, so
+ * an invalid option of a later request is refused before a contract read for an earlier request.
+ */
+export function validateEnqueueRequests(requests: readonly EnqueueRequest[]): void {
+  for (const request of requests) validateEnqueueOptions(request.options ?? {});
+}
+
+/** Check the size of an `enqueueMany` batch, then the options of every request. */
+export function validateEnqueueBatch(requests: readonly EnqueueRequest[]): void {
+  if (requests.length > MAX_ENQUEUE_BATCH_SIZE) {
+    throw new RangeError(`enqueueMany accepts at most ${MAX_ENQUEUE_BATCH_SIZE} requests`);
+  }
+  validateEnqueueRequests(requests);
+}
+
+/** Check the options of a task group callback. A callback is enqueued later, with no coalescing. */
+export function validateCallbackRequest(request: EnqueueRequest): void {
+  const options = request.options ?? {};
+  if (
+    options.idempotency !== undefined ||
+    options.debounce !== undefined ||
+    options.throttle !== undefined
+  ) {
+    throw new TypeError(
+      "task group callbacks cannot use enqueue idempotency, debounce, or throttle",
+    );
+  }
+  validateEnqueueOptions(options);
 }
 
 function validateSensitiveKeys(keys: readonly string[] | undefined, field: string): void {
@@ -1033,9 +1071,7 @@ export class EnqueueContractsModule extends QueueModule {
     transaction: Queryable = this.context.database,
   ): Promise<EnqueueResult[]> {
     if (requests.length === 0) return [];
-    if (requests.length > MAX_ENQUEUE_BATCH_SIZE) {
-      throw new RangeError(`enqueueMany accepts at most ${MAX_ENQUEUE_BATCH_SIZE} requests`);
-    }
+    validateEnqueueBatch(requests);
     return this.submitEnqueueRequests(requests, transaction, async (serializedInput) => {
       const result = await transaction.query<EnqueueRow>(SQL_STATEMENTS["enqueue_many_v1"], [
         serializedInput,
@@ -1052,19 +1088,10 @@ export class EnqueueContractsModule extends QueueModule {
     request: EnqueueRequest,
     transaction: Queryable = this.context.database,
   ): Promise<string> {
-    const options = request.options ?? {};
-    if (
-      options.idempotency !== undefined ||
-      options.debounce !== undefined ||
-      options.throttle !== undefined
-    ) {
-      throw new TypeError(
-        "task group callbacks cannot use enqueue idempotency, debounce, or throttle",
-      );
-    }
+    validateCallbackRequest(request);
     const [input] = await this.serializeEnqueueRequests([request], transaction);
     const { serializedPayload, ...serialized } = input!;
-    if (options.runAt === undefined) delete serialized.runAt;
+    if (request.options?.runAt === undefined) delete serialized.runAt;
     return serializedRequest(serialized, serializedPayload);
   }
 
@@ -1085,6 +1112,7 @@ export class EnqueueContractsModule extends QueueModule {
     requests: readonly EnqueueRequest[],
     transaction: Queryable,
   ): Promise<SerializedEnqueueRequest[]> {
+    validateEnqueueRequests(requests);
     const traceContext = injectTraceContext();
     return Promise.all(
       requests.map((request) => this.serializeEnqueueRequest(request, transaction, traceContext)),
