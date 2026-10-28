@@ -349,10 +349,10 @@ waits. If a long transaction holds a child, the step fails and rolls back. The n
 
 `workhorse.schema_migration` records the installed migration history. `workhorse.protocol_version`
 independently records which SQL protocol versions the installed schema serves, so a protocol
-revision is never inferred from a schema version. That table is also the compatibility ceiling: a
-client refuses an installed schema that no longer lists the protocol it speaks, and a major release
-narrows the list when it removes a superseded function. A client applies no ceiling of its own,
-because it cannot know at build time which later release will stop serving it. Schema versions and SQL function versions remain
+revision is never inferred from a schema version. That table is also the compatibility ceiling: the
+compatibility check of a client refuses an installed schema that no longer lists the protocol it
+speaks, and a major release narrows the list when it removes a superseded function. A client
+applies no ceiling of its own, because it cannot know at build time which later release will stop serving it. Schema versions and SQL function versions remain
 separate: a migration may add `claim_v2` while retaining `claim_v1` for the rest of the major line.
 
 ## Expand and contract across deployments
