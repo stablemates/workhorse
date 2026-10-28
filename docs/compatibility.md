@@ -992,9 +992,12 @@ skip publication after npm publishes, and the run still succeeds. `pnpm release:
    `python/CHANGELOG.md`, `go/CHANGELOG.md`, `rust/CHANGELOG.md`, `ruby/CHANGELOG.md`,
    `jvm/CHANGELOG.md`, `dotnet/CHANGELOG.md`, and the changelog of each published npm package that
    has one.
-5. The release is a minor or major release, and `sql/releases/<NNNN>.sql` does not exist for
-   `WORKHORSE_SCHEMA_VERSION`. The first major release adds no migration, so the last `0.x` minor
-   already froze its artifact.
+5. `sql/releases/<NNNN>.sql` does not exist for `WORKHORSE_SCHEMA_VERSION`. This applies to every
+   release kind. If a release ships a schema version above the newest file in `sql/releases/`, the
+   release must add the file for that version. A patch release can ship a migration, so it can also
+   need a new file. A release without a migration ships a schema version that an earlier release
+   froze. The first major release adds no migration, so the last `0.x` minor already froze its
+   artifact.
 
 The Python files and `python/CHANGELOG.md` use the PEP 440 spelling of a prerelease, and the other
 files use the SemVer spelling. The check changes no publication step of a workflow.
