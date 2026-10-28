@@ -128,7 +128,8 @@ flight.
 **Heartbeats.** One round for each worker sends every active lease through `heartbeat_many_v2`.
 Rounds never overlap. A busy retry sends only the busy leases between two rounds. On the dedicated
 heartbeat connection, the rounds of the workers on one pool share one transaction and one
-`heartbeat_pool_v1` statement.
+`heartbeat_pool_v1` statement, in every SDK except .NET. A .NET round sends one transaction for each
+worker and each 100 leases.
 
 `claim_v1` is the same call as `claim_many_v1` with a limit of 1.
 

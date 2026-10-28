@@ -303,13 +303,17 @@ deadline bounds it. `heartbeat_v1` and a custom `WorkerQueueApi` without `heartb
 for a row lock and never report `busy`. TypeScript `Queue.tryHeartbeat()` calls `heartbeat_v2`,
 which renews one lease by the rule of `heartbeat_many_v2`, but it has no busy retry.
 
-**Round deadline.** A round on the reserved connection sends `heartbeat_many_v2` in its own
-transaction. Before the statement, the round sets `statement_timeout` to one quarter of the time left
-before its deadline. It sets `idle_in_transaction_session_timeout` to one quarter too, for each idle
-gap. The last quarter stays for `COMMIT` and the settings statement. The worker counts
-the renewals only after `COMMIT` succeeds. No setting bounds `COMMIT`. If a round expires before it
-sends `heartbeat_many_v2`, it rolls back and keeps its connection. If a statement of the round can
-still run, the worker discards the connection.
+**Round deadline.** In every SDK except .NET, a round on the reserved connection sends one
+transaction for every worker on the pool. Its one `heartbeat_pool_v1` statement calls
+`heartbeat_many_v2` for each batch of up to 100 leases of one worker. A .NET round sends one
+transaction with one `heartbeat_many_v2` statement for each batch instead. Before the statement, the
+round sets `statement_timeout` to one quarter of the time left before its deadline. It sets
+`idle_in_transaction_session_timeout` to one quarter too, for each idle gap. The last quarter stays
+for `COMMIT` and the settings statement.
+
+The worker counts the renewals only after `COMMIT` succeeds. No setting bounds `COMMIT`. If a round
+expires before it sends its heartbeat statement, it rolls back and keeps its connection. If a
+statement of the round can still run, the worker discards the connection.
 
 **Smallest supported interval.** The smallest supported interval is 100 ms, in the TypeScript,
 Python, Go, Rust, Ruby, and JVM SDKs. Its round deadline is 75 ms. Below 100 ms, the worker accepts
@@ -346,7 +350,7 @@ Both moments come before the database renews, so the local countdown never ends 
 The Rust worker matches each heartbeat result to the fence token of the claim. If a suspended task
 resumes while an old round returns, that round cannot renew or cancel the resumed handler.
 
-More detail: [Task lifecycle: Heartbeat](https://github.com/stablemates/workhorse/blob/main/docs/architecture/lifecycle.md#heartbeat), [Task lifecycle: Busy retry](https://github.com/stablemates/workhorse/blob/main/docs/architecture/lifecycle.md#busy-retry), [Task lifecycle: Heartbeat round deadline](https://github.com/stablemates/workhorse/blob/main/docs/architecture/lifecycle.md#heartbeat-round-deadline), [Task lifecycle: Supported heartbeat interval](https://github.com/stablemates/workhorse/blob/main/docs/architecture/lifecycle.md#supported-heartbeat-interval), [Task lifecycle: Heartbeat schedule](https://github.com/stablemates/workhorse/blob/main/docs/architecture/lifecycle.md#heartbeat-schedule), and [Schema and SQL protocol: .NET worker](https://github.com/stablemates/workhorse/blob/main/docs/architecture/schema-and-protocol.md#net-worker).
+More detail: [Task lifecycle: Heartbeat](https://github.com/stablemates/workhorse/blob/main/docs/architecture/lifecycle.md#heartbeat), [Task lifecycle: Busy retry](https://github.com/stablemates/workhorse/blob/main/docs/architecture/lifecycle.md#busy-retry), [Task lifecycle: Pool renewal](https://github.com/stablemates/workhorse/blob/main/docs/architecture/lifecycle.md#pool-renewal), [Task lifecycle: Heartbeat round deadline](https://github.com/stablemates/workhorse/blob/main/docs/architecture/lifecycle.md#heartbeat-round-deadline), [Task lifecycle: Supported heartbeat interval](https://github.com/stablemates/workhorse/blob/main/docs/architecture/lifecycle.md#supported-heartbeat-interval), [Task lifecycle: Heartbeat schedule](https://github.com/stablemates/workhorse/blob/main/docs/architecture/lifecycle.md#heartbeat-schedule), and [Schema and SQL protocol: .NET worker](https://github.com/stablemates/workhorse/blob/main/docs/architecture/schema-and-protocol.md#net-worker).
 
 </details>
 
@@ -464,11 +468,14 @@ The shared runtime fixture pins, at concurrency 8, the claim limits 8, 1, and 2 
 flight.
 
 **Heartbeats.** One round for each worker sends every active lease through `heartbeat_many_v2`.
-Rounds never overlap. A busy retry sends only the busy leases between two rounds.
+Rounds never overlap. A busy retry sends only the busy leases between two rounds. On the dedicated
+heartbeat connection, the rounds of the workers on one pool share one transaction and one
+`heartbeat_pool_v1` statement, in every SDK except .NET. A .NET round sends one transaction for each
+worker and each 100 leases.
 
 `claim_v1` is the same call as `claim_many_v1` with a limit of 1.
 
-More detail: [Task lifecycle: Dispatch loop](https://github.com/stablemates/workhorse/blob/main/docs/architecture/lifecycle.md#dispatch-loop), [Task lifecycle: Claim errors](https://github.com/stablemates/workhorse/blob/main/docs/architecture/lifecycle.md#claim-errors), [Task lifecycle: Worker options](https://github.com/stablemates/workhorse/blob/main/docs/architecture/lifecycle.md#worker-options), and [Task lifecycle: Claim](https://github.com/stablemates/workhorse/blob/main/docs/architecture/lifecycle.md#claim).
+More detail: [Task lifecycle: Dispatch loop](https://github.com/stablemates/workhorse/blob/main/docs/architecture/lifecycle.md#dispatch-loop), [Task lifecycle: Claim errors](https://github.com/stablemates/workhorse/blob/main/docs/architecture/lifecycle.md#claim-errors), [Task lifecycle: Worker options](https://github.com/stablemates/workhorse/blob/main/docs/architecture/lifecycle.md#worker-options), [Task lifecycle: Claim](https://github.com/stablemates/workhorse/blob/main/docs/architecture/lifecycle.md#claim), [Task lifecycle: Busy retry](https://github.com/stablemates/workhorse/blob/main/docs/architecture/lifecycle.md#busy-retry), and [Task lifecycle: Pool renewal](https://github.com/stablemates/workhorse/blob/main/docs/architecture/lifecycle.md#pool-renewal).
 
 </details>
 
