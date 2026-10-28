@@ -503,7 +503,11 @@ describe("a docs-only pull request", () => {
   // The lanes that a docs-only change skips must check nothing in the documentation. If a step is
   // added to one of them, decide whether it reads the documentation, then update this list.
   const skippedLaneRuns: Record<string, readonly string[]> = {
-    unit: ["pnpm install --frozen-lockfile", "pnpm npm:test:python-toolchain"],
+    unit: [
+      "pnpm install --frozen-lockfile",
+      "uv sync --project python",
+      "pnpm npm:test:python-toolchain",
+    ],
   };
 
   it("skips only the lanes whose steps this test knows", () => {

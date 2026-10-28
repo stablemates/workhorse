@@ -95,9 +95,30 @@ jobs:
       # /usr/bin, the action puts /usr/bin first on the PATH, where /usr/bin/go is an older Go. Each
       # later setup step puts its own directory ahead of /usr/bin, so the pinned tools stay first
       # (SM-1484).
-      - uses: gradle/actions/setup-gradle@3f5f9adaf7d9fecd50b5935e54106014257a94e6 # v6.4.0
+      #
+      # The first step restores the Gradle cache. The cache service can stall, and a stalled restore
+      # can use the full time limit of the job. Usually the restore takes less than 10 s. Thus the
+      # first step stops after 5 minutes. If it stops or fails, the next step removes the Gradle
+      # download that it can leave incomplete. Then the third step provisions the pinned Gradle
+      # with no cache. The post step of the first step reads its inputs again when the job ends.
+      # If GRADLE_SETUP_FALLBACK is true, that post step saves no cache (SM-1874). Every other job
+      # that sets up Gradle uses the same three steps.
+      - id: setup-gradle
+        uses: gradle/actions/setup-gradle@3f5f9adaf7d9fecd50b5935e54106014257a94e6 # v6.4.0
+        timeout-minutes: 5
+        continue-on-error: true
         with:
           gradle-version: 9.8.2 # Pinned to the gradle version in mise.toml.
+          cache-disabled: ${{ env.GRADLE_SETUP_FALLBACK == 'true' }}
+      - if: steps.setup-gradle.outcome != 'success'
+        run: |
+          rm -rf "$RUNNER_TEMP/.gradle-actions/gradle-installations"
+          echo "GRADLE_SETUP_FALLBACK=true" >> "$GITHUB_ENV"
+      - if: steps.setup-gradle.outcome != 'success'
+        uses: gradle/actions/setup-gradle@3f5f9adaf7d9fecd50b5935e54106014257a94e6 # v6.4.0
+        with:
+          gradle-version: 9.8.2 # Pinned to the gradle version in mise.toml.
+          cache-disabled: true
       - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
@@ -107,9 +128,14 @@ jobs:
         with:
           go-version-file: go/go.mod
           cache-dependency-path: go/go.sum
+      # The action turns its cache on by default only on GitHub-hosted runners, so each setup-uv
+      # step turns it on. Without the cache, each job downloads more than 100 packages. Each job
+      # installs a different set of packages, so each job keeps its own cache entry (SM-1874).
       - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
         with:
           version: 0.12.21 # Pinned to the uv version in mise.toml.
+          enable-cache: true
+          cache-suffix: static
       # `sql-catalogues:check` formats the Rust statement catalogue with rustfmt, and `rust:vuln` asks
       # cargo for the dependency graph of the root Cargo.lock.
       - uses: actions-rust-lang/setup-rust-toolchain@c8ff772090ab9d00f7f7bd7b388f3c3032282e3b # v1
@@ -199,7 +225,12 @@ jobs:
       - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
         with:
           version: 0.12.21 # Pinned to the uv version in mise.toml.
+          enable-cache: true
+          cache-suffix: unit
       - run: pnpm install --frozen-lockfile
+      # Make the Python environment before the tests. Otherwise the first test that runs
+      # `uv run --project python` makes it, and its time limit includes the install (SM-1874).
+      - run: uv sync --project python
       # The TypeScript part of `pnpm test:unit`, split so each test runs once per change (ADR 0083):
       # the npm-release-scope lane runs the rest of it. The python and go lanes run the whole suite of
       # their language, which contains its unit scope, so this lane runs neither unit scope again.
@@ -347,6 +378,8 @@ jobs:
       - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
         with:
           version: 0.12.21 # Pinned to the uv version in mise.toml.
+          enable-cache: true
+          cache-suffix: python-${{ matrix.python }}
       - run: pnpm install --frozen-lockfile
       - run: pnpm build:runtime:dev
       - run: pnpm db:reset:test
@@ -502,6 +535,8 @@ jobs:
       - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
         with:
           version: 0.12.21 # Pinned to the uv version in mise.toml.
+          enable-cache: true
+          cache-suffix: packed
       - run: pnpm install --frozen-lockfile
       - run: pnpm db:reset:test-packed
       - run: pnpm test:packed
@@ -657,9 +692,22 @@ jobs:
       # /usr/bin, the action puts /usr/bin first on the PATH, where /usr/bin/go is an older Go. Each
       # later setup step puts its own directory ahead of /usr/bin, so the pinned tools stay first
       # (SM-1484).
-      - uses: gradle/actions/setup-gradle@3f5f9adaf7d9fecd50b5935e54106014257a94e6 # v6.4.0
+      - id: setup-gradle
+        uses: gradle/actions/setup-gradle@3f5f9adaf7d9fecd50b5935e54106014257a94e6 # v6.4.0
+        timeout-minutes: 5
+        continue-on-error: true
         with:
           gradle-version: 9.8.2 # Pinned to the gradle version in mise.toml.
+          cache-disabled: ${{ env.GRADLE_SETUP_FALLBACK == 'true' }}
+      - if: steps.setup-gradle.outcome != 'success'
+        run: |
+          rm -rf "$RUNNER_TEMP/.gradle-actions/gradle-installations"
+          echo "GRADLE_SETUP_FALLBACK=true" >> "$GITHUB_ENV"
+      - if: steps.setup-gradle.outcome != 'success'
+        uses: gradle/actions/setup-gradle@3f5f9adaf7d9fecd50b5935e54106014257a94e6 # v6.4.0
+        with:
+          gradle-version: 9.8.2 # Pinned to the gradle version in mise.toml.
+          cache-disabled: true
       - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
@@ -735,11 +783,30 @@ jobs:
         env:
           CHANNEL: ${{ matrix.dotnet }}.0
           QUALITY: ${{ matrix.runtime }}
+        # The download host can refuse a download for some minutes, for example with HTTP 409.
+        # dotnet-install.sh tries each download three times in about 30 s. Thus this step does the
+        # full install again after 30, 60, and 120 s (SM-1874).
+        timeout-minutes: 10
         run: |
           set -euo pipefail
-          curl -fsSL --retry 3 https://builds.dotnet.microsoft.com/dotnet/scripts/v1/dotnet-install.sh -o "$RUNNER_TEMP/dotnet-install.sh"
-          for runtime in dotnet aspnetcore; do
-            bash "$RUNNER_TEMP/dotnet-install.sh" --runtime "$runtime" --channel "$CHANNEL" --quality "$QUALITY" --install-dir "$DOTNET_ROOT"
+          # `set -e` does not apply in a function that an `if` calls, so each command returns on failure.
+          install_runtimes() {
+            curl -fsSL --retry 3 --retry-all-errors https://builds.dotnet.microsoft.com/dotnet/scripts/v1/dotnet-install.sh -o "$RUNNER_TEMP/dotnet-install.sh" || return 1
+            for runtime in dotnet aspnetcore; do
+              bash "$RUNNER_TEMP/dotnet-install.sh" --runtime "$runtime" --channel "$CHANNEL" --quality "$QUALITY" --install-dir "$DOTNET_ROOT" || return 1
+            done
+          }
+          for attempt in 1 2 3 4; do
+            if install_runtimes; then
+              break
+            fi
+            if [ "$attempt" -eq 4 ]; then
+              echo "::error::The runtime install failed $attempt times"
+              exit 1
+            fi
+            delay=$((30 * 2 ** (attempt - 1)))
+            echo "::warning::The runtime install failed on attempt $attempt. The next attempt starts in $delay s"
+            sleep "$delay"
           done
           dotnet --list-runtimes
       - run: pnpm install --frozen-lockfile
@@ -778,9 +845,22 @@ jobs:
       # /usr/bin, the action puts /usr/bin first on the PATH, where /usr/bin/go is an older Go. Each
       # later setup step puts its own directory ahead of /usr/bin, so the pinned tools stay first
       # (SM-1484).
-      - uses: gradle/actions/setup-gradle@3f5f9adaf7d9fecd50b5935e54106014257a94e6 # v6.4.0
+      - id: setup-gradle
+        uses: gradle/actions/setup-gradle@3f5f9adaf7d9fecd50b5935e54106014257a94e6 # v6.4.0
+        timeout-minutes: 5
+        continue-on-error: true
         with:
           gradle-version: 9.8.2 # Pinned to the gradle version in mise.toml.
+          cache-disabled: ${{ env.GRADLE_SETUP_FALLBACK == 'true' }}
+      - if: steps.setup-gradle.outcome != 'success'
+        run: |
+          rm -rf "$RUNNER_TEMP/.gradle-actions/gradle-installations"
+          echo "GRADLE_SETUP_FALLBACK=true" >> "$GITHUB_ENV"
+      - if: steps.setup-gradle.outcome != 'success'
+        uses: gradle/actions/setup-gradle@3f5f9adaf7d9fecd50b5935e54106014257a94e6 # v6.4.0
+        with:
+          gradle-version: 9.8.2 # Pinned to the gradle version in mise.toml.
+          cache-disabled: true
       - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
@@ -827,9 +907,22 @@ jobs:
       # /usr/bin, the action puts /usr/bin first on the PATH, where /usr/bin/go is an older Go. Each
       # later setup step puts its own directory ahead of /usr/bin, so the pinned tools stay first
       # (SM-1484).
-      - uses: gradle/actions/setup-gradle@3f5f9adaf7d9fecd50b5935e54106014257a94e6 # v6.4.0
+      - id: setup-gradle
+        uses: gradle/actions/setup-gradle@3f5f9adaf7d9fecd50b5935e54106014257a94e6 # v6.4.0
+        timeout-minutes: 5
+        continue-on-error: true
         with:
           gradle-version: 9.8.2 # Pinned to the gradle version in mise.toml.
+          cache-disabled: ${{ env.GRADLE_SETUP_FALLBACK == 'true' }}
+      - if: steps.setup-gradle.outcome != 'success'
+        run: |
+          rm -rf "$RUNNER_TEMP/.gradle-actions/gradle-installations"
+          echo "GRADLE_SETUP_FALLBACK=true" >> "$GITHUB_ENV"
+      - if: steps.setup-gradle.outcome != 'success'
+        uses: gradle/actions/setup-gradle@3f5f9adaf7d9fecd50b5935e54106014257a94e6 # v6.4.0
+        with:
+          gradle-version: 9.8.2 # Pinned to the gradle version in mise.toml.
+          cache-disabled: true
       - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
@@ -878,9 +971,22 @@ jobs:
       # /usr/bin, the action puts /usr/bin first on the PATH, where /usr/bin/go is an older Go. Each
       # later setup step puts its own directory ahead of /usr/bin, so the pinned tools stay first
       # (SM-1484).
-      - uses: gradle/actions/setup-gradle@3f5f9adaf7d9fecd50b5935e54106014257a94e6 # v6.4.0
+      - id: setup-gradle
+        uses: gradle/actions/setup-gradle@3f5f9adaf7d9fecd50b5935e54106014257a94e6 # v6.4.0
+        timeout-minutes: 5
+        continue-on-error: true
         with:
           gradle-version: 9.8.2 # Pinned to the gradle version in mise.toml.
+          cache-disabled: ${{ env.GRADLE_SETUP_FALLBACK == 'true' }}
+      - if: steps.setup-gradle.outcome != 'success'
+        run: |
+          rm -rf "$RUNNER_TEMP/.gradle-actions/gradle-installations"
+          echo "GRADLE_SETUP_FALLBACK=true" >> "$GITHUB_ENV"
+      - if: steps.setup-gradle.outcome != 'success'
+        uses: gradle/actions/setup-gradle@3f5f9adaf7d9fecd50b5935e54106014257a94e6 # v6.4.0
+        with:
+          gradle-version: 9.8.2 # Pinned to the gradle version in mise.toml.
+          cache-disabled: true
       - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
@@ -1008,9 +1114,22 @@ jobs:
           persist-credentials: false
       # The development demo builds its JVM worker's class path with Gradle. Set up Gradle first. The
       # comment in the `static` job gives the reason (SM-1484).
-      - uses: gradle/actions/setup-gradle@3f5f9adaf7d9fecd50b5935e54106014257a94e6 # v6.4.0
+      - id: setup-gradle
+        uses: gradle/actions/setup-gradle@3f5f9adaf7d9fecd50b5935e54106014257a94e6 # v6.4.0
+        timeout-minutes: 5
+        continue-on-error: true
         with:
           gradle-version: 9.8.2 # Pinned to the gradle version in mise.toml.
+          cache-disabled: ${{ env.GRADLE_SETUP_FALLBACK == 'true' }}
+      - if: steps.setup-gradle.outcome != 'success'
+        run: |
+          rm -rf "$RUNNER_TEMP/.gradle-actions/gradle-installations"
+          echo "GRADLE_SETUP_FALLBACK=true" >> "$GITHUB_ENV"
+      - if: steps.setup-gradle.outcome != 'success'
+        uses: gradle/actions/setup-gradle@3f5f9adaf7d9fecd50b5935e54106014257a94e6 # v6.4.0
+        with:
+          gradle-version: 9.8.2 # Pinned to the gradle version in mise.toml.
+          cache-disabled: true
       - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
@@ -1023,6 +1142,8 @@ jobs:
       - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
         with:
           version: 0.12.21 # Pinned to the uv version in mise.toml.
+          enable-cache: true
+          cache-suffix: demo
       # The development demo runs its JVM worker on the JDK, and its .NET worker with `dotnet run`
       # on the SDK, that mise.toml pins. The SDK goes into its own directory, so the muxer finds no
       # other SDK of the runner image.
