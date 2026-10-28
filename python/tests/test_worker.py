@@ -535,7 +535,10 @@ def test_run_once_refills_a_bounded_concurrency_slot(database_url: str) -> None:
         assert outcomes == sorted((task_id, "succeeded") for task_id in task_ids)
 
 
-def test_batch_handler_orders_members_and_settles_each_outcome(database_url: str) -> None:
+@pytest.mark.parametrize("late_priority", [None, 50], ids=["members-on-time", "one-member-late"])
+def test_batch_handler_orders_members_and_settles_each_outcome(
+    database_url: str, late_priority: int | None
+) -> None:
     delivered: list[tuple[int, str]] = []
 
     with (
@@ -566,7 +569,25 @@ def test_batch_handler_orders_members_and_settles_each_outcome(database_url: str
             worker_pool,
             worker_id="python-batch-worker",
             concurrency=3,
-        ).handle_batch("email.batch", max_size=3, linger_ms=100, handler=handle_batch)
+        ).handle_batch(
+            "email.batch",
+            max_size=3,
+            # The batch must hold all three members. A short linger dispatches the first members
+            # without a member that starts late, as on a loaded host. The handler then returns three
+            # outcomes for fewer tasks, and the arity check fails the batch. A full batch dispatches
+            # as soon as its third member arrives, so the long linger costs no time.
+            linger_ms=60_000,
+            handler=handle_batch,
+        )
+        # The probe holds one member for 300 ms before it joins the batch, as a loaded host can.
+        join_batch = worker._handlers["email.batch"]
+
+        def join_batch_late(payload: Any, context: HandlerContext) -> Any:
+            if payload["priority"] == late_priority:
+                sleep(0.3)
+            return join_batch(payload, context)
+
+        worker._handlers["email.batch"] = join_batch_late
 
         assert worker.run_once() is True
         assert delivered == [(90, "default"), (50, "default"), (10, "default")]
@@ -840,16 +861,26 @@ def test_batch_member_cancellation_does_not_disturb_its_peer(database_url: str) 
         assert by_task[completed_task] == ("succeeded", {"cancel": False}, None)
 
 
-def test_batch_member_timeout_does_not_disturb_its_peer(database_url: str) -> None:
+@pytest.mark.parametrize(
+    "late_timed", [None, True, False], ids=["members-on-time", "timed-late", "peer-late"]
+)
+def test_batch_member_timeout_does_not_disturb_its_peer(
+    database_url: str, late_timed: bool | None
+) -> None:
     with (
         psycopg.connect(database_url) as enqueue_connection,
         psycopg.connect(database_url, autocommit=True) as worker_connection,
+        psycopg.connect(database_url, autocommit=True) as operator_connection,
     ):
         queue = Queue(enqueue_connection)
+        # The execution timeout starts when the worker claims the task, and it also runs while the
+        # timed member waits for its peer. A short timeout ends that wait before a late peer
+        # arrives, and the peer then goes to the handler alone. Thus the timeout is long, and the
+        # handler makes it due only after the batch holds both members.
         timed_task = queue.enqueue(
             "batch.timeout",
             {"timed": True},
-            EnqueueOptions(execution_timeout_ms=180, max_attempts=1),
+            EnqueueOptions(execution_timeout_ms=60_000, max_attempts=1),
         )
         completed_task = queue.enqueue(
             "batch.timeout",
@@ -860,6 +891,14 @@ def test_batch_member_timeout_does_not_disturb_its_peer(database_url: str) -> No
 
         def handle_batch(items: Any) -> list[dict[str, object]]:
             timed = next(item for item in items if item.payload["timed"] is True)
+            # The timeout is now due in PostgreSQL. The next heartbeat round reports it, and the
+            # worker ends the timed member with an execution timeout.
+            updated = operator_connection.execute(
+                "UPDATE workhorse.task_runtime SET attempt_timeout_at = clock_timestamp() "
+                "WHERE task_id = %s AND state = 'active'",
+                (timed.context.task.id,),
+            )
+            assert updated.rowcount == 1
             assert timed.context.cancellation.wait(timeout=5)
             assert isinstance(timed.context.cancellation.reason, ExecutionTimeoutError)
             return [
@@ -875,7 +914,23 @@ def test_batch_member_timeout_does_not_disturb_its_peer(database_url: str) -> No
             # leaves no margin for one slow round. The lease is longer than the handler's 5 s wait.
             lease_ms=10_000,
             heartbeat_ms=100,
-        ).handle_batch("batch.timeout", max_size=2, linger_ms=100, handler=handle_batch)
+        ).handle_batch(
+            "batch.timeout",
+            max_size=2,
+            # The batch must hold both members. A full batch dispatches as soon as its second member
+            # arrives, so the long linger costs no time.
+            linger_ms=60_000,
+            handler=handle_batch,
+        )
+        # The probe holds one member for 300 ms before it joins the batch, as a loaded host can.
+        join_batch = worker._handlers["batch.timeout"]
+
+        def join_batch_late(payload: Any, context: HandlerContext) -> Any:
+            if payload["timed"] is late_timed:
+                sleep(0.3)
+            return join_batch(payload, context)
+
+        worker._handlers["batch.timeout"] = join_batch_late
 
         assert worker.run_once() is True
         outcomes = worker_connection.execute(
