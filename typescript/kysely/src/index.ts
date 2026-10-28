@@ -42,5 +42,6 @@ export function createKyselyAdapter<TTransaction extends KyselyExecutor = Kysely
     database,
     toQueryable: kyselyQueryable,
     ...options,
+    provider: "Kysely",
   });
 }

@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   createProviderAdapter,
   createProviderQueryable,
+  createWorkhorseAdapter,
   Queue,
   registerTelemetryProvider,
   Worker,
@@ -38,6 +39,7 @@ function thrownBy(operation: () => unknown): Error {
 function providerAdapter(connectionPool?: () => AdapterConnectionPool | undefined) {
   return createProviderAdapter({
     database: {},
+    provider: "Example",
     toQueryable: (_executor: object, pool) =>
       createProviderQueryable({
         execute: async () => [],
@@ -48,36 +50,60 @@ function providerAdapter(connectionPool?: () => AdapterConnectionPool | undefine
   });
 }
 
+const nextStep = /Give the queue a node-postgres pool with a maximum size \(max\) of at least 3/;
+
 describe("worker heartbeat reservation", () => {
-  it("refuses a queue whose database cannot lend a connection, and names the opt-out", () => {
+  it("refuses a queue whose database cannot lend a connection, and names the next step", () => {
     const error = thrownBy(() => new Worker(new Queue(plainQueryable())));
 
     expect(error.message).toMatch(/cannot reserve a dedicated heartbeat connection/);
     expect(error.message).toMatch(/no connect\(\)/);
-    expect(error.message).toMatch(/sharedHeartbeats: true/);
+    expect(error.message).toMatch(nextStep);
+    expect(error.message).not.toMatch(/sharedHeartbeats/);
   });
 
-  it("refuses a pool too small to lend the heartbeat connection, and names its size", () => {
-    const error = thrownBy(() => new Worker(new Queue(fakePool(2))));
+  it.each([
+    [1, /allows 1 connection and needs at least 3/],
+    [2, /allows 2 connections and needs at least 3/],
+  ])("refuses a pool of %i, and names the size it found and the size it needs", (max, size) => {
+    const error = thrownBy(() => new Worker(new Queue(fakePool(max))));
 
-    expect(error.message).toMatch(/allows 2 connections and needs at least 3/);
-    expect(error.message).toMatch(/sharedHeartbeats: true/);
+    expect(error.message).toMatch(size);
+    expect(error.message).toMatch(nextStep);
+    expect(error.message).not.toMatch(/sharedHeartbeats/);
   });
 
-  it("refuses a pool of unknown size", () => {
-    expect(thrownBy(() => new Worker(new Queue(fakePool(undefined)))).message).toMatch(
-      /size is unknown/,
-    );
+  it("refuses a pool of unknown size, and names the size it needs", () => {
+    const error = thrownBy(() => new Worker(new Queue(fakePool(undefined))));
+
+    expect(error.message).toMatch(/reports no maximum size and needs a known size of at least 3/);
+    expect(error.message).toMatch(nextStep);
+    expect(error.message).not.toMatch(/sharedHeartbeats/);
   });
 
   it("accepts a pool of three connections", () => {
     expect(() => new Worker(new Queue(fakePool(3)))).not.toThrow();
   });
 
-  it("accepts any queue when heartbeats share the pool", () => {
-    expect(() => new Worker(new Queue(plainQueryable()), { sharedHeartbeats: true })).not.toThrow();
-    expect(() => new Worker(new Queue(fakePool(1)), { sharedHeartbeats: true })).not.toThrow();
-  });
+  it.each([true, false, undefined])(
+    "names the removal when a caller still passes sharedHeartbeats: %s",
+    (value) => {
+      const options = { sharedHeartbeats: value };
+      const error = thrownBy(
+        // @ts-expect-error sharedHeartbeats is no longer a worker option.
+        () => new Worker(new Queue(fakePool(3)), { sharedHeartbeats: value }),
+      );
+      expect(error.message).toMatch(/sharedHeartbeats option was removed/);
+      expect(error.message).toMatch(/at least 3/);
+      // A wider options object reaches the same check at run time.
+      expect(() => new Worker(new Queue(fakePool(3)), options as never)).toThrow(
+        /sharedHeartbeats option was removed/,
+      );
+      expect(() => providerAdapter(() => fakePool(3)).createWorker(options as never)).toThrow(
+        /sharedHeartbeats option was removed/,
+      );
+    },
+  );
 
   it("exempts a custom worker queue, which has no pool to check", () => {
     const custom = {
@@ -105,11 +131,53 @@ describe("worker heartbeat reservation", () => {
     expect(resolved).toBeGreaterThan(0);
   });
 
-  it("refuses an adapter's worker when the adapter has no pool", () => {
-    expect(thrownBy(() => providerAdapter().createWorker()).message).toMatch(
-      /cannot reserve a dedicated heartbeat connection/,
+  it.each([
+    ["no pool", undefined, /no connect\(\)/],
+    ["a pool of 2", fakePool(2), /allows 2 connections and needs at least 3/],
+    ["a pool of unknown size", fakePool(undefined), /reports no maximum size/],
+  ])(
+    "refuses an adapter's worker on %s, and names the adapter and its pool step",
+    (_name, pool, size) => {
+      const error = thrownBy(() => providerAdapter(() => pool).createWorker());
+
+      expect(error.message).toMatch(/^Example adapter cannot create a worker: /);
+      expect(error.message).toMatch(size);
+      expect(error.message).toMatch(/as the adapter's pool option/);
+      expect(error.message).not.toMatch(/sharedHeartbeats/);
+    },
+  );
+});
+
+describe("core adapter worker pool", () => {
+  it.each([
+    ["no pool", plainQueryable(), /no connect\(\)/],
+    ["a pool of 2", fakePool(2), /allows 2 connections and needs at least 3/],
+    ["a pool of unknown size", fakePool(undefined), /reports no maximum size/],
+  ])(
+    "refuses a worker on %s, and names the adapter and the database step",
+    (_name, database, size) => {
+      const adapter = createWorkhorseAdapter({
+        database,
+        adaptTransaction: (transaction: Queryable) => transaction,
+      });
+      const error = thrownBy(() => adapter.createWorker());
+
+      expect(error.message).toMatch(/^Workhorse adapter cannot create a worker: /);
+      expect(error.message).toMatch(size);
+      expect(error.message).toMatch(/Give the adapter a database that is a node-postgres Pool/);
+      expect(error.message).not.toMatch(/sharedHeartbeats/);
+    },
+  );
+
+  it("names the removal before it checks the pool", () => {
+    const adapter = createWorkhorseAdapter({
+      database: plainQueryable(),
+      adaptTransaction: (transaction: Queryable) => transaction,
+    });
+
+    expect(() => adapter.createWorker({ sharedHeartbeats: true } as never)).toThrow(
+      /sharedHeartbeats option was removed/,
     );
-    expect(() => providerAdapter().createWorker({ sharedHeartbeats: true })).not.toThrow();
   });
 });
 
@@ -122,19 +190,11 @@ describe("worker default cohorts on a sized pool", () => {
     expect(cohorts).toEqual([1, 2, 4, 8, 8]);
   });
 
-  it("counts the heartbeat connection only when the worker reserves it", () => {
-    const worker = new Worker(new Queue(fakePool(3)), { concurrency: 64, sharedHeartbeats: true });
-
-    expect(worker.cohorts).toBe(2);
-  });
-
   it("keeps an explicit cohort count on a small pool", () => {
     expect(new Worker(new Queue(fakePool(3)), { concurrency: 64, cohorts: 8 }).cohorts).toBe(8);
   });
 
-  it("leaves the default uncapped when the pool size is unknown", () => {
-    const unsized = new Queue(fakePool(undefined));
-    expect(new Worker(unsized, { concurrency: 64, sharedHeartbeats: true }).cohorts).toBe(8);
+  it("leaves the default uncapped when the statement pool size is unknown", () => {
     expect(providerAdapter(() => fakePool(3)).createWorker({ concurrency: 64 }).cohorts).toBe(8);
   });
 });

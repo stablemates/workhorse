@@ -62,7 +62,7 @@ Completed transaction handles fail through Knex's completion guard; they never b
 Run workers in a separate process with a separately configured compatible node-postgres pool.
 Do not lend a transaction or extract Knex's internal pool for worker sessions.
 An adapter's explicit `pool` option is for dedicated heartbeat and listener connections, not ordinary enqueue execution.
-Without that option, a worker refuses to start unless `sharedHeartbeats` is explicitly selected.
+The pool must have a maximum size (`max`) of at least 3. Without it, `createWorker()` throws.
 Use Workhorse core's `Queue` and `defineWorkerProcess` for the separate worker process.
 
 [Workhorse core](https://workhorse.run/docs/installation) owns schema installation and changes.

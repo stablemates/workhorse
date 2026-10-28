@@ -70,6 +70,7 @@ interface QueryableProvider {
   adapter(
     execute: Execute,
     close: () => Promise<void>,
+    pool?: AdapterConnectionPool,
   ): { adapter: WorkhorseAdapter<unknown>; transaction: unknown };
 }
 
@@ -104,10 +105,11 @@ const queryableProviders: QueryableProvider[] = [
     error: Object.assign(new Error("duplicate secret@example.com"), { code: "23505" }),
     expectedCode: "23505",
     queryable: (execute, pool) => knexQueryable(mockKnex(execute), pool),
-    adapter(execute, close) {
+    adapter(execute, close, pool) {
       const executor = mockKnex(execute);
       const adapter = createKnexAdapter<KnexExecutor>(executor, {
         close,
+        pool,
       }) as WorkhorseAdapter<unknown>;
       return { adapter, transaction: executor };
     },
@@ -128,14 +130,14 @@ const queryableProviders: QueryableProvider[] = [
         pool,
       );
     },
-    adapter(execute, close) {
+    adapter(execute, close, pool) {
       const executor = {
         execute: async (query: SQL) => {
           const compiled = compileDrizzle(query);
           return pgResult(await execute(compiled.sql, compiled.params));
         },
       } as DrizzleExecutor;
-      const adapter = createDrizzleAdapter(executor, { close }) as WorkhorseAdapter<unknown>;
+      const adapter = createDrizzleAdapter(executor, { close, pool }) as WorkhorseAdapter<unknown>;
       return { adapter, transaction: executor };
     },
   },
@@ -154,12 +156,12 @@ const queryableProviders: QueryableProvider[] = [
       };
       return prismaQueryable(executor, pool);
     },
-    adapter(execute, close) {
+    adapter(execute, close, pool) {
       const executor: PrismaExecutor = {
         $queryRawUnsafe: async <T = unknown>(text: string, ...parameters: unknown[]) =>
           (await execute(text, parameters)) as T,
       };
-      const adapter = createPrismaAdapter(executor, { close }) as WorkhorseAdapter<unknown>;
+      const adapter = createPrismaAdapter(executor, { close, pool }) as WorkhorseAdapter<unknown>;
       return { adapter, transaction: executor };
     },
   },
@@ -183,12 +185,12 @@ const queryableProviders: QueryableProvider[] = [
       };
       return prismaQueryable(executor, pool);
     },
-    adapter(execute, close) {
+    adapter(execute, close, pool) {
       const executor: PrismaExecutor = {
         $queryRawUnsafe: async <T = unknown>(text: string, ...parameters: unknown[]) =>
           (await execute(text, parameters)) as T,
       };
-      const adapter = createPrismaAdapter(executor, { close }) as WorkhorseAdapter<unknown>;
+      const adapter = createPrismaAdapter(executor, { close, pool }) as WorkhorseAdapter<unknown>;
       return { adapter, transaction: executor };
     },
   },
@@ -208,12 +210,12 @@ const queryableProviders: QueryableProvider[] = [
         pool,
       );
     },
-    adapter(execute, close) {
+    adapter(execute, close, pool) {
       const executor: TypeOrmExecutor = {
         query: async <T = unknown>(text: string, parameters: unknown[] = []) =>
           (await execute(text, parameters)) as T,
       };
-      const adapter = createTypeOrmAdapter(executor, { close }) as WorkhorseAdapter<unknown>;
+      const adapter = createTypeOrmAdapter(executor, { close, pool }) as WorkhorseAdapter<unknown>;
       return { adapter, transaction: executor };
     },
   },
@@ -232,13 +234,13 @@ const queryableProviders: QueryableProvider[] = [
         pool,
       );
     },
-    adapter(execute, close) {
+    adapter(execute, close, pool) {
       const executor = {
         executeQuery: async <R>(query: { sql: string; parameters: readonly unknown[] }) => ({
           rows: (await execute(query.sql, query.parameters)) as R[],
         }),
       } as KyselyExecutor;
-      const adapter = createKyselyAdapter(executor, { close }) as WorkhorseAdapter<unknown>;
+      const adapter = createKyselyAdapter(executor, { close, pool }) as WorkhorseAdapter<unknown>;
       return { adapter, transaction: executor };
     },
   },
@@ -319,7 +321,44 @@ describe.each(queryableProviders)("$name queryable contract", (provider) => {
   it("lets a worker reserve its heartbeat connection from an attached pool", () => {
     expect(() => new Worker(queue(lendingPool(4)))).not.toThrow();
     expect(() => new Worker(queue(lendingPool(2)))).toThrow(/allows 2 connections/);
-    expect(() => new Worker(queue())).toThrow(/sharedHeartbeats: true/);
+    expect(() => new Worker(queue())).toThrow(/needs a pool of at least 3 connections/);
+  });
+
+  // Prisma 6 and Prisma 7 run the same adapter package.
+  const adapterName = provider.name.replace(/\d+$/, "");
+
+  it.each([
+    ["no pool", undefined, /no connect\(\)/],
+    ["a pool of 2", 2, /allows 2 connections and needs at least 3/],
+  ])("refuses a worker on %s, and names the adapter and its pool step", (_case, max, size) => {
+    const { adapter } = provider.adapter(
+      vi.fn<Execute>(async () => []),
+      async () => undefined,
+      max === undefined ? undefined : lendingPool(max),
+    );
+    const failure = (() => {
+      try {
+        adapter.createWorker();
+      } catch (error) {
+        return error as Error;
+      }
+      throw new Error("expected createWorker() to throw");
+    })();
+
+    expect(failure.message).toMatch(new RegExp(`^${adapterName} adapter cannot create a worker: `));
+    expect(failure.message).toMatch(size);
+    expect(failure.message).toMatch(/pool option/);
+    expect(failure.message).not.toMatch(/sharedHeartbeats/);
+  });
+
+  it("creates a worker on an explicit pool of 3", () => {
+    const { adapter } = provider.adapter(
+      vi.fn<Execute>(async () => []),
+      async () => undefined,
+      lendingPool(3),
+    );
+
+    expect(() => adapter.createWorker()).not.toThrow();
   });
 
   it("adapts transactions and closes configured resources once", async () => {

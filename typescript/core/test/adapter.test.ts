@@ -7,6 +7,14 @@ function queryable(): Queryable {
   return { query: vi.fn<Queryable["query"]>() } as unknown as Queryable;
 }
 
+// A worker needs a pool with a known size of at least 3. The constructor does not connect.
+function pooledQueryable(): Queryable {
+  return Object.assign(queryable(), {
+    connect: vi.fn<() => Promise<never>>(),
+    options: { max: 3 },
+  });
+}
+
 describe("createWorkhorseAdapter", () => {
   it("creates queues for provider-owned transactions without changing the default queue", async () => {
     const database = queryable();
@@ -160,12 +168,12 @@ describe("createWorkhorseAdapter", () => {
   it("creates workers from the shared queue and closes provider resources once", async () => {
     const close = vi.fn<() => Promise<void>>(async () => undefined);
     const adapter = createWorkhorseAdapter({
-      database: queryable(),
+      database: pooledQueryable(),
       adaptTransaction: (transaction: Queryable) => transaction,
       close,
     });
 
-    const worker = adapter.createWorker({ workerId: "adapter-test", sharedHeartbeats: true });
+    const worker = adapter.createWorker({ workerId: "adapter-test" });
     expect(worker).toBeDefined();
 
     await Promise.all([adapter.close(), adapter.close()]);
@@ -174,11 +182,11 @@ describe("createWorkhorseAdapter", () => {
 
   it("defaults worker concurrency to one and exposes synchronous runtime state", () => {
     const adapter = createWorkhorseAdapter({
-      database: queryable(),
+      database: pooledQueryable(),
       adaptTransaction: (transaction: Queryable) => transaction,
     });
 
-    const worker = adapter.createWorker({ sharedHeartbeats: true });
+    const worker = adapter.createWorker();
 
     expect(worker.concurrency).toBe(1);
     expect(worker.runtimeState()).toEqual({
@@ -198,11 +206,11 @@ describe("createWorkhorseAdapter", () => {
     "rejects invalid worker concurrency %s",
     (concurrency) => {
       const adapter = createWorkhorseAdapter({
-        database: queryable(),
+        database: pooledQueryable(),
         adaptTransaction: (transaction: Queryable) => transaction,
       });
 
-      expect(() => adapter.createWorker({ concurrency, sharedHeartbeats: true })).toThrow(
+      expect(() => adapter.createWorker({ concurrency })).toThrow(
         "concurrency must be a safe integer between 1 and 100",
       );
     },
@@ -210,12 +218,10 @@ describe("createWorkhorseAdapter", () => {
 
   it.each([1, 100])("accepts worker concurrency boundary %s", (concurrency) => {
     const adapter = createWorkhorseAdapter({
-      database: queryable(),
+      database: pooledQueryable(),
       adaptTransaction: (transaction: Queryable) => transaction,
     });
 
-    expect(
-      adapter.createWorker({ concurrency, sharedHeartbeats: true }).runtimeState(),
-    ).toMatchObject({ concurrency });
+    expect(adapter.createWorker({ concurrency }).runtimeState()).toMatchObject({ concurrency });
   });
 });

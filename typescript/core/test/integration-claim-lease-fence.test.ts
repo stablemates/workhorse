@@ -14,6 +14,7 @@ import {
 import { SQL_STATEMENTS } from "../src/queue/sql-catalogue.generated.js";
 import { workerHeartbeatReservation } from "../src/worker-internal.js";
 import { createIntegrationTestContext } from "./support/integration.js";
+import { unreservedQueue } from "../src/worker-internal.js";
 
 const { databaseUrl, deferred, pool, queue, waitForDatabaseCondition, admin, adminAudit } =
   createIntegrationTestContext(import.meta.url);
@@ -2617,9 +2618,8 @@ describe("claim lease fence", () => {
       queueName,
     );
     const id = await flakyWrites.enqueue("settlement-write", null, { maxAttempts: 1 });
-    const worker = new Worker(flakyWrites, {
+    const worker = new Worker(unreservedQueue(flakyWrites), {
       // The wrapper has no pool to lend a heartbeat connection from.
-      sharedHeartbeats: true,
       workerId: "settlement-write-worker",
       registryIntervalMs: 0,
     }).handle("settlement-write", async () => ({ ok: true }));

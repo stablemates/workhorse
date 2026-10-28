@@ -12,6 +12,7 @@ import {
   Worker,
 } from "../src/index.js";
 import { createIntegrationTestContext } from "./support/integration.js";
+import { unreservedQueue } from "../src/worker-internal.js";
 
 registerOpenTelemetry();
 
@@ -1239,9 +1240,8 @@ describe("checkpoints progress waits", () => {
     const countingQueue = new Queue(countingDatabase);
     const id = await countingQueue.enqueue("ordinary-handler", { value: 42 });
     // The counting wrapper has no pool to lend a heartbeat connection from.
-    const worker = new Worker(countingQueue, {
+    const worker = new Worker(unreservedQueue(countingQueue), {
       workerId: "ordinary-worker",
-      sharedHeartbeats: true,
     }).handle<{ value: number }, { value: number }>("ordinary-handler", ({ value }) => ({ value }));
 
     expect(await worker.runOnce()).toBe(true);
@@ -1262,9 +1262,8 @@ describe("checkpoints progress waits", () => {
     };
     const countingQueue = new Queue(countingDatabase);
     await countingQueue.enqueue("durability-reads", {});
-    const worker = new Worker(countingQueue, {
+    const worker = new Worker(unreservedQueue(countingQueue), {
       workerId: "durability-read-worker",
-      sharedHeartbeats: true,
     }).handle("durability-reads", async (_payload, context) => {
       await Promise.all([
         context.getCheckpoint("first"),

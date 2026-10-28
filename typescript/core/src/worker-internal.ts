@@ -84,6 +84,20 @@ export interface WorkerHeartbeatReservation {
   [workerHeartbeatReservationProblem](): string | undefined;
 }
 
+/**
+ * Throws when a caller still passes a worker option that Workhorse removed. A caller that reaches
+ * the worker through an untyped object gets no type error, so the constructor checks at run time.
+ */
+export function rejectRemovedWorkerOptions(options: object | undefined): void {
+  // The key alone counts: a caller that passes sharedHeartbeats: undefined still names the option.
+  if (options === undefined || !("sharedHeartbeats" in options)) return;
+  throw new Error(
+    "The sharedHeartbeats option was removed: every worker on a Workhorse Queue reserves a " +
+      "dedicated heartbeat connection. Remove the option, and give the queue a node-postgres pool " +
+      "with a maximum size (max) of at least 3.",
+  );
+}
+
 /** Explains why the queue cannot lend a heartbeat connection, or returns undefined when it can. */
 export const workerHeartbeatReservationProblem = Symbol(
   "workhorse.worker.heartbeat-reservation-problem",
@@ -120,4 +134,27 @@ export const workerSchemaCheck = Symbol("workhorse.worker.schema-check");
 
 export interface WorkerSchemaCheck {
   [workerSchemaCheck](): Promise<void>;
+}
+
+const unreservedProperties = new Set<PropertyKey>([
+  workerHeartbeatReservation,
+  workerHeartbeatReservationProblem,
+]);
+
+/**
+ * @internal A view of a queue that lends no dedicated heartbeat connection, for tests and
+ * benchmarks only. The package index does not export it.
+ *
+ * A worker on it sends each heartbeat round through `queue.heartbeatMany`, as a worker on a custom
+ * `WorkerQueueApi` does. A test can then run a worker on a database without a pool, or count and
+ * spy on the rounds. Every other property reads through to the queue, so a spy set on the queue
+ * later still applies.
+ */
+export function unreservedQueue<T extends object>(queue: T): T {
+  return new Proxy(queue, {
+    get(target, property, receiver) {
+      if (unreservedProperties.has(property)) return undefined;
+      return Reflect.get(target, property, receiver);
+    },
+  });
 }

@@ -22,6 +22,14 @@ const database = createDatabaseTestHarness(import.meta.url, {
 const { databaseUrl, pool } = database;
 
 /**
+ * The node-postgres pool a lifecycle worker takes its listener and heartbeat connections from. A
+ * worker needs a known size of at least 3, so the ORM's pool of 1 stays free for statements.
+ */
+function newWorkerPool(): Pool {
+  return new Pool({ connectionString: databaseUrl, max: 3 });
+}
+
+/**
  * Provider resources whose lifecycle a test controls: a real ORM instance over a deliberately
  * small connection pool, the adapter built on it, and the ORM's own transaction entry point.
  */
@@ -61,8 +69,14 @@ function deferred(): { promise: Promise<void>; resolve: () => void } {
 function createDrizzleResources(max: number): LifecycleResources {
   const drizzlePool = new Pool({ connectionString: databaseUrl, max });
   const drizzleDatabase = drizzle({ client: drizzlePool });
+  const workerPool = newWorkerPool();
+  // The explicit pool takes precedence over `$client`.
   const adapter = createDrizzleAdapter(drizzleDatabase, {
-    close: () => drizzlePool.end(),
+    pool: workerPool,
+    close: async () => {
+      await drizzlePool.end();
+      await workerPool.end();
+    },
   }) as WorkhorseAdapter<unknown>;
   return {
     adapter,
@@ -87,8 +101,13 @@ function createDrizzleResources(max: number): LifecycleResources {
 
 function createPrismaResources(major: PrismaMajor): LifecycleResources {
   const prisma = major.createClient(databaseUrl, 1);
+  const workerPool = newWorkerPool();
   const adapter = createPrismaAdapter(prisma, {
-    close: () => prisma.$disconnect(),
+    pool: workerPool,
+    close: async () => {
+      await prisma.$disconnect();
+      await workerPool.end();
+    },
   }) as WorkhorseAdapter<unknown>;
   return {
     adapter,
@@ -121,8 +140,14 @@ function createTypeOrmResources(): LifecycleResources {
     synchronize: false,
     extra: { max: 1 },
   });
+  const workerPool = newWorkerPool();
+  // The explicit pool takes precedence over driver.master, which holds 1 connection.
   const adapter = createTypeOrmAdapter(dataSource, {
-    close: () => dataSource.destroy(),
+    pool: workerPool,
+    close: async () => {
+      await dataSource.destroy();
+      await workerPool.end();
+    },
   }) as WorkhorseAdapter<unknown>;
   return {
     adapter,
@@ -153,8 +178,13 @@ function createKyselyResources(): LifecycleResources {
   const kyselyDatabase = new Kysely<Record<string, never>>({
     dialect: new PostgresDialect({ pool: kyselyPool }),
   });
+  const workerPool = newWorkerPool();
   const adapter = createKyselyAdapter(kyselyDatabase, {
-    close: () => kyselyDatabase.destroy(),
+    pool: workerPool,
+    close: async () => {
+      await kyselyDatabase.destroy();
+      await workerPool.end();
+    },
   }) as WorkhorseAdapter<unknown>;
   return {
     adapter,
@@ -182,8 +212,13 @@ function createKyselyResources(): LifecycleResources {
 
 function createKnexResources(): LifecycleResources {
   const knexDatabase = knex({ client: "pg", connection: databaseUrl, pool: { min: 0, max: 1 } });
+  const workerPool = newWorkerPool();
   const adapter = createKnexAdapter(knexDatabase, {
-    close: () => knexDatabase.destroy(),
+    pool: workerPool,
+    close: async () => {
+      await knexDatabase.destroy();
+      await workerPool.end();
+    },
   }) as WorkhorseAdapter<unknown>;
   return {
     adapter,
@@ -206,10 +241,7 @@ function createKnexResources(): LifecycleResources {
 
 const providers: LifecycleProvider[] = [
   { name: "Knex", errorType: KnexQueryError, create: createKnexResources },
-  // The Drizzle adapter discovers the pool through `$client` and may reserve a LISTEN connection
-  // for a running worker, so its pool holds one more connection than the strictly single-session
-  // providers below.
-  { name: "Drizzle", errorType: DrizzleQueryError, create: () => createDrizzleResources(2) },
+  { name: "Drizzle", errorType: DrizzleQueryError, create: () => createDrizzleResources(1) },
   ...prismaMajors.map((major) => ({
     name: major.name,
     errorType: PrismaQueryError,
@@ -323,8 +355,6 @@ describe.each(providers)("$name provider lifecycle", (provider) => {
 
     const worker = resources.adapter
       .createWorker({
-        // These single-connection lifecycle fixtures have no room for a dedicated heartbeat.
-        sharedHeartbeats: true,
         workerId: `${provider.name}-lifecycle-worker`,
         pollMs: 25,
         registryIntervalMs: 0,

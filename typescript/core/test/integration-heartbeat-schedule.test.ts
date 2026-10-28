@@ -5,6 +5,7 @@ import { Worker } from "../src/index.js";
 import { workerHeartbeatReservation } from "../src/worker-internal.js";
 import { type HeartbeatSchedule, recordHeartbeatTimers } from "./support/heartbeat-timers.js";
 import { createIntegrationTestContext } from "./support/integration.js";
+import { unreservedQueue } from "../src/worker-internal.js";
 
 // Heartbeat rounds start on a fixed schedule: each round falls due one heartbeatMs after the
 // previous round started, not after it ended. So one round that times out does not move the next
@@ -191,7 +192,7 @@ describe("heartbeat schedule", () => {
       release = resolve;
     });
     const started: string[] = [];
-    const worker = new Worker(queue, {
+    const worker = new Worker(unreservedQueue(queue), {
       workerId: "schedule-flight-worker",
       queue: "heartbeat-schedule-flight",
       concurrency: 2,
@@ -199,7 +200,6 @@ describe("heartbeat schedule", () => {
       heartbeatMs,
       pollMs: 20,
       registryIntervalMs: 0,
-      sharedHeartbeats: true,
     }).handle("flight", async (_payload, context) => {
       started.push(context.task.id);
       await released;
@@ -288,7 +288,7 @@ describe("heartbeat schedule", () => {
       release = resolve;
     });
     const registered: number[] = [];
-    const worker = new Worker(queue, {
+    const worker = new Worker(unreservedQueue(queue), {
       workerId: "schedule-replacement-worker",
       queue: "heartbeat-schedule-replacement",
       concurrency: 2,
@@ -296,7 +296,6 @@ describe("heartbeat schedule", () => {
       heartbeatMs,
       pollMs: 20,
       registryIntervalMs: 0,
-      sharedHeartbeats: true,
     })
       .handle("first", async () => {
         await firstFinished;
@@ -344,14 +343,13 @@ describe("heartbeat schedule", () => {
     const released = new Promise<void>((resolve) => {
       release = resolve;
     });
-    const worker = new Worker(queue, {
+    const worker = new Worker(unreservedQueue(queue), {
       workerId: "schedule-whole-bound-worker",
       queue: "heartbeat-schedule-whole-bound",
       leaseMs: 30_000,
       heartbeatMs,
       pollMs: 20,
       registryIntervalMs: 0,
-      sharedHeartbeats: true,
     }).handle("whole", async () => {
       await released;
       return null;

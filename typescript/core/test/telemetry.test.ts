@@ -27,6 +27,7 @@ import { Worker } from "../src/worker.js";
 import { registerQueueMetrics, type QueueMetricSource } from "../src/telemetry.js";
 import { fullTierProbeRejection } from "./support/full-tier.js";
 import { answerSchemaCheck } from "./support/schema-check.js";
+import { unreservedQueue } from "../src/worker-internal.js";
 
 registerOpenTelemetry();
 
@@ -218,8 +219,7 @@ describe("OpenTelemetry", () => {
         throw new Error(`Unexpected query: ${sql}`);
       }),
     );
-    const worker = new Worker(new Queue(database, "mail"), {
-      sharedHeartbeats: true,
+    const worker = new Worker(unreservedQueue(new Queue(database, "mail")), {
       workerId: "worker-a",
       registryIntervalMs: 0,
     });
@@ -359,8 +359,7 @@ describe("OpenTelemetry", () => {
         throw new Error(`Unexpected query: ${sql}`);
       }),
     );
-    const worker = new Worker(new Queue(database, "mail"), {
-      sharedHeartbeats: true,
+    const worker = new Worker(unreservedQueue(new Queue(database, "mail")), {
       workerId: "worker-redaction",
       registryIntervalMs: 0,
     }).handle("mail.send", async () => {

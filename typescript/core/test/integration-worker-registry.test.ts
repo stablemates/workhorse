@@ -16,6 +16,7 @@ import { InjectedCrashError } from "../src/worker.js";
 import { Pool } from "pg";
 import { type HeartbeatSchedule, recordHeartbeatTimers } from "./support/heartbeat-timers.js";
 import { createIntegrationTestContext } from "./support/integration.js";
+import { unreservedQueue } from "../src/worker-internal.js";
 
 const { databaseUrl, deferred, pool, queue, admin, adminAudit } = createIntegrationTestContext(
   import.meta.url,
@@ -1112,8 +1113,7 @@ describe("worker registry", () => {
         inFlight -= 1;
       });
     });
-    const worker = new Worker(shared, {
-      sharedHeartbeats: true,
+    const worker = new Worker(unreservedQueue(shared), {
       workerId: "slow-heartbeat-worker",
       concurrency: 2,
       heartbeatMs: 10,
@@ -1972,8 +1972,7 @@ describe("worker registry", () => {
         claimsInFlight -= 1;
       }
     });
-    const worker = new Worker(pollingQueue, {
-      sharedHeartbeats: true,
+    const worker = new Worker(unreservedQueue(pollingQueue), {
       workerId: "notification-fallback",
       pollMs: 100,
       registryIntervalMs: 0,
@@ -2017,8 +2016,7 @@ describe("worker registry", () => {
     });
     const random = vi.spyOn(Math, "random").mockReturnValue(0.5);
     // The stalled-connect wrapper states no pool size, so it cannot lend a heartbeat connection.
-    const worker = new Worker(pendingQueue, {
-      sharedHeartbeats: true,
+    const worker = new Worker(unreservedQueue(pendingQueue), {
       workerId: "notification-pending-listener",
       pollMs: 100,
       registryIntervalMs: 0,
@@ -2050,7 +2048,7 @@ describe("worker registry", () => {
       removeListener: vi.fn<() => void>(),
       release: vi.fn<(error?: Error) => void>(),
     };
-    // The pool states its size, so the worker starts the listener under the opt-out (SM-1585).
+    // The pool states its size, so the queue starts the listener on it (SM-1585).
     const pendingListenerDatabase = {
       query: pool.query.bind(pool),
       connect: async () => listener,
@@ -2058,8 +2056,7 @@ describe("worker registry", () => {
     };
     const pendingQueue = new Queue(pendingListenerDatabase);
     const claim = vi.spyOn(pendingQueue, "claimMany");
-    const worker = new Worker(pendingQueue, {
-      sharedHeartbeats: true,
+    const worker = new Worker(unreservedQueue(pendingQueue), {
       workerId: "notification-pending-listen",
       pollMs: 100,
       registryIntervalMs: 0,

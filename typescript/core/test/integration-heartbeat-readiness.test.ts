@@ -140,7 +140,7 @@ describe("worker heartbeat readiness", () => {
       const started = performance.now();
       const run = worker.run();
       await expect(run).rejects.toThrow(
-        /Worker refused to start: the queue's pool of 3 connections did not lend the dedicated heartbeat connection within the startup budget of 5000 ms .*sharedHeartbeats: true/,
+        /Worker refused to start: the queue's pool of 3 connections did not lend the dedicated heartbeat connection within the startup budget of 5000 ms \(max\(heartbeatMs, 5000\)\)\. Give the pool more free connections\.$/,
       );
       // The budget is max(heartbeatMs, 5 s), not the interval of 100 ms.
       expect(performance.now() - started).toBeGreaterThanOrEqual(4_900);

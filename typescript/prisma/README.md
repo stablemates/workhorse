@@ -39,9 +39,9 @@ await prisma.$transaction(async (tx) => {
 
 The adapter never disconnects a caller-owned Prisma client unless `close` is configured.
 [Workhorse core](https://workhorse.run/docs/installation) owns schema installation and changes.
-A process that runs workers passes a `pg` pool as `pool`. Workers take their heartbeat and
-`LISTEN/NOTIFY` connections from it, and refuse to start without it unless `sharedHeartbeats` is
-set. Database errors
+A process that runs workers passes a `pg` pool with a maximum size (`max`) of at least 3 as `pool`.
+Workers take their heartbeat and `LISTEN/NOTIFY` connections from it. Without that pool,
+`createWorker()` throws an error that names the step. Database errors
 become `PrismaQueryError`, with the original error in `cause` and a nested PostgreSQL code copied to
 `code` when Prisma exposes one. On Prisma 7, the code comes from the error that the driver adapter
 reported.

@@ -38,9 +38,9 @@ await database.transaction().execute(async (transaction) => {
 
 The adapter never destroys a caller-owned Kysely database unless `close` is configured.
 [Workhorse core](https://workhorse.run/docs/installation) owns schema installation and changes.
-Pass the `pg` pool used by `PostgresDialect` as `pool`. Workers take their heartbeat and
-`LISTEN/NOTIFY` connections from it, and refuse to start without it unless `sharedHeartbeats` is
-set. Database errors become `KyselyQueryError`, with the original error in `cause` and its
+Pass the `pg` pool used by `PostgresDialect` as `pool`, with a maximum size (`max`) of at least 3.
+Workers take their heartbeat and `LISTEN/NOTIFY` connections from it. Without that pool,
+`createWorker()` throws an error that names the step. Database errors become `KyselyQueryError`, with the original error in `cause` and its
 PostgreSQL code copied to `code`.
 
 ## Next

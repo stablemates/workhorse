@@ -81,6 +81,7 @@ import {
   type WatchedCompletionClaim,
   type WorkerStatementWatch,
   workerHeartbeatReservation,
+  rejectRemovedWorkerOptions,
   workerHeartbeatReservationProblem,
   workerStatementPoolCapacity,
   workerListenerPoolMaxSize,
@@ -493,15 +494,6 @@ export interface WorkerOptions {
    */
   heartbeatMs?: number;
   /**
-   * Send heartbeats through the queue's shared pool instead of a dedicated connection.
-   *
-   * By default a worker on a Workhorse `Queue` reserves one heartbeat connection from its pool, so
-   * handlers that hold every other connection cannot starve lease renewal. It refuses to start when
-   * the pool cannot lend one. Set this only for a pool too small to spare the connection, or a
-   * database with no pool; heartbeats then wait behind other statements.
-   */
-  sharedHeartbeats?: boolean;
-  /**
    * Idle fallback polling delay. By default, `run()` waits five seconds while its notification
    * subscription is live. Without a live subscription, it starts at 250 milliseconds and backs off
    * after each empty claim, up to five seconds. An explicit value replaces both bases. While the
@@ -792,10 +784,9 @@ export class Worker {
   private nextHeartbeatAt: number | undefined;
   private heartbeatChannel: WorkerHeartbeatChannel | undefined;
 
-  // The reserved heartbeat connection, taken on first use. A queue that cannot lend one heartbeats
-  // through its shared pool.
+  // The reserved heartbeat connection, taken on first use. A custom WorkerQueueApi lends none, so
+  // its worker heartbeats through the queue's own transport.
   private reservedHeartbeatChannel(): WorkerHeartbeatChannel | undefined {
-    if (this.options.sharedHeartbeats === true) return undefined;
     if (this.heartbeatChannel !== undefined) return this.heartbeatChannel;
     const reservation = (this.queue as Partial<WorkerHeartbeatReservation>)[
       workerHeartbeatReservation
@@ -853,8 +844,8 @@ export class Worker {
   }
 
   // ADR 0071 rule 6: no claim of any kind, ordinary or fused, while the reserved heartbeat
-  // connection is not usable. A worker without a reserved connection (sharedHeartbeats, or a
-  // custom WorkerQueueApi) has no gate.
+  // connection is not usable. A worker on a custom WorkerQueueApi has no reserved connection and no
+  // gate.
   private heartbeatGateOpen(): boolean {
     return this.heartbeatChannel?.usable() ?? true;
   }
@@ -872,8 +863,7 @@ export class Worker {
           : "could not run the compatibility query on one more connection";
     return new Error(
       `${prefix}: ${channel.pool} ${what} within the startup budget of ` +
-        `${this.startupBudgetMs} ms (max(heartbeatMs, 5000)). Give the pool more free ` +
-        "connections, or set sharedHeartbeats: true to send heartbeats through the shared pool.",
+        `${this.startupBudgetMs} ms (max(heartbeatMs, 5000)). Give the pool more free connections.`,
       failure.cause === undefined ? undefined : { cause: failure.cause },
     );
   }
@@ -1072,6 +1062,7 @@ export class Worker {
     queue: WorkerQueueApi | Queue,
     private readonly options: WorkerOptions = {},
   ) {
+    rejectRemovedWorkerOptions(options);
     this.queue = queue instanceof Queue ? queueAsWorkerApi(queue) : queue;
     this.workerId = options.workerId ?? defaultWorkerId();
     if (options.queue !== undefined && options.queues !== undefined) {
@@ -1096,9 +1087,7 @@ export class Worker {
         this.concurrency,
         poolCapacity === undefined
           ? undefined
-          : poolCapacity -
-              (this.supportsNotifications ? 1 : 0) -
-              (options.sharedHeartbeats === true ? 0 : 1),
+          : poolCapacity - (this.supportsNotifications ? 1 : 0) - 1,
       );
     this.leaseMs = options.leaseMs ?? 30_000;
     this.heartbeatMs = options.heartbeatMs ?? Math.max(100, Math.floor(this.leaseMs / 3));
@@ -1145,18 +1134,16 @@ export class Worker {
       if (options.retryDelayMs > MAX_RETRY_DELAY_MS)
         throw new Error(`retryDelayMs must be a safe integer ${RETRY_DELAY_RANGE}`);
     }
-    if (options.sharedHeartbeats !== true) {
-      // A custom WorkerQueueApi chooses its own transport, so only a Workhorse Queue is checked.
-      const problem = (queue as Partial<WorkerHeartbeatReservation>)[
-        workerHeartbeatReservationProblem
-      ]?.call(queue);
-      if (problem !== undefined) {
-        throw new Error(
-          `Worker cannot reserve a dedicated heartbeat connection: ${problem}. Give the queue a ` +
-            "pool of at least 3 connections, or set sharedHeartbeats: true to send heartbeats " +
-            "through the shared pool.",
-        );
-      }
+    // A custom WorkerQueueApi chooses its own transport, so only a Workhorse Queue is checked.
+    const problem = (queue as Partial<WorkerHeartbeatReservation>)[
+      workerHeartbeatReservationProblem
+    ]?.call(queue);
+    if (problem !== undefined) {
+      throw new Error(
+        `Worker cannot reserve a dedicated heartbeat connection: ${problem}. Give the queue a ` +
+          "node-postgres pool with a maximum size (max) of at least 3: the listener, the " +
+          "heartbeat connection, and one statement.",
+      );
     }
   }
 

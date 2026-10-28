@@ -9,10 +9,13 @@ import {
   type WorkhorseTelemetryProvider,
 } from "../src/index.js";
 import { createIntegrationTestContext } from "./support/integration.js";
+import { unreservedQueue } from "../src/worker-internal.js";
 
-// SM-1585: under the shared heartbeat opt-out, the listener starts only on a pool that reports a
-// maximum size of at least 2. The listener holds one pooled connection, so on a pool of 1 it would
-// hold the only one. A pool that hides its size could be that pool, so the worker polls on it.
+// SM-1585: the queue listener starts only on a pool that reports a maximum size of at least 2. The
+// listener holds one pooled connection, so on a pool of 1 it would hold the only one. A pool that
+// hides its size could be that pool, so the worker polls on it. A public worker needs a pool of at
+// least 3, so these workers run through the test seam that lends no heartbeat connection. The rule
+// still guards the public Queue.subscribeToTaskNotifications.
 
 const { databaseUrl, pool: observer, admin } = createIntegrationTestContext(import.meta.url);
 
@@ -95,7 +98,7 @@ interface Result {
 }
 
 /**
- * Run one worker with the opt-out on a fresh pool of `max` connections. Two tasks exist before the
+ * Run one worker through the test seam on a fresh pool of `max` connections. Two tasks exist before the
  * start. A third arrives once both ran, so it needs a later claim. When `hidden` is true, the
  * queue sees only `query()` and `connect()`, so the pool reports no maximum size.
  */
@@ -130,10 +133,9 @@ async function completeThreeTasks(max: number, hidden: boolean): Promise<Result>
     );
     const handled = [deferred(), deferred(), deferred()];
     const seen: number[] = [];
-    const worker = new Worker(queue, {
+    const worker = new Worker(unreservedQueue(queue), {
       queue: name,
       workerId: name,
-      sharedHeartbeats: true,
       pollMs: 50,
       heartbeatMs: 200,
       leaseMs: 5_000,
@@ -173,7 +175,7 @@ async function completeThreeTasks(max: number, hidden: boolean): Promise<Result>
   }
 }
 
-describe("worker listener on a small pool with the opt-out", () => {
+describe("queue listener on a small pool", () => {
   let unregister: (() => void) | undefined;
   afterEach(() => unregister?.());
 

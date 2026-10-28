@@ -2,10 +2,12 @@ import type { QueryResult, QueryResultRow } from "pg";
 import { Admin } from "./admin.js";
 import { attachPool } from "./connection-pool.js";
 import { databaseErrorCode, WorkhorseError } from "./errors.js";
+import { heartbeatReservationProblem } from "./heartbeat-connection.js";
 import { Queue } from "./queue.js";
 import type { Queryable, QueueOptions } from "./types.js";
 import { Worker } from "./worker.js";
 import type { WorkerOptions } from "./worker.js";
+import { rejectRemovedWorkerOptions } from "./worker-internal.js";
 
 /**
  * Stable runtime surface consumed by database providers and dedicated worker processes.
@@ -36,6 +38,24 @@ export interface WorkhorseAdapterOptions<TTransaction> {
 export function createWorkhorseAdapter<TTransaction = Queryable>(
   options: WorkhorseAdapterOptions<TTransaction>,
 ): WorkhorseAdapter<TTransaction> {
+  return buildAdapter(options, {
+    provider: "Workhorse",
+    poolStep:
+      "Give the adapter a database that is a node-postgres Pool with a maximum size (max) of at " +
+      "least 3, or attach one with attachConnectionPool.",
+  });
+}
+
+/** How a worker refusal names the adapter and the step that gives the worker a usable pool. */
+interface AdapterWorkerRefusal {
+  provider: string;
+  poolStep: string;
+}
+
+function buildAdapter<TTransaction>(
+  options: WorkhorseAdapterOptions<TTransaction>,
+  refusal: AdapterWorkerRefusal,
+): WorkhorseAdapter<TTransaction> {
   const queue = new Queue(options.database, options.defaultQueue, options.queueOptions);
   const admin = new Admin(options.database, options.defaultQueue, options.queueOptions);
   let closePromise: Promise<void> | undefined;
@@ -55,6 +75,14 @@ export function createWorkhorseAdapter<TTransaction = Queryable>(
       );
     },
     createWorker(workerOptions) {
+      rejectRemovedWorkerOptions(workerOptions);
+      // The worker would refuse the same pool, but its error cannot name the adapter or its step.
+      const problem = heartbeatReservationProblem(options.database);
+      if (problem !== undefined) {
+        throw new Error(
+          `${refusal.provider} adapter cannot create a worker: ${problem}. ${refusal.poolStep}`,
+        );
+      }
       return new Worker(queue, workerOptions);
     },
     close() {
@@ -89,8 +117,8 @@ export interface ProviderAdapterOptions {
   queueOptions?: QueueOptions;
   /**
    * The node-postgres pool workers take their dedicated listener and heartbeat connections from.
-   * An adapter that finds its ORM's own pool omits this option. Otherwise a worker needs it unless
-   * it sets `sharedHeartbeats`.
+   * It must report a maximum size (`max`) of at least 3. It takes precedence over a pool that the
+   * adapter finds in its ORM. Without a usable pool, `createWorker()` throws.
    */
   pool?: AdapterConnectionPool;
   /**
@@ -139,8 +167,8 @@ export function rowsToQueryResult<TRow extends QueryResultRow>(
 /**
  * Lend a pool to a queryable, so a worker on it can take dedicated connections.
  *
- * A worker needs the pool for its heartbeat connection, and refuses to start without one unless
- * `sharedHeartbeats` is set. The listener comes from the same pool; without it the worker polls.
+ * A worker needs the pool for its heartbeat connection, and refuses to start without a pool that
+ * reports a maximum size of at least 3. The listener comes from the same pool.
  * The pool object itself is the sharing identity, so queryables built from one pool share one
  * listener and one heartbeat connection.
  */
@@ -196,8 +224,10 @@ export function createProviderQueryable<TRow extends QueryResultRow = QueryResul
 export interface ProviderAdapterDefinition<TExecutor> extends ProviderAdapterOptions {
   /** The database, client, or data source the application owns. */
   database: TExecutor;
-  /** The pool the adapter finds in its ORM. It takes precedence over the `pool` option. */
+  /** The pool the adapter finds in its ORM. The `pool` option takes precedence over it. */
   connectionPool?: AdapterConnectionPoolSource;
+  /** The adapter name that a worker refusal starts with, for example `Kysely`. */
+  provider?: string;
   /**
    * Convert one executor into a queryable. It is called for the database with the connection pool,
    * and again per transaction without one: a transaction is a borrowed session that ends, and a
@@ -216,10 +246,25 @@ export interface ProviderAdapterDefinition<TExecutor> extends ProviderAdapterOpt
 export function createProviderAdapter<TExecutor, TTransaction extends TExecutor = TExecutor>(
   definition: ProviderAdapterDefinition<TExecutor>,
 ): WorkhorseAdapter<TTransaction> {
-  const { database, toQueryable, connectionPool, pool, ...adapterOptions } = definition;
-  return createWorkhorseAdapter<TTransaction>({
-    ...adapterOptions,
-    database: toQueryable(database, connectionPool ?? pool),
-    adaptTransaction: (transaction) => toQueryable(transaction),
-  });
+  const {
+    database,
+    toQueryable,
+    connectionPool,
+    pool,
+    provider = "Workhorse",
+    ...adapterOptions
+  } = definition;
+  return buildAdapter<TTransaction>(
+    {
+      ...adapterOptions,
+      database: toQueryable(database, pool ?? connectionPool),
+      adaptTransaction: (transaction) => toQueryable(transaction),
+    },
+    {
+      provider,
+      poolStep:
+        "Pass a node-postgres Pool with a maximum size (max) of at least 3 as the adapter's pool " +
+        "option.",
+    },
+  );
 }
