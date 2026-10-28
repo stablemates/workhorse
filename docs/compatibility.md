@@ -839,45 +839,56 @@ nothing.
 
 The durable protocol is the PostgreSQL schema, not the TypeScript API. Its guarantees:
 
-- **The runtime declares a floor; the database declares the ceiling.** A runtime accepts the single
-  row in `workhorse.schema_version` when it is at or above `MINIMUM_SCHEMA_VERSION`, and applies no
-  upper bound of its own. That floor is the version that introduced the newest schema object the
-  release calls, across its statement catalogues and the dashboard host it ships. Thus the
-  compatibility check refuses a schema that the release fails on. A process that runs the check at
-  startup stops before its first call. A release raises the
-  floor when it starts calling something newer, which is why the deployment pipeline migrates
-  before any process from the new release starts. A schema that is merely newer still carries every function the runtime
-  calls, because inside a major line a migration only adds, so refusing it would make every rolling
-  deployment an outage. The ceiling is `workhorse.protocol_version`, where the installed schema
-  lists the client protocols it still answers; a contract step drops the ones it stops serving, and
-  the compatibility check of an older runtime then refuses the schema. That narrowing is a contract
-  step the operator runs, never something a release performs on their behalf, so a mixed fleet
-  mid-deploy is supported at every version boundary including a major one. Migration 0025 is the one exception: 0.5.0 ships it
-  as a contract step that retires protocols 1 through 4. A database from before 0.5.0 therefore
-  crosses it offline, with every worker and producer stopped, as
-  [the fast-tier cutover](schema-lifecycle.md#the-fast-tier-cutover) describes.
+- **The runtime declares a floor; the database declares the ceiling.** If the single row in
+  `workhorse.schema_version` is at or above `MINIMUM_SCHEMA_VERSION`, a runtime accepts it. The
+  runtime applies no upper bound of its own.
+
+  That floor is the first schema version that contains the newest schema object that the release
+  calls. This includes the statement catalogues of the release and the dashboard host that it
+  ships. Thus the compatibility check refuses a schema that the release fails on. If a process runs
+  the check at startup, it stops before its first call.
+
+  When a release starts to call something newer, it raises the floor. Thus the deployment pipeline
+  migrates before any process from the new release starts. Inside a major line, a migration only
+  adds. Thus a schema that is only newer still has every function that the runtime calls. If the
+  runtime refuses that schema, each rolling deployment becomes an outage.
+
+  The ceiling is `workhorse.protocol_version`. In that table, the installed schema lists the client
+  protocols that it still answers. A contract step drops the protocols that it stops serving. Then
+  the compatibility check of an older runtime refuses the schema. The operator runs that contract
+  step, and a release never runs it for the operator. Thus a mixed fleet mid-deploy is supported at
+  every version boundary, also at a major one.
+
+  Migration 0025 is the one exception: 0.5.0 ships it as a contract step that retires protocols 1
+  through 4. Thus a database from before 0.5.0 crosses it offline, with every worker and producer
+  stopped. [The fast-tier cutover](schema-lifecycle.md#the-fast-tier-cutover) gives these steps.
 
   See [Retention and removal](#retention-and-removal).
 
 - **Installation is clean-database only; migration owns every upgrade from 0.2.0.** `installSchema`
   refuses to interpret an older or unversioned `workhorse` schema. `migrateSchema` applies ordered,
-  immutable, transactional migrations forward from the baseline frozen as `sql/releases/0006.sql`,
-  which is schema 6, the 0.2.0 clean install. The supported floor is that baseline: 0.1.x had no
-  production install and is not carried forward, so `migrateSchema` refuses a schema below 6 and
-  names Workhorse 0.2.1 as the last release that migrates one
+  immutable, transactional migrations forward from a baseline. The file `sql/releases/0006.sql`
+  freezes that baseline: schema 6, the 0.2.0 clean install.
+
+  The supported floor is that baseline. Version 0.1.x has no production install, and the migration
+  chain does not include it. Thus `migrateSchema` refuses a schema below 6. It names Workhorse 0.2.1
+  as the last release that migrates one
   ([ADR 0073](decisions/0073-prune-the-migration-chain-to-the-0-2-0-baseline.md)).
-  A deployment runs it from a pipeline step before any process from the new release starts; no
-  component migrates on start. `docs/schema-lifecycle.md` records the execution contract, the
-  expand/contract rollout rules, and the backup and recovery guidance.
-- **Correctness-sensitive transitions stay in versioned SQL functions.** Claim, completion, retry,
-  cancellation, deadline, and maintenance transitions are owned by SQL. A client that speaks the
-  same schema version speaks the same protocol, whatever language it is written in.
-- **Task payloads are caller-owned JSON.** Workhorse stores and returns them unchanged. Trace context
-  and other Workhorse metadata are kept beside the payload, never merged into it.
+
+  A deployment runs `migrateSchema` from a pipeline step before any process from the new release
+  starts. No component migrates on start. `docs/schema-lifecycle.md` records the execution
+  contract, the expand/contract rollout rules, and the backup and recovery guidance.
+
+- **Correctness-sensitive transitions stay in versioned SQL functions.** SQL owns the claim,
+  completion, retry, cancellation, deadline, and maintenance transitions. A client that speaks the
+  same schema version speaks the same protocol. The language of the client does not change this.
+- **Task payloads are caller-owned JSON.** Workhorse stores and returns them unchanged. Workhorse
+  keeps trace context and other Workhorse metadata next to the payload. It never merges them into
+  the payload.
 - **The dashboard wire contract is versioned separately.** `dashboard/v1` pins the oRPC envelopes,
-  HTML placeholders, request order, and procedure schemas used by the TypeScript, Python, Go,
-  Rust, Ruby, and JVM backends. Applications should embed a shipped backend rather than call those
-  procedures as a public operator API.
+  HTML placeholders, request order, and procedure schemas. The TypeScript, Python, Go, Rust, Ruby,
+  and JVM backends use them. An application should embed a shipped backend. It should not call
+  those procedures as a public operator API.
 
 <picture>
   <source media="(max-width: 600px) and (prefers-color-scheme: dark)" srcset="../site/public/diagrams/schema-compatibility-narrow-dark.png">
