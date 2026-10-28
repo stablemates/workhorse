@@ -33,6 +33,15 @@ updates:
       actions:
         patterns: ["*"]
         update-types: [minor, patch]
+    # attest-action v0.0.7 adds `require-build-hashes` to its own `[tool.uv]` table, and only uv
+    # 0.13.0 or later reads that key. The pinned uv in mise.toml discards the table, and then
+    # `uv run --locked` inside the action fails. Only release-python.yml uses the action, and CI on a
+    # pull request does not run it, so a bump passes CI and fails the release rehearsal (SM-1892).
+    # SM-1894 moves uv and the action together, proves it with a dry run, and removes this entry.
+    # A `versions` rule also holds back a security update in its range, so this entry is temporary.
+    ignore:
+      - dependency-name: astral-sh/attest-action
+        versions: [">=0.0.7"]
 
   # The pnpm workspace root. One entry covers every workspace package, because pnpm-lock.yaml at the
   # root is the single lockfile CI installs from.
