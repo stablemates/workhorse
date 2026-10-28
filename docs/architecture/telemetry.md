@@ -86,8 +86,6 @@ is the unit that the heartbeat scheduler of the SDK sends:
 - The Ruby, JVM, and .NET workers on one pool share one dedicated heartbeat. Its round carries the
   leases of every worker on the pool, so the round counts once. The JVM counts it once for each
   distinct `WorkhorseTelemetry` among the workers of the round.
-- Under the shared heartbeats opt-out, a round can send several batches. If more than one batch
-  fails, the round counts once, with the reason of the first failure.
 
 A scheduler sends at most one round at a time, so the count rate stays bounded by the heartbeat
 interval and the busy retries. The counter adds no log record. The Go and Rust workers keep their
@@ -126,15 +124,14 @@ counts that error as `timeout` only after the round deadline, because a pgx conn
 the same error. The JVM worker
 sets the network timeout of the dedicated heartbeat connection to the round deadline, so a driver
 timeout after that deadline is `timeout`. A JDBC login timeout before the deadline is `connection`. The .NET worker does the same for a
-`TimeoutException`. A dial timeout, a driver socket timeout
-before the deadline, or a socket timeout in a borrowing round is `connection`. The Python worker
+`TimeoutException`. A dial timeout or a driver socket timeout
+before the deadline is `connection`. The Python worker
 converts each of its own deadline waits to `HeartbeatRoundExpired`. Thus a plain `TimeoutError` there
 is a socket failure, and it counts as `connection`, as `ETIMEDOUT` does in TypeScript.
 
 A round that reaches its deadline before it sends a statement counts as `timeout`. A round that ends
 before its heartbeat statement only because it got a new heartbeat connection does not count. It
-sent nothing, and a full round runs on the new connection at once. A borrowing round counts its
-first failed batch at once, before its other batches end.
+sent nothing, and a full round runs on the new connection at once.
 
 The Python classifier also reads `__context__` and the members of an `ExceptionGroup`. The JVM
 classifier also reads suppressed exceptions and `SQLException.getNextException`. The .NET classifier

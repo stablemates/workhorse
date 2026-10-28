@@ -105,17 +105,13 @@ fallback poll, so tasks run, but they start later.
 To keep wake hints, give the worker a pool that connects directly to PostgreSQL or through
 PgBouncer in session mode:
 
-- The Drizzle and TypeORM adapters listen on the node-postgres pool of the ORM. Connect that pool
-  directly or through a session-mode PgBouncer database.
-- The Prisma and Kysely adapters take a `pool` option for this purpose. Give it a direct pool or a
-  session-mode PgBouncer pool.
-- A `Queue` on a queryable without `connect()` and without an attached pool has no listener. Its
-  worker polls and logs one warning at start. This worker also has no pool for a heartbeat
-  connection, so it needs `sharedHeartbeats`. The heartbeat section below explains this option.
-- With `sharedHeartbeats`, the listener can hold the only connection of a small pool. Thus the
-  worker starts the listener only when it knows the maximum size of the pool. The pool must be able
-  to lend the listener a connection and still keep one for other work. In other cases, the worker
-  polls and logs one warning.
+- The Drizzle and TypeORM adapters listen on the node-postgres pool of the ORM, or on the pool that
+  you give as the option `pool`. Connect that pool directly or through a session-mode PgBouncer
+  database.
+- The Prisma, Kysely, and Knex adapters take a `pool` option for this purpose. Give it a direct pool
+  or a session-mode PgBouncer pool.
+- A worker needs a pool for its listener and its heartbeat connection. A `Queue` on a queryable
+  without `connect()` and without an attached pool cannot create a worker.
 
 <details>
 <summary>Reference: listener behavior and polling</summary>
@@ -133,42 +129,31 @@ checks the pool's shape, not its pooling mode, so it still reports the capabilit
 
 **Pool source for the listener (TypeScript)**
 
-| Adapter        | Pool source     |
-| -------------- | --------------- |
-| Drizzle        | `$client`       |
-| TypeORM        | `driver.master` |
-| Prisma, Kysely | `pool` option   |
+| Adapter              | Pool source                                         |
+| -------------------- | --------------------------------------------------- |
+| Drizzle              | `pool` option, or else `$client`                    |
+| TypeORM              | `pool` option, or else `driver.master`              |
+| Prisma, Kysely, Knex | `pool` option. Without it, `createWorker()` throws. |
 
-**Polling-only cases (TypeScript)**
+**Polling warnings (every language)**
 
-- A queryable without a pool stays polling-only.
-- A pool whose capacity is 1 stays polling-only.
-- A pool that has `connect()` and no `options.max` stays polling-only.
-- When `Worker.run()` starts with no subscription, it logs `workhorse.worker.polling_only` at warn
-  level once.
-
-**Listener under the opt-out (every language)**
-
-- A listener in the pool starts only when the worker knows a pool maximum size of at least 2.
-- The size comes from the pool, or from the caller on the JVM: `poolMaxSize(int)` in Java,
-  `poolMaxSize` in Kotlin, and `workhorse.worker.pool-max-size` in the Spring starter. In .NET,
-  the size is `Max Pool Size` in the connection string of the `NpgsqlDataSource`. With
-  `Pooling=false`, the size is unknown.
-- No worker probes the pool for its size.
-- Otherwise the worker polls and logs one warning for each run. In TypeScript, Python, Ruby, and
-  the JVM, the warning is `workhorse.worker.polling_only`. Its record carries
-  `workhorse.worker.pool_max_size`: the size that the worker found, or `unknown`.
-- Go and Rust log their own warnings. These warnings do not carry `workhorse.worker.pool_max_size`.
-- The .NET worker logs `workhorse.worker.polling_only` with the worker ID only. Its record does not
-  carry `workhorse.worker.pool_max_size`.
-- The Go worker polls when `MaxConns` is below 2. It logs "PostgreSQL notification listener requires
-  at least two pool connections; worker is using polling" with no attributes.
-- The Rust listener is outside the pool. If the Rust worker expects no listener, for example because
-  `max_size` is below 2, it polls. It logs "PostgreSQL notification listener unavailable; worker is
-  using polling" with `workhorse.worker.id` only.
-- These two Go and Rust warnings do not apply to deliberate polling. With `PollingOnly`, the Go
-  worker logs "PostgreSQL notification listener disabled; worker is using polling" instead. With
-  `polling_only`, the Rust worker logs no listener warning.
+- A worker never polls because its pool is small. A worker on a pool below 3, or on a pool of
+  unknown size, fails at construction. A JVM `DataSource` with no declared `poolMaxSize` and a .NET
+  data source with `Pooling=false` are the exceptions: the startup check is their guard.
+- TypeScript: when `Worker.run()` starts with no subscription, it logs
+  `workhorse.worker.polling_only` at warn level once. Its record carries
+  `workhorse.worker.pool_max_size`: the size that the worker found, or `unknown`. A custom
+  `WorkerQueueApi` that returns no subscription causes this warning.
+- JVM: when the listener does not listen by the end of its startup wait, the worker logs
+  `workhorse.worker.polling_only` once, with `workhorse.worker.pool_max_size`.
+- .NET: in the same case, the worker logs `workhorse.worker.polling_only` with the worker ID only.
+- Python and Ruby log no polling warning.
+- Go: with `PollingOnly`, the worker logs "PostgreSQL notification listener disabled; worker is
+  using polling". When the listener fails, it logs "PostgreSQL notification listener unavailable;
+  worker is using polling".
+- Rust: the listener is outside the pool. Without a `listen_config`, the worker polls and logs
+  "PostgreSQL notification listener unavailable; worker is using polling" with
+  `workhorse.worker.id` only. With `polling_only`, it logs no listener warning.
 
 **Fallback poll.** A `Worker.run()` with a live listener polls every 5,000 ms by default, with ±10%
 jitter. Before its `LISTEN` succeeds, and while it reconnects, the worker starts at 250 ms instead.
@@ -176,7 +161,7 @@ A lost listener wakes the worker, and its backoff restarts at 250 ms. An explici
 both bases. While the listener is live, the worker waits the explicit value without the 5,000 ms
 cap.
 
-More detail: [Operations and CLI: Polling-only cases](https://github.com/stablemates/workhorse/blob/main/docs/architecture/operations.md#polling-only-cases), [Operations and CLI: Polling cadence](https://github.com/stablemates/workhorse/blob/main/docs/architecture/operations.md#polling-cadence), [Overview: Listener under the opt-out](https://github.com/stablemates/workhorse/blob/main/docs/architecture/overview.md#listener-under-the-opt-out), and [Schema and SQL protocol: .NET connections](https://github.com/stablemates/workhorse/blob/main/docs/architecture/schema-and-protocol.md#net-connections).
+More detail: [Operations and CLI: Polling-only cases](https://github.com/stablemates/workhorse/blob/main/docs/architecture/operations.md#polling-only-cases), [Operations and CLI: Polling cadence](https://github.com/stablemates/workhorse/blob/main/docs/architecture/operations.md#polling-cadence), [Overview: Polling warnings](https://github.com/stablemates/workhorse/blob/main/docs/architecture/overview.md#polling-warnings), and [Schema and SQL protocol: .NET connections](https://github.com/stablemates/workhorse/blob/main/docs/architecture/schema-and-protocol.md#net-connections).
 
 </details>
 
@@ -236,15 +221,15 @@ one more client for the Rust listener connection.
 <details>
 <summary>Reference: connections each language holds</summary>
 
-| Language   | Pool identity                                                                        | Listener connection                                                                                                                                                                                         | Heartbeat connection                                                                           |
-| ---------- | ------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------- |
-| TypeScript | The pool object, such as a node-postgres `Pool`.                                     | One `TaskNotificationHub` per pool, holding one pooled connection. Skipped unless `options.max` is at least 2.                                                                                              | One per pool. The last holder returns it to the pool.                                          |
-| Go         | The `*pgxpool.Pool` object.                                                          | One `taskNotificationHub` per pool. Polls instead when `MaxConns` is below 2.                                                                                                                               | One per pool. When the last holder releases it, `closeAndRemove` closes it.                    |
-| Ruby       | The pool object.                                                                     | One `Worker::Listener.shared(pool)` per pool, holding one pool connection. Skipped unless the pool `size` is at least 2.                                                                                    | One `Worker::Heartbeat.dedicated(pool)` per pool, held while a worker runs or a lease remains. |
-| Python     | The pool object, in each of three domains: psycopg sync, psycopg async, and asyncpg. | One per pool object, holding one pool connection. The domains never share. Skipped unless the pool reports a size of at least 2.                                                                            | One per pool object. The last worker gives it back to the pool.                                |
-| Rust       | The address that `Pool::manager()` returns.                                          | One per pool identity, opened by `notifications::listen` from `WorkerOptions::listen_config`, outside the pool. Expected only when `max_size` is at least 2.                                                | One per pool identity, from the pool. The last run gives it back to the pool.                  |
-| JVM        | The `DataSource` object, by reference identity.                                      | One `Listener.shared(dataSource)` per `DataSource`, holding one connection while any worker runs. Under the opt-out, skipped unless `poolMaxSize` is 2 or more.                                             | One per `DataSource`, held while any worker or attempt runs.                                   |
-| .NET       | The `NpgsqlDataSource` object, by reference identity.                                | One listener per `NpgsqlDataSource`, holding one pooled connection on a dedicated thread. It runs `SELECT 1` after one quiet poll interval. Under the opt-out, skipped unless `Max Pool Size` is 2 or more. | One per `NpgsqlDataSource`, on a dedicated thread, held while any worker or attempt runs.      |
+| Language   | Pool identity                                                                        | Listener connection                                                                                                                                                     | Heartbeat connection                                                                           |
+| ---------- | ------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------- |
+| TypeScript | The pool object, such as a node-postgres `Pool`.                                     | One `TaskNotificationHub` per pool, holding one pooled connection.                                                                                                      | One per pool. The last holder returns it to the pool.                                          |
+| Go         | The `*pgxpool.Pool` object.                                                          | One `taskNotificationHub` per pool. None under `PollingOnly`.                                                                                                           | One per pool. When the last holder releases it, `closeAndRemove` closes it.                    |
+| Ruby       | The pool object.                                                                     | One `Worker::Listener.shared(pool)` per pool, holding one pool connection. None under `polling_only`.                                                                   | One `Worker::Heartbeat.dedicated(pool)` per pool, held while a worker runs or a lease remains. |
+| Python     | The pool object, in each of three domains: psycopg sync, psycopg async, and asyncpg. | One per pool object, holding one pool connection. The domains never share.                                                                                              | One per pool object. The last worker gives it back to the pool.                                |
+| Rust       | The address that `Pool::manager()` returns.                                          | One per pool identity, opened by `notifications::listen` from `WorkerOptions::listen_config`, outside the pool. None under `polling_only` or without a `listen_config`. | One per pool identity, from the pool. The last run gives it back to the pool.                  |
+| JVM        | The `DataSource` object, by reference identity.                                      | One `Listener.shared(dataSource)` per `DataSource`, holding one connection while any worker runs. None under `pollingOnly(true)`.                                       | One per `DataSource`, held while any worker or attempt runs.                                   |
+| .NET       | The `NpgsqlDataSource` object, by reference identity.                                | One listener per `NpgsqlDataSource`, holding one pooled connection on a dedicated thread. It runs `SELECT 1` after one quiet poll interval. None under `PollingOnly`.   | One per `NpgsqlDataSource`, on a dedicated thread, held while any worker or attempt runs.      |
 
 - With 4 workers on one pool of 20, 18 pooled connections remain. In Rust, 19 remain, and 1 more
   client connects outside the pool.
@@ -277,12 +262,17 @@ pooled connection for a slow report query. Suppose that the heartbeat uses the s
 5. Recovery puts each task back in the queue.
 
 Thus, each pool keeps a dedicated heartbeat connection, and the heartbeat never waits for the
-shared pool. Count this connection in addition to the listener and the handler connections. The
-pool must also leave room for statements. If the pool states a size that is too small, the worker
-does not start. A Java `DataSource` does not state its size. On the JVM, you can declare the size
-with `poolMaxSize`, and the worker refuses a declared size that is too small. Without a declared
-size, the startup check is the only check. A .NET worker reads `Max Pool Size` from the connection
-string of its `NpgsqlDataSource`, and it refuses a size that is too small.
+shared pool. Every worker uses this connection, and no option disables it. Count this connection
+in addition to the listener and the handler connections. The pool must also leave room for
+statements, so the pool has a minimum size. If the pool is smaller, or does not state its size,
+the worker fails when you construct it. The error names the size that it found, the size that it
+needs, and the next step.
+
+Two pools are exceptions, because they do not state their size. A Java `DataSource` does not state its size. On the JVM, you can
+declare the size with `poolMaxSize`, and the worker refuses a declared size that is too small. A
+.NET worker reads `Max Pool Size` from the connection string of its `NpgsqlDataSource`, and it
+refuses a size that is too small. With `Pooling=false`, the .NET data source has no size. Without a
+known size, the startup check is the only check.
 
 The workers on one pool renew their leases together, in one transaction for each round. A round thus
 needs the same number of round trips to PostgreSQL for one worker or for many workers. That
@@ -291,7 +281,7 @@ transaction locks the task rows of every worker in the round until it commits.
 Every worker checks the pool when it starts. Within its startup budget, the worker first gets the
 heartbeat connection. Then it borrows one more connection for a short check, and returns it at
 once. If the pool cannot give these connections in time, the worker does not start. Its error names
-the budget and the opt-out.
+the pool and the budget.
 
 The listener is best effort, so the worker starts without it and polls. The check proves only that
 the pool has room at that moment.
@@ -300,28 +290,21 @@ While the heartbeat has no connection, no worker on the pool claims a new task. 
 continue. A fast-tier completion settles its task and claims nothing. The heartbeat asks the pool
 for a new connection at once. When the new connection is ready, the workers claim again at once.
 
-To send heartbeats through the shared pool, set `sharedHeartbeats`. Then busy handlers can delay the
-lease renewal, and the worker does no startup check of the heartbeat connection. Go names this
-option `SharedHeartbeats`. Python, Rust, and Ruby name it `shared_heartbeats`. Java names it
-`sharedHeartbeats(true)`, Kotlin `sharedHeartbeats = true`, and .NET `SharedHeartbeats = true`. The
-heartbeat connection runs only
-self-contained statements, so it works in every pool mode.
+The heartbeat connection runs only self-contained statements, so it works in every pool mode.
 
-With `sharedHeartbeats`, the pool can be smaller, so the listener needs a pool of known size. In
-some cases, the worker polls and logs one warning. One case is a pool whose maximum size the worker
-does not know. The other case is a pool that has no connection for other work while the listener
-holds one. A Java `DataSource` does not state its size, so a JVM worker with `sharedHeartbeats(true)`
-polls unless you declare the size with `poolMaxSize`. The worker trusts that value. If you make the
-pool smaller than the declared size, the listener can hold the last connection again.
+On the JVM, the worker trusts the declared `poolMaxSize`. If you make the pool smaller than the
+declared size, the startup check can still pass, and claims can then wait for a free connection.
 
 <details>
 <summary>Reference: heartbeat reservation</summary>
 
-**Minimum pool.** Where the pool reports its maximum size, a dedicated heartbeat connection needs a
-pool of at least 3 connections. That leaves room for the listener and one claim. TypeScript,
-Python, and Ruby also refuse a pool whose size is unknown. A `DataSource` reports no size. The JVM
-checks only a size that `poolMaxSize` declares. A .NET worker reads `Max Pool Size`, and with
-`Pooling=false` it checks only at startup.
+**Minimum pool.** Every worker needs a pool of at least 3 connections: the listener, the heartbeat
+connection, and one statement. In Rust, the listener is outside the pool, so the pool of 3 holds the
+heartbeat connection and two statement connections. No option disables the heartbeat connection.
+TypeScript, Python, and Ruby also refuse a pool whose size is unknown. A `DataSource` reports no
+size, so the JVM checks only a size that `poolMaxSize` declares. A .NET worker reads
+`Max Pool Size`, and with `Pooling=false` it checks only at startup. The error at construction
+names the size that the worker found, the size that it needs, and the next step.
 
 **Startup check.** The startup budget is the larger of the heartbeat interval and 5 s. One deadline
 bounds both steps, in this order:
@@ -332,7 +315,7 @@ bounds both steps, in this order:
    at once.
 
 If a step does not end within the budget, the worker refuses to start. The error describes the
-pool and names the budget and the opt-out. An incompatible schema keeps its own error. The JVM
+pool and names the budget. An incompatible schema keeps its own error. The JVM
 and .NET workers wait for the listener between the two steps, and that wait does not count against
 the budget. The other languages do not wait for the listener at startup.
 
@@ -346,15 +329,15 @@ after a backoff that grows to at most the heartbeat interval. Python multiplies 
 random factor from 0.9 to 1.1, and then applies the cap. When the replacement is ready, the workers
 claim at once.
 
-| Language   | Refusal of a small pool                                                              | Refusal at startup                   | Opt-out                                                    |
-| ---------- | ------------------------------------------------------------------------------------ | ------------------------------------ | ---------------------------------------------------------- |
-| TypeScript | The `Worker` constructor throws.                                                     | `Worker.run()` rejects.              | `sharedHeartbeats`                                         |
-| Go         | `NewWorker` returns an error.                                                        | `Run` and `RunOnce` return an error. | `SharedHeartbeats`                                         |
-| Python     | `ValueError`                                                                         | `TimeoutError`                       | `shared_heartbeats`                                        |
-| Ruby       | `ArgumentError`                                                                      | `WorkerStartupError`                 | `shared_heartbeats`                                        |
-| Rust       | `Worker::new` returns `Error::InvalidArgument`.                                      | `run` returns an error.              | `shared_heartbeats`                                        |
-| JVM        | `build()` throws when `poolMaxSize` is below 3.                                      | `WorkhorseException`                 | `sharedHeartbeats(true)`, Kotlin `sharedHeartbeats = true` |
-| .NET       | The `Worker` constructor throws `ArgumentException` when `Max Pool Size` is below 3. | `WorkerStartupException`             | `SharedHeartbeats = true`                                  |
+| Language   | Refusal of a small pool                                                              | Refusal at startup                   |
+| ---------- | ------------------------------------------------------------------------------------ | ------------------------------------ |
+| TypeScript | The `Worker` constructor throws.                                                     | `Worker.run()` rejects.              |
+| Go         | `NewWorker` returns an error.                                                        | `Run` and `RunOnce` return an error. |
+| Python     | `ValueError`                                                                         | `TimeoutError`                       |
+| Ruby       | `ArgumentError`                                                                      | `WorkerStartupError`                 |
+| Rust       | `Worker::new` returns `Error::InvalidArgument`.                                      | `run` returns an error.              |
+| JVM        | `build()` throws when `poolMaxSize` is below 3.                                      | `WorkhorseException`                 |
+| .NET       | The `Worker` constructor throws `ArgumentException` when `Max Pool Size` is below 3. | `WorkerStartupException`             |
 
 A TypeScript `WorkerQueueApi` that is not a `Queue` is not checked.
 
@@ -410,15 +393,15 @@ A `DataSource` reports no pool size, so the Java worker applies the third rule o
 
 **Spare connections**
 
-| Language   | Spare connections                                                                                            |
-| ---------- | ------------------------------------------------------------------------------------------------------------ |
-| TypeScript | `options.max`, minus 1 for the listener when notifications are supported, minus 1 unless `sharedHeartbeats`. |
-| Go         | `MaxConns`, minus 1 unless `PollingOnly`, minus 1 unless `SharedHeartbeats`.                                 |
-| Python     | Pool size, minus 1 for the listener when the size is at least 2, minus 1 unless `shared_heartbeats`.         |
-| Ruby       | Pool size, minus 1 unless `polling_only`, minus 1 unless `shared_heartbeats`.                                |
-| Rust       | `max_size`, minus 1 unless `shared_heartbeats`. The listener sits outside the pool.                          |
-| Java       | `poolMaxSize`, minus 1 for the listener when the worker listens, minus 1 unless `sharedHeartbeats`.          |
-| .NET       | `Max Pool Size`, minus 1 for the listener when the worker listens, minus 1 unless `SharedHeartbeats`.        |
+| Language   | Spare connections                                                                                    |
+| ---------- | ---------------------------------------------------------------------------------------------------- |
+| TypeScript | `options.max`, minus 1 for the listener when notifications are supported, minus 1 for the heartbeat. |
+| Go         | `MaxConns`, minus 1 unless `PollingOnly`, minus 1 for the heartbeat.                                 |
+| Python     | Pool size, minus 1 for the listener, minus 1 for the heartbeat.                                      |
+| Ruby       | Pool size, minus 1 unless `polling_only`, minus 1 for the heartbeat.                                 |
+| Rust       | `max_size`, minus 1 for the heartbeat. The listener sits outside the pool.                           |
+| Java       | `poolMaxSize`, minus 1 for the listener when the worker listens, minus 1 for the heartbeat.          |
+| .NET       | `Max Pool Size`, minus 1 for the listener when the worker listens, minus 1 for the heartbeat.        |
 
 In TypeScript, pools of 3, 4, 6, and 10 connections give a concurrency-64 worker 1, 2, 4, and 8
 cohorts. A TypeScript database with an attached pool, such as a Prisma or Kysely adapter, runs

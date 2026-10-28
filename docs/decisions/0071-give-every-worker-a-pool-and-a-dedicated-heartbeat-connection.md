@@ -16,10 +16,13 @@
   mark the paragraphs of the decision that the SM-1565 amendment supersedes.
 - **Amended:** 2026-10-22 (SM-1585): under the opt-out, a worker starts a pool-fed listener only when
   it knows a pool maximum size of at least 2, from the pool's report or the caller's declaration. An
-  unknown size means polling.
+  unknown size means polling. Superseded by the 2026-10-28 amendment.
 - **Amended:** 2026-10-22 (SM-1633): on the dedicated heartbeat connection, one transaction renews
   every worker of a round. The amendment at the end of this record states the round shape and its
   effect on row locks.
+- **Amended:** 2026-10-28 (SM-1900): every SDK removes the heartbeat opt-out. Every worker on a
+  Workhorse pool reserves the dedicated heartbeat connection. The amendment at the end of this
+  record states the reasons and the new answer for each case of the rejected alternative.
 
 ## Context
 
@@ -94,6 +97,9 @@ Rules 3 and 4 of the 2026-10-21 amendment extend the next paragraph. A worker al
 start when it cannot reserve the heartbeat connection and borrow one more connection within its
 startup budget. A JVM `DataSource` reports no capacity, so on the JVM that startup check replaces
 the check at construction. The paragraph stays as the record of the original decision.
+
+The 2026-10-28 amendment removes the opt-out that the next two paragraphs name. The error no longer
+names an opt-out. The paragraphs stay as the record of the original decision.
 
 A worker whose pool cannot lend the heartbeat connection fails at construction. The pool must have
 a known capacity of at least 3: the listener, the heartbeat connection, and one statement. The
@@ -176,10 +182,16 @@ checkpoint while others run, which one serialized connection could not do.
 Every pool gives up one connection to heartbeats. Operators budget it on top of the listener and
 the handlers, as guide 390 states.
 
+The 2026-10-28 amendment supersedes the next paragraph. A fixture now uses a pool of 3 connections
+or an internal seam that no public API exposes.
+
 Test fixtures change in every SDK. Fixtures that build a worker on a small pool or a single
 connection must either grow the pool or set the opt-out. The per-SDK tickets carry that work.
 
 ## Alternatives considered
+
+The 2026-10-28 amendment reverses the second item below. Its section "The answer for each case"
+gives the new answer for small pools, single connections, and test fixtures.
 
 - **Keep the silent fallback and document it.** Rejected: the risk stays invisible where it matters.
 - **Require a dedicated connection with no opt-out.** Rejected: small pools, single connections, and
@@ -223,6 +235,9 @@ Each of those issues has shipped. Before its issue shipped, an SDK kept its earl
 startup behavior.
 
 ### The rules
+
+The 2026-10-28 amendment removes the opt-out that rules 3 and 4 name. A worker on a pool below 3
+no longer starts, and the error of rule 3 names no opt-out. The rules stay word for word below.
 
 In these rules, I is the heartbeat interval. L is the lease duration. B is the round bound, default
 7.5 s. W is the worker count. C is the task count per worker. A pool identity is the key that an SDK
@@ -279,6 +294,9 @@ on SM-1565. The section "The Rust pool identity depends on deadpool" records par
 
 ### Scope of rules 3 to 6
 
+The 2026-10-28 amendment supersedes this section. Rules 3 to 6 now apply to every worker on a
+Workhorse pool. The section stays as the record of this amendment.
+
 Rules 3 to 6 are the reservation, readiness, and claim-gate rules. They apply to workers that use
 the dedicated heartbeat connection. A worker with the opt-out has no reserved heartbeat connection,
 and rules 3 to 6 do not apply to it. The opt-out is `sharedHeartbeats` in TypeScript,
@@ -288,6 +306,9 @@ statement, as the section "A worker that cannot reserve refuses to start" states
 `WorkerQueueApi` that is not a Workhorse `Queue` stays exempt, as that section also states.
 
 ### Why the rules have this form
+
+The 2026-10-28 amendment supersedes the last two sentences of the next paragraph. No SDK has the
+opt-out.
 
 **Rule 1.** Each SDK keeps its scheduler. TypeScript and Go send one round for each worker, and the
 rounds queue on the shared connection. Ruby and the JVM use one coordinator for all workers on the
@@ -559,6 +580,9 @@ to 190 ms.
    `heartbeat_many_v2` statement, with no transaction. Go is the exception: under
    `SharedHeartbeats`, it sends each statement in a bounded transaction of its own, as before.
 
+The 2026-10-28 amendment removes the opt-out, so rule 6 no longer applies. Every round uses the
+dedicated heartbeat connection. Rule 6 stays as the record of this amendment.
+
 ### Why the rules have this form
 
 **One statement, not a statement for each worker in one transaction.** One statement keeps the
@@ -597,3 +621,104 @@ transaction could before.
   `LATERAL` call does not give.
 - **One coordinator thread for each pool in every SDK.** Rejected: rule 1 lets each SDK keep its
   scheduler, and the shared transaction gives the same round trips.
+
+## Amendment: remove the heartbeat opt-out (2026-10-28)
+
+The original decision kept an opt-out for small pools. Its name was `sharedHeartbeats` in
+TypeScript and the JVM, `SharedHeartbeats` in Go and .NET, and `shared_heartbeats` in Python, Rust,
+and Ruby. With the opt-out, heartbeat rounds borrowed ordinary pool connections, and a worker on a
+pool of 1 ran. The maintainer decided on 2026-10-28 to remove the opt-out from every SDK. SM-1899
+removes it from TypeScript, SM-1901 from Python, Go, Rust, and Ruby, and SM-1902 from the JVM and
+.NET. The removal ships in 0.11.0.
+
+**Example.** Before 0.11.0, a worker with the opt-out runs on a pool of 2.
+
+1. A claim and a settlement hold both connections of the pool.
+2. A heartbeat round becomes due. It waits behind them for a pool connection.
+3. The round does not run in time, and the lease expires.
+4. A peer worker claims the task again, so the handler runs a second time.
+
+### Reasons
+
+1. The opt-out keeps a known lease risk. Heartbeats wait behind claims and settlements on the same
+   connections, so a lease can expire and a task can run twice. The original decision addresses that
+   class of defect.
+2. Each SDK carried two lifecycles. Rules 3 to 6 of the 2026-10-21 amendment (reservation,
+   readiness, and the claim gate) did not apply under the opt-out. Each fix had to handle both
+   paths, as SM-1585 and SM-1864 did.
+3. Under the opt-out, a listener in the pool needed a known pool size of at least 2. Thus a pool
+   of 1, or a pool of unknown size, could only poll.
+4. No known production installation uses the opt-out. Thus the removal needs no deprecation period.
+
+### The rules
+
+1. No SDK has the opt-out. Every worker on a Workhorse pool reserves the dedicated heartbeat
+   connection. Rules 3 to 6 of the 2026-10-21 amendment apply to every such worker.
+2. A worker needs a pool with a known size of at least 3: the listener, the heartbeat connection,
+   and one statement. A worker on a pool below 3, or on a pool of unknown size, fails at
+   construction. The error names the size that it found, the size that it needs, and the next step.
+   The error names no opt-out. Each SDK keeps its own wording. The Rust listener opens its
+   connection outside the pool, so a Rust pool of 3 holds the heartbeat connection and two
+   statement connections.
+3. Two pools have no known size at construction. A JVM `DataSource` with no declared `poolMaxSize`
+   reports no size. A .NET data source with `Pooling=false` has no pool limit. For these pools, the
+   readiness check at the start of each run is the guard. Within the larger of the heartbeat
+   interval and 5 s, the worker reserves the heartbeat connection and borrows one more connection.
+   Between these two steps, the worker starts the listener. The listener wait does not count
+   against the budget, and the listener stays best effort. If a reservation or readiness step
+   fails, the run throws `WorkhorseException` on the JVM or `WorkerStartupException` in .NET.
+4. A caller that still gives the removed option gets an error or a compile failure. The table below
+   gives the result in each SDK.
+5. A TypeScript `WorkerQueueApi` that is not a Workhorse `Queue` stays exempt. It chooses its own
+   transport, so the worker has no pool to check.
+6. The 2026-10-22 amendment (SM-1585) no longer applies. No worker polls because its pool is small.
+   Python and Ruby no longer log `workhorse.worker.polling_only`. Go no longer logs its warning for
+   a pool below 2.
+
+| SDK        | Removed option                                                                                                          | Result when a caller still gives it                                                         |
+| ---------- | ----------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------- |
+| TypeScript | `sharedHeartbeats`                                                                                                      | A type error, and an error at construction that names the removal.                          |
+| Go         | `WorkerOptions.SharedHeartbeats`                                                                                        | A compile failure.                                                                          |
+| Python     | `shared_heartbeats`                                                                                                     | `TypeError` that names the removal.                                                         |
+| Ruby       | `shared_heartbeats:`                                                                                                    | `ArgumentError` that names the removal.                                                     |
+| Rust       | `WorkerOptions::shared_heartbeats`                                                                                      | A compile failure.                                                                          |
+| JVM        | `Worker.Builder.sharedHeartbeats(boolean)`, Kotlin `sharedHeartbeats`, Spring Boot `workhorse.worker.shared-heartbeats` | A compile failure. The Spring Boot starter throws `IllegalStateException` at context start. |
+| .NET       | `WorkerOptions.SharedHeartbeats`, `Workhorse.Hosting` key `Workhorse:Worker:SharedHeartbeats`                           | A compile failure. `Workhorse.Hosting` throws `InvalidOperationException` at binding.       |
+
+### The answer for each case
+
+The original decision rejected "no opt-out", because small pools, single connections, and test
+fixtures would have no way to run. Each case now has this answer:
+
+- **Small pools.** A deployment budgets 3 connections for each worker process, on top of the
+  connections of its handlers. Guide 390 states the budget. The worker refuses a smaller pool at
+  construction, so the operator sees the fix before the first claim.
+- **Single connections.** Every worker takes a pool. SM-1899 gives every TypeScript adapter worker
+  a pool. The Drizzle and TypeORM adapters accept the adapter option `pool`, and it takes
+  precedence over the pool of the ORM. The Prisma, Kysely, and Knex adapters require `pool` to
+  create a worker. A `Queue` keeps taking a connection or a transaction, so an enqueue can still
+  join the transaction of the caller.
+- **Test fixtures.** A fixture uses a pool of 3 connections, or an internal seam that no public API
+  exposes.
+
+### Consequences of this amendment
+
+- Each SDK has one heartbeat lifecycle. A fix to the reservation, the readiness check, or the claim
+  gate handles one path.
+- A worker on a pool with a known size of 1 or 2 no longer runs. This is a breaking change in
+  0.11.0. Each changelog and `docs/compatibility.md` state the upgrade step.
+- On the JVM without a declared `poolMaxSize`, and in .NET with `Pooling=false`, the readiness check
+  enforces only the connections of that start. A worker that listens needs 3 connections there. A
+  worker that does not listen, under `pollingOnly` or in a single pass, needs 2. Thus such a worker
+  can start on a pool of 2. A pool of 3 stays the requirement of this record, and the readiness
+  check proves current headroom only.
+- The heartbeat round has one shape in each SDK, as the 2026-10-22 amendment (SM-1633) states.
+
+### Alternatives considered in this amendment
+
+- **Deprecate the opt-out first, and remove it in a later release.** Rejected: no known production
+  installation uses it, and each SDK would keep two lifecycles for one more release.
+- **Keep the opt-out as a public option for tests only.** Rejected: a public option is public API,
+  and callers can use it in production. An internal seam gives tests the same control.
+- **Keep the opt-out and log a warning when it is set.** Rejected: the lease risk and the two
+  lifecycles stay.

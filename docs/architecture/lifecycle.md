@@ -1503,12 +1503,12 @@ leases. A Rust round cannot hold more than 100 leases, because a completing atte
 before its fused claim runs. For the same reason, a .NET round cannot hold more than 100 leases of
 one worker. Per-task deadline timers and abort signals stay independent.
 
-Under the shared heartbeats opt-out, a round sends one `heartbeat_many_v2` statement for each batch,
-each in autocommit. Go is the exception: under `SharedHeartbeats`, it sends each batch in a bounded
-transaction of its own, on a connection that it borrows from the pool. On the dedicated heartbeat
-connection, one statement sends every batch of the
-round, as [Pool renewal](#pool-renewal) describes. .NET is the exception: on its dedicated
-connection, it sends each batch in a transaction of its own.
+Every round of a worker on a Workhorse pool uses the dedicated heartbeat connection. 0.11.0 removed
+the heartbeat opt-out, under which a round borrowed ordinary pool connections (ADR 0071). A
+TypeScript custom `WorkerQueueApi` that is not a `Queue` is the exception. Its rounds call its own
+`heartbeatMany` or `heartbeatStatus`, with no reserved connection and no round deadline. On the dedicated connection, one
+statement sends every batch of the round, as [Pool renewal](#pool-renewal) describes. .NET is the
+exception: on its dedicated connection, it sends each batch in a transaction of its own.
 
 #### Pool renewal
 
@@ -1659,8 +1659,7 @@ apply in every SDK:
    slot. At or after the regular slot, the scheduler drops the selection, and the regular round
    sends every registered lease, busy ones too.
 6. A bounded busy retry ends by `min(retry start + round bound, next regular slot, earliest watchdog
-   end of its leases)`. It uses the same transaction and server timeouts as a regular round. A round
-   without a client deadline, under shared heartbeats, retries with no deadline.
+   end of its leases)`. It uses the same transaction and server timeouts as a regular round.
    If the deadline of a bounded busy retry is less than 20 ms after its start, the retry sends
    nothing. The 20 ms is the 8 ms that a round needs at its settings statement ([Heartbeat round
    deadline](#heartbeat-round-deadline)), plus a margin of 12 ms for the payload, the wait for the
@@ -1893,10 +1892,11 @@ Reservation requirements:
   when it has `connect()`, as a node-postgres `Pool` does.
 - The reservation needs a known capacity (`options.max`) of at least 3. That leaves room for the
   notification listener and one claim.
-- If a `Queue` cannot lend the connection, the `Worker` constructor throws. The message names the
-  reason (no pool, unknown size, or the size found) and the opt-out.
-- `WorkerOptions.sharedHeartbeats` skips the reservation and sends rounds through the queue's
-  queryable.
+- If a `Queue` cannot lend the connection, the `Worker` constructor throws. The error text names the
+  reason: no pool, unknown size, or the size found. It also names the next step. The queue needs a
+  node-postgres pool with a maximum size (`max`) of at least 3.
+- No option skips the reservation. The `Worker` constructor and adapter `createWorker()` throw an
+  error that names the removal when the options still carry the removed opt-out key.
 - The worker does not check a custom `WorkerQueueApi` that is not a `Queue`, because that API
   chooses its own transport.
 
@@ -1937,8 +1937,7 @@ pool, and an application without a pool `error` listener ends.
 #### Heartbeat readiness
 
 The rules in this section apply to a TypeScript worker that uses the reserved heartbeat connection.
-They do not apply under `sharedHeartbeats`, or to a custom `WorkerQueueApi` that is not a `Queue`
-(ADR 0071, rules 3 to 8).
+They do not apply to a custom `WorkerQueueApi` that is not a `Queue` (ADR 0071, rules 3 to 8).
 
 **Startup readiness check.** The startup budget is `max(heartbeatMs, 5,000)` ms
 (`heartbeatStartupBudgetMs`). Within this budget, `Worker.run()` does these steps before its first
@@ -1951,8 +1950,8 @@ registration:
 
 The budget covers the query as well as the connect. If the query is still running at the end of
 the budget, the worker destroys the borrowed connection. If a step does not finish within the
-budget, or the query fails, `run()` rejects. The error names the pool and its `options.max`, the
-budget, and the opt-out `sharedHeartbeats: true`. A `SchemaCompatibilityError` reaches the caller
+budget, or the query fails, `run()` rejects. The error names the pool and its `options.max` and the
+budget, and it asks for more free connections in the pool. A `SchemaCompatibilityError` reaches the caller
 unchanged. If `stop()` is called or the signal of the run aborts during the check, the check ends at
 once and `run()` resolves. The same applies to the first registration write after the check. The
 listener stays best effort and is not part of the check. The worker starts it after the check, so a
@@ -2036,16 +2035,14 @@ run has settled:
 The Go, Python, and Rust drivers report a lost connection only on the next statement. That statement
 fails the round and discards the connection. Their heartbeat connections work as follows:
 
-- Go workers use the pool's dedicated heartbeat connection unless `WorkerOptions.SharedHeartbeats`
-  opts out. The invocations of a Go worker share one hold. `Worker.Run` and `Worker.RunOnce` take it
+- Go workers use the pool's dedicated heartbeat connection. The invocations of a Go worker share one hold. `Worker.Run` and `Worker.RunOnce` take it
   after they get the execution permit. They release it before they return the permit. Thus a
   `RunOnce` that waits for the permit cannot release the hold of the invocation that it waits
   behind. The Go startup and claim gate below apply to this connection.
 - Python workers on one pool object share one heartbeat connection from that pool. A failed round
   discards it, and the reservation of the pool starts the replacement at once. While the pool holds
   no usable heartbeat connection, the workers claim no task.
-- Rust workers on one pool identity share one pooled heartbeat connection unless
-  `WorkerOptions::shared_heartbeats` is set. The pool identity is the address that
+- Rust workers on one pool identity share one pooled heartbeat connection. The pool identity is the address that
   `Pool::manager()` returns, so clones of one pool share the connection, and two pools that the
   caller builds separately do not. `shared::HeartbeatConnection` holds the connection while a run
   of any worker on the pool identity holds it. When the last run stops, the connection goes back to
@@ -2087,26 +2084,25 @@ fails the round and discards the connection. Their heartbeat connections work as
   deadline stays owned by the worker, and the deregistration runs after the late registration. The
   next run of the worker waits for these statements before it registers, within its startup
   budget. If one still runs at the end of the budget, `run` refuses to start.
-- A Rust round under `shared_heartbeats` borrows a connection like any other worker statement. That
-  round has no deadline, and its checkout waits for the larger of the lease and 5 s at most. The
-  statements of a `HandlerContext` use the same checkout bound.
+- The checkout of a statement of a `HandlerContext` waits for the larger of the lease and 5 s at
+  most.
 - A Rust run starts within its startup budget, the larger of the heartbeat interval and 5 s. In
   that budget, and in this order, the shared heartbeat connection must be present, and one more
   pooled connection must run the compatibility check. If a step does not finish, `run` returns an
-  error that names the pool, the budget, and the opt-out. The run then ends: before SM-1572, a
+  error that names the budget. The error also gives the size of the pool and its connection,
+  available, and waiting counts. The run then ends: before SM-1572, a
   worker that could not reserve its heartbeat connection ran without it. A `shutdown` that resolves
   during startup ends the run at once.
 
-A Go worker with the dedicated heartbeat connection starts and claims under these rules (ADR 0071,
-SM-1576). `SharedHeartbeats` turns off all of them.
+A Go worker starts and claims under these rules (ADR 0071, SM-1576).
 
 1. The startup budget is the larger of `HeartbeatInterval` and 5 s (`minimumStartupBudget`). In it,
    `prepareStart` waits for the shared heartbeat connection. Then it borrows one more pooled
    connection, runs the compatibility check on it, and releases that connection at once.
 2. If either step fails or does not complete in the budget, `Run` and `RunOnce` return an error,
    unless the compatibility check refuses the schema, which returns its own error. The error
-   names the pool as host, port, and database, its `MaxConns`, the step, the budget, and
-   `SharedHeartbeats`. It also gives the error of the last failed acquisition, for example a refused
+   names the pool as host, port, and database, its `MaxConns`, the step, and the budget. It also
+   gives the error of the last failed acquisition, for example a refused
    connection. Before SM-1576, the worker ignored a failed reservation and continued.
 3. One acquisition loop for each pool (`acquireUntilHeld`) asks the pool for the connection. It
    starts at the first reservation and again when a round discards the connection. It runs also
@@ -2170,8 +2166,8 @@ SM-1576). `SharedHeartbeats` turns off all of them.
 The Go driver reports a lost connection only on the next statement. So a heartbeat connection that
 PostgreSQL closed while no round ran keeps the gate open until the next round fails.
 
-A Ruby worker reserves the heartbeat connection of its pool when `run` or `run_once` starts, unless
-`shared_heartbeats` is set. The startup budget is the larger of `heartbeat` and 5 seconds
+A Ruby worker reserves the heartbeat connection of its pool when `run` or `run_once` starts. The
+startup budget is the larger of `heartbeat` and 5 seconds
 (`STARTUP_BUDGET_FLOOR`). One deadline at the end of the budget bounds both steps, in this order:
 
 1. `Worker::Heartbeat#reserve` adds the worker, and the heartbeat thread starts a checkout. The
@@ -2182,7 +2178,7 @@ A Ruby worker reserves the heartbeat connection of its pool when `run` or `run_o
 
 If step 1 does not end by the deadline, `run` and `run_once` raise `WorkerStartupError`. If the
 probe cannot borrow its connection, or does not end by the deadline, they also raise
-`WorkerStartupError`. Its message names the pool, the budget, and `shared_heartbeats`. A
+`WorkerStartupError`. Its message names the pool, its size, and the budget. A
 compatibility query that fails keeps its own error, and an incompatible schema raises
 `CompatibilityError`. A stop during step 1 ends the run without an error. The worker registers and
 subscribes to the shared listener only after both steps. Thus a stalled `LISTEN` cannot use the
@@ -2383,7 +2379,7 @@ least 50 ms. A short interval still leaves time for a round.
 | SDK        | Named value             | Helper                      | Interval                     | Where the round runs                                                                                       |
 | ---------- | ----------------------- | --------------------------- | ---------------------------- | ---------------------------------------------------------------------------------------------------------- |
 | TypeScript | `heartbeatRoundMs`      | `heartbeatRoundBoundMs`     | `heartbeatMs`                | the reservation (`ReservedConnection`)                                                                     |
-| Go         | `heartbeatRoundBound`   | `heartbeatRoundBoundFor`    | `HeartbeatInterval`          | the shared heartbeat connection, or one acquired pool connection under `SharedHeartbeats`                  |
+| Go         | `heartbeatRoundBound`   | `heartbeatRoundBoundFor`    | `HeartbeatInterval`          | the shared heartbeat connection                                                                            |
 | Python     | `_heartbeat_round_ms`   | `heartbeat_round_bound_ms`  | `heartbeat_ms`               | the dedicated connection, on a thread of its own, so the heartbeat thread stops at the deadline            |
 | Rust       | `heartbeat_round_bound` | `heartbeat_round_bound_for` | `heartbeat_interval`         | the shared heartbeat connection of the pool identity                                                       |
 | Ruby       | `round_bound`           | `Heartbeat.round_bound`     | the shortest member interval | the dedicated connection                                                                                   |
@@ -2396,12 +2392,6 @@ the wait for the connection, and `BEGIN` use part of the bound first. In one tra
 psycopg worker with an interval of 10 ms had a median of 8.59 ms left at the settings statement.
 More than half of its rounds failed before the heartbeat. Thus the smallest supported interval is
 100 ms ([Supported heartbeat interval](#supported-heartbeat-interval)).
-
-Rounds under `sharedHeartbeats` (TypeScript), `shared_heartbeats` (Python, Rust, Ruby), and the
-JVM's shared heartbeats do not change. They have no client deadline and no server timeouts. The
-worker waits for the statement, so it never leaves an abandoned heartbeat statement. Rounds under
-the .NET `SharedHeartbeats` also have no round bound and no server timeouts. Each of their
-statements has a driver command timeout of 30 s (`BorrowedTimeoutSeconds`).
 
 The Go driver also sends a cancel request when a deadline interrupts a query. That request needs a
 second connection and can be lost, so the server timeouts do not depend on it.
@@ -2441,12 +2431,8 @@ local timer of a deadline or an execution timeout does not use the heartbeat. Wh
 no such timer fires first, the handler runs until the lease watchdog ends the attempt. Recovery then
 cancels the task.
 
-This repeated failure needs a round bound. In TypeScript, Python, Rust, Ruby, and the JVM, rounds
-under shared heartbeats have no round bound, as [Heartbeat round
-deadline](#heartbeat-round-deadline) describes. They wait for each heartbeat statement, so a slow
-statement does not fail them. Rounds under the .NET `SharedHeartbeats` also have no round bound,
-but each statement has a command timeout of 30 s. A Go round under `SharedHeartbeats` keeps the
-round bound.
+This repeated failure needs a round bound. Every round on the dedicated heartbeat connection has
+one, as [Heartbeat round deadline](#heartbeat-round-deadline) describes.
 
 If every renewal of a lease misses its deadline, the worker never renews that lease. On the
 dedicated connection, one transaction renews every batch of a round ([Pool renewal](#pool-renewal)).
@@ -2471,8 +2457,6 @@ The minimum applies to the interval option of each SDK:
 | Ruby       | `heartbeat:` of `Worker`, in seconds                   | 0.1                      |
 | JVM        | `Worker.Builder.heartbeat` and `WorkerScope.heartbeat` | 100 ms                   |
 | .NET       | `WorkerOptions.Heartbeat`                              | 100 ms                   |
-
-The minimum also applies to a worker that uses shared heartbeats.
 
 #### Heartbeat schedule
 
@@ -2579,10 +2563,6 @@ The worker accepts any heartbeat interval shorter than the lease. It does not re
 an interval that breaks the margin rule. For example, take an interval of 20,000 ms and a lease of
 30,000 ms. If the round at 20,000 ms times out, the next round falls due at 40,000 ms. The lease
 ended at 30,000 ms, so one timed-out round gives no margin.
-
-Rounds without a client deadline (`sharedHeartbeats` in TypeScript, `shared_heartbeats` in Python,
-Rust, and Ruby, the shared heartbeats of JVM, and `SharedHeartbeats` in .NET) follow the same
-schedule. They have no round bound, so a slow shared round can delay the next round past the margin.
 
 ### Cancellation
 

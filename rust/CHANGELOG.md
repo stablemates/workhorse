@@ -51,6 +51,9 @@ These changes can make code that worked on 0.10 act differently:
    timeout at once (SM-1884). These SDKs are TypeScript, Python, Ruby, the JVM, and .NET. They
    report `deadline_exceeded` or `timeout`, not `lease_lost`. This SDK already did, so it does
    not change.
+4. Every SDK removes the heartbeat opt-out (SM-1899, SM-1901, SM-1902). In this SDK, code that
+   sets `WorkerOptions::shared_heartbeats` no longer compiles, and `Worker::new` returns
+   `Error::InvalidArgument` for a pool with a maximum size below 3. See "Breaking changes".
 
 ### Row retention lag skips a member of an unfinished task group
 

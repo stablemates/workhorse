@@ -54,6 +54,11 @@ These changes can make code that worked on 0.10 act differently:
 4. During a shutdown, a handler whose I/O the drain's interrupt stopped now returns its task to the
    queue. Before this change, the attempt failed (SM-1889). See "A handler that the drain
    interrupts gives its task back".
+5. Every SDK removes the heartbeat opt-out (SM-1899, SM-1901, SM-1902). In this SDK, code that
+   calls `sharedHeartbeats(boolean)` no longer compiles, and `build()` throws
+   `IllegalArgumentException` for a declared `poolMaxSize` below 3. Without a declared size, a run
+   on a pool that is too small throws `WorkhorseException` at its readiness check. See "The
+   heartbeat opt-out is removed".
 
 ### The heartbeat opt-out is removed
 

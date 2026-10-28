@@ -740,7 +740,7 @@ The cap applies only when the queue's database is itself a pool with a positive 
 
 - `Queue[workerStatementPoolCapacity]()` reports that size.
 - `spareConnections` is `max` minus 1 for the listener when `supportsTaskNotifications()` holds,
-  minus 1 for the heartbeat connection unless `sharedHeartbeats` is true.
+  minus 1 for the heartbeat connection.
 - Pools of 3, 4, 6 and 10 connections give a concurrency-64 worker 1, 2, 4 and 8 cohorts.
 
 A database with an attached pool, such as a Prisma or Kysely adapter, runs statements outside that
@@ -760,10 +760,9 @@ pool, so its default is not capped. An explicit `cohorts` is never capped.
 `Worker(cohorts=...)` takes an integer from 1 through `concurrency`.
 `_dispatch_cohorts(concurrency, spare_connections)` applies the same default.
 
-`spare_connections` is the pool's `max_size`, or its `get_max_size()`, minus 1 for the listener
-when the size is at least 2, minus 1 for the heartbeat connection unless `shared_heartbeats` is
-true. A pool whose size is
-unknown leaves the default uncapped.
+`spare_connections` is the pool's `max_size`, or its `get_max_size()`, minus 1 for the listener and
+minus 1 for the heartbeat connection. A worker on a pool whose size is unknown fails at
+construction, so the default always has a cap.
 
 Fused completion works in these steps:
 
@@ -786,7 +785,7 @@ The Go worker splits its slots the same way.
   1 and the concurrency`. Zero selects `defaultDispatchCohorts(concurrency, spareConnections)`,
   which uses the TypeScript rule.
 - `spareConnections` is the pool's `MaxConns`, minus 1 for the listener unless `PollingOnly` is
-  set, minus 1 for the heartbeat connection unless `SharedHeartbeats` is set.
+  set, minus 1 for the heartbeat connection.
 - An explicit `Cohorts` is never capped.
 
 The worker's `completionBatcher` collects concurrent fast-tier completions by queue and cohort. It
@@ -818,7 +817,7 @@ The Rust worker follows the same rules.
   `worker cohorts must be between 1 and concurrency`.
 - An explicit value is never capped.
 - Its `default_cohorts` caps the default at the pool's `max_size`, minus 1 for the heartbeat
-  connection unless `shared_heartbeats` is true. Its listener opens a connection outside the pool.
+  connection. Its listener opens a connection outside the pool.
 - The fused claim limit follows the Go rule.
 
 `Inner::complete_batched` sends the completions of one queue and cohort that finish in the same
@@ -836,9 +835,10 @@ The Ruby worker follows the Python rules.
 - `Worker.new(cohorts:)` takes an Integer from 1 through `concurrency` and raises `ArgumentError`
   otherwise. An explicit value is never capped.
 - Without it, `dispatch_cohorts` applies the TypeScript default. It caps the default at the pool's
-  Integer `size`, minus 1 for the listener unless `polling_only` is true, minus 1 for the heartbeat
-  connection unless `shared_heartbeats` is true, and never below 1.
-- A pool without an Integer `size` leaves the default uncapped.
+  Integer `size`, minus the reserved connections. The listener reserves 1 unless `polling_only` is
+  true, and the heartbeat reserves 1. The cap is never below 1.
+- A worker on a pool without an Integer `size` fails at construction, so the default always has a
+  cap.
 - `DispatchSlots` splits the slots as TypeScript does.
 
 Claims and fused completion work as follows:
@@ -864,9 +864,8 @@ default.
 A `DataSource` reports no pool size, so the cap applies only when the caller declares `poolMaxSize`:
 
 - `spareConnections` is the declared size, minus 1 for the listener when the worker listens, minus 1
-  for the heartbeat connection unless `sharedHeartbeats` is true.
-- The worker listens unless `pollingOnly` is true. Under `sharedHeartbeats(true)`, it listens only
-  when the declared size is at least 2.
+  for the heartbeat connection.
+- The worker listens unless `pollingOnly` is true.
 - Declared sizes of 3, 4, 6, and 10 give a concurrency-64 worker 1, 2, 4, and 8 cohorts.
 - Without `poolMaxSize`, the default is not capped.
 
@@ -880,9 +879,8 @@ The worker reads `Max Pool Size` from the connection string of its `NpgsqlDataSo
 default only when `Pooling` is true:
 
 - `spareConnections` is `Max Pool Size`, minus 1 for the listener when the worker listens, minus 1
-  for the heartbeat connection unless `SharedHeartbeats` is true.
-- The worker listens unless `PollingOnly` is true. Under `SharedHeartbeats`, it listens only when
-  `Max Pool Size` is at least 2.
+  for the heartbeat connection.
+- The worker listens unless `PollingOnly` is true.
 - Pools of 3, 4, 6, and 10 connections give a concurrency-64 worker 1, 2, 4, and 8 cohorts.
 - With `Pooling=false`, the size is unknown, so the default is not capped.
 

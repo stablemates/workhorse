@@ -180,7 +180,7 @@ connection.
 
 - The clients never call `commit`, `rollback`, or `close`.
 - `Worker` borrows one connection for each statement and returns it after the statement.
-- Unless `shared_heartbeats` is set, a worker reserves one pool connection for heartbeat rounds.
+- A worker reserves one pool connection for heartbeat rounds.
 - The listener holds another pool connection while it listens.
 - If a Psycopg heartbeat or listener connection lacks `autocommit=True`, the worker raises
   `ValueError`.

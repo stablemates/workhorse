@@ -59,12 +59,18 @@ transaction objects of a provider into `Queryable`.
 
 Each adapter finds the node-postgres pool differently:
 
-| Factory                | How it finds the pool                                                                                                                                |
-| ---------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `createDrizzleAdapter` | Discovers the retained node-postgres pool through `$client`.                                                                                         |
-| `createTypeOrmAdapter` | Discovers it as `dataSource.driver.master`, which TypeORM's `PostgresDriver` creates on `initialize()`. The adapter finds it at worker construction. |
-| `createPrismaAdapter`  | Accepts the option `pool`.                                                                                                                           |
-| `createKyselyAdapter`  | Accepts the option `pool`. Kysely callers can pass the pool that `PostgresDialect` uses.                                                             |
+| Factory                | How it finds the pool                                                                                                                                                                 |
+| ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `createDrizzleAdapter` | Accepts the option `pool`. Without it, discovers the retained node-postgres pool through `$client`.                                                                                   |
+| `createTypeOrmAdapter` | Accepts the option `pool`. Without it, discovers `dataSource.driver.master`, which TypeORM's `PostgresDriver` creates on `initialize()`. The adapter finds it at worker construction. |
+| `createPrismaAdapter`  | Accepts the option `pool`.                                                                                                                                                            |
+| `createKyselyAdapter`  | Accepts the option `pool`. Kysely callers can pass the pool that `PostgresDialect` uses.                                                                                              |
+| `createKnexAdapter`    | Accepts the option `pool`.                                                                                                                                                            |
+
+In the Drizzle and TypeORM adapters, the option `pool` takes precedence over the pool of the ORM
+(`createProviderAdapter` uses `pool ?? connectionPool`). The Prisma, Kysely, and Knex adapters find
+no pool of their own. Without `pool`, their `createWorker()` throws an error that starts with the
+adapter name, for example `Kysely adapter cannot create a worker`, and states the pool step.
 
 Each adapter exposes `queue` and `admin`. `forTransaction` and `adminForTransaction` bind the
 related client to a caller-owned transaction. Neither method commits, rolls back,
@@ -167,7 +173,7 @@ validate the database of a transaction against its base executor. The Objection 
 
 Workers use compatible pg pools that are configured separately. A Knex adapter accepts an explicit
 `pool` for dedicated heartbeat sessions and listener sessions. It never extracts the internal pool
-of Knex. Without `pool`, a worker requires the explicit `sharedHeartbeats` opt-out.
+of Knex. Without `pool`, `createWorker()` throws.
 
 ### What an adapter must guarantee
 
@@ -219,8 +225,8 @@ must still give the same guarantees.
    - A TypeScript worker with the dedicated heartbeat connection also runs its claim statements on
      this pool, so that it reads its claim gate after the borrow
      ([Heartbeat readiness](lifecycle.md#heartbeat-readiness)).
-   - Without a pool, a worker refuses to start unless `sharedHeartbeats` is set. If that option is
-     set, the worker dispatches by bounded polling.
+   - Without a pool, the `Worker` constructor throws. A worker needs a pool with a known
+     `options.max` of at least 3.
    - `connectionPoolOf(database)` resolves that pool for any caller. `@stablemates/workhorse`
      exports it with its `ConnectionPool` type. It checks in this order:
      1. an attached pool, calling the function when the adapter attached one
@@ -255,8 +261,8 @@ pool mode as a separate lane to prove the boundary.
 | PgCat, either pool mode       | Relays a buffered notification only with the next query result of the client. Thus an idle `LISTEN`ing worker gets no notification.                                                                                                                                   |
 
 To restore wake hints, use a worker pool that connects to PostgreSQL without those poolers. An
-example is the `pool` of the Prisma or Kysely adapter. The alternative is a `Queue` whose queryable
-has no `connect()`. That `Queue` uses only polling, and its workers need `sharedHeartbeats`.
+example is the `pool` of an adapter. A worker always needs a pool, so a `Queue` whose queryable has no
+`connect()` and no attached pool cannot create a worker.
 
 #### Advisory locks
 
@@ -289,15 +295,15 @@ more client.
 For example, 4 workers on one pool of 20 leave 18 pooled connections for claims and handlers. In
 Rust, 19 pooled connections remain, and the Rust workers open 1 more connection outside the pool.
 
-| Language   | Pool identity                                                                                            | Listener connection                                                                                                                                                                                                         | Heartbeat connection                                                                                                                                           |
-| ---------- | -------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| TypeScript | The pool object that `connectionPoolOf` returns, such as a node-postgres `Pool`.                         | One `TaskNotificationHub` per pool in `notifications.ts`, holding one pooled connection. `listeningPool` skips it unless `options.max` is at least 2.                                                                       | One shared heartbeat connection per pool in `heartbeat-connection.ts`. The last holder returns it to the pool.                                                 |
-| Go         | The `*pgxpool.Pool` object.                                                                              | One `taskNotificationHub` per `*pgxpool.Pool`. `subscribeToTaskNotifications` polls instead when `MaxConns` is below 2.                                                                                                     | `holdHeartbeatConnection` holds the shared heartbeat connection. When the last holder releases it, `closeAndRemove` closes it and removes it from the pool.    |
-| Ruby       | The pool object, by identity.                                                                            | One `Worker::Listener.shared(pool)` per pool object, holding one pool connection. Started only when the pool `size` is at least 2.                                                                                          | One `Worker::Heartbeat.dedicated(pool)` per pool object, held while any worker on it runs or a lease on it remains. Then the heartbeat returns it to the pool. |
-| Python     | The pool object, in a weak registry, in each of three domains: psycopg sync, psycopg async, and asyncpg. | One `PoolHub` listener per pool object, holding one pool connection. Started only when the pool reports a maximum size of at least 2.                                                                                       | One `HeartbeatReservation` per pool object, in the same `PoolHub`. When the last worker leaves, the reservation gives the connection back to the pool.         |
-| Rust       | The address that `Pool::manager()` returns, so clones of one pool share.                                 | One `shared::SharedListener` per pool identity, opened by `notifications::listen` from `WorkerOptions::listen_config`, outside the pool. Expected only when `max_size` is at least 2.                                       | One `shared::HeartbeatConnection` per pool identity, from the pool. When the last run stops, the connection goes back to the pool.                             |
-| JVM        | The `DataSource` object, by reference identity, never by `equals`.                                       | One `Listener.shared(dataSource)` per `DataSource` object, held while any worker runs. None under `pollingOnly(true)` or `runOnce`. Under the opt-out, none unless `poolMaxSize` is 2 or more.                              | One `Heartbeat.dedicated(dataSource)` per `DataSource`, held while a worker or a task runs. Then the heartbeat returns it to the pool.                         |
-| .NET       | The exact `NpgsqlDataSource` reference, in a `ConditionalWeakTable`.                                     | One `Listener.Shared(dataSource)` per `NpgsqlDataSource`, holding one pool connection while any worker subscribes. None under `PollingOnly` or `RunOnceAsync`. Under the opt-out, none unless `Max Pool Size` is 2 or more. | One `Heartbeat.Shared(dataSource)` per `NpgsqlDataSource`, held while a worker holds a reservation or a task runs. Then the heartbeat returns it to the pool.  |
+| Language   | Pool identity                                                                                            | Listener connection                                                                                                                                                                              | Heartbeat connection                                                                                                                                           |
+| ---------- | -------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| TypeScript | The pool object that `connectionPoolOf` returns, such as a node-postgres `Pool`.                         | One `TaskNotificationHub` per pool in `notifications.ts`, holding one pooled connection. A worker always has a pool of at least 3, so the hub always starts.                                     | One shared heartbeat connection per pool in `heartbeat-connection.ts`. The last holder returns it to the pool.                                                 |
+| Go         | The `*pgxpool.Pool` object.                                                                              | One `taskNotificationHub` per `*pgxpool.Pool`. None under `PollingOnly`.                                                                                                                         | `holdHeartbeatConnection` holds the shared heartbeat connection. When the last holder releases it, `closeAndRemove` closes it and removes it from the pool.    |
+| Ruby       | The pool object, by identity.                                                                            | One `Worker::Listener.shared(pool)` per pool object, holding one pool connection. None under `polling_only`.                                                                                     | One `Worker::Heartbeat.dedicated(pool)` per pool object, held while any worker on it runs or a lease on it remains. Then the heartbeat returns it to the pool. |
+| Python     | The pool object, in a weak registry, in each of three domains: psycopg sync, psycopg async, and asyncpg. | One `PoolHub` listener per pool object, holding one pool connection.                                                                                                                             | One `HeartbeatReservation` per pool object, in the same `PoolHub`. When the last worker leaves, the reservation gives the connection back to the pool.         |
+| Rust       | The address that `Pool::manager()` returns, so clones of one pool share.                                 | One `shared::SharedListener` per pool identity, opened by `notifications::listen` from `WorkerOptions::listen_config`, outside the pool. None under `polling_only` or without a `listen_config`. | One `shared::HeartbeatConnection` per pool identity, from the pool. When the last run stops, the connection goes back to the pool.                             |
+| JVM        | The `DataSource` object, by reference identity, never by `equals`.                                       | One `Listener.shared(dataSource)` per `DataSource` object, held while any worker runs. None under `pollingOnly(true)` or `runOnce`.                                                              | One `Heartbeat.dedicated(dataSource)` per `DataSource`, held while a worker or a task runs. Then the heartbeat returns it to the pool.                         |
+| .NET       | The exact `NpgsqlDataSource` reference, in a `ConditionalWeakTable`.                                     | One `Listener.Shared(dataSource)` per `NpgsqlDataSource`, holding one pool connection while any worker subscribes. None under `PollingOnly` or `RunOnceAsync`.                                   | One `Heartbeat.Shared(dataSource)` per `NpgsqlDataSource`, held while a worker holds a reservation or a task runs. Then the heartbeat returns it to the pool.  |
 
 Python keeps the three domains apart, also when two pools reach one database
 ([Schema and SQL protocol: Shared pool connections](schema-and-protocol.md#shared-pool-connections)).
@@ -319,15 +325,18 @@ The heartbeat discards it and asks the pool for a replacement.
 
 ##### Rules for the dedicated heartbeat connection
 
-These rules apply to a worker that uses the dedicated heartbeat connection. A worker with the
-opt-out reserves no heartbeat connection, and these rules do not apply to it. Under the opt-out,
-each heartbeat round borrows a pool connection, and the listener is still shared. The section
-[Listener under the opt-out](#listener-under-the-opt-out) states when that listener starts.
+These rules apply to every worker on a Workhorse pool. 0.11.0 removed the heartbeat opt-out from
+every SDK (ADR 0071, amendment of 2026-10-28), so every such worker reserves the dedicated heartbeat
+connection. A TypeScript `WorkerQueueApi` that is not a `Queue` is the only exception: it chooses
+its own transport, so the worker has no pool to check.
 
 1. **Minimum pool.** Where the pool reports its maximum size, a pool identity needs at least 3
-   connections. They are the listener connection, the heartbeat connection, and one statement. A worker on
-   a smaller pool refuses to start. TypeScript, Python, and Ruby also refuse a pool whose size is
-   unknown. A `DataSource` reports no size. If the caller declares the size with `poolMaxSize`,
+   connections. They are the listener connection, the heartbeat connection, and one statement. In
+   Rust, the listener connection is outside the pool, so the 3 pool connections are the heartbeat
+   connection and two statement connections (ADR 0074). A
+   worker on a smaller pool fails at construction. TypeScript, Python, and Ruby also refuse a pool
+   whose size is unknown. The error names the size that the worker found, the size that it needs,
+   and the next step. A `DataSource` reports no size. If the caller declares the size with `poolMaxSize`,
    the JVM worker refuses a declared size below 3 when it builds. Otherwise, the JVM worker relies
    on the startup check in rule 2.
    The .NET worker reads `Max Pool Size` from the connection string of its `NpgsqlDataSource`. If
@@ -341,7 +350,7 @@ each heartbeat round borrows a pool connection, and the listener is still shared
       it at once.
 
    If a step does not end within the budget, the worker refuses to start. The error describes the
-   pool and names the budget and the opt-out. The listener is best effort and is not part of the
+   pool and names the budget. The listener is best effort and is not part of the
    check. The JVM and .NET workers wait for the listener between the two steps, and that wait does
    not count against the budget. The other SDKs do not wait for the listener at startup. The check
    proves only the headroom of the pool at that moment.
@@ -360,63 +369,77 @@ each heartbeat round borrows a pool connection, and the listener is still shared
 The docs recommend a pool of 3 connections plus the number of statements that run at the same
 time. No SDK checks this recommendation.
 
-##### Listener under the opt-out
+##### Polling warnings
 
-A listener in the pool holds one pooled connection while it listens. Under the opt-out, a pool of 1
-or 2 connections is allowed. On a pool of 1, the listener could hold the only connection, and then
-registration, claims, and handler statements could not borrow one (SM-1585).
+A worker never polls because its pool is small. A worker on a pool below 3, or on a pool of
+unknown size, fails at construction. Two pools are the exceptions: a JVM `DataSource` with no
+declared `poolMaxSize`, and a .NET data source with `Pooling=false`. The startup check in rule 2 is
+their guard. Before 0.11.0, a worker under the heartbeat opt-out polled on
+such a pool (SM-1585). A worker still polls when the caller asks for it, or when its listener does
+not listen.
 
-Thus, under the opt-out, a worker starts a listener in the pool only when it knows a pool maximum
-size of at least 2. The size comes from the report of the pool or from a declaration by the caller.
-No worker probes the pool for its size. If the size is unknown or below 2, the worker polls.
+In TypeScript and the JVM, the run then logs `workhorse.worker.polling_only` once, at warn
+severity, with the body "Worker has no notification listener and dispatches by polling". The record
+carries `workhorse.worker.id`, `workhorse.worker.queues`, and `workhorse.worker.pool_max_size`. That
+attribute is the size that the worker found, or `unknown`.
 
-In TypeScript, Python, Ruby, and the JVM, each such run then logs `workhorse.worker.polling_only`
-once, at warn severity, with the body "Worker has no notification listener and dispatches by
-polling". The record carries `workhorse.worker.id`, `workhorse.worker.queues`, and
-`workhorse.worker.pool_max_size`. That attribute is the size that the worker found, or `unknown`.
+- TypeScript: `Worker.run()` logs the event when it starts with no subscription. With a Workhorse
+  `Queue`, the pool always has room for the listener, so the event comes from a custom
+  `WorkerQueueApi` that returns no subscription. It has no `subscribeToTaskNotifications`, or the
+  method returns `null` for every queue.
+- JVM: the worker logs the event when its listener does not listen by the end of its startup wait,
+  unless the caller requests a stop. A run under `pollingOnly(true)` logs nothing.
 
-The .NET worker logs the event `workhorse.worker.polling_only` once for each such run, at
+The .NET worker logs the event `workhorse.worker.polling_only` in the same case as the JVM, once, at
 `LogLevel.Warning`. Its message is "Worker {WorkerId} has no notification listener and dispatches by
-polling". The record carries only the `WorkerId` property. The .NET worker also logs this event when
-its listener does not listen by the end of startup.
+polling". The record carries only the `WorkerId` property.
 
-Go and Rust log their own warnings, once for each run. These warnings do not carry
-`workhorse.worker.pool_max_size`:
+Python and Ruby log no polling warning. 0.11.0 removed their `workhorse.worker.polling_only` event,
+because their pool always has a connection for the listener.
 
-- Go: if `MaxConns` is below 2, `Worker.Run` logs "PostgreSQL notification listener requires at
-  least two pool connections; worker is using polling" at warn level, with no attributes.
-- Rust: if the worker expects no listener, for example because `max_size` is below 2, the run logs
-  "PostgreSQL notification listener unavailable; worker is using polling" at warn level. The event
-  carries `workhorse.worker.id` only.
+Go and Rust log their own warnings. These warnings do not carry `workhorse.worker.pool_max_size`:
 
-These two warnings do not apply to deliberate polling. If `PollingOnly` is set, the Go worker logs
-"PostgreSQL notification listener disabled; worker is using polling" at warn level instead. Its
-check of `PollingOnly` comes before its check of `MaxConns`. If `polling_only` is set, the Rust
-worker expects no listener and logs no listener warning.
+- Go: if `PollingOnly` is set, `Worker.Run` logs "PostgreSQL notification listener disabled; worker
+  is using polling" at warn level. If the listener fails, the worker logs "PostgreSQL notification
+  listener unavailable; worker is using polling" with the error. 0.11.0 removed the Go warning for
+  a pool below 2.
+- Rust: the listener connection is outside the pool. If the worker expects no listener because it
+  has no `listen_config`, the run logs "PostgreSQL notification listener unavailable; worker is
+  using polling" at warn level. The event carries `workhorse.worker.id` only. If `polling_only` is
+  set, the Rust worker expects no listener and logs no listener warning.
 
-| Language   | Source of the size                                                                                                                                        | Without a known size                                                                        |
-| ---------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------- |
-| TypeScript | `options.max` of the pool that `connectionPoolOf` returns. A wrapper that has `connect()` and no `options.max` hides the size.                            | The worker polls.                                                                           |
-| Go         | `MaxConns` of the `*pgxpool.Pool`.                                                                                                                        | Does not occur. Below 2, the worker polls and logs its own warning.                         |
-| Python     | `max_size` or `get_max_size()` of the pool, in each of the three domains.                                                                                 | The worker polls.                                                                           |
-| Ruby       | `size` of the pool.                                                                                                                                       | The worker polls.                                                                           |
-| Rust       | Does not apply. The listener connection is outside the pool, and the worker expects the listener only when `max_size` is at least 2.                      | Does not occur.                                                                             |
-| JVM        | `poolMaxSize(int)` on `Worker.Builder`, `poolMaxSize` in Kotlin, and `workhorse.worker.pool-max-size` in the Spring starter. The worker trusts the value. | The worker polls. A `DataSource` reports no size, so this is the default under the opt-out. |
-| .NET       | `Max Pool Size` of the connection string of the `NpgsqlDataSource`, read with `NpgsqlConnectionStringBuilder`. With `Pooling=false`, the size is unknown. | The worker polls.                                                                           |
+The JVM worker trusts a declared `poolMaxSize`. If an operator makes the pool smaller than the
+declared size, the readiness check proves only the headroom at the start of the run.
 
-If an operator makes a JVM pool smaller than its declared size, the listener can hold the last
-connection again. Without the opt-out, the listener rule does not change: the pool has at least 3
-connections, or the JVM readiness check proves the headroom.
+| Language   | Refusal of a small pool                                                                                          | Refusal at startup                                            |
+| ---------- | ---------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------- |
+| TypeScript | The `Worker` constructor throws when the pool is missing, its size is unknown, or it is below 3.                 | `Worker.run()` rejects.                                       |
+| Go         | `NewWorker` returns an error when `MaxConns` is below 3.                                                         | `Run` and `RunOnce` return an error.                          |
+| Python     | `ValueError` when the capacity is unknown or below 3.                                                            | `TimeoutError`                                                |
+| Ruby       | `ArgumentError` unless the pool `size` is an `Integer` of at least 3.                                            | `WorkerStartupError`                                          |
+| Rust       | `Worker::new` returns `Error::InvalidArgument` when `max_size` is below 3.                                       | `run` returns an error.                                       |
+| JVM        | `IllegalArgumentException` from `build()` when `poolMaxSize` is below 3. Otherwise none.                         | `WorkhorseException`                                          |
+| .NET       | The `Worker` constructor throws `ArgumentException` when `Max Pool Size` is below 3. With `Pooling=false`, none. | `RunAsync` and `RunOnceAsync` throw `WorkerStartupException`. |
 
-| Language   | Refusal of a small pool                                                                                          | Refusal at startup                                            | Opt-out                                                               |
-| ---------- | ---------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------- | --------------------------------------------------------------------- |
-| TypeScript | The `Worker` constructor throws when the pool is missing, its size is unknown, or it is below 3.                 | `Worker.run()` rejects.                                       | `sharedHeartbeats`                                                    |
-| Go         | `NewWorker` returns an error when `MaxConns` is below 3.                                                         | `Run` and `RunOnce` return an error.                          | `SharedHeartbeats`                                                    |
-| Python     | `ValueError` when the capacity is unknown or below 3.                                                            | `TimeoutError`                                                | `shared_heartbeats`                                                   |
-| Ruby       | `ArgumentError` unless the pool `size` is an `Integer` of at least 3.                                            | `WorkerStartupError`                                          | `shared_heartbeats`                                                   |
-| Rust       | `Worker::new` returns `Error::InvalidArgument` when `max_size` is below 3.                                       | `run` returns an error.                                       | `shared_heartbeats`                                                   |
-| JVM        | `IllegalArgumentException` from `build()` when `poolMaxSize` is below 3. Otherwise none.                         | `WorkhorseException`                                          | `sharedHeartbeats(true)` in Java, `sharedHeartbeats = true` in Kotlin |
-| .NET       | The `Worker` constructor throws `ArgumentException` when `Max Pool Size` is below 3. With `Pooling=false`, none. | `RunAsync` and `RunOnceAsync` throw `WorkerStartupException`. | `WorkerOptions.SharedHeartbeats = true`                               |
+The error text at construction differs between SDKs. TypeScript has its own wording. The other six
+SDKs use one wording, and Go and Rust write it as one lowercase sentence:
+
+- TypeScript: "Worker cannot reserve a dedicated heartbeat connection: {problem}. Give the queue a
+  node-postgres pool with a maximum size (max) of at least 3: the listener, the heartbeat
+  connection, and one statement." The `{problem}` is "the pool allows N connection(s) and needs at
+  least 3", "the pool reports no maximum size and needs a known size of at least 3", or "the
+  queue's database has no connect() and no attached pool, and a worker needs a pool of at least 3
+  connections".
+- Python, Ruby, the JVM, and .NET: "Worker needs a pool with a known maximum size of at least 3
+  connections (found N). Give the worker a pool with a maximum size of at least 3." Python and Ruby
+  write `unknown` for N when the pool reports no size.
+- Go and Rust: "worker needs a pool with a known maximum size of at least 3 connections (found N);
+  give the worker a pool with a maximum size of at least 3".
+
+A caller that still gives the removed opt-out gets a compile failure in Go, Rust, the JVM, and .NET.
+TypeScript, Python, and Ruby raise an error that names the removal, and so do the Spring Boot
+starter property and the `Workhorse.Hosting` configuration key. The SDK changelogs name each
+removed option.
 
 Other sections give the heartbeat connection, the gate, and the backoff of each SDK in detail:
 

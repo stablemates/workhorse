@@ -49,6 +49,11 @@ These changes can make code that worked on 0.10 act differently:
    deadline or attempt timeout at once. The worker reports `deadline_exceeded` or `timeout`, not
    `lease_lost` (SM-1884). See "A stale failure or release after a lapsed lease settles its
    cause".
+4. Every SDK removes the heartbeat opt-out (SM-1899, SM-1901, SM-1902). In this SDK, code that
+   sets `WorkerOptions.SharedHeartbeats` no longer compiles, and the `Worker` constructor throws
+   `ArgumentException` for a `Max Pool Size` below 3. With `Pooling=false`, a run on a pool that is
+   too small throws `WorkerStartupException` at its readiness check. See "The heartbeat opt-out is
+   removed".
 
 ### The heartbeat opt-out is removed
 

@@ -188,7 +188,7 @@ pool after the last worker drains. Plan the total number of connections across a
 Some connections stay reserved in each pool:
 
 - The notification listener holds one connection.
-- The heartbeat connection holds one connection, unless you set `sharedHeartbeats`.
+- The heartbeat connection holds one connection.
 - Claims, handler queries, and routines share the other connections.
 
 Each worker also registers itself in PostgreSQL at each `registryIntervalMs`. Thus, a dashboard on
@@ -199,7 +199,7 @@ another machine can see the workers. See [Operations](/docs/operations).
 
 - Notification-assisted dispatch reserves one shared listener connection for each node-postgres
   pool.
-- Heartbeats reserve one more connection unless `sharedHeartbeats` is set.
+- Heartbeats reserve one more connection. A worker pool needs a `max` of at least 3.
 - Claims, handler queries, and maintenance use the remaining pool capacity.
 - By default, each worker upserts `workhorse.worker_registry` on its `registryIntervalMs` cadence.
   `registryIntervalMs: 0` turns registration off.

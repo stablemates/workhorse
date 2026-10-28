@@ -246,8 +246,9 @@ Rust, Java, or Kotlin worker holds its own.
   cap. Without a listener, the 5,000 ms cap also applies to it.
 - The jitter applies after the cap. Python, Ruby, the JVM, and .NET then cut each wait to the
   registry interval.
-- A pool with a capacity of 1 stays polling-only. Go `WorkerOptions.PollingOnly` turns the listener
-  off for a transaction-mode pooler.
+- A worker never polls because its pool is small. A pool below the minimum size fails at
+  construction. If the worker cannot know the size, the startup check refuses a pool that has no room
+  for the startup connections. Go `WorkerOptions.PollingOnly` disables the listener for a transaction-mode pooler.
 
 More detail: [Operations and CLI: Polling cadence](../architecture/operations.md#polling-cadence) and [Operations and CLI: Task notifications](../architecture/operations.md#task-notifications).
 
@@ -850,8 +851,7 @@ context methods of `AsyncWorker` are awaitable.
 | `AsyncWorker.from_asyncpg` | asyncpg `Pool`                |
 
 - The worker borrows one connection for each statement and returns it afterwards.
-- Unless `shared_heartbeats` is set, the worker reserves one pool connection for heartbeat rounds
-  for the whole run.
+- The worker reserves one pool connection for heartbeat rounds for the whole run.
 - The listener holds another pool connection while it listens.
 - Psycopg connections must use `autocommit=True`. Otherwise the worker raises `ValueError`.
 - `AsyncWorker` never closes the pool it was given.
