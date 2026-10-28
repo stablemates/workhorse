@@ -31,6 +31,7 @@ import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.locks.LockSupport;
 import java.util.function.BooleanSupplier;
 import javax.sql.DataSource;
 import org.junit.jupiter.api.AfterEach;
@@ -344,13 +345,12 @@ class WorkerTelemetryDatabaseTest {
                 Object.class,
                 (context, payload) -> {
                   started.countDown();
+                  // The drain cancels the token and then interrupts the thread. The interrupt
+                  // would close the socket of the lapse below, so the handler waits for it and
+                  // clears it first (SM-1889).
                   long deadline = System.nanoTime() + WAIT.toNanos();
-                  while (!context.isCancelled() && System.nanoTime() < deadline) {
-                    try {
-                      context.cancellation().await(WAIT);
-                    } catch (InterruptedException ignored) {
-                      // Waits for the token, not for the interrupt.
-                    }
+                  while (!Thread.interrupted() && System.nanoTime() < deadline) {
+                    LockSupport.parkNanos(TimeUnit.MILLISECONDS.toNanos(1));
                   }
                   lapse(taskId, boundary);
                   context.cancellation().throwIfCancelled();
