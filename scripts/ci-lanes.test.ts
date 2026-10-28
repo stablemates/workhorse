@@ -13,7 +13,9 @@ import {
   FILTERED_LANE_NAMES,
   FILTERED_LANES,
   LANE_NAMES,
+  LANE_PLAN_FILE,
   isDocsOnlyChange,
+  lanePlanRecord,
   matchesGlob,
   planLanes,
   pushBase,
@@ -1009,6 +1011,40 @@ describe("listing the files of a push", () => {
     const { files, calls } = await listed(forced);
     expect(files).toBeUndefined();
     expect(calls.map((call) => call[0])).toEqual(["rev-parse"]);
+  });
+});
+
+describe("publishing the lane plan", () => {
+  it("writes the plan that the run uses to LANE_PLAN_PATH", () => {
+    const directory = mkdtempSync(path.join(tmpdir(), "workhorse-lane-plan-"));
+    try {
+      const planPath = path.join(directory, LANE_PLAN_FILE);
+      const sha = "c".repeat(40);
+      const output = execFileSync(
+        process.execPath,
+        ["--import", "tsx", "scripts/ci-lanes.ts", "workflow_dispatch"],
+        {
+          cwd: repository,
+          encoding: "utf8",
+          env: {
+            ...process.env,
+            LANE_PLAN_PATH: planPath,
+            GITHUB_SHA: sha,
+            GITHUB_RUN_ID: "42",
+            GITHUB_RUN_ATTEMPT: "3",
+            GITHUB_STEP_SUMMARY: "",
+          },
+          stdio: ["ignore", "pipe", "ignore"],
+        },
+      );
+      const { plan, reason } = planLanes("workflow_dispatch", "", undefined);
+      expect(output).toBe(`lanes=${JSON.stringify(plan)}\n`);
+      expect(JSON.parse(readFileSync(planPath, "utf8"))).toEqual(
+        lanePlanRecord({ event: "workflow_dispatch", sha, runId: 42, runAttempt: 3 }, plan, reason),
+      );
+    } finally {
+      rmSync(directory, { force: true, recursive: true });
+    }
   });
 });
 

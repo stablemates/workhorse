@@ -80,9 +80,14 @@ async function pushTag(checkout: string, tag: string, commit: string, annotated 
 /**
  * Stand-ins for `gh` and `pnpm` that come first on `PATH`, so the script reaches no GitHub API and
  * runs no check. Each one appends its arguments to a log. The `gh` stand-in prints the lines of
- * `runs` as `gh api --jq` prints them, or exits 1 when `runs` is `"fail"`.
+ * `runs` as `gh api --jq` prints them, or exits 1 when `runs` is `"fail"`. The `pnpm` stand-in
+ * fails the main CI plan check when `plan` is `"partial"`, as scripts/check-main-ci-plan.ts fails
+ * for a run that skipped lanes or a plan that it cannot read.
  */
-async function stubTools(runs: string[] | "fail"): Promise<{
+async function stubTools(
+  runs: string[] | "fail",
+  plan: "full" | "partial" = "full",
+): Promise<{
   env: NodeJS.ProcessEnv;
   calls: () => Promise<{ gh: string[]; pnpm: string[] }>;
 }> {
@@ -98,9 +103,13 @@ async function stubTools(runs: string[] | "fail"): Promise<{
     join(directory, "gh"),
     `#!/bin/sh\nprintf '%s\\n' "$*" >> ${JSON.stringify(ghLog)}\n${ghBody}`,
   );
+  const planCheck =
+    plan === "partial"
+      ? 'case "$*" in *check-main-ci-plan.ts*) echo "did not plan the lanes go" >&2; exit 1 ;; esac\n'
+      : "";
   await writeFile(
     join(directory, "pnpm"),
-    `#!/bin/sh\nprintf '%s\\n' "$*" >> ${JSON.stringify(pnpmLog)}\n`,
+    `#!/bin/sh\nprintf '%s\\n' "$*" >> ${JSON.stringify(pnpmLog)}\n${planCheck}`,
   );
   await chmod(join(directory, "gh"), 0o755);
   await chmod(join(directory, "pnpm"), 0o755);
@@ -136,6 +145,10 @@ function ciRun(
     `https://github.com/${repository}/actions/runs/${id}`,
   ].join("\t");
 }
+
+/** The `pnpm` arguments with which the script runs the main CI plan check for the candidate. */
+const planCheck = (candidate: string) =>
+  `--silent exec tsx scripts/check-main-ci-plan.ts stablemates/workhorse ${candidate}`;
 
 const githubOrigin = "https://github.com/stablemates/workhorse.git";
 const forkOrigin = "https://github.com/someone/workhorse.git";
@@ -262,7 +275,7 @@ describe.skipIf(!onPosix)("scripts/release-go.sh", () => {
     const fullCheck = ["go:release-check 1.2.3", "db:reset:test", "db:reset:test-packed", "check"];
     const goChecks = ["go:release-check 1.2.3", "db:reset:test", "go:test", "go:vuln"];
 
-    it("reuses a successful main CI push run of HEAD and runs only the Go checks", async () => {
+    it("reuses a successful main CI push run of HEAD that planned every lane and runs only the Go checks", async () => {
       const { checkout, candidate } = await gateCandidate();
       const tools = await stubTools([ciRun(candidate, "success", { id: 42 })]);
 
@@ -270,15 +283,34 @@ describe.skipIf(!onPosix)("scripts/release-go.sh", () => {
 
       expect(result.exitCode).toBe(0);
       expect(result.output).toContain(
-        `HEAD ${candidate} passed the main CI run https://github.com/stablemates/workhorse/actions/runs/42.`,
+        `HEAD ${candidate} passed a main CI run that planned every lane. Running only the Go checks.`,
       );
       const calls = await tools.calls();
-      expect(calls.pnpm).toEqual(goChecks);
+      expect(calls.pnpm).toEqual([goChecks[0], planCheck(candidate), ...goChecks.slice(1)]);
       expect(calls.gh).toHaveLength(1);
       expect(calls.gh[0]).toContain(
         "api --hostname github.com --method GET repos/stablemates/workhorse/actions/workflows/ci.yml/runs",
       );
       expect(calls.gh[0]).toContain(`head_sha=${candidate}`);
+      expect(await git(checkout, "ls-remote", "origin", "refs/tags/go/v1.2.3")).not.toBe("");
+    });
+
+    it("runs the full check when the successful run of HEAD did not plan every lane", async () => {
+      const { checkout, candidate } = await gateCandidate();
+      const tools = await stubTools([ciRun(candidate, "success", { id: 42 })], "partial");
+
+      const result = await releaseGo(checkout, "1.2.3", tools.env);
+
+      expect(result.exitCode).toBe(0);
+      expect(result.output).toContain("did not plan the lanes go");
+      expect(result.output).toContain(
+        `No main CI run that planned every lane for HEAD ${candidate}. Running the full pnpm check.`,
+      );
+      expect((await tools.calls()).pnpm).toEqual([
+        fullCheck[0],
+        planCheck(candidate),
+        ...fullCheck.slice(1),
+      ]);
       expect(await git(checkout, "ls-remote", "origin", "refs/tags/go/v1.2.3")).not.toBe("");
     });
 

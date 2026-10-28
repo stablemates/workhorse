@@ -10,15 +10,16 @@
 // every lane runs. A docs-only pull request runs only the always-run lanes that check the
 // documentation (SM-1681). A push to `main` uses the same map for the files that it changes, but it
 // runs every lane if it changes a release file or if the plan cannot list its files (SM-1878). The
-// release workflows require a successful push run for the tagged commit, so the release candidate
-// commit must run every lane. `workflow_dispatch` runs and the weekly schedule run every lane that
+// release workflows require a successful push run for the tagged commit that planned every lane, so
+// the release candidate commit must run every lane. The plan job uploads the plan of each push run,
+// and scripts/check-main-ci-plan.ts reads it for a release (SM-1886). `workflow_dispatch` runs and the weekly schedule run every lane that
 // their event runs, whatever changed. scripts/ci-lanes.test.ts holds the map to the workflow and to
 // the files each lane names in its sources.
 //
 // `tsx scripts/ci-lanes.ts --docs-only` reads changed paths from standard input and tells whether
 // the change is docs-only, for the merge rule in AGENTS.md.
 import { execFile } from "node:child_process";
-import { appendFile, readFile } from "node:fs/promises";
+import { appendFile, readFile, writeFile } from "node:fs/promises";
 import { pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 import { WEEKLY_COMPATIBILITY_SCHEDULE } from "./ci-matrix.js";
@@ -223,7 +224,7 @@ export const ALWAYS_RUN_LANE_INPUTS = [
 /**
  * Files that a release candidate commit changes. A push to `main` that changes one of them runs
  * every lane, because the release workflows accept the tagged commit only after a successful push
- * run of this workflow, and that run must be a full run (SM-1878). The globs hold each file that
+ * run of this workflow that planned every lane (SM-1878, SM-1886). The globs hold each file that
  * scripts/check-release.ts reads for the release version or the frozen schema, each changelog, and
  * each release workflow. Each release candidate changes every changelog, so a candidate always
  * matches this list.
@@ -285,6 +286,43 @@ export type LanePlan = Record<LaneName, boolean>;
 
 export const FILTERED_LANE_NAMES = Object.keys(FILTERED_LANES) as FilteredLaneName[];
 export const LANE_NAMES: readonly LaneName[] = [...ALWAYS_RUN_LANES, ...FILTERED_LANE_NAMES];
+
+/**
+ * The lanes that a push to `main` runs when it runs every lane. The release workflows accept the
+ * tagged commit only after a successful push run that planned each of these lanes (SM-1886).
+ */
+export const FULL_PUSH_LANES: readonly LaneName[] = LANE_NAMES.filter(
+  (lane) => !(WEEKLY_LANES as readonly string[]).includes(lane),
+);
+
+/**
+ * The artifact that the plan job of a push run uploads, and the file in it. The file holds the
+ * plan that the run used. scripts/check-main-ci-plan.ts reads it for each release.
+ */
+export const LANE_PLAN_ARTIFACT = "lane-plan";
+export const LANE_PLAN_FILE = "lane-plan.json";
+
+/**
+ * The content of {@link LANE_PLAN_FILE}. Change `version` when the shape changes. `runId` and
+ * `runAttempt` name the workflow run and the attempt whose plan job wrote the file.
+ */
+export interface LanePlanRecord {
+  readonly version: 1;
+  readonly event: string;
+  readonly sha: string;
+  readonly runId: number;
+  readonly runAttempt: number;
+  readonly reason: string;
+  readonly lanes: LanePlan;
+}
+
+export function lanePlanRecord(
+  run: Pick<LanePlanRecord, "event" | "sha" | "runId" | "runAttempt">,
+  lanes: LanePlan,
+  reason: string,
+): LanePlanRecord {
+  return { version: 1, ...run, reason, lanes };
+}
 
 const globCache = new Map<string, RegExp>();
 
@@ -536,6 +574,16 @@ async function main(): Promise<void> {
         "\n",
       ),
     );
+  }
+  // The plan job uploads this file for a push run. If the commit or the run is unknown, the file
+  // is not written, the upload finds no file, and the run fails.
+  const planPath = process.env.LANE_PLAN_PATH;
+  const sha = process.env.GITHUB_SHA;
+  const runId = Number(process.env.GITHUB_RUN_ID);
+  const runAttempt = Number(process.env.GITHUB_RUN_ATTEMPT);
+  if (planPath && sha && Number.isSafeInteger(runId) && Number.isSafeInteger(runAttempt)) {
+    const record = lanePlanRecord({ event: eventName, sha, runId, runAttempt }, plan, reason);
+    await writeFile(planPath, `${JSON.stringify(record)}\n`);
   }
   process.stdout.write(`lanes=${JSON.stringify(plan)}\n`);
 }

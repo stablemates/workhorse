@@ -58,17 +58,6 @@ jobs:
     env:
       DATABASE_URL_TEST: postgres://workhorse:workhorse@localhost:5432/workhorse_test
     steps:
-      - name: Require successful main CI for this commit
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          successful_runs="$(gh api \
-            "repos/$GITHUB_REPOSITORY/actions/workflows/ci.yml/runs?head_sha=$GITHUB_SHA&event=push&status=completed&per_page=10" \
-            --jq '[.workflow_runs[] | select(.conclusion == "success")] | length')"
-          if [ "$successful_runs" -eq 0 ]; then
-            echo "No successful main CI push run exists for $GITHUB_SHA" >&2
-            exit 1
-          fi
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
@@ -87,6 +76,13 @@ jobs:
           version: 0.12.21 # Pinned to the uv version in mise.toml.
           enable-cache: false
       - run: pnpm install --frozen-lockfile
+      # A successful main CI push run must exist for this commit, and it must have planned every
+      # lane. The script reads the plan artifact of the run, and a plan that it cannot read fails
+      # the release (SM-1886). Every other job of this workflow waits for this job.
+      - name: Require a main CI run that planned every lane
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: pnpm --silent exec tsx scripts/check-main-ci-plan.ts "$GITHUB_REPOSITORY" "$GITHUB_SHA"
       # The tooling that builds these distributions is judged before they are built for publication.
       - run: pnpm tooling:vuln
       - run: pnpm python:release-check

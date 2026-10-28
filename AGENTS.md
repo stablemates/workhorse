@@ -140,6 +140,11 @@ file: a `CHANGELOG.md`, a `package.json`, a version file, `sql/releases/`, or a 
 `RELEASE_FILES` in `scripts/ci-lanes.ts` lists them. A push also runs every lane when the plan cannot
 list its files, for example after a force push.
 
+The release workflows publish a commit only after a successful `main` push run that planned every
+lane. The plan job of each push run uploads its plan as the `lane-plan` artifact.
+`scripts/check-main-ci-plan.ts` reads that artifact before any publish step. If the run skipped a
+lane, or the plan cannot be read, the release fails. Thus tag only the release candidate commit.
+
 - A canceled CI run on `main` is not a failure. Do not report it as a failure.
 - Do not start a canceled run on `main` again, and do not wait for it.
 - Use the checks of the pull request before the merge as the CI evidence for a merged change.
