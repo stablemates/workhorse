@@ -830,10 +830,10 @@ This section states the limits and defaults that operators must know.
 
 ### Schema and PostgreSQL
 
-- The canonical artifact installs version 86, the whole current schema.
+- The canonical artifact installs version 87, the whole current schema.
 - Version 6 is the migration baseline. Its frozen copy is `sql/releases/0006.sql`.
 - A schema change is an upgrade, not a reinstall. `migrateSchema` applies the ordered steps under
-  `sql/migrations/`, which run from 6 to 86.
+  `sql/migrations/`, which run from 6 to 87.
 - Workhorse does not upgrade a database below 6
   ([ADR 0073](../decisions/0073-prune-the-migration-chain-to-the-0-2-0-baseline.md)).
 - Workhorse requires only plain PostgreSQL 15+. Workhorse installs no extension beyond the default

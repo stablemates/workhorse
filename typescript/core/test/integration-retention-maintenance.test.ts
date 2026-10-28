@@ -1883,6 +1883,342 @@ describe("retention maintenance", () => {
     );
   });
 
+  it("does not report row lag while an unfinished task group holds the row", async () => {
+    // Terminal cleanup keeps each member of a task group that has not finished, because the group
+    // needs its member outcomes when it finishes (ADR 0095). An open or sealed group can stay
+    // unfinished for any length of time, so health does not count its members as lag. A group that
+    // finishes releases all its members at once, so lag counts from the finish of the group.
+    const groupQueue = "row-lag-group";
+    const workerId = "retention-health-worker";
+    const groupMember = (payload: number, runAt?: Date) => ({
+      type: "row-lag-group-member",
+      payload,
+      options: { queue: groupQueue, maxAttempts: 1, ...(runAt ? { runAt } : {}) },
+    });
+    const callback = {
+      type: "row-lag-group-callback",
+      payload: {},
+      options: { queue: "callbacks" },
+    };
+    const callbacks = { onFinish: callback, onSuccess: callback, onFailure: callback };
+
+    const open = await queue.createTaskGroup(callbacks);
+    const [openMember] = await queue.addToTaskGroup(open.id, [groupMember(1)]);
+    // The second member of the sealed group waits far in the future, so the group cannot finish.
+    const { group: sealed, tasks: sealedMembers } = await queue.taskGroup(callbacks, (builder) =>
+      builder.add([groupMember(2), groupMember(3, new Date("2999-01-01T00:00:00Z"))]),
+    );
+    const claimed = await queue.claimMany(workerId, 10, { queue: groupQueue });
+    expect(claimed.map((task) => task.id).toSorted()).toEqual(
+      [openMember!.taskId, sealedMembers[0]!.taskId].toSorted(),
+    );
+    for (const task of claimed) {
+      expect(await queue.complete(task, workerId, { done: true })).toBe(true);
+    }
+    const heldIds = claimed.map((task) => task.id);
+    await pool.query(
+      `UPDATE workhorse.task
+          SET created_at = clock_timestamp() - interval '30 days' WHERE id = ANY($1::uuid[])`,
+      [heldIds],
+    );
+    await pool.query(
+      `UPDATE workhorse.task_outcome
+          SET finished_at = clock_timestamp() - interval '30 days',
+              history_through_at = clock_timestamp() - interval '30 days'
+        WHERE task_id = ANY($1::uuid[])`,
+      [heldIds],
+    );
+    await queue.syncRetentionPolicy({
+      taskIdentityRetentionDays: 1,
+      terminalOutcomeRetentionDays: 1,
+      taskEventRetentionDays: 1,
+      attemptHistoryRetentionDays: 1,
+      scheduleOccurrenceRetentionDays: 1,
+      statisticsRetentionDays: 1,
+    });
+    await queue.retainHistory({ force: true });
+
+    const groupState = async (id: string) =>
+      (
+        await pool.query<{ state: string }>(
+          "SELECT state FROM workhorse.task_group WHERE id = $1",
+          [id],
+        )
+      ).rows[0]?.state;
+    const rowLagReported = (health: Awaited<ReturnType<typeof queue.health>>) =>
+      health.status.reasons.filter((reason) => reason.code === "retention-lag");
+
+    // 1. Both groups are unfinished, so neither held member is lag, and the prune deletes neither.
+    const held = await queue.health();
+    expect(held.retentionLagMs.taskIdentity).toBeNull();
+    expect(held.retentionLagMs.terminalOutcome).toBeNull();
+    expect(rowLagReported(held)).toEqual([]);
+    expect((await queue.pruneTerminalStorage({ force: true }))[2]).toMatchObject({
+      phase: "terminal_tasks",
+      rowsAffected: 0,
+    });
+    expect(await groupState(open.id)).toBe("open");
+    expect(await groupState(sealed.id)).toBe("sealed");
+
+    // 2. The open group finishes now. Its member passed its windows 29 days ago, but lag counts
+    // from the finish of the group, so it is still inside its budget.
+    expect((await queue.sealTaskGroup(open.id)).state).toBe("finished");
+    const finished = await queue.health();
+    for (const lag of [
+      finished.retentionLagMs.taskIdentity,
+      finished.retentionLagMs.terminalOutcome,
+    ]) {
+      expect(lag).toBeGreaterThanOrEqual(0);
+      expect(lag).toBeLessThan(60_000);
+    }
+    expect(rowLagReported(finished)).toEqual([]);
+
+    // 3. If the group finished long ago and the prune did not run, the member is lag.
+    await pool.query(
+      `UPDATE workhorse.task_group
+          SET finished_at = clock_timestamp() - interval '1 day' WHERE id = $1`,
+      [open.id],
+    );
+    const late = await queue.health();
+    expect(late.retentionLagMs.taskIdentity).toBeGreaterThan(86_400_000 - 60_000);
+    expect(late.retentionLagMs.terminalOutcome).toBeGreaterThan(86_400_000 - 60_000);
+    expect(rowLagReported(late)).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ category: "taskIdentity" }),
+        expect.objectContaining({ category: "terminalOutcome" }),
+      ]),
+    );
+
+    // 4. The prune deletes the member of the finished group. The test aged only the history
+    // boundary, so it also removes the history rows that a real history pass drops first. The
+    // sealed group still holds its member, so health reports no lag again.
+    await pool.query("DELETE FROM workhorse.task_event WHERE task_id = ANY($1::uuid[])", [heldIds]);
+    await pool.query("DELETE FROM workhorse.attempt_history WHERE task_id = ANY($1::uuid[])", [
+      heldIds,
+    ]);
+    expect((await queue.pruneTerminalStorage({ force: true }))[2]).toMatchObject({
+      phase: "terminal_tasks",
+      rowsAffected: 1,
+    });
+    const remaining = await pool.query<{ id: string }>(
+      "SELECT id FROM workhorse.task WHERE id = ANY($1::uuid[])",
+      [heldIds],
+    );
+    expect(remaining.rows.map((row) => row.id)).toEqual([sealedMembers[0]!.taskId]);
+    const cleared = await queue.health();
+    expect(cleared.retentionLagMs.taskIdentity).toBeNull();
+    expect(cleared.retentionLagMs.terminalOutcome).toBeNull();
+    expect(rowLagReported(cleared)).toEqual([]);
+  });
+
+  it("does not let a member of a group that finished just now hide an older ungrouped row", async () => {
+    // The finish of a group does not follow the age of its members. A member that is older than an
+    // ungrouped row can therefore be inside its budget while the ungrouped row is overdue.
+    const workerId = "retention-health-worker";
+    const callback = {
+      type: "row-lag-hide-callback",
+      payload: {},
+      options: { queue: "callbacks" },
+    };
+    const { group, tasks } = await queue.taskGroup(
+      { onFinish: callback, onSuccess: callback, onFailure: callback },
+      (builder) =>
+        builder.add([
+          { type: "row-lag-hide-member", payload: 1, options: { queue: "row-lag-hide" } },
+        ]),
+    );
+    const memberId = tasks[0]!.taskId;
+    const ungroupedId = await queue.enqueue(
+      "row-lag-hide-ungrouped",
+      {},
+      { queue: "row-lag-hide" },
+    );
+    for (const task of await queue.claimMany(workerId, 10, { queue: "row-lag-hide" })) {
+      expect(await queue.complete(task, workerId, { done: true })).toBe(true);
+    }
+    expect(
+      (
+        await pool.query<{ state: string }>(
+          "SELECT state FROM workhorse.task_group WHERE id = $1",
+          [group.id],
+        )
+      ).rows[0]?.state,
+    ).toBe("finished");
+    // The member finished 30 days ago, the ungrouped task 20 days ago. Only the ungrouped task is
+    // overdue, because the group of the member finished just now.
+    for (const [id, age] of [
+      [memberId, "30 days"],
+      [ungroupedId, "20 days"],
+    ] as const) {
+      await pool.query(
+        `UPDATE workhorse.task SET created_at = clock_timestamp() - $2::interval WHERE id = $1`,
+        [id, age],
+      );
+      await pool.query(
+        `UPDATE workhorse.task_outcome
+            SET finished_at = clock_timestamp() - $2::interval,
+                history_through_at = clock_timestamp() - $2::interval
+          WHERE task_id = $1`,
+        [id, age],
+      );
+    }
+    await queue.syncRetentionPolicy({
+      taskIdentityRetentionDays: 1,
+      terminalOutcomeRetentionDays: 1,
+      taskEventRetentionDays: 1,
+      attemptHistoryRetentionDays: 1,
+      scheduleOccurrenceRetentionDays: 1,
+      statisticsRetentionDays: 1,
+    });
+    await queue.retainHistory({ force: true });
+
+    const health = await queue.health();
+    // The ungrouped task passed its windows 19 days ago, and its history pass came later.
+    for (const lag of [health.retentionLagMs.taskIdentity, health.retentionLagMs.terminalOutcome]) {
+      expect(lag).toBeGreaterThan(17 * 86_400_000);
+      expect(lag).toBeLessThan(20 * 86_400_000);
+    }
+    expect(health.status.reasons).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ code: "retention-lag", category: "taskIdentity" }),
+        expect.objectContaining({ code: "retention-lag", category: "terminalOutcome" }),
+      ]),
+    );
+  });
+
+  it("counts row lag from the earliest due member of the finished task groups", async () => {
+    // A member is due at the later of its row window and the finish of its group. Member A passed
+    // its windows 30 seconds ago, and its group finished three days ago, so A is due now. Member B
+    // passed its windows 16 days ago, but its group finished two days ago, so B is due two days ago.
+    // The group of A finished first, but B is the member that is overdue.
+    const workerId = "retention-health-worker";
+    const callback = { type: "row-lag-due-callback", payload: {}, options: { queue: "callbacks" } };
+    const oneMemberGroup = async (payload: number) => {
+      const { group, tasks } = await queue.taskGroup(
+        { onFinish: callback, onSuccess: callback, onFailure: callback },
+        (builder) =>
+          builder.add([{ type: "row-lag-due-member", payload, options: { queue: "row-lag-due" } }]),
+      );
+      return { groupId: group.id, taskId: tasks[0]!.taskId };
+    };
+    const memberA = await oneMemberGroup(1);
+    const memberB = await oneMemberGroup(2);
+    for (const task of await queue.claimMany(workerId, 10, { queue: "row-lag-due" })) {
+      expect(await queue.complete(task, workerId, { done: true })).toBe(true);
+    }
+    for (const [member, rowAge, groupAge] of [
+      [memberA, "1 day 30 seconds", "3 days"],
+      [memberB, "17 days", "2 days"],
+    ] as const) {
+      await pool.query(
+        `UPDATE workhorse.task SET created_at = clock_timestamp() - $2::interval WHERE id = $1`,
+        [member.taskId, rowAge],
+      );
+      // The history of both rows is old, so the history pass is not the instant that decides.
+      await pool.query(
+        `UPDATE workhorse.task_outcome
+            SET finished_at = clock_timestamp() - $2::interval,
+                history_through_at = clock_timestamp() - interval '17 days'
+          WHERE task_id = $1`,
+        [member.taskId, rowAge],
+      );
+      await pool.query(
+        `UPDATE workhorse.task_group
+            SET finished_at = clock_timestamp() - $2::interval
+          WHERE id = $1 AND state = 'finished'`,
+        [member.groupId, groupAge],
+      );
+    }
+    await queue.syncRetentionPolicy({
+      taskIdentityRetentionDays: 1,
+      terminalOutcomeRetentionDays: 1,
+      taskEventRetentionDays: 1,
+      attemptHistoryRetentionDays: 1,
+      scheduleOccurrenceRetentionDays: 1,
+      statisticsRetentionDays: 1,
+    });
+    await queue.retainHistory({ force: true });
+
+    const health = await queue.health();
+    for (const lag of [health.retentionLagMs.taskIdentity, health.retentionLagMs.terminalOutcome]) {
+      expect(lag).toBeGreaterThan(2 * 86_400_000 - 60_000);
+      expect(lag).toBeLessThan(2 * 86_400_000 + 60_000);
+    }
+    expect(health.status.reasons).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ code: "retention-lag", category: "taskIdentity" }),
+        expect.objectContaining({ code: "retention-lag", category: "terminalOutcome" }),
+      ]),
+    );
+  });
+
+  it("counts row lag from the member whose history pass released it first", async () => {
+    // Two members of one group finished 15 and 30 days ago, and the group finished 10 days ago.
+    // History windows are 14 days, so the history of the first member became releasable at today's
+    // UTC midnight, while the second member has been due since its group finished.
+    const workerId = "retention-health-worker";
+    const callback = {
+      type: "row-lag-release-callback",
+      payload: {},
+      options: { queue: "callbacks" },
+    };
+    const { group, tasks } = await queue.taskGroup(
+      { onFinish: callback, onSuccess: callback, onFailure: callback },
+      (builder) =>
+        builder.add([
+          { type: "row-lag-release-member", payload: 1, options: { queue: "row-lag-release" } },
+          { type: "row-lag-release-member", payload: 2, options: { queue: "row-lag-release" } },
+        ]),
+    );
+    for (const task of await queue.claimMany(workerId, 10, { queue: "row-lag-release" })) {
+      expect(await queue.complete(task, workerId, { done: true })).toBe(true);
+    }
+    await queue.syncMaintenancePolicy(
+      { timezone: "UTC", historyRetentionLocalTime: "00:00" },
+      { force: true },
+    );
+    await queue.syncRetentionPolicy({
+      taskIdentityRetentionDays: 14,
+      terminalOutcomeRetentionDays: 1,
+      taskEventRetentionDays: 14,
+      attemptHistoryRetentionDays: 14,
+      scheduleOccurrenceRetentionDays: 14,
+      statisticsRetentionDays: 14,
+    });
+    await queue.retainHistory({ force: true });
+    // The member that is due today gets the smaller task id, so an order by group finish and then
+    // by task id would pick it first.
+    const [dueToday, overdue] = tasks.map((task) => task.taskId).toSorted();
+    for (const [taskId, finishedAge] of [
+      [dueToday!, "15 days"],
+      [overdue!, "30 days"],
+    ] as const) {
+      await pool.query(
+        `UPDATE workhorse.task SET created_at = clock_timestamp() - interval '31 days' WHERE id = $1`,
+        [taskId],
+      );
+      await pool.query(
+        `UPDATE workhorse.task_outcome
+            SET finished_at = clock_timestamp() - $2::interval,
+                history_through_at = clock_timestamp() - $2::interval
+          WHERE task_id = $1`,
+        [taskId, finishedAge],
+      );
+    }
+    await pool.query(
+      `UPDATE workhorse.task_group
+          SET finished_at = clock_timestamp() - interval '10 days'
+        WHERE id = $1 AND state = 'finished'`,
+      [group.id],
+    );
+
+    const health = await queue.health();
+    for (const lag of [health.retentionLagMs.taskIdentity, health.retentionLagMs.terminalOutcome]) {
+      expect(lag).toBeGreaterThan(10 * 86_400_000 - 60_000);
+      expect(lag).toBeLessThan(10 * 86_400_000 + 60_000);
+    }
+  });
+
   it("counts row lag from the history pass that released the row", async () => {
     // One daily history pass releases a whole day of rows, and the oldest of them passed its row
     // window about a day earlier. The bounded prune needs several runs to delete them, so lag counts

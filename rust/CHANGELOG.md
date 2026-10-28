@@ -11,6 +11,29 @@ adds.
 
 ## Unreleased
 
+### Upgrade steps
+
+**Migrate the schema before starting updated processes.** Run `workhorse schema migrate` before any
+process of this release starts, producers too. Migration 0088 moves the schema to version **87**.
+The SDK compatibility floor stays at **76**. A 0.10 process keeps working on version 87, because a
+migration inside a major line only adds.
+
+### Row retention lag skips a member of an unfinished task group
+
+Terminal cleanup keeps each member of a task group that has not finished, because the group needs
+its member outcomes when it finishes. Before this change, queue health counted such a member as row
+retention lag after it passed its windows (SM-1851). An open or sealed group can stay unfinished for
+any length of time. Thus health reported "Retention cleanup is late for task records, finished
+results", and the lag grew without end. The public demo keeps one open and one sealed group on
+purpose, so its Health page showed the report every day.
+
+Migration 0088 (`0088-count-only-prunable-rows-as-row-retention-lag.sql`) moves the schema to
+version 87. Now `queue_health_v1` skips a member of an unfinished group when it measures task
+identity and terminal outcome lag. For a group member, lag counts from the latest of window
+expiry, history release, and group finish. The health document keeps its keys, and the schema floor
+does not change.
+Every process of every SDK version gets the new result when the migration commits.
+
 ### The dashboard bundle uses Mantine 9.7.4
 
 The Rust dashboard backend serves the shared dashboard browser bundle. After 0.10.0, a dependency

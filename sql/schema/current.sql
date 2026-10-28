@@ -3072,7 +3072,9 @@ DECLARE
 BEGIN
   SELECT (to_jsonb(snapshot) - 'schedule_occurrence_pass_lag_ms'
            - 'schedule_occurrence_due_lag_ms' - 'eligible_task_identity_history_at'
-           - 'eligible_terminal_outcome_history_at') || jsonb_build_object(
+           - 'eligible_terminal_outcome_history_at' - 'eligible_ungrouped_task_identity_at'
+           - 'eligible_ungrouped_terminal_outcome_at' - 'eligible_member_task_identity_due_at'
+           - 'eligible_member_terminal_outcome_due_at') || jsonb_build_object(
            'status', workhorse.evaluate_queue_health_v1(to_jsonb(snapshot), to_jsonb(policy)),
            'budgets', jsonb_build_object(
              'promotionLagMs', policy.promotion_lag_ms,
@@ -3222,10 +3224,16 @@ BEGIN
                 AS oldest_task_identity_at,
               (SELECT finished_at FROM terminal_outcome ORDER BY finished_at, task_id LIMIT 1)
                 AS oldest_terminal_outcome_at,
-              eligible_task_identity.created_at AS eligible_task_identity_at,
+              LEAST(eligible_task_identity.created_at, eligible_member.created_at)
+                AS eligible_task_identity_at,
+              eligible_task_identity.created_at AS eligible_ungrouped_task_identity_at,
               eligible_task_identity.history_through_at AS eligible_task_identity_history_at,
-              eligible_terminal_outcome.finished_at AS eligible_terminal_outcome_at,
+              LEAST(eligible_terminal_outcome.finished_at, eligible_member.finished_at)
+                AS eligible_terminal_outcome_at,
+              eligible_terminal_outcome.finished_at AS eligible_ungrouped_terminal_outcome_at,
               eligible_terminal_outcome.history_through_at AS eligible_terminal_outcome_history_at,
+              eligible_member.task_identity_due_at AS eligible_member_task_identity_due_at,
+              eligible_member.terminal_outcome_due_at AS eligible_member_terminal_outcome_due_at,
               (SELECT occurred_at FROM workhorse.task_event ORDER BY occurred_at, event_id LIMIT 1)
                 AS oldest_task_event_at,
               (SELECT occurred_at FROM workhorse.task_event
@@ -3255,6 +3263,15 @@ BEGIN
             -- A row counts as eligible only once workhorse.prune_terminal_tasks_v1 could delete it.
             -- That prune also waits until daily history retention has passed the row's history, so
             -- a row held only by that gate is waiting on history retention, not lagging here.
+            -- The prune also keeps each member of a task group that has not finished, because the
+            -- group needs its member outcomes when it finishes (ADR 0095). A group can stay open
+            -- or sealed for any length of time, so its members are held on purpose, not lagging.
+            -- A member of a finished group is due at the latest of its row window, the history
+            -- pass due to release it, and the finish of its group. Those instants do not follow
+            -- the age of the row in one order, so an ordered walk could pick a member that is not
+            -- due yet and hide an overdue one. The member boundary therefore takes the earliest due
+            -- instant over all eligible members of finished groups. The prune deletes those rows,
+            -- so the set holds only members that cleanup has not reached yet.
             LEFT JOIN LATERAL (
               SELECT task.created_at, outcome.history_through_at
                 FROM workhorse.task task
@@ -3268,6 +3285,9 @@ BEGIN
                  AND outcome.history_through_at < (
                    SELECT history_retained_before FROM workhorse.maintenance_state
                     WHERE routine_name = 'history_retention'
+                 )
+                 AND NOT EXISTS (
+                   SELECT 1 FROM workhorse.task_group_member member WHERE member.task_id = task.id
                  )
                ORDER BY task.created_at, task.id LIMIT 1
             ) eligible_task_identity ON true
@@ -3285,8 +3305,62 @@ BEGIN
                    SELECT history_retained_before FROM workhorse.maintenance_state
                     WHERE routine_name = 'history_retention'
                  )
+                 AND NOT EXISTS (
+                   SELECT 1 FROM workhorse.task_group_member member WHERE member.task_id = task.id
+                 )
                ORDER BY outcome.finished_at, outcome.task_id LIMIT 1
             ) eligible_terminal_outcome ON true
+            LEFT JOIN LATERAL (
+              SELECT min(task.created_at) AS created_at, min(outcome.finished_at) AS finished_at,
+                     min(GREATEST(
+                       task.created_at
+                         + make_interval(days => policy.task_identity_retention_days),
+                       member_group.finished_at, released_member.at
+                     )) AS task_identity_due_at,
+                     min(GREATEST(
+                       outcome.finished_at
+                         + make_interval(days => policy.terminal_outcome_retention_days),
+                       member_group.finished_at, released_member.at
+                     )) AS terminal_outcome_due_at
+                FROM workhorse.task_group member_group
+                JOIN workhorse.task_group_member member ON member.group_id = member_group.id
+                JOIN workhorse.task task ON task.id = member.task_id
+                JOIN terminal_outcome outcome ON outcome.task_id = task.id
+                CROSS JOIN maintenance
+                -- The same rule as the released boundary below: the first scheduled history pass
+                -- at or after the start of the UTC day after the history plus the longer window.
+                CROSS JOIN LATERAL (
+                  SELECT (date_trunc('day', (outcome.history_through_at + make_interval(
+                           days => GREATEST(
+                             COALESCE(policy.task_event_retention_days, 0),
+                             COALESCE(policy.attempt_history_retention_days, 0)
+                           )
+                         )) AT TIME ZONE 'UTC') + interval '1 day') AT TIME ZONE 'UTC' AS at
+                ) releasable_member
+                CROSS JOIN LATERAL (
+                  SELECT CASE
+                           WHEN ((releasable_member.at AT TIME ZONE maintenance.timezone)::date
+                                  + maintenance.history_retention_local_time)
+                                  AT TIME ZONE maintenance.timezone >= releasable_member.at
+                             THEN ((releasable_member.at AT TIME ZONE maintenance.timezone)::date
+                                  + maintenance.history_retention_local_time)
+                                  AT TIME ZONE maintenance.timezone
+                           ELSE ((releasable_member.at AT TIME ZONE maintenance.timezone)::date + 1
+                                  + maintenance.history_retention_local_time)
+                                  AT TIME ZONE maintenance.timezone END AS at
+                ) released_member
+               WHERE member_group.state = 'finished'
+                 AND policy.task_identity_retention_days IS NOT NULL
+                 AND policy.terminal_outcome_retention_days IS NOT NULL
+                 AND task.created_at < clock_timestamp()
+                   - make_interval(days => policy.task_identity_retention_days)
+                 AND outcome.finished_at < clock_timestamp()
+                   - make_interval(days => policy.terminal_outcome_retention_days)
+                 AND outcome.history_through_at < (
+                   SELECT history_retained_before FROM workhorse.maintenance_state
+                    WHERE routine_name = 'history_retention'
+                 )
+            ) eligible_member ON true
           ), partitions AS (
             SELECT parent.relname AS parent_name,
                    ((regexp_match(
@@ -3339,22 +3413,30 @@ BEGIN
           SELECT policy.*, boundaries.*,
                  -- Row lag counts from the later of two instants: the row passing its row window,
                  -- and the scheduled history pass that released it. One pass releases a whole day
-                 -- of rows at once, and the bounded prune needs time to delete them.
+                 -- of rows at once, and the bounded prune needs time to delete them. A member of a
+                 -- finished task group also waits for the finish of its group. Lag counts from the
+                 -- earlier due instant of the ungrouped boundary and the member boundary.
                  CASE WHEN policy.task_identity_retention_days IS NULL
                              OR boundaries.eligible_task_identity_at IS NULL THEN NULL
                       ELSE GREATEST(0, extract(epoch FROM
-                        clock_timestamp() - GREATEST(
-                          boundaries.eligible_task_identity_at
-                            + make_interval(days => policy.task_identity_retention_days),
-                          released.task_identity_at
+                        clock_timestamp() - LEAST(
+                          GREATEST(
+                            boundaries.eligible_ungrouped_task_identity_at
+                              + make_interval(days => policy.task_identity_retention_days),
+                            released.task_identity_at
+                          ),
+                          boundaries.eligible_member_task_identity_due_at
                         )) * 1000) END AS task_identity_lag_ms,
                  CASE WHEN policy.terminal_outcome_retention_days IS NULL
                              OR boundaries.eligible_terminal_outcome_at IS NULL THEN NULL
                       ELSE GREATEST(0, extract(epoch FROM
-                        clock_timestamp() - GREATEST(
-                          boundaries.eligible_terminal_outcome_at
-                            + make_interval(days => policy.terminal_outcome_retention_days),
-                          released.terminal_outcome_at
+                        clock_timestamp() - LEAST(
+                          GREATEST(
+                            boundaries.eligible_ungrouped_terminal_outcome_at
+                              + make_interval(days => policy.terminal_outcome_retention_days),
+                            released.terminal_outcome_at
+                          ),
+                          boundaries.eligible_member_terminal_outcome_due_at
                         )) * 1000) END AS terminal_outcome_lag_ms,
                  CASE WHEN policy.task_event_retention_days IS NULL
                              OR boundaries.oldest_task_event_at IS NULL THEN NULL
@@ -22778,10 +22860,11 @@ INSERT INTO workhorse.schema_migration(version, description) VALUES
   (83, 'recheck terminal cleanup references and continue lease scans'),
   (84, 'make the day and schedule lock keys unambiguous'),
   (85, 'report the fast-tier retry of an expired timeout'),
-  (86, 'show the last schedule skip on the dashboard')
+  (86, 'show the last schedule skip on the dashboard'),
+  (87, 'count only prunable rows as row retention lag')
 ON CONFLICT DO NOTHING;
 
-INSERT INTO workhorse.schema_version(version) VALUES (86) ON CONFLICT DO NOTHING;
+INSERT INTO workhorse.schema_version(version) VALUES (87) ON CONFLICT DO NOTHING;
 
 INSERT INTO workhorse.protocol_version(version) VALUES (5) ON CONFLICT DO NOTHING;
 SELECT workhorse.create_history_day_v1(

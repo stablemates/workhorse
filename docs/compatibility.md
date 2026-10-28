@@ -1645,6 +1645,27 @@ benchmarked configuration is not a statement that other supported versions are s
 Requirements for making a performance claim at all are in [`benchmarking.md`](benchmarking.md);
 until a scenario has a recorded live artifact, no performance claim is made for any version.
 
+## Upgrade from 0.10.x to 0.11.0
+
+A 0.10.0 database is at schema version 86. Migration 0088 does not raise the SDK schema floor, so
+the upgrade is a rolling deployment, and a mixed fleet is supported while it runs.
+
+1. Run `workhorse schema migrate`. It applies migration 0088 and leaves the schema at version 87.
+2. Roll out the new processes in any order.
+
+| Migration                                                | Schema version | Changes                                                                                              |
+| -------------------------------------------------------- | -------------- | ---------------------------------------------------------------------------------------------------- |
+| `0088-count-only-prunable-rows-as-row-retention-lag.sql` | 87             | Row retention lag skips a member of an unfinished task group and counts from the finish of the group |
+
+Migration 0088 does not raise the floor, so it stays 76. It replaces `queue_health_v1`. Its row
+retention lag skips a member of a task group that has not finished, because terminal cleanup keeps
+that row on purpose. The lag of a member also counts from the finish of its group. The health
+document keeps its keys, and the migration changes no rows. Thus every process of every SDK version
+gets the new result when the migration commits.
+
+A 0.10 process keeps working on schema version 87, because a migration inside a major line only
+adds.
+
 ## Upgrade from 0.9.x to 0.10.0
 
 0.10.0 lets a producer throttle an enqueue into a fast-tier queue. Its dashboard hosts

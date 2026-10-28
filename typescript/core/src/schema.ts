@@ -615,6 +615,13 @@ export const SCHEMA_MIGRATIONS: readonly SchemaMigrationStep[] = [
     description: "show the last schedule skip on the dashboard",
     kind: "additive",
   },
+  {
+    fromVersion: 86,
+    toVersion: 87,
+    file: "0088-count-only-prunable-rows-as-row-retention-lag.sql",
+    description: "count only prunable rows as row retention lag",
+    kind: "additive",
+  },
 ];
 
 /**

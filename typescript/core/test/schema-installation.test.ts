@@ -664,6 +664,10 @@ describe("schema installation", () => {
         version: 86,
         description: "show the last schedule skip on the dashboard",
       },
+      {
+        version: 87,
+        description: "count only prunable rows as row retention lag",
+      },
     ]);
 
     const protocols = await pool.query<{ version: number }>(

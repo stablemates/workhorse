@@ -3095,16 +3095,27 @@ Fallback counts are exact through 10,000 rows. `defaultHistoryRowsCapped` marks 
 bound.
 
 Terminal identity lag excludes live tasks. Terminal identity and terminal outcome lag count only
-rows that `prune_terminal_tasks_v1` could delete now. A row also waits until its
-`history_through_at` is earlier than the `history_retained_before` of the `history_retention`
-routine. That cutoff moves forward once a day. Thus a row that only this cutoff holds is not lag. A
-stalled history pass appears as task event and attempt history lag instead.
+rows that pass both row windows and two gates of `prune_terminal_tasks_v1`:
 
-One history pass releases a whole day of rows at once. The bounded prune then needs several runs to
-delete them. Thus row lag counts from the later of two instants:
+- The row's `history_through_at` is earlier than the `history_retained_before` of the
+  `history_retention` routine. That cutoff moves forward once a day. Thus a row that only this
+  cutoff holds is not lag. A stalled history pass appears as task event and attempt history lag
+  instead.
+- The task is not a member of a task group whose `state` is not `finished`. The prune keeps such a
+  member, because the group needs its member outcomes when it finishes. An open or sealed group can
+  stay unfinished for any length of time, so its members are not lag.
+
+The prune also keeps a row for its other references, such as a redrive source, a prerequisite
+dependency, or a child. Row lag does not apply those gates, so a row that only they hold still
+counts as lag.
+
+One history pass releases a whole day of rows at once, and a group that finishes releases all its
+members at once. The bounded prune then needs several runs to delete them. Thus row lag counts from
+the latest of three instants:
 
 - the time when the row passes its row window;
-- the first scheduled pass due to release the row.
+- the first scheduled pass due to release the row;
+- the `finished_at` of the task group of the row, if the row is a member of a group.
 
 A pass at time t sets the cutoff to the start of the current UTC day, minus the longer of
 `task_event_retention_days` and `attempt_history_retention_days`. Thus history through h is
@@ -3112,9 +3123,20 @@ releasable from the start of the UTC day after h plus that window. The due pass 
 `history_retention_local_time` in `maintenance_policy.timezone` at or after that instant. The
 instant is fixed for each row. Thus, if a prune stops, the lag still grows.
 
-If a pass runs late, its rows also count as late. Health measures only the oldest eligible row:
-`eligible_task_identity_at` for identity lag and `eligible_terminal_outcome_at` for outcome lag.
-`queue_health_v1` removes the `history_through_at` values of those rows from the public document.
+If a pass runs late, its rows also count as late. Health measures two boundaries for each
+category, and lag counts from the earlier due instant of them. The anchor is `created_at` for
+identity lag and `finished_at` for outcome lag.
+
+- The ungrouped boundary is the oldest eligible row that is not a member of a task group, by its
+  anchor. It is due at the later of its row window and its history pass.
+- The member boundary is the earliest due instant over all eligible members of finished groups. A
+  member is due at the latest of its row window, its history pass, and the group `finished_at`.
+
+The three instants of a member do not follow its age in one order. Thus an ordered walk could pick
+a member that is not due yet and hide an overdue one. The member boundary reads only members that
+the prune can delete, and the prune removes them. The public document reports the earlier anchor
+of the two boundaries as `eligible_task_identity_at` or `eligible_terminal_outcome_at`.
+`queue_health_v1` removes the other values of the boundaries from the public document.
 
 History lag is based only on fully droppable partitions or expired default rows. It excludes the
 intentionally retained partial boundary day.
