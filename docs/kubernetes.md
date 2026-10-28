@@ -7,8 +7,12 @@ The manifests below were applied to a k3s v1.34.1+k3s1 cluster on 2026-09-12. Th
 `batch/v1` and `apps/v1` resources, so they do not depend on k3s-specific APIs.
 
 Replace `registry.example.com/acme/workhorse-app:1.2.3` with one immutable application image. The
-image must contain the Workhorse CLI and the compiled worker configuration at
-`/app/dist/workhorse.worker.js`.
+image must contain the Workhorse CLI. It must also contain `/app/dist/workhorse.worker.js`, the
+compiled worker definition from
+[Dedicated worker processes](worker-processes.md#configuration-and-cli).
+
+The worker definition must start the probe listener on port 9090. Set its `hostname` to `0.0.0.0`,
+because the default `127.0.0.1` does not accept probes from Kubernetes.
 
 <picture>
   <source media="(max-width: 600px) and (prefers-color-scheme: dark)" srcset="../site/public/diagrams/kubernetes-workloads-narrow-dark.png">
