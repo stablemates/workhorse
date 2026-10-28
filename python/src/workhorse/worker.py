@@ -1681,6 +1681,10 @@ class Worker:
         self._wake = Event()
         self._dispatch_wake_version = 0
         self._active_threads: set[Thread] = set()
+        # Each admitted handler thread that has not entered _run_claimed_task, with the thread that
+        # admitted it and its task ID. The first to remove an entry decides whether the handler
+        # thread runs its task or the dispatcher releases it.
+        self._unentered_threads: dict[Thread, tuple[Thread, str]] = {}
         self._dispatch_sequence = 0
         self._dispatch_order: dict[str, int] = {}
         self._run_errors: list[BaseException] = []
@@ -2598,6 +2602,14 @@ class Worker:
                 self._wake.set()
 
         def settle(outcome: _ClaimOutcome) -> None:
+            try:
+                admit_and_start(outcome)
+            except BaseException:
+                # An interrupt can stop the dispatch between an admission and its start.
+                self._release_interrupted_admissions()
+                raise
+
+        def admit_and_start(outcome: _ClaimOutcome) -> None:
             limit, cohort, cohort_limit = claims.pop(outcome.claim_id)
             admitted: list[tuple[ClaimedTask, Thread]] = []
             with self._state_lock:
@@ -3679,6 +3691,7 @@ class Worker:
             args=(task, claim_sent_at),
             name=f"workhorse-handler-{task.id}",
         )
+        self._unentered_threads[thread] = (current_thread(), task.id)
         # The dispatcher assigns this in claim order. A batch coordinator cannot read arrival
         # order off its own lock instead, because handler threads start concurrently and reach
         # that lock in scheduler order, not claim order.
@@ -3704,11 +3717,11 @@ class Worker:
         report can also fail to start a thread.
         """
         failure: Exception | None = None
-        for task, thread in admitted:
+        for _task, thread in admitted:
             try:
                 thread.start()
             except Exception as error:
-                self._release_handler_thread(thread, task.id)
+                self._release_unentered_thread(thread)
                 with self._state_lock:
                     self._run_errors.append(error)
                     self._stopping = True
@@ -3717,26 +3730,59 @@ class Worker:
         if failure is not None:
             self._report_fatal_error(failure)
 
+    def _release_unentered_thread(self, thread: Thread) -> None:
+        """Release an admitted handler thread unless it already entered _run_claimed_task."""
+        with self._state_lock:
+            entry = self._unentered_threads.pop(thread, None)
+            if entry is not None:
+                self._release_handler_thread_locked(thread, entry[1])
+        self._wake.set()
+
+    def _release_interrupted_admissions(self) -> None:
+        """Release the handler threads that this thread admitted and that did not start.
+
+        An interrupt such as KeyboardInterrupt can stop the dispatch after an admission, before or
+        in Thread.start. The native thread sets its ident before Thread.start returns, so a thread
+        without an ident was not started or is in its start. A thread that the start creates after
+        the release finds no entry in _unentered_threads and returns before its handler runs. A
+        thread with an ident runs its task, so the release does not touch it.
+        """
+        admitter = current_thread()
+        with self._state_lock:
+            for thread, (owner, task_id) in list(self._unentered_threads.items()):
+                if owner is admitter and thread.ident is None:
+                    del self._unentered_threads[thread]
+                    self._release_handler_thread_locked(thread, task_id)
+        self._wake.set()
+
     def _release_handler_thread(self, thread: Thread, task_id: str) -> None:
         """Remove a handler thread and its task from the dispatch state, and free its slot."""
         with self._state_lock:
-            self._active_threads.discard(thread)
-            self._dispatch_order.pop(task_id, None)
-            self._fast_task_ids.discard(task_id)
-            slots = self._dispatch_slots
-            if slots is not None:
-                cohort = slots.thread_cohorts.pop(thread, None)
-                if cohort is not None:
-                    slots.cohort_active[cohort] -= 1
-                    if slots.handed_over.pop(thread, None) is not None:
-                        slots.cohort_handed_over[cohort] -= 1
+            self._release_handler_thread_locked(thread, task_id)
         self._wake.set()
+
+    def _release_handler_thread_locked(self, thread: Thread, task_id: str) -> None:
+        self._active_threads.discard(thread)
+        self._dispatch_order.pop(task_id, None)
+        self._fast_task_ids.discard(task_id)
+        slots = self._dispatch_slots
+        if slots is not None:
+            cohort = slots.thread_cohorts.pop(thread, None)
+            if cohort is not None:
+                slots.cohort_active[cohort] -= 1
+                if slots.handed_over.pop(thread, None) is not None:
+                    slots.cohort_handed_over[cohort] -= 1
 
     def _claim_order(self, task: ClaimedTask) -> int:
         with self._state_lock:
             return self._dispatch_order.get(task.id, self._dispatch_sequence)
 
     def _run_claimed_task(self, task: ClaimedTask, claim_sent_at: float) -> None:
+        with self._state_lock:
+            if self._unentered_threads.pop(current_thread(), None) is None:
+                # The dispatcher released this thread after an interrupt in its start. The task
+                # keeps its lease until lease recovery.
+                return
         try:
             self._execute_claimed_task(task, claim_sent_at)
         except StaleLeaseError:
@@ -3760,13 +3806,15 @@ class Worker:
             for thread in active:
                 # A fused completion admits a claimed task's thread under the state lock and
                 # starts it after releasing the lock, so the drain can see it before it starts.
-                # A thread that does not start leaves the active set without an ident.
-                while thread.ident is None:
+                # A thread leaves _unentered_threads when it enters _run_claimed_task, after its
+                # start, or when the dispatcher releases it. A released thread can be in its start
+                # and cannot join yet, and it does not run its task, so the drain does not wait.
+                while True:
                     with self._state_lock:
-                        if thread not in self._active_threads:
+                        if thread not in self._unentered_threads:
                             break
                     sleep(0.001)
-                if thread.ident is not None:
+                if thread.is_alive():
                     thread.join()
 
     def _execute_claimed_task(self, task: ClaimedTask, claim_sent_at: float) -> None:
