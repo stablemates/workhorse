@@ -12,7 +12,7 @@ provider integration. PydanticAI does not get Workhorse persistence automaticall
 
 ## Run the local proof
 
-The repository example uses Python 3.12 or later, `pydantic-ai-slim==2.57.0`, and the Psycopg
+The repository example uses Python 3.12 or later, `pydantic-ai-slim==2.59.0`, and the Psycopg
 driver of the Python SDK. The local proof uses Psycopg 3.3.6, psycopg-pool 3.3.2, and PostgreSQL
 18.6. PydanticAI is a development dependency. It is not a dependency of the installed Workhorse SDK.
 
@@ -242,7 +242,7 @@ conversation.
 
 ## Migrate the stored histories explicitly
 
-The stored recipe marker is `local-credit-v1`, and the serializer marker is `2.57.0`. If a marker
+The stored recipe marker is `local-credit-v1`, and the serializer marker is `2.59.0`. If a marker
 does not match, you must migrate explicitly. The handler does not guess the compatibility.
 
 Before you upgrade the framework, test the serialized histories and the tool schemas. Tool
