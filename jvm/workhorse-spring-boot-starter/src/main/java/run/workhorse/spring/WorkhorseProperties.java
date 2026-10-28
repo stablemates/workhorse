@@ -132,15 +132,9 @@ public class WorkhorseProperties {
     private Duration shutdownGrace = Duration.ofSeconds(25);
 
     /**
-     * Whether the worker renews leases on a connection that it borrows for each round, instead of
-     * the dedicated heartbeat connection that every worker on the DataSource shares.
-     */
-    private boolean sharedHeartbeats;
-
-    /**
-     * The maximum size of the pool behind the DataSource, which a DataSource does not report. With
-     * shared heartbeats, the worker listens only when this size is at least 2. Without them, a size
-     * below 3 stops the startup. Unset means an unknown size.
+     * The maximum size of the pool behind the DataSource, which a DataSource does not report. A
+     * size below 3 stops the startup. Unset means an unknown size, and the readiness check of the
+     * worker then checks the pool when it starts.
      */
     private @Nullable Integer poolMaxSize;
 
@@ -292,16 +286,6 @@ public class WorkhorseProperties {
     /** Sets the shutdown grace. */
     public void setShutdownGrace(Duration shutdownGrace) {
       this.shutdownGrace = shutdownGrace;
-    }
-
-    /** Whether heartbeat rounds borrow connections. */
-    public boolean isSharedHeartbeats() {
-      return sharedHeartbeats;
-    }
-
-    /** Sets whether heartbeat rounds borrow connections. */
-    public void setSharedHeartbeats(boolean sharedHeartbeats) {
-      this.sharedHeartbeats = sharedHeartbeats;
     }
 
     /** The declared pool maximum size, or null when it is unknown. */

@@ -1,4 +1,3 @@
-using System.Transactions;
 using Npgsql;
 using Workhorse.Internal;
 using Workhorse.Internal.Database;
@@ -7,37 +6,15 @@ using Workhorse.Tests.Testing;
 namespace Workhorse.Tests.Internal.Database;
 
 /// <summary>
-/// The synchronous helpers that the heartbeat and the listener use on their dedicated threads
+/// The synchronous statement helper that the held heartbeat connection uses on its dedicated thread
 /// (ADR 0107, "Concurrency").
 /// </summary>
 public sealed class SynchronousSqlTests(ScratchDatabase database) : IClassFixture<ScratchDatabase>
 {
     [Fact]
-    public void OpensOutsideAnAmbientTransactionScope()
-    {
-        var marker = Guid.NewGuid();
-        using (var setup = database.DataSource.CreateCommand("CREATE TABLE IF NOT EXISTS dotnet_sync_scope_probe (id uuid PRIMARY KEY)"))
-        {
-            setup.ExecuteNonQuery();
-        }
-
-        using (new TransactionScope())
-        {
-            using var connection = DataSources.Open(database.DataSource);
-            using var insert = new NpgsqlCommand("INSERT INTO dotnet_sync_scope_probe VALUES ($1)", connection);
-            insert.Parameters.Add(Parameters.Uuid(marker));
-            insert.ExecuteNonQuery();
-        }
-
-        using var read = database.DataSource.CreateCommand("SELECT count(*) FROM dotnet_sync_scope_probe WHERE id = $1");
-        read.Parameters.Add(Parameters.Uuid(marker));
-        Assert.Equal(1L, read.ExecuteScalar());
-    }
-
-    [Fact]
     public void ReadsRowsAndHandsOverTheCommandBeforeItRuns()
     {
-        using var connection = DataSources.Open(database.DataSource);
+        using var connection = database.DataSource.OpenConnection();
         NpgsqlCommand? seen = null;
         var at = new DateTimeOffset(2026, 10, 22, 9, 0, 0, TimeSpan.FromHours(2));
         var rows = Sql.Rows(
@@ -60,7 +37,7 @@ public sealed class SynchronousSqlTests(ScratchDatabase database) : IClassFixtur
     [Fact]
     public void TranslatesADatabaseError()
     {
-        using var connection = DataSources.Open(database.DataSource);
+        using var connection = database.DataSource.OpenConnection();
         var error = Assert.Throws<DatabaseException>(() =>
             Sql.Rows(connection, new SqlCatalogue.Statement("division_by_zero", "SELECT 1 / 0", 0), [], 5));
         Assert.Equal("22012", error.SqlState);
@@ -69,14 +46,14 @@ public sealed class SynchronousSqlTests(ScratchDatabase database) : IClassFixtur
     [Fact]
     public void RefusesTheWrongArity()
     {
-        using var connection = DataSources.Open(database.DataSource);
+        using var connection = database.DataSource.OpenConnection();
         Assert.Throws<InvalidOperationException>(() => Sql.Rows(connection, SqlCatalogue.GetTaskGroupV1, [], 5));
     }
 
     [Fact]
     public async Task AnotherThreadCanCancelTheCommand()
     {
-        using var connection = DataSources.Open(database.DataSource);
+        using var connection = database.DataSource.OpenConnection();
         using var handed = new SemaphoreSlim(0);
         NpgsqlCommand? running = null;
         var statement = Task.Run(() => Sql.Rows(
@@ -100,7 +77,7 @@ public sealed class SynchronousSqlTests(ScratchDatabase database) : IClassFixtur
     [Fact]
     public void TheCommandTimeoutEndsAStatement()
     {
-        using var connection = DataSources.Open(database.DataSource);
+        using var connection = database.DataSource.OpenConnection();
         Assert.Throws<DatabaseException>(() =>
             Sql.Rows(connection, new SqlCatalogue.Statement("sleep", "SELECT pg_sleep(10)", 0), [], 1));
     }

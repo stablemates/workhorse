@@ -107,8 +107,8 @@ public final class Worker implements AutoCloseable {
   private static final long STARTUP_BUDGET_FLOOR_MS = 5_000;
 
   /**
-   * The smallest declared pool size that a worker with the dedicated heartbeat connection accepts:
-   * the listener, the heartbeat connection, and one connection for statements (ADR 0071, rule 4).
+   * The smallest declared pool size that a worker accepts: the listener, the heartbeat connection,
+   * and one connection for statements (ADR 0071, rule 4).
    */
   private static final int MIN_POOL_MAX_SIZE = 3;
 
@@ -185,7 +185,6 @@ public final class Worker implements AutoCloseable {
   private final Map<String, Registration> handlers;
   private final Map<String, BatchCoordinator> coordinators;
   private final Heartbeat heartbeat;
-  private final boolean sharedHeartbeats;
 
   /** The pool maximum size that the caller declared, or {@code null} when it is unknown. */
   private final @Nullable Integer poolMaxSize;
@@ -368,15 +367,15 @@ public final class Worker implements AutoCloseable {
     PgjdbcVersion.require();
     // A DataSource reports no pool size, so only a declared size can fail this check (ADR 0071,
     // rule 4). An unknown size leaves the check to the readiness check at startup.
-    if (!builder.sharedHeartbeats
-        && builder.poolMaxSize != null
-        && builder.poolMaxSize < MIN_POOL_MAX_SIZE) {
+    if (builder.poolMaxSize != null && builder.poolMaxSize < MIN_POOL_MAX_SIZE) {
       throw new IllegalArgumentException(
-          "Worker pool capacity must be at least "
+          "Worker needs a pool with a known maximum size of at least "
               + MIN_POOL_MAX_SIZE
-              + " (found "
+              + " connections (found "
               + builder.poolMaxSize
-              + "); set sharedHeartbeats(true) to opt out");
+              + "). Give the worker a pool with a maximum size of at least "
+              + MIN_POOL_MAX_SIZE
+              + ".");
     }
     this.poolMaxSize = builder.poolMaxSize;
     this.dataSource = builder.dataSource;
@@ -449,11 +448,7 @@ public final class Worker implements AutoCloseable {
                 .codec(codec)
                 .telemetry(builder.telemetry)
                 .build());
-    this.sharedHeartbeats = builder.sharedHeartbeats;
-    this.heartbeat =
-        builder.sharedHeartbeats
-            ? Heartbeat.borrowing(dataSource)
-            : Heartbeat.dedicated(dataSource);
+    this.heartbeat = Heartbeat.dedicated(dataSource);
     this.sdkVersion = SdkVersion.current();
     this.hostname = localHostname();
   }
@@ -525,8 +520,7 @@ public final class Worker implements AutoCloseable {
     if (size == null) {
       return null;
     }
-    boolean listens = !builder.pollingOnly && lendsListener(builder.sharedHeartbeats, size);
-    return size - (listens ? 1 : 0) - (builder.sharedHeartbeats ? 0 : 1);
+    return size - (builder.pollingOnly ? 0 : 1) - 1;
   }
 
   // ---------------------------------------------------------------------------------------------
@@ -1060,7 +1054,7 @@ public final class Worker implements AutoCloseable {
     // the pool from it. The listener starts between the two steps, so the check proves a free
     // connection beside both reserved ones. The budget is computed once, and its end moves later
     // by the time of the listener wait, which is best effort and uses none of the budget.
-    boolean listens = continuous && !pollingOnly && poolLendsListener();
+    boolean listens = continuous && !pollingOnly;
     long startupDeadline = System.nanoTime() + startupBudgetNanos();
     Heartbeat.Reservation reservation = reserveHeartbeat(run, startupDeadline, listens);
     if (reservation == null) {
@@ -1089,12 +1083,8 @@ public final class Worker implements AutoCloseable {
         startupDeadline += System.nanoTime() - listenerStart;
       }
       // Every step before the claims waits only until the stop deadline, so a stalled statement
-      // cannot keep a stop from its drain. A worker with shared heartbeats reserves nothing, so it
-      // checks compatibility as before, without the startup budget.
-      ready =
-          sharedHeartbeats
-              ? step(queue::assertCompatible, run, "compatibility check")
-              : checkReadiness(run, startupDeadline, listens);
+      // cannot keep a stop from its drain.
+      ready = checkReadiness(run, startupDeadline, listens);
     } finally {
       if (!ready) {
         if (listener != null) {
@@ -1402,21 +1392,25 @@ public final class Worker implements AutoCloseable {
   }
 
   /**
-   * The budget that a startup refusal names: the reserved connections and one statement. {@code
-   * listens} is whether the worker uses the shared listener.
+   * The size rule, the size that the worker knows, and the next step, which a startup refusal
+   * names. The text does not name the removed heartbeat opt-out. {@code listens} is whether the
+   * worker uses the shared listener.
    */
-  private static String startupBudget(boolean listens) {
-    return listens
-        ? " All workers on one DataSource object share one heartbeat connection and one listener"
-            + " connection, so the pool needs at least 3 connections: the listener, the heartbeat,"
-            + " and one for each statement in flight."
-        : " All workers on one DataSource object share one heartbeat connection, so the pool needs"
-            + " at least 2 connections: the heartbeat and one for each statement in flight.";
+  private String startupBudget(boolean listens) {
+    String rule =
+        listens
+            ? " All workers on one DataSource object share one heartbeat connection and one"
+                + " listener connection, so the pool needs at least 3 connections: the listener,"
+                + " the heartbeat, and one for each statement in flight."
+            : " All workers on one DataSource object share one heartbeat connection, so the pool"
+                + " needs at least 2 connections: the heartbeat and one for each statement in"
+                + " flight.";
+    String size =
+        poolMaxSize != null
+            ? " The declared poolMaxSize is " + poolMaxSize + "."
+            : " The DataSource reports no pool size, and no poolMaxSize is declared.";
+    return rule + size + " Grow the pool, or check that the database accepts connections.";
   }
-
-  private static final String STARTUP_OPT_OUT =
-      " Make the pool larger, or set sharedHeartbeats(true) to borrow a pool connection for each"
-          + " heartbeat round.";
 
   /**
    * Reserves the heartbeat connection that the worker shares with every worker on its {@code
@@ -1452,8 +1446,7 @@ public final class Worker implements AutoCloseable {
             + ") within its startup budget of "
             + budgetMs
             + " ms, so it does not start."
-            + startupBudget(listens)
-            + STARTUP_OPT_OUT;
+            + startupBudget(listens);
     throw failure == null
         ? new WorkhorseException(message)
         : new WorkhorseException(message, failure);
@@ -1494,21 +1487,6 @@ public final class Worker implements AutoCloseable {
     }
   }
 
-  /**
-   * Whether the pool can lend the shared listener a connection (SM-1585). The listener holds one
-   * pooled connection while it listens. With the opt-out, a pool smaller than 3 is allowed, so the
-   * listener starts only when the caller declared a pool size of at least 2. A {@code DataSource}
-   * reports no size, and the worker never probes the pool for one. Without the opt-out, the
-   * readiness check proves the headroom.
-   */
-  private boolean poolLendsListener() {
-    return lendsListener(sharedHeartbeats, poolMaxSize);
-  }
-
-  private static boolean lendsListener(boolean sharedHeartbeats, @Nullable Integer poolMaxSize) {
-    return !sharedHeartbeats || (poolMaxSize != null && poolMaxSize >= 2);
-  }
-
   private void logPollingOnly() {
     log(
         System.Logger.Level.WARNING,
@@ -1539,8 +1517,9 @@ public final class Worker implements AutoCloseable {
    * to the check's own thread, which runs its query and returns the connection. Returns {@code
    * false} when a stop passed its deadline first.
    *
-   * @throws CompatibilityException or another error of the check, as before
-   * @throws WorkhorseException if the pool gives no connection within the budget
+   * @throws CompatibilityException if the schema is not compatible
+   * @throws WorkhorseException if the pool gives no connection within the budget, or the check
+   *     fails in another way, with that failure as the cause
    */
   private boolean checkReadiness(RunState run, long deadline, boolean listens) {
     long budgetMs = Math.max(heartbeatMs, STARTUP_BUDGET_FLOOR_MS);
@@ -1583,8 +1562,7 @@ public final class Worker implements AutoCloseable {
                   + ") for its startup check within its startup budget of "
                   + budgetMs
                   + " ms, while it held its reserved connections, so it does not start."
-                  + startupBudget(listens)
-                  + STARTUP_OPT_OUT);
+                  + startupBudget(listens));
         }
         try {
           check.join(Duration.ofNanos(Math.min(remaining, IDLE_CHECK_NANOS)));
@@ -1598,8 +1576,18 @@ public final class Worker implements AutoCloseable {
       }
     }
     Throwable error = failure.get();
+    if (error instanceof CompatibilityException refusal) {
+      throw refusal;
+    }
     if (error != null) {
-      throw unchecked(error);
+      // A pool can refuse the borrow before the budget ends, for example at its own checkout
+      // timeout. The refusal then names the pool rule too, and keeps the pool error as its cause.
+      throw new WorkhorseException(
+          "The startup check of the worker failed on its DataSource ("
+              + dataSource
+              + "), while it held its reserved connections, so it does not start."
+              + startupBudget(listens),
+          error);
     }
     return true;
   }
@@ -4864,7 +4852,6 @@ public final class Worker implements AutoCloseable {
     private List<String> scheduleNamespaces = List.of();
     private int scheduleCatchupLimit = 100;
     private long shutdownGraceMs = 25_000;
-    private boolean sharedHeartbeats;
     private @Nullable Integer poolMaxSize;
     private @Nullable RetryDelay retryDelay;
     private @Nullable Consumer<Throwable> onRegistrationError;
@@ -4997,23 +4984,11 @@ public final class Worker implements AutoCloseable {
     }
 
     /**
-     * Renews leases with a connection borrowed for each round, instead of the dedicated heartbeat
-     * connection that every worker on the {@code DataSource} shares (ADR 0071). Such a worker does
-     * not wait for a heartbeat connection when it starts. The default is {@code false}.
-     */
-    public Builder sharedHeartbeats(boolean shared) {
-      this.sharedHeartbeats = shared;
-      return this;
-    }
-
-    /**
      * Declares the maximum size of the pool behind the {@code DataSource}, because a {@code
-     * DataSource} does not report it. The worker trusts the value and never probes the pool. With
-     * {@code sharedHeartbeats(true)}, the worker starts the shared listener only when the declared
-     * size is at least 2, and otherwise polls. Without the opt-out, {@link #build()} refuses a
-     * declared size below 3. The declared size also caps the default {@link #cohorts}. If an
-     * operator makes the pool smaller than the declared size, the listener can hold the last
-     * connection. The default is unset, which means an unknown size.
+     * DataSource} does not report it. The worker trusts the value and never probes the pool. {@link
+     * #build()} refuses a declared size below 3. The declared size also caps the default {@link
+     * #cohorts}. The default is unset, which means an unknown size. With an unknown size, the
+     * readiness check at startup is the only check of the pool.
      */
     public Builder poolMaxSize(int size) {
       if (size < 1) {

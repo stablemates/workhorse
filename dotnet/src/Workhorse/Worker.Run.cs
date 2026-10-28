@@ -226,7 +226,7 @@ public sealed partial class Worker
         // ADR 0071 rule 3: within one startup budget, the worker reserves the heartbeat connection,
         // and then borrows one ordinary connection for the compatibility query. The listener starts
         // between the two steps, and its wait uses none of the budget.
-        var listens = continuous && !_pollingOnly && PoolLendsListener();
+        var listens = continuous && !_pollingOnly;
         var startupDeadline = Monotonic.Now() + Monotonic.Millis(Math.Max(_heartbeatMs, StartupBudgetFloorMs));
         if (await ReserveHeartbeatAsync(run, startupDeadline, listens).ConfigureAwait(false) is null)
         {
@@ -358,16 +358,17 @@ public sealed partial class Worker
     }
 
     /// <summary>
-    /// Whether the pool can lend the shared listener a connection (SM-1585). Under the opt-out, the
-    /// listener starts only on a pool of a known size of at least 2.
+    /// The size rule, the size that the worker knows, and the next step, which a startup refusal
+    /// names. <paramref name="listens"/> is whether the worker uses the shared listener.
     /// </summary>
-    private bool PoolLendsListener() => !_sharedHeartbeats || _poolMaxSize >= 2;
-
-    private static string StartupBudgetText(bool listens) =>
+    private string StartupBudgetText(bool listens) =>
         (listens
             ? " All workers on one NpgsqlDataSource share one heartbeat connection and one listener connection, so the pool needs at least 3 connections: the listener, the heartbeat, and one for each statement in flight."
             : " All workers on one NpgsqlDataSource share one heartbeat connection, so the pool needs at least 2 connections: the heartbeat and one for each statement in flight.")
-        + " Make the pool larger, or set SharedHeartbeats to open a connection for each heartbeat round.";
+        + (_poolMaxSize is { } size
+            ? $" The data source has Max Pool Size={size}."
+            : " The data source does not pool, so its size is unknown.")
+        + " Grow the pool, or check that the database accepts connections.";
 
     /// <summary>
     /// Reserves the heartbeat connection and waits for it until the end of the startup budget. A stop
@@ -422,16 +423,12 @@ public sealed partial class Worker
     /// <summary>
     /// The readiness check of ADR 0071: while the reserved connections are held, it borrows one
     /// ordinary connection, runs the compatibility query, and gives the connection back. It ends by
-    /// <paramref name="deadline"/>. Under shared heartbeats it runs the compatibility check alone.
-    /// Returns <c>false</c> when a stop passed its deadline first.
+    /// <paramref name="deadline"/>. Returns <c>false</c> when a stop passed its deadline first.
     /// </summary>
     private async Task<bool> CheckReadinessAsync(RunState run, long deadline, bool listens)
     {
         using var budget = new CancellationTokenSource();
-        if (!_sharedHeartbeats)
-        {
-            budget.CancelAfter(Monotonic.Span(deadline - Monotonic.Now()));
-        }
+        budget.CancelAfter(Monotonic.Span(deadline - Monotonic.Now()));
 
         var check = CheckCompatibilityAsync(budget.Token);
         // The wait itself ends at the budget. The token alone does not bound the check: Npgsql's
@@ -448,7 +445,7 @@ public sealed partial class Worker
                 return false;
             }
 
-            if (!_sharedHeartbeats && deadline - Monotonic.Now() <= 0)
+            if (deadline - Monotonic.Now() <= 0)
             {
                 outOfBudget = true;
                 Abandon(check);
@@ -468,6 +465,15 @@ public sealed partial class Worker
             catch (OperationCanceledException) when (budget.IsCancellationRequested)
             {
                 // The budget ended while the check waited for a connection.
+            }
+            catch (Exception error) when (error is not CompatibilityException and not OperationCanceledException)
+            {
+                // A pool or the server can refuse the connection before the budget ends. The refusal
+                // then names the pool rule too, and keeps that error as its inner exception.
+                throw new WorkerStartupException(
+                    "The startup check of the worker failed on its NpgsqlDataSource, while it held its reserved connections, "
+                    + "so it does not start." + StartupBudgetText(listens),
+                    error);
             }
         }
 

@@ -318,7 +318,6 @@ class WorkerDatabaseTest {
             .queues(queueName)
             .pollingOnly(true)
             .disableRegistry(true)
-            .sharedHeartbeats(true)
             .handle("echo", String.class, (ctx, payload) -> payload)
             .build();
 

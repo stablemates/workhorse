@@ -14,7 +14,7 @@ public sealed class WorkerShutdownGraceTests
     {
         // The worker opens no connection here, so the address is never reached.
         var dataSource = NpgsqlDataSource.Create("Host=127.0.0.1;Port=1;Database=workhorse;Username=workhorse");
-        return new Worker(dataSource, new WorkerOptions { Queues = ["grace"], SharedHeartbeats = true, ShutdownGrace = grace });
+        return new Worker(dataSource, new WorkerOptions { Queues = ["grace"], ShutdownGrace = grace });
     }
 
     private static long GraceNanos(Worker worker) =>

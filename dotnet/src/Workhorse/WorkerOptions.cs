@@ -30,9 +30,8 @@ public sealed class WorkerOptions
     /// <see cref="Concurrency"/>. The default, 0, chooses one cohort below concurrency 8, and one
     /// for each 8 slots from 2 to 8 otherwise. On a pooled data source, the worker then caps that
     /// default at the spare connections of the pool. The spare connections are <c>Max Pool Size</c>,
-    /// minus 1 for the listener when the worker listens. Unless <see cref="SharedHeartbeats"/> is set,
-    /// the heartbeat connection takes 1 more. The cap is never below 1. An explicit value is never
-    /// capped.
+    /// minus 1 for the listener when the worker listens, minus 1 for the heartbeat connection. The
+    /// cap is never below 1. An explicit value is never capped.
     /// </summary>
     public int Cohorts { get; set; }
 
@@ -74,12 +73,6 @@ public sealed class WorkerOptions
     /// 25 s.
     /// </summary>
     public TimeSpan ShutdownGrace { get; set; } = TimeSpan.FromSeconds(25);
-
-    /// <summary>
-    /// The opt-out of ADR 0071. When <c>true</c>, each heartbeat round opens a connection for its
-    /// statement instead of the one heartbeat connection that the workers of a data source share.
-    /// </summary>
-    public bool SharedHeartbeats { get; set; }
 
     /// <summary>Chooses the retry delay of a failed attempt. The default is unset.</summary>
     public RetryDelay? RetryDelay { get; set; }

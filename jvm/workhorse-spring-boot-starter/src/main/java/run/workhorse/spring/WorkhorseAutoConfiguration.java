@@ -24,6 +24,8 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnSingleCandi
 import org.springframework.boot.autoconfigure.condition.ConditionalOnWebApplication;
 import org.springframework.boot.autoconfigure.condition.NoneNestedConditions;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
+import org.springframework.boot.context.properties.bind.Bindable;
+import org.springframework.boot.context.properties.bind.Binder;
 import org.springframework.boot.health.autoconfigure.contributor.ConditionalOnEnabledHealthIndicator;
 import org.springframework.boot.health.contributor.HealthIndicator;
 import org.springframework.boot.web.servlet.FilterRegistrationBean;
@@ -33,6 +35,7 @@ import org.springframework.context.annotation.Condition;
 import org.springframework.context.annotation.ConditionContext;
 import org.springframework.context.annotation.Conditional;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.core.env.Environment;
 import org.springframework.core.type.AnnotatedTypeMetadata;
 import org.springframework.transaction.PlatformTransactionManager;
 import run.workhorse.Admin;
@@ -191,6 +194,31 @@ public final class WorkhorseAutoConfiguration {
     }
   }
 
+  /**
+   * The property that Workhorse 0.11.0 removed. Every worker now uses the dedicated heartbeat
+   * connection (ADR 0071), so the property has no effect, and the starter refuses it.
+   */
+  static final String REMOVED_SHARED_HEARTBEATS = "workhorse.worker.shared-heartbeats";
+
+  /**
+   * The startup check of the removed {@code workhorse.worker.shared-heartbeats} property, in each
+   * relaxed form. It runs whether or not the starter selects a DataSource.
+   */
+  @Bean
+  static SmartInitializingSingleton workhorseRemovedPropertyCheck(Environment environment) {
+    return () -> {
+      if (Binder.get(environment)
+          .bind(REMOVED_SHARED_HEARTBEATS, Bindable.of(String.class))
+          .isBound()) {
+        throw new IllegalStateException(
+            REMOVED_SHARED_HEARTBEATS
+                + " was removed in 0.11.0. Every worker now reserves a dedicated heartbeat"
+                + " connection. Remove the property, and give the worker a pool with a known"
+                + " maximum size of at least 3.");
+      }
+    };
+  }
+
   /** The warning when the starter backs off because several DataSource beans exist. */
   @Configuration(proxyBeanMethods = false)
   @Conditional(SeveralDataSources.class)
@@ -337,7 +365,6 @@ public final class WorkhorseAutoConfiguration {
               .scheduleNamespaces(options.getScheduleNamespaces().toArray(String[]::new))
               .scheduleCatchupLimit(options.getScheduleCatchupLimit())
               .shutdownGrace(options.getShutdownGrace())
-              .sharedHeartbeats(options.isSharedHeartbeats())
               .codec(codec.getIfAvailable(JsonCodec::standard));
       String workerId = options.getWorkerId();
       if (workerId != null) {

@@ -14,7 +14,7 @@ public sealed class WorkerIntervalBoundariesTests
     {
         // The worker opens no connection here, so the address is never reached.
         var dataSource = NpgsqlDataSource.Create("Host=127.0.0.1;Port=1;Database=workhorse;Username=workhorse");
-        var options = new WorkerOptions { Queues = ["intervals"], SharedHeartbeats = true };
+        var options = new WorkerOptions { Queues = ["intervals"] };
         configure(options);
         return new Worker(dataSource, options);
     }

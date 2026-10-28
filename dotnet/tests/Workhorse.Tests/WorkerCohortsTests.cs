@@ -42,19 +42,10 @@ public sealed class WorkerCohortsTests
         Assert.Equal(cohorts, await CohortsAsync(poolSize, concurrency));
 
     [Fact]
-    public async Task PollingOnlyAndSharedHeartbeatsReserveNoConnection()
+    public async Task PollingOnlyReservesNoListenerConnection()
     {
         Assert.Equal(3, await CohortsAsync(4, 64, options => options.PollingOnly = true));
-        Assert.Equal(3, await CohortsAsync(4, 64, options => options.SharedHeartbeats = true));
-        Assert.Equal(4, await CohortsAsync(4, 64, options =>
-        {
-            options.SharedHeartbeats = true;
-            options.PollingOnly = true;
-        }));
-
-        // Under the opt-out, a pool of 1 lends no listener, so the worker polls.
-        Assert.Equal(1, await CohortsAsync(1, 64, options => options.SharedHeartbeats = true));
-        Assert.Equal(1, await CohortsAsync(2, 64, options => options.SharedHeartbeats = true));
+        Assert.Equal(2, await CohortsAsync(3, 64, options => options.PollingOnly = true));
     }
 
     [Fact]
@@ -64,7 +55,6 @@ public sealed class WorkerCohortsTests
         Assert.Equal(64, await CohortsAsync(3, 64, options => options.Cohorts = 64));
         // Without pooling, the worker ignores a Max Pool Size that the connection string states.
         Assert.Equal(8, await CohortsAsync(WithoutPooling, 64));
-        Assert.Equal(8, await CohortsAsync(WithoutPooling, 64, options => options.SharedHeartbeats = true));
 
         // Npgsql reports its default Max Pool Size of 100, so the cap leaves the default unchanged.
         Assert.Equal(8, await CohortsAsync(_ => { }, 64));

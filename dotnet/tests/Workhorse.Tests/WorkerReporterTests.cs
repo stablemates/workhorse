@@ -19,7 +19,6 @@ public sealed class WorkerReporterTests
         return new Worker(dataSource, new WorkerOptions
         {
             Queues = ["reporters"],
-            SharedHeartbeats = true,
             WorkerId = "reporter-worker",
             LoggerFactory = loggerFactory,
         });

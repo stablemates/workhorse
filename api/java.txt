@@ -1521,7 +1521,6 @@ run.workhorse.Worker.Builder: public run.workhorse.Worker.Builder registryInterv
 run.workhorse.Worker.Builder: public run.workhorse.Worker.Builder retryDelay(run.workhorse.RetryDelay)
 run.workhorse.Worker.Builder: public run.workhorse.Worker.Builder scheduleCatchupLimit(int)
 run.workhorse.Worker.Builder: public run.workhorse.Worker.Builder scheduleNamespaces(java.lang.String...)
-run.workhorse.Worker.Builder: public run.workhorse.Worker.Builder sharedHeartbeats(boolean)
 run.workhorse.Worker.Builder: public run.workhorse.Worker.Builder shutdownGrace(java.time.Duration)
 run.workhorse.Worker.Builder: public run.workhorse.Worker.Builder telemetry(run.workhorse.WorkhorseTelemetry)
 run.workhorse.Worker.Builder: public run.workhorse.Worker.Builder workerId(java.lang.String)
@@ -1720,7 +1719,6 @@ run.workhorse.spring.WorkhorseProperties.WorkerProperties: public WorkerProperti
 run.workhorse.spring.WorkhorseProperties.WorkerProperties: public boolean isDisableRegistry()
 run.workhorse.spring.WorkhorseProperties.WorkerProperties: public boolean isEnabled()
 run.workhorse.spring.WorkhorseProperties.WorkerProperties: public boolean isPollingOnly()
-run.workhorse.spring.WorkhorseProperties.WorkerProperties: public boolean isSharedHeartbeats()
 run.workhorse.spring.WorkhorseProperties.WorkerProperties: public int getConcurrency()
 run.workhorse.spring.WorkhorseProperties.WorkerProperties: public int getScheduleCatchupLimit()
 run.workhorse.spring.WorkhorseProperties.WorkerProperties: public java.time.Duration getLease()
@@ -1744,7 +1742,6 @@ run.workhorse.spring.WorkhorseProperties.WorkerProperties: public void setQueues
 run.workhorse.spring.WorkhorseProperties.WorkerProperties: public void setRegistryInterval(java.time.Duration)
 run.workhorse.spring.WorkhorseProperties.WorkerProperties: public void setScheduleCatchupLimit(int)
 run.workhorse.spring.WorkhorseProperties.WorkerProperties: public void setScheduleNamespaces(java.util.List<java.lang.String>)
-run.workhorse.spring.WorkhorseProperties.WorkerProperties: public void setSharedHeartbeats(boolean)
 run.workhorse.spring.WorkhorseProperties.WorkerProperties: public void setShutdownGrace(java.time.Duration)
 run.workhorse.spring.WorkhorseProperties.WorkerProperties: public void setWorkerId(@Nullable java.lang.String)
 
@@ -1773,6 +1770,5 @@ property workhorse.worker.queues: java.util.List<java.lang.String> = ["default"]
 property workhorse.worker.registry-interval: java.time.Duration = "PT5S"
 property workhorse.worker.schedule-catchup-limit: java.lang.Integer = 100
 property workhorse.worker.schedule-namespaces: java.util.List<java.lang.String> = []
-property workhorse.worker.shared-heartbeats: java.lang.Boolean = false
 property workhorse.worker.shutdown-grace: java.time.Duration = "PT25S"
 property workhorse.worker.worker-id: java.lang.String

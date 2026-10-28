@@ -150,7 +150,6 @@ public sealed class WorkerUnitTests
         Assert.Equal(TimeSpan.FromSeconds(5), options.RegistryInterval);
         Assert.Equal(100, options.ScheduleCatchupLimit);
         Assert.Equal(TimeSpan.FromSeconds(25), options.ShutdownGrace);
-        Assert.False(options.SharedHeartbeats);
         Assert.Null(options.RetryDelay);
     }
 

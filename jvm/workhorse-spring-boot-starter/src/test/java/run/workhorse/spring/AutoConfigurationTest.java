@@ -283,6 +283,34 @@ class AutoConfigurationTest {
                     .hasStackTraceContaining("workhorse.data-source=false"));
   }
 
+  /**
+   * SM-1902: {@code workhorse.worker.shared-heartbeats} is removed. In each relaxed form and with
+   * each value, the context does not start, also when the starter selects no DataSource.
+   */
+  @Test
+  void refusesTheRemovedSharedHeartbeatsProperty() {
+    for (String property :
+        List.of(
+            "workhorse.worker.shared-heartbeats=true",
+            "workhorse.worker.sharedHeartbeats=false",
+            "workhorse.worker.shared_heartbeats=true")) {
+      Contexts.runner()
+          .withPropertyValues(property)
+          .run(
+              context ->
+                  assertThat(context)
+                      .getFailure()
+                      .as(property)
+                      .isInstanceOf(IllegalStateException.class)
+                      .hasMessageContaining("workhorse.worker.shared-heartbeats")
+                      .hasMessageContaining("removed")
+                      .hasMessageContaining("a known maximum size of at least 3"));
+    }
+    Contexts.runner()
+        .withPropertyValues("workhorse.worker.pool-max-size=3")
+        .run(context -> assertThat(context).hasNotFailed());
+  }
+
   @Test
   void acceptsAPrimaryDashboardAuthorizerAmongSeveral() {
     web()

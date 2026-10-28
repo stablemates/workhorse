@@ -18,7 +18,7 @@ public sealed class WorkerRegistryWriteTests
     {
         // The worker opens no connection here, so the address is never reached.
         var dataSource = NpgsqlDataSource.Create("Host=127.0.0.1;Port=1;Database=workhorse;Username=workhorse");
-        return new Worker(dataSource, new WorkerOptions { Queues = ["registry"], SharedHeartbeats = true });
+        return new Worker(dataSource, new WorkerOptions { Queues = ["registry"] });
     }
 
     private static Task RegistryStep(Worker worker, Func<Task> body) =>

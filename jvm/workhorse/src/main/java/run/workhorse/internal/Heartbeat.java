@@ -29,7 +29,6 @@ import java.util.concurrent.locks.ReentrantLock;
 import java.util.function.BooleanSupplier;
 import javax.sql.DataSource;
 import org.jspecify.annotations.Nullable;
-import run.workhorse.ConnectionSource;
 import run.workhorse.internal.telemetry.Telemetry;
 import run.workhorse.internal.telemetry.WorkerTelemetry;
 
@@ -40,8 +39,7 @@ import run.workhorse.internal.telemetry.WorkerTelemetry;
  * <p>Every worker on one {@link DataSource} object shares one dedicated heartbeat. The key is the
  * object itself, by reference identity, never by {@code equals}. That heartbeat holds one
  * connection while a worker holds a {@link Reservation} or an attempt is registered, so handlers
- * that hold every other connection never delay a lease round. A worker with shared heartbeats has
- * its own heartbeat, which borrows a connection for each round instead.
+ * that hold every other connection never delay a lease round.
  *
  * <p>A dedicated heartbeat checks out its connection, and each replacement, on one checkout thread
  * at a time. That thread owns each connection from its checkout until the pool has it back, so a
@@ -161,7 +159,6 @@ public final class Heartbeat {
   private static final long NETWORK_TIMEOUT_SLACK_NANOS = TimeUnit.MILLISECONDS.toNanos(1);
 
   private final DataSource dataSource;
-  private final boolean dedicated;
   private final ReentrantLock lock = new ReentrantLock();
   private final Condition changed = lock.newCondition();
   private final Map<List<Object>, Member> members = new LinkedHashMap<>();
@@ -170,7 +167,7 @@ public final class Heartbeat {
   /** A round that replaces every connection, for tests of the schedule. */
   private final @Nullable Round fixedRound;
 
-  /** Whether the heartbeat holds a connection across rounds: dedicated, with no fixed round. */
+  /** Whether the heartbeat holds a connection across rounds: true without a fixed round. */
   private final boolean holdsConnection;
 
   /** The open reservations of workers. They change under {@link #lock}. */
@@ -272,29 +269,23 @@ public final class Heartbeat {
    */
   private boolean roundExpired;
 
-  Heartbeat(DataSource dataSource, boolean dedicated) {
-    this(dataSource, dedicated, null);
+  Heartbeat(DataSource dataSource) {
+    this(dataSource, null);
   }
 
   /**
    * A heartbeat whose rounds go through {@code fixedRound} instead of a connection, when it is not
-   * {@code null}. A failed round then acts as a failed dedicated round.
+   * {@code null}, for tests. A failed round then acts as a failed round on the held connection.
    */
-  Heartbeat(DataSource dataSource, boolean dedicated, @Nullable Round fixedRound) {
+  Heartbeat(DataSource dataSource, @Nullable Round fixedRound) {
     this.dataSource = dataSource;
-    this.dedicated = dedicated;
     this.fixedRound = fixedRound;
-    this.holdsConnection = dedicated && fixedRound == null;
+    this.holdsConnection = fixedRound == null;
   }
 
   /** The heartbeat that every worker on the {@code dataSource} object shares. */
   public static Heartbeat dedicated(DataSource dataSource) {
-    return DEDICATED.get(dataSource, source -> new Heartbeat(source, true));
-  }
-
-  /** A heartbeat of one worker that borrows a connection for each round. */
-  public static Heartbeat borrowing(DataSource dataSource) {
-    return new Heartbeat(dataSource, false);
+    return DEDICATED.get(dataSource, Heartbeat::new);
   }
 
   /**
@@ -302,7 +293,8 @@ public final class Heartbeat {
    * open, a dedicated heartbeat keeps its connection, and replaces a lost one at once, also when no
    * attempt is registered. {@code intervalNanos} is the worker's heartbeat interval, which caps the
    * wait between two failed checkouts. {@code onConnected} runs on the checkout thread each time a
-   * new connection is installed. A reservation of a borrowing heartbeat is always connected.
+   * new connection is installed. A reservation of a heartbeat with a fixed round is always
+   * connected.
    */
   public Reservation reserve(long intervalNanos, Runnable onConnected) {
     Reservation reservation = new Reservation(intervalNanos, onConnected);
@@ -664,27 +656,11 @@ public final class Heartbeat {
    * aborted one ({@link #discard}). The replacement checkout then starts at once: rounds waits for
    * the slot itself, and starts one overdue round at once. A round that expires before its
    * heartbeat statement with a clean connection does not throw out of rounds (RoundExpired), so the
-   * next round uses the same connection. A borrowing round that fails is skipped.
+   * next round uses the same connection.
    */
   private void run() {
-    Round round;
     Round fixed = fixedRound;
-    if (fixed != null) {
-      round = fixed;
-    } else if (dedicated) {
-      round = this::sendOnHeld;
-    } else {
-      ConnectionSource source = ConnectionSource.of(dataSource);
-      round =
-          (timeoutNanos, statement, parameters) -> {
-            Connection connection = source.acquire();
-            try {
-              return Sql.rows(connection, statement, parameters);
-            } finally {
-              source.release(connection, false);
-            }
-          };
-    }
+    Round round = fixed != null ? fixed : this::sendOnHeld;
     boolean idle = true;
     while (true) {
       boolean exit = false;
@@ -788,15 +764,14 @@ public final class Heartbeat {
    * Runs rounds until no member remains, and returns {@code true} then. A regular round falls due
    * one shortest member interval after the previous regular round started. A round that ends after
    * its next slot starts one overdue round at once, and the interval after it counts from that
-   * start, so missed slots are never replayed. A dedicated round that fails throws, so the caller
-   * can replace the connection; a borrowing round that fails is skipped.
+   * start, so missed slots are never replayed. A round that fails throws, so the caller can replace
+   * the connection.
    *
    * <p>A round has one batch for each worker and each {@link #ROUND_LIMIT} leases ({@link
    * #batches}). On the dedicated connection, the round sends every batch in one transaction with
    * one {@code heartbeat_pool_v1} statement, so the number of round trips does not grow with the
    * number of workers. The deadline of that transaction is the round start plus {@link
-   * #roundBoundNanos}. A borrowing round has no deadline, and sends one {@code heartbeat_many_v2}
-   * statement for each batch.
+   * #roundBoundNanos}.
    *
    * <p>Between two regular slots, a busy retry sends only the members that the latest round
    * reported busy ({@link #takeBusyRetry}). It is a round of this one thread, so it never overlaps
@@ -861,7 +836,7 @@ public final class Heartbeat {
         deadline = retryDeadline(start, interval, previous + interval, due);
         // A retry that cannot finish in time sends nothing. It does not touch the connection, and
         // the loop waits for the regular slot, as after an empty selection.
-        if (dedicated && !busyRetryFits(start, deadline)) {
+        if (!busyRetryFits(start, deadline)) {
           continue;
         }
         batches = batches(due);
@@ -979,86 +954,56 @@ public final class Heartbeat {
    * ({@link #roundExpired}). A round that fails at or after its heartbeat statement throws, and no
    * lease of it counts.
    *
-   * <p>A borrowing round sends one {@code heartbeat_many_v2} statement for each batch, and skips a
-   * failed one.
-   *
    * <p>A round that fails before PostgreSQL returns its statuses counts once in {@code
    * workhorse.worker.heartbeat.round_failure} ({@link #roundFailed}).
    */
   List<Member> sendBatches(List<Batch> batches, long deadline, Round round) throws SQLException {
     roundExpired = false;
     List<Member> busy = new ArrayList<>();
-    if (dedicated) {
-      if (batches.isEmpty()) {
-        return busy;
-      }
-      if (deadline - System.nanoTime() <= 0) {
-        // The round reached its deadline before it sent anything, so its members get no status.
-        roundFailed(
-            batches,
-            new RoundExpired("Heartbeat round reached its deadline before it sent its leases"),
-            true);
-        return busy;
-      }
-      long sentAt = System.nanoTime();
-      List<Row> rows;
-      try {
-        String payload = pool(batches);
-        rows = round.send(deadline - System.nanoTime(), SqlCatalogue.HEARTBEAT_POOL_V1, payload);
-      } catch (RoundExpired expired) {
-        roundExpired = true;
-        // A round that got a new connection sends nothing and runs again at once on it. It did
-        // not fail. Any other expired round reached its deadline before PostgreSQL gave a status.
-        if (!freshConnection) {
-          roundFailed(batches, expired, true);
-        }
-        return busy;
-      } catch (SQLException | RuntimeException error) {
-        // The network timeout of the connection ends the read at the round deadline. A socket
-        // timeout before that comes from a driver or pool setting, and is a connection failure.
-        boolean deadlineReached = System.nanoTime() - deadline + NETWORK_TIMEOUT_SLACK_NANOS >= 0;
-        roundFailed(batches, error, deadlineReached);
-        throw error;
-      }
-      // The statement numbers the batches from 1, in the order of the payload.
-      List<Map<String, String>> statuses = new ArrayList<>();
-      for (int index = 0; index < batches.size(); index++) {
-        statuses.add(new HashMap<>());
-      }
-      for (Row row : rows) {
-        int batch = row.requiredInteger("batch");
-        if (batch >= 1 && batch <= batches.size()) {
-          statuses.get(batch - 1).put(row.requiredText("task_id"), row.requiredText("status"));
-        }
-      }
-      for (int index = 0; index < batches.size(); index++) {
-        settle(batches.get(index).members(), statuses.get(index), sentAt, busy);
-      }
+    if (batches.isEmpty()) {
       return busy;
     }
-    // The first failed batch fails the round, which counts at once and only once. The other
-    // batches still go out and settle. A borrowing round has no network timeout of its own, so a
-    // socket timeout is never its deadline.
-    boolean failed = false;
-    for (Batch batch : batches) {
-      long sentAt = System.nanoTime();
-      List<Row> rows;
-      try {
-        String payload = Json.write(leases(batch.members()));
-        long remaining = deadline - System.nanoTime();
-        rows = round.send(remaining, SqlCatalogue.HEARTBEAT_MANY_V2, batch.workerId(), payload);
-      } catch (SQLException | RuntimeException error) {
-        if (!failed) {
-          failed = true;
-          roundFailed(batches, error, false);
-        }
-        continue;
+    if (deadline - System.nanoTime() <= 0) {
+      // The round reached its deadline before it sent anything, so its members get no status.
+      roundFailed(
+          batches,
+          new RoundExpired("Heartbeat round reached its deadline before it sent its leases"),
+          true);
+      return busy;
+    }
+    long sentAt = System.nanoTime();
+    List<Row> rows;
+    try {
+      String payload = pool(batches);
+      rows = round.send(deadline - System.nanoTime(), SqlCatalogue.HEARTBEAT_POOL_V1, payload);
+    } catch (RoundExpired expired) {
+      roundExpired = true;
+      // A round that got a new connection sends nothing and runs again at once on it. It did not
+      // fail. Any other expired round reached its deadline before PostgreSQL gave a status.
+      if (!freshConnection) {
+        roundFailed(batches, expired, true);
       }
-      Map<String, String> statuses = new HashMap<>();
-      for (Row row : rows) {
-        statuses.put(row.requiredText("task_id"), row.requiredText("status"));
+      return busy;
+    } catch (SQLException | RuntimeException error) {
+      // The network timeout of the connection ends the read at the round deadline. A socket
+      // timeout before that comes from a driver or pool setting, and is a connection failure.
+      boolean deadlineReached = System.nanoTime() - deadline + NETWORK_TIMEOUT_SLACK_NANOS >= 0;
+      roundFailed(batches, error, deadlineReached);
+      throw error;
+    }
+    // The statement numbers the batches from 1, in the order of the payload.
+    List<Map<String, String>> statuses = new ArrayList<>();
+    for (int index = 0; index < batches.size(); index++) {
+      statuses.add(new HashMap<>());
+    }
+    for (Row row : rows) {
+      int batch = row.requiredInteger("batch");
+      if (batch >= 1 && batch <= batches.size()) {
+        statuses.get(batch - 1).put(row.requiredText("task_id"), row.requiredText("status"));
       }
-      settle(batch.members(), statuses, sentAt, busy);
+    }
+    for (int index = 0; index < batches.size(); index++) {
+      settle(batches.get(index).members(), statuses.get(index), sentAt, busy);
     }
     return busy;
   }
@@ -1116,11 +1061,9 @@ public final class Heartbeat {
    *   <li>{@code connection}, when the chain has no SQLSTATE: a {@link
    *       SQLNonTransientConnectionException} or {@link SQLTransientConnectionException}, which a
    *       pool or a driver uses for a connection that it could not open or that closed; or a driver
-   *       or pool timeout before the round deadline. A borrowing round sets no network timeout and
-   *       has no deadline of its own, so its caller passes {@code deadlineReached} as false. A
-   *       login timeout of {@code DataSource.getConnection}, a pool checkout timeout, a driver
-   *       {@code socketTimeout}, and a driver {@code connectTimeout} are thus connection failures
-   *       there.
+   *       or pool timeout before the round deadline. A login timeout of {@code
+   *       DataSource.getConnection}, a pool checkout timeout, a driver {@code socketTimeout}, and a
+   *       driver {@code connectTimeout} before the round deadline are thus connection failures.
    *   <li>{@code other}: everything else.
    * </ol>
    */

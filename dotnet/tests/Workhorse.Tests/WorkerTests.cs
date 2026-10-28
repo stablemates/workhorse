@@ -740,11 +740,9 @@ public sealed class WorkerTests(ScratchDatabase database) : IClassFixture<Scratc
         var second = new Worker(database.DataSource, Options("default"));
         using var other = database.CreateDataSource(_ => { });
         var third = new Worker(other, Options("default"));
-        var shared = new Worker(database.DataSource, Options("default", options => options.SharedHeartbeats = true));
 
         Assert.Same(first.HeartbeatForTests, second.HeartbeatForTests);
         Assert.NotSame(first.HeartbeatForTests, third.HeartbeatForTests);
-        Assert.NotSame(first.HeartbeatForTests, shared.HeartbeatForTests);
         Assert.Same(Workhorse.Internal.Runtime.Listener.Shared(database.DataSource), Workhorse.Internal.Runtime.Listener.Shared(database.DataSource));
         Assert.NotSame(Workhorse.Internal.Runtime.Listener.Shared(database.DataSource), Workhorse.Internal.Runtime.Listener.Shared(other));
     }
@@ -797,14 +795,37 @@ public sealed class WorkerTests(ScratchDatabase database) : IClassFixture<Scratc
     }
 
     [Fact]
-    public void AWorkerRefusesAPoolSmallerThanThreeUnlessHeartbeatsAreShared()
+    public void AWorkerRefusesAMultiplexingDataSource()
     {
-        using var small = database.CreateDataSource(builder => builder.MaxPoolSize = 2);
-        Assert.Throws<ArgumentException>(() => new Worker(small, Options("default")));
-        _ = new Worker(small, Options("default", options => options.SharedHeartbeats = true));
-
         using var multiplexing = database.CreateDataSource(builder => builder.Multiplexing = true);
         Assert.Throws<ArgumentException>(() => new Worker(multiplexing, Options("default")));
+    }
+
+    /// <summary>
+    /// SM-1902: the pool waits 1 s for a connection, so it refuses the readiness check long before
+    /// the startup budget of 5 s. The refusal still names the size rule and the next step, and it keeps
+    /// the pool error as its inner exception.
+    /// </summary>
+    [Fact]
+    public async Task APoolThatRefusesTheReadinessCheckFirstEndsTheRunWithTheSizeRule()
+    {
+        await using var pool = database.CreateDataSource(builder =>
+        {
+            builder.MaxPoolSize = 3;
+            builder.Timeout = 1;
+        });
+        // The test holds one connection, the heartbeat and the listener take the other two.
+        await using var held = await pool.OpenConnectionAsync(TestContext.Current.CancellationToken);
+        await using var worker = new Worker(pool, Options(UniqueQueue("early-refusal"), options => options.Lease = TimeSpan.FromSeconds(3)));
+
+        // If the worker started, the token ends the run, and the assertion fails instead of a hang.
+        using var bound = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+        bound.CancelAfter(TimeSpan.FromSeconds(30));
+        var refusal = await Assert.ThrowsAsync<WorkerStartupException>(() => worker.RunAsync(bound.Token));
+        Assert.Contains("The startup check of the worker failed", refusal.Message, StringComparison.Ordinal);
+        Assert.Contains("Max Pool Size=3", refusal.Message, StringComparison.Ordinal);
+        Assert.EndsWith("Grow the pool, or check that the database accepts connections.", refusal.Message, StringComparison.Ordinal);
+        Assert.NotNull(refusal.InnerException);
     }
 
     [Fact]

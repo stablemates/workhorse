@@ -186,7 +186,7 @@ class HeartbeatDatabaseTest {
                 })
             .build();
     ExecutorService runner = Executors.newSingleThreadExecutor();
-    Heartbeat heartbeat = new Heartbeat(dataSource, true);
+    Heartbeat heartbeat = new Heartbeat(dataSource);
     Runnable unregister = () -> {};
     try (Connection blocker = ScratchDatabase.connect()) {
       Future<Boolean> run = runner.submit(worker::runOnce);
@@ -299,7 +299,7 @@ class HeartbeatDatabaseTest {
   @Test
   void replacesALostConnectionOnACheckoutThreadAndWakesTheReservation() throws Exception {
     Gated gated = new Gated();
-    Heartbeat heartbeat = new Heartbeat(gated.over(dataSource), true);
+    Heartbeat heartbeat = new Heartbeat(gated.over(dataSource));
     AtomicInteger wakes = new AtomicInteger();
     Heartbeat.Reservation reservation =
         heartbeat.reserve(TimeUnit.SECONDS.toNanos(1), wakes::incrementAndGet);
@@ -415,7 +415,7 @@ class HeartbeatDatabaseTest {
   @Test
   void startsTheFirstRoundOnAReplacementWithTheFullBound() throws Exception {
     Watched watched = new Watched();
-    Heartbeat heartbeat = new Heartbeat(watched.over(dataSource), true);
+    Heartbeat heartbeat = new Heartbeat(watched.over(dataSource));
     watched.round = heartbeat.roundsStarted::get;
     Runnable unregister = () -> {};
     try (RunningTask task = new RunningTask("replaced-bound")) {
@@ -456,7 +456,7 @@ class HeartbeatDatabaseTest {
   @Test
   void renewsAtOnceOnAReplacementAfterTheShortestIntervalLeft() throws Exception {
     Watched watched = new Watched();
-    Heartbeat heartbeat = new Heartbeat(watched.over(dataSource), true);
+    Heartbeat heartbeat = new Heartbeat(watched.over(dataSource));
     watched.round = heartbeat.roundsStarted::get;
     Runnable removeFast = () -> {};
     Runnable removeSlow = () -> {};
@@ -507,7 +507,7 @@ class HeartbeatDatabaseTest {
   @Test
   void staysConnectedThroughAFailedRenewalAndABusyRound() throws Exception {
     Watched watched = new Watched();
-    Heartbeat heartbeat = new Heartbeat(watched.over(dataSource), true);
+    Heartbeat heartbeat = new Heartbeat(watched.over(dataSource));
     Heartbeat.Reservation reservation = heartbeat.reserve(TimeUnit.SECONDS.toNanos(1), () -> {});
     AtomicBoolean disconnected = new AtomicBoolean();
     AtomicBoolean sampling = new AtomicBoolean(true);
@@ -588,7 +588,7 @@ class HeartbeatDatabaseTest {
   void runsOneCheckoutForRepeatedTimeoutsAndClosesTheLateConnection() throws Exception {
     Gated gated = new Gated();
     gated.hold.set(true);
-    Heartbeat heartbeat = new Heartbeat(gated.over(dataSource), true);
+    Heartbeat heartbeat = new Heartbeat(gated.over(dataSource));
     try {
       for (int attempt = 0; attempt < 5; attempt++) {
         Heartbeat.Reservation reservation =
@@ -616,7 +616,7 @@ class HeartbeatDatabaseTest {
   @Test
   void waitsForTheReturnOfTheLastConnectionBeforeTheNextCheckout() throws Exception {
     Gated gated = new Gated();
-    Heartbeat heartbeat = new Heartbeat(gated.over(dataSource), true);
+    Heartbeat heartbeat = new Heartbeat(gated.over(dataSource));
     Heartbeat.Reservation first = heartbeat.reserve(TimeUnit.SECONDS.toNanos(1), () -> {});
     try {
       assertTrue(
@@ -639,7 +639,7 @@ class HeartbeatDatabaseTest {
   void waitsForTheReturnOfAnUnwantedConnectionBeforeTheNextCheckout() throws Exception {
     Gated gated = new Gated();
     gated.hold.set(true);
-    Heartbeat heartbeat = new Heartbeat(gated.over(dataSource), true);
+    Heartbeat heartbeat = new Heartbeat(gated.over(dataSource));
     Heartbeat.Reservation first = heartbeat.reserve(TimeUnit.SECONDS.toNanos(1), () -> {});
     try {
       waitUntil("the checkout waits", () -> gated.waiting.get() == 1);
@@ -896,7 +896,7 @@ class HeartbeatDatabaseTest {
     Watched watched = new Watched();
     // The round bound of a 1 s interval is 750 ms, so its quarter is about 187 ms.
     watched.slowSettingsMs.set(300);
-    Heartbeat heartbeat = new Heartbeat(watched.over(dataSource), true);
+    Heartbeat heartbeat = new Heartbeat(watched.over(dataSource));
     Runnable unregister = () -> {};
     try (RunningTask task = new RunningTask("expired")) {
       Recorded member = new Recorded(task.taskId, task.claimed);
@@ -933,7 +933,7 @@ class HeartbeatDatabaseTest {
     // rollback returns after the deadline.
     watched.slowSettingsMs.set(300);
     watched.slowRollbackMs.set(600);
-    Heartbeat heartbeat = new Heartbeat(watched.over(dataSource), true);
+    Heartbeat heartbeat = new Heartbeat(watched.over(dataSource));
     Runnable unregister = () -> {};
     try (RunningTask task = new RunningTask("late-rollback")) {
       Recorded member = new Recorded(task.taskId, task.claimed);
@@ -962,7 +962,7 @@ class HeartbeatDatabaseTest {
   @Test
   void skipsABusyRetryWithTooLittleTimeAndRenewsAtTheNextSlot() throws Exception {
     Watched watched = new Watched();
-    Heartbeat heartbeat = new Heartbeat(watched.over(dataSource), true);
+    Heartbeat heartbeat = new Heartbeat(watched.over(dataSource));
     Runnable unregister = () -> {};
     try (RunningTask task = new RunningTask("short-retry");
         Connection blocker = ScratchDatabase.connect()) {

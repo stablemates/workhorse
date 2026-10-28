@@ -24,6 +24,20 @@ from version 86 to version **89**. They replace function bodies and change no st
 compatibility floor stays at **76**. A 0.10 process keeps working on version 89, because a
 migration inside a major line only adds.
 
+**Give each worker a pool with at least 3 connections, and remove the heartbeat opt-out.** A worker
+needs the listener, the heartbeat connection, and one connection for statements. Remove every call
+to `Worker.Builder.sharedHeartbeats(boolean)`, every Kotlin `sharedHeartbeats =` assignment, and the
+Spring Boot property `workhorse.worker.shared-heartbeats`. If you declare `poolMaxSize` or
+`workhorse.worker.pool-max-size`, set it to the real size of the pool, at least 3. See "The
+heartbeat opt-out is removed".
+
+### Breaking changes
+
+- The heartbeat opt-out is removed (SM-1902). `Worker.Builder.sharedHeartbeats(boolean)`, the Kotlin
+  `WorkerScope.sharedHeartbeats` property, and the Spring Boot property
+  `workhorse.worker.shared-heartbeats` no longer exist. Every worker uses the dedicated heartbeat
+  connection. See "The heartbeat opt-out is removed".
+
 ### Behavior changes
 
 These changes can make code that worked on 0.10 act differently:
@@ -40,6 +54,31 @@ These changes can make code that worked on 0.10 act differently:
 4. During a shutdown, a handler whose I/O the drain's interrupt stopped now returns its task to the
    queue. Before this change, the attempt failed (SM-1889). See "A handler that the drain
    interrupts gives its task back".
+
+### The heartbeat opt-out is removed
+
+ADR 0071 gives each worker a dedicated heartbeat connection, and it kept an opt-out for small pools.
+Under the opt-out, heartbeat rounds borrowed ordinary pool connections. A round could then wait
+behind claims and settlements, a lease could expire, and a task could run twice.
+
+**Example.** A worker runs on a HikariCP pool of 2 with `sharedHeartbeats(true)`.
+
+1. Before 0.11.0, the worker starts and polls, and each heartbeat round borrows a pool connection.
+2. In 0.11.0, the code does not compile, because `sharedHeartbeats(boolean)` no longer exists.
+3. After the call is removed and the pool size is declared with `poolMaxSize(2)`, `build()` throws
+   `IllegalArgumentException`. The message names the declared size, the size of 3 that the worker
+   needs, and the next step.
+
+A `DataSource` does not report its pool size. If no `poolMaxSize` is declared, the worker does not
+check the size when it is built. The readiness check at the start of each run is then the guard.
+Within the larger of the heartbeat interval and 5 s, the worker reserves the heartbeat connection,
+starts the listener, and borrows one more connection. If a step fails, the run throws
+`WorkhorseException`, and the worker does not start. The message names the size rule, the pool
+size that the worker knows, and the next step.
+
+The Spring Boot starter refuses `workhorse.worker.shared-heartbeats` in each relaxed form and with
+each value. The application context does not start, and an `IllegalStateException` names the
+removal and the next step.
 
 ### A step of the wall clock no longer moves the expiry request
 

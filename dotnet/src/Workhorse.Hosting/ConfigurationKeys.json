@@ -20,7 +20,6 @@
     { "key": "Workhorse:Worker:RegistryInterval", "type": "TimeSpan", "default": "00:00:05" },
     { "key": "Workhorse:Worker:ScheduleCatchupLimit", "type": "int", "default": 100 },
     { "key": "Workhorse:Worker:ScheduleNamespaces", "type": "string[]", "default": [] },
-    { "key": "Workhorse:Worker:SharedHeartbeats", "type": "bool", "default": false },
     { "key": "Workhorse:Worker:ShutdownGrace", "type": "TimeSpan", "default": "00:00:25" },
     { "key": "Workhorse:Worker:WorkerId", "type": "string?", "default": null }
   ]
