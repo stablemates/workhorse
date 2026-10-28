@@ -2179,7 +2179,8 @@
                             "occurrenceCount": 0,
                             "lastSkippedCount": 4,
                             "configuredEnabled": true,
-                            "lastSkippedThrough": "2026-09-13T03:00:00.000Z"
+                            "lastSkippedThrough": "2026-09-13T03:00:00.000Z",
+                            "occurrenceCountCapped": false
                           }
                         ],
                         "capturedAt": "2026-01-01T00:00:00.000Z",
@@ -10561,6 +10562,9 @@
                 "type": "string"
               }
             ]
+          },
+          "occurrenceCountCapped": {
+            "type": "boolean"
           }
         },
         "required": [

@@ -97,6 +97,35 @@ describe("schema installation", () => {
     }
   });
 
+  it("uses the expiry index when the registry prune deletes expired kept pauses", async () => {
+    // Plan the delete statement of the installed body, so the test follows the function. The
+    // stable now() stands for the v_now variable of the body.
+    const body = await pool.query<{ source: string }>(
+      "SELECT prosrc AS source FROM pg_proc WHERE oid = 'workhorse.prune_worker_registry_v1(interval)'::regprocedure",
+    );
+    const statement = /DELETE FROM workhorse\.worker_pause_tombstone tombstone[^;]*/.exec(
+      body.rows[0]!.source,
+    )?.[0];
+    expect(statement).toBeDefined();
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+      await client.query("SET LOCAL enable_seqscan = off");
+      const plan = (
+        await client.query<{ "QUERY PLAN": string }>(
+          `EXPLAIN (COSTS OFF) ${statement!.replaceAll("v_now", "now()")}`,
+        )
+      ).rows
+        .map((row) => row["QUERY PLAN"])
+        .join("\n");
+
+      expect(plan).toContain("worker_pause_tombstone_expires_idx");
+    } finally {
+      await client.query("ROLLBACK").catch(() => undefined);
+      client.release();
+    }
+  });
+
   it("installs the versioned dashboard read surface", async () => {
     const views = await pool.query<{ table_name: string; columns: string[] }>(`
       SELECT table_name, json_agg(column_name ORDER BY ordinal_position) AS columns
@@ -667,6 +696,10 @@ describe("schema installation", () => {
       {
         version: 87,
         description: "count only prunable rows as row retention lag",
+      },
+      {
+        version: 88,
+        description: "settle cancel-requested timeouts and bound the dashboard schedule reads",
       },
     ]);
 

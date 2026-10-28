@@ -623,6 +623,13 @@ export const SCHEMA_MIGRATIONS: readonly SchemaMigrationStep[] = [
     description: "count only prunable rows as row retention lag",
     kind: "additive",
   },
+  {
+    fromVersion: 87,
+    toVersion: 88,
+    file: "0089-settle-cancel-timeouts-and-bound-schedule-reads.sql",
+    description: "settle cancel-requested timeouts and bound the dashboard schedule reads",
+    kind: "additive",
+  },
 ];
 
 /**

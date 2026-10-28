@@ -154,6 +154,33 @@ describe("schedules page", () => {
     expect(scheduleSkipSummary({})).toBeNull();
   });
 
+  it("shows a capped occurrence count with a plus sign", async () => {
+    const { CronPage, scheduleOccurrenceCount } = await import("./pages/schedules.js");
+    const [invoices] = page.schedules;
+    const capped = renderToStaticMarkup(
+      createElement(
+        MantineProvider,
+        null,
+        createElement(CronPage, {
+          data: {
+            ...page,
+            schedules: [{ ...invoices!, occurrenceCount: 1_000, occurrenceCountCapped: true }],
+          },
+          togglingSchedule: null,
+          setSchedulePaused: () => undefined,
+          scheduleTasksHref: () => "/tasks",
+        }),
+      ),
+    );
+    expect(capped).toContain("<span>1,000+</span>");
+
+    expect(scheduleOccurrenceCount({ occurrenceCount: 1_000, occurrenceCountCapped: false })).toBe(
+      "1,000",
+    );
+    // A database below schema 88 returns an exact count and no cap key.
+    expect(scheduleOccurrenceCount({ occurrenceCount: 20_000 })).toBe("20,000");
+  });
+
   it("hides the skip badge once the last skip is 24 hours old", async () => {
     const { CronPage, scheduleSkipSummary } = await import("./pages/schedules.js");
     const [invoices] = page.schedules;

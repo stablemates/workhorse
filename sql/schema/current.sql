@@ -9142,14 +9142,16 @@ BEGIN
   )
   SELECT count(*)::integer INTO v_count FROM pruned;
 
+  -- The expiry comparison stays a separate condition, so the scan seeks
+  -- worker_pause_tombstone_expires_idx and tries the lock only for the expired rows that the index
+  -- returns. A CASE hid the comparison from the planner and read the whole table (SM-1866). On a
+  -- sequential scan, PostgreSQL tests the cheaper comparison first, so it also tries the lock only
+  -- for an expired row.
   DELETE FROM workhorse.worker_pause_tombstone tombstone
-   WHERE CASE
-     WHEN tombstone.expires_at <= v_now
-     THEN pg_try_advisory_xact_lock(
+   WHERE tombstone.expires_at <= v_now
+     AND pg_try_advisory_xact_lock(
        hashtextextended('workhorse:worker-registry:' || tombstone.worker_id, 0)
-     )
-     ELSE false
-   END;
+     );
 
   RETURN v_count;
 END;
@@ -14700,6 +14702,10 @@ BEGIN
   END LOOP;
 
   IF v_count < v_limit THEN
+    -- A pending cancellation wins over the timeout, so timeout_owned_v1 settles nothing for it.
+    -- The scan skips such a row while its lease is live and its deadline is ahead, as the fast
+    -- tier does: a lock that settles nothing makes the heartbeat of its worker busy, and it uses
+    -- the limit that real timeouts behind it need (SM-1866).
     FOR v_runtime IN
       SELECT runtime.* FROM workhorse.task_runtime runtime
        WHERE runtime.state = 'active' AND runtime.attempt_timeout_at IS NOT NULL
@@ -14709,9 +14715,19 @@ BEGIN
            OR runtime.deadline_at > v_now
            OR runtime.attempt_timeout_at < runtime.deadline_at
          )
+         AND (runtime.cancel_requested_at IS NULL OR runtime.deadline_at <= v_now)
        ORDER BY runtime.attempt_timeout_at, runtime.task_id FOR UPDATE SKIP LOCKED
        LIMIT GREATEST(0, v_limit - v_count)
     LOOP
+      -- The deadline of this row passed after its timeout. The pending cancellation then closes
+      -- the task, as terminalize_deadline_v1 does for each cancellation behind a passed deadline.
+      IF v_runtime.cancel_requested_at IS NOT NULL THEN
+        IF workhorse.terminalize_deadline_v1(v_runtime.task_id) THEN
+          v_count := v_count + 1;
+          v_notify_queues := array_append(v_notify_queues, v_runtime.queue_name);
+        END IF;
+        CONTINUE;
+      END IF;
       SELECT * INTO STRICT v_task FROM workhorse.task task WHERE task.id = v_runtime.task_id;
       IF workhorse.timeout_owned_v1(
         v_runtime.task_id, v_runtime.worker_id, v_runtime.fence_token
@@ -16815,9 +16831,15 @@ BEGIN
   v_attempt_exists := to_regclass(format('workhorse.%I', v_attempt_partition)) IS NOT NULL;
   IF v_event_exists AND v_attempt_exists THEN RETURN; END IF;
 
-  -- Lifecycle transitions insert attempt history before task events. Take the partitioned-parent
-  -- locks in that order before either CREATE TABLE can acquire them implicitly, otherwise a
-  -- transition and paired partition creation can each hold the relation the other needs.
+  -- Take both partitioned-parent locks before either CREATE TABLE takes them implicitly, so two
+  -- calls of this function for different days lock the parents in one order. Some lifecycle
+  -- writers take them in the other order. In one transaction, tick_v1 writes task_event through
+  -- promote_v1 and later writes attempt_history through recover_expired_telemetry_v1.
+  -- timeout_owned_v1 also writes task_event before attempt_history. Thus this function can hold
+  -- attempt_history and wait for task_event while such a writer waits for attempt_history.
+  -- prepare_history_partitions_v1 sets lock_timeout to 250 ms and defers the day. The demo history
+  -- seed sets lock_timeout to 250 ms and retries its transaction on 55P03 or 40P01 (SM-1879). A
+  -- direct call with no lock_timeout waits until PostgreSQL detects the deadlock.
   LOCK TABLE ONLY workhorse.attempt_history IN ACCESS EXCLUSIVE MODE;
   LOCK TABLE ONLY workhorse.task_event IN ACCESS EXCLUSIVE MODE;
   LOCK TABLE workhorse.attempt_history_default IN ACCESS EXCLUSIVE MODE;
@@ -20587,11 +20609,23 @@ BEGIN
 END;
 $$;
 
+-- The planner estimates one schedule as 1 / n_distinct(schedule_name) of schedule_occurrence. With
+-- few schedules, some scans then look cheap: a sequential scan, a bitmap scan, or a scan of
+-- schedule_occurrence_retention_idx in time order. Each of them reads the rows of every schedule
+-- (SM-1866). The settings remove the first two, and the occurrence reads below remove the third.
+-- The worker registry count still needs a sequential scan. On PostgreSQL 15 through 17, its
+-- disabled cost would start JIT compilation on each poll, so jit is off too.
 CREATE OR REPLACE FUNCTION workhorse.dashboard_cron_v1(p_input jsonb)
 RETURNS jsonb
 LANGUAGE sql
+SET jit = off
+SET enable_seqscan = off
+SET enable_bitmapscan = off
 AS $$
-  WITH schedule_rows AS (
+  -- The page lists 50 schedules. Each listed schedule then reads at most 1,001 occurrences for its
+  -- count and one occurrence for its last fire, so a busy schedule cannot make the poll read every
+  -- retained occurrence (SM-1866).
+  WITH listed AS (
     SELECT definition.namespace, definition.schedule_name, definition.cron_expression,
            definition.queue_name, definition.task_type, definition.priority,
            definition.catchup_policy,
@@ -20599,28 +20633,47 @@ AS $$
            definition.paused_reason, definition.paused_at,
            definition.revision, definition.updated_at,
            definition.last_skipped_at, definition.last_skipped_count,
-           definition.last_skipped_through,
-           count(occurrence.occurrence_at)::integer AS occurrence_count,
-           max(occurrence.fired_at) AS last_fired_at,
-           (SELECT count(*)::integer
-              FROM workhorse.dashboard_worker_registry_v1 registry
-             WHERE definition.namespace = ANY(registry.schedule_namespaces)
-               AND registry.last_heartbeat_at >= clock_timestamp() - interval '30 seconds')
-             AS evaluator_count
+           definition.last_skipped_through
       FROM workhorse.dashboard_schedule_definition_v1 definition
-      LEFT JOIN workhorse.dashboard_schedule_occurrence_v1 occurrence
-        ON occurrence.namespace = definition.namespace
-       AND occurrence.schedule_name = definition.schedule_name
-     GROUP BY definition.namespace, definition.schedule_name, definition.cron_expression,
-              definition.queue_name, definition.task_type, definition.priority,
-              definition.catchup_policy,
-              definition.configured_enabled, definition.paused, definition.paused_by,
-              definition.paused_reason, definition.paused_at,
-              definition.revision, definition.updated_at,
-              definition.last_skipped_at, definition.last_skipped_count,
-              definition.last_skipped_through
      ORDER BY definition.namespace, definition.schedule_name
      LIMIT 50
+  ), schedule_rows AS (
+    SELECT listed.*,
+           counted.occurrence_count,
+           latest.fired_at AS last_fired_at,
+           (SELECT count(*)::integer
+              FROM workhorse.dashboard_worker_registry_v1 registry
+             WHERE listed.namespace = ANY(registry.schedule_namespaces)
+               AND registry.last_heartbeat_at >= clock_timestamp() - interval '30 seconds')
+             AS evaluator_count
+      FROM listed
+      -- The count has no sort order, so the planner builds no full scan of the retention index.
+      -- Only an index that holds both schedule keys then serves the conditions.
+      CROSS JOIN LATERAL (
+        SELECT count(*)::integer AS occurrence_count
+          FROM (
+            SELECT 1 FROM workhorse.dashboard_schedule_occurrence_v1 occurrence
+             WHERE occurrence.namespace = listed.namespace
+               AND occurrence.schedule_name = listed.schedule_name
+             LIMIT 1001
+          ) bounded
+      ) counted
+      -- The newest occurrence usually carries the latest fire time. Two cases fire an older
+      -- occurrence later: an evaluator fires in wall-clock order, which goes back in UTC across a
+      -- daylight-saving gap, and a direct fire_schedule_v1 call can fire any second. Then
+      -- lastFiredAt is earlier than the latest fire. The range condition keeps schedule_name in
+      -- the sort order.
+      -- An equality would drop it, and the retention index could then give the order. Only the
+      -- primary key gives this order without a sort. The range follows the namespace equality, so
+      -- it also bounds the scan when the schedule has no occurrence.
+      LEFT JOIN LATERAL (
+        SELECT occurrence.fired_at FROM workhorse.dashboard_schedule_occurrence_v1 occurrence
+         WHERE occurrence.namespace = listed.namespace
+           AND occurrence.schedule_name >= listed.schedule_name
+           AND occurrence.schedule_name <= listed.schedule_name
+         ORDER BY occurrence.schedule_name DESC, occurrence.occurrence_at DESC
+         LIMIT 1
+      ) latest ON true
   ), schedules AS (
     SELECT COALESCE(jsonb_agg(jsonb_build_object(
       'kind', 'user',
@@ -20634,12 +20687,13 @@ AS $$
       'pausedAt', workhorse.dashboard_iso_v1(paused_at),
       'active', configured_enabled AND NOT paused, 'revision', revision::text,
       'updatedAt', workhorse.dashboard_iso_v1(updated_at),
-      'occurrenceCount', occurrence_count,
+      'occurrenceCount', LEAST(occurrence_count, 1000),
       'lastFiredAt', workhorse.dashboard_iso_v1(last_fired_at),
       'evaluatorCount', evaluator_count,
       'lastSkippedAt', workhorse.dashboard_iso_v1(last_skipped_at),
       'lastSkippedCount', last_skipped_count,
-      'lastSkippedThrough', workhorse.dashboard_iso_v1(last_skipped_through)
+      'lastSkippedThrough', workhorse.dashboard_iso_v1(last_skipped_through),
+      'occurrenceCountCapped', occurrence_count > 1000
     ) ORDER BY namespace, schedule_name), '[]'::jsonb) AS value FROM schedule_rows
   ), policy AS (
     SELECT * FROM workhorse.dashboard_maintenance_policy_v1 WHERE singleton
@@ -22861,10 +22915,11 @@ INSERT INTO workhorse.schema_migration(version, description) VALUES
   (84, 'make the day and schedule lock keys unambiguous'),
   (85, 'report the fast-tier retry of an expired timeout'),
   (86, 'show the last schedule skip on the dashboard'),
-  (87, 'count only prunable rows as row retention lag')
+  (87, 'count only prunable rows as row retention lag'),
+  (88, 'settle cancel-requested timeouts and bound the dashboard schedule reads')
 ON CONFLICT DO NOTHING;
 
-INSERT INTO workhorse.schema_version(version) VALUES (87) ON CONFLICT DO NOTHING;
+INSERT INTO workhorse.schema_version(version) VALUES (88) ON CONFLICT DO NOTHING;
 
 INSERT INTO workhorse.protocol_version(version) VALUES (5) ON CONFLICT DO NOTHING;
 SELECT workhorse.create_history_day_v1(

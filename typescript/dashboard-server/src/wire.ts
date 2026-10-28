@@ -465,7 +465,12 @@ export interface DashboardScheduleRow {
   active: boolean;
   revision: string;
   updatedAt: string;
+  /**
+   * The retained occurrences of the schedule. The count stops at 1,000. Before schema version 88,
+   * the count has no limit.
+   */
   occurrenceCount: number;
+  /** When the newest occurrence fired. Null before the first occurrence. */
   lastFiredAt: string | null;
   /** Live workers that currently offer this schedule namespace. */
   evaluatorCount: number;
@@ -481,6 +486,11 @@ export interface DashboardScheduleRow {
   lastSkippedCount?: number | null;
   /** The newest occurrence that the last skip dropped. Absent with `lastSkippedAt`. */
   lastSkippedThrough?: string | null;
+  /**
+   * True when more than 1,000 occurrences are retained. `occurrenceCount` is then 1,000. Absent
+   * when the installed schema predates version 88, which this dashboard still accepts.
+   */
+  occurrenceCountCapped?: boolean;
 }
 
 export interface DashboardMaintenanceLoopCadences {

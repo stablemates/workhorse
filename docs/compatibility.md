@@ -1664,15 +1664,17 @@ until a scenario has a recorded live artifact, no performance claim is made for 
 
 ## Upgrade from 0.10.x to 0.11.0
 
-A 0.10.0 database is at schema version 86. Migration 0088 does not raise the SDK schema floor, so
-the upgrade is a rolling deployment, and a mixed fleet is supported while it runs.
+A 0.10.0 database is at schema version 86. Migrations 0088 and 0089 do not raise the SDK schema
+floor. Thus the upgrade is a rolling deployment, and a mixed fleet is supported while it runs.
 
-1. Run `workhorse schema migrate`. It applies migration 0088 and leaves the schema at version 87.
+1. Run `workhorse schema migrate`. It applies migrations 0088 through 0089 and leaves the schema at
+   version 88.
 2. Roll out the new processes in any order.
 
-| Migration                                                | Schema version | Changes                                                                                              |
-| -------------------------------------------------------- | -------------- | ---------------------------------------------------------------------------------------------------- |
-| `0088-count-only-prunable-rows-as-row-retention-lag.sql` | 87             | Row retention lag skips a member of an unfinished task group and counts from the finish of the group |
+| Migration                                                  | Schema version | Changes                                                                                                                                                                                            |
+| ---------------------------------------------------------- | -------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `0088-count-only-prunable-rows-as-row-retention-lag.sql`   | 87             | Row retention lag skips a member of an unfinished task group and counts from the finish of the group                                                                                               |
+| `0089-settle-cancel-timeouts-and-bound-schedule-reads.sql` | 88             | Recovery skips a timed-out attempt that waits for its cancellation, the Schedules page reads a bounded number of occurrences, and the registry prune finds expired kept pauses through their index |
 
 Migration 0088 does not raise the floor, so it stays 76. It replaces `queue_health_v1`. Its row
 retention lag skips a member of a task group that has not finished, because terminal cleanup keeps
@@ -1680,7 +1682,20 @@ that row on purpose. The lag of a member also counts from the finish of its grou
 document keeps its keys, and the migration changes no rows. Thus every process of every SDK version
 gets the new result when the migration commits.
 
-A 0.10 process keeps working on schema version 87, because a migration inside a major line only
+Migration 0089 does not raise the floor either. It replaces the bodies of `recover_expired_v1`,
+`dashboard_cron_v1`, `prune_worker_registry_v1`, and `create_history_day_v1`, and it changes no
+rows:
+
+- The full-tier timeout scan skips an attempt with a pending cancellation while its deadline is
+  ahead.
+- `dashboard_cron_v1` reads at most 1,001 occurrences for each listed schedule and reports at most
+  1,000. The new key `occurrenceCountCapped` is `true` above that count. A dashboard host of every
+  SDK version passes the document through, so it serves the key when the migration commits.
+- The registry prune deletes expired kept pauses through `worker_pause_tombstone_expires_idx`.
+- The comment in `create_history_day_v1` states the real lock order of the history parents. Its
+  statements do not change.
+
+A 0.10 process keeps working on schema version 88, because a migration inside a major line only
 adds.
 
 ## Upgrade from 0.9.x to 0.10.0

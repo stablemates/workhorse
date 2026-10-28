@@ -2860,9 +2860,26 @@ Transaction boundaries:
 partition of one parent only. Thus a `run_maintenance_v1` call that retires partitions and then
 creates partitions takes the parents in this order once and holds them to the commit.
 
-Lifecycle transitions insert attempt history before task events. This shared parent-lock order
-therefore prevents paired partition DDL from deadlocking a transition between its two history
-inserts.
+This shared order keeps two partition DDL calls from deadlocking each other. Some lifecycle writers
+do not use it:
+
+- In one transaction, `tick_v1` writes `task_event` through `promote_v1`. Later it writes
+  `attempt_history` through `recover_expired_telemetry_v1`.
+- `timeout_owned_v1` also writes `task_event` before `attempt_history`.
+
+Thus partition creation can hold the `attempt_history` parent and wait for `task_event`, while such
+a writer holds `task_event` and waits for `attempt_history`. PostgreSQL then stops one transaction
+with `40P01`. Two callers of creation bound that wait:
+
+- `prepare_history_partitions_v1` sets `lock_timeout` to 250 ms for each day. It defers a day whose
+  locks stay busy.
+- The demo history seed in `typescript/demo/src/app.ts` sets `lock_timeout` to 250 ms. It runs its
+  transaction again after `55P03` or `40P01` (SM-1879).
+
+A direct call with the default `lock_timeout` of 0 waits until PostgreSQL detects the deadlock.
+
+Before migration 0089, the comment in `create_history_day_v1` said that lifecycle transitions write
+`attempt_history` first. Migration 0089 corrects the comment and changes no statement.
 
 Before the parent locks, each of the three functions takes a transaction advisory lock for its UTC
 day. Since migration 0085, the key of that lock does not depend on the session `DateStyle` or
@@ -3609,7 +3626,9 @@ These events end a kept pause:
    no rows when no registry row exists.
 3. `deregister_worker_v2` removes the kept pause of its `instance_id`. `deregister_worker_v1`
    removes the kept pause of its `worker_id`.
-4. `prune_worker_registry_v1` removes each kept pause whose `expires_at` has passed.
+4. `prune_worker_registry_v1` removes each kept pause whose `expires_at` has passed. It finds them
+   through `worker_pause_tombstone_expires_idx`. Before migration 0089, a `CASE` condition hid the
+   expiry comparison from the planner, so each prune read the whole table (SM-1866).
 
 `register_worker_v1`, `set_worker_paused_internal_v1`, and both deregistration functions take the
 transaction advisory lock `hashtextextended('workhorse:worker-registry:' || worker_id, 0)` before

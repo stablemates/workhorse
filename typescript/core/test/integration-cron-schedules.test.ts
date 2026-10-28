@@ -18,6 +18,29 @@ interface CronOccurrenceFixture {
   expected: string[];
 }
 
+interface OccurrencePlanNode {
+  "Node Type"?: string;
+  "Relation Name"?: string;
+  "Index Name"?: string;
+  "Index Cond"?: string;
+  "Actual Rows"?: number;
+  "Actual Loops"?: number;
+  "Rows Removed by Filter"?: number;
+  "Shared Hit Blocks"?: number;
+  "Shared Read Blocks"?: number;
+  Plans?: OccurrencePlanNode[];
+}
+
+// Each plan node that reads schedule_occurrence through its table or one of its indexes.
+function occurrencePlanReads(node: OccurrencePlanNode): OccurrencePlanNode[] {
+  const reads =
+    node["Relation Name"] === "schedule_occurrence" ||
+    node["Index Name"]?.startsWith("schedule_occurrence_") === true
+      ? [node]
+      : [];
+  return [...reads, ...(node.Plans ?? []).flatMap(occurrencePlanReads)];
+}
+
 const cronFixtures = JSON.parse(
   await readFile(new URL("../../../protocol/v1/cron-occurrences.json", import.meta.url), "utf8"),
 ) as CronOccurrenceFixture[];
@@ -1114,6 +1137,109 @@ describe("cron schedules", () => {
         WHERE namespace = 'integration' AND schedule_name = 'hashed-minute'`,
     );
     expect(occurrence.rows).toEqual([{ minute: 44 }]);
+  });
+
+  it("reads a bounded occurrence count and one last fire for each dashboard schedule", async () => {
+    const occurrenceCap = 1_000;
+    const namespace = "dashboard-occurrences";
+    await queue.syncSchedules(namespace, [
+      { name: "busy", schedule: "* * * * * *", task: { type: "dashboard.busy", payload: null } },
+      { name: "quiet", schedule: "0 * * * *", task: { type: "dashboard.quiet", payload: null } },
+      // A schedule with no occurrence sorts after the busy one. A backward scan that the
+      // schedule_name key cannot stop would read the rows of busy and quiet for it.
+      { name: "zero", schedule: "0 0 1 1 *", task: { type: "dashboard.zero", payload: null } },
+    ]);
+    // A six-field cron writes one occurrence each second, so 20,000 rows are about 5.5 hours.
+    await pool.query(
+      `INSERT INTO workhorse.schedule_occurrence(namespace, schedule_name, occurrence_at, fired_at)
+       SELECT $1, 'busy', at, at + interval '10 milliseconds'
+         FROM generate_series(
+           timestamptz '2026-10-01T00:00:00Z', timestamptz '2026-10-01T00:00:00Z' + interval '19999 seconds',
+           interval '1 second'
+         ) AS series(at)
+       UNION ALL
+       SELECT $1, 'quiet', at, at + interval '10 milliseconds'
+         FROM unnest(ARRAY[timestamptz '2026-10-01T00:00:00Z', timestamptz '2026-10-01T01:00:00Z'])
+           AS fired(at)`,
+      [namespace],
+    );
+    await pool.query("ANALYZE workhorse.schedule_occurrence");
+    const lastFired = await pool.query<{ schedule_name: string; last_fired_at: Date }>(
+      `SELECT schedule_name, max(fired_at) AS last_fired_at FROM workhorse.schedule_occurrence
+        WHERE namespace = $1 GROUP BY schedule_name ORDER BY schedule_name`,
+      [namespace],
+    );
+
+    const document = await pool.query<{
+      document: {
+        schedules: {
+          namespace: string;
+          name: string;
+          occurrenceCount: number;
+          occurrenceCountCapped?: boolean;
+          lastFiredAt: string | null;
+        }[];
+      };
+    }>("SELECT workhorse.dashboard_cron_v1('{}'::jsonb) AS document");
+    expect(
+      document.rows[0]!.document.schedules.map((schedule) => [
+        schedule.name,
+        schedule.occurrenceCount,
+        schedule.occurrenceCountCapped,
+        schedule.lastFiredAt,
+      ]),
+    ).toEqual([
+      ["busy", occurrenceCap, true, lastFired.rows[0]!.last_fired_at.toISOString()],
+      ["quiet", 2, false, lastFired.rows[1]!.last_fired_at.toISOString()],
+      ["zero", 0, false, null],
+    ]);
+
+    // The function body is one SQL statement, and EXPLAIN of the call shows only its result node.
+    // Plan the installed body under the settings of the function, so the plan is its plan.
+    const cron = (
+      await pool.query<{ source: string; settings: string[] | null }>(
+        `SELECT prosrc AS source, proconfig AS settings FROM pg_proc
+          WHERE oid = 'workhorse.dashboard_cron_v1(jsonb)'::regprocedure`,
+      )
+    ).rows[0]!;
+    expect(cron.settings).toEqual(["jit=off", "enable_seqscan=off", "enable_bitmapscan=off"]);
+    const client = await pool.connect();
+    let plan: OccurrencePlanNode;
+    try {
+      await client.query("BEGIN");
+      for (const setting of cron.settings!) {
+        const [name, value] = setting.split("=");
+        await client.query("SELECT set_config($1, $2, true)", [name, value]);
+      }
+      const explained = await client.query<{ "QUERY PLAN": Array<{ Plan: OccurrencePlanNode }> }>(
+        `EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) ${cron.source.replaceAll("p_input", "$1::jsonb")}`,
+        ["{}"],
+      );
+      plan = explained.rows[0]!["QUERY PLAN"][0]!.Plan;
+    } finally {
+      await client.query("ROLLBACK").catch(() => undefined);
+      client.release();
+    }
+    const reads = occurrencePlanReads(plan);
+    // One count read and one last-fire read, each with one loop for each of the three schedules.
+    expect(reads.map((read) => read["Actual Loops"])).toEqual([3, 3]);
+    for (const read of reads) {
+      // Each read must seek the rows of one schedule. A scan without both keys in its index
+      // condition could read every occurrence and still return few rows.
+      expect(read["Index Cond"]).toMatch(/\bnamespace [<>=]/);
+      expect(read["Index Cond"]).toMatch(/\bschedule_name [<>=]/);
+      // Actual Rows counts the rows after the filter, so add the rows that the filter removed.
+      // Both are the mean of the loops, and each loop reads one schedule.
+      const examined = read["Actual Rows"]! + (read["Rows Removed by Filter"] ?? 0);
+      expect(examined).toBeLessThanOrEqual(occurrenceCap + 1);
+      expect(examined * read["Actual Loops"]!).toBeLessThanOrEqual((occurrenceCap + 1) * 3);
+    }
+    // EXPLAIN does not count the index entries that an index key rejects. Thus the last-fire read
+    // must also touch only a few blocks for each schedule: the index path and one heap block.
+    const lastFire = reads.find((read) => read["Index Cond"]?.includes("schedule_name >="));
+    expect(lastFire).toBeDefined();
+    const blocks = lastFire!["Shared Hit Blocks"]! + lastFire!["Shared Read Blocks"]!;
+    expect(blocks).toBeLessThanOrEqual(5 * lastFire!["Actual Loops"]!);
   });
 
   it("rejects stale schedule revisions after a definition changes", async () => {

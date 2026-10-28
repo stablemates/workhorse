@@ -568,6 +568,9 @@
         "schedules[].occurrenceCount": {
           "type": "number"
         },
+        "schedules[].occurrenceCountCapped": {
+          "type": "boolean"
+        },
         "schedules[].paused": {
           "type": "boolean"
         },

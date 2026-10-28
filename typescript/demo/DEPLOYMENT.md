@@ -653,8 +653,8 @@ therefore makes this release one offline cutover. For this release only, deploy 
    applies 0025 and leaves the database at version 25. Without `--yes`, the command applies nothing
    and names any old worker that still heartbeated inside its lease.
 4. From the same image, run `workhorse schema migrate` again against each database. It applies the
-   additive steps after 0025 and leaves the database at version 87.
-5. Deploy the new release as usual. Its pre-deploy hook finds version 87, installs the demo's own
+   additive steps after 0025 and leaves the database at version 88.
+5. Deploy the new release as usual. Its pre-deploy hook finds version 88, installs the demo's own
    tables, and verifies both workspaces before any container starts.
 
 The CLI reads the database from `--database-url`, `WORKHORSE_DATABASE_URL`, or `DATABASE_URL`. Pass
@@ -743,13 +743,16 @@ stage, so a new commit invalidates none of the cached layers.
 
 ### Dashboard schema
 
-The current build ships Workhorse schema version 87; its packaged migrations carry a version 6
+The current build ships Workhorse schema version 88; its packaged migrations carry a version 6
 baseline forward to it. Version 25 is a contract step, which the
 [fast-tier cutover](#the-fast-tier-release-needs-one-offline-cutover) applies. Versions 26 through
-87 are additive, so the ordinary schema step applies them to a database at version 25. Every client in
+88 are additive, so the ordinary schema step applies them to a database at version 25. Every client in
 this build refuses mutations against a schema below 76, because every statement catalogue of this
 build names `deregister_worker_v2`, which version 76 adds. Run
-`workhorse schema migrate` before any process from this build starts. Migration 0088, which
+`workhorse schema migrate` before any process from this build starts. Migration 0089, which
+produces version 88, replaces the bodies of `recover_expired_v1`, `dashboard_cron_v1`,
+`prune_worker_registry_v1`, and `create_history_day_v1`. It does not raise the floor and changes no
+rows. Migration 0088, which
 produces version 87, replaces `queue_health_v1`. Its row retention lag skips a member of an
 unfinished task group, so the demo's open and sealed seed groups no longer report late cleanup. It
 does not raise the floor and changes no rows. Migration 0087, which

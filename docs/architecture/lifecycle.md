@@ -1630,9 +1630,12 @@ their transaction:
 - each settlement: `complete_v1`, `fail_v1`, `release_owned_v1`, `expire_owned_v1`, and
   `recover_expired_v1`.
 
-The tick locks only a lease that has already expired. A short lock makes only the round that meets
-it busy. `SKIP LOCKED` gives no fairness: if a handler takes the row lock again and again, each round
-can meet it. A lock that stays held, for example a progress update in a long transaction of the
+The tick locks a live lease only to settle its attempt: when the attempt timeout or the deadline
+has passed. It does not lock an attempt with a pending cancellation while the lease is live and the
+deadline is ahead. A cancellation wins over a timeout, and the worker acknowledges it
+([Retry and recovery](#retry-and-recovery)). A short lock makes only the round that meets it busy.
+`SKIP LOCKED` gives no fairness: if a handler takes the row lock again and again, each round can
+meet it. A lock that stays held, for example a progress update in a long transaction of the
 caller (`forTransaction`), blocks every renewal until that transaction commits. If it commits after
 the watchdog end, the attempt loses its lease.
 
@@ -2701,6 +2704,20 @@ If the caller omits the delay, `Queue.recoverExpired(limit)` passes SQL `NULL`. 
 persisted policy selection. An explicit number stays an override. `lease_expired` details include
 the policy, selected delay, and source. An old worker cannot complete later, because its active
 generation no longer exists.
+
+The timeout scan skips an attempt with a pending cancellation while its deadline is ahead.
+`timeout_owned_v1` settles nothing for such an attempt, because the cancellation wins. Before
+migration 0089, the scan locked these rows until the tick committed (SM-1866):
+
+1. Each lock made the heartbeat of the owning worker report `busy`, and `acknowledge_cancel_v1`
+   waited for the tick.
+2. The rows used the limit of the tick, so a real timeout ordered after them waited for their leases
+   to expire.
+
+If the deadline of such an attempt passed after its timeout, the deadline scan leaves the row to the
+timeout scan. The timeout scan then calls `terminalize_deadline_v1`, which closes the task
+`canceled` with event `source = deadline_reaper`. `fast_recover_expired_v1` skips the same rows in
+its candidate scan.
 
 The deadline, timeout, and lease scans compare against one `v_now` read at entry:
 

@@ -546,7 +546,9 @@ schedules that no worker evaluates.
 
 The page lists `invoice-run` with its queue, its evaluator count, and a Pause action. The evaluator
 count is the number of live workers that can evaluate the namespace. To see the tasks of that type
-in that queue, open the run count. The task list opens in a new browser tab. If the deployment
+in that queue, open the run count. The task list opens in a new browser tab. The run count stops at
+a limit, so a busy schedule cannot slow the page. Above the limit, the page adds a plus sign to the
+count. If the deployment
 disabled a definition, the page shows `Config off`. A paused definition does not show `Config off`.
 
 If a `skip` schedule skipped occurrences recently, its last-run cell shows a `Skipped` badge with

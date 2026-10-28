@@ -399,7 +399,9 @@ schedules that no worker evaluates.
 
 The page lists `invoice-run` with its queue, its evaluator count, and a Pause action. The evaluator
 count is the number of live workers that can evaluate the namespace. To see the tasks of that type
-in that queue, open the run count. The task list opens in a new browser tab. If the deployment
+in that queue, open the run count. The task list opens in a new browser tab. The run count stops at
+a limit, so a busy schedule cannot slow the page. Above the limit, the page adds a plus sign to the
+count. If the deployment
 disabled a definition, the page shows `Config off`. A paused definition does not show `Config off`.
 
 If a `skip` schedule skipped occurrences recently, its last-run cell shows a `Skipped` badge with
@@ -426,6 +428,10 @@ routines.
   whose `last_heartbeat_at` is at most 30 seconds old.
 - The run count links to `/tasks?queue=<queue>&type=<task type>`. The task listing has no schedule
   filter.
+- `occurrenceCount` stops at 1,000. `occurrenceCountCapped` is `true` when more occurrences are
+  retained, and the page then shows `1,000+`. `lastFiredAt` is the fire time of the newest
+  occurrence. A database below schema version 88 counts every occurrence and returns no
+  `occurrenceCountCapped`.
 - A deployment-disabled definition shows `Config off`. A paused definition does not show it.
 - `lastSkippedAt`, `lastSkippedCount`, and `lastSkippedThrough` return `last_skipped_at`,
   `last_skipped_count`, and `last_skipped_through` from `dashboard_schedule_definition_v1`. They are
