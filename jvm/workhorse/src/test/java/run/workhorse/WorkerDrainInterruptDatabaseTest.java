@@ -423,6 +423,62 @@ class WorkerDrainInterruptDatabaseTest {
     assertFalse(Thread.currentThread().isInterrupted());
   }
 
+  /**
+   * SM-1889: the drain's interrupt closes the socket of the handler's own query. The driver then
+   * throws an {@link SQLException} whose causes hold no {@link InterruptedException}. The handler
+   * stopped because of the shutdown, so the task goes back to its queue without an attempt.
+   */
+  @Test
+  void releasesAHandlerWhoseOwnQueryTheDrainInterruptStops() throws Exception {
+    UUID taskId = enqueue("own-query");
+    CountDownLatch started = new CountDownLatch(1);
+    List<String> handlerErrors = new CopyOnWriteArrayList<>();
+    Worker worker =
+        worker(scratch)
+            .handle(
+                "own-query",
+                Object.class,
+                (context, payload) -> {
+                  started.countDown();
+                  long limit = System.nanoTime() + WAIT.toNanos();
+                  while (!Thread.currentThread().isInterrupted() && System.nanoTime() < limit) {
+                    LockSupport.parkNanos(TimeUnit.MILLISECONDS.toNanos(1));
+                  }
+                  try (Connection connection = ScratchDatabase.connect();
+                      PreparedStatement statement = connection.prepareStatement("SELECT 1")) {
+                    statement.execute();
+                  } catch (SQLException error) {
+                    handlerErrors.add(error.getClass().getName());
+                    throw error;
+                  }
+                  return null;
+                })
+            .build();
+    worker.start();
+    try {
+      assertTrue(started.await(WAIT.toSeconds(), TimeUnit.SECONDS), "the handler started");
+    } finally {
+      try {
+        worker.close();
+      } catch (ShutdownIncompleteException slow) {
+        // The attempt still ends on its own thread; the wait below covers it.
+      }
+    }
+    waitForCount("the task goes back to its queue", 1, () -> events("released", List.of(taskId)));
+
+    assertEquals(
+        List.of("org.postgresql.util.PSQLException"),
+        handlerErrors,
+        "the interrupt stopped the handler's query");
+    assertEquals(
+        1,
+        count(
+            "SELECT count(*) FROM workhorse.task_runtime WHERE state = 'ready' AND current_attempt = 1"
+                + " AND task_id = ANY(?::uuid[])",
+            List.of(taskId)),
+        "the task waits in its queue and did not use its attempt");
+  }
+
   // SM-1525 (m2): a child request reads its payload contract through the drain's interrupt. Without
   // the deferral, the interrupt closes the socket of the read, and the worker fails the parent
   // instead of giving it back to its queue.

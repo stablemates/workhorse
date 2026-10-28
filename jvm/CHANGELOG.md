@@ -37,6 +37,9 @@ These changes can make code that worked on 0.10 act differently:
    deadline or attempt timeout at once. The worker reports `deadline_exceeded` or `timeout`, not
    `lease_lost` (SM-1884). See "A stale failure or release after a lapsed lease settles its
    cause".
+4. During a shutdown, a handler whose I/O the drain's interrupt stopped now returns its task to the
+   queue. Before this change, the attempt failed (SM-1889). See "A handler that the drain
+   interrupts gives its task back".
 
 ### A step of the wall clock no longer moves the expiry request
 
@@ -157,6 +160,29 @@ the worker settles nothing. After a failed cancellation acknowledgement, the han
 `cancel_requested`. A late heartbeat round can also deliver the cancellation request, after a
 failure, a release, or a refused completion. If the acknowledgement then refuses, the handler
 outcome was `canceled`. Now it is `lease_lost`.
+
+### A handler that the drain interrupts gives its task back
+
+At the end of the shutdown grace, the drain cancels each running handler's token with `SHUTDOWN`.
+Then it interrupts the handler's thread. The interrupt closes the socket of a virtual thread. Thus a
+handler that runs a JDBC statement or other socket I/O then gets an I/O error, for example a
+`PSQLException` caused by `SocketException: Closed by interrupt`. That error holds no
+`CancelledException` and no `InterruptedException`.
+
+Before this change, the worker released the task only for those two errors. For the I/O error, it
+called `fail_v1`. The task lost an attempt, or failed permanently on its last attempt. 0.10.0 has
+the same defect (SM-1889).
+
+Now, after the drain interrupts the handler, the worker also releases the task through
+`release_owned_v1` for an I/O failure that the interrupt caused. No attempt is charged. The cause
+chain of the handler's error must hold one of these errors:
+
+- `SocketException` with the message `Closed by interrupt`
+- `ClosedByInterruptException`
+- `InterruptedIOException` that is not a `SocketTimeoutException`
+
+Any other error of the handler's own still fails the attempt, as before. An error of a batch
+handler and an error of the payload decode also still fail the attempt.
 
 ### The dashboard bundle uses Mantine 9.7.4
 

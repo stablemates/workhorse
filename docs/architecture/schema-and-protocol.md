@@ -3217,6 +3217,15 @@ The worker installs no JVM shutdown hook and traps no signal.
   of the outer error.
 - During a shutdown, a `CancelledException` with `SHUTDOWN` or an `InterruptedException` in the
   cause chain releases the task through `release_owned_v1`, which charges no attempt.
+- After the drain interrupts the handler, an I/O failure that the interrupt caused also releases
+  the task, if the handler call throws it. The interrupt closes the socket of a virtual thread, so
+  the handler's own I/O can fail with an error that holds no `InterruptedException` (SM-1889).
+  `interruptedIo` looks in the cause chain for a `SocketException` whose `getMessage()` is
+  `Closed by interrupt`, a `ClosedByInterruptException`, or an `InterruptedIOException` that is not
+  a `SocketTimeoutException`. Another error of the handler's own still fails the attempt. The rule
+  does not apply to the payload decode or to a batch member. A batch shares one error among its
+  members, and the batch handler can run on the thread of another member, so the interrupt of one
+  member does not show what caused that error.
 - A `LeaseLostException` settles nothing, because the fence already refuses the write.
 - Before it completes a task, the worker checks the result. A NUL character fails the attempt with
   `<task type> result contains a NUL character, which PostgreSQL jsonb cannot store`. The codec

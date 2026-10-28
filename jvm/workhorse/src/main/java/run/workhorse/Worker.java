@@ -1,10 +1,14 @@
 package run.workhorse;
 
+import java.io.InterruptedIOException;
 import java.io.PrintWriter;
 import java.io.StringWriter;
 import java.lang.reflect.Type;
 import java.net.InetAddress;
+import java.net.SocketException;
+import java.net.SocketTimeoutException;
 import java.net.UnknownHostException;
+import java.nio.channels.ClosedByInterruptException;
 import java.nio.charset.StandardCharsets;
 import java.sql.Connection;
 import java.sql.SQLException;
@@ -2655,6 +2659,12 @@ public final class Worker implements AutoCloseable {
     /** Whether an interrupt waits for the end of the worker's writes. */
     private boolean interruptDeferred;
 
+    /**
+     * Whether the drain interrupted the handler region. A deferred interrupt also counts, because
+     * the thread gets it before control returns to handler code.
+     */
+    private boolean drainInterrupted;
+
     private static final int QUEUED = 0;
     private static final int STARTED = 1;
     private static final int ABANDONED = 2;
@@ -2759,10 +2769,25 @@ public final class Worker implements AutoCloseable {
       }
     }
 
+    /**
+     * Whether the drain interrupted the handler region. The interrupt closes a virtual thread's
+     * socket, so the handler's own I/O can then fail with an error that wraps no {@link
+     * InterruptedException} (SM-1889).
+     */
+    boolean drainInterrupted() {
+      lock.lock();
+      try {
+        return drainInterrupted;
+      } finally {
+        lock.unlock();
+      }
+    }
+
     void interrupt() {
       lock.lock();
       try {
         if (handlerThread != null) {
+          drainInterrupted = true;
           if (deferrals > 0) {
             interruptDeferred = true;
           } else {
@@ -2960,6 +2985,8 @@ public final class Worker implements AutoCloseable {
       return;
     }
     String encoded;
+    // Whether the error comes from the handler call itself, and not from the decode or a batch.
+    boolean handlerThrew = false;
     try {
       Object result;
       task.enterHandler();
@@ -2974,7 +3001,9 @@ public final class Worker implements AutoCloseable {
           @SuppressWarnings("unchecked")
           Handler<@Nullable Object> handler =
               (Handler<@Nullable Object>) Objects.requireNonNull(registration.handler);
+          handlerThrew = true;
           result = handler.handle(context, payload);
+          handlerThrew = false;
         }
       } finally {
         task.leaveHandler();
@@ -2993,8 +3022,14 @@ public final class Worker implements AutoCloseable {
       if (finishSuspended(claimed, ownership, arbiter)) {
         return;
       }
-      // A handler that stopped for shutdown returns the task to the queue without an attempt.
-      if (cancellation.reason() == CancellationReason.SHUTDOWN && shutdownCancellation(error)) {
+      // A handler that stopped for shutdown returns the task to the queue without an attempt. The
+      // drain's interrupt closes a virtual thread's socket, so after it, an I/O failure that the
+      // interrupt caused in the handler call also counts as that stop (SM-1889). The rule does not
+      // apply to a batch member: the batch handler can run on another member's thread, so this
+      // member's interrupt does not show what caused the shared error.
+      boolean interruptedIo = handlerThrew && task.drainInterrupted() && interruptedIo(error);
+      if (cancellation.reason() == CancellationReason.SHUTDOWN
+          && (interruptedIo || shutdownCancellation(error))) {
         releaseOwned(claimed, arbiter, ownership);
         return;
       }
@@ -3262,6 +3297,32 @@ public final class Worker implements AutoCloseable {
         return true;
       }
       if (current instanceof InterruptedException) {
+        return true;
+      }
+      current = current.getCause();
+    }
+    return false;
+  }
+
+  /** The message of the {@link SocketException} that an interrupt gives a virtual thread. */
+  private static final String CLOSED_BY_INTERRUPT = "Closed by interrupt";
+
+  /**
+   * Whether {@code error}, or an error it wraps, is an I/O failure that an interrupt caused: a
+   * {@link ClosedByInterruptException}, an {@link InterruptedIOException} that is not a timeout, or
+   * the {@code SocketException: Closed by interrupt} of a virtual thread's socket. A JDBC driver
+   * wraps the last one in its {@link SQLException} (SM-1889). Another I/O error does not count. The
+   * walk stays bounded against a cyclic chain.
+   */
+  // Package-private for InterruptedIoTest.
+  static boolean interruptedIo(Throwable error) {
+    Throwable current = error;
+    for (int depth = 0; depth < CAUSE_DEPTH && current != null; depth++) {
+      if (current instanceof ClosedByInterruptException
+          || (current instanceof InterruptedIOException
+              && !(current instanceof SocketTimeoutException))
+          || (current instanceof SocketException
+              && CLOSED_BY_INTERRUPT.equals(current.getMessage()))) {
         return true;
       }
       current = current.getCause();
