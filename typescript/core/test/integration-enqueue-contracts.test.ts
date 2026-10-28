@@ -1249,6 +1249,56 @@ describe("enqueue contracts", () => {
     expect(queryCount).toBe(0);
   });
 
+  it("refuses each invalid enqueue option before any statement", async () => {
+    let queryCount = 0;
+    const countedDatabase: Queryable = {
+      query(statement, values) {
+        queryCount += 1;
+        return pool.query(statement, values as unknown[]);
+      },
+    };
+    const countedQueue = new Queue(countedDatabase, "default");
+    const taskId = "00000000-0000-4000-8000-000000000001";
+    const dependencies = {
+      onSuccess: "release",
+      onFailure: "cancel",
+      onCancellation: "cancel",
+    } as const;
+    // The types reject some of these combinations, so the casts reach the runtime checks.
+    const refused = [
+      [{ priority: -1 }, "priority must be an integer"],
+      [{ runAt: new Date(Number.NaN) }, "Invalid time value"],
+      [{ deadline: new Date(Number.NaN) }, "Invalid time value"],
+      [
+        { idempotency: { key: "both" }, throttle: { key: "both", windowMs: 1_000 } },
+        "cannot combine idempotency, debounce, or throttle",
+      ],
+      [
+        { debounce: { key: "late", windowMs: 1_000, schedule: "reset" }, runAt: new Date() },
+        "instead of runAt",
+      ],
+      [
+        {
+          prerequisiteTaskId: taskId,
+          dependencies: { ...dependencies, prerequisiteTaskIds: [taskId] },
+        },
+        "cannot combine prerequisiteTaskId and dependencies",
+      ],
+      [{ dependencies: { ...dependencies, prerequisiteTaskIds: [] } }, "requires between 1 and"],
+      [
+        { dependencies: { ...dependencies, prerequisiteTaskIds: [taskId, taskId] } },
+        "prerequisiteTaskIds must be unique",
+      ],
+    ] as unknown as [EnqueueOptions, string][];
+    for (const [options, message] of refused) {
+      await expect(countedQueue.enqueue("options-refused", null, options)).rejects.toThrow(message);
+      await expect(
+        countedQueue.enqueueWithResult("options-refused", null, options),
+      ).rejects.toThrow(message);
+    }
+    expect(queryCount).toBe(0);
+  });
+
   it("stores no execution timeout for an omitted or zero value", async () => {
     expect(await storedExecutionTimeout(await queue.enqueue("timeout-omitted", null))).toBeNull();
     expect(
