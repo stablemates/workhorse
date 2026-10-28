@@ -1185,7 +1185,8 @@ describe("continuous integration", () => {
     // The lockfiles alone decide what runs beside the key and the token.
     expect(job).not.toContain("cache: pnpm");
     expect(job).toContain("cache-disabled: true");
-    expect(job).toContain('if [ "v$jvm" != "$GITHUB_REF_NAME" ]; then');
+    // A mismatched version publishes nothing. On a match, a missing secret fails the job (SM-1861).
+    expect(job).toContain('node scripts/check-release-line.ts maven-central "$GITHUB_REF_NAME"');
     // The job reads exactly the four secrets that SM-1384 creates, each in one step only. The
     // version step learns only whether they exist.
     expect(new Set([...job.matchAll(/secrets\.(\w+)/g)].map((match) => match[1]))).toEqual(
@@ -1251,9 +1252,8 @@ describe("continuous integration", () => {
     expect(job).toContain("contents: read");
     expect(job).not.toContain("contents: write");
     expect(job).not.toContain("cache: pnpm");
-    expect(job).toContain('if [ "v$dotnet" != "$GITHUB_REF_NAME" ]; then');
-    expect(job).toContain('echo "publish=false" >> "$GITHUB_OUTPUT"');
-    expect(job).not.toContain("exit 1");
+    // A mismatched version publishes nothing. On a match, a missing secret fails the job (SM-1861).
+    expect(job).toContain('node scripts/check-release-line.ts nuget "$GITHUB_REF_NAME"');
     expect(job).toContain(
       'pnpm dotnet:package-check --tag "$GITHUB_REF_NAME" --output "$RUNNER_TEMP/nuget"',
     );
@@ -1278,15 +1278,22 @@ describe("continuous integration", () => {
     const registries = [
       workflow.slice(workflow.indexOf("\n  crates-io:"), workflow.indexOf("\n  rubygems:")),
       workflow.slice(workflow.indexOf("\n  rubygems:"), workflow.indexOf("\n  maven-central:")),
+    ];
+    const gated = [
       workflow.slice(workflow.indexOf("\n  maven-central:"), workflow.indexOf("\n  nuget:")),
       workflow.slice(workflow.indexOf("\n  nuget:"), workflow.indexOf("\n  github-release:")),
     ];
 
     expect(job).toContain("needs: [publish, crates-io, rubygems, maven-central, nuget]");
     expect(job).toContain("if: startsWith(github.ref, 'refs/tags/v') && inputs.dry-run != true");
-    // A registry job that publishes nothing must still succeed, or the release never appears.
+    // A registry job whose version differs from the tag must still succeed, or the release never
+    // appears. scripts/check-release-line.test.ts holds the Maven Central and nuget.org jobs to it.
     for (const registry of registries) {
       expect(registry).toContain('echo "publish=false" >> "$GITHUB_OUTPUT"');
+      expect(registry).not.toContain("exit 1");
+    }
+    for (const registry of gated) {
+      expect(registry).toContain("node scripts/check-release-line.ts");
       expect(registry).not.toContain("exit 1");
     }
   });
