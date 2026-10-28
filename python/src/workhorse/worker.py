@@ -4181,15 +4181,27 @@ class Worker:
         attempt settles them here under its own fence instead of leaving the task to recovery. Only
         a lost lease remains an error.
         """
+        try:
+            outcome, _status = self._settle_refusal(task)
+        except StaleLeaseError:
+            arbiter.submit("lease_expired")
+            raise
+        arbiter.submit(outcome)
+
+    def _settle_refusal(self, task: ClaimedTask) -> tuple[_AttemptOutcome, str]:
+        """Settle the cause of a fenced write that PostgreSQL refused, under the attempt's fence.
+
+        expire_owned_v1 does not read expires_at, so a due deadline or attempt timeout settles also
+        after the lease lapsed (SM-1884). A requested cancellation settles when
+        acknowledge_cancel_v1 accepts it. Returns the outcome and the handler span outcome. Any
+        other answer raises StaleLeaseError.
+        """
         status = self._expire_owned_task(task, _current_context())
         outcome = _outcome_for_status(status, neutral=frozenset({"not_due"}))
         if outcome == "cancelled" and self._acknowledge_cancel(task):
-            arbiter.submit("cancelled")
-            return
+            return outcome, "canceled"
         if outcome == "deadline_exceeded" or outcome == "attempt_timeout":
-            arbiter.submit(outcome)
-            return
-        arbiter.submit("lease_expired")
+            return outcome, str(status)
         raise StaleLeaseError(task.id)
 
     def _finish_lifecycle_outcome(self, task: ClaimedTask, outcome: _AttemptOutcome | None) -> bool:
@@ -4274,7 +4286,8 @@ class Worker:
                 raise StaleLeaseError(task.id)
             return "cancelled", status_text
         if outcome == "lease_expired":
-            raise StaleLeaseError(task.id)
+            # A lease that lapsed under an unchanged fence can still settle a due boundary.
+            return self._settle_refusal(task)
         return outcome, status_text
 
     def _settle_failure(self, task: ClaimedTask, error: Exception) -> tuple[_AttemptOutcome, str]:
@@ -4323,7 +4336,11 @@ class Worker:
                 raise StaleLeaseError(task.id) from error
             return "cancelled", state_text
         if outcome == "lease_expired":
-            raise StaleLeaseError(task.id) from error
+            # A lease that lapsed under an unchanged fence can still settle a due boundary.
+            try:
+                return self._settle_refusal(task)
+            except StaleLeaseError as stale:
+                raise stale from error
         return outcome, state_text
 
 

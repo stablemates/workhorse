@@ -40,6 +40,32 @@ expiry, history release, and group finish. The health document keeps its keys, a
 does not change.
 Every process of every SDK version gets the new result when the migration commits.
 
+### A stale failure or release after a lapsed lease settles its cause
+
+A lease can lapse while a handler runs, with no change to the fence. Then `fail_v1` and
+`release_owned_v1` answer `stale`, but `expire_owned_v1` can still settle a due deadline or attempt
+timeout under that fence. Before this change, the worker settled nothing, and lease recovery
+settled the task later (SM-1884).
+
+Now the worker calls `expire_owned_v1` at once and settles the due boundary, as the Go and Rust
+workers do:
+
+- After a lapsed lease with a due deadline, the handler outcome was `lease_lost`. Now it is
+  `deadline_exceeded`, and the task fails at once.
+- After a lapsed lease with a due attempt timeout, the handler outcome was `lease_lost`. Now it is
+  `timeout`, and PostgreSQL applies the retry policy at once.
+- After a lapsed lease with no due boundary, the outcome stays `lease_lost`.
+
+The handler span records `deadline_exceeded` or `timeout_exceeded`. Before this change, it
+recorded `stale`.
+
+If `fail_v1` or `release_owned_v1` answers `cancel_requested` and `acknowledge_cancel_v1` refuses,
+the worker settles nothing. After a failed cancellation acknowledgement, the handler outcome was
+`unknown`. Now it is `lease_lost`. The handler span records `stale`. Before this change, it recorded
+`unknown`. A late heartbeat round can also deliver the cancellation request, after a failure, a
+release, or a refused completion. If the acknowledgement then refuses, the handler outcome was
+`canceled`. Now it is `lease_lost`.
+
 ### The dashboard bundle uses Mantine 9.7.4
 
 The Rack dashboard backend serves the shared dashboard browser bundle. After 0.10.0, a dependency

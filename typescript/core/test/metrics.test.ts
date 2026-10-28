@@ -1261,9 +1261,11 @@ describe("Workhorse OpenTelemetry metrics", () => {
       fenceToken: 1n,
       leaseExpiresAt: new Date(Date.now() + 30_000),
     };
+    // After a stale answer, the worker asks expire_owned_v1, which finds no owned task either.
     const queue = workerQueue({
       claim: async () => task,
       fail: async () => databaseState,
+      expireOwned: async () => "stale",
     });
     const worker = new Worker(queue, {
       queue: "mail",

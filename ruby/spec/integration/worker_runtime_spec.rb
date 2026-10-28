@@ -700,6 +700,112 @@ RSpec.describe "Worker runtime against PostgreSQL" do
       "workhorse.handler.duration")
   end
 
+  # SM-1884: the handler lets its lease lapse under an unchanged fence, so fail_v1 and
+  # release_owned_v1 answer stale. expire_owned_v1 does not read expires_at, so a due boundary still
+  # settles under that fence. The cases are the lapsed-lease cases of the Go test
+  # worker_refused_completion_outcome_test.go. The boundaries are an hour away, so the worker's own
+  # timers cannot reach them, and only the maintenance tick before the claim runs.
+  describe "after a lapsed lease" do
+    def enqueue_lapsing
+      queue.enqueue("lapsing", {}, max_attempts: 1, deadline: Time.now + 3600, execution_timeout: 3600).task_id
+    end
+
+    def lapsing_worker(**)
+      worker(lease: 60, heartbeat: 30, maintenance_interval: 3600, **)
+    end
+
+    # Runs +sql+ on a connection of its own, outside the worker's connections.
+    def control(sql, params)
+      connection = ScratchDatabase.connect
+      connection.exec_params(sql, params).values
+    ensure
+      connection&.close
+    end
+
+    def lapse(task_id, boundary)
+      past = "clock_timestamp() - interval '1 second'"
+      change = boundary ? "expires_at = #{past}, #{boundary} = #{past}" : "expires_at = #{past}"
+      control("UPDATE workhorse.task_runtime SET #{change} WHERE task_id = $1", [task_id])
+    end
+
+    def handler_outcomes(task_id)
+      span = RecordedTelemetry.spans.find do |recorded|
+        recorded.name == "workhorse.handler" && recorded.attributes["workhorse.task.id"] == task_id
+      end
+      executions = RecordedTelemetry.measurements.select do |(name, _amount, attributes)|
+        name == "workhorse.handler.executions" && attributes["workhorse.queue.name"] == @queue_name
+      end
+      [span&.attributes&.fetch("workhorse.handler.outcome"),
+        executions.map { |(_name, _amount, attributes)| attributes["workhorse.handler.outcome"] }]
+    end
+
+    cases = [
+      ["deadline_at", "failed", "deadline_exceeded", "deadline_exceeded"],
+      ["attempt_timeout_at", "failed", "timeout_exceeded", "timeout"],
+      [nil, "active", "stale", "lease_lost"]
+    ]
+
+    cases.each do |boundary, settled, span_outcome, metric_outcome|
+      it "reports #{metric_outcome} for a stale failure with #{boundary || "no due boundary"}" do
+        task_id = enqueue_lapsing
+        subject = lapsing_worker.handle("lapsing") do
+          lapse(task_id, boundary)
+          raise "the handler failed"
+        end
+        expect(subject.run_once).to be(true)
+
+        expect(state(task_id)).to eq(settled)
+        expect(handler_outcomes(task_id)).to eq([span_outcome, [metric_outcome]])
+      end
+
+      it "reports #{metric_outcome} for a stale shutdown release with #{boundary || "no due boundary"}" do
+        task_id = enqueue_lapsing
+        started = Queue.new
+        subject = lapsing_worker(shutdown_grace: 0.1).handle("lapsing") do |_payload, context|
+          started << true
+          context.cancellation.wait(10)
+          lapse(task_id, boundary)
+          context.cancellation.check!
+        end
+        thread = Thread.new { subject.run }
+        started.pop
+        subject.stop
+        begin
+          thread.join(10)
+        rescue W::ShutdownIncompleteError
+          # A loaded host can stall the release past the unwind window. The wait below covers it.
+        end
+        wait_until { !handler_outcomes(task_id).last.empty? }
+
+        expect(state(task_id)).to eq(settled)
+        expect(handler_outcomes(task_id)).to eq([span_outcome, [metric_outcome]])
+      end
+    end
+
+    # fail_v1 answers cancel_requested, and acknowledge_cancel_v1 refuses. The worker settles
+    # nothing, so the handler outcome is a lost lease, not unknown. A trigger of this test database
+    # keeps the acknowledgement from deleting the runtime row.
+    it "reports lease_lost when the cancellation acknowledgement after fail_v1 is refused" do
+      task_id = enqueue_lapsing
+      @connection.exec("CREATE FUNCTION public.keep_runtime() RETURNS trigger LANGUAGE plpgsql
+        AS $$ BEGIN RETURN NULL; END; $$")
+      @connection.exec("CREATE TRIGGER keep_runtime BEFORE DELETE ON workhorse.task_runtime FOR EACH ROW
+        WHEN (OLD.task_id = '#{task_id}') EXECUTE FUNCTION public.keep_runtime()")
+      subject = lapsing_worker.handle("lapsing") do
+        control("SELECT status FROM workhorse.cancel_v1($1, 'test', 'no longer needed')", [task_id])
+        raise "the handler failed"
+      end
+      begin
+        expect(subject.run_once).to be(true)
+      ensure
+        @connection.exec("DROP TRIGGER keep_runtime ON workhorse.task_runtime")
+        @connection.exec("DROP FUNCTION public.keep_runtime()")
+      end
+
+      expect(handler_outcomes(task_id)).to eq(["stale", ["lease_lost"]])
+    end
+  end
+
   it "parents a handler span only to its task's stored trace context" do
     untraced_id = queue.enqueue("trace-parent", {}).task_id
     producer = OpenTelemetry::Trace::SpanContext.new

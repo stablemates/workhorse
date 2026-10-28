@@ -9,6 +9,7 @@ import subprocess
 import threading
 from collections.abc import Iterable, Mapping
 from contextlib import suppress
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -563,3 +564,111 @@ def test_a_stale_settlement_reports_a_lost_lease_as_the_handler_outcome(
         and record.log_record.attributes["workhorse.task.id"] == task_id
     ]
     assert finished == ["lease_lost"]
+
+
+# The lapsed-lease cases of the Go test worker_refused_completion_outcome_test.go: the boundary that
+# comes due with the lapsed lease, the state when run_once returns, and the span and metric outcomes.
+_LAPSED_LEASE_CASES = [
+    ("deadline_at", "failed", "deadline_exceeded", "deadline_exceeded"),
+    ("attempt_timeout_at", "failed", "timeout_exceeded", "timeout"),
+    (None, "active", "stale", "lease_lost"),
+]
+
+
+def _lapse(database_url: str, task_id: str, boundary: str | None) -> None:
+    """Let the lease of `task_id` lapse under an unchanged fence, and make `boundary` due."""
+    past = "clock_timestamp() - interval '1 second'"
+    change = f"expires_at = {past}" + (f", {boundary} = {past}" if boundary else "")
+    with psycopg.connect(database_url, autocommit=True) as connection:
+        connection.execute(
+            f"UPDATE workhorse.task_runtime SET {change} WHERE task_id = %s",  # type: ignore[arg-type]
+            (task_id,),
+        )
+
+
+@pytest.mark.parametrize("settlement", ["fail", "release"])
+@pytest.mark.parametrize(
+    ("boundary", "state", "span_outcome", "metric_outcome"), _LAPSED_LEASE_CASES
+)
+def test_a_stale_settlement_after_a_lapsed_lease_reports_the_settled_cause(
+    database_url: str,
+    monkeypatch: pytest.MonkeyPatch,
+    settlement: str,
+    boundary: str | None,
+    state: str,
+    span_outcome: str,
+    metric_outcome: str,
+) -> None:
+    """A stale fail_v1 or release_owned_v1 answer after a lapsed lease settles its cause (SM-1884).
+
+    The lease lapses under an unchanged fence. expire_owned_v1 does not read expires_at, so a due
+    deadline or attempt timeout still settles, and the worker reports that cause. Only a lapsed lease
+    with no due boundary reports a lost lease. The boundaries are an hour away, so the worker's own
+    timers cannot reach them.
+    """
+    SPAN_EXPORTER.clear()
+    queue_name = f"lapsed-{settlement}-{boundary or 'lease'}"
+    task_type = f"lapsed.{settlement}.{boundary or 'lease'}"
+    with psycopg.connect(database_url) as connection:
+        task_id = Queue(connection, queue_name).enqueue(
+            task_type,
+            {},
+            EnqueueOptions(
+                max_attempts=1,
+                deadline=datetime.now(UTC) + timedelta(hours=1),
+                execution_timeout_ms=3_600_000,
+            ),
+        )
+        connection.commit()
+    executions_before = _counter_values("workhorse.handler.executions")
+
+    worker = Worker(
+        worker_pool,
+        queue=queue_name,
+        worker_id=f"python-{queue_name}",
+        lease_ms=60_000,
+        heartbeat_ms=30_000,
+        maintenance_interval_ms=3_600_000,
+    )
+    if settlement == "fail":
+
+        def fail(_payload: object, _context: HandlerContext) -> None:
+            _lapse(database_url, task_id, boundary)
+            raise RuntimeError("the handler failed")
+
+        worker.handle(task_type, fail)
+    else:
+        # No handler is registered, so the worker releases the claim through release_owned_v1.
+        send = workhorse.worker._fenced_write_rows
+
+        def fenced_write_rows(executor: Any, statement: Any, parameters: Any) -> Any:
+            if statement is workhorse.worker._STATEMENTS.release_owned:
+                _lapse(database_url, task_id, boundary)
+            return send(executor, statement, parameters)
+
+        monkeypatch.setattr(workhorse.worker, "_fenced_write_rows", fenced_write_rows)
+    worker.run_once()
+
+    with psycopg.connect(database_url) as connection:
+        row = connection.execute(
+            "SELECT COALESCE(outcome.state, runtime.state) FROM workhorse.task task"
+            " LEFT JOIN workhorse.task_runtime runtime ON runtime.task_id = task.id"
+            " LEFT JOIN workhorse.task_outcome outcome ON outcome.task_id = task.id"
+            " WHERE task.id = %s",
+            (task_id,),
+        ).fetchone()
+    assert row is not None and row[0] == state
+    handler_span = next(
+        span
+        for span in SPAN_EXPORTER.get_finished_spans()
+        if span.name == "workhorse.handler" and span.attributes["workhorse.task.id"] == task_id
+    )
+    assert handler_span.attributes["workhorse.handler.outcome"] == span_outcome
+    executions = _counter_values("workhorse.handler.executions")
+    added = {
+        dict(attributes)["workhorse.handler.outcome"]: value - executions_before.get(attributes, 0)
+        for attributes, value in executions.items()
+        if dict(attributes).get("workhorse.task.type") == task_type
+        and value != executions_before.get(attributes, 0)
+    }
+    assert added == {metric_outcome: 1}

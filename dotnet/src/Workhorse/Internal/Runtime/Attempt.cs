@@ -38,6 +38,12 @@ internal sealed class Arbiter
     internal bool Submit(Outcome outcome) => Interlocked.CompareExchange(ref _outcome, (int)outcome, None) == None;
 
     /// <summary>
+    /// Replaces a cancellation that PostgreSQL refused to acknowledge with a lost lease. A heartbeat
+    /// round can submit the cancellation request first, but the worker settled nothing.
+    /// </summary>
+    internal void RefuseCancellation() => Interlocked.CompareExchange(ref _outcome, (int)Outcome.LeaseExpired, (int)Outcome.Cancelled);
+
+    /// <summary>
     /// The suspension that a fenced durable write released the task for, or <c>null</c>. The attempt
     /// suspends whichever outcome won, because the heartbeat reports that release as a lost lease.
     /// </summary>

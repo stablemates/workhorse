@@ -325,6 +325,32 @@ RSpec.describe W::Worker do
       expect([arbiter.outcome, cancellation.reason, ownership.stop.set?]).to eq([nil, nil, false])
     end
   end
+  # SM-1884: a late heartbeat round can submit a cancellation request before the reconciliation of a
+  # stale failure or release. If PostgreSQL refuses the acknowledgement, the worker settled nothing.
+  describe "a reconciliation after a late heartbeat cancellation" do
+    ownership_class = described_class.const_get(:Ownership)
+    let(:task) do
+      W::ClaimedTask.new(
+        id: "00000000-0000-4000-8000-000000000003", queue: "default", type: "t", priority: 0, payload: {},
+        contract_version: nil, result_max_bytes: nil, redact_error_details: false, trace_context: nil,
+        attempt: 1, max_attempts: 3, retry_policy: nil, deadline_at: nil, execution_timeout_ms: nil,
+        attempt_timeout_at: nil, fence_token: 7, lease_expires_at: nil
+      )
+    end
+
+    it "reports a lost lease when PostgreSQL refuses the acknowledgement" do
+      subject = worker
+      ownership = ownership_class.new(Process.clock_gettime(Process::CLOCK_MONOTONIC), 30.0)
+      arbiter = W::Arbiter.new
+      arbiter.submit(:cancelled)
+      allow(subject).to receive(:acknowledge_cancel).and_return(false)
+
+      expect { subject.send(:reconcile_refusal, task, ownership, arbiter, "fail") }
+        .to raise_error(W::LeaseLostError)
+      expect(arbiter.outcome).to eq(:lease_expired)
+    end
+  end
+
   # SM-1869: the watch converts the expiry to a monotonic due time once. A wall clock that steps
   # back during a lease wait does not delay the first expiry request.
   describe "the expiry watch" do

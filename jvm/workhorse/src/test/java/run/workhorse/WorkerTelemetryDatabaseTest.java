@@ -28,6 +28,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.BooleanSupplier;
 import javax.sql.DataSource;
@@ -281,6 +283,200 @@ class WorkerTelemetryDatabaseTest {
             .put(Names.HANDLER_OUTCOME, metricOutcome)
             .build();
     assertEquals(List.of(task), points(metric("workhorse.handler.executions")));
+  }
+
+  /**
+   * SM-1884: a handler fails after its lease lapsed under an unchanged fence, so {@code fail_v1}
+   * answers {@code stale}. {@code expire_owned_v1} does not read {@code expires_at}, so the worker
+   * still settles a due deadline or attempt timeout and reports that cause. Only a lapsed lease
+   * with no due boundary reports a lost lease. The cases are the lapsed-lease cases of the Go test
+   * {@code worker_refused_completion_outcome_test.go}.
+   */
+  @ParameterizedTest
+  @CsvSource({
+    "deadline_at,failed,deadline_exceeded,deadline_exceeded",
+    "attempt_timeout_at,failed,timeout_exceeded,timeout",
+    "none,active,stale,lease_lost"
+  })
+  void settlesTheCauseOfAStaleFailureAfterALapsedLease(
+      String boundary, String settledState, String spanOutcome, String metricOutcome)
+      throws SQLException {
+    UUID taskId = enqueueWithFarBoundaries();
+    Worker subject =
+        lapsedLeaseWorker()
+            .handle(
+                "email.send",
+                Object.class,
+                (context, payload) -> {
+                  lapse(taskId, boundary);
+                  throw new IllegalStateException("the handler failed");
+                })
+            .build();
+    assertTrue(subject.runOnce());
+
+    assertEquals(settledState, state(taskId), "the state when runOnce returned");
+    assertEquals(
+        spanOutcome, text(recording.spans(Names.SPAN_HANDLER).get(0), Names.HANDLER_OUTCOME));
+    assertEquals(
+        List.of(executions(metricOutcome)), points(metric("workhorse.handler.executions")));
+  }
+
+  /**
+   * SM-1884: a handler stops for the shutdown after its lease lapsed, so {@code release_owned_v1}
+   * answers {@code stale}. The worker reconciles that answer as it reconciles a stale failure.
+   */
+  @ParameterizedTest
+  @CsvSource({
+    "deadline_at,failed,deadline_exceeded,deadline_exceeded",
+    "attempt_timeout_at,failed,timeout_exceeded,timeout",
+    "none,active,stale,lease_lost"
+  })
+  void settlesTheCauseOfAStaleShutdownReleaseAfterALapsedLease(
+      String boundary, String settledState, String spanOutcome, String metricOutcome)
+      throws SQLException, InterruptedException {
+    UUID taskId = enqueueWithFarBoundaries();
+    CountDownLatch started = new CountDownLatch(1);
+    Worker subject =
+        lapsedLeaseWorker()
+            .shutdownGrace(Duration.ofMillis(100))
+            .handle(
+                "email.send",
+                Object.class,
+                (context, payload) -> {
+                  started.countDown();
+                  long deadline = System.nanoTime() + WAIT.toNanos();
+                  while (!context.isCancelled() && System.nanoTime() < deadline) {
+                    try {
+                      context.cancellation().await(WAIT);
+                    } catch (InterruptedException ignored) {
+                      // Waits for the token, not for the interrupt.
+                    }
+                  }
+                  lapse(taskId, boundary);
+                  context.cancellation().throwIfCancelled();
+                  return null;
+                })
+            .build();
+    subject.start();
+    assertTrue(started.await(WAIT.toMillis(), TimeUnit.MILLISECONDS));
+    try {
+      subject.close();
+    } catch (ShutdownIncompleteException slow) {
+      // A loaded host can stall the release past the unwind window. The wait below covers it.
+    }
+    waitUntil(() -> !recording.spans(Names.SPAN_HANDLER).isEmpty());
+
+    assertEquals(settledState, state(taskId), "the state after the release");
+    assertEquals(
+        spanOutcome, text(recording.spans(Names.SPAN_HANDLER).get(0), Names.HANDLER_OUTCOME));
+    assertEquals(
+        List.of(executions(metricOutcome)), points(metric("workhorse.handler.executions")));
+  }
+
+  /**
+   * SM-1884: {@code fail_v1} answers {@code cancel_requested}, and {@code acknowledge_cancel_v1}
+   * refuses. The worker settles nothing, so the handler outcome is a lost lease, not {@code
+   * unknown}. A trigger of this test database keeps the acknowledgement from deleting the runtime
+   * row.
+   */
+  @Test
+  void reportsALostLeaseWhenTheCancellationAcknowledgementIsRefused() throws SQLException {
+    UUID taskId = enqueueWithFarBoundaries();
+    execute(
+        "CREATE FUNCTION public.keep_runtime() RETURNS trigger LANGUAGE plpgsql"
+            + " AS $$ BEGIN RETURN NULL; END; $$");
+    execute(
+        "CREATE TRIGGER keep_runtime BEFORE DELETE ON workhorse.task_runtime FOR EACH ROW"
+            + " WHEN (OLD.task_id = '"
+            + taskId
+            + "') EXECUTE FUNCTION public.keep_runtime()");
+    try {
+      Worker subject =
+          lapsedLeaseWorker()
+              .handle(
+                  "email.send",
+                  Object.class,
+                  (context, payload) -> {
+                    execute(
+                        "SELECT status FROM workhorse.cancel_v1('"
+                            + taskId
+                            + "', 'test', 'no longer needed')");
+                    throw new IllegalStateException("the handler failed");
+                  })
+              .build();
+      assertTrue(subject.runOnce());
+    } finally {
+      execute("DROP TRIGGER keep_runtime ON workhorse.task_runtime");
+      execute("DROP FUNCTION public.keep_runtime()");
+    }
+
+    assertEquals("stale", text(recording.spans(Names.SPAN_HANDLER).get(0), Names.HANDLER_OUTCOME));
+    assertEquals(List.of(executions("lease_lost")), points(metric("workhorse.handler.executions")));
+  }
+
+  // The enqueued boundaries are far away, so the worker's own timers cannot reach them.
+  private UUID enqueueWithFarBoundaries() {
+    return queue
+        .enqueue(
+            "email.send",
+            Map.of(),
+            EnqueueOptions.builder()
+                .queue(queueName)
+                .maxAttempts(1)
+                .deadline(Instant.now().plus(Duration.ofHours(1)))
+                .executionTimeout(Duration.ofHours(1))
+                .build())
+        .taskId();
+  }
+
+  // Only the tick before the claim runs, and no heartbeat round runs while the handler runs.
+  private Worker.Builder lapsedLeaseWorker() {
+    return worker()
+        .lease(Duration.ofSeconds(60))
+        .heartbeat(Duration.ofSeconds(30))
+        .maintenanceInterval(Duration.ofHours(1));
+  }
+
+  private Attributes executions(String outcome) {
+    return Attributes.builder()
+        .put(Names.QUEUE_NAME, queueName)
+        .put(Names.TASK_TYPE, "email.send")
+        .put(Names.HANDLER_OUTCOME, outcome)
+        .build();
+  }
+
+  // Lets the lease lapse under an unchanged fence, and makes the boundary due unless it is none.
+  private static void lapse(UUID taskId, String boundary) throws SQLException {
+    String past = "clock_timestamp() - interval '1 second'";
+    String change =
+        "none".equals(boundary)
+            ? "expires_at = " + past
+            : "expires_at = " + past + ", " + boundary + " = " + past;
+    execute("UPDATE workhorse.task_runtime SET " + change + " WHERE task_id = '" + taskId + "'");
+  }
+
+  private static void execute(String sql) throws SQLException {
+    try (Connection connection = ScratchDatabase.connect();
+        PreparedStatement statement = connection.prepareStatement(sql)) {
+      statement.execute();
+    }
+  }
+
+  private static String state(UUID taskId) throws SQLException {
+    try (Connection connection = ScratchDatabase.connect();
+        PreparedStatement statement =
+            connection.prepareStatement(
+                "SELECT COALESCE(outcome.state, runtime.state) AS state"
+                    + " FROM workhorse.task task"
+                    + " LEFT JOIN workhorse.task_runtime runtime ON runtime.task_id = task.id"
+                    + " LEFT JOIN workhorse.task_outcome outcome ON outcome.task_id = task.id"
+                    + " WHERE task.id = ?")) {
+      statement.setObject(1, taskId);
+      try (ResultSet row = statement.executeQuery()) {
+        assertTrue(row.next());
+        return row.getString("state");
+      }
+    }
   }
 
   @Test

@@ -114,7 +114,7 @@ public sealed partial class Worker
         {
             // A task type with no handler goes back to its queue, so another worker can claim it.
             WorkerLog.HandlerMissing(_logger, task.Task.Type, task.Task.Id);
-            await ReleaseOwnedAsync(task.Task, arbiter, token).ConfigureAwait(false);
+            await ReleaseOwnedAsync(task.Task, arbiter, null, token).ConfigureAwait(false);
             return;
         }
 
@@ -155,11 +155,11 @@ public sealed partial class Worker
             // A handler that stopped for the shutdown returns the task without charging the attempt.
             if (cancellation.Reason == CancelReason.Shutdown && ShutdownCancellation(error, cancellation.Token))
             {
-                await ReleaseOwnedAsync(claimed, arbiter, token).ConfigureAwait(false);
+                await ReleaseOwnedAsync(claimed, arbiter, ownership, token).ConfigureAwait(false);
                 return;
             }
 
-            await SettleFailureAsync(claimed, error, arbiter, token).ConfigureAwait(false);
+            await SettleFailureAsync(claimed, error, arbiter, ownership, token).ConfigureAwait(false);
             return;
         }
         finally
@@ -289,35 +289,44 @@ public sealed partial class Worker
     /// Renewal stops when the handler returns, so the attempt settles them here under its own fence and
     /// does not leave the task to recovery. Only a lost lease throws <see cref="LeaseLostException"/>.
     /// </summary>
-    internal async Task ReconcileRejectedCompletionAsync(ClaimedTask task, Ownership ownership, Arbiter arbiter, CancellationToken cancellationToken)
+    internal Task ReconcileRejectedCompletionAsync(ClaimedTask task, Ownership ownership, Arbiter arbiter, CancellationToken cancellationToken) =>
+        ReconcileRefusalAsync(task, ownership, arbiter, "complete", cancellationToken);
+
+    /// <summary>
+    /// Like <see cref="ReconcileRejectedCompletionAsync"/>, for the fenced write of
+    /// <paramref name="operation"/>: the completion, or a failure or release that PostgreSQL
+    /// answered <c>stale</c> (SM-1884). Without an ownership, no heartbeat round can settle the
+    /// attempt, so the reconciliation takes no lock.
+    /// </summary>
+    private async Task ReconcileRefusalAsync(ClaimedTask task, Ownership? ownership, Arbiter arbiter, string operation, CancellationToken cancellationToken)
     {
+        if (ownership is null)
+        {
+            await SettleRefusalAsync(task, arbiter, operation, cancellationToken).ConfigureAwait(false);
+            return;
+        }
+
         // A heartbeat round that read the membership before the release can still settle the
         // attempt. Both take the settlement lock, so the first one decides. If the round decided
         // first, the attempt finishes with its outcome and writes nothing more.
         await ownership.Settlement.WaitAsync(CancellationToken.None).ConfigureAwait(false);
         try
         {
-            if (arbiter.Current is not null && await FinishOwnershipAsync(task, ownership, arbiter, cancellationToken).ConfigureAwait(false))
+            try
             {
-                return;
+                if (arbiter.Current is not null && await FinishOwnershipAsync(task, ownership, arbiter, cancellationToken).ConfigureAwait(false))
+                {
+                    return;
+                }
+            }
+            catch (LeaseLostException)
+            {
+                // A heartbeat round submitted a cancellation that PostgreSQL refused to acknowledge.
+                arbiter.RefuseCancellation();
+                throw;
             }
 
-            var status = await ExpireOwnedAsync(task, cancellationToken).ConfigureAwait(false);
-            Outcome? outcome = status == "not_due" ? null : OutcomeFor(status, "complete");
-            if (outcome == Outcome.Cancelled && await AcknowledgeCancelAsync(task, cancellationToken).ConfigureAwait(false))
-            {
-                arbiter.Submit(Outcome.Cancelled);
-                return;
-            }
-
-            if (outcome is Outcome.DeadlineExceeded or Outcome.AttemptTimeout)
-            {
-                arbiter.Submit(outcome.Value);
-                return;
-            }
-
-            arbiter.Submit(Outcome.LeaseExpired);
-            throw new LeaseLostException(task.Id, "complete");
+            await SettleRefusalAsync(task, arbiter, operation, cancellationToken).ConfigureAwait(false);
         }
         finally
         {
@@ -325,8 +334,36 @@ public sealed partial class Worker
         }
     }
 
+    /// <summary>
+    /// Settles the cause of a fenced write that PostgreSQL refused, under the attempt's own fence.
+    /// <c>expire_owned_v1</c> does not read <c>expires_at</c>, so a due deadline or attempt timeout
+    /// settles also after the lease lapsed (SM-1884). A requested cancellation settles when
+    /// <c>acknowledge_cancel_v1</c> accepts it. Any other answer submits a lost lease and throws
+    /// <see cref="LeaseLostException"/>.
+    /// </summary>
+    private async Task SettleRefusalAsync(ClaimedTask task, Arbiter arbiter, string operation, CancellationToken cancellationToken)
+    {
+        var status = await ExpireOwnedAsync(task, cancellationToken).ConfigureAwait(false);
+        Outcome? outcome = status == "not_due" ? null : OutcomeFor(status, operation);
+        if (outcome == Outcome.Cancelled && await AcknowledgeCancelAsync(task, cancellationToken).ConfigureAwait(false))
+        {
+            arbiter.Submit(Outcome.Cancelled);
+            return;
+        }
+
+        if (outcome is Outcome.DeadlineExceeded or Outcome.AttemptTimeout)
+        {
+            arbiter.Submit(outcome.Value);
+            return;
+        }
+
+        arbiter.Submit(Outcome.LeaseExpired);
+        arbiter.RefuseCancellation();
+        throw new LeaseLostException(task.Id, operation);
+    }
+
     /// <summary>Hands an owned task back to PostgreSQL without charging the attempt.</summary>
-    private async Task ReleaseOwnedAsync(ClaimedTask task, Arbiter arbiter, CancellationToken cancellationToken)
+    private async Task ReleaseOwnedAsync(ClaimedTask task, Arbiter arbiter, Ownership? ownership, CancellationToken cancellationToken)
     {
         var row = await FencedRowAsync(SqlCatalogue.ReleaseOwnedV1, task, () => [], cancellationToken).ConfigureAwait(false);
         var status = row.Text("status");
@@ -338,7 +375,7 @@ public sealed partial class Worker
             return;
         }
 
-        await SettleStatusAsync(task, status, arbiter, "release", "not_due", Outcome.LeaseExpired, cancellationToken).ConfigureAwait(false);
+        await SettleStatusAsync(task, status, arbiter, "release", "not_due", Outcome.LeaseExpired, ownership, cancellationToken).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -359,7 +396,7 @@ public sealed partial class Worker
     }
 
     /// <summary>Records a handler failure. PostgreSQL retries or fails the task by its retry policy.</summary>
-    private async Task SettleFailureAsync(ClaimedTask task, Exception error, Arbiter arbiter, CancellationToken cancellationToken)
+    private async Task SettleFailureAsync(ClaimedTask task, Exception error, Arbiter arbiter, Ownership ownership, CancellationToken cancellationToken)
     {
         var envelope = FailureEnvelope.Write(error, task.RedactErrorDetails);
         int? delay = null;
@@ -389,15 +426,18 @@ public sealed partial class Worker
             return;
         }
 
-        await SettleStatusAsync(task, state, arbiter, "fail", "failed", Outcome.Failed, cancellationToken).ConfigureAwait(false);
+        await SettleStatusAsync(task, state, arbiter, "fail", "failed", Outcome.Failed, ownership, cancellationToken).ConfigureAwait(false);
     }
 
     /// <summary>
     /// Submits the outcome for a status that the worker's own write returned. A cancel request is
-    /// acknowledged; a lost lease throws <see cref="LeaseLostException"/>.
+    /// acknowledged. A <c>stale</c> answer settles its cause, as <see cref="SettleRefusalAsync"/>
+    /// describes. A lost lease submits <see cref="Outcome.LeaseExpired"/> and throws
+    /// <see cref="LeaseLostException"/>. The reconciliation waits for a heartbeat settlement of
+    /// <paramref name="ownership"/>, as <see cref="ReconcileRefusalAsync"/> describes.
     /// </summary>
     private async Task SettleStatusAsync(
-        ClaimedTask task, string? status, Arbiter arbiter, string operation, string neutral, Outcome neutralOutcome, CancellationToken cancellationToken)
+        ClaimedTask task, string? status, Arbiter arbiter, string operation, string neutral, Outcome neutralOutcome, Ownership? ownership, CancellationToken cancellationToken)
     {
         if (status == neutral)
         {
@@ -406,16 +446,25 @@ public sealed partial class Worker
         }
 
         var outcome = OutcomeFor(status, operation);
+        if (outcome == Outcome.LeaseExpired)
+        {
+            // A lease that lapsed under an unchanged fence can still settle a due boundary. The span
+            // then takes its outcome from the settled cause, as after a refused completion.
+            WorkerTelemetry.HandlerSpanOutcome(task, null);
+            await ReconcileRefusalAsync(task, ownership, arbiter, operation, cancellationToken).ConfigureAwait(false);
+            return;
+        }
+
         if (outcome == Outcome.Cancelled && !await AcknowledgeCancelAsync(task, cancellationToken).ConfigureAwait(false))
         {
+            // The worker settled nothing, so the attempt reports the lost lease, also on the span.
+            WorkerTelemetry.HandlerSpanOutcome(task, null);
+            arbiter.Submit(Outcome.LeaseExpired);
+            arbiter.RefuseCancellation();
             throw new LeaseLostException(task.Id, operation);
         }
 
         arbiter.Submit(outcome);
-        if (outcome == Outcome.LeaseExpired)
-        {
-            throw new LeaseLostException(task.Id, operation);
-        }
     }
 
     private static Outcome OutcomeFor(string? status, string operation) => status switch
