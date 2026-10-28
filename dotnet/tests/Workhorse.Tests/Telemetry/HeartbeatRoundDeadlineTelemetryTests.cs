@@ -75,8 +75,7 @@ public sealed class HeartbeatRoundDeadlineTelemetryTests
 
                 var member = workerId == first.WorkerId ? first : second;
                 return [new Row(new Dictionary<string, object?> { ["task_id"] = member.TaskId.ToString(), ["status"] = "accepted" })];
-            },
-            dedicated: true);
+            });
         var leaveFirst = heartbeat.Register(first);
         var leaveSecond = heartbeat.Register(second);
         Interlocked.Exchange(ref armedAfter, heartbeat.RoundsStarted + 1);

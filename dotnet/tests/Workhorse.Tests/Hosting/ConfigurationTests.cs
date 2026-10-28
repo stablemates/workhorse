@@ -66,7 +66,6 @@ public sealed class ConfigurationTests(ScratchDatabase database) : IClassFixture
             ["Workhorse:Worker:RegistryInterval"] = "00:00:07",
             ["Workhorse:Worker:ScheduleCatchupLimit"] = "50",
             ["Workhorse:Worker:ScheduleNamespaces:0"] = "billing",
-            ["Workhorse:Worker:SharedHeartbeats"] = "true",
             ["Workhorse:Worker:ShutdownGrace"] = "00:00:10",
             ["Workhorse:Worker:WorkerId"] = "worker-a",
         };
@@ -89,7 +88,6 @@ public sealed class ConfigurationTests(ScratchDatabase database) : IClassFixture
         Assert.Equal(TimeSpan.FromSeconds(7), worker.RegistryInterval);
         Assert.Equal(50, worker.ScheduleCatchupLimit);
         Assert.Equal(["billing"], worker.ScheduleNamespaces);
-        Assert.True(worker.SharedHeartbeats);
         Assert.Equal(TimeSpan.FromSeconds(10), worker.ShutdownGrace);
         Assert.Equal("worker-a", worker.WorkerId);
         Assert.NotNull(worker.LoggerFactory);
@@ -108,6 +106,26 @@ public sealed class ConfigurationTests(ScratchDatabase database) : IClassFixture
         Assert.Equal(["default"], worker.Queues);
         Assert.Equal(TimeSpan.FromSeconds(25), worker.ShutdownGrace);
         Assert.Equal("default", provider.GetRequiredService<IOptions<QueueOptions>>().Value.DefaultQueue);
+    }
+
+    /// <summary>
+    /// SM-1902: <c>Workhorse:Worker:SharedHeartbeats</c> is removed. With each value, also
+    /// <c>null</c>, and in each letter case, <c>AddWorkhorse</c> throws, also in a process that
+    /// registers no worker. The error names the removal and the next step.
+    /// </summary>
+    [Theory]
+    [InlineData("Workhorse:Worker:SharedHeartbeats", "true")]
+    [InlineData("Workhorse:Worker:SharedHeartbeats", "false")]
+    [InlineData("Workhorse:Worker:SharedHeartbeats", null)]
+    [InlineData("workhorse:worker:sharedheartbeats", "true")]
+    public void TheRemovedSharedHeartbeatsKeyStopsTheRegistration(string key, string? value)
+    {
+        var services = new ServiceCollection();
+        var configuration = Configuration(new Dictionary<string, string?> { [key] = value });
+        var refusal = Assert.Throws<InvalidOperationException>(() => services.AddWorkhorse(configuration));
+        Assert.Contains("SharedHeartbeats was removed in 0.11.0", refusal.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("removed", refusal.Message, StringComparison.Ordinal);
+        Assert.Contains("a known maximum size of at least 3", refusal.Message, StringComparison.Ordinal);
     }
 
     [Fact]

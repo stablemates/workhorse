@@ -118,7 +118,6 @@ run.workhorse.kotlin.WorkerScope: public var registryInterval: java.time.Duratio
 run.workhorse.kotlin.WorkerScope: public var retryDelay: run.workhorse.RetryDelay? = null
 run.workhorse.kotlin.WorkerScope: public var scheduleCatchupLimit: Int? = null
 run.workhorse.kotlin.WorkerScope: public var scheduleNamespaces: List<String>? = null
-run.workhorse.kotlin.WorkerScope: public var sharedHeartbeats: Boolean? = null
 run.workhorse.kotlin.WorkerScope: public var shutdownGrace: java.time.Duration? = null
 run.workhorse.kotlin.WorkerScope: public var telemetry: run.workhorse.WorkhorseTelemetry? = null
 run.workhorse.kotlin.WorkerScope: public var workerId: String? = null

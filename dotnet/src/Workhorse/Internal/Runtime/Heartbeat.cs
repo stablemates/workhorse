@@ -16,8 +16,7 @@ namespace Workhorse.Internal.Runtime;
 /// Every worker on one <see cref="NpgsqlDataSource"/> shares one dedicated heartbeat. The pool
 /// identity is the exact data source reference, in a <see cref="ConditionalWeakTable{TKey,TValue}"/>
 /// that does not keep the data source alive. That heartbeat holds one connection while a worker
-/// holds a <see cref="Reservation"/> or an attempt is registered. A worker with
-/// <c>SharedHeartbeats</c> has its own heartbeat, which opens a connection for each round instead.
+/// holds a <see cref="Reservation"/> or an attempt is registered.
 /// </para>
 /// <para>
 /// The heartbeat thread schedules the rounds and never does I/O. It hands each round to the thread
@@ -39,9 +38,6 @@ internal sealed class Heartbeat
     /// <summary>The longest base delay before a busy retry (ADR 0105).</summary>
     private const long BusyRetryBaseMs = 100;
 
-    /// <summary>The driver's command timeout of a round under shared heartbeats, which has no bound.</summary>
-    private const int BorrowedTimeoutSeconds = 30;
-
     /// <summary>The first wait before a failed checkout runs again. It doubles up to the shortest interval.</summary>
     private static readonly long RetryNanos = Monotonic.Millis(100);
 
@@ -60,7 +56,6 @@ internal sealed class Heartbeat
     private static readonly ConditionalWeakTable<NpgsqlDataSource, Heartbeat> Dedicated = [];
 
     private readonly NpgsqlDataSource _dataSource;
-    private readonly bool _dedicated;
     private readonly Func<string, string, IReadOnlyList<Row>>? _fixedRound;
 
     // Monitor.Wait needs a monitor lock, so this is an object and not a System.Threading.Lock.
@@ -92,21 +87,31 @@ internal sealed class Heartbeat
     private int _connectionsLost;
     private long _busyLeases;
     private bool _roundExpired;
+    private long _roundBoundForTests;
 
-    private Heartbeat(NpgsqlDataSource dataSource, bool dedicated)
-    {
-        _dataSource = dataSource;
-        _dedicated = dedicated;
-    }
+    private Heartbeat(NpgsqlDataSource dataSource) => _dataSource = dataSource;
 
     /// <summary>
     /// A heartbeat whose statements go to <paramref name="fixedRound"/>, with the worker ID and the
-    /// lease payload, instead of PostgreSQL. A test uses it to control what each batch sees. With
-    /// <paramref name="dedicated"/>, the rounds follow the rules of the dedicated connection, but the
-    /// heartbeat opens no connection.
+    /// lease payload, instead of PostgreSQL. A test uses it to control what each batch sees. The
+    /// rounds follow the rules of the dedicated connection, but the heartbeat opens no connection.
     /// </summary>
-    internal Heartbeat(NpgsqlDataSource dataSource, Func<string, string, IReadOnlyList<Row>> fixedRound, bool dedicated = false)
-        : this(dataSource, dedicated) => _fixedRound = fixedRound;
+    internal Heartbeat(NpgsqlDataSource dataSource, Func<string, string, IReadOnlyList<Row>> fixedRound)
+        : this(dataSource) => _fixedRound = fixedRound;
+
+    /// <summary>
+    /// The bound of a regular round in nanoseconds, in place of <see cref="RoundBoundNanos"/>, or 0
+    /// for that bound. Only a conformance driver sets it, on the heartbeat of a data source of its own,
+    /// so that a round which the driver blocks does not lose its connection.
+    /// </summary>
+    internal long RoundBoundForTests
+    {
+        get => Volatile.Read(ref _roundBoundForTests);
+        set => Volatile.Write(ref _roundBoundForTests, value);
+    }
+
+    /// <summary>Whether the heartbeat holds a connection across rounds: true without a fixed round.</summary>
+    private bool HoldsConnection => _fixedRound is null;
 
     /// <summary>One running attempt.</summary>
     internal interface IMember
@@ -164,14 +169,11 @@ internal sealed class Heartbeat
     internal long LastLossLateness { get; private set; }
 
     /// <summary>Whether the heartbeat holds a usable connection: the claim gate of the data source. A test reads it.</summary>
-    internal bool Connected => !_dedicated || _connected;
+    internal bool Connected => !HoldsConnection || _connected;
 
     /// <summary>The heartbeat that every worker on <paramref name="dataSource"/> shares.</summary>
     internal static Heartbeat Shared(NpgsqlDataSource dataSource) =>
-        Dedicated.GetValue(dataSource, source => new Heartbeat(source, dedicated: true));
-
-    /// <summary>A heartbeat of one worker that opens a connection for each round.</summary>
-    internal static Heartbeat Borrowing(NpgsqlDataSource dataSource) => new(dataSource, dedicated: false);
+        Dedicated.GetValue(dataSource, source => new Heartbeat(source));
 
     /// <summary>
     /// The deadline of one round for the shortest interval: three quarters of it, at least
@@ -221,7 +223,7 @@ internal sealed class Heartbeat
     internal Reservation Reserve(long intervalNanos, Action onConnected)
     {
         var reservation = new Reservation(this, intervalNanos, onConnected);
-        if (!_dedicated)
+        if (!HoldsConnection)
         {
             return reservation;
         }
@@ -322,7 +324,7 @@ internal sealed class Heartbeat
     /// <summary>Starts the checkout task, unless one runs, a connection is held, or nothing needs one.</summary>
     private void StartCheckoutLocked()
     {
-        if (!_dedicated || _fixedRound is not null || _held is not null || _checkingOut || !WantedLocked())
+        if (!HoldsConnection || _held is not null || _checkingOut || !WantedLocked())
         {
             return;
         }
@@ -548,11 +550,8 @@ internal sealed class Heartbeat
             catch (Exception)
             {
                 // An exception never leaves this thread, because that would end the process. The next
-                // round waits for its slot, and a dedicated round runs on a replacement connection.
-                if (_dedicated)
-                {
-                    Discard();
-                }
+                // round waits for its slot, and runs on a replacement connection.
+                Discard();
             }
         }
     }
@@ -628,7 +627,7 @@ internal sealed class Heartbeat
             if (retry)
             {
                 deadline = RetryDeadline(start, interval, _previous + interval, due);
-                if (_dedicated && deadline - start < BusyRetryMinNanos)
+                if (deadline - start < BusyRetryMinNanos)
                 {
                     continue;
                 }
@@ -639,7 +638,8 @@ internal sealed class Heartbeat
             else
             {
                 _previous = start;
-                deadline = start + RoundBoundNanos(interval);
+                var bound = RoundBoundForTests;
+                deadline = start + (bound > 0 ? bound : RoundBoundNanos(interval));
                 batches = Batches(due);
                 first = NextFirstBatch(batches.Count);
             }
@@ -693,10 +693,10 @@ internal sealed class Heartbeat
         return batches;
     }
 
-    /// <summary>The batch that a dedicated round sends first. It moves by one each round.</summary>
+    /// <summary>The batch that a round sends first. It moves by one each round.</summary>
     private int NextFirstBatch(int count)
     {
-        if (!_dedicated || count == 0)
+        if (count == 0)
         {
             return 0;
         }
@@ -708,35 +708,28 @@ internal sealed class Heartbeat
 
     /// <summary>
     /// Sends the batches in order from <paramref name="first"/>, and returns the members that came
-    /// back busy. On the dedicated connection, a batch that would start after the deadline is not
-    /// sent, a failed batch throws, and a batch that expires before its heartbeat statement ends the
-    /// round without a throw. A borrowing round sends every batch and skips a failed one.
+    /// back busy. A batch that would start after the deadline is not sent, a failed batch throws, and
+    /// a batch that expires before its heartbeat statement ends the round without a throw.
     /// <para>
     /// A round that fails before PostgreSQL gives the statuses of a batch adds one to
-    /// <c>workhorse.worker.heartbeat.round_failure</c>, at most once for each round. A dedicated round
-    /// that reaches its deadline before a batch goes out leaves that batch unrenewed, so it counts as
+    /// <c>workhorse.worker.heartbeat.round_failure</c>, at most once for each round. A round that
+    /// reaches its deadline before a batch goes out leaves that batch unrenewed, so it counts as
     /// a <c>timeout</c>, as in the Go, Ruby, and JVM workers.
     /// </para>
     /// </summary>
     private List<IMember> SendBatches(List<Batch> batches, int first, long deadline)
     {
         _roundExpired = false;
-        var failed = false;
         var busy = new List<IMember>();
         for (var index = 0; index < batches.Count; index++)
         {
             var batch = batches[(first + index) % batches.Count];
             var sentAt = Monotonic.Now();
-            if (_dedicated && deadline - sentAt <= 0)
+            if (deadline - sentAt <= 0)
             {
                 // The round reached its deadline, and this batch and the batches after it stay
-                // unrenewed. The round counts once, also when an earlier batch already counted.
-                if (!failed)
-                {
-                    failed = true;
-                    WorkerTelemetry.HeartbeatRoundReachedDeadline();
-                }
-
+                // unrenewed. The round counts once.
+                WorkerTelemetry.HeartbeatRoundReachedDeadline();
                 return busy;
             }
 
@@ -754,11 +747,9 @@ internal sealed class Heartbeat
             {
                 var leases = Leases(members);
                 NpgsqlParameter[] parameters = [Parameters.Text(batch.WorkerId), Parameters.Json(leases)];
-                rows = _fixedRound is { } fixedRound ? fixedRound(batch.WorkerId, leases)
-                    : _dedicated ? SendOnHeld(deadline, parameters)
-                    : SendBorrowed(parameters);
+                rows = _fixedRound is { } fixedRound ? fixedRound(batch.WorkerId, leases) : SendOnHeld(deadline, parameters);
             }
-            catch (RoundExpiredException error) when (_dedicated)
+            catch (RoundExpiredException error)
             {
                 _roundExpired = true;
                 // A round that got its new connection during its wait sent nothing, and a full round
@@ -770,23 +761,11 @@ internal sealed class Heartbeat
 
                 return busy;
             }
-            catch (Exception error) when (_dedicated)
+            catch (Exception error)
             {
-                // Only the dedicated round has a deadline that a driver timeout can follow.
+                // A driver timeout at the round deadline is the round's own timeout.
                 WorkerTelemetry.HeartbeatRoundFailed(error, deadlineReached: Monotonic.Now() - deadline >= 0);
                 throw;
-            }
-            catch (Exception error) when (!_dedicated)
-            {
-                // A borrowing round sends its other batches, and counts once with its first failure.
-                // It has no round deadline, so a driver timeout there is a connection failure.
-                if (!failed)
-                {
-                    failed = true;
-                    WorkerTelemetry.HeartbeatRoundFailed(error, deadlineReached: false);
-                }
-
-                continue;
             }
 
             var statuses = new Dictionary<string, string>(StringComparer.Ordinal);
@@ -841,12 +820,6 @@ internal sealed class Heartbeat
             ConnectionsLost++;
             throw;
         }
-    }
-
-    private IReadOnlyList<Row> SendBorrowed(NpgsqlParameter[] parameters)
-    {
-        using var connection = DataSources.Open(_dataSource);
-        return Sql.Rows(connection, SqlCatalogue.HeartbeatManyV2, parameters, BorrowedTimeoutSeconds);
     }
 
     private static string Leases(List<IMember> members)
@@ -954,7 +927,7 @@ internal sealed class Heartbeat
         /// gate of ADR 0071, rule 6. A failed renewal on a connection that stays open, and a busy
         /// round, keep it. A lost connection clears it until the replacement arrives.
         /// </summary>
-        internal bool Connected => !_closed && (!_owner._dedicated || _owner._connected);
+        internal bool Connected => !_closed && (!_owner.HoldsConnection || _owner._connected);
 
         /// <summary>The failure of a checkout since the heartbeat last installed a connection.</summary>
         internal Exception? LastFailure
@@ -974,7 +947,7 @@ internal sealed class Heartbeat
         /// </summary>
         internal async Task<bool> AwaitAsync(long deadline, Func<bool> stopped)
         {
-            if (!_owner._dedicated)
+            if (!_owner.HoldsConnection)
             {
                 return true;
             }

@@ -1112,7 +1112,6 @@ Workhorse.WorkerOptions: public WorkerOptions()
 Workhorse.WorkerOptions: public Workhorse.RetryDelay? RetryDelay { get; set; }
 Workhorse.WorkerOptions: public bool DisableRegistry { get; set; }
 Workhorse.WorkerOptions: public bool PollingOnly { get; set; }
-Workhorse.WorkerOptions: public bool SharedHeartbeats { get; set; }
 Workhorse.WorkerOptions: public int Cohorts { get; set; }
 Workhorse.WorkerOptions: public int Concurrency { get; set; }
 Workhorse.WorkerOptions: public int ScheduleCatchupLimit { get; set; }
@@ -1210,6 +1209,5 @@ key Workhorse:Worker:Queues: string[] = ["default"]
 key Workhorse:Worker:RegistryInterval: TimeSpan = "00:00:05"
 key Workhorse:Worker:ScheduleCatchupLimit: int = 100
 key Workhorse:Worker:ScheduleNamespaces: string[] = []
-key Workhorse:Worker:SharedHeartbeats: bool = false
 key Workhorse:Worker:ShutdownGrace: TimeSpan = "00:00:25"
 key Workhorse:Worker:WorkerId: string? = null

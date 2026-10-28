@@ -25,7 +25,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.CopyOnWriteArrayList;
-import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -150,55 +149,11 @@ class HeartbeatTest {
     };
   }
 
-  private static List<Heartbeat.Member> members(int count) {
-    List<Heartbeat.Member> members = new ArrayList<>();
-    for (int index = 0; index < count; index++) {
-      members.add(member("worker"));
-    }
-    return members;
-  }
-
   /**
    * The deadline of a round in the batch tests. A pause of a loaded host before the first send
    * stays below it (SM-1479).
    */
   private static final long ROUND_DEADLINE_MS = 200;
-
-  /**
-   * A round whose slow batch always passes the deadline of {@link #ROUND_DEADLINE_MS}. It records
-   * the payload of each send.
-   */
-  private static Heartbeat.Round slowFirstBatch(String slowTask, List<String> sent) {
-    return (timeoutNanos, statement, parameters) -> {
-      String payload = (String) parameters[1];
-      sent.add(payload);
-      if (payload.contains(slowTask)) {
-        try {
-          TimeUnit.MILLISECONDS.sleep(ROUND_DEADLINE_MS + 50);
-        } catch (InterruptedException interrupted) {
-          Thread.currentThread().interrupt();
-        }
-      }
-      return List.of();
-    };
-  }
-
-  @Test
-  void aSharedRoundSendsEveryBatchAfterASlowFirstBatch() throws Exception {
-    List<Heartbeat.Member> due = members(101);
-    List<Heartbeat.Batch> batches = Heartbeat.batches(due);
-    assertEquals(2, batches.size());
-    String last = due.get(100).taskId().toString();
-    Heartbeat shared = new Heartbeat(null, false);
-    for (int round = 0; round < 3; round++) {
-      List<String> sent = new ArrayList<>();
-      long deadline = System.nanoTime() + millis(ROUND_DEADLINE_MS);
-      shared.sendBatches(batches, deadline, slowFirstBatch(due.get(0).taskId().toString(), sent));
-      // A shared round has no deadline, so the batch after the slow one is always sent.
-      assertEquals(2, sent.size(), "round " + round);
-      assertTrue(sent.get(1).contains(last), "round " + round);
-    }
-  }
 
   /**
    * SM-1633: a dedicated round sends one {@code heartbeat_pool_v1} statement for every batch of
@@ -217,8 +172,7 @@ class HeartbeatTest {
     due.add(second);
     due.add(third);
     // The fixed round is never due within the test: the member interval is 10 s.
-    Heartbeat dedicated =
-        new Heartbeat(null, true, (timeoutNanos, statement, parameters) -> List.of());
+    Heartbeat dedicated = new Heartbeat(null, (timeoutNanos, statement, parameters) -> List.of());
     List<Runnable> removals = new ArrayList<>();
     due.forEach(member -> removals.add(dedicated.register(member)));
     Recorder round = new Recorder(0, (index, call) -> answer(call, due, second));
@@ -486,7 +440,7 @@ class HeartbeatTest {
     FakeMember accepted = new FakeMember("worker", interval);
     List<FakeMember> all = List.of(busy, accepted);
     Recorder round = new Recorder(0, (index, call) -> answer(call, all, index == 0 ? busy : null));
-    Heartbeat heartbeat = new Heartbeat(null, true, round);
+    Heartbeat heartbeat = new Heartbeat(null, round);
     Runnable removeBusy = heartbeat.register(busy);
     Runnable removeAccepted = heartbeat.register(accepted);
     try {
@@ -519,7 +473,7 @@ class HeartbeatTest {
     FakeMember accepted = new FakeMember("worker", interval);
     List<FakeMember> all = List.of(busy, accepted);
     Recorder round = new Recorder(10, (index, call) -> answer(call, all, busy));
-    Heartbeat heartbeat = new Heartbeat(null, true, round);
+    Heartbeat heartbeat = new Heartbeat(null, round);
     Runnable removeBusy = heartbeat.register(busy);
     Runnable removeAccepted = heartbeat.register(accepted);
     try {
@@ -561,7 +515,7 @@ class HeartbeatTest {
               }
               return Map.of(original.taskId(), "accepted");
             });
-    subject.add(new Heartbeat(null, true, round));
+    subject.add(new Heartbeat(null, round));
     removals.add(subject.get(0).register(original));
     try {
       waitUntil("a second round ran", () -> round.calls.size() >= 2);
@@ -592,7 +546,7 @@ class HeartbeatTest {
               }
               return answer(call, all, busy);
             });
-    Heartbeat heartbeat = new Heartbeat(null, true, round);
+    Heartbeat heartbeat = new Heartbeat(null, round);
     Runnable removeBusy = heartbeat.register(busy);
     Runnable removeAccepted = heartbeat.register(accepted);
     try {
@@ -615,7 +569,7 @@ class HeartbeatTest {
     FakeMember busy = new FakeMember("worker", interval);
     busy.leaseEndsAt.set(System.nanoTime() - 1);
     Recorder round = new Recorder(0, (index, call) -> answer(call, List.of(busy), busy));
-    Heartbeat heartbeat = new Heartbeat(null, true, round);
+    Heartbeat heartbeat = new Heartbeat(null, round);
     Runnable remove = heartbeat.register(busy);
     try {
       waitUntil("two rounds ran", () -> round.calls.size() >= 2);
@@ -654,7 +608,7 @@ class HeartbeatTest {
               }
               return answer(call, all, null);
             });
-    Heartbeat heartbeat = new Heartbeat(null, true, round);
+    Heartbeat heartbeat = new Heartbeat(null, round);
     Runnable removeBusy = heartbeat.register(busy);
     Runnable removeAccepted = heartbeat.register(accepted);
     try {
@@ -687,7 +641,7 @@ class HeartbeatTest {
               }
               return answer(call, all, null);
             });
-    Heartbeat heartbeat = new Heartbeat(null, true, round);
+    Heartbeat heartbeat = new Heartbeat(null, round);
     Runnable removeBusy = heartbeat.register(busy);
     Runnable removeAccepted = heartbeat.register(accepted);
     try {
@@ -710,7 +664,7 @@ class HeartbeatTest {
   @Test
   void endsADedicatedRoundWithoutAThrowWhenItExpiresBeforeItsHeartbeat() throws Exception {
     List<Heartbeat.Member> due = threeWorkers();
-    Heartbeat dedicated = new Heartbeat(null, true);
+    Heartbeat dedicated = new Heartbeat(null);
     List<SqlCatalogue.Statement> sent = new ArrayList<>();
     List<Heartbeat.Member> busy =
         dedicated.sendBatches(
@@ -732,8 +686,7 @@ class HeartbeatTest {
             new FakeMember("second", millis(10_000)),
             new FakeMember("third", millis(10_000)));
     // The fixed round is never due within the test: the member interval is 10 s.
-    Heartbeat dedicated =
-        new Heartbeat(null, true, (timeoutNanos, statement, parameters) -> List.of());
+    Heartbeat dedicated = new Heartbeat(null, (timeoutNanos, statement, parameters) -> List.of());
     List<Runnable> removals = new ArrayList<>();
     due.forEach(member -> removals.add(dedicated.register(member)));
     List<String> sent = new ArrayList<>();
@@ -922,7 +875,7 @@ class HeartbeatTest {
       // One fixed round carries every member, so no schedule decides which members it sends.
       List<Heartbeat.Batch> batches = Heartbeat.batches(List.copyOf(all));
       assertEquals(3, batches.size());
-      Heartbeat heartbeat = new Heartbeat(null, true, round);
+      Heartbeat heartbeat = new Heartbeat(null, round);
       long deadline = System.nanoTime() + millis(60_000);
       assertThrows(SQLException.class, () -> heartbeat.sendBatches(batches, deadline, round));
       // The next round succeeds, and counts nothing.
@@ -934,39 +887,6 @@ class HeartbeatTest {
           shared.metrics().stream()
               .noneMatch(metric -> metric.getName().equals("workhorse.worker.heartbeat.failure")),
           "a failed round gives no ownership verdict");
-    }
-  }
-
-  @Test
-  void countsABorrowingRoundWithTwoFailedBatchesOnce() throws Exception {
-    List<FakeMember> all = new ArrayList<>();
-    for (int count = 0; count < 101; count++) {
-      all.add(new FakeMember("worker", millis(1_000)));
-    }
-    // The first round sends two batches, and both fail.
-    Recorder round =
-        new Recorder(
-            0,
-            (index, call) -> {
-              if (index < 2) {
-                throw new SQLException("internal", "XX000");
-              }
-              return answer(call, all, null);
-            });
-    try (RecordingOpenTelemetry recording = new RecordingOpenTelemetry()) {
-      Telemetry telemetry = OpenTelemetryTelemetry.of(recording.sdk());
-      all.forEach(member -> member.telemetry = telemetry);
-      // One fixed round carries every member, so no schedule splits the two batches.
-      List<Heartbeat.Batch> batches = Heartbeat.batches(List.copyOf(all));
-      assertEquals(2, batches.size());
-      Heartbeat heartbeat = new Heartbeat(null, false, round);
-      long deadline = System.nanoTime() + millis(60_000);
-      heartbeat.sendBatches(batches, deadline, round);
-      assertEquals(2, round.calls.size(), "the round sent both batches");
-      assertEquals(Map.of("database", 1L), roundFailures(recording));
-      // The next round succeeds, and counts nothing.
-      heartbeat.sendBatches(batches, deadline, round);
-      assertEquals(Map.of("database", 1L), roundFailures(recording));
     }
   }
 
@@ -982,57 +902,12 @@ class HeartbeatTest {
   }
 
   @Test
-  void countsAFailedBorrowingBatchAtOnceWhileTheNextBatchStalls() throws Exception {
-    CountDownLatch release = new CountDownLatch(1);
-    Recorder round =
-        new Recorder(
-            0,
-            (index, call) -> {
-              if (index == 0) {
-                throw new SQLException("internal", "XX000");
-              }
-              try {
-                release.await(30, TimeUnit.SECONDS);
-              } catch (InterruptedException interrupted) {
-                Thread.currentThread().interrupt();
-              }
-              return Map.of();
-            });
-    try (RecordingOpenTelemetry recording = new RecordingOpenTelemetry()) {
-      List<Heartbeat.Batch> batches =
-          Heartbeat.batches(counted(101, OpenTelemetryTelemetry.of(recording.sdk())));
-      assertEquals(2, batches.size());
-      Heartbeat heartbeat = new Heartbeat(null, false, round);
-      Thread sender =
-          Thread.ofPlatform()
-              .start(
-                  () -> {
-                    try {
-                      heartbeat.sendBatches(batches, System.nanoTime() + millis(60_000), round);
-                    } catch (SQLException error) {
-                      throw new AssertionError(error);
-                    }
-                  });
-      try {
-        waitUntil("the second batch is in flight", () -> round.calls.size() == 2);
-        waitUntil(
-            "the failed batch counted while the next batch stalls",
-            () -> !roundFailures(recording).isEmpty());
-      } finally {
-        release.countDown();
-        sender.join();
-      }
-      assertEquals(Map.of("database", 1L), roundFailures(recording));
-    }
-  }
-
-  @Test
   void countsADedicatedRoundThatReachedItsDeadlineBeforeItSentTimeout() throws Exception {
     Recorder round = new Recorder(0, (index, call) -> Map.of());
     try (RecordingOpenTelemetry recording = new RecordingOpenTelemetry()) {
       List<Heartbeat.Batch> batches =
           Heartbeat.batches(counted(2, OpenTelemetryTelemetry.of(recording.sdk())));
-      Heartbeat heartbeat = new Heartbeat(null, true, round);
+      Heartbeat heartbeat = new Heartbeat(null, round);
       assertEquals(List.of(), heartbeat.sendBatches(batches, System.nanoTime() - 1, round));
       assertEquals(List.of(), round.calls, "the expired round sent nothing");
       assertEquals(Map.of("timeout", 1L), roundFailures(recording));
@@ -1063,7 +938,7 @@ class HeartbeatTest {
     try (RecordingOpenTelemetry recording = new RecordingOpenTelemetry()) {
       List<Heartbeat.Batch> batches =
           Heartbeat.batches(counted(1, OpenTelemetryTelemetry.of(recording.sdk())));
-      Heartbeat heartbeat = new Heartbeat(null, true, round);
+      Heartbeat heartbeat = new Heartbeat(null, round);
       assertThrows(
           SQLException.class,
           () -> heartbeat.sendBatches(batches, System.nanoTime() + millis(20), round));
@@ -1072,42 +947,36 @@ class HeartbeatTest {
   }
 
   @Test
-  void countsASocketTimeoutBeforeTheDeadlineOrOnABorrowingRoundConnection() throws Exception {
+  void countsASocketTimeoutBeforeTheDeadlineAsAConnectionFailure() throws Exception {
     Recorder round =
         new Recorder(
             0,
             (index, call) -> {
               throw socketTimeout();
             });
-    try (RecordingOpenTelemetry dedicated = new RecordingOpenTelemetry();
-        RecordingOpenTelemetry borrowing = new RecordingOpenTelemetry()) {
+    try (RecordingOpenTelemetry recording = new RecordingOpenTelemetry()) {
       List<Heartbeat.Batch> early =
-          Heartbeat.batches(counted(1, OpenTelemetryTelemetry.of(dedicated.sdk())));
-      Heartbeat held = new Heartbeat(null, true, round);
+          Heartbeat.batches(counted(1, OpenTelemetryTelemetry.of(recording.sdk())));
+      Heartbeat held = new Heartbeat(null, round);
       // A driver socketTimeout that ends the read long before the round deadline.
       assertThrows(
           SQLException.class,
           () -> held.sendBatches(early, System.nanoTime() + millis(60_000), round));
-      assertEquals(Map.of("connection", 1L), roundFailures(dedicated));
-      // A borrowing round sets no network timeout, even after its deadline.
-      List<Heartbeat.Batch> late =
-          Heartbeat.batches(counted(1, OpenTelemetryTelemetry.of(borrowing.sdk())));
-      new Heartbeat(null, false, round).sendBatches(late, System.nanoTime() - 1, round);
-      assertEquals(Map.of("connection", 1L), roundFailures(borrowing));
+      assertEquals(Map.of("connection", 1L), roundFailures(recording));
     }
   }
 
   @Test
-  void countsALoginTimeoutOnABorrowingRoundConnectionAndAtADedicatedDeadlineTimeout()
+  void countsALoginTimeoutBeforeTheDeadlineAsAConnectionFailureAndAtTheDeadlineAsATimeout()
       throws Exception {
     // JDBC lets DataSource.getConnection throw this when its login timeout ends.
-    Recorder borrowingRound =
+    Recorder earlyRound =
         new Recorder(
             0,
             (index, call) -> {
               throw new SQLTimeoutException("login timed out");
             });
-    Recorder dedicatedRound =
+    Recorder lateRound =
         new Recorder(
             0,
             (index, call) -> {
@@ -1118,20 +987,22 @@ class HeartbeatTest {
               }
               throw new SQLTimeoutException("login timed out");
             });
-    try (RecordingOpenTelemetry borrowing = new RecordingOpenTelemetry();
-        RecordingOpenTelemetry dedicated = new RecordingOpenTelemetry()) {
-      List<Heartbeat.Batch> shared =
-          Heartbeat.batches(counted(1, OpenTelemetryTelemetry.of(borrowing.sdk())));
-      new Heartbeat(null, false, borrowingRound)
-          .sendBatches(shared, System.nanoTime() + millis(60_000), borrowingRound);
-      assertEquals(Map.of("connection", 1L), roundFailures(borrowing));
-      List<Heartbeat.Batch> held =
-          Heartbeat.batches(counted(1, OpenTelemetryTelemetry.of(dedicated.sdk())));
-      Heartbeat heartbeat = new Heartbeat(null, true, dedicatedRound);
+    try (RecordingOpenTelemetry early = new RecordingOpenTelemetry();
+        RecordingOpenTelemetry late = new RecordingOpenTelemetry()) {
+      List<Heartbeat.Batch> before =
+          Heartbeat.batches(counted(1, OpenTelemetryTelemetry.of(early.sdk())));
+      Heartbeat first = new Heartbeat(null, earlyRound);
       assertThrows(
           SQLException.class,
-          () -> heartbeat.sendBatches(held, System.nanoTime() + millis(20), dedicatedRound));
-      assertEquals(Map.of("timeout", 1L), roundFailures(dedicated));
+          () -> first.sendBatches(before, System.nanoTime() + millis(60_000), earlyRound));
+      assertEquals(Map.of("connection", 1L), roundFailures(early));
+      List<Heartbeat.Batch> at =
+          Heartbeat.batches(counted(1, OpenTelemetryTelemetry.of(late.sdk())));
+      Heartbeat second = new Heartbeat(null, lateRound);
+      assertThrows(
+          SQLException.class,
+          () -> second.sendBatches(at, System.nanoTime() + millis(20), lateRound));
+      assertEquals(Map.of("timeout", 1L), roundFailures(late));
     }
   }
 }

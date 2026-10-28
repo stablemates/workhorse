@@ -54,9 +54,9 @@ public sealed class ShutdownIncompleteException : WorkhorseException
 }
 
 /// <summary>
-/// A worker with the dedicated heartbeat connection could not reserve that connection, or could
-/// not borrow a connection for its readiness check, within its startup budget. The message names
-/// the pool, the budget, and the <c>SharedHeartbeats</c> opt-out. A pool error is the inner exception.
+/// A worker could not reserve its heartbeat connection, or could not borrow a connection for its
+/// readiness check, within its startup budget. The message names the budget, the size that the pool
+/// needs, the size that the worker knows, and the next step. A pool error is the inner exception.
 /// </summary>
 public sealed class WorkerStartupException : WorkhorseException
 {

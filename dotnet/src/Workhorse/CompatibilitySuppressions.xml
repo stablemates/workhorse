@@ -1,0 +1,18 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<!-- https://learn.microsoft.com/dotnet/fundamentals/package-validation/diagnostic-ids -->
+<Suppressions xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema">
+  <Suppression>
+    <DiagnosticId>CP0002</DiagnosticId>
+    <Target>M:Workhorse.WorkerOptions.get_SharedHeartbeats</Target>
+    <Left>lib/net10.0/Workhorse.dll</Left>
+    <Right>lib/net10.0/Workhorse.dll</Right>
+    <IsBaselineSuppression>true</IsBaselineSuppression>
+  </Suppression>
+  <Suppression>
+    <DiagnosticId>CP0002</DiagnosticId>
+    <Target>M:Workhorse.WorkerOptions.set_SharedHeartbeats(System.Boolean)</Target>
+    <Left>lib/net10.0/Workhorse.dll</Left>
+    <Right>lib/net10.0/Workhorse.dll</Right>
+    <IsBaselineSuppression>true</IsBaselineSuppression>
+  </Suppression>
+</Suppressions>

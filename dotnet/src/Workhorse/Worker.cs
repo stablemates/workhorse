@@ -60,7 +60,6 @@ public sealed partial class Worker : IAsyncDisposable
     private readonly int _scheduleCatchupLimit;
     private readonly long _shutdownGraceNanos;
     private readonly RetryDelay? _retryDelay;
-    private readonly bool _sharedHeartbeats;
     private readonly int? _poolMaxSize;
     private readonly Heartbeat _heartbeat;
     private readonly string _hostname = Environment.MachineName;
@@ -80,7 +79,7 @@ public sealed partial class Worker : IAsyncDisposable
     /// validates <paramref name="options"/>.
     /// </summary>
     /// <exception cref="ArgumentException">An option is out of its range, the data source multiplexes,
-    /// or its pool is smaller than 3 without <see cref="WorkerOptions.SharedHeartbeats"/>.</exception>
+    /// or its pool is smaller than 3.</exception>
     /// <exception cref="InvalidOperationException">The process turned on the Npgsql legacy timestamp
     /// switch.</exception>
     public Worker(NpgsqlDataSource dataSource, WorkerOptions options)
@@ -134,7 +133,6 @@ public sealed partial class Worker : IAsyncDisposable
         _scheduleCatchupLimit = options.ScheduleCatchupLimit;
         _shutdownGraceNanos = Monotonic.Millis(Values.Milliseconds(options.ShutdownGrace, nameof(options.ShutdownGrace), 0, 86_400_000));
         _retryDelay = options.RetryDelay;
-        _sharedHeartbeats = options.SharedHeartbeats;
         _codec = new JsonCodec(options.Json);
         _logger = (options.LoggerFactory ?? NullLoggerFactory.Instance).CreateLogger<Worker>();
 
@@ -142,17 +140,17 @@ public sealed partial class Worker : IAsyncDisposable
         // construction. Without pooling the size is unknown, and the readiness check is the check.
         var connection = new NpgsqlConnectionStringBuilder(_dataSource.ConnectionString);
         _poolMaxSize = connection.Pooling ? connection.MaxPoolSize : null;
-        if (!_sharedHeartbeats && _poolMaxSize < MinPoolMaxSize)
+        if (_poolMaxSize < MinPoolMaxSize)
         {
             throw new ArgumentException(
-                $"The worker's pool must hold at least {MinPoolMaxSize} connections (found Max Pool Size={_poolMaxSize}): "
-                + "the listener, the heartbeat, and one for each statement. Set SharedHeartbeats to opt out.",
+                $"Worker needs a pool with a known maximum size of at least {MinPoolMaxSize} connections (found {_poolMaxSize}). "
+                + $"Give the worker a pool with a maximum size of at least {MinPoolMaxSize}.",
                 nameof(dataSource));
         }
 
         // The default cohorts need the pool size, so the worker chooses them after it reads the size.
         Cohorts = options.Cohorts == 0 ? DefaultCohorts(Concurrency, SpareConnections()) : options.Cohorts;
-        _heartbeat = _sharedHeartbeats ? Heartbeat.Borrowing(_dataSource) : Heartbeat.Shared(_dataSource);
+        _heartbeat = Heartbeat.Shared(_dataSource);
     }
 
     /// <summary>
@@ -315,8 +313,7 @@ public sealed partial class Worker : IAsyncDisposable
     /// </summary>
     private int? SpareConnections()
     {
-        var listens = !_pollingOnly && PoolLendsListener();
-        return _poolMaxSize - (listens ? 1 : 0) - (_sharedHeartbeats ? 0 : 1);
+        return _poolMaxSize - (_pollingOnly ? 0 : 1) - 1;
     }
 
     private async Task EnterRunAsync()

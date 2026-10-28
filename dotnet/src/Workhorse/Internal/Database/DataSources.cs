@@ -58,23 +58,6 @@ internal static class DataSources
     }
 
     /// <summary>
-    /// The synchronous form of <see cref="OpenAsync"/>, with the same suppressed scope, for the
-    /// dedicated threads of the worker (ADR 0107, "Concurrency").
-    /// </summary>
-    internal static NpgsqlConnection Open(NpgsqlDataSource dataSource)
-    {
-        using var scope = new TransactionScope(TransactionScopeOption.Suppress);
-        try
-        {
-            return dataSource.OpenConnection();
-        }
-        catch (NpgsqlException error)
-        {
-            throw SqlStates.Translate(error);
-        }
-    }
-
-    /// <summary>
     /// Runs <paramref name="body"/> on <paramref name="caller"/>, or on a connection that the call
     /// opens from <paramref name="dataSource"/> and then disposes. The SDK never opens, closes,
     /// begins, commits, or rolls back on a caller connection.

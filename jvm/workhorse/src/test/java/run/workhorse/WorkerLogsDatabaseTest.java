@@ -377,11 +377,14 @@ class WorkerLogsDatabaseTest {
 
   @Test
   void emitsThePollingOnlyWarningAndTheMaintenanceDrift() throws InterruptedException {
-    // The shared heartbeat on a DataSource of unknown size leaves no connection for the listener.
+    // The listener's LISTEN stalls on a DataSource of unknown size, so the worker polls.
+    CountDownLatch listen = new CountDownLatch(1);
     Worker subject =
-        worker()
-            .pollingOnly(false)
-            .sharedHeartbeats(true)
+        Worker.builder(WorkerPoolDatabaseTest.stallingListen(dataSource, listen))
+            .queues(queueName)
+            .pollInterval(Duration.ofMillis(10))
+            .disableRegistry(true)
+            .telemetry(telemetry)
             .maintenanceInterval(Duration.ofMillis(100))
             .handle("email.send", Object.class, (context, payload) -> null)
             .build();
@@ -392,6 +395,7 @@ class WorkerLogsDatabaseTest {
               recording.metrics().stream()
                   .anyMatch(metric -> metric.getName().equals("workhorse.maintenance.drift")));
     } finally {
+      listen.countDown();
       subject.close();
     }
     LogRecordData polling = only("workhorse.worker.polling_only");

@@ -31,14 +31,9 @@ class WorkerCohortsTest {
   }
 
   @Test
-  void pollingOnlyAndSharedHeartbeatsReserveNoConnection() {
+  void pollingOnlyReservesNoListenerConnection() {
     assertEquals(3, cohorts(64, builder -> builder.poolMaxSize(4).pollingOnly(true)));
-    assertEquals(3, cohorts(64, builder -> builder.poolMaxSize(4).sharedHeartbeats(true)));
-    assertEquals(
-        4, cohorts(64, builder -> builder.poolMaxSize(4).sharedHeartbeats(true).pollingOnly(true)));
-    // Under the opt-out, a declared size of 1 lends no listener, so the worker polls.
-    assertEquals(1, cohorts(64, builder -> builder.poolMaxSize(1).sharedHeartbeats(true)));
-    assertEquals(1, cohorts(64, builder -> builder.poolMaxSize(2).sharedHeartbeats(true)));
+    assertEquals(2, cohorts(64, builder -> builder.poolMaxSize(3).pollingOnly(true)));
   }
 
   @Test
@@ -46,6 +41,5 @@ class WorkerCohortsTest {
     assertEquals(8, cohorts(64, builder -> builder.poolMaxSize(4).cohorts(8)));
     assertEquals(64, cohorts(64, builder -> builder.poolMaxSize(3).cohorts(64)));
     assertEquals(8, cohorts(64, builder -> builder));
-    assertEquals(8, cohorts(64, builder -> builder.sharedHeartbeats(true)));
   }
 }

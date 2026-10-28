@@ -24,6 +24,18 @@ from version 86 to version **89**. They replace function bodies and change no st
 compatibility floor stays at **76**. A 0.10 process keeps working on version 89, because a
 migration inside a major line only adds.
 
+**Give each worker a pool with at least 3 connections, and remove the heartbeat opt-out.** A worker
+needs the listener, the heartbeat connection, and one connection for statements. Remove every
+assignment of `WorkerOptions.SharedHeartbeats` and the configuration key
+`Workhorse:Worker:SharedHeartbeats`. If the connection string sets `Max Pool Size`, set it to at
+least 3. See "The heartbeat opt-out is removed".
+
+### Breaking changes
+
+- The heartbeat opt-out is removed (SM-1902). `WorkerOptions.SharedHeartbeats` and the
+  `Workhorse.Hosting` configuration key `Workhorse:Worker:SharedHeartbeats` no longer exist. Every
+  worker uses the dedicated heartbeat connection. See "The heartbeat opt-out is removed".
+
 ### Behavior changes
 
 These changes can make code that worked on 0.10 act differently:
@@ -37,6 +49,28 @@ These changes can make code that worked on 0.10 act differently:
    deadline or attempt timeout at once. The worker reports `deadline_exceeded` or `timeout`, not
    `lease_lost` (SM-1884). See "A stale failure or release after a lapsed lease settles its
    cause".
+
+### The heartbeat opt-out is removed
+
+ADR 0071 gives each worker a dedicated heartbeat connection, and it kept an opt-out for small pools.
+Under the opt-out, each heartbeat round opened its own connection. A round could then wait behind
+claims and settlements for a pool connection, a lease could expire, and a task could run twice.
+
+**Example.** A worker runs on a data source with `Max Pool Size=2` and `SharedHeartbeats = true`.
+
+1. Before 0.11.0, the worker starts and polls, and each heartbeat round opens a connection.
+2. In 0.11.0, the code does not compile, because `WorkerOptions.SharedHeartbeats` no longer exists.
+3. After the assignment is removed, the `Worker` constructor throws `ArgumentException`. The message
+   names `Max Pool Size=2`, the size of 3 that the worker needs, and the next step.
+
+With `Pooling=false`, Npgsql has no pool and no client-side limit, so the worker does not check a
+size when it is built. The readiness check at the start of each run is then the guard. Within the
+larger of the heartbeat interval and 5 s, the worker reserves the heartbeat connection, starts the
+listener, and opens one more connection. If a step fails, the run throws `WorkerStartupException`,
+and the worker does not start.
+
+`Workhorse.Hosting` refuses the key `Workhorse:Worker:SharedHeartbeats` with each value. Binding
+`WorkerOptions` throws an `InvalidOperationException` that names the removal and the next step.
 
 ### Row retention lag skips a member of an unfinished task group
 

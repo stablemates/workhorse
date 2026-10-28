@@ -378,7 +378,6 @@ final class RuntimeFixtures {
           worker(pool, fixture)
               .lease(millis(fixture, "leaseMs"))
               .heartbeat(millis(fixture, "heartbeatMs"))
-              .sharedHeartbeats(true)
               .handle(
                   taskType(fixture),
                   Object.class,
@@ -468,14 +467,14 @@ final class RuntimeFixtures {
         new Intercept.Hook() {
           @Override
           public void before(Intercept.Call call) {
-            if (call.is(SqlCatalogue.HEARTBEAT_MANY_V2)) {
+            if (heartbeat(call)) {
               heartbeats.incrementAndGet();
             }
           }
 
           @Override
           public void after(Intercept.Call call) {
-            if (call.is(SqlCatalogue.HEARTBEAT_MANY_V2)) {
+            if (heartbeat(call)) {
               heartbeats.decrementAndGet();
             }
           }
@@ -508,7 +507,6 @@ final class RuntimeFixtures {
           worker(pool, fixture)
               .lease(millis(fixture, "leaseMs"))
               .heartbeat(millis(fixture, "heartbeatMs"))
-              .sharedHeartbeats(true)
               .handle(
                   taskType(fixture),
                   Object.class,
@@ -575,7 +573,7 @@ final class RuntimeFixtures {
         new Intercept.Hook() {
           @Override
           public void before(Intercept.Call call) throws InterruptedException {
-            if (!call.is(SqlCatalogue.HEARTBEAT_MANY_V2)) {
+            if (!heartbeat(call)) {
               return;
             }
             int number = calls.incrementAndGet();
@@ -590,7 +588,7 @@ final class RuntimeFixtures {
 
           @Override
           public void after(Intercept.Call call) {
-            if (call.is(SqlCatalogue.HEARTBEAT_MANY_V2)) {
+            if (heartbeat(call)) {
               active.decrementAndGet();
             }
           }
@@ -600,7 +598,6 @@ final class RuntimeFixtures {
           worker(pool, fixture)
               .lease(millis(fixture, "leaseMs"))
               .heartbeat(Duration.ofMillis(heartbeat))
-              .sharedHeartbeats(true)
               .handle(
                   taskType(fixture),
                   Object.class,
@@ -893,7 +890,6 @@ final class RuntimeFixtures {
       Worker subject =
           worker(pool, fixture)
               .concurrency(concurrency)
-              .sharedHeartbeats(true)
               .shutdownGrace(JOIN_GRACE)
               .handle(
                   taskType(fixture),
@@ -980,11 +976,10 @@ final class RuntimeFixtures {
   }
 
   /**
-   * Whether {@code call} renews leases. A worker with shared heartbeats sends {@code
-   * heartbeat_many_v2}. The dedicated heartbeat of a pool sends {@code heartbeat_pool_v1}.
+   * Whether {@code call} renews leases: the dedicated heartbeat sends {@code heartbeat_pool_v1}.
    */
   private static boolean heartbeat(Intercept.Call call) {
-    return call.is(SqlCatalogue.HEARTBEAT_MANY_V2) || call.is(SqlCatalogue.HEARTBEAT_POOL_V1);
+    return call.is(SqlCatalogue.HEARTBEAT_POOL_V1);
   }
 
   private static int size(Object lock, List<?> list) {

@@ -31,6 +31,7 @@ public static class WorkhorseServiceCollectionExtensions
     /// </remarks>
     /// <param name="services">The service collection.</param>
     /// <param name="configuration">The application configuration. The method reads its <c>Workhorse</c> section.</param>
+    /// <exception cref="InvalidOperationException">The configuration sets the removed key <c>Workhorse:Worker:SharedHeartbeats</c>.</exception>
     public static IServiceCollection AddWorkhorse(this IServiceCollection services, IConfiguration configuration)
     {
         ArgumentNullException.ThrowIfNull(services);
@@ -41,6 +42,8 @@ public static class WorkhorseServiceCollectionExtensions
         }
 
         var section = configuration.GetSection(Section);
+        // The removed key fails the registration, also in a process that never reads the worker options.
+        WorkerConfiguration.RefuseRemovedKeys(section.GetSection("Worker"));
         services.AddOptions();
         services.AddOptions<QueueOptions>().Bind(section.GetSection("Queue"));
         services.AddOptions<WorkerOptions>()

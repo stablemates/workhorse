@@ -1,6 +1,7 @@
 package run.workhorse;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -370,8 +371,8 @@ class WorkerPoolDatabaseTest {
 
   /**
    * A worker that cannot get its heartbeat connection within its startup budget, max(interval, 5
-   * s), does not start. It does not wait for the 30 s of HikariCP, and its error names the budget
-   * and the opt-out.
+   * s), does not start. It does not wait for the 30 s of HikariCP, and its error names the budget,
+   * the unknown pool size, and the next step.
    */
   @Test
   void refusesToStartWithoutItsHeartbeatConnection() throws Exception {
@@ -395,7 +396,11 @@ class WorkerPoolDatabaseTest {
         String message = String.valueOf(error.getMessage());
         assertTrue(message.contains("no heartbeat connection"), message);
         assertTrue(message.contains("at least 3 connections"), message);
-        assertTrue(message.contains("sharedHeartbeats(true)"), message);
+        assertTrue(message.contains("no poolMaxSize is declared"), message);
+        assertTrue(
+            message.contains("Grow the pool, or check that the database accepts connections."),
+            message);
+        assertFalse(message.contains("sharedHeartbeats"), message);
       } finally {
         closeAll(held);
       }
@@ -430,7 +435,41 @@ class WorkerPoolDatabaseTest {
           message.contains(
               "at least 3 connections: the listener, the heartbeat, and one for each statement"),
           message);
-      assertTrue(message.contains("sharedHeartbeats(true)"), message);
+      assertTrue(message.contains("no poolMaxSize is declared"), message);
+      assertTrue(
+          message.contains("Grow the pool, or check that the database accepts connections."),
+          message);
+      assertFalse(message.contains("sharedHeartbeats"), message);
+      HikariPoolMXBean bean = pool.getHikariPoolMXBean();
+      waitUntil("the refusal gave every connection back", () -> bean.getActiveConnections() == 0);
+    }
+  }
+
+  /**
+   * SM-1902: a pool of 2 whose own checkout timeout, 250 ms, ends the readiness borrow long before
+   * the startup budget. The refusal still names the size rule, the unknown size, and the next step,
+   * and it keeps the pool error as its cause.
+   */
+  @Test
+  void refusesToStartWhenThePoolRefusesTheReadinessBorrowFirst() throws Exception {
+    try (HikariDataSource pool = pool(2)) {
+      pool.setConnectionTimeout(250);
+      Worker worker =
+          worker(pool, "jvm-pool-two-early")
+              .handle("held", Object.class, (ctx, payload) -> Map.of())
+              .build();
+      long startAt = System.nanoTime();
+      WorkhorseException error = assertThrows(WorkhorseException.class, worker::run);
+      double waitedMs = (System.nanoTime() - startAt) / 1e6;
+      assertTrue(waitedMs < 4_900, "the worker waited " + waitedMs + " ms");
+      String message = String.valueOf(error.getMessage());
+      assertTrue(message.contains("The startup check of the worker failed"), message);
+      assertTrue(message.contains("no poolMaxSize is declared"), message);
+      assertTrue(
+          message.endsWith("Grow the pool, or check that the database accepts connections."),
+          message);
+      assertFalse(message.contains("sharedHeartbeats"), message);
+      assertTrue(error.getCause() != null, "the pool error is the cause");
       HikariPoolMXBean bean = pool.getHikariPoolMXBean();
       waitUntil("the refusal gave every connection back", () -> bean.getActiveConnections() == 0);
     }
@@ -614,7 +653,7 @@ class WorkerPoolDatabaseTest {
   }
 
   /** A source over {@code source} whose {@code LISTEN} waits until {@code listen} counts down. */
-  private static DataSource stallingListen(DataSource source, CountDownLatch listen) {
+  static DataSource stallingListen(DataSource source, CountDownLatch listen) {
     return (DataSource)
         Proxy.newProxyInstance(
             DataSource.class.getClassLoader(),

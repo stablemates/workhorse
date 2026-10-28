@@ -311,7 +311,6 @@ internal sealed class RuntimeFixtures : IAsyncDisposable
         {
             options.Lease = Millis(fixture, "leaseMs");
             options.Heartbeat = Millis(fixture, "heartbeatMs");
-            options.SharedHeartbeats = true;
             grace = options.ShutdownGrace;
         });
         subject.Handle<JsonElement>(TaskType(fixture), async (context, _) =>
@@ -427,7 +426,6 @@ internal sealed class RuntimeFixtures : IAsyncDisposable
         {
             worker.Lease = Millis(fixture, "leaseMs");
             worker.Heartbeat = Millis(fixture, "heartbeatMs");
-            worker.SharedHeartbeats = true;
 
             // A maintenance tick during the attempt can fail it in PostgreSQL first. Then the timer's
             // settlement answers stale, and the handler sees LeaseLost (SM-1684, SM-1687). With a
@@ -522,9 +520,13 @@ internal sealed class RuntimeFixtures : IAsyncDisposable
         {
             options.Lease = Millis(fixture, "leaseMs");
             options.Heartbeat = TimeSpan.FromMilliseconds(heartbeat);
-            options.SharedHeartbeats = true;
             grace = options.ShutdownGrace;
         });
+        // The fixture blocks the first round for three intervals in a client hook. A dedicated round
+        // that outlives its bound of three quarters of the interval loses its connection, and a
+        // replacement round runs (ADR 0071, rule 5). The fixture checks the round loop, so the driver
+        // widens the bound of this heartbeat, which serves only this data source, to half the lease.
+        subject.HeartbeatForTests.RoundBoundForTests = Monotonic.Millis((long)fixture["leaseMs"]! / 2);
         subject.Handle<JsonElement>(TaskType(fixture), async (_, _) =>
         {
             handlerStarted.TrySetResult();
@@ -832,7 +834,6 @@ internal sealed class RuntimeFixtures : IAsyncDisposable
         var subject = NewWorker(pool, fixture, options =>
         {
             options.Concurrency = concurrency;
-            options.SharedHeartbeats = true;
             grace = options.ShutdownGrace;
         });
         subject.Handle<JsonElement>(TaskType(fixture), async (_, _) =>
