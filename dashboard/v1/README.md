@@ -160,7 +160,8 @@ server-assigned from the authenticated principal; the client-supplied value is i
 Besides RPC, a backend serves three surfaces under `{basePath}`:
 
 - `{basePath}` exactly answers a 302 redirect to `{basePath}/tasks`.
-- `{basePath}/assets/*` serves the built bundle's files with immutable caching.
+- `{basePath}/assets/*` serves the built bundle's files with `Cache-Control: public,
+  max-age=31536000, immutable`.
 - Every other owned path answers the bundle's `index.html` with two placeholders filled
   (`renderDashboardHtml` in `typescript/dashboard-server/src/server/html.ts`): the runtime
   configuration script `window.workhorseDashboard = { basePath, rpcUrl, auditActor,
@@ -169,9 +170,13 @@ Besides RPC, a backend serves three surfaces under `{basePath}`:
   names the mounted `loginUrl` and `logoutUrl`, and the application redirects there when RPC
   answers 401.
 
+A backend sends the rendered `index.html` page with `Cache-Control: no-store`. The runtime configuration names the
+operator in `auditActor`, so a shared cache or the browser cache must not keep the page.
+
 The archive also carries `login.html` with `<!--__WORKHORSE_LOGIN_ERROR__-->` as its only runtime
 placeholder. A backend replaces it with either an empty string or the generic invalid-credential
-paragraph; session and password verification remain language-specific.
+paragraph; session and password verification remain language-specific. A backend that serves the
+login page also sends it with `Cache-Control: no-store`.
 
 `dashboard/app` keeps its build-time dependency on `@stablemates/workhorse-dashboard-server` because the
 Vite development transform invokes the reference server's `renderDashboardHtml`. The compiled

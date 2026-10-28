@@ -415,7 +415,9 @@ class DashboardHost:
             + json.dumps(config, separators=(",", ":")).translate(_SCRIPT_ESCAPES),
         ).replace("<!--__WORKHORSE_BROWSER_MODULES__-->", modules)
         return DashboardResponse(
-            200, html.encode(), (("Content-Type", "text/html; charset=utf-8"),)
+            200,
+            html.encode(),
+            (("Content-Type", "text/html; charset=utf-8"), ("Cache-Control", "no-store")),
         )
 
     def _asset(self, name: str) -> DashboardResponse:

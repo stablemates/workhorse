@@ -683,7 +683,10 @@ internal sealed partial class DashboardHost
             : throw new InvalidOperationException("the dashboard bundle has no app/index.html");
         var html = ReplaceFirst(page, "/*__WORKHORSE_RUNTIME_CONFIG__*/", "window.workhorseDashboard = " + ScriptSafe(config.ToJsonString(ScriptJson)));
         html = ReplaceFirst(html, "<!--__WORKHORSE_BROWSER_MODULES__-->", modules.ToString());
-        return new Reply(200, new Dictionary<string, string> { ["Content-Type"] = "text/html; charset=utf-8" }, Encoding.UTF8.GetBytes(html));
+        return new Reply(
+            200,
+            new Dictionary<string, string> { ["Content-Type"] = "text/html; charset=utf-8", ["Cache-Control"] = "no-store" },
+            Encoding.UTF8.GetBytes(html));
     }
 
     private static string ReplaceFirst(string text, string placeholder, string value)

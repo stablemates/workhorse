@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import io
 import json
+import re
 from collections.abc import Callable, Iterable
 from typing import cast
 
@@ -83,9 +84,16 @@ def test_dashboard_host_serves_the_embedded_application() -> None:
     status, headers, body = _request(_host(), "/workhorse/tasks")
     assert status == "200 OK"
     assert headers["Content-Type"] == "text/html; charset=utf-8"
+    assert headers["Cache-Control"] == "no-store"
     assert b'"basePath":"/workhorse"' in body
     assert b'"auditActor":"operator@example.test"' in body
     assert f'"workhorseVersion":"{WORKHORSE_VERSION}"'.encode() in body
+
+    asset = re.search(rb"\./assets/[^\"]+\.js", body)
+    assert asset is not None
+    status, headers, _ = _request(_host(), "/workhorse" + asset.group().decode()[1:])
+    assert status == "200 OK"
+    assert headers["Cache-Control"] == "public, max-age=31536000, immutable"
 
     root = DashboardHost(
         cast(object, _Connection()),

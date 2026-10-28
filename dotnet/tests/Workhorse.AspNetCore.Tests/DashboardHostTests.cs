@@ -39,6 +39,7 @@ public sealed class DashboardHostTests(ScratchDatabase database) : IClassFixture
         var shell = await server.GetAsync("/app/ops/workhorse/tasks/abc");
         Assert.Equal(200, shell.Status);
         Assert.StartsWith("text/html", shell.Header("Content-Type"), StringComparison.Ordinal);
+        Assert.Equal("no-store", shell.Header("Cache-Control"));
         Assert.Contains("\"basePath\":\"/app/ops/workhorse\"", shell.Text, StringComparison.Ordinal);
         Assert.Contains("\"rpcUrl\":\"/app/ops/workhorse/rpc\"", shell.Text, StringComparison.Ordinal);
 
