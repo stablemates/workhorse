@@ -6,6 +6,7 @@ import type { TaskAttempt } from "../src/task-attempt.js";
 import type { ClaimedTask, Json, Queryable } from "../src/types.js";
 import type { WorkerQueueApi } from "../src/worker.js";
 import { MAX_EXTERNAL_WAIT_VALUE_BYTES } from "../src/types.js";
+import { answerSchemaCheck } from "./support/schema-check.js";
 
 // Compact JSON writes 30,000 zeros in 60,001 bytes. PostgreSQL's jsonb text puts a space after each
 // comma, so it writes the same array in 90,000 bytes, which is above the limit.
@@ -25,7 +26,7 @@ function refusingQueue(): { queue: Queue; statements: string[] } {
       throw new Error("the size check must refuse the value before a statement runs");
     },
   } as unknown as Queryable;
-  return { queue: new Queue(database), statements };
+  return { queue: new Queue(answerSchemaCheck(database)), statements };
 }
 
 describe("external wait value size", () => {

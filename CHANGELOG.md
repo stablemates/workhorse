@@ -45,6 +45,24 @@ expiry, history release, and group finish. The health document keeps its keys, a
 does not change.
 Every process of every SDK version gets the new result when the migration commits.
 
+### The TypeScript `Queue`, `Admin`, and `runOnce` check the schema
+
+**Behavior change.** Before this change, a TypeScript producer on schema version 75 called
+`Queue.enqueueManyWithResults`, and the queue sent `enqueue_many_v1` at once. The TypeScript `Queue`
+and `Admin` did not run the compatibility check. `Worker.runOnce()` and `Worker.run()` with
+`sharedHeartbeats: true` did not run it either. The Go, Python, Ruby, Rust, JVM, and .NET SDKs
+refused that schema before the first statement (SM-1864).
+
+Now each `Queue` and each `Admin` runs the check before the first statement of a call. A refusal
+throws `SchemaCompatibilityError` with the same codes as `assertSchemaCompatible`. Each instance
+keeps the first answer, a success or a refusal, so a later call sends no extra statement. It does
+not keep a driver error, so the next call queries again. The call gets that driver error unchanged,
+with its SQLSTATE. A method that takes a caller transaction runs the check on that transaction.
+
+`Worker.runOnce()` and `Worker.run()` with `sharedHeartbeats: true` now run the check before the
+first registration, and a refusal rejects them. If a test gives a `Queue` or an `Admin` a fake
+database, the fake must now answer the `compatibility_state` statement.
+
 ### The dashboard bundle uses Mantine 9.7.4
 
 Every release line serves the shared dashboard browser bundle. After 0.10.0, a dependency update

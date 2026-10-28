@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import { FastTierUnsupportedError, Queue, Worker, type Queryable } from "../src/index.js";
 import { SQL_STATEMENTS } from "../src/queue/sql-catalogue.generated.js";
 import type { HandlerContext } from "../src/worker.js";
+import { answerSchemaCheck } from "./support/schema-check.js";
 
 // SM-993: a full-tier probe answer sends a worker to claim_many_v1 for the probe interval. If an
 // operator moves the queue to the fast tier in that interval, claim_many_v1 returns fast-tier tasks
@@ -81,7 +82,7 @@ function fakeDatabase(options: FakeDatabaseOptions) {
   }) as Queryable["query"];
   const count = (statement: string): number =>
     statements.filter((entry) => entry === statement).length;
-  return { database: { query } satisfies Queryable, statements, count };
+  return { database: answerSchemaCheck({ query } satisfies Queryable), statements, count };
 }
 
 function fallbackWorker(database: Queryable): Worker {

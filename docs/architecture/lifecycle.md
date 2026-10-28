@@ -1866,8 +1866,9 @@ They do not apply under `sharedHeartbeats`, or to a custom `WorkerQueueApi` that
 registration:
 
 1. It waits until the reservation holds a connection.
-2. It borrows one more connection from the same pool. It runs `assertSchemaCompatible` on that
-   connection, and returns the connection at once.
+2. It borrows one more connection from the same pool. It runs the compatibility check of the queue
+   on that connection, and returns the connection at once. If the queue already has an answer, the
+   check sends no statement.
 
 The budget covers the query as well as the connect. If the query is still running at the end of
 the budget, the worker destroys the borrowed connection. If a step does not finish within the

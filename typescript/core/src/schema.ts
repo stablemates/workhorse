@@ -9,6 +9,7 @@ import {
   WORKHORSE_SCHEMA_VERSION,
 } from "./queue/sql-catalogue.generated.js";
 import { existsSync } from "node:fs";
+import type { QueryResult, QueryResultRow } from "pg";
 import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { expectOneRow, SchemaCompatibilityError, type SchemaCompatibilityCode } from "./errors.js";
@@ -711,6 +712,22 @@ export {
  * unreachable database is not a verdict about versions.
  */
 export async function assertSchemaCompatible(database: Queryable): Promise<void> {
+  return checkSchemaCompatibility(database, (error) => {
+    throw new Error(
+      "Unable to verify Workhorse schema compatibility because the database query failed.",
+      { cause: error },
+    );
+  });
+}
+
+/**
+ * The check of {@link assertSchemaCompatible}. `unreadable` decides what a query failure that is
+ * not a missing relation throws.
+ */
+async function checkSchemaCompatibility(
+  database: Queryable,
+  unreadable: (error: unknown) => never,
+): Promise<void> {
   let state: CompatibilityState;
   try {
     state = await readCompatibilityState(database);
@@ -726,10 +743,7 @@ export async function assertSchemaCompatible(database: Queryable): Promise<void>
         { cause: error },
       );
     }
-    throw new Error(
-      "Unable to verify Workhorse schema compatibility because the database query failed.",
-      { cause: error },
-    );
+    unreadable(error);
   }
   const refusal = schemaCompatibilityRefusal(state);
   if (refusal !== null) {
@@ -738,6 +752,66 @@ export async function assertSchemaCompatible(database: Queryable): Promise<void>
       expectedVersion: WORKHORSE_SCHEMA_VERSION,
     });
   }
+}
+
+/**
+ * Run the compatibility check until PostgreSQL answers it, then reuse that answer.
+ *
+ * The answer is success or a {@link SchemaCompatibilityError}. A driver error is not an answer, so
+ * the next call queries again. The call gets the driver error unchanged, so a caller that branches
+ * on its SQLSTATE sees the same error as from the statement of the call. Each `Queue` and each
+ * `Admin` holds one for its lifetime, as the `Queue` and `Admin` of the other SDKs do.
+ *
+ * The answer is shared, but a query in flight is not: calls that overlap on one connection share
+ * its query, and a call on another connection sends its own. Otherwise a caller transaction that
+ * holds the last pooled connection would wait for a check that waits for that connection.
+ */
+export class CachedSchemaCompatibilityCheck {
+  private answer: { readonly refusal: SchemaCompatibilityError | null } | undefined;
+  private readonly inFlight = new WeakMap<Queryable, Promise<void>>();
+
+  /** Check through `database`, the connection the call uses, unless an answer is known. */
+  async assert(database: Queryable): Promise<void> {
+    if (this.answer === undefined) {
+      let check = this.inFlight.get(database);
+      if (check === undefined) {
+        check = this.query(database);
+        this.inFlight.set(database, check);
+      }
+      await check;
+    }
+    if (this.answer?.refusal) throw this.answer.refusal;
+  }
+
+  private async query(database: Queryable): Promise<void> {
+    try {
+      await checkSchemaCompatibility(database, (error) => {
+        throw error;
+      });
+      this.answer ??= { refusal: null };
+    } catch (error) {
+      if (!(error instanceof SchemaCompatibilityError)) throw error;
+      this.answer ??= { refusal: error };
+    } finally {
+      this.inFlight.delete(database);
+    }
+  }
+}
+
+/** `database`, with the compatibility check before each statement. */
+export function schemaCheckedQueryable(
+  database: Queryable,
+  check: CachedSchemaCompatibilityCheck,
+): Queryable {
+  return {
+    async query<R extends QueryResultRow = QueryResultRow>(
+      text: string,
+      values?: readonly unknown[],
+    ): Promise<QueryResult<R>> {
+      await check.assert(database);
+      return database.query<R>(text, values);
+    },
+  };
 }
 
 /** A refusal in both vocabularies: the code a caller branches on, the sentence a person reads. */

@@ -110,3 +110,14 @@ export const workerQueueTierRead = Symbol("workhorse.worker.queue-tier-read");
 export interface WorkerQueueTierRead {
   [workerQueueTierRead](queueName: string): Promise<boolean>;
 }
+
+/**
+ * Runs the cached compatibility check of the queue. `runOnce()` and a `run()` without a reserved
+ * heartbeat connection call it before the worker registers. The readiness check of a reserved
+ * connection stores its answer in the same cache.
+ */
+export const workerSchemaCheck = Symbol("workhorse.worker.schema-check");
+
+export interface WorkerSchemaCheck {
+  [workerSchemaCheck](): Promise<void>;
+}

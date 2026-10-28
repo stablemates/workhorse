@@ -11,6 +11,7 @@ import type { QueryResult, QueryResultRow } from "pg";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { WorkerQueueApi } from "../src/worker.js";
 import type { ClaimedTask, Queryable } from "../src/types.js";
+import { answerSchemaCheck } from "./support/schema-check.js";
 
 const exporter = new InMemoryMetricExporter(AggregationTemporality.DELTA);
 const reader = new PeriodicExportingMetricReader({
@@ -104,7 +105,7 @@ describe("Workhorse OpenTelemetry metrics", () => {
           { ordinal: 2, task_id: "task-2", outcome: "accepted" },
         ] as unknown as R[]),
     };
-    const queue = new Queue(database);
+    const queue = new Queue(answerSchemaCheck(database));
 
     await queue.enqueueMany([
       { type: "email.send", payload: null, options: { queue: "mail" } },
@@ -146,7 +147,7 @@ describe("Workhorse OpenTelemetry metrics", () => {
           })) as unknown as R[],
         ),
     };
-    const queue = new Queue(database);
+    const queue = new Queue(answerSchemaCheck(database));
 
     await queue.enqueueManyWithResults([
       { type: "email.accepted", payload: null, options: { queue: "mail" } },
@@ -901,7 +902,7 @@ describe("Workhorse OpenTelemetry metrics", () => {
         queryResult([{ rows_affected: 7, expired_leases: 7, retried: 7 }] as unknown as R[]),
     };
 
-    await new Queue(database).recoverExpired();
+    await new Queue(answerSchemaCheck(database)).recoverExpired();
     await collect();
 
     expect(metric("workhorse.leases.expired")?.dataPoints).toEqual([
@@ -926,7 +927,10 @@ describe("Workhorse OpenTelemetry metrics", () => {
         ] as unknown as R[]),
     };
 
-    await new Queue(database).cancel("task-1", { requestedBy: "operator", reason: "deploy" });
+    await new Queue(answerSchemaCheck(database)).cancel("task-1", {
+      requestedBy: "operator",
+      reason: "deploy",
+    });
     await collect();
 
     expect(metric("workhorse.tasks.cancellation")?.dataPoints).toEqual([
@@ -946,7 +950,7 @@ describe("Workhorse OpenTelemetry metrics", () => {
         return queryResult([{ task_id: fireCalls === 1 ? "task-1" : null }] as unknown as R[]);
       },
     };
-    const queue = new Queue(database);
+    const queue = new Queue(answerSchemaCheck(database));
     const occurrence = new Date(Date.now() - 5_000);
 
     await queue.fireSchedule("billing", "daily-invoice", 1n, occurrence);
@@ -981,7 +985,7 @@ describe("Workhorse OpenTelemetry metrics", () => {
         ] as unknown as R[]),
     };
 
-    await new Admin(database).redrive("failed-task", {
+    await new Admin(answerSchemaCheck(database)).redrive("failed-task", {
       actor: "operator",
       reason: "fixed",
       requestId: "request-1",
@@ -1024,7 +1028,7 @@ describe("Workhorse OpenTelemetry metrics", () => {
         ] as unknown as R[]),
     };
 
-    await new Admin(database).redriveMany(
+    await new Admin(answerSchemaCheck(database)).redriveMany(
       {},
       { actor: "operator", reason: "fixed", requestId: "request-2" },
     );
@@ -1065,7 +1069,7 @@ describe("Workhorse OpenTelemetry metrics", () => {
         ] as unknown as R[]),
     };
 
-    await new Queue(database).claim("worker-1", { queue: "mail" });
+    await new Queue(answerSchemaCheck(database)).claim("worker-1", { queue: "mail" });
     await collect();
 
     expect(metric("workhorse.tasks.claimed")?.dataPoints).toEqual([
@@ -1105,7 +1109,7 @@ describe("Workhorse OpenTelemetry metrics", () => {
       leaseExpiresAt: new Date(Date.now() + 30_000),
     };
 
-    await new Queue(database).heartbeatStatus(task, "worker-1");
+    await new Queue(answerSchemaCheck(database)).heartbeatStatus(task, "worker-1");
     await collect();
 
     expect(metric("workhorse.worker.heartbeat.failure")?.dataPoints).toEqual([
@@ -1348,7 +1352,7 @@ describe("Workhorse OpenTelemetry metrics", () => {
     metrics.disable();
     metrics.setGlobalMeterProvider(lateProvider);
     try {
-      await new Queue(database).enqueue("email.send", null, { queue: "mail" });
+      await new Queue(answerSchemaCheck(database)).enqueue("email.send", null, { queue: "mail" });
       await lateProvider.forceFlush();
 
       expect(

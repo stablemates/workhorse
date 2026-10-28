@@ -11,6 +11,7 @@ import { SignalsModule } from "./signals.js";
 import { TaskGroupsModule } from "./task-groups.js";
 import { HumanWaitsModule } from "./human-waits.js";
 import { WorkerRegistryModule } from "./worker-registry.js";
+import { CachedSchemaCompatibilityCheck } from "../schema.js";
 
 export interface CachedContractDefinition {
   readonly version: string;
@@ -21,6 +22,8 @@ export interface CachedContractDefinition {
 export interface QueueModuleState {
   readonly currentDatabaseContracts: Map<string, CachedContractDefinition>;
   readonly retainedDatabaseContracts: Map<string, Map<string, CachedContractDefinition>>;
+  /** The queue and each queue that `forDatabase` binds to a transaction share one answer. */
+  readonly compatibility: CachedSchemaCompatibilityCheck;
 }
 
 /** @internal */
@@ -28,6 +31,7 @@ export function createQueueModuleState(): QueueModuleState {
   return {
     currentDatabaseContracts: new Map(),
     retainedDatabaseContracts: new Map(),
+    compatibility: new CachedSchemaCompatibilityCheck(),
   };
 }
 

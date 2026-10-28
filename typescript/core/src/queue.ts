@@ -146,6 +146,7 @@ import {
   workerListenerPoolMaxSize,
   workerProgressRead,
   workerQueueTierRead,
+  workerSchemaCheck,
   workerWaitsRead,
   type WorkerHeartbeatChannel,
 } from "./worker-internal.js";
@@ -156,7 +157,6 @@ import {
 } from "./heartbeat-connection.js";
 import { statementPoolCapacity } from "./connection-pool.js";
 import { FastTierUnsupportedError, SchemaCompatibilityError } from "./errors.js";
-import { assertSchemaCompatible } from "./schema.js";
 import { monotonicNow } from "./timers.js";
 import { queryFencedWrite } from "./queue/fenced-write.js";
 import { heartbeatLeaseBatches, reportHeartbeatStatuses } from "./queue/claim-lease-fence.js";
@@ -267,6 +267,18 @@ export class Queue {
     );
   }
 
+  // Run the compatibility check through `database`, the connection of the call, unless the queue
+  // has the answer. A schema the release cannot use then fails with `SchemaCompatibilityError`
+  // before the first statement of the call.
+  private checkSchema(database: Queryable = this.database): Promise<void> {
+    return this.moduleState.compatibility.assert(database);
+  }
+
+  /** @internal */
+  [workerSchemaCheck](): Promise<void> {
+    return this.checkSchema();
+  }
+
   /** @internal Bind the facade to another database while retaining process-local module caches. */
   forDatabase(database: Queryable): Queue {
     return new Queue(database, this.defaultQueue, this.options, this.moduleState);
@@ -292,6 +304,7 @@ export class Queue {
     options: EnqueueOptions = {},
     transaction: Queryable = this.database,
   ): Promise<string> {
+    await this.checkSchema(transaction);
     return this.modules.enqueueContracts.enqueue(type, payload, options, transaction);
   }
 
@@ -301,6 +314,7 @@ export class Queue {
     options: EnqueueOptions = {},
     transaction: Queryable = this.database,
   ): Promise<EnqueueResult> {
+    await this.checkSchema(transaction);
     return this.modules.enqueueContracts.enqueueWithResult(type, payload, options, transaction);
   }
 
@@ -308,6 +322,8 @@ export class Queue {
     requests: readonly EnqueueRequest[],
     transaction: Queryable = this.database,
   ): Promise<string[]> {
+    // An empty batch sends no statement, so it needs no check.
+    if (requests.length > 0) await this.checkSchema(transaction);
     return this.modules.enqueueContracts.enqueueMany(requests, transaction);
   }
 
@@ -315,6 +331,8 @@ export class Queue {
     requests: readonly EnqueueRequest[],
     transaction: Queryable = this.database,
   ): Promise<EnqueueResult[]> {
+    // An empty batch sends no statement, so it needs no check.
+    if (requests.length > 0) await this.checkSchema(transaction);
     return this.modules.enqueueContracts.enqueueManyWithResults(requests, transaction);
   }
 
@@ -327,6 +345,7 @@ export class Queue {
     callbacks: TaskGroupCallbacks = {},
     transaction: Queryable = this.database,
   ): Promise<TaskGroup> {
+    await this.checkSchema(transaction);
     return this.modules.taskGroups.create(callbacks, transaction);
   }
 
@@ -339,6 +358,7 @@ export class Queue {
     build: (group: TaskGroupBuilder) => void | Promise<void>,
     transaction: Queryable = this.database,
   ): Promise<TaskGroupBlockResult> {
+    await this.checkSchema(transaction);
     return this.modules.taskGroups.createSealed(callbacks, build, transaction);
   }
 
@@ -351,6 +371,7 @@ export class Queue {
     requests: readonly EnqueueRequest[],
     transaction: Queryable = this.database,
   ): Promise<EnqueueResult[]> {
+    await this.checkSchema(transaction);
     return this.modules.taskGroups.add(groupId, requests, transaction);
   }
 
@@ -360,31 +381,37 @@ export class Queue {
     workerId: string,
     requests: readonly EnqueueRequest[],
   ): Promise<EnqueueResult[]> {
+    await this.checkSchema();
     return this.modules.taskGroups.addAsMember(task, workerId, requests);
   }
 
   /** Seal an open group. Sealing a sealed or finished group changes nothing. */
   async sealTaskGroup(groupId: string, transaction: Queryable = this.database): Promise<TaskGroup> {
+    await this.checkSchema(transaction);
     return this.modules.taskGroups.seal(groupId, transaction);
   }
 
-  getTaskGroup(groupId: string): Promise<TaskGroup | null> {
+  async getTaskGroup(groupId: string): Promise<TaskGroup | null> {
+    await this.checkSchema();
     return this.modules.taskGroups.get(groupId);
   }
 
-  listTaskGroupMembers(
+  async listTaskGroupMembers(
     groupId: string,
     query: TaskGroupMemberQuery = {},
   ): Promise<TaskGroupMemberPage> {
+    await this.checkSchema();
     return this.modules.taskGroups.listMembers(groupId, query);
   }
 
   /** The group a task is a member of, or whose callback the task is. */
-  findTaskGroup(taskId: string): Promise<TaskGroupLink | null> {
+  async findTaskGroup(taskId: string): Promise<TaskGroupLink | null> {
+    await this.checkSchema();
     return this.modules.taskGroups.forTask(taskId);
   }
 
   async promote(limit = 100): Promise<number> {
+    await this.checkSchema();
     return this.modules.queueAdministration.promote(limit);
   }
 
@@ -400,6 +427,7 @@ export class Queue {
    * process-scoped rather than a flag that outlives the process it was aimed at.
    */
   async registerWorker(registration: WorkerRegistration): Promise<{ paused: boolean }> {
+    await this.checkSchema();
     return this.modules.workerRegistry.registerWorker(registration);
   }
 
@@ -411,17 +439,20 @@ export class Queue {
    * fenced: it removes the row by worker ID only, also when a later run registered that row.
    */
   async deregisterWorker(workerId: string, instanceId?: string): Promise<boolean> {
+    await this.checkSchema();
     return this.modules.workerRegistry.deregisterWorker(workerId, instanceId);
   }
 
   /** Drop registrations whose process stopped heartbeating longer ago than the given window. */
   async pruneWorkerRegistry(maxAgeMs = 60_000): Promise<number> {
+    await this.checkSchema();
     return this.modules.workerRegistry.pruneWorkerRegistry(maxAgeMs);
   }
 
   async tick(
     options: { promoteLimit?: number; recoverLimit?: number } = {},
   ): Promise<MaintenancePhaseResult[]> {
+    await this.checkSchema();
     return this.modules.retentionMaintenance.tick(options);
   }
 
@@ -433,6 +464,7 @@ export class Queue {
    * default is the start time of that transaction.
    */
   async runMaintenance(options: { now?: Date } = {}): Promise<MaintenancePhaseResult[]> {
+    await this.checkSchema();
     return this.modules.retentionMaintenance.runMaintenance(options);
   }
 
@@ -440,6 +472,7 @@ export class Queue {
   async prepareHistoryPartitions(
     options: { force?: boolean; now?: Date } = {},
   ): Promise<MaintenancePhaseResult[]> {
+    await this.checkSchema();
     return this.modules.retentionMaintenance.prepareHistoryPartitions(options);
   }
 
@@ -459,6 +492,7 @@ export class Queue {
   async rollupStatistics(
     options: { force?: boolean; now?: Date; maxBuckets?: number } = {},
   ): Promise<MaintenancePhaseResult[]> {
+    await this.checkSchema();
     return this.modules.retentionMaintenance.rollupStatistics(options);
   }
 
@@ -466,6 +500,7 @@ export class Queue {
   async retainHistory(
     options: { force?: boolean; now?: Date } = {},
   ): Promise<MaintenancePhaseResult[]> {
+    await this.checkSchema();
     return this.modules.retentionMaintenance.retainHistory(options);
   }
 
@@ -473,6 +508,7 @@ export class Queue {
   async pruneTerminalStorage(
     options: { force?: boolean; now?: Date } = {},
   ): Promise<MaintenancePhaseResult[]> {
+    await this.checkSchema();
     return this.modules.retentionMaintenance.pruneTerminalStorage(options);
   }
 
@@ -480,6 +516,7 @@ export class Queue {
     definition: RetentionPolicyDefinition,
     options: { force?: boolean } = {},
   ): Promise<RetentionPolicy> {
+    await this.checkSchema();
     return this.modules.retentionMaintenance.syncRetentionPolicy(definition, options);
   }
 
@@ -489,10 +526,12 @@ export class Queue {
    * holds history rather than leaving the archive incomplete.
    */
   async setColdExportPolicy(definition: ColdExportPolicyDefinition): Promise<ColdExportStatus> {
+    await this.checkSchema();
     return this.modules.retentionMaintenance.setColdExportPolicy(definition);
   }
 
   async getColdExportStatus(): Promise<ColdExportStatus> {
+    await this.checkSchema();
     return this.modules.retentionMaintenance.getColdExportStatus();
   }
 
@@ -501,6 +540,7 @@ export class Queue {
     definitions: readonly ConcurrencyPolicyDefinition[],
     options: { prune?: boolean } = {},
   ): Promise<ConcurrencyPolicy[]> {
+    await this.checkSchema();
     const input = definitions.map((definition) => ({
       queue: definition.queue,
       maxActive: definition.maxActive,
@@ -515,6 +555,7 @@ export class Queue {
   }
 
   async listConcurrencyPolicies(queueNames: readonly string[] = []): Promise<ConcurrencyPolicy[]> {
+    await this.checkSchema();
     const result = await this.database.query<ConcurrencyPolicyRow>(
       SQL_STATEMENTS["concurrency_policy"],
       [queueNames],
@@ -532,6 +573,7 @@ export class Queue {
     definitions: readonly RateLimitPolicyDefinition[],
     options: { prune?: boolean } = {},
   ): Promise<RateLimitPolicy[]> {
+    await this.checkSchema();
     const input = definitions.map((definition) => ({
       queue: definition.queue,
       rate: definition.rate,
@@ -545,6 +587,7 @@ export class Queue {
   }
 
   async listRateLimitPolicies(queueNames: readonly string[] = []): Promise<RateLimitPolicy[]> {
+    await this.checkSchema();
     const result = await this.database.query<RateLimitPolicyRow>(
       SQL_STATEMENTS["rate_limit_policy"],
       [queueNames],
@@ -558,6 +601,7 @@ export class Queue {
   }
 
   async rateLimitStatuses(queueNames: readonly string[] = []): Promise<RateLimitStatus[]> {
+    await this.checkSchema();
     return this.modules.operatorReads.rateLimitStatuses(queueNames);
   }
 
@@ -566,6 +610,7 @@ export class Queue {
     definitions: readonly BudgetDefinition[],
     options: { prune?: boolean } = {},
   ): Promise<Budget[]> {
+    await this.checkSchema();
     const input = definitions.map((definition) => ({
       name: definition.name,
       maxActive: definition.maxActive ?? null,
@@ -580,6 +625,7 @@ export class Queue {
   }
 
   async listBudgets(budgetNames: readonly string[] = []): Promise<Budget[]> {
+    await this.checkSchema();
     const result = await this.database.query<BudgetRow>(SQL_STATEMENTS["list_budgets"], [
       budgetNames,
     ]);
@@ -587,28 +633,33 @@ export class Queue {
   }
 
   async budgetStatuses(budgetNames: readonly string[] = []): Promise<BudgetStatus[]> {
+    await this.checkSchema();
     return this.modules.operatorReads.budgetStatuses(budgetNames);
   }
 
   async overrideRetentionPolicy(
     definition: Partial<RetentionPolicyDefinition>,
   ): Promise<RetentionPolicy> {
+    await this.checkSchema();
     return this.modules.retentionMaintenance.overrideRetentionPolicy(definition);
   }
 
   async revertRetentionPolicy(
     settings: readonly RetentionPolicySetting[],
   ): Promise<RetentionPolicy> {
+    await this.checkSchema();
     return this.modules.retentionMaintenance.revertRetentionPolicy(settings);
   }
 
   async previewRetentionPolicy(
     definition: Partial<RetentionPolicyDefinition>,
   ): Promise<RetentionPolicyImpact> {
+    await this.checkSchema();
     return this.modules.retentionMaintenance.previewRetentionPolicy(definition);
   }
 
   async getRetentionPolicy(): Promise<RetentionPolicy> {
+    await this.checkSchema();
     return this.modules.retentionMaintenance.getRetentionPolicy();
   }
 
@@ -616,22 +667,26 @@ export class Queue {
     definition: MaintenancePolicyDefinition,
     options: { force?: boolean } = {},
   ): Promise<MaintenancePolicy> {
+    await this.checkSchema();
     return this.modules.retentionMaintenance.syncMaintenancePolicy(definition, options);
   }
 
   async overrideMaintenancePolicy(
     definition: Partial<MaintenancePolicyDefinition>,
   ): Promise<MaintenancePolicy> {
+    await this.checkSchema();
     return this.modules.retentionMaintenance.overrideMaintenancePolicy(definition);
   }
 
   async revertMaintenancePolicy(
     settings: readonly MaintenancePolicySetting[],
   ): Promise<MaintenancePolicy> {
+    await this.checkSchema();
     return this.modules.retentionMaintenance.revertMaintenancePolicy(settings);
   }
 
   async getMaintenancePolicy(): Promise<MaintenancePolicy> {
+    await this.checkSchema();
     return this.modules.retentionMaintenance.getMaintenancePolicy();
   }
 
@@ -640,10 +695,12 @@ export class Queue {
     definitions: readonly ScheduleDefinition[],
     options: { prune?: boolean } = {},
   ): Promise<void> {
+    await this.checkSchema();
     return this.modules.cronSchedules.syncSchedules(namespace, definitions, options);
   }
 
   async schedules(namespaces: readonly string[]): Promise<StoredSchedule[]> {
+    await this.checkSchema();
     return this.modules.cronSchedules.schedules(namespaces);
   }
 
@@ -653,6 +710,7 @@ export class Queue {
     revision: bigint,
     occurrenceAt: Date,
   ): Promise<string | null> {
+    await this.checkSchema();
     return this.modules.cronSchedules.fireSchedule(namespace, name, revision, occurrenceAt);
   }
 
@@ -662,6 +720,7 @@ export class Queue {
     catchupLimit: number,
     evaluationWindowMs: number,
   ): Promise<void> {
+    await this.checkSchema();
     return this.modules.cronSchedules.fireDueSchedules(
       namespaces,
       now,
@@ -671,6 +730,7 @@ export class Queue {
   }
 
   async cancel(taskId: string, request: CancellationRequest = {}): Promise<CancelResult> {
+    await this.checkSchema();
     return this.modules.claimLeaseFence.cancel(taskId, request);
   }
 
@@ -678,6 +738,7 @@ export class Queue {
     workerId: string,
     options: { queue?: string; leaseMs?: number } = {},
   ): Promise<ClaimedTask<TPayload> | null> {
+    await this.checkSchema();
     return this.modules.claimLeaseFence.claim<TPayload>(workerId, options);
   }
 
@@ -686,20 +747,24 @@ export class Queue {
     limit: number,
     options: { queue?: string; leaseMs?: number } = {},
   ): Promise<ClaimedTask<TPayload>[]> {
+    await this.checkSchema();
     return this.modules.claimLeaseFence.claimMany<TPayload>(workerId, limit, options);
   }
 
   /** @internal Persist the ordered membership chosen by a worker's batch coordinator. */
   async recordBatchDispatch(batch: BatchExecutionRecord): Promise<void> {
+    await this.checkSchema();
     return this.modules.claimLeaseFence.recordBatchDispatch(batch);
   }
 
   /** @internal Persist that the shared callback failed before returning per-member outcomes. */
   async recordBatchFailure(batch: BatchExecutionRecord): Promise<void> {
+    await this.checkSchema();
     return this.modules.claimLeaseFence.recordBatchFailure(batch);
   }
 
   async heartbeat(task: ClaimedTask, workerId: string, leaseMs = 30_000): Promise<boolean> {
+    await this.checkSchema();
     return this.modules.claimLeaseFence.heartbeat(task, workerId, leaseMs);
   }
 
@@ -708,6 +773,7 @@ export class Queue {
     workerId: string,
     leaseMs = 30_000,
   ): Promise<HeartbeatStatus> {
+    await this.checkSchema();
     return this.modules.claimLeaseFence.heartbeatStatus(task, workerId, leaseMs);
   }
 
@@ -723,6 +789,7 @@ export class Queue {
     workerId: string,
     leaseMs = 30_000,
   ): Promise<HeartbeatBatchStatus> {
+    await this.checkSchema();
     return this.modules.claimLeaseFence.tryHeartbeat(task, workerId, leaseMs);
   }
 
@@ -732,25 +799,30 @@ export class Queue {
     workerId: string,
     leaseMs = 30_000,
   ): Promise<Map<string, HeartbeatBatchStatus>> {
+    await this.checkSchema();
     return this.modules.claimLeaseFence.heartbeatMany(tasks, workerId, leaseMs);
   }
 
   async expireOwned(task: ClaimedTask, workerId: string): Promise<ExpireOwnedStatus> {
+    await this.checkSchema();
     return this.modules.claimLeaseFence.expireOwned(task, workerId);
   }
 
   /** Give an owned task back to its queue with its attempt intact. */
   async releaseOwned(task: ClaimedTask, workerId: string): Promise<ReleaseOwnedStatus> {
+    await this.checkSchema();
     return this.modules.claimLeaseFence.releaseOwned(task, workerId);
   }
 
   async acknowledgeCancel(task: ClaimedTask, workerId: string): Promise<boolean> {
+    await this.checkSchema();
     return this.modules.claimLeaseFence.acknowledgeCancel(task, workerId);
   }
 
   async [workerCheckpointsRead]<TValue extends Json = Json>(
     taskId: string,
   ): Promise<TaskCheckpoint<TValue>[]> {
+    await this.checkSchema();
     return this.modules.checkpointsProgressWaits.listCheckpoints<TValue>(taskId);
   }
 
@@ -761,6 +833,7 @@ export class Queue {
     value: TValue,
     options: SaveCheckpointOptions = {},
   ): Promise<TaskCheckpoint<TValue>> {
+    await this.checkSchema();
     return this.modules.checkpointsProgressWaits.saveCheckpoint(
       task,
       workerId,
@@ -773,6 +846,7 @@ export class Queue {
   async [workerProgressRead]<TValue extends Json = Json>(
     taskId: string,
   ): Promise<TaskProgress<TValue> | null> {
+    await this.checkSchema();
     return this.modules.checkpointsProgressWaits.getProgress<TValue>(taskId);
   }
 
@@ -781,10 +855,12 @@ export class Queue {
     workerId: string,
     value: TValue,
   ): Promise<TaskProgress<TValue>> {
+    await this.checkSchema();
     return this.modules.checkpointsProgressWaits.updateProgress(task, workerId, value);
   }
 
   async [workerWaitsRead](taskId: string): Promise<TaskWait[]> {
+    await this.checkSchema();
     return this.modules.checkpointsProgressWaits.listWaits(taskId);
   }
 
@@ -794,6 +870,7 @@ export class Queue {
     name: string,
     request: ScheduleWaitRequest,
   ): Promise<ScheduleWaitResult> {
+    await this.checkSchema();
     return this.modules.checkpointsProgressWaits.scheduleWait(task, workerId, name, request);
   }
 
@@ -803,6 +880,7 @@ export class Queue {
     name: string,
     options: ExternalWaitOptions = {},
   ): Promise<WaitForSignalResult<TPayload>> {
+    await this.checkSchema();
     return this.modules.signals.waitForSignal<TPayload>(task, workerId, name, options);
   }
 
@@ -812,6 +890,7 @@ export class Queue {
     payload: TPayload,
     request: SendSignalRequest,
   ): Promise<SignalDeliveryResult<TPayload>> {
+    await this.checkSchema();
     return this.modules.signals.sendSignal(taskId, name, payload, request);
   }
 
@@ -822,6 +901,7 @@ export class Queue {
     context: TContext,
     options: ExternalWaitOptions = {},
   ): Promise<WaitForHumanResult<TResult>> {
+    await this.checkSchema();
     return this.modules.humanWaits.waitForHuman<TContext, TResult>(
       task,
       workerId,
@@ -837,6 +917,7 @@ export class Queue {
     result: TResult,
     request: CompleteHumanWaitRequest,
   ): Promise<HumanWaitCompletionResult<TResult>> {
+    await this.checkSchema();
     return this.modules.humanWaits.completeHumanWait(taskId, name, result, request);
   }
 
@@ -848,6 +929,7 @@ export class Queue {
     payload: TPayload,
     options: ChildTaskOptions = {},
   ): Promise<CreateChildResult<TResult>> {
+    await this.checkSchema();
     return this.modules.childTasks.createChild(parent, workerId, name, type, payload, options);
   }
 
@@ -856,6 +938,7 @@ export class Queue {
     workerId: string,
     children: readonly ChildTaskRequest[],
   ): Promise<CreateChildrenResult<ChildOutcomes<TResult>>> {
+    await this.checkSchema();
     return this.modules.childTasks.createChildren<TResult>(parent, workerId, children);
   }
 
@@ -864,6 +947,7 @@ export class Queue {
     workerId: string,
     children: readonly ChildTaskRequest[],
   ): Promise<CreateChildrenResult<TResult>> {
+    await this.checkSchema();
     return this.modules.childTasks.createChildrenAll<TResult>(parent, workerId, children);
   }
 
@@ -872,6 +956,7 @@ export class Queue {
     workerId: string,
     result: TResult,
   ): Promise<boolean> {
+    await this.checkSchema();
     return this.modules.claimLeaseFence.complete(task, workerId, result, () =>
       this.modules.enqueueContracts.validateResult(task, result),
     );
@@ -888,6 +973,7 @@ export class Queue {
     result: TResult,
     claim: CompletionClaim,
   ): Promise<CompletionClaimResult<TPayload>> {
+    await this.checkSchema();
     const serialized = await this.modules.enqueueContracts.validateResult(task, result);
     return (await this.modules.claimLeaseFence.completeAndClaim(
       task,
@@ -906,10 +992,12 @@ export class Queue {
     limit: number,
     options: { queue?: string; leaseMs?: number } = {},
   ): Promise<ClaimedTask<TPayload>[]> {
+    await this.checkSchema();
     return this.modules.claimLeaseFence.claimFast<TPayload>(workerId, limit, options);
   }
 
   async [workerQueueTierRead](queueName: string): Promise<boolean> {
+    await this.checkSchema();
     return (await this.modules.queueAdministration.queueTier(queueName)) === "fast";
   }
 
@@ -918,6 +1006,7 @@ export class Queue {
     workerId: string,
     result: Json,
   ): Promise<(claim?: CompletionClaim) => Promise<CompletionClaimResult>> {
+    await this.checkSchema();
     const serialized = await this.modules.enqueueContracts.validateResult(task, result);
     const complete = async (): Promise<CompletionClaimResult> => ({
       accepted: await this.modules.claimLeaseFence.complete(
@@ -966,6 +1055,7 @@ export class Queue {
   [workerHeartbeatReservation](heartbeatMs: number): WorkerHeartbeatChannel | undefined {
     const connection = holdHeartbeatConnection(this.database, heartbeatMs);
     if (connection === undefined) return undefined;
+    const compatibility = this.moduleState.compatibility;
     return {
       pool: describePool(this.database),
       reserve: () => connection.reserve(),
@@ -982,7 +1072,7 @@ export class Queue {
         let borrowed: Awaited<ReturnType<typeof connection.borrow>>;
         try {
           borrowed = await connection.borrow(deadline - monotonicNow(), signal, (client) =>
-            assertSchemaCompatible(client),
+            compatibility.assert(client),
           );
         } catch (error) {
           // A schema verdict is not a connection budget problem, so it reaches the caller as is.
@@ -1012,6 +1102,7 @@ export class Queue {
 
   /** Seed immutable JSON Schema contracts and the application-selected current versions. */
   async syncContracts(): Promise<void> {
+    await this.checkSchema();
     return this.modules.enqueueContracts.syncContracts();
   }
 
@@ -1029,23 +1120,28 @@ export class Queue {
     | "timeout_exceeded"
     | "stale"
   > {
+    await this.checkSchema();
     return this.modules.claimLeaseFence.fail(task, workerId, error, retryDelayMs);
   }
 
   async recoverExpired(limit = 100, retryDelayMs?: number): Promise<number> {
+    await this.checkSchema();
     return this.modules.claimLeaseFence.recoverExpired(limit, retryDelayMs);
   }
 
   async health(): Promise<QueueHealth> {
+    await this.checkSchema();
     return this.modules.operatorReads.health();
   }
 
   /** Read the per-queue live pressure used by OpenTelemetry observable instruments. */
   async queueMetricSnapshot(): Promise<QueueMetricSnapshot[]> {
+    await this.checkSchema();
     return this.modules.operatorReads.queueMetricSnapshot();
   }
 
   async budgetMetricSnapshot(): Promise<BudgetMetricSnapshot[]> {
+    await this.checkSchema();
     return this.modules.operatorReads.budgetMetricSnapshot();
   }
 }

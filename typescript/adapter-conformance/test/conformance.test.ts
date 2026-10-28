@@ -32,11 +32,13 @@ import {
 import {
   type AdapterConnectionPool,
   EnqueueIdempotencyConflictError,
+  PROTOCOL_VERSION,
   QueryError,
   RedriveIdempotencyConflictError,
   type Queryable,
   Queue,
   Worker,
+  WORKHORSE_SCHEMA_VERSION,
   type WorkhorseAdapter,
 } from "@stablemates/workhorse";
 import { sql as drizzleSql, type SQL } from "drizzle-orm";
@@ -321,20 +323,32 @@ describe.each(queryableProviders)("$name queryable contract", (provider) => {
   });
 
   it("adapts transactions and closes configured resources once", async () => {
-    const execute = vi.fn<Execute>(async () => [
-      {
-        ordinal: 1,
-        task_id: "00000000-0000-4000-8000-000000000001",
-        outcome: "accepted",
-      },
-    ]);
+    const execute = vi.fn<Execute>(async (text) =>
+      // The queue runs the compatibility check on the transaction before its first statement.
+      text.includes("FROM workhorse.protocol_version")
+        ? [
+            { kind: "protocol", version: PROTOCOL_VERSION },
+            { kind: "schema", version: WORKHORSE_SCHEMA_VERSION },
+          ]
+        : [
+            {
+              ordinal: 1,
+              task_id: "00000000-0000-4000-8000-000000000001",
+              outcome: "accepted",
+            },
+          ],
+    );
     const close = vi.fn<() => Promise<void>>(async () => undefined);
     const { adapter, transaction } = provider.adapter(execute, close);
 
     await adapter.forTransaction(transaction).enqueue("test", { value: true });
     await Promise.all([adapter.close(), adapter.close()]);
 
-    expect(execute).toHaveBeenCalledOnce();
+    expect(execute).toHaveBeenCalledTimes(2);
+    expect(execute).toHaveBeenLastCalledWith(
+      expect.stringContaining("enqueue_many_v1"),
+      expect.anything(),
+    );
     expect(close).toHaveBeenCalledOnce();
   });
 });

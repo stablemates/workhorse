@@ -49,6 +49,7 @@ import type { HumanWaitPage } from "./queue/human-waits.js";
 import type { SignalWaitPage } from "./queue/signals.js";
 import type { StoredSchedule } from "./queue/cron-schedules.js";
 import { nullableRowTimestamp } from "./queue/row-mapping.js";
+import { CachedSchemaCompatibilityCheck, schemaCheckedQueryable } from "./schema.js";
 import type {
   TaskGroup,
   TaskGroupDrift,
@@ -205,15 +206,19 @@ function purgeConflict(error: unknown): PurgeIdempotencyConflictError | null {
  * across the SDKs, CLI, and dashboard.
  */
 export class Admin {
+  private readonly database: Queryable;
   private readonly modules: QueueModules;
 
   constructor(
-    private readonly database: Queryable,
+    database: Queryable,
     readonly defaultQueue = "default",
     options: QueueOptions = {},
   ) {
+    // Each statement waits for the compatibility check, so every method checks after it validates
+    // its arguments and before its first statement.
+    this.database = schemaCheckedQueryable(database, new CachedSchemaCompatibilityCheck());
     this.modules = createQueueModules(
-      createQueueModuleContext(database, defaultQueue, validateQueueOptions(options)),
+      createQueueModuleContext(this.database, defaultQueue, validateQueueOptions(options)),
     );
   }
 

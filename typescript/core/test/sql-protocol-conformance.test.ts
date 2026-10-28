@@ -76,6 +76,7 @@ import {
 import { Pool } from "pg";
 import { raceBudgetAdmission } from "./support/budget-race.js";
 import { createDatabaseTestHarness } from "./support/db.js";
+import { answerSchemaCheck } from "./support/schema-check.js";
 import { workerHeartbeatReservation, type WorkerHeartbeatChannel } from "../src/worker-internal.js";
 
 const compatibilityDatabase = createDatabaseTestHarness(
@@ -1822,7 +1823,8 @@ async function exerciseQueue<TResult>(
       return { rows } as never;
     },
   };
-  const result = await operation(runtimeQueue(database));
+  // The fake answers the compatibility check, so the parameters it records are the call's own.
+  const result = await operation(runtimeQueue(answerSchemaCheck(database)));
   return { parameters, result };
 }
 
@@ -2253,7 +2255,7 @@ describe("SQL protocol conformance fixtures", () => {
           } as never;
         },
       };
-      const queue = runtimeQueue(transaction);
+      const queue = runtimeQueue(answerSchemaCheck(transaction));
       await queue.enqueueMany([fixture.application as EnqueueRequest], transaction);
       assertFixtureValue(
         [fixture.postgres],
@@ -2334,7 +2336,7 @@ describe("SQL protocol conformance fixtures", () => {
           return { rows: [] } as never;
         },
       };
-      const queue = new Queue(database, fixture.defaultQueue);
+      const queue = new Queue(answerSchemaCheck(database), fixture.defaultQueue);
       await queue.syncSchedules(fixture.namespace, fixture.application as never, {
         prune: fixture.prune,
       });

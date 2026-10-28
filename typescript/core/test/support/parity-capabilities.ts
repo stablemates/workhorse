@@ -594,7 +594,10 @@ export const PARITY_CLIENT_ROWS: readonly ParityRow[] = [
       file: "enqueue_postgres.rs",
       test: "incompatible_schema_refuses_before_the_first_write",
     },
-    typescript: { file: "integration-enqueue-contracts.test.ts", pattern: "schema" },
+    typescript: {
+      file: "client-schema-compatibility.test.ts",
+      pattern: "refuses a schema below the floor before it sends the mutation",
+    },
     python: { file: "test_compatibility.py", pattern: "compatib" },
     go: { file: "compatibility_test.go", pattern: "Compatibility" },
   },
