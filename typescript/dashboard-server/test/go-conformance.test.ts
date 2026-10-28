@@ -14,6 +14,10 @@ import { createDatabaseTestHarness } from "../../core/test/support/db.js";
 
 const repository = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
 const database = createDatabaseTestHarness(import.meta.url);
+// Each phase has its own limit, so a stalled phase fails with its name before the test timeout.
+const buildLimitMs = 60_000;
+const addressLimitMs = 15_000;
+const requestLimitMs = 15_000;
 let scope: Scope | undefined;
 
 beforeEach(() => {
@@ -50,13 +54,12 @@ it("passes dashboard/v1 through the Go embedded backend", { timeout: 120_000 }, 
       const headers = new Headers(request.headers);
       headers.set("x-workhorse-conformance-host", new URL(request.url).host);
       headers.set("x-workhorse-conformance-mode", mode);
-      const response = await fetch(`http://${address}${new URL(request.url).pathname}`, {
+      return send(`http://${address}${new URL(request.url).pathname}`, {
         method: request.method,
         headers,
         body:
           request.method === "GET" || request.method === "HEAD" ? undefined : await request.text(),
       });
-      return response;
     },
   });
   expect(report.exchanges).toBeGreaterThan(0);
@@ -163,7 +166,7 @@ async function rpc(
   input: unknown,
   databaseSQL = false,
 ) {
-  const response = await fetch(`http://${address}/workhorse/rpc/dashboard/${procedure}`, {
+  const response = await send(`http://${address}/workhorse/rpc/dashboard/${procedure}`, {
     method: "POST",
     headers: {
       "content-type": "application/json",
@@ -174,6 +177,25 @@ async function rpc(
   });
   expect(response.status).toBe(200);
   return (await response.json()).json;
+}
+
+/** Sends one request and reads its whole body under one limit, so a stalled exchange names itself. */
+async function send(url: string, init: RequestInit): Promise<Response> {
+  const phase = `request ${init.method} ${new URL(url).pathname}`;
+  try {
+    const response = await fetch(url, { ...init, signal: AbortSignal.timeout(requestLimitMs) });
+    const body = await response.text();
+    return new Response(body === "" ? null : body, {
+      status: response.status,
+      statusText: response.statusText,
+      headers: response.headers,
+    });
+  } catch (error) {
+    if (error instanceof DOMException && error.name === "TimeoutError") {
+      throw new Error(`The ${phase} did not finish within ${requestLimitMs} ms`, { cause: error });
+    }
+    throw error;
+  }
 }
 
 /** Cleanups for one test, run newest first; a resource created after close is released at once. */
@@ -220,11 +242,30 @@ async function build(owner: Scope, binary: string, directory: string) {
   const finished = settled(child).finally(() => {
     done = true;
   });
+  const stop = () => {
+    if (child.pid === undefined || done) return;
+    try {
+      process.kill(-child.pid, "SIGKILL");
+    } catch (error) {
+      // Node reaps the leader before stderr closes, so the group can be gone while `done` is false.
+      if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error;
+    }
+  };
   await owner.own(async () => {
-    if (child.pid !== undefined && !done) process.kill(-child.pid, "SIGKILL");
+    stop();
     await finished;
   });
-  const code = await finished;
+  let timedOut = false;
+  const deadline = setTimeout(() => {
+    timedOut = true;
+    stop();
+  }, buildLimitMs);
+  const code = await finished.finally(() => clearTimeout(deadline));
+  if (timedOut) {
+    throw new Error(
+      withStderr(`The go build phase did not finish within ${buildLimitMs} ms`, errors),
+    );
+  }
   if (code !== 0) throw new Error(`go build exited with ${code}: ${errors.trim()}`);
 }
 
@@ -249,10 +290,16 @@ async function stopServer(child: ChildProcessWithoutNullStreams) {
   }
 }
 
+/** Resolves with the address the server prints first; the scope stops a server that never does. */
 function firstLine(process: ChildProcessWithoutNullStreams): Promise<string> {
-  return new Promise((resolve, reject) => {
+  let deadline: NodeJS.Timeout | undefined;
+  return new Promise<string>((resolve, reject) => {
     let output = "";
     let errors = "";
+    deadline = setTimeout(() => {
+      const message = `The server address phase did not finish within ${addressLimitMs} ms`;
+      reject(new Error(withStderr(message, errors)));
+    }, addressLimitMs);
     process.stdout.on("data", (chunk: Buffer) => {
       output += chunk.toString();
       const newline = output.indexOf("\n");
@@ -264,5 +311,9 @@ function firstLine(process: ChildProcessWithoutNullStreams): Promise<string> {
     process.stderr.on("data", (chunk: Buffer) => {
       errors += chunk.toString();
     });
-  });
+  }).finally(() => clearTimeout(deadline));
+}
+
+function withStderr(message: string, errors: string) {
+  return errors.trim() === "" ? message : `${message}: ${errors.trim()}`;
 }
