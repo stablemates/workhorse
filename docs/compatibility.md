@@ -1302,7 +1302,11 @@ for example `requireFeature("opentelemetry")` or `requireFeature("servlet")`.
    `pnpm release:verify maven` from the same staging directory, with
    `pnpm jvm:package-check --consumers-only`. Thus the stage uploads the jars that its consumers
    ran, not a second build.
-6. `scripts/upload-maven-central.ts` uploads the bundle to the Central Publisher Portal with
+6. `scripts/upload-maven-central.ts` first asks the Central Publisher Portal whether Maven Central
+   has each of the three artifacts at the version. If Maven Central has all three, the script
+   uploads nothing and the `maven-central` job succeeds. This lets a re-run finish after a late
+   publish. If Maven Central has some of the three but not all, the `maven-central` job fails and
+   uploads nothing. If it has none, the script uploads the bundle to the Portal with
    `publishingType=AUTOMATIC`. The Portal validates the deployment and, if it passes, publishes it
    to Maven Central. No person selects Publish in the Portal. The job waits until the Portal
    reports the deployment as `PUBLISHED`. It fails if the Portal reports `FAILED` or a state that
@@ -1546,8 +1550,9 @@ in the line "The Portal accepted deployment". Each line "Deployment ... is" give
 `maven-central` job read, and the last of these lines gives the last known state.
 
 Do not re-run the `maven-central` job before you know the state of each deployment of the
-version. Maven Central refuses a second deployment of a version that it already has. Do these
-steps:
+version. If Maven Central has the version, a re-run uploads nothing. While the Portal still works
+on a deployment, a re-run uploads a second deployment, and Maven Central refuses it when the first
+publishes. Do these steps:
 
 1. Open <https://central.sonatype.com/publishing/deployments>. Find the deployment by the ID in the
    log. If the log has no line "The Portal accepted deployment", look for a deployment with the name
@@ -1556,18 +1561,23 @@ steps:
    deployment of the version, re-run the failed `maven-central` job. The `maven-central`
    environment asks for a review first.
 2. If the state is `PENDING`, `VALIDATING`, `VALIDATED`, or `PUBLISHING`, the Portal still works on
-   the deployment. Wait, and read the state again. You cannot drop a deployment in `PUBLISHING`.
-3. If the state is `PUBLISHED`, Maven Central has the version permanently. Do not re-run the
-   `maven-central` job. Run `pnpm release:verify maven X.Y.Z`, as step 7 of
-   [JVM artifacts](#jvm-artifacts) describes. Then do the work of the `github-release` job
-   yourself, because the run skipped it:
-   1. Make sure that the `publish`, `crates-io`, `rubygems`, and `nuget` jobs of the same run
-      succeeded. If one of them failed, do its recovery first. The GitHub release must not announce
-      a version that a registry of the train does not have.
-   2. From a checkout of the `vX.Y.Z` tag, run `pnpm install --frozen-lockfile` and
-      `pnpm schema:generate`.
-   3. Run the `gh release create` command of the `github-release` job in
-      `.github/workflows/release.yml`, with the same title, notes, and `sql/schema.sql`.
+   the deployment. Wait, and read the state again. Do not re-run the `maven-central` job in one of
+   these states. You cannot drop a deployment in `PUBLISHING`.
+3. If the state is `PUBLISHED`, Maven Central has the version permanently. Re-run the failed
+   `maven-central` job. The `maven-central` environment asks for a review first. The `maven-central`
+   job runs its checks again, finds the three artifacts on Maven Central, and uploads nothing. Then
+   the `github-release` job runs, if the `publish`, `crates-io`, `rubygems`, and `nuget` jobs of the
+   run succeeded. Run `pnpm release:verify maven X.Y.Z`, as step 7 of
+   [JVM artifacts](#jvm-artifacts) describes.
+
+   A re-run uses the workflow and the scripts of the tag, not of `main`. SM-1838 adds the check
+   before 0.11.0 is tagged. 0.11.0 is the first tag that uploads with `publishingType=AUTOMATIC`, so
+   each such tag has the check. The tags 0.9.0 and 0.10.0 upload with `USER_MANAGED`, so the Portal
+   publishes nothing for them without the maintainer.
+
+   If the re-run fails because Maven Central has only some of the three artifacts, do not re-run
+   it again. Ask Central Support with the deployment ID.
+
 4. If the state is `FAILED`, read the `errors` of the deployment in the log or in the Portal.
 
 If the errors name a defect of the bundle, for example a missing signature or a POM without the

@@ -21,7 +21,14 @@
  * the bundle, the Portal keeps the deployment and can still publish it. "Recover from a failed
  * Maven Central upload" in `docs/compatibility.md` states what the maintainer does then.
  *
- * Usage: tsx scripts/upload-maven-central.ts <bundle.zip> <deployment name>
+ * Before the upload, the script asks the Portal whether Maven Central has each of the three
+ * artifacts at the version (SM-1838). The Portal API documents this request as
+ * `GET /api/v1/publisher/published`. If Maven Central has all three, a deployment of an earlier run
+ * published after that run failed. The script then uploads nothing and succeeds, so a re-run of the
+ * job lets `github-release` run. If Maven Central has some of the three but not all, the script
+ * fails and uploads nothing.
+ *
+ * Usage: tsx scripts/upload-maven-central.ts <bundle.zip> <deployment name> <version>
  */
 import { readFile } from "node:fs/promises";
 import path from "node:path";
@@ -42,6 +49,17 @@ const pollLimit = 60 * 60_000;
 const statusTimeout = 30_000;
 /** The status requests in a row that may fail for a transient reason before the upload fails. */
 const statusAttempts = 5;
+/**
+ * The Maven group and the three artifacts of ADR 0103. `scripts/check-jvm-release.ts` states the
+ * same values, and a test keeps the two equal. This script imports nothing from it, so the step
+ * that holds the Portal token runs no other module.
+ */
+export const namespace = "run.workhorse";
+export const artifacts = [
+  "workhorse",
+  "workhorse-kotlin",
+  "workhorse-spring-boot-starter",
+] as const;
 
 /** The states of a Portal deployment. */
 type DeploymentState =
@@ -66,6 +84,23 @@ export function authorizationHeader(username: string, password: string): string 
 export function uploadUrl(name: string): string {
   const query = new URLSearchParams({ name, publishingType: "AUTOMATIC" });
   return `${portal}/upload?${query.toString()}`;
+}
+
+/** The URL that asks the Portal whether Maven Central has one artifact at a version. */
+export function publishedUrl(name: string, version: string): string {
+  const query = new URLSearchParams({ namespace, name, version });
+  return `${portal}/published?${query.toString()}`;
+}
+
+/**
+ * What Maven Central has of the version: `none` uploads the bundle, `all` uploads nothing, and
+ * `some` fails. One deployment holds the three artifacts, so `some` is not a state that a re-run
+ * can fix.
+ */
+export function publishedOutcome(published: readonly boolean[]): "none" | "all" | "some" {
+  if (published.every((value) => !value)) return "none";
+  if (published.every((value) => value)) return "all";
+  return "some";
 }
 
 /**
@@ -130,6 +165,80 @@ async function deploymentStatus(
   }
 }
 
+async function componentPublished(
+  fetchImpl: typeof fetch,
+  name: string,
+  version: string,
+  authorization: string,
+): Promise<boolean | StatusFailure> {
+  let response: Response;
+  try {
+    response = await fetchImpl(publishedUrl(name, version), {
+      method: "GET",
+      headers: { Authorization: authorization },
+      signal: AbortSignal.timeout(statusTimeout),
+    });
+  } catch (error) {
+    return { failure: error instanceof Error ? error.message : String(error), transient: true };
+  }
+  if (!response.ok) {
+    return {
+      failure: `HTTP ${String(response.status)}`,
+      transient: transientStatus(response.status),
+    };
+  }
+  let body: unknown;
+  try {
+    body = await response.json();
+  } catch (error) {
+    return { failure: error instanceof Error ? error.message : String(error), transient: true };
+  }
+  const published = (body as { published?: unknown } | null)?.published;
+  if (typeof published !== "boolean") {
+    return {
+      failure: `an answer without a boolean published: ${JSON.stringify(body)}`,
+      transient: false,
+    };
+  }
+  return published;
+}
+
+/**
+ * Ask the Portal whether Maven Central has each artifact at `version`. A request that fails for a
+ * transient reason repeats, as a status request does. Each other failure stops the release stage,
+ * because the script must not upload when it does not know the state of Maven Central.
+ */
+export async function publishedComponents(
+  version: string,
+  authorization: string,
+  fetchImpl: typeof fetch = fetch,
+  sleep: (milliseconds: number) => Promise<unknown> = setTimeout,
+): Promise<boolean[]> {
+  const published: boolean[] = [];
+  for (const name of artifacts) {
+    for (let failures = 1; ; failures += 1) {
+      const answer = await componentPublished(fetchImpl, name, version, authorization);
+      if (typeof answer === "boolean") {
+        published.push(answer);
+        break;
+      }
+      if (!answer.transient) {
+        throw new Error(
+          `The Portal refused the request that checks whether Maven Central has ${namespace}:${name}:${version}: ${answer.failure}`,
+        );
+      }
+      if (failures >= statusAttempts) {
+        throw new Error(
+          `The request that checks whether Maven Central has ${namespace}:${name}:${version} failed ${String(statusAttempts)} times in a row: ${answer.failure}`,
+        );
+      }
+      console.warn(`The Portal request failed (${answer.failure}). The upload tries again.`);
+      await sleep(pollInterval);
+    }
+  }
+  return published;
+}
+
 function credentials(): { username: string; password: string } {
   const username = process.env.MAVEN_CENTRAL_USERNAME;
   const password = process.env.MAVEN_CENTRAL_PASSWORD;
@@ -139,15 +248,36 @@ function credentials(): { username: string; password: string } {
   return { username, password };
 }
 
+/**
+ * Upload the bundle and wait for `PUBLISHED`. Return the deployment ID, or `undefined` when Maven
+ * Central already has the three artifacts at `version` and the script uploads nothing.
+ */
 export async function uploadToCentral(
   bundle: string,
   name: string,
+  version: string,
   fetchImpl: typeof fetch = fetch,
   sleep: (milliseconds: number) => Promise<unknown> = setTimeout,
   now: () => number = Date.now,
-): Promise<string> {
+): Promise<string | undefined> {
   const { username, password } = credentials();
   const authorization = authorizationHeader(username, password);
+  const published = await publishedComponents(version, authorization, fetchImpl, sleep);
+  const coordinates = (names: readonly string[]) =>
+    names.map((artifact) => `${namespace}:${artifact}:${version}`).join(", ");
+  switch (publishedOutcome(published)) {
+    case "all":
+      console.log(
+        `Maven Central already has ${coordinates(artifacts)}. A deployment of an earlier run published them, so the upload sends nothing.`,
+      );
+      return undefined;
+    case "some":
+      throw new Error(
+        `Maven Central has ${coordinates(artifacts.filter((_, index) => published[index]))} but not ${coordinates(artifacts.filter((_, index) => !published[index]))}. The upload sends nothing. Read the state of each deployment of the version in the Portal.`,
+      );
+    case "none":
+      break;
+  }
   const form = new FormData();
   form.append(
     "bundle",
@@ -209,18 +339,20 @@ export async function uploadToCentral(
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === path.resolve(import.meta.filename)) {
-  const [bundle, name] = process.argv.slice(2);
-  if (!bundle || !name) {
+  const [bundle, name, version] = process.argv.slice(2);
+  if (!bundle || !name || !version) {
     process.stderr.write(
-      "Usage: tsx scripts/upload-maven-central.ts <bundle.zip> <deployment name>\n",
+      "Usage: tsx scripts/upload-maven-central.ts <bundle.zip> <deployment name> <version>\n",
     );
     process.exitCode = 64;
   } else {
     try {
-      const deployment = await uploadToCentral(bundle, name);
-      console.log(
-        `Maven Central published deployment ${deployment}. repo1.maven.org can take some minutes to serve it.`,
-      );
+      const deployment = await uploadToCentral(bundle, name, version);
+      if (deployment !== undefined) {
+        console.log(
+          `Maven Central published deployment ${deployment}. repo1.maven.org can take some minutes to serve it.`,
+        );
+      }
     } catch (error) {
       process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
       process.exitCode = 1;

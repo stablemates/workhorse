@@ -1194,6 +1194,8 @@ describe("continuous integration", () => {
     expect(upload).toHaveLength(1);
     expect(stepReading("MAVEN_CENTRAL_PASSWORD")).toEqual(upload);
     expect(upload[0]).toContain("scripts/upload-maven-central.ts");
+    // A re-run after a late publish checks Maven Central at the tag version first (SM-1838).
+    expect(upload[0]).toContain('"workhorse-jvm-$GITHUB_REF_NAME" "${GITHUB_REF_NAME#v}"');
     expect(upload[0]).not.toContain("SIGNING");
     // The Portal publishes a valid deployment, and the upload waits for PUBLISHED (SM-1837).
     const uploadScript = await read("scripts/upload-maven-central.ts");

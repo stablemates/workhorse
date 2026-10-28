@@ -296,6 +296,12 @@ jobs:
   # Portal validates the bundle. The upload step ends only when the Portal reports `PUBLISHED`, and
   # fails on `FAILED` or after 60 minutes. Thus `github-release` runs only after a real publish.
   #
+  # The Portal can publish a deployment after the job fails, for example after the 60 minutes. The
+  # upload step therefore first asks the Portal whether Maven Central has the three artifacts at the
+  # version (SM-1838). If it has all three, the step uploads nothing and succeeds, so a re-run lets
+  # `github-release` run. If it has some but not all, the step fails. All the earlier steps and
+  # checks run on each re-run.
+  #
   # The job uploads the bytes that its own consumers ran (SM-1506). One step signs the artifacts and
   # writes the bundle. The next step, without a secret, runs the release consumers from the same
   # staging directory. Then the upload step sends that bundle.
@@ -403,7 +409,7 @@ jobs:
         env:
           MAVEN_CENTRAL_USERNAME: ${{ secrets.MAVEN_CENTRAL_USERNAME }}
           MAVEN_CENTRAL_PASSWORD: ${{ secrets.MAVEN_CENTRAL_PASSWORD }}
-        run: pnpm exec tsx scripts/upload-maven-central.ts "$RUNNER_TEMP/workhorse-jvm.zip" "workhorse-jvm-$GITHUB_REF_NAME"
+        run: pnpm exec tsx scripts/upload-maven-central.ts "$RUNNER_TEMP/workhorse-jvm.zip" "workhorse-jvm-$GITHUB_REF_NAME" "${GITHUB_REF_NAME#v}"
 
   # The four .NET packages of ADR 0107 publish to nuget.org from the train tag. Like the crate, the
   # gem, and the JVM artifacts, they join only when `dotnet/Directory.Build.props` carries the tag's
