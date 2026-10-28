@@ -139,11 +139,11 @@ key. The other request waits, and then it gets the same task.
 
 **`EnqueueOptions.idempotency`**
 
-| Field   | Rule                                                                    |
-| ------- | ----------------------------------------------------------------------- |
-| `key`   | Required. 1 to 512 UTF-8 bytes.                                         |
-| `scope` | Optional. 1 to 256 UTF-8 bytes. The default is `"default"`.             |
-| `ttlMs` | Optional. An integer from 1 to 31,536,000,000 (365 days). Default 24 h. |
+| Field   | Rule                                                                                           |
+| ------- | ---------------------------------------------------------------------------------------------- |
+| `key`   | Required. 1 to 512 UTF-8 bytes.                                                                |
+| `scope` | Optional. 1 to 256 UTF-8 bytes. The default is `"default"`.                                    |
+| `ttlMs` | Optional. An integer from 1 to 31,536,000,000 (365 days). Default 24 h. 0 selects the default. |
 
 A request with `idempotency` cannot also set `debounce` or `throttle`.
 

@@ -105,9 +105,9 @@ add attempts. Thus, a task cannot retry without a limit.
 <details>
 <summary>Reference: attempt budget</summary>
 
-| Option        | Rule                                  |
-| ------------- | ------------------------------------- |
-| `maxAttempts` | An integer from 1 to 100. Default 25. |
+| Option        | Rule                                                         |
+| ------------- | ------------------------------------------------------------ |
+| `maxAttempts` | An integer from 1 to 100. Default 25. 0 selects the default. |
 
 - PostgreSQL checks the budget in SQL on every failure and recovery. A retry runs only if the failed
   attempt number is less than `maxAttempts`.

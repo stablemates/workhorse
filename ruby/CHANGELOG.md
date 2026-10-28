@@ -60,6 +60,15 @@ the page from its cache after logout (SM-1870).
 Now the Rack dashboard backend sends the page with `Cache-Control: no-store`, as the TypeScript host
 does. Each asset keeps `Cache-Control: public, max-age=31536000, immutable`.
 
+### An idempotency TTL that rounds to 0 ms is refused
+
+The queue rounds `Idempotency#ttl` to the nearest millisecond. Before this change, a positive TTL
+below 0.0005 s, or a small negative TTL such as -0.0004 s, rounded to 0. The queue then kept the key
+for the default 24 hours without a warning (SM-1857).
+
+Now the queue raises `ArgumentError` for a TTL that is not 0 and rounds to 0 ms. An exact 0 still
+selects the default. ADR 0115 records the rule for all seven SDKs.
+
 ## 0.10.0 — 2026-10-26
 
 The npm packages, Python distribution, Go module, Rust crate, Ruby gem, JVM artifacts, and .NET

@@ -1049,12 +1049,11 @@ public sealed partial class Queue
         input["tags"] = Tags(options.Tags);
         if (options.Idempotency is { } idempotency)
         {
-            var ttl = Values.Milliseconds(idempotency.Ttl, "idempotency TTL", 0, MaxDurationMs);
             input["idempotency"] = new JsonObject
             {
                 ["key"] = RequiredBytes(idempotency.Key, MaxKeyBytes, "idempotency key"),
                 ["scope"] = Scope(idempotency.Scope),
-                ["ttlMs"] = ttl == 0 ? DefaultIdempotencyTtlMs : ttl,
+                ["ttlMs"] = IdempotencyTtl(idempotency.Ttl),
             };
         }
 
@@ -1352,6 +1351,13 @@ public sealed partial class Queue
         timeout is not { } value || value == TimeSpan.Zero
             ? null
             : Values.Milliseconds(value, "execution timeout", 1, MaxDurationMs);
+
+    /// <summary>
+    /// The protocol value of an idempotency TTL. Zero takes the default. A nonzero duration that
+    /// rounds to 0 ms is refused, so a unit mistake cannot select the default.
+    /// </summary>
+    private static long IdempotencyTtl(TimeSpan ttl) =>
+        ttl == TimeSpan.Zero ? DefaultIdempotencyTtlMs : Values.Milliseconds(ttl, "idempotency TTL", 1, MaxDurationMs);
 
     /// <summary>The value, or <c>null</c> when it is null or empty. A value longer than the maximum throws.</summary>
     private static string? OptionalBytes(string? value, int maximum, string label)

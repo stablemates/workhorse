@@ -246,6 +246,18 @@ async fn sync_schedules_stores_and_prunes_definitions() {
         .sync_schedules("app", vec![ScheduleDefinition::new("bad", "* * * * *", invalid)], false)
         .await;
     assert!(matches!(refusal, Err(Error::InvalidArgument(_))), "got {refusal:?}");
+    for max_attempts in [-1, 101] {
+        let mut invalid = ScheduledTask::new("ping", json!({}));
+        invalid.max_attempts = max_attempts;
+        let refusal = queue
+            .sync_schedules(
+                "app",
+                vec![ScheduleDefinition::new("bad", "* * * * *", invalid)],
+                false,
+            )
+            .await;
+        assert!(matches!(refusal, Err(Error::InvalidArgument(_))), "got {refusal:?}");
+    }
 }
 
 #[tokio::test]

@@ -220,6 +220,36 @@ RSpec.describe Stablemates::Workhorse::Queue do
     expect(sent.call(execution_timeout: 31_536_000)).to eq(31_536_000_000)
   end
 
+  it "sends the default idempotency TTL for a zero value" do
+    sent = lambda do |ttl|
+      executor = FakeExecutor.new { [] }
+      idempotency = W::Idempotency.new(key: "k", ttl: ttl)
+      expect { described_class.new(executor).enqueue("t", {}, idempotency: idempotency) }.to raise_error(ArgumentError)
+      JSON.parse(executor.statements.last.last.first).first.fetch("idempotency").fetch("ttlMs")
+    end
+
+    expect(sent.call(0)).to eq(86_400_000)
+    expect(sent.call(0.0)).to eq(86_400_000)
+    expect(sent.call(0.001)).to eq(1)
+    expect(sent.call(0.0005)).to eq(1)
+    expect(sent.call(31_536_000)).to eq(31_536_000_000)
+  end
+
+  it "refuses a nonzero idempotency TTL that rounds to 0 ms" do
+    message = "enqueue request 1: idempotency TTL must be a finite Numeric count of seconds between " \
+      "0.001 and 31536000"
+    expect(refusal(idempotency: W::Idempotency.new(key: "k", ttl: 0.0004))).to eq(message)
+    expect(refusal(idempotency: W::Idempotency.new(key: "k", ttl: -0.0004))).to eq(message)
+    expect(refusal(idempotency: W::Idempotency.new(key: "k", ttl: -1))).to eq(message)
+  end
+
+  it "sends 25 attempts for a zero max attempts" do
+    executor = FakeExecutor.new { [] }
+    expect { described_class.new(executor).enqueue("t", {}, max_attempts: 0) }.to raise_error(ArgumentError)
+    expect(JSON.parse(executor.statements.last.last.first).first.fetch("maxAttempts")).to eq(25)
+    expect(refusal(max_attempts: -1)).to eq("enqueue request 1: max attempts must be an Integer between 1 and 100")
+  end
+
   it "refuses a nonzero execution timeout that rounds to 0 ms" do
     message = "enqueue request 1: execution timeout must be a finite Numeric count of seconds between " \
       "0.001 and 31536000"

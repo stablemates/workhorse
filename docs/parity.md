@@ -265,12 +265,14 @@ differ today, and the reasons follow the table.
 | Handler retry delay override                      | `retryDelayMs`, unset                                     | `retry_delay_ms`, unset                                   | `RetryDelay`, unset                                       | `retry_delay`, unset                                      | `retry_delay`, unset                                      | `retryDelay`, unset                                       | `RetryDelay`, unset                                       |
 | Handler retry delay override range                | 0 to 2,147,483,647 ms, refused outside                    | 0 to 2,147,483,647 ms, refused outside                    | 0 to 2,147,483,647 ms, refused outside                    | 0 to 2,147,483,647 ms, refused outside                    | 0 to 2,147,483,647 ms, refused outside                    | 0 to 2,147,483,647 ms, refused outside                    | 0 to 2,147,483,647 ms, refused outside                    |
 | Enqueue execution timeout                         | Unset or 0 is none; else 1 to 31,536,000,000 ms           | Unset or 0 is none; else 1 to 31,536,000,000 ms           | Unset or 0 is none; else 1 to 31,536,000,000 ms           | Unset or 0 is none; else 1 to 31,536,000,000 ms           | Unset or 0 is none; else 1 to 31,536,000,000 ms           | Unset or 0 is none; else 1 to 31,536,000,000 ms           | Unset or 0 is none; else 1 to 31,536,000,000 ms           |
+| Enqueue max attempts                              | 0 is 25; else 1 to 100, refused outside                   | 0 is 25; else 1 to 100, refused outside                   | 0 is 25; else 1 to 100, refused outside                   | 0 is 25; else 1 to 100, refused outside                   | 0 is 25; else 1 to 100, refused outside                   | 0 is 25; else 1 to 100, refused outside                   | 0 is 25; else 1 to 100, refused outside                   |
+| Enqueue idempotency TTL                           | 0 is 86,400,000 ms; else 1 to 31,536,000,000 ms           | 0 is 86,400,000 ms; else 1 to 31,536,000,000 ms           | 0 is 86,400,000 ms; else 1 to 31,536,000,000 ms           | 0 is 86,400,000 ms; else 1 to 31,536,000,000 ms           | 0 is 86,400,000 ms; else 1 to 31,536,000,000 ms           | 0 is 86,400,000 ms; else 1 to 31,536,000,000 ms           | 0 is 86,400,000 ms; else 1 to 31,536,000,000 ms           |
 | Queue of a handler task group add without a queue | The queue of the member task                              | The queue of the member task                              | The queue of the member task                              | The queue of the member task                              | The queue of the member task                              | The queue of the member task                              | The queue of the member task                              |
 | Queue of a child task request without a queue     | The queue of the parent task                              | The queue of the parent task                              | The queue of the parent task                              | The queue of the parent task                              | The queue of the parent task                              | The queue of the parent task                              | The queue of the parent task                              |
 
 <!-- END GENERATED PARITY DEFAULTS -->
 
-Five rows carry a condition the setting name alone cannot.
+Seven rows carry a condition the setting name alone cannot.
 
 - **Claim poll interval.** A worker claims on one of two schedules. While its `LISTEN` subscription
   is live, a notification wakes it, so polling is only a fallback and the worker waits the ceiling
@@ -309,6 +311,17 @@ Five rows carry a condition the setting name alone cannot.
   .NET take a duration and round it to the nearest millisecond, half up. They refuse a nonzero
   value that rounds to 0 ms, so a value below the precision cannot remove the timeout, as
   [ADR 0114](decisions/0114-read-a-zero-execution-timeout-as-no-timeout.md) records.
+- **Enqueue max attempts.** An omitted attempt limit and an explicit 0 both give 25 attempts, for
+  an enqueue, a child task, and the task of a schedule. A Go caller cannot tell 0 from an omitted
+  value, so all seven SDKs read 0 as Go does. Each SDK refuses any other value outside 1 through
+  100 before the statement that writes the task.
+- **Enqueue idempotency TTL.** An omitted TTL and an explicit 0 both keep the key for
+  86,400,000 ms. TypeScript, Python, Go, and Rust take integer milliseconds, and PostgreSQL refuses
+  a fraction or a value outside 1 through 31,536,000,000 ms. Ruby, the JVM, and .NET take a
+  duration and round it to the nearest millisecond, half up. They refuse a nonzero value that
+  rounds to 0 ms, so a unit mistake cannot select the default, as
+  [ADR 0115](decisions/0115-read-a-zero-max-attempts-and-a-zero-idempotency-ttl-as-the-default.md)
+  records.
 
 The shutdown deadline agrees at 25,000 ms, and it sits under the 30 second termination grace a
 container platform gives a process by default. What follows that deadline cannot agree, and it is

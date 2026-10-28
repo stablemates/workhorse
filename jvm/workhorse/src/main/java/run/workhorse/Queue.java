@@ -1541,12 +1541,22 @@ public final class Queue {
   }
 
   private static Map<String, @Nullable Object> idempotencyDocument(Idempotency idempotency) {
-    long ttl = Values.milliseconds(idempotency.ttl(), "idempotency TTL", 0, MAX_DURATION_MS);
     Map<String, @Nullable Object> document = new LinkedHashMap<>();
     document.put("key", requiredBytes(idempotency.key(), MAX_KEY_BYTES, "idempotency key"));
     document.put("scope", scope(idempotency.scope()));
-    document.put("ttlMs", ttl == 0 ? DEFAULT_IDEMPOTENCY_TTL_MS : ttl);
+    document.put("ttlMs", idempotencyTtl(idempotency.ttl()));
     return document;
+  }
+
+  /**
+   * The protocol value of an idempotency TTL. Zero takes the default. A nonzero duration that
+   * rounds to 0 ms is refused, so a unit mistake cannot select the default.
+   */
+  private static long idempotencyTtl(Duration ttl) {
+    if (ttl.isZero()) {
+      return DEFAULT_IDEMPOTENCY_TTL_MS;
+    }
+    return Values.milliseconds(ttl, "idempotency TTL", 1, MAX_DURATION_MS);
   }
 
   private static Map<String, @Nullable Object> debounceDocument(Debounce debounce) {

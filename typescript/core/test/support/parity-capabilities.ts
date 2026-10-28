@@ -2329,6 +2329,83 @@ export const PARITY_DEFAULT_ROWS: readonly ParityDefaultRow[] = [
     },
   },
   {
+    setting: "Enqueue max attempts",
+    dotnet: {
+      value: "0 is 25; else 1 to 100, refused outside",
+      file: "dotnet/src/Workhorse/Queue.cs",
+      pattern:
+        '["maxAttempts"] = maxAttempts is null or 0 ? DefaultMaxAttempts : Range(maxAttempts.Value, 1, 100, "max attempts"),',
+    },
+    jvm: {
+      value: "0 is 25; else 1 to 100, refused outside",
+      file: "jvm/workhorse/src/main/java/run/workhorse/Queue.java",
+      pattern: "maxAttempts == null || maxAttempts == 0",
+    },
+    rust: {
+      value: "0 is 25; else 1 to 100, refused outside",
+      file: "rust/src/queue.rs",
+      pattern: "if !(0..=MAX_ATTEMPTS_LIMIT).contains(&options.max_attempts) {",
+    },
+    typescript: {
+      value: "0 is 25; else 1 to 100, refused outside",
+      file: "typescript/core/src/queue/enqueue-contracts.ts",
+      pattern: "if (value === undefined || value === 0) return DEFAULT_MAX_ATTEMPTS;",
+    },
+    python: {
+      value: "0 is 25; else 1 to 100, refused outside",
+      file: "python/src/workhorse/_protocol.py",
+      pattern: "def _max_attempts(value: int) -> int:",
+    },
+    go: {
+      value: "0 is 25; else 1 to 100, refused outside",
+      file: "go/queue.go",
+      pattern: "if options.MaxAttempts < 0 || options.MaxAttempts > maxAttemptsLimit {",
+    },
+    ruby: {
+      value: "0 is 25; else 1 to 100, refused outside",
+      file: "ruby/lib/stablemates/workhorse/queue.rb",
+      pattern: '"maxAttempts" => (max_attempts.nil? || max_attempts == 0) ? DEFAULT_MAX_ATTEMPTS :',
+    },
+  },
+  {
+    setting: "Enqueue idempotency TTL",
+    dotnet: {
+      value: "0 is 86,400,000 ms; else 1 to 31,536,000,000 ms",
+      file: "dotnet/src/Workhorse/Queue.cs",
+      pattern: "private static long IdempotencyTtl(TimeSpan ttl) =>",
+    },
+    jvm: {
+      value: "0 is 86,400,000 ms; else 1 to 31,536,000,000 ms",
+      file: "jvm/workhorse/src/main/java/run/workhorse/Queue.java",
+      pattern: "private static long idempotencyTtl(Duration ttl) {",
+    },
+    rust: {
+      value: "0 is 86,400,000 ms; else 1 to 31,536,000,000 ms",
+      file: "rust/src/enqueue.rs",
+      pattern: "if idempotency.ttl_ms == 0 {",
+    },
+    typescript: {
+      value: "0 is 86,400,000 ms; else 1 to 31,536,000,000 ms",
+      file: "typescript/core/src/queue/enqueue-contracts.ts",
+      pattern: "idempotency.ttlMs === undefined || idempotency.ttlMs === 0",
+    },
+    python: {
+      value: "0 is 86,400,000 ms; else 1 to 31,536,000,000 ms",
+      file: "python/src/workhorse/_protocol.py",
+      pattern: "ttl_ms = DEFAULT_IDEMPOTENCY_TTL_MS if value.ttl_ms == 0 else value.ttl_ms",
+    },
+    go: {
+      value: "0 is 86,400,000 ms; else 1 to 31,536,000,000 ms",
+      file: "go/queue.go",
+      pattern: "ttlMS = defaultIdempotencyTTLMS",
+    },
+    ruby: {
+      value: "0 is 86,400,000 ms; else 1 to 31,536,000,000 ms",
+      file: "ruby/lib/stablemates/workhorse/queue.rb",
+      pattern: "def idempotency_ttl(value)",
+    },
+  },
+  {
     setting: "Queue of a handler task group add without a queue",
     dotnet: {
       value: "The queue of the member task",

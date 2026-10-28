@@ -18,6 +18,7 @@ import { QueueModule, type QueueModuleContext } from "./module-context.js";
 import type { EnqueueContractsModule } from "./enqueue-contracts.js";
 import {
   executionTimeoutValue,
+  maxAttemptsValue,
   TaskContractValidationError,
   TaskValueSizeLimitError,
   validateTaskPriority,
@@ -175,7 +176,7 @@ export class ChildTasksModule extends QueueModule {
       concurrencyKey: options.concurrencyKey ?? null,
       budget: options.budget ?? null,
       executionTimeoutMs: executionTimeoutValue(options.executionTimeoutMs),
-      maxAttempts: options.maxAttempts ?? 25,
+      maxAttempts: maxAttemptsValue(options.maxAttempts),
       retryPolicy: options.retryPolicy ?? null,
       prerequisiteTaskId: null,
       dependencies: null,

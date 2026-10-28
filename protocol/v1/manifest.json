@@ -21,7 +21,9 @@
       "minimal-enqueue-request",
       "zero-execution-timeout-request",
       "minimum-execution-timeout-request",
-      "maximum-execution-timeout-request"
+      "maximum-execution-timeout-request",
+      "zero-max-attempts-request",
+      "zero-idempotency-ttl-request"
     ],
     "schedules": [
       "recurring-schedule-definition",

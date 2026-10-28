@@ -164,21 +164,21 @@ so your code controls the schedules.
 
 **`Queue.syncSchedules(namespace, definitions, options)`**
 
-| Field                 | Rule                                                     |
-| --------------------- | -------------------------------------------------------- |
-| `name`                | Required. Unique within the namespace.                   |
-| `schedule`            | Required. A cron expression in the Workhorse dialect.    |
-| `timezone`            | Optional. A valid IANA name. Default `"UTC"`.            |
-| `catchupPolicy`       | Optional. `skip`, `latest`, or `all`. Default `skip`.    |
-| `enabled`             | Optional. Default `true`.                                |
-| `task.type`           | Required.                                                |
-| `task.payload`        | Required.                                                |
-| `task.queue`          | Optional. Default: the `Queue` instance's default queue. |
-| `task.priority`       | Optional. An integer from 0 to 100. Default 0.           |
-| `task.concurrencyKey` | Optional. 1 to 256 UTF-8 bytes.                          |
-| `task.maxAttempts`    | Optional. An integer from 1 to 100. Default 25.          |
-| `task.retryPolicy`    | Optional. Normalized like an enqueue retry policy.       |
-| `options.prune`       | Optional. Default `true`.                                |
+| Field                 | Rule                                                                   |
+| --------------------- | ---------------------------------------------------------------------- |
+| `name`                | Required. Unique within the namespace.                                 |
+| `schedule`            | Required. A cron expression in the Workhorse dialect.                  |
+| `timezone`            | Optional. A valid IANA name. Default `"UTC"`.                          |
+| `catchupPolicy`       | Optional. `skip`, `latest`, or `all`. Default `skip`.                  |
+| `enabled`             | Optional. Default `true`.                                              |
+| `task.type`           | Required.                                                              |
+| `task.payload`        | Required.                                                              |
+| `task.queue`          | Optional. Default: the `Queue` instance's default queue.               |
+| `task.priority`       | Optional. An integer from 0 to 100. Default 0.                         |
+| `task.concurrencyKey` | Optional. 1 to 256 UTF-8 bytes.                                        |
+| `task.maxAttempts`    | Optional. An integer from 1 to 100. Default 25. 0 selects the default. |
+| `task.retryPolicy`    | Optional. Normalized like an enqueue retry policy.                     |
+| `options.prune`       | Optional. Default `true`.                                              |
 
 Python, Rust, and Ruby expose `sync_schedules`, Go exposes `SyncSchedules`, and .NET exposes
 `Queue.SyncSchedulesAsync`.

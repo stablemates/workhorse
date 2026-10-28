@@ -406,6 +406,51 @@ class QueueDatabaseTest {
   }
 
   @Test
+  void retainsAKeyForTheDefaultTtlForAZeroValue() throws SQLException {
+    String name = unique("ttl");
+    assertEquals(86_400_000L, retention(name, Duration.ZERO));
+    assertEquals(1L, retention(name, Duration.ofMillis(1)));
+    assertEquals(1L, retention(name, Duration.ofNanos(500_000)));
+    for (Duration refused :
+        List.of(
+            Duration.ofNanos(400_000),
+            Duration.ofNanos(-400_000),
+            Duration.ofMillis(31_536_000_001L))) {
+      IllegalArgumentException error =
+          assertThrows(
+              IllegalArgumentException.class,
+              () ->
+                  queue.enqueue(
+                      "ttl",
+                      null,
+                      queueOptions(name)
+                          .idempotency(new Idempotency(unique("key"), "default", refused))
+                          .build()));
+      assertEquals(
+          "enqueue request 1: idempotency TTL must be a Duration between 0.001 and 31536000"
+              + " seconds",
+          error.getMessage());
+    }
+    assertEquals(3, tasksIn(name));
+  }
+
+  private long retention(String name, Duration ttl) throws SQLException {
+    UUID taskId =
+        queue
+            .enqueue(
+                "ttl",
+                null,
+                queueOptions(name)
+                    .idempotency(new Idempotency(unique("key"), "default", ttl))
+                    .build())
+            .taskId();
+    return count(
+        "SELECT (request_fingerprint ->> 'ttlMs')::bigint"
+            + " FROM workhorse.enqueue_idempotency WHERE task_id = ?::uuid",
+        taskId.toString());
+  }
+
+  @Test
   void replacesAPendingTaskInsideItsDebounceWindow() throws SQLException {
     String name = unique("debounce");
     EnqueueOptions options =

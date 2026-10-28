@@ -130,7 +130,10 @@ public sealed record Idempotency
     /// <summary>The scope of the key. The default is <c>default</c>.</summary>
     public string Scope { get; init; } = "default";
 
-    /// <summary>How long PostgreSQL retains the request. The default is one day; zero takes the default.</summary>
+    /// <summary>
+    /// How long PostgreSQL retains the request. The default is one day; zero takes the default. A
+    /// nonzero value must round to 1 ms or more.
+    /// </summary>
     public TimeSpan Ttl { get; init; } = TimeSpan.FromDays(1);
 }
 

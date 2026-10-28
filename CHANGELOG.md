@@ -77,6 +77,20 @@ other lines carry the rebuilt `read-surface-1.tar.gz`. Its `bundle.json` records
 
 The `dashboard/v1` procedures and the read surface version do not change (SM-1858).
 
+### A zero maxAttempts and a zero idempotency TTL select the default
+
+**Behavior change.** Before this change, `maxAttempts: 0` and an idempotency `ttlMs` of 0 reached
+PostgreSQL, and PostgreSQL refused the enqueue. Go, Rust, Ruby, the JVM, and .NET read 0 as the
+default. Thus one task definition succeeded in one SDK and failed in another (SM-1857).
+
+Now `Queue.enqueue`, `Queue.enqueueMany`, a child task request, and `Queue.syncSchedules` send 25
+attempts for `maxAttempts: 0`. An idempotency `ttlMs` of 0 keeps the key for 86,400,000 ms, the same
+as an omitted TTL. ADR 0115 records the rule for all seven SDKs.
+
+The queue now refuses a `maxAttempts` that is not 0 or an integer from 1 through 100 with
+`RangeError`. The refusal comes before the statement that writes the task or the schedule. Before
+this change, PostgreSQL refused the value.
+
 ## 0.10.0 — 2026-10-26
 
 The npm packages, Python distribution, Go module, Rust crate, Ruby gem, JVM artifacts, and .NET

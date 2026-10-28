@@ -18,6 +18,7 @@ const MaxTaskDependencies = 100
 
 const (
 	defaultMaxAttempts      = 25
+	maxAttemptsLimit        = 100
 	defaultIdempotencyTTLMS = 86_400_000
 )
 
@@ -841,6 +842,13 @@ func scheduleInputs(definitions []ScheduleDefinition, defaultQueue string) ([]sc
 				fmt.Errorf(priorityRangeMessage, ErrInvalidScheduleDefinition),
 			)
 		}
+		if definition.Task.MaxAttempts < 0 || definition.Task.MaxAttempts > maxAttemptsLimit {
+			return nil, fmt.Errorf(
+				scheduleDefinitionErrorFormat,
+				index+1,
+				fmt.Errorf(maxAttemptsMessage, ErrInvalidScheduleDefinition),
+			)
+		}
 		queueName := definition.Task.Queue
 		if queueName == emptyString {
 			queueName = defaultQueue
@@ -1008,7 +1016,7 @@ func validateEnqueueOptions(options EnqueueOptions) error {
 	if options.Priority < 0 || options.Priority > 100 {
 		return fmt.Errorf(priorityRangeMessage, ErrInvalidEnqueueOptions)
 	}
-	if options.MaxAttempts < 0 {
+	if options.MaxAttempts < 0 || options.MaxAttempts > maxAttemptsLimit {
 		return fmt.Errorf(maxAttemptsMessage, ErrInvalidEnqueueOptions)
 	}
 	if options.Debounce != nil && options.RunAt != nil {

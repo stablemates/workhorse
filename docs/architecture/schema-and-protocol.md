@@ -744,6 +744,11 @@ that it sends, so a `JSON.rawJSON` number keeps its scale. Thus an oversized val
 | Payload and result limits | 1,048,576 bytes         |
 | Idempotency retention     | 86,400,000 milliseconds |
 
+An explicit `max_attempts=0` sends the attempt budget default of 25. An explicit idempotency
+`ttl_ms=0` sends the retention default of 86,400,000 milliseconds. The client refuses any other
+`max_attempts` outside 1 through 100 before `enqueue_many_v1`, as [ADR 0115](../decisions/0115-read-a-zero-max-attempts-and-a-zero-idempotency-ttl-as-the-default.md)
+records.
+
 #### Timestamp text
 
 PostgreSQL reads timestamp text without an offset in the session `TimeZone`. Thus the Python SDK
@@ -1565,7 +1570,7 @@ Each non-empty call first serializes and validates every request. Only then does
 
 - multiple keyed modes;
 - priority outside 0 through 100;
-- negative `MaxAttempts`;
+- `MaxAttempts` outside 0 through 100;
 - a debounce combined with `RunAt`;
 - debounce or throttle combined with `Dependencies`;
 - prerequisite lists that are empty, duplicated, or larger than `MaxTaskDependencies` at 100.
@@ -1669,7 +1674,8 @@ Scheduled task serialization:
 
 - A zero `ScheduledTask.Queue` uses the queue default.
 - `Priority` accepts 0 through 100.
-- A zero `MaxAttempts` becomes 25.
+- A zero `MaxAttempts` becomes 25. Any other value outside 1 through 100 is refused before any
+  statement.
 - A zero `ConcurrencyKey` and `RetryPolicy` serialize as `null`.
 - `Enabled` serializes as true when its pointer is nil.
 
@@ -2499,12 +2505,12 @@ retries after a driver error.
 `sync_schedules`, `sync_contracts`, `sync_concurrency_policies`, `sync_rate_limit_policies`,
 `sync_budgets`, and the matching policy and budget list methods.
 
-| Input                               | Limit                                        |
-| ----------------------------------- | -------------------------------------------- |
-| `EnqueueOptions.max_attempts`       | Defaults to 25. Zero selects that default.   |
-| `enqueue_many`                      | At most 1,000 requests                       |
-| Task dependencies                   | 1 through 100 unique prerequisite task IDs   |
-| Signal payload or human-wait result | At most 65,536 bytes of canonical JSONB text |
+| Input                               | Limit                                                                      |
+| ----------------------------------- | -------------------------------------------------------------------------- |
+| `EnqueueOptions.max_attempts`       | Defaults to 25. Zero selects that default. Other values are 1 through 100. |
+| `enqueue_many`                      | At most 1,000 requests                                                     |
+| Task dependencies                   | 1 through 100 unique prerequisite task IDs                                 |
+| Signal payload or human-wait result | At most 65,536 bytes of canonical JSONB text                               |
 
 ### Enqueue transport foundation
 
@@ -2893,6 +2899,7 @@ non-replaceable reason in an enqueue answer throws `UnexpectedStatusException`.
 | `concurrencyKey`, `budget` | At most 256 UTF-8 bytes each.                                                   |
 | `tags`                     | At most 20 tags of 1 through 100 characters.                                    |
 | `idempotency`              | An `Idempotency(key, scope, ttl)`. The key holds 1 through 512 UTF-8 bytes.     |
+| `idempotency.ttl`          | 0, or a `Duration` that rounds to 1 through 31,536,000,000 ms. 0 is one day.    |
 | `debounce`, `throttle`     | A key of 1 through 512 UTF-8 bytes and a window of 1 through 31,536,000,000 ms. |
 | `dependencies`             | 1 through 100 unique prerequisite task IDs.                                     |
 
@@ -3759,6 +3766,7 @@ default options. Each method is asynchronous and takes a last `CancellationToken
 | `ConcurrencyKey`, `Budget` | At most 256 UTF-8 bytes each.                                                               |
 | `Tags`                     | At most 20 tags of 1 through 100 characters.                                                |
 | `Idempotency`              | `Key` of 1 through 512 UTF-8 bytes, `Scope` default `default`, `Ttl` default one day.       |
+| `Idempotency.Ttl`          | Zero, or a `TimeSpan` that rounds to 1 through 31,536,000,000 ms. Zero is one day.          |
 | `Debounce`, `Throttle`     | `Key` of 1 through 512 UTF-8 bytes and `Window` of 1 ms through 365 days.                   |
 | `Dependencies`             | 1 through 100 unique `PrerequisiteTaskIds`, and `OnSuccess`, `OnFailure`, `OnCancellation`. |
 | `RetryPolicy`              | `RetryPolicy.Fixed`, `RetryPolicy.Exponential`, or `RetryPolicy.DecorrelatedJitter`.        |

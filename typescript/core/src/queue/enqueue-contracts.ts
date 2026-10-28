@@ -343,6 +343,20 @@ export function executionTimeoutValue(value: number | undefined): number | null 
   return value === undefined || value === 0 ? null : value;
 }
 
+const DEFAULT_MAX_ATTEMPTS = 25;
+const MAX_TASK_ATTEMPTS = 100;
+
+/** The protocol value of an attempt limit. Zero means the default, the same as an omitted one. */
+export function maxAttemptsValue(value: number | undefined): number {
+  if (value === undefined || value === 0) return DEFAULT_MAX_ATTEMPTS;
+  if (!Number.isSafeInteger(value) || value < 1 || value > MAX_TASK_ATTEMPTS) {
+    throw new RangeError(
+      `maxAttempts must be an integer between 1 and ${MAX_TASK_ATTEMPTS}, or 0 for the default`,
+    );
+  }
+  return value;
+}
+
 export function validateTaskPriority(value: number | undefined): number {
   if (value === undefined) return 0;
   if (!Number.isSafeInteger(value) || value < 0 || value > MAX_TASK_PRIORITY) {
@@ -1096,7 +1110,7 @@ export class EnqueueContractsModule extends QueueModule {
       concurrencyKey: options.concurrencyKey ?? null,
       budget: options.budget ?? null,
       executionTimeoutMs: executionTimeoutValue(options.executionTimeoutMs),
-      maxAttempts: options.maxAttempts ?? 25,
+      maxAttempts: maxAttemptsValue(options.maxAttempts),
       retryPolicy: options.retryPolicy ?? null,
       prerequisiteTaskId: options.prerequisiteTaskId ?? null,
       dependencies:
@@ -1115,7 +1129,11 @@ export class EnqueueContractsModule extends QueueModule {
             idempotency: {
               key: idempotency.key,
               scope: idempotency.scope ?? DEFAULT_IDEMPOTENCY_SCOPE,
-              ttlMs: idempotency.ttlMs ?? DEFAULT_IDEMPOTENCY_TTL_MS,
+              // Zero means the default retention window, the same as an omitted one.
+              ttlMs:
+                idempotency.ttlMs === undefined || idempotency.ttlMs === 0
+                  ? DEFAULT_IDEMPOTENCY_TTL_MS
+                  : idempotency.ttlMs,
             },
           }),
       ...(options.debounce === undefined

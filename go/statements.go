@@ -310,7 +310,7 @@ const (
 	enqueueRequestErrorFormat           = "enqueue request %d: %w"
 	keyedModesCombinedMessage           = "%w: cannot combine idempotency, debounce, or throttle"
 	priorityRangeMessage                = "%w: priority must be between 0 and 100"
-	maxAttemptsMessage                  = "%w: max attempts must be positive"
+	maxAttemptsMessage                  = "%w: max attempts must be between 1 and 100, or 0 for the default"
 	debounceRunAtMessage                = "%w: debounced enqueue uses its PostgreSQL-owned window instead of run at"
 	keyedDependenciesMessage            = "%w: cannot combine debounce or throttle with dependencies"
 	uniqueDependenciesMessage           = "%w: dependencies must contain unique prerequisite task IDs"

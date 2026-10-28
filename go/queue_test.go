@@ -524,6 +524,7 @@ func TestQueueRejectsInvalidOptionCombinationsBeforeQuery(t *testing.T) {
 		},
 		{name: "priority outside range", options: workhorse.EnqueueOptions{Priority: 101}},
 		{name: "negative max attempts", options: workhorse.EnqueueOptions{MaxAttempts: -1}},
+		{name: "max attempts above range", options: workhorse.EnqueueOptions{MaxAttempts: 101}},
 		{
 			name:    "debounce with run at",
 			options: workhorse.EnqueueOptions{RunAt: &now, Debounce: &workhorse.Debounce{Key: "same", WindowMS: 1}},
@@ -564,6 +565,23 @@ func TestQueueRejectsInvalidOptionCombinationsBeforeQuery(t *testing.T) {
 				t.Fatalf("invalid options queried PostgreSQL: %s", fmt.Sprint(executor.calls))
 			}
 		})
+	}
+}
+
+func TestQueueRejectsAScheduleMaxAttemptsOutsideRangeBeforeQuery(t *testing.T) {
+	for _, maxAttempts := range []int{-1, 101} {
+		executor := &queueExecutor{}
+		queue := workhorse.NewQueue(executor, "default")
+		err := queue.SyncSchedules(context.Background(), "attempts", []workhorse.ScheduleDefinition{{
+			Name: "refused", Schedule: "0 0 * * *",
+			Task: workhorse.ScheduledTask{Type: "attempts", MaxAttempts: maxAttempts},
+		}})
+		if !errors.Is(err, workhorse.ErrInvalidScheduleDefinition) {
+			t.Fatalf("expected invalid schedule definition for %d, received %v", maxAttempts, err)
+		}
+		if len(executor.calls) != 0 {
+			t.Fatalf("invalid schedule queried PostgreSQL: %s", fmt.Sprint(executor.calls))
+		}
 	}
 }
 
