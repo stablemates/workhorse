@@ -541,8 +541,9 @@ bound.
 
 Lag differs by category:
 
-- **Task identity and terminal outcome lag** count from the later of two instants: the row passing
-  its window, and the history pass that released it.
+- **Task identity and terminal outcome lag** count from the latest of three instants. These are
+  the end of the row window, the history pass that released the row, and the finish of its task
+  group. A member of an unfinished task group is not lag. Cleanup keeps it until the group finishes.
 - **Event and attempt lag** count from the configured window alone. A partitioned row counts past
   the start of the UTC day its window reaches, and a default-partition row past the window itself.
   The rollup and export clamps are not applied. So a stalled rollup or exporter shows as growing

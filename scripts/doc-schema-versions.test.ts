@@ -24,7 +24,7 @@ import { repositoryRoot } from "./packages.js";
 // version that added a feature or the version a 0.7 database starts at.
 
 /** The upgrade section of the newest release. The release that adds the next section moves this. */
-const upgradeHeading = "## Upgrade from 0.9.x to 0.10.0";
+const upgradeHeading = "## Upgrade from 0.10.x to 0.11.0";
 
 function read(relativePath: string): string {
   return readFileSync(path.join(repositoryRoot, relativePath), "utf8");
