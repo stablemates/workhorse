@@ -862,7 +862,6 @@ cron-page JSON document.
 #### Application schedules
 
 The function returns at most 50 schedule definitions ordered by `namespace` and `schedule_name`.
-Occurrence counts and last-fired times come from `dashboard_schedule_occurrence_v1`.
 `scheduleCount` counts every definition. If it is more than the number of rows returned, the
 Schedules page says `Showing 50 of <scheduleCount> schedules`.
 
@@ -873,6 +872,45 @@ Each definition includes `evaluatorCount`. It counts registrations that meet bot
 
 Application rows return `configuredEnabled`, `paused`, `pausedBy`, `pausedReason`, `pausedAt`, and
 effective `active`.
+
+Each definition reads its occurrences from `dashboard_schedule_occurrence_v1` after the function
+limits the list to 50 definitions. A busy schedule keeps up to one occurrence for each second of
+occurrence retention, so the function bounds the read for each definition:
+
+| Key                     | Value                                                                                                   |
+| ----------------------- | ------------------------------------------------------------------------------------------------------- |
+| `occurrenceCount`       | The retained occurrences, from 0 through 1,000. The function reads at most 1,001 occurrences.           |
+| `occurrenceCountCapped` | `true` when more than 1,000 occurrences are retained. `occurrenceCount` is then 1,000.                  |
+| `lastFiredAt`           | The `fired_at` of the newest occurrence by `occurrence_at`, or null. The function reads one occurrence. |
+
+The planner estimates one schedule as `1 / n_distinct(schedule_name)` of `schedule_occurrence`. With
+few schedules, some scans then look cheap: a sequential scan, a bitmap scan, or a scan of
+`schedule_occurrence_retention_idx` in time order. Each of them reads the rows of every schedule.
+Thus the function keeps each read on an index that holds `namespace` and `schedule_name`:
+
+1. `dashboard_cron_v1` sets `enable_seqscan` and `enable_bitmapscan` to `off`.
+2. The count has no sort order, so the planner builds no full scan of the retention index.
+3. The last-fire read writes the `schedule_name` equality as a closed range and orders by
+   `schedule_name` and `occurrence_at`. Only `schedule_occurrence_pkey` gives that order without a
+   sort. The range follows the `namespace` equality, so it also bounds the scan for a schedule with
+   no occurrence.
+
+The worker registry count still needs a sequential scan. On PostgreSQL 15 through 17, its disabled
+cost would start JIT compilation on each poll. Thus `dashboard_cron_v1` also sets `jit` to `off`.
+
+The newest occurrence usually carries the latest `fired_at`. Two cases fire an older occurrence
+later, and that fire does not change `lastFiredAt`:
+
+- An evaluator fires the occurrences of a pass in wall-clock order. Across a daylight-saving gap,
+  that order can go back in UTC. The fixture `half-hour-gap-keeps-wall-clock-order` in
+  `protocol/v1/cron-occurrences.json` gives `15:30Z`, `15:50Z`, and then `15:40Z`.
+- A direct `fire_schedule_v1` call can fire any second.
+
+An exact maximum of `fired_at` needs an index on that column, which each fire must also write.
+
+Before schema version 88, the function counted every retained occurrence and returned the maximum
+`fired_at` of all of them, and it returned no `occurrenceCountCapped` key. Migration 0089 bounds the
+read (SM-1866).
 
 Since schema version 86, each definition also returns the last skip of a `skip` schedule from
 `dashboard_schedule_definition_v1`:
@@ -890,7 +928,9 @@ On the Schedules page:
 
 - Each application schedule's occurrence count links to `/tasks?queue=<queue>&type=<task type>` in
   a new browser tab. The task listing has no schedule filter. Thus the link filters by the
-  schedule's destination queue and by its task type.
+  schedule's destination queue and by its task type. If `occurrenceCountCapped` is `true`, the
+  count shows as `1,000+`. The rule is in `scheduleOccurrenceCount` in
+  `dashboard/app/src/pages/schedules.tsx`.
 - Compact rows show the queue, evaluator count, and Pause or Resume action.
 - A deployment-disabled definition shows `Config off`.
 - If `lastSkippedAt` and `lastSkippedCount` are set, the Last run cell can show a yellow

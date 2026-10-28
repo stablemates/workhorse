@@ -166,11 +166,14 @@ The timeout is optional. In every SDK, an omitted timeout and an explicit 0 both
 - With attempts left, `retry_delay_v1` selects the delay. With no policy, the delay is 0.
 - With no attempts left, it writes a `failed` outcome.
 - A pending cancellation request wins. The function then changes nothing.
+- `recover_expired_v1` does not lock a timed-out attempt with a pending cancellation while its
+  lease is live and its deadline is ahead. If its deadline passed after the timeout,
+  `terminalize_deadline_v1` closes the task `canceled`.
 
 When the deadline and the timeout have both passed, the earlier one settles the attempt. On a tie,
 the deadline wins.
 
-More detail: [Task lifecycle: Deadlines and execution timeouts](../architecture/lifecycle.md#deadlines-and-execution-timeouts), [Data model: Retry delay selection](../architecture/data-model.md#retry-delay-selection), [Schema and SQL protocol: JVM queue](../architecture/schema-and-protocol.md#jvm-queue), and [Schema and SQL protocol: .NET queue](../architecture/schema-and-protocol.md#net-queue).
+More detail: [Task lifecycle: Deadlines and execution timeouts](../architecture/lifecycle.md#deadlines-and-execution-timeouts), [Task lifecycle: Expired-lease recovery](../architecture/lifecycle.md#expired-lease-recovery), [Data model: Retry delay selection](../architecture/data-model.md#retry-delay-selection), [Schema and SQL protocol: JVM queue](../architecture/schema-and-protocol.md#jvm-queue), and [Schema and SQL protocol: .NET queue](../architecture/schema-and-protocol.md#net-queue).
 
 </details>
 

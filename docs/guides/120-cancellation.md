@@ -128,7 +128,9 @@ cancellation. Your handler code decides how quickly the cancellation occurs.
    exact unexpired worker and fence. It writes one `canceled` outcome, one attempt-history row, and
    one `canceled` event with `source = acknowledged`.
 4. **Recovery.** If the lease expires first, `recover_expired_v1` writes the same records with
-   `source = recovered`, instead of a retry.
+   `source = recovered`, instead of a retry. If the deadline passes first, it writes them with
+   `source = deadline_reaper`. A passed execution timeout does not settle the attempt, and recovery
+   does not lock it while the lease is live and the deadline is ahead.
 
 `complete_v1` and `fail_v1` reject a runtime that carries a cancellation request.
 
@@ -142,7 +144,7 @@ heartbeat returns `cancel_requested`. The local timer of a deadline or an execut
 still get `cancel_requested` from `expire_owned_v1`. Otherwise the lease watchdog ends the attempt,
 and recovery confirms the cancellation.
 
-More detail: [Task lifecycle: Active work](../architecture/lifecycle.md#active-work), [Task lifecycle: Worker options](../architecture/lifecycle.md#worker-options), and [Task lifecycle: Supported heartbeat interval](../architecture/lifecycle.md#supported-heartbeat-interval).
+More detail: [Task lifecycle: Active work](../architecture/lifecycle.md#active-work), [Task lifecycle: Expired-lease recovery](../architecture/lifecycle.md#expired-lease-recovery), [Task lifecycle: Worker options](../architecture/lifecycle.md#worker-options), and [Task lifecycle: Supported heartbeat interval](../architecture/lifecycle.md#supported-heartbeat-interval).
 
 </details>
 

@@ -1124,6 +1124,90 @@ describe("claim lease fence", () => {
     expect(evidence.rows).toEqual([{ outcome: "canceled", source: "deadline_reaper" }]);
   });
 
+  it("times out an attempt behind timed-out attempts that wait for their cancellation", async () => {
+    // The worker of a cancel-requested attempt still holds its lease, so the timeout scan must not
+    // lock the attempt. A limit of three leaves no room for the canceled rows (SM-1866).
+    const canceled = 3;
+    const ids: string[] = [];
+    for (let index = 0; index <= canceled; index += 1) {
+      ids.push(
+        await queue.enqueue("timeout-behind-cancel", null, {
+          executionTimeoutMs: 60_000,
+          maxAttempts: 2,
+        }),
+      );
+      const claimed = await queue.claim("timeout-behind-cancel-worker", { leaseMs: 60_000 });
+      expect(claimed?.id).toBe(ids[index]);
+    }
+    const timedOut = ids[canceled]!;
+    for (const id of ids.slice(0, canceled)) {
+      expect((await queue.cancel(id)).status).toBe("cancel_requested");
+    }
+    // The canceled attempts timed out first, so the scan order puts them before the other one.
+    await pool.query(
+      `UPDATE workhorse.task_runtime
+          SET attempt_timeout_at = clock_timestamp()
+            - CASE WHEN task_id = $2 THEN interval '1 second' ELSE interval '2 seconds' END
+        WHERE task_id = ANY($1::uuid[])`,
+      [ids, timedOut],
+    );
+
+    const recovered = await pool.query<{ count: number }>(
+      "SELECT workhorse.recover_expired_v1($1) AS count",
+      [canceled],
+    );
+    expect(recovered.rows).toEqual([{ count: 1 }]);
+    expect(await admin.getTask(timedOut)).toMatchObject({ state: "ready", currentAttempt: 2 });
+    const history = await pool.query<{ outcome: string }>(
+      "SELECT outcome FROM workhorse.attempt_history WHERE task_id = $1",
+      [timedOut],
+    );
+    expect(history.rows).toEqual([{ outcome: "timeout" }]);
+    for (const id of ids.slice(0, canceled)) {
+      expect(await admin.getTask(id)).toMatchObject({ state: "active", currentAttempt: 1 });
+    }
+  });
+
+  it("cancels an attempt whose timeout passed before its deadline and its cancellation", async () => {
+    // The timeout is earlier than the deadline, so the deadline scan leaves the row to the timeout
+    // scan. The pending cancellation then wins, as it does in terminalize_deadline_v1.
+    const id = await queue.enqueue("timeout-then-deadline-cancel", null, {
+      deadline: new Date(Date.now() + 60_000),
+      executionTimeoutMs: 60_000,
+      maxAttempts: 3,
+    });
+    const claimed = await queue.claim("timeout-then-deadline-cancel-worker", { leaseMs: 60_000 });
+    expect(claimed?.id).toBe(id);
+    expect((await queue.cancel(id, { reason: "operator won" })).status).toBe("cancel_requested");
+    await pool.query(
+      `UPDATE workhorse.task SET deadline_at = clock_timestamp() - interval '1 second'
+        WHERE id = $1`,
+      [id],
+    );
+    await pool.query(
+      `UPDATE workhorse.task_runtime
+          SET deadline_at = clock_timestamp() - interval '1 second',
+              attempt_timeout_at = clock_timestamp() - interval '2 seconds'
+        WHERE task_id = $1`,
+      [id],
+    );
+
+    expect(await queue.recoverExpired()).toBe(1);
+    expect(await admin.getTask(id)).toMatchObject({
+      state: "canceled",
+      error: { name: "CancellationRequested", reason: "operator won" },
+    });
+    const evidence = await pool.query<{ outcome: string; source: string }>(
+      `SELECT history.outcome, event.details->>'source' AS source
+         FROM workhorse.attempt_history history
+         JOIN workhorse.task_event event ON event.task_id = history.task_id
+          AND event.attempt = history.attempt AND event.event_type = 'canceled'
+        WHERE history.task_id = $1`,
+      [id],
+    );
+    expect(evidence.rows).toEqual([{ outcome: "canceled", source: "deadline_reaper" }]);
+  });
+
   it("classifies the earliest elapsed deadline or execution-timeout boundary", async () => {
     const timeoutFirstId = await queue.enqueue("timeout-before-deadline", null, {
       deadline: new Date(Date.now() + 60_000),

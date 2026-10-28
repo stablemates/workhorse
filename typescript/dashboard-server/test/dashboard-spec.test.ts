@@ -45,3 +45,15 @@ it("accepts a schedule row without the skip keys that schema 86 adds", async () 
   expect(row.required.filter((key) => skipKeys.includes(key))).toEqual([]);
   expect(row.required).toContain("evaluatorCount");
 });
+
+it("accepts a schedule row without the occurrence cap key that schema 88 adds", async () => {
+  const committed = await readFile(join(artifactDirectory, "procedures.json"), "utf8");
+  const contract = JSON.parse(committed) as {
+    $defs: Record<string, { properties: Record<string, unknown>; required: string[] }>;
+  };
+  const row = contract.$defs.DashboardScheduleRow!;
+  // A database below schema 88 counts every occurrence and returns no cap key.
+  expect(row.properties.occurrenceCountCapped).toEqual({ type: "boolean" });
+  expect(row.required).not.toContain("occurrenceCountCapped");
+  expect(row.required).toContain("occurrenceCount");
+});

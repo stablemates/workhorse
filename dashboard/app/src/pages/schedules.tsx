@@ -60,6 +60,19 @@ export function scheduleSkipSummary(
   };
 }
 
+/**
+ * The occurrence count of an application schedule. Workhorse stops the count at 1,000 from schema
+ * 88, and `occurrenceCountCapped` then says that more occurrences are retained. A database below
+ * schema 88 returns an exact count and no cap key.
+ */
+export function scheduleOccurrenceCount(schedule: {
+  occurrenceCount: number | null;
+  occurrenceCountCapped?: boolean;
+}): string {
+  const count = formatCount(schedule.occurrenceCount ?? 0);
+  return schedule.occurrenceCountCapped === true ? `${count}+` : count;
+}
+
 export const pauseScheduleWarning =
   "Workhorse will stop enqueuing occurrences of this schedule until an operator resumes it. The pause survives deploys. Tasks already enqueued are unchanged.";
 
@@ -459,7 +472,7 @@ export function CronPage({
                               aria-label={`View tasks of type ${schedule.type} in the ${schedule.queue} queue in a new window`}
                             >
                               <Group component="span" gap={4} wrap="nowrap" justify="flex-end">
-                                <span>{formatCount(schedule.occurrenceCount ?? 0)}</span>
+                                <span>{scheduleOccurrenceCount(schedule)}</span>
                                 <ArrowSquareOut size={13} aria-hidden />
                               </Group>
                             </Anchor>

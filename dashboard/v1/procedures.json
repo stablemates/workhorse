@@ -4902,6 +4902,9 @@
               "type": "string"
             }
           ]
+        },
+        "occurrenceCountCapped": {
+          "type": "boolean"
         }
       },
       "required": [

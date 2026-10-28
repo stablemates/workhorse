@@ -13,9 +13,10 @@ adds.
 ### Upgrade steps
 
 **Migrate the schema before starting updated processes.** Run `workhorse schema migrate` before any
-process of this release starts, producers too. Migration 0088 moves the schema to version **87**.
-The SDK compatibility floor stays at **76**. A 0.10 process keeps working on version 87, because a
-migration inside a major line only adds.
+process of this release starts, producers too. Migrations 0088 and 0089 move the schema to version
+**88**. They replace function bodies and change no stored rows. The SDK compatibility floor stays at
+**76**. A 0.10 process keeps working on version 88, because a migration inside a major line only
+adds.
 
 ### Row retention lag skips a member of an unfinished task group
 
@@ -56,6 +57,37 @@ Now `Queue` and `AsyncQueue` raise `ValueError` for more than 100 prerequisite t
 statement. They also serialize the batch before the schema compatibility query, as Go does. Thus an
 option that the client refuses, such as a `max_attempts` of 101, sends no statement.
 
+### Recovery no longer locks a timed-out attempt that waits for its cancellation
+
+An operator cancels a running task after its execution timeout passed, and its lease is still live.
+Before migration 0089, each maintenance tick locked that attempt in its timeout scan, but settled
+nothing, because the cancellation wins over the timeout. While the tick ran, the heartbeat of the
+owning worker reported the lease busy. The locked rows also used the recovery limit, so a real
+timeout behind them waited for their leases to expire (SM-1866).
+
+Now the full-tier timeout scan skips such an attempt while its lease is live and its deadline is
+ahead, as the fast tier does. If the deadline passed after the timeout, recovery closes the task
+`canceled` at once.
+
+### The dashboard Schedules page reads a bounded number of occurrences
+
+Before migration 0089, `dashboard_cron_v1` counted every retained occurrence of each listed
+schedule. A schedule that fires each second keeps about 1.2 million occurrences in the default
+retention of 14 days. Each poll of the Schedules page read all of them (SM-1866).
+
+Now the function reads at most 1,001 occurrences for each listed schedule. `occurrenceCount` stops
+at 1,000, and the new optional key `occurrenceCountCapped` is `true` when more occurrences are
+retained. The bundled Schedules page then shows `1,000+`. `lastFiredAt` is the fire time of the
+newest occurrence. The `dashboard/v1` change is additive. A database below schema 88 returns an
+exact count and no `occurrenceCountCapped`. The page change rebuilds the shared dashboard bundle
+again. The sha256 in "The dashboard bundle uses Mantine 9.7.4" is the sha256 of that bundle.
+
+### The worker registry prune finds expired kept pauses through their index
+
+Before migration 0089, `prune_worker_registry_v1` deleted expired kept pauses with a condition that
+the planner could not match to `worker_pause_tombstone_expires_idx`. Each maintenance pass read the
+whole table. Now the delete reads only the expired rows through the index (SM-1866).
+
 ### A worker no longer keeps every failed registration refresh
 
 A worker refreshes its registration at a fixed interval, and each refresh sends its statement on a
@@ -72,7 +104,7 @@ keeps only the newest call, and the garbage collector removes each earlier one.
 The Python dashboard backend serves the shared dashboard browser bundle. After 0.10.0, a dependency
 update moved the dashboard to Mantine 9.7.4 and rebuilt that bundle (SM-1839). The distribution now
 carries the rebuilt `read-surface-1.tar.gz`. Its `bundle.json` records the sha256
-`f234a7d60a362c841becc2522ff8dd750958136873ccda90461c26f45f9ba7d1`.
+`a7d61ed1d0433e38a8d227cbcc8f98a0bf668f2d3bb1d47391b1882fd69bf795`.
 
 The `dashboard/v1` procedures and the read surface version do not change (SM-1858).
 
