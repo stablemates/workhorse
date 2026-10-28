@@ -46,6 +46,16 @@ default. ADR 0115 records the rule for all seven SDKs.
 The client now refuses a `max_attempts` above 100 with `ValueError` before the statement that
 writes the task or the schedule. Before this change, PostgreSQL refused it.
 
+### The client refuses more than 100 prerequisites before the enqueue
+
+Before this change, the client checked only for an empty or duplicate `prerequisite_task_ids` list.
+With 101 IDs, it sent the statement, PostgreSQL refused it, and the caller got a database error
+(SM-1862). TypeScript, Go, Rust, Ruby, the JVM, and .NET refuse the list before the statement.
+
+Now `Queue` and `AsyncQueue` raise `ValueError` for more than 100 prerequisite task IDs before any
+statement. They also serialize the batch before the schema compatibility query, as Go does. Thus an
+option that the client refuses, such as a `max_attempts` of 101, sends no statement.
+
 ### A worker no longer keeps every failed registration refresh
 
 A worker refreshes its registration at a fixed interval, and each refresh sends its statement on a

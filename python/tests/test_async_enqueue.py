@@ -5,7 +5,7 @@ from collections.abc import Mapping, Sequence
 import pytest
 from psycopg.rows import tuple_row
 
-from workhorse import AsyncQueue
+from workhorse import AsyncQueue, Dependencies, EnqueueOptions
 from workhorse._statements import MINIMUM_SCHEMA_VERSION, PROTOCOL_VERSION
 
 
@@ -170,3 +170,14 @@ async def test_asyncpg_delivers_external_wait_results() -> None:
     assert decision.status == "completed"
     assert "$1::uuid" in connection.calls[1][0]
     assert "$1::uuid" in connection.calls[3][0]
+
+
+@pytest.mark.asyncio
+async def test_refuses_101_prerequisite_task_ids_before_any_statement() -> None:
+    ids = [f"00000000-0000-4000-8000-{index:012d}" for index in range(101)]
+    options = EnqueueOptions(dependencies=Dependencies(ids, "release", "cancel", "fail"))
+    connection = AsyncpgConnection()
+
+    with pytest.raises(ValueError, match="dependencies accepts at most 100 prerequisite task IDs"):
+        await AsyncQueue.from_asyncpg(connection).enqueue("dependent", {}, options)
+    assert connection.calls == []
