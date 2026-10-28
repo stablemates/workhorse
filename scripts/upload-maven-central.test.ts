@@ -3,12 +3,38 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { group, publishedArtifacts } from "./check-jvm-release.js";
 import {
+  artifacts,
   authorizationHeader,
   deploymentOutcome,
+  namespace,
+  publishedComponents,
+  publishedOutcome,
+  publishedUrl,
   uploadToCentral,
   uploadUrl,
 } from "./upload-maven-central.js";
+
+/** Answer each check of Maven Central with `published: false`, and pass every other request on. */
+function unpublished(fetchImpl: typeof fetch): typeof fetch {
+  return async (url, init) =>
+    String(url).includes("/published?")
+      ? Response.json({ published: false })
+      : fetchImpl(url, init);
+}
+
+/** A Portal that has the artifacts in `published`, and records each request. */
+function portalWith(published: readonly string[]) {
+  return vi.fn<typeof fetch>(async (url) => {
+    const address = new URL(String(url));
+    if (address.pathname.endsWith("/published")) {
+      return Response.json({ published: published.includes(address.searchParams.get("name")!) });
+    }
+    if (address.pathname.endsWith("/upload")) return new Response("deployment-9");
+    return Response.json({ deploymentState: "PUBLISHED" });
+  });
+}
 
 describe("the Central Portal upload", () => {
   let directory: string;
@@ -71,7 +97,13 @@ describe("the Central Portal upload", () => {
     });
 
     await expect(
-      uploadToCentral(bundle, "workhorse-jvm-v0.9.0", fetchImpl, async () => {}),
+      uploadToCentral(
+        bundle,
+        "workhorse-jvm-v0.9.0",
+        "0.9.0",
+        unpublished(fetchImpl),
+        async () => {},
+      ),
     ).resolves.toBe("deployment-1");
     expect(requests.map((request) => request.url)).toEqual([
       uploadUrl("workhorse-jvm-v0.9.0"),
@@ -101,7 +133,13 @@ describe("the Central Portal upload", () => {
         ? new Response("deployment-2")
         : Response.json({ deploymentState: "FAILED", errors: { jar: ["missing signature"] } }),
     );
-    const failure = uploadToCentral(bundle, "name", fetchImpl, async () => {});
+    const failure = uploadToCentral(
+      bundle,
+      "name",
+      "0.9.0",
+      unpublished(fetchImpl),
+      async () => {},
+    );
 
     await expect(failure).rejects.toThrow(
       'Deployment deployment-2 is FAILED: {"jar":["missing signature"]}',
@@ -121,9 +159,9 @@ describe("the Central Portal upload", () => {
           ),
     );
 
-    await expect(uploadToCentral(bundle, "name", fetchImpl, async () => {})).rejects.toThrow(
-      'Deployment deployment-6 is FAILED: {"publish":["sync failed"]}',
-    );
+    await expect(
+      uploadToCentral(bundle, "name", "0.9.0", unpublished(fetchImpl), async () => {}),
+    ).rejects.toThrow('Deployment deployment-6 is FAILED: {"publish":["sync failed"]}');
     expect(fetchImpl).toHaveBeenCalledTimes(4);
   });
 
@@ -134,9 +172,9 @@ describe("the Central Portal upload", () => {
         : Response.json({ deploymentState: "DROPPED" }),
     );
 
-    await expect(uploadToCentral(bundle, "name", fetchImpl, async () => {})).rejects.toThrow(
-      "Deployment deployment-7 is DROPPED: {}",
-    );
+    await expect(
+      uploadToCentral(bundle, "name", "0.9.0", unpublished(fetchImpl), async () => {}),
+    ).rejects.toThrow("Deployment deployment-7 is DROPPED: {}");
   });
 
   it("fails after an hour in PUBLISHING, and names the deployment and its last state", async () => {
@@ -153,7 +191,9 @@ describe("the Central Portal upload", () => {
       clock += milliseconds;
     });
 
-    await expect(uploadToCentral(bundle, "name", fetchImpl, sleep, () => clock)).rejects.toThrow(
+    await expect(
+      uploadToCentral(bundle, "name", "0.9.0", unpublished(fetchImpl), sleep, () => clock),
+    ).rejects.toThrow(
       "Deployment deployment-8 did not reach PUBLISHED within 60 minutes. Its last state was PUBLISHING, and the Portal can still publish it.",
     );
     // The deadline counts the request time, so the script stops soon after the hour.
@@ -179,9 +219,9 @@ describe("the Central Portal upload", () => {
       String(url).includes("/upload?") ? new Response("deployment-3") : answers.shift()!(),
     );
 
-    await expect(uploadToCentral(bundle, "name", fetchImpl, async () => {})).resolves.toBe(
-      "deployment-3",
-    );
+    await expect(
+      uploadToCentral(bundle, "name", "0.9.0", unpublished(fetchImpl), async () => {}),
+    ).resolves.toBe("deployment-3");
     expect(fetchImpl).toHaveBeenCalledTimes(5);
   });
 
@@ -192,7 +232,9 @@ describe("the Central Portal upload", () => {
         : new Response("unavailable", { status: 503 }),
     );
 
-    await expect(uploadToCentral(bundle, "name", fetchImpl, async () => {})).rejects.toThrow(
+    await expect(
+      uploadToCentral(bundle, "name", "0.9.0", unpublished(fetchImpl), async () => {}),
+    ).rejects.toThrow(
       "The Portal status request for deployment deployment-4 failed 5 times in a row: HTTP 503",
     );
     expect(fetchImpl).toHaveBeenCalledTimes(6);
@@ -205,15 +247,149 @@ describe("the Central Portal upload", () => {
         : new Response("unauthorized", { status: 401 }),
     );
 
-    await expect(uploadToCentral(bundle, "name", fetchImpl, async () => {})).rejects.toThrow(
+    await expect(
+      uploadToCentral(bundle, "name", "0.9.0", unpublished(fetchImpl), async () => {}),
+    ).rejects.toThrow(
       "The Portal refused the status request for deployment deployment-5: HTTP 401",
     );
     expect(fetchImpl).toHaveBeenCalledTimes(2);
   });
 
+  it("checks the same three artifacts that the release check stages", () => {
+    expect(namespace).toBe(group);
+    expect(artifacts).toEqual(publishedArtifacts);
+    expect(publishedUrl("workhorse-kotlin", "0.10.1")).toBe(
+      "https://central.sonatype.com/api/v1/publisher/published?namespace=run.workhorse&name=workhorse-kotlin&version=0.10.1",
+    );
+  });
+
+  it("uploads when Maven Central has none of the artifacts, uploads nothing when it has all, and fails on some", () => {
+    expect(publishedOutcome([false, false, false])).toBe("none");
+    expect(publishedOutcome([true, true, true])).toBe("all");
+    expect(publishedOutcome([true, false, true])).toBe("some");
+  });
+
+  it("uploads the bundle when Maven Central has none of the artifacts", async () => {
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    const fetchImpl = portalWith([]);
+
+    await expect(
+      uploadToCentral(bundle, "workhorse-jvm-v0.10.1", "0.10.1", fetchImpl, async () => {}),
+    ).resolves.toBe("deployment-9");
+    expect(fetchImpl.mock.calls.map((call) => String(call[0]))).toEqual([
+      ...artifacts.map((artifact) => publishedUrl(artifact, "0.10.1")),
+      uploadUrl("workhorse-jvm-v0.10.1"),
+      "https://central.sonatype.com/api/v1/publisher/status?id=deployment-9",
+    ]);
+    vi.restoreAllMocks();
+  });
+
+  it("uploads nothing and succeeds when a late publish gave Maven Central all the artifacts", async () => {
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    const fetchImpl = portalWith(artifacts);
+
+    await expect(
+      uploadToCentral(bundle, "workhorse-jvm-v0.10.1", "0.10.1", fetchImpl, async () => {}),
+    ).resolves.toBeUndefined();
+    expect(fetchImpl.mock.calls.map((call) => String(call[0]))).toEqual(
+      artifacts.map((artifact) => publishedUrl(artifact, "0.10.1")),
+    );
+    expect(log.mock.calls.map((call) => call[0])).toEqual([
+      "Maven Central already has run.workhorse:workhorse:0.10.1, run.workhorse:workhorse-kotlin:0.10.1, run.workhorse:workhorse-spring-boot-starter:0.10.1. A deployment of an earlier run published them, so the upload sends nothing.",
+    ]);
+    log.mockRestore();
+  });
+
+  it("uploads nothing and fails when Maven Central has some of the artifacts", async () => {
+    const fetchImpl = portalWith(["workhorse", "workhorse-spring-boot-starter"]);
+
+    await expect(
+      uploadToCentral(bundle, "workhorse-jvm-v0.10.1", "0.10.1", fetchImpl, async () => {}),
+    ).rejects.toThrow(
+      "Maven Central has run.workhorse:workhorse:0.10.1, run.workhorse:workhorse-spring-boot-starter:0.10.1 but not run.workhorse:workhorse-kotlin:0.10.1. The upload sends nothing. Read the state of each deployment of the version in the Portal.",
+    );
+    expect(fetchImpl.mock.calls.some((call) => String(call[0]).includes("/upload?"))).toBe(false);
+  });
+
+  it("retries a check of Maven Central that fails for a transient reason", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const answers: (() => Response)[] = [
+      () => new Response("bad gateway", { status: 502 }),
+      () => {
+        throw new TypeError("fetch failed");
+      },
+      () => Response.json({ published: true }),
+      () => Response.json({ published: true }),
+      () => Response.json({ published: true }),
+    ];
+    const fetchImpl = vi.fn<typeof fetch>(async () => answers.shift()!());
+    const sleep = vi.fn<(milliseconds: number) => Promise<void>>(async () => {});
+
+    await expect(publishedComponents("0.10.1", "Bearer x", fetchImpl, sleep)).resolves.toEqual([
+      true,
+      true,
+      true,
+    ]);
+    expect(fetchImpl).toHaveBeenCalledTimes(5);
+    expect(sleep).toHaveBeenCalledTimes(2);
+    warn.mockRestore();
+  });
+
+  it("fails without an upload when the check of Maven Central keeps failing", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const fetchImpl = vi.fn<typeof fetch>(async () => new Response("unavailable", { status: 503 }));
+
+    await expect(
+      uploadToCentral(bundle, "name", "0.10.1", fetchImpl, async () => {}),
+    ).rejects.toThrow(
+      "The request that checks whether Maven Central has run.workhorse:workhorse:0.10.1 failed 5 times in a row: HTTP 503",
+    );
+    expect(fetchImpl).toHaveBeenCalledTimes(5);
+    warn.mockRestore();
+  });
+
+  it("fails without an upload when the Portal refuses the check or answers without a boolean", async () => {
+    const refused = vi.fn<typeof fetch>(async () => new Response("forbidden", { status: 403 }));
+    await expect(
+      uploadToCentral(bundle, "name", "0.10.1", refused, async () => {}),
+    ).rejects.toThrow(
+      "The Portal refused the request that checks whether Maven Central has run.workhorse:workhorse:0.10.1: HTTP 403",
+    );
+    expect(refused).toHaveBeenCalledTimes(1);
+
+    const unclear = vi.fn<typeof fetch>(async () => Response.json({ status: "unknown" }));
+    await expect(
+      uploadToCentral(bundle, "name", "0.10.1", unclear, async () => {}),
+    ).rejects.toThrow(
+      'The Portal refused the request that checks whether Maven Central has run.workhorse:workhorse:0.10.1: an answer without a boolean published: {"status":"unknown"}',
+    );
+    expect(unclear).toHaveBeenCalledTimes(1);
+  });
+
+  it("fails without an upload when a later check of Maven Central fails", async () => {
+    const signals: (AbortSignal | null | undefined)[] = [];
+    const fetchImpl = vi.fn<typeof fetch>(async (url, init) => {
+      signals.push(init?.signal);
+      return new URL(String(url)).searchParams.get("name") === "workhorse-spring-boot-starter"
+        ? new Response("forbidden", { status: 403 })
+        : Response.json({ published: false });
+    });
+
+    await expect(
+      uploadToCentral(bundle, "name", "0.10.1", fetchImpl, async () => {}),
+    ).rejects.toThrow(
+      "The Portal refused the request that checks whether Maven Central has run.workhorse:workhorse-spring-boot-starter:0.10.1: HTTP 403",
+    );
+    expect(fetchImpl.mock.calls.map((call) => String(call[0]))).toEqual(
+      artifacts.map((artifact) => publishedUrl(artifact, "0.10.1")),
+    );
+    // Each check has a timeout of its own, so a stalled request cannot hold the job.
+    expect(signals.every((signal) => signal instanceof AbortSignal)).toBe(true);
+  });
+
   it("refuses to upload without the user token", async () => {
     vi.stubEnv("MAVEN_CENTRAL_PASSWORD", "");
-    await expect(uploadToCentral(bundle, "name", vi.fn<typeof fetch>())).rejects.toThrow(
+    await expect(uploadToCentral(bundle, "name", "0.9.0", vi.fn<typeof fetch>())).rejects.toThrow(
       "The upload needs MAVEN_CENTRAL_USERNAME and MAVEN_CENTRAL_PASSWORD",
     );
   });
