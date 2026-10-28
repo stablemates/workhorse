@@ -47,7 +47,7 @@ dev = [
   "opentelemetry-sdk>=1.44,<2",
   "pip-audit>=2.9,<3",
   "psycopg[binary]==3.3.6",
-  "pydantic-ai-slim==2.57.0",
+  "pydantic-ai-slim==2.59.0",
   "pytest>=8.4,<10",
   "pytest-asyncio>=1.2,<2",
   "pytest-xdist>=3.8,<4",
