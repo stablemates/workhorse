@@ -7,7 +7,11 @@
   [SM-1548](https://linear.app/stablemates/issue/SM-1548)
   (a pull request runs a lane only when it changes an input of that lane),
   [SM-1681](https://linear.app/stablemates/issue/SM-1681)
-  (a docs-only pull request runs only the lanes that check the documentation)
+  (a docs-only pull request runs only the lanes that check the documentation),
+  [SM-1877](https://linear.app/stablemates/issue/SM-1877)
+  (a pull request runs only the static steps that it needs),
+  [SM-1878](https://linear.app/stablemates/issue/SM-1878)
+  (a push to `main` runs only its lanes, except for a release file)
 - **Related:** [ADR 0043](0043-public-ci-and-release-policy.md),
   [ADR 0079](0079-govern-the-rust-api-as-an-eighth-surface.md),
   [SM-970](https://linear.app/stablemates/issue/SM-970)
@@ -133,6 +137,35 @@ runs under `rust:test`.
 checks. Neither gates pull request feedback. `pnpm go:release-check` now runs the release tag and
 changelog checks, then the same staged-proxy check as `pnpm go:package-check`.
 
+_Amended by [SM-1878](https://linear.app/stablemates/issue/SM-1878)._ A push to `main` plans its
+lanes from the files that it changes, with the same map as a pull request. Before this amendment,
+each push ran every lane. A maintainer then canceled most of these runs by hand to decrease the
+cost. This amendment replaces the sentences above that say a push to `main` runs every lane and
+every static step.
+
+The `plan` job reads the `before` and `after` SHAs of the push event. It fetches the last 50 commits
+of the pushed history and makes sure that the `before` commit is an ancestor of the pushed commit.
+Then it lists the files that differ between the two commits. The rest of the plan is the same as
+for a pull request. Thus a push runs only the lanes and static steps that its files select. A
+docs-only push runs only the lanes that check the documentation.
+
+The release workflows require a successful push run of CI for the tagged commit. They do not check
+which lanes that run ran. Thus a push runs every lane in these conditions:
+
+- The push changes a release file, as `RELEASE_FILES` in `scripts/ci-lanes.ts` names them. These are
+  each `CHANGELOG.md`, each `package.json`, each file that `scripts/check-release.ts` reads for the
+  release version, `sql/releases/`, and the release workflows. A release candidate commit changes
+  every changelog, so its push run is always a full run.
+- The `before` SHA is missing, is all zeros, or is not a commit SHA.
+- The push creates the branch or is a force push.
+- The `after` SHA of the event is not the commit that the job checked out.
+- The `before` commit is not an ancestor of the pushed commit in the fetched history.
+- The plan cannot read the event, fetch the history, or list the changed files.
+
+A missed lane costs more than an extra lane, so each failure path runs every lane.
+`scripts/ci-lanes.test.ts` plans the files of the 0.11.0 release candidate commit and each kind of
+release file, and holds each file that `scripts/check-release.ts` names to a full run.
+
 _Amended by [SM-1877](https://linear.app/stablemates/issue/SM-1877)._ The `static` lane still runs
 on every change, but a pull request runs only the static steps that the change can affect. Before
 this amendment, a Python-only change set up Java, .NET, Rust, and Ruby, and ran the JVM and .NET
@@ -192,3 +225,12 @@ one language skips the static steps and the setup of the other languages, and a 
 source skips the JVM verification metadata lane. A file that a language step reads and that its
 lane does not name hides a failure until a run that selects every lane. Pushes to `main`, the
 weekly run, and a change to a shared input run every static step.
+
+_Amended by [SM-1878](https://linear.app/stablemates/issue/SM-1878)._ A push to `main` that changes
+only one language costs about as much as its pull request run. Nobody has to cancel it by hand.
+A change that adds a changelog entry changes a release file, so its push still runs every lane.
+On 2026-10-28, 20 of the last 60 commits on `main` changed a changelog. A push run no longer runs
+the lanes that its pull request skipped. Thus an input that the map omits
+hides a failure until the next release candidate, the next change to a shared input, or the weekly
+run. A tag on a commit that is not the release candidate commit can have a push run that skipped
+lanes. The release workflows accept that run, so a maintainer must tag the release candidate commit.

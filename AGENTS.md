@@ -132,8 +132,13 @@ prerequisites, or deployment procedure, update `typescript/demo/DEPLOYMENT.md` i
 ## Expect canceled CI runs on main
 
 CI costs money for each run. Maintainers and agents cancel CI runs on `main` to decrease that cost.
-CI cancels an older run automatically only on a pull request, so each push to `main` starts a full
-run.
+CI cancels an older run automatically only on a pull request, so each push to `main` starts a run.
+
+A push to `main` that is not a release runs only its lanes. The plan uses the files that the push
+changes, as it does for a pull request (ADR 0083). A push runs every lane when it changes a release
+file: a `CHANGELOG.md`, a `package.json`, a version file, `sql/releases/`, or a release workflow.
+`RELEASE_FILES` in `scripts/ci-lanes.ts` lists them. A push also runs every lane when the plan cannot
+list its files, for example after a force push.
 
 - A canceled CI run on `main` is not a failure. Do not report it as a failure.
 - Do not start a canceled run on `main` again, and do not wait for it.
