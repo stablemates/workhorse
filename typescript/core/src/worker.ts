@@ -1805,6 +1805,11 @@ export class Worker {
       const accepted = await this.writeCompletion(task, writeCompletion);
       if (!accepted) {
         if (await attempt.acknowledgeCancellation()) {
+          // No heartbeat delivered the request that made complete_v1 refuse the write, so the
+          // attempt records the cancellation here. PostgreSQL accepted it, so it is the outcome
+          // even if a stale heartbeat answer submitted lease_expired while the request ran.
+          attempt.arbiter.submit("cancelled");
+          attempt.recordExecution("canceled");
           span.setAttribute("workhorse.handler.outcome", "canceled");
           return;
         }

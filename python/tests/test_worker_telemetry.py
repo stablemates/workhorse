@@ -482,3 +482,84 @@ def _renewed(connection: psycopg.Connection[Any], task_id: str) -> bool:
         (task_id,),
     ).fetchone()
     return row is not None and row[0] is True
+
+
+def _move_fence(database_url: str, task_id: str) -> None:
+    """Move the fence of `task_id`, so PostgreSQL answers stale to the next fenced write."""
+    with psycopg.connect(database_url, autocommit=True) as connection:
+        connection.execute(
+            "UPDATE workhorse.task_runtime SET fence_token = fence_token + 1 WHERE task_id = %s",
+            (task_id,),
+        )
+
+
+@pytest.mark.parametrize("settlement", ["fail", "release", "unacknowledged-cancel"])
+def test_a_stale_settlement_reports_a_lost_lease_as_the_handler_outcome(
+    database_url: str, monkeypatch: pytest.MonkeyPatch, settlement: str
+) -> None:
+    """A stale answer from fail_v1 or release_owned_v1 reports lease_lost, not unknown (SM-1863).
+
+    The fence moves before the write, or fail_v1 answers cancel_requested and the acknowledgement
+    fails. The worker settles nothing, and lease recovery owns the task. The span, the executions
+    metric, and the execution_finished log state that lost lease.
+    """
+    SPAN_EXPORTER.clear()
+    LOG_EXPORTER.clear()
+    queue_name = f"stale-{settlement}"
+    task_type = f"stale.{settlement}"
+    with psycopg.connect(database_url) as connection:
+        task_id = Queue(connection, queue_name).enqueue(task_type, {})
+        connection.commit()
+    executions_before = _counter_values("workhorse.handler.executions")
+
+    worker = Worker(worker_pool, queue=queue_name, worker_id=f"python-stale-{settlement}")
+    if settlement == "fail":
+
+        def fail(_payload: object, _context: HandlerContext) -> None:
+            _move_fence(database_url, task_id)
+            raise RuntimeError("the handler failed")
+
+        worker.handle(task_type, fail)
+    elif settlement == "unacknowledged-cancel":
+
+        def cancel_then_fail(_payload: object, _context: HandlerContext) -> None:
+            with psycopg.connect(database_url) as connection:
+                assert Queue(connection, queue_name).cancel(task_id).status == "cancel_requested"
+                connection.commit()
+            raise RuntimeError("the handler failed")
+
+        worker.handle(task_type, cancel_then_fail)
+        monkeypatch.setattr(worker, "_acknowledge_cancel", lambda _task: False)
+    else:
+        # No handler is registered, so the worker releases the claim through release_owned_v1.
+        send = workhorse.worker._fenced_write_rows
+
+        def fenced_write_rows(executor: Any, statement: Any, parameters: Any) -> Any:
+            if statement is workhorse.worker._STATEMENTS.release_owned:
+                _move_fence(database_url, task_id)
+            return send(executor, statement, parameters)
+
+        monkeypatch.setattr(workhorse.worker, "_fenced_write_rows", fenced_write_rows)
+    worker.run_once()
+
+    handler_span = next(
+        span
+        for span in SPAN_EXPORTER.get_finished_spans()
+        if span.name == "workhorse.handler" and span.attributes["workhorse.task.id"] == task_id
+    )
+    assert handler_span.attributes["workhorse.handler.outcome"] == "stale"
+    executions = _counter_values("workhorse.handler.executions")
+    added = {
+        dict(attributes)["workhorse.handler.outcome"]: value - executions_before.get(attributes, 0)
+        for attributes, value in executions.items()
+        if dict(attributes).get("workhorse.task.type") == task_type
+        and value != executions_before.get(attributes, 0)
+    }
+    assert added == {"lease_lost": 1}
+    finished = [
+        record.log_record.attributes["workhorse.handler.outcome"]
+        for record in LOG_EXPORTER.get_finished_logs()
+        if record.log_record.event_name == "workhorse.task.execution_finished"
+        and record.log_record.attributes["workhorse.task.id"] == task_id
+    ]
+    assert finished == ["lease_lost"]
