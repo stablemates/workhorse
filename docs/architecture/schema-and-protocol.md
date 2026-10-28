@@ -1054,7 +1054,9 @@ call. A loop that ends without a stop fixes it when it ends. These waits end at 
 The handler drain has no bound in the worker. `run_worker_process` bounds it with
 `shutdown_timeout_ms`. After the drain, one cleanup window of 1,000 ms starts.
 `deregister_worker_v2` spends from it, and an `AsyncWorker` run spends the rest on the release of
-the shared listener. A wait on the stop path does not start a new budget.
+the shared listener. A wait on the stop path does not start a new budget. The deregistration runs
+after the registration statement in flight, as [Heartbeat readiness](lifecycle.md#heartbeat-readiness)
+states under "Deregistration order".
 
 #### Ownership statuses and expiration
 

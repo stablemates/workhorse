@@ -8,7 +8,7 @@ import socket
 import traceback
 from bisect import insort
 from collections.abc import Callable, Mapping, Sequence
-from concurrent.futures import Future, InvalidStateError, TimeoutError as FutureTimeoutError
+from concurrent.futures import Future, InvalidStateError, TimeoutError as FutureTimeoutError, wait
 from contextlib import nullcontext, suppress
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
@@ -3541,20 +3541,33 @@ class Worker:
     def _deregister(self, *, deadline: float) -> None:
         """Remove the registry row of this run. The worker waits for it until ``deadline``.
 
-        ``deregister_worker_v2`` deletes the row only while it names the instance of this run, so a
-        late call cannot delete the row of a later run.
+        The delete runs after the last registration statement, if one still runs. That statement
+        can commit after the stop deadline, and it would bring back the row of the stopped run.
+        A statement that passed its deadline and then committed leaves ``_registered`` false, so
+        any registration statement makes the delete run. ``deregister_worker_v2`` deletes the row
+        only while it names the instance of this run, so a late call cannot delete the row of a
+        later run.
         """
-        if not self._registered:
+        with self._state_lock:
+            registration = self._registration_call
+        if not self._registered and registration is None:
             return
         self._registered = False
+        worker_id = self.worker_id
         instance_id = self._instance_id
-        executor = self._executor_within(deadline - monotonic())
-        with suppress(Exception):
-            self._call_by(
-                deadline,
-                lambda: executor.rows(_STATEMENTS.deregister_worker, (self.worker_id, instance_id)),
-                "deregistration",
+
+        def deregister() -> list[_Row]:
+            if registration is not None:
+                wait((registration,))
+            # Nothing waits for a delete that starts after the deadline, so it gets one budget.
+            remaining = deadline - monotonic()
+            executor = self._executor_within(
+                remaining if remaining > 0 else self._connection_budget_seconds
             )
+            return executor.rows(_STATEMENTS.deregister_worker, (worker_id, instance_id))
+
+        with suppress(Exception):
+            self._call_by(deadline, deregister, "deregistration")
 
     def _dispatch_wait_seconds(self, slots: _DispatchSlots) -> float:
         """Choose the wait after an empty claim from the live subscription state.

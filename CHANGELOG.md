@@ -75,6 +75,17 @@ recorded `unknown` (SM-1863).
 Now the metrics and the log record `canceled`, as the Go worker does after SM-1811. The outcome
 names do not change.
 
+### A stopped worker no longer comes back in the fleet view
+
+A worker refreshes its registration on its own cadence, and it deletes its registry row when it
+stops. A periodic refresh can wait for a pooled connection or for the registry lock. If `stop()`
+came during that wait, `run()` stopped its wait at the end of the unwind window and deleted the row.
+Then the late refresh committed and wrote the row again, with `draining = false`. The fleet view
+showed a running worker until `prune_worker_registry_v1` removed the row (SM-1867).
+
+Now the deregistration waits for each registration write in flight, and then deletes the row.
+`run()` still stops its wait at the end of the unwind window, so the stop keeps its deadline.
+
 ### The dashboard bundle uses Mantine 9.7.4
 
 Every release line serves the shared dashboard browser bundle. After 0.10.0, a dependency update
