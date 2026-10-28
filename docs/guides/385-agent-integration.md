@@ -149,7 +149,7 @@ A Python, Go, Rust, Ruby, Java, Kotlin, or .NET project has no Node.js dependenc
 version in the command. This version must be equal to the SDK version of the application:
 
 ```bash
-npx --package @stablemates/workhorse@0.10.0 workhorse schema install
+npx --package @stablemates/workhorse@0.11.0 workhorse schema install
 ```
 
 The machine that runs the deployment needs Node.js for this command. [the compatibility reference](../compatibility.md#supported-versions)

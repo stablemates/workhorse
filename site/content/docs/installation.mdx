@@ -199,7 +199,7 @@ A Python, Go, Rust, Ruby, Java, Kotlin, or .NET project has no `node_modules` th
 Thus, the command gives the package and the version:
 
 ```bash
-npx --package @stablemates/workhorse@0.10.0 workhorse schema install
+npx --package @stablemates/workhorse@0.11.0 workhorse schema install
 ```
 
 Use the SDK version that your application uses. All the SDKs release together from one commit, so
@@ -290,13 +290,13 @@ npm exec --no -- workhorse schema status --json
 The command exits with 0 if this build accepts the installed schema. It exits with 1 if this build
 refuses the schema, or if the PostgreSQL major version is too old. The JSON output gives the schema
 and the PostgreSQL results separately. This part of the output is for a current schema of release
-0.10.0:
+0.11.0:
 
 ```json
 {
   "schema": {
-    "installedVersion": 86,
-    "expectedVersion": 86,
+    "installedVersion": 89,
+    "expectedVersion": 89,
     "minimumVersion": 76,
     "state": "current",
     "compatible": true,
@@ -325,11 +325,11 @@ the clean-install file `schema.sql` to its GitHub release. Do these steps:
 2. Apply the file with `psql`.
 
 ```bash
-curl -fLO https://github.com/stablemates/workhorse/releases/download/v0.10.0/schema.sql
+curl -fLO https://github.com/stablemates/workhorse/releases/download/v0.11.0/schema.sql
 psql "$DATABASE_URL" -f schema.sql
 ```
 
-The [`v0.10.0` release](https://github.com/stablemates/workhorse/releases/tag/v0.10.0) has the file.
+The [`v0.11.0` release](https://github.com/stablemates/workhorse/releases/tag/v0.11.0) has the file.
 If you use a different version, change the two version numbers together. The file creates the
 schema that the SDK of the same release expects.
 

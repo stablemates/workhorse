@@ -2,15 +2,15 @@
   "install": {
     "dotnet": "dotnet add package Workhorse",
     "go": "go get github.com/stablemates/workhorse/go",
-    "gradle": "implementation(\"run.workhorse:workhorse:0.10.0\")",
-    "maven": "<dependency><groupId>run.workhorse</groupId><artifactId>workhorse</artifactId><version>0.10.0</version></dependency>",
+    "gradle": "implementation(\"run.workhorse:workhorse:0.11.0\")",
+    "maven": "<dependency><groupId>run.workhorse</groupId><artifactId>workhorse</artifactId><version>0.11.0</version></dependency>",
     "node": "npm install @stablemates/workhorse",
     "python": "pip install stablemates-workhorse",
     "ruby": "bundle add stablemates-workhorse",
     "rust": "cargo add workhorse",
     "schema": "npm exec --no -- workhorse schema install",
-    "schemaDownload": "curl -fLO https://github.com/stablemates/workhorse/releases/download/v0.10.0/schema.sql",
-    "schemaPinned": "npx --package @stablemates/workhorse@0.10.0 workhorse schema install"
+    "schemaDownload": "curl -fLO https://github.com/stablemates/workhorse/releases/download/v0.11.0/schema.sql",
+    "schemaPinned": "npx --package @stablemates/workhorse@0.11.0 workhorse schema install"
   },
   "support": {
     "activejob": {

@@ -447,6 +447,55 @@ describe("0.10.0 release notes", () => {
   });
 });
 
+/** The 0.11.0 release: the first entry whose notes cover migrations 0088 through 0090. */
+const release0110 = "## 0.11.0 — 2026-10-28";
+
+describe("0.11.0 release notes", () => {
+  const lines = [...changelogs, "jvm/CHANGELOG.md", "dotnet/CHANGELOG.md"];
+
+  describe.each(lines)("%s", (path) => {
+    const section = entry(path, release0110);
+
+    it("states the train, the floor, the migrations, and the behavior changes", () => {
+      expect(section).toMatch(phrase("release from one source commit"));
+      expect(section).toMatch(/^Requires \*\*schema v76\*\*/m);
+      expect(section).toMatch(phrase("Migrate the schema before starting updated processes"));
+      expect(section).toMatch(
+        phrase("Migrations 0088, 0089, and 0090 move the schema from version 86 to version **89**"),
+      );
+      expect(section).toMatch(phrase("compatibility floor stays at **76**"));
+      for (const issue of ["SM-1857", "SM-1864", "SM-1884"]) expect(section).toContain(issue);
+    });
+  });
+
+  it("names every migration added after 0.10.0 in the root notes", () => {
+    // 0.10.0 shipped schema version 86, and 0.11.0 ships 89, so migrations 0088 through 0090 are
+    // new in 0.11.0.
+    const section = entry("CHANGELOG.md", release0110);
+    const added = readdirSync(join(root, "sql/migrations"))
+      .map((name) => /^(\d{4})-/.exec(name)?.[1])
+      .filter(
+        (number): number is string =>
+          number !== undefined && Number(number) > 87 && Number(number) <= 90,
+      );
+    expect(added).toHaveLength(3);
+    for (const number of added) expect(section, `migration ${number}`).toContain(number);
+  });
+
+  describe.each([...lines, "typescript/otel/CHANGELOG.md"])("%s", (path) => {
+    it("links only to files and headings that exist", () => {
+      const broken = links(path, entry(path, release0110))
+        .filter(({ file, anchor }) => {
+          if (file === undefined) return false;
+          if (!existsSync(join(root, file))) return true;
+          return anchor !== undefined && file.endsWith(".md") && !anchors(file).has(anchor);
+        })
+        .map(({ target }) => target);
+      expect(broken).toEqual([]);
+    });
+  });
+});
+
 /**
  * The first entry of the .NET changelog, the oldest one. It stays `## Unreleased` until the
  * release candidate of the first .NET publish dates it.
