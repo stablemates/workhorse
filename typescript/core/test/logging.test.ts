@@ -6,6 +6,7 @@ import { Queue } from "../src/queue.js";
 import type { Queryable } from "../src/types.js";
 import { Worker } from "../src/worker.js";
 import { fullTierProbeRejection } from "./support/full-tier.js";
+import { answerSchemaCheck } from "./support/schema-check.js";
 
 registerOpenTelemetry();
 const records: LogRecord[] = [];
@@ -55,8 +56,8 @@ describe("structured logging", () => {
         throw new Error(`Unexpected query: ${sql}`);
       },
     } as unknown as Queryable;
-    const queue = new Queue(database, "mail");
-    const admin = new Admin(database, "mail");
+    const queue = new Queue(answerSchemaCheck(database), "mail");
+    const admin = new Admin(answerSchemaCheck(database), "mail");
 
     await queue.enqueue("mail.send", {
       recipient: "reader@example.com",
@@ -108,7 +109,7 @@ describe("structured logging", () => {
       },
     } as unknown as Queryable;
     // The fake database has no pool to lend a heartbeat connection from.
-    const worker = new Worker(new Queue(database, "mail"), {
+    const worker = new Worker(new Queue(answerSchemaCheck(database), "mail"), {
       sharedHeartbeats: true,
       workerId: "worker-registration-log",
       queues: ["mail", "billing"],
@@ -159,7 +160,7 @@ describe("structured logging", () => {
         };
       },
     } as unknown as Queryable;
-    const queue = new Queue(database);
+    const queue = new Queue(answerSchemaCheck(database));
 
     await queue.tick();
     expect(

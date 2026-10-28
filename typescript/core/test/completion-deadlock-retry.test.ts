@@ -2,6 +2,7 @@ import type { QueryResult, QueryResultRow } from "pg";
 import { describe, expect, it } from "vitest";
 import { Queue } from "../src/queue.js";
 import type { ClaimedTask, Queryable } from "../src/types.js";
+import { answerSchemaCheck } from "./support/schema-check.js";
 
 const task: ClaimedTask = {
   id: "00000000-0000-0000-0000-000000000001",
@@ -38,7 +39,7 @@ function database(failures: Error[]): { queryable: Queryable; calls: () => numbe
       return { command: "SELECT", rowCount: rows.length, oid: 0, fields: [], rows };
     },
   };
-  return { queryable, calls: () => calls };
+  return { queryable: answerSchemaCheck(queryable), calls: () => calls };
 }
 
 describe("fused completion deadlock retry", () => {

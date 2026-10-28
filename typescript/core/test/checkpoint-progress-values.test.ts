@@ -2,6 +2,7 @@ import type { QueryResult, QueryResultRow } from "pg";
 import { describe, expect, it } from "vitest";
 import { Queue } from "../src/queue.js";
 import type { ClaimedTask, Json, Queryable } from "../src/types.js";
+import { answerSchemaCheck } from "./support/schema-check.js";
 
 // SM-1169: JSON.stringify writes NaN and the infinities as null, so checkpoint("ratio", () =>
 // Infinity) stored null under a value typed as a number.
@@ -34,7 +35,7 @@ function recordingDatabase(): { queryable: Queryable; statements: string[] } {
       return { command: "SELECT", rowCount: 0, oid: 0, fields: [], rows: [] };
     },
   };
-  return { queryable, statements };
+  return { queryable: answerSchemaCheck(queryable), statements };
 }
 
 // Numbers JSON cannot represent, at the top level and nested in arrays and objects.

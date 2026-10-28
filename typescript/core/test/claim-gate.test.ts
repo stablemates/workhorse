@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import { holdHeartbeatConnection, withClaimGate } from "../src/heartbeat-connection.js";
 import { createProviderQueryable, Queue, type Queryable } from "../src/index.js";
 import type { ClaimedTask } from "../src/types.js";
+import { answerSchemaCheck } from "./support/schema-check.js";
 
 // ADR 0071, rule 6, for the TypeScript claim path (SM-1575). A claim or a fused completion reads
 // the heartbeat gate after it has its connection and immediately before each attempt. The fakes
@@ -126,7 +127,7 @@ describe("claim gate on an ORM adapter", () => {
   it("runs no claim whose connection arrived after the heartbeat connection was lost", async () => {
     const attached = controlledPool({ holdConnects: true });
     const adapter = adapterOn(attached);
-    const queue = new Queue(adapter.queryable);
+    const queue = new Queue(answerSchemaCheck(adapter.queryable));
     let open = true;
 
     const claim = withClaimGate(
@@ -152,7 +153,7 @@ describe("claim gate on an ORM adapter", () => {
     const task = claimedTask("00000000-0000-4000-8000-000000000001");
     attached.answerWith((text) => result(text.includes(FUSED) ? [fusedRow(task)] : []));
     const adapter = adapterOn(attached);
-    const queue = new Queue(adapter.queryable);
+    const queue = new Queue(answerSchemaCheck(adapter.queryable));
     let open = true;
 
     const completion = withClaimGate(
@@ -177,7 +178,7 @@ describe("claim gate around a fused completion", () => {
     const pool = controlledPool();
     const task = claimedTask("00000000-0000-4000-8000-000000000002");
     pool.answerWith((text) => result(text.includes(FUSED) ? [fusedRow(task)] : []));
-    const queue = new Queue(pool.pool as unknown as Queryable);
+    const queue = new Queue(answerSchemaCheck(pool.pool as unknown as Queryable));
     let open = true;
 
     // The completion collects in its batch until the current turn of the event loop ends, and
@@ -222,7 +223,7 @@ describe("claim gate around a fused completion", () => {
       }
       return result([fusedRow(task)]);
     });
-    const queue = new Queue(pool.pool as unknown as Queryable);
+    const queue = new Queue(answerSchemaCheck(pool.pool as unknown as Queryable));
 
     await expect(
       withClaimGate(

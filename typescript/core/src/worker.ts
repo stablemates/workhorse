@@ -86,7 +86,9 @@ import {
   workerListenerPoolMaxSize,
   workerProgressRead,
   workerQueueTierRead,
+  workerSchemaCheck,
   workerWaitsRead,
+  type WorkerSchemaCheck,
 } from "./worker-internal.js";
 import { reportWorkerFailure, reportWorkerStartup } from "./worker-failure.js";
 import { createHandlerContext } from "./handler-context.js";
@@ -1613,6 +1615,7 @@ export class Worker {
     if (includeMaintenance) {
       // runOnce() registers in its maintenance pass, so the stop path of an ended run must settle.
       await this.settlePreviousRun();
+      await this.checkSchema();
       await this.runMaintenance();
     }
     if (shouldStop() || this.paused) return false;
@@ -2250,6 +2253,10 @@ export class Worker {
         const failure = await channel.checkReadiness(this.startupBudgetMs, stopSignal.signal);
         if (failure?.step === "stopped" || shouldStop()) return;
         if (failure !== undefined) throw this.readinessRefusal(channel, failure);
+      } else {
+        // Without a reserved connection, the check runs without the startup budget.
+        await this.untilAborted(this.checkSchema(), stopSignal.signal);
+        if (shouldStop()) return;
       }
       // The first registration write can wait for a pooled connection, and stop() ends that wait.
       // The deregistration waits for it in the unwind window, so a late write leaves no row.
@@ -2759,6 +2766,12 @@ export class Worker {
 
   // Waits for `work` until `signal` aborts. After the abort the caller goes on without it, and a
   // later failure of `work` is ignored.
+  // The queue keeps the answer, so only the first check of a worker sends a statement.
+  private async checkSchema(): Promise<void> {
+    const check = (this.queue as Partial<WorkerSchemaCheck>)[workerSchemaCheck];
+    if (typeof check === "function") await check.call(this.queue);
+  }
+
   private async untilAborted(work: Promise<unknown>, signal: AbortSignal): Promise<void> {
     if (signal.aborted) {
       void work.catch(() => undefined);

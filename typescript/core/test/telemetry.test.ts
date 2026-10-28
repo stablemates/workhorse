@@ -26,6 +26,7 @@ import type { ClaimedTask, Queryable } from "../src/types.js";
 import { Worker } from "../src/worker.js";
 import { registerQueueMetrics, type QueueMetricSource } from "../src/telemetry.js";
 import { fullTierProbeRejection } from "./support/full-tier.js";
+import { answerSchemaCheck } from "./support/schema-check.js";
 
 registerOpenTelemetry();
 
@@ -64,7 +65,7 @@ afterAll(() => {
 function queryable(
   query: (text: string, values?: readonly unknown[]) => Promise<{ rows: never[] }>,
 ): Queryable {
-  return { query } as unknown as Queryable;
+  return answerSchemaCheck({ query } as unknown as Queryable);
 }
 
 describe("OpenTelemetry", () => {

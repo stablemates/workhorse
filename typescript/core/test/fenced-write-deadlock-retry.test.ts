@@ -2,6 +2,7 @@ import type { QueryResult, QueryResultRow } from "pg";
 import { describe, expect, it } from "vitest";
 import { Queue } from "../src/queue.js";
 import type { ClaimedTask, Queryable } from "../src/types.js";
+import { answerSchemaCheck } from "./support/schema-check.js";
 
 const task: ClaimedTask = {
   id: "00000000-0000-0000-0000-000000000001",
@@ -42,7 +43,7 @@ function database(
       return { command: "SELECT", rowCount: rows.length, oid: 0, fields: [], rows };
     },
   };
-  return { queryable, statements };
+  return { queryable: answerSchemaCheck(queryable), statements };
 }
 
 // Each full-tier write fenced by the lease, and the row that accepts it.

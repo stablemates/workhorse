@@ -74,8 +74,8 @@ Stop and report why if one of these properties does not fit the application:
 - PostgreSQL is the only supported database. Workhorse has no other backend.
 - The schema does not change when the application starts. A deployment step installs or migrates
   it. The compatibility check refuses a schema that is too old, or a schema that no longer serves
-  the SQL protocol of the client. Some clients do not run this check before each mutation, so run
-  it in each process at startup.
+  the SQL protocol of the client. Each `Queue`, `Admin`, and worker runs this check before its
+  first statement. Also run it in each process at startup, so that a process stops at once.
 - Workhorse has no workflow definition language. You write the steps of a flow as checkpoints in
   your own code.
 - A concurrency policy applies to one queue, not to many queues.

@@ -576,6 +576,31 @@ against.
 - Any other query failure stays a plain `Error`. The reason is that an unreadable database gives no
   result about versions.
 
+Each `Queue` and each `Admin` holds one `CachedSchemaCompatibilityCheck` from
+`typescript/core/src/schema.ts`. It runs `assertSchemaCompatible` until PostgreSQL answers. Then it
+keeps the answer: success or a `SchemaCompatibilityError`. It does not keep a driver error, so the
+next call queries again, and the call gets the driver error unchanged. Calls that overlap on one
+connection share one query. A call on another connection sends its own query, so a caller
+transaction that holds the last pooled connection does not wait for the pool. After the first answer,
+a call sends no extra statement.
+
+- Each `Queue` method that sends a statement runs the check first. An empty `enqueueMany` or
+  `enqueueManyWithResults` batch sends no statement and runs no check. A method that takes a caller
+  `transaction` runs the check on that transaction. A `Queue` from `forDatabase` shares the answer
+  of the queue that made it.
+- `Admin` runs the check before each statement, after it validates its arguments.
+- `Worker.runOnce()` runs the check before its registration and its maintenance pass.
+- `Worker.run()` runs the check in its startup readiness check, on the borrowed connection, as
+  [Task lifecycle: Heartbeat readiness](lifecycle.md#heartbeat-readiness) describes. That check
+  keeps its answer in the cache of the queue.
+- Under `sharedHeartbeats: true`, `Worker.run()` runs the check before its first registration,
+  without the startup budget.
+- A refusal rejects `run()` or `runOnce()` with the `SchemaCompatibilityError`. A worker on a custom
+  `WorkerQueueApi` that is not a `Queue` runs no check.
+
+`typescript/core/test/client-schema-compatibility.test.ts` covers the cache, the refusal before the
+first statement, and the worker refusals.
+
 `typescript/core/test/schema-compatibility.test.ts` runs every case in
 `protocol/v1/compatibility.json`. `typescript/core/test/schema-installation.test.ts` asserts the
 thrown type and code against a real database in both directions.

@@ -1,15 +1,18 @@
 import { describe, expect, it } from "vitest";
 import { Queue } from "../src/index.js";
 import { SQL_STATEMENTS } from "../src/queue/sql-catalogue.generated.js";
+import { answerSchemaCheck } from "./support/schema-check.js";
 
 const recordingQueue = () => {
   const calls: Array<{ text: string; values: readonly unknown[] }> = [];
-  const queue = new Queue({
-    query: async (text: string, values: readonly unknown[] = []) => {
-      calls.push({ text, values });
-      return { rows: [], rowCount: 0, command: "SELECT", oid: 0, fields: [] };
-    },
-  });
+  const queue = new Queue(
+    answerSchemaCheck({
+      query: async (text: string, values: readonly unknown[] = []) => {
+        calls.push({ text, values });
+        return { rows: [], rowCount: 0, command: "SELECT", oid: 0, fields: [] };
+      },
+    }),
+  );
   return { calls, queue };
 };
 

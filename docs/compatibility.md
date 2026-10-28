@@ -1701,12 +1701,10 @@ The SDK schema floor rises from 73 to 76. Every SDK statement catalogue names
 schema version 76 adds. Thus the migrations must run before the first new process starts. 0.10.0
 freezes `sql/releases/0086.sql`.
 
-If the schema is below version 76, a new dashboard host refuses its requests. A new worker refuses
-to start, but a TypeScript worker checks the schema only in `run`, and only without
-`sharedHeartbeats: true`. `runOnce` does not check it. The Go, Python, Ruby, Rust, JVM, and .NET
-`Queue` and `Admin` refuse each mutation. The TypeScript `Queue` and `Admin` do not check the
-schema, so their statements run against the older schema. To get the refusal in a TypeScript
-process, call `assertSchemaCompatible` before the first mutation.
+If the schema is below version 76, the compatibility check refuses it. A new dashboard host refuses
+its requests, and a new worker refuses to start. A new `Queue` or `Admin` refuses each call before
+its first statement. The TypeScript SDK does this from 0.11.0. In 0.10.0, only
+`assertSchemaCompatible` and a TypeScript `Worker.run` without `sharedHeartbeats: true` refuse.
 
 Schema version 77 does not raise the floor. Migration 0078 changes only the HINT of the P1001 to
 P1010 errors, and DETAIL does not change.

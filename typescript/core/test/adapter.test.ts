@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { createWorkhorseAdapter } from "../src/adapter.js";
 import type { Queryable } from "../src/types.js";
+import { answerSchemaCheck } from "./support/schema-check.js";
 
 function queryable(): Queryable {
   return { query: vi.fn<Queryable["query"]>() } as unknown as Queryable;
@@ -9,7 +10,8 @@ function queryable(): Queryable {
 describe("createWorkhorseAdapter", () => {
   it("creates queues for provider-owned transactions without changing the default queue", async () => {
     const database = queryable();
-    const transactionDatabase = queryable();
+    const transactionQuery = vi.fn<Queryable["query"]>();
+    const transactionDatabase = answerSchemaCheck({ query: transactionQuery } as Queryable);
     const transaction = { id: "tx" };
     const adaptTransaction = vi.fn<(transaction: { id: string }) => Queryable>(
       () => transactionDatabase,
@@ -36,11 +38,12 @@ describe("createWorkhorseAdapter", () => {
     await expect(transactionalQueue.enqueue("send", null)).rejects.toThrow(
       "send payload does not satisfy contract version current",
     );
-    expect(transactionDatabase.query).not.toHaveBeenCalled();
+    // The transaction answers the compatibility check, and it receives no other statement.
+    expect(transactionQuery).not.toHaveBeenCalled();
   });
 
   it("shares synchronized contract state with transaction-bound queues", async () => {
-    const database: Queryable = {
+    const database: Queryable = answerSchemaCheck({
       query: vi.fn<(statement: string) => Promise<never>>(async (statement: string) => {
         if (statement.includes("get_contract_definition_v1")) {
           return {
@@ -58,7 +61,7 @@ describe("createWorkhorseAdapter", () => {
         }
         return { rows: [] } as never;
       }) as Queryable["query"],
-    };
+    });
     const transactionDatabase: Queryable = {
       query: vi.fn<() => Promise<never>>(
         async () =>
@@ -96,10 +99,10 @@ describe("createWorkhorseAdapter", () => {
   });
 
   it("uses a database contract discovered after an enqueue version mismatch", async () => {
-    const database: Queryable = {
+    const database: Queryable = answerSchemaCheck({
       // oxlint-disable-next-line vitest/require-mock-type-parameters -- Queryable.query is generic and the cast supplies its contract.
       query: vi.fn(async () => ({ rows: [] })) as unknown as Queryable["query"],
-    };
+    });
     let enqueueAttempts = 0;
     const transactionDatabase: Queryable = {
       // oxlint-disable-next-line vitest/require-mock-type-parameters -- Queryable.query is generic and the cast supplies its contract.
