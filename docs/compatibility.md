@@ -1664,17 +1664,18 @@ until a scenario has a recorded live artifact, no performance claim is made for 
 
 ## Upgrade from 0.10.x to 0.11.0
 
-A 0.10.0 database is at schema version 86. Migrations 0088 and 0089 do not raise the SDK schema
+A 0.10.0 database is at schema version 86. Migrations 0088 through 0090 do not raise the SDK schema
 floor. Thus the upgrade is a rolling deployment, and a mixed fleet is supported while it runs.
 
-1. Run `workhorse schema migrate`. It applies migrations 0088 through 0089 and leaves the schema at
-   version 88.
+1. Run `workhorse schema migrate`. It applies migrations 0088 through 0090 and leaves the schema at
+   version 89.
 2. Roll out the new processes in any order.
 
-| Migration                                                  | Schema version | Changes                                                                                                                                                                                            |
-| ---------------------------------------------------------- | -------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `0088-count-only-prunable-rows-as-row-retention-lag.sql`   | 87             | Row retention lag skips a member of an unfinished task group and counts from the finish of the group                                                                                               |
-| `0089-settle-cancel-timeouts-and-bound-schedule-reads.sql` | 88             | Recovery skips a timed-out attempt that waits for its cancellation, the Schedules page reads a bounded number of occurrences, and the registry prune finds expired kept pauses through their index |
+| Migration                                                                    | Schema version | Changes                                                                                                                                                                                            |
+| ---------------------------------------------------------------------------- | -------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `0088-count-only-prunable-rows-as-row-retention-lag.sql`                     | 87             | Row retention lag skips a member of an unfinished task group and counts from the finish of the group                                                                                               |
+| `0089-settle-cancel-timeouts-and-bound-schedule-reads.sql`                   | 88             | Recovery skips a timed-out attempt that waits for its cancellation, the Schedules page reads a bounded number of occurrences, and the registry prune finds expired kept pauses through their index |
+| `0090-settle-a-fast-tier-cancellation-at-its-deadline-after-its-timeout.sql` | 89             | Fast-tier recovery closes an attempt with a pending cancellation `canceled` when its deadline passed after its timeout                                                                             |
 
 Migration 0088 does not raise the floor, so it stays 76. It replaces `queue_health_v1`. Its row
 retention lag skips a member of a task group that has not finished, because terminal cleanup keeps
@@ -1695,7 +1696,12 @@ rows:
 - The comment in `create_history_day_v1` states the real lock order of the history parents. Its
   statements do not change.
 
-A 0.10 process keeps working on schema version 88, because a migration inside a major line only
+Migration 0090 does not raise the floor either. It replaces the body of `fast_recover_expired_v1`,
+and it changes no rows. If a fast-tier attempt has a pending cancellation and its deadline passed,
+recovery closes the task `canceled`, also when its attempt timeout is earlier than its deadline.
+Before, recovery locked that row in each tick and settled nothing until the lease expired.
+
+A 0.10 process keeps working on schema version 89, because a migration inside a major line only
 adds.
 
 ## Upgrade from 0.9.x to 0.10.0

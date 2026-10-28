@@ -701,6 +701,10 @@ describe("schema installation", () => {
         version: 88,
         description: "settle cancel-requested timeouts and bound the dashboard schedule reads",
       },
+      {
+        version: 89,
+        description: "settle a fast-tier cancellation at its deadline after its timeout",
+      },
     ]);
 
     const protocols = await pool.query<{ version: number }>(

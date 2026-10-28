@@ -10266,7 +10266,8 @@ $$;
 -- Recover fast-tier rows that crossed a boundary: a ready row past its deadline, or an active row
 -- past its deadline, attempt timeout, or lease. One index range scan finds the active rows, because
 -- the index key is the earliest of the three boundaries. An active row with a pending cancellation
--- waits for its lease to lapse, unless its deadline passed first, as it does on the full tier.
+-- waits for its lease to lapse, unless its deadline passed. A passed deadline then closes the row
+-- canceled, also when the attempt timeout is earlier, as it does on the full tier.
 CREATE OR REPLACE FUNCTION workhorse.fast_recover_expired_v1(
   p_limit integer, p_retry_delay_ms integer, p_now timestamptz
 ) RETURNS TABLE (
@@ -10320,6 +10321,7 @@ BEGIN
     IF v_runtime.deadline_at IS NOT NULL AND v_runtime.deadline_at <= p_now
        AND (
          v_runtime.state = 'ready'
+         OR v_runtime.cancel_requested_at IS NOT NULL
          OR v_runtime.attempt_timeout_at IS NULL
          OR v_runtime.attempt_timeout_at > p_now
          OR v_runtime.deadline_at <= v_runtime.attempt_timeout_at
@@ -22916,10 +22918,11 @@ INSERT INTO workhorse.schema_migration(version, description) VALUES
   (85, 'report the fast-tier retry of an expired timeout'),
   (86, 'show the last schedule skip on the dashboard'),
   (87, 'count only prunable rows as row retention lag'),
-  (88, 'settle cancel-requested timeouts and bound the dashboard schedule reads')
+  (88, 'settle cancel-requested timeouts and bound the dashboard schedule reads'),
+  (89, 'settle a fast-tier cancellation at its deadline after its timeout')
 ON CONFLICT DO NOTHING;
 
-INSERT INTO workhorse.schema_version(version) VALUES (88) ON CONFLICT DO NOTHING;
+INSERT INTO workhorse.schema_version(version) VALUES (89) ON CONFLICT DO NOTHING;
 
 INSERT INTO workhorse.protocol_version(version) VALUES (5) ON CONFLICT DO NOTHING;
 SELECT workhorse.create_history_day_v1(

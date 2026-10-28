@@ -17,7 +17,7 @@ internal static class SqlCatalogue
     internal const int MinimumProtocolVersion = 5;
     internal const int MaximumProtocolVersion = 5;
     internal const int MinimumSchemaVersion = 76;
-    internal const int MaximumSchemaVersion = 88;
+    internal const int MaximumSchemaVersion = 89;
 
     /// <summary>PostgreSQL's atomic enqueue batch limit.</summary>
     internal const int MaxEnqueueBatchSize = 1000;
