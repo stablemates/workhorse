@@ -211,8 +211,8 @@ async function rubyLockfiles(root: string): Promise<string[]> {
 }
 
 /**
- * The four .NET packages share one version. The `nuget` job reads every `<Version>` element of the
- * file with `sed` and publishes only when the result equals the tag, so the file must hold one.
+ * The four .NET packages share one version. `scripts/check-release-line.ts` in the `nuget` job
+ * fails on a file with more than one `<Version>` element, so the release check refuses it first.
  */
 async function checkDotnetVersion(files: ReleaseFiles, version: TrainVersion): Promise<void> {
   const relativePath = "dotnet/Directory.Build.props";

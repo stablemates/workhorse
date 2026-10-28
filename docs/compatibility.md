@@ -985,8 +985,10 @@ publication. The run still succeeds. So the check must refuse the candidate befo
 registry receives it. The check also reads `dotnet/Directory.Build.props`, so it refuses a .NET
 version that differs from the tag.
 
-The release check reads no secret. If a `maven-central` secret is missing, the JVM artifacts also
-skip publication after npm publishes, and the run still succeeds. `pnpm release:check
+The release check reads no secret. If the JVM or .NET version matches the tag and a secret of its
+environment is missing, the `maven-central` or `nuget` job fails before any upload. The error
+names each missing secret, and `github-release` does not run. A dry run and a run without a `v*`
+tag do not start the `maven-central` and `nuget` jobs. `pnpm release:check
 <npm|python|go> <tag>` runs the same checks for each tag. `pnpm npm:release-check`,
 `pnpm python:release-check`, and `pnpm go:release-check` call it first. It fails, and lists each problem, if one of these is true:
 
@@ -1315,9 +1317,11 @@ for example `requireFeature("opentelemetry")` or `requireFeature("servlet")`.
       `pnpm release:verify maven` against the staging directory.
       The dry run uploads nothing and reads no secret. The CI `jvm` job runs it on the Java floor on
       every change.
-3. After npm publishes, the `maven-central` job compares the version in `jvm/gradle.properties`
-   with the tag. A mismatch writes a notice and publishes nothing. The job also writes a notice and
-   publishes nothing while one of the four secrets of the `maven-central` environment is missing.
+3. After npm publishes, `scripts/check-release-line.ts` in the `maven-central` job compares the
+   version in `jvm/gradle.properties` with the tag. A mismatch writes a notice and publishes
+   nothing, and the `maven-central` job still succeeds. On a match, the job fails if one of the
+   four secrets of the `maven-central` environment is missing. The error names each missing
+   secret. Add the secret to the environment, then re-run the job.
    The [release check](#release-train) in the build job refuses a mismatched tag before npm
    publishes.
 4. On a match, the job stages and signs the artifacts with the release key, and runs the same
@@ -1410,9 +1414,10 @@ reviewer of that environment approves the run. The version check is a step, so e
 for the reviewer, even a run that pushes nothing. After npm publishes and the reviewer approves, the
 `nuget` job works in this sequence:
 
-1. It compares the version in `dotnet/Directory.Build.props` with the tag. A mismatch writes a
-   notice and publishes nothing. The job also writes a notice and publishes nothing while the
-   `nuget` environment has no `NUGET_USER` secret.
+1. `scripts/check-release-line.ts` compares the version in `dotnet/Directory.Build.props` with
+   the tag. A mismatch writes a notice and publishes nothing, and the `nuget` job still succeeds.
+   On a match, the job fails if the `nuget` environment has no `NUGET_USER` secret. The error
+   names the secret. Add the secret to the environment, then re-run the job.
 2. It runs `pnpm dotnet:package-check` with the tag, and keeps the packages that the consumer ran.
 3. `NuGet/login` exchanges the OIDC identity of the `nuget` job for a nuget.org API key that is valid for
    one hour. nuget.org mints it only for the trusted publishing policy of this repository,
@@ -1427,9 +1432,10 @@ nuget.org never deletes a published version. It can only unlist one. The require
 `nuget` environment is therefore the person between the push and a permanent version.
 
 The `github-release` job needs the `nuget` job, so the GitHub release announces a version only after
-nuget.org has the packages. A version mismatch or a missing `NUGET_USER` secret ends the `nuget` job
-with success, so the GitHub release still appears. If the reviewer rejects the run, the `nuget` job
-fails, and the GitHub release does not appear. SM-1441 records the maintainer setup: the
+nuget.org has the packages. A version mismatch ends the `nuget` job with success, so the GitHub
+release still appears. If the version matches and the `NUGET_USER` secret is missing, the `nuget`
+job fails, and the GitHub release does not appear (SM-1861). If the reviewer rejects the run, the
+`nuget` job fails, and the GitHub release does not appear. SM-1441 records the maintainer setup: the
 nuget.org organization `stablemates`, the prefix `Workhorse.*`, the trusted publishing policy, and
 the protected `nuget` environment with the `NUGET_USER` secret. Nothing in this repository performs
 it.

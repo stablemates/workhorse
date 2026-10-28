@@ -231,7 +231,7 @@ describe("checkRelease across the release train", () => {
   });
 
   it("rejects a .NET build file that declares a second Version", async () => {
-    // The `nuget` job reads both values, so it would skip publication although the first matches.
+    // The `nuget` job would fail after npm publishes, so the check refuses the candidate first.
     await edit(
       "dotnet/Directory.Build.props",
       "</Project>",
