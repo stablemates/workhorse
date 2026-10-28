@@ -23,6 +23,9 @@ const CHILD_TASK_SUSPENSION = Symbol("workhorse.childTaskSuspension");
 // Bounds on the wait before asking PostgreSQL again whether a local expiry has arrived.
 const EXPIRATION_RETRY_MIN_MS = 5;
 const EXPIRATION_RETRY_MAX_MS = 1_000;
+// How long a final settlement waits for an expiration request already in flight, as Go and Rust
+// bound their retries of a not_due answer.
+const SHARED_EXPIRATION_BUDGET_MS = 1_000;
 
 type AttemptOutcome =
   | "completed"
@@ -192,6 +195,92 @@ export class TaskAttempt {
     return accepted;
   }
 
+  /**
+   * Acknowledges the cancellation that a fenced failure or release answered with, and returns
+   * whether PostgreSQL accepted it. The outcome comes from that answer: `canceled` if PostgreSQL
+   * accepts, also when a `stale` heartbeat answer arrived first. If PostgreSQL refuses, the worker
+   * settled nothing, so the attempt reports a lost lease.
+   */
+  async acknowledgeRequestedCancellation(): Promise<boolean> {
+    this.stop();
+    this.abort(new CancellationRequestedError(this.task.id));
+    const accepted = await this.services.acknowledgeCancel(this.task, this.services.workerId);
+    this.recordSettled(accepted ? "cancelled" : "lease_expired");
+    return accepted;
+  }
+
+  /**
+   * Settles the cause of a fenced failure or release that PostgreSQL answered `stale`, under this
+   * attempt's fence, and returns the handler span outcome.
+   *
+   * `expire_owned_v1` does not read `expires_at`, so a due deadline or attempt timeout settles also
+   * after the lease lapsed under an unchanged fence (SM-1884). A requested cancellation settles
+   * when `acknowledge_cancel_v1` accepts it. Any other answer leaves the task to lease recovery and
+   * reports a lost lease.
+   *
+   * A local expiry can ask PostgreSQL at the same time. The request that commits first settles the
+   * boundary, and the other one reads `stale`. Thus the reconciliation uses the answer of a request
+   * already in flight, and waits for it for at most {@link SHARED_EXPIRATION_BUDGET_MS}. That
+   * request can ask again after a `not_due` answer. If it does not answer in time, the
+   * reconciliation sends one request of its own.
+   */
+  async reconcileStale(): Promise<"canceled" | "deadline_exceeded" | "timeout_exceeded" | "stale"> {
+    let status =
+      (await this.sharedExpiration()) ??
+      (await this.services.expireOwned(this.task, this.services.workerId));
+    if (status === "stale") status = (await this.sharedExpiration()) ?? status;
+    if (status === "deadline_exceeded") return this.recordSettled("deadline_exceeded");
+    if (status === "timeout_exceeded") return this.recordSettled("attempt_timeout");
+    if (
+      status === "cancel_requested" &&
+      (await this.services.acknowledgeCancel(this.task, this.services.workerId))
+    ) {
+      return this.recordSettled("cancelled");
+    }
+    return this.recordSettled("lease_expired");
+  }
+
+  /** The answer of the expiration request in flight, or undefined if none answers in time. */
+  private async sharedExpiration(): Promise<ExpireOwnedStatus | undefined> {
+    const pending = this.expirationPromise;
+    if (pending === undefined) return undefined;
+    let cancel: (() => void) | undefined;
+    const timeout = new Promise<undefined>((resolve) => {
+      const timer = setTimeout(resolve, SHARED_EXPIRATION_BUDGET_MS, undefined);
+      cancel = () => clearTimeout(timer);
+    });
+    try {
+      // A failed request proves nothing about the expiry, so the reconciliation asks itself.
+      return await Promise.race([pending.catch(() => undefined), timeout]);
+    } finally {
+      cancel?.();
+    }
+  }
+
+  /**
+   * Records the outcome that PostgreSQL settled, and returns its handler span outcome. The
+   * activation records that outcome, also when a racing answer submitted another one first.
+   */
+  private recordSettled(
+    outcome: "cancelled" | "deadline_exceeded" | "attempt_timeout" | "lease_expired",
+  ): "canceled" | "deadline_exceeded" | "timeout_exceeded" | "stale" {
+    this.arbiter.submit(outcome);
+    if (outcome === "cancelled") {
+      this.recordExecution("canceled");
+      return "canceled";
+    }
+    if (outcome === "deadline_exceeded") {
+      this.recordExecution("deadline_exceeded");
+      return "deadline_exceeded";
+    }
+    if (outcome === "attempt_timeout") {
+      this.recordExecution("timeout");
+      return "timeout_exceeded";
+    }
+    this.recordExecution("lease_lost");
+    return "stale";
+  }
+
   /** Waits for the answer to an expiry this attempt asked PostgreSQL for, if it asked. */
   async settleExpiration(): Promise<void> {
     await this.expirationPromise;
@@ -210,7 +299,7 @@ export class TaskAttempt {
     });
   }
 
-  recordFailure(state: Exclude<FailureStatus, "cancel_requested">): void {
+  recordFailure(state: Exclude<FailureStatus, "cancel_requested" | "stale">): void {
     if (state === "ready" || state === "scheduled") {
       if (this.arbiter.submit("failed")) this.recordExecution("retry");
     } else if (state === "failed") {
@@ -219,8 +308,6 @@ export class TaskAttempt {
       if (this.arbiter.submit("deadline_exceeded")) this.recordExecution("deadline_exceeded");
     } else if (state === "timeout_exceeded") {
       if (this.arbiter.submit("attempt_timeout")) this.recordExecution("timeout");
-    } else if (state === "stale") {
-      if (this.arbiter.submit("lease_expired")) this.recordExecution("lease_lost");
     }
   }
 
@@ -230,7 +317,7 @@ export class TaskAttempt {
    * A refused release names the boundary PostgreSQL settled instead, so this reads the same
    * vocabulary {@link recordFailure} does and the attempt still ends with one truthful outcome.
    */
-  recordRelease(status: Exclude<ReleaseOwnedStatus, "cancel_requested">): void {
+  recordRelease(status: Exclude<ReleaseOwnedStatus, "cancel_requested" | "stale">): void {
     if (status === "released") {
       if (this.arbiter.submit("released")) this.recordExecution("released");
     } else if (status === "deadline_exceeded") {
@@ -239,7 +326,7 @@ export class TaskAttempt {
       if (this.arbiter.submit("attempt_timeout")) this.recordExecution("timeout");
     } else {
       // A boundary the database already passed cannot come back, so it never answers not_due to a
-      // release. Both remaining answers mean this worker no longer owns what it is handing back.
+      // release. That answer means this worker no longer owns what it is handing back.
       if (this.arbiter.submit("lease_expired")) this.recordExecution("lease_lost");
     }
   }

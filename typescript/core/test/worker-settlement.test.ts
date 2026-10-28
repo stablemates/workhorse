@@ -54,6 +54,7 @@ describe("worker settlement", () => {
       complete: async () => false,
       acknowledgeCancel: async () => false,
       fail,
+      expireOwned: async () => "stale",
       tick: async () => [],
       runMaintenance: async () => [],
     } as unknown as WorkerQueueApi;

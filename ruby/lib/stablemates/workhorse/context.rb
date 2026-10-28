@@ -63,6 +63,10 @@ module Stablemates
 
       def submit(outcome) = @outcome.compare_and_set(nil, outcome)
 
+      # Replaces a cancellation that PostgreSQL refused to acknowledge with a lost lease. A
+      # heartbeat round can submit the cancellation request first, but the worker settled nothing.
+      def refuse_cancellation = @outcome.compare_and_set(:cancelled, :lease_expired)
+
       # Records that a fenced durable write released the task for the suspension +outcome+. The
       # attempt then suspends whichever outcome won, because the heartbeat reports that release as a
       # lost lease.

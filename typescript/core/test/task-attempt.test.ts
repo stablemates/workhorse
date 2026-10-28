@@ -79,6 +79,43 @@ describe("TaskAttempt", () => {
     vi.useRealTimers();
   });
 
+  // SM-1884: a stale failure or release reconciles through the expiration request in flight.
+  it("reconciles a stale settlement with the answer of the expiration request in flight", async () => {
+    const { attempt, services, heartbeat, activation } = startAttempt();
+    const expiry = deferredExpiry();
+    vi.mocked(services.expireOwned).mockImplementation(() => expiry.promise);
+    heartbeat.status?.("deadline_exceeded", performance.now());
+
+    const reconciled = attempt.reconcileStale();
+    expiry.resolve("deadline_exceeded");
+
+    await expect(reconciled).resolves.toBe("deadline_exceeded");
+    expect(services.expireOwned).toHaveBeenCalledTimes(1);
+    expect(activation.outcome).toBe("deadline_exceeded");
+    attempt.stop();
+  });
+
+  it("waits at most one second for an expiration request that keeps answering not_due", async () => {
+    vi.useFakeTimers({ now: 0 });
+    const { attempt, services, heartbeat, activation } = startAttempt();
+    vi.mocked(services.expireOwned).mockResolvedValue("not_due");
+    heartbeat.status?.("deadline_exceeded", performance.now());
+    let settled = false;
+    const reconciled = attempt.reconcileStale().then((outcome) => {
+      settled = true;
+      return outcome;
+    });
+
+    await vi.advanceTimersByTimeAsync(999);
+    expect(settled).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
+
+    await expect(reconciled).resolves.toBe("stale");
+    expect(activation.outcome).toBe("lease_lost");
+    expect(attempt.arbiter.is("lease_expired")).toBe(true);
+    attempt.stop();
+  });
+
   it("allows durable effects while the lease is held and refuses them after it is lost", () => {
     const { attempt, heartbeat } = startAttempt();
     expect(() => attempt.requireLease()).not.toThrow();

@@ -538,3 +538,19 @@ RSpec.describe W::CancellationToken do
     expect { token.check! }.to raise_error(W::CancelledError)
   end
 end
+
+RSpec.describe W::Arbiter do
+  # SM-1884: a late heartbeat round can submit a cancellation request first. If PostgreSQL then
+  # refuses the acknowledgement, the worker settled nothing, so the attempt reports a lost lease.
+  it "replaces a refused cancellation with a lost lease and keeps every other outcome" do
+    arbiter = described_class.new
+    arbiter.submit(:cancelled)
+    arbiter.refuse_cancellation
+    expect(arbiter.outcome).to eq(:lease_expired)
+
+    settled = described_class.new
+    settled.submit(:deadline_exceeded)
+    settled.refuse_cancellation
+    expect(settled.outcome).to eq(:deadline_exceeded)
+  end
+end

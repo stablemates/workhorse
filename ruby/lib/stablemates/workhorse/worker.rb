@@ -1635,21 +1635,20 @@ module Stablemates
       # span.
       def release(task, arbiter, attributes)
         log(:warn, "workhorse.handler.missing", "No handler registered for the claimed task type", attributes)
-        release_owned(task, arbiter, attributes)
+        release_owned(task, arbiter, attributes, nil)
       end
 
       # Hands an owned task back to PostgreSQL, which makes it claimable again without charging the
-      # attempt. Returns the release status.
-      def release_owned(task, arbiter, attributes)
+      # attempt. Returns the release status, or nil after a reconciled stale answer.
+      def release_owned(task, arbiter, attributes, ownership)
         status = fenced_row(SqlCatalogue::RELEASE_OWNED_V1, task)["status"]
         log(:info, "workhorse.task.release_processed", "Owned task release processed",
           attributes.merge("workhorse.release.status" => status))
         if status == "released"
           arbiter.submit(:released)
-        else
-          settle_status(task, status, arbiter, "release", ["not_due"], :lease_expired)
+          return status
         end
-        status
+        settle_status(task, status, arbiter, "release", ["not_due"], :lease_expired, ownership)
       end
 
       def run_handler(task, handler, claim_started_at, active, arbiter, state)
@@ -1674,11 +1673,11 @@ module Stablemates
 
           # A handler that stopped for shutdown returns the task to the queue without an attempt.
           if cancellation.reason == :shutdown && shutdown_cancellation?(e)
-            state[:span_outcome] = release_owned(task, arbiter, Telemetry.task_span_attributes(task))
+            state[:span_outcome] = release_owned(task, arbiter, Telemetry.task_span_attributes(task), ownership)
             return
           end
 
-          state[:span_outcome] = settle_failure(task, e, arbiter)
+          state[:span_outcome] = settle_failure(task, e, arbiter, ownership)
           state[:errors] << (task.redact_error_details ? REDACTED_NAME : error_name(e))
           return
         ensure
@@ -1758,15 +1757,39 @@ module Stablemates
       # nothing. The heartbeat thread delivers statuses inline, so the lock is not held during the
       # statements here.
       def reconcile_rejected_completion(task, ownership, arbiter)
-        decided = ownership.settlement.synchronize { !arbiter.outcome.nil? }
-        return if decided && finish_lifecycle(task, arbiter)
+        reconcile_refusal(task, ownership, arbiter, "complete")
+      end
 
-        outcome = outcome_for_status(expire_owned(task, Telemetry.current_context), ["not_due"], "complete")
+      # Like reconcile_rejected_completion, for the fenced write of +operation+: the completion, or a
+      # failure or release that PostgreSQL answered stale (SM-1884). Without +ownership+, no
+      # heartbeat round can settle the attempt, so the reconciliation does not wait.
+      def reconcile_refusal(task, ownership, arbiter, operation)
+        decided = ownership&.settlement&.synchronize { !arbiter.outcome.nil? }
+        if decided
+          begin
+            return if finish_lifecycle(task, arbiter)
+          rescue LeaseLostError
+            # A heartbeat round submitted a cancellation that PostgreSQL refused to acknowledge.
+            arbiter.refuse_cancellation
+            raise
+          end
+        end
+
+        settle_refusal(task, arbiter, operation)
+      end
+
+      # Settles the cause of a fenced write that PostgreSQL refused, under the attempt's own fence.
+      # expire_owned_v1 does not read expires_at, so a due deadline or attempt timeout settles also
+      # after the lease lapsed (SM-1884). A requested cancellation settles when acknowledge_cancel_v1
+      # accepts it. Any other answer submits a lost lease and raises LeaseLostError.
+      def settle_refusal(task, arbiter, operation)
+        outcome = outcome_for_status(expire_owned(task, Telemetry.current_context), ["not_due"], operation)
         return arbiter.submit(:cancelled) if outcome == :cancelled && acknowledge_cancel(task)
         return arbiter.submit(outcome) if %i[deadline_exceeded attempt_timeout].include?(outcome)
 
         arbiter.submit(:lease_expired)
-        raise LeaseLostError.new(task.id, "complete")
+        arbiter.refuse_cancellation
+        raise LeaseLostError.new(task.id, operation)
       end
 
       # Registers the attempt with the heartbeat and starts its lease watchdog. The watchdog's
@@ -1893,18 +1916,31 @@ module Stablemates
         STATUS_OUTCOMES.fetch(status) { raise UnexpectedStatusError.new(operation, status) }
       end
 
-      # Submits the outcome for a status the worker's own write returned. A cancel request is
-      # acknowledged; a lost lease raises LeaseLostError. A neutral status submits +neutral_outcome+.
-      def settle_status(task, status, arbiter, operation, neutral, neutral_outcome)
+      # Submits the outcome for a status the worker's own write returned, and returns the status
+      # for the handler span. A cancel request is acknowledged. A stale answer settles its cause, as
+      # settle_refusal describes, and returns nil, so the span takes its outcome from that cause. A
+      # lost lease submits :lease_expired and raises LeaseLostError. A neutral status submits
+      # +neutral_outcome+. The reconciliation waits for a heartbeat round of +ownership+, as
+      # reconcile_refusal describes.
+      def settle_status(task, status, arbiter, operation, neutral, neutral_outcome, ownership)
         outcome = outcome_for_status(status, neutral, operation)
         case outcome
-        when nil then return arbiter.submit(neutral_outcome)
-        when :cancelled then raise LeaseLostError.new(task.id, operation) unless acknowledge_cancel(task)
+        when nil then arbiter.submit(neutral_outcome)
         when :lease_expired
-          arbiter.submit(:lease_expired)
-          raise LeaseLostError.new(task.id, operation)
+          # A lease that lapsed under an unchanged fence can still settle a due boundary.
+          reconcile_refusal(task, ownership, arbiter, operation)
+          return nil
+        when :cancelled
+          unless acknowledge_cancel(task)
+            # The worker settled nothing, so the attempt reports the lost lease.
+            arbiter.submit(:lease_expired)
+            arbiter.refuse_cancellation
+            raise LeaseLostError.new(task.id, operation)
+          end
+          arbiter.submit(outcome)
+        else arbiter.submit(outcome)
         end
-        arbiter.submit(outcome)
+        status
       end
 
       # Stops renewing and reports whether the arbiter already decided the attempt. Raises the
@@ -1954,8 +1990,9 @@ module Stablemates
       end
 
       # Records a handler failure. PostgreSQL retries or fails the task by its retry policy.
-      # Returns the state PostgreSQL chose, for the handler span.
-      def settle_failure(task, error, arbiter)
+      # Returns the state PostgreSQL chose, for the handler span, or nil after a reconciled stale
+      # answer.
+      def settle_failure(task, error, arbiter, ownership)
         envelope = error_envelope(error, task.redact_error_details)
         state = Telemetry.span("workhorse.retry", Telemetry.task_span_attributes(task)) do |span|
           delay = durable_replay_conflict(error) ? -1 : retry_delay_override(task)
@@ -1971,10 +2008,9 @@ module Stablemates
           Telemetry.task_span_attributes(task).merge("workhorse.attempt.outcome" => state))
         if retried
           arbiter.submit(:retry)
-        else
-          settle_status(task, state, arbiter, "fail", %w[failed], :failed)
+          return state
         end
-        state
+        settle_status(task, state, arbiter, "fail", %w[failed], :failed, ownership)
       end
 
       # Whether +error+, or an error it wraps, is a +:shutdown+ CancelledError. With the token's own

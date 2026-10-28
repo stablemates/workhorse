@@ -2353,7 +2353,7 @@ public final class Worker implements AutoCloseable {
    */
   private void releaseUnstarted(Active task) {
     try {
-      releaseOwned(task.claimed.task, new Arbiter());
+      releaseOwned(task.claimed.task, new Arbiter(), null);
     } catch (RuntimeException error) {
       Map<String, @Nullable Object> attributes = taskAttributes(task.claimed.task);
       attributes.put("error.type", error.getClass().getName());
@@ -2914,7 +2914,7 @@ public final class Worker implements AutoCloseable {
             "workhorse.handler.missing",
             "No handler registered for the claimed task type",
             attributes);
-        releaseOwned(claimed, arbiter);
+        releaseOwned(claimed, arbiter, null);
       } else {
         runHandler(task, registration, arbiter);
       }
@@ -2995,10 +2995,10 @@ public final class Worker implements AutoCloseable {
       }
       // A handler that stopped for shutdown returns the task to the queue without an attempt.
       if (cancellation.reason() == CancellationReason.SHUTDOWN && shutdownCancellation(error)) {
-        releaseOwned(claimed, arbiter);
+        releaseOwned(claimed, arbiter, ownership);
         return;
       }
-      settleFailure(claimed, error, arbiter);
+      settleFailure(claimed, error, arbiter, ownership);
       return;
     } finally {
       ownership.release();
@@ -3047,29 +3047,61 @@ public final class Worker implements AutoCloseable {
    */
   // Package-private for RefusedCompletionTest.
   void reconcileRejectedCompletion(ClaimedTask task, Ownership ownership, Arbiter arbiter) {
+    reconcileRefusal(task, ownership, arbiter, "complete");
+  }
+
+  /**
+   * Like {@link #reconcileRejectedCompletion}, for the fenced write of {@code operation}: the
+   * completion, or a failure or release that PostgreSQL answered {@code stale} (SM-1884). Without
+   * an ownership, no heartbeat round can settle the attempt, so the reconciliation takes no lock.
+   */
+  private void reconcileRefusal(
+      ClaimedTask task, @Nullable Ownership ownership, Arbiter arbiter, String operation) {
+    if (ownership == null) {
+      settleRefusal(task, arbiter, operation);
+      return;
+    }
     ownership.settlement.lock();
     try {
-      if (arbiter.outcome() != null && finishOwnership(task, ownership, arbiter)) {
-        return;
+      try {
+        if (arbiter.outcome() != null && finishOwnership(task, ownership, arbiter)) {
+          return;
+        }
+      } catch (LeaseLostException lost) {
+        // A heartbeat round submitted a cancellation that PostgreSQL refused to acknowledge.
+        arbiter.refuseCancellation();
+        throw lost;
       }
-      Outcome outcome = outcomeFor(expireOwned(task), Set.of("not_due"), "complete");
-      if (outcome == Outcome.CANCELLED && acknowledgeCancel(task)) {
-        arbiter.submit(Outcome.CANCELLED);
-        return;
-      }
-      if (outcome == Outcome.DEADLINE_EXCEEDED || outcome == Outcome.ATTEMPT_TIMEOUT) {
-        arbiter.submit(outcome);
-        return;
-      }
-      arbiter.submit(Outcome.LEASE_EXPIRED);
-      throw new LeaseLostException(task.id(), "complete");
+      settleRefusal(task, arbiter, operation);
     } finally {
       ownership.settlement.unlock();
     }
   }
 
+  /**
+   * Settles the cause of a fenced write that PostgreSQL refused, under the attempt's own fence.
+   * {@code expire_owned_v1} does not read {@code expires_at}, so a due deadline or attempt timeout
+   * settles also after the lease lapsed (SM-1884). A requested cancellation settles when {@code
+   * acknowledge_cancel_v1} accepts it. Any other answer submits a lost lease and throws {@link
+   * LeaseLostException}.
+   */
+  private void settleRefusal(ClaimedTask task, Arbiter arbiter, String operation) {
+    Outcome outcome = outcomeFor(expireOwned(task), Set.of("not_due"), operation);
+    if (outcome == Outcome.CANCELLED && acknowledgeCancel(task)) {
+      arbiter.submit(Outcome.CANCELLED);
+      return;
+    }
+    if (outcome == Outcome.DEADLINE_EXCEEDED || outcome == Outcome.ATTEMPT_TIMEOUT) {
+      arbiter.submit(outcome);
+      return;
+    }
+    arbiter.submit(Outcome.LEASE_EXPIRED);
+    arbiter.refuseCancellation();
+    throw new LeaseLostException(task.id(), operation);
+  }
+
   /** Hands an owned task back to PostgreSQL without charging the attempt. */
-  private void releaseOwned(ClaimedTask task, Arbiter arbiter) {
+  private void releaseOwned(ClaimedTask task, Arbiter arbiter, @Nullable Ownership ownership) {
     String status = fencedRow(SqlCatalogue.RELEASE_OWNED_V1, task).text("status");
     telemetry.handlerSpanOutcome(status);
     Map<String, @Nullable Object> attributes = taskAttributes(task);
@@ -3082,12 +3114,14 @@ public final class Worker implements AutoCloseable {
     if ("released".equals(status)) {
       arbiter.submit(Outcome.RELEASED);
     } else {
-      settleStatus(task, status, arbiter, "release", Set.of("not_due"), Outcome.LEASE_EXPIRED);
+      settleStatus(
+          task, status, arbiter, "release", Set.of("not_due"), Outcome.LEASE_EXPIRED, ownership);
     }
   }
 
   /** Records a handler failure. PostgreSQL retries or fails the task by its retry policy. */
-  private void settleFailure(ClaimedTask task, Exception error, Arbiter arbiter) {
+  private void settleFailure(
+      ClaimedTask task, Exception error, Arbiter arbiter, Ownership ownership) {
     String envelope = Json.write(failureEnvelope(error, task.redactErrorDetails()));
     Long delay = replayConflict(error) != null ? Long.valueOf(-1) : retryDelayOverride(task);
     String state =
@@ -3111,7 +3145,7 @@ public final class Worker implements AutoCloseable {
     if ("ready".equals(state) || "scheduled".equals(state)) {
       arbiter.submit(Outcome.RETRY);
     } else {
-      settleStatus(task, state, arbiter, "fail", Set.of("failed"), Outcome.FAILED);
+      settleStatus(task, state, arbiter, "fail", Set.of("failed"), Outcome.FAILED, ownership);
     }
   }
 
@@ -3862,6 +3896,14 @@ public final class Worker implements AutoCloseable {
     }
 
     /**
+     * Replaces a cancellation that PostgreSQL refused to acknowledge with a lost lease. A heartbeat
+     * round can submit the cancellation request first, but the worker settled nothing.
+     */
+    void refuseCancellation() {
+      outcome.compareAndSet(Outcome.CANCELLED, Outcome.LEASE_EXPIRED);
+    }
+
+    /**
      * Records that a fenced durable write released the task for the suspension {@code suspension}.
      * The attempt then suspends whichever outcome won.
      */
@@ -4179,7 +4221,10 @@ public final class Worker implements AutoCloseable {
 
   /**
    * Submits the outcome for a status that the worker's own write returned. A cancel request is
-   * acknowledged; a lost lease throws {@link LeaseLostException}.
+   * acknowledged. A {@code stale} answer settles its cause, as {@link #settleRefusal} describes. A
+   * lost lease submits {@link Outcome#LEASE_EXPIRED} and throws {@link LeaseLostException}. The
+   * reconciliation waits for a heartbeat settlement of {@code ownership}, as {@link
+   * #reconcileRefusal} describes.
    */
   private void settleStatus(
       ClaimedTask task,
@@ -4187,19 +4232,28 @@ public final class Worker implements AutoCloseable {
       Arbiter arbiter,
       String operation,
       Set<String> neutral,
-      Outcome neutralOutcome) {
+      Outcome neutralOutcome,
+      @Nullable Ownership ownership) {
     Outcome outcome = outcomeFor(status, neutral, operation);
     if (outcome == null) {
       arbiter.submit(neutralOutcome);
       return;
     }
+    if (outcome == Outcome.LEASE_EXPIRED) {
+      // A lease that lapsed under an unchanged fence can still settle a due boundary. The span
+      // then takes its outcome from the settled cause, as after a refused completion.
+      telemetry.handlerSpanOutcome(null);
+      reconcileRefusal(task, ownership, arbiter, operation);
+      return;
+    }
     if (outcome == Outcome.CANCELLED && !acknowledgeCancel(task)) {
+      // The worker settled nothing, so the attempt reports the lost lease, also on the span.
+      telemetry.handlerSpanOutcome(null);
+      arbiter.submit(Outcome.LEASE_EXPIRED);
+      arbiter.refuseCancellation();
       throw new LeaseLostException(task.id(), operation);
     }
     arbiter.submit(outcome);
-    if (outcome == Outcome.LEASE_EXPIRED) {
-      throw new LeaseLostException(task.id(), operation);
-    }
   }
 
   /**

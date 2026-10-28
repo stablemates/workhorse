@@ -1780,9 +1780,10 @@ The SDKs differ in what a refusal does after the handler has returned.
     It writes `deadline_exceeded` or `timeout_exceeded`, or acknowledges a `cancel_requested` answer
     with `acknowledge_cancel_v1`. Go `reconcileRejectedSettlement` does the same.
   - A `stale` or `not_due` answer leaves the task to recovery. Python raises `StaleLeaseError`.
-  - Python reports `lease_lost` when `fail_v1` or `release_owned_v1` answers `stale`, and when the
-    worker cannot acknowledge a cancellation after one of them. The worker settles nothing then
-    (SM-1863).
+  - Python reports `lease_lost` when the worker cannot acknowledge a cancellation after `fail_v1`
+    or `release_owned_v1`. The worker settles nothing then (SM-1863). A `stale` answer from one of
+    them goes to a reconciliation, as [A stale failure or release](#a-stale-failure-or-release)
+    describes.
   - Go `reconcileRejectedSettlement` returns the cause that it settled as the handler outcome of
     the span and of `workhorse.handler.executions`: `deadline_exceeded`, `timeout`, or `canceled`.
     Only a `stale` or `not_due` answer keeps `lease_lost`. `settleAfterShutdown` reports the same
@@ -1816,6 +1817,67 @@ The SDKs differ in what a refusal does after the handler has returned.
   | `attempt-timeout` | `attempt_timeout_at` one second in the past       | `failed`   | `timeout`           |
   | `cancellation`    | a cancellation request                            | `canceled` | `canceled`          |
   | `moved-fence`     | `fence_token` plus one, `deadline_at` in the past | `active`   | none                |
+
+#### A stale failure or release
+
+`fail_v1` and `release_owned_v1` answer `stale` when the fence moved. They also answer `stale` when
+`expires_at` passed under an unchanged fence. `expire_owned_v1` does not read `expires_at`, so it
+can still settle a due deadline or attempt timeout under that fence. Thus a `stale` answer does not
+always mean that another owner has the task. Each SDK reconciles that answer under the attempt's
+fence before the attempt ends (SM-1811, SM-1884):
+
+| SDK        | Reconciliation of a `stale` failure or release                  |
+| ---------- | --------------------------------------------------------------- |
+| TypeScript | `TaskAttempt.reconcileStale`                                    |
+| Python     | `Worker._settle_refusal`                                        |
+| Go         | `reconcileRejectedSettlement`                                   |
+| Rust       | `Inner::reconcile`                                              |
+| Ruby       | `reconcile_refusal`, called from `settle_status`                |
+| JVM        | `Worker.reconcileRefusal`, called from `settleStatus`           |
+| .NET       | `Worker.ReconcileRefusalAsync`, called from `SettleStatusAsync` |
+
+The reconciliation calls `expire_owned_v1`, or `expire_owned_telemetry_v1` in Python, Ruby, the
+JVM, and .NET. The answer gives the handler outcome. The SDKs that emit the
+`workhorse.task.execution_finished` log record the metric outcome there. .NET emits no such log.
+The span column states the values of TypeScript, Python, Ruby, the JVM, and .NET. Go writes the
+metric outcome on its handler span.
+
+| `expire_owned_v1` answer                                | Metric outcome      | Span outcome        |
+| ------------------------------------------------------- | ------------------- | ------------------- |
+| `deadline_exceeded`                                     | `deadline_exceeded` | `deadline_exceeded` |
+| `timeout_exceeded`                                      | `timeout`           | `timeout_exceeded`  |
+| `cancel_requested`, and `acknowledge_cancel_v1` accepts | `canceled`          | `canceled`          |
+| any other answer                                        | `lease_lost`        | `stale`             |
+
+- Go and Rust call `acknowledge_cancel_v1` before `expire_owned_v1`. They ask `expire_owned_v1`
+  again after a `not_due` answer, for up to 1 s. Python, Ruby, the JVM, and .NET ask once.
+- `acknowledge_cancel_v1` refuses after `expires_at` passed. Thus a cancellation request does not
+  settle after a lapsed lease, and the task stays with lease recovery.
+- Ruby, the JVM, and .NET use the same reconciliation after a refused completion.
+  `reconcile_refusal`, `reconcileRefusal`, and `ReconcileRefusalAsync` take the attempt's
+  settlement lock first, as for a refused completion. If a heartbeat round already decided the
+  attempt, it finishes with that outcome and writes nothing more. Python
+  `_reconcile_rejected_completion` calls `_settle_refusal`.
+- TypeScript uses the answer of an expiration request that a local expiry already sent. That
+  request asks again after a `not_due` answer, so the reconciliation waits for it for at most 1 s.
+  Otherwise, or after no answer in time, it sends one request of its own. If that request reads
+  `stale` while the other one is in flight, it waits for the other answer again, also for at most
+  1 s. The request that commits first settles the boundary.
+- If `acknowledge_cancel_v1` refuses, a `cancelled` outcome that a late heartbeat round submitted
+  becomes `lease_expired`. Ruby `Arbiter#refuse_cancellation`, JVM `Arbiter.refuseCancellation`,
+  and .NET `Arbiter.RefuseCancellation` make this change. `settle_refusal`, `settle_status`, and
+  `reconcile_refusal` call it, and so do their JVM and .NET counterparts. Thus the change applies
+  also to a refused completion.
+- With a lost lease, the worker settles nothing. Lease recovery settles the task later. Python
+  raises `StaleLeaseError`, Ruby raises `LeaseLostError`, and the JVM and .NET throw
+  `LeaseLostException`. A reconciliation that sends `expire_owned_v1` gives the operation `fail` or
+  `release`. If a heartbeat round decided the attempt first, the error keeps the operation of that
+  path: `cancel` after a refused acknowledgement, or `heartbeat` after a lost lease. The worker
+  catches the error, and the run continues.
+
+If `fail_v1` or `release_owned_v1` answers `cancel_requested` and `acknowledge_cancel_v1` refuses,
+the worker also settles nothing. TypeScript, Python, Ruby, the JVM, and .NET then report
+`lease_lost` on the metric, and `stale` on the span (SM-1863, SM-1884).
 
 Python ends supervision in one outer `finally` in `_execute_claimed_task_within_span`, on every
 path, including a `BaseException` from the handler.

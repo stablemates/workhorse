@@ -1761,8 +1761,12 @@ export class Worker {
           const released = await this.queue.releaseOwned(task, this.workerId);
           span.setAttribute("workhorse.handler.outcome", released);
           if (released === "cancel_requested") {
-            attempt.markCancellationRequested();
-            await attempt.acknowledgeCancellation();
+            if (!(await attempt.acknowledgeRequestedCancellation())) {
+              span.setAttribute("workhorse.handler.outcome", "stale");
+            }
+          } else if (released === "stale") {
+            // A lease that lapsed under an unchanged fence can still settle a due boundary.
+            span.setAttribute("workhorse.handler.outcome", await attempt.reconcileStale());
           } else attempt.recordRelease(released);
           return;
         }
@@ -1974,8 +1978,12 @@ export class Worker {
     const failed = await this.queue.fail(task, this.workerId, error, delay);
     span.setAttribute("workhorse.handler.outcome", failed);
     if (failed === "cancel_requested") {
-      attempt.markCancellationRequested();
-      await attempt.acknowledgeCancellation();
+      if (!(await attempt.acknowledgeRequestedCancellation())) {
+        span.setAttribute("workhorse.handler.outcome", "stale");
+      }
+    } else if (failed === "stale") {
+      // A lease that lapsed under an unchanged fence can still settle a due boundary.
+      span.setAttribute("workhorse.handler.outcome", await attempt.reconcileStale());
     } else attempt.recordFailure(failed);
   }
 

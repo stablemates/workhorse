@@ -911,7 +911,7 @@ public sealed partial class Worker
             {
                 try
                 {
-                    await ReleaseOwnedAsync(task.Task, new Arbiter(), run.StopPath.Token).ConfigureAwait(false);
+                    await ReleaseOwnedAsync(task.Task, new Arbiter(), null, run.StopPath.Token).ConfigureAwait(false);
                 }
                 catch (Exception error) when (error is WorkhorseException or OperationCanceledException or NpgsqlException)
                 {
