@@ -20,6 +20,22 @@ Workhorse is a public beta. While the line is `0.x`, any minor release may chang
 a major line a migration only adds. Breaking changes are always listed with
 upgrade steps.
 
+## Unreleased
+
+### The dashboard bundle uses Mantine 9.7.4
+
+Every release line serves the shared dashboard browser bundle. After 0.10.0, a dependency update
+moved the dashboard to Mantine 9.7.4 and rebuilt that bundle (SM-1839).
+`@stablemates/workhorse-dashboard-server` serves the rebuilt browser assets from `dist/app`. The
+other lines carry the rebuilt `read-surface-1.tar.gz`. Its `bundle.json` records the sha256
+`f234a7d60a362c841becc2522ff8dd750958136873ccda90461c26f45f9ba7d1`.
+
+- `@stablemates/workhorse-dashboard` declares Mantine `^9.7.4`, up from `^9.7.2`.
+- `@stablemates/workhorse-dashboard-server` depends on `@orpc/client` and `@orpc/server` at exactly
+  `1.16.1`, up from `1.15.7`.
+
+The `dashboard/v1` procedures and the read surface version do not change (SM-1858).
+
 ## 0.10.0 — 2026-10-26
 
 The npm packages, Python distribution, Go module, Rust crate, Ruby gem, JVM artifacts, and .NET

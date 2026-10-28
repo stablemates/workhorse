@@ -9,6 +9,17 @@ Workhorse is a public beta. Any 0.x minor release may change behaviour. From `0.
 upgrades in place: every release ships ordered migrations, and inside a major line a migration only
 adds.
 
+## Unreleased
+
+### The dashboard bundle uses Mantine 9.7.4
+
+The Rust dashboard backend serves the shared dashboard browser bundle. After 0.10.0, a dependency
+update moved the dashboard to Mantine 9.7.4 and rebuilt that bundle (SM-1839). The crate now carries
+the rebuilt `read-surface-1.tar.gz`. Its `bundle.json` records the sha256
+`f234a7d60a362c841becc2522ff8dd750958136873ccda90461c26f45f9ba7d1`.
+
+The `dashboard/v1` procedures and the read surface version do not change (SM-1858).
+
 ## 0.10.0 — 2026-10-26
 
 The npm packages, Python distribution, Go module, Rust crate, Ruby gem, JVM artifacts, and .NET
