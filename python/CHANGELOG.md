@@ -163,6 +163,18 @@ with the error. The worker still starts the later threads of the claim, because 
 holds a lease. The task of the failed thread stays leased until lease recovery returns it to its
 queue.
 
+### An interrupt in a bare worker run no longer blocks the stop
+
+A worker starts the handler threads of claimed tasks after it admits them to its dispatch state. A
+bare `worker.run()` on the main thread gets a `KeyboardInterrupt` when a person presses Ctrl+C.
+Before this change, if the interrupt arrived before the worker started each admitted thread, the
+threads that did not start stayed in the dispatch state. The stop then waited for them and did not
+end (SM-1880). The process runner was not affected, because it turns SIGINT and SIGTERM into a stop.
+
+Now the worker releases each admitted thread that did not start, and the run raises the interrupt.
+A thread that started runs its task to the end. The task of a released thread stays leased until
+lease recovery returns it to its queue.
+
 ### The dashboard page tells each cache not to store it
 
 The dashboard page holds `window.workhorseDashboard`, which contains the `auditActor` of the

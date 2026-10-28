@@ -7,7 +7,7 @@ from contextlib import contextmanager
 from itertools import pairwise
 from threading import Event, Lock, Thread, current_thread
 from time import monotonic, sleep
-from typing import Any
+from typing import Any, ClassVar
 
 import pytest
 
@@ -744,6 +744,122 @@ def test_drain_that_sees_a_handler_thread_before_its_start_fails_does_not_wait_f
         held.set()
         wait_for(lambda: len(executions.accepted) == 1, "the first task did not complete")
     assert [str(error) for error in errors] == ["can't start new thread"]
+
+
+def thread_that_is_interrupted(task_id: str, *, after_start: bool = False) -> type[Thread]:
+    """Raise KeyboardInterrupt in the start of the handler thread of task_id.
+
+    With after_start, the interrupt arrives after the native thread exists. Without it, the
+    interrupt arrives before, and the class keeps the thread so that a test can start it later.
+    """
+
+    class InterruptedStart(Thread):
+        interrupted: ClassVar[list[Thread]] = []
+
+        def start(self) -> None:
+            if self.name == f"workhorse-handler-{task_id}":
+                InterruptedStart.interrupted.append(self)
+                if after_start:
+                    super().start()
+                raise KeyboardInterrupt
+            super().start()
+
+    return InterruptedStart
+
+
+def test_interrupt_in_a_handler_thread_start_releases_the_threads_that_did_not_start(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    rows = handled_rows(3)
+    first, interrupted, last = (str(row["task_id"]) for row in rows)
+    interrupted_start = thread_that_is_interrupted(interrupted)
+    monkeypatch.setattr(worker_module, "Thread", interrupted_start)
+    claims = FastClaims(rows)
+    worker = scripted_worker(claims, concurrency=3)
+    executions = FastExecutions(worker)
+    with running(worker, executions) as errors:
+        wait_for(lambda: executions.running() == 1, "the first handler thread did not start")
+        wait_for(lambda: len(worker._active_threads) == 1, "the worker did not release a thread")
+        assert_released(worker, interrupted)
+        assert_released(worker, last)
+        executions.open_all()
+        # The drain waits for the thread that started, and then the stop ends.
+        wait_for(lambda: len(errors) == 1, "the stop did not end")
+    assert [type(error) for error in errors] == [KeyboardInterrupt]
+    assert executions.started == [first]
+    assert executions.accepted == [first]
+    # A native thread that starts after its release returns before its handler runs.
+    [thread] = interrupted_start.interrupted
+    Thread.start(thread)
+    thread.join(timeout=5)
+    assert not thread.is_alive()
+    assert executions.started == [first]
+
+
+def test_interrupt_after_a_handler_thread_starts_keeps_its_running_task(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    rows = handled_rows(2)
+    interrupted, last = (str(row["task_id"]) for row in rows)
+    monkeypatch.setattr(
+        worker_module, "Thread", thread_that_is_interrupted(interrupted, after_start=True)
+    )
+    claims = FastClaims(rows)
+    worker = scripted_worker(claims, concurrency=2)
+    executions = FastExecutions(worker)
+    with running(worker, executions) as errors:
+        wait_for(lambda: executions.running() == 1, "the interrupted thread did not run")
+        wait_for(lambda: len(worker._active_threads) == 1, "the worker did not release a thread")
+        with worker._state_lock:
+            assert interrupted in worker._dispatch_order
+        assert_released(worker, last)
+        executions.open_all()
+        wait_for(lambda: len(errors) == 1, "the stop did not end")
+    assert [type(error) for error in errors] == [KeyboardInterrupt]
+    assert executions.started == [interrupted]
+    assert executions.accepted == [interrupted]
+
+
+def test_interrupt_before_a_handler_thread_is_started_waits_for_its_task(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    rows = handled_rows(1)
+    interrupted = str(rows[0]["task_id"])
+    bootstrapped = Event()
+    held = Event()
+
+    class HeldBootstrap(Thread):
+        def start(self) -> None:
+            if self.name != f"workhorse-handler-{interrupted}":
+                super().start()
+                return
+            # The native thread exists and has an ident, but Thread.start has not returned.
+            Thread(target=super().start).start()
+            assert bootstrapped.wait(timeout=5), "the native thread did not start"
+            raise KeyboardInterrupt
+
+        def _set_ident(self) -> None:
+            super()._set_ident()  # type: ignore[misc]
+            if self.name == f"workhorse-handler-{interrupted}":
+                bootstrapped.set()
+                assert held.wait(timeout=5), "the held bootstrap was never released"
+
+    monkeypatch.setattr(worker_module, "Thread", HeldBootstrap)
+    claims = FastClaims(rows)
+    worker = scripted_worker(claims, concurrency=1)
+    executions = FastExecutions(worker)
+    with running(worker, executions) as errors:
+        assert bootstrapped.wait(timeout=5), "the worker did not start the handler thread"
+        # The drain waits for the thread to enter its task, and does not join it too early.
+        sleep(0.05)
+        assert errors == []
+        held.set()
+        wait_for(lambda: executions.running() == 1, "the interrupted task did not run")
+        executions.open_all()
+        wait_for(lambda: len(executions.accepted) == 1, "the interrupted task did not complete")
+        wait_for(lambda: len(errors) == 1, "the stop did not end")
+    assert [type(error) for error in errors] == [KeyboardInterrupt]
+    assert executions.started == [interrupted]
 
 
 class HeldTick(ScriptedClaims):
