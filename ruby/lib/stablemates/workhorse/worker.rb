@@ -1809,17 +1809,18 @@ module Stablemates
       # deadline or an attempt timeout when one passes. While PostgreSQL answers not_due, the first
       # retry waits EXPIRATION_RETRY and each later one waits twice as long, up to
       # EXPIRATION_RETRY_MAX. Each request locks the task row, so a short fixed retry makes the
-      # heartbeat of the attempt answer busy (SM-1701).
+      # heartbeat of the attempt answer busy (SM-1701). The expiry is a database timestamp, so the
+      # watch converts it to a monotonic due time once. Every wait reads only the monotonic clock,
+      # so a step of the wall clock does not move it (SM-1869).
       def watch_expiration(task, ownership, arbiter, cancellation, parent, fail_attempt)
         expiration_at = [task.deadline_at, task.attempt_timeout_at].compact.min
+        # A past expiry is due now.
+        expiration_due = monotonic + [expiration_at - Time.now, 0].max if expiration_at
         retry_at = nil
         retry_delay = EXPIRATION_RETRY
         loop do
-          delay = if retry_at
-            retry_at - monotonic
-          elsif expiration_at
-            expiration_at - Time.now
-          end
+          due = retry_at || expiration_due
+          delay = due && (due - monotonic)
           lease_delay = ownership.lease_remaining
           if delay.nil? || lease_delay < delay
             if lease_delay.positive?

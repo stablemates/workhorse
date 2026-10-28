@@ -8,6 +8,7 @@ import java.net.UnknownHostException;
 import java.nio.charset.StandardCharsets;
 import java.sql.Connection;
 import java.sql.SQLException;
+import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
@@ -4000,53 +4001,72 @@ public final class Worker implements AutoCloseable {
       Arbiter arbiter,
       TaskCancellation cancellation,
       Consumer<Exception> failAttempt) {
-    Instant expirationAt = earliest(task.deadlineAt(), task.attemptTimeoutAt());
-    Long retryAt = null;
-    long retry = EXPIRATION_RETRY_NANOS;
     try {
-      while (true) {
-        Long delay;
-        if (retryAt != null) {
-          delay = retryAt - System.nanoTime();
-        } else if (expirationAt != null) {
-          delay = nanosUntil(expirationAt);
-        } else {
-          delay = null;
-        }
-        long leaseDelay = ownership.leaseRemaining(System.nanoTime());
-        if (delay == null || leaseDelay < delay) {
-          if (leaseDelay > 0) {
-            if (ownership.stop.await(leaseDelay, TimeUnit.NANOSECONDS)) {
-              return;
+      watchExpiration(
+          earliest(task.deadlineAt(), task.attemptTimeoutAt()),
+          Clock.systemUTC(),
+          ownership,
+          () -> {
+            ownership.settlement.lock();
+            try {
+              return settleExpiration(task, arbiter, cancellation);
+            } finally {
+              ownership.settlement.unlock();
             }
-            continue;
-          }
-          // A late accepted answer can close the window first. It then ends the attempt itself.
-          if (ownership.lapse()) {
-            expireLease(ownership, arbiter, cancellation);
-          }
-          return;
-        }
-        if (ownership.stop.await(Math.max(0, delay), TimeUnit.NANOSECONDS)) {
-          return;
-        }
-        String status;
-        ownership.settlement.lock();
-        try {
-          status = settleExpiration(task, arbiter, cancellation);
-        } finally {
-          ownership.settlement.unlock();
-        }
-        if (!"not_due".equals(status)) {
-          return;
-        }
-        retryAt = System.nanoTime() + retry;
-        retry = Math.min(retry * 2, EXPIRATION_RETRY_MAX_NANOS);
-      }
+          },
+          () -> expireLease(ownership, arbiter, cancellation));
     } catch (InterruptedException interrupted) {
       Thread.currentThread().interrupt();
     } catch (RuntimeException error) {
       failAttempt.accept(error);
+    }
+  }
+
+  /**
+   * Waits on the lease window of {@code ownership} and on {@code expirationAt}. If the window ends
+   * first, it calls {@code loseLease}. If the expiry passes first, it calls {@code ask}, and again
+   * while {@code ask} answers {@code not_due}. The expiry is a database timestamp, so {@code
+   * wallClock} converts it to a monotonic due time once. Every wait reads only the monotonic clock,
+   * so a step of the wall clock does not move it (SM-1869).
+   */
+  static void watchExpiration(
+      @Nullable Instant expirationAt,
+      Clock wallClock,
+      Ownership ownership,
+      Supplier<@Nullable String> ask,
+      Runnable loseLease)
+      throws InterruptedException {
+    // A past expiry is due now. nanosUntil saturates, and the sum can wrap, so every comparison
+    // below uses a difference of monotonic values.
+    Long expirationDue =
+        expirationAt == null ? null : System.nanoTime() + nanosUntil(wallClock, expirationAt);
+    Long retryAt = null;
+    long retry = EXPIRATION_RETRY_NANOS;
+    while (true) {
+      Long dueAt = retryAt != null ? retryAt : expirationDue;
+      Long delay = dueAt == null ? null : dueAt - System.nanoTime();
+      long leaseDelay = ownership.leaseRemaining(System.nanoTime());
+      if (delay == null || leaseDelay < delay) {
+        if (leaseDelay > 0) {
+          if (ownership.stop.await(leaseDelay, TimeUnit.NANOSECONDS)) {
+            return;
+          }
+          continue;
+        }
+        // A late accepted answer can close the window first. It then ends the attempt itself.
+        if (ownership.lapse()) {
+          loseLease.run();
+        }
+        return;
+      }
+      if (ownership.stop.await(Math.max(0, delay), TimeUnit.NANOSECONDS)) {
+        return;
+      }
+      if (!"not_due".equals(ask.get())) {
+        return;
+      }
+      retryAt = System.nanoTime() + retry;
+      retry = Math.min(retry * 2, EXPIRATION_RETRY_MAX_NANOS);
     }
   }
 
@@ -4080,9 +4100,14 @@ public final class Worker implements AutoCloseable {
     return first.isBefore(second) ? first : second;
   }
 
-  private static long nanosUntil(Instant time) {
+  /** The nanoseconds until {@code time}: zero for a past time, saturated for a far one. */
+  private static long nanosUntil(Clock wallClock, Instant time) {
+    Duration remaining = Duration.between(wallClock.instant(), time);
+    if (remaining.isNegative()) {
+      return 0;
+    }
     try {
-      return Duration.between(Instant.now(), time).toNanos();
+      return remaining.toNanos();
     } catch (ArithmeticException overflow) {
       return Long.MAX_VALUE;
     }

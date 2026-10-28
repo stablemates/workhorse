@@ -18,6 +18,17 @@ version **89**. They replace function bodies and change no stored rows. The SDK 
 stays at **76**. A 0.10 process keeps working on version 89, because a migration inside a major line
 only adds.
 
+### A step of the wall clock no longer moves the expiry request
+
+A worker asks PostgreSQL to end an attempt when its deadline or its attempt timeout passes. Before
+this change, the worker read the wall clock again after each wait on the lease window (SM-1869). If
+the host clock stepped back 10 minutes, the first expiry request came 10 minutes late. If the clock
+stepped forward, the request came early and got `not_due`. Each retry then locked the task row until
+the real due time.
+
+Now the worker converts the expiry to a monotonic due time once, when its expiry
+watch starts. After that, it reads only the monotonic clock.
+
 ### Row retention lag skips a member of an unfinished task group
 
 Terminal cleanup keeps each member of a task group that has not finished, because the group needs
