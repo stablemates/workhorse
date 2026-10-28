@@ -2,6 +2,10 @@
 // changes a file that the lane reads. The plan job of .github/workflows/ci.yml runs this script and
 // gives each other job of the workflow one boolean output that decides whether the job runs.
 //
+// The static job also runs the steps of one language only when the plan selects the filtered lane
+// of that language (SM-1877). Thus the inputs of a filtered lane also hold each file that the
+// static steps of its language read.
+//
 // The map fails open. If a changed file matches a shared input, or no entry of the map names it,
 // every lane runs. A docs-only pull request runs only the always-run lanes that check the
 // documentation (SM-1681). Pushes, `workflow_dispatch` runs, and the weekly schedule run every lane
@@ -88,6 +92,12 @@ export interface FilteredLane {
 const typescriptBuild = ["typescript/**", "dashboard/**"];
 
 const javaInputs = ["jvm/**", "api/java.txt", "api/kotlin.txt"];
+const jvmResolutionInputs = [
+  "jvm/**/*.gradle.kts",
+  "jvm/gradle/**",
+  "jvm/gradle.properties",
+  "jvm/release-consumer/**",
+];
 const rubyInputs = ["ruby/**", "api/ruby.txt"];
 
 /** Lanes that a pull request runs only when it changes one of their inputs. */
@@ -145,6 +155,9 @@ export const FILTERED_LANES = {
       "Cargo.lock",
       "rust-toolchain.toml",
       "rustfmt.toml",
+      // The static lane runs `pnpm rust:vuln` only when the plan selects this lane, and cargo-deny
+      // reads its configuration from this file.
+      "deny.toml",
       "api/rust.txt",
       // `pnpm rust:conformance:check` holds this generated page to the Rust conformance ledger.
       "docs/rust-conformance.md",
@@ -163,9 +176,17 @@ export const FILTERED_LANES = {
     sources: ["jvm/**", "scripts/check-jvm-release.ts"],
     inputs: javaInputs,
   },
+  // The check writes jvm/gradle/verification-metadata.xml and the file of each release consumer
+  // again, so its result depends only on the plugins and libraries that Gradle resolves. The build
+  // files, the version catalogue, and the Gradle properties decide them. A change to a JVM source
+  // cannot change them, and the jvm lane builds and checks the sources (SM-1877).
   "jvm-verification-metadata": {
-    sources: ["jvm/**", "scripts/jvm-verification-metadata.ts"],
-    inputs: javaInputs,
+    sources: [
+      ...jvmResolutionInputs,
+      "scripts/jvm-verification-metadata.ts",
+      "scripts/jvm-verification-metadata/**",
+    ],
+    inputs: jvmResolutionInputs,
   },
   "spring-boot": { sources: ["jvm/**"], inputs: javaInputs },
   "spring-boot-snapshot": { sources: ["jvm/**"], inputs: javaInputs },
@@ -192,7 +213,6 @@ export const ALWAYS_RUN_LANE_INPUTS = [
   // Configuration that only the static lane reads.
   ".oxfmtrc.json",
   ".oxlintrc.json",
-  "deny.toml",
   "knip.json",
   "lefthook.yml",
 ] as const;
@@ -208,8 +228,8 @@ export const DOC_PATHS = ["docs/**", "site/**", "*.md", "api/README.md"] as cons
  * The always-run lanes that a docs-only pull request runs, because each one has a check that reads
  * the documentation:
  *
- * - `static`: `pnpm format:check`, `pnpm lint` (oxlint and knip over `site/`), and `pnpm typecheck`
- *   (the site and its MDX pages).
+ * - `static`: oxfmt, oxlint, and knip over `site/` (parts of `pnpm format:check` and `pnpm lint`),
+ *   and `pnpm typecheck` (the site and its MDX pages).
  * - `npm-release-scope`: the documentation tests of the unit scope, such as
  *   scripts/guide-reference-values.test.ts and typescript/core/test/site-guide-coverage.test.ts.
  * - `demo`: `pnpm build`, whose site build runs site/scripts/check-language-examples.ts, and the

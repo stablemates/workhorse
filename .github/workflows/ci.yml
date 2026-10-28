@@ -87,6 +87,9 @@ jobs:
     if: fromJSON(needs.plan.outputs.lanes)['static']
     runs-on: depot-ubuntu-24.04
     timeout-minutes: 30
+    # A step that reads the files of one language only runs only when the plan selects the lane of
+    # that language, as scripts/ci-lanes.ts maps it. The cross-language checks and the setup that
+    # they need run in every run. scripts/ci-lanes.test.ts holds each step to its lane (SM-1877).
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -104,17 +107,18 @@ jobs:
       # If GRADLE_SETUP_FALLBACK is true, that post step saves no cache (SM-1874). Every other job
       # that sets up Gradle uses the same three steps.
       - id: setup-gradle
+        if: fromJSON(needs.plan.outputs.lanes)['jvm']
         uses: gradle/actions/setup-gradle@3f5f9adaf7d9fecd50b5935e54106014257a94e6 # v6.4.0
         timeout-minutes: 5
         continue-on-error: true
         with:
           gradle-version: 9.8.2 # Pinned to the gradle version in mise.toml.
           cache-disabled: ${{ env.GRADLE_SETUP_FALLBACK == 'true' }}
-      - if: steps.setup-gradle.outcome != 'success'
+      - if: fromJSON(needs.plan.outputs.lanes)['jvm'] && steps.setup-gradle.outcome != 'success'
         run: |
           rm -rf "$RUNNER_TEMP/.gradle-actions/gradle-installations"
           echo "GRADLE_SETUP_FALLBACK=true" >> "$GITHUB_ENV"
-      - if: steps.setup-gradle.outcome != 'success'
+      - if: fromJSON(needs.plan.outputs.lanes)['jvm'] && steps.setup-gradle.outcome != 'success'
         uses: gradle/actions/setup-gradle@3f5f9adaf7d9fecd50b5935e54106014257a94e6 # v6.4.0
         with:
           gradle-version: 9.8.2 # Pinned to the gradle version in mise.toml.
@@ -136,36 +140,41 @@ jobs:
           version: 0.12.21 # Pinned to the uv version in mise.toml.
           enable-cache: true
           cache-suffix: static
-      # `sql-catalogues:check` formats the Rust statement catalogue with rustfmt, and `rust:vuln` asks
-      # cargo for the dependency graph of the root Cargo.lock.
+      # `sql-catalogues:check` and `dashboard-spec:check` format the Rust catalogues with rustfmt, so
+      # this step runs in every run. `rust:vuln` asks cargo for the dependency graph of the root
+      # Cargo.lock.
       - uses: actions-rust-lang/setup-rust-toolchain@c8ff772090ab9d00f7f7bd7b388f3c3032282e3b # v1
         with:
           toolchain: 1.89.0 # Pinned to the rust version in mise.toml.
           components: rustfmt
           cache: false
           rustflags: ""
-      - uses: taiki-e/install-action@1e29709c0ec63babbe8f266397a465f29a825f91 # v2.87.31
+      - if: fromJSON(needs.plan.outputs.lanes)['rust']
+        uses: taiki-e/install-action@1e29709c0ec63babbe8f266397a465f29a825f91 # v2.87.31
         with:
           tool: cargo-deny@0.20.2 # Pinned to the cargo-deny version in mise.toml.
-      # `pnpm lint` runs RuboCop over the Ruby gem, `ruby-api:check` loads it to read its API, and
+      # `ruby:lint` runs RuboCop over the Ruby gem, `ruby-api:check` loads it to read its API, and
       # `ruby:vuln` runs bundler-audit from its bundle.
-      - uses: ruby/setup-ruby@26e5b7d197ebf60545ee9667bcbace0be11ccaec # v1.334.0
+      - if: fromJSON(needs.plan.outputs.lanes)['ruby']
+        uses: ruby/setup-ruby@26e5b7d197ebf60545ee9667bcbace0be11ccaec # v1.334.0
         with:
           ruby-version: 3.4.11 # Pinned to the ruby version in mise.toml.
           working-directory: ruby
           bundler-cache: true
-      # `pnpm lint` compiles the JVM sources with Error Prone and NullAway, `pnpm format:check`
-      # runs google-java-format over them, and `java-api:check` and `kotlin-api:check` build the JVM
+      # `jvm:lint` compiles the JVM sources with Error Prone and NullAway, `jvm:format:check` runs
+      # google-java-format over them, and `java-api:check` and `kotlin-api:check` build the JVM
       # artifacts to read their API, all on the JDK that mise.toml pins.
-      - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
+      - if: fromJSON(needs.plan.outputs.lanes)['jvm']
+        uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
         with:
           distribution: temurin
           java-version: 25.0.4 # Pinned to the java version in mise.toml.
-      # `pnpm lint` runs `dotnet format` over the .NET solution and builds it with the analyzers as
+      # `dotnet:lint` runs `dotnet format` over the .NET solution and builds it with the analyzers as
       # errors, and `dotnet-api:check` builds the packages to read their API, on the SDK that
       # mise.toml pins. The SDK goes into its own directory, so the muxer
       # finds no other SDK of the runner image.
-      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+      - if: fromJSON(needs.plan.outputs.lanes)['dotnet']
+        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
         env:
           DOTNET_INSTALL_DIR: ${{ runner.temp }}/dotnet
         with:
@@ -181,28 +190,58 @@ jobs:
       - run: pnpm dashboard-bundle:check
       - run: pnpm parity:check
       - run: pnpm typescript-api:check
-      - run: pnpm python-api:check
-      - run: pnpm go-api:check
-      - run: pnpm ruby-api:check
-      - run: pnpm java-api:check
-      - run: pnpm kotlin-api:check
-      - run: pnpm dotnet-api:check
+      - if: fromJSON(needs.plan.outputs.lanes)['python']
+        run: pnpm python-api:check
+      - if: fromJSON(needs.plan.outputs.lanes)['go']
+        run: pnpm go-api:check
+      - if: fromJSON(needs.plan.outputs.lanes)['ruby']
+        run: pnpm ruby-api:check
+      - if: fromJSON(needs.plan.outputs.lanes)['jvm']
+        run: pnpm java-api:check
+      - if: fromJSON(needs.plan.outputs.lanes)['jvm']
+        run: pnpm kotlin-api:check
+      - if: fromJSON(needs.plan.outputs.lanes)['dotnet']
+        run: pnpm dotnet-api:check
       - run: pnpm cli-surface:check
       - run: pnpm telemetry-surface:check
-      - run: pnpm format:check
-      - run: pnpm lint
+      # The parts of `pnpm format:check` and `pnpm lint`, so that the part of one language can skip.
+      # `pnpm go:fmt:check` and `pnpm go:lint` also read benchmarks/connection-budget/go-probe,
+      # which the go lane does not read, so they run in every run.
+      - run: pnpm exec oxfmt --check .
+      - if: fromJSON(needs.plan.outputs.lanes)['python']
+        run: pnpm python:format:check
+      - run: pnpm go:fmt:check
+      - if: fromJSON(needs.plan.outputs.lanes)['jvm']
+        run: pnpm jvm:format:check
+      - run: pnpm exec oxlint --deny-warnings --import-plugin --vitest-plugin typescript dashboard site scripts vitest*.config.ts
+      - run: pnpm lint:dead-code
+      - if: fromJSON(needs.plan.outputs.lanes)['python']
+        run: pnpm python:lint
+      - run: pnpm go:lint
+      - if: fromJSON(needs.plan.outputs.lanes)['ruby']
+        run: pnpm ruby:lint
+      - if: fromJSON(needs.plan.outputs.lanes)['jvm']
+        run: pnpm jvm:lint
+      - if: fromJSON(needs.plan.outputs.lanes)['dotnet']
+        run: pnpm dotnet:lint
       - run: pnpm npm:vuln
-      - run: pnpm python:vuln
-      - run: pnpm go:vuln
-      - run: pnpm rust:vuln
-      - run: pnpm ruby:vuln
+      - if: fromJSON(needs.plan.outputs.lanes)['python']
+        run: pnpm python:vuln
+      - if: fromJSON(needs.plan.outputs.lanes)['go']
+        run: pnpm go:vuln
+      - if: fromJSON(needs.plan.outputs.lanes)['rust']
+        run: pnpm rust:vuln
+      - if: fromJSON(needs.plan.outputs.lanes)['ruby']
+        run: pnpm ruby:vuln
       # `jvm:vuln` publishes the JVM artifacts to a scratch repository, resolves their runtime class
       # paths as a caller does, and asks the OSV database about each module.
-      - run: pnpm jvm:vuln
+      - if: fromJSON(needs.plan.outputs.lanes)['jvm']
+        run: pnpm jvm:vuln
       # `dotnet:vuln` restores a consumer of the four .NET packages, checks that it resolves each
       # shipped dependency at its floor, and lists every advisory of its graph. NuGet Audit already
       # fails every restore of the solution on an advisory.
-      - run: pnpm dotnet:vuln
+      - if: fromJSON(needs.plan.outputs.lanes)['dotnet']
+        run: pnpm dotnet:vuln
       # The build and publication tooling, in its own lane under ADR 0058.
       - run: pnpm tooling:vuln
       - run: pnpm typecheck

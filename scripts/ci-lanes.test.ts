@@ -8,6 +8,7 @@ import {
   ALWAYS_RUN_LANES,
   DOC_CHECK_LANES,
   DOC_PATHS,
+  type FilteredLaneName,
   FILTERED_LANE_NAMES,
   FILTERED_LANES,
   LANE_NAMES,
@@ -28,9 +29,14 @@ const trackedFiles = execFileSync("git", ["ls-files", "-z"], { cwd: repository, 
   .filter(Boolean);
 const tracked = new Set(trackedFiles);
 
+interface Step {
+  readonly if?: string;
+  readonly run?: string;
+  readonly uses?: string;
+}
 interface Job {
   readonly if?: string;
-  readonly steps?: readonly { readonly run?: string }[];
+  readonly steps?: readonly Step[];
   readonly needs?: string | readonly string[];
   readonly "continue-on-error"?: boolean;
   readonly outputs?: Record<string, string>;
@@ -38,6 +44,11 @@ interface Job {
 const workflow = parse(readFileSync(path.join(repository, ".github/workflows/ci.yml"), "utf8")) as {
   readonly jobs: Record<string, Job>;
 };
+const packageScripts = (
+  JSON.parse(readFileSync(path.join(repository, "package.json"), "utf8")) as {
+    scripts: Record<string, string>;
+  }
+).scripts;
 function matchesAny(file: string, globs: readonly string[]): boolean {
   return globs.some((glob) => matchesGlob(file, glob));
 }
@@ -180,7 +191,11 @@ describe("the lane-input map and the repository", () => {
     /\.(?:go|rs|rb|py|java|kt|kts|cs|csproj|props|ts|mts|js|mjs|json|toml|ya?ml|gemspec|sh)$/;
 
   // Paths that a source names in prose, such as a Python docstring, without reading the file.
+  // The api-snapshot tasks write build/api/java.txt and build/api/kotlin.txt, not the committed
+  // snapshots.
   const mentions = new Set([
+    "jvm/api-snapshot/build.gradle.kts reads api/java.txt",
+    "jvm/api-snapshot/build.gradle.kts reads api/kotlin.txt",
     "python/tests/test_json_integers.py reads docs/parity.md",
     "python/tests/test_landing_snippets.py reads site/lib/landing-snippets.ts",
     "python/tests/test_landing_snippets.py reads site/scripts/check-language-examples.ts",
@@ -381,7 +396,7 @@ describe("selecting lanes for a pull request", () => {
         "jvm/workhorse/src/main/java/run/workhorse/Worker.java",
         "jvm/workhorse/src/test/java/run/workhorse/internal/ListenerDatabaseTest.java",
       ],
-      lanes: ["jvm", "jvm-verification-metadata", "python", "spring-boot"],
+      lanes: ["jvm", "python", "spring-boot"],
     },
     {
       change: "SM-1572, a Rust worker change",
@@ -414,7 +429,7 @@ describe("selecting lanes for a pull request", () => {
         "jvm/README.md",
         "site/content/docs/installation.mdx",
       ],
-      lanes: ["jvm", "jvm-verification-metadata", "python", "spring-boot"],
+      lanes: ["jvm", "python", "spring-boot"],
     },
     {
       change: "SM-1567, a Go toolchain pin",
@@ -536,8 +551,9 @@ describe("a docs-only pull request", () => {
 
   // Each check that reads the documentation, with the lane that runs it.
   it.each([
-    ["static", "pnpm format:check"],
-    ["static", "pnpm lint"],
+    ["static", "pnpm exec oxfmt --check ."],
+    ["static", `pnpm exec ${packageScripts.lint?.split(" && ")[0] ?? ""}`],
+    ["static", "pnpm lint:dead-code"],
     ["static", "pnpm typecheck"],
     ["demo", "pnpm build"],
     ["demo", "pnpm test:site-smoke:built"],
@@ -557,6 +573,198 @@ describe("a docs-only pull request", () => {
   ])("runs %s in the npm release test scope", (file) => {
     expect(tracked.has(file)).toBe(true);
     expect(matchesAny(file, [...databaseTestFiles, ...pythonToolchainTestFiles])).toBe(false);
+  });
+});
+
+// The steps of the static job that read the files of one language only, by the filtered lane whose
+// inputs hold each file that the step reads. A step runs only when the plan selects that lane. The
+// other steps are cross-language checks and their setup, and they run in every run. For example, the
+// generated catalogues need gofmt, rustfmt, and ruff, so the Go, Rust, and uv setup always runs.
+// pnpm go:fmt:check and pnpm go:lint also read benchmarks/connection-budget/go-probe, which the go
+// lane does not read, so they always run.
+const staticLanguageSteps: Record<string, readonly string[]> = {
+  jvm: [
+    "gradle/actions/setup-gradle",
+    'rm -rf "$RUNNER_TEMP/.gradle-actions/gradle-installations"',
+    "actions/setup-java",
+    "pnpm java-api:check",
+    "pnpm kotlin-api:check",
+    "pnpm jvm:format:check",
+    "pnpm jvm:lint",
+    "pnpm jvm:vuln",
+  ],
+  dotnet: ["actions/setup-dotnet", "pnpm dotnet-api:check", "pnpm dotnet:lint", "pnpm dotnet:vuln"],
+  ruby: ["ruby/setup-ruby", "pnpm ruby-api:check", "pnpm ruby:lint", "pnpm ruby:vuln"],
+  rust: ["taiki-e/install-action", "pnpm rust:vuln"],
+  python: [
+    "pnpm python-api:check",
+    "pnpm python:format:check",
+    "pnpm python:lint",
+    "pnpm python:vuln",
+  ],
+  go: ["pnpm go-api:check", "pnpm go:vuln"],
+};
+
+/** The action of a step without its version, or the first line of its command. */
+function stepKey(step: Step): string {
+  return step.uses?.split("@")[0] ?? step.run?.trim().split("\n")[0] ?? "";
+}
+
+function laneOfStaticStep(step: Step): string | undefined {
+  const key = stepKey(step);
+  return Object.keys(staticLanguageSteps).find((lane) => staticLanguageSteps[lane]?.includes(key));
+}
+
+function laneCondition(lane: string): string {
+  return `fromJSON(needs.plan.outputs.lanes)['${lane}']`;
+}
+
+const staticSteps = workflow.jobs.static?.steps ?? [];
+
+/** The steps of the static job that can run on a pull request with these changed files. */
+function staticStepsThatRun(files: readonly string[]): string[] {
+  const { plan } = planLanes("pull_request", "", files);
+  return staticSteps
+    .filter((step) => {
+      const lane = laneOfStaticStep(step);
+      return lane === undefined || plan[lane as FilteredLaneName];
+    })
+    .map(stepKey);
+}
+
+describe("the static job", () => {
+  it("runs each language step only when the plan selects its lane", () => {
+    const problems: string[] = [];
+    for (const step of staticSteps) {
+      const lane = laneOfStaticStep(step);
+      const condition = step.if ?? "";
+      if (lane !== undefined) {
+        const gate = laneCondition(lane);
+        if (condition !== gate && !condition.startsWith(`${gate} && `))
+          problems.push(`${stepKey(step)} runs without the ${lane} lane`);
+      } else if (condition.includes("needs.plan.outputs.lanes"))
+        problems.push(`${stepKey(step)} has a lane condition but no lane in this test`);
+    }
+    expect(problems).toEqual([]);
+  });
+
+  it("has each language step that this test names", () => {
+    const keys = new Set(staticSteps.map(stepKey));
+    const missing = Object.values(staticLanguageSteps)
+      .flat()
+      .filter((key) => !keys.has(key));
+    expect(missing).toEqual([]);
+  });
+
+  // The job runs the parts of `pnpm lint` and `pnpm format:check` as separate steps, so that the
+  // part of one language can skip. A part that a later change adds to a script must get a step.
+  it.each(["format:check", "lint", "typecheck"])("runs each part of pnpm %s", (script) => {
+    const runs = new Set(staticSteps.flatMap((step) => (step.run ? [step.run.trim()] : [])));
+    if (runs.has(`pnpm ${script}`)) return;
+    const parts = (packageScripts[script] ?? "").split(" && ");
+    expect(parts.length).toBeGreaterThan(1);
+    const missing = parts
+      .map((part) => (part.startsWith("pnpm ") ? part : `pnpm exec ${part}`))
+      .filter((run) => !runs.has(run));
+    expect(missing).toEqual([]);
+  });
+
+  it.each([
+    "pnpm exec oxfmt --check .",
+    "pnpm sql-catalogues:check",
+    "pnpm go:sqlc:check",
+    "pnpm dashboard-spec:check",
+    "pnpm go:fmt:check",
+    "pnpm go:lint",
+    "pnpm typecheck",
+  ])("runs the cross-language step %s in every run", (run) => {
+    const step = staticSteps.find((candidate) => candidate.run?.trim() === run);
+    expect(step).toBeDefined();
+    expect(step?.if).toBeUndefined();
+  });
+
+  // SM-1584 changed Python and the documentation only.
+  it("runs no JVM, .NET, Rust, or Ruby step for a Python change", () => {
+    const runs = staticStepsThatRun([
+      "docs/guides/390-connection-pooling.md",
+      "python/src/workhorse/_pool_hub.py",
+      "python/tests/test_pool_hub.py",
+    ]);
+    const other = new Set(
+      ["jvm", "dotnet", "rust", "ruby"].flatMap((lane) => staticLanguageSteps[lane] ?? []),
+    );
+    expect(runs.filter((key) => other.has(key))).toEqual([]);
+    expect(runs).toContain("pnpm python:lint");
+  });
+
+  it.each([".github/workflows/ci.yml", "pnpm-lock.yaml", "sql/schema/current.sql", "Dockerfile"])(
+    "runs every step for a change to %s",
+    (file) => {
+      expect(staticStepsThatRun([file])).toEqual(staticSteps.map(stepKey));
+    },
+  );
+
+  // A file that a language step reads must select the lane of the step.
+  it.each([
+    ["jvm", "jvm/build.gradle.kts"],
+    ["jvm", "api/java.txt"],
+    ["jvm", "api/kotlin.txt"],
+    ["dotnet", "dotnet/Workhorse.slnx"],
+    ["dotnet", "api/dotnet.txt"],
+    ["ruby", "ruby/.rubocop.yml"],
+    ["ruby", "ruby/Gemfile.lock"],
+    ["ruby", "api/ruby.txt"],
+    ["rust", "Cargo.toml"],
+    ["rust", "Cargo.lock"],
+    ["rust", "deny.toml"],
+    ["python", "python/pyproject.toml"],
+    ["python", "python/uv.lock"],
+    ["python", "api/python.txt"],
+    ["go", "go/go.sum"],
+    ["go", "api/go.txt"],
+  ])("selects the %s lane for a change to %s", (lane, file) => {
+    expect(tracked.has(file)).toBe(true);
+    const selection = selectLanes([file]);
+    expect(selection.all || selection.lanes.has(lane as FilteredLaneName)).toBe(true);
+    expect(staticStepsThatRun([file])).toEqual(
+      expect.arrayContaining([...(staticLanguageSteps[lane] ?? [])]),
+    );
+  });
+});
+
+describe("the JVM verification metadata lane", () => {
+  // The files that decide which plugins and libraries Gradle resolves.
+  const resolutionFiles = trackedFiles.filter((file) =>
+    matchesAny(file, [
+      "jvm/**/*.gradle.kts",
+      "jvm/gradle/**",
+      "jvm/gradle.properties",
+      "jvm/release-consumer/**",
+    ]),
+  );
+
+  it.each(resolutionFiles)("runs for a change to %s", (file) => {
+    const selection = selectLanes([file]);
+    expect(selection.all || selection.lanes.has("jvm-verification-metadata")).toBe(true);
+  });
+
+  it("runs for a change to the version catalogue", () => {
+    expect(resolutionFiles).toContain("jvm/gradle/libs.versions.toml");
+  });
+
+  it("skips a change to the JVM sources", () => {
+    const files = [
+      "jvm/workhorse/src/main/java/run/workhorse/Worker.java",
+      "jvm/workhorse-kotlin/src/main/kotlin/run/workhorse/kotlin/Blocking.kt",
+      "jvm/README.md",
+    ];
+    for (const file of files) {
+      expect(tracked.has(file)).toBe(true);
+      const selection = selectLanes([file]);
+      const lanes = selection.all ? undefined : [...selection.lanes];
+      expect(lanes).toContain("jvm");
+      expect(lanes).not.toContain("jvm-verification-metadata");
+    }
   });
 });
 
