@@ -34,7 +34,7 @@ def deadlock() -> Exception:
 
 @pytest.mark.parametrize(
     "statement",
-    [STATEMENTS.complete, STATEMENTS.fail, STATEMENTS.heartbeat_many, STATEMENTS.update_progress],
+    [STATEMENTS.complete, STATEMENTS.fail, STATEMENTS.update_progress],
 )
 def test_sends_a_deadlock_victim_again(statement: DriverStatement) -> None:
     executor = ScriptedWrites([deadlock()] * (FENCED_WRITE_DEADLOCK_ATTEMPTS - 1))

@@ -178,7 +178,9 @@ RSpec.describe "Worker heartbeat reservation" do
     pool.refuse = true
     started = monotonic
     expect { worker.run_once }.to raise_error(W::WorkerStartupError) { |error|
-      expect(error.message).to include("FakeLendingPool (size 3)", "0.3 s", "shared_heartbeats: true")
+      expect(error.message).to include("FakeLendingPool (size 3)", "0.3 s",
+        "; grow the pool, or check that the database accepts connections")
+      expect(error.message).not_to include("shared_heartbeats")
     }
     expect(monotonic - started).to be_between(0.3, 2)
     # Nothing registered and nothing claimed.
@@ -247,7 +249,7 @@ RSpec.describe "Worker heartbeat reservation" do
 
       super(&block)
     end
-    expect { worker.run_once }.to raise_error(W::WorkerStartupError, /readiness check.*shared_heartbeats: true/)
+    expect { worker.run_once }.to raise_error(W::WorkerStartupError, /readiness check.*grow the pool, or check that the database accepts connections/)
     expect(pool.statements).to be_empty
     wait_until { pool.held.empty? }
   end
@@ -262,12 +264,6 @@ RSpec.describe "Worker heartbeat reservation" do
     expect(runner.join(1)).not_to be_nil
     expect(monotonic - stopped).to be < 0.5
     expect(pool.statements).to be_empty
-  end
-
-  it "starts under shared_heartbeats without a reserved connection" do
-    pool.refuse = true
-    expect(worker(shared_heartbeats: true).run_once).to be(false)
-    expect(pool.checkouts.value).to eq(0)
   end
 
   it "keeps the reservation while workers run with no task, and releases it when the last worker stops" do
@@ -617,7 +613,7 @@ RSpec.describe "Worker heartbeat reservation" do
       super()
     end
     lending = FakeHeartbeatPool.new([broken, FakeHeartbeatConnection.new])
-    heartbeat = W::Worker.const_get(:Heartbeat).new(lending, dedicated: true)
+    heartbeat = W::Worker.const_get(:Heartbeat).new(lending)
     unregister = heartbeat.register(member)
     wait_until { renewals.any? }
     expect(lending.lent.size).to eq(2)

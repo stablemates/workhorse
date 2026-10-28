@@ -704,7 +704,6 @@ class StatementRegistry:
     release_owned: DriverStatement
     fire_due_schedules: DriverStatement
     get_contract: DriverStatement
-    heartbeat_many: DriverStatement
     heartbeat_pool: DriverStatement
     list_checkpoints: DriverStatement
     list_concurrency_policies: DriverStatement
@@ -749,7 +748,6 @@ STATEMENTS = StatementRegistry(
     release_owned=_statement("release_owned_v1"),
     fire_due_schedules=_statement("fire_due_schedules_v2"),
     get_contract=_statement("get_contract_definition_v1"),
-    heartbeat_many=_statement("heartbeat_many_v2"),
     heartbeat_pool=_statement("heartbeat_pool_v1"),
     list_checkpoints=_statement("list_checkpoints"),
     list_concurrency_policies=_statement("list_concurrency_policies"),

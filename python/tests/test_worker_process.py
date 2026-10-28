@@ -15,6 +15,7 @@ from typing import Any, cast
 import psycopg
 import pytest
 from eventual_conditions import eventually
+from reservations import Compatible, ScriptedHeartbeats, ScriptedPool
 
 from workhorse import ClaimedTask, Queue, Worker, run_worker_process
 from workhorse._statements import STATEMENTS, DriverStatement
@@ -305,16 +306,15 @@ class StalledHandlers:
 
 def _stalling_worker(database: FailingDatabase, handlers: StalledHandlers) -> Worker:
     worker = Worker(
-        object(),  # type: ignore[arg-type]
+        ScriptedPool(),  # type: ignore[arg-type]
         queue="process",
         worker_id="python-process-fatal",
         concurrency=2,
         poll_ms=10,
         registry_interval_ms=0,
-        shared_heartbeats=True,
-        _executor=database,
+        _executor=Compatible(database),
+        _heartbeat_executor_factory=ScriptedHeartbeats().open,
     )
-    worker._compatibility.assert_compatible = lambda: None  # type: ignore[method-assign]
     worker._listens = False
     worker._execute_claimed_task = handlers.execute  # type: ignore[method-assign]
     return worker.handle(STALLED_TYPE, lambda _payload, _context: None)

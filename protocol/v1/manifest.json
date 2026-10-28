@@ -431,7 +431,6 @@
     },
     {
       "name": "heartbeat_many_v2",
-      "pythonBinding": "heartbeat_many",
       "arity": 2,
       "contract": "SELECT task_id::text AS task_id, status FROM workhorse.heartbeat_many_v2($1::text, $2::jsonb) ORDER BY ordinal",
       "catalogues": ["protocol"]

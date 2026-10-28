@@ -480,7 +480,10 @@ async def test_one_startup_deadline_bounds_a_late_reservation_and_a_stalled_quer
     assert 4.9 < elapsed < 5.6, elapsed
     assert "compatibility check" in str(refused.value)
     assert "5000 ms" in str(refused.value)
-    assert "shared_heartbeats=True" in str(refused.value)
+    assert str(refused.value).endswith(
+        "Grow the pool, or check that the database accepts connections."
+    )
+    assert "shared_heartbeats" not in str(refused.value)
 
 
 @pytest.mark.asyncio

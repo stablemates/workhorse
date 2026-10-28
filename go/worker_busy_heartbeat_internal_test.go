@@ -107,7 +107,7 @@ func newBusyHeartbeatWorker(
 	t.Helper()
 	worker, err := NewWorker(unconnectedPool(t), WorkerOptions{
 		Queue: "busy-heartbeat", WorkerID: "busy-heartbeat-worker",
-		LeaseDuration: lease, HeartbeatInterval: interval, SharedHeartbeats: true,
+		LeaseDuration: lease, HeartbeatInterval: interval,
 	})
 	if err != nil {
 		t.Fatal(err)

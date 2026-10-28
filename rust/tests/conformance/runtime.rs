@@ -43,6 +43,10 @@ pub async fn run_runtime(fixture: &Value) -> Outcome {
         "trace-propagation" => {
             return Outcome::Skipped("the opentelemetry feature is off".into());
         }
+        #[cfg(not(feature = "__conformance-hooks"))]
+        "heartbeat-cadence" => {
+            return Outcome::Skipped("the __conformance-hooks feature is off".into());
+        }
         _ => {}
     }
     let name = format!("runtime_{}", text(fixture, "id"));
@@ -59,6 +63,7 @@ pub async fn run_runtime(fixture: &Value) -> Outcome {
             "batch" => batch(database, fixture).await,
             "cooperative-cancellation" => cooperative_cancellation(database, fixture).await,
             "expiration" => expiration(database, fixture).await,
+            #[cfg(feature = "__conformance-hooks")]
             "heartbeat-cadence" => heartbeat_cadence(database, fixture).await,
             "poll-cadence" => poll_cadence(database, fixture).await,
             "subscription-recovery" => subscription_recovery(database, fixture).await,
@@ -731,58 +736,58 @@ async fn expiration(database: &ScratchDatabase, fixture: &Value) -> Checked {
     assert_outcomes(&client, task, &strings(&fixture["expectedAttemptOutcomes"])).await
 }
 
-/// Gates the first heartbeat round in PostgreSQL, so a second round could only start concurrently.
+/// Counts the heartbeat rounds that start while one is in flight, and how many run at once.
+#[cfg(feature = "__conformance-hooks")]
+struct RoundCounts {
+    calls: AtomicUsize,
+    active: AtomicUsize,
+    most_active: AtomicUsize,
+}
+
+/// Ends one counted round.
+#[cfg(feature = "__conformance-hooks")]
+struct ActiveRound(Arc<RoundCounts>);
+
+#[cfg(feature = "__conformance-hooks")]
+impl Drop for ActiveRound {
+    fn drop(&mut self) {
+        self.0.active.fetch_sub(1, Ordering::SeqCst);
+    }
+}
+
+/// Holds the first heartbeat round in the worker, so a second round could only start
+/// concurrently. PostgreSQL ends a held statement by the deadline of its round, so the hold must
+/// be in the worker, as the Go runner holds the round in its driver.
+#[cfg(feature = "__conformance-hooks")]
 async fn heartbeat_cadence(database: &ScratchDatabase, fixture: &Value) -> Checked {
     let client = database.connect().await;
     let heartbeat = number(fixture, "heartbeatMs");
-    client
-        .batch_execute(&format!(
-            "ALTER FUNCTION workhorse.heartbeat_many_v2(text, jsonb) RENAME TO heartbeat_many_v2_inner;
-             CREATE SEQUENCE workhorse.runtime_heartbeat_calls;
-             CREATE SEQUENCE workhorse.runtime_heartbeat_overlaps;
-             CREATE SEQUENCE workhorse.runtime_heartbeat_released;
-             CREATE FUNCTION workhorse.heartbeat_many_v2(p_worker_id text, p_leases jsonb)
-               RETURNS TABLE (ordinal bigint, task_id uuid, status text)
-               LANGUAGE plpgsql AS $$
-             DECLARE
-               v_call bigint := nextval('workhorse.runtime_heartbeat_calls');
-             BEGIN
-               IF NOT pg_try_advisory_xact_lock(878878) THEN
-                 PERFORM nextval('workhorse.runtime_heartbeat_overlaps');
-               END IF;
-               IF v_call = 1 THEN
-                 WHILE NOT (SELECT is_called FROM workhorse.runtime_heartbeat_released) LOOP
-                   PERFORM pg_sleep(0.005);
-                 END LOOP;
-               ELSE
-                 PERFORM pg_sleep({seconds});
-               END IF;
-               RETURN QUERY SELECT * FROM workhorse.heartbeat_many_v2_inner(p_worker_id, p_leases);
-             END
-             $$;",
-            seconds = 3.0 * heartbeat as f64 / 1000.0
-        ))
-        .await
-        .map_err(sql)?;
-    let counter = |sequence: &'static str| {
-        let client = &client;
-        async move {
-            let row = client
-                .query_one(&format!(
-                        "SELECT CASE WHEN is_called THEN last_value ELSE 0 END FROM workhorse.{sequence}"
-                    ), &[])
-                .await
-                .map_err(sql)?;
-            Ok::<i64, String>(row.get(0))
-        }
-    };
     let queue = queue(database, fixture).await?;
     let task_type = text(fixture, "taskType");
     let task = queue.enqueue(task_type, &json!({}), Default::default()).await.map_err(driver)?;
-    // A shared round is not bounded by the interval, so the gate holds it the way the TypeScript
-    // executor's delayed heartbeatMany does, and only the round loop can keep the next one back.
-    let options = WorkerOptions { shared_heartbeats: true, ..lease_options(fixture) };
-    let worker = worker(database, 4, options)?;
+    let worker = worker(database, 4, lease_options(fixture))?;
+    let counts = Arc::new(RoundCounts {
+        calls: AtomicUsize::new(0),
+        active: AtomicUsize::new(0),
+        most_active: AtomicUsize::new(0),
+    });
+    let (release_first, first_released) = watch::channel(false);
+    worker.hold_heartbeat_rounds_for_test({
+        let counts = Arc::clone(&counts);
+        move || {
+            let (counts, mut released) = (Arc::clone(&counts), first_released.clone());
+            async move {
+                let call = counts.calls.fetch_add(1, Ordering::SeqCst) + 1;
+                let active = counts.active.fetch_add(1, Ordering::SeqCst) + 1;
+                counts.most_active.fetch_max(active, Ordering::SeqCst);
+                let round = ActiveRound(counts);
+                if call == 1 {
+                    let _ = released.wait_for(|released| *released).await;
+                }
+                round
+            }
+        }
+    });
     let (started, mut handler_started) = mpsc::unbounded_channel();
     let (release, released) = watch::channel(false);
     worker.handle(task_type, move |_: Value, _| {
@@ -798,30 +803,21 @@ async fn heartbeat_cadence(database: &ScratchDatabase, fixture: &Value) -> Check
         tokio::spawn(async move { worker.run_once().await })
     };
     handler_started.recv().await.ok_or("the handler never started")?;
-    eventually("no heartbeat round started", || async {
-        Ok(counter("runtime_heartbeat_calls").await? >= 1)
-    })
-    .await?;
+    let calls = || counts.calls.load(Ordering::SeqCst) as i64;
+    eventually("no heartbeat round started", || async { Ok(calls() >= 1) }).await?;
     tokio::time::sleep(Duration::from_millis(2 * heartbeat as u64)).await;
-    let blocked = counter("runtime_heartbeat_calls").await?;
+    let blocked = calls();
     let want_blocked = number(fixture, "expectedCallsWhileBlocked");
     check(blocked == want_blocked, || {
         format!("{blocked} heartbeat rounds started while one was blocked, want {want_blocked}")
     })?;
-    client
-        .execute("SELECT nextval('workhorse.runtime_heartbeat_released')", &[])
-        .await
-        .map_err(sql)?;
+    let _ = release_first.send(true);
     let minimum = number(fixture, "expectedMinimumCallsBeforeSettlement");
-    eventually("the heartbeat rounds did not resume", || async {
-        Ok(counter("runtime_heartbeat_calls").await? >= minimum)
-    })
-    .await?;
+    eventually("the heartbeat rounds did not resume", || async { Ok(calls() >= minimum) }).await?;
     let _ = release.send(true);
     let processed = running.await.map_err(|error| error.to_string())?.map_err(driver)?;
     check(processed, || "run_once() processed nothing".into())?;
-    let overlaps = counter("runtime_heartbeat_overlaps").await?;
-    let concurrent = 1 + overlaps;
+    let concurrent = counts.most_active.load(Ordering::SeqCst) as i64;
     let maximum = number(fixture, "expectedMaximumOverlap");
     check(concurrent <= maximum, || {
         format!("{concurrent} heartbeat rounds ran at once, want at most {maximum}")

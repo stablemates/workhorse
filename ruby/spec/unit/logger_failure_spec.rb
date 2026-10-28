@@ -25,7 +25,7 @@ RSpec.describe "A logger that raises" do
       settle: ->(status) { calls << [:settle, status] },
       fail: ->(error) { calls << [:fail, error] }, lease_ends_at: -> {}
     )
-    heartbeat = W::Worker::Heartbeat.new(FakeExecutor.new, dedicated: false)
+    heartbeat = W::Worker::Heartbeat.new(FakeHeartbeatPool.new([]))
     heartbeat.instance_variable_get(:@members)[["w", task.id]] = member
     allow(Kernel).to receive(:warn)
     heartbeat.send(:settle, [member], {task.id => "accepted"}, 1.5)

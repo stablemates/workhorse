@@ -19,7 +19,7 @@ RSpec.describe "Worker on the fast tier against PostgreSQL" do
 
   def worker(**options)
     W::Worker.new(@pool, queues: [@queue_name], polling_only: true, poll_interval: 0.01, disable_registry: true,
-      shared_heartbeats: true, **options)
+      **options)
   end
 
   # Runs +subject+ until the block holds, then stops it and returns the run's error, if any.
@@ -167,10 +167,18 @@ RSpec.describe "Worker on the fast tier against PostgreSQL" do
 
   # Holds each tier read of +subject+ until a heartbeat round renews a lease after the read began,
   # and fails the first read when +fail_first+. A read that no heartbeat covers waits +limit+
-  # seconds, past the lease, so the lease expires. The shared heartbeat runs through this executor.
+  # seconds, past the lease, so the lease expires. The heartbeat sends its rounds on the dedicated
+  # heartbeat connection, not through this executor.
   def slow_tier_reads(subject, limit, fail_first: false)
     reads = Concurrent::AtomicFixnum.new
     renewals = Concurrent::AtomicFixnum.new
+    subject.instance_variable_get(:@heartbeat).define_singleton_method(:bounded_rows) do |*arguments|
+      rows = super(*arguments)
+      if arguments[1] == W::SqlCatalogue::HEARTBEAT_POOL_V1 && rows.any? { |row| row["status"] == "accepted" }
+        renewals.increment
+      end
+      rows
+    end
     executor = subject.instance_variable_get(:@executor)
     original = executor.method(:rows)
     executor.define_singleton_method(:rows) do |sql, params = []|
@@ -180,9 +188,7 @@ RSpec.describe "Worker on the fast tier against PostgreSQL" do
         sleep 0.01 until renewals.value > renewed || Process.clock_gettime(Process::CLOCK_MONOTONIC) > deadline
         raise "the tier read failed" if fail_first && reads.increment == 1
       end
-      rows = original.call(sql, params)
-      renewals.increment if sql == W::SqlCatalogue::HEARTBEAT_MANY_V2 && rows.any? { |row| row["status"] == "accepted" }
-      rows
+      original.call(sql, params)
     end
   end
 

@@ -1,6 +1,5 @@
 # frozen_string_literal: true
 
-require "logger"
 require "opentelemetry"
 require "spec_helper"
 
@@ -49,7 +48,6 @@ RSpec.describe "Failed heartbeat rounds" do
         wrapped(database_error(nil), PG::ConnectionBad.new("closed"))
       },
       "a socket timeout" => -> { IO::TimeoutError.new("Blocking operation timed out!") },
-      # Under shared_heartbeats: true the round borrows its connection through the pool's +with+.
       "a connection_pool wait that ends at the pool's limit" => lambda {
         ConnectionPool::TimeoutError.new("Waited 5 sec, 0/5 available")
       },
@@ -120,8 +118,8 @@ RSpec.describe "Failed heartbeat rounds" do
       define_method(:meter) { |*| meter_class.new(instruments, measurements) }
     end
 
-    # Answers as PostgreSQL would. A claim hands out the pending task once. The first heartbeat
-    # fails as +fail_round+ says; each later heartbeat accepts every lease.
+    # Answers as PostgreSQL would. A claim hands out the pending task once. The heartbeat rounds run
+    # on the connection that +connection_class+ lends.
     pool_class = Class.new(FakeExecutor) do
       attr_accessor :connection_class
 
@@ -144,16 +142,6 @@ RSpec.describe "Failed heartbeat rounds" do
           completed << params[0]
           [{"accepted" => "t"}]
         when W::SqlCatalogue::FAIL_V1 then [{"state" => "failed"}]
-        when W::SqlCatalogue::HEARTBEAT_MANY_V2
-          if heartbeats.increment == 1
-            # Executor#rows translates a PG::Error, and the original stays the cause.
-            begin
-              raise PG::ConnectionBad, "server closed the connection unexpectedly"
-            rescue PG::Error => e
-              raise W::Executor.translate(e)
-            end
-          end
-          JSON.parse(params[1]).map { |lease| {"task_id" => lease["taskId"], "status" => "accepted"} }
         else []
         end
       end
@@ -179,10 +167,10 @@ RSpec.describe "Failed heartbeat rounds" do
       }
     end
 
-    def run_until_three_heartbeats(**options)
+    def run_until_three_heartbeats
       aborted = nil
       subject = W::Worker.new(pool, queues: ["default"], polling_only: true, poll_interval: 0.01,
-        disable_registry: true, lease: 1, heartbeat: 0.05, **options)
+        disable_registry: true, lease: 1, heartbeat: 0.05)
       subject.handle("round-failure") do |_payload, context|
         deadline = Process.clock_gettime(Process::CLOCK_MONOTONIC) + 3
         sleep 0.01 until heartbeats.value >= 3 || Process.clock_gettime(Process::CLOCK_MONOTONIC) > deadline
@@ -199,62 +187,6 @@ RSpec.describe "Failed heartbeat rounds" do
         .to eq([[round_failure, 1, {"workhorse.heartbeat.failure_reason" => reason}]])
       # A failed round gives no ownership verdict, so the verdict counter stays empty.
       expect(provider.measurements.select { |name, _, _| name == verdict_failure }).to eq([])
-    end
-
-    # Review of SM-1704: a later batch that stalls must not delay the count of the round.
-    it "counts a failed borrowed batch at once, while a later batch of the round still waits" do
-      heartbeat = heartbeat_class.new(nil, dedicated: false)
-      members = %w[first second].each_with_index.map do |worker_id, index|
-        task = W::ClaimedTask.new(
-          id: format("00000000-0000-4000-8000-%012d", index + 1), queue: "default", type: "t", priority: 0,
-          payload: {}, contract_version: nil, result_max_bytes: nil, redact_error_details: false,
-          trace_context: nil, attempt: 1, max_attempts: 3, retry_policy: nil, deadline_at: nil,
-          execution_timeout_ms: nil, attempt_timeout_at: nil, fence_token: 7, lease_expires_at: nil
-        )
-        heartbeat_class::Member.new(worker_id: worker_id, task: task, lease_ms: 30_000, interval: 0.05,
-          logger: Logger.new(IO::NULL), renew: ->(_) {}, settle: ->(_) {}, fail: ->(_) {}, lease_ends_at: -> {})
-      end
-      release = Concurrent::Event.new
-      # Set when batch two has started and waits for +release+.
-      second_waits = Concurrent::Event.new
-      statements = Concurrent::Array.new
-      round = Thread.new do
-        heartbeat.send(:send_each, heartbeat.send(:batches, members), Float::INFINITY) do |_sql, params, _timeout|
-          statements << params[0]
-          raise PG::ConnectionBad, "server closed the connection unexpectedly" if params[0] == "first"
-
-          second_waits.set
-          release.wait(5)
-          []
-        end
-      end
-      counted = lambda do
-        provider.measurements.select { |name, _, _| name == round_failure }
-      end
-      # Batch one fails before batch two starts, so the count must be there while batch two waits.
-      entered = second_waits.wait(2)
-      deadline = Process.clock_gettime(Process::CLOCK_MONOTONIC) + 2
-      sleep 0.01 until counted.call.any? || Process.clock_gettime(Process::CLOCK_MONOTONIC) > deadline
-      seen = counted.call.dup
-      waiting = statements.to_a
-      still_waiting = round.alive? && !release.set?
-      release.set
-      expect(round.join(5)).not_to be_nil
-      expect(entered).to be(true)
-      expect(still_waiting).to be(true)
-      expect(waiting).to eq(%w[first second])
-      expect(seen).to eq([[round_failure, 1, {"workhorse.heartbeat.failure_reason" => "connection"}]])
-      expect(counted.call).to eq(seen)
-    ensure
-      release&.set
-    end
-
-    it "counts a failed borrowed round once by reason and completes the task" do
-      expect(run_until_three_heartbeats(shared_heartbeats: true)).to be(false)
-      expect(heartbeats.value).to be >= 3
-      expect(completed).to eq([task_id])
-      expect(pool.statements.map(&:first)).not_to include(W::SqlCatalogue::FAIL_V1)
-      expect_one_round_failure("connection")
     end
 
     it "counts a failed round on the dedicated connection once by reason and completes the task" do

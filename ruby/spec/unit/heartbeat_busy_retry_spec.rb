@@ -36,14 +36,9 @@ RSpec.describe "Worker heartbeat busy retry" do
   # recorded in +calls+.
   def drive(heartbeat, calls, &answer)
     heartbeat.instance_variable_set(:@previous, monotonic)
-    statement = lambda do |sql, params, timeout|
-      # A dedicated heartbeat sends heartbeat_pool_v1 with batches, and a borrowing one sends
-      # heartbeat_many_v2 with one list of leases.
-      batches = if sql == W::SqlCatalogue::HEARTBEAT_POOL_V1
-        JSON.parse(params[0]).map { |batch| batch["leases"] }
-      else
-        [JSON.parse(params[1])]
-      end
+    statement = lambda do |_sql, params, timeout|
+      # The heartbeat sends heartbeat_pool_v1 with batches.
+      batches = JSON.parse(params[0]).map { |batch| batch["leases"] }
       ids = batches.flatten.map { |lease| lease["taskId"] }
       calls << {at: monotonic, ids: ids, timeout: timeout}
       statuses = answer.call(ids, calls.size)
@@ -68,7 +63,7 @@ RSpec.describe "Worker heartbeat busy retry" do
 
   # The current thread stands in for the heartbeat thread, so register starts none. Only +drive+
   # runs rounds.
-  let(:heartbeat) { heartbeat_class.new(nil, dedicated: true).tap { |made| made.instance_variable_set(:@thread, Thread.current) } }
+  let(:heartbeat) { heartbeat_class.new(nil).tap { |made| made.instance_variable_set(:@thread, Thread.current) } }
   let(:calls) { Concurrent::Array.new }
   let(:events) { Concurrent::Array.new }
   let(:first) { claimed(1) }
@@ -169,20 +164,6 @@ RSpec.describe "Worker heartbeat busy retry" do
     wait_until { calls.size >= 2 }
     expect(calls[1][:ids]).to eq([second.id])
     expect(calls[1][:timeout]).to be_between(0.02, 0.07)
-  end
-
-  it "runs the busy retry of a borrowing heartbeat, which has no deadline, also 15 ms before the regular slot" do
-    interval = 0.4
-    borrowing = heartbeat_class.new(nil, dedicated: false).tap { |made| made.instance_variable_set(:@thread, Thread.current) }
-    allow(heartbeat_class).to receive(:busy_retry_delay) do
-      borrowing.instance_variable_get(:@previous) + interval - 0.015 - monotonic
-    end
-    @unregister = [first, second].map { |task| borrowing.register(member(task, interval, events)) }
-    drive(borrowing, calls) do |ids, number|
-      ids.to_h { |id| [id, (number == 1 && id == second.id) ? "busy" : "accepted"] }
-    end
-    wait_until { calls.size >= 2 }
-    expect(calls[1][:ids]).to eq([second.id])
   end
 
   it "ignores a result for a member that was replaced or left while the round ran" do

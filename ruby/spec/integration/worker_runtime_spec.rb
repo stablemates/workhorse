@@ -356,18 +356,17 @@ RSpec.describe "Worker runtime against PostgreSQL" do
     task_id = queue.enqueue("busy", {}).task_id
     release = Concurrent::Event.new
     started = Concurrent::Event.new
-    subject = worker(lease: 30, heartbeat: 0.2, shared_heartbeats: true).handle("busy") do
+    subject = worker(lease: 30, heartbeat: 0.2).handle("busy") do
       started.set
       release.wait(30)
       {}
     end
     results = Concurrent::Array.new
-    executor = subject.instance_variable_get(:@executor)
-    original = executor.method(:rows)
-    executor.define_singleton_method(:rows) do |sql, params = []|
+    # Records the statuses and the duration of each round on the dedicated heartbeat connection.
+    subject.instance_variable_get(:@heartbeat).define_singleton_method(:bounded_rows) do |*arguments|
       sent = Process.clock_gettime(Process::CLOCK_MONOTONIC)
-      rows = original.call(sql, params)
-      if sql == W::SqlCatalogue::HEARTBEAT_MANY_V2
+      rows = super(*arguments)
+      if arguments[1] == W::SqlCatalogue::HEARTBEAT_POOL_V1
         results << [rows.map { |row| row["status"] }, Process.clock_gettime(Process::CLOCK_MONOTONIC) - sent]
       end
       rows

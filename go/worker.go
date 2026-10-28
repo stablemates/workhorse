@@ -312,11 +312,6 @@ type WorkerOptions struct {
 	ScheduleCatchupLimit int
 	ShutdownGracePeriod  time.Duration
 	PollingOnly          bool
-	// SharedHeartbeats opts out of the dedicated heartbeat connection reservation. Without it, Run
-	// and RunOnce refuse to start unless the pool lends the heartbeat connection and then one more
-	// connection for the compatibility check within the larger of HeartbeatInterval and 5 s, and
-	// the worker claims no task while the pool holds no heartbeat connection.
-	SharedHeartbeats bool
 	// Cohorts splits the slots into fixed shares for fast-tier dispatch (ADR 0076). It takes 1
 	// through Concurrency. Zero selects the default: one cohort below concurrency 8, otherwise one
 	// per 8 slots between 2 and 8, and never more than the pool connections the worker leaves spare.
@@ -397,7 +392,6 @@ type Worker struct {
 	heartbeatWake        chan struct{}
 	heartbeatRunning     bool
 	heartbeatLease       *heartbeatConnectionLease
-	sharedHeartbeats     bool
 	// heartbeatRound sends the heartbeat statements of one round and returns the status of each
 	// member, in the order of members. It is queryHeartbeatRound outside tests.
 	heartbeatRound func(members []*heartbeatMember, deadline time.Time) ([]ownershipStatus, error)
@@ -470,12 +464,15 @@ func (lease fencedLease) parameters() []any {
 	return []any{lease.taskID, lease.workerID, lease.fenceToken}
 }
 
-// NewWorker constructs a bounded worker over a caller-owned pool.
+// NewWorker constructs a bounded worker over a caller-owned pool. It refuses a pool whose maximum
+// size is below 3, because the worker holds a dedicated heartbeat connection (ADR 0071).
 func NewWorker(pool *pgxpool.Pool, options WorkerOptions) (*Worker, error) {
 	if pool == nil {
 		return nil, errors.New(nilWorkerPoolMessage)
 	}
-	if pool.Config().MaxConns < 3 && !options.SharedHeartbeats {
+	// The worker holds a dedicated heartbeat connection, borrows one connection for the
+	// compatibility check, and listens on one more unless it polls only (ADR 0071).
+	if pool.Config().MaxConns < 3 {
 		return nil, fmt.Errorf(workerHeartbeatCapacityErrorFormat, pool.Config().MaxConns)
 	}
 	if options.Queue != emptyString && len(options.Queues) > 0 {
@@ -590,9 +587,7 @@ func NewWorker(pool *pgxpool.Pool, options WorkerOptions) (*Worker, error) {
 		if !options.PollingOnly {
 			spare--
 		}
-		if !options.SharedHeartbeats {
-			spare--
-		}
+		spare--
 		cohorts = defaultDispatchCohorts(concurrency, spare)
 	}
 	if cohorts < 1 || cohorts > concurrency {
@@ -649,7 +644,6 @@ func NewWorker(pool *pgxpool.Pool, options WorkerOptions) (*Worker, error) {
 		contracts:                  newContractCache(),
 		heartbeatMembers:           make(map[*heartbeatMember]struct{}),
 		heartbeatWake:              make(chan struct{}, 1),
-		sharedHeartbeats:           options.SharedHeartbeats,
 	}
 	worker.heartbeatRound = worker.queryHeartbeatRound
 	worker.expireOwned = worker.expireOwnedOnce
@@ -670,8 +664,8 @@ func (worker *Worker) Handle(taskType string, handler Handler) *Worker {
 }
 
 // Run listens and polls until the context is cancelled or an operational lifecycle error occurs, then drains.
-// Without SharedHeartbeats, Run first reserves the heartbeat connection and runs the compatibility
-// check inside the startup budget, and it returns an error if either step fails.
+// Run first reserves the heartbeat connection and runs the compatibility check inside the startup
+// budget, and it returns an error if either step fails.
 func (worker *Worker) Run(ctx context.Context) error {
 	releaseRun, err := worker.acquireRun(ctx)
 	if err != nil {
@@ -2720,12 +2714,8 @@ func (worker *Worker) recordLeaseWatchdog(ctx context.Context, task ClaimedTask)
 	)
 }
 
-// holdHeartbeats takes this worker's share of the heartbeat connection its pool lends. A worker
-// that opted out of the reservation heartbeats through the shared pool and holds nothing.
+// holdHeartbeats takes this worker's share of the heartbeat connection its pool lends.
 func (worker *Worker) holdHeartbeats() {
-	if worker.sharedHeartbeats {
-		return
-	}
 	worker.heartbeatMu.Lock()
 	defer worker.heartbeatMu.Unlock()
 	if worker.heartbeatLease == nil {
@@ -2738,13 +2728,7 @@ func (worker *Worker) holdHeartbeats() {
 // borrows one ordinary connection, runs the compatibility check on it, and returns it at once. If
 // either step fails, the worker does not start. The borrow proves that the pool has a connection
 // to spare now. It does not prove that the pool keeps one free.
-//
-// A worker with SharedHeartbeats reserves nothing, and it runs the compatibility check without the
-// budget.
 func (worker *Worker) prepareStart(ctx context.Context) error {
-	if worker.sharedHeartbeats {
-		return worker.compatibility.Assert(ctx)
-	}
 	worker.heartbeatMu.Lock()
 	lease := worker.heartbeatLease
 	worker.heartbeatMu.Unlock()
@@ -2767,7 +2751,7 @@ func (worker *Worker) prepareStart(ctx context.Context) error {
 	return err
 }
 
-// startupError names the pool, the budget, and the opt-out. A run that its caller stopped returns
+// startupError names the pool, its maximum size, the step, and the budget. A run that its caller stopped returns
 // the error unchanged, because the budget did not end it.
 func (worker *Worker) startupError(ctx context.Context, step string, err error) error {
 	if ctx.Err() != nil {
@@ -2778,13 +2762,10 @@ func (worker *Worker) startupError(ctx context.Context, step string, err error) 
 	return fmt.Errorf(workerStartupConnectionErrorFormat, pool, config.MaxConns, step, worker.startupBudget, err)
 }
 
-// heartbeatReady reports whether the worker may claim. A worker with a dedicated heartbeat connection
-// claims no task, ordinary or fused, while its pool holds no such connection (ADR 0071). A round that
-// fails and keeps its connection, or a round that holds the connection, does not close this gate.
+// heartbeatReady reports whether the worker may claim. A worker claims no task, ordinary or fused,
+// while its pool holds no dedicated heartbeat connection (ADR 0071). A round that fails and keeps its
+// connection, or a round that holds the connection, does not close this gate.
 func (worker *Worker) heartbeatReady() bool {
-	if worker.sharedHeartbeats {
-		return true
-	}
 	worker.heartbeatMu.Lock()
 	lease := worker.heartbeatLease
 	worker.heartbeatMu.Unlock()
@@ -3058,18 +3039,18 @@ func (worker *Worker) refreshOwnershipMany(members []*heartbeatMember, deadline 
 }
 
 // heartbeatStatementLeaseLimit is the most leases that one heartbeat_many_v2 call accepts: one
-// statement on the pool, or one batch of a shared heartbeat_pool_v1 statement. heartbeat_many_v2
+// batch of a shared heartbeat_pool_v1 statement. heartbeat_many_v2
 // raises an error above it. A round can hold more members than the concurrency limit, because a fused
 // completion claim registers its tasks before the completing attempts unregister.
 const heartbeatStatementLeaseLimit = 100
 
 // queryHeartbeatRound sends the heartbeats of one round for members and returns the status of each
 // member, in the order of members. It sends the leases in task ID order, in batches of at most
-// heartbeatStatementLeaseLimit. On the shared heartbeat connection, every batch goes into one
-// heartbeat_pool_v1 statement, which can also carry the rounds of other workers on the pool. Under
-// the shared heartbeats opt-out, each batch is its own heartbeat_many_v2 statement on a pooled
-// connection. The round ends by deadline, on the client and on the server, so a statement that
-// stalls cannot hold the batch past the next round.
+// heartbeatStatementLeaseLimit. Every batch goes into one heartbeat_pool_v1 statement on the
+// dedicated heartbeat connection, which can also carry the rounds of other workers on the pool. The
+// round ends by deadline, on the client and on the server, so a statement that stalls cannot hold
+// the batch past the next round. A round that finds the worker's hold released fails, as a round on
+// a released connection does, so it never borrows an ordinary pool connection.
 func (worker *Worker) queryHeartbeatRound(
 	members []*heartbeatMember, deadline time.Time,
 ) ([]ownershipStatus, error) {
@@ -3092,7 +3073,6 @@ func (worker *Worker) queryHeartbeatRound(
 	slices.SortStableFunc(order, func(left, right int) int {
 		return strings.Compare(members[left].task.ID, members[right].task.ID)
 	})
-	var payloads []string
 	var batches []heartbeatBatch
 	for chunk := range slices.Chunk(order, heartbeatStatementLeaseLimit) {
 		requests := make([]lease, 0, len(chunk))
@@ -3107,7 +3087,6 @@ func (worker *Worker) queryHeartbeatRound(
 		if err != nil {
 			return nil, err
 		}
-		payloads = append(payloads, string(payload))
 		object, err := json.Marshal(batch{WorkerID: worker.workerID, Leases: payload})
 		if err != nil {
 			return nil, err
@@ -3139,44 +3118,19 @@ func (worker *Worker) queryHeartbeatRound(
 		}
 		return nil
 	}
-	// Serialization counts against the deadline.
-	if reserved != nil {
-		// The round is all or nothing: its rows arrive only after COMMIT succeeded by the deadline.
-		rowsByBatch, err := reserved.renew(roundContext, time.Until(deadline), batches)
-		if err != nil {
+	if reserved == nil {
+		return nil, errors.New(heartbeatConnectionClosedMessage)
+	}
+	// Serialization counts against the deadline. The round is all or nothing: its rows arrive only
+	// after COMMIT succeeded by the deadline.
+	rowsByBatch, err := reserved.renew(roundContext, time.Until(deadline), batches)
+	if err != nil {
+		return nil, err
+	}
+	for chunkIndex, rows := range rowsByBatch {
+		if err := route(chunkIndex, rows); err != nil {
 			return nil, err
 		}
-		for chunkIndex, rows := range rowsByBatch {
-			if err := route(chunkIndex, rows); err != nil {
-				return nil, err
-			}
-		}
-		return statuses, nil
-	}
-	round := func(ctx context.Context, executor Executor) error {
-		// Each statement commits on its own. If a later statement fails, the round fails, and
-		// the renewals of the earlier statements do not count locally.
-		for chunkIndex, payload := range payloads {
-			rows, err := queryFencedWrite(
-				ctx,
-				executor,
-				protocolStatementRegistry[heartbeatManyStatementName],
-				worker.workerID,
-				payload,
-			)
-			if err != nil {
-				return err
-			}
-			if err := route(chunkIndex, rows); err != nil {
-				return err
-			}
-		}
-		return nil
-	}
-	queryContext, cancel := context.WithDeadline(roundContext, deadline)
-	defer cancel()
-	if err := runBoundedOnPool(queryContext, worker.pool, round); err != nil {
-		return nil, err
 	}
 	return statuses, nil
 }

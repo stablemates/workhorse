@@ -187,9 +187,6 @@ pub struct WorkerOptions {
     pub shutdown_grace_period: Duration,
     /// Never opens the `LISTEN` connection.
     pub polling_only: bool,
-    /// Sends heartbeat rounds through the shared pool instead of a reserved connection. Without
-    /// it, all workers on clones of one pool share one reserved heartbeat connection.
-    pub shared_heartbeats: bool,
     /// The connection the notification listener opens, outside the pool. Without it the worker
     /// polls. All workers on clones of one pool share one listener, so a worker whose value
     /// differs from that of a running worker on the same pool refuses to start.
@@ -216,7 +213,6 @@ impl Default for WorkerOptions {
             schedule_catchup_limit: 100,
             shutdown_grace_period: Duration::from_secs(25),
             polling_only: false,
-            shared_heartbeats: false,
             listen_config: None,
             on_registration_error: None,
             retry_delay: None,
@@ -346,9 +342,10 @@ fn validate(
         return invalid(GRACE_RANGE);
     }
     let capacity = pool.status().max_size;
-    if capacity < MIN_DEDICATED_POOL && !options.shared_heartbeats {
+    // deadpool always knows the maximum size of a pool, so no pool has an unknown size.
+    if capacity < MIN_DEDICATED_POOL {
         return Err(Error::invalid(format!(
-            "worker cannot reserve a dedicated heartbeat connection: max pool size is {capacity}; need at least {MIN_DEDICATED_POOL} (set shared_heartbeats to opt out)"
+            "worker needs a pool with a known maximum size of at least {MIN_DEDICATED_POOL} connections (found {capacity}); give the worker a pool with a maximum size of at least {MIN_DEDICATED_POOL}"
         )));
     }
     Ok(heartbeat)
@@ -484,28 +481,22 @@ fn contain(step: impl FnOnce()) {
 /// statement that outlives its run claims nothing, also after a later run opens its own gate.
 pub(super) struct RunGate {
     open: AtomicBool,
-    heartbeat: Option<Arc<shared::HeartbeatConnection>>,
+    heartbeat: Arc<shared::HeartbeatConnection>,
 }
 
 impl RunGate {
     /// Whether a claim can start now.
     fn is_open(&self) -> bool {
-        self.open.load(Ordering::SeqCst)
-            && self.heartbeat.as_ref().is_none_or(|heartbeat| heartbeat.ready())
+        self.open.load(Ordering::SeqCst) && self.heartbeat.ready()
     }
 
-    /// A permit for one claim statement, if the gate is open. With the dedicated heartbeat
-    /// connection, the permit keeps the reservation valid until the statement ends.
+    /// A permit for one claim statement, if the gate is open. The permit keeps the reservation of
+    /// the heartbeat connection valid until the statement ends.
     pub(super) fn permit(&self) -> Option<crate::queue::GatePermit> {
         if !self.open.load(Ordering::SeqCst) {
             return None;
         }
-        match &self.heartbeat {
-            None => Some(Box::new(())),
-            Some(heartbeat) => {
-                heartbeat.claim_permit().map(|permit| Box::new(permit) as crate::queue::GatePermit)
-            }
-        }
+        self.heartbeat.claim_permit().map(|permit| Box::new(permit) as crate::queue::GatePermit)
     }
 
     fn close(&self) {
@@ -685,15 +676,14 @@ impl Worker {
                 let suffix = format!("{:016x}", Uuid::new_v4().as_u128() as u64);
                 format!("{hostname}-{}-{suffix}", std::process::id())
             });
-        let listener_expected =
-            !options.polling_only && options.listen_config.is_some() && pool.status().max_size >= 2;
+        let listener_expected = !options.polling_only && options.listen_config.is_some();
         let poll_interval = options.poll_interval.unwrap_or(if listener_expected {
             LISTENING_POLL
         } else {
             POLLING_POLL
         });
-        let spare_connections =
-            pool.status().max_size.saturating_sub(usize::from(!options.shared_heartbeats));
+        // The heartbeat connection takes one connection of the pool.
+        let spare_connections = pool.status().max_size - 1;
         let cohorts = options
             .cohorts
             .unwrap_or_else(|| default_cohorts(options.concurrency, spare_connections));
@@ -742,6 +732,27 @@ impl Worker {
         lock(&self.0.empty_wait).map(|(deadline, wakeable)| (deadline.into_std(), wakeable))
     }
 
+    /// Holds each heartbeat round at its start until the future that `gate` returns resolves. The
+    /// round keeps the output of that future until the round ends. No timeout bounds the hold, so
+    /// the round loop starts no other round meanwhile.
+    ///
+    /// Public only so the conformance runner can hold a round in the worker, because PostgreSQL
+    /// ends a held statement by the deadline of its round; not part of the API. Only the internal
+    /// `__conformance-hooks` feature compiles it.
+    #[cfg(feature = "__conformance-hooks")]
+    #[doc(hidden)]
+    pub fn hold_heartbeat_rounds_for_test<F, Fut>(&self, gate: F)
+    where
+        F: Fn() -> Fut + Send + Sync + 'static,
+        Fut: Future + Send + 'static,
+        Fut::Output: Send + 'static,
+    {
+        self.0.heartbeats.set_round_gate(Arc::new(move || {
+            let held = gate();
+            async move { Box::new(held.await) as Box<dyn std::any::Any + Send> }.boxed()
+        }));
+    }
+
     /// Registers the handler for `task_type`, replacing any earlier one.
     ///
     /// A payload that does not decode fails the attempt through the task's retry policy.
@@ -773,10 +784,9 @@ impl Worker {
     /// Claims and executes until `shutdown` resolves, then drains within the grace period.
     ///
     /// Startup has a budget: the larger of the heartbeat interval and 5 s. Within it, the shared
-    /// heartbeat connection of the pool must be present, unless `shared_heartbeats` is set, and
-    /// one more pooled connection must run the schema compatibility check. Otherwise `run`
-    /// returns an error that names the pool, the budget, and the opt-out. A `shutdown` that
-    /// resolves during startup ends the run with `Ok`.
+    /// heartbeat connection of the pool must be present, and one more pooled connection must run
+    /// the schema compatibility check. Otherwise `run` returns an error that names the pool and
+    /// the budget. A `shutdown` that resolves during startup ends the run with `Ok`.
     ///
     /// The grace period starts when the worker observes `shutdown`. Claims in flight, the draining
     /// registration refresh, and running handlers all finish within it. Handlers still running
@@ -828,7 +838,10 @@ impl Worker {
             inner: Arc::clone(inner),
             shutdown: shutdown_token.clone(),
             listening,
-            readiness: inner.heartbeat_connection().map(|heartbeat| heartbeat.readiness()),
+            readiness: inner
+                .heartbeat_connection()
+                .expect("a started run holds the heartbeat connection")
+                .readiness(),
         });
         let deadline = dispatch::dispatch(
             &dispatcher,
@@ -928,8 +941,8 @@ struct WorkerDispatch {
     inner: Arc<Inner>,
     shutdown: StopToken,
     listening: Arc<AtomicBool>,
-    /// Changes when the shared heartbeat connection comes or goes. `None` with `shared_heartbeats`.
-    readiness: Option<watch::Receiver<bool>>,
+    /// Changes when the shared heartbeat connection comes or goes.
+    readiness: watch::Receiver<bool>,
 }
 
 impl dispatch::Dispatch for WorkerDispatch {
@@ -976,7 +989,7 @@ impl dispatch::Dispatch for WorkerDispatch {
     }
 
     fn readiness(&self) -> Option<watch::Receiver<bool>> {
-        self.readiness.clone()
+        Some(self.readiness.clone())
     }
 
     fn claim(
@@ -1108,13 +1121,13 @@ impl Inner {
         else {
             return Ok(false);
         };
-        let heartbeat = subscription.heartbeat().cloned();
+        let heartbeat = Arc::clone(subscription.heartbeat());
         // Teardown releases the subscription, with the stop deadline of the run, also when a later
         // step of startup fails.
         *lock(&self.subscription) = Some(subscription);
         *lock(&self.run_gate) =
             Some(Arc::new(RunGate { open: AtomicBool::new(true), heartbeat: heartbeat.clone() }));
-        if !self.ready_within(heartbeat, deadline, budget, &stop).await? {
+        if !self.ready_within(&heartbeat, deadline, budget, &stop).await? {
             return Ok(false);
         }
         if !self.late_settled(deadline, budget, &stop).await? {
@@ -1133,12 +1146,7 @@ impl Inner {
         startup_deadline: Instant,
         listen: Option<shared::Listen>,
     ) -> shared::Request {
-        shared::Request {
-            dedicated: !self.options.shared_heartbeats,
-            interval: self.heartbeat_interval,
-            startup_deadline,
-            listen,
-        }
+        shared::Request { interval: self.heartbeat_interval, startup_deadline, listen }
     }
 
     /// The startup budget: the larger of the heartbeat interval and 5 s.
@@ -1150,18 +1158,16 @@ impl Inner {
     /// check on one ordinary connection, which goes back to the pool at once.
     async fn ready_within(
         &self,
-        heartbeat: Option<Arc<shared::HeartbeatConnection>>,
+        heartbeat: &shared::HeartbeatConnection,
         deadline: Instant,
         budget: Duration,
         stop: &StopToken,
     ) -> Result<bool, Error> {
-        if let Some(heartbeat) = heartbeat {
-            tokio::select! {
-                () = stop.cancelled() => return Ok(false),
-                ready = timeout_at(deadline, heartbeat.wait_ready()) => if ready.is_err() {
-                    return Err(self.startup_error("could not reserve its heartbeat connection", budget));
-                },
-            }
+        tokio::select! {
+            () = stop.cancelled() => return Ok(false),
+            ready = timeout_at(deadline, heartbeat.wait_ready()) => if ready.is_err() {
+                return Err(self.startup_error("could not reserve its heartbeat connection", budget));
+            },
         }
         let checkout = BoundedPool::new(&self.pool, budget);
         let check = crate::compatibility::assert_schema_compatible(&checkout);
@@ -1178,16 +1184,11 @@ impl Inner {
     }
 
     /// The refusal of a startup step that did not finish within the startup budget. It names the
-    /// pool, the budget, and the opt-out.
+    /// pool and the budget.
     fn startup_error(&self, step: &str, budget: Duration) -> Error {
         let status = self.pool.status();
-        let opt_out = if self.options.shared_heartbeats {
-            ""
-        } else {
-            "; the workers on one pool need one heartbeat connection and at least one more connection (set shared_heartbeats to opt out of the heartbeat connection)"
-        };
         Error::invalid(format!(
-            "worker {step} within the startup budget of {budget:?}: the pool has max size {}, {} connections, {} available, and {} waiting{opt_out}",
+            "worker {step} within the startup budget of {budget:?}: the pool has max size {}, {} connections, {} available, and {} waiting; the workers on one pool need one heartbeat connection and at least one more connection",
             status.max_size, status.size, status.available, status.waiting
         ))
     }
@@ -1280,14 +1281,14 @@ impl Inner {
         }
     }
 
-    /// The shared heartbeat connection of this run. `None` with `shared_heartbeats` or between runs.
+    /// The shared heartbeat connection of this run. `None` between runs.
     fn heartbeat_connection(&self) -> Option<Arc<shared::HeartbeatConnection>> {
-        lock(&self.subscription).as_ref()?.heartbeat().cloned()
+        lock(&self.subscription).as_ref().map(|subscription| Arc::clone(subscription.heartbeat()))
     }
 
-    /// Whether the worker may claim a task now. A worker with the dedicated heartbeat connection
-    /// claims nothing, ordinary or fused, while its pool identity holds no connection (ADR 0071,
-    /// rule 6). No run claims after it ends.
+    /// Whether the worker may claim a task now. A worker claims nothing, ordinary or fused, while
+    /// its pool identity holds no heartbeat connection (ADR 0071, rule 6). No run claims after it
+    /// ends.
     fn claims_allowed(&self) -> bool {
         self.run_gate().is_some_and(|gate| gate.is_open())
     }
@@ -1320,13 +1321,11 @@ impl Inner {
             .await
             .unwrap()
             .unwrap();
-        let heartbeat = subscription.heartbeat().cloned();
+        let heartbeat = Arc::clone(subscription.heartbeat());
         *lock(&self.subscription) = Some(subscription);
         *lock(&self.run_gate) =
             Some(Arc::new(RunGate { open: AtomicBool::new(true), heartbeat: heartbeat.clone() }));
-        if let Some(heartbeat) = heartbeat {
-            heartbeat.wait_ready().await;
-        }
+        heartbeat.wait_ready().await;
     }
 
     /// The wait after an empty claim. Without a caller interval, the base follows the listener: a
@@ -2041,36 +2040,55 @@ mod tests {
         });
     }
 
-    /// SM-1028: the connection a heartbeat round is waiting on returns to the pool before the run ends.
+    /// SM-1028: the connection a heartbeat round is waiting on returns to the pool before the run
+    /// ends. The round waits for the heartbeat connection, which the pool never gives.
     #[tokio::test]
     async fn teardown_waits_for_the_heartbeat_round_in_flight() {
         let options = WorkerOptions {
-            shared_heartbeats: true,
             heartbeat_interval: Some(Duration::from_millis(10)),
             ..Default::default()
         };
         let (port, mut accepted) = silent_server();
-        let worker = Worker::new(silent_pool_on(port), options).unwrap();
+        let pool = silent_pool_on(port);
+        let worker = Worker::new(pool.clone(), options).unwrap();
         let permit = Arc::clone(&worker.0.run_permit).acquire_owned().await.unwrap();
         let scope = RunScope::new(&worker.0, permit);
+        // The run joins the shared connections. The heartbeat connection never becomes present.
+        let reserving = tokio::spawn({
+            let worker = worker.clone();
+            async move { worker.0.reserve_for_test().await }
+        });
         let membership = worker.0.register_heartbeat(
             Uuid::new_v4(),
             1,
             tokio::time::Instant::now() + Duration::from_secs(30),
         );
-        // The round is in flight once the server holds the connection it asked for.
+        // The round is in flight once the server holds the connection it waits for.
         tokio::time::timeout(Duration::from_secs(5), accepted.recv())
             .await
-            .expect("the heartbeat round never connected")
-            .expect("the heartbeat round connected");
+            .expect("the heartbeat connection never connected")
+            .expect("the heartbeat connection connected");
+        // deadpool counts a connection that it still opens as a waiting user.
+        let in_use = || {
+            let status = pool.status();
+            status.size - status.available + status.waiting
+        };
+        assert_eq!(in_use(), 1, "the pool did not count the connection the round waits for");
         drop(membership);
         drop(scope);
-        tokio::time::sleep(Duration::from_millis(50)).await;
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while worker.0.run_permit.available_permits() == 0 {
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .expect("the run never ended");
         assert_eq!(
-            worker.0.run_permit.available_permits(),
+            in_use(),
             0,
-            "the run ended while its heartbeat round still waited for a connection"
+            "the run ended while the pool still lent the connection its heartbeat round waited for"
         );
+        reserving.abort();
     }
 
     fn rejects(options: WorkerOptions, message: &str) {
@@ -2239,15 +2257,23 @@ mod tests {
         let limit =
             WorkerOptions { shutdown_grace_period: MAX_SHUTDOWN_GRACE, ..Default::default() };
         assert!(Worker::new(pool(4), limit).is_ok());
-        let error = Worker::new(pool(2), WorkerOptions::default()).unwrap_err();
-        assert!(error.to_string().starts_with(
-            "worker cannot reserve a dedicated heartbeat connection: max pool size is 2"
-        ));
-        assert!(Worker::new(
-            pool(2),
-            WorkerOptions { shared_heartbeats: true, ..Default::default() }
-        )
-        .is_ok());
+    }
+
+    // SM-1901: every worker reserves a heartbeat connection, so a pool below three connections
+    // fails with a message that names only the pool size.
+    #[tokio::test]
+    async fn a_pool_below_three_connections_is_refused() {
+        for max_size in [1, 2] {
+            let error = Worker::new(pool(max_size), WorkerOptions::default()).unwrap_err();
+            assert!(matches!(error, Error::InvalidArgument(_)), "{error:?}");
+            assert_eq!(
+                error.to_string(),
+                format!(
+                    "worker needs a pool with a known maximum size of at least 3 connections (found {max_size}); give the worker a pool with a maximum size of at least 3"
+                )
+            );
+        }
+        assert!(Worker::new(pool(3), WorkerOptions::default()).is_ok());
     }
 
     #[tokio::test]
@@ -2264,9 +2290,9 @@ mod tests {
         assert_eq!(cohorts(20, concurrency(100)), 8, "at most eight cohorts");
         assert_eq!(cohorts(4, concurrency(100)), 3, "one pool connection is the heartbeat's");
         assert_eq!(
-            cohorts(2, WorkerOptions { shared_heartbeats: true, ..concurrency(100) }),
+            cohorts(3, concurrency(100)),
             2,
-            "shared heartbeats leave the whole pool spare"
+            "the smallest pool keeps two spare connections"
         );
         assert_eq!(
             cohorts(4, WorkerOptions { cohorts: Some(8), ..concurrency(100) }),

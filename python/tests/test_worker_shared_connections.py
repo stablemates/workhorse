@@ -601,13 +601,16 @@ def test_a_sync_worker_refuses_to_start_when_it_cannot_reserve_its_heartbeat_con
             for connection in held:
                 pool.putconn(connection)
 
-    # The startup budget is max(I, 5 s), so the error names 5000 ms, the pool, and the opt-out.
+    # The startup budget is max(I, 5 s), so the error names 5000 ms, the pool, and the remedy.
     assert 4.5 < elapsed < 9, elapsed
     message = str(raised.value)
     assert "reserve its heartbeat connection" in message
     assert "5000 ms" in message
     assert "ConnectionPool" in message
-    assert "shared_heartbeats=True" in message
+    assert message.endswith("Grow the pool, or check that the database accepts connections."), (
+        message
+    )
+    assert "shared_heartbeats" not in message
 
 
 def run_in_new_loop(operation: Callable[[], Awaitable[Any]]) -> BaseException | None:

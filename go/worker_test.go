@@ -2564,87 +2564,6 @@ func TestWorkerBindsTheDatabaseClockToMaintenance(t *testing.T) {
 	}
 }
 
-func TestWorkerOwnershipLifecycleSupportsASingleConnectionPool(t *testing.T) {
-	databaseURL := createConformanceDatabase(t, testDatabaseURL(t), "worker-single-connection")
-	ctx := context.Background()
-	config, err := pgxpool.ParseConfig(databaseURL)
-	if err != nil {
-		t.Fatal(err)
-	}
-	config.MaxConns = 1
-	// Keep the heartbeat on the sole connection so settlement must wait for it.
-	tracer := newHeartbeatQueryTracer(150 * time.Millisecond)
-	config.ConnConfig.Tracer = tracer
-	pool, err := pgxpool.NewWithConfig(ctx, config)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(pool.Close)
-
-	queueName := "go-worker-single-connection"
-	queue := workhorse.NewQueue(workhorse.NewPGXExecutor(pool), queueName)
-	taskID, err := queue.Enqueue(ctx, "single-connection", nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	worker, err := workhorse.NewWorker(pool, workhorse.WorkerOptions{
-		Queue:               queueName,
-		WorkerID:            "single-connection-worker",
-		SharedHeartbeats:    true,
-		LeaseDuration:       10 * time.Second,
-		HeartbeatInterval:   100 * time.Millisecond,
-		PollInterval:        5 * time.Millisecond,
-		MaintenanceInterval: 100 * time.Millisecond,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	handlerStarted := make(chan struct{})
-	releaseHandler := make(chan struct{})
-	var releaseHandlerOnce sync.Once
-	release := func() { releaseHandlerOnce.Do(func() { close(releaseHandler) }) }
-	t.Cleanup(release)
-	worker.Handle("single-connection", func(_ context.Context, _ any, _ *workhorse.HandlerContext) (any, error) {
-		close(handlerStarted)
-		<-releaseHandler
-		return map[string]any{"settled": true}, nil
-	})
-	workerResult := make(chan error, 1)
-	go func() {
-		processed, err := worker.RunOnce(ctx)
-		if err == nil && !processed {
-			err = errors.New("single-connection worker did not process the task")
-		}
-		workerResult <- err
-	}()
-	select {
-	case <-handlerStarted:
-	case <-time.After(5 * time.Second):
-		t.Fatal("single-connection worker did not start the handler")
-	}
-	tracer.waitForCalls(t, 1)
-	release()
-	select {
-	case err := <-workerResult:
-		if err != nil {
-			t.Fatal(err)
-		}
-	case <-time.After(5 * time.Second):
-		t.Fatal("single-connection worker did not settle the heartbeated task")
-	}
-	var settled bool
-	if err := pool.QueryRow(
-		ctx,
-		"SELECT EXISTS (SELECT 1 FROM workhorse.task_outcome WHERE task_id = $1::uuid)",
-		taskID,
-	).Scan(&settled); err != nil {
-		t.Fatal(err)
-	}
-	if !settled {
-		t.Fatal("single-connection worker returned before persisting the task outcome")
-	}
-}
-
 func TestWorkerNotificationsWakeClaimsAndReconnectAfterListenerLoss(t *testing.T) {
 	databaseURL := createConformanceDatabase(t, testDatabaseURL(t), "worker-notifications")
 	ctx := context.Background()
@@ -2652,7 +2571,7 @@ func TestWorkerNotificationsWakeClaimsAndReconnectAfterListenerLoss(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	config.MaxConns = 2
+	config.MaxConns = 3
 	pool, err := pgxpool.NewWithConfig(ctx, config)
 	if err != nil {
 		t.Fatal(err)
@@ -2663,7 +2582,6 @@ func TestWorkerNotificationsWakeClaimsAndReconnectAfterListenerLoss(t *testing.T
 	worker, err := workhorse.NewWorker(pool, workhorse.WorkerOptions{
 		Queue:               queueName,
 		WorkerID:            "notification-worker",
-		SharedHeartbeats:    true,
 		LeaseDuration:       time.Second,
 		HeartbeatInterval:   100 * time.Millisecond,
 		PollInterval:        5 * time.Second,

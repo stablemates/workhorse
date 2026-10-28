@@ -349,6 +349,8 @@ mod tests {
         let mut config = deadpool_postgres::Config::new();
         config.host = Some("/nonexistent-workhorse-socket".into());
         config.dbname = Some("unused".into());
+        // The smallest pool a worker accepts: one heartbeat connection and two more.
+        config.pool = Some(deadpool_postgres::PoolConfig::new(3));
         config.create_pool(Some(deadpool_postgres::Runtime::Tokio1), tokio_postgres::NoTls).unwrap()
     }
 
@@ -370,8 +372,7 @@ mod tests {
         F: Fn(Vec<BatchItem<i64>>) -> Fut + Send + Sync + 'static,
         Fut: Future<Output = Vec<BatchResult<i64>>> + Send + 'static,
     {
-        let options =
-            WorkerOptions { concurrency: 3, shared_heartbeats: true, ..Default::default() };
+        let options = WorkerOptions { concurrency: 3, ..Default::default() };
         let worker = Worker::new(pool(), options).unwrap();
         let coordinator = Arc::new(Coordinator {
             worker: Arc::downgrade(&worker.0),

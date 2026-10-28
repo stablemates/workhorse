@@ -18,6 +18,23 @@ from version 86 to version **89**. They replace function bodies and change no st
 compatibility floor stays at **76**. A 0.10 process keeps working on version 89, because a
 migration inside a major line only adds.
 
+**Give each worker a pool with a known size of at least 3.** `Worker.new` no longer accepts
+`shared_heartbeats:`. Remove the option. If a worker pool reports a size below 3, or reports no
+size, set its size to 3 or more. Each worker process needs 3 connections: the listener, the
+heartbeat connection, and one statement connection. A `polling_only: true` worker opens no
+listener, but it still needs a pool of 3 (SM-1901).
+
+### Breaking changes
+
+- **`shared_heartbeats:` is removed.** Every worker now reserves a dedicated heartbeat connection
+  on its pool (ADR 0071). Before, `shared_heartbeats: true` let heartbeat rounds borrow ordinary
+  pool connections and let a pool below 3 run. Then a heartbeat could wait behind claims and
+  settlements, so a lease could expire and a task could run twice. Now `Worker.new` raises
+  `ArgumentError` when it gets `shared_heartbeats:`, and the message names the removal. A worker
+  on a pool with a size below 3, or with no reported size, raises `ArgumentError` at construction.
+  The worker no longer logs `workhorse.worker.polling_only`, because its pool always has a
+  connection for the listener (SM-1901).
+
 ### Behavior changes
 
 These changes can make code that worked on 0.10 act differently:

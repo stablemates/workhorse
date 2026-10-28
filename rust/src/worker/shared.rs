@@ -41,8 +41,8 @@ struct Entry {
     generation: u64,
     /// Proves the address while the entry exists. It is never upgraded to hold the pool.
     _pool: deadpool_postgres::WeakPool,
+    /// The worker runs that use the shared connections. Each one uses the heartbeat connection.
     subscribers: usize,
-    heartbeat_users: usize,
     heartbeat: Option<Arc<HeartbeatConnection>>,
     /// Set while the last heartbeat user closes the connection.
     heartbeat_closing: Option<watch::Receiver<bool>>,
@@ -65,8 +65,6 @@ static SUBSCRIBERS: AtomicU64 = AtomicU64::new(1);
 /// What one worker run asks of the shared connections.
 #[derive(Clone)]
 pub(super) struct Request {
-    /// The worker uses the dedicated heartbeat connection, so it has no `shared_heartbeats`.
-    pub(super) dedicated: bool,
     pub(super) interval: Duration,
     /// The end of the startup budget. It bounds the first acquisition of the heartbeat connection.
     pub(super) startup_deadline: Instant,
@@ -89,7 +87,7 @@ pub(super) struct Subscription {
     key: PoolKey,
     generation: u64,
     id: u64,
-    heartbeat: Option<Arc<HeartbeatConnection>>,
+    heartbeat: Arc<HeartbeatConnection>,
     listener: Option<Arc<SharedListener>>,
     released: bool,
 }
@@ -145,7 +143,7 @@ fn try_subscribe(pool: &deadpool_postgres::Pool, request: Request) -> Result<Joi
                 return Ok(Joined::Wait(closing.clone()));
             }
         }
-        if let Some(closing) = entry.heartbeat_closing.as_ref().filter(|_| request.dedicated) {
+        if let Some(closing) = &entry.heartbeat_closing {
             return Ok(Joined::Wait(closing.clone()));
         }
     }
@@ -153,7 +151,6 @@ fn try_subscribe(pool: &deadpool_postgres::Pool, request: Request) -> Result<Joi
         generation: GENERATIONS.fetch_add(1, Ordering::Relaxed),
         _pool: pool.weak(),
         subscribers: 0,
-        heartbeat_users: 0,
         heartbeat: None,
         heartbeat_closing: None,
         listener_users: 0,
@@ -162,14 +159,11 @@ fn try_subscribe(pool: &deadpool_postgres::Pool, request: Request) -> Result<Joi
     });
     entry.subscribers += 1;
     let id = SUBSCRIBERS.fetch_add(1, Ordering::Relaxed);
-    let heartbeat = request.dedicated.then(|| {
-        entry.heartbeat_users += 1;
-        let connection = entry.heartbeat.get_or_insert_with(|| {
-            HeartbeatConnection::open(pool, request.interval, request.startup_deadline)
-        });
-        connection.join(request.interval, request.startup_deadline);
-        Arc::clone(connection)
+    let connection = entry.heartbeat.get_or_insert_with(|| {
+        HeartbeatConnection::open(pool, request.interval, request.startup_deadline)
     });
+    connection.join(request.interval, request.startup_deadline);
+    let heartbeat = Arc::clone(connection);
     let listener = request.listen.map(|listen| {
         entry.listener_users += 1;
         let listener =
@@ -183,9 +177,9 @@ fn try_subscribe(pool: &deadpool_postgres::Pool, request: Request) -> Result<Joi
 }
 
 impl Subscription {
-    /// The shared heartbeat connection, when the worker uses the dedicated connection.
-    pub(super) fn heartbeat(&self) -> Option<&Arc<HeartbeatConnection>> {
-        self.heartbeat.as_ref()
+    /// The shared heartbeat connection.
+    pub(super) fn heartbeat(&self) -> &Arc<HeartbeatConnection> {
+        &self.heartbeat
     }
 
     /// Whether the shared listener is connected, when the worker listens.
@@ -228,14 +222,11 @@ impl Subscription {
             return cleanup;
         };
         entry.subscribers -= 1;
-        if self.heartbeat.is_some() {
-            entry.heartbeat_users -= 1;
-            if entry.heartbeat_users == 0 {
-                if let Some(heartbeat) = entry.heartbeat.take() {
-                    let (settled, closing) = watch::channel(false);
-                    entry.heartbeat_closing = Some(closing);
-                    cleanup.heartbeat = Some((heartbeat, settled));
-                }
+        if entry.subscribers == 0 {
+            if let Some(heartbeat) = entry.heartbeat.take() {
+                let (settled, closing) = watch::channel(false);
+                entry.heartbeat_closing = Some(closing);
+                cleanup.heartbeat = Some((heartbeat, settled));
             }
         }
         if let Some(subscribed) = &self.listener {
@@ -941,13 +932,14 @@ impl Drop for SharedListener {
 }
 
 /// The registry state of the pool identity of `pool`, for the lifetime tests: the generation, the
-/// subscriptions, the heartbeat users, and the listener users. `None` when it has no entry.
+/// subscriptions, which are also the heartbeat users, and the listener users. `None` when it has
+/// no entry.
 #[cfg(test)]
-pub(super) fn entry_of(pool: &deadpool_postgres::Pool) -> Option<(u64, usize, usize, usize)> {
+pub(super) fn entry_of(pool: &deadpool_postgres::Pool) -> Option<(u64, usize, usize)> {
     let registry = lock(&REGISTRY);
-    registry.get(&pool_key(pool)).map(|entry| {
-        (entry.generation, entry.subscribers, entry.heartbeat_users, entry.listener_users)
-    })
+    registry
+        .get(&pool_key(pool))
+        .map(|entry| (entry.generation, entry.subscribers, entry.listener_users))
 }
 
 #[cfg(test)]
@@ -974,12 +966,7 @@ mod tests {
     }
 
     fn request() -> Request {
-        Request {
-            dedicated: false,
-            interval: Duration::from_secs(1),
-            startup_deadline: Instant::now(),
-            listen: None,
-        }
+        Request { interval: Duration::from_secs(1), startup_deadline: Instant::now(), listen: None }
     }
 
     /// A heartbeat connection whose group the tests use without a database.
@@ -1213,13 +1200,15 @@ mod tests {
         let pool = pool();
         let first = joined(&pool, request());
         let second = joined(&pool.clone(), request());
-        let (generation, subscribers, _, _) = entry_of(&pool).unwrap();
+        let (generation, subscribers, _) = entry_of(&pool).unwrap();
         assert_eq!(subscribers, 2, "two clones of one pool share one entry");
         first.release(None).await;
-        assert_eq!(entry_of(&pool), Some((generation, 1, 0, 0)));
-        // A dropped subscription releases without a wait.
+        assert_eq!(entry_of(&pool), Some((generation, 1, 0)));
+        // A dropped subscription leaves the entry without a wait. The entry goes when the close of
+        // the heartbeat connection settles.
         drop(second);
-        assert_eq!(entry_of(&pool), None);
+        assert_eq!(entry_of(&pool), Some((generation, 0, 0)));
+        eventually("the dropped subscription never settled", || entry_of(&pool).is_none()).await;
     }
 
     // A subscription of an old generation cannot remove the entry of a new generation.
@@ -1235,7 +1224,7 @@ mod tests {
         let cleanup = old.detach();
         assert!(cleanup.settled, "the old subscription found an entry to clean up");
         drop(cleanup);
-        let (generation, subscribers, _, _) = entry_of(&pool).unwrap();
+        let (generation, subscribers, _) = entry_of(&pool).unwrap();
         assert_eq!((generation, subscribers), (new.generation, 1), "the old cleanup changed it");
         drop(old);
         new.release(None).await;
@@ -1275,7 +1264,7 @@ mod tests {
         assert!(error.to_string().starts_with("worker listen_config differs"), "{error}");
         // A worker that does not listen can still join.
         let polling = joined(&pool, request());
-        assert_eq!(entry_of(&pool).map(|entry| entry.3), Some(2), "one listener, two users");
+        assert_eq!(entry_of(&pool).map(|entry| entry.2), Some(2), "one listener, two users");
         for subscription in [first, same, polling] {
             subscription.release(None).await;
         }
@@ -1462,13 +1451,13 @@ mod tests {
         let (first_run, second_run) = (run(&first), run(&second));
         ready(&first).await;
         ready(&second).await;
-        let (generation, subscribers, heartbeat_users, _) = entry_of(&pool).unwrap();
-        assert_eq!((subscribers, heartbeat_users), (2, 2));
+        let (generation, subscribers, _) = entry_of(&pool).unwrap();
+        assert_eq!(subscribers, 2);
         let shared = first.0.heartbeat_connection().unwrap();
         assert!(Arc::ptr_eq(&shared, &second.0.heartbeat_connection().unwrap()));
         drop(shared);
         stop(first_run).await;
-        assert_eq!(entry_of(&pool), Some((generation, 1, 1, 0)));
+        assert_eq!(entry_of(&pool), Some((generation, 1, 0)));
         assert!(second.0.claims_allowed(), "the first stop closed the shared connection");
         stop(second_run).await;
         released(&pool).await;
@@ -1676,14 +1665,13 @@ mod tests {
             }
         });
         eventually("the release never left the entry", || {
-            entry_of(&pool) == Some((generation, 0, 0, 0))
+            entry_of(&pool) == Some((generation, 0, 0))
         })
         .await;
         // The cleanup task closes the gate when it first runs.
         eventually("the release left the gate open", || !heartbeat.ready()).await;
         assert!(heartbeat.claim_permit().is_none(), "a new claim passed the closing gate");
         let request = crate::worker::shared::Request {
-            dedicated: true,
             interval: Duration::from_millis(300),
             startup_deadline: Instant::now(),
             listen: None,
@@ -1722,7 +1710,7 @@ mod tests {
             let inner = Arc::clone(&worker.0);
             async move { inner.release_subscription(None).await }
         });
-        let closing = Some((generation, 0, 0, 0));
+        let closing = Some((generation, 0, 0));
         eventually("the release never left the entry", || entry_of(&pool) == closing).await;
         release.abort();
         assert!(release.await.unwrap_err().is_cancelled());
@@ -1753,13 +1741,8 @@ mod tests {
         let round = heartbeat.connection().await;
         let deadline = Instant::now() + Duration::from_millis(100);
         worker.0.release_subscription(Some(deadline)).await;
-        assert_eq!(
-            entry_of(&pool),
-            Some((generation, 0, 0, 0)),
-            "the entry went with the deadline"
-        );
+        assert_eq!(entry_of(&pool), Some((generation, 0, 0)), "the entry went with the deadline");
         let request = Request {
-            dedicated: true,
             interval: Duration::from_millis(300),
             startup_deadline: Instant::now(),
             listen: None,
@@ -1898,13 +1881,12 @@ mod tests {
             .create_pool(Some(deadpool_postgres::Runtime::Tokio1), tokio_postgres::NoTls)
             .unwrap();
         let request = Request {
-            dedicated: true,
             interval: Duration::from_millis(100),
             startup_deadline: Instant::now(),
             listen: None,
         };
         let subscription = joined(&pool, request);
-        let heartbeat = Arc::clone(subscription.heartbeat().unwrap());
+        let heartbeat = Arc::clone(subscription.heartbeat());
         let open_connections = || open.load(Ordering::SeqCst);
         for failed in 1..=3 {
             eventually("the keeper never retried", || heartbeat.failed_acquisitions() >= failed)
@@ -1927,7 +1909,7 @@ mod tests {
     async fn cancel_release(
         worker: &crate::Worker,
         pool: &deadpool_postgres::Pool,
-        closing: Option<(u64, usize, usize, usize)>,
+        closing: Option<(u64, usize, usize)>,
     ) {
         let release = tokio::spawn({
             let inner = Arc::clone(&worker.0);
@@ -1947,7 +1929,7 @@ mod tests {
         let worker = crate::Worker::new(pool.clone(), lifetime_options()).unwrap();
         worker.0.reserve_for_test().await;
         let heartbeat = worker.0.heartbeat_connection().unwrap();
-        let closing = Some((entry_of(&pool).unwrap().0, 0, 0, 0));
+        let closing = Some((entry_of(&pool).unwrap().0, 0, 0));
         // A claim statement is in flight. No round holds the connection.
         let attempt = heartbeat.claim_permit().expect("the gate was closed");
         cancel_release(&worker, &pool, closing).await;
@@ -1967,7 +1949,7 @@ mod tests {
         let worker = crate::Worker::new(pool.clone(), lifetime_options()).unwrap();
         worker.0.reserve_for_test().await;
         let heartbeat = worker.0.heartbeat_connection().unwrap();
-        let closing = Some((entry_of(&pool).unwrap().0, 0, 0, 0));
+        let closing = Some((entry_of(&pool).unwrap().0, 0, 0));
         // An abort cannot end a blocking task that has started, so this keeper ends only when the
         // test lets it. Tokio can still cancel a blocking task that has not started, so the test
         // waits until the task runs before the close can abort it.
@@ -2051,7 +2033,7 @@ mod tests {
         let subscription = joined(&pool, Request { listen: Some(listen), ..request() });
         let listening = subscription.listening().unwrap();
         eventually("the listener never listened", || listening.load(Ordering::SeqCst)).await;
-        let closing = Some((entry_of(&pool).unwrap().0, 0, 0, 0));
+        let closing = Some((entry_of(&pool).unwrap().0, 0, 0));
         let release = tokio::spawn(subscription.release(None));
         timeout(WAIT, unlisten_sent).await.expect("the listener never sent UNLISTEN").unwrap();
         release.abort();

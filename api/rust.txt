@@ -5,6 +5,7 @@
 # arrived line is an addition. `pnpm rust-api:check` fails on either, so an addition costs one
 # regeneration. Blanket impls are omitted because each follows from a bound listed here.
 
+feature __conformance-hooks
 feature dashboard
 feature opentelemetry
 feature sqlx
@@ -2889,7 +2890,6 @@ pub workhorse::WorkerOptions::registry_interval: core::time::Duration
 pub workhorse::WorkerOptions::retry_delay: core::option::Option<workhorse::RetryDelay>
 pub workhorse::WorkerOptions::schedule_catchup_limit: i32
 pub workhorse::WorkerOptions::schedule_namespaces: alloc::vec::Vec<alloc::string::String>
-pub workhorse::WorkerOptions::shared_heartbeats: bool
 pub workhorse::WorkerOptions::shutdown_grace_period: core::time::Duration
 pub workhorse::WorkerOptions::worker_id: core::option::Option<alloc::string::String>
 impl core::clone::Clone for workhorse::WorkerOptions
@@ -2978,6 +2978,8 @@ pub type workhorse::QueueHealth = serde_json::map::Map<alloc::string::String, se
 pub type workhorse::RegistrationErrorHook = alloc::sync::Arc<(dyn core::ops::function::Fn(&workhorse::Error) + core::marker::Send + core::marker::Sync)>
 pub type workhorse::RetryDelay = alloc::sync::Arc<(dyn core::ops::function::Fn(i32, &workhorse::ClaimedTask) -> core::option::Option<core::time::Duration> + core::marker::Send + core::marker::Sync)>
 pub type workhorse::RetryPolicy = serde_json::map::Map<alloc::string::String, serde_json::value::Value>
+
+#[cfg(feature = "__conformance-hooks")] adds no public items
 
 #[cfg(feature = "dashboard")] pub mod workhorse::dashboard
 #[cfg(feature = "dashboard")] pub use workhorse::dashboard::bytes

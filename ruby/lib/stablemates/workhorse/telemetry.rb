@@ -163,11 +163,11 @@ module Stablemates
       #   errors of a socket), or SocketError (DNS); or a SQLSTATE that starts with 08, or 57P01,
       #   57P02, or 57P03 (a server shutdown). IO::TimeoutError is an IOError, so a socket timeout
       #   is a connection error too.
-      # - "connection" also covers a pool error that CONNECTION_ERROR_NAMES names. Under
-      #   +shared_heartbeats: true+ the round borrows a connection through the pool's +with+, so a
-      #   wait that ends at the pool's own limit reaches the round: ConnectionPool::TimeoutError,
-      #   Sequel::PoolTimeout, or ActiveRecord::ConnectionTimeoutError (an
-      #   ActiveRecord::ConnectionNotEstablished).
+      # - "connection" also covers a pool error that CONNECTION_ERROR_NAMES names: a wait that ends at
+      #   the pool's own limit, ConnectionPool::TimeoutError, Sequel::PoolTimeout, or
+      #   ActiveRecord::ConnectionTimeoutError (an ActiveRecord::ConnectionNotEstablished). A round
+      #   runs on the dedicated heartbeat connection and borrows none from the pool. The classifier
+      #   keeps these names, so a pool error in a round still counts as "connection".
       # - "database": any other SQLSTATE.
       # - "other": everything else. A Timeout::Error that is not one of these, for example from
       #   Timeout.timeout, is "other": only the round deadline is "timeout".

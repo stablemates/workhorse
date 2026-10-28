@@ -60,14 +60,8 @@ RSpec.describe "Worker heartbeat thread" do
     raise "condition not met within #{timeout} seconds" unless yield
   end
 
-  let(:executor) do
-    FakeExecutor.new do |sql, params|
-      next [] unless sql == W::SqlCatalogue::HEARTBEAT_MANY_V2
-
-      JSON.parse(params[1]).map { |lease| {"task_id" => lease["taskId"], "status" => "accepted"} }
-    end
-  end
-  let(:heartbeat) { heartbeat_class.new(executor, dedicated: false) }
+  # Lends a new FakeHeartbeatConnection, which accepts every lease, to each heartbeat checkout.
+  let(:heartbeat) { heartbeat_class.new(FakeLendingPool.new) }
   let(:renewals) { Concurrent::Array.new }
   let(:first) { claimed(1) }
   let(:second) { claimed(2) }
@@ -89,7 +83,7 @@ RSpec.describe "Worker heartbeat thread" do
     expect(heartbeat.instance_variable_get(:@thread)).to be_alive
   end
 
-  it "keeps the thread when a shared round raises while a member is registered" do
+  it "keeps the thread when a round raises while a member is registered" do
     raised = Concurrent::AtomicBoolean.new
     original = heartbeat.method(:send_round)
     heartbeat.define_singleton_method(:send_round) do |*args, **options, &block|

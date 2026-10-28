@@ -108,7 +108,8 @@ The gem is `stablemates-workhorse`, and its namespace is `Stablemates::Workhorse
   that was `:non_replaceable` also carries a `reason`: `:incompatible_key_mode`, `:not_pending`, or
   `:window_elapsed_pending`.
 - `Worker` takes a pool, registers handlers by task type, and runs them under a lease with a shared
-  heartbeat connection. `run_worker_process` drains it on `TERM` or `INT`.
+  heartbeat connection. The pool must report a maximum size of at least 3 connections, or the
+  constructor raises `ArgumentError`. `run_worker_process` drains the worker on `TERM` or `INT`.
 - `HandlerContext` offers checkpoints, durable sleeps, signal and human waits, child tasks, and
   progress. PostgreSQL owns every durable decision, and an unresolved wait suspends the task.
 - `Admin` lists, inspects, and repairs tasks, dead letters, waits, workers, and queues.

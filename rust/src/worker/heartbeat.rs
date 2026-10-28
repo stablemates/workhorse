@@ -22,7 +22,6 @@ use tokio::time::{timeout_at, Instant};
 use uuid::Uuid;
 
 use super::{random_fraction, shared, Inner, OwnershipStatus};
-use crate::fenced_write::fenced_rows;
 use crate::sql_catalogue_generated as sql;
 use crate::telemetry::{Attribute, Counter};
 use crate::Error;
@@ -118,10 +117,22 @@ impl Drop for Membership {
     }
 }
 
+/// Holds a round at its start until the returned future resolves. The round keeps the value of
+/// that future until the round ends. Only the conformance runner sets one
+/// (`Worker::hold_heartbeat_rounds_for_test`, behind the internal `__conformance-hooks` feature).
+#[cfg(feature = "__conformance-hooks")]
+pub(super) type RoundGate = Arc<
+    dyn Fn() -> futures_util::future::BoxFuture<'static, Box<dyn std::any::Any + Send>>
+        + Send
+        + Sync,
+>;
+
 #[derive(Default)]
 pub(super) struct Heartbeats {
     state: Mutex<State>,
     wake: Notify,
+    #[cfg(feature = "__conformance-hooks")]
+    round_gate: Mutex<Option<RoundGate>>,
     /// Answers the rounds in place of PostgreSQL in unit tests.
     #[cfg(test)]
     fake_round: Mutex<Option<tests::FakeRound>>,
@@ -189,6 +200,17 @@ impl State {
 impl Heartbeats {
     fn state(&self) -> std::sync::MutexGuard<'_, State> {
         self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    /// Holds each later round at its start with `gate`.
+    #[cfg(feature = "__conformance-hooks")]
+    pub(super) fn set_round_gate(&self, gate: RoundGate) {
+        *self.round_gate.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(gate);
+    }
+
+    #[cfg(feature = "__conformance-hooks")]
+    fn round_gate(&self) -> Option<RoundGate> {
+        self.round_gate.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clone()
     }
 }
 
@@ -588,8 +610,7 @@ impl Inner {
                 // window in it, so it never renews a lease that the watchdog has given up.
                 Some(lease_ends_at) => {
                     let deadline = bounded.min(next).min(lease_ends_at);
-                    // A shared retry has no client deadline, so only a bounded retry can skip.
-                    if !self.options.shared_heartbeats && busy_retry_too_short(started, deadline) {
+                    if busy_retry_too_short(started, deadline) {
                         continue;
                     }
                     deadline
@@ -629,6 +650,13 @@ impl Inner {
         members: &[Sent],
         deadline: Instant,
     ) -> Result<Vec<Sent>, RoundFailure> {
+        // A gate holds the round in the worker, so the round loop cannot start another one. No
+        // timeout bounds the hold. The round keeps the value of the gate until it ends.
+        #[cfg(feature = "__conformance-hooks")]
+        let _held = match self.heartbeats.round_gate() {
+            Some(gate) => Some(gate().await),
+            None => None,
+        };
         // A lease renewed by this round runs from before the request left, which can only be
         // earlier than the renewal in PostgreSQL, so a local lease window never outlasts the real one.
         let sent_at = Instant::now();
@@ -654,30 +682,17 @@ impl Inner {
             let fence = sent.fence.to_string();
             json!({"taskId": sent.task, "fenceToken": fence, "leaseMs": lease_ms})
         };
-        // A shared round borrows like any other worker statement. A round on the reserved
-        // connection is bounded by `deadline`, on the client and on the server, so a statement
-        // stalled on it cannot hold the next round.
-        let rows = if self.options.shared_heartbeats {
-            let payload = json!(members.iter().map(lease).collect::<Vec<_>>());
-            let params: [&(dyn tokio_postgres::types::ToSql + Sync); 2] =
-                [&self.worker_id, &payload];
-            let rows = fenced_rows(&self.statements(), sql::HEARTBEAT_MANY_V2, &params).await?;
-            let mut leases = Vec::with_capacity(rows.len());
-            for row in &rows {
-                leases.push((row.try_get("task_id")?, row.try_get("status")?));
-            }
-            leases
-        } else {
-            // Each batch holds at most `BATCH_LEASES` leases of this worker.
-            let batches = members
-                .chunks(BATCH_LEASES)
-                .map(|chunk| {
-                    let leases: Vec<_> = chunk.iter().map(lease).collect();
-                    json!({"workerId": self.worker_id, "leases": leases})
-                })
-                .collect();
-            self.reserved_round(batches, deadline).await?
-        };
+        // A round on the reserved connection is bounded by `deadline`, on the client and on the
+        // server, so a statement stalled on it cannot hold the next round. Each batch holds at most
+        // `BATCH_LEASES` leases of this worker.
+        let batches = members
+            .chunks(BATCH_LEASES)
+            .map(|chunk| {
+                let leases: Vec<_> = chunk.iter().map(lease).collect();
+                json!({"workerId": self.worker_id, "leases": leases})
+            })
+            .collect();
+        let rows = self.reserved_round(batches, deadline).await?;
         let mut statuses = HashMap::with_capacity(rows.len());
         for (task, status) in rows {
             statuses.insert(task, LeaseStatus::parse(Some(&status))?);
@@ -786,7 +801,7 @@ impl Inner {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
     use futures_util::future::BoxFuture;
     use futures_util::FutureExt;
@@ -815,14 +830,6 @@ mod tests {
     const ACCEPTED: LeaseStatus = LeaseStatus::Owner(OwnershipStatus::Accepted);
 
     fn worker_with(interval: Duration, lease: Duration) -> Worker {
-        worker_sharing(interval, lease, false)
-    }
-
-    fn shared_worker_with(interval: Duration, lease: Duration) -> Worker {
-        worker_sharing(interval, lease, true)
-    }
-
-    fn worker_sharing(interval: Duration, lease: Duration, shared_heartbeats: bool) -> Worker {
         let manager = deadpool_postgres::Manager::new(
             "postgresql://localhost/unused".parse().unwrap(),
             tokio_postgres::NoTls,
@@ -835,7 +842,6 @@ mod tests {
                 polling_only: true,
                 lease_duration: lease,
                 heartbeat_interval: Some(interval),
-                shared_heartbeats,
                 ..WorkerOptions::default()
             },
         )
@@ -1053,6 +1059,41 @@ mod tests {
         let statuses = HashMap::from([(membership.task.to_string(), ACCEPTED)]);
         worker.0.deliver_heartbeats(&members, &statuses, started + Duration::from_secs(1));
         assert!(matches!(membership.beats.try_recv(), Err(mpsc::error::TryRecvError::Empty)));
+    }
+
+    // SM-1445: a round that answers `accepted` after the lease window ended neither renews the
+    // lease nor lets a later round renew it. The watchdog owns the window from its end.
+    #[tokio::test(start_paused = true)]
+    async fn a_round_that_answers_after_the_lease_window_restores_no_renewals() {
+        let interval = Duration::from_secs(1);
+        let worker = worker_with(interval, Duration::from_secs(30));
+        let rounds = Rounds::install(&worker, Duration::ZERO, move |_, members| {
+            Ok(answer(members, ACCEPTED, &[]))
+        });
+        // The first round answers one interval late, after the window of the lease.
+        *worker.0.heartbeats.fake_round.lock().unwrap() = Some({
+            let fake = worker.0.heartbeats.fake_round.lock().unwrap().clone().unwrap();
+            let first = Arc::new(AtomicBool::new(true));
+            Arc::new(move |members: Vec<Sent>, deadline: Instant| {
+                let (fake, first) = (Arc::clone(&fake), Arc::clone(&first));
+                async move {
+                    if first.swap(false, Ordering::SeqCst) {
+                        tokio::time::sleep(interval).await;
+                    }
+                    fake(members, deadline).await
+                }
+                .boxed()
+            })
+        });
+        let started = Instant::now();
+        let window_ends = started + interval * 3 / 2;
+        let mut membership = worker.0.register_heartbeat(Uuid::new_v4(), 1, window_ends);
+        tokio::time::sleep(interval * 3).await;
+        assert!(rounds.calls().len() >= 2, "no round ran after the late answer");
+        assert!(matches!(membership.beats.try_recv(), Err(mpsc::error::TryRecvError::Empty)));
+        let state = worker.0.heartbeats.state();
+        let member = state.member(membership.task, membership.registration).expect("registered");
+        assert_eq!(member.lease_ends_at, window_ends, "a late answer moved the lease window");
     }
 
     // A busy answer starts one retry with only the busy lease, before the next regular slot and
@@ -1431,21 +1472,6 @@ mod tests {
         assert_eq!(calls[1].at, started + interval * 2, "the regular round did not come next");
         assert_eq!(calls[1].tasks, [task]);
         assert!(matches!(membership.beats.try_recv(), Ok(Beat::Renewed(at)) if at == calls[1].at));
-    }
-
-    // A shared busy retry has no client deadline, so it runs however close the next slot is.
-    #[tokio::test(start_paused = true)]
-    async fn a_shared_busy_retry_runs_close_to_the_next_slot() {
-        let interval = Duration::from_millis(40);
-        let worker = shared_worker_with(interval, Duration::from_secs(30));
-        let rounds = late_retry_rounds(&worker);
-        let started = Instant::now();
-        let _membership =
-            worker.0.register_heartbeat(Uuid::new_v4(), 1, started + Duration::from_secs(30));
-        tokio::time::sleep(interval * 2 - Duration::from_millis(1)).await;
-        let calls = rounds.calls();
-        assert_eq!(calls.len(), 2, "the shared busy retry did not run");
-        assert!(calls[1].at > started + interval && calls[1].at < started + interval * 2);
     }
 
     /// A worker whose rounds use the reserved connection to `database`, with that connection taken.

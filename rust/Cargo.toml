@@ -29,6 +29,10 @@ name = "workhorse"
 
 [features]
 sqlx = ["dep:sqlx"]
+# Internal: only the repository's conformance runner enables it, to hold a heartbeat round inside
+# the worker. It has no stability guarantee, it can change or go away in any release, and an
+# application must not enable it. A build without it has no hook and no per-round lock.
+__conformance-hooks = []
 opentelemetry = ["dep:opentelemetry", "dep:tracing-opentelemetry"]
 # The embedded dashboard backend. A build without it compiles no HTTP dependency.
 dashboard = [
