@@ -727,6 +727,9 @@ export class Worker {
   private lastRegistryRefreshAt = Number.NEGATIVE_INFINITY;
   private registered = false;
   private pendingStopRegistrationRefresh: Promise<void> | undefined;
+  // Every refreshRegistration() call in flight. The deregistration waits for each one, so no
+  // registration write of a run commits after the delete of its row.
+  private readonly pendingRegistrationRefreshes = new Set<Promise<void>>();
   // The first registration write of the current run(), which stop() can stop waiting for.
   private pendingStartupRegistration: Promise<void> | undefined;
   // Settles when every stop-path statement of the ended runs has settled. A later run waits for it
@@ -1983,7 +1986,15 @@ export class Worker {
    * observability and control surface, not part of the dispatch contract, so a worker that cannot
    * reach it keeps claiming and executing exactly as before.
    */
-  private async refreshRegistration(force = false): Promise<void> {
+  private refreshRegistration(force = false): Promise<void> {
+    const refresh = this.writeRegistration(force);
+    this.pendingRegistrationRefreshes.add(refresh);
+    const forget = () => this.pendingRegistrationRefreshes.delete(refresh);
+    void refresh.then(forget, forget);
+    return refresh;
+  }
+
+  private async writeRegistration(force: boolean): Promise<void> {
     if (this.registryIntervalMs === 0) return;
     const nowMs = monotonicNow();
     if (!force && nowMs - this.lastRegistryRefreshAt < this.registryIntervalMs) return;
@@ -2057,6 +2068,11 @@ export class Worker {
     const startup = this.pendingStartupRegistration;
     this.pendingStartupRegistration = undefined;
     await startup?.catch(() => undefined);
+    // A periodic refresh can still wait for a pooled connection after the unwind deadline. Its
+    // write must commit before the delete, or it brings back the row of the stopped run.
+    while (this.pendingRegistrationRefreshes.size > 0) {
+      await Promise.allSettled(this.pendingRegistrationRefreshes);
+    }
     if (!this.registered) return;
     let refreshFailure: { error: unknown } | undefined;
     try {

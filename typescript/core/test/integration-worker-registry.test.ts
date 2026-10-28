@@ -302,6 +302,55 @@ describe("worker registry", () => {
     await expect(lifecycleRegistration()).resolves.toBeUndefined();
   });
 
+  // SM-1867: a periodic registration write that commits after the deregistration must not bring
+  // back the row of the stopped instance.
+  it("deregisters after a periodic registration write that outlives the stop deadline", async () => {
+    const workerId = "registry-late-periodic-write";
+    const gate = deferred();
+    const held = deferred();
+    let registrations = 0;
+    let lateWrite: Promise<unknown> | undefined;
+    const gatedQueue = new Proxy(queue, {
+      get(target, property, receiver) {
+        if (property === "registerWorker") {
+          return (...args: Parameters<Queue["registerWorker"]>) => {
+            registrations += 1;
+            // The first write registers the run. Hold one periodic write, as a full pool does.
+            if (registrations === 1 || args[0].draining || lateWrite !== undefined) {
+              return target.registerWorker(...args);
+            }
+            held.resolve();
+            lateWrite = gate.promise.then(() => target.registerWorker(...args));
+            return lateWrite;
+          };
+        }
+        return Reflect.get(target, property, receiver);
+      },
+    });
+    const worker = new Worker(gatedQueue, {
+      workerId,
+      queue: "default",
+      pollMs: 10,
+      registryIntervalMs: 100,
+    });
+    const registration = async () =>
+      (await admin.listWorkers()).find((entry) => entry.workerId === workerId);
+
+    const running = worker.run();
+    try {
+      await vi.waitFor(async () => expect(await registration()).toBeDefined(), stallWait);
+      await held.promise;
+      worker.stop();
+      // The run ends at its unwind deadline, while the periodic write still waits.
+      await running;
+      expect(lateWrite).toBeDefined();
+    } finally {
+      gate.resolve();
+    }
+    await lateWrite;
+    await vi.waitFor(async () => expect(await registration()).toBeUndefined(), stallWait);
+  }, 30_000);
+
   it("deregisters when notification subscription cleanup fails", async () => {
     const closeFailure = new Error("notification close failed");
     const close = vi.fn<() => Promise<void>>(async () => {

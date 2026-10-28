@@ -1955,6 +1955,22 @@ registration at once, also within the registry interval of the ended run. In `ru
 ms by default. At the grace, the process exits with code 1, so every wait on its stop path ends by
 the grace.
 
+**Deregistration order.** A registration write can wait for a pooled connection or for the
+`workhorse:worker-registry:<id>` advisory lock, and then commit after the stop deadline. If the
+delete ran first, `register_worker_v1` would write the row of the stopped run again, with
+`draining = false`. The row would then stay until `prune_worker_registry_v1` removes it. Thus the
+TypeScript and Python workers send `deregister_worker_v2` only after each registration write of the
+run has settled:
+
+- TypeScript keeps each `refreshRegistration()` call in flight. `deregister()` waits for each one,
+  and then deletes the row. `run()` still stops its wait for the deregistration at the end of the
+  unwind window. The deregistration then continues without the worker.
+- Python `_deregister` waits for `_registration_call`, the registration statement in flight, and
+  then deletes the row. A statement that passed its deadline can still commit, so the worker
+  deletes the row after any registration statement, also when no refresh of the run succeeded.
+  `run()` still stops its wait at the end of the cleanup window. A delete that starts after that
+  window waits one stop budget at most for its pool connection.
+
 The Go, Python, and Rust drivers report a lost connection only on the next statement. That statement
 fails the round and discards the connection. Their heartbeat connections work as follows:
 

@@ -99,6 +99,18 @@ occurred when the worker could not acknowledge a cancellation after one of these
 Now the metric and the log record `lease_lost`, and the span records `stale`. These are the
 outcomes of a refused completion that settles nothing. The outcome names do not change.
 
+### A stopped worker no longer comes back in the fleet view
+
+A worker refreshes its registration at a fixed interval, and it deletes its registry row when it
+stops. A refresh can wait for a pool connection or for the registry lock. If `stop()` came during
+that wait, the worker stopped its wait at the stop deadline and deleted the row. Then the late
+refresh committed and wrote the row again, with `draining = false`. The fleet view showed a running
+worker until `prune_worker_registry_v1` removed the row (SM-1867).
+
+Now the deregistration waits for the last registration statement of the run, and then deletes the
+row. It also deletes the row when that statement passed its deadline and committed later. `run()`
+still stops its wait at the end of the cleanup window, so the stop keeps its deadline.
+
 ### A worker no longer keeps every failed registration refresh
 
 A worker refreshes its registration at a fixed interval, and each refresh sends its statement on a

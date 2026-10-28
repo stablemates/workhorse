@@ -33,8 +33,8 @@ from workhorse import (
     WaitConflictError,
     Worker,
 )
-from workhorse._statements import PROTOCOL_VERSION
-from workhorse._drivers import SyncExecutor
+from workhorse._statements import PROTOCOL_VERSION, STATEMENTS
+from workhorse._drivers import PooledSyncExecutor, SyncExecutor
 from workhorse._notifications import SharedTaskNotificationListener
 from workhorse._version import WORKHORSE_VERSION
 
@@ -1123,6 +1123,144 @@ def test_run_pauses_resumes_and_drains_active_slots(database_url: str) -> None:
             (task_ids,),
         ).fetchall()
         assert outcomes == sorted((task_id, "succeeded") for task_id in task_ids)
+
+
+def test_worker_deregisters_after_a_periodic_registration_that_outlives_the_stop(
+    database_url: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """SM-1867: a late periodic registration must not bring back the row of a stopped run."""
+    worker_id = "python-late-periodic-registration"
+    held = Event()
+    gate = Event()
+    late_write_done = Event()
+    registrations = 0
+    send = PooledSyncExecutor.rows
+
+    def gated_rows(executor: PooledSyncExecutor, statement: Any, parameters: Any = ()) -> list[Any]:
+        nonlocal registrations
+        if statement is not STATEMENTS.register_worker:
+            return send(executor, statement, parameters)
+        registrations += 1
+        # The first refresh registers the run. Hold one periodic refresh, as a full pool does.
+        if registrations == 1 or parameters[14] is True or held.is_set():
+            return send(executor, statement, parameters)
+        held.set()
+        assert gate.wait(60)
+        try:
+            return send(executor, statement, parameters)
+        finally:
+            late_write_done.set()
+
+    monkeypatch.setattr(PooledSyncExecutor, "rows", gated_rows)
+    worker = Worker(worker_pool, worker_id=worker_id, poll_ms=10, registry_interval_ms=100)
+    errors: list[BaseException] = []
+
+    def run_worker() -> None:
+        try:
+            worker.run()
+        except BaseException as error:
+            errors.append(error)
+
+    def registered() -> bool:
+        with psycopg.connect(database_url, autocommit=True) as connection:
+            row = connection.execute(
+                "SELECT 1 FROM workhorse.worker_registry WHERE worker_id = %s", (worker_id,)
+            ).fetchone()
+        return row is not None
+
+    thread = Thread(target=run_worker)
+    thread.start()
+    try:
+        eventually(held.is_set, "the worker never sent a periodic registration")
+        assert registered()
+        worker.stop()
+        # The run ends by its stop deadline and cleanup window, while the refresh still waits.
+        thread.join(timeout=15)
+        assert not thread.is_alive()
+    finally:
+        gate.set()
+    assert errors == []
+    assert late_write_done.wait(10)
+    eventually(lambda: not registered(), "the late registration left the row of the stopped run")
+
+
+def test_worker_deregisters_after_a_first_registration_that_commits_during_the_drain(
+    database_url: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """SM-1867: a first registration that passes its deadline and commits later leaves no row."""
+    worker_id = "python-late-first-registration"
+    queue_name = "python-late-first-registration"
+    held = Event()
+    gate = Event()
+    late_write_done = Event()
+    handler_started = Event()
+    release_handler = Event()
+    draining = Event()
+    send = PooledSyncExecutor.rows
+
+    def gated_rows(executor: PooledSyncExecutor, statement: Any, parameters: Any = ()) -> list[Any]:
+        if statement is not STATEMENTS.register_worker or held.is_set():
+            return send(executor, statement, parameters)
+        # Hold the first registration past its deadline, so no refresh of the run succeeds.
+        held.set()
+        assert gate.wait(60)
+        try:
+            return send(executor, statement, parameters)
+        finally:
+            late_write_done.set()
+
+    def handle(_payload: Any, _context: Any) -> None:
+        handler_started.set()
+        assert release_handler.wait(60)
+
+    monkeypatch.setattr(PooledSyncExecutor, "rows", gated_rows)
+    worker = Worker(
+        worker_pool, queue=queue_name, worker_id=worker_id, poll_ms=10, registry_interval_ms=100
+    ).handle("late-first-registration", handle)
+    drain = worker._drain_active_threads
+
+    def recorded_drain() -> None:
+        draining.set()
+        drain()
+
+    monkeypatch.setattr(worker, "_drain_active_threads", recorded_drain)
+    errors: list[BaseException] = []
+
+    def run_worker() -> None:
+        try:
+            worker.run()
+        except BaseException as error:
+            errors.append(error)
+
+    def registered() -> bool:
+        with psycopg.connect(database_url, autocommit=True) as connection:
+            row = connection.execute(
+                "SELECT 1 FROM workhorse.worker_registry WHERE worker_id = %s", (worker_id,)
+            ).fetchone()
+        return row is not None
+
+    with psycopg.connect(database_url) as enqueue_connection:
+        Queue(enqueue_connection, queue_name).enqueue("late-first-registration", {})
+        enqueue_connection.commit()
+    thread = Thread(target=run_worker)
+    thread.start()
+    try:
+        eventually(held.is_set, "the worker never sent its first registration")
+        assert handler_started.wait(15)
+        worker.stop()
+        eventually(draining.is_set, "the run never started its drain")
+        # The first registration commits during the drain, after the draining refresh skipped.
+        gate.set()
+        assert late_write_done.wait(10)
+        assert registered()
+        assert worker._registered is False
+    finally:
+        gate.set()
+        release_handler.set()
+        thread.join(timeout=15)
+    assert not thread.is_alive()
+    assert errors == []
+    eventually(lambda: not registered(), "the late first registration left the row of the run")
 
 
 def test_worker_registry_delivers_remote_pause_and_deregisters(database_url: str) -> None:
