@@ -64,6 +64,17 @@ with its SQLSTATE. A method that takes a caller transaction runs the check on th
 first registration, and a refusal rejects them. If a test gives a `Queue` or an `Admin` a fake
 database, the fake must now answer the `compatibility_state` statement.
 
+### The worker records a cancellation that refuses a completion
+
+A cancellation request can arrive while a handler runs. Then `complete_v1` refuses the completion,
+and the worker acknowledges the cancellation. Before this change, the handler span recorded
+`workhorse.handler.outcome=canceled`, but the worker emitted no `workhorse.handler.executions`
+point and no `workhorse.task.execution_finished` log. The `workhorse.handler.duration` point
+recorded `unknown` (SM-1863).
+
+Now the metrics and the log record `canceled`, as the Go worker does after SM-1811. The outcome
+names do not change.
+
 ### The dashboard bundle uses Mantine 9.7.4
 
 Every release line serves the shared dashboard browser bundle. After 0.10.0, a dependency update

@@ -1765,6 +1765,11 @@ The SDKs differ in what a refusal does after the handler has returned.
   submits `lease_expired`. A due deadline or attempt timeout calls `expire_owned_v1`, as
   [Local timers](#local-timers) describes. A `stale` renewal that arrives while that request is in
   flight waits for its answer.
+  - If `complete_v1` refuses the write, the worker calls `acknowledge_cancel_v1`. If that call
+    accepts, `TaskAttempt` records `canceled` on the span, the metrics, and the log, also when a
+    `stale` heartbeat answer arrived first. Otherwise the worker calls `settleFailure`. It sends
+    the refusal through `fail_v1`, unless the attempt already has an outcome, for example
+    `lease_expired` (SM-1863).
 - Go `superviseOwnership` and Python `_run_supervised_attempt` record the time when the handler
   returned. After that time, a refused renewal, a lapsed watchdog, or a due expiration only stops
   the renewal. Then the fenced completion or failure gets the same verdict in PostgreSQL:
@@ -1775,6 +1780,9 @@ The SDKs differ in what a refusal does after the handler has returned.
     It writes `deadline_exceeded` or `timeout_exceeded`, or acknowledges a `cancel_requested` answer
     with `acknowledge_cancel_v1`. Go `reconcileRejectedSettlement` does the same.
   - A `stale` or `not_due` answer leaves the task to recovery. Python raises `StaleLeaseError`.
+  - Python reports `lease_lost` when `fail_v1` or `release_owned_v1` answers `stale`, and when the
+    worker cannot acknowledge a cancellation after one of them. The worker settles nothing then
+    (SM-1863).
   - Go `reconcileRejectedSettlement` returns the cause that it settled as the handler outcome of
     the span and of `workhorse.handler.executions`: `deadline_exceeded`, `timeout`, or `canceled`.
     Only a `stale` or `not_due` answer keeps `lease_lost`. `settleAfterShutdown` reports the same

@@ -88,6 +88,17 @@ Before migration 0089, `prune_worker_registry_v1` deleted expired kept pauses wi
 the planner could not match to `worker_pause_tombstone_expires_idx`. Each maintenance pass read the
 whole table. Now the delete reads only the expired rows through the index (SM-1866).
 
+### A stale failure or release reports a lost lease
+
+PostgreSQL answers `stale` to `fail_v1` or `release_owned_v1` when the fence moved or the lease
+expired. The worker then settles nothing, and lease recovery owns the task. Before this change, the
+handler span, the `workhorse.handler.executions` metric, and the
+`workhorse.task.execution_finished` log recorded `workhorse.handler.outcome=unknown`. The same
+occurred when the worker could not acknowledge a cancellation after one of these writes (SM-1863).
+
+Now the metric and the log record `lease_lost`, and the span records `stale`. These are the
+outcomes of a refused completion that settles nothing. The outcome names do not change.
+
 ### A worker no longer keeps every failed registration refresh
 
 A worker refreshes its registration at a fixed interval, and each refresh sends its statement on a

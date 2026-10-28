@@ -449,6 +449,122 @@ describe("Workhorse OpenTelemetry metrics", () => {
     ]);
   });
 
+  it("records a cancellation that a refused completion acknowledges as canceled", async () => {
+    const { Worker } = await import("../src/worker.js");
+    const task: ClaimedTask = {
+      id: "task-refused-completion-cancel",
+      queue: "mail",
+      type: "email.send",
+      priority: 0,
+      payload: null,
+      contractVersion: null,
+      resultMaxBytes: 1_048_576,
+      redactErrorDetails: false,
+      traceContext: null,
+      attempt: 1,
+      maxAttempts: 3,
+      retryPolicy: null,
+      deadlineAt: null,
+      executionTimeoutMs: null,
+      attemptTimeoutAt: null,
+      fenceToken: 1n,
+      leaseExpiresAt: new Date(Date.now() + 30_000),
+    };
+    // complete_v1 refuses the write because a cancellation request arrived while the handler ran.
+    const queue = workerQueue({
+      claim: async () => task,
+      complete: async () => false,
+      acknowledgeCancel: async () => true,
+    });
+    const worker = new Worker(queue, {
+      queue: "mail",
+      registryIntervalMs: 0,
+    }).handle("email.send", async () => ({ sent: true }));
+
+    await worker.runOnce();
+    await collect();
+
+    const outcome = {
+      "workhorse.handler.outcome": "canceled",
+      "workhorse.task.type": "email.send",
+      "workhorse.queue.name": "mail",
+    };
+    expect(metric("workhorse.handler.executions")?.dataPoints).toEqual([
+      expect.objectContaining({ attributes: outcome, value: 1 }),
+    ]);
+    expect(metric("workhorse.handler.duration")?.dataPoints).toEqual([
+      expect.objectContaining({ attributes: outcome }),
+    ]);
+  });
+
+  it("records an acknowledged cancellation as canceled when a stale heartbeat answers first", async () => {
+    const { Worker } = await import("../src/worker.js");
+    const task: ClaimedTask = {
+      id: "task-refused-completion-cancel-stale",
+      queue: "mail",
+      type: "email.send",
+      priority: 0,
+      payload: null,
+      contractVersion: null,
+      resultMaxBytes: 1_048_576,
+      redactErrorDetails: false,
+      traceContext: null,
+      attempt: 1,
+      maxAttempts: 3,
+      retryPolicy: null,
+      deadlineAt: null,
+      executionTimeoutMs: null,
+      attemptTimeoutAt: null,
+      fenceToken: 1n,
+      leaseExpiresAt: new Date(Date.now() + 30_000),
+    };
+    // The acknowledgement commits first, so the next heartbeat round finds no owned task and
+    // answers stale before the acknowledgement answer arrives.
+    let acknowledging = false;
+    let reportStale: (() => void) | undefined;
+    const staleReported = new Promise<void>((resolve) => {
+      reportStale = resolve;
+    });
+    const queue = workerQueue({
+      claim: async () => task,
+      complete: async () => false,
+      heartbeatStatus: async () => {
+        if (!acknowledging) return "accepted";
+        reportStale?.();
+        return "stale";
+      },
+      acknowledgeCancel: async () => {
+        acknowledging = true;
+        await staleReported;
+        await new Promise((resolve) => {
+          setTimeout(resolve, 20);
+        });
+        return true;
+      },
+    });
+    const worker = new Worker(queue, {
+      queue: "mail",
+      registryIntervalMs: 0,
+      leaseMs: 1_000,
+      heartbeatMs: 10,
+    }).handle("email.send", async () => ({ sent: true }));
+
+    await worker.runOnce();
+    await collect();
+
+    const outcome = {
+      "workhorse.handler.outcome": "canceled",
+      "workhorse.task.type": "email.send",
+      "workhorse.queue.name": "mail",
+    };
+    expect(metric("workhorse.handler.executions")?.dataPoints).toEqual([
+      expect.objectContaining({ attributes: outcome, value: 1 }),
+    ]);
+    expect(metric("workhorse.handler.duration")?.dataPoints).toEqual([
+      expect.objectContaining({ attributes: outcome }),
+    ]);
+  });
+
   it("records cancellation when it wins the execution-timeout race", async () => {
     const { Worker } = await import("../src/worker.js");
     const task: ClaimedTask = {

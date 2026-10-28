@@ -3817,7 +3817,12 @@ class Worker:
     ) -> None:
         handler = self._handlers.get(task.type)
         if handler is None:
-            release_outcome, release_status = self._release_owned_task(task)
+            try:
+                release_outcome, release_status = self._release_owned_task(task)
+            except StaleLeaseError:
+                # The worker settled nothing, so the attempt reports the lost lease.
+                arbiter.submit("lease_expired")
+                raise
             span_outcome["value"] = release_status
             arbiter.submit(release_outcome)
             return
@@ -4041,7 +4046,12 @@ class Worker:
         except Exception as error:
             if finish_ownership_lifecycle(error):
                 return
-            failure_outcome, failure_state = self._settle_failure(task, error)
+            try:
+                failure_outcome, failure_state = self._settle_failure(task, error)
+            except StaleLeaseError:
+                # The worker settled nothing, so the attempt reports the lost lease.
+                arbiter.submit("lease_expired")
+                raise
             span_outcome["value"] = failure_state
             span_errors.append(
                 _REDACTED_ERROR_NAME if task.redact_error_details else type(error).__name__
