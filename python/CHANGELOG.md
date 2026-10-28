@@ -8,15 +8,34 @@ Workhorse is a public beta. Any 0.x minor release may change behaviour. From `0.
 upgrades in place: every release ships ordered migrations, and inside a major line a migration only
 adds.
 
-## Unreleased
+## 0.11.0 — 2026-10-28
+
+The npm packages, Python distribution, Go module, Rust crate, Ruby gem, JVM artifacts, and .NET
+packages release from one source commit.
+
+Requires **schema v76** and Python **3.12** or newer.
 
 ### Upgrade steps
 
 **Migrate the schema before starting updated processes.** Run `workhorse schema migrate` before any
-process of this release starts, producers too. Migrations 0088 through 0090 move the schema to
-version **89**. They replace function bodies and change no stored rows. The SDK compatibility floor
-stays at **76**. A 0.10 process keeps working on version 89, because a migration inside a major line
-only adds.
+process of this release starts, producers too. Migrations 0088, 0089, and 0090 move the schema
+from version 86 to version **89**. They replace function bodies and change no stored rows. The SDK
+compatibility floor stays at **76**. A 0.10 process keeps working on version 89, because a
+migration inside a major line only adds.
+
+### Behavior changes
+
+These changes can make code that worked on 0.10 act differently:
+
+1. A `max_attempts=0` and an idempotency `ttl_ms=0` now select the default, and the client
+   refuses a `max_attempts` above 100 before its statement (SM-1857). See "A zero max_attempts
+   and a zero idempotency TTL select the default".
+2. The TypeScript `Queue`, `Admin`, and `Worker.runOnce()` now check the schema before their first
+   statement (SM-1864). This SDK already did, so it does not change.
+3. After a lease lapses while a handler runs, a stale failure or release now settles a due
+   deadline or attempt timeout at once. The worker reports `deadline_exceeded` or `timeout`, not
+   `lease_lost` (SM-1884). See "A stale failure or release after a lapsed lease settles its
+   cause".
 
 ### A step of the wall clock no longer moves the expiry request
 

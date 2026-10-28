@@ -8,15 +8,34 @@ Workhorse is a public beta. Any 0.x minor release may change behaviour. From `0.
 upgrades in place: every release ships ordered migrations, and inside a major line a migration only
 adds.
 
-## Unreleased
+## 0.11.0 — 2026-10-28
+
+The npm packages, Python distribution, Go module, Rust crate, Ruby gem, JVM artifacts, and .NET
+packages release from one source commit.
+
+Requires **schema v76** and Go **1.25** or newer.
 
 ### Upgrade steps
 
 **Migrate the schema before starting updated processes.** Run `workhorse schema migrate` before any
-process of this release starts, producers too. Migrations 0088 through 0090 move the schema to
-version **89**. They replace function bodies and change no stored rows. The SDK compatibility floor
-stays at **76**. A 0.10 process keeps working on version 89, because a migration inside a major line
-only adds.
+process of this release starts, producers too. Migrations 0088, 0089, and 0090 move the schema
+from version 86 to version **89**. They replace function bodies and change no stored rows. The SDK
+compatibility floor stays at **76**. A 0.10 process keeps working on version 89, because a
+migration inside a major line only adds.
+
+### Behavior changes
+
+These changes can make code that worked on 0.10 act differently:
+
+1. A zero `MaxAttempts` still selects the default. The SDK now refuses a `MaxAttempts` outside 0
+   through 100 before its statement (SM-1857). See "A MaxAttempts above 100 is refused in the
+   SDK".
+2. The TypeScript `Queue`, `Admin`, and `Worker.runOnce()` now check the schema before their first
+   statement (SM-1864). This SDK already did, so it does not change.
+3. After a lease lapses while a handler runs, five SDKs now settle a due deadline or attempt
+   timeout at once (SM-1884). These SDKs are TypeScript, Python, Ruby, the JVM, and .NET. They
+   report `deadline_exceeded` or `timeout`, not `lease_lost`. This SDK already did, so it does
+   not change.
 
 ### Row retention lag skips a member of an unfinished task group
 
