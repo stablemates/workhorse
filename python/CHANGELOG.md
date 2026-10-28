@@ -8,6 +8,19 @@ Workhorse is a public beta. Any 0.x minor release may change behaviour. From `0.
 upgrades in place: every release ships ordered migrations, and inside a major line a migration only
 adds.
 
+## Unreleased
+
+### A worker no longer keeps every failed registration refresh
+
+A worker refreshes its registration at a fixed interval, and each refresh sends its statement on a
+new call. Before this change, a refresh kept a reference to the earlier call while it waited for
+its own call. A failed call raises its exception in that wait, and the traceback keeps the
+reference. Thus each failed call kept the failed call before it. While the database refused every
+refresh, the worker memory grew by one call for each refresh (SM-1847).
+
+Now a refresh clears its reference to the earlier call before it starts its own call. The worker
+keeps only the newest call, and the garbage collector removes each earlier one.
+
 ## 0.10.0 — 2026-10-26
 
 The npm packages, Python distribution, Go module, Rust crate, Ruby gem, JVM artifacts, and .NET
