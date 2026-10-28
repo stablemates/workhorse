@@ -2592,7 +2592,7 @@ class Worker:
 
         def settle(outcome: _ClaimOutcome) -> None:
             limit, cohort, cohort_limit = claims.pop(outcome.claim_id)
-            threads: list[Thread] = []
+            admitted: list[tuple[ClaimedTask, Thread]] = []
             with self._state_lock:
                 slots.reserved -= limit
                 if cohort is None:
@@ -2603,15 +2603,14 @@ class Worker:
                 if outcome.claimed is not None:
                     # A claimed task holds a lease, so it runs even when the loop is stopping or
                     # failed.
-                    threads = [
-                        self._admit_claimed_task(task, claim_started_at, cohort)
+                    admitted = [
+                        (task, self._admit_claimed_task(task, claim_started_at, cohort))
                         for task, claim_started_at in outcome.claimed
                     ]
                     self._settle_claim_progress(slots, outcome)
             if outcome.error is not None:
                 self._report_fatal_error(outcome.error)
-            for thread in threads:
-                thread.start()
+            self._start_handler_threads(admitted)
 
         def settle_returned() -> None:
             while not results.empty():
@@ -3047,7 +3046,7 @@ class Worker:
         if reservation.limit == 0:
             return
         running = current_thread()
-        threads: list[Thread] = []
+        admitted: list[tuple[ClaimedTask, Thread]] = []
         with self._state_lock:
             slots = self._dispatch_slots
             if slots is None:
@@ -3058,8 +3057,8 @@ class Worker:
             # handler's until it exits.
             if not claimed and slots.handed_over.pop(running, None) is not None:
                 slots.cohort_handed_over[reservation.cohort] -= 1
-            threads = [
-                self._admit_claimed_task(next_task, claim_sent_at, reservation.cohort)
+            admitted = [
+                (next_task, self._admit_claimed_task(next_task, claim_sent_at, reservation.cohort))
                 for next_task, claim_sent_at in claimed or ()
             ]
             if claimed and any(next_task.type in self._handlers for next_task, _ in claimed):
@@ -3075,8 +3074,7 @@ class Worker:
                         monotonic() + self._dispatch_wait_seconds(slots),
                         reservation.wake_version,
                     )
-        for thread in threads:
-            thread.start()
+        self._start_handler_threads(admitted)
         self._wake.set()
 
     def _send_batched_completion(self, pending: _PendingCompletion, key: tuple[str, int]) -> None:
@@ -3675,6 +3673,45 @@ class Worker:
             slots.thread_cohorts[thread] = cohort
         return thread
 
+    def _start_handler_threads(self, admitted: list[tuple[ClaimedTask, Thread]]) -> None:
+        """Start the handler threads of admitted tasks, and release each thread that does not start.
+
+        A thread that does not start never runs the finally of _run_claimed_task, so this releases
+        its slot and its task in the same way, and the run fails with the error. The later threads
+        still start: each holds the lease of its task, and a claimed task runs even when the run
+        fails. The task of a thread that does not start keeps its lease until lease recovery.
+        The report waits until every thread starts or is released, because the observer of the
+        report can also fail to start a thread.
+        """
+        failure: Exception | None = None
+        for task, thread in admitted:
+            try:
+                thread.start()
+            except Exception as error:
+                self._release_handler_thread(thread, task.id)
+                with self._state_lock:
+                    self._run_errors.append(error)
+                    self._stopping = True
+                if failure is None:
+                    failure = error
+        if failure is not None:
+            self._report_fatal_error(failure)
+
+    def _release_handler_thread(self, thread: Thread, task_id: str) -> None:
+        """Remove a handler thread and its task from the dispatch state, and free its slot."""
+        with self._state_lock:
+            self._active_threads.discard(thread)
+            self._dispatch_order.pop(task_id, None)
+            self._fast_task_ids.discard(task_id)
+            slots = self._dispatch_slots
+            if slots is not None:
+                cohort = slots.thread_cohorts.pop(thread, None)
+                if cohort is not None:
+                    slots.cohort_active[cohort] -= 1
+                    if slots.handed_over.pop(thread, None) is not None:
+                        slots.cohort_handed_over[cohort] -= 1
+        self._wake.set()
+
     def _claim_order(self, task: ClaimedTask) -> int:
         with self._state_lock:
             return self._dispatch_order.get(task.id, self._dispatch_sequence)
@@ -3692,19 +3729,7 @@ class Worker:
                 self._stopping = True
             self._report_fatal_error(error)
         finally:
-            running = current_thread()
-            with self._state_lock:
-                self._active_threads.discard(running)
-                self._dispatch_order.pop(task.id, None)
-                self._fast_task_ids.discard(task.id)
-                slots = self._dispatch_slots
-                if slots is not None:
-                    cohort = slots.thread_cohorts.pop(running, None)
-                    if cohort is not None:
-                        slots.cohort_active[cohort] -= 1
-                        if slots.handed_over.pop(running, None) is not None:
-                            slots.cohort_handed_over[cohort] -= 1
-            self._wake.set()
+            self._release_handler_thread(current_thread(), task.id)
 
     def _drain_active_threads(self) -> None:
         while True:
@@ -3715,9 +3740,14 @@ class Worker:
             for thread in active:
                 # A fused completion admits a claimed task's thread under the state lock and
                 # starts it after releasing the lock, so the drain can see it before it starts.
+                # A thread that does not start leaves the active set without an ident.
                 while thread.ident is None:
+                    with self._state_lock:
+                        if thread not in self._active_threads:
+                            break
                     sleep(0.001)
-                thread.join()
+                if thread.ident is not None:
+                    thread.join()
 
     def _execute_claimed_task(self, task: ClaimedTask, claim_sent_at: float) -> None:
         arbiter = _AttemptOutcomeArbiter()

@@ -608,6 +608,144 @@ def test_stop_runs_the_tasks_an_in_flight_fused_claim_returns() -> None:
     assert claims.claim_limits() == [2]
 
 
+def thread_that_cannot_start(task_id: str, held: Event | None = None) -> type[Thread]:
+    """Make the handler thread of task_id fail to start, as an exhausted thread limit does.
+
+    With held, the start waits until held is set before it fails.
+    """
+
+    class FailingStart(Thread):
+        starting = Event()
+
+        def start(self) -> None:
+            if self.name == f"workhorse-handler-{task_id}":
+                FailingStart.starting.set()
+                if held is not None:
+                    assert held.wait(timeout=5), "held start was never released"
+                raise RuntimeError("can't start new thread")
+            super().start()
+
+    return FailingStart
+
+
+def assert_released(worker: Worker, task_id: str) -> None:
+    with worker._state_lock:
+        assert task_id not in worker._dispatch_order
+        assert task_id not in worker._fast_task_ids
+        assert f"workhorse-handler-{task_id}" not in {
+            thread.name for thread in worker._active_threads
+        }
+        slots = worker._dispatch_slots
+        assert slots is not None
+        assert sum(slots.cohort_active) == len(worker._active_threads)
+
+
+def test_handler_thread_that_does_not_start_releases_its_task(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    rows = handled_rows(3)
+    failing = str(rows[1]["task_id"])
+    monkeypatch.setattr(worker_module, "Thread", thread_that_cannot_start(failing))
+    claims = FastClaims(rows)
+    worker = scripted_worker(claims, concurrency=3)
+    executions = FastExecutions(worker)
+    with running(worker, executions) as errors:
+        # The thread after the failed one in the same claim still starts.
+        wait_for(lambda: executions.running() == 2, "the later handler thread did not start")
+        assert failing not in executions.started
+        assert_released(worker, failing)
+        executions.open_all()
+        wait_for(lambda: len(executions.accepted) == 2, "the started tasks did not complete")
+    # The stop does not wait for the thread that did not start, and the run reports its error.
+    assert [str(error) for error in errors] == ["can't start new thread"]
+
+
+def test_handler_thread_of_a_fused_claim_that_does_not_start_releases_its_task(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    rows = handled_rows(3)
+    failing = str(rows[2]["task_id"])
+    monkeypatch.setattr(worker_module, "Thread", thread_that_cannot_start(failing))
+    claims = FastClaims(rows)
+    worker = scripted_worker(claims, concurrency=2)
+    executions = FastExecutions(worker)
+    with running(worker, executions) as errors:
+        wait_for(lambda: executions.running() == 2, "the worker did not fill its slots")
+        executions.finish(executions.started[0])
+        wait_for(lambda: len(claims.fused()) == 1, "the completion did not send a statement")
+        wait_for(lambda: len(executions.accepted) == 1, "the completion was not accepted")
+        assert failing not in executions.started
+        assert_released(worker, failing)
+        executions.open_all()
+    assert [str(error) for error in errors] == ["can't start new thread"]
+
+
+def test_failed_report_of_a_failed_start_still_starts_the_later_threads(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    rows = handled_rows(3)
+    failing = str(rows[0]["task_id"])
+    monkeypatch.setattr(worker_module, "Thread", thread_that_cannot_start(failing))
+    claims = FastClaims(rows)
+    worker = scripted_worker(claims, concurrency=3)
+    executions = FastExecutions(worker)
+
+    def report(_error: BaseException) -> None:
+        # The fatal error observer of a process runner starts a thread, which can also fail.
+        raise RuntimeError("the observer can't start new thread")
+
+    worker._report_fatal_error = report  # type: ignore[method-assign]
+    with running(worker, executions) as errors:
+        wait_for(lambda: executions.running() == 2, "the later handler threads did not start")
+        assert_released(worker, failing)
+        executions.open_all()
+        wait_for(lambda: len(executions.accepted) == 2, "the started tasks did not complete")
+    assert [str(error) for error in errors] == ["the observer can't start new thread"]
+
+
+class ListedThreads(set[Thread]):
+    """Active threads that record when the drain lists them while they hold one name."""
+
+    def __init__(self, name: str) -> None:
+        super().__init__()
+        self._name = name
+        self.listed = Event()
+
+    def __iter__(self) -> Iterator[Thread]:
+        # Only the drain iterates the active threads.
+        threads = list(super().__iter__())
+        if any(thread.name == self._name for thread in threads):
+            self.listed.set()
+        return iter(threads)
+
+
+def test_drain_that_sees_a_handler_thread_before_its_start_fails_does_not_wait_for_it(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    rows = handled_rows(2)
+    failing = str(rows[1]["task_id"])
+    held = Event()
+    failing_start = thread_that_cannot_start(failing, held)
+    monkeypatch.setattr(worker_module, "Thread", failing_start)
+    claims = FastClaims(rows)
+    worker = scripted_worker(claims, concurrency=1)
+    executions = FastExecutions(worker)
+    active = ListedThreads(f"workhorse-handler-{failing}")
+    worker._active_threads = active
+    with running(worker, executions) as errors:
+        wait_for(lambda: executions.running() == 1, "the worker did not fill its slot")
+        # The fused claim of the first task admits the second, and its start waits.
+        executions.finish(executions.started[0])
+        assert failing_start.starting.wait(timeout=5), "the fused claim did not start a thread"
+        assert not active.listed.is_set()
+        worker.stop()
+        # The drain lists the admitted thread before its start fails.
+        assert active.listed.wait(timeout=5), "the drain did not list the thread"
+        held.set()
+        wait_for(lambda: len(executions.accepted) == 1, "the first task did not complete")
+    assert [str(error) for error in errors] == ["can't start new thread"]
+
+
 class HeldTick(ScriptedClaims):
     """Hold the startup tick open until released, or fail it, while claims answer as scripted."""
 

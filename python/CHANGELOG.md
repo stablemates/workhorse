@@ -30,6 +30,18 @@ carries the rebuilt `read-surface-1.tar.gz`. Its `bundle.json` records the sha25
 
 The `dashboard/v1` procedures and the read surface version do not change (SM-1858).
 
+### A handler thread that does not start no longer blocks the worker
+
+A worker runs each claimed task on a handler thread. A thread does not start when, for example, the
+process has no more threads. Before this change, the worker then kept that task in its dispatch
+state. The later threads of the same claim did not start, and a stop waited for the failed thread
+and did not end (SM-1854).
+
+Now the worker releases the slot and the task of a thread that does not start, and the run fails
+with the error. The worker still starts the later threads of the claim, because each of their tasks
+holds a lease. The task of the failed thread stays leased until lease recovery returns it to its
+queue.
+
 ## 0.10.0 — 2026-10-26
 
 The npm packages, Python distribution, Go module, Rust crate, Ruby gem, JVM artifacts, and .NET
