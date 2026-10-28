@@ -184,6 +184,12 @@ jobs:
   # The Rust crate joins the train only once `rust/Cargo.toml` carries the tag's version, so an
   # unfinished SDK never ships because some other line released. It follows npm so that a stopped
   # train never reaches crates.io, and crates.io, like npm, never accepts a version twice.
+  #
+  # The job can fail after crates.io accepts the crate, for example at the job timeout. A re-run
+  # must then let `github-release` run. So before the upload, the job packages the crate and
+  # `scripts/check-registry-version.ts` asks crates.io for the tag version (SM-1860). If crates.io
+  # serves it with the checksum of the packaged crate, the job uploads nothing and succeeds. If the
+  # checksum differs, the job fails. The `rubygems` job does the same.
   crates-io:
     if: startsWith(github.ref, 'refs/tags/v') && inputs.dry-run != true
     needs: publish
@@ -215,16 +221,36 @@ jobs:
             echo "$message" >> "$GITHUB_STEP_SUMMARY"
             echo "publish=false" >> "$GITHUB_OUTPUT"
           fi
+      # `cargo package` makes the same bytes from the same tag, and `cargo publish` uploads the
+      # bytes that it packages. `--no-verify`, because `cargo publish` verifies the package.
+      - name: Package workhorse
+        if: steps.version.outputs.publish == 'true'
+        run: cargo package --package workhorse --locked --no-verify
+      # Plain `node` runs the check, so the step installs no dependency beside the publication
+      # identity.
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        if: steps.version.outputs.publish == 'true'
+        with:
+          node-version: 24
+          package-manager-cache: false
+      - name: Ask crates.io whether it serves the version
+        if: steps.version.outputs.publish == 'true'
+        id: registry
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
+          node scripts/check-registry-version.ts crates-io workhorse "$version" \
+            "target/package/workhorse-$version.crate"
       # Publication carries no secret. The action exchanges this job's OIDC identity for a
       # short-lived crates.io token, which crates.io mints only for the trusted publisher the
       # `workhorse` crate names: this repository, this workflow file, and the `crates-io`
       # environment. The action's post step revokes the token when the job ends.
       - name: Exchange the OIDC identity for a crates.io token
-        if: steps.version.outputs.publish == 'true'
+        if: steps.registry.outputs.upload == 'true'
         id: auth
         uses: rust-lang/crates-io-auth-action@3268eb413133e2960fa4ae0e963ca76380c54cd9 # v1.0.6
       - name: Publish workhorse
-        if: steps.version.outputs.publish == 'true'
+        if: steps.registry.outputs.upload == 'true'
         env:
           CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
         run: cargo publish --package workhorse --locked
@@ -261,8 +287,29 @@ jobs:
             echo "$message" >> "$GITHUB_STEP_SUMMARY"
             echo "publish=false" >> "$GITHUB_OUTPUT"
           fi
-      - name: Install the gem's bundle
+      # `gem build` makes the same bytes from the same tag, and `rake release` runs `gem build` on
+      # the same gemspec. The archive goes outside the checkout, so `rake release` builds its own.
+      - name: Build stablemates-workhorse
         if: steps.version.outputs.publish == 'true'
+        working-directory: ruby
+        run: gem build stablemates-workhorse.gemspec --output "$RUNNER_TEMP/stablemates-workhorse-${GITHUB_REF_NAME#v}.gem"
+      # Plain `node` runs the check, so the step installs no dependency beside the publication
+      # identity.
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        if: steps.version.outputs.publish == 'true'
+        with:
+          node-version: 24
+          package-manager-cache: false
+      - name: Ask RubyGems.org whether it serves the version
+        if: steps.version.outputs.publish == 'true'
+        id: registry
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
+          node scripts/check-registry-version.ts rubygems stablemates-workhorse "$version" \
+            "$RUNNER_TEMP/stablemates-workhorse-$version.gem"
+      - name: Install the gem's bundle
+        if: steps.registry.outputs.upload == 'true'
         working-directory: ruby
         env:
           BUNDLE_FROZEN: "true"
@@ -274,7 +321,7 @@ jobs:
       # is already `v` plus the gem version, so Bundler finds it and neither creates nor pushes a
       # tag, and the read-only token could not push one anyway.
       - name: Publish stablemates-workhorse
-        if: steps.version.outputs.publish == 'true'
+        if: steps.registry.outputs.upload == 'true'
         uses: rubygems/release-gem@7f9650160c1a4e7989fdc9855807bdbd421d8b6b # v1.4.1
         with:
           working-directory: ruby

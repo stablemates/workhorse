@@ -1072,6 +1072,11 @@ describe("continuous integration", () => {
     expect(job).toContain('if [ "v$crate" = "$GITHUB_REF_NAME" ]; then');
     expect(job).toContain("cargo publish --package workhorse --locked");
     expect(job).not.toContain("secrets.");
+    // A re-run after a published upload checks crates.io first, and mints no token (SM-1860).
+    const check = job.indexOf("node scripts/check-registry-version.ts crates-io workhorse");
+    expect(check).toBeGreaterThan(job.indexOf("cargo package --package workhorse --locked"));
+    expect(check).toBeLessThan(job.indexOf("rust-lang/crates-io-auth-action@"));
+    expect(job.match(/if: steps\.registry\.outputs\.upload == 'true'/g)).toHaveLength(2);
   });
 
   it("publishes the Ruby gem through RubyGems trusted publishing on matching tags", async () => {
@@ -1103,6 +1108,13 @@ describe("continuous integration", () => {
     expect(job).toContain("working-directory: ruby");
     expect(job).not.toContain("bundler-cache: true");
     expect(job).not.toContain("secrets.");
+    // A re-run after a published upload checks RubyGems.org first (SM-1860).
+    const check = job.indexOf(
+      "node scripts/check-registry-version.ts rubygems stablemates-workhorse",
+    );
+    expect(check).toBeGreaterThan(job.indexOf("gem build stablemates-workhorse.gemspec"));
+    expect(check).toBeLessThan(job.indexOf("bundle install"));
+    expect(job.match(/if: steps\.registry\.outputs\.upload == 'true'/g)).toHaveLength(2);
     // The action runs `rake release`, which only Bundler's gem tasks define.
     expect(rakefile).toContain('require "bundler/gem_tasks"');
   });
