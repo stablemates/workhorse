@@ -4,19 +4,29 @@ import { createDatabaseTestHarness } from "./support/db.js";
 const database = createDatabaseTestHarness(import.meta.url);
 const readyTasks = 2000;
 // The ready rows fill a few dozen heap pages. Probing both wait views once per ready row costs
-// several index hits each and exceeds this bound many times over.
-const sharedHitBound = 1000;
+// several index blocks each and exceeds this bound many times over.
+const blockBound = 1000;
 
-async function sharedHits(sql: string): Promise<number> {
-  const result = await database.pool.query<{ "QUERY PLAN": unknown }>(
-    `EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) ${sql}`,
-  );
-  const explain = result.rows[0]?.["QUERY PLAN"] as
-    | Array<{ Plan?: { "Shared Hit Blocks"?: number } }>
-    | undefined;
-  const hits = explain?.[0]?.Plan?.["Shared Hit Blocks"];
-  expect(hits).toBeTypeOf("number");
-  return hits as number;
+// Counts the blocks that one statement fetches from workhorse tables and indexes. EXPLAIN also
+// counts catalog blocks. After DDL in another database resets the caches of a backend, the backend
+// reads its catalogs again. In one CI run, this added over 2,000 blocks to a read with an unchanged
+// plan (SM-1896). The per-relation counters exclude the catalogs. They count fetches, not only
+// hits, so a block that shared buffers evicted still counts. Pending counters cannot flush between
+// these reads, so the difference measures this statement.
+async function workhorseBlocks(sql: string): Promise<number> {
+  const blocks = `SELECT COALESCE(sum(pg_stat_get_xact_blocks_fetched(oid)), 0)::bigint AS blocks
+                    FROM pg_class WHERE relnamespace = 'workhorse'::regnamespace`;
+  const client = await database.pool.connect();
+  try {
+    await client.query("BEGIN");
+    const before = await client.query<{ blocks: string }>(blocks);
+    await client.query(sql);
+    const after = await client.query<{ blocks: string }>(blocks);
+    await client.query("COMMIT");
+    return Number(after.rows[0]!.blocks) - Number(before.rows[0]!.blocks);
+  } finally {
+    client.release();
+  }
 }
 
 async function waitingCount(): Promise<number> {
@@ -104,16 +114,18 @@ describe("dashboard task counts", () => {
 
   it("probes the wait views only for scheduled rows that name a wait", async () => {
     expect(await waitingCount()).toBe(5);
-    expect(await sharedHits("SELECT workhorse.dashboard_task_counts_v1('{}'::jsonb)")).toBeLessThan(
-      sharedHitBound,
-    );
+    expect(
+      await workhorseBlocks("SELECT workhorse.dashboard_task_counts_v1('{}'::jsonb)"),
+    ).toBeLessThan(blockBound);
     // Activity evaluates the wait probe only for the waiting filter, so the difference between
     // the two filters is what the probe costs.
-    const activityAll = await sharedHits("SELECT workhorse.dashboard_activity_v1('{}'::jsonb)");
-    const activityWaiting = await sharedHits(
+    const activityAll = await workhorseBlocks(
+      "SELECT workhorse.dashboard_activity_v1('{}'::jsonb)",
+    );
+    const activityWaiting = await workhorseBlocks(
       `SELECT workhorse.dashboard_activity_v1('{"filter":"waiting"}'::jsonb)`,
     );
-    expect(activityWaiting - activityAll).toBeLessThan(sharedHitBound);
+    expect(activityWaiting - activityAll).toBeLessThan(blockBound);
 
     // Past the estimate threshold, the read counts live rows from task_runtime alone.
     await database.pool.query(
@@ -124,8 +136,8 @@ describe("dashboard task counts", () => {
     await database.pool.query("ANALYZE workhorse.task");
 
     expect(await waitingCount()).toBe(5);
-    expect(await sharedHits("SELECT workhorse.dashboard_task_counts_v1('{}'::jsonb)")).toBeLessThan(
-      sharedHitBound,
-    );
+    expect(
+      await workhorseBlocks("SELECT workhorse.dashboard_task_counts_v1('{}'::jsonb)"),
+    ).toBeLessThan(blockBound);
   });
 });
