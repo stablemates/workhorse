@@ -92,8 +92,9 @@ Worker processes own a separate node-postgres pool and use the core `Queue`. Do 
 transaction session. Do not take the internal pool of Knex.
 
 If a worker uses this adapter, give a compatible pg pool as the `pool` option. The worker uses this
-pool for its heartbeats and its listen connection. Ordinary queries continue to use Knex. If you do
-not give the pool, the worker starts only when you set `sharedHeartbeats`.
+pool for its heartbeats and its listen connection. Ordinary queries continue to use Knex. The pool
+must report a maximum size (`max`) of at least 3. If you do not give the pool, `createWorker` throws
+an error. The error names the adapter and the step to take.
 
 ## Close the Knex instance that the adapter owns
 

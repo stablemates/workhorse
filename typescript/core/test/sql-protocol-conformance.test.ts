@@ -78,6 +78,7 @@ import { raceBudgetAdmission } from "./support/budget-race.js";
 import { createDatabaseTestHarness } from "./support/db.js";
 import { answerSchemaCheck } from "./support/schema-check.js";
 import { workerHeartbeatReservation, type WorkerHeartbeatChannel } from "../src/worker-internal.js";
+import { unreservedQueue } from "../src/worker-internal.js";
 
 const compatibilityDatabase = createDatabaseTestHarness(
   new URL("?compatibility", import.meta.url).href,
@@ -788,8 +789,7 @@ async function executePollCadenceRuntimeFixture(
   const queue = new Queue(pollingDatabase);
   const handled = deferred<void>();
   // The polling wrapper has no pool to lend a heartbeat connection from.
-  const worker = new Worker(queue, {
-    sharedHeartbeats: true,
+  const worker = new Worker(unreservedQueue(queue), {
     workerId: `runtime-${fixture.id}`,
     queue: queueName,
     pollMs: fixture.pollMs,
@@ -1126,8 +1126,7 @@ async function executeSlotRefillRuntimeFixture(
   // Handlers block until the fixture finishes them in the order they started.
   const started: Array<() => void> = [];
   let openHandlers = false;
-  const worker = new Worker(queue, {
-    sharedHeartbeats: true,
+  const worker = new Worker(unreservedQueue(queue), {
     workerId: `runtime-${fixture.id}`,
     queue: queueName,
     concurrency: fixture.concurrency,

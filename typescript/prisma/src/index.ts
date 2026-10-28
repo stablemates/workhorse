@@ -45,5 +45,6 @@ export function createPrismaAdapter<TTransaction extends PrismaExecutor = Prisma
     database,
     toQueryable: prismaQueryable,
     ...options,
+    provider: "Prisma",
   });
 }

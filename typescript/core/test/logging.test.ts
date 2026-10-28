@@ -7,6 +7,7 @@ import type { Queryable } from "../src/types.js";
 import { Worker } from "../src/worker.js";
 import { fullTierProbeRejection } from "./support/full-tier.js";
 import { answerSchemaCheck } from "./support/schema-check.js";
+import { unreservedQueue } from "../src/worker-internal.js";
 
 registerOpenTelemetry();
 const records: LogRecord[] = [];
@@ -109,8 +110,7 @@ describe("structured logging", () => {
       },
     } as unknown as Queryable;
     // The fake database has no pool to lend a heartbeat connection from.
-    const worker = new Worker(new Queue(answerSchemaCheck(database), "mail"), {
-      sharedHeartbeats: true,
+    const worker = new Worker(unreservedQueue(new Queue(answerSchemaCheck(database), "mail")), {
       workerId: "worker-registration-log",
       queues: ["mail", "billing"],
       pollMs: 1_000,

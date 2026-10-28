@@ -126,15 +126,15 @@ If `workhorse init` finds Prisma, it writes this file for you. It reads the vers
 - If `init` cannot read the version, the file uses the Prisma 6 constructor, and `init` prints a
   note. Install your dependencies before you run `init` to prevent this.
 
-If you cannot give a pool, set `sharedHeartbeats` on the worker. The worker then sends heartbeats
-through Prisma and polls for new tasks.
+A worker needs this pool. If you do not give `pool`, `createWorker` throws an error. The error
+names the adapter and the step to take.
 
 <details>
 <summary>Reference: worker connections</summary>
 
-- `createPrismaAdapter` accepts the option `pool`.
-- A dedicated heartbeat connection needs a pool of at least 3 connections. If the pool is smaller,
-  the worker does not start unless you set `sharedHeartbeats`.
+- `createPrismaAdapter` accepts the option `pool`. On Prisma 7, give the pool that `PrismaPg` uses.
+- The pool must report a maximum size (`max`) of at least 3. If the pool is smaller, or `pool` is
+  missing, `createWorker` throws an error that starts with `Prisma adapter cannot create a worker`.
 
 More detail: [Overview: ORM adapters](https://github.com/stablemates/workhorse/blob/main/docs/architecture/overview.md#orm-adapters),
 [Overview: Connection budgets per language](https://github.com/stablemates/workhorse/blob/main/docs/architecture/overview.md#connection-budgets-per-language).

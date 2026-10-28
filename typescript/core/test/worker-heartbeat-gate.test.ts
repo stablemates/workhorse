@@ -179,7 +179,7 @@ describe("worker heartbeat gate", () => {
     }
   });
 
-  it("refuses to start with an error that names the pool, the budget, and the opt-out", async () => {
+  it("refuses to start with an error that names the pool, the budget, and the next step", async () => {
     const gate = fakeChannel({ readiness: { step: "heartbeat", reason: "timeout" } });
     const fake = fastQueue(gate.channel, []);
     const worker = new Worker(fake.queue, { ...options, heartbeatMs: 7_000, leaseMs: 30_000 });
@@ -187,7 +187,7 @@ describe("worker heartbeat gate", () => {
     await expect(worker.run()).rejects.toThrow(
       "Worker refused to start: the test pool did not lend the dedicated heartbeat connection " +
         "within the startup budget of 7000 ms (max(heartbeatMs, 5000)). Give the pool more free " +
-        "connections, or set sharedHeartbeats: true to send heartbeats through the shared pool.",
+        "connections.",
     );
     expect(fake.claims).toEqual([]);
   });

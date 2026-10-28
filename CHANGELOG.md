@@ -35,6 +35,35 @@ from version 86 to version **89**. They replace function bodies and change no st
 compatibility floor stays at **76**. A 0.10 process keeps working on version 89, because a
 migration inside a major line only adds.
 
+**Give each worker a pool with a known size of at least 3.** The worker option `sharedHeartbeats`
+is removed. See the [breaking change](#breaking-changes) below. Before you upgrade, do these steps:
+
+1. Remove `sharedHeartbeats` from each `Worker` and `createWorker` call.
+2. Give the worker's `Queue` a node-postgres `Pool` with `max` set to at least 3.
+3. For the Prisma, Kysely, or Knex adapter, give that pool as the adapter option `pool`. For
+   Kysely, give the pool that `PostgresDialect` uses.
+4. For Drizzle, run the database on such a pool, or give one as `pool`. For TypeORM, set
+   `poolSize` to at least 3 and initialize the data source first, or give a pool as `pool`.
+
+### Breaking changes
+
+- **TypeScript:** the worker option `sharedHeartbeats` is removed (SM-1899). Before this change, a
+  worker with `sharedHeartbeats: true` sent its heartbeats through the same pool connections as its
+  claims and completions. A heartbeat could then wait behind those statements, so a lease could
+  expire and a task could run twice. Now every worker on a Workhorse `Queue` reserves a dedicated
+  heartbeat connection.
+
+  A worker on a pool with a maximum size below 3, or with no known size, fails when you construct
+  it. The error names the size it found, the size it needs, and the next step. A caller that still
+  passes `sharedHeartbeats` gets a type error and an error at construction that names the removal.
+  A worker on a custom `WorkerQueueApi` is not checked.
+
+- **TypeScript adapters:** `adapter.createWorker()` fails without a usable pool. The error starts
+  with the adapter name, for example `Kysely adapter cannot create a worker`. The error
+  states the pool step for that adapter. The Drizzle and TypeORM adapters now accept the option
+  `pool`. It takes precedence over the pool that the adapter finds in `$client` or
+  `driver.master`.
+
 ### Behavior changes
 
 These changes can make code that worked on 0.10 act differently:

@@ -52,7 +52,9 @@ Neither outcome belongs to the original transaction, and Workhorse reports no er
 
 The adapter never closes caller-owned database resources unless `close` is configured.
 [Workhorse core](https://workhorse.run/docs/installation) owns schema installation and changes.
-Database errors are rethrown as `DrizzleQueryError`, with the original error in `cause` and its
+Workers take their heartbeat and `LISTEN/NOTIFY` connections from the `pg` pool that Drizzle runs
+on (`db.$client`), or from the `pool` option when you give one. That pool must have a maximum size
+(`max`) of at least 3. Without it, `createWorker()` throws. Database errors are rethrown as `DrizzleQueryError`, with the original error in `cause` and its
 PostgreSQL code copied to `code` when available.
 
 ## Next

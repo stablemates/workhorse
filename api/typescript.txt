@@ -3263,7 +3263,7 @@ type DependencyRepairAction = "recounted" | "released" | "rejected";
 
 type DependencyTerminalPolicy = "release" | "cancel" | "fail";
 
-interface DrizzleAdapterOptions extends Omit<ProviderAdapterOptions, "pool"> {
+interface DrizzleAdapterOptions extends ProviderAdapterOptions {
 }
 
 interface DrizzleExecutor {
@@ -3894,8 +3894,10 @@ class ProgressRateLimitError extends WorkhorseError {
 interface ProviderAdapterDefinition<TExecutor> extends ProviderAdapterOptions {
   /** The database, client, or data source the application owns. */
   database: TExecutor;
-  /** The pool the adapter finds in its ORM. It takes precedence over the `pool` option. */
+  /** The pool the adapter finds in its ORM. The `pool` option takes precedence over it. */
   connectionPool?: AdapterConnectionPoolSource;
+  /** The adapter name that a worker refusal starts with, for example `Kysely`. */
+  provider?: string;
   /**
   * Convert one executor into a queryable. It is called for the database with the connection pool,
   * and again per transaction without one: a transaction is a borrowed session that ends, and a
@@ -3909,8 +3911,8 @@ interface ProviderAdapterOptions {
   queueOptions?: QueueOptions;
   /**
   * The node-postgres pool workers take their dedicated listener and heartbeat connections from.
-  * An adapter that finds its ORM's own pool omits this option. Otherwise a worker needs it unless
-  * it sets `sharedHeartbeats`.
+  * It must report a maximum size (`max`) of at least 3. It takes precedence over a pool that the
+  * adapter finds in its ORM. Without a usable pool, `createWorker()` throws.
   */
   pool?: AdapterConnectionPool;
   /**
@@ -5424,7 +5426,7 @@ interface TraceContext {
   tracestate?: string;
 }
 
-interface TypeOrmAdapterOptions extends Omit<ProviderAdapterOptions, "pool"> {
+interface TypeOrmAdapterOptions extends ProviderAdapterOptions {
 }
 
 interface TypeOrmExecutor {
@@ -5600,15 +5602,6 @@ interface WorkerOptions {
   * is 100 ms. The worker accepts a shorter value, but on a loaded host it can renew no lease.
   */
   heartbeatMs?: number;
-  /**
-  * Send heartbeats through the queue's shared pool instead of a dedicated connection.
-  *
-  * By default a worker on a Workhorse `Queue` reserves one heartbeat connection from its pool, so
-  * handlers that hold every other connection cannot starve lease renewal. It refuses to start when
-  * the pool cannot lend one. Set this only for a pool too small to spare the connection, or a
-  * database with no pool; heartbeats then wait behind other statements.
-  */
-  sharedHeartbeats?: boolean;
   /**
   * Idle fallback polling delay. By default, `run()` waits five seconds while its notification
   * subscription is live. Without a live subscription, it starts at 250 milliseconds and backs off

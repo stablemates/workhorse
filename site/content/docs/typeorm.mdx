@@ -66,7 +66,9 @@ waits for notifications about new tasks. Thus, initialize the data source before
 worker.
 
 The pool must have space for these two connections and for the claims of the worker. Use the
-TypeORM option `extra.max` to set the size of the pool.
+TypeORM option `extra.max` to set the size of the pool. To use another node-postgres pool, give it
+as the `pool` option. If no usable pool is available, `createWorker` throws an error. The error
+names the adapter and the step to take.
 
 <details>
 <summary>Reference: worker connections</summary>
@@ -74,9 +76,9 @@ TypeORM option `extra.max` to set the size of the pool.
 - The pool is `dataSource.driver.master`. TypeORM's `PostgresDriver` creates it on `initialize()`.
 - The adapter finds the pool when a worker is constructed, not when you create the adapter.
 - TypeORM does not document `driver.master`. An integration test pins this accessor.
-- `TypeOrmAdapterOptions` has no `pool` option.
-- A dedicated heartbeat connection needs a pool of at least 3 connections. If the pool is smaller,
-  the worker does not start unless you set `sharedHeartbeats`.
+- `TypeOrmAdapterOptions` accepts the option `pool`. It takes precedence over `driver.master`.
+- The pool must report a maximum size (`max`) of at least 3. If the pool is smaller, or no pool is
+  available, `createWorker` throws an error that starts with `TypeORM adapter cannot create a worker`.
 
 More detail: [Overview: ORM adapters](https://github.com/stablemates/workhorse/blob/main/docs/architecture/overview.md#orm-adapters),
 [Overview: Connection budgets per language](https://github.com/stablemates/workhorse/blob/main/docs/architecture/overview.md#connection-budgets-per-language).

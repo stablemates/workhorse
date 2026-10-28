@@ -41,5 +41,6 @@ export function createKnexAdapter<TTransaction extends KnexExecutor = Knex.Trans
     database,
     toQueryable: knexQueryable,
     ...options,
+    provider: "Knex",
   });
 }

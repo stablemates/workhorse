@@ -18,6 +18,7 @@ import {
   ensureTestDatabase,
   poolingScratchName,
 } from "./support/db.js";
+import { unreservedQueue } from "../src/worker-internal.js";
 
 /**
  * Pooling-mode conformance: direct connections and both pool modes of each supported pooler.
@@ -356,8 +357,7 @@ describe("notification capability", () => {
 
     const handled: string[] = [];
     // A query-only database cannot lend a heartbeat connection either.
-    const worker = new Worker(queue, {
-      sharedHeartbeats: true,
+    const worker = new Worker(unreservedQueue(queue), {
       workerId: "pooling-query-only-dispatch",
       registryIntervalMs: 0,
     }).handle<{ token: string }>("pooling.query-only", ({ token }) => {

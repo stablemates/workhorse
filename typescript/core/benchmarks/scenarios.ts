@@ -49,6 +49,7 @@ import type {
 // The statement catalogue is internal too. The replay probe matches its exact text.
 import { SQL_STATEMENTS } from "../src/queue/sql-catalogue.generated.js";
 import { dispatchRefillBatch, InjectedCrashError, type Failpoint } from "../src/worker.js";
+import { unreservedQueue } from "../src/worker-internal.js";
 
 registerOpenTelemetry();
 
@@ -1027,9 +1028,9 @@ interface QueryPressureSnapshot {
  * Counts the statements a worker sends, including its claims and heartbeats.
  *
  * The probe has no `connect()`, so it cannot lend a dedicated heartbeat connection. A worker over it
- * sets `sharedHeartbeats`, which sends heartbeats through `query()` where the probe counts them.
- * Lending a pool instead would hide those heartbeats and give the worker a notification listener,
- * which would change the polling path these scenarios measure.
+ * runs on `unreservedQueue`, an internal seam that sends heartbeats through `query()` where the
+ * probe counts them. Lending a pool instead would hide those heartbeats and give the worker a
+ * notification listener, which would change the polling path these scenarios measure.
  */
 class QueryPressureProbe implements Queryable {
   private activeQueries = 0;
@@ -4172,13 +4173,11 @@ async function workerConcurrency(
       context.pool,
       () => concurrency - worker.runtimeState().activeSlots,
     );
-    worker = new Worker(operationalQueue(probe, context.queueName), {
+    worker = new Worker(unreservedQueue(operationalQueue(probe, context.queueName)), {
       concurrency,
       workerId: `benchmark-concurrency-${concurrency}`,
       leaseMs,
       heartbeatMs,
-      // The probe counts heartbeats; see QueryPressureProbe.
-      sharedHeartbeats: true,
       pollMs,
       maintenanceIntervalMs: 100,
       maintenanceRoutinePollMs: 100,
@@ -4389,13 +4388,11 @@ async function workerConcurrency(
       let processingStartedAt = 0;
 
       for (let workerIndex = 0; workerIndex < shape.workerCount; workerIndex += 1) {
-        const worker = new Worker(operationalQueue(probe, context.queueName), {
+        const worker = new Worker(unreservedQueue(operationalQueue(probe, context.queueName)), {
           concurrency: shape.concurrency,
           workerId: `benchmark-topology-${profile.name}-${shape.name}-${workerIndex + 1}`,
           leaseMs,
           heartbeatMs,
-          // The probe counts heartbeats; see QueryPressureProbe.
-          sharedHeartbeats: true,
           pollMs,
           maintenanceIntervalMs: 60_000,
           maintenanceRoutinePollMs: 60_000,
@@ -4476,17 +4473,18 @@ async function workerConcurrency(
   const firstNullQueue = operationalQueue(context.pool, context.queueName);
   await firstNullQueue.enqueue("first-null", { only: true });
   const firstNullProbe = new QueryPressureProbe(context.pool);
-  const firstNullWorker = new Worker(operationalQueue(firstNullProbe, context.queueName), {
-    concurrency: 4,
-    workerId: "benchmark-first-null",
-    leaseMs,
-    heartbeatMs,
-    // The probe counts heartbeats; see QueryPressureProbe.
-    sharedHeartbeats: true,
-    pollMs: 1,
-    maintenanceIntervalMs: 100,
-    maintenanceRoutinePollMs: 100,
-  });
+  const firstNullWorker = new Worker(
+    unreservedQueue(operationalQueue(firstNullProbe, context.queueName)),
+    {
+      concurrency: 4,
+      workerId: "benchmark-first-null",
+      leaseMs,
+      heartbeatMs,
+      pollMs: 1,
+      maintenanceIntervalMs: 100,
+      maintenanceRoutinePollMs: 100,
+    },
+  );
   let firstNullHandled = 0;
   firstNullWorker.handle("first-null", () => {
     firstNullHandled += 1;
@@ -4513,13 +4511,11 @@ async function workerConcurrency(
   const pauseQueue = operationalQueue(context.pool, context.queueName);
   await pauseQueue.enqueue("pause-guard", { paused: true });
   const pauseProbe = new QueryPressureProbe(context.pool);
-  const pauseWorker = new Worker(operationalQueue(pauseProbe, context.queueName), {
+  const pauseWorker = new Worker(unreservedQueue(operationalQueue(pauseProbe, context.queueName)), {
     concurrency: 4,
     workerId: "benchmark-pause",
     leaseMs,
     heartbeatMs,
-    // The probe counts heartbeats; see QueryPressureProbe.
-    sharedHeartbeats: true,
     pollMs: 1,
     maintenanceIntervalMs: 100,
     maintenanceRoutinePollMs: 100,
@@ -4549,17 +4545,18 @@ async function workerConcurrency(
     await shutdownQueue.enqueue("shutdown-drain", { index });
   }
   const shutdownProbe = new QueryPressureProbe(context.pool);
-  const shutdownWorker = new Worker(operationalQueue(shutdownProbe, context.queueName), {
-    concurrency: shutdownConcurrency,
-    workerId: "benchmark-shutdown",
-    leaseMs,
-    heartbeatMs,
-    // The probe counts heartbeats; see QueryPressureProbe.
-    sharedHeartbeats: true,
-    pollMs: 1,
-    maintenanceIntervalMs: 100,
-    maintenanceRoutinePollMs: 100,
-  });
+  const shutdownWorker = new Worker(
+    unreservedQueue(operationalQueue(shutdownProbe, context.queueName)),
+    {
+      concurrency: shutdownConcurrency,
+      workerId: "benchmark-shutdown",
+      leaseMs,
+      heartbeatMs,
+      pollMs: 1,
+      maintenanceIntervalMs: 100,
+      maintenanceRoutinePollMs: 100,
+    },
+  );
   let shutdownActive = 0;
   let releaseShutdown!: () => void;
   const shutdownGate = new Promise<void>((resolve) => {
@@ -4658,13 +4655,11 @@ async function batchDispatch(
       context.pool,
       () => batchMaxSize - worker.runtimeState().activeSlots,
     );
-    worker = new Worker(operationalQueue(probe, cohortQueueName), {
+    worker = new Worker(unreservedQueue(operationalQueue(probe, cohortQueueName)), {
       concurrency: batchMaxSize,
       workerId: `benchmark-batch-${mode}`,
       leaseMs,
       heartbeatMs,
-      // The probe counts heartbeats; see QueryPressureProbe.
-      sharedHeartbeats: true,
       pollMs: 10,
       registryIntervalMs: 0,
     });
@@ -5253,13 +5248,12 @@ async function notificationDispatch(
       context.queueName,
     );
     let handled = false;
-    const worker = new Worker(workerQueue, {
+    // The polling cohort's query-only database cannot lend a heartbeat connection. Both cohorts
+    // heartbeat through the probe, so they differ only in notification support.
+    const worker = new Worker(unreservedQueue(workerQueue), {
       workerId: `benchmark-notification-${notifications ? "assisted" : "polling"}`,
       pollMs: notifications ? notificationFallbackMs : pollingFallbackMs,
       registryIntervalMs: 0,
-      // The polling cohort's query-only database cannot lend a heartbeat connection. Both cohorts
-      // heartbeat through the probe, so they differ only in notification support.
-      sharedHeartbeats: true,
     }).handle("notification-dispatch", () => {
       handled = true;
       return null;
@@ -5552,12 +5546,11 @@ async function checkpointReplay(
     let valueMismatches = 0;
     const passValues: Json[][] = [];
     const replayHandlerMs: number[] = [];
-    const worker = new Worker(queue, {
+    // The probe has no connect(), so heartbeats share it and appear as other statements.
+    const worker = new Worker(unreservedQueue(queue), {
       workerId: `benchmark-checkpoint-replay-${count}`,
       leaseMs,
       heartbeatMs: leaseMs / 4,
-      // The probe has no connect(), so heartbeats share it and appear as other statements.
-      sharedHeartbeats: true,
       pollMs: 1,
       // One warm-up pass below runs maintenance, so no timed pass repeats it.
       maintenanceIntervalMs: 3_600_000,

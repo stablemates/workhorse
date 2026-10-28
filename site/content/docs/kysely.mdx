@@ -74,18 +74,18 @@ not see the account or the task before the commit.
 To enqueue a task that is not part of a transaction, use `workhorse.queue`. This queue does not join
 the transaction of the caller.
 
-## Run a worker without a pool
+## Give the worker a pool of at least 3 connections
 
-If you do not give `pool`, a worker does not start unless you set `sharedHeartbeats`. With this
-setting, the worker sends its heartbeats through the queries of Kysely. It then finds new tasks by
-bounded polling.
+A worker needs `pool`. The pool must hold the listen connection, the heartbeat connection, and one
+query. If you do not give `pool`, `createWorker` throws an error. The error names the adapter and
+the step to take.
 
 <details>
 <summary>Reference: worker connections</summary>
 
 - `createKyselyAdapter` accepts the option `pool`. Give the pool that `PostgresDialect` uses.
-- A dedicated heartbeat connection needs a pool of at least 3 connections. If the pool is smaller,
-  the worker does not start unless you set `sharedHeartbeats`.
+- The pool must report a maximum size (`max`) of at least 3. If the pool is smaller, or `pool` is
+  missing, `createWorker` throws an error that starts with `Kysely adapter cannot create a worker`.
 
 More detail: [Overview: ORM adapters](https://github.com/stablemates/workhorse/blob/main/docs/architecture/overview.md#orm-adapters),
 [Overview: What an adapter must guarantee](https://github.com/stablemates/workhorse/blob/main/docs/architecture/overview.md#what-an-adapter-must-guarantee).

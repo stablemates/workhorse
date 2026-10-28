@@ -7,6 +7,7 @@ import { MINIMUM_SCHEMA_VERSION, PROTOCOL_VERSION } from "../src/schema.js";
 import { SQL_STATEMENTS } from "../src/queue/sql-catalogue.generated.js";
 import type { Queryable } from "../src/types.js";
 import { Worker } from "../src/worker.js";
+import { unreservedQueue } from "../src/worker-internal.js";
 
 const COMPATIBILITY = SQL_STATEMENTS["compatibility_state"];
 const AUDIT = { actor: "operator", reason: "schema check", requestId: "schema-check-1" };
@@ -255,7 +256,6 @@ describe("Admin schema compatibility check", () => {
 
 describe("Worker schema compatibility check", () => {
   const workerOptions = {
-    sharedHeartbeats: true,
     workerId: "schema-check-worker",
     queues: ["mail"],
     pollMs: 1_000,
@@ -263,15 +263,15 @@ describe("Worker schema compatibility check", () => {
 
   it("refuses a schema below the floor in runOnce before it registers", async () => {
     const fake = fakeDatabase(MINIMUM_SCHEMA_VERSION - 1);
-    const worker = new Worker(new Queue(fake.database, "mail"), workerOptions);
+    const worker = new Worker(unreservedQueue(new Queue(fake.database, "mail")), workerOptions);
 
     await expect(worker.runOnce()).rejects.toMatchObject({ code: "schema-too-old" });
     expect(fake.statements).toEqual([COMPATIBILITY]);
   });
 
-  it("refuses a schema below the floor in run with shared heartbeats", async () => {
+  it("refuses a schema below the floor in run without a reserved heartbeat connection", async () => {
     const fake = fakeDatabase(MINIMUM_SCHEMA_VERSION - 1);
-    const worker = new Worker(new Queue(fake.database, "mail"), workerOptions);
+    const worker = new Worker(unreservedQueue(new Queue(fake.database, "mail")), workerOptions);
 
     await expect(worker.run()).rejects.toMatchObject({ code: "schema-too-old" });
     expect(fake.statements).toEqual([COMPATIBILITY]);

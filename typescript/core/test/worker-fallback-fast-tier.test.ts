@@ -4,6 +4,7 @@ import { FastTierUnsupportedError, Queue, Worker, type Queryable } from "../src/
 import { SQL_STATEMENTS } from "../src/queue/sql-catalogue.generated.js";
 import type { HandlerContext } from "../src/worker.js";
 import { answerSchemaCheck } from "./support/schema-check.js";
+import { unreservedQueue } from "../src/worker-internal.js";
 
 // SM-993: a full-tier probe answer sends a worker to claim_many_v1 for the probe interval. If an
 // operator moves the queue to the fast tier in that interval, claim_many_v1 returns fast-tier tasks
@@ -86,9 +87,8 @@ function fakeDatabase(options: FakeDatabaseOptions) {
 }
 
 function fallbackWorker(database: Queryable): Worker {
-  return new Worker(new Queue(database, QUEUE), {
+  return new Worker(unreservedQueue(new Queue(database, QUEUE)), {
     queues: [QUEUE],
-    sharedHeartbeats: true,
     registryIntervalMs: 0,
   });
 }

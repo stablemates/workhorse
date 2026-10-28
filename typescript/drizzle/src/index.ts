@@ -16,7 +16,7 @@ export interface DrizzleExecutor {
   readonly $client?: AdapterConnectionPool;
 }
 
-export interface DrizzleAdapterOptions extends Omit<ProviderAdapterOptions, "pool"> {}
+export interface DrizzleAdapterOptions extends ProviderAdapterOptions {}
 
 export class DrizzleQueryError extends QueryError {
   constructor(statement: string, cause: unknown) {
@@ -44,6 +44,7 @@ export function createDrizzleAdapter<TTransaction extends DrizzleExecutor = Driz
     database,
     toQueryable: drizzleQueryable,
     ...options,
+    provider: "Drizzle",
     // The node-postgres pool Drizzle runs on lends the worker its dedicated connections.
     connectionPool: database.$client,
   });

@@ -53,9 +53,13 @@ export function describePool(database: Queryable): string {
  */
 export function heartbeatReservationProblem(database: Queryable): string | undefined {
   const pool = connectionPoolOf(database);
-  if (pool === undefined) return "the queue's database has no connect() and no attached pool";
+  if (pool === undefined) {
+    return `the queue's database has no connect() and no attached pool, and a worker needs a pool of at least ${MINIMUM_RESERVING_CAPACITY} connections`;
+  }
   const capacity = pool.options?.max;
-  if (capacity === undefined) return "the pool's size is unknown";
+  if (capacity === undefined) {
+    return `the pool reports no maximum size and needs a known size of at least ${MINIMUM_RESERVING_CAPACITY}`;
+  }
   if (capacity < MINIMUM_RESERVING_CAPACITY) {
     return `the pool allows ${capacity} connection${capacity === 1 ? "" : "s"} and needs at least ${MINIMUM_RESERVING_CAPACITY}`;
   }

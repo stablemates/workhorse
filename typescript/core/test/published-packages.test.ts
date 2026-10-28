@@ -320,7 +320,8 @@ describe("ORM adapter entry points", () => {
 
   it.each(adapters)("keeps %s as thin glue over the public core adapter API", async (adapter) => {
     const source = await read(`typescript/${adapter}/src/index.ts`);
-    expect(source.trimEnd().split("\n").length).toBeLessThanOrEqual(50);
+    // 51 lines: an adapter also names itself for the refusal of a worker without a pool (SM-1899).
+    expect(source.trimEnd().split("\n").length).toBeLessThanOrEqual(51);
     expect(source).not.toMatch(/from ["']@stablemates\/workhorse\//);
     expect(source).not.toMatch(/from ["'](?:\.\.\/)+\.\.\/src\//);
   });

@@ -14,7 +14,7 @@ export interface TypeOrmExecutor {
   query<T = unknown>(statement: string, values?: unknown[]): Promise<T>;
 }
 
-export interface TypeOrmAdapterOptions extends Omit<ProviderAdapterOptions, "pool"> {}
+export interface TypeOrmAdapterOptions extends ProviderAdapterOptions {}
 
 export class TypeOrmQueryError extends QueryError {
   constructor(statement: string, cause: unknown) {
@@ -44,6 +44,7 @@ export function createTypeOrmAdapter<TTransaction extends TypeOrmExecutor = Type
     database,
     toQueryable: typeOrmQueryable,
     ...options,
+    provider: "TypeORM",
     // PostgresDriver creates its node-postgres pool as driver.master when the data source initializes.
     connectionPool: () => (database as { driver?: { master?: unknown } }).driver?.master,
   });

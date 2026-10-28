@@ -3,6 +3,7 @@ import { setTimeout as sleep } from "node:timers/promises";
 import { describe, expect, expectTypeOf, it, vi } from "vitest";
 import { type BatchHandlerItem, type ClaimedTask, Worker } from "../src/index.js";
 import { createIntegrationTestContext } from "./support/integration.js";
+import { unreservedQueue } from "../src/worker-internal.js";
 
 const { deferred, pool, queue, admin } = createIntegrationTestContext(import.meta.url);
 
@@ -408,7 +409,7 @@ describe("batch handlers", () => {
         heartbeatSeen.resolve();
         return statuses;
       });
-    const worker = new Worker(queue, {
+    const worker = new Worker(unreservedQueue(queue), {
       workerId,
       queue: queueName,
       concurrency: 2,
@@ -416,7 +417,6 @@ describe("batch handlers", () => {
       heartbeatMs: 100,
       // A reserved heartbeat connection renews through another Queue object, so the spy does not
       // see its heartbeats. That heartbeat also locks the stale row, and recovery skips locked rows.
-      sharedHeartbeats: true,
     }).handleBatch<{ outcome: string }, { source: string }>(
       "batch-isolation",
       { maxSize: 2, lingerMs: 100 },

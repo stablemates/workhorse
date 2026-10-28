@@ -5,6 +5,7 @@ import { Worker } from "../src/index.js";
 import { workerHeartbeatReservation } from "../src/worker-internal.js";
 import { type HeartbeatSchedule, recordHeartbeatTimers } from "./support/heartbeat-timers.js";
 import { createIntegrationTestContext } from "./support/integration.js";
+import { unreservedQueue } from "../src/worker-internal.js";
 
 // Each deadline that the worker gives setUnrefTimeoutAt, and whether its callback ran. The lease
 // watchdog arms its timer through this function.
@@ -172,7 +173,9 @@ afterEach(() => {
 describe("busy heartbeat retry", () => {
   it.each([
     { shared: false, label: "reserved connection" },
-    { shared: true, label: "shared heartbeats" },
+    // The test seam lends no heartbeat connection, so rounds run through queue.heartbeatMany, as on a
+    // custom WorkerQueueApi.
+    { shared: true, label: "queue transport" },
   ])("retries only the busy lease before the next regular round ($label)", async ({ shared }) => {
     const heartbeatMs = 400;
     const retryBaseMs = Math.min(100, heartbeatMs / 8);
@@ -210,14 +213,13 @@ describe("busy heartbeat retry", () => {
       release = resolve;
     });
     const aborted: string[] = [];
-    const worker = new Worker(queue, {
+    const worker = new Worker(shared ? unreservedQueue(queue) : queue, {
       workerId: `busy-retry-${shared ? "shared" : "reserved"}-worker`,
       queue: queueName,
       concurrency: 2,
       leaseMs: 30_000,
       heartbeatMs,
       registryIntervalMs: 0,
-      sharedHeartbeats: shared,
     }).handle("retry", async (_payload, context) => {
       started.add(context.task.id);
       await released;
@@ -541,7 +543,6 @@ describe("busy heartbeat retry", () => {
       leaseMs: 30_000,
       heartbeatMs,
       registryIntervalMs: 0,
-      sharedHeartbeats: false,
     }).handle("left", async (payload: { leaves: boolean }) => {
       await (payload.leaves ? sent : released);
       return null;
@@ -599,19 +600,18 @@ describe("busy heartbeat retry", () => {
   });
 
   it.each([false, true])(
-    "never renews through heartbeatStatus with the built-in queue (shared heartbeats: %s)",
-    async (sharedHeartbeats) => {
-      const queueName = `busy-retry-no-scalar-${String(sharedHeartbeats)}`;
+    "never renews through heartbeatStatus with the built-in queue (queue transport: %s)",
+    async (unreserved) => {
+      const queueName = `busy-retry-no-scalar-${String(unreserved)}`;
       await queue.enqueue("scalar", {}, { queue: queueName });
       const scalar = vi.spyOn(queue, "heartbeatStatus");
-      const worker = new Worker(queue, {
-        workerId: `busy-retry-no-scalar-${String(sharedHeartbeats)}`,
+      const worker = new Worker(unreserved ? unreservedQueue(queue) : queue, {
+        workerId: `busy-retry-no-scalar-${String(unreserved)}`,
         queue: queueName,
         leaseMs: 1_000,
         // 100 ms is the smallest supported interval. The handler outlasts two rounds.
         heartbeatMs: 100,
         registryIntervalMs: 0,
-        sharedHeartbeats,
       }).handle("scalar", async () => {
         await sleep(300);
         return null;
