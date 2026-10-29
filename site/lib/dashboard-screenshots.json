@@ -1,0 +1,53 @@
+{
+  "description": "Dashboard captures at 1440x900 CSS pixels and device scale factor 2, in the light and dark schemes, in the order of the dashboard sidebar. The landing hero shows the first screen, its showcase shows the others, and /features shows the operator screens with their captions.",
+  "screens": [
+    {
+      "name": "tasks",
+      "label": "Tasks",
+      "alt": "Workhorse dashboard task activity chart and task table",
+      "caption": "Find a task by its status, queue, or type, and see the activity of each queue.",
+      "light": "/screenshots/landing/tasks.png",
+      "dark": "/screenshots/landing/tasks-dark.png"
+    },
+    {
+      "name": "events",
+      "label": "Events",
+      "alt": "Workhorse event stream with task lifecycle events and operational details",
+      "caption": "Read each lifecycle transition and attempt result, filtered by queue, task type, or worker.",
+      "light": "/screenshots/landing/events.png",
+      "dark": "/screenshots/landing/events-dark.png"
+    },
+    {
+      "name": "schedules",
+      "label": "Schedules",
+      "alt": "Workhorse schedule list with expressions, destinations, and recent runs",
+      "caption": "See when each recurring task runs and the queue that receives it.",
+      "light": "/screenshots/landing/schedules.png",
+      "dark": "/screenshots/landing/schedules-dark.png"
+    },
+    {
+      "name": "queues",
+      "label": "Queues",
+      "alt": "Workhorse queues dashboard with per-queue status, concurrency limits, and rate budgets",
+      "caption": "Pause new claims, compare concurrency and start-rate budgets, or clear tasks that have not started.",
+      "light": "/screenshots/landing/queues.png",
+      "dark": "/screenshots/landing/queues-dark.png"
+    },
+    {
+      "name": "workers",
+      "label": "Workers",
+      "alt": "Workhorse worker fleet with queue assignments, capacity, and recent results",
+      "caption": "See the capacity, current claims, and recent attempt results of each worker.",
+      "light": "/screenshots/landing/workers.png",
+      "dark": "/screenshots/landing/workers-dark.png"
+    },
+    {
+      "name": "health",
+      "label": "System health",
+      "alt": "Workhorse system health dashboard with health checks and activity over time",
+      "caption": "Check leases, deadlines, limits, and cleanup, and see the activity over time.",
+      "light": "/screenshots/landing/health.png",
+      "dark": "/screenshots/landing/health-dark.png"
+    }
+  ]
+}

@@ -26,9 +26,11 @@ func renderInvoice(chargeID string) (map[string]any, error) {
 
 func registerInvoice(worker *workhorse.Worker) {
 	worker.Handle("invoice.issue", workhorse.Typed(func(
-		_ context.Context, payload invoice, handler *workhorse.HandlerContext,
+		_ context.Context,
+		payload invoice,
+		handler *workhorse.HandlerContext,
 	) (any, error) {
-		// After Workhorse stores a checkpoint result, later runs return it.
+		// Later runs return the stored checkpoint result.
 		stored, err := handler.Checkpoint("charge", func() (any, error) {
 			return chargeCard(payload.Amount)
 		})

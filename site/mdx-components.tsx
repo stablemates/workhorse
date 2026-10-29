@@ -5,13 +5,11 @@ import { TypeTable } from "fumadocs-ui/components/type-table";
 import defaultMdxComponents from "fumadocs-ui/mdx";
 import type { MDXComponents } from "mdx/types";
 
-import { ComparisonTable } from "@/components/comparison-table";
 import { Diagram } from "@/components/diagram";
-import { IntegrationCatalog } from "@/components/integration-catalog";
-import { ReleaseTable } from "@/components/release-table";
 
 /**
- * MDX component map shared by every MDX surface on the site.
+ * MDX component map of the blog posts and the site pages. The documentation
+ * pages render with Blume, whose components are in `site/blume/components.ts`.
  * Keep additions server-safe: anything interactive must opt into "use client"
  * inside its own module so docs pages stay server-rendered.
  */
@@ -20,10 +18,7 @@ export function getMDXComponents(components?: MDXComponents): MDXComponents {
     ...defaultMdxComponents,
     Card,
     Cards,
-    ComparisonTable,
     Diagram,
-    IntegrationCatalog,
-    ReleaseTable,
     Step,
     Steps,
     Tab,

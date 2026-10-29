@@ -82,7 +82,15 @@ gtag('config', 'G-9NC8FKZPVB');`,
         />
       </head>
       <body className="flex min-h-screen flex-col bg-fd-background font-sans antialiased">
-        <RootProvider search={{ SearchDialog: StaticSearchDialog }}>
+        {/*
+         * The Blume documentation pages keep the colour scheme under
+         * `blume-theme`. Both header toggles write "light" or "dark" there,
+         * so a reader's choice holds on the docs and on the other pages.
+         */}
+        <RootProvider
+          search={{ SearchDialog: StaticSearchDialog }}
+          theme={{ storageKey: "blume-theme" }}
+        >
           <Outlet />
         </RootProvider>
         <Scripts />

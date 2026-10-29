@@ -3,7 +3,6 @@ import { readFile } from "node:fs/promises";
 import { setTimeout as sleep } from "node:timers/promises";
 import { resolve } from "node:path";
 import { CLI_COMMANDS } from "../src/cli/surface.js";
-import { WORKHORSE_VERSION } from "../src/version.js";
 import {
   agentEntryPointHopBound,
   assertAgentEntryPointReachable,
@@ -62,9 +61,22 @@ try {
   // `/` is the landing page; every documentation destination lives in the
   // docs sidebar.
   const expectations = [
-    ["/", ["Workhorse", "Postgres", "quickstart", "derby", "G-9NC8FKZPVB"]],
+    ["/", ["Workhorse", "Postgres", "quickstart", "one SQL protocol", "G-9NC8FKZPVB"]],
+    // The old dashboard tour. The header "Demo" item now opens the live demo, and this page only
+    // sends an old link there, so it is not indexed.
+    [
+      "/demo",
+      [
+        "Open the live dashboard",
+        'http-equiv="refresh" content="0; url=https://demo.workhorse.run"',
+        '<link rel="canonical" href="https://demo.workhorse.run"',
+        '<meta name="robots" content="noindex"',
+      ],
+    ],
     ["/docs", ["Workhorse", "PostgreSQL"]],
-    ["/docs/api", ["API overview", `Workhorse version ${WORKHORSE_VERSION}`]],
+    // The docs sidebar no longer prints the version. The releases checks below
+    // hold each newest version to the release notes page.
+    ["/docs/api", ["API overview"]],
     ["/docs/for-ai-agents", ["TypeScript", "Python", "Go"]],
     // The playbook's remedy for a non-restart-safe external effect is a
     // checkpoint. A rewrite that drops the word drops the one mistake a
@@ -336,11 +348,12 @@ try {
     'href="/about"',
     'href="/contact"',
     'href="/privacy"',
-    'aria-label="typescript"',
-    'aria-label="python"',
-    'aria-label="go"',
-    'aria-label="rust"',
-    'aria-label="ruby"',
+    // The code examples carry a tab for each language, and the tab text is its proper name.
+    ">TypeScript</button>",
+    ">Python</button>",
+    ">Go</button>",
+    ">Rust</button>",
+    ">Ruby</button>",
   ]);
 
   // Shiki writes a token's colours as a class, and one generated stylesheet
@@ -350,16 +363,30 @@ try {
   // above the built size, so it catches the pipeline losing its transformer
   // rather than ordinary growth.
   // For SM-1480, the Java and Kotlin tabs of SM-1464 give a landing page of 618400 bytes.
-  // For SM-1628, the C# tabs give a landing page of 698845 bytes. The ceiling is about 5% above
-  // that size, rounded up to a multiple of 5000 bytes.
+  // For SM-1628, the C# tabs give a landing page of 698845 bytes.
+  // The site tabs then moved their theme variables from each inline style into one stylesheet,
+  // and a hidden code panel holds its code without token markup. Every language of every pillar
+  // then gives a landing page of 149721 bytes and a /features page of 349306 bytes. Each ceiling
+  // is about 5% above its size, rounded up to a multiple of 5000 bytes. The marketing controls
+  // now take every color from the site stylesheet, and a page with code draws each language logo
+  // once (`components/languages.tsx`). The landing page is then about 153 KB, still under its
+  // ceiling. A Graphical part with inline variables adds about 23 KB, so one part catches the
+  // regression.
   if (landingHtml.includes("--shiki-light:")) {
     throw new Error(
       "The landing page ships per-token inline colours again; gen-code-theme.ts and the highlighting transformers have come apart",
     );
   }
   const landingBytes = Buffer.byteLength(landingHtml, "utf8");
-  if (landingBytes > 735_000) {
+  if (landingBytes > 160_000) {
     throw new Error(`The landing page grew to ${landingBytes} bytes, past its shape`);
+  }
+  const featuresBytes = Buffer.byteLength(
+    await (await fetch(`${baseUrl}/features`)).text(),
+    "utf8",
+  );
+  if (featuresBytes > 370_000) {
+    throw new Error(`The /features page grew to ${featuresBytes} bytes, past its shape`);
   }
 
   // The landing page is the one an agent is most likely to reach first, and its
@@ -393,14 +420,85 @@ try {
     );
   }
 
+  // The hero capture follows the saved scheme choice. A preload with a `media`
+  // query follows only the system scheme, so a reader whose saved choice
+  // differs fetched both captures at high priority.
+  if (/rel="preload"[^>]*media="\(prefers-color-scheme/.test(landingHtml)) {
+    throw new Error("The landing page preloads a capture by the system scheme again");
+  }
+  assertIncludesTokens(landingHtml, "The landing page", [
+    'localStorage.getItem("blume-theme")',
+    '"/screenshots/landing/tasks-dark.png":"/screenshots/landing/tasks.png"',
+  ]);
+
+  // `llms.txt` tells an agent that every page has a `.md` twin, so the feature
+  // tour has one too, derived from the built page as the landing twin is.
+  const featuresHtml = await (await fetch(`${baseUrl}/features`)).text();
+  assertIncludesTokens(featuresHtml, "The /features page", [
+    '<link rel="alternate" type="text/markdown" href="https://workhorse.run/features.md"',
+  ]);
+  const featuresTwinResponse = await fetch(`${baseUrl}/features.md`);
+  const featuresTwin = await featuresTwinResponse.text();
+  if (!featuresTwinResponse.ok) {
+    throw new Error(`/features.md returned ${featuresTwinResponse.status}`);
+  }
+  assertIncludesTokens(featuresTwin, "The /features twin", [
+    'canonical: "https://workhorse.run/features"',
+    "**TypeScript**",
+    "**C#**",
+  ]);
+  for (const heading of featuresHtml.matchAll(/<h[12][^>]*>(.*?)<\/h[12]>/g)) {
+    const text = heading[1]!
+      .replace(/<[^>]+>/g, "")
+      .replace(/&#x27;/g, "'")
+      .replace(/&amp;/g, "&")
+      .trim();
+    if (text !== "" && !featuresTwin.includes(text)) {
+      throw new Error(`The /features twin is missing the heading "${text}"`);
+    }
+  }
+
+  // The feature tour renders highlighted markup. The snippet sources are for
+  // the build only, so no script of the page may carry one. Each line below is
+  // a line of `site/lib/landing-snippets.ts` that the highlighted markup splits
+  // into tokens.
+  const snippetSource = await readFile(
+    resolve(repositoryRoot, "site/lib/landing-snippets.ts"),
+    "utf8",
+  );
+  const sourceLines = [
+    'await queue.enqueue("email.welcome", { to: "ada@example.com" });',
+    "builder.Services.AddWorkhorseWorker(worker => worker.Handle(",
+  ];
+  for (const line of sourceLines) {
+    if (!snippetSource.includes(line)) {
+      throw new Error(`site/lib/landing-snippets.ts no longer has the line ${line}`);
+    }
+  }
+  for (const [, script] of featuresHtml.matchAll(/(?:src|href)="(\/assets\/[^"]+\.js)"/g)) {
+    const code = await (await fetch(`${baseUrl}${script}`)).text();
+    for (const line of sourceLines) {
+      if (code.includes(line)) {
+        throw new Error(`${script} of /features carries the snippet sources (${line})`);
+      }
+    }
+  }
+
+  // Blume writes the head of a documentation page: its own attribute order, a
+  // root-relative Markdown alternate, and " - " in the title.
   const quickstartHtml = await (await fetch(`${baseUrl}/docs/quickstart`)).text();
   assertIncludesTokens(quickstartHtml, "The quickstart page", [
     '<link rel="canonical" href="https://workhorse.run/docs/quickstart"',
-    '<link rel="alternate" type="text/markdown" href="https://workhorse.run/docs/quickstart.md"',
-    'name="twitter:title" content="Quickstart — Workhorse"',
+    '<link href="/docs/quickstart.md" rel="alternate" type="text/markdown"',
+    'name="twitter:title" content="Quickstart - Workhorse"',
     '"@type":"TechArticle"',
     '"@type":"Organization"',
     `"publisher":{"@id":"${siteConfig.url}/#organization"}`,
+    // The privacy notice states that every HTML page loads Google Analytics.
+    // Blume writes the docs pages, so `blume.config.ts` loads the same tag
+    // that `RootDocument` loads on the other pages.
+    'src="https://www.googletagmanager.com/gtag/js?id=G-9NC8FKZPVB"',
+    'gtag("config","G-9NC8FKZPVB")',
   ]);
 
   // The catalog reaches an agent only if the generator expanded the component
@@ -459,6 +557,9 @@ try {
   }
   if (sitemap.includes("/not-found")) {
     throw new Error("The sitemap lists /not-found, which exists only to be served as a 404 body");
+  }
+  if (sitemap.includes(`<loc>${siteConfig.url}/demo</loc>`)) {
+    throw new Error("The sitemap lists /demo, which only redirects to the live demo");
   }
 
   // The blog (ADR 0052) ships with zero posts and grows one file at a time.

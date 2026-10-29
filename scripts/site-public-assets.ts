@@ -7,8 +7,9 @@ import { repositoryRoot } from "./packages.js";
  *
  * The site build copies all of `site/public` into its output, so a file there that no page names
  * still ships in the site image. An image counts as used by the site when the site sources name
- * its public path, when `site/integrations.json` names it as a logo, or when a page shows its
- * diagram through `<Diagram name="…">`. Some diagram PNGs are used only by Markdown in the
+ * its public path, when a site module imports its file by a relative path, when
+ * `site/integrations.json` names it as a logo, or when a page shows its diagram through
+ * `<Diagram name="…">`. Some diagram PNGs are used only by Markdown in the
  * repository, such as the README, which GitHub renders from the repository path. They must stay in
  * `site/public/diagrams`, but the site does not use them, so `Dockerfile.site` removes them from
  * the build output with `--prune`.
@@ -90,21 +91,43 @@ async function repositoryMarkdown(): Promise<string> {
   return texts.join("\n");
 }
 
-async function siteSources(): Promise<string> {
+async function siteSources(): Promise<{ file: string; text: string }[]> {
   const files = [
     ...(await Promise.all(sourceDirectories.map((name) => walk(path.join(siteRoot, name))))).flat(),
     ...sourceFiles.map((name) => path.join(siteRoot, name)),
   ].filter(
     (file) => sourcePattern.test(file) && !/\.test\.tsx?$/.test(file) && !ignoredSources.has(file),
   );
-  const texts = await Promise.all(files.map((file) => readFile(file, "utf8").catch(() => "")));
-  return texts.join("\n");
+  return Promise.all(
+    files.map(async (file) => ({ file, text: await readFile(file, "utf8").catch(() => "") })),
+  );
+}
+
+/**
+ * The images in `site/public` that a site module imports by a relative path, such as
+ * `import markSvg from "../public/brand/workhorse-mark.svg?raw"`. Each specifier resolves from
+ * the directory of its module, and a query such as `?raw` does not change the file.
+ */
+function relativeImportUses(sources: { file: string; text: string }[]): Set<string> {
+  const publicRoot = path.join(siteRoot, "public");
+  const used = new Set<string>();
+  for (const { file, text } of sources) {
+    for (const match of text.matchAll(
+      /\b(?:from|import)\s*\(?\s*["'](\.\.?\/[^"'?#]+\.(?:png|svg|ico|jpe?g|webp|avif|gif))[?#"']/g,
+    )) {
+      const relative = path.relative(publicRoot, path.resolve(path.dirname(file), match[1]!));
+      if (relative.startsWith("..") || path.isAbsolute(relative)) continue;
+      used.add(relative.split(path.sep).join("/"));
+    }
+  }
+  return used;
 }
 
 /** The images in `site/public` that the site uses, as paths below `site/public`. */
 export async function siteImageUses(): Promise<Set<string>> {
-  const sources = await siteSources();
-  const used = new Set<string>();
+  const modules = await siteSources();
+  const sources = modules.map((module) => module.text).join("\n");
+  const used = relativeImportUses(modules);
   // A path ends at a quote, a parenthesis, a semicolon, whitespace, a query, or a fragment, so
   // `/icon.png.json` is no use of `/icon.png`. A path also counts when its file is missing, so the
   // caller can report the missing file.

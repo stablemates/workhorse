@@ -1,0 +1,119 @@
+---
+import diagramSizes from "../../lib/diagram-sizes.json" with { type: "json" };
+
+/**
+ * One diagram that `scripts/diagrams.ts` generates into `site/public/diagrams/`.
+ * The page shows the light or the dark image of the current theme, and the
+ * narrow image on a screen up to 600 px wide, as the guide's `<picture>` does.
+ *
+ * A click opens the wide image of the current theme at full size in a modal
+ * dialog. The dialog is a native `<dialog>`, so the page ships one small script
+ * and no framework runtime.
+ *
+ * Each image states its width and height, so the page reserves its space before
+ * it loads. Set `eager` only on a diagram in the first screen of its page. Set
+ * `narrow` to show the narrow image on every screen, at most 520 px wide.
+ */
+interface Props {
+  name: string;
+  alt: string;
+  eager?: boolean;
+  narrow?: boolean;
+}
+
+const { name, alt, eager = false, narrow: narrowOnly = false } = Astro.props;
+
+const sizes: Record<string, readonly number[] | undefined> = diagramSizes;
+
+function sizeOf(slug: string) {
+  const [width, height] = sizes[slug] ?? [];
+  if (width === undefined || height === undefined) {
+    throw new Error(`No diagram named ${slug}. Run \`pnpm diagrams:generate\`.`);
+  }
+  return { width, height };
+}
+
+const wide = sizeOf(name);
+const narrow = sizeOf(`${name}-narrow`);
+const loading = eager ? "eager" : "lazy";
+const themes = ["light", "dark"] as const;
+---
+
+<wh-diagram class="not-prose wh-diagram">
+  <button
+    type="button"
+    class="wh-diagram-open"
+    aria-label={`Open the diagram at full size: ${alt}`}
+    aria-haspopup="dialog"
+    data-diagram-open
+  >
+    {
+      themes.map((theme) => (
+        <picture class={`wh-theme-${theme}`}>
+          {narrowOnly ? null : (
+            <source
+              media="(max-width: 600px)"
+              srcset={`/diagrams/${name}-narrow-${theme}.png`}
+              width={narrow.width}
+              height={narrow.height}
+            />
+          )}
+          <img
+            src={`/diagrams/${name}${narrowOnly ? "-narrow" : ""}-${theme}.png`}
+            alt={alt}
+            width={(narrowOnly ? narrow : wide).width}
+            height={(narrowOnly ? narrow : wide).height}
+            loading={loading}
+            decoding="async"
+            class={narrowOnly ? "wh-diagram-narrow" : "wh-diagram-wide"}
+          />
+        </picture>
+      ))
+    }
+    <span aria-hidden="true" class="wh-diagram-hint">Full size</span>
+  </button>
+  <dialog aria-label={alt} class="wh-diagram-dialog" data-diagram-dialog>
+    <div class="wh-diagram-scroll" data-diagram-backdrop>
+      <div class="wh-diagram-frame" data-diagram-backdrop>
+        {
+          themes.map((theme) => (
+            <img
+              src={`/diagrams/${name}-${theme}.png`}
+              alt={alt}
+              width={wide.width}
+              height={wide.height}
+              loading="lazy"
+              decoding="async"
+              class={`wh-diagram-full wh-theme-${theme}`}
+            />
+          ))
+        }
+      </div>
+    </div>
+    <button type="button" class="wh-diagram-close" aria-label="Close the diagram" data-diagram-close>
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true">
+        <path d="M18 6 6 18M6 6l12 12"></path>
+      </svg>
+    </button>
+  </dialog>
+</wh-diagram>
+
+<script>
+  class WorkhorseDiagram extends HTMLElement {
+    connectedCallback() {
+      const dialog = this.querySelector<HTMLDialogElement>("[data-diagram-dialog]");
+      if (!dialog) return;
+      this.querySelector("[data-diagram-open]")?.addEventListener("click", () => dialog.showModal());
+      this.querySelector("[data-diagram-close]")?.addEventListener("click", () => dialog.close());
+      // A click on the dialog itself or on the space around the image closes it.
+      dialog.addEventListener("click", (event) => {
+        const target = event.target;
+        if (target === dialog || (target instanceof HTMLElement && "diagramBackdrop" in target.dataset)) {
+          dialog.close();
+        }
+      });
+    }
+  }
+
+  if (!customElements.get("wh-diagram")) customElements.define("wh-diagram", WorkhorseDiagram);
+</script>

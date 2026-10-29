@@ -48,6 +48,11 @@ COPY typescript/typeorm/package.json typescript/typeorm/
 COPY typescript/prisma/prisma/schema.prisma typescript/prisma/prisma/
 COPY typescript/adapter-conformance/prisma/schema.prisma typescript/adapter-conformance/prisma/
 RUN pnpm install --frozen-lockfile
+# The documentation pages build with Blume from site/blume. That package stays out of the pnpm
+# workspace and keeps its own lockfile, because Blume's dependencies would change how the workspace
+# lockfile resolves the peers of other packages. It installs from its manifests in the same way.
+COPY site/blume/package.json site/blume/pnpm-lock.yaml site/blume/
+RUN pnpm install --dir site/blume --ignore-workspace --frozen-lockfile
 COPY . .
 # Links the sources the first install did not have. It downloads nothing.
 RUN pnpm install --frozen-lockfile --offline

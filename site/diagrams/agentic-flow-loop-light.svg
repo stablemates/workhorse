@@ -1,85 +1,85 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 336" width="960" height="336" role="img" aria-labelledby="agentic-flow-loop-light-title agentic-flow-loop-light-desc">
 <title id="agentic-flow-loop-light-title">The agent loop runs four times, but the model plans one time</title>
 <desc id="agentic-flow-loop-light-desc">The agent.loop handler for conv-12 runs four times. Run 1 on worker A calls the model in the plan checkpoint and creates the research and calculate child tasks. Run 2 on worker B gets the stored plan and the stored tool results, and starts the model-cooldown timer. Run 3 gets past the timer and waits for the approval signal. Run 4 gets the approval and completes the answer.</desc>
-<defs><marker id="arrow-light" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#4e5359"/></marker></defs>
-<rect width="960" height="336" fill="#f9fafb"/>
-<text x="24" y="40" fill="#1a2027" font-size="12" font-family="Geist" font-weight="600" text-anchor="start">agent.loop</text>
-<text x="24" y="55" fill="#4e5359" font-size="9" font-family="Geist Mono" font-weight="400" text-anchor="start">conv-12</text>
-<text x="268.8" y="44" fill="#6d7277" font-size="8" font-family="Geist Mono" font-weight="400" text-anchor="middle">checkpoint("plan")</text>
-<text x="418.40000000000003" y="44" fill="#6d7277" font-size="8" font-family="Geist Mono" font-weight="400" text-anchor="middle">runChildrenAll</text>
-<text x="568" y="44" fill="#6d7277" font-size="8" font-family="Geist Mono" font-weight="400" text-anchor="middle">sleep("model-cooldown")</text>
-<text x="717.5999999999999" y="44" fill="#6d7277" font-size="8" font-family="Geist Mono" font-weight="400" text-anchor="middle">waitForSignal("approval")</text>
-<text x="867.1999999999999" y="44" fill="#6d7277" font-size="8" font-family="Geist Mono" font-weight="400" text-anchor="middle">complete</text>
-<line x1="200" y1="52" x2="936" y2="52" stroke="rgba(26,32,39,0.14)"/>
-<text x="24" y="88" fill="#1a2027" font-size="11" font-family="Geist" font-weight="600" text-anchor="start">Run 1</text>
-<text x="24" y="103" fill="#4e5359" font-size="9" font-family="Geist Mono" font-weight="400" text-anchor="start">worker A</text>
-<rect x="200" y="72" width="137.6" height="40" rx="6" fill="#f9fafb"/>
-<rect x="200" y="72" width="137.6" height="40" rx="6" fill="rgba(213,92,19,0.08)" stroke="#aa4515" stroke-width="1.4"/>
-<text x="268.8" y="90" fill="#1a2027" font-size="10" font-weight="600" font-family="Geist" text-anchor="middle">calls the model</text>
-<text x="268.8" y="104" fill="#4e5359" font-size="9" font-family="Geist Mono" text-anchor="middle">stores the plan</text>
-<rect x="349.6" y="72" width="137.6" height="40" rx="6" fill="#f9fafb"/>
-<rect x="349.6" y="72" width="137.6" height="40" rx="6" fill="#ffffff" stroke="#1a2027" stroke-width="1"/>
-<text x="418.40000000000003" y="90" fill="#1a2027" font-size="10" font-weight="600" font-family="Geist" text-anchor="middle">creates 2 child tasks</text>
-<text x="418.40000000000003" y="104" fill="#4e5359" font-size="9" font-family="Geist Mono" text-anchor="middle">waits · frees slot</text>
-<text x="568" y="96" fill="#6d7277" font-size="8" font-family="Geist Mono" font-weight="400" text-anchor="middle">not reached</text>
-<text x="717.5999999999999" y="96" fill="#6d7277" font-size="8" font-family="Geist Mono" font-weight="400" text-anchor="middle">not reached</text>
-<text x="867.1999999999999" y="96" fill="#6d7277" font-size="8" font-family="Geist Mono" font-weight="400" text-anchor="middle">not reached</text>
-<text x="24" y="144" fill="#1a2027" font-size="11" font-family="Geist" font-weight="600" text-anchor="start">Run 2</text>
-<text x="24" y="159" fill="#4e5359" font-size="9" font-family="Geist Mono" font-weight="400" text-anchor="start">after the tools</text>
-<rect x="200" y="128" width="137.6" height="40" rx="6" fill="#f9fafb"/>
-<rect x="200" y="128" width="137.6" height="40" rx="6" fill="rgba(26,32,39,0.05)" stroke="#4e5359" stroke-width="1"/>
-<text x="268.8" y="146" fill="#1a2027" font-size="10" font-weight="600" font-family="Geist" text-anchor="middle">stored plan</text>
-<text x="268.8" y="160" fill="#4e5359" font-size="9" font-family="Geist Mono" text-anchor="middle">no model call</text>
-<rect x="349.6" y="128" width="137.6" height="40" rx="6" fill="#f9fafb"/>
-<rect x="349.6" y="128" width="137.6" height="40" rx="6" fill="rgba(26,32,39,0.05)" stroke="#4e5359" stroke-width="1"/>
-<text x="418.40000000000003" y="146" fill="#1a2027" font-size="10" font-weight="600" font-family="Geist" text-anchor="middle">stored results</text>
-<text x="418.40000000000003" y="160" fill="#4e5359" font-size="9" font-family="Geist Mono" text-anchor="middle">no tool runs</text>
-<rect x="499.2" y="128" width="137.6" height="40" rx="6" fill="#f9fafb"/>
-<rect x="499.2" y="128" width="137.6" height="40" rx="6" fill="#ffffff" stroke="#1a2027" stroke-width="1"/>
-<text x="568" y="146" fill="#1a2027" font-size="10" font-weight="600" font-family="Geist" text-anchor="middle">starts timer</text>
-<text x="568" y="160" fill="#4e5359" font-size="9" font-family="Geist Mono" text-anchor="middle">waits</text>
-<text x="717.5999999999999" y="152" fill="#6d7277" font-size="8" font-family="Geist Mono" font-weight="400" text-anchor="middle">not reached</text>
-<text x="867.1999999999999" y="152" fill="#6d7277" font-size="8" font-family="Geist Mono" font-weight="400" text-anchor="middle">not reached</text>
-<text x="24" y="200" fill="#1a2027" font-size="11" font-family="Geist" font-weight="600" text-anchor="start">Run 3</text>
-<text x="24" y="215" fill="#4e5359" font-size="9" font-family="Geist Mono" font-weight="400" text-anchor="start">after the cooldown</text>
-<rect x="200" y="184" width="137.6" height="40" rx="6" fill="#f9fafb"/>
-<rect x="200" y="184" width="137.6" height="40" rx="6" fill="rgba(26,32,39,0.05)" stroke="#4e5359" stroke-width="1"/>
-<text x="268.8" y="202" fill="#1a2027" font-size="10" font-weight="600" font-family="Geist" text-anchor="middle">stored plan</text>
-<text x="268.8" y="216" fill="#4e5359" font-size="9" font-family="Geist Mono" text-anchor="middle">no model call</text>
-<rect x="349.6" y="184" width="137.6" height="40" rx="6" fill="#f9fafb"/>
-<rect x="349.6" y="184" width="137.6" height="40" rx="6" fill="rgba(26,32,39,0.05)" stroke="#4e5359" stroke-width="1"/>
-<text x="418.40000000000003" y="202" fill="#1a2027" font-size="10" font-weight="600" font-family="Geist" text-anchor="middle">stored results</text>
-<text x="418.40000000000003" y="216" fill="#4e5359" font-size="9" font-family="Geist Mono" text-anchor="middle">no tool runs</text>
-<rect x="499.2" y="184" width="137.6" height="40" rx="6" fill="#f9fafb"/>
-<rect x="499.2" y="184" width="137.6" height="40" rx="6" fill="rgba(26,32,39,0.05)" stroke="#4e5359" stroke-width="1"/>
-<text x="568" y="202" fill="#1a2027" font-size="10" font-weight="600" font-family="Geist" text-anchor="middle">timer done</text>
-<text x="568" y="216" fill="#4e5359" font-size="9" font-family="Geist Mono" text-anchor="middle">returns</text>
-<rect x="648.8" y="184" width="137.6" height="40" rx="6" fill="#f9fafb"/>
-<rect x="648.8" y="184" width="137.6" height="40" rx="6" fill="#ffffff" stroke="#1a2027" stroke-width="1"/>
-<text x="717.5999999999999" y="202" fill="#1a2027" font-size="10" font-weight="600" font-family="Geist" text-anchor="middle">waits</text>
-<text x="717.5999999999999" y="216" fill="#4e5359" font-size="9" font-family="Geist Mono" text-anchor="middle">for approval</text>
-<text x="867.1999999999999" y="208" fill="#6d7277" font-size="8" font-family="Geist Mono" font-weight="400" text-anchor="middle">not reached</text>
-<text x="24" y="256" fill="#1a2027" font-size="11" font-family="Geist" font-weight="600" text-anchor="start">Run 4</text>
-<text x="24" y="271" fill="#4e5359" font-size="9" font-family="Geist Mono" font-weight="400" text-anchor="start">after sendSignal</text>
-<rect x="200" y="240" width="137.6" height="40" rx="6" fill="#f9fafb"/>
-<rect x="200" y="240" width="137.6" height="40" rx="6" fill="rgba(26,32,39,0.05)" stroke="#4e5359" stroke-width="1"/>
-<text x="268.8" y="258" fill="#1a2027" font-size="10" font-weight="600" font-family="Geist" text-anchor="middle">stored plan</text>
-<text x="268.8" y="272" fill="#4e5359" font-size="9" font-family="Geist Mono" text-anchor="middle">no model call</text>
-<rect x="349.6" y="240" width="137.6" height="40" rx="6" fill="#f9fafb"/>
-<rect x="349.6" y="240" width="137.6" height="40" rx="6" fill="rgba(26,32,39,0.05)" stroke="#4e5359" stroke-width="1"/>
-<text x="418.40000000000003" y="258" fill="#1a2027" font-size="10" font-weight="600" font-family="Geist" text-anchor="middle">stored results</text>
-<text x="418.40000000000003" y="272" fill="#4e5359" font-size="9" font-family="Geist Mono" text-anchor="middle">no tool runs</text>
-<rect x="499.2" y="240" width="137.6" height="40" rx="6" fill="#f9fafb"/>
-<rect x="499.2" y="240" width="137.6" height="40" rx="6" fill="rgba(26,32,39,0.05)" stroke="#4e5359" stroke-width="1"/>
-<text x="568" y="258" fill="#1a2027" font-size="10" font-weight="600" font-family="Geist" text-anchor="middle">timer done</text>
-<text x="568" y="272" fill="#4e5359" font-size="9" font-family="Geist Mono" text-anchor="middle">returns</text>
-<rect x="648.8" y="240" width="137.6" height="40" rx="6" fill="#f9fafb"/>
-<rect x="648.8" y="240" width="137.6" height="40" rx="6" fill="rgba(26,32,39,0.05)" stroke="#4e5359" stroke-width="1"/>
-<text x="717.5999999999999" y="258" fill="#1a2027" font-size="10" font-weight="600" font-family="Geist" text-anchor="middle">returns</text>
-<text x="717.5999999999999" y="272" fill="#4e5359" font-size="9" font-family="Geist Mono" text-anchor="middle">the approval</text>
-<rect x="798.4" y="240" width="137.6" height="40" rx="6" fill="#f9fafb"/>
-<rect x="798.4" y="240" width="137.6" height="40" rx="6" fill="#ffffff" stroke="#1a2027" stroke-width="1"/>
-<text x="867.1999999999999" y="258" fill="#1a2027" font-size="10" font-weight="600" font-family="Geist" text-anchor="middle">completes</text>
-<text x="867.1999999999999" y="272" fill="#4e5359" font-size="9" font-family="Geist Mono" text-anchor="middle">the answer</text>
-<text x="24" y="320" fill="#4e5359" font-size="9" font-family="Geist Mono" font-weight="400" text-anchor="start">Each run starts at the first line and gets each stored step. The model and each tool run one time.</text>
+<defs><marker id="arrow-light" markerWidth="8" markerHeight="8" refX="6.5" refY="4" orient="auto" markerUnits="userSpaceOnUse"><path d="M 1.5,1 L 6.5,4 L 1.5,7" fill="none" stroke="#7d7d7d" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/></marker></defs>
+<rect width="960" height="336" fill="#ffffff"/>
+<text x="24" y="40" fill="#000000" font-size="12" font-family="Timeless Grotesk, Geist, sans-serif" font-weight="500" text-anchor="start">agent.loop</text>
+<text x="24" y="55" fill="#555555" font-size="9" font-family="Timeless Grotesk, Geist, sans-serif" font-weight="400" text-anchor="start">conv-12</text>
+<text x="268.8" y="44" fill="#555555" font-size="8" font-family="Geist Mono, monospace" font-weight="400" text-anchor="middle">checkpoint("plan")</text>
+<text x="418.40000000000003" y="44" fill="#555555" font-size="8" font-family="Geist Mono, monospace" font-weight="400" text-anchor="middle">runChildrenAll</text>
+<text x="568" y="44" fill="#555555" font-size="8" font-family="Geist Mono, monospace" font-weight="400" text-anchor="middle">sleep("model-cooldown")</text>
+<text x="717.5999999999999" y="44" fill="#555555" font-size="8" font-family="Geist Mono, monospace" font-weight="400" text-anchor="middle">waitForSignal("approval")</text>
+<text x="867.1999999999999" y="44" fill="#555555" font-size="8" font-family="Timeless Grotesk, Geist, sans-serif" font-weight="400" text-anchor="middle">complete</text>
+<line x1="200" y1="52" x2="936" y2="52" stroke="#e7e7e7"/>
+<text x="24" y="88" fill="#000000" font-size="11" font-family="Timeless Grotesk, Geist, sans-serif" font-weight="500" text-anchor="start">Run 1</text>
+<text x="24" y="103" fill="#555555" font-size="9" font-family="Timeless Grotesk, Geist, sans-serif" font-weight="400" text-anchor="start">worker A</text>
+<rect x="200" y="72" width="137.6" height="40" rx="8" fill="#ffffff"/>
+<rect x="200.5" y="72.5" width="136.6" height="39" rx="8" fill="rgba(207,145,72,0.12)" stroke="#cf9148" stroke-width="1"/>
+<text x="268.8" y="90" fill="#000000" font-size="10" font-weight="500" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">calls the model</text>
+<text x="268.8" y="104" fill="#555555" font-size="9" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">stores the plan</text>
+<rect x="349.6" y="72" width="137.6" height="40" rx="8" fill="#ffffff"/>
+<rect x="350.1" y="72.5" width="136.6" height="39" rx="8" fill="#ffffff" stroke="#cdcdcd" stroke-width="1"/>
+<text x="418.40000000000003" y="90" fill="#000000" font-size="10" font-weight="500" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">creates 2 child tasks</text>
+<text x="418.40000000000003" y="104" fill="#555555" font-size="9" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">waits · frees slot</text>
+<text x="568" y="96" fill="#555555" font-size="8" font-family="Timeless Grotesk, Geist, sans-serif" font-weight="400" text-anchor="middle">not reached</text>
+<text x="717.5999999999999" y="96" fill="#555555" font-size="8" font-family="Timeless Grotesk, Geist, sans-serif" font-weight="400" text-anchor="middle">not reached</text>
+<text x="867.1999999999999" y="96" fill="#555555" font-size="8" font-family="Timeless Grotesk, Geist, sans-serif" font-weight="400" text-anchor="middle">not reached</text>
+<text x="24" y="144" fill="#000000" font-size="11" font-family="Timeless Grotesk, Geist, sans-serif" font-weight="500" text-anchor="start">Run 2</text>
+<text x="24" y="159" fill="#555555" font-size="9" font-family="Timeless Grotesk, Geist, sans-serif" font-weight="400" text-anchor="start">after the tools</text>
+<rect x="200" y="128" width="137.6" height="40" rx="8" fill="#ffffff"/>
+<rect x="200.5" y="128.5" width="136.6" height="39" rx="8" fill="#f4f4f4" stroke="#e7e7e7" stroke-width="1"/>
+<text x="268.8" y="146" fill="#000000" font-size="10" font-weight="500" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">stored plan</text>
+<text x="268.8" y="160" fill="#555555" font-size="9" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">no model call</text>
+<rect x="349.6" y="128" width="137.6" height="40" rx="8" fill="#ffffff"/>
+<rect x="350.1" y="128.5" width="136.6" height="39" rx="8" fill="#f4f4f4" stroke="#e7e7e7" stroke-width="1"/>
+<text x="418.40000000000003" y="146" fill="#000000" font-size="10" font-weight="500" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">stored results</text>
+<text x="418.40000000000003" y="160" fill="#555555" font-size="9" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">no tool runs</text>
+<rect x="499.2" y="128" width="137.6" height="40" rx="8" fill="#ffffff"/>
+<rect x="499.7" y="128.5" width="136.6" height="39" rx="8" fill="#ffffff" stroke="#cdcdcd" stroke-width="1"/>
+<text x="568" y="146" fill="#000000" font-size="10" font-weight="500" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">starts timer</text>
+<text x="568" y="160" fill="#555555" font-size="9" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">waits</text>
+<text x="717.5999999999999" y="152" fill="#555555" font-size="8" font-family="Timeless Grotesk, Geist, sans-serif" font-weight="400" text-anchor="middle">not reached</text>
+<text x="867.1999999999999" y="152" fill="#555555" font-size="8" font-family="Timeless Grotesk, Geist, sans-serif" font-weight="400" text-anchor="middle">not reached</text>
+<text x="24" y="200" fill="#000000" font-size="11" font-family="Timeless Grotesk, Geist, sans-serif" font-weight="500" text-anchor="start">Run 3</text>
+<text x="24" y="215" fill="#555555" font-size="9" font-family="Timeless Grotesk, Geist, sans-serif" font-weight="400" text-anchor="start">after the cooldown</text>
+<rect x="200" y="184" width="137.6" height="40" rx="8" fill="#ffffff"/>
+<rect x="200.5" y="184.5" width="136.6" height="39" rx="8" fill="#f4f4f4" stroke="#e7e7e7" stroke-width="1"/>
+<text x="268.8" y="202" fill="#000000" font-size="10" font-weight="500" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">stored plan</text>
+<text x="268.8" y="216" fill="#555555" font-size="9" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">no model call</text>
+<rect x="349.6" y="184" width="137.6" height="40" rx="8" fill="#ffffff"/>
+<rect x="350.1" y="184.5" width="136.6" height="39" rx="8" fill="#f4f4f4" stroke="#e7e7e7" stroke-width="1"/>
+<text x="418.40000000000003" y="202" fill="#000000" font-size="10" font-weight="500" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">stored results</text>
+<text x="418.40000000000003" y="216" fill="#555555" font-size="9" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">no tool runs</text>
+<rect x="499.2" y="184" width="137.6" height="40" rx="8" fill="#ffffff"/>
+<rect x="499.7" y="184.5" width="136.6" height="39" rx="8" fill="#f4f4f4" stroke="#e7e7e7" stroke-width="1"/>
+<text x="568" y="202" fill="#000000" font-size="10" font-weight="500" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">timer done</text>
+<text x="568" y="216" fill="#555555" font-size="9" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">returns</text>
+<rect x="648.8" y="184" width="137.6" height="40" rx="8" fill="#ffffff"/>
+<rect x="649.3" y="184.5" width="136.6" height="39" rx="8" fill="#ffffff" stroke="#cdcdcd" stroke-width="1"/>
+<text x="717.5999999999999" y="202" fill="#000000" font-size="10" font-weight="500" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">waits</text>
+<text x="717.5999999999999" y="216" fill="#555555" font-size="9" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">for approval</text>
+<text x="867.1999999999999" y="208" fill="#555555" font-size="8" font-family="Timeless Grotesk, Geist, sans-serif" font-weight="400" text-anchor="middle">not reached</text>
+<text x="24" y="256" fill="#000000" font-size="11" font-family="Timeless Grotesk, Geist, sans-serif" font-weight="500" text-anchor="start">Run 4</text>
+<text x="24" y="271" fill="#555555" font-size="9" font-family="Geist Mono, monospace" font-weight="400" text-anchor="start">after sendSignal</text>
+<rect x="200" y="240" width="137.6" height="40" rx="8" fill="#ffffff"/>
+<rect x="200.5" y="240.5" width="136.6" height="39" rx="8" fill="#f4f4f4" stroke="#e7e7e7" stroke-width="1"/>
+<text x="268.8" y="258" fill="#000000" font-size="10" font-weight="500" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">stored plan</text>
+<text x="268.8" y="272" fill="#555555" font-size="9" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">no model call</text>
+<rect x="349.6" y="240" width="137.6" height="40" rx="8" fill="#ffffff"/>
+<rect x="350.1" y="240.5" width="136.6" height="39" rx="8" fill="#f4f4f4" stroke="#e7e7e7" stroke-width="1"/>
+<text x="418.40000000000003" y="258" fill="#000000" font-size="10" font-weight="500" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">stored results</text>
+<text x="418.40000000000003" y="272" fill="#555555" font-size="9" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">no tool runs</text>
+<rect x="499.2" y="240" width="137.6" height="40" rx="8" fill="#ffffff"/>
+<rect x="499.7" y="240.5" width="136.6" height="39" rx="8" fill="#f4f4f4" stroke="#e7e7e7" stroke-width="1"/>
+<text x="568" y="258" fill="#000000" font-size="10" font-weight="500" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">timer done</text>
+<text x="568" y="272" fill="#555555" font-size="9" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">returns</text>
+<rect x="648.8" y="240" width="137.6" height="40" rx="8" fill="#ffffff"/>
+<rect x="649.3" y="240.5" width="136.6" height="39" rx="8" fill="#f4f4f4" stroke="#e7e7e7" stroke-width="1"/>
+<text x="717.5999999999999" y="258" fill="#000000" font-size="10" font-weight="500" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">returns</text>
+<text x="717.5999999999999" y="272" fill="#555555" font-size="9" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">the approval</text>
+<rect x="798.4" y="240" width="137.6" height="40" rx="8" fill="#ffffff"/>
+<rect x="798.9" y="240.5" width="136.6" height="39" rx="8" fill="#ffffff" stroke="#cdcdcd" stroke-width="1"/>
+<text x="867.1999999999999" y="258" fill="#000000" font-size="10" font-weight="500" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">completes</text>
+<text x="867.1999999999999" y="272" fill="#555555" font-size="9" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">the answer</text>
+<text x="24" y="320" fill="#555555" font-size="9" font-family="Timeless Grotesk, Geist, sans-serif" font-weight="400" text-anchor="start">Each run starts at the first line and gets each stored step. The model and each tool run one time.</text>
 </svg>

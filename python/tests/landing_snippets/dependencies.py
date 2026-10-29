@@ -1,8 +1,22 @@
-from workhorse import Dependencies, EnqueueOptions, HandlerContext, Json, Queue, Worker
+from workhorse import (
+    Dependencies,
+    EnqueueOptions,
+    HandlerContext,
+    Json,
+    Queue,
+    Worker,
+)
 
 
-def configure_checkout(queue: Queue, worker: Worker, order_id: str) -> None:
-    inventory_id = queue.enqueue("inventory.reserve", {"orderId": order_id})
+def configure_checkout(
+    queue: Queue,
+    worker: Worker,
+    order_id: str,
+) -> None:
+    inventory_id = queue.enqueue(
+        "inventory.reserve",
+        {"orderId": order_id},
+    )
     queue.enqueue(
         "order.confirm",
         {"orderId": order_id},
@@ -16,7 +30,10 @@ def configure_checkout(queue: Queue, worker: Worker, order_id: str) -> None:
         ),
     )
 
-    def fulfill(order: Json, context: HandlerContext) -> dict[str, Json]:
+    def fulfill(
+        order: Json,
+        context: HandlerContext,
+    ) -> dict[str, Json]:
         receipt = context.run_child("charge", "payment.capture", order)
         return {"receipt": receipt}
 

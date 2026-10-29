@@ -1,0 +1,579 @@
+/*
+ * The Untitled theme on Blume's tokens.
+ *
+ * Untitled is a neutral scale with 8 px and 12 px corners and no drawn
+ * borders: an edge is a hairline shadow. A selected item gets a neutral
+ * surface, not a color. Amber marks only keyboard focus. Body text is 14 px in the
+ * interface and 16 px in prose, and headings are 24 px and 36 px.
+ *
+ * Fonts: Timeless Grotesk comes first in each stack. Its files are licensed
+ * separately (https://timeless.co/type), so the repository does not ship them.
+ * To use it, put the WOFF2 files in `site/blume/fonts/` and declare them as
+ * `variants` of `theme.fonts.display` and `theme.fonts.body` in
+ * `blume.config.ts`. Until then, Geist renders the text and Geist Mono the code.
+ */
+
+:root {
+  --wh-n1: #ffffff;
+  --wh-n2: #fbfbfb;
+  --wh-n3: #f4f4f4;
+  --wh-n4: #e7e7e7;
+  --wh-n5: #cdcdcd;
+  --wh-n6: #a1a1a1;
+  --wh-n7: #7d7d7d;
+  --wh-n8: #555555;
+  --wh-n9: #333333;
+  --wh-n10: #000000;
+  /* The theme's key color. It marks keyboard focus and nothing else. */
+  --wh-amber: #cf9148;
+  --wh-code-surface: var(--wh-n3);
+
+  --blume-background: var(--wh-n1);
+  --blume-foreground: var(--wh-n10);
+  --blume-muted: var(--wh-n3);
+  --blume-muted-foreground: var(--wh-n8);
+  --blume-border: var(--wh-n4);
+  --blume-code-background: var(--wh-code-surface);
+  --blume-code-highlight: rgb(0 0 0 / 0.04);
+  --blume-code-highlight-border: var(--wh-n5);
+  --blume-radius: 0.5rem;
+  --blume-content-width: 46rem;
+  /* `--blume-ff-*` name the self-hosted Geist faces that `blume.config.ts` loads. */
+  --blume-font-display: "Timeless Grotesk", var(--blume-ff-geist-variable);
+  --blume-font-body: "Timeless Grotesk", var(--blume-ff-geist-variable);
+  --blume-font-mono: var(--blume-ff-geist-mono-variable);
+}
+
+:root[data-theme="dark"] {
+  --wh-n1: #000000;
+  --wh-n2: #202020;
+  --wh-n3: #2b2b2b;
+  --wh-n4: #3d3d3d;
+  --wh-n5: #565656;
+  --wh-n6: #838383;
+  --wh-n7: #ababab;
+  --wh-n8: #cfcfcf;
+  --wh-n9: #f4f4f4;
+  --wh-n10: #ffffff;
+  --wh-code-surface: #141414;
+
+  --blume-background: var(--wh-n1);
+  --blume-foreground: var(--wh-n10);
+  --blume-muted: var(--wh-n2);
+  --blume-muted-foreground: var(--wh-n7);
+  --blume-border: var(--wh-n3);
+  --blume-code-background: var(--wh-code-surface);
+  --blume-code-highlight: rgb(255 255 255 / 0.06);
+  --blume-code-highlight-border: var(--wh-n5);
+}
+
+/* ---------- Type ---------- */
+
+body {
+  font-size: 0.875rem;
+  font-feature-settings: "ss01", "cv11";
+  -webkit-font-smoothing: antialiased;
+}
+
+article.prose,
+.prose {
+  font-size: 1rem;
+  line-height: 1.5rem;
+  text-wrap: pretty;
+}
+
+.prose h1 {
+  font-size: 2.25rem;
+  line-height: 2.5rem;
+  letter-spacing: -0.02em;
+  font-weight: 600;
+}
+
+.prose h2 {
+  font-size: 1.5rem;
+  line-height: 2rem;
+  letter-spacing: -0.01em;
+  font-weight: 600;
+}
+
+.prose h3 {
+  font-size: 1.125rem;
+  line-height: 1.75rem;
+  letter-spacing: -0.01em;
+  font-weight: 600;
+}
+
+.prose a:not(.not-prose a, :is(h1, h2, h3, h4, h5, h6) a) {
+  color: inherit;
+  text-decoration-line: underline;
+  text-decoration-color: var(--wh-n5);
+  text-decoration-thickness: 1px;
+  text-underline-offset: 3px;
+}
+
+.prose a:not(.not-prose a, :is(h1, h2, h3, h4, h5, h6) a):hover {
+  text-decoration-color: var(--wh-n10);
+}
+
+.prose :not(pre) > code {
+  border: 0;
+  border-radius: 0.25rem;
+  background: var(--wh-n3);
+  box-shadow: none;
+  padding: 0.1em 0.35em;
+  font-size: 0.8125em;
+  font-weight: 400;
+}
+
+/* ---------- Edges: no drawn borders ---------- */
+
+/* A fill separates a code block, a reference block, or a table from the page, not a stroke. */
+.prose .blume-table-scroll,
+blume-tabs:not([data-inline]),
+.prose pre.astro-code,
+.prose figure:has(> pre),
+.prose details,
+.prose table:not(.not-prose table) {
+  border-width: 0 !important;
+  box-shadow: none;
+}
+
+blume-tabs {
+  border-radius: 0.75rem !important;
+  background: var(--wh-code-surface) !important;
+}
+
+/* ---------- Language tabs ---------- */
+
+/*
+ * The tab strip reads as the header of the code block below it: the same
+ * surface and a hairline under it. The tabs follow the theme's tab control:
+ * muted labels, and a neutral fill on the selected language.
+ */
+blume-tabs [data-blume-tablist],
+blume-tabs [data-blume-tab-actions] {
+  border-color: var(--wh-n4) !important;
+  background: var(--wh-code-surface);
+}
+
+:root[data-theme="dark"] blume-tabs [data-blume-tablist],
+:root[data-theme="dark"] blume-tabs [data-blume-tab-actions] {
+  border-color: var(--wh-n3) !important;
+}
+
+blume-tabs [data-blume-tablist] {
+  align-items: center;
+  gap: 0.25rem !important;
+  padding: 0.375rem 0.5rem !important;
+}
+
+blume-tabs [role="tab"] {
+  margin: 0 !important;
+  border: 0 !important;
+  border-radius: 0.375rem;
+  padding: 0.25rem 0.625rem;
+  font-family: var(--blume-font-body);
+  font-size: 0.8125rem;
+  font-weight: 500;
+  letter-spacing: 0;
+  color: var(--wh-n8);
+}
+
+blume-tabs [role="tab"]:hover {
+  color: var(--wh-n10);
+}
+
+/* The theme's tab control: the selected tab is a `neutral-1` surface on the track. */
+blume-tabs [role="tab"][aria-selected="true"] {
+  background: var(--wh-n1);
+  color: var(--wh-n10);
+}
+
+:root[data-theme="dark"] blume-tabs [role="tab"][aria-selected="true"] {
+  background: var(--wh-n3);
+}
+
+blume-tabs [role="tab"]:focus-visible {
+  outline: 2px solid var(--wh-amber);
+  outline-offset: -2px;
+  border-radius: 0.25rem;
+}
+
+/* A code panel inside a tab group sits flush, without its own frame. */
+blume-tabs [data-blume-tab-panel] > pre.astro-code,
+blume-tabs [data-blume-tab-panel] > figure {
+  margin: 0 !important;
+  border-radius: 0 !important;
+  box-shadow: none !important;
+}
+
+/* A panel that also holds prose keeps the prose readable on the code surface. */
+blume-tabs [data-blume-tab-panel] {
+  font-size: 0.9375rem;
+  line-height: 1.5rem;
+}
+
+/* ---------- Code blocks ---------- */
+
+.prose pre.astro-code,
+blume-tabs pre.astro-code {
+  font-family: var(--blume-font-mono);
+  font-size: 0.8125rem;
+  line-height: 1.375rem;
+}
+
+.prose pre.astro-code {
+  border-radius: 0.75rem;
+}
+
+/* ---------- Reference blocks ---------- */
+
+/*
+ * A behavior section closes with a collapsed `<details>` block whose summary
+ * starts with "Reference:". It holds exact identifiers, limits, and defaults.
+ */
+.prose details {
+  margin-block: 1.75rem;
+  border-radius: 0.75rem;
+  background: var(--wh-n3);
+  padding: 0;
+}
+
+:root[data-theme="dark"] .prose details {
+  background: #101010;
+}
+
+.prose details > summary {
+  cursor: pointer;
+  padding: 0.75rem 1rem;
+  font-size: 0.875rem;
+  font-weight: 600;
+  color: var(--wh-n10);
+}
+
+.prose details > summary::marker {
+  color: var(--wh-n7);
+}
+
+/* Inline code on the reference block's `neutral-3` fill takes the page color, so it stays visible. */
+:root:not([data-theme="dark"]) .prose details :not(pre) > code {
+  background: var(--wh-n1);
+}
+
+.prose details > :not(summary) {
+  margin-inline: 1rem;
+}
+
+.prose details[open] > summary {
+  box-shadow: inset 0 -1px 0 var(--wh-n4);
+  margin-bottom: 1rem;
+}
+
+:root[data-theme="dark"] .prose details[open] > summary {
+  box-shadow: inset 0 -1px 0 var(--wh-n3);
+}
+
+/* ---------- Header ----------
+ *
+ * `components/Header.astro` renders the site header and imports its styles
+ * from `site/components/site-header.css`. Blume copies this file into its
+ * generated stylesheet, so a relative `@import` here would not resolve. The
+ * values below map its `--wh-hdr-*` names to this ramp, as
+ * `site/src/styles/global.css` does for the other pages.
+ */
+
+:root {
+  --wh-hdr-bg: var(--wh-n1);
+  --wh-hdr-fg: var(--wh-n10);
+  --wh-hdr-muted: var(--wh-n8);
+  --wh-hdr-line: var(--wh-n4);
+  --wh-hdr-hover: var(--wh-n3);
+  --wh-hdr-accent: var(--wh-amber);
+  --wh-hdr-font: var(--blume-font-body);
+}
+
+:root[data-theme="dark"] {
+  --wh-hdr-muted: var(--wh-n7);
+  --wh-hdr-line: var(--wh-n3);
+  --wh-hdr-hover: var(--wh-n2);
+}
+
+/* The header items at the top of the drawer below 1024px (`components/MobileNav.astro`). */
+.wh-nav-drawer-links {
+  display: flex;
+  flex-direction: column;
+  margin-block-end: 1rem;
+  padding-block-end: 1rem;
+  border-block-end: 1px solid var(--wh-hdr-line);
+}
+
+.wh-nav-drawer-links .wh-hdr-link {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  min-block-size: 2.5rem;
+  padding-inline: 0.625rem;
+  color: var(--wh-hdr-muted);
+  font-size: 0.875rem;
+  font-weight: 500;
+  text-decoration: none;
+}
+
+.wh-nav-drawer-links .wh-hdr-link[aria-current="page"] {
+  color: var(--wh-hdr-fg);
+}
+
+/* ---------- Sidebar ----------
+ *
+ * Each group is a collapsible row: its icon, its label in the foreground
+ * color, and a small chevron. A page row is 32 px high and muted. The pages of
+ * an open group hang from a hairline under the group icon. Spacing is on a
+ * 4 px grid: 4 px between groups, 4 px above and 8 px below an open group.
+ * The current page gets the theme's selected surface, a neutral fill, and the
+ * foreground color. Hover changes only the text color, so it never looks like
+ * the current page.
+ */
+
+.blume-nav-summary,
+.blume-nav-link {
+  border-radius: 0.5rem;
+  padding: 0.375rem 0.625rem;
+  font-size: 0.875rem;
+  line-height: 1.25rem;
+}
+
+.blume-nav-summary {
+  gap: 0.5rem;
+  color: var(--wh-n10);
+  font-weight: 500;
+}
+
+.blume-nav-summary:hover {
+  background: var(--wh-n3);
+}
+
+.blume-nav-summary svg {
+  color: var(--wh-n7);
+}
+
+/* The chevron is the last part of the row. It is smaller and quieter than the group icon. */
+.blume-nav-summary > span:last-child {
+  display: inline-flex;
+  color: var(--wh-n6);
+}
+
+.blume-nav-summary > span:last-child svg {
+  inline-size: 12px;
+  block-size: 12px;
+  color: inherit;
+}
+
+/* Groups: 4 px apart. */
+details:has(> .blume-nav-summary) {
+  margin-block-start: 0.25rem;
+}
+
+li:first-child > details:has(> .blume-nav-summary) {
+  margin-block-start: 0;
+}
+
+/* The pages of an open group hang from a hairline under the center of the group icon (10 px + 7 px). */
+details > .blume-nav-summary + div {
+  margin: 0.25rem 0 0.5rem 1.0625rem;
+  border-inline-start: 1px solid var(--wh-n4);
+  padding-inline-start: 0.5rem;
+}
+
+:root[data-theme="dark"] details > .blume-nav-summary + div {
+  border-color: var(--wh-n3);
+}
+
+details > .blume-nav-summary + div > ul,
+details > .blume-nav-summary + div {
+  row-gap: 0;
+}
+
+.blume-nav-link {
+  color: var(--wh-n8);
+  transition: color 120ms ease;
+}
+
+.blume-nav-link:hover {
+  background: transparent;
+  color: var(--wh-n10);
+}
+
+:root[data-theme="dark"] .blume-nav-link {
+  color: var(--wh-n7);
+}
+
+:root[data-theme="dark"] .blume-nav-link:hover {
+  color: var(--wh-n10);
+}
+
+/* The current page gets the theme's selected surface: a neutral fill, no rule or color. */
+.blume-nav-link[aria-current="page"],
+:root[data-theme="dark"] .blume-nav-link[aria-current="page"] {
+  background: var(--wh-n3);
+  color: var(--wh-n10);
+  font-weight: 500;
+  box-shadow: none;
+}
+
+:root[data-theme="dark"] .blume-nav-link[aria-current="page"] {
+  background: var(--wh-n2);
+}
+
+.blume-nav-link:focus-visible,
+.blume-nav-summary:focus-visible {
+  outline: 2px solid var(--wh-amber);
+  outline-offset: -2px;
+}
+
+/* ---------- Data components ---------- */
+
+.wh-rule {
+  border-color: var(--wh-n4);
+}
+
+:root[data-theme="dark"] .wh-rule {
+  border-color: var(--wh-n3);
+}
+
+.wh-mono-label {
+  font-family: var(--blume-font-mono);
+  font-size: 0.6875rem;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--blume-muted-foreground);
+}
+
+.wh-link-underline {
+  text-decoration-line: underline;
+  text-decoration-color: var(--wh-n5);
+  text-underline-offset: 3px;
+}
+
+.wh-link-underline:hover {
+  text-decoration-color: var(--wh-n10);
+}
+
+/* ---------- Diagrams ---------- */
+
+.wh-theme-dark {
+  display: none;
+}
+
+:root[data-theme="dark"] .wh-theme-light {
+  display: none;
+}
+
+:root[data-theme="dark"] picture.wh-theme-dark,
+:root[data-theme="dark"] img.wh-theme-dark {
+  display: block;
+}
+
+.wh-diagram {
+  display: block;
+  margin-block: 2rem;
+}
+
+.wh-diagram-open {
+  display: block;
+  width: 100%;
+  cursor: zoom-in;
+  text-align: left;
+}
+
+.wh-diagram-wide {
+  width: 100%;
+  height: auto;
+}
+
+.wh-diagram-narrow {
+  margin-inline: auto;
+  width: 100%;
+  max-width: 520px;
+  height: auto;
+}
+
+.wh-diagram-hint {
+  margin-top: 0.5rem;
+  display: flex;
+  justify-content: flex-end;
+  font-family: var(--blume-font-mono);
+  font-size: 0.75rem;
+  color: var(--blume-muted-foreground);
+}
+
+.wh-diagram-open:hover .wh-diagram-hint,
+.wh-diagram-open:focus-visible .wh-diagram-hint {
+  color: var(--blume-foreground);
+}
+
+.wh-diagram-open:focus-visible {
+  outline: 2px solid var(--wh-amber);
+  outline-offset: 4px;
+  border-radius: 0.5rem;
+}
+
+.wh-diagram-dialog {
+  margin: 0;
+  width: 100dvw;
+  max-width: none;
+  height: 100dvh;
+  max-height: none;
+  border: 0;
+  background: var(--blume-background);
+  padding: 0;
+  color: var(--blume-foreground);
+}
+
+.wh-diagram-dialog::backdrop {
+  background: transparent;
+}
+
+html:has(.wh-diagram-dialog[open]) {
+  overflow: hidden;
+}
+
+.wh-diagram-scroll {
+  height: 100%;
+  overflow: auto;
+}
+
+.wh-diagram-frame {
+  display: flex;
+  min-height: 100%;
+  min-width: fit-content;
+  padding: 1rem;
+}
+
+@media (min-width: 640px) {
+  .wh-diagram-frame {
+    padding: 2.5rem;
+  }
+}
+
+.wh-diagram-full {
+  margin: auto;
+  align-self: center;
+  width: max(960px, min(1920px, calc(100vw - 5rem)));
+  max-width: none;
+  height: auto;
+}
+
+.wh-diagram-close {
+  position: fixed;
+  top: 0.75rem;
+  right: 0.75rem;
+  border-radius: 0.5rem;
+  background: var(--wh-n3);
+  padding: 0.5rem;
+  color: var(--blume-muted-foreground);
+}
+
+.wh-diagram-close:hover {
+  color: var(--blume-foreground);
+}

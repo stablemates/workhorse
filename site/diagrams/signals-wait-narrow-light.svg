@@ -1,36 +1,36 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 344" width="400" height="344" role="img" aria-labelledby="signals-wait-narrow-light-title signals-wait-narrow-light-desc">
 <title id="signals-wait-narrow-light-title">A signal wait frees the worker until the payload arrives</title>
 <desc id="signals-wait-narrow-light-desc">At 0 s, worker A runs the handler for ord-381, and the handler waits for the approval signal. No worker holds the task during the wait. At 3 h, the review service calls sendSignal, and Workhorse stores the payload and sets the task to ready. Worker B runs the handler from its first line. The wait returns the stored payload, and the handler publishes the order. Both runs are attempt 1.</desc>
-<defs><marker id="arrow-light" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#4e5359"/></marker></defs>
-<rect width="400" height="344" fill="#f9fafb"/>
-<text x="24" y="49" fill="#1a2027" font-size="9" font-family="Geist Mono">0 s</text>
-<rect x="112" y="24" width="264" height="42" rx="6" fill="#f9fafb"/>
-<rect x="112" y="24" width="264" height="42" rx="6" fill="rgba(213,92,19,0.08)" stroke="#aa4515" stroke-width="1.4"/>
-<text x="244" y="43" fill="#1a2027" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">worker A: waitForSignal</text>
-<text x="244" y="57" fill="#4e5359" font-size="9" font-family="Geist Mono" text-anchor="middle">records the wait · frees the slot</text>
-<path d="M 248,66 V 78" fill="none" stroke="#4e5359" stroke-width="1.2" marker-end="url(#arrow-light)"/>
-<text x="24" y="105" fill="#1a2027" font-size="9" font-family="Geist Mono">0 s to 3 h</text>
-<rect x="112" y="80" width="264" height="42" rx="6" fill="#f9fafb"/>
-<rect x="112" y="80" width="264" height="42" rx="6" fill="rgba(26,32,39,0.03)" stroke="rgba(26,32,39,0.4)" stroke-width="1" stroke-dasharray="4,3"/>
-<text x="244" y="99" fill="#1a2027" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">no worker holds the task</text>
-<text x="244" y="113" fill="#4e5359" font-size="9" font-family="Geist Mono" text-anchor="middle">scheduled · no owner</text>
-<path d="M 248,122 V 134" fill="none" stroke="#4e5359" stroke-width="1.2" marker-end="url(#arrow-light)"/>
-<text x="24" y="161" fill="#1a2027" font-size="9" font-family="Geist Mono">3 h</text>
-<rect x="112" y="136" width="264" height="42" rx="6" fill="#f9fafb"/>
-<rect x="112" y="136" width="264" height="42" rx="6" fill="rgba(26,32,39,0.05)" stroke="#4e5359" stroke-width="1"/>
-<text x="244" y="155" fill="#1a2027" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">review service: sendSignal</text>
-<text x="244" y="169" fill="#4e5359" font-size="9" font-family="Geist Mono" text-anchor="middle">payload stored · task ready</text>
-<path d="M 248,178 V 190" fill="none" stroke="#4e5359" stroke-width="1.2" marker-end="url(#arrow-light)"/>
-<text x="24" y="217" fill="#1a2027" font-size="9" font-family="Geist Mono">after 3 h</text>
-<rect x="112" y="192" width="264" height="42" rx="6" fill="#f9fafb"/>
-<rect x="112" y="192" width="264" height="42" rx="6" fill="rgba(26,32,39,0.05)" stroke="#4e5359" stroke-width="1"/>
-<text x="244" y="211" fill="#1a2027" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">worker B: the wait returns</text>
-<text x="244" y="225" fill="#4e5359" font-size="9" font-family="Geist Mono" text-anchor="middle">the stored payload at once</text>
-<path d="M 248,234 V 246" fill="none" stroke="#4e5359" stroke-width="1.2" marker-end="url(#arrow-light)"/>
-<rect x="112" y="248" width="264" height="42" rx="6" fill="#f9fafb"/>
-<rect x="112" y="248" width="264" height="42" rx="6" fill="#ffffff" stroke="#1a2027" stroke-width="1"/>
-<text x="244" y="267" fill="#1a2027" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">publishOrder runs</text>
-<text x="244" y="281" fill="#4e5359" font-size="9" font-family="Geist Mono" text-anchor="middle">publishes ord-381 · task succeeds</text>
-<text x="24" y="312" fill="#4e5359" font-size="9" font-family="Geist Mono" font-weight="400" text-anchor="start">Each run starts at the first line of the</text>
-<text x="24" y="327" fill="#4e5359" font-size="9" font-family="Geist Mono" font-weight="400" text-anchor="start">handler. The wait does not use an attempt.</text>
+<defs><marker id="arrow-light" markerWidth="8" markerHeight="8" refX="6.5" refY="4" orient="auto" markerUnits="userSpaceOnUse"><path d="M 1.5,1 L 6.5,4 L 1.5,7" fill="none" stroke="#7d7d7d" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/></marker></defs>
+<rect width="400" height="344" fill="#ffffff"/>
+<text x="24" y="49" fill="#000000" font-size="9" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="start">0 s</text>
+<rect x="112" y="24" width="264" height="42" rx="8" fill="#ffffff"/>
+<rect x="112.5" y="24.5" width="263" height="41" rx="8" fill="rgba(207,145,72,0.12)" stroke="#cf9148" stroke-width="1"/>
+<text x="244" y="43" fill="#000000" font-size="11" font-weight="500" font-family="Geist Mono, monospace" text-anchor="middle">worker A: waitForSignal</text>
+<text x="244" y="57" fill="#555555" font-size="9" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">records the wait · frees the slot</text>
+<path d="M 248,66 V 78" fill="none" stroke="#7d7d7d" stroke-width="1" marker-end="url(#arrow-light)"/>
+<text x="24" y="105" fill="#000000" font-size="9" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="start">0 s to 3 h</text>
+<rect x="112" y="80" width="264" height="42" rx="8" fill="#ffffff"/>
+<rect x="112.5" y="80.5" width="263" height="41" rx="8" fill="#ffffff" stroke="#e7e7e7" stroke-width="1"/>
+<text x="244" y="99" fill="#555555" font-size="11" font-weight="500" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">no worker holds the task</text>
+<text x="244" y="113" fill="#555555" font-size="9" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">scheduled · no owner</text>
+<path d="M 248,122 V 134" fill="none" stroke="#7d7d7d" stroke-width="1" marker-end="url(#arrow-light)"/>
+<text x="24" y="161" fill="#000000" font-size="9" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="start">3 h</text>
+<rect x="112" y="136" width="264" height="42" rx="8" fill="#ffffff"/>
+<rect x="112.5" y="136.5" width="263" height="41" rx="8" fill="#f4f4f4" stroke="#e7e7e7" stroke-width="1"/>
+<text x="244" y="155" fill="#000000" font-size="11" font-weight="500" font-family="Geist Mono, monospace" text-anchor="middle">review service: sendSignal</text>
+<text x="244" y="169" fill="#555555" font-size="9" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">payload stored · task ready</text>
+<path d="M 248,178 V 190" fill="none" stroke="#7d7d7d" stroke-width="1" marker-end="url(#arrow-light)"/>
+<text x="24" y="217" fill="#000000" font-size="9" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="start">after 3 h</text>
+<rect x="112" y="192" width="264" height="42" rx="8" fill="#ffffff"/>
+<rect x="112.5" y="192.5" width="263" height="41" rx="8" fill="#f4f4f4" stroke="#e7e7e7" stroke-width="1"/>
+<text x="244" y="211" fill="#000000" font-size="11" font-weight="500" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">worker B: the wait returns</text>
+<text x="244" y="225" fill="#555555" font-size="9" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">the stored payload at once</text>
+<path d="M 248,234 V 246" fill="none" stroke="#7d7d7d" stroke-width="1" marker-end="url(#arrow-light)"/>
+<rect x="112" y="248" width="264" height="42" rx="8" fill="#ffffff"/>
+<rect x="112.5" y="248.5" width="263" height="41" rx="8" fill="#ffffff" stroke="#cdcdcd" stroke-width="1"/>
+<text x="244" y="267" fill="#000000" font-size="11" font-weight="500" font-family="Geist Mono, monospace" text-anchor="middle">publishOrder runs</text>
+<text x="244" y="281" fill="#555555" font-size="9" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">publishes ord-381 · task succeeds</text>
+<text x="24" y="312" fill="#555555" font-size="9" font-family="Timeless Grotesk, Geist, sans-serif" font-weight="400" text-anchor="start">Each run starts at the first line of the</text>
+<text x="24" y="327" fill="#555555" font-size="9" font-family="Timeless Grotesk, Geist, sans-serif" font-weight="400" text-anchor="start">handler. The wait does not use an attempt.</text>
 </svg>

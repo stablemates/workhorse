@@ -40,6 +40,7 @@ docs/benchmarks/results
 # twins of pages whose sources are gone, and `COPY . .` would publish them (SM-855).
 # site/scripts/image-context.test.ts keeps this list in step with .gitignore.
 **/.source
+**/.blume
 site/public/robots.txt
 site/public/sitemap.xml
 site/public/llms.txt
@@ -47,6 +48,8 @@ site/public/llms-full.txt
 site/public/docs.md
 site/public/docs
 site/public/blog
+site/public/compare.md
+site/public/compare
 site/public/404.md
 site/public/404.json
 site/public/openapi.json

@@ -1,0 +1,22 @@
+---
+import { organization, publisherReference, siteConfig } from "../../lib/site.ts";
+
+/**
+ * The publisher of each documentation page, as JSON-LD (ADR 0062). Blume's
+ * head names the page as a `TechArticle` with the `@id` `<canonical>#page`.
+ * This record adds the `Organization` node that every page of the site names,
+ * and gives that same page node its publisher, so an agent that verifies the
+ * publisher finds the answer on a documentation page too.
+ */
+interface Props {
+  route: string;
+}
+
+const { route } = Astro.props;
+const record = {
+  "@context": "https://schema.org",
+  "@graph": [organization, { "@id": `${siteConfig.url}${route}#page`, publisher: publisherReference }],
+};
+---
+
+<script type="application/ld+json" set:html={JSON.stringify(record)} />

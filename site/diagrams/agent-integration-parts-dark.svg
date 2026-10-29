@@ -1,41 +1,41 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 304" width="960" height="304" role="img" aria-labelledby="agent-integration-parts-dark-title agent-integration-parts-dark-desc">
 <title id="agent-integration-parts-dark-title">The four parts of an integration, and where each one runs</title>
 <desc id="agent-integration-parts-dark-desc">The deployment installs the Workhorse schema. When the application starts, it asserts that the schema is compatible. The application inserts order-42 and enqueues order.created in one transaction, with the number of attempts and the time limits. The worker runs the handler, which sends the confirmation email in a checkpoint. Then the application reads the task by its identifier.</desc>
-<defs><marker id="arrow-dark" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#ced1d4"/></marker></defs>
-<rect width="960" height="304" fill="#04080e"/>
-<path d="M 200,102 H 254" fill="none" stroke="#ced1d4" stroke-width="1.2" marker-end="url(#arrow-dark)"/>
-<path d="M 416,102 H 474" fill="none" stroke="#ced1d4" stroke-width="1.2" marker-end="url(#arrow-dark)"/>
-<path d="M 680,102 H 734" fill="none" stroke="#ced1d4" stroke-width="1.2" marker-end="url(#arrow-dark)"/>
-<path d="M 828,130 V 172 H 580 V 196" fill="none" stroke="#ced1d4" stroke-width="1.2" marker-end="url(#arrow-dark)"/>
-<rect x="24" y="48" width="192" height="200" rx="8" fill="rgba(242,244,245,0.02)" stroke="rgba(242,244,245,0.12)" stroke-width="0.8"/>
-<rect x="36" y="42" width="68" height="12" rx="2" fill="#04080e"/>
-<text x="70" y="51" fill="#95999d" font-size="7" font-family="Geist Mono" text-anchor="middle" letter-spacing="0.14em">DEPLOYMENT</text>
-<rect x="240" y="48" width="456" height="200" rx="8" fill="rgba(242,244,245,0.02)" stroke="rgba(242,244,245,0.12)" stroke-width="0.8"/>
-<rect x="252" y="42" width="72" height="12" rx="2" fill="#04080e"/>
-<text x="288" y="51" fill="#95999d" font-size="7" font-family="Geist Mono" text-anchor="middle" letter-spacing="0.14em">APPLICATION</text>
-<rect x="720" y="48" width="216" height="200" rx="8" fill="rgba(242,244,245,0.02)" stroke="rgba(242,244,245,0.12)" stroke-width="0.8"/>
-<rect x="732" y="42" width="44" height="12" rx="2" fill="#04080e"/>
-<text x="754" y="51" fill="#95999d" font-size="7" font-family="Geist Mono" text-anchor="middle" letter-spacing="0.14em">WORKER</text>
-<rect x="40" y="76" width="160" height="52" rx="6" fill="#04080e"/>
-<rect x="40" y="76" width="160" height="52" rx="6" fill="rgba(242,244,245,0.05)" stroke="#ced1d4" stroke-width="1"/>
-<text x="120" y="100" fill="#f2f4f5" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">1 · schema install</text>
-<text x="120" y="114" fill="#ced1d4" font-size="9" font-family="Geist Mono" text-anchor="middle">workhorse schema install</text>
-<rect x="256" y="76" width="160" height="52" rx="6" fill="#04080e"/>
-<rect x="256" y="76" width="160" height="52" rx="6" fill="#0a1017" stroke="#f2f4f5" stroke-width="1"/>
-<text x="336" y="100" fill="#f2f4f5" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">assert compatible</text>
-<text x="336" y="114" fill="#ced1d4" font-size="9" font-family="Geist Mono" text-anchor="middle">when the app starts</text>
-<rect x="476" y="76" width="204" height="52" rx="6" fill="#04080e"/>
-<rect x="476" y="76" width="204" height="52" rx="6" fill="rgba(252,152,76,0.08)" stroke="#fc984c" stroke-width="1.4"/>
-<text x="578" y="100" fill="#f2f4f5" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">2 · enqueue + 4 · policy</text>
-<text x="578" y="114" fill="#ced1d4" font-size="9" font-family="Geist Mono" text-anchor="middle">order-42 and order.created</text>
-<rect x="736" y="76" width="160" height="52" rx="6" fill="#04080e"/>
-<rect x="736" y="76" width="160" height="52" rx="6" fill="#0a1017" stroke="#f2f4f5" stroke-width="1"/>
-<text x="816" y="100" fill="#f2f4f5" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">3 · handler</text>
-<text x="816" y="114" fill="#ced1d4" font-size="9" font-family="Geist Mono" text-anchor="middle">the email in a checkpoint</text>
-<rect x="476" y="198" width="204" height="44" rx="6" fill="#04080e"/>
-<rect x="476" y="198" width="204" height="44" rx="6" fill="rgba(242,244,245,0.05)" stroke="#ced1d4" stroke-width="1"/>
-<text x="578" y="218" fill="#f2f4f5" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">read the task</text>
-<text x="578" y="232" fill="#ced1d4" font-size="9" font-family="Geist Mono" text-anchor="middle">by its identifier</text>
-<text x="578" y="146" fill="#95999d" font-size="8" font-family="Geist Mono" font-weight="400" text-anchor="middle">one transaction · attempts · time limits</text>
-<text x="24" y="288" fill="#ced1d4" font-size="9" font-family="Geist Mono" font-weight="400" text-anchor="start">The deployment owns the schema. The application does not install it when it starts.</text>
+<defs><marker id="arrow-dark" markerWidth="8" markerHeight="8" refX="6.5" refY="4" orient="auto" markerUnits="userSpaceOnUse"><path d="M 1.5,1 L 6.5,4 L 1.5,7" fill="none" stroke="#838383" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/></marker></defs>
+<rect width="960" height="304" fill="#000000"/>
+<path d="M 200,102 H 254" fill="none" stroke="#838383" stroke-width="1" marker-end="url(#arrow-dark)"/>
+<path d="M 416,102 H 474" fill="none" stroke="#838383" stroke-width="1" marker-end="url(#arrow-dark)"/>
+<path d="M 680,102 H 734" fill="none" stroke="#838383" stroke-width="1" marker-end="url(#arrow-dark)"/>
+<path d="M 828,130 V 172 H 580 V 196" fill="none" stroke="#838383" stroke-width="1" marker-end="url(#arrow-dark)"/>
+<rect x="24" y="48" width="192" height="200" rx="12" fill="none" stroke="#2b2b2b" stroke-width="1"/>
+<rect x="36" y="42" width="68" height="12" fill="#000000"/>
+<text x="70" y="51" fill="#ababab" font-size="8" font-weight="500" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle" letter-spacing="0.04em">DEPLOYMENT</text>
+<rect x="240" y="48" width="456" height="200" rx="12" fill="none" stroke="#2b2b2b" stroke-width="1"/>
+<rect x="252" y="42" width="72" height="12" fill="#000000"/>
+<text x="288" y="51" fill="#ababab" font-size="8" font-weight="500" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle" letter-spacing="0.04em">APPLICATION</text>
+<rect x="720" y="48" width="216" height="200" rx="12" fill="none" stroke="#2b2b2b" stroke-width="1"/>
+<rect x="732" y="42" width="44" height="12" fill="#000000"/>
+<text x="754" y="51" fill="#ababab" font-size="8" font-weight="500" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle" letter-spacing="0.04em">WORKER</text>
+<rect x="40" y="76" width="160" height="52" rx="8" fill="#000000"/>
+<rect x="40.5" y="76.5" width="159" height="51" rx="8" fill="#202020" stroke="#2b2b2b" stroke-width="1"/>
+<text x="120" y="100" fill="#f4f4f4" font-size="11" font-weight="500" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">1 · schema install</text>
+<text x="120" y="114" fill="#ababab" font-size="9" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">workhorse schema install</text>
+<rect x="256" y="76" width="160" height="52" rx="8" fill="#000000"/>
+<rect x="256.5" y="76.5" width="159" height="51" rx="8" fill="#000000" stroke="#3d3d3d" stroke-width="1"/>
+<text x="336" y="100" fill="#f4f4f4" font-size="11" font-weight="500" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">assert compatible</text>
+<text x="336" y="114" fill="#ababab" font-size="9" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">when the app starts</text>
+<rect x="476" y="76" width="204" height="52" rx="8" fill="#000000"/>
+<rect x="476.5" y="76.5" width="203" height="51" rx="8" fill="rgba(207,145,72,0.12)" stroke="#cf9148" stroke-width="1"/>
+<text x="578" y="100" fill="#f4f4f4" font-size="11" font-weight="500" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">2 · enqueue + 4 · policy</text>
+<text x="578" y="114" fill="#ababab" font-size="9" font-family="Geist Mono, monospace" text-anchor="middle">order-42 and order.created</text>
+<rect x="736" y="76" width="160" height="52" rx="8" fill="#000000"/>
+<rect x="736.5" y="76.5" width="159" height="51" rx="8" fill="#000000" stroke="#3d3d3d" stroke-width="1"/>
+<text x="816" y="100" fill="#f4f4f4" font-size="11" font-weight="500" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">3 · handler</text>
+<text x="816" y="114" fill="#ababab" font-size="9" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">the email in a checkpoint</text>
+<rect x="476" y="198" width="204" height="44" rx="8" fill="#000000"/>
+<rect x="476.5" y="198.5" width="203" height="43" rx="8" fill="#202020" stroke="#2b2b2b" stroke-width="1"/>
+<text x="578" y="218" fill="#f4f4f4" font-size="11" font-weight="500" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">read the task</text>
+<text x="578" y="232" fill="#ababab" font-size="9" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">by its identifier</text>
+<text x="578" y="146" fill="#ababab" font-size="8" font-family="Timeless Grotesk, Geist, sans-serif" font-weight="400" text-anchor="middle">one transaction · attempts · time limits</text>
+<text x="24" y="288" fill="#cfcfcf" font-size="9" font-family="Timeless Grotesk, Geist, sans-serif" font-weight="400" text-anchor="start">The deployment owns the schema. The application does not install it when it starts.</text>
 </svg>

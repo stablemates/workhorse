@@ -1,27 +1,27 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 252" width="960" height="252" role="img" aria-labelledby="django-tasks-acceptance-dark-title django-tasks-acceptance-dark-desc">
 <title id="django-tasks-acceptance-dark-title">A TaskResult shows acceptance; the outer block decides the commit</title>
 <desc id="django-tasks-acceptance-dark-desc">The request opens transaction.atomic(using="business"). In an inner atomic block, greet.enqueue("Ada") returns a TaskResult with the status READY and a task ID. A later statement in the outer block fails, and Django rolls back the outer block. PostgreSQL removes the task, and the task ID identifies no task.</desc>
-<defs><marker id="arrow-dark" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#ced1d4"/></marker></defs>
-<rect width="960" height="252" fill="#04080e"/>
-<rect x="24" y="48" width="640" height="156" rx="8" fill="rgba(242,244,245,0.02)" stroke="rgba(242,244,245,0.12)" stroke-width="0.8"/>
-<rect x="36" y="42" width="216" height="12" rx="2" fill="#04080e"/>
-<text x="144" y="51" fill="#95999d" font-size="7" font-family="Geist Mono" text-anchor="middle" letter-spacing="0.14em">OUTER BLOCK · atomic(using="business")</text>
-<rect x="40" y="80" width="300" height="108" rx="8" fill="rgba(242,244,245,0.02)" stroke="rgba(242,244,245,0.12)" stroke-width="0.8"/>
-<rect x="52" y="74" width="108" height="12" rx="2" fill="#04080e"/>
-<text x="106" y="83" fill="#95999d" font-size="7" font-family="Geist Mono" text-anchor="middle" letter-spacing="0.14em">INNER ATOMIC BLOCK</text>
-<path d="M 324,134 H 366" fill="none" stroke="#ced1d4" stroke-width="1.2" marker-end="url(#arrow-dark)"/>
-<path d="M 648,134 H 702" fill="none" stroke="#ced1d4" stroke-width="1.2" marker-end="url(#arrow-dark)"/>
-<rect x="56" y="108" width="268" height="52" rx="6" fill="#04080e"/>
-<rect x="56" y="108" width="268" height="52" rx="6" fill="rgba(252,152,76,0.08)" stroke="#fc984c" stroke-width="1.4"/>
-<text x="190" y="132" fill="#f2f4f5" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">greet.enqueue("Ada")</text>
-<text x="190" y="146" fill="#ced1d4" font-size="9" font-family="Geist Mono" text-anchor="middle">TaskResult · READY · task ID</text>
-<rect x="368" y="108" width="280" height="52" rx="6" fill="#04080e"/>
-<rect x="368" y="108" width="280" height="52" rx="6" fill="rgba(242,244,245,0.03)" stroke="rgba(242,244,245,0.4)" stroke-width="1" stroke-dasharray="4,3"/>
-<text x="508" y="132" fill="#f2f4f5" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">a later statement fails</text>
-<text x="508" y="146" fill="#ced1d4" font-size="9" font-family="Geist Mono" text-anchor="middle">Django rolls back the outer block</text>
-<rect x="704" y="108" width="232" height="52" rx="6" fill="#04080e"/>
-<rect x="704" y="108" width="232" height="52" rx="6" fill="rgba(242,244,245,0.05)" stroke="#ced1d4" stroke-width="1"/>
-<text x="820" y="132" fill="#f2f4f5" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">the task is gone</text>
-<text x="820" y="146" fill="#ced1d4" font-size="9" font-family="Geist Mono" text-anchor="middle">its task ID identifies no task</text>
-<text x="24" y="236" fill="#ced1d4" font-size="9" font-family="Geist Mono" font-weight="400" text-anchor="start">A TaskResult shows that Workhorse accepted the task. It does not show that the transaction committed.</text>
+<defs><marker id="arrow-dark" markerWidth="8" markerHeight="8" refX="6.5" refY="4" orient="auto" markerUnits="userSpaceOnUse"><path d="M 1.5,1 L 6.5,4 L 1.5,7" fill="none" stroke="#838383" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/></marker></defs>
+<rect width="960" height="252" fill="#000000"/>
+<rect x="24" y="48" width="640" height="156" rx="12" fill="none" stroke="#2b2b2b" stroke-width="1"/>
+<rect x="36" y="42" width="204" height="12" fill="#000000"/>
+<text x="138" y="51" fill="#ababab" font-size="8" font-weight="500" font-family="Geist Mono, monospace" text-anchor="middle" letter-spacing="0.04em">OUTER BLOCK · atomic(using="business")</text>
+<rect x="40" y="80" width="300" height="108" rx="12" fill="none" stroke="#2b2b2b" stroke-width="1"/>
+<rect x="52" y="74" width="108" height="12" fill="#000000"/>
+<text x="106" y="83" fill="#ababab" font-size="8" font-weight="500" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle" letter-spacing="0.04em">INNER ATOMIC BLOCK</text>
+<path d="M 324,134 H 366" fill="none" stroke="#838383" stroke-width="1" marker-end="url(#arrow-dark)"/>
+<path d="M 648,134 H 702" fill="none" stroke="#838383" stroke-width="1" marker-end="url(#arrow-dark)"/>
+<rect x="56" y="108" width="268" height="52" rx="8" fill="#000000"/>
+<rect x="56.5" y="108.5" width="267" height="51" rx="8" fill="rgba(207,145,72,0.12)" stroke="#cf9148" stroke-width="1"/>
+<text x="190" y="132" fill="#f4f4f4" font-size="11" font-weight="500" font-family="Geist Mono, monospace" text-anchor="middle">greet.enqueue("Ada")</text>
+<text x="190" y="146" fill="#ababab" font-size="9" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">TaskResult · READY · task ID</text>
+<rect x="368" y="108" width="280" height="52" rx="8" fill="#000000"/>
+<rect x="368.5" y="108.5" width="279" height="51" rx="8" fill="#000000" stroke="#2b2b2b" stroke-width="1"/>
+<text x="508" y="132" fill="#cfcfcf" font-size="11" font-weight="500" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">a later statement fails</text>
+<text x="508" y="146" fill="#ababab" font-size="9" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">Django rolls back the outer block</text>
+<rect x="704" y="108" width="232" height="52" rx="8" fill="#000000"/>
+<rect x="704.5" y="108.5" width="231" height="51" rx="8" fill="#202020" stroke="#2b2b2b" stroke-width="1"/>
+<text x="820" y="132" fill="#f4f4f4" font-size="11" font-weight="500" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">the task is gone</text>
+<text x="820" y="146" fill="#ababab" font-size="9" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">its task ID identifies no task</text>
+<text x="24" y="236" fill="#cfcfcf" font-size="9" font-family="Timeless Grotesk, Geist, sans-serif" font-weight="400" text-anchor="start">A TaskResult shows that Workhorse accepted the task. It does not show that the transaction committed.</text>
 </svg>

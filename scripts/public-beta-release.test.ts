@@ -144,16 +144,18 @@ describe("the 0.11.0 release", () => {
   });
 
   it("names the released version on the site from the package", async () => {
-    // SM-734 took the beta mark and the install panel off the landing page. The docs layout's
-    // sidebar banner is the surface that still prints the version, and it must interpolate the
-    // package constant. The `not.toMatch` below forbids a hand-typed version on either route.
-    const docsLayout = await read("site/src/routes/docs.tsx");
-    expect(docsLayout).toContain(
-      'import { WORKHORSE_VERSION } from "@stablemates/workhorse/version"',
-    );
-    expect(docsLayout).toContain("v{WORKHORSE_VERSION}");
-    expect(docsLayout).not.toMatch(/\d+\.\d+\.\d+/);
-    expect(await read("site/src/routes/index.tsx")).not.toMatch(/\d+\.\d+\.\d+/);
+    // SM-734 took the beta mark and the install panel off the landing page, and the maintainer
+    // later took the version off the foot of the docs sidebar. The release notes page and the
+    // compatibility page now state the version. The `not.toMatch` lines forbid a hand-typed
+    // version in the site chrome: the shared header, the docs drawer, and the landing page.
+    for (const chrome of [
+      "site/blume/components/Header.astro",
+      "site/blume/components/MobileNav.astro",
+      "site/components/site-header.tsx",
+      "site/src/routes/index.tsx",
+    ]) {
+      expect(await read(chrome)).not.toMatch(/\d+\.\d+\.\d+/);
+    }
 
     expect(await read("docs/compatibility.md")).toContain(
       `The current release is \`${releaseVersion}\`.`,

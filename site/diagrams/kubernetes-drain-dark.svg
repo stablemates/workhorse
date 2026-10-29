@@ -1,32 +1,32 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 244" width="960" height="244" role="img" aria-labelledby="kubernetes-drain-dark-title kubernetes-drain-dark-desc">
 <title id="kubernetes-drain-dark-title">A grace period of 120 s lets the drain of 110 s finish</title>
 <desc id="kubernetes-drain-dark-desc">At the first termination signal, /readyz returns 503 and /livez stays at 200 while handlers drain. With a Pod grace period of 120 seconds, the Workhorse deadline of 110 seconds ends first. With the Kubernetes default of 30 seconds, Kubernetes sends SIGKILL during the drain.</desc>
-<defs><marker id="arrow-dark" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#ced1d4"/></marker></defs>
-<rect width="960" height="244" fill="#04080e"/>
-<text x="200" y="44" fill="#95999d" font-size="8" font-family="Geist Mono" font-weight="400" text-anchor="middle">0 s</text>
-<text x="380" y="44" fill="#95999d" font-size="8" font-family="Geist Mono" font-weight="400" text-anchor="middle">30 s</text>
-<text x="560" y="44" fill="#95999d" font-size="8" font-family="Geist Mono" font-weight="400" text-anchor="middle">60 s</text>
-<text x="740" y="44" fill="#95999d" font-size="8" font-family="Geist Mono" font-weight="400" text-anchor="middle">90 s</text>
-<text x="860" y="44" fill="#95999d" font-size="8" font-family="Geist Mono" font-weight="400" text-anchor="middle">110 s</text>
-<text x="920" y="44" fill="#95999d" font-size="8" font-family="Geist Mono" font-weight="400" text-anchor="middle">120 s</text>
-<line x1="200" y1="52" x2="920" y2="52" stroke="rgba(242,244,245,0.14)"/>
-<text x="24" y="88" fill="#f2f4f5" font-size="11" font-family="Geist" font-weight="600" text-anchor="start">grace period 120 s</text>
-<text x="24" y="103" fill="#ced1d4" font-size="9" font-family="Geist Mono" font-weight="400" text-anchor="start">this manifest</text>
-<text x="24" y="160" fill="#f2f4f5" font-size="11" font-family="Geist" font-weight="600" text-anchor="start">grace period 30 s</text>
-<text x="24" y="175" fill="#ced1d4" font-size="9" font-family="Geist Mono" font-weight="400" text-anchor="start">the Kubernetes default</text>
-<rect x="200" y="72" width="656" height="44" rx="6" fill="#04080e"/>
-<rect x="200" y="72" width="656" height="44" rx="6" fill="rgba(252,152,76,0.08)" stroke="#fc984c" stroke-width="1.4"/>
-<text x="528" y="92" fill="#f2f4f5" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">handlers drain</text>
-<text x="528" y="106" fill="#ced1d4" font-size="9" font-family="Geist Mono" text-anchor="middle">/readyz 503 · /livez 200</text>
-<rect x="860" y="72" width="60" height="44" rx="6" fill="#04080e"/>
-<rect x="860" y="72" width="60" height="44" rx="6" fill="rgba(242,244,245,0.05)" stroke="#ced1d4" stroke-width="1"/>
-<text x="890" y="98" fill="#f2f4f5" font-size="12" font-weight="600" font-family="Geist" text-anchor="middle">margin</text>
-<rect x="200" y="144" width="176" height="44" rx="6" fill="#04080e"/>
-<rect x="200" y="144" width="176" height="44" rx="6" fill="#0a1017" stroke="#f2f4f5" stroke-width="1"/>
-<text x="288" y="170" fill="#f2f4f5" font-size="12" font-weight="600" font-family="Geist" text-anchor="middle">handlers drain</text>
-<rect x="380" y="144" width="540" height="44" rx="6" fill="#04080e"/>
-<rect x="380" y="144" width="540" height="44" rx="6" fill="rgba(242,244,245,0.03)" stroke="rgba(242,244,245,0.4)" stroke-width="1" stroke-dasharray="4,3"/>
-<text x="650" y="164" fill="#f2f4f5" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">SIGKILL at 30 s</text>
-<text x="650" y="178" fill="#ced1d4" font-size="9" font-family="Geist Mono" text-anchor="middle">the drain stops early</text>
-<text x="24" y="228" fill="#ced1d4" font-size="9" font-family="Geist Mono" font-weight="400" text-anchor="start">Make the Pod grace period longer than the Workhorse deadline (--shutdown-timeout-ms).</text>
+<defs><marker id="arrow-dark" markerWidth="8" markerHeight="8" refX="6.5" refY="4" orient="auto" markerUnits="userSpaceOnUse"><path d="M 1.5,1 L 6.5,4 L 1.5,7" fill="none" stroke="#838383" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/></marker></defs>
+<rect width="960" height="244" fill="#000000"/>
+<text x="200" y="44" fill="#ababab" font-size="8" font-family="Timeless Grotesk, Geist, sans-serif" font-weight="400" text-anchor="middle">0 s</text>
+<text x="380" y="44" fill="#ababab" font-size="8" font-family="Timeless Grotesk, Geist, sans-serif" font-weight="400" text-anchor="middle">30 s</text>
+<text x="560" y="44" fill="#ababab" font-size="8" font-family="Timeless Grotesk, Geist, sans-serif" font-weight="400" text-anchor="middle">60 s</text>
+<text x="740" y="44" fill="#ababab" font-size="8" font-family="Timeless Grotesk, Geist, sans-serif" font-weight="400" text-anchor="middle">90 s</text>
+<text x="860" y="44" fill="#ababab" font-size="8" font-family="Timeless Grotesk, Geist, sans-serif" font-weight="400" text-anchor="middle">110 s</text>
+<text x="920" y="44" fill="#ababab" font-size="8" font-family="Timeless Grotesk, Geist, sans-serif" font-weight="400" text-anchor="middle">120 s</text>
+<line x1="200" y1="52" x2="920" y2="52" stroke="#2b2b2b"/>
+<text x="24" y="88" fill="#f4f4f4" font-size="11" font-family="Timeless Grotesk, Geist, sans-serif" font-weight="500" text-anchor="start">grace period 120 s</text>
+<text x="24" y="103" fill="#cfcfcf" font-size="9" font-family="Timeless Grotesk, Geist, sans-serif" font-weight="400" text-anchor="start">this manifest</text>
+<text x="24" y="160" fill="#f4f4f4" font-size="11" font-family="Timeless Grotesk, Geist, sans-serif" font-weight="500" text-anchor="start">grace period 30 s</text>
+<text x="24" y="175" fill="#cfcfcf" font-size="9" font-family="Timeless Grotesk, Geist, sans-serif" font-weight="400" text-anchor="start">the Kubernetes default</text>
+<rect x="200" y="72" width="656" height="44" rx="8" fill="#000000"/>
+<rect x="200.5" y="72.5" width="655" height="43" rx="8" fill="rgba(207,145,72,0.12)" stroke="#cf9148" stroke-width="1"/>
+<text x="528" y="92" fill="#f4f4f4" font-size="11" font-weight="500" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">handlers drain</text>
+<text x="528" y="106" fill="#ababab" font-size="9" font-family="Geist Mono, monospace" text-anchor="middle">/readyz 503 · /livez 200</text>
+<rect x="860" y="72" width="60" height="44" rx="8" fill="#000000"/>
+<rect x="860.5" y="72.5" width="59" height="43" rx="8" fill="#202020" stroke="#2b2b2b" stroke-width="1"/>
+<text x="890" y="98" fill="#f4f4f4" font-size="12" font-weight="500" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">margin</text>
+<rect x="200" y="144" width="176" height="44" rx="8" fill="#000000"/>
+<rect x="200.5" y="144.5" width="175" height="43" rx="8" fill="#000000" stroke="#3d3d3d" stroke-width="1"/>
+<text x="288" y="170" fill="#f4f4f4" font-size="12" font-weight="500" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">handlers drain</text>
+<rect x="380" y="144" width="540" height="44" rx="8" fill="#000000"/>
+<rect x="380.5" y="144.5" width="539" height="43" rx="8" fill="#000000" stroke="#2b2b2b" stroke-width="1"/>
+<text x="650" y="164" fill="#cfcfcf" font-size="11" font-weight="500" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">SIGKILL at 30 s</text>
+<text x="650" y="178" fill="#ababab" font-size="9" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">the drain stops early</text>
+<text x="24" y="228" fill="#cfcfcf" font-size="9" font-family="Timeless Grotesk, Geist, sans-serif" font-weight="400" text-anchor="start">Make the Pod grace period longer than the Workhorse deadline (--shutdown-timeout-ms).</text>
 </svg>

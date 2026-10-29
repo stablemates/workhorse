@@ -1,49 +1,70 @@
 /**
  * Primitives for the documentation diagrams under `site/diagrams/`.
  *
- * The tokens come from `site/src/styles/global.css`, so a diagram matches the site in both color
- * schemes. Each diagram is plain SVG with Geist and Geist Mono text. `generate-diagrams.ts` renders
- * it to PNG with resvg, because GitHub cannot load web fonts in an image a README embeds.
+ * The tokens come from the Untitled theme: ten neutral steps for each color scheme and one accent
+ * for the single focal element of a diagram. Boxes have hairline strokes and 8 px corners, and
+ * regions have 12 px corners. Labels use the sans family. A label uses the mono family only when it
+ * is a code identifier (see `isCode`). `generate-diagrams.ts` renders each diagram to PNG with
+ * resvg, because GitHub cannot load web fonts in an image a README embeds.
  */
 
 export type Theme = "light" | "dark";
 
 interface Palette {
+  /** The page behind the diagram, and the mask behind a label on a line. Neutral 1. */
   readonly paper: string;
+  /** The fill of a PostgreSQL state box. Neutral 3 in light, neutral 2 in dark. */
+  readonly well: string;
+  /** Region outlines and dividers. Neutral 4. */
+  readonly hairline: string;
+  /** Box outlines. Neutral 5. */
+  readonly line: string;
+  /** Arrows. Neutral 7 in light, neutral 6 in dark, for 3:1 contrast on the paper. */
+  readonly arrow: string;
+  /** Names and headings. Neutral 10 in light, neutral 9 in dark. */
   readonly ink: string;
-  readonly inkRgb: string;
+  /** Subtitles and secondary text. Neutral 8 in light, neutral 7 in dark. */
   readonly muted: string;
+  /**
+   * Region labels, arrow labels, and the least important text. Neutral 8 in light, 7 in dark,
+   * for 4.5:1 contrast on the paper and the well.
+   */
   readonly soft: string;
+  /** The one accent, for the focal element. */
   readonly accent: string;
   readonly accentRgb: string;
-  readonly backend: string;
 }
 
 const palettes: Record<Theme, Palette> = {
   light: {
-    paper: "#f9fafb",
-    ink: "#1a2027",
-    inkRgb: "26,32,39",
-    muted: "#4e5359",
-    soft: "#6d7277",
-    accent: "#aa4515",
-    accentRgb: "213,92,19",
-    backend: "#ffffff",
+    paper: "#ffffff",
+    well: "#f4f4f4",
+    hairline: "#e7e7e7",
+    line: "#cdcdcd",
+    arrow: "#7d7d7d",
+    ink: "#000000",
+    muted: "#555555",
+    soft: "#555555",
+    accent: "#cf9148",
+    accentRgb: "207,145,72",
   },
   dark: {
-    paper: "#04080e",
-    ink: "#f2f4f5",
-    inkRgb: "242,244,245",
-    muted: "#ced1d4",
-    soft: "#95999d",
-    accent: "#fc984c",
-    accentRgb: "252,152,76",
-    backend: "#0a1017",
+    paper: "#000000",
+    well: "#202020",
+    hairline: "#2b2b2b",
+    line: "#3d3d3d",
+    arrow: "#838383",
+    ink: "#f4f4f4",
+    muted: "#cfcfcf",
+    soft: "#ababab",
+    accent: "#cf9148",
+    accentRgb: "207,145,72",
   },
 };
 
-export const SANS = "Geist";
-export const MONO = "Geist Mono";
+/** The sans stack of the theme. resvg uses the first family it has a file for. */
+export const SANS = "Timeless Grotesk, Geist, sans-serif";
+export const MONO = "Geist Mono, monospace";
 
 /** A box style: the dashboard is `focal`, a process is `backend`, PostgreSQL state is `store`. */
 type BoxKind = "focal" | "backend" | "store" | "external";
@@ -64,9 +85,25 @@ function grid(value: number): number {
   return Math.ceil(value / 4) * 4;
 }
 
-/** The width of a mono label mask, from its character count, size, and tracking. */
-function labelWidth(text: string, size = 8, tracking = 0.06): number {
-  return grid([...text].length * (0.62 + tracking) * size + 12);
+/**
+ * True when `text` reads as code: an identifier with an underscore, a call, a dotted or camel-case
+ * name, a key and value, a path, a quoted string, or a cron field. Plain words and lists of plain
+ * words are prose and use the sans family, and so is a full sentence that names an identifier.
+ */
+function isCode(text: string): boolean {
+  if (/^[A-Z].*\.$/.test(text) && text.split(" ").length > 5) return false;
+  return /[_(){}=<>/"`*[\]]|&quot;|&lt;|&gt;|\b[a-z][a-z0-9]*[A-Z]|\w\.\w|\w:\w|--/.test(text);
+}
+
+/** The family for a text: mono for code, sans for prose. */
+function familyOf(text: string, requested: string = MONO): string {
+  return requested === MONO && isCode(text) ? MONO : SANS;
+}
+
+/** The width of a label mask, from its character count, size, and family. */
+function labelWidth(text: string, size: number, family: string): number {
+  const em = family === MONO ? 0.62 : /^[^a-z]*$/.test(text) ? 0.66 : 0.56;
+  return grid([...text].length * em * size + 12);
 }
 
 export class Diagram {
@@ -77,40 +114,38 @@ export class Diagram {
     this.#palette = palettes[theme];
   }
 
-  #ink(alpha: number): string {
-    return `rgba(${this.#palette.inkRgb},${alpha})`;
-  }
-
   /** A titled region. Draw zones after the arrows that cross them and before their boxes. */
   zone(x: number, y: number, w: number, h: number, text: string): void {
     const p = this.#palette;
-    const lw = labelWidth(text, 7, 0.14);
+    const family = familyOf(text);
+    const lw = labelWidth(text, 8, family);
     this.#parts.push(
-      `<rect x="${x}" y="${y}" width="${w}" height="${h}" rx="8" fill="${this.#ink(0.02)}" stroke="${this.#ink(0.12)}" stroke-width="0.8"/>`,
-      `<rect x="${x + 12}" y="${y - 6}" width="${lw}" height="12" rx="2" fill="${p.paper}"/>`,
-      `<text x="${x + 12 + lw / 2}" y="${y + 3}" fill="${p.soft}" font-size="7" font-family="${MONO}" text-anchor="middle" letter-spacing="0.14em">${text}</text>`,
+      `<rect x="${x}" y="${y}" width="${w}" height="${h}" rx="12" fill="none" stroke="${p.hairline}" stroke-width="1"/>`,
+      `<rect x="${x + 12}" y="${y - 6}" width="${lw}" height="12" fill="${p.paper}"/>`,
+      `<text x="${x + 12 + lw / 2}" y="${y + 3}" fill="${p.soft}" font-size="8" font-weight="500" font-family="${family}" text-anchor="middle" letter-spacing="0.04em">${text}</text>`,
     );
   }
 
   /** An orthogonal arrow along `d`. Draw arrows before boxes, so a box covers the line end. */
   arrow(d: string, { dashed = false }: { readonly dashed?: boolean } = {}): void {
-    const dash = dashed ? ' stroke-dasharray="5,4"' : "";
+    const dash = dashed ? ' stroke-dasharray="4,3"' : "";
     this.#parts.push(
-      `<path d="${d}" fill="none" stroke="${this.#palette.muted}" stroke-width="1.2"${dash} marker-end="url(#arrow-${this.theme})"/>`,
+      `<path d="${d}" fill="none" stroke="${this.#palette.arrow}" stroke-width="1"${dash} marker-end="url(#arrow-${this.theme})"/>`,
     );
   }
 
-  /** A mono label on a paper mask, centered on `x`. */
+  /** A label on a paper mask, centered on `x`. */
   label(x: number, y: number, text: string): void {
     const p = this.#palette;
-    const w = labelWidth(text);
+    const family = familyOf(text);
+    const w = labelWidth(text, 9, family);
     this.#parts.push(
       `<rect x="${x - w / 2}" y="${y}" width="${w}" height="12" rx="2" fill="${p.paper}"/>`,
-      `<text x="${x}" y="${y + 9}" fill="${p.soft}" font-size="8" font-family="${MONO}" text-anchor="middle" letter-spacing="0.06em">${text}</text>`,
+      `<text x="${x}" y="${y + 9}" fill="${p.soft}" font-size="9" font-family="${family}" text-anchor="middle">${text}</text>`,
     );
   }
 
-  /** A box with an optional centered name and mono subtitle. */
+  /** A box with an optional centered name and subtitle. */
   box(
     x: number,
     y: number,
@@ -122,36 +157,42 @@ export class Diagram {
     size = 12,
   ): void {
     const p = this.#palette;
-    const [fill, stroke, dash, width] = {
-      focal: [`rgba(${p.accentRgb},0.08)`, p.accent, "", "1.4"],
-      backend: [p.backend, p.ink, "", "1"],
-      store: [this.#ink(0.05), p.muted, "", "1"],
-      external: [this.#ink(0.03), this.#ink(0.4), ' stroke-dasharray="4,3"', "1"],
+    const [fill, stroke] = {
+      focal: [`rgba(${p.accentRgb},0.12)`, p.accent],
+      backend: [p.paper, p.line],
+      store: [p.well, p.hairline],
+      external: [p.paper, p.hairline],
     }[kind];
-    // A short or narrow bar keeps square corners, so it does not become a pill.
-    const rx = Math.min(6, h / 4, w / 4);
+    // A short or narrow bar keeps small corners, so it does not become a pill.
+    const rx = Math.min(8, h / 4, w / 4);
     this.#parts.push(
       `<rect x="${x}" y="${y}" width="${w}" height="${h}" rx="${rx}" fill="${p.paper}"/>`,
-      `<rect x="${x}" y="${y}" width="${w}" height="${h}" rx="${rx}" fill="${fill}" stroke="${stroke}" stroke-width="${width}"${dash}/>`,
+      `<rect x="${x + 0.5}" y="${y + 0.5}" width="${w - 1}" height="${h - 1}" rx="${rx}" fill="${fill}" stroke="${stroke}" stroke-width="1"/>`,
     );
     if (name === undefined) return;
     const cx = x + w / 2;
     const ny = y + h / 2 + (sub === undefined ? 4 : -2);
+    const nameColor = kind === "external" ? p.muted : p.ink;
     this.#parts.push(
-      `<text x="${cx}" y="${ny}" fill="${p.ink}" font-size="${size}" font-weight="600" font-family="${SANS}" text-anchor="middle">${name}</text>`,
+      `<text x="${cx}" y="${ny}" fill="${nameColor}" font-size="${size}" font-weight="500" font-family="${familyOf(name)}" text-anchor="middle">${name}</text>`,
     );
     if (sub !== undefined) {
       this.#parts.push(
-        `<text x="${cx}" y="${ny + 14}" fill="${p.muted}" font-size="9" font-family="${MONO}" text-anchor="middle">${sub}</text>`,
+        `<text x="${cx}" y="${ny + 14}" fill="${p.soft}" font-size="9" font-family="${familyOf(sub)}" text-anchor="middle">${sub}</text>`,
       );
     }
   }
 
-  /** Text rows from baseline `y`, 15 px apart, centered on `x` unless `anchor` is `start`. */
+  /**
+   * Text rows from baseline `y`, 15 px apart, centered on `x` unless `anchor` is `start`. A row that
+   * asks for the mono family gets it only when its text is code.
+   */
   rows(x: number, y: number, rows: readonly Row[], anchor: "middle" | "start" = "middle"): void {
     rows.forEach(([text, size, color, family, weight], index) => {
+      const resolved = familyOf(text, family);
+      const w = resolved === SANS ? Math.min(weight, 500) : weight;
       this.#parts.push(
-        `<text x="${x}" y="${y + index * 15}" fill="${this.#palette[color]}" font-size="${size}" font-family="${family}" font-weight="${weight}" text-anchor="${anchor}">${text}</text>`,
+        `<text x="${x}" y="${y + index * 15}" fill="${this.#palette[color]}" font-size="${size}" font-family="${resolved}" font-weight="${w}" text-anchor="${anchor}">${text}</text>`,
       );
     });
   }
@@ -159,19 +200,27 @@ export class Diagram {
   /** A horizontal divider inside a box. */
   divider(x1: number, x2: number, y: number): void {
     this.#parts.push(
-      `<line x1="${x1}" y1="${y}" x2="${x2}" y2="${y}" stroke="${this.#ink(0.14)}"/>`,
+      `<line x1="${x1}" y1="${y}" x2="${x2}" y2="${y}" stroke="${this.#palette.hairline}"/>`,
     );
   }
 
-  /** Left-aligned mono text, for a legend or a line of code. */
+  /** Text from `x`, for a legend or a line of code. Code uses the mono family, prose uses sans. */
   text(
     x: number,
     y: number,
     text: string,
-    { size = 9, color = "muted" }: { readonly size?: number; readonly color?: Color } = {},
+    {
+      size = 9,
+      color = "muted",
+      anchor = "start",
+    }: {
+      readonly size?: number;
+      readonly color?: Color;
+      readonly anchor?: "start" | "middle" | "end";
+    } = {},
   ): void {
     this.#parts.push(
-      `<text x="${x}" y="${y}" fill="${this.#palette[color]}" font-size="${size}" font-family="${MONO}">${text}</text>`,
+      `<text x="${x}" y="${y}" fill="${this.#palette[color]}" font-size="${size}" font-family="${familyOf(text)}" text-anchor="${anchor}">${text}</text>`,
     );
   }
 
@@ -183,7 +232,7 @@ export class Diagram {
       `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${width} ${height}" width="${width}" height="${height}" role="img" aria-labelledby="${id}-title ${id}-desc">`,
       `<title id="${id}-title">${title}</title>`,
       `<desc id="${id}-desc">${description}</desc>`,
-      `<defs><marker id="arrow-${this.theme}" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="${p.muted}"/></marker></defs>`,
+      `<defs><marker id="arrow-${this.theme}" markerWidth="8" markerHeight="8" refX="6.5" refY="4" orient="auto" markerUnits="userSpaceOnUse"><path d="M 1.5,1 L 6.5,4 L 1.5,7" fill="none" stroke="${p.arrow}" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/></marker></defs>`,
       `<rect width="${width}" height="${height}" fill="${p.paper}"/>`,
       ...this.#parts,
       "</svg>",

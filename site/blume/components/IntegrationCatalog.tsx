@@ -1,5 +1,5 @@
-import resolved from "@/.source/integrations.json";
-import type { Integration, IntegrationCategory } from "@/lib/integrations";
+import resolved from "../../.source/integrations.json" with { type: "json" };
+import type { Integration, IntegrationCategory } from "../../lib/integrations";
 
 /**
  * The integration catalog, rendered from `site/integrations.json` after
@@ -36,14 +36,12 @@ function Entry({ entry }: { entry: ResolvedIntegration }) {
         </a>
         <span className="wh-mono-label">{entry.tier}</span>
         {entry.package ? (
-          <code className="font-mono text-[12.5px] text-fd-muted-foreground">{entry.package}</code>
+          <code className="font-mono text-[12.5px] text-muted-foreground">{entry.package}</code>
         ) : null}
       </div>
       <p className="mt-2 text-[14.5px] leading-relaxed">{entry.summary}</p>
-      <p className="mt-1 text-[14.5px] leading-relaxed text-fd-muted-foreground">
-        {entry.boundary}
-      </p>
-      <p className="mt-2 font-mono text-[12px] text-fd-muted-foreground">
+      <p className="mt-1 text-[14.5px] leading-relaxed text-muted-foreground">{entry.boundary}</p>
+      <p className="mt-2 font-mono text-[12px] text-muted-foreground">
         {evidence(entry)}
         {entry.supportedRange ? ` · supports ${entry.supportedRange}` : ""}
       </p>
@@ -51,7 +49,7 @@ function Entry({ entry }: { entry: ResolvedIntegration }) {
   );
 }
 
-export function IntegrationCatalog() {
+export default function IntegrationCatalog() {
   return (
     <div className="not-prose mt-8 flex flex-col gap-10">
       {catalog.categories.map((category) => {
@@ -60,7 +58,7 @@ export function IntegrationCatalog() {
         return (
           <section key={category.id} id={category.id} className="scroll-mt-24">
             <h2 className="text-[19px] font-semibold tracking-tight">{category.title}</h2>
-            <p className="mt-1 text-[14.5px] leading-relaxed text-fd-muted-foreground">
+            <p className="mt-1 text-[14.5px] leading-relaxed text-muted-foreground">
               {category.question}
             </p>
             <div className="mt-4">

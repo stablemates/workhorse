@@ -8,7 +8,7 @@ interface PageMetadata {
 
 interface ArticleOptions {
   /** The schema.org type of the JSON-LD record. */
-  readonly schemaType: "TechArticle" | "BlogPosting";
+  readonly schemaType: "BlogPosting";
   /** ISO calendar date, for a post's `article:published_time` and `datePublished`. */
   readonly published?: string;
 }
@@ -16,8 +16,8 @@ interface ArticleOptions {
 /**
  * The head of one article page: canonical link, description, Open Graph tags
  * with `og:type` `article`, the `text/markdown` alternate that names the
- * page's twin, and a JSON-LD record. Documentation pages and blog posts share
- * it and differ only in the schema.org type and whether they carry a date.
+ * page's twin, and a JSON-LD record. Blog posts use it. Blume writes the head
+ * of each documentation page.
  */
 function articleHead(page: PageMetadata, options: ArticleOptions) {
   const canonical = `${siteConfig.url}${page.url}`;
@@ -61,10 +61,6 @@ function articleHead(page: PageMetadata, options: ArticleOptions) {
       },
     ],
   };
-}
-
-export function documentationHead(page: PageMetadata) {
-  return articleHead(page, { schemaType: "TechArticle" });
 }
 
 export function postHead(post: PageMetadata & { readonly date: string }) {

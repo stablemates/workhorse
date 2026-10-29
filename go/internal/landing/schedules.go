@@ -9,15 +9,17 @@ import (
 
 func runBilling(ctx context.Context, pool *pgxpool.Pool) error {
 	queue := workhorse.NewQueue(workhorse.NewPGXExecutor(pool), "default")
-	if err := queue.SyncSchedules(ctx, "billing", []workhorse.ScheduleDefinition{
+	schedules := []workhorse.ScheduleDefinition{
 		{
 			Name:     "nightly-invoice-run",
 			Schedule: "0 2 * * *",
 			Task: workhorse.ScheduledTask{
-				Type: "invoices.generate", Payload: map[string]any{},
+				Type:    "invoices.generate",
+				Payload: map[string]any{},
 			},
 		},
-	}); err != nil {
+	}
+	if err := queue.SyncSchedules(ctx, "billing", schedules); err != nil {
 		return err
 	}
 	worker, err := workhorse.NewWorker(pool, workhorse.WorkerOptions{
@@ -27,7 +29,9 @@ func runBilling(ctx context.Context, pool *pgxpool.Pool) error {
 		return err
 	}
 	worker.Handle("invoices.generate", func(
-		_ context.Context, payload any, _ *workhorse.HandlerContext,
+		_ context.Context,
+		payload any,
+		_ *workhorse.HandlerContext,
 	) (any, error) {
 		return map[string]any{"generated": true}, nil
 	})

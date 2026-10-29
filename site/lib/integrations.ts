@@ -38,7 +38,7 @@ export interface IntegrationCategory {
  * near-black ink and vanishes on a dark page. A tool that publishes a single
  * full-colour mark names it in both slots.
  */
-export interface IntegrationLogo {
+interface IntegrationLogo {
   readonly light: string;
   readonly dark: string;
 }

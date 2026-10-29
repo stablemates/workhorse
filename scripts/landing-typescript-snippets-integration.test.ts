@@ -177,6 +177,57 @@ describe("TypeScript landing snippets", () => {
     expect(snapshot.payload).toEqual({ to: "ada@example.com" });
   });
 
+  it("heroEnqueue enqueues and completes a welcome email", async () => {
+    const worker = pollingWorker();
+    const { taskId } = await runSnippet("heroEnqueue", { queue, worker }, { returns: ["taskId"] });
+
+    const snapshot = await drain(worker, taskId as string, "succeeded");
+
+    expect(snapshot.result).toEqual({ deliveredTo: "ada@example.com" });
+  });
+
+  it("heroSchedule syncs a nightly schedule in its timezone", async () => {
+    const { worker } = await runSnippet("heroSchedule", { queue, Worker }, { returns: ["worker"] });
+
+    expect(worker).toBeInstanceOf(Worker);
+    const schedules = await queue.schedules(["billing"]);
+    expect(schedules.map(({ name, schedule, timezone }) => ({ name, schedule, timezone }))).toEqual(
+      [{ name: "nightly-invoices", schedule: "0 2 * * *", timezone: "Europe/London" }],
+    );
+  });
+
+  it("heroThrottle returns the accepted task to the repeat", async () => {
+    const { first, second } = await runSnippet(
+      "heroThrottle",
+      { queue },
+      { returns: ["first", "second"] },
+    );
+
+    const accepted = first as workhorse.EnqueueResult;
+    expect(accepted.outcome).toBe("accepted");
+    expect(second).toEqual({ taskId: accepted.taskId, outcome: "coalesced" });
+  });
+
+  it("heroHumanWait resumes the refund with the review", async () => {
+    const worker = pollingWorker();
+    const taskId = await queue.enqueue("refund.issue", { id: "refund-1" });
+    const completions: unknown[] = [];
+    // The snippet completes the wait at once. PostgreSQL accepts a completion only while the task
+    // waits, so the test lets the task reach its wait first.
+    const adminScreen = {
+      completeHumanWait: async (...request: Parameters<Queue["completeHumanWait"]>) => {
+        await drain(worker, taskId, "scheduled");
+        completions.push(await queue.completeHumanWait(...request));
+      },
+    };
+    await runSnippet("heroHumanWait", { worker, queue: adminScreen, taskId });
+
+    expect(completions).toMatchObject([{ status: "completed" }]);
+    const snapshot = await drain(worker, taskId, "succeeded");
+
+    expect(snapshot.result).toEqual({ refunded: true });
+  });
+
   it("enqueue commits the order and its task together", async () => {
     await harness.pool.query(
       "CREATE TABLE IF NOT EXISTS orders (id text PRIMARY KEY, total bigint)",

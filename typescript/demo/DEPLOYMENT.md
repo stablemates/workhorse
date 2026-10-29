@@ -24,9 +24,13 @@ A deployment builds two images from this repository and nothing else:
 
 - `Dockerfile` builds the demo.
 - `Dockerfile.site` builds the documentation site, whose runtime serves the static bundle through
-  the nginx configuration in `site/nginx.conf`.
+  the nginx configuration in `site/nginx.conf`. Two builds write that bundle. TanStack Start builds
+  the landing page, the blog, and the site pages. Blume builds the documentation pages at `/docs`
+  from `site/blume`, and the site build copies them into the same bundle.
 
 Both dependency layers copy every workspace manifest, including the optional Knex adapter, before their frozen pnpm install.
+`site/blume` is not a workspace package. It has its own lockfile, and the site image installs it
+from its manifest and lockfile in a second frozen install.
 The adapter does not add a runtime service or change which resources the deployment owns.
 
 Both Dockerfiles pin every base image by its multi-platform manifest digest. When updating a base
@@ -153,8 +157,10 @@ must honour it. The origin states a `Cache-Control` policy for each path:
 | Path                                                               | `Cache-Control`                       |
 | ------------------------------------------------------------------ | ------------------------------------- |
 | `/assets/`, the content-hashed build output                        | `public, max-age=31536000, immutable` |
+| `/_astro/`, the content-hashed output of the documentation pages   | `public, max-age=31536000, immutable` |
 | An image outside `/assets/`, such as `/diagrams/` and `/brand/`    | `public, max-age=3600`                |
 | A page, a Markdown twin, a 404 body, `/api/`, and other text files | `no-cache`                            |
+| `/blume-nav/`, the sidebar sections of the documentation pages     | `no-cache`, with `noindex`            |
 | A `406` response and `/up`                                         | `no-store`                            |
 | A redirect                                                         | `public, max-age=3600`                |
 

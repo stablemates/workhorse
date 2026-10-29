@@ -17,10 +17,19 @@ def render_invoice(charge_id: Json) -> dict[str, Json]:
 
 
 def register_invoice(worker: Worker) -> None:
-    def issue(payload: Invoice, context: HandlerContext) -> dict[str, Json]:
-        # After Workhorse stores a checkpoint result, later runs return it.
-        charge = context.checkpoint("charge", lambda: charge_card(payload["amount"]))
-        pdf = context.checkpoint("render", lambda: render_invoice(charge["id"]))
+    def issue(
+        payload: Invoice,
+        context: HandlerContext,
+    ) -> dict[str, Json]:
+        # Later runs return the stored checkpoint result.
+        charge = context.checkpoint(
+            "charge",
+            lambda: charge_card(payload["amount"]),
+        )
+        pdf = context.checkpoint(
+            "render",
+            lambda: render_invoice(charge["id"]),
+        )
         print("email", payload["email"], pdf)
         return {"chargeId": charge["id"]}
 

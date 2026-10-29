@@ -74,18 +74,19 @@ pub(crate) mod landing_checkpoints {
         Ok(json!({ "id": format!("ch_{amount}") }))
     }
 
-    async fn render_invoice(charge_id: Value) -> Result<Value, HandlerError> {
-        Ok(json!({ "chargeId": charge_id }))
+    async fn render_invoice(id: Value) -> Result<Value, HandlerError> {
+        Ok(json!({ "chargeId": id }))
     }
 
     pub fn register_invoice(worker: &Worker) {
-        worker.handle("invoice.issue", |invoice: Invoice, context| async move {
-            // After Workhorse stores a checkpoint result, later runs return it.
-            let charge: Value =
-                context.checkpoint("charge", || charge_card(invoice.amount)).await?;
+        worker.handle("invoice.issue", |invoice: Invoice, cx| async move {
+            // Later runs return the stored checkpoint result.
+            let amount = invoice.amount;
+            let charge = cx.checkpoint("charge", || charge_card(amount));
+            let charge = charge.await?;
 
-            let pdf: Value =
-                context.checkpoint("render", || render_invoice(charge["id"].clone())).await?;
+            let id = charge["id"].clone();
+            let pdf = cx.checkpoint("render", || render_invoice(id)).await?;
 
             println!("email {} {pdf}", invoice.email);
             Ok(json!({ "chargeId": charge["id"] }))
@@ -177,19 +178,21 @@ pub(crate) mod landing_schedules {
     // docs:start landing-schedules
     use serde_json::json;
     use workhorse::deadpool_postgres::Pool;
-    use workhorse::{
-        run_worker_process, Queue, ScheduleDefinition, ScheduledTask, Worker, WorkerOptions,
-    };
+    use workhorse::{run_worker_process, Queue, Worker, WorkerOptions};
+    use workhorse::{ScheduleDefinition, ScheduledTask};
 
     pub async fn run(pool: Pool) -> Result<(), Box<dyn std::error::Error>> {
         // Run on every deployment with the complete list.
         let task = ScheduledTask::new("invoices.generate", json!({}));
-        let schedule = ScheduleDefinition::new("nightly-invoice-run", "0 2 * * *", task);
-        Queue::new(&pool, "default").sync_schedules("billing", vec![schedule], true).await?;
+        let name = "nightly-invoice-run";
+        let schedule = ScheduleDefinition::new(name, "0 2 * * *", task);
+        let queue = Queue::new(&pool, "default");
+        queue.sync_schedules("billing", vec![schedule], true).await?;
 
         // Any worker in the namespace fires due schedules itself.
-        let options =
-            WorkerOptions { schedule_namespaces: vec!["billing".into()], ..Default::default() };
+        let schedule_namespaces = vec!["billing".into()];
+        let defaults = WorkerOptions::default();
+        let options = WorkerOptions { schedule_namespaces, ..defaults };
         let worker = Worker::new(pool, options)?;
         run_worker_process(&worker).await?;
         Ok(())
@@ -201,7 +204,8 @@ pub(crate) mod landing_flow_control {
     // docs:start landing-flow-control
     use serde_json::json;
     use workhorse::deadpool_postgres::Pool;
-    use workhorse::policies::{ConcurrencyPolicyDefinition, RateLimit, RateLimitPolicyDefinition};
+    use workhorse::policies::ConcurrencyPolicyDefinition;
+    use workhorse::policies::{RateLimit, RateLimitPolicyDefinition};
     use workhorse::{EnqueueOptions, Error, Queue};
 
     pub async fn configure(
@@ -222,14 +226,16 @@ pub(crate) mod landing_flow_control {
             rate: RateLimit { limit: 100, interval_ms: 1_000, burst: 200 },
             per_key: None,
         };
-        queue.sync_rate_limit_policies("workers", &[provider], false).await?;
+        let policies = [provider];
+        queue.sync_rate_limit_policies("workers", &policies, false).await?;
 
         let options = EnqueueOptions {
             queue: Some("mail".into()),
             concurrency_key: Some(format!("tenant:{tenant_id}")),
             ..Default::default()
         };
-        queue.enqueue("mail.send", &json!({ "messageId": message_id }), options).await?;
+        let message = json!({ "messageId": message_id });
+        queue.enqueue("mail.send", &message, options).await?;
         Ok(())
     }
     // docs:end
@@ -239,30 +245,34 @@ pub(crate) mod landing_dependencies {
     // docs:start landing-dependencies
     use serde_json::{json, Value};
     use workhorse::deadpool_postgres::Pool;
-    use workhorse::{Dependencies, DependencyTerminalPolicy, EnqueueOptions, Error, Queue, Worker};
+    use workhorse::{Dependencies, DependencyTerminalPolicy};
+    use workhorse::{EnqueueOptions, Error, Queue, Worker};
 
-    pub async fn confirm(queue: &Queue<Pool>, order_id: &str) -> Result<(), Error> {
-        let order = json!({ "orderId": order_id });
-        let inventory =
-            queue.enqueue("inventory.reserve", &order, EnqueueOptions::default()).await?;
+    pub async fn confirm(queue: &Queue<Pool>, id: &str) -> Result<(), Error> {
+        let order = json!({ "orderId": id });
+        let options = EnqueueOptions::default();
+        let inventory = queue.enqueue("inventory.reserve", &order, options);
+        let inventory = inventory.await?;
 
-        let dependencies = Dependencies {
+        let dependencies = Some(Dependencies {
             prerequisite_task_ids: vec![inventory.task_id],
             on_success: DependencyTerminalPolicy::Release,
             on_failure: DependencyTerminalPolicy::Cancel,
             on_cancellation: DependencyTerminalPolicy::Cancel,
-        };
-        let options = EnqueueOptions { dependencies: Some(dependencies), ..Default::default() };
+        });
+        let options = EnqueueOptions { dependencies, ..Default::default() };
         queue.enqueue("order.confirm", &order, options).await?;
         Ok(())
     }
 
     pub fn register_fulfillment(worker: &Worker) {
-        worker.handle("order.fulfill", |order: Value, context| async move {
-            let options = EnqueueOptions { queue: Some("payments".into()), ..Default::default() };
+        worker.handle("order.fulfill", |order: Value, cx| async move {
+            let queue = Some("payments".into());
+            let options = EnqueueOptions { queue, ..Default::default() };
             let capture = json!({ "orderId": order["id"] });
-            let receipt: Value =
-                context.run_child("charge", "payment.capture", &capture, options).await?;
+            let task = "payment.capture";
+            let child = cx.run_child("charge", task, &capture, options);
+            let receipt: Value = child.await?;
             Ok(json!({ "receipt": receipt }))
         });
     }
@@ -305,12 +315,13 @@ pub(crate) mod landing_external_waits {
     use workhorse::{DeliveryOptions, Error, Queue, Worker};
 
     pub fn register_release(worker: &Worker) {
-        worker.handle("release.publish", |release: Value, context| async move {
-            let scan: Value = context.wait_for_signal("security-scan", None).await?.payload;
+        worker.handle("release.publish", |release: Value, cx| async move {
+            let scan = cx.wait_for_signal("security-scan", None).await?;
+            let scan: Value = scan.payload;
 
-            let request = json!({ "releaseId": release["id"], "scan": scan });
-            let review: Value =
-                context.wait_for_human("release-approval", &request, None).await?.result;
+            let req = json!({ "releaseId": release["id"], "scan": scan });
+            let review = cx.wait_for_human("release-approval", &req, None);
+            let review: Value = review.await?.result;
 
             Ok(json!({ "published": review["approved"] }))
         });
@@ -326,7 +337,8 @@ pub(crate) mod landing_external_waits {
             idempotency_key: delivery_id.into(),
             requested_by: "security-scanner".into(),
         };
-        queue.send_signal(task_id, "security-scan", result, delivery).await?;
+        let name = "security-scan";
+        queue.send_signal(task_id, name, result, delivery).await?;
         Ok(())
     }
     // docs:end

@@ -1,45 +1,45 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 224" width="960" height="224" role="img" aria-labelledby="cold-export-day-light-title cold-export-day-light-desc">
 <title id="cold-export-day-light-title">Cold export copies a finished day before retention deletes it</title>
 <desc id="cold-export-day-light-desc">During 14 September UTC, tasks write events and attempts. At midnight the day ends, but the rollup has not summarized it, so it is not ready. Some minutes later the rollup passes midnight, and the day is ready. At its next run, archiver-1 writes the file and its manifest to the export store and marks the segment complete. When the retention window ends, retention deletes the day from PostgreSQL. The export store keeps it.</desc>
-<defs><marker id="arrow-light" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#4e5359"/></marker></defs>
-<rect width="960" height="224" fill="#f9fafb"/>
-<text x="24" y="40" fill="#1a2027" font-size="12" font-family="Geist" font-weight="600" text-anchor="start">task_event</text>
-<text x="24" y="55" fill="#4e5359" font-size="9" font-family="Geist Mono" font-weight="400" text-anchor="start">one segment · 14 Sep</text>
-<text x="268.8" y="44" fill="#6d7277" font-size="8" font-family="Geist Mono" font-weight="400" text-anchor="middle">14 Sep</text>
-<text x="418.40000000000003" y="44" fill="#6d7277" font-size="8" font-family="Geist Mono" font-weight="400" text-anchor="middle">midnight UTC</text>
-<text x="568" y="44" fill="#6d7277" font-size="8" font-family="Geist Mono" font-weight="400" text-anchor="middle">minutes later</text>
-<text x="717.5999999999999" y="44" fill="#6d7277" font-size="8" font-family="Geist Mono" font-weight="400" text-anchor="middle">next run</text>
-<text x="867.1999999999999" y="44" fill="#6d7277" font-size="8" font-family="Geist Mono" font-weight="400" text-anchor="middle">window ends</text>
-<line x1="200" y1="52" x2="936" y2="52" stroke="rgba(26,32,39,0.14)"/>
-<text x="24" y="97" fill="#1a2027" font-size="10" font-family="Geist Mono">PostgreSQL</text>
-<rect x="200" y="72" width="137.6" height="40" rx="6" fill="#f9fafb"/>
-<rect x="200" y="72" width="137.6" height="40" rx="6" fill="rgba(26,32,39,0.05)" stroke="#4e5359" stroke-width="1"/>
-<text x="268.8" y="90" fill="#1a2027" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">history written</text>
-<text x="268.8" y="104" fill="#4e5359" font-size="9" font-family="Geist Mono" text-anchor="middle">task_event rows</text>
-<rect x="349.6" y="72" width="137.6" height="40" rx="6" fill="#f9fafb"/>
-<rect x="349.6" y="72" width="137.6" height="40" rx="6" fill="rgba(26,32,39,0.03)" stroke="rgba(26,32,39,0.4)" stroke-width="1" stroke-dasharray="4,3"/>
-<text x="418.40000000000003" y="90" fill="#1a2027" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">day ended</text>
-<text x="418.40000000000003" y="104" fill="#4e5359" font-size="9" font-family="Geist Mono" text-anchor="middle">not ready</text>
-<rect x="499.2" y="72" width="137.6" height="40" rx="6" fill="#f9fafb"/>
-<rect x="499.2" y="72" width="137.6" height="40" rx="6" fill="rgba(26,32,39,0.05)" stroke="#4e5359" stroke-width="1"/>
-<text x="568" y="90" fill="#1a2027" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">rollup passed</text>
-<text x="568" y="104" fill="#4e5359" font-size="9" font-family="Geist Mono" text-anchor="middle">ready for export</text>
-<rect x="648.8" y="72" width="137.6" height="40" rx="6" fill="#f9fafb"/>
-<rect x="648.8" y="72" width="137.6" height="40" rx="6" fill="rgba(26,32,39,0.05)" stroke="#4e5359" stroke-width="1"/>
-<text x="717.5999999999999" y="90" fill="#1a2027" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">segment complete</text>
-<text x="717.5999999999999" y="104" fill="#4e5359" font-size="9" font-family="Geist Mono" text-anchor="middle">export watermark moves</text>
-<rect x="798.4" y="72" width="137.6" height="40" rx="6" fill="#f9fafb"/>
-<rect x="798.4" y="72" width="137.6" height="40" rx="6" fill="#ffffff" stroke="#1a2027" stroke-width="1"/>
-<text x="867.1999999999999" y="90" fill="#1a2027" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">retention deletes</text>
-<text x="867.1999999999999" y="104" fill="#4e5359" font-size="9" font-family="Geist Mono" text-anchor="middle">the day</text>
-<text x="24" y="153" fill="#1a2027" font-size="10" font-family="Geist Mono">export store</text>
-<rect x="648.8" y="128" width="137.6" height="40" rx="6" fill="#f9fafb"/>
-<rect x="648.8" y="128" width="137.6" height="40" rx="6" fill="rgba(213,92,19,0.08)" stroke="#aa4515" stroke-width="1.4"/>
-<text x="717.5999999999999" y="146" fill="#1a2027" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">file + manifest</text>
-<text x="717.5999999999999" y="160" fill="#4e5359" font-size="9" font-family="Geist Mono" text-anchor="middle">written by archiver-1</text>
-<rect x="798.4" y="128" width="137.6" height="40" rx="6" fill="#f9fafb"/>
-<rect x="798.4" y="128" width="137.6" height="40" rx="6" fill="rgba(213,92,19,0.08)" stroke="#aa4515" stroke-width="1.4"/>
-<text x="867.1999999999999" y="146" fill="#1a2027" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">keeps the day</text>
-<text x="867.1999999999999" y="160" fill="#4e5359" font-size="9" font-family="Geist Mono" text-anchor="middle">for the auditor</text>
-<text x="24" y="208" fill="#4e5359" font-size="9" font-family="Geist Mono" font-weight="400" text-anchor="start">Workhorse permits the export only after the rollup passes the day, so the export comes before the deletion.</text>
+<defs><marker id="arrow-light" markerWidth="8" markerHeight="8" refX="6.5" refY="4" orient="auto" markerUnits="userSpaceOnUse"><path d="M 1.5,1 L 6.5,4 L 1.5,7" fill="none" stroke="#7d7d7d" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/></marker></defs>
+<rect width="960" height="224" fill="#ffffff"/>
+<text x="24" y="40" fill="#000000" font-size="12" font-family="Timeless Grotesk, Geist, sans-serif" font-weight="500" text-anchor="start">task_event</text>
+<text x="24" y="55" fill="#555555" font-size="9" font-family="Timeless Grotesk, Geist, sans-serif" font-weight="400" text-anchor="start">one segment · 14 Sep</text>
+<text x="268.8" y="44" fill="#555555" font-size="8" font-family="Timeless Grotesk, Geist, sans-serif" font-weight="400" text-anchor="middle">14 Sep</text>
+<text x="418.40000000000003" y="44" fill="#555555" font-size="8" font-family="Timeless Grotesk, Geist, sans-serif" font-weight="400" text-anchor="middle">midnight UTC</text>
+<text x="568" y="44" fill="#555555" font-size="8" font-family="Timeless Grotesk, Geist, sans-serif" font-weight="400" text-anchor="middle">minutes later</text>
+<text x="717.5999999999999" y="44" fill="#555555" font-size="8" font-family="Timeless Grotesk, Geist, sans-serif" font-weight="400" text-anchor="middle">next run</text>
+<text x="867.1999999999999" y="44" fill="#555555" font-size="8" font-family="Timeless Grotesk, Geist, sans-serif" font-weight="400" text-anchor="middle">window ends</text>
+<line x1="200" y1="52" x2="936" y2="52" stroke="#e7e7e7"/>
+<text x="24" y="97" fill="#000000" font-size="10" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="start">PostgreSQL</text>
+<rect x="200" y="72" width="137.6" height="40" rx="8" fill="#ffffff"/>
+<rect x="200.5" y="72.5" width="136.6" height="39" rx="8" fill="#f4f4f4" stroke="#e7e7e7" stroke-width="1"/>
+<text x="268.8" y="90" fill="#000000" font-size="11" font-weight="500" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">history written</text>
+<text x="268.8" y="104" fill="#555555" font-size="9" font-family="Geist Mono, monospace" text-anchor="middle">task_event rows</text>
+<rect x="349.6" y="72" width="137.6" height="40" rx="8" fill="#ffffff"/>
+<rect x="350.1" y="72.5" width="136.6" height="39" rx="8" fill="#ffffff" stroke="#e7e7e7" stroke-width="1"/>
+<text x="418.40000000000003" y="90" fill="#555555" font-size="11" font-weight="500" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">day ended</text>
+<text x="418.40000000000003" y="104" fill="#555555" font-size="9" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">not ready</text>
+<rect x="499.2" y="72" width="137.6" height="40" rx="8" fill="#ffffff"/>
+<rect x="499.7" y="72.5" width="136.6" height="39" rx="8" fill="#f4f4f4" stroke="#e7e7e7" stroke-width="1"/>
+<text x="568" y="90" fill="#000000" font-size="11" font-weight="500" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">rollup passed</text>
+<text x="568" y="104" fill="#555555" font-size="9" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">ready for export</text>
+<rect x="648.8" y="72" width="137.6" height="40" rx="8" fill="#ffffff"/>
+<rect x="649.3" y="72.5" width="136.6" height="39" rx="8" fill="#f4f4f4" stroke="#e7e7e7" stroke-width="1"/>
+<text x="717.5999999999999" y="90" fill="#000000" font-size="11" font-weight="500" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">segment complete</text>
+<text x="717.5999999999999" y="104" fill="#555555" font-size="9" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">export watermark moves</text>
+<rect x="798.4" y="72" width="137.6" height="40" rx="8" fill="#ffffff"/>
+<rect x="798.9" y="72.5" width="136.6" height="39" rx="8" fill="#ffffff" stroke="#cdcdcd" stroke-width="1"/>
+<text x="867.1999999999999" y="90" fill="#000000" font-size="11" font-weight="500" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">retention deletes</text>
+<text x="867.1999999999999" y="104" fill="#555555" font-size="9" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">the day</text>
+<text x="24" y="153" fill="#000000" font-size="10" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="start">export store</text>
+<rect x="648.8" y="128" width="137.6" height="40" rx="8" fill="#ffffff"/>
+<rect x="649.3" y="128.5" width="136.6" height="39" rx="8" fill="rgba(207,145,72,0.12)" stroke="#cf9148" stroke-width="1"/>
+<text x="717.5999999999999" y="146" fill="#000000" font-size="11" font-weight="500" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">file + manifest</text>
+<text x="717.5999999999999" y="160" fill="#555555" font-size="9" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">written by archiver-1</text>
+<rect x="798.4" y="128" width="137.6" height="40" rx="8" fill="#ffffff"/>
+<rect x="798.9" y="128.5" width="136.6" height="39" rx="8" fill="rgba(207,145,72,0.12)" stroke="#cf9148" stroke-width="1"/>
+<text x="867.1999999999999" y="146" fill="#000000" font-size="11" font-weight="500" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">keeps the day</text>
+<text x="867.1999999999999" y="160" fill="#555555" font-size="9" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">for the auditor</text>
+<text x="24" y="208" fill="#555555" font-size="9" font-family="Timeless Grotesk, Geist, sans-serif" font-weight="400" text-anchor="start">Workhorse permits the export only after the rollup passes the day, so the export comes before the deletion.</text>
 </svg>

@@ -12,15 +12,16 @@ type review struct {
 
 func configureRelease(worker *workhorse.Worker) {
 	worker.Handle("release.publish", func(
-		_ context.Context, release any, handler *workhorse.HandlerContext,
+		_ context.Context,
+		release any,
+		handler *workhorse.HandlerContext,
 	) (any, error) {
 		scan, err := handler.WaitForSignal("security-scan")
 		if err != nil {
 			return nil, err
 		}
-		response, err := handler.WaitForHuman("release-approval", map[string]any{
-			"release": release, "scan": scan,
-		})
+		request := map[string]any{"release": release, "scan": scan}
+		response, err := handler.WaitForHuman("release-approval", request)
 		if err != nil {
 			return nil, err
 		}
@@ -32,9 +33,19 @@ func configureRelease(worker *workhorse.Worker) {
 	})
 }
 
-func deliverScan(ctx context.Context, queue *workhorse.Queue, taskID string, result any, deliveryID string) error {
-	_, err := queue.SendSignal(ctx, taskID, "security-scan", result, workhorse.ExternalWaitDelivery{
-		IdempotencyKey: deliveryID, RequestedBy: "security-scanner",
-	})
+func deliverScan(
+	ctx context.Context,
+	queue *workhorse.Queue,
+	taskID string,
+	result any,
+	deliveryID string,
+) error {
+	delivery := workhorse.ExternalWaitDelivery{
+		IdempotencyKey: deliveryID,
+		RequestedBy:    "security-scanner",
+	}
+	_, err := queue.SendSignal(
+		ctx, taskID, "security-scan", result, delivery,
+	)
 	return err
 }

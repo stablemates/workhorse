@@ -2,16 +2,19 @@
   "categories": [
     {
       "id": "database-queue",
+      "label": "Database task queues",
       "title": "Task queues that store work in a database",
       "summary": "These libraries keep tasks in a SQL database, often the one the application already uses. Workhorse is in this category."
     },
     {
       "id": "broker-queue",
+      "label": "Redis and broker queues",
       "title": "Task queues on Redis or a message broker",
       "summary": "These libraries keep tasks in Redis or in a message broker such as RabbitMQ. The broker is a second service beside the application database."
     },
     {
       "id": "workflow-platform",
+      "label": "Workflow platforms",
       "title": "Workflow platforms",
       "summary": "These platforms run multi-step workflows and record each completed step. Most of them need their own server or a cloud service. Workhorse is a task queue, not a workflow platform."
     }
@@ -336,6 +339,7 @@
       "hub": true,
       "workhorse": {
         "value": "PostgreSQL",
+        "extraService": "none",
         "source": "docs/compatibility.md",
         "page": "/docs/installation",
         "note": "No broker and no server."
@@ -504,6 +508,7 @@
           "evidence": "An HTTP proxy is available in the @pg-boss/proxy package, exposing pg-boss methods over a simple JSON API. It's useful for platform compatibility (calling pg-boss from non-Node runtimes or serverless functions)"
         },
         "infrastructure": {
+          "extraService": "none",
           "value": "PostgreSQL",
           "note": "CockroachDB, Citus, and PGlite are other backends.",
           "source": "https://github.com/timgit/pg-boss/blob/12.38.0/README.md#L76-L78",
@@ -708,6 +713,7 @@
           "evidence": "You can schedule jobs directly in the database, e.g. from a trigger or function, or by calling SQL from your application code. You do this using the graphile_worker.add_job function"
         },
         "infrastructure": {
+          "extraService": "none",
           "value": "PostgreSQL",
           "note": "Workers run in Node.js processes beside the application.",
           "source": "https://github.com/graphile/worker/blob/v0.18.0/website/docs/index.md#L6-L7",
@@ -909,6 +915,7 @@
           "evidence": "An insert-only Python client for River ... Allows jobs to be inserted in Python and run by a Go worker, but doesn't support working jobs in Python."
         },
         "infrastructure": {
+          "extraService": "none",
           "value": "PostgreSQL or SQLite",
           "note": "PostgreSQL is the main target. A SQLite driver ships in the same module.",
           "source": "https://github.com/riverqueue/river/blob/v0.49.0/riverdriver/riversqlite/river_sqlite_driver.go#L1-L2",
@@ -1118,6 +1125,7 @@
           "evidence": "Solid Queue is a database-based queuing backend for Active Job (Looked at the README: Active Job is the only way to enqueue.)"
         },
         "infrastructure": {
+          "extraService": "none",
           "value": "MySQL, PostgreSQL, or SQLite",
           "note": "The default setup uses a separate queue database.",
           "source": "https://github.com/rails/solid_queue/blob/v1.7.0/README.md#L7",
@@ -1357,6 +1365,7 @@
           "evidence": "\"Oban relies on a structured `oban_jobs` table as its job queue, and purposefully uses JSON as a portable data structures for serialization. That makes enqueueing jobs into Oban simple for any language with a PostgreSQL adapter—no Oban client necessary.\""
         },
         "infrastructure": {
+          "extraService": "none",
           "value": "PostgreSQL, MySQL, or SQLite",
           "source": "https://github.com/oban-bg/oban/blob/v2.24.2/README.md#L157",
           "version": "2.24.2",
@@ -1595,6 +1604,7 @@
           "evidence": "GoodJob is a multithreaded, Postgres-based, Active Job backend for Ruby on Rails. (Looked at the README: Active Job is the only way to enqueue.)"
         },
         "infrastructure": {
+          "extraService": "none",
           "value": "PostgreSQL",
           "source": "https://github.com/bensheldon/good_job/blob/v4.22.1/README.md#L7",
           "version": "4.22.1",
@@ -1892,6 +1902,7 @@
           "evidence": "\"This is so that the database is solely responsible for consistency, and would allow us to have the same behavior if someone were to write a procrastinate compatible client, in Python or in another language altogether.\""
         },
         "infrastructure": {
+          "extraService": "none",
           "value": "PostgreSQL",
           "source": "https://github.com/procrastinate-org/procrastinate/blob/3.10.0/README.md#L15-L17",
           "version": "3.10.0",
@@ -2069,6 +2080,7 @@
           "evidence": "\"Hangfire serializes the type (``System.Console``), method name (``WriteLine``, with all the parameter types to identify it later), and all the given arguments, and places it to Storage.\" The docs document no client for another language."
         },
         "infrastructure": {
+          "extraService": "none",
           "value": "A job storage database: SQL Server, or Redis with Hangfire Pro",
           "note": "Redis storage is the paid Hangfire.Pro.Redis package. The storage is an abstraction, so other packages can implement it.",
           "source": "https://github.com/HangfireIO/Hangfire/blob/v1.8.25/README.md#L14",
@@ -2322,6 +2334,7 @@
           "evidence": "\"The PHP package only implements the Queue class (producer side). Workers are not included\""
         },
         "infrastructure": {
+          "extraService": "optional",
           "value": "Redis, or PostgreSQL",
           "note": "Redis is the default. The PostgreSQL backend runs the same API. Rust and PHP use Redis only.",
           "source": "https://github.com/taskforcesh/bullmq/blob/v6.3.16/docs/gitbook/guide/postgresql.md#L1-L12",
@@ -2517,6 +2530,7 @@
           "evidence": "\"Celery is written in Python, but the protocol can be implemented in any language. In addition to Python there's node-celery for Node.js, a PHP client, gocelery, gopher-celery for Go, and rusty-celery for Rust.\""
         },
         "infrastructure": {
+          "extraService": "required",
           "value": "A message broker (RabbitMQ, Redis, or Amazon SQS)",
           "note": "Other transports are experimental. A result backend is optional.",
           "source": "https://github.com/celery/celery/blob/v5.6.3/docs/getting-started/backends-and-brokers/index.rst#L28-L44",
@@ -2761,6 +2775,7 @@
           "evidence": "\"The main method used to push a job to Redis\": queue, class, args (\"must be JSON-serializable\"), at, retry. \"because we are serializing to JSON\". The repository has only the Ruby client."
         },
         "infrastructure": {
+          "extraService": "required",
           "value": "Redis",
           "note": "Valkey and Dragonfly also work.",
           "source": "https://github.com/sidekiq/sidekiq/blob/v8.1.7/README.md#L17-L23",
@@ -2974,6 +2989,7 @@
           "evidence": "\"You can enqueue Dramatiq messages using any language that has bindings to one of its brokers. All you have to do is push a JSON-encoded dictionary containing the following fields to your queue\"."
         },
         "infrastructure": {
+          "extraService": "required",
           "value": "RabbitMQ or Redis",
           "source": "https://github.com/Bogdanp/dramatiq/blob/v2.2.1/docs/source/installation.rst#L17-L18",
           "version": "2.2.1",
@@ -3206,6 +3222,7 @@
           "evidence": "\"Asynq is a Go library for queueing tasks and processing them asynchronously with workers.\" The README documents no client for another language."
         },
         "infrastructure": {
+          "extraService": "required",
           "value": "Redis",
           "note": "Redis 4.0 or later. Some Lua scripts may not work with Redis Cluster.",
           "source": "https://github.com/hibiken/asynq/blob/v0.26.0/README.md#L51-L67",
@@ -3441,6 +3458,7 @@
           "evidence": "Workflow and Activity code uses the SDK as a library, and the Worker runtime is implemented by the SDK."
         },
         "infrastructure": {
+          "extraService": "required",
           "value": "A Temporal Service and a database (Cassandra, MySQL or PostgreSQL)",
           "note": "SQLite is for development and testing only.",
           "source": "https://github.com/temporalio/documentation/blob/15a0f373952e1542d044fe094c9686a2abea182d/docs/encyclopedia/temporal-service/persistence.mdx#L50-L59",
@@ -3676,6 +3694,7 @@
           "evidence": "README: \"Event API - Receives events from SDKs via HTTP requests. Authenticates client requests via Event Keys.\""
         },
         "infrastructure": {
+          "extraService": "required",
           "value": "An Inngest server",
           "note": "By default the server runs an in-memory Redis and SQLite. It can use an external Redis and PostgreSQL. Inngest Cloud is the managed service, with free and paid plans.",
           "source": "https://github.com/inngest/inngest/blob/v1.46.0/cmd/start/cmd.go#L49-L63",
@@ -3916,6 +3935,7 @@
           "evidence": "You can also enqueue a workflow from a Postgres trigger or stored procedure. The DBOS System Database includes an enqueue_workflow method for this scenario."
         },
         "infrastructure": {
+          "extraService": "none",
           "value": "PostgreSQL",
           "note": "SQLite can also hold the system database, and it is the default. DBOS recommends PostgreSQL for production.",
           "source": "https://github.com/dbos-inc/dbos-docs/blob/5c118aacd4b07a8988c63041cf3e61482299403a/docs/python/tutorials/database-connection.md#L6-L15",
@@ -4147,6 +4167,7 @@
           "evidence": "\"You can invoke services over HTTP 1.1 or higher. Request/response bodies should be encoded as JSON.\" curl localhost:8080/restate/call/MyService/myHandler."
         },
         "infrastructure": {
+          "extraService": "required",
           "value": "A Restate Server",
           "note": "No external database. A single node needs a persistent volume. A cluster needs an object store for snapshots.",
           "source": "https://github.com/restatedev/docs-restate/blob/5d7f07f2d9e52961b133e9ad2eae0d615c5d47e7/docs/server/overview.mdx#L18-L24",
@@ -4382,6 +4403,7 @@
           "evidence": "\"/api/v1/tasks/{taskIdentifier}/trigger\": post: operationId: trigger_task_v1, summary: Trigger a task, description: Trigger a task by its identifier."
         },
         "infrastructure": {
+          "extraService": "required",
           "value": "The Trigger.dev webapp, PostgreSQL, Redis, ClickHouse, ElectricSQL, an S2 stream server, a container registry and object storage",
           "source": "https://github.com/triggerdotdev/trigger.dev/blob/v4.7.4/hosting/docker/webapp/docker-compose.yml#L11-L301",
           "version": "4.7.4",
@@ -4611,6 +4633,7 @@
           "evidence": "trigger: post: ... description: Trigger a new workflow run"
         },
         "infrastructure": {
+          "extraService": "required",
           "value": "The Hatchet engine and API server, and PostgreSQL",
           "note": "RabbitMQ is optional. Hatchet Lite bundles the engine and API in one image.",
           "source": "https://github.com/hatchet-dev/hatchet/blob/v0.110.8/frontend/docs/content/docs/self-hosting/index.mdx#L11-L35",

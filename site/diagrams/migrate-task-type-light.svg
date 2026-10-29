@@ -1,50 +1,50 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 296" width="960" height="296" role="img" aria-labelledby="migrate-task-type-light-title migrate-task-type-light-desc">
 <title id="migrate-task-type-light-title">Move one task type: both workers run until the old queue is empty</title>
 <desc id="migrate-task-type-light-desc">Steps 1 and 2: write a Workhorse handler and deploy a worker that waits for tasks, while the producers still publish to the old system. Steps 3 to 5: the producers enqueue inside the transaction that writes their data, and the old worker finishes the old queue. Step 6: when the old queue is empty, remove the old task code and the old producer code.</desc>
-<defs><marker id="arrow-light" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#4e5359"/></marker></defs>
-<rect width="960" height="296" fill="#f9fafb"/>
-<text x="312" y="44" fill="#1a2027" font-size="9" font-family="Geist Mono" font-weight="400" text-anchor="middle">steps 1 – 2 · prepare</text>
-<text x="564" y="44" fill="#1a2027" font-size="9" font-family="Geist Mono" font-weight="400" text-anchor="middle">steps 3 – 5 · switch and empty</text>
-<text x="816" y="44" fill="#1a2027" font-size="9" font-family="Geist Mono" font-weight="400" text-anchor="middle">step 6 · remove</text>
-<line x1="192" y1="56" x2="936" y2="56" stroke="rgba(26,32,39,0.14)"/>
-<text x="24" y="90" fill="#1a2027" font-size="12" font-family="Geist" font-weight="600" text-anchor="start">producers</text>
-<text x="24" y="105" fill="#4e5359" font-size="9" font-family="Geist Mono" font-weight="400" text-anchor="start">code that enqueues</text>
-<rect x="192" y="72" width="240" height="48" rx="6" fill="#f9fafb"/>
-<rect x="192" y="72" width="240" height="48" rx="6" fill="rgba(26,32,39,0.03)" stroke="rgba(26,32,39,0.4)" stroke-width="1" stroke-dasharray="4,3"/>
-<text x="312" y="94" fill="#1a2027" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">publish after the commit</text>
-<text x="312" y="108" fill="#4e5359" font-size="9" font-family="Geist Mono" text-anchor="middle">the old system</text>
-<rect x="444" y="72" width="240" height="48" rx="6" fill="#f9fafb"/>
-<rect x="444" y="72" width="240" height="48" rx="6" fill="rgba(213,92,19,0.08)" stroke="#aa4515" stroke-width="1.4"/>
-<text x="564" y="94" fill="#1a2027" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">enqueue in the transaction</text>
-<text x="564" y="108" fill="#4e5359" font-size="9" font-family="Geist Mono" text-anchor="middle">Workhorse</text>
-<rect x="696" y="72" width="240" height="48" rx="6" fill="#f9fafb"/>
-<rect x="696" y="72" width="240" height="48" rx="6" fill="#ffffff" stroke="#1a2027" stroke-width="1"/>
-<text x="816" y="94" fill="#1a2027" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">enqueue in the transaction</text>
-<text x="816" y="108" fill="#4e5359" font-size="9" font-family="Geist Mono" text-anchor="middle">Workhorse</text>
-<text x="24" y="154" fill="#1a2027" font-size="12" font-family="Geist" font-weight="600" text-anchor="start">old worker</text>
-<text x="24" y="169" fill="#4e5359" font-size="9" font-family="Geist Mono" font-weight="400" text-anchor="start">the old system</text>
-<rect x="192" y="136" width="240" height="48" rx="6" fill="#f9fafb"/>
-<rect x="192" y="136" width="240" height="48" rx="6" fill="rgba(26,32,39,0.03)" stroke="rgba(26,32,39,0.4)" stroke-width="1" stroke-dasharray="4,3"/>
-<text x="312" y="158" fill="#1a2027" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">runs the task type</text>
-<text x="312" y="172" fill="#4e5359" font-size="9" font-family="Geist Mono" text-anchor="middle">the old queue</text>
-<rect x="444" y="136" width="240" height="48" rx="6" fill="#f9fafb"/>
-<rect x="444" y="136" width="240" height="48" rx="6" fill="rgba(26,32,39,0.03)" stroke="rgba(26,32,39,0.4)" stroke-width="1" stroke-dasharray="4,3"/>
-<text x="564" y="158" fill="#1a2027" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">finishes the old queue</text>
-<text x="564" y="172" fill="#4e5359" font-size="9" font-family="Geist Mono" text-anchor="middle">keep it running</text>
-<text x="816" y="164" fill="#6d7277" font-size="9" font-family="Geist Mono" font-weight="400" text-anchor="middle">removed</text>
-<text x="24" y="218" fill="#1a2027" font-size="12" font-family="Geist" font-weight="600" text-anchor="start">Workhorse</text>
-<text x="24" y="233" fill="#4e5359" font-size="9" font-family="Geist Mono" font-weight="400" text-anchor="start">the worker</text>
-<rect x="192" y="200" width="240" height="48" rx="6" fill="#f9fafb"/>
-<rect x="192" y="200" width="240" height="48" rx="6" fill="#ffffff" stroke="#1a2027" stroke-width="1"/>
-<text x="312" y="222" fill="#1a2027" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">waits for tasks</text>
-<text x="312" y="236" fill="#4e5359" font-size="9" font-family="Geist Mono" text-anchor="middle">the same payload shape</text>
-<rect x="444" y="200" width="240" height="48" rx="6" fill="#f9fafb"/>
-<rect x="444" y="200" width="240" height="48" rx="6" fill="rgba(26,32,39,0.05)" stroke="#4e5359" stroke-width="1"/>
-<text x="564" y="222" fill="#1a2027" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">runs the new tasks</text>
-<text x="564" y="236" fill="#4e5359" font-size="9" font-family="Geist Mono" text-anchor="middle">beside the old worker</text>
-<rect x="696" y="200" width="240" height="48" rx="6" fill="#f9fafb"/>
-<rect x="696" y="200" width="240" height="48" rx="6" fill="rgba(26,32,39,0.05)" stroke="#4e5359" stroke-width="1"/>
-<text x="816" y="222" fill="#1a2027" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">runs the task type</text>
-<text x="816" y="236" fill="#4e5359" font-size="9" font-family="Geist Mono" text-anchor="middle">the only worker</text>
-<text x="24" y="280" fill="#4e5359" font-size="9" font-family="Geist Mono" font-weight="400" text-anchor="start">During a rolling deploy, each request goes to one system only. Both workers run, so the tasks in both queues continue to run.</text>
+<defs><marker id="arrow-light" markerWidth="8" markerHeight="8" refX="6.5" refY="4" orient="auto" markerUnits="userSpaceOnUse"><path d="M 1.5,1 L 6.5,4 L 1.5,7" fill="none" stroke="#7d7d7d" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/></marker></defs>
+<rect width="960" height="296" fill="#ffffff"/>
+<text x="312" y="44" fill="#000000" font-size="9" font-family="Timeless Grotesk, Geist, sans-serif" font-weight="400" text-anchor="middle">steps 1 – 2 · prepare</text>
+<text x="564" y="44" fill="#000000" font-size="9" font-family="Timeless Grotesk, Geist, sans-serif" font-weight="400" text-anchor="middle">steps 3 – 5 · switch and empty</text>
+<text x="816" y="44" fill="#000000" font-size="9" font-family="Timeless Grotesk, Geist, sans-serif" font-weight="400" text-anchor="middle">step 6 · remove</text>
+<line x1="192" y1="56" x2="936" y2="56" stroke="#e7e7e7"/>
+<text x="24" y="90" fill="#000000" font-size="12" font-family="Timeless Grotesk, Geist, sans-serif" font-weight="500" text-anchor="start">producers</text>
+<text x="24" y="105" fill="#555555" font-size="9" font-family="Timeless Grotesk, Geist, sans-serif" font-weight="400" text-anchor="start">code that enqueues</text>
+<rect x="192" y="72" width="240" height="48" rx="8" fill="#ffffff"/>
+<rect x="192.5" y="72.5" width="239" height="47" rx="8" fill="#ffffff" stroke="#e7e7e7" stroke-width="1"/>
+<text x="312" y="94" fill="#555555" font-size="11" font-weight="500" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">publish after the commit</text>
+<text x="312" y="108" fill="#555555" font-size="9" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">the old system</text>
+<rect x="444" y="72" width="240" height="48" rx="8" fill="#ffffff"/>
+<rect x="444.5" y="72.5" width="239" height="47" rx="8" fill="rgba(207,145,72,0.12)" stroke="#cf9148" stroke-width="1"/>
+<text x="564" y="94" fill="#000000" font-size="11" font-weight="500" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">enqueue in the transaction</text>
+<text x="564" y="108" fill="#555555" font-size="9" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">Workhorse</text>
+<rect x="696" y="72" width="240" height="48" rx="8" fill="#ffffff"/>
+<rect x="696.5" y="72.5" width="239" height="47" rx="8" fill="#ffffff" stroke="#cdcdcd" stroke-width="1"/>
+<text x="816" y="94" fill="#000000" font-size="11" font-weight="500" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">enqueue in the transaction</text>
+<text x="816" y="108" fill="#555555" font-size="9" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">Workhorse</text>
+<text x="24" y="154" fill="#000000" font-size="12" font-family="Timeless Grotesk, Geist, sans-serif" font-weight="500" text-anchor="start">old worker</text>
+<text x="24" y="169" fill="#555555" font-size="9" font-family="Timeless Grotesk, Geist, sans-serif" font-weight="400" text-anchor="start">the old system</text>
+<rect x="192" y="136" width="240" height="48" rx="8" fill="#ffffff"/>
+<rect x="192.5" y="136.5" width="239" height="47" rx="8" fill="#ffffff" stroke="#e7e7e7" stroke-width="1"/>
+<text x="312" y="158" fill="#555555" font-size="11" font-weight="500" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">runs the task type</text>
+<text x="312" y="172" fill="#555555" font-size="9" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">the old queue</text>
+<rect x="444" y="136" width="240" height="48" rx="8" fill="#ffffff"/>
+<rect x="444.5" y="136.5" width="239" height="47" rx="8" fill="#ffffff" stroke="#e7e7e7" stroke-width="1"/>
+<text x="564" y="158" fill="#555555" font-size="11" font-weight="500" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">finishes the old queue</text>
+<text x="564" y="172" fill="#555555" font-size="9" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">keep it running</text>
+<text x="816" y="164" fill="#555555" font-size="9" font-family="Timeless Grotesk, Geist, sans-serif" font-weight="400" text-anchor="middle">removed</text>
+<text x="24" y="218" fill="#000000" font-size="12" font-family="Timeless Grotesk, Geist, sans-serif" font-weight="500" text-anchor="start">Workhorse</text>
+<text x="24" y="233" fill="#555555" font-size="9" font-family="Timeless Grotesk, Geist, sans-serif" font-weight="400" text-anchor="start">the worker</text>
+<rect x="192" y="200" width="240" height="48" rx="8" fill="#ffffff"/>
+<rect x="192.5" y="200.5" width="239" height="47" rx="8" fill="#ffffff" stroke="#cdcdcd" stroke-width="1"/>
+<text x="312" y="222" fill="#000000" font-size="11" font-weight="500" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">waits for tasks</text>
+<text x="312" y="236" fill="#555555" font-size="9" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">the same payload shape</text>
+<rect x="444" y="200" width="240" height="48" rx="8" fill="#ffffff"/>
+<rect x="444.5" y="200.5" width="239" height="47" rx="8" fill="#f4f4f4" stroke="#e7e7e7" stroke-width="1"/>
+<text x="564" y="222" fill="#000000" font-size="11" font-weight="500" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">runs the new tasks</text>
+<text x="564" y="236" fill="#555555" font-size="9" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">beside the old worker</text>
+<rect x="696" y="200" width="240" height="48" rx="8" fill="#ffffff"/>
+<rect x="696.5" y="200.5" width="239" height="47" rx="8" fill="#f4f4f4" stroke="#e7e7e7" stroke-width="1"/>
+<text x="816" y="222" fill="#000000" font-size="11" font-weight="500" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">runs the task type</text>
+<text x="816" y="236" fill="#555555" font-size="9" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">the only worker</text>
+<text x="24" y="280" fill="#555555" font-size="9" font-family="Timeless Grotesk, Geist, sans-serif" font-weight="400" text-anchor="start">During a rolling deploy, each request goes to one system only. Both workers run, so the tasks in both queues continue to run.</text>
 </svg>

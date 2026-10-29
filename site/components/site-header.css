@@ -1,0 +1,229 @@
+/*
+ * The site header, shared by the TanStack Start pages (`site-header.tsx`) and
+ * the Blume documentation pages (`blume/components/Header.astro`). Both builds
+ * import this file, so the header has one height, one logo position, and one
+ * set of items at every width.
+ *
+ * The file uses plain CSS and no utility classes, because each build generates
+ * utilities only for its own sources. Each build maps the `--wh-hdr-*` values
+ * to its own neutral ramp: `src/styles/global.css` for the site and
+ * `blume/theme.css` for the documentation pages.
+ *
+ * The header is 64px high, because the Blume sidebar sticks at 4rem below it.
+ * The amber accent marks only the current item.
+ */
+
+.wh-hdr {
+  position: sticky;
+  top: 0;
+  z-index: 40;
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  block-size: 4rem;
+  padding-inline: 1rem;
+  border-block-end: 1px solid var(--wh-hdr-line);
+  background-color: color-mix(in srgb, var(--wh-hdr-bg) 92%, transparent);
+  backdrop-filter: blur(8px);
+  color: var(--wh-hdr-fg);
+  font-family: var(--wh-hdr-font);
+  font-feature-settings: "cv11", "ss01";
+  font-size: 0.875rem;
+  line-height: 1.25rem;
+  letter-spacing: 0;
+}
+
+@media (min-width: 768px) {
+  .wh-hdr {
+    padding-inline: 1.5rem;
+  }
+}
+
+.wh-hdr a {
+  text-decoration: none;
+}
+
+.wh-hdr-brand {
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 0.625rem;
+  block-size: 2.25rem;
+  color: var(--wh-hdr-fg);
+}
+
+.wh-hdr-mark,
+.wh-hdr-wordmark {
+  display: block;
+  flex-shrink: 0;
+}
+
+/* The mark's view box fits the head and mane closely, so a 28px box shows the full 28px mark. */
+.wh-hdr-mark {
+  inline-size: 28px;
+  block-size: 28px;
+}
+
+/* Half the mark box: a 14px cap height, about 99px wide. */
+.wh-hdr-wordmark {
+  inline-size: 99px;
+  block-size: 14.24px;
+}
+
+.wh-hdr-mark svg,
+.wh-hdr-wordmark svg,
+.wh-hdr-icon svg,
+.wh-hdr-ext svg {
+  display: block;
+  inline-size: 100%;
+  block-size: 100%;
+}
+
+.wh-hdr-nav {
+  display: none;
+  align-self: stretch;
+  align-items: stretch;
+  gap: 0.25rem;
+  margin-inline-start: 1.75rem;
+}
+
+.wh-hdr-link {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding-inline: 0.625rem;
+  color: var(--wh-hdr-muted);
+  font-weight: 500;
+  white-space: nowrap;
+  transition: color 160ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.wh-hdr-link:hover,
+.wh-hdr-link[aria-current="page"] {
+  color: var(--wh-hdr-fg);
+}
+
+/* The current item: a 2px amber rule on the header's bottom edge. The text also turns to full ink. */
+.wh-hdr-link[aria-current="page"]::after {
+  content: "";
+  position: absolute;
+  inset-inline: 0.625rem;
+  inset-block-end: -1px;
+  block-size: 2px;
+  background-color: var(--wh-hdr-accent);
+}
+
+.wh-hdr-ext {
+  inline-size: 12px;
+  block-size: 12px;
+  opacity: 0.6;
+}
+
+.wh-hdr-actions {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 0.25rem;
+  margin-inline-start: auto;
+}
+
+.wh-hdr-icon,
+.wh-hdr-actions [data-blume-search-open] {
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  inline-size: 2.25rem;
+  block-size: 2.25rem;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0.5rem;
+  background-color: transparent;
+  color: var(--wh-hdr-muted);
+  cursor: pointer;
+  transition:
+    color 160ms cubic-bezier(0.16, 1, 0.3, 1),
+    background-color 160ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.wh-hdr-icon:hover,
+.wh-hdr-actions [data-blume-search-open]:hover,
+.wh-hdr-icon[aria-expanded="true"] {
+  background-color: var(--wh-hdr-hover);
+  color: var(--wh-hdr-fg);
+}
+
+/* Icon spans of the site header. The Blume search button holds a bare SVG. */
+:where(.wh-hdr-icon) > span {
+  display: block;
+  inline-size: 18px;
+  block-size: 18px;
+}
+
+.wh-hdr-actions [data-blume-search-open] svg {
+  inline-size: 18px;
+  block-size: 18px;
+}
+
+/* The colour scheme control shows the current scheme: the sun in light mode, the moon in dark mode. */
+.wh-hdr-moon,
+:is(.dark, [data-theme="dark"]) .wh-hdr-sun {
+  display: none;
+}
+
+:is(.dark, [data-theme="dark"]) .wh-hdr-moon {
+  display: block;
+}
+
+@media (min-width: 1024px) {
+  .wh-hdr-nav {
+    display: flex;
+  }
+
+  .wh-hdr-menu {
+    display: none;
+  }
+}
+
+/*
+ * The menu of the site pages below 1024px. The documentation pages open the
+ * Blume drawer instead, which lists the same items above the sidebar.
+ */
+.wh-hdr-panel {
+  position: absolute;
+  inset-inline: 0;
+  inset-block-start: 100%;
+  display: flex;
+  flex-direction: column;
+  padding: 0.5rem 1rem 1rem;
+  border-block-end: 1px solid var(--wh-hdr-line);
+  background-color: var(--wh-hdr-bg);
+}
+
+.wh-hdr-panel[hidden] {
+  display: none;
+}
+
+.wh-hdr-panel .wh-hdr-link {
+  min-block-size: 2.75rem;
+  padding-inline: 0.5rem;
+  font-size: 1rem;
+}
+
+.wh-hdr-panel .wh-hdr-link[aria-current="page"]::after,
+.wh-nav-drawer-links .wh-hdr-link[aria-current="page"]::after {
+  inset-inline: 0 auto;
+  inset-block: 0.75rem;
+  inline-size: 2px;
+  block-size: auto;
+}
+
+@media (min-width: 1024px) {
+  .wh-hdr-panel {
+    display: none;
+  }
+}

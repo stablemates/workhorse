@@ -12,7 +12,10 @@ class Review(TypedDict):
 
 
 def configure_release(worker: Worker) -> None:
-    def publish(release: Release, context: HandlerContext) -> dict[str, Json]:
+    def publish(
+        release: Release,
+        context: HandlerContext,
+    ) -> dict[str, Json]:
         scan = context.wait_for_signal("security-scan")
         review = cast(
             Review,
@@ -26,7 +29,12 @@ def configure_release(worker: Worker) -> None:
     worker.handle("release.publish", publish)
 
 
-def deliver_scan(queue: Queue, task_id: str, result: Json, delivery_id: str) -> None:
+def deliver_scan(
+    queue: Queue,
+    task_id: str,
+    result: Json,
+    delivery_id: str,
+) -> None:
     queue.send_signal(
         task_id,
         "security-scan",

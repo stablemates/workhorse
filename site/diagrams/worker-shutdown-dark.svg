@@ -1,41 +1,41 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 276" width="960" height="276" role="img" aria-labelledby="worker-shutdown-dark-title worker-shutdown-dark-desc">
 <title id="worker-shutdown-dark-title">A worker process drains after the first signal and exits early only on a failure</title>
 <desc id="worker-shutdown-dark-desc">The first SIGINT or SIGTERM sets readiness to false and calls stop() on every Worker. The workers send no more claims. Active handlers continue, and their heartbeat batch continues. The adapter resources close after every run loop finishes. A second signal exits with the conventional signal code. A missed deadline, shutdownTimeoutMs with 25,000 ms by default, exits with code 1.</desc>
-<defs><marker id="arrow-dark" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#ced1d4"/></marker></defs>
-<rect width="960" height="276" fill="#04080e"/>
-<rect x="24" y="48" width="168" height="52" rx="6" fill="#04080e"/>
-<rect x="24" y="48" width="168" height="52" rx="6" fill="rgba(242,244,245,0.03)" stroke="rgba(242,244,245,0.4)" stroke-width="1" stroke-dasharray="4,3"/>
-<text x="108" y="72" fill="#f2f4f5" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">SIGINT or SIGTERM</text>
-<text x="108" y="86" fill="#ced1d4" font-size="9" font-family="Geist Mono" text-anchor="middle">the first signal</text>
-<path d="M 192,74 H 208" fill="none" stroke="#ced1d4" stroke-width="1.2" marker-end="url(#arrow-dark)"/>
-<rect x="210" y="48" width="168" height="52" rx="6" fill="#04080e"/>
-<rect x="210" y="48" width="168" height="52" rx="6" fill="#0a1017" stroke="#f2f4f5" stroke-width="1"/>
-<text x="294" y="72" fill="#f2f4f5" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">readiness false</text>
-<text x="294" y="86" fill="#ced1d4" font-size="9" font-family="Geist Mono" text-anchor="middle">stop() on every Worker</text>
-<path d="M 378,74 H 394" fill="none" stroke="#ced1d4" stroke-width="1.2" marker-end="url(#arrow-dark)"/>
-<rect x="396" y="48" width="168" height="52" rx="6" fill="#04080e"/>
-<rect x="396" y="48" width="168" height="52" rx="6" fill="rgba(252,152,76,0.08)" stroke="#fc984c" stroke-width="1.4"/>
-<text x="480" y="72" fill="#f2f4f5" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">handlers drain</text>
-<text x="480" y="86" fill="#ced1d4" font-size="9" font-family="Geist Mono" text-anchor="middle">heartbeats · no claims</text>
-<path d="M 564,74 H 580" fill="none" stroke="#ced1d4" stroke-width="1.2" marker-end="url(#arrow-dark)"/>
-<rect x="582" y="48" width="168" height="52" rx="6" fill="#04080e"/>
-<rect x="582" y="48" width="168" height="52" rx="6" fill="#0a1017" stroke="#f2f4f5" stroke-width="1"/>
-<text x="666" y="72" fill="#f2f4f5" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">adapter closes</text>
-<text x="666" y="86" fill="#ced1d4" font-size="9" font-family="Geist Mono" text-anchor="middle">after every run loop</text>
-<path d="M 750,74 H 766" fill="none" stroke="#ced1d4" stroke-width="1.2" marker-end="url(#arrow-dark)"/>
-<rect x="768" y="48" width="168" height="52" rx="6" fill="#04080e"/>
-<rect x="768" y="48" width="168" height="52" rx="6" fill="rgba(242,244,245,0.05)" stroke="#ced1d4" stroke-width="1"/>
-<text x="852" y="72" fill="#f2f4f5" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">the process exits</text>
-<text x="852" y="86" fill="#ced1d4" font-size="9" font-family="Geist Mono" text-anchor="middle">the drain is complete</text>
-<path d="M 440,100 V 140 H 294 V 174" fill="none" stroke="#ced1d4" stroke-width="1.2" stroke-dasharray="5,4" marker-end="url(#arrow-dark)"/>
-<path d="M 520,100 V 140 H 666 V 174" fill="none" stroke="#ced1d4" stroke-width="1.2" stroke-dasharray="5,4" marker-end="url(#arrow-dark)"/>
-<rect x="210" y="176" width="168" height="52" rx="6" fill="#04080e"/>
-<rect x="210" y="176" width="168" height="52" rx="6" fill="rgba(242,244,245,0.03)" stroke="rgba(242,244,245,0.4)" stroke-width="1" stroke-dasharray="4,3"/>
-<text x="294" y="200" fill="#f2f4f5" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">second signal</text>
-<text x="294" y="214" fill="#ced1d4" font-size="9" font-family="Geist Mono" text-anchor="middle">the signal exit code</text>
-<rect x="582" y="176" width="168" height="52" rx="6" fill="#04080e"/>
-<rect x="582" y="176" width="168" height="52" rx="6" fill="rgba(242,244,245,0.03)" stroke="rgba(242,244,245,0.4)" stroke-width="1" stroke-dasharray="4,3"/>
-<text x="666" y="200" fill="#f2f4f5" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">missed deadline</text>
-<text x="666" y="214" fill="#ced1d4" font-size="9" font-family="Geist Mono" text-anchor="middle">25,000 ms default · code 1</text>
-<text x="24" y="260" fill="#ced1d4" font-size="9" font-family="Geist Mono" font-weight="400" text-anchor="start">A hard stop leaves active leases to fenced expiry recovery. A process stop does not cancel a task.</text>
+<defs><marker id="arrow-dark" markerWidth="8" markerHeight="8" refX="6.5" refY="4" orient="auto" markerUnits="userSpaceOnUse"><path d="M 1.5,1 L 6.5,4 L 1.5,7" fill="none" stroke="#838383" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/></marker></defs>
+<rect width="960" height="276" fill="#000000"/>
+<rect x="24" y="48" width="168" height="52" rx="8" fill="#000000"/>
+<rect x="24.5" y="48.5" width="167" height="51" rx="8" fill="#000000" stroke="#2b2b2b" stroke-width="1"/>
+<text x="108" y="72" fill="#cfcfcf" font-size="11" font-weight="500" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">SIGINT or SIGTERM</text>
+<text x="108" y="86" fill="#ababab" font-size="9" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">the first signal</text>
+<path d="M 192,74 H 208" fill="none" stroke="#838383" stroke-width="1" marker-end="url(#arrow-dark)"/>
+<rect x="210" y="48" width="168" height="52" rx="8" fill="#000000"/>
+<rect x="210.5" y="48.5" width="167" height="51" rx="8" fill="#000000" stroke="#3d3d3d" stroke-width="1"/>
+<text x="294" y="72" fill="#f4f4f4" font-size="11" font-weight="500" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">readiness false</text>
+<text x="294" y="86" fill="#ababab" font-size="9" font-family="Geist Mono, monospace" text-anchor="middle">stop() on every Worker</text>
+<path d="M 378,74 H 394" fill="none" stroke="#838383" stroke-width="1" marker-end="url(#arrow-dark)"/>
+<rect x="396" y="48" width="168" height="52" rx="8" fill="#000000"/>
+<rect x="396.5" y="48.5" width="167" height="51" rx="8" fill="rgba(207,145,72,0.12)" stroke="#cf9148" stroke-width="1"/>
+<text x="480" y="72" fill="#f4f4f4" font-size="11" font-weight="500" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">handlers drain</text>
+<text x="480" y="86" fill="#ababab" font-size="9" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">heartbeats · no claims</text>
+<path d="M 564,74 H 580" fill="none" stroke="#838383" stroke-width="1" marker-end="url(#arrow-dark)"/>
+<rect x="582" y="48" width="168" height="52" rx="8" fill="#000000"/>
+<rect x="582.5" y="48.5" width="167" height="51" rx="8" fill="#000000" stroke="#3d3d3d" stroke-width="1"/>
+<text x="666" y="72" fill="#f4f4f4" font-size="11" font-weight="500" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">adapter closes</text>
+<text x="666" y="86" fill="#ababab" font-size="9" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">after every run loop</text>
+<path d="M 750,74 H 766" fill="none" stroke="#838383" stroke-width="1" marker-end="url(#arrow-dark)"/>
+<rect x="768" y="48" width="168" height="52" rx="8" fill="#000000"/>
+<rect x="768.5" y="48.5" width="167" height="51" rx="8" fill="#202020" stroke="#2b2b2b" stroke-width="1"/>
+<text x="852" y="72" fill="#f4f4f4" font-size="11" font-weight="500" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">the process exits</text>
+<text x="852" y="86" fill="#ababab" font-size="9" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">the drain is complete</text>
+<path d="M 440,100 V 140 H 294 V 174" fill="none" stroke="#838383" stroke-width="1" stroke-dasharray="4,3" marker-end="url(#arrow-dark)"/>
+<path d="M 520,100 V 140 H 666 V 174" fill="none" stroke="#838383" stroke-width="1" stroke-dasharray="4,3" marker-end="url(#arrow-dark)"/>
+<rect x="210" y="176" width="168" height="52" rx="8" fill="#000000"/>
+<rect x="210.5" y="176.5" width="167" height="51" rx="8" fill="#000000" stroke="#2b2b2b" stroke-width="1"/>
+<text x="294" y="200" fill="#cfcfcf" font-size="11" font-weight="500" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">second signal</text>
+<text x="294" y="214" fill="#ababab" font-size="9" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">the signal exit code</text>
+<rect x="582" y="176" width="168" height="52" rx="8" fill="#000000"/>
+<rect x="582.5" y="176.5" width="167" height="51" rx="8" fill="#000000" stroke="#2b2b2b" stroke-width="1"/>
+<text x="666" y="200" fill="#cfcfcf" font-size="11" font-weight="500" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">missed deadline</text>
+<text x="666" y="214" fill="#ababab" font-size="9" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">25,000 ms default · code 1</text>
+<text x="24" y="260" fill="#cfcfcf" font-size="9" font-family="Timeless Grotesk, Geist, sans-serif" font-weight="400" text-anchor="start">A hard stop leaves active leases to fenced expiry recovery. A process stop does not cancel a task.</text>
 </svg>

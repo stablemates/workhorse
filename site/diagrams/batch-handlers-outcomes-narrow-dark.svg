@@ -1,25 +1,25 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 247" width="400" height="247" role="img" aria-labelledby="batch-handlers-outcomes-narrow-dark-title batch-handlers-outcomes-narrow-dark-desc">
 <title id="batch-handlers-outcomes-narrow-dark-title">Each outcome of a batch applies to its own task</title>
 <desc id="batch-handlers-outcomes-narrow-dark-desc">The handler of the first batch returns 20 outcomes, in the order of the items. Nineteen are succeeded, and Workhorse completes each of these tasks with its own fence token. One is failed, and that task follows its own retry policy and attempt budget. If the handler throws an error, all 20 tasks fail, each with its own retry budget.</desc>
-<defs><marker id="arrow-dark" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#ced1d4"/></marker></defs>
-<rect width="400" height="247" fill="#04080e"/>
-<text x="24" y="49" fill="#f2f4f5" font-size="9" font-family="Geist Mono">returns</text>
-<rect x="112" y="24" width="264" height="42" rx="6" fill="#04080e"/>
-<rect x="112" y="24" width="264" height="42" rx="6" fill="rgba(242,244,245,0.05)" stroke="#ced1d4" stroke-width="1"/>
-<text x="244" y="43" fill="#f2f4f5" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">20 outcomes</text>
-<text x="244" y="57" fill="#ced1d4" font-size="9" font-family="Geist Mono" text-anchor="middle">in the order of the items</text>
-<path d="M 248,66 V 78" fill="none" stroke="#ced1d4" stroke-width="1.2" marker-end="url(#arrow-dark)"/>
-<text x="24" y="105" fill="#f2f4f5" font-size="9" font-family="Geist Mono">19</text>
-<rect x="112" y="80" width="264" height="42" rx="6" fill="#04080e"/>
-<rect x="112" y="80" width="264" height="42" rx="6" fill="#0a1017" stroke="#f2f4f5" stroke-width="1"/>
-<text x="244" y="99" fill="#f2f4f5" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">succeeded</text>
-<text x="244" y="113" fill="#ced1d4" font-size="9" font-family="Geist Mono" text-anchor="middle">each with its own fence token</text>
-<path d="M 248,122 V 134" fill="none" stroke="#ced1d4" stroke-width="1.2" marker-end="url(#arrow-dark)"/>
-<text x="24" y="161" fill="#f2f4f5" font-size="9" font-family="Geist Mono">1</text>
-<rect x="112" y="136" width="264" height="42" rx="6" fill="#04080e"/>
-<rect x="112" y="136" width="264" height="42" rx="6" fill="rgba(252,152,76,0.08)" stroke="#fc984c" stroke-width="1.4"/>
-<text x="244" y="155" fill="#f2f4f5" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">failed</text>
-<text x="244" y="169" fill="#ced1d4" font-size="9" font-family="Geist Mono" text-anchor="middle">its own retry policy</text>
-<text x="24" y="200" fill="#ced1d4" font-size="9" font-family="Geist Mono" font-weight="400" text-anchor="start">If the handler throws, all 20 tasks fail,</text>
-<text x="24" y="215" fill="#ced1d4" font-size="9" font-family="Geist Mono" font-weight="400" text-anchor="start">each with its own retry budget.</text>
+<defs><marker id="arrow-dark" markerWidth="8" markerHeight="8" refX="6.5" refY="4" orient="auto" markerUnits="userSpaceOnUse"><path d="M 1.5,1 L 6.5,4 L 1.5,7" fill="none" stroke="#838383" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/></marker></defs>
+<rect width="400" height="247" fill="#000000"/>
+<text x="24" y="49" fill="#f4f4f4" font-size="9" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="start">returns</text>
+<rect x="112" y="24" width="264" height="42" rx="8" fill="#000000"/>
+<rect x="112.5" y="24.5" width="263" height="41" rx="8" fill="#202020" stroke="#2b2b2b" stroke-width="1"/>
+<text x="244" y="43" fill="#f4f4f4" font-size="11" font-weight="500" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">20 outcomes</text>
+<text x="244" y="57" fill="#ababab" font-size="9" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">in the order of the items</text>
+<path d="M 248,66 V 78" fill="none" stroke="#838383" stroke-width="1" marker-end="url(#arrow-dark)"/>
+<text x="24" y="105" fill="#f4f4f4" font-size="9" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="start">19</text>
+<rect x="112" y="80" width="264" height="42" rx="8" fill="#000000"/>
+<rect x="112.5" y="80.5" width="263" height="41" rx="8" fill="#000000" stroke="#3d3d3d" stroke-width="1"/>
+<text x="244" y="99" fill="#f4f4f4" font-size="11" font-weight="500" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">succeeded</text>
+<text x="244" y="113" fill="#ababab" font-size="9" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">each with its own fence token</text>
+<path d="M 248,122 V 134" fill="none" stroke="#838383" stroke-width="1" marker-end="url(#arrow-dark)"/>
+<text x="24" y="161" fill="#f4f4f4" font-size="9" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="start">1</text>
+<rect x="112" y="136" width="264" height="42" rx="8" fill="#000000"/>
+<rect x="112.5" y="136.5" width="263" height="41" rx="8" fill="rgba(207,145,72,0.12)" stroke="#cf9148" stroke-width="1"/>
+<text x="244" y="155" fill="#f4f4f4" font-size="11" font-weight="500" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">failed</text>
+<text x="244" y="169" fill="#ababab" font-size="9" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">its own retry policy</text>
+<text x="24" y="200" fill="#cfcfcf" font-size="9" font-family="Timeless Grotesk, Geist, sans-serif" font-weight="400" text-anchor="start">If the handler throws, all 20 tasks fail,</text>
+<text x="24" y="215" fill="#cfcfcf" font-size="9" font-family="Timeless Grotesk, Geist, sans-serif" font-weight="400" text-anchor="start">each with its own retry budget.</text>
 </svg>

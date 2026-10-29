@@ -7,6 +7,7 @@ import {
   type ToolingScan,
   collectPythonFindings,
   findToolingProblems,
+  inStandaloneProject,
   requireReadablePipAuditReport,
   toolingAcceptanceFileName,
 } from "./audit-tooling-dependencies.js";
@@ -30,16 +31,20 @@ const devOnlyReport: AuditReport = {
 };
 
 // An advisory that the production gate reports, through a published package.
+const pgProtocolAdvisory = {
+  id: 1200002,
+  severity: "moderate",
+  module_name: "pg-protocol",
+  title: "pg-protocol: oversized message",
+  url: "https://github.com/advisories/GHSA-test-prod-0002",
+  github_advisory_id: "GHSA-test-prod-0002",
+  patched_versions: ">=9.9.9",
+};
+
 const productionReport: AuditReport = {
   advisories: {
     "1200002": {
-      id: 1200002,
-      severity: "moderate",
-      module_name: "pg-protocol",
-      title: "pg-protocol: oversized message",
-      url: "https://github.com/advisories/GHSA-test-prod-0002",
-      github_advisory_id: "GHSA-test-prod-0002",
-      patched_versions: ">=9.9.9",
+      ...pgProtocolAdvisory,
       findings: [{ version: "1.0.0", paths: ["typescript__core>pg>pg-protocol"] }],
     },
   },
@@ -140,6 +145,67 @@ describe("the npm half of the tooling lane", () => {
     ).toEqual(["Acceptance of advisory 1200001 was due for review on 2026-09-01"]);
     expect(headlines({ npm: [devAcceptance], python: [] }, scan())).toEqual([
       "Acceptance of advisory 1200001 matches nothing pnpm audit reports",
+    ]);
+  });
+});
+
+describe("the npm half over a standalone project", () => {
+  // site/blume reports the same `.` paths as the workspace root, because it has its own lockfile.
+  const blume = inStandaloneProject(collectFindings(devOnlyReport), "site__blume");
+
+  it("names the project in the path of each finding", () => {
+    expect(blume.map((finding) => [finding.workspacePackage, finding.dependencyPath])).toEqual([
+      ["site__blume", "site__blume>vite>esbuild"],
+    ]);
+  });
+
+  it("does not let an acceptance for the workspace root cover the project", () => {
+    expect(headlines({ npm: [devAcceptance], python: [] }, scan({ npmAll: blume }))).toEqual([
+      `Advisory 1200001 now reaches site__blume, which ${toolingAcceptanceFileName} does not accept`,
+    ]);
+  });
+
+  it("lets an acceptance that names the project pass", () => {
+    const accepted = { ...devAcceptance, workspacePackages: ["site__blume"] };
+    expect(headlines({ npm: [accepted], python: [] }, scan({ npmAll: blume }))).toEqual([]);
+  });
+});
+
+describe("a standalone project that shares an advisory with the production gate", () => {
+  // The same advisory reaches a published package and site/blume, which has its own lockfile.
+  const production = collectFindings(productionReport);
+  const blume = inStandaloneProject(
+    collectFindings({
+      advisories: {
+        "1200002": {
+          ...pgProtocolAdvisory,
+          findings: [{ version: "1.0.0", paths: [".>pg>pg-protocol"] }],
+        },
+      },
+    }),
+    "site__blume",
+  );
+  const input = scan({ npmAll: [...production, ...blume], npmProduction: production });
+  const blumeAcceptance = { ...productionAcceptance, workspacePackages: ["site__blume"] };
+
+  it("still fails on the project finding", () => {
+    expect(headlines(empty, input)).toEqual([
+      `Advisory 1200002 in pg-protocol is not accepted in ${toolingAcceptanceFileName}`,
+    ]);
+  });
+
+  it("lets an acceptance that names only the project pass", () => {
+    expect(headlines({ npm: [blumeAcceptance], python: [] }, input)).toEqual([]);
+  });
+
+  it("refuses an acceptance that also names a workspace package", () => {
+    const both = {
+      ...productionAcceptance,
+      workspacePackages: ["typescript__core", "site__blume"],
+    };
+    expect(headlines({ npm: [both], python: [] }, input)).toEqual([
+      `${toolingAcceptanceFileName} accepts npm advisory 1200002, which the production gate reports`,
+      `Advisory 1200002 in pg-protocol is not accepted in ${toolingAcceptanceFileName}`,
     ]);
   });
 });

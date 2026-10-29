@@ -1,0 +1,481 @@
+/*
+ * The comparison tables of `/compare` and `/compare/<product>`
+ * (`comparison.tsx`). A table separates its rows with hairlines on the page
+ * fill. Amber marks a group heading of a product table and the Workhorse
+ * column of the hub, and nothing else.
+ */
+
+/* `.wh-docs-body table` gives a prose table a panel fill. A comparison table sits on the page. */
+.wh-cmp .wh-cmp-table,
+.wh-apx .wh-apx-table {
+  border-radius: 0;
+  background-color: transparent;
+}
+
+.wh-cmp-table {
+  inline-size: 100%;
+  table-layout: fixed;
+  border-collapse: collapse;
+  font-size: var(--text-ui-s);
+  line-height: var(--text-ui-s--line-height);
+  text-align: start;
+}
+
+.wh-cmp-table thead th {
+  padding: 0 0.75rem 0.625rem 0;
+  border-block-end: 1px solid var(--wh-line);
+  color: var(--wh-muted);
+  font-size: var(--text-ui-xs);
+  line-height: var(--text-ui-xs--line-height);
+  font-weight: 500;
+  text-align: start;
+  vertical-align: bottom;
+}
+
+.wh-cmp-group th {
+  padding: 1.5rem 0 0.5rem;
+  border-block-end: 1px solid var(--wh-line);
+  color: var(--wh-muted);
+  font-family: var(--font-mono);
+  font-size: var(--text-ui-xs);
+  line-height: var(--text-ui-xs--line-height);
+  font-weight: 400;
+  letter-spacing: 0.02em;
+  text-align: start;
+}
+
+.wh-cmp-group th::before {
+  content: "";
+  display: inline-block;
+  inline-size: 6px;
+  block-size: 6px;
+  margin-inline-end: 0.5rem;
+  vertical-align: 0.1em;
+  background-color: var(--wh-amber);
+}
+
+.wh-cmp-row > * {
+  padding: 0.75rem 0.75rem 0.75rem 0;
+  border-block-end: 1px solid var(--wh-line);
+  vertical-align: top;
+  text-align: start;
+}
+
+.wh-cmp-row > :last-child {
+  padding-inline-end: 0;
+}
+
+.wh-cmp-table thead th:first-child {
+  inline-size: 46%;
+}
+
+.wh-cmp-label {
+  color: var(--wh-fg);
+  font-weight: 400;
+}
+
+.wh-cmp-toggle {
+  display: inline-flex;
+  align-items: flex-start;
+  gap: 0.375rem;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: start;
+  cursor: pointer;
+}
+
+.wh-cmp-toggle:hover {
+  text-decoration: underline;
+  text-decoration-color: var(--wh-n-5);
+  text-underline-offset: 3px;
+}
+
+.wh-cmp-chevron {
+  inline-size: 1rem;
+  block-size: 1rem;
+  flex-shrink: 0;
+  margin-block-start: 0.125rem;
+  color: var(--wh-decor);
+  transition: transform var(--wh-duration) var(--wh-ease);
+}
+
+.wh-cmp-toggle[aria-expanded="true"] .wh-cmp-chevron {
+  transform: rotate(180deg);
+}
+
+.wh-cmp-detail > td {
+  padding: 0.875rem 1rem 1rem;
+  border-block-end: 1px solid var(--wh-line);
+  background-color: var(--wh-panel);
+}
+
+/* Below 640px a product row stacks: the capability on its own line, then the two marks under labels. */
+@media (max-width: 639px) {
+  .wh-cmp-table,
+  .wh-cmp-table tbody {
+    display: block;
+  }
+
+  .wh-cmp-table thead {
+    position: absolute;
+    inline-size: 1px;
+    block-size: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+  }
+
+  .wh-cmp-table tr {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    column-gap: 0.75rem;
+    border-block-end: 1px solid var(--wh-line);
+  }
+
+  .wh-cmp-table tr > * {
+    display: block;
+    border-block-end: 0;
+  }
+
+  .wh-cmp-table .wh-cmp-group > th,
+  .wh-cmp-table .wh-cmp-label,
+  .wh-cmp-table .wh-cmp-detail > td {
+    grid-column: 1 / -1;
+  }
+
+  .wh-cmp-table .wh-cmp-label {
+    inline-size: auto;
+    padding-block-end: 0.25rem;
+    font-weight: 500;
+  }
+
+  .wh-cmp-table .wh-cmp-cell {
+    padding-block-start: 0.25rem;
+  }
+
+  .wh-cmp-table .wh-cmp-cell::before {
+    content: attr(data-label);
+    display: block;
+    margin-block-end: 0.25rem;
+    color: var(--wh-muted);
+    font-family: var(--font-mono);
+    font-size: var(--text-ui-xs);
+    line-height: var(--text-ui-xs--line-height);
+  }
+}
+
+/* ---------- The hub: approaches ---------- */
+
+/*
+ * The head of each column says what the approach is. Workhorse sits on a
+ * quiet panel tint that runs down its column, so the eye can follow it.
+ * Amber marks only the top edge of that column.
+ */
+.wh-apx {
+  --wh-apx-tint: color-mix(in oklab, var(--wh-panel) 55%, transparent);
+}
+
+.wh-apx-table {
+  inline-size: 100%;
+  table-layout: fixed;
+  border-collapse: collapse;
+  font-size: var(--text-ui-s);
+  line-height: var(--text-ui-s--line-height);
+}
+
+.wh-apx-table thead th {
+  padding: 1rem 1rem 1.25rem;
+  border-block: 1px solid var(--wh-line);
+  font-weight: 400;
+  text-align: start;
+  vertical-align: top;
+}
+
+.wh-apx-table thead th:first-child {
+  inline-size: 27%;
+  padding-inline-start: 0;
+  border-block-start-color: transparent;
+  color: var(--wh-muted);
+  font-size: var(--text-ui-xs);
+  line-height: var(--text-ui-xs--line-height);
+  font-weight: 500;
+  vertical-align: bottom;
+}
+
+.wh-apx-table thead th[data-workhorse] {
+  border-block-start: 2px solid var(--wh-amber);
+}
+
+.wh-apx-name {
+  display: block;
+  color: var(--wh-fg);
+  font-size: var(--text-ui-s);
+  line-height: var(--text-ui-s--line-height);
+  font-weight: 600;
+}
+
+.wh-apx-summary {
+  display: block;
+  margin-block-start: 0.5rem;
+  color: var(--wh-body);
+  font-size: var(--text-ui-xs);
+  line-height: 1.125rem;
+  text-wrap: pretty;
+}
+
+.wh-apx-meta {
+  display: block;
+  margin-block-start: 0.75rem;
+  color: var(--wh-muted);
+  font-size: var(--text-ui-xs);
+  line-height: var(--text-ui-xs--line-height);
+}
+
+.wh-apx-table tbody > tr > * {
+  padding: 1.25rem 1rem;
+  border-block-end: 1px solid var(--wh-line);
+  text-align: start;
+  vertical-align: top;
+}
+
+.wh-apx-table tbody th {
+  padding-inline-start: 0;
+  font-weight: 400;
+}
+
+.wh-apx-table [data-workhorse] {
+  background-color: var(--wh-apx-tint);
+  color: var(--wh-fg);
+}
+
+.wh-apx-label {
+  display: block;
+  color: var(--wh-fg);
+  font-weight: 500;
+}
+
+.wh-apx-rule {
+  display: block;
+  margin-block-start: 0.25rem;
+  color: var(--wh-muted);
+  font-size: var(--text-ui-xs);
+  line-height: 1.125rem;
+  text-wrap: pretty;
+}
+
+/* One dot for each product: filled when it supports the capability, half when in part, a ring when not. */
+.wh-apx-dots {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-block-start: 0.25rem;
+}
+
+.wh-apx-dot {
+  inline-size: 8px;
+  block-size: 8px;
+  border-radius: 50%;
+  box-shadow: inset 0 0 0 1.25px var(--wh-decor);
+}
+
+.wh-apx-dot[data-mark="Supported"] {
+  background-color: var(--wh-fg);
+  box-shadow: none;
+}
+
+.wh-apx-dot[data-mark="Partial"] {
+  background: linear-gradient(90deg, transparent 50%, var(--wh-decor) 50%);
+}
+
+/*
+ * Below 1024px the head of the table becomes a list of the approaches, and
+ * each capability stacks: its name on its own line, then its five cells in a
+ * grid, each under the name of its column.
+ */
+@media (max-width: 1023px) {
+  .wh-apx-table,
+  .wh-apx-table :is(thead, tbody) {
+    display: block;
+  }
+
+  .wh-apx-table thead > tr {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    margin-block-end: 1rem;
+  }
+
+  .wh-apx-table thead th {
+    display: block;
+    inline-size: auto;
+    border-block-end: 0;
+  }
+
+  .wh-apx-table thead th:first-child {
+    display: none;
+  }
+
+  .wh-apx-table tbody > tr {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 0.5rem;
+    padding-block: 1.25rem;
+    border-block-end: 1px solid var(--wh-line);
+  }
+
+  .wh-apx-table tbody > tr:first-child {
+    border-block-start: 1px solid var(--wh-line);
+  }
+
+  .wh-apx-table tbody > tr > * {
+    display: block;
+    padding: 0.75rem;
+    border-block-end: 0;
+  }
+
+  .wh-apx-table tbody > tr > th {
+    grid-column: 1 / -1;
+    padding: 0 0 0.25rem;
+  }
+
+  .wh-apx-table tbody td::before {
+    content: attr(data-label);
+    display: block;
+    margin-block-end: 0.5rem;
+    color: var(--wh-muted);
+    font-size: var(--text-ui-xs);
+    line-height: var(--text-ui-xs--line-height);
+  }
+
+  .wh-apx-table tbody td[data-workhorse] {
+    grid-column: 1 / -1;
+  }
+}
+
+@media (min-width: 640px) and (max-width: 1023px) {
+  .wh-apx-table tbody > tr {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+
+  .wh-apx-table tbody td[data-workhorse] {
+    grid-column: auto;
+  }
+}
+
+@media (max-width: 639px) {
+  .wh-apx-table thead > tr {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .wh-apx-table tbody > tr > td:not([data-workhorse]) {
+    padding-inline: 0;
+  }
+}
+
+/* ---------- The hub: products by approach ---------- */
+
+.wh-product-index {
+  display: grid;
+  gap: 2rem;
+}
+
+@media (min-width: 640px) {
+  .wh-product-index {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+.wh-product-index ul {
+  margin: 0.75rem 0 0;
+  padding: 0;
+  list-style: none;
+  border-block-start: 1px solid var(--wh-line);
+}
+
+.wh-product-link {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding-block: 0.5rem;
+  border-block-end: 1px solid var(--wh-line);
+  color: var(--wh-body);
+  font-size: var(--text-ui-s);
+  line-height: var(--text-ui-s--line-height);
+  text-decoration: none;
+  transition: color var(--wh-duration) var(--wh-ease);
+}
+
+.wh-product-arrow {
+  color: var(--wh-decor);
+  opacity: 0;
+  transform: translateX(-4px);
+  transition:
+    opacity var(--wh-duration) var(--wh-ease),
+    transform var(--wh-duration) var(--wh-ease);
+}
+
+a.wh-product-link:hover,
+a.wh-product-link:focus-visible {
+  color: var(--wh-fg);
+}
+
+a.wh-product-link:hover .wh-product-arrow,
+a.wh-product-link:focus-visible .wh-product-arrow {
+  opacity: 1;
+  transform: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .wh-product-arrow {
+    transition: none;
+  }
+}
+
+/* ---------- The product page head ---------- */
+
+/* The two products of a page, side by side in one hairline frame. */
+.wh-product-pair {
+  display: grid;
+  border: 1px solid var(--wh-line);
+}
+
+.wh-product-pair > div {
+  padding: 1rem 1.25rem;
+}
+
+.wh-product-pair > div + div {
+  border-block-start: 1px solid var(--wh-line);
+}
+
+.wh-product-pair dt {
+  color: var(--wh-fg);
+  font-size: var(--text-ui-s);
+  line-height: var(--text-ui-s--line-height);
+  font-weight: 600;
+}
+
+.wh-product-pair dd {
+  margin: 0.25rem 0 0;
+  color: var(--wh-body);
+  font-size: var(--text-ui-s);
+  line-height: var(--text-ui-s--line-height);
+}
+
+@media (min-width: 640px) {
+  .wh-product-pair {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .wh-product-pair > div + div {
+    border-block-start: 0;
+    border-inline-start: 1px solid var(--wh-line);
+  }
+}
+
+/* The hub text keeps a reading width. Its matrix takes the full column. */
+.wh-compare-hub .wh-compare-body > :not(.wh-apx) {
+  max-inline-size: 48rem;
+}

@@ -1,38 +1,38 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 260" width="960" height="260" role="img" aria-labelledby="dashboard-authorize-dark-title dashboard-authorize-dark-desc">
 <title id="dashboard-authorize-dark-title">The dashboard asks your application who the operator is before it serves anything</title>
 <desc id="dashboard-authorize-dark-desc">Dana opens /workhorse in the application. The dashboard calls the authorize callback before it serves anything. The callback reads the application session and returns a principal that names dana. If the callback refuses the request, the dashboard serves nothing. The dashboard checks that the installed schema is compatible and does not change it. When Dana cancels a task, the dashboard records dana as the operator.</desc>
-<defs><marker id="arrow-dark" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#ced1d4"/></marker></defs>
-<rect width="960" height="260" fill="#04080e"/>
-<path d="M 184,80 H 210" fill="none" stroke="#ced1d4" stroke-width="1.2" marker-end="url(#arrow-dark)"/>
-<path d="M 372,80 H 398" fill="none" stroke="#ced1d4" stroke-width="1.2" marker-end="url(#arrow-dark)"/>
-<path d="M 560,80 H 586" fill="none" stroke="#ced1d4" stroke-width="1.2" marker-end="url(#arrow-dark)"/>
-<path d="M 748,80 H 774" fill="none" stroke="#ced1d4" stroke-width="1.2" marker-end="url(#arrow-dark)"/>
-<path d="M 292,104 V 158" fill="none" stroke="#ced1d4" stroke-width="1.2" stroke-dasharray="5,4" marker-end="url(#arrow-dark)"/>
-<rect x="24" y="56" width="160" height="48" rx="6" fill="#04080e"/>
-<rect x="24" y="56" width="160" height="48" rx="6" fill="rgba(242,244,245,0.03)" stroke="rgba(242,244,245,0.4)" stroke-width="1" stroke-dasharray="4,3"/>
-<text x="104" y="78" fill="#f2f4f5" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">Dana opens</text>
-<text x="104" y="92" fill="#ced1d4" font-size="9" font-family="Geist Mono" text-anchor="middle">/workhorse</text>
-<rect x="212" y="56" width="160" height="48" rx="6" fill="#04080e"/>
-<rect x="212" y="56" width="160" height="48" rx="6" fill="rgba(252,152,76,0.08)" stroke="#fc984c" stroke-width="1.4"/>
-<text x="292" y="78" fill="#f2f4f5" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">authorize callback</text>
-<text x="292" y="92" fill="#ced1d4" font-size="9" font-family="Geist Mono" text-anchor="middle">reads the app session</text>
-<rect x="400" y="56" width="160" height="48" rx="6" fill="#04080e"/>
-<rect x="400" y="56" width="160" height="48" rx="6" fill="rgba(242,244,245,0.05)" stroke="#ced1d4" stroke-width="1"/>
-<text x="480" y="78" fill="#f2f4f5" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">principal</text>
-<text x="480" y="92" fill="#ced1d4" font-size="9" font-family="Geist Mono" text-anchor="middle">actor: dana</text>
-<rect x="588" y="56" width="160" height="48" rx="6" fill="#04080e"/>
-<rect x="588" y="56" width="160" height="48" rx="6" fill="#0a1017" stroke="#f2f4f5" stroke-width="1"/>
-<text x="668" y="78" fill="#f2f4f5" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">schema check</text>
-<text x="668" y="92" fill="#ced1d4" font-size="9" font-family="Geist Mono" text-anchor="middle">compatible · no change</text>
-<rect x="776" y="56" width="160" height="48" rx="6" fill="#04080e"/>
-<rect x="776" y="56" width="160" height="48" rx="6" fill="#0a1017" stroke="#f2f4f5" stroke-width="1"/>
-<text x="856" y="78" fill="#f2f4f5" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">Dana cancels a task</text>
-<text x="856" y="92" fill="#ced1d4" font-size="9" font-family="Geist Mono" text-anchor="middle">recorded actor: dana</text>
-<rect x="266" y="122" width="52" height="12" rx="2" fill="#04080e"/>
-<text x="292" y="131" fill="#95999d" font-size="8" font-family="Geist Mono" text-anchor="middle" letter-spacing="0.06em">REFUSES</text>
-<rect x="24" y="160" width="536" height="44" rx="6" fill="#04080e"/>
-<rect x="24" y="160" width="536" height="44" rx="6" fill="rgba(242,244,245,0.03)" stroke="rgba(242,244,245,0.4)" stroke-width="1" stroke-dasharray="4,3"/>
-<text x="292" y="180" fill="#f2f4f5" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">the dashboard serves nothing</text>
-<text x="292" y="194" fill="#ced1d4" font-size="9" font-family="Geist Mono" text-anchor="middle">no page, no data</text>
-<text x="24" y="244" fill="#ced1d4" font-size="9" font-family="Geist Mono" font-weight="400" text-anchor="start">The application owns the login. The dashboard records the operator that the callback names.</text>
+<defs><marker id="arrow-dark" markerWidth="8" markerHeight="8" refX="6.5" refY="4" orient="auto" markerUnits="userSpaceOnUse"><path d="M 1.5,1 L 6.5,4 L 1.5,7" fill="none" stroke="#838383" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/></marker></defs>
+<rect width="960" height="260" fill="#000000"/>
+<path d="M 184,80 H 210" fill="none" stroke="#838383" stroke-width="1" marker-end="url(#arrow-dark)"/>
+<path d="M 372,80 H 398" fill="none" stroke="#838383" stroke-width="1" marker-end="url(#arrow-dark)"/>
+<path d="M 560,80 H 586" fill="none" stroke="#838383" stroke-width="1" marker-end="url(#arrow-dark)"/>
+<path d="M 748,80 H 774" fill="none" stroke="#838383" stroke-width="1" marker-end="url(#arrow-dark)"/>
+<path d="M 292,104 V 158" fill="none" stroke="#838383" stroke-width="1" stroke-dasharray="4,3" marker-end="url(#arrow-dark)"/>
+<rect x="24" y="56" width="160" height="48" rx="8" fill="#000000"/>
+<rect x="24.5" y="56.5" width="159" height="47" rx="8" fill="#000000" stroke="#2b2b2b" stroke-width="1"/>
+<text x="104" y="78" fill="#cfcfcf" font-size="11" font-weight="500" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">Dana opens</text>
+<text x="104" y="92" fill="#ababab" font-size="9" font-family="Geist Mono, monospace" text-anchor="middle">/workhorse</text>
+<rect x="212" y="56" width="160" height="48" rx="8" fill="#000000"/>
+<rect x="212.5" y="56.5" width="159" height="47" rx="8" fill="rgba(207,145,72,0.12)" stroke="#cf9148" stroke-width="1"/>
+<text x="292" y="78" fill="#f4f4f4" font-size="11" font-weight="500" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">authorize callback</text>
+<text x="292" y="92" fill="#ababab" font-size="9" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">reads the app session</text>
+<rect x="400" y="56" width="160" height="48" rx="8" fill="#000000"/>
+<rect x="400.5" y="56.5" width="159" height="47" rx="8" fill="#202020" stroke="#2b2b2b" stroke-width="1"/>
+<text x="480" y="78" fill="#f4f4f4" font-size="11" font-weight="500" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">principal</text>
+<text x="480" y="92" fill="#ababab" font-size="9" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">actor: dana</text>
+<rect x="588" y="56" width="160" height="48" rx="8" fill="#000000"/>
+<rect x="588.5" y="56.5" width="159" height="47" rx="8" fill="#000000" stroke="#3d3d3d" stroke-width="1"/>
+<text x="668" y="78" fill="#f4f4f4" font-size="11" font-weight="500" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">schema check</text>
+<text x="668" y="92" fill="#ababab" font-size="9" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">compatible · no change</text>
+<rect x="776" y="56" width="160" height="48" rx="8" fill="#000000"/>
+<rect x="776.5" y="56.5" width="159" height="47" rx="8" fill="#000000" stroke="#3d3d3d" stroke-width="1"/>
+<text x="856" y="78" fill="#f4f4f4" font-size="11" font-weight="500" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">Dana cancels a task</text>
+<text x="856" y="92" fill="#ababab" font-size="9" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">recorded actor: dana</text>
+<rect x="264" y="122" width="56" height="12" rx="2" fill="#000000"/>
+<text x="292" y="131" fill="#ababab" font-size="9" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">REFUSES</text>
+<rect x="24" y="160" width="536" height="44" rx="8" fill="#000000"/>
+<rect x="24.5" y="160.5" width="535" height="43" rx="8" fill="#000000" stroke="#2b2b2b" stroke-width="1"/>
+<text x="292" y="180" fill="#cfcfcf" font-size="11" font-weight="500" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">the dashboard serves nothing</text>
+<text x="292" y="194" fill="#ababab" font-size="9" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">no page, no data</text>
+<text x="24" y="244" fill="#cfcfcf" font-size="9" font-family="Timeless Grotesk, Geist, sans-serif" font-weight="400" text-anchor="start">The application owns the login. The dashboard records the operator that the callback names.</text>
 </svg>

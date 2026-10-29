@@ -132,8 +132,21 @@ interface AuditRun {
  */
 export type AuditScope = "prod" | "all";
 
-function auditArguments(scope: AuditScope): readonly string[] {
-  return scope === "prod" ? ["audit", "--prod", "--json"] : ["audit", "--json"];
+/**
+ * Which project `pnpm audit` reads in the directory. `workspace` is the pnpm workspace that contains
+ * it. `standalone` is a project with its own lockfile inside the workspace tree, such as
+ * site/blume. Without `--ignore-workspace`, pnpm finds the root pnpm-workspace.yaml and audits the
+ * root lockfile instead.
+ */
+type AuditProject = "workspace" | "standalone";
+
+function auditArguments(scope: AuditScope, project: AuditProject): readonly string[] {
+  return [
+    "audit",
+    ...(scope === "prod" ? ["--prod"] : []),
+    ...(project === "standalone" ? ["--ignore-workspace"] : []),
+    "--json",
+  ];
 }
 
 /**
@@ -143,16 +156,18 @@ function auditArguments(scope: AuditScope): readonly string[] {
  * the workspace the lockfile pins; the packed-release gate audits a throwaway consumer that has the
  * published tarballs installed. Both meet the same service and both can be handed the same
  * unusable answer, so both come through here. The scope is a parameter because the tooling lane
- * reads the same workspace with its development dependencies included.
+ * reads the same workspace with its development dependencies included. The project is a parameter
+ * because the tooling lane also reads site/blume, which has its own lockfile.
  */
 export async function readAuditReport(
   directory: string = repositoryRoot,
   scope: AuditScope = "prod",
   acceptanceList: string = acceptanceFileName,
+  project: AuditProject = "workspace",
 ): Promise<AuditReport> {
-  const command = `pnpm ${auditArguments(scope).join(" ")}`;
+  const command = `pnpm ${auditArguments(scope, project).join(" ")}`;
   const run = await new Promise<AuditRun>((resolve, reject) => {
-    const child = spawn("pnpm", auditArguments(scope), {
+    const child = spawn("pnpm", auditArguments(scope, project), {
       cwd: directory,
       stdio: ["ignore", "pipe", "pipe"],
     });

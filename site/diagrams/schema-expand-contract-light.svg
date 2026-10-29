@@ -1,37 +1,37 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 316" width="960" height="316" role="img" aria-labelledby="schema-expand-contract-light-title schema-expand-contract-light-desc">
 <title id="schema-expand-contract-light-title">A change that spans deployments rolls out in three releases</title>
 <desc id="schema-expand-contract-light-desc">Release 1, expand: a migration adds the new shape beside the old one. Release 2, migrate: applications move reads, then writes, to the new shape. Release 3, contract: a migration removes the old shape. When that removal narrows workhorse.protocol_version, it ships as a contract step that the operator runs with workhorse schema contract --yes.</desc>
-<defs><marker id="arrow-light" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#4e5359"/></marker></defs>
-<rect width="960" height="316" fill="#f9fafb"/>
-<rect x="24" y="48" width="280" height="108" rx="8" fill="rgba(26,32,39,0.02)" stroke="rgba(26,32,39,0.12)" stroke-width="0.8"/>
-<rect x="36" y="42" width="108" height="12" rx="2" fill="#f9fafb"/>
-<text x="90" y="51" fill="#6d7277" font-size="7" font-family="Geist Mono" text-anchor="middle" letter-spacing="0.14em">RELEASE 1 · EXPAND</text>
-<rect x="40" y="76" width="248" height="52" rx="6" fill="#f9fafb"/>
-<rect x="40" y="76" width="248" height="52" rx="6" fill="#ffffff" stroke="#1a2027" stroke-width="1"/>
-<text x="164" y="100" fill="#1a2027" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">migration adds the new shape</text>
-<text x="164" y="114" fill="#4e5359" font-size="9" font-family="Geist Mono" text-anchor="middle">beside the old one</text>
-<rect x="340" y="48" width="280" height="108" rx="8" fill="rgba(26,32,39,0.02)" stroke="rgba(26,32,39,0.12)" stroke-width="0.8"/>
-<rect x="352" y="42" width="116" height="12" rx="2" fill="#f9fafb"/>
-<text x="410" y="51" fill="#6d7277" font-size="7" font-family="Geist Mono" text-anchor="middle" letter-spacing="0.14em">RELEASE 2 · MIGRATE</text>
-<rect x="356" y="76" width="248" height="52" rx="6" fill="#f9fafb"/>
-<rect x="356" y="76" width="248" height="52" rx="6" fill="#ffffff" stroke="#1a2027" stroke-width="1"/>
-<text x="480" y="100" fill="#1a2027" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">applications move to the new shape</text>
-<text x="480" y="114" fill="#4e5359" font-size="9" font-family="Geist Mono" text-anchor="middle">reads first, then writes</text>
-<path d="M 304,102 H 338" fill="none" stroke="#4e5359" stroke-width="1.2" marker-end="url(#arrow-light)"/>
-<rect x="656" y="48" width="280" height="108" rx="8" fill="rgba(26,32,39,0.02)" stroke="rgba(26,32,39,0.12)" stroke-width="0.8"/>
-<rect x="668" y="42" width="120" height="12" rx="2" fill="#f9fafb"/>
-<text x="728" y="51" fill="#6d7277" font-size="7" font-family="Geist Mono" text-anchor="middle" letter-spacing="0.14em">RELEASE 3 · CONTRACT</text>
-<rect x="672" y="76" width="248" height="52" rx="6" fill="#f9fafb"/>
-<rect x="672" y="76" width="248" height="52" rx="6" fill="rgba(213,92,19,0.08)" stroke="#aa4515" stroke-width="1.4"/>
-<text x="796" y="100" fill="#1a2027" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">migration removes the old shape</text>
-<text x="796" y="114" fill="#4e5359" font-size="9" font-family="Geist Mono" text-anchor="middle">no supported version uses it</text>
-<path d="M 620,102 H 654" fill="none" stroke="#4e5359" stroke-width="1.2" marker-end="url(#arrow-light)"/>
-<path d="M 796,128 V 214" fill="none" stroke="#4e5359" stroke-width="1.2" stroke-dasharray="5,4" marker-end="url(#arrow-light)"/>
-<rect x="696" y="176" width="200" height="12" rx="2" fill="#f9fafb"/>
-<text x="796" y="185" fill="#6d7277" font-size="8" font-family="Geist Mono" text-anchor="middle" letter-spacing="0.06em">narrows workhorse.protocol_version</text>
-<rect x="656" y="216" width="280" height="52" rx="6" fill="#f9fafb"/>
-<rect x="656" y="216" width="280" height="52" rx="6" fill="rgba(26,32,39,0.03)" stroke="rgba(26,32,39,0.4)" stroke-width="1" stroke-dasharray="4,3"/>
-<text x="796" y="240" fill="#1a2027" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">contract step</text>
-<text x="796" y="254" fill="#4e5359" font-size="9" font-family="Geist Mono" text-anchor="middle">workhorse schema contract --yes</text>
-<text x="24" y="300" fill="#4e5359" font-size="9" font-family="Geist Mono" font-weight="400" text-anchor="start">workhorse schema migrate does not run a contract step. The operator runs it deliberately.</text>
+<defs><marker id="arrow-light" markerWidth="8" markerHeight="8" refX="6.5" refY="4" orient="auto" markerUnits="userSpaceOnUse"><path d="M 1.5,1 L 6.5,4 L 1.5,7" fill="none" stroke="#7d7d7d" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/></marker></defs>
+<rect width="960" height="316" fill="#ffffff"/>
+<rect x="24" y="48" width="280" height="108" rx="12" fill="none" stroke="#e7e7e7" stroke-width="1"/>
+<rect x="36" y="42" width="108" height="12" fill="#ffffff"/>
+<text x="90" y="51" fill="#555555" font-size="8" font-weight="500" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle" letter-spacing="0.04em">RELEASE 1 · EXPAND</text>
+<rect x="40" y="76" width="248" height="52" rx="8" fill="#ffffff"/>
+<rect x="40.5" y="76.5" width="247" height="51" rx="8" fill="#ffffff" stroke="#cdcdcd" stroke-width="1"/>
+<text x="164" y="100" fill="#000000" font-size="11" font-weight="500" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">migration adds the new shape</text>
+<text x="164" y="114" fill="#555555" font-size="9" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">beside the old one</text>
+<rect x="340" y="48" width="280" height="108" rx="12" fill="none" stroke="#e7e7e7" stroke-width="1"/>
+<rect x="352" y="42" width="116" height="12" fill="#ffffff"/>
+<text x="410" y="51" fill="#555555" font-size="8" font-weight="500" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle" letter-spacing="0.04em">RELEASE 2 · MIGRATE</text>
+<rect x="356" y="76" width="248" height="52" rx="8" fill="#ffffff"/>
+<rect x="356.5" y="76.5" width="247" height="51" rx="8" fill="#ffffff" stroke="#cdcdcd" stroke-width="1"/>
+<text x="480" y="100" fill="#000000" font-size="11" font-weight="500" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">applications move to the new shape</text>
+<text x="480" y="114" fill="#555555" font-size="9" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">reads first, then writes</text>
+<path d="M 304,102 H 338" fill="none" stroke="#7d7d7d" stroke-width="1" marker-end="url(#arrow-light)"/>
+<rect x="656" y="48" width="280" height="108" rx="12" fill="none" stroke="#e7e7e7" stroke-width="1"/>
+<rect x="668" y="42" width="120" height="12" fill="#ffffff"/>
+<text x="728" y="51" fill="#555555" font-size="8" font-weight="500" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle" letter-spacing="0.04em">RELEASE 3 · CONTRACT</text>
+<rect x="672" y="76" width="248" height="52" rx="8" fill="#ffffff"/>
+<rect x="672.5" y="76.5" width="247" height="51" rx="8" fill="rgba(207,145,72,0.12)" stroke="#cf9148" stroke-width="1"/>
+<text x="796" y="100" fill="#000000" font-size="11" font-weight="500" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">migration removes the old shape</text>
+<text x="796" y="114" fill="#555555" font-size="9" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">no supported version uses it</text>
+<path d="M 620,102 H 654" fill="none" stroke="#7d7d7d" stroke-width="1" marker-end="url(#arrow-light)"/>
+<path d="M 796,128 V 214" fill="none" stroke="#7d7d7d" stroke-width="1" stroke-dasharray="4,3" marker-end="url(#arrow-light)"/>
+<rect x="694" y="176" width="204" height="12" rx="2" fill="#ffffff"/>
+<text x="796" y="185" fill="#555555" font-size="9" font-family="Geist Mono, monospace" text-anchor="middle">narrows workhorse.protocol_version</text>
+<rect x="656" y="216" width="280" height="52" rx="8" fill="#ffffff"/>
+<rect x="656.5" y="216.5" width="279" height="51" rx="8" fill="#ffffff" stroke="#e7e7e7" stroke-width="1"/>
+<text x="796" y="240" fill="#555555" font-size="11" font-weight="500" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">contract step</text>
+<text x="796" y="254" fill="#555555" font-size="9" font-family="Geist Mono, monospace" text-anchor="middle">workhorse schema contract --yes</text>
+<text x="24" y="300" fill="#555555" font-size="9" font-family="Timeless Grotesk, Geist, sans-serif" font-weight="400" text-anchor="start">workhorse schema migrate does not run a contract step. The operator runs it deliberately.</text>
 </svg>

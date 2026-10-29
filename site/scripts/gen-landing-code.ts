@@ -4,7 +4,7 @@ import { highlight } from "fumadocs-core/highlight";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 
-import { createTokenClassTransformer, landingCodeThemes } from "../lib/code-highlighting.js";
+import { createTokenClassTransformer, siteCodeThemes } from "../lib/code-highlighting.js";
 import {
   landingSnippetLanguages,
   landingSnippets,
@@ -32,7 +32,7 @@ const rendered: Record<string, string> = {};
 for (const [id, code] of Object.entries(landingSnippets)) {
   const node = await highlight(code, {
     lang: landingSnippetLanguages[id as LandingSnippetId] ?? "ts",
-    themes: landingCodeThemes,
+    themes: siteCodeThemes,
     transformers: [tokenClasses],
     defaultColor: false,
     components: {
@@ -45,7 +45,7 @@ for (const [id, code] of Object.entries(landingSnippets)) {
       pre: ({ className, ...props }) =>
         createElement("pre", {
           ...props,
-          className: `${typeof className === "string" ? className : ""} wh-code-surface overflow-x-auto px-4 py-4 text-[12.5px] leading-[1.75] [&_code]:font-mono`,
+          className: `${typeof className === "string" ? className : ""} wh-code-surface overflow-x-auto px-4 py-4 text-[13px] leading-[1.7] [&_code]:font-mono`,
         }),
     },
   });

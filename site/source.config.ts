@@ -1,9 +1,28 @@
 import { pageSchema } from "fumadocs-core/source/schema";
 import { defineCollections, defineConfig, defineDocs } from "fumadocs-mdx/config";
-import { createTokenClassTransformer, docsCodeThemes } from "./lib/code-highlighting.js";
+import { createTokenClassTransformer, siteCodeThemes } from "./lib/code-highlighting.js";
 
+/**
+ * The documentation pages. Blume renders them from `blume/`; this collection
+ * only feeds the search index of the other pages (`lib/source.ts`). The page
+ * files are flat, so `*.mdx` leaves out `compare/`, which the collection below
+ * owns.
+ */
 export const docs = defineDocs({
   dir: "content/docs",
+  docs: { files: ["*.mdx"] },
+});
+
+/**
+ * The product comparisons (ADR 0104, ADR 0116): the hub `compare/index.mdx` at
+ * `/compare` and one page for each product at `/compare/<product>`. The files
+ * stay under `content/docs/compare/`, the one folder of pages that may name a
+ * compared product, but the TanStack Start app renders them as site pages.
+ */
+export const compare = defineCollections({
+  type: "doc",
+  dir: "content/docs/compare",
+  schema: pageSchema,
 });
 
 /**
@@ -39,7 +58,7 @@ export default defineConfig({
     // and Shiki highlighting with dual light/dark themes.
     preset: "fumadocs",
     rehypeCodeOptions: {
-      themes: docsCodeThemes,
+      themes: siteCodeThemes,
       // Token colours reach the page as classes rather than as a style on
       // every token, and `scripts/gen-code-theme.ts` writes the rules. A page
       // once carried more repeated hex colours than text.

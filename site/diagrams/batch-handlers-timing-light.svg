@@ -1,34 +1,34 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 224" width="960" height="224" role="img" aria-labelledby="batch-handlers-timing-light-title batch-handlers-timing-light-desc">
 <title id="batch-handlers-timing-light-title">A full batch runs at once, and a partial batch runs after the linger</title>
 <desc id="batch-handlers-timing-light-desc">A worker with a batch handler for email.send claims 27 tasks. The handler takes a maximum of 20 tasks, with a linger of 50 ms. The first 20 tasks make a full batch, and the handler gets them at once. The other seven wait for the linger, and the handler gets them at about 50 ms. 27 tasks need two provider requests.</desc>
-<defs><marker id="arrow-light" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#4e5359"/></marker></defs>
-<rect width="960" height="224" fill="#f9fafb"/>
-<text x="24" y="40" fill="#1a2027" font-size="12" font-family="Geist" font-weight="600" text-anchor="start">email.send</text>
-<text x="24" y="55" fill="#4e5359" font-size="9" font-family="Geist Mono" font-weight="400" text-anchor="start">maxSize 20 · lingerMs 50</text>
-<text x="260" y="44" fill="#6d7277" font-size="8" font-family="Geist Mono" font-weight="400" text-anchor="middle">0 ms</text>
-<text x="360" y="44" fill="#6d7277" font-size="8" font-family="Geist Mono" font-weight="400" text-anchor="middle">10 ms</text>
-<text x="460" y="44" fill="#6d7277" font-size="8" font-family="Geist Mono" font-weight="400" text-anchor="middle">20 ms</text>
-<text x="560" y="44" fill="#6d7277" font-size="8" font-family="Geist Mono" font-weight="400" text-anchor="middle">30 ms</text>
-<text x="660" y="44" fill="#6d7277" font-size="8" font-family="Geist Mono" font-weight="400" text-anchor="middle">40 ms</text>
-<text x="760" y="44" fill="#6d7277" font-size="8" font-family="Geist Mono" font-weight="400" text-anchor="middle">50 ms</text>
-<text x="860" y="44" fill="#6d7277" font-size="8" font-family="Geist Mono" font-weight="400" text-anchor="middle">60 ms</text>
-<line x1="260" y1="52" x2="860" y2="52" stroke="rgba(26,32,39,0.14)"/>
-<text x="24" y="88" fill="#1a2027" font-size="11" font-family="Geist" font-weight="600" text-anchor="start">batch 1</text>
-<text x="24" y="103" fill="#4e5359" font-size="9" font-family="Geist Mono" font-weight="400" text-anchor="start">20 tasks · full</text>
-<rect x="260" y="72" width="150" height="40" rx="6" fill="#f9fafb"/>
-<rect x="260" y="72" width="150" height="40" rx="6" fill="rgba(213,92,19,0.08)" stroke="#aa4515" stroke-width="1.4"/>
-<text x="335" y="90" fill="#1a2027" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">handler call</text>
-<text x="335" y="104" fill="#4e5359" font-size="9" font-family="Geist Mono" text-anchor="middle">provider request 1</text>
-<text x="24" y="144" fill="#1a2027" font-size="11" font-family="Geist" font-weight="600" text-anchor="start">batch 2</text>
-<text x="24" y="159" fill="#4e5359" font-size="9" font-family="Geist Mono" font-weight="400" text-anchor="start">7 tasks · partial</text>
-<path d="M 752,148 H 758" fill="none" stroke="#4e5359" stroke-width="1.2" marker-end="url(#arrow-light)"/>
-<rect x="260" y="128" width="488" height="40" rx="6" fill="#f9fafb"/>
-<rect x="260" y="128" width="488" height="40" rx="6" fill="rgba(26,32,39,0.03)" stroke="rgba(26,32,39,0.4)" stroke-width="1" stroke-dasharray="4,3"/>
-<text x="504" y="146" fill="#1a2027" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">linger 50 ms</text>
-<text x="504" y="160" fill="#4e5359" font-size="9" font-family="Geist Mono" text-anchor="middle">waits for more tasks</text>
-<rect x="760" y="128" width="150" height="40" rx="6" fill="#f9fafb"/>
-<rect x="760" y="128" width="150" height="40" rx="6" fill="#ffffff" stroke="#1a2027" stroke-width="1"/>
-<text x="835" y="146" fill="#1a2027" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">handler call</text>
-<text x="835" y="160" fill="#4e5359" font-size="9" font-family="Geist Mono" text-anchor="middle">provider request 2</text>
-<text x="24" y="208" fill="#4e5359" font-size="9" font-family="Geist Mono" font-weight="400" text-anchor="start">27 tasks need two provider requests, not 27. Each task keeps its own lease and fence token.</text>
+<defs><marker id="arrow-light" markerWidth="8" markerHeight="8" refX="6.5" refY="4" orient="auto" markerUnits="userSpaceOnUse"><path d="M 1.5,1 L 6.5,4 L 1.5,7" fill="none" stroke="#7d7d7d" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/></marker></defs>
+<rect width="960" height="224" fill="#ffffff"/>
+<text x="24" y="40" fill="#000000" font-size="12" font-family="Timeless Grotesk, Geist, sans-serif" font-weight="500" text-anchor="start">email.send</text>
+<text x="24" y="55" fill="#555555" font-size="9" font-family="Geist Mono, monospace" font-weight="400" text-anchor="start">maxSize 20 · lingerMs 50</text>
+<text x="260" y="44" fill="#555555" font-size="8" font-family="Timeless Grotesk, Geist, sans-serif" font-weight="400" text-anchor="middle">0 ms</text>
+<text x="360" y="44" fill="#555555" font-size="8" font-family="Timeless Grotesk, Geist, sans-serif" font-weight="400" text-anchor="middle">10 ms</text>
+<text x="460" y="44" fill="#555555" font-size="8" font-family="Timeless Grotesk, Geist, sans-serif" font-weight="400" text-anchor="middle">20 ms</text>
+<text x="560" y="44" fill="#555555" font-size="8" font-family="Timeless Grotesk, Geist, sans-serif" font-weight="400" text-anchor="middle">30 ms</text>
+<text x="660" y="44" fill="#555555" font-size="8" font-family="Timeless Grotesk, Geist, sans-serif" font-weight="400" text-anchor="middle">40 ms</text>
+<text x="760" y="44" fill="#555555" font-size="8" font-family="Timeless Grotesk, Geist, sans-serif" font-weight="400" text-anchor="middle">50 ms</text>
+<text x="860" y="44" fill="#555555" font-size="8" font-family="Timeless Grotesk, Geist, sans-serif" font-weight="400" text-anchor="middle">60 ms</text>
+<line x1="260" y1="52" x2="860" y2="52" stroke="#e7e7e7"/>
+<text x="24" y="88" fill="#000000" font-size="11" font-family="Timeless Grotesk, Geist, sans-serif" font-weight="500" text-anchor="start">batch 1</text>
+<text x="24" y="103" fill="#555555" font-size="9" font-family="Timeless Grotesk, Geist, sans-serif" font-weight="400" text-anchor="start">20 tasks · full</text>
+<rect x="260" y="72" width="150" height="40" rx="8" fill="#ffffff"/>
+<rect x="260.5" y="72.5" width="149" height="39" rx="8" fill="rgba(207,145,72,0.12)" stroke="#cf9148" stroke-width="1"/>
+<text x="335" y="90" fill="#000000" font-size="11" font-weight="500" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">handler call</text>
+<text x="335" y="104" fill="#555555" font-size="9" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">provider request 1</text>
+<text x="24" y="144" fill="#000000" font-size="11" font-family="Timeless Grotesk, Geist, sans-serif" font-weight="500" text-anchor="start">batch 2</text>
+<text x="24" y="159" fill="#555555" font-size="9" font-family="Timeless Grotesk, Geist, sans-serif" font-weight="400" text-anchor="start">7 tasks · partial</text>
+<path d="M 752,148 H 758" fill="none" stroke="#7d7d7d" stroke-width="1" marker-end="url(#arrow-light)"/>
+<rect x="260" y="128" width="488" height="40" rx="8" fill="#ffffff"/>
+<rect x="260.5" y="128.5" width="487" height="39" rx="8" fill="#ffffff" stroke="#e7e7e7" stroke-width="1"/>
+<text x="504" y="146" fill="#555555" font-size="11" font-weight="500" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">linger 50 ms</text>
+<text x="504" y="160" fill="#555555" font-size="9" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">waits for more tasks</text>
+<rect x="760" y="128" width="150" height="40" rx="8" fill="#ffffff"/>
+<rect x="760.5" y="128.5" width="149" height="39" rx="8" fill="#ffffff" stroke="#cdcdcd" stroke-width="1"/>
+<text x="835" y="146" fill="#000000" font-size="11" font-weight="500" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">handler call</text>
+<text x="835" y="160" fill="#555555" font-size="9" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">provider request 2</text>
+<text x="24" y="208" fill="#555555" font-size="9" font-family="Timeless Grotesk, Geist, sans-serif" font-weight="400" text-anchor="start">27 tasks need two provider requests, not 27. Each task keeps its own lease and fence token.</text>
 </svg>

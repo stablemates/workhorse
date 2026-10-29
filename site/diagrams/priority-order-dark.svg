@@ -1,57 +1,57 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 280" width="960" height="280" role="img" aria-labelledby="priority-order-dark-title priority-order-dark-desc">
 <title id="priority-order-dark-title">An urgent ready task starts before older ordinary tasks</title>
 <desc id="priority-order-dark-desc">Queue billing has fifty ordinary reminders ready, and all worker slots are busy. At 2 s, the app enqueues an urgent reminder. At 3 s, a slot becomes free, and the worker gets the urgent reminder. At 4 s, another slot becomes free, and the worker gets the oldest ordinary reminder.</desc>
-<defs><marker id="arrow-dark" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#ced1d4"/></marker></defs>
-<rect width="960" height="280" fill="#04080e"/>
-<text x="24" y="40" fill="#f2f4f5" font-size="12" font-family="Geist" font-weight="600" text-anchor="start">billing</text>
-<text x="24" y="55" fill="#ced1d4" font-size="9" font-family="Geist Mono" font-weight="400" text-anchor="start">all slots are busy</text>
-<text x="286" y="44" fill="#95999d" font-size="8" font-family="Geist Mono" font-weight="400" text-anchor="middle">0 s</text>
-<text x="474" y="44" fill="#95999d" font-size="8" font-family="Geist Mono" font-weight="400" text-anchor="middle">2 s</text>
-<text x="662" y="44" fill="#95999d" font-size="8" font-family="Geist Mono" font-weight="400" text-anchor="middle">3 s</text>
-<text x="850" y="44" fill="#95999d" font-size="8" font-family="Geist Mono" font-weight="400" text-anchor="middle">4 s</text>
-<line x1="200" y1="52" x2="936" y2="52" stroke="rgba(242,244,245,0.14)"/>
-<text x="24" y="97" fill="#f2f4f5" font-size="10" font-family="Geist Mono">event</text>
-<rect x="200" y="72" width="172" height="40" rx="6" fill="#04080e"/>
-<rect x="200" y="72" width="172" height="40" rx="6" fill="rgba(242,244,245,0.03)" stroke="rgba(242,244,245,0.4)" stroke-width="1" stroke-dasharray="4,3"/>
-<text x="286" y="90" fill="#f2f4f5" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">50 ordinary ready</text>
-<text x="286" y="104" fill="#ced1d4" font-size="9" font-family="Geist Mono" text-anchor="middle">in FIFO order</text>
-<rect x="388" y="72" width="172" height="40" rx="6" fill="#04080e"/>
-<rect x="388" y="72" width="172" height="40" rx="6" fill="rgba(242,244,245,0.03)" stroke="rgba(242,244,245,0.4)" stroke-width="1" stroke-dasharray="4,3"/>
-<text x="474" y="90" fill="#f2f4f5" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">enqueue urgent</text>
-<text x="474" y="104" fill="#ced1d4" font-size="9" font-family="Geist Mono" text-anchor="middle">the reminder is ready</text>
-<rect x="576" y="72" width="172" height="40" rx="6" fill="#04080e"/>
-<rect x="576" y="72" width="172" height="40" rx="6" fill="rgba(242,244,245,0.03)" stroke="rgba(242,244,245,0.4)" stroke-width="1" stroke-dasharray="4,3"/>
-<text x="662" y="90" fill="#f2f4f5" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">a slot is free</text>
-<text x="662" y="104" fill="#ced1d4" font-size="9" font-family="Geist Mono" text-anchor="middle">the worker asks</text>
-<rect x="764" y="72" width="172" height="40" rx="6" fill="#04080e"/>
-<rect x="764" y="72" width="172" height="40" rx="6" fill="rgba(242,244,245,0.03)" stroke="rgba(242,244,245,0.4)" stroke-width="1" stroke-dasharray="4,3"/>
-<text x="850" y="90" fill="#f2f4f5" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">a slot is free</text>
-<text x="850" y="104" fill="#ced1d4" font-size="9" font-family="Geist Mono" text-anchor="middle">the worker asks</text>
-<text x="24" y="153" fill="#f2f4f5" font-size="10" font-family="Geist Mono">ready order</text>
-<rect x="200" y="128" width="172" height="40" rx="6" fill="#04080e"/>
-<rect x="200" y="128" width="172" height="40" rx="6" fill="rgba(242,244,245,0.05)" stroke="#ced1d4" stroke-width="1"/>
-<text x="286" y="146" fill="#f2f4f5" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">ordinary</text>
-<text x="286" y="160" fill="#ced1d4" font-size="9" font-family="Geist Mono" text-anchor="middle">oldest first</text>
-<rect x="388" y="128" width="172" height="40" rx="6" fill="#04080e"/>
-<rect x="388" y="128" width="172" height="40" rx="6" fill="rgba(242,244,245,0.05)" stroke="#ced1d4" stroke-width="1"/>
-<text x="474" y="146" fill="#f2f4f5" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">urgent first</text>
-<text x="474" y="160" fill="#ced1d4" font-size="9" font-family="Geist Mono" text-anchor="middle">then the ordinary</text>
-<rect x="576" y="128" width="172" height="40" rx="6" fill="#04080e"/>
-<rect x="576" y="128" width="172" height="40" rx="6" fill="rgba(242,244,245,0.05)" stroke="#ced1d4" stroke-width="1"/>
-<text x="662" y="146" fill="#f2f4f5" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">ordinary</text>
-<text x="662" y="160" fill="#ced1d4" font-size="9" font-family="Geist Mono" text-anchor="middle">oldest first</text>
-<rect x="764" y="128" width="172" height="40" rx="6" fill="#04080e"/>
-<rect x="764" y="128" width="172" height="40" rx="6" fill="rgba(242,244,245,0.05)" stroke="#ced1d4" stroke-width="1"/>
-<text x="850" y="146" fill="#f2f4f5" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">ordinary</text>
-<text x="850" y="160" fill="#ced1d4" font-size="9" font-family="Geist Mono" text-anchor="middle">49 are left</text>
-<text x="24" y="209" fill="#f2f4f5" font-size="10" font-family="Geist Mono">worker gets</text>
-<rect x="576" y="184" width="172" height="40" rx="6" fill="#04080e"/>
-<rect x="576" y="184" width="172" height="40" rx="6" fill="rgba(252,152,76,0.08)" stroke="#fc984c" stroke-width="1.4"/>
-<text x="662" y="202" fill="#f2f4f5" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">the urgent reminder</text>
-<text x="662" y="216" fill="#ced1d4" font-size="9" font-family="Geist Mono" text-anchor="middle">not the oldest</text>
-<rect x="764" y="184" width="172" height="40" rx="6" fill="#04080e"/>
-<rect x="764" y="184" width="172" height="40" rx="6" fill="#0a1017" stroke="#f2f4f5" stroke-width="1"/>
-<text x="850" y="202" fill="#f2f4f5" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">the oldest ordinary</text>
-<text x="850" y="216" fill="#ced1d4" font-size="9" font-family="Geist Mono" text-anchor="middle">no urgent is ready</text>
-<text x="24" y="264" fill="#ced1d4" font-size="9" font-family="Geist Mono" font-weight="400" text-anchor="start">The highest priority starts first. Tasks with the same priority keep their FIFO order.</text>
+<defs><marker id="arrow-dark" markerWidth="8" markerHeight="8" refX="6.5" refY="4" orient="auto" markerUnits="userSpaceOnUse"><path d="M 1.5,1 L 6.5,4 L 1.5,7" fill="none" stroke="#838383" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/></marker></defs>
+<rect width="960" height="280" fill="#000000"/>
+<text x="24" y="40" fill="#f4f4f4" font-size="12" font-family="Timeless Grotesk, Geist, sans-serif" font-weight="500" text-anchor="start">billing</text>
+<text x="24" y="55" fill="#cfcfcf" font-size="9" font-family="Timeless Grotesk, Geist, sans-serif" font-weight="400" text-anchor="start">all slots are busy</text>
+<text x="286" y="44" fill="#ababab" font-size="8" font-family="Timeless Grotesk, Geist, sans-serif" font-weight="400" text-anchor="middle">0 s</text>
+<text x="474" y="44" fill="#ababab" font-size="8" font-family="Timeless Grotesk, Geist, sans-serif" font-weight="400" text-anchor="middle">2 s</text>
+<text x="662" y="44" fill="#ababab" font-size="8" font-family="Timeless Grotesk, Geist, sans-serif" font-weight="400" text-anchor="middle">3 s</text>
+<text x="850" y="44" fill="#ababab" font-size="8" font-family="Timeless Grotesk, Geist, sans-serif" font-weight="400" text-anchor="middle">4 s</text>
+<line x1="200" y1="52" x2="936" y2="52" stroke="#2b2b2b"/>
+<text x="24" y="97" fill="#f4f4f4" font-size="10" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="start">event</text>
+<rect x="200" y="72" width="172" height="40" rx="8" fill="#000000"/>
+<rect x="200.5" y="72.5" width="171" height="39" rx="8" fill="#000000" stroke="#2b2b2b" stroke-width="1"/>
+<text x="286" y="90" fill="#cfcfcf" font-size="11" font-weight="500" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">50 ordinary ready</text>
+<text x="286" y="104" fill="#ababab" font-size="9" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">in FIFO order</text>
+<rect x="388" y="72" width="172" height="40" rx="8" fill="#000000"/>
+<rect x="388.5" y="72.5" width="171" height="39" rx="8" fill="#000000" stroke="#2b2b2b" stroke-width="1"/>
+<text x="474" y="90" fill="#cfcfcf" font-size="11" font-weight="500" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">enqueue urgent</text>
+<text x="474" y="104" fill="#ababab" font-size="9" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">the reminder is ready</text>
+<rect x="576" y="72" width="172" height="40" rx="8" fill="#000000"/>
+<rect x="576.5" y="72.5" width="171" height="39" rx="8" fill="#000000" stroke="#2b2b2b" stroke-width="1"/>
+<text x="662" y="90" fill="#cfcfcf" font-size="11" font-weight="500" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">a slot is free</text>
+<text x="662" y="104" fill="#ababab" font-size="9" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">the worker asks</text>
+<rect x="764" y="72" width="172" height="40" rx="8" fill="#000000"/>
+<rect x="764.5" y="72.5" width="171" height="39" rx="8" fill="#000000" stroke="#2b2b2b" stroke-width="1"/>
+<text x="850" y="90" fill="#cfcfcf" font-size="11" font-weight="500" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">a slot is free</text>
+<text x="850" y="104" fill="#ababab" font-size="9" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">the worker asks</text>
+<text x="24" y="153" fill="#f4f4f4" font-size="10" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="start">ready order</text>
+<rect x="200" y="128" width="172" height="40" rx="8" fill="#000000"/>
+<rect x="200.5" y="128.5" width="171" height="39" rx="8" fill="#202020" stroke="#2b2b2b" stroke-width="1"/>
+<text x="286" y="146" fill="#f4f4f4" font-size="11" font-weight="500" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">ordinary</text>
+<text x="286" y="160" fill="#ababab" font-size="9" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">oldest first</text>
+<rect x="388" y="128" width="172" height="40" rx="8" fill="#000000"/>
+<rect x="388.5" y="128.5" width="171" height="39" rx="8" fill="#202020" stroke="#2b2b2b" stroke-width="1"/>
+<text x="474" y="146" fill="#f4f4f4" font-size="11" font-weight="500" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">urgent first</text>
+<text x="474" y="160" fill="#ababab" font-size="9" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">then the ordinary</text>
+<rect x="576" y="128" width="172" height="40" rx="8" fill="#000000"/>
+<rect x="576.5" y="128.5" width="171" height="39" rx="8" fill="#202020" stroke="#2b2b2b" stroke-width="1"/>
+<text x="662" y="146" fill="#f4f4f4" font-size="11" font-weight="500" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">ordinary</text>
+<text x="662" y="160" fill="#ababab" font-size="9" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">oldest first</text>
+<rect x="764" y="128" width="172" height="40" rx="8" fill="#000000"/>
+<rect x="764.5" y="128.5" width="171" height="39" rx="8" fill="#202020" stroke="#2b2b2b" stroke-width="1"/>
+<text x="850" y="146" fill="#f4f4f4" font-size="11" font-weight="500" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">ordinary</text>
+<text x="850" y="160" fill="#ababab" font-size="9" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">49 are left</text>
+<text x="24" y="209" fill="#f4f4f4" font-size="10" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="start">worker gets</text>
+<rect x="576" y="184" width="172" height="40" rx="8" fill="#000000"/>
+<rect x="576.5" y="184.5" width="171" height="39" rx="8" fill="rgba(207,145,72,0.12)" stroke="#cf9148" stroke-width="1"/>
+<text x="662" y="202" fill="#f4f4f4" font-size="11" font-weight="500" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">the urgent reminder</text>
+<text x="662" y="216" fill="#ababab" font-size="9" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">not the oldest</text>
+<rect x="764" y="184" width="172" height="40" rx="8" fill="#000000"/>
+<rect x="764.5" y="184.5" width="171" height="39" rx="8" fill="#000000" stroke="#3d3d3d" stroke-width="1"/>
+<text x="850" y="202" fill="#f4f4f4" font-size="11" font-weight="500" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">the oldest ordinary</text>
+<text x="850" y="216" fill="#ababab" font-size="9" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">no urgent is ready</text>
+<text x="24" y="264" fill="#cfcfcf" font-size="9" font-family="Timeless Grotesk, Geist, sans-serif" font-weight="400" text-anchor="start">The highest priority starts first. Tasks with the same priority keep their FIFO order.</text>
 </svg>

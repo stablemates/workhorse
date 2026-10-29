@@ -98,6 +98,7 @@ describe("site/nginx.conf", async () => {
     const redirects = [...blocks].filter(([, body]) => /^\s*return 301\b/m.test(body));
     expect(redirects.map(([match]) => match)).toEqual([
       "= /favicon.ico",
+      "~ ^/docs/compare(?<compare_page>(?:/[^/]+?)?)(?<compare_twin>\\.md)?/?$",
       "~ ^(/.+)/$",
       "= /docs/job-dependencies",
       "= /docs/child-jobs",

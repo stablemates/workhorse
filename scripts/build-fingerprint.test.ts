@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, expect, it } from "vitest";
@@ -43,4 +43,14 @@ it("detects changed and deleted nested output chunks", async () => {
   expect(await treeFingerprint(root, ["dist"])).not.toBe(original);
   await rm(path.join(root, "dist/assets/chunk.js"));
   expect(await treeFingerprint(root, ["dist"])).not.toBe(original);
+});
+
+it("hashes a symbolic link to a directory by its target path", async () => {
+  const root = await fixture();
+  await mkdir(path.join(root, "public"));
+  await symlink("public", path.join(root, "linked"));
+  const original = await sourceFingerprint(root);
+  await rm(path.join(root, "linked"));
+  await symlink("dist", path.join(root, "linked"));
+  expect(await sourceFingerprint(root)).not.toBe(original);
 });

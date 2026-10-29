@@ -1,9 +1,9 @@
 import { copyFile, mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
 
 import {
+  compareHubUrl,
   comparisons,
   isPublished as isPublishedComparison,
-  productUrl,
 } from "../lib/comparisons.js";
 import { type Integration, type IntegrationCategory, isPublished } from "../lib/integrations.js";
 import { siteConfig } from "../lib/site.js";
@@ -22,27 +22,28 @@ import { readReleaseLines } from "./release-changelogs.js";
 import { loadSitePages } from "./site-pages.js";
 
 /**
- * Builds everything the docs routes need without loading Fumadocs at runtime.
+ * Builds everything the site needs from the content before either build runs.
  *
- * The Fumadocs loader in `lib/source.ts` reads the filesystem, so importing it
- * from a route drags `node:fs` into the browser bundle and the page dies on the
- * first client-side navigation. This script runs at build time instead and
- * emits plain JSON: the sidebar tree, one metadata record per page, the
- * sitemap, the robots file, and the prerender list.
+ * Blume renders the documentation pages at `/docs` from `blume/`, and the
+ * TanStack Start app renders the rest of the site. This script runs before both
+ * and emits plain JSON: the Blume sidebar, one metadata record per page, the
+ * sitemap, the robots file, the agent files, and the prerender list of the
+ * TanStack Start app.
  *
  * `content/docs/meta.json` owns the sidebar order, except under
  * `---Integrations---`, which `integrations.json` owns. This script turns the
- * separators into collapsible folders with no URL of their own, so the page
+ * separators into collapsible groups with no URL of their own, so the page
  * files stay flat and every `/docs/<slug>` URL keeps working.
  *
  * The one folder of page files is `content/docs/compare/`, which
- * `comparisons.json` owns in the same way under `---Compare---` (ADR 0104). Its
- * pages are served at `/docs/compare` and `/docs/compare/<product>`.
+ * `comparisons.json` owns (ADR 0104). The TanStack Start app serves its pages
+ * at `/compare` and `/compare/<product>` (ADR 0116), so they are not in the
+ * sidebar. `llms.txt` still lists them in a "Compare" section.
  */
 
 interface Group {
   readonly title: string;
-  /** Key in the icon map in `src/routes/docs.tsx`. Nested catalog groups carry none. */
+  /** A Lucide icon name that Blume shows beside the group. Nested catalog groups carry none. */
   readonly icon?: string;
   readonly defaultOpen?: boolean;
   readonly pages?: string[];
@@ -58,9 +59,9 @@ interface Group {
  * page keeps its title, and only the nav entry changes.
  */
 const sidebarLabels: Readonly<Record<string, string>> = {
+  concepts: "Overview",
   integrations: "Overview",
-  compare: "Overview",
-  migrate: "From another task queue",
+  migrate: "Migrate from another queue",
   enqueue: "Enqueue a task",
   contracts: "Validate payloads",
   idempotency: "Avoid duplicates",
@@ -234,16 +235,6 @@ const resolveIntegration = (entry: Integration): ResolvedIntegration => {
 const resolvedIntegrations = publishedIntegrations.map(resolveIntegration);
 
 /**
- * Which catalog pages carry a brand mark. The tree records the slug and
- * `src/routes/docs.tsx` reads the mark's two theme variants back out of the
- * catalog, so an integration's logo is declared in one place with everything
- * else about it.
- */
-const logos = new Set(
-  publishedIntegrations.filter((entry) => entry.logo).map((entry) => entry.slug),
-);
-
-/**
  * Sidebar labels for catalog pages. A catalog entry's name is already the short
  * form of its page title — "Serverless and edge" against "Can I use Workhorse
  * from a serverless app?" — so it is the label, and an integration still needs
@@ -252,15 +243,18 @@ const logos = new Set(
 const catalogLabels: Readonly<Record<string, string>> = Object.fromEntries(
   publishedIntegrations.map((entry) => [entry.slug, entry.name]),
 );
+/**
+ * Group icons, as Lucide names that Blume resolves. Each glyph says what the
+ * group does, and no two repeat.
+ */
 const groupIcons: Readonly<Record<string, string>> = {
-  "Getting started": "rocket",
-  "Producing work": "inbox",
-  "Executing work": "play",
-  Operating: "activity",
+  "Get started": "rocket",
+  "Core concepts": "box",
+  "Enqueue tasks": "inbox",
+  "Run tasks": "play",
   Integrations: "plug",
-  Compare: "compare",
-  "Migrate to Workhorse": "migrate",
-  Reference: "code",
+  Operate: "gauge",
+  Reference: "book-open",
 };
 
 /**
@@ -279,17 +273,19 @@ const catalogSubgroups: readonly Group[] = catalog.categories.map((category) => 
 }));
 
 /**
- * The sidebar group the comparison data owns. The hub sits first, then each
- * published product page in data order, so adding a page is one MDX file and
- * one entry in `comparisons.json`.
+ * The comparison pages. The hub sits first, then each published product page
+ * in data order, so adding a page is one MDX file and one entry in
+ * `comparisons.json`. They are site pages, not sidebar entries, and
+ * `llms.txt` lists them in a group of this name after the sidebar groups.
  */
-const compareGroup = "Compare";
+const compareGroupTitle = "Compare";
 const compareDir = "compare";
 const publishedComparisons = comparisons.products.filter(isPublishedComparison);
 const comparePages = [
   compareDir,
-  ...publishedComparisons.map((product) => productUrl(product).replace(/^\/docs\//, "")),
+  ...publishedComparisons.map((product) => `${compareDir}/${product.slug}`),
 ];
+const compareGroup: Group = { title: compareGroupTitle, pages: comparePages };
 
 const structure: Group[] = [];
 for (const entry of docsMeta.pages) {
@@ -303,9 +299,7 @@ for (const entry of docsMeta.pages) {
       defaultOpen: structure.length === 0,
       ...(separator[1] === catalogGroup
         ? { pages: ["integrations"], groups: catalogSubgroups }
-        : separator[1] === compareGroup
-          ? { pages: [...comparePages] }
-          : { pages: [] }),
+        : { pages: [] }),
     });
     continue;
   }
@@ -318,20 +312,17 @@ for (const entry of docsMeta.pages) {
         "Add the page to the catalog instead.",
     );
   }
-  if (group.title === compareGroup) {
-    throw new Error(
-      `meta.json lists "${entry}" under ${compareGroup}, which site/comparisons.json owns. ` +
-        "Add the product to the comparison data instead.",
-    );
-  }
   group.pages.push(entry);
 }
 
 if (!structure.some((group) => group.title === catalogGroup)) {
   throw new Error(`meta.json has no ---${catalogGroup}--- separator for the catalog to fill`);
 }
-if (!structure.some((group) => group.title === compareGroup)) {
-  throw new Error(`meta.json has no ---${compareGroup}--- separator for the comparisons to fill`);
+if (structure.some((group) => group.title === compareGroupTitle)) {
+  throw new Error(
+    `meta.json has a ---${compareGroupTitle}--- separator. The comparison pages are site pages ` +
+      "at /compare (ADR 0116), so the sidebar has no group for them.",
+  );
 }
 
 const entries = await readdir(contentDir, { withFileTypes: true });
@@ -351,7 +342,7 @@ if (unexpectedFolders.length > 0) {
 /**
  * The slug of a page is its path under `content/docs` without `.mdx`, except
  * that `compare/index.mdx` is the slug `compare`, because the hub is served at
- * `/docs/compare`. The page record keeps the real file path.
+ * `/compare`. The page record keeps the real file path.
  */
 const comparisonSlugs = compareEntries
   .filter((entry) => entry.isFile() && entry.name.endsWith(".mdx"))
@@ -371,7 +362,7 @@ for (const product of comparisons.products) {
   if (!isPublishedComparison(product) && comparisonSlugs.includes(slug)) {
     throw new Error(
       `The planned comparison "${product.slug}" already has a page. ` +
-        'Set its page to "published" so the sidebar and the hub link it.',
+        'Set its page to "published" so the hub and llms.txt link it.',
     );
   }
 }
@@ -448,6 +439,17 @@ const releaseMarkdown = [
       ]),
 ].join("\n");
 
+/**
+ * The URL of a page: `/docs/<slug>`, except the docs index at `/docs` and the
+ * comparison pages at `/compare` and `/compare/<product>`.
+ */
+const pageUrl = (slug: string) => {
+  if (slug === "index") return "/docs";
+  if (slug === compareDir) return compareHubUrl;
+  if (slug.startsWith(`${compareDir}/`)) return `/${slug}`;
+  return `/docs/${slug}`;
+};
+
 const pages = new Map<string, PageRecord>();
 /**
  * One Markdown document per page: the `# title` and `> description` lead
@@ -481,7 +483,7 @@ const pageRecords = await Promise.all(
     }
     const page: PageRecord = {
       slug,
-      url: slug === "index" ? "/docs" : `/docs/${slug}`,
+      url: pageUrl(slug),
       path: pagePath(slug),
       title,
       description,
@@ -496,33 +498,42 @@ for (const { page, markdown } of pageRecords) {
 
 const placed = new Set<string>();
 
-const pageNode = (slug: string) => {
+/**
+ * The sidebar in the shape of Blume's explicit `navigation.sidebar` items. A
+ * page is a `root` item with its own label, so the short sidebar label and the
+ * full page title can differ. `blume/blume.config.ts` reads this file.
+ */
+interface SidebarItem {
+  readonly label: string;
+  readonly root?: string;
+  readonly icon?: string;
+  readonly collapsed?: boolean;
+  readonly items?: readonly SidebarItem[];
+}
+
+const pageItem = (slug: string): SidebarItem => {
   const page = pages.get(slug);
   if (!page) throw new Error(`The sidebar lists "${slug}", which has no file in content/docs`);
   if (placed.has(slug)) throw new Error(`The sidebar lists "${slug}" more than once`);
   placed.add(slug);
   return {
-    type: "page" as const,
-    name: catalogLabels[slug] ?? sidebarLabels[slug] ?? page.title,
-    url: page.url,
-    ...(logos.has(slug) ? { icon: slug } : {}),
+    label: catalogLabels[slug] ?? sidebarLabels[slug] ?? page.title,
+    root: page.url,
   };
 };
 
-const folderNode = (group: Group): unknown => ({
-  type: "folder" as const,
-  name: group.title,
+const groupItem = (group: Group): SidebarItem => ({
+  label: group.title,
   ...(group.icon ? { icon: group.icon } : {}),
-  defaultOpen: group.defaultOpen ?? false,
-  children: [...(group.pages ?? []).map(pageNode), ...(group.groups ?? []).map(folderNode)],
+  ...(group.defaultOpen ? { collapsed: false } : {}),
+  items: [...(group.pages ?? []).map(pageItem), ...(group.groups ?? []).map(groupItem)],
 });
 
-const tree = {
-  name: docsMeta.title,
-  children: structure.map(folderNode),
-};
+const sidebar = structure.map(groupItem);
 
-const missing = slugs.filter((slug) => !placed.has(slug)).toSorted();
+const missing = slugs
+  .filter((slug) => !placed.has(slug) && !comparePages.includes(slug))
+  .toSorted();
 if (missing.length > 0) {
   throw new Error(
     `These pages exist but no sidebar group lists them: ${missing.join(", ")}. ` +
@@ -536,7 +547,38 @@ await mkdir(new URL("../public/", import.meta.url), { recursive: true });
 
 await writeFile(
   new URL("docs-index.json", outDir),
-  `${JSON.stringify({ tree, pages: Object.fromEntries(pages) }, null, 2)}\n`,
+  `${JSON.stringify({ pages: Object.fromEntries(pages) }, null, 2)}\n`,
+);
+
+await writeFile(new URL("blume-sidebar.json", outDir), `${JSON.stringify(sidebar, null, 2)}\n`);
+
+/**
+ * The comparison pages as the TanStack Start routes see them. `path` is
+ * relative to `content/docs/compare/`, the directory of the `compare`
+ * collection in `source.config.ts`, and `product` is the slug in
+ * `comparisons.json`, absent for the hub.
+ */
+await writeFile(
+  new URL("compare-index.json", outDir),
+  `${JSON.stringify(
+    {
+      pages: comparePages.map((slug) => {
+        const page = pages.get(slug);
+        if (!page) throw new Error(`The comparison page "${slug}" has no file in content/docs`);
+        const record = {
+          url: page.url,
+          path: page.path.slice(compareDir.length + 1),
+          title: page.title,
+          description: page.description,
+        };
+        return slug === compareDir
+          ? record
+          : Object.assign(record, { product: slug.slice(compareDir.length + 1) });
+      }),
+    },
+    null,
+    2,
+  )}\n`,
 );
 
 /**
@@ -592,6 +634,9 @@ await writeFile(
 
 const routes = [
   "/",
+  // The feature tour (`src/routes/features.tsx`). It is a route, not a page of
+  // a collection, so it is named here.
+  "/features",
   "/docs",
   ...[...pages.values()]
     .map((page) => page.url)
@@ -609,9 +654,31 @@ const routes = [
  */
 const notFoundRoute = "/not-found";
 
+/**
+ * `/demo` was the dashboard tour. It now only redirects an old link to the
+ * live demo (`src/routes/demo.tsx`), so, like `/not-found`, it is prerendered
+ * but stays out of the sitemap.
+ */
+const demoRedirectRoute = "/demo";
+
+/**
+ * The TanStack Start app prerenders every route except the documentation
+ * pages, which Blume builds from `blume/` into the same output directory.
+ */
+const isDocsRoute = (route: string) => route === "/docs" || route.startsWith("/docs/");
+
 await writeFile(
   new URL("prerender.json", outDir),
-  `${JSON.stringify([...routes, notFoundRoute, "/api/search"], null, 2)}\n`,
+  `${JSON.stringify(
+    [
+      ...routes.filter((route) => !isDocsRoute(route)),
+      demoRedirectRoute,
+      notFoundRoute,
+      "/api/search",
+    ],
+    null,
+    2,
+  )}\n`,
 );
 
 const base = siteConfig.url;
@@ -647,7 +714,9 @@ ${routes
 );
 
 /**
- * Markdown twins, one per page, at `/docs/<slug>.md`.
+ * Markdown twins, one per page, at the page URL with `.md` appended:
+ * `/docs/<slug>.md`, `/docs.md` for the docs index, and `/compare.md` and
+ * `/compare/<product>.md` for the comparison pages.
  *
  * An agent that fetches a docs URL gets an HTML shell it has to strip. These
  * files hand it the source instead. The title becomes an H1, every language tab
@@ -660,6 +729,11 @@ ${routes
  * runtime compatibility check answers that question.
  */
 await mkdir(new URL("../public/docs/", import.meta.url), { recursive: true });
+// Rebuilt from scratch for the reason the blog directory is below. The twins of
+// the comparison pages were under `docs/compare/` before ADR 0116, and nginx
+// now redirects those URLs, so a twin left there must not ship either.
+await rm(new URL("../public/compare/", import.meta.url), { recursive: true, force: true });
+await rm(new URL("../public/docs/compare/", import.meta.url), { recursive: true, force: true });
 await Promise.all(
   [...pages.values()].map(async (page) => {
     const document = markdownDocuments.get(page.slug);
@@ -672,12 +746,7 @@ await Promise.all(
       "---",
       "",
     ].join("\n");
-    // `index` is served at `/docs`, so its twin is `/docs.md`, not
-    // `/docs/index.md`. Every other page keeps its slug.
-    const target = new URL(
-      page.slug === "index" ? "../public/docs.md" : `../public/docs/${page.slug}.md`,
-      import.meta.url,
-    );
+    const target = new URL(`../public${page.url}.md`, import.meta.url);
     await mkdir(new URL("./", target), { recursive: true });
     await writeFile(target, `${frontmatter}\n${document}`);
   }),
@@ -803,18 +872,21 @@ const llmsFullSection = (group: Group, depth = 2): string => {
  * this file has already fetched everything, so routing it is a no-op; what it
  * still needs is where the index lives and how to install.
  *
- * The Compare group stays out of the full file (ADR 0104). An agent that
+ * The Compare group stays out of the full file (ADR 0104), and `structure`
+ * does not hold it. An agent that
  * integrates Workhorse does not need the product matrices, and each comparison
  * page would add its tables to every download. `llms.txt` still lists the
  * comparison pages, and each one keeps its Markdown twin.
  */
-const llmsFullGroups = structure.filter((group) => group.title !== compareGroup);
+const llmsFullGroups = structure;
+/** The groups of `llms.txt` and the 404 bodies: the sidebar groups, then the comparison pages. */
+const indexGroups = [...structure, compareGroup];
 const llmsFull = `# ${siteConfig.name}
 
 > ${siteConfig.description}
 
 This file is every documentation page in one download, except the product comparisons under
-${compareGroup}. For the page index and the Markdown URLs, read [llms.txt](${base}/llms.txt).
+${compareGroupTitle}. For the page index and the Markdown URLs, read [llms.txt](${base}/llms.txt).
 
 Install with the commands under ${installation.title} below. They name no version, and the runtime
 compatibility check confirms the schema before a process starts.
@@ -837,11 +909,11 @@ TypeScript, Python, Go, Rust, and Ruby — where the HTML page shows one.
 Install with the commands on [${installation.title}](${base}${installation.url}.md). They name no
 version, and the runtime compatibility check confirms the schema before a process starts.
 
-[llms-full.txt](${base}/llms-full.txt) is every page below in one file, except the ${compareGroup}
+[llms-full.txt](${base}/llms-full.txt) is every page below in one file, except the ${compareGroupTitle}
 pages, about ${llmsFullKilobytes} KB.
 
 ${renderWhenToUse(site, { entryPoint, installation, limitations })}
-${structure.map((group) => llmsSection(group)).join("\n")}
+${indexGroups.map((group) => llmsSection(group)).join("\n")}
 ${renderCliSection(site, { api: apiPage, installation, operations })}
 ${renderMachineReadable(site)}
 ## Optional
@@ -873,6 +945,8 @@ await writeFile(
 User-agent: *
 Allow: /
 Disallow: /api/
+Disallow: /blume-nav/
+Disallow: /blume-search.json
 Sitemap: ${base}/sitemap.xml
 `,
 );
@@ -883,7 +957,7 @@ Sitemap: ${base}/sitemap.xml
  * with status 404 either way. Both are derived from the same page records as
  * `llms.txt`, so a link in a 404 body cannot point at a page nobody ships.
  */
-const firstPages = structure.map((group) => {
+const firstPages = indexGroups.map((group) => {
   const slug = group.pages?.[0];
   const first = slug ? pages.get(slug) : undefined;
   if (!first) throw new Error(`The sidebar group "${group.title}" lists no first page`);

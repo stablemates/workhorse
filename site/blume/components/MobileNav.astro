@@ -1,0 +1,33 @@
+---
+import blogIndex from "../../.source/blog-index.json";
+import { currentNavItem, headerIcons, siteNavItems } from "../../lib/site-nav.ts";
+import NavTree from "../node_modules/blume/src/components/layout/NavTree.astro";
+
+/**
+ * The drawer of the documentation pages below 1024px. The header shows only
+ * its icons at those widths, so the drawer lists the header items first, as
+ * the menu of the other pages does, and then the sidebar.
+ */
+type Props = Parameters<typeof NavTree>[0];
+
+const items = siteNavItems({ hasPosts: blogIndex.posts.length > 0 });
+const current = currentNavItem(items, Astro.props.currentRoute);
+---
+
+<nav class="wh-nav-drawer-links" aria-label="Site">
+  {
+    items.map((item) =>
+      item.match.kind === "external" ? (
+        <a class="wh-hdr-link" href={item.href} target="_blank" rel="noreferrer noopener">
+          {item.label}
+          <span class="wh-hdr-ext" set:html={headerIcons.external} />
+        </a>
+      ) : (
+        <a class="wh-hdr-link" href={item.href} aria-current={item === current ? "page" : undefined}>
+          {item.label}
+        </a>
+      ),
+    )
+  }
+</nav>
+<NavTree {...Astro.props} />

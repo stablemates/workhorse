@@ -1,38 +1,38 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 340" width="960" height="340" role="img" aria-labelledby="kubernetes-workloads-light-title kubernetes-workloads-light-desc">
 <title id="kubernetes-workloads-light-title">The schema Job runs first; the dashboard stays behind an internal Service</title>
 <desc id="kubernetes-workloads-light-desc">Step 1: the schema Job migrates the schema and verifies it. Step 2: the worker Deployment, with two replicas and probes on port 9090, and the dashboard Deployment, with one replica, start from the same image. Your authenticated HTTPS ingress reaches the dashboard through an internal ClusterIP Service. Each workload connects to PostgreSQL with the URL from the Secret workhorse-database.</desc>
-<defs><marker id="arrow-light" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#4e5359"/></marker></defs>
-<rect width="960" height="340" fill="#f9fafb"/>
-<path d="M 224,130 H 248 V 82 H 270" fill="none" stroke="#4e5359" stroke-width="1.2" marker-end="url(#arrow-light)"/>
-<path d="M 224,130 H 248 V 178 H 270" fill="none" stroke="#4e5359" stroke-width="1.2" marker-end="url(#arrow-light)"/>
-<path d="M 552,82 H 506" fill="none" stroke="#4e5359" stroke-width="1.2" marker-end="url(#arrow-light)"/>
-<path d="M 768,82 H 722" fill="none" stroke="#4e5359" stroke-width="1.2" marker-end="url(#arrow-light)"/>
-<path d="M 124,156 V 246" fill="none" stroke="#4e5359" stroke-width="1.2" marker-end="url(#arrow-light)"/>
-<path d="M 388,204 V 246" fill="none" stroke="#4e5359" stroke-width="1.2" marker-end="url(#arrow-light)"/>
-<path d="M 504,96 H 528 V 246" fill="none" stroke="#4e5359" stroke-width="1.2" marker-end="url(#arrow-light)"/>
-<rect x="24" y="104" width="200" height="52" rx="6" fill="#f9fafb"/>
-<rect x="24" y="104" width="200" height="52" rx="6" fill="rgba(26,32,39,0.05)" stroke="#4e5359" stroke-width="1"/>
-<text x="124" y="128" fill="#1a2027" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">1 · schema Job</text>
-<text x="124" y="142" fill="#4e5359" font-size="9" font-family="Geist Mono" text-anchor="middle">migrate, then verify</text>
-<rect x="272" y="56" width="232" height="52" rx="6" fill="#f9fafb"/>
-<rect x="272" y="56" width="232" height="52" rx="6" fill="#ffffff" stroke="#1a2027" stroke-width="1"/>
-<text x="388" y="80" fill="#1a2027" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">2 · dashboard Deployment</text>
-<text x="388" y="94" fill="#4e5359" font-size="9" font-family="Geist Mono" text-anchor="middle">1 replica</text>
-<rect x="552" y="56" width="168" height="52" rx="6" fill="#f9fafb"/>
-<rect x="552" y="56" width="168" height="52" rx="6" fill="#ffffff" stroke="#1a2027" stroke-width="1"/>
-<text x="636" y="80" fill="#1a2027" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">ClusterIP Service</text>
-<text x="636" y="94" fill="#4e5359" font-size="9" font-family="Geist Mono" text-anchor="middle">internal only</text>
-<rect x="768" y="56" width="168" height="52" rx="6" fill="#f9fafb"/>
-<rect x="768" y="56" width="168" height="52" rx="6" fill="rgba(26,32,39,0.03)" stroke="rgba(26,32,39,0.4)" stroke-width="1" stroke-dasharray="4,3"/>
-<text x="852" y="80" fill="#1a2027" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">your HTTPS ingress</text>
-<text x="852" y="94" fill="#4e5359" font-size="9" font-family="Geist Mono" text-anchor="middle">with authentication</text>
-<rect x="272" y="152" width="232" height="52" rx="6" fill="#f9fafb"/>
-<rect x="272" y="152" width="232" height="52" rx="6" fill="rgba(213,92,19,0.08)" stroke="#aa4515" stroke-width="1.4"/>
-<text x="388" y="176" fill="#1a2027" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">2 · worker Deployment</text>
-<text x="388" y="190" fill="#4e5359" font-size="9" font-family="Geist Mono" text-anchor="middle">2 replicas · probes on :9090</text>
-<rect x="24" y="248" width="912" height="44" rx="6" fill="#f9fafb"/>
-<rect x="24" y="248" width="912" height="44" rx="6" fill="rgba(26,32,39,0.05)" stroke="#4e5359" stroke-width="1"/>
-<text x="480" y="268" fill="#1a2027" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">PostgreSQL</text>
-<text x="480" y="282" fill="#4e5359" font-size="9" font-family="Geist Mono" text-anchor="middle">the URL comes from the Secret workhorse-database</text>
-<text x="24" y="324" fill="#4e5359" font-size="9" font-family="Geist Mono" font-weight="400" text-anchor="start">Apply the Job and wait until it succeeds. Then apply both Deployments with the same image.</text>
+<defs><marker id="arrow-light" markerWidth="8" markerHeight="8" refX="6.5" refY="4" orient="auto" markerUnits="userSpaceOnUse"><path d="M 1.5,1 L 6.5,4 L 1.5,7" fill="none" stroke="#7d7d7d" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/></marker></defs>
+<rect width="960" height="340" fill="#ffffff"/>
+<path d="M 224,130 H 248 V 82 H 270" fill="none" stroke="#7d7d7d" stroke-width="1" marker-end="url(#arrow-light)"/>
+<path d="M 224,130 H 248 V 178 H 270" fill="none" stroke="#7d7d7d" stroke-width="1" marker-end="url(#arrow-light)"/>
+<path d="M 552,82 H 506" fill="none" stroke="#7d7d7d" stroke-width="1" marker-end="url(#arrow-light)"/>
+<path d="M 768,82 H 722" fill="none" stroke="#7d7d7d" stroke-width="1" marker-end="url(#arrow-light)"/>
+<path d="M 124,156 V 246" fill="none" stroke="#7d7d7d" stroke-width="1" marker-end="url(#arrow-light)"/>
+<path d="M 388,204 V 246" fill="none" stroke="#7d7d7d" stroke-width="1" marker-end="url(#arrow-light)"/>
+<path d="M 504,96 H 528 V 246" fill="none" stroke="#7d7d7d" stroke-width="1" marker-end="url(#arrow-light)"/>
+<rect x="24" y="104" width="200" height="52" rx="8" fill="#ffffff"/>
+<rect x="24.5" y="104.5" width="199" height="51" rx="8" fill="#f4f4f4" stroke="#e7e7e7" stroke-width="1"/>
+<text x="124" y="128" fill="#000000" font-size="11" font-weight="500" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">1 · schema Job</text>
+<text x="124" y="142" fill="#555555" font-size="9" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">migrate, then verify</text>
+<rect x="272" y="56" width="232" height="52" rx="8" fill="#ffffff"/>
+<rect x="272.5" y="56.5" width="231" height="51" rx="8" fill="#ffffff" stroke="#cdcdcd" stroke-width="1"/>
+<text x="388" y="80" fill="#000000" font-size="11" font-weight="500" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">2 · dashboard Deployment</text>
+<text x="388" y="94" fill="#555555" font-size="9" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">1 replica</text>
+<rect x="552" y="56" width="168" height="52" rx="8" fill="#ffffff"/>
+<rect x="552.5" y="56.5" width="167" height="51" rx="8" fill="#ffffff" stroke="#cdcdcd" stroke-width="1"/>
+<text x="636" y="80" fill="#000000" font-size="11" font-weight="500" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">ClusterIP Service</text>
+<text x="636" y="94" fill="#555555" font-size="9" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">internal only</text>
+<rect x="768" y="56" width="168" height="52" rx="8" fill="#ffffff"/>
+<rect x="768.5" y="56.5" width="167" height="51" rx="8" fill="#ffffff" stroke="#e7e7e7" stroke-width="1"/>
+<text x="852" y="80" fill="#555555" font-size="11" font-weight="500" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">your HTTPS ingress</text>
+<text x="852" y="94" fill="#555555" font-size="9" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">with authentication</text>
+<rect x="272" y="152" width="232" height="52" rx="8" fill="#ffffff"/>
+<rect x="272.5" y="152.5" width="231" height="51" rx="8" fill="rgba(207,145,72,0.12)" stroke="#cf9148" stroke-width="1"/>
+<text x="388" y="176" fill="#000000" font-size="11" font-weight="500" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">2 · worker Deployment</text>
+<text x="388" y="190" fill="#555555" font-size="9" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">2 replicas · probes on :9090</text>
+<rect x="24" y="248" width="912" height="44" rx="8" fill="#ffffff"/>
+<rect x="24.5" y="248.5" width="911" height="43" rx="8" fill="#f4f4f4" stroke="#e7e7e7" stroke-width="1"/>
+<text x="480" y="268" fill="#000000" font-size="11" font-weight="500" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">PostgreSQL</text>
+<text x="480" y="282" fill="#555555" font-size="9" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">the URL comes from the Secret workhorse-database</text>
+<text x="24" y="324" fill="#555555" font-size="9" font-family="Timeless Grotesk, Geist, sans-serif" font-weight="400" text-anchor="start">Apply the Job and wait until it succeeds. Then apply both Deployments with the same image.</text>
 </svg>

@@ -85,7 +85,7 @@ export function Diagram({
         ))}
         <span
           aria-hidden
-          className="mt-2 flex items-center justify-end gap-1.5 font-mono text-xs text-fd-muted-foreground transition-colors group-hover:text-fd-foreground group-focus-visible:text-fd-foreground"
+          className="mt-2 flex items-center justify-end gap-1.5 text-xs text-fd-muted-foreground transition-colors group-hover:text-fd-foreground group-focus-visible:text-fd-foreground"
         >
           <HugeiconsIcon icon={ArrowExpand01Icon} size={13} strokeWidth={1.8} />
           Full size
@@ -114,7 +114,7 @@ export function Diagram({
         </div>
         <button
           type="button"
-          className="fixed top-3 right-3 rounded-md border border-fd-border bg-fd-background p-2 text-fd-muted-foreground hover:text-fd-foreground"
+          className="fixed top-3 right-3 rounded-ui-s bg-wh-subtle p-2 text-wh-muted transition-colors duration-150 hover:bg-(--wh-control-hover) hover:text-wh-fg"
           aria-label="Close the diagram"
           onClick={() => dialog.current?.close()}
         >

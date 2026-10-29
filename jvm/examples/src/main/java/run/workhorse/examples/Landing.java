@@ -50,6 +50,10 @@ import run.workhorse.dashboard.DashboardAuthorization;
  * The Java snippets of the landing page (https://workhorse.run). Each {@code docs:start
  * landing-<name>-java} region is one snippet. Each nested class holds one snippet, as each module
  * of {@code rust/examples/landing.rs} does, so that two snippets can use the same method name.
+ *
+ * <p>The landing page shows the pillar snippets beside their execution journals, in a pane of about
+ * 72 columns. google-java-format joins every statement that fits in 100 columns, so a {@code
+ * spotless:off} fence keeps those regions in its style at 72 columns.
  */
 public final class Landing {
   private Landing() {}
@@ -104,12 +108,14 @@ public final class Landing {
   static final class CheckpointsExample {
     private CheckpointsExample() {}
 
+    // spotless:off
     // docs:start landing-checkpoints-java
     static Map<String, Object> chargeCard(@Nullable Object amount) {
       return Map.of("id", "ch_" + amount);
     }
 
-    static Map<String, @Nullable Object> renderInvoice(@Nullable Object chargeId) {
+    static Map<String, @Nullable Object> renderInvoice(
+        @Nullable Object chargeId) {
       return Map.of("chargeId", chargeId);
     }
 
@@ -118,18 +124,25 @@ public final class Landing {
           "invoice.issue",
           Map.class,
           (context, invoice) -> {
-            // After Workhorse stores a checkpoint result, later runs return it.
+            // Later runs return the stored checkpoint result.
             Map<?, ?> charge =
-                context.checkpoint("charge", Map.class, () -> chargeCard(invoice.get("amount")));
+                context.checkpoint(
+                    "charge",
+                    Map.class,
+                    () -> chargeCard(invoice.get("amount")));
 
             Map<?, ?> pdf =
-                context.checkpoint("render", Map.class, () -> renderInvoice(charge.get("id")));
+                context.checkpoint(
+                    "render",
+                    Map.class,
+                    () -> renderInvoice(charge.get("id")));
 
             System.out.println("email " + invoice.get("email") + " " + pdf);
             return Map.of("chargeId", charge.get("id"));
           });
     }
     // docs:end
+    // spotless:on
   }
 
   /** A durable sleep. */
@@ -205,48 +218,59 @@ public final class Landing {
   static final class SchedulesExample {
     private SchedulesExample() {}
 
+    // spotless:off
     // docs:start landing-schedules-java
     static void run(DataSource dataSource) {
       // Run on every deployment with the complete list.
       ScheduledTask task = ScheduledTask.of("invoices.generate", Map.of());
       ScheduleDefinition schedule =
           new ScheduleDefinition("nightly-invoice-run", "0 2 * * *", task);
-      new Queue(ConnectionSource.of(dataSource)).syncSchedules("billing", List.of(schedule), true);
+      Queue queue = new Queue(ConnectionSource.of(dataSource));
+      queue.syncSchedules("billing", List.of(schedule), true);
 
       // Any worker in the namespace fires due schedules itself.
-      Worker worker = Worker.builder(dataSource).scheduleNamespaces("billing").build();
+      Worker worker =
+          Worker.builder(dataSource).scheduleNamespaces("billing").build();
       WorkerProcess.runWorkerProcess(worker);
     }
     // docs:end
+    // spotless:on
   }
 
   /** Concurrency and rate limits. */
   static final class FlowControlExample {
     private FlowControlExample() {}
 
+    // spotless:off
     // docs:start landing-flow-control-java
     static void configure(Queue queue, String messageId, String tenantId) {
       // At most 20 mail tasks active; at most 2 per tenant.
-      ConcurrencyPolicyDefinition mail = new ConcurrencyPolicyDefinition("mail", 20, 2);
+      ConcurrencyPolicyDefinition mail =
+          new ConcurrencyPolicyDefinition("mail", 20, 2);
       queue.syncConcurrencyPolicies("workers", List.of(mail), false);
 
+      RateLimit rate = new RateLimit(100, Duration.ofSeconds(1), 200);
       RateLimitPolicyDefinition provider =
-          new RateLimitPolicyDefinition(
-              "provider-api", new RateLimit(100, Duration.ofSeconds(1), 200));
+          new RateLimitPolicyDefinition("provider-api", rate);
       queue.syncRateLimitPolicies("workers", List.of(provider), false);
 
       queue.enqueue(
           "mail.send",
           Map.of("messageId", messageId),
-          EnqueueOptions.builder().queue("mail").concurrencyKey("tenant:" + tenantId).build());
+          EnqueueOptions.builder()
+              .queue("mail")
+              .concurrencyKey("tenant:" + tenantId)
+              .build());
     }
     // docs:end
+    // spotless:on
   }
 
   /** Dependencies and child tasks. */
   static final class DependenciesExample {
     private DependenciesExample() {}
 
+    // spotless:off
     // docs:start landing-dependencies-java
     static void confirm(Queue queue, String orderId) {
       Map<String, Object> order = Map.of("orderId", orderId);
@@ -258,8 +282,9 @@ public final class Landing {
               DependencyPolicy.RELEASE,
               DependencyPolicy.CANCEL,
               DependencyPolicy.CANCEL);
-      queue.enqueue(
-          "order.confirm", order, EnqueueOptions.builder().dependencies(dependencies).build());
+      EnqueueOptions options =
+          EnqueueOptions.builder().dependencies(dependencies).build();
+      queue.enqueue("order.confirm", order, options);
     }
 
     static Worker.Builder registerFulfillment(Worker.Builder worker) {
@@ -267,14 +292,22 @@ public final class Landing {
           "order.fulfill",
           Map.class,
           (context, order) -> {
-            EnqueueOptions options = EnqueueOptions.builder().queue("payments").build();
-            Map<String, @Nullable Object> capture = Map.of("orderId", order.get("id"));
+            EnqueueOptions options =
+                EnqueueOptions.builder().queue("payments").build();
+            Map<String, @Nullable Object> capture =
+                Map.of("orderId", order.get("id"));
             Map<?, ?> receipt =
-                context.runChild("charge", "payment.capture", capture, options, Map.class);
+                context.runChild(
+                    "charge",
+                    "payment.capture",
+                    capture,
+                    options,
+                    Map.class);
             return Map.of("receipt", receipt);
           });
     }
     // docs:end
+    // spotless:on
   }
 
   /** Debounce. */
@@ -299,26 +332,33 @@ public final class Landing {
   static final class ExternalWaitsExample {
     private ExternalWaitsExample() {}
 
+    // spotless:off
     // docs:start landing-external-waits-java
     static Worker.Builder registerRelease(Worker.Builder worker) {
       return worker.handle(
           "release.publish",
           Map.class,
           (context, release) -> {
-            Object scan = context.waitForSignal("security-scan", Object.class, null);
+            Object scan =
+                context.waitForSignal("security-scan", Object.class, null);
 
             Map<String, @Nullable Object> request =
                 Map.of("releaseId", release.get("id"), "scan", scan);
-            Map<?, ?> review = context.waitForHuman("release-approval", request, Map.class, null);
+            Map<?, ?> review =
+                context.waitForHuman(
+                    "release-approval", request, Map.class, null);
 
             return Map.of("published", review.get("approved"));
           });
     }
 
-    static void deliverScan(Queue queue, UUID taskId, Object result, String deliveryId) {
-      queue.sendSignal(taskId, "security-scan", result, deliveryId, "security-scanner");
+    static void deliverScan(
+        Queue queue, UUID taskId, Object result, String deliveryId) {
+      queue.sendSignal(
+          taskId, "security-scan", result, deliveryId, "security-scanner");
     }
     // docs:end
+    // spotless:on
   }
 
   /** Batch handlers. */
