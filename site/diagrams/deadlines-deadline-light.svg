@@ -1,40 +1,40 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 228" width="960" height="228" role="img" aria-labelledby="deadlines-deadline-light-title deadlines-deadline-light-desc">
 <title id="deadlines-deadline-light-title">A deadline ends the task, even if attempts are left</title>
 <desc id="deadlines-deadline-light-desc">A price.quote task has a deadline of 20:00. Attempts 1 to 3 fail between 18:00 and 19:40, and attempt 4 waits until 20:05. At 20:00, the deadline passes while no worker holds the task. Soon after, maintenance ends the task as failed, and attempt 4 does not start.</desc>
-<defs><marker id="arrow-light" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#4e5359"/></marker></defs>
-<rect width="960" height="228" fill="#f9fafb"/>
-<text x="24" y="40" fill="#1a2027" font-size="12" font-family="Geist" font-weight="600" text-anchor="start">price.quote</text>
-<text x="24" y="55" fill="#4e5359" font-size="9" font-family="Geist Mono" font-weight="400" text-anchor="start">deadline 20:00</text>
-<text x="286" y="44" fill="#6d7277" font-size="8" font-family="Geist Mono" font-weight="400" text-anchor="middle">18:00</text>
-<text x="474" y="44" fill="#6d7277" font-size="8" font-family="Geist Mono" font-weight="400" text-anchor="middle">until 19:40</text>
-<text x="662" y="44" fill="#6d7277" font-size="8" font-family="Geist Mono" font-weight="400" text-anchor="middle">20:00</text>
-<text x="850" y="44" fill="#6d7277" font-size="8" font-family="Geist Mono" font-weight="400" text-anchor="middle">20:05</text>
-<line x1="200" y1="52" x2="936" y2="52" stroke="rgba(26,32,39,0.14)"/>
-<text x="24" y="97" fill="#1a2027" font-size="10" font-family="Geist Mono">attempts</text>
-<rect x="200" y="72" width="172" height="40" rx="6" fill="#f9fafb"/>
-<rect x="200" y="72" width="172" height="40" rx="6" fill="#ffffff" stroke="#1a2027" stroke-width="1"/>
-<text x="286" y="90" fill="#1a2027" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">attempt 1 fails</text>
-<text x="286" y="104" fill="#4e5359" font-size="9" font-family="Geist Mono" text-anchor="middle">the provider is down</text>
-<rect x="388" y="72" width="172" height="40" rx="6" fill="#f9fafb"/>
-<rect x="388" y="72" width="172" height="40" rx="6" fill="#ffffff" stroke="#1a2027" stroke-width="1"/>
-<text x="474" y="90" fill="#1a2027" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">attempts 2 and 3 fail</text>
-<text x="474" y="104" fill="#4e5359" font-size="9" font-family="Geist Mono" text-anchor="middle">each wait is longer</text>
-<rect x="764" y="72" width="172" height="40" rx="6" fill="#f9fafb"/>
-<rect x="764" y="72" width="172" height="40" rx="6" fill="rgba(26,32,39,0.03)" stroke="rgba(26,32,39,0.4)" stroke-width="1" stroke-dasharray="4,3"/>
-<text x="850" y="90" fill="#1a2027" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">attempt 4</text>
-<text x="850" y="104" fill="#4e5359" font-size="9" font-family="Geist Mono" text-anchor="middle">does not start</text>
-<text x="24" y="153" fill="#1a2027" font-size="10" font-family="Geist Mono">task</text>
-<rect x="200" y="128" width="172" height="40" rx="6" fill="#f9fafb"/>
-<rect x="200" y="128" width="172" height="40" rx="6" fill="rgba(26,32,39,0.05)" stroke="#4e5359" stroke-width="1"/>
-<text x="286" y="146" fill="#1a2027" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">scheduled</text>
-<text x="286" y="160" fill="#4e5359" font-size="9" font-family="Geist Mono" text-anchor="middle">waits for attempt 2</text>
-<rect x="388" y="128" width="172" height="40" rx="6" fill="#f9fafb"/>
-<rect x="388" y="128" width="172" height="40" rx="6" fill="rgba(26,32,39,0.05)" stroke="#4e5359" stroke-width="1"/>
-<text x="474" y="146" fill="#1a2027" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">scheduled</text>
-<text x="474" y="160" fill="#4e5359" font-size="9" font-family="Geist Mono" text-anchor="middle">attempt 4 at 20:05</text>
-<rect x="576" y="128" width="172" height="40" rx="6" fill="#f9fafb"/>
-<rect x="576" y="128" width="172" height="40" rx="6" fill="rgba(213,92,19,0.08)" stroke="#aa4515" stroke-width="1.4"/>
-<text x="662" y="146" fill="#1a2027" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">failed</text>
-<text x="662" y="160" fill="#4e5359" font-size="9" font-family="Geist Mono" text-anchor="middle">soon after 20:00</text>
-<text x="24" y="212" fill="#4e5359" font-size="9" font-family="Geist Mono" font-weight="400" text-anchor="start">A deadline ends the task at a fixed time. Attempts that are left do not start.</text>
+<defs><marker id="arrow-light" markerWidth="8" markerHeight="8" refX="6.5" refY="4" orient="auto" markerUnits="userSpaceOnUse"><path d="M 1.5,1 L 6.5,4 L 1.5,7" fill="none" stroke="#7d7d7d" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/></marker></defs>
+<rect width="960" height="228" fill="#ffffff"/>
+<text x="24" y="40" fill="#000000" font-size="12" font-family="Timeless Grotesk, Geist, sans-serif" font-weight="500" text-anchor="start">price.quote</text>
+<text x="24" y="55" fill="#555555" font-size="9" font-family="Geist Mono, monospace" font-weight="400" text-anchor="start">deadline 20:00</text>
+<text x="286" y="44" fill="#555555" font-size="8" font-family="Geist Mono, monospace" font-weight="400" text-anchor="middle">18:00</text>
+<text x="474" y="44" fill="#555555" font-size="8" font-family="Geist Mono, monospace" font-weight="400" text-anchor="middle">until 19:40</text>
+<text x="662" y="44" fill="#555555" font-size="8" font-family="Geist Mono, monospace" font-weight="400" text-anchor="middle">20:00</text>
+<text x="850" y="44" fill="#555555" font-size="8" font-family="Geist Mono, monospace" font-weight="400" text-anchor="middle">20:05</text>
+<line x1="200" y1="52" x2="936" y2="52" stroke="#e7e7e7"/>
+<text x="24" y="97" fill="#000000" font-size="10" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="start">attempts</text>
+<rect x="200" y="72" width="172" height="40" rx="8" fill="#ffffff"/>
+<rect x="200.5" y="72.5" width="171" height="39" rx="8" fill="#ffffff" stroke="#cdcdcd" stroke-width="1"/>
+<text x="286" y="90" fill="#000000" font-size="11" font-weight="500" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">attempt 1 fails</text>
+<text x="286" y="104" fill="#555555" font-size="9" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">the provider is down</text>
+<rect x="388" y="72" width="172" height="40" rx="8" fill="#ffffff"/>
+<rect x="388.5" y="72.5" width="171" height="39" rx="8" fill="#ffffff" stroke="#cdcdcd" stroke-width="1"/>
+<text x="474" y="90" fill="#000000" font-size="11" font-weight="500" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">attempts 2 and 3 fail</text>
+<text x="474" y="104" fill="#555555" font-size="9" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">each wait is longer</text>
+<rect x="764" y="72" width="172" height="40" rx="8" fill="#ffffff"/>
+<rect x="764.5" y="72.5" width="171" height="39" rx="8" fill="#ffffff" stroke="#e7e7e7" stroke-width="1"/>
+<text x="850" y="90" fill="#555555" font-size="11" font-weight="500" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">attempt 4</text>
+<text x="850" y="104" fill="#555555" font-size="9" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">does not start</text>
+<text x="24" y="153" fill="#000000" font-size="10" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="start">task</text>
+<rect x="200" y="128" width="172" height="40" rx="8" fill="#ffffff"/>
+<rect x="200.5" y="128.5" width="171" height="39" rx="8" fill="#f4f4f4" stroke="#e7e7e7" stroke-width="1"/>
+<text x="286" y="146" fill="#000000" font-size="11" font-weight="500" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">scheduled</text>
+<text x="286" y="160" fill="#555555" font-size="9" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">waits for attempt 2</text>
+<rect x="388" y="128" width="172" height="40" rx="8" fill="#ffffff"/>
+<rect x="388.5" y="128.5" width="171" height="39" rx="8" fill="#f4f4f4" stroke="#e7e7e7" stroke-width="1"/>
+<text x="474" y="146" fill="#000000" font-size="11" font-weight="500" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">scheduled</text>
+<text x="474" y="160" fill="#555555" font-size="9" font-family="Geist Mono, monospace" text-anchor="middle">attempt 4 at 20:05</text>
+<rect x="576" y="128" width="172" height="40" rx="8" fill="#ffffff"/>
+<rect x="576.5" y="128.5" width="171" height="39" rx="8" fill="rgba(207,145,72,0.12)" stroke="#cf9148" stroke-width="1"/>
+<text x="662" y="146" fill="#000000" font-size="11" font-weight="500" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">failed</text>
+<text x="662" y="160" fill="#555555" font-size="9" font-family="Geist Mono, monospace" text-anchor="middle">soon after 20:00</text>
+<text x="24" y="212" fill="#555555" font-size="9" font-family="Timeless Grotesk, Geist, sans-serif" font-weight="400" text-anchor="start">A deadline ends the task at a fixed time. Attempts that are left do not start.</text>
 </svg>

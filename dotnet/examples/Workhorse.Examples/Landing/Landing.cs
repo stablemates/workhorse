@@ -65,22 +65,28 @@ public static class CheckpointsExample
 
     public sealed record Pdf(string ChargeId);
 
-    public static Task<Charge> ChargeCardAsync(long amount) => Task.FromResult(new Charge($"ch_{amount}"));
+    public static Task<Charge> ChargeCardAsync(long amount) =>
+        Task.FromResult(new Charge($"ch_{amount}"));
 
-    public static Task<Pdf> RenderInvoiceAsync(string chargeId) => Task.FromResult(new Pdf(chargeId));
+    public static Task<Pdf> RenderInvoiceAsync(string chargeId) =>
+        Task.FromResult(new Pdf(chargeId));
 
     public static void RegisterInvoice(Worker worker)
     {
-        worker.Handle("invoice.issue", async (HandlerContext context, Invoice invoice) =>
-        {
-            // After Workhorse stores a checkpoint result, later runs return it.
-            var charge = await context.CheckpointAsync("charge", _ => ChargeCardAsync(invoice.Amount));
+        worker.Handle(
+            "invoice.issue",
+            async (HandlerContext context, Invoice invoice) =>
+            {
+                // Later runs return the stored checkpoint result.
+                var charge = await context.CheckpointAsync(
+                    "charge", _ => ChargeCardAsync(invoice.Amount));
 
-            var pdf = await context.CheckpointAsync("render", _ => RenderInvoiceAsync(charge.Id));
+                var pdf = await context.CheckpointAsync(
+                    "render", _ => RenderInvoiceAsync(charge.Id));
 
-            Console.WriteLine($"email {invoice.Email} {pdf}");
-            return new { chargeId = charge.Id };
-        });
+                Console.WriteLine($"email {invoice.Email} {pdf}");
+                return new { chargeId = charge.Id };
+            });
     }
     // docs:end
 }
@@ -157,19 +163,31 @@ public static class IdempotencyExample
 public static class SchedulesExample
 {
     // docs:start landing-schedules-csharp
-    public static async Task RunAsync(NpgsqlDataSource dataSource, CancellationToken stoppingToken)
+    public static async Task RunAsync(
+        NpgsqlDataSource dataSource,
+        CancellationToken stoppingToken)
     {
         // Run on every deployment with the complete list.
         var schedule = new ScheduleDefinition
         {
             Name = "nightly-invoice-run",
             Schedule = "0 2 * * *",
-            Task = new ScheduledTask { TaskType = "invoices.generate", Payload = new { } },
+            Task = new ScheduledTask
+            {
+                TaskType = "invoices.generate",
+                Payload = new { },
+            },
         };
-        await new Queue(dataSource).SyncSchedulesAsync("billing", [schedule], prune: true, stoppingToken);
+        var queue = new Queue(dataSource);
+        await queue.SyncSchedulesAsync(
+            "billing", [schedule], prune: true, stoppingToken);
 
         // Any worker in the namespace fires due schedules itself.
-        await using var worker = new Worker(dataSource, new WorkerOptions { ScheduleNamespaces = ["billing"] });
+        var options = new WorkerOptions
+        {
+            ScheduleNamespaces = ["billing"],
+        };
+        await using var worker = new Worker(dataSource, options);
         await worker.RunAsync(stoppingToken);
     }
     // docs:end
@@ -179,23 +197,42 @@ public static class SchedulesExample
 public static class FlowControlExample
 {
     // docs:start landing-flow-control-csharp
-    public static async Task ConfigureAsync(Queue queue, string messageId, string tenantId)
+    public static async Task ConfigureAsync(
+        Queue queue,
+        string messageId,
+        string tenantId)
     {
         // At most 20 mail tasks active; at most 2 per tenant.
-        var mail = new ConcurrencyPolicyDefinition { Queue = "mail", MaxActive = 20, MaxActivePerKey = 2 };
-        await queue.SyncConcurrencyPoliciesAsync("workers", [mail], prune: false);
+        var mail = new ConcurrencyPolicyDefinition
+        {
+            Queue = "mail",
+            MaxActive = 20,
+            MaxActivePerKey = 2,
+        };
+        await queue.SyncConcurrencyPoliciesAsync(
+            "workers", [mail], prune: false);
 
         var provider = new RateLimitPolicyDefinition
         {
             Queue = "provider-api",
-            Rate = new RateLimit { Limit = 100, Interval = TimeSpan.FromSeconds(1), Burst = 200 },
+            Rate = new RateLimit
+            {
+                Limit = 100,
+                Interval = TimeSpan.FromSeconds(1),
+                Burst = 200,
+            },
         };
-        await queue.SyncRateLimitPoliciesAsync("workers", [provider], prune: false);
+        await queue.SyncRateLimitPoliciesAsync(
+            "workers", [provider], prune: false);
 
         await queue.EnqueueAsync(
             "mail.send",
             new { messageId },
-            new EnqueueOptions { Queue = "mail", ConcurrencyKey = $"tenant:{tenantId}" });
+            new EnqueueOptions
+            {
+                Queue = "mail",
+                ConcurrencyKey = $"tenant:{tenantId}",
+            });
     }
     // docs:end
 }
@@ -207,7 +244,8 @@ public static class DependenciesExample
     public static async Task ConfirmAsync(Queue queue, string orderId)
     {
         var order = new { orderId };
-        var inventory = await queue.EnqueueAsync("inventory.reserve", order);
+        var inventory = await queue.EnqueueAsync(
+            "inventory.reserve", order);
 
         var dependencies = new Dependencies
         {
@@ -216,7 +254,8 @@ public static class DependenciesExample
             OnFailure = DependencyPolicy.Cancel,
             OnCancellation = DependencyPolicy.Cancel,
         };
-        await queue.EnqueueAsync("order.confirm", order, new EnqueueOptions { Dependencies = dependencies });
+        var options = new EnqueueOptions { Dependencies = dependencies };
+        await queue.EnqueueAsync("order.confirm", order, options);
     }
 
     public sealed record Fulfillment(string Id);
@@ -225,13 +264,17 @@ public static class DependenciesExample
 
     public static void RegisterFulfillment(Worker worker)
     {
-        worker.Handle("order.fulfill", async (HandlerContext context, Fulfillment order) =>
-        {
-            var options = new EnqueueOptions { Queue = "payments" };
-            var receipt = await context.RunChildAsync<Capture, JsonElement>(
-                "charge", "payment.capture", new Capture(order.Id), options);
-            return new { receipt };
-        });
+        worker.Handle(
+            "order.fulfill",
+            async (HandlerContext context, Fulfillment order) =>
+            {
+                var options = new EnqueueOptions { Queue = "payments" };
+                var capture = new Capture(order.Id);
+                var receipt = await context
+                    .RunChildAsync<Capture, JsonElement>(
+                        "charge", "payment.capture", capture, options);
+                return new { receipt };
+            });
     }
     // docs:end
 }
@@ -263,26 +306,41 @@ public static class ExternalWaitsExample
     // docs:start landing-external-waits-csharp
     public sealed record Release(string Id);
 
-    public sealed record ApprovalRequest(string ReleaseId, JsonElement Scan);
+    public sealed record ApprovalRequest(
+        string ReleaseId,
+        JsonElement Scan);
 
     public sealed record Review(bool Approved);
 
     public static void RegisterRelease(Worker worker)
     {
-        worker.Handle("release.publish", async (HandlerContext context, Release release) =>
-        {
-            var scan = await context.WaitForSignalAsync<JsonElement>("security-scan", timeout: null);
+        worker.Handle(
+            "release.publish",
+            async (HandlerContext context, Release release) =>
+            {
+                var scan = await context.WaitForSignalAsync<JsonElement>(
+                    "security-scan", timeout: null);
 
-            var request = new ApprovalRequest(release.Id, scan);
-            var review = await context.WaitForHumanAsync<ApprovalRequest, Review>(
-                "release-approval", request, timeout: null);
+                var request = new ApprovalRequest(release.Id, scan);
+                var review = await context
+                    .WaitForHumanAsync<ApprovalRequest, Review>(
+                        "release-approval", request, timeout: null);
 
-            return new { published = review.Approved };
-        });
+                return new { published = review.Approved };
+            });
     }
 
-    public static Task DeliverScanAsync(Queue queue, Guid taskId, object result, string deliveryId) =>
-        queue.SendSignalAsync(taskId, "security-scan", result, deliveryId, "security-scanner");
+    public static Task DeliverScanAsync(
+        Queue queue,
+        Guid taskId,
+        object result,
+        string deliveryId) =>
+        queue.SendSignalAsync(
+            taskId,
+            "security-scan",
+            result,
+            deliveryId,
+            "security-scanner");
     // docs:end
 }
 

@@ -1,56 +1,56 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 308" width="960" height="308" role="img" aria-labelledby="task-lifecycle-light-title task-lifecycle-light-desc">
 <title id="task-lifecycle-light-title">A task is in one of seven states: four live and three finished</title>
 <desc id="task-lifecycle-light-desc">A live task is blocked, scheduled, ready, or active, and it has a task_runtime row. A blocked task waits for its prerequisite tasks. A scheduled task waits for its run time, a retry delay, or a durable sleep. A ready task waits for a worker, and a worker claim makes it active. An active task finishes as succeeded, failed, or canceled, in task_outcome. If a failed attempt has attempts left, the task retries through scheduled, or through ready when the delay is zero.</desc>
-<defs><marker id="arrow-light" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#4e5359"/></marker></defs>
-<rect width="960" height="308" fill="#f9fafb"/>
-<rect x="24" y="64" width="696" height="192" rx="8" fill="rgba(26,32,39,0.02)" stroke="rgba(26,32,39,0.12)" stroke-width="0.8"/>
-<rect x="36" y="58" width="116" height="12" rx="2" fill="#f9fafb"/>
-<text x="94" y="67" fill="#6d7277" font-size="7" font-family="Geist Mono" text-anchor="middle" letter-spacing="0.14em">LIVE · task_runtime</text>
-<rect x="744" y="64" width="192" height="192" rx="8" fill="rgba(26,32,39,0.02)" stroke="rgba(26,32,39,0.12)" stroke-width="0.8"/>
-<rect x="756" y="58" width="136" height="12" rx="2" fill="#f9fafb"/>
-<text x="824" y="67" fill="#6d7277" font-size="7" font-family="Geist Mono" text-anchor="middle" letter-spacing="0.14em">FINISHED · task_outcome</text>
-<path d="M 188,164 H 210" fill="none" stroke="#4e5359" stroke-width="1.2" marker-end="url(#arrow-light)"/>
-<path d="M 360,164 H 382" fill="none" stroke="#4e5359" stroke-width="1.2" marker-end="url(#arrow-light)"/>
-<path d="M 532,164 H 554" fill="none" stroke="#4e5359" stroke-width="1.2" marker-end="url(#arrow-light)"/>
-<path d="M 600,140 V 100 H 286 V 138" fill="none" stroke="#4e5359" stroke-width="1.2" stroke-dasharray="5,4" marker-end="url(#arrow-light)"/>
-<rect x="387" y="94" width="112" height="12" rx="2" fill="#f9fafb"/>
-<text x="443" y="103" fill="#6d7277" font-size="8" font-family="Geist Mono" text-anchor="middle" letter-spacing="0.06em">retry with a delay</text>
-<path d="M 580,140 V 120 H 458 V 138" fill="none" stroke="#4e5359" stroke-width="1.2" stroke-dasharray="5,4" marker-end="url(#arrow-light)"/>
-<rect x="485" y="114" width="68" height="12" rx="2" fill="#f9fafb"/>
-<text x="519" y="123" fill="#6d7277" font-size="8" font-family="Geist Mono" text-anchor="middle" letter-spacing="0.06em">zero delay</text>
-<path d="M 114,188 V 224 H 458 V 190" fill="none" stroke="#4e5359" stroke-width="1.2" marker-end="url(#arrow-light)"/>
-<rect x="224" y="218" width="124" height="12" rx="2" fill="#f9fafb"/>
-<text x="286" y="227" fill="#6d7277" font-size="8" font-family="Geist Mono" text-anchor="middle" letter-spacing="0.06em">prerequisites finish</text>
-<rect x="40" y="140" width="148" height="48" rx="6" fill="#f9fafb"/>
-<rect x="40" y="140" width="148" height="48" rx="6" fill="#ffffff" stroke="#1a2027" stroke-width="1"/>
-<text x="114" y="162" fill="#1a2027" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">blocked</text>
-<text x="114" y="176" fill="#4e5359" font-size="9" font-family="Geist Mono" text-anchor="middle">waits for prerequisites</text>
-<rect x="212" y="140" width="148" height="48" rx="6" fill="#f9fafb"/>
-<rect x="212" y="140" width="148" height="48" rx="6" fill="#ffffff" stroke="#1a2027" stroke-width="1"/>
-<text x="286" y="162" fill="#1a2027" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">scheduled</text>
-<text x="286" y="176" fill="#4e5359" font-size="9" font-family="Geist Mono" text-anchor="middle">waits for its run time</text>
-<rect x="384" y="140" width="148" height="48" rx="6" fill="#f9fafb"/>
-<rect x="384" y="140" width="148" height="48" rx="6" fill="#ffffff" stroke="#1a2027" stroke-width="1"/>
-<text x="458" y="162" fill="#1a2027" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">ready</text>
-<text x="458" y="176" fill="#4e5359" font-size="9" font-family="Geist Mono" text-anchor="middle">waits for a worker</text>
-<rect x="556" y="140" width="148" height="48" rx="6" fill="#f9fafb"/>
-<rect x="556" y="140" width="148" height="48" rx="6" fill="rgba(213,92,19,0.08)" stroke="#aa4515" stroke-width="1.4"/>
-<text x="630" y="162" fill="#1a2027" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">active</text>
-<text x="630" y="176" fill="#4e5359" font-size="9" font-family="Geist Mono" text-anchor="middle">one worker, a lease</text>
-<rect x="760" y="92" width="160" height="44" rx="6" fill="#f9fafb"/>
-<rect x="760" y="92" width="160" height="44" rx="6" fill="rgba(26,32,39,0.05)" stroke="#4e5359" stroke-width="1"/>
-<text x="840" y="112" fill="#1a2027" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">succeeded</text>
-<text x="840" y="126" fill="#4e5359" font-size="9" font-family="Geist Mono" text-anchor="middle">the result</text>
-<path d="M 704,164 H 720 V 114 H 758" fill="none" stroke="#4e5359" stroke-width="1.2" marker-end="url(#arrow-light)"/>
-<rect x="760" y="148" width="160" height="44" rx="6" fill="#f9fafb"/>
-<rect x="760" y="148" width="160" height="44" rx="6" fill="rgba(26,32,39,0.03)" stroke="rgba(26,32,39,0.4)" stroke-width="1" stroke-dasharray="4,3"/>
-<text x="840" y="168" fill="#1a2027" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">failed</text>
-<text x="840" y="182" fill="#4e5359" font-size="9" font-family="Geist Mono" text-anchor="middle">the error</text>
-<path d="M 704,164 H 720 V 170 H 758" fill="none" stroke="#4e5359" stroke-width="1.2" marker-end="url(#arrow-light)"/>
-<rect x="760" y="204" width="160" height="44" rx="6" fill="#f9fafb"/>
-<rect x="760" y="204" width="160" height="44" rx="6" fill="rgba(26,32,39,0.03)" stroke="rgba(26,32,39,0.4)" stroke-width="1" stroke-dasharray="4,3"/>
-<text x="840" y="224" fill="#1a2027" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">canceled</text>
-<text x="840" y="238" fill="#4e5359" font-size="9" font-family="Geist Mono" text-anchor="middle">the envelope</text>
-<path d="M 704,164 H 720 V 226 H 758" fill="none" stroke="#4e5359" stroke-width="1.2" marker-end="url(#arrow-light)"/>
-<text x="24" y="292" fill="#4e5359" font-size="9" font-family="Geist Mono" font-weight="400" text-anchor="start">Each finished state is final. A dependency policy can also finish a blocked task.</text>
+<defs><marker id="arrow-light" markerWidth="8" markerHeight="8" refX="6.5" refY="4" orient="auto" markerUnits="userSpaceOnUse"><path d="M 1.5,1 L 6.5,4 L 1.5,7" fill="none" stroke="#7d7d7d" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/></marker></defs>
+<rect width="960" height="308" fill="#ffffff"/>
+<rect x="24" y="64" width="696" height="192" rx="12" fill="none" stroke="#e7e7e7" stroke-width="1"/>
+<rect x="36" y="58" width="108" height="12" fill="#ffffff"/>
+<text x="90" y="67" fill="#555555" font-size="8" font-weight="500" font-family="Geist Mono, monospace" text-anchor="middle" letter-spacing="0.04em">LIVE · task_runtime</text>
+<rect x="744" y="64" width="192" height="192" rx="12" fill="none" stroke="#e7e7e7" stroke-width="1"/>
+<rect x="756" y="58" width="128" height="12" fill="#ffffff"/>
+<text x="820" y="67" fill="#555555" font-size="8" font-weight="500" font-family="Geist Mono, monospace" text-anchor="middle" letter-spacing="0.04em">FINISHED · task_outcome</text>
+<path d="M 188,164 H 210" fill="none" stroke="#7d7d7d" stroke-width="1" marker-end="url(#arrow-light)"/>
+<path d="M 360,164 H 382" fill="none" stroke="#7d7d7d" stroke-width="1" marker-end="url(#arrow-light)"/>
+<path d="M 532,164 H 554" fill="none" stroke="#7d7d7d" stroke-width="1" marker-end="url(#arrow-light)"/>
+<path d="M 600,140 V 100 H 286 V 138" fill="none" stroke="#7d7d7d" stroke-width="1" stroke-dasharray="4,3" marker-end="url(#arrow-light)"/>
+<rect x="391" y="94" width="104" height="12" rx="2" fill="#ffffff"/>
+<text x="443" y="103" fill="#555555" font-size="9" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">retry with a delay</text>
+<path d="M 580,140 V 120 H 458 V 138" fill="none" stroke="#7d7d7d" stroke-width="1" stroke-dasharray="4,3" marker-end="url(#arrow-light)"/>
+<rect x="487" y="114" width="64" height="12" rx="2" fill="#ffffff"/>
+<text x="519" y="123" fill="#555555" font-size="9" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">zero delay</text>
+<path d="M 114,188 V 224 H 458 V 190" fill="none" stroke="#7d7d7d" stroke-width="1" marker-end="url(#arrow-light)"/>
+<rect x="228" y="218" width="116" height="12" rx="2" fill="#ffffff"/>
+<text x="286" y="227" fill="#555555" font-size="9" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">prerequisites finish</text>
+<rect x="40" y="140" width="148" height="48" rx="8" fill="#ffffff"/>
+<rect x="40.5" y="140.5" width="147" height="47" rx="8" fill="#ffffff" stroke="#cdcdcd" stroke-width="1"/>
+<text x="114" y="162" fill="#000000" font-size="11" font-weight="500" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">blocked</text>
+<text x="114" y="176" fill="#555555" font-size="9" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">waits for prerequisites</text>
+<rect x="212" y="140" width="148" height="48" rx="8" fill="#ffffff"/>
+<rect x="212.5" y="140.5" width="147" height="47" rx="8" fill="#ffffff" stroke="#cdcdcd" stroke-width="1"/>
+<text x="286" y="162" fill="#000000" font-size="11" font-weight="500" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">scheduled</text>
+<text x="286" y="176" fill="#555555" font-size="9" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">waits for its run time</text>
+<rect x="384" y="140" width="148" height="48" rx="8" fill="#ffffff"/>
+<rect x="384.5" y="140.5" width="147" height="47" rx="8" fill="#ffffff" stroke="#cdcdcd" stroke-width="1"/>
+<text x="458" y="162" fill="#000000" font-size="11" font-weight="500" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">ready</text>
+<text x="458" y="176" fill="#555555" font-size="9" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">waits for a worker</text>
+<rect x="556" y="140" width="148" height="48" rx="8" fill="#ffffff"/>
+<rect x="556.5" y="140.5" width="147" height="47" rx="8" fill="rgba(207,145,72,0.12)" stroke="#cf9148" stroke-width="1"/>
+<text x="630" y="162" fill="#000000" font-size="11" font-weight="500" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">active</text>
+<text x="630" y="176" fill="#555555" font-size="9" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">one worker, a lease</text>
+<rect x="760" y="92" width="160" height="44" rx="8" fill="#ffffff"/>
+<rect x="760.5" y="92.5" width="159" height="43" rx="8" fill="#f4f4f4" stroke="#e7e7e7" stroke-width="1"/>
+<text x="840" y="112" fill="#000000" font-size="11" font-weight="500" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">succeeded</text>
+<text x="840" y="126" fill="#555555" font-size="9" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">the result</text>
+<path d="M 704,164 H 720 V 114 H 758" fill="none" stroke="#7d7d7d" stroke-width="1" marker-end="url(#arrow-light)"/>
+<rect x="760" y="148" width="160" height="44" rx="8" fill="#ffffff"/>
+<rect x="760.5" y="148.5" width="159" height="43" rx="8" fill="#ffffff" stroke="#e7e7e7" stroke-width="1"/>
+<text x="840" y="168" fill="#555555" font-size="11" font-weight="500" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">failed</text>
+<text x="840" y="182" fill="#555555" font-size="9" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">the error</text>
+<path d="M 704,164 H 720 V 170 H 758" fill="none" stroke="#7d7d7d" stroke-width="1" marker-end="url(#arrow-light)"/>
+<rect x="760" y="204" width="160" height="44" rx="8" fill="#ffffff"/>
+<rect x="760.5" y="204.5" width="159" height="43" rx="8" fill="#ffffff" stroke="#e7e7e7" stroke-width="1"/>
+<text x="840" y="224" fill="#555555" font-size="11" font-weight="500" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">canceled</text>
+<text x="840" y="238" fill="#555555" font-size="9" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">the envelope</text>
+<path d="M 704,164 H 720 V 226 H 758" fill="none" stroke="#7d7d7d" stroke-width="1" marker-end="url(#arrow-light)"/>
+<text x="24" y="292" fill="#555555" font-size="9" font-family="Timeless Grotesk, Geist, sans-serif" font-weight="400" text-anchor="start">Each finished state is final. A dependency policy can also finish a blocked task.</text>
 </svg>

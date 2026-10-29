@@ -10,6 +10,7 @@ __pycache__/
 /typescript/dashboard/development/
 coverage/
 .source/
+.blume/
 /site/public/robots.txt
 /site/public/sitemap.xml
 .env
@@ -30,6 +31,8 @@ scripts/with-env-probe.tmp.*
 /site/public/docs.md
 /site/public/docs/
 /site/public/blog/
+/site/public/compare.md
+/site/public/compare/
 /sql/schema.sql
 /site/public/404.md
 /site/public/404.json

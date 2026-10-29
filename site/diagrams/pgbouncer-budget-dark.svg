@@ -1,38 +1,38 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 247" width="960" height="247" role="img" aria-labelledby="pgbouncer-budget-dark-title pgbouncer-budget-dark-desc">
 <title id="pgbouncer-budget-dark-title">Four workers on one pool share one listener and one heartbeat connection</title>
 <desc id="pgbouncer-budget-dark-desc">Four workers run on one pool of 20 connections. In TypeScript, Go, Python, Ruby, Java, and Kotlin, the four workers share one listener connection and one heartbeat connection from the pool. Thus 18 connections remain for claims and handlers. In Rust, the four workers share one heartbeat connection from the pool, so 19 remain. The shared Rust listener connection is outside the pool, so the server or the pooler must accept one more client.</desc>
-<defs><marker id="arrow-dark" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#ced1d4"/></marker></defs>
-<rect width="960" height="247" fill="#04080e"/>
-<text x="24" y="40" fill="#f2f4f5" font-size="12" font-family="Geist" font-weight="600" text-anchor="start">one pool of 20</text>
-<text x="24" y="55" fill="#ced1d4" font-size="9" font-family="Geist Mono" font-weight="400" text-anchor="start">four workers</text>
-<text x="200" y="44" fill="#95999d" font-size="8" font-family="Geist Mono" font-weight="400" text-anchor="middle">0</text>
-<text x="360" y="44" fill="#95999d" font-size="8" font-family="Geist Mono" font-weight="400" text-anchor="middle">5</text>
-<text x="520" y="44" fill="#95999d" font-size="8" font-family="Geist Mono" font-weight="400" text-anchor="middle">10</text>
-<text x="680" y="44" fill="#95999d" font-size="8" font-family="Geist Mono" font-weight="400" text-anchor="middle">15</text>
-<text x="840" y="44" fill="#95999d" font-size="8" font-family="Geist Mono" font-weight="400" text-anchor="middle">20</text>
-<text x="896" y="44" fill="#95999d" font-size="8" font-family="Geist Mono" font-weight="400" text-anchor="middle">outside the pool</text>
-<line x1="200" y1="52" x2="840" y2="52" stroke="rgba(242,244,245,0.14)"/>
-<line x1="856" y1="52" x2="936" y2="52" stroke="rgba(242,244,245,0.14)"/>
-<text x="24" y="84" fill="#f2f4f5" font-size="10" font-family="Geist Mono" font-weight="400" text-anchor="start">TypeScript, Go, Python,</text>
-<text x="24" y="99" fill="#f2f4f5" font-size="10" font-family="Geist Mono" font-weight="400" text-anchor="start">Ruby, Java, Kotlin</text>
-<text x="24" y="114" fill="#ced1d4" font-size="9" font-family="Geist Mono" font-weight="400" text-anchor="start">1 listener · 1 heartbeat</text>
-<rect x="200" y="72" width="60" height="40" rx="6" fill="#04080e"/>
-<rect x="200" y="72" width="60" height="40" rx="6" fill="rgba(252,152,76,0.08)" stroke="#fc984c" stroke-width="1.4"/>
-<text x="230" y="96" fill="#f2f4f5" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">2</text>
-<rect x="264" y="72" width="576" height="40" rx="6" fill="#04080e"/>
-<rect x="264" y="72" width="576" height="40" rx="6" fill="#0a1017" stroke="#f2f4f5" stroke-width="1"/>
-<text x="552" y="96" fill="#f2f4f5" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">18 for claims and handlers</text>
-<text x="24" y="155" fill="#f2f4f5" font-size="10" font-family="Geist Mono" font-weight="400" text-anchor="start">Rust</text>
-<text x="24" y="170" fill="#ced1d4" font-size="9" font-family="Geist Mono" font-weight="400" text-anchor="start">1 heartbeat in the pool</text>
-<rect x="200" y="136" width="28" height="40" rx="6" fill="#04080e"/>
-<rect x="200" y="136" width="28" height="40" rx="6" fill="rgba(252,152,76,0.08)" stroke="#fc984c" stroke-width="1.4"/>
-<text x="214" y="160" fill="#f2f4f5" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">1</text>
-<rect x="232" y="136" width="608" height="40" rx="6" fill="#04080e"/>
-<rect x="232" y="136" width="608" height="40" rx="6" fill="#0a1017" stroke="#f2f4f5" stroke-width="1"/>
-<text x="536" y="160" fill="#f2f4f5" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">19 for claims and handlers</text>
-<rect x="856" y="136" width="80" height="40" rx="6" fill="#04080e"/>
-<rect x="856" y="136" width="80" height="40" rx="6" fill="rgba(242,244,245,0.03)" stroke="rgba(242,244,245,0.4)" stroke-width="1" stroke-dasharray="4,3"/>
-<text x="896" y="160" fill="#f2f4f5" font-size="10" font-weight="600" font-family="Geist" text-anchor="middle">1 listener</text>
-<text x="24" y="216" fill="#ced1d4" font-size="9" font-family="Geist Mono" font-weight="400" text-anchor="start">All the workers on one pool share these connections, so the count does not grow with the workers.</text>
-<text x="24" y="231" fill="#ced1d4" font-size="9" font-family="Geist Mono" font-weight="400" text-anchor="start">The Rust listener is outside the pool, so the server or the pooler must accept one more client.</text>
+<defs><marker id="arrow-dark" markerWidth="8" markerHeight="8" refX="6.5" refY="4" orient="auto" markerUnits="userSpaceOnUse"><path d="M 1.5,1 L 6.5,4 L 1.5,7" fill="none" stroke="#838383" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/></marker></defs>
+<rect width="960" height="247" fill="#000000"/>
+<text x="24" y="40" fill="#f4f4f4" font-size="12" font-family="Timeless Grotesk, Geist, sans-serif" font-weight="500" text-anchor="start">one pool of 20</text>
+<text x="24" y="55" fill="#cfcfcf" font-size="9" font-family="Timeless Grotesk, Geist, sans-serif" font-weight="400" text-anchor="start">four workers</text>
+<text x="200" y="44" fill="#ababab" font-size="8" font-family="Timeless Grotesk, Geist, sans-serif" font-weight="400" text-anchor="middle">0</text>
+<text x="360" y="44" fill="#ababab" font-size="8" font-family="Timeless Grotesk, Geist, sans-serif" font-weight="400" text-anchor="middle">5</text>
+<text x="520" y="44" fill="#ababab" font-size="8" font-family="Timeless Grotesk, Geist, sans-serif" font-weight="400" text-anchor="middle">10</text>
+<text x="680" y="44" fill="#ababab" font-size="8" font-family="Timeless Grotesk, Geist, sans-serif" font-weight="400" text-anchor="middle">15</text>
+<text x="840" y="44" fill="#ababab" font-size="8" font-family="Timeless Grotesk, Geist, sans-serif" font-weight="400" text-anchor="middle">20</text>
+<text x="896" y="44" fill="#ababab" font-size="8" font-family="Timeless Grotesk, Geist, sans-serif" font-weight="400" text-anchor="middle">outside the pool</text>
+<line x1="200" y1="52" x2="840" y2="52" stroke="#2b2b2b"/>
+<line x1="856" y1="52" x2="936" y2="52" stroke="#2b2b2b"/>
+<text x="24" y="84" fill="#f4f4f4" font-size="10" font-family="Timeless Grotesk, Geist, sans-serif" font-weight="400" text-anchor="start">TypeScript, Go, Python,</text>
+<text x="24" y="99" fill="#f4f4f4" font-size="10" font-family="Timeless Grotesk, Geist, sans-serif" font-weight="400" text-anchor="start">Ruby, Java, Kotlin</text>
+<text x="24" y="114" fill="#cfcfcf" font-size="9" font-family="Timeless Grotesk, Geist, sans-serif" font-weight="400" text-anchor="start">1 listener · 1 heartbeat</text>
+<rect x="200" y="72" width="60" height="40" rx="8" fill="#000000"/>
+<rect x="200.5" y="72.5" width="59" height="39" rx="8" fill="rgba(207,145,72,0.12)" stroke="#cf9148" stroke-width="1"/>
+<text x="230" y="96" fill="#f4f4f4" font-size="11" font-weight="500" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">2</text>
+<rect x="264" y="72" width="576" height="40" rx="8" fill="#000000"/>
+<rect x="264.5" y="72.5" width="575" height="39" rx="8" fill="#000000" stroke="#3d3d3d" stroke-width="1"/>
+<text x="552" y="96" fill="#f4f4f4" font-size="11" font-weight="500" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">18 for claims and handlers</text>
+<text x="24" y="155" fill="#f4f4f4" font-size="10" font-family="Timeless Grotesk, Geist, sans-serif" font-weight="400" text-anchor="start">Rust</text>
+<text x="24" y="170" fill="#cfcfcf" font-size="9" font-family="Timeless Grotesk, Geist, sans-serif" font-weight="400" text-anchor="start">1 heartbeat in the pool</text>
+<rect x="200" y="136" width="28" height="40" rx="7" fill="#000000"/>
+<rect x="200.5" y="136.5" width="27" height="39" rx="7" fill="rgba(207,145,72,0.12)" stroke="#cf9148" stroke-width="1"/>
+<text x="214" y="160" fill="#f4f4f4" font-size="11" font-weight="500" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">1</text>
+<rect x="232" y="136" width="608" height="40" rx="8" fill="#000000"/>
+<rect x="232.5" y="136.5" width="607" height="39" rx="8" fill="#000000" stroke="#3d3d3d" stroke-width="1"/>
+<text x="536" y="160" fill="#f4f4f4" font-size="11" font-weight="500" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">19 for claims and handlers</text>
+<rect x="856" y="136" width="80" height="40" rx="8" fill="#000000"/>
+<rect x="856.5" y="136.5" width="79" height="39" rx="8" fill="#000000" stroke="#2b2b2b" stroke-width="1"/>
+<text x="896" y="160" fill="#cfcfcf" font-size="10" font-weight="500" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">1 listener</text>
+<text x="24" y="216" fill="#cfcfcf" font-size="9" font-family="Timeless Grotesk, Geist, sans-serif" font-weight="400" text-anchor="start">All the workers on one pool share these connections, so the count does not grow with the workers.</text>
+<text x="24" y="231" fill="#cfcfcf" font-size="9" font-family="Timeless Grotesk, Geist, sans-serif" font-weight="400" text-anchor="start">The Rust listener is outside the pool, so the server or the pooler must accept one more client.</text>
 </svg>

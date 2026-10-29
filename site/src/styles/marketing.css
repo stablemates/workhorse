@@ -1,0 +1,1593 @@
+/*
+ * Marketing pages: the landing page and /features
+ * -----------------------------------------------
+ * One calm page: a neutral canvas, a centered column, and space between the
+ * sections instead of drawn lines. The amber key color (`color-1` of the
+ * Untitled theme) is the one accent. It marks the highlighted path of a
+ * diagram and text links. A selected tab is a neutral fill. Headlines stay in
+ * the foreground color. Every other mark stays on the neutral ramp. Small
+ * amber text in light mode uses a darker shade, so it keeps 4.5:1 contrast.
+ *
+ * Every control reads its colors from these rules and the `dark` class on the
+ * root element, which Fumadocs sets before the first paint. No control takes
+ * a color from a script, so the first frame already has the right scheme.
+ *
+ * Labels use the UI sans in sentence case. Mono is only for code, table names,
+ * and other identifiers.
+ */
+
+:root {
+  /* Amber for small text: 5.7:1 on n1 in light mode. */
+  --wh-amber-ink: #8f5b1d;
+}
+
+.dark {
+  /* 6.6:1 on n1 in dark mode, so the key color itself is legible at every size. */
+  --wh-amber-ink: var(--wh-amber);
+}
+
+/*
+ * Headlines use Geist at weight 600. The variable font has every weight, so
+ * the browser draws no synthetic bold. A larger size takes tighter tracking
+ * and leading, because the space between glyphs grows with the size.
+ *
+ * `wh-display` is the hero headline, above the top step of the theme type
+ * scale. `wh-title` is a section headline.
+ */
+.wh-display {
+  font-size: 2.5rem;
+  line-height: 1.1;
+  letter-spacing: -0.03em;
+}
+
+.wh-title {
+  font-size: 2rem;
+  line-height: 1.15;
+  letter-spacing: -0.025em;
+}
+
+@media (min-width: 640px) {
+  .wh-display {
+    font-size: 3.5rem;
+    line-height: 1.06;
+    letter-spacing: -0.035em;
+  }
+
+  .wh-title {
+    font-size: 2.5rem;
+    line-height: 1.1;
+    letter-spacing: -0.03em;
+  }
+}
+
+/* The tab row of a code group scrolls sideways on a narrow screen instead of wrapping into two rows. */
+.wh-scroll-x {
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.wh-scroll-x::-webkit-scrollbar {
+  display: none;
+}
+
+/* On a marketing page, a text link takes the amber ink. */
+.wh-marketing .wh-link {
+  color: var(--wh-amber-ink);
+}
+
+.wh-marketing .wh-link > svg {
+  color: currentColor;
+}
+
+/* The group links at the top of /features. */
+.wh-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.25rem 0.75rem;
+  border-radius: 9999px;
+  background-color: var(--wh-page);
+  box-shadow: inset 0 0 0 1px var(--wh-line);
+  font-size: var(--text-ui-xs);
+  line-height: var(--text-ui-xs--line-height);
+  color: var(--wh-body);
+  transition: box-shadow var(--wh-duration) var(--wh-ease);
+}
+
+.wh-chip:hover {
+  box-shadow: inset 0 0 0 1px var(--wh-n-5);
+}
+
+/* ---------- Screenshots ---------- */
+
+/*
+ * A dashboard capture sits on a subtle surface with a hairline edge. The
+ * outer radius is the inner radius plus the padding, so the corners nest.
+ */
+.wh-shot {
+  padding: 0.375rem;
+  border-radius: 14px;
+  background-color: var(--wh-n-2);
+  box-shadow:
+    inset 0 0 0 1px var(--wh-line),
+    0 1px 2px rgb(0 0 0 / 0.04),
+    0 12px 32px -12px rgb(0 0 0 / 0.12);
+}
+
+@media (min-width: 640px) {
+  .wh-shot {
+    padding: 0.5rem;
+    border-radius: 16px;
+  }
+}
+
+.wh-shot-image {
+  display: block;
+  inline-size: 100%;
+  block-size: auto;
+  border-radius: 8px;
+  outline: 1px solid rgb(0 0 0 / 0.1);
+  outline-offset: -1px;
+}
+
+.dark .wh-shot {
+  box-shadow: inset 0 0 0 1px var(--wh-line);
+}
+
+.dark .wh-shot-image {
+  outline-color: rgb(255 255 255 / 0.1);
+}
+
+/* Each screen has a capture for each scheme. Only the capture of the current scheme shows. */
+.wh-shot-image[data-scheme="dark"],
+.dark .wh-shot-image[data-scheme="light"] {
+  display: none;
+}
+
+.dark .wh-shot-image[data-scheme="dark"] {
+  display: block;
+}
+
+/*
+ * The hero frame aligns with the page container. It shows the top of the
+ * capture, the chart and the first rows of the task table, and lets the lower
+ * part fade into the page, so the frame stays quieter than the headline.
+ */
+.wh-hero-shot {
+  aspect-ratio: 1.75;
+  overflow: hidden;
+  mask-image: linear-gradient(to bottom, #000 76%, transparent);
+}
+
+/*
+ * On a phone the whole capture is too small to read. The hero shows the main
+ * area of the capture at a larger scale instead: the title, the status tabs,
+ * and the activity chart. The sidebar is 16% of the capture, so a shift of
+ * 17% hides it. The capture runs to both sides of the frame, so a layer above
+ * it draws the hairline edge again.
+ */
+@media (max-width: 639.98px) {
+  .wh-hero-shot {
+    aspect-ratio: 0.9;
+    mask-image: linear-gradient(to bottom, #000 84%, transparent);
+  }
+
+  .wh-hero-shot .wh-shot {
+    position: relative;
+    overflow: hidden;
+  }
+
+  .wh-hero-shot .wh-shot::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    border-radius: inherit;
+    box-shadow: inset 0 0 0 1px var(--wh-line);
+    pointer-events: none;
+  }
+
+  .wh-hero-shot .wh-shot-image {
+    inline-size: 215%;
+    max-inline-size: none;
+    translate: -17% 0;
+  }
+}
+
+/*
+ * On a phone, the frame of the dashboard tour shows the capture at twice the
+ * width of the frame and scrolls sideways, so a reader can pan across a
+ * screen at a readable size. An outline draws the hairline edge, because an
+ * outline paints above the capture where it runs to the edge.
+ */
+@media (max-width: 639.98px) {
+  .wh-shot-pan {
+    overflow-x: auto;
+    overscroll-behavior-x: contain;
+    box-shadow: none;
+    outline: 1px solid var(--wh-line);
+    outline-offset: -1px;
+  }
+
+  .wh-shot-pan .wh-shot-image {
+    inline-size: 200%;
+    max-inline-size: none;
+  }
+}
+
+/* ---------- Tabs ---------- */
+
+/*
+ * The tabs of `components/tabs.tsx`. A tab is a label in the muted color. The
+ * selected tab is a neutral fill that slides to the tab a reader selects.
+ * Base UI writes the position of the selected tab into the `--active-tab-*`
+ * variables of the indicator after hydration. Until then the indicator is
+ * hidden, and the selected tab draws the same fill itself, so the switch from
+ * one to the other changes no pixel.
+ *
+ * `pill` sits on the surface around it. `segmented` sits on a track.
+ *
+ * The rules sit in the components layer, so a Tailwind utility on a tab or a
+ * list wins over them.
+ */
+@layer components {
+  .wh-tabset {
+    --wh-tab-fill: var(--wh-n-3);
+    --wh-tab-fill-edge: none;
+    --wh-tab-slide: 240ms;
+  }
+
+  .wh-tabset-list {
+    position: relative;
+    display: flex;
+    gap: 0.125rem;
+  }
+
+  .wh-tabset-tab {
+    position: relative;
+    z-index: 1;
+    display: inline-flex;
+    flex: none;
+    align-items: center;
+    gap: 0.5rem;
+    block-size: 2rem;
+    padding-inline: 0.75rem;
+    border-radius: var(--radius-ui-s);
+    font-size: var(--text-ui-s);
+    line-height: var(--text-ui-s--line-height);
+    font-weight: 500;
+    white-space: nowrap;
+    color: var(--wh-muted);
+    cursor: pointer;
+    user-select: none;
+    -webkit-tap-highlight-color: transparent;
+    transition: color var(--wh-duration) var(--wh-ease);
+  }
+
+  .wh-tabset-tab:hover,
+  .wh-tabset-tab[data-active] {
+    color: var(--wh-fg);
+  }
+
+  .wh-tabset-indicator {
+    position: absolute;
+    inset-block-start: 0;
+    inset-inline-start: 0;
+    z-index: 0;
+    inline-size: var(--active-tab-width);
+    block-size: var(--active-tab-height);
+    translate: var(--active-tab-left) var(--active-tab-top);
+    border-radius: var(--radius-ui-s);
+    background-color: var(--wh-tab-fill);
+    box-shadow: var(--wh-tab-fill-edge);
+    transition:
+      translate var(--wh-tab-slide) var(--wh-ease),
+      inline-size var(--wh-tab-slide) var(--wh-ease);
+  }
+
+  .wh-tabset-list:not(:has(> .wh-tabset-indicator:not([hidden]))) > .wh-tabset-tab[data-active] {
+    background-color: var(--wh-tab-fill);
+    box-shadow: var(--wh-tab-fill-edge);
+  }
+
+  /* A language logo before the name of its tab. */
+  .wh-lang-logo {
+    flex: none;
+    inline-size: 1rem;
+    block-size: 1rem;
+  }
+
+  /*
+   * A language row of a code group shares the width of its code pane. Tighter
+   * tabs, and a smaller label between 1024 and 1180 px where the pane is
+   * narrowest, keep all eight languages in one row from 1024 px.
+   */
+  .wh-tabs .wh-tabset-tab {
+    gap: 0.375rem;
+    padding-inline: 0.5rem;
+  }
+
+  @media (min-width: 1024px) and (max-width: 1179.98px) {
+    .wh-tabs .wh-tabset-tab {
+      padding-inline: 0.375rem;
+      font-size: 0.8125rem;
+    }
+  }
+
+  /* On a framed panel, the fill is the page color, so it stands out from the panel. */
+  .wh-frame.wh-tabset,
+  .wh-tabset[data-variant="segmented"] {
+    --wh-tab-fill: var(--wh-page);
+    --wh-tab-fill-edge: 0 0 0 1px var(--wh-line), 0 1px 2px rgb(0 0 0 / 0.05);
+  }
+
+  .dark .wh-frame.wh-tabset,
+  .dark .wh-tabset[data-variant="segmented"] {
+    --wh-tab-fill: var(--wh-n-4);
+    --wh-tab-fill-edge: none;
+  }
+
+  .wh-tabset[data-variant="segmented"] .wh-tabset-list {
+    padding: 0.25rem;
+    border-radius: var(--radius-ui-m);
+    background-color: var(--wh-n-3);
+  }
+
+  .dark .wh-tabset[data-variant="segmented"] .wh-tabset-list {
+    background-color: var(--wh-n-2);
+  }
+
+  /*
+   * A panel that a reader opens fades in. The panel of the first paint does
+   * not, because the root takes `data-changed` only after a selection.
+   */
+  .wh-tabset[data-changed] > .wh-tabset-panel:not([hidden]) {
+    animation: wh-panel-in 200ms var(--wh-ease);
+  }
+
+  @keyframes wh-panel-in {
+    from {
+      opacity: 0;
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .wh-tabset {
+      --wh-tab-slide: 0ms;
+    }
+
+    .wh-tabset[data-changed] > .wh-tabset-panel:not([hidden]) {
+      animation: none;
+    }
+  }
+}
+
+/*
+ * Keyboard focus. These rules sit outside the layer, so they win over the
+ * global focus outline in `global.css`. A pointer press shows no ring,
+ * because `:focus-visible` matches only keyboard focus.
+ */
+.wh-tabset-tab:focus-visible {
+  outline-offset: 0;
+}
+
+/*
+ * The pillar row scrolls sideways on a phone, so it clips an outline at its
+ * edges. A pillar draws its focus ring inside its own box instead.
+ */
+.wh-pillar-tab:focus-visible {
+  outline: none;
+  box-shadow: inset 0 0 0 2px var(--color-fd-ring);
+}
+
+/* ---------- Dashboard screens ---------- */
+
+/*
+ * Every screen of a showcase stays in the page, stacked in one grid cell, so
+ * its capture loads once and the frame keeps the height of the tallest
+ * panel. A hidden panel is transparent, not `visibility: hidden`, because
+ * the browser does not load a lazy image in an invisible element. The
+ * selected panel sits on top and fades in over the panel before it. That
+ * panel stays opaque under it and goes transparent when the fade ends, so no
+ * frame shows the page through a capture. A caption hides at once, because
+ * two lines of text do not blend well.
+ */
+.wh-screens-stack {
+  display: grid;
+}
+
+/* A stacked panel has no `hidden` attribute. Base UI makes it `inert` when it is not selected. */
+.wh-screens-stack > .wh-tabset-panel {
+  display: block;
+  grid-area: 1 / 1;
+  min-inline-size: 0;
+}
+
+.wh-screens-captioned {
+  grid-template-rows: auto auto;
+}
+
+.wh-screens-captioned > .wh-tabset-panel {
+  display: grid;
+  grid-row: 1 / span 2;
+  grid-template-rows: subgrid;
+}
+
+.wh-screens-stack > .wh-tabset-panel[inert] {
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0s linear 200ms;
+}
+
+.wh-screens-stack > .wh-tabset-panel:not([inert]) {
+  position: relative;
+  z-index: 1;
+  opacity: 1;
+  transition: opacity 200ms var(--wh-ease);
+}
+
+.wh-screens-captioned > .wh-tabset-panel[inert] > p {
+  visibility: hidden;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .wh-screens-stack > .wh-tabset-panel:is([inert], :not([inert])) {
+    transition: none;
+  }
+}
+
+/* ---------- Diagrams ---------- */
+
+/*
+ * Line diagrams in one drawing style: solid boxes with a 1 px stroke, sans
+ * labels, mono code, and dots. One path in each diagram is amber and 1.5 px.
+ * The SVG reads its colors from these classes, so it follows the color scheme.
+ */
+.wh-dg {
+  font-family: var(--font-sans);
+}
+
+.wh-dg .dg-box {
+  fill: var(--wh-page);
+  stroke: var(--wh-n-5);
+  stroke-width: 1;
+}
+
+.wh-dg .dg-well {
+  fill: var(--wh-n-3);
+}
+
+.wh-dg .dg-wire {
+  fill: none;
+  stroke: var(--wh-n-5);
+  stroke-width: 1;
+}
+
+.wh-dg .dg-pill {
+  fill: var(--wh-n-4);
+}
+
+.wh-dg .dg-dot {
+  fill: var(--wh-n-6);
+}
+
+.wh-dg .dg-label {
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.wh-dg .dg-label-default {
+  fill: var(--wh-n-9);
+}
+
+.wh-dg .dg-label-quiet {
+  fill: var(--wh-n-8);
+  font-weight: 400;
+}
+
+.wh-dg .dg-label-hot {
+  fill: var(--wh-amber-ink);
+}
+
+.wh-dg .dg-code {
+  fill: var(--wh-n-8);
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
+.wh-dg .dg-hot {
+  stroke: var(--wh-amber);
+  stroke-width: 1.5;
+}
+
+.wh-dg .dg-hot-fill {
+  fill: var(--wh-amber);
+}
+
+.wh-dg .dg-hot-text {
+  fill: var(--wh-amber-ink);
+}
+
+/* ---------- Pillars ---------- */
+
+/*
+ * One surface on the page color with a hairline edge. The tab row sits at its
+ * top on a slightly darker fill. The selected pillar is a sheet of the page
+ * color, with a hairline on each side, that slides along the row and covers
+ * the line under it, so it opens into the panel.
+ */
+@layer components {
+  .wh-pillars {
+    --wh-tab-fill: var(--wh-page);
+    --wh-tab-fill-edge: -1px 0 0 var(--wh-line), 1px 0 0 var(--wh-line);
+
+    overflow: hidden;
+    border: 1px solid var(--wh-line);
+    border-radius: var(--radius-ui-m);
+    background-color: var(--wh-page);
+  }
+
+  .wh-pillars > .wh-tabset-list {
+    gap: 0;
+    background-color: var(--wh-n-2);
+    box-shadow: inset 0 -1px 0 var(--wh-line);
+  }
+
+  .wh-pillars > .wh-tabset-list > .wh-tabset-tab {
+    block-size: auto;
+    border-radius: 0;
+    white-space: normal;
+  }
+
+  .wh-pillars > .wh-tabset-list > .wh-tabset-indicator {
+    border-radius: 0;
+  }
+
+  .wh-pillar-label {
+    color: var(--wh-muted);
+  }
+
+  .wh-pillar-title {
+    color: var(--wh-muted);
+    transition: color var(--wh-duration) var(--wh-ease);
+  }
+
+  .wh-pillar-tab:hover .wh-pillar-title,
+  .wh-pillar-tab[data-active] .wh-pillar-title {
+    color: var(--wh-fg);
+  }
+}
+
+/* The code of a pillar sits on the surface itself, with no frame of its own. */
+.wh-pillar-code .wh-code-surface,
+.wh-pillar-code pre.shiki {
+  background-color: transparent;
+}
+
+/*
+ * From 1024 px the code and its journal sit side by side, with 62% of the
+ * width for the code. Every pillar snippet keeps its lines at 74 columns or
+ * fewer. Each line of the code block has its own 16 px inset, so the block
+ * drops its own padding here. At 12 px the longest line then fits the pane at
+ * 1024 px with no sideways scroll, and at 13 px from 1280 px.
+ */
+@media (min-width: 1024px) {
+  .wh-pillar-panel {
+    display: grid;
+    grid-template-columns: minmax(0, 62fr) minmax(0, 38fr);
+  }
+
+  .wh-pillar-panel[hidden] {
+    display: none;
+  }
+
+  .wh-pillar-code {
+    border-block-end: 0;
+    box-shadow: inset -1px 0 0 var(--wh-line);
+  }
+
+  .wh-pillar-code pre {
+    padding-inline: 0;
+    font-size: 0.75rem;
+  }
+}
+
+@media (min-width: 1280px) {
+  .wh-pillar-code pre {
+    font-size: 0.8125rem;
+  }
+}
+
+/* ---------- Execution journal ---------- */
+
+/*
+ * The journal is a vertical trace. Each row has a full-width track that
+ * stands for the run of the task, and its segments sit on that track at the
+ * time they ran. A failed attempt and a wait that holds no worker slot are
+ * amber.
+ */
+.wh-journal-track {
+  position: relative;
+  block-size: 0.375rem;
+  border-radius: 9999px;
+  background-color: var(--wh-n-3);
+}
+
+.dark .wh-journal-track {
+  background-color: var(--wh-n-3);
+}
+
+.wh-journal-bar {
+  position: absolute;
+  inset-block: 0;
+  min-inline-size: 0.375rem;
+  border-radius: 9999px;
+  background-color: var(--wh-n-9);
+}
+
+.dark .wh-journal-bar {
+  background-color: var(--wh-n-8);
+}
+
+.wh-journal-bar[data-tone="replay"] {
+  background-color: var(--wh-n-6);
+}
+
+.wh-journal-bar[data-tone="failed"] {
+  background-color: var(--wh-amber);
+}
+
+.wh-journal-bar[data-tone="wait"],
+.wh-journal-bar[data-tone="held"] {
+  background: repeating-linear-gradient(90deg, var(--wh-n-6) 0 3px, transparent 3px 6px);
+}
+
+.wh-journal-bar[data-tone="held"] {
+  background: repeating-linear-gradient(90deg, var(--wh-amber) 0 3px, transparent 3px 6px);
+}
+
+/* The sample bar of a legend entry. */
+.wh-journal-key {
+  position: static;
+  display: inline-block;
+  inline-size: 0.875rem;
+  block-size: 0.375rem;
+}
+
+/*
+ * One journal row: the step number, the call, and its status on the first
+ * line. The track and the note sit under the call.
+ */
+.wh-journal-row {
+  display: grid;
+  grid-template-columns: 1.25rem minmax(0, 1fr) auto;
+  align-items: baseline;
+  column-gap: 0.5rem;
+  row-gap: 0.5rem;
+  font-size: var(--text-ui-xs);
+  line-height: var(--text-ui-xs--line-height);
+}
+
+.wh-journal-step {
+  color: var(--wh-faint);
+  font-variant-numeric: tabular-nums;
+}
+
+.wh-journal-call {
+  min-inline-size: 0;
+  overflow-wrap: anywhere;
+  font-family: var(--font-mono);
+  color: var(--wh-body);
+}
+
+.wh-journal-row > .wh-journal-track,
+.wh-journal-note {
+  grid-column: 2 / -1;
+}
+
+.wh-journal-note {
+  margin-block-start: -0.125rem;
+  color: var(--wh-muted);
+  text-wrap: pretty;
+}
+
+/* The status of a journal row: a short word in the tone of its last segment. */
+.wh-journal-status {
+  color: var(--wh-muted);
+}
+
+.wh-journal-status[data-tone="failed"],
+.wh-journal-status[data-tone="held"] {
+  color: var(--wh-amber-ink);
+}
+
+/* ---------- Features page ---------- */
+
+/*
+ * The feature tour (`src/routes/features.tsx`). Each group has its own layout
+ * around one visual. A feature sits under a hairline: its guarantee in the
+ * foreground color, the detail in the muted color, its API names as code, and
+ * a neutral link to its guide. Amber stays in the diagrams, where it marks
+ * the element each diagram is about.
+ */
+
+/* A guide link on this page is neutral, so the amber marks of the diagrams keep their meaning. */
+.wh-features .wh-link {
+  color: var(--wh-fg);
+}
+
+/*
+ * The two column lines of the page from 1024 px: the text column and the
+ * visual column. The visual column is wider under 1280 px, so the eight
+ * language tabs of a code sample stay on one row.
+ */
+.wh-features {
+  --wh-fcol-text: minmax(0, 5fr);
+  --wh-fcol-visual: minmax(0, 8fr);
+  --wh-fcol-gap: 3rem;
+}
+
+@media (min-width: 1280px) {
+  .wh-features {
+    --wh-fcol-visual: minmax(0, 7fr);
+    --wh-fcol-gap: 4rem;
+  }
+}
+
+/* A group title is one step under the section title of the landing page. */
+.wh-ftitle {
+  font-size: 1.875rem;
+  line-height: 1.15;
+  letter-spacing: -0.025em;
+}
+
+@media (min-width: 640px) {
+  .wh-ftitle {
+    font-size: 2.25rem;
+    line-height: 1.1;
+    letter-spacing: -0.03em;
+  }
+}
+
+/*
+ * A fragment link scrolls a group under the site header and the group nav.
+ * The section padding is above the title, so a small margin is enough.
+ */
+.wh-fgroup {
+  scroll-margin-top: 3.5rem;
+}
+
+@media (min-width: 640px) {
+  .wh-fgroup {
+    scroll-margin-top: 3rem;
+  }
+}
+
+/* A nav click focuses the group so Tab continues there. The group is not a control, so it shows no ring. */
+.wh-fgroup:focus {
+  outline: none;
+}
+
+/*
+ * A fragment link to one feature, such as `#durable-sleep`, puts its title
+ * under the site header (4 rem) and the group nav (about 3.5 rem).
+ */
+.wh-feature {
+  scroll-margin-top: 7.5rem;
+}
+
+/*
+ * The group nav (`components/feature-nav.tsx`). It is a track that floats on
+ * the page and sticks 12 px under the site header. The fill of the current
+ * group slides from link to link. The nav itself lets a pointer through, so
+ * only the track takes clicks.
+ */
+.wh-fnav {
+  position: sticky;
+  inset-block-start: 4.75rem;
+  z-index: 30;
+  display: flex;
+  justify-content: center;
+  margin-block-start: 2.5rem;
+  padding-inline: 1rem;
+  pointer-events: none;
+}
+
+.wh-fnav-track {
+  max-inline-size: 100%;
+  overflow: hidden;
+  padding: 0.25rem;
+  border-radius: var(--radius-ui-m);
+  background-color: color-mix(in srgb, var(--wh-n-2) 86%, transparent);
+  box-shadow:
+    inset 0 0 0 1px var(--wh-line),
+    0 1px 2px rgb(0 0 0 / 0.04),
+    0 10px 28px -14px rgb(0 0 0 / 0.18);
+  backdrop-filter: blur(12px);
+  pointer-events: auto;
+}
+
+.dark .wh-fnav-track {
+  box-shadow:
+    inset 0 0 0 1px var(--wh-line),
+    0 10px 28px -14px rgb(0 0 0 / 0.8);
+}
+
+/* On a phone the row scrolls sideways, and its edges fade, so a cut label reads as more to scroll. */
+@media (max-width: 639.98px) {
+  .wh-fnav-scroll {
+    mask-image: linear-gradient(
+      to right,
+      transparent,
+      #000 0.75rem,
+      #000 calc(100% - 0.75rem),
+      transparent
+    );
+  }
+}
+
+.wh-fnav-list {
+  position: relative;
+  display: flex;
+  gap: 0.125rem;
+  inline-size: max-content;
+}
+
+.wh-fnav-link {
+  position: relative;
+  z-index: 1;
+  display: inline-flex;
+  align-items: center;
+  block-size: 2.25rem;
+  padding-inline: 0.875rem;
+  border-radius: var(--radius-ui-s);
+  font-size: var(--text-ui-s);
+  line-height: var(--text-ui-s--line-height);
+  font-weight: 500;
+  white-space: nowrap;
+  color: var(--wh-muted);
+  -webkit-tap-highlight-color: transparent;
+  transition: color var(--wh-duration) var(--wh-ease);
+}
+
+.wh-fnav-link:hover,
+.wh-fnav-link[aria-current] {
+  color: var(--wh-fg);
+}
+
+/* The track scrolls sideways on a phone, so a link draws its focus ring inside its own box. */
+.wh-fnav-link:focus-visible {
+  outline-offset: -2px;
+}
+
+@media (min-width: 640px) {
+  .wh-fnav-link {
+    block-size: 2rem;
+  }
+}
+
+.wh-fnav-indicator {
+  position: absolute;
+  inset-block: 0;
+  inset-inline-start: 0;
+  z-index: 0;
+  border-radius: var(--radius-ui-s);
+  background-color: var(--wh-page);
+  box-shadow:
+    0 0 0 1px var(--wh-line),
+    0 1px 2px rgb(0 0 0 / 0.05);
+  opacity: 0;
+  transition:
+    translate 240ms var(--wh-ease),
+    inline-size 240ms var(--wh-ease),
+    opacity var(--wh-duration) var(--wh-ease);
+}
+
+.dark .wh-fnav-indicator {
+  background-color: var(--wh-n-4);
+  box-shadow: none;
+}
+
+.wh-fnav-indicator[data-visible] {
+  opacity: 1;
+}
+
+/* The first fill of a scroll appears in place. Only later fills slide. */
+.wh-fnav-indicator[data-instant] {
+  transition: opacity var(--wh-duration) var(--wh-ease);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .wh-fnav-indicator {
+    transition: opacity var(--wh-duration) var(--wh-ease);
+  }
+}
+
+/*
+ * A split group: the head and the features in one column, the visual in the
+ * other. Under 1024 px they stack as head, visual, features. From 1024 px the
+ * visual sticks under the group nav while the features scroll beside it.
+ * `data-mirror` puts the visual on the start side, and stacks the features
+ * before the visual. A split can leave out its head.
+ */
+.wh-fsplit {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-areas: "head" "visual" "list";
+}
+
+.wh-fsplit[data-mirror] {
+  grid-template-areas: "head" "list" "visual";
+}
+
+.wh-fsplit-head {
+  grid-area: head;
+}
+
+.wh-fsplit-visual {
+  grid-area: visual;
+  min-inline-size: 0;
+  margin-block-start: 2.5rem;
+}
+
+.wh-fsplit-list {
+  grid-area: list;
+  margin-block-start: 2.5rem;
+}
+
+/* A mirrored split with no head starts with its features. */
+.wh-fsplit[data-mirror]:not(:has(> .wh-fsplit-head)) > .wh-fsplit-list {
+  margin-block-start: 0;
+}
+
+@media (min-width: 768px) and (max-width: 1023.98px) {
+  .wh-fsplit-list[data-layout="stack"] {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    column-gap: 2.5rem;
+  }
+}
+
+@media (min-width: 1024px) {
+  .wh-fsplit {
+    grid-template-columns: var(--wh-fcol-text) var(--wh-fcol-visual);
+    grid-template-rows: auto 1fr;
+    grid-template-areas: "head visual" "list visual";
+    column-gap: var(--wh-fcol-gap);
+  }
+
+  .wh-fsplit[data-mirror] {
+    grid-template-columns: var(--wh-fcol-visual) var(--wh-fcol-text);
+    grid-template-areas: "visual head" "visual list";
+  }
+
+  .wh-fsplit-visual {
+    position: sticky;
+    inset-block-start: 9rem;
+    align-self: start;
+    margin-block-start: 0;
+  }
+
+  /* Each line of the code has its own 16 px inset, so the block drops its own padding here. */
+  .wh-fsplit-visual pre {
+    padding-inline: 0;
+    font-size: 0.75rem;
+  }
+}
+
+@media (min-width: 1280px) {
+  .wh-fsplit-visual pre {
+    font-size: 0.8125rem;
+  }
+}
+
+/* The head and the visual of a group side by side, on the column lines of a split. */
+.wh-fcols {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 2.5rem;
+}
+
+@media (min-width: 1024px) {
+  .wh-fcols {
+    grid-template-columns: var(--wh-fcol-text) var(--wh-fcol-visual);
+    column-gap: var(--wh-fcol-gap);
+  }
+}
+
+/* A diagram on its own, centered under a centered head, at its natural width. */
+.wh-fstage {
+  display: flex;
+  justify-content: center;
+  margin-block-start: 3rem;
+}
+
+.wh-fstage > * {
+  inline-size: fit-content;
+  max-inline-size: 100%;
+}
+
+/* From 1024 px the diagram draws a little larger, so it holds the center of its group. */
+@media (min-width: 1024px) {
+  .wh-fstage > * {
+    zoom: 1.15;
+  }
+}
+
+/* ---------- Feature list ---------- */
+
+.wh-flist {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.wh-feature {
+  display: flex;
+  flex-direction: column;
+  padding-block: 1.5rem;
+  border-block-start: 1px solid var(--wh-line);
+}
+
+.wh-flist[data-layout="stack"] > .wh-feature:last-child {
+  padding-block-end: 0;
+}
+
+.wh-feature-title {
+  font-size: var(--text-ui-m);
+  line-height: var(--text-ui-m--line-height);
+  font-weight: 600;
+  letter-spacing: -0.011em;
+  color: var(--wh-fg);
+  text-wrap: balance;
+}
+
+.wh-feature-detail {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+}
+
+.wh-feature-body {
+  margin-block-start: 0.5rem;
+  font-size: var(--text-ui-s);
+  line-height: 1.375rem;
+  color: var(--wh-muted);
+  text-wrap: pretty;
+}
+
+.wh-feature-body code {
+  font-family: var(--font-mono);
+  font-size: 0.875em;
+  color: var(--wh-fg);
+}
+
+/* The API names of a feature: code on a subtle fill, with the SDKs that use each spelling. */
+.wh-feature-api {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.375rem 0.875rem;
+  margin-block-start: 0.875rem;
+  font-size: var(--text-ui-xs);
+  line-height: var(--text-ui-xs--line-height);
+}
+
+.wh-feature-api > li {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.375rem;
+}
+
+.wh-feature-api code {
+  padding: 0.125rem 0.375rem;
+  border-radius: var(--radius-ui-xs);
+  background-color: var(--wh-subtle);
+  font-family: var(--font-mono);
+  color: var(--wh-body);
+}
+
+.wh-feature-sdks {
+  color: var(--wh-faint);
+}
+
+.wh-feature-link {
+  margin-block-start: 1rem;
+}
+
+/* One column for each feature. The links sit on one line at the foot of the columns. */
+@media (min-width: 1024px) {
+  .wh-flist[data-layout="columns"] {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    column-gap: 3rem;
+  }
+
+  .wh-flist[data-layout="columns"] .wh-feature-link {
+    margin-block-start: auto;
+    padding-block-start: 1rem;
+  }
+}
+
+/* One row for each feature: the title on the column line of the head, the detail on that of the visual. */
+@media (min-width: 1024px) {
+  .wh-flist[data-layout="rows"] > .wh-feature {
+    display: grid;
+    grid-template-columns: var(--wh-fcol-text) var(--wh-fcol-visual);
+    column-gap: var(--wh-fcol-gap);
+    padding-block: 1.75rem;
+  }
+
+  .wh-flist[data-layout="rows"] .wh-feature-title {
+    font-size: 1.125rem;
+    line-height: 1.5rem;
+    letter-spacing: -0.015em;
+  }
+
+  .wh-flist[data-layout="rows"] .wh-feature-body {
+    margin-block-start: 0;
+  }
+
+  .wh-flist[data-layout="rows"] > .wh-feature:last-child {
+    border-block-end: 1px solid var(--wh-line);
+  }
+}
+
+/* ---------- Package list ---------- */
+
+/*
+ * Every package in one hairline frame: two columns from 1024 px, with the
+ * name over its summary. A row takes the subtle fill on hover.
+ */
+.wh-fpackages {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  margin-block-start: 4rem;
+  overflow: hidden;
+  border-radius: var(--radius-ui-m);
+  box-shadow: inset 0 0 0 1px var(--wh-line);
+}
+
+.wh-fpackages > li + li {
+  border-block-start: 1px solid var(--wh-line);
+}
+
+.wh-fpackage {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  block-size: 100%;
+  padding: 0.875rem 1rem;
+  transition: background-color var(--wh-duration) var(--wh-ease);
+}
+
+@media (min-width: 640px) {
+  .wh-fpackage {
+    padding: 1rem 1.25rem;
+  }
+}
+
+.wh-fpackage:hover {
+  background-color: var(--wh-n-2);
+}
+
+.wh-fpackage:focus-visible {
+  outline-offset: -2px;
+}
+
+.wh-fpackage-name {
+  overflow-wrap: anywhere;
+  font-family: var(--font-mono);
+  font-size: var(--text-ui-s);
+  line-height: var(--text-ui-s--line-height);
+  font-weight: 500;
+  color: var(--wh-fg);
+}
+
+@media (min-width: 1024px) {
+  .wh-fpackages {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .wh-fpackages > li:nth-child(2) {
+    border-block-start: 0;
+  }
+
+  .wh-fpackages > li:nth-child(odd) {
+    box-shadow: 1px 0 0 var(--wh-line);
+  }
+}
+
+/* ---------- Closing call ---------- */
+
+/* The last call to action sits on the subtle fill of the tab rows, with a hairline edge. */
+.wh-closing {
+  border-radius: 16px;
+  background-color: var(--wh-n-2);
+  box-shadow: inset 0 0 0 1px var(--wh-line);
+}
+
+/* ---------- Page container ---------- */
+
+/*
+ * The one container of the marketing pages: every section, the closing call,
+ * and the footer. Its padding is the padding of the site header, so up to the
+ * maximum width their edges line up with the logo and the header actions.
+ */
+.wh-container {
+  margin-inline: auto;
+  inline-size: 100%;
+  max-inline-size: 76rem;
+  padding-inline: 1rem;
+}
+
+@media (min-width: 768px) {
+  .wh-container {
+    padding-inline: 1.5rem;
+  }
+}
+
+/* ---------- Footer ---------- */
+
+/*
+ * The site footer (`components/site-footer.tsx`). It sits on the page color
+ * under one hairline. The position is one large line. The runtime floors are
+ * a small table with the names in the muted color and the versions in the
+ * foreground color. The wordmark closes the page at the full width of the
+ * container. It takes a quiet neutral and fades into the bottom edge, so it
+ * reads as a signature and not as a headline.
+ */
+.wh-footer {
+  overflow: hidden;
+  border-block-start: 1px solid var(--wh-line);
+  background-color: var(--wh-page);
+}
+
+.wh-footer-line {
+  font-size: var(--text-ui-l);
+  line-height: var(--text-ui-l--line-height);
+  font-weight: 500;
+  letter-spacing: -0.015em;
+  color: var(--wh-fg);
+}
+
+.wh-footer-runtimes {
+  display: grid;
+  grid-template-columns: repeat(3, max-content);
+  gap: 0.5rem 1.75rem;
+  font-size: var(--text-ui-s);
+  line-height: var(--text-ui-s--line-height);
+  font-variant-numeric: tabular-nums;
+}
+
+.wh-footer-runtimes > div {
+  display: flex;
+  gap: 0.375rem;
+}
+
+.wh-footer-runtimes dt {
+  color: var(--wh-muted);
+}
+
+.wh-footer-runtimes dd {
+  color: var(--wh-fg);
+}
+
+.wh-footer-link {
+  font-size: var(--text-ui-s);
+  line-height: var(--text-ui-s--line-height);
+  color: var(--wh-body);
+  transition: color var(--wh-duration) var(--wh-ease);
+}
+
+.wh-footer-link:hover {
+  color: var(--wh-fg);
+}
+
+.wh-footer-license {
+  font-size: inherit;
+  line-height: inherit;
+  color: inherit;
+  text-decoration-line: underline;
+  text-decoration-color: var(--wh-line);
+  text-underline-offset: 3px;
+  transition:
+    color var(--wh-duration) var(--wh-ease),
+    text-decoration-color var(--wh-duration) var(--wh-ease);
+}
+
+.wh-footer-license:hover {
+  text-decoration-color: currentColor;
+}
+
+/*
+ * The wordmark and its horses. One wordmark unit is `--wh-u`, because the
+ * wordmark file is 502.4 units wide: the caps start at y 0 and the lowercase
+ * letters at y 16.4. A horse is 28 units wide and its hooves are 20 units
+ * under its top, so a horse on a letter has `top` at the letter top minus 20.
+ */
+.wh-footer-signature {
+  --wh-u: calc(100cqw / 502.4);
+  position: relative;
+  container-type: inline-size;
+  margin-block: clamp(1.5rem, 4vw, 3.5rem) -1.5%;
+}
+
+.wh-pony {
+  position: absolute;
+  width: calc(28 * var(--wh-u));
+  aspect-ratio: 42 / 34;
+  color: var(--wh-fg);
+}
+
+.wh-pony__move,
+.wh-pony svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.wh-pony svg {
+  overflow: visible;
+}
+
+.wh-pony__tail,
+.wh-pony__mane {
+  fill: var(--wh-amber);
+}
+
+.wh-pony__eye {
+  fill: var(--wh-page);
+  transform-box: fill-box;
+  transform-origin: center;
+}
+
+.wh-pony__leg {
+  transform-box: fill-box;
+  transform-origin: 50% 0;
+}
+
+.wh-pony__head {
+  transform-origin: 27px 14px;
+}
+
+.wh-pony__tail {
+  transform-origin: 11px 13px;
+}
+
+/* It grazes on the first "o", between the "W" and the "k". */
+.wh-pony--graze {
+  top: calc(-2.8 * var(--wh-u));
+  left: calc(105.8 * var(--wh-u));
+}
+
+/* It stands on the stem of the "k" and looks one way, then the other. */
+.wh-pony--hop {
+  top: calc(-20 * var(--wh-u));
+  left: calc(185.1 * var(--wh-u));
+}
+
+/* It sleeps on the stem of the "h", with its legs under it. */
+.wh-pony--sleep {
+  top: calc(-20 * var(--wh-u));
+  left: calc(241.9 * var(--wh-u));
+}
+
+.wh-pony--sleep .wh-pony__leg {
+  display: none;
+}
+
+.wh-pony--sleep .wh-pony__upper {
+  transform: translateY(7px);
+}
+
+.wh-pony--sleep .wh-pony__head {
+  transform: rotate(26deg);
+}
+
+.wh-pony--sleep .wh-pony__eye {
+  transform: scale(1.2, 0.25);
+}
+
+.wh-pony-snore {
+  position: absolute;
+  top: calc(-22 * var(--wh-u));
+  left: calc(268 * var(--wh-u));
+  font-size: calc(6.5 * var(--wh-u));
+  font-weight: 600;
+  line-height: 1;
+  color: var(--wh-muted);
+}
+
+.wh-pony-snore > span {
+  position: absolute;
+  opacity: 0;
+}
+
+/* It runs along "orse" and back. */
+.wh-pony--run {
+  top: calc(-3.6 * var(--wh-u));
+  left: calc(300 * var(--wh-u));
+}
+
+.wh-pony--run .wh-pony__head {
+  transform: rotate(14deg);
+}
+
+.wh-pony--run .wh-pony__tail {
+  transform: rotate(-18deg);
+}
+
+/* If the reader asks for reduced motion, every horse holds its pose. */
+@media (prefers-reduced-motion: no-preference) {
+  .wh-pony--graze .wh-pony__head {
+    animation: wh-pony-graze 6s ease-in-out infinite;
+  }
+
+  .wh-pony--graze .wh-pony__tail,
+  .wh-pony--hop .wh-pony__tail {
+    animation: wh-pony-swish 2.4s ease-in-out infinite;
+  }
+
+  .wh-pony--hop .wh-pony__move {
+    transform-origin: 50% 88%;
+    animation: wh-pony-hop 4.2s cubic-bezier(0.3, 0, 0.3, 1) infinite;
+  }
+
+  .wh-pony--hop svg {
+    animation: wh-pony-look 8.4s steps(1) infinite;
+  }
+
+  .wh-pony--sleep .wh-pony__move {
+    transform-origin: 50% 100%;
+    animation: wh-pony-breathe 3.2s ease-in-out infinite;
+  }
+
+  .wh-pony-snore > span {
+    animation: wh-pony-snore 3.6s ease-out infinite;
+  }
+
+  .wh-pony-snore > span:nth-child(2) {
+    animation-delay: 1.2s;
+  }
+
+  .wh-pony-snore > span:nth-child(3) {
+    animation-delay: 2.4s;
+  }
+
+  .wh-pony--run {
+    animation: wh-pony-run 9s linear infinite;
+  }
+
+  .wh-pony--run svg {
+    animation: wh-pony-look 9s steps(1) infinite;
+  }
+
+  .wh-pony--run .wh-pony__move {
+    animation: wh-pony-bob 0.36s ease-in-out infinite;
+  }
+
+  .wh-pony--run .wh-pony__leg:nth-child(odd) {
+    animation: wh-pony-stride 0.36s ease-in-out infinite;
+  }
+
+  .wh-pony--run .wh-pony__leg:nth-child(even) {
+    animation: wh-pony-stride 0.36s ease-in-out infinite reverse;
+  }
+}
+
+@keyframes wh-pony-graze {
+  0%,
+  18%,
+  82%,
+  100% {
+    transform: rotate(0);
+  }
+  28%,
+  72% {
+    transform: rotate(38deg);
+  }
+  36%,
+  52% {
+    transform: rotate(34deg);
+  }
+  44%,
+  60% {
+    transform: rotate(39deg);
+  }
+}
+
+@keyframes wh-pony-swish {
+  0%,
+  100% {
+    transform: rotate(0);
+  }
+  30% {
+    transform: rotate(14deg);
+  }
+  60% {
+    transform: rotate(-6deg);
+  }
+}
+
+@keyframes wh-pony-hop {
+  0%,
+  62%,
+  86%,
+  100% {
+    transform: none;
+  }
+  66% {
+    transform: scale(1.08, 0.9);
+  }
+  74% {
+    transform: translateY(-38%) scale(0.96, 1.05);
+  }
+  82% {
+    transform: scale(1.06, 0.93);
+  }
+}
+
+@keyframes wh-pony-look {
+  0% {
+    transform: none;
+  }
+  50% {
+    transform: scaleX(-1);
+  }
+}
+
+@keyframes wh-pony-breathe {
+  50% {
+    transform: scaleY(1.04);
+  }
+}
+
+@keyframes wh-pony-snore {
+  0% {
+    opacity: 0;
+    transform: scale(0.6);
+  }
+  20% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+    transform: translate(calc(6 * var(--wh-u)), calc(-10 * var(--wh-u))) scale(1.1);
+  }
+}
+
+@keyframes wh-pony-run {
+  0%,
+  100% {
+    transform: none;
+  }
+  50% {
+    transform: translateX(calc(174 * var(--wh-u)));
+  }
+}
+
+@keyframes wh-pony-bob {
+  50% {
+    transform: translateY(-6%);
+  }
+}
+
+@keyframes wh-pony-stride {
+  0%,
+  100% {
+    transform: rotate(28deg);
+  }
+  50% {
+    transform: rotate(-28deg);
+  }
+}
+
+.wh-footer-wordmark {
+  aspect-ratio: 502.4 / 72.2;
+  background-color: var(--wh-n-4);
+  mask-image:
+    url("/brand/workhorse-wordmark.svg"), linear-gradient(to bottom, #000 30%, transparent 95%);
+  mask-size: 100% 100%;
+  mask-repeat: no-repeat;
+  mask-composite: intersect;
+}
+
+.dark .wh-footer-wordmark {
+  background-color: var(--wh-n-3);
+}

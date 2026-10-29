@@ -1,38 +1,38 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 280" width="960" height="280" role="img" aria-labelledby="debounce-reset-dark-title debounce-reset-dark-desc">
 <title id="debounce-reset-dark-title">With reset, each new revision moves the run time</title>
 <desc id="debounce-reset-dark-desc">Requests for doc-42 use a window of 2 s and schedule reset. Revision 1 at 0 s creates a task that runs at 2 s. Revision 2 at 1 s replaces the payload and moves the run time to 3 s. Revision 3 at 2.5 s moves it to 4.5 s. Soon after 4.5 s, a worker indexes revision 3. Every request gets the same taskId.</desc>
-<defs><marker id="arrow-dark" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#ced1d4"/></marker></defs>
-<rect width="960" height="280" fill="#04080e"/>
-<text x="24" y="40" fill="#f2f4f5" font-size="12" font-family="Geist" font-weight="600" text-anchor="start">doc-42</text>
-<text x="24" y="55" fill="#ced1d4" font-size="9" font-family="Geist Mono" font-weight="400" text-anchor="start">schedule: "reset"</text>
-<text x="240" y="44" fill="#95999d" font-size="8" font-family="Geist Mono" font-weight="400" text-anchor="middle">0 s</text>
-<text x="352" y="44" fill="#95999d" font-size="8" font-family="Geist Mono" font-weight="400" text-anchor="middle">1 s</text>
-<text x="464" y="44" fill="#95999d" font-size="8" font-family="Geist Mono" font-weight="400" text-anchor="middle">2 s</text>
-<text x="576" y="44" fill="#95999d" font-size="8" font-family="Geist Mono" font-weight="400" text-anchor="middle">3 s</text>
-<text x="688" y="44" fill="#95999d" font-size="8" font-family="Geist Mono" font-weight="400" text-anchor="middle">4 s</text>
-<text x="800" y="44" fill="#95999d" font-size="8" font-family="Geist Mono" font-weight="400" text-anchor="middle">5 s</text>
-<line x1="240" y1="52" x2="800" y2="52" stroke="rgba(242,244,245,0.14)"/>
-<text x="24" y="88" fill="#f2f4f5" font-size="11" font-family="Geist" font-weight="600" text-anchor="start">revision 1</text>
-<text x="24" y="103" fill="#ced1d4" font-size="9" font-family="Geist Mono" font-weight="400" text-anchor="start">accepted</text>
-<rect x="240" y="72" width="224" height="40" rx="6" fill="#04080e"/>
-<rect x="240" y="72" width="224" height="40" rx="6" fill="rgba(242,244,245,0.03)" stroke="rgba(242,244,245,0.4)" stroke-width="1" stroke-dasharray="4,3"/>
-<text x="352" y="90" fill="#f2f4f5" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">run time 2 s</text>
-<text x="352" y="104" fill="#ced1d4" font-size="9" font-family="Geist Mono" text-anchor="middle">replaced at 1 s</text>
-<text x="24" y="144" fill="#f2f4f5" font-size="11" font-family="Geist" font-weight="600" text-anchor="start">revision 2</text>
-<text x="24" y="159" fill="#ced1d4" font-size="9" font-family="Geist Mono" font-weight="400" text-anchor="start">replaced</text>
-<rect x="352" y="128" width="224" height="40" rx="6" fill="#04080e"/>
-<rect x="352" y="128" width="224" height="40" rx="6" fill="rgba(242,244,245,0.03)" stroke="rgba(242,244,245,0.4)" stroke-width="1" stroke-dasharray="4,3"/>
-<text x="464" y="146" fill="#f2f4f5" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">run time 3 s</text>
-<text x="464" y="160" fill="#ced1d4" font-size="9" font-family="Geist Mono" text-anchor="middle">replaced at 2.5 s</text>
-<text x="24" y="200" fill="#f2f4f5" font-size="11" font-family="Geist" font-weight="600" text-anchor="start">revision 3</text>
-<text x="24" y="215" fill="#ced1d4" font-size="9" font-family="Geist Mono" font-weight="400" text-anchor="start">replaced</text>
-<rect x="520" y="184" width="224" height="40" rx="6" fill="#04080e"/>
-<rect x="520" y="184" width="224" height="40" rx="6" fill="rgba(242,244,245,0.05)" stroke="#ced1d4" stroke-width="1"/>
-<text x="632" y="202" fill="#f2f4f5" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">run time 4.5 s</text>
-<text x="632" y="216" fill="#ced1d4" font-size="9" font-family="Geist Mono" text-anchor="middle">no later request</text>
-<rect x="752" y="184" width="132" height="40" rx="6" fill="#04080e"/>
-<rect x="752" y="184" width="132" height="40" rx="6" fill="rgba(252,152,76,0.08)" stroke="#fc984c" stroke-width="1.4"/>
-<text x="818" y="202" fill="#f2f4f5" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">runs</text>
-<text x="818" y="216" fill="#ced1d4" font-size="9" font-family="Geist Mono" text-anchor="middle">indexes revision 3</text>
-<text x="24" y="264" fill="#ced1d4" font-size="9" font-family="Geist Mono" font-weight="400" text-anchor="start">Three requests make one task with one taskId. The task uses the latest revision.</text>
+<defs><marker id="arrow-dark" markerWidth="8" markerHeight="8" refX="6.5" refY="4" orient="auto" markerUnits="userSpaceOnUse"><path d="M 1.5,1 L 6.5,4 L 1.5,7" fill="none" stroke="#838383" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/></marker></defs>
+<rect width="960" height="280" fill="#000000"/>
+<text x="24" y="40" fill="#f4f4f4" font-size="12" font-family="Timeless Grotesk, Geist, sans-serif" font-weight="500" text-anchor="start">doc-42</text>
+<text x="24" y="55" fill="#cfcfcf" font-size="9" font-family="Geist Mono, monospace" font-weight="400" text-anchor="start">schedule: "reset"</text>
+<text x="240" y="44" fill="#ababab" font-size="8" font-family="Timeless Grotesk, Geist, sans-serif" font-weight="400" text-anchor="middle">0 s</text>
+<text x="352" y="44" fill="#ababab" font-size="8" font-family="Timeless Grotesk, Geist, sans-serif" font-weight="400" text-anchor="middle">1 s</text>
+<text x="464" y="44" fill="#ababab" font-size="8" font-family="Timeless Grotesk, Geist, sans-serif" font-weight="400" text-anchor="middle">2 s</text>
+<text x="576" y="44" fill="#ababab" font-size="8" font-family="Timeless Grotesk, Geist, sans-serif" font-weight="400" text-anchor="middle">3 s</text>
+<text x="688" y="44" fill="#ababab" font-size="8" font-family="Timeless Grotesk, Geist, sans-serif" font-weight="400" text-anchor="middle">4 s</text>
+<text x="800" y="44" fill="#ababab" font-size="8" font-family="Timeless Grotesk, Geist, sans-serif" font-weight="400" text-anchor="middle">5 s</text>
+<line x1="240" y1="52" x2="800" y2="52" stroke="#2b2b2b"/>
+<text x="24" y="88" fill="#f4f4f4" font-size="11" font-family="Timeless Grotesk, Geist, sans-serif" font-weight="500" text-anchor="start">revision 1</text>
+<text x="24" y="103" fill="#cfcfcf" font-size="9" font-family="Timeless Grotesk, Geist, sans-serif" font-weight="400" text-anchor="start">accepted</text>
+<rect x="240" y="72" width="224" height="40" rx="8" fill="#000000"/>
+<rect x="240.5" y="72.5" width="223" height="39" rx="8" fill="#000000" stroke="#2b2b2b" stroke-width="1"/>
+<text x="352" y="90" fill="#cfcfcf" font-size="11" font-weight="500" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">run time 2 s</text>
+<text x="352" y="104" fill="#ababab" font-size="9" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">replaced at 1 s</text>
+<text x="24" y="144" fill="#f4f4f4" font-size="11" font-family="Timeless Grotesk, Geist, sans-serif" font-weight="500" text-anchor="start">revision 2</text>
+<text x="24" y="159" fill="#cfcfcf" font-size="9" font-family="Timeless Grotesk, Geist, sans-serif" font-weight="400" text-anchor="start">replaced</text>
+<rect x="352" y="128" width="224" height="40" rx="8" fill="#000000"/>
+<rect x="352.5" y="128.5" width="223" height="39" rx="8" fill="#000000" stroke="#2b2b2b" stroke-width="1"/>
+<text x="464" y="146" fill="#cfcfcf" font-size="11" font-weight="500" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">run time 3 s</text>
+<text x="464" y="160" fill="#ababab" font-size="9" font-family="Geist Mono, monospace" text-anchor="middle">replaced at 2.5 s</text>
+<text x="24" y="200" fill="#f4f4f4" font-size="11" font-family="Timeless Grotesk, Geist, sans-serif" font-weight="500" text-anchor="start">revision 3</text>
+<text x="24" y="215" fill="#cfcfcf" font-size="9" font-family="Timeless Grotesk, Geist, sans-serif" font-weight="400" text-anchor="start">replaced</text>
+<rect x="520" y="184" width="224" height="40" rx="8" fill="#000000"/>
+<rect x="520.5" y="184.5" width="223" height="39" rx="8" fill="#202020" stroke="#2b2b2b" stroke-width="1"/>
+<text x="632" y="202" fill="#f4f4f4" font-size="11" font-weight="500" font-family="Geist Mono, monospace" text-anchor="middle">run time 4.5 s</text>
+<text x="632" y="216" fill="#ababab" font-size="9" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">no later request</text>
+<rect x="752" y="184" width="132" height="40" rx="8" fill="#000000"/>
+<rect x="752.5" y="184.5" width="131" height="39" rx="8" fill="rgba(207,145,72,0.12)" stroke="#cf9148" stroke-width="1"/>
+<text x="818" y="202" fill="#f4f4f4" font-size="11" font-weight="500" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">runs</text>
+<text x="818" y="216" fill="#ababab" font-size="9" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">indexes revision 3</text>
+<text x="24" y="264" fill="#cfcfcf" font-size="9" font-family="Timeless Grotesk, Geist, sans-serif" font-weight="400" text-anchor="start">Three requests make one task with one taskId. The task uses the latest revision.</text>
 </svg>

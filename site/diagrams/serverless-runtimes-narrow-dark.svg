@@ -1,22 +1,22 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 232" width="400" height="232" role="img" aria-labelledby="serverless-runtimes-narrow-dark-title serverless-runtimes-narrow-dark-desc">
 <title id="serverless-runtimes-narrow-dark-title">A Node.js function can enqueue; only a continuous process can host a worker</title>
 <desc id="serverless-runtimes-narrow-dark-desc">A Node.js function on Vercel, AWS Lambda, or a Cloud Run service can enqueue in the same transaction as its data, but it cannot host a worker, because it has no continuous process. An edge isolate, such as Vercel Edge or Cloudflare Workers, cannot use the published client. A continuous process, such as a Cloud Run worker pool, a virtual machine, or Kubernetes, can host a worker.</desc>
-<defs><marker id="arrow-dark" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#ced1d4"/></marker></defs>
-<rect width="400" height="232" fill="#04080e"/>
-<text x="24" y="49" fill="#f2f4f5" font-size="9" font-family="Geist Mono">function</text>
-<rect x="112" y="24" width="264" height="42" rx="6" fill="#04080e"/>
-<rect x="112" y="24" width="264" height="42" rx="6" fill="#0a1017" stroke="#f2f4f5" stroke-width="1"/>
-<text x="244" y="43" fill="#f2f4f5" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">Node.js function</text>
-<text x="244" y="57" fill="#ced1d4" font-size="9" font-family="Geist Mono" text-anchor="middle">can enqueue · no worker</text>
-<text x="24" y="105" fill="#f2f4f5" font-size="9" font-family="Geist Mono">edge</text>
-<rect x="112" y="80" width="264" height="42" rx="6" fill="#04080e"/>
-<rect x="112" y="80" width="264" height="42" rx="6" fill="rgba(242,244,245,0.03)" stroke="rgba(242,244,245,0.4)" stroke-width="1" stroke-dasharray="4,3"/>
-<text x="244" y="99" fill="#f2f4f5" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">edge isolate</text>
-<text x="244" y="113" fill="#ced1d4" font-size="9" font-family="Geist Mono" text-anchor="middle">no published client · no worker</text>
-<text x="24" y="161" fill="#f2f4f5" font-size="9" font-family="Geist Mono">process</text>
-<rect x="112" y="136" width="264" height="42" rx="6" fill="#04080e"/>
-<rect x="112" y="136" width="264" height="42" rx="6" fill="rgba(252,152,76,0.08)" stroke="#fc984c" stroke-width="1.4"/>
-<text x="244" y="155" fill="#f2f4f5" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">continuous process</text>
-<text x="244" y="169" fill="#ced1d4" font-size="9" font-family="Geist Mono" text-anchor="middle">hosts the worker</text>
-<text x="24" y="200" fill="#ced1d4" font-size="9" font-family="Geist Mono" font-weight="400" text-anchor="start">Check the process lifetime first.</text>
+<defs><marker id="arrow-dark" markerWidth="8" markerHeight="8" refX="6.5" refY="4" orient="auto" markerUnits="userSpaceOnUse"><path d="M 1.5,1 L 6.5,4 L 1.5,7" fill="none" stroke="#838383" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/></marker></defs>
+<rect width="400" height="232" fill="#000000"/>
+<text x="24" y="49" fill="#f4f4f4" font-size="9" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="start">function</text>
+<rect x="112" y="24" width="264" height="42" rx="8" fill="#000000"/>
+<rect x="112.5" y="24.5" width="263" height="41" rx="8" fill="#000000" stroke="#3d3d3d" stroke-width="1"/>
+<text x="244" y="43" fill="#f4f4f4" font-size="11" font-weight="500" font-family="Geist Mono, monospace" text-anchor="middle">Node.js function</text>
+<text x="244" y="57" fill="#ababab" font-size="9" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">can enqueue · no worker</text>
+<text x="24" y="105" fill="#f4f4f4" font-size="9" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="start">edge</text>
+<rect x="112" y="80" width="264" height="42" rx="8" fill="#000000"/>
+<rect x="112.5" y="80.5" width="263" height="41" rx="8" fill="#000000" stroke="#2b2b2b" stroke-width="1"/>
+<text x="244" y="99" fill="#cfcfcf" font-size="11" font-weight="500" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">edge isolate</text>
+<text x="244" y="113" fill="#ababab" font-size="9" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">no published client · no worker</text>
+<text x="24" y="161" fill="#f4f4f4" font-size="9" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="start">process</text>
+<rect x="112" y="136" width="264" height="42" rx="8" fill="#000000"/>
+<rect x="112.5" y="136.5" width="263" height="41" rx="8" fill="rgba(207,145,72,0.12)" stroke="#cf9148" stroke-width="1"/>
+<text x="244" y="155" fill="#f4f4f4" font-size="11" font-weight="500" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">continuous process</text>
+<text x="244" y="169" fill="#ababab" font-size="9" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">hosts the worker</text>
+<text x="24" y="200" fill="#cfcfcf" font-size="9" font-family="Timeless Grotesk, Geist, sans-serif" font-weight="400" text-anchor="start">Check the process lifetime first.</text>
 </svg>

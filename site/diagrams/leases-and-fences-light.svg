@@ -1,60 +1,60 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 332" width="960" height="332" role="img" aria-labelledby="leases-and-fences-light-title leases-and-fences-light-desc">
 <title id="leases-and-fences-light-title">A lease gives a task one owner, and a fence token refuses a late write</title>
 <desc id="leases-and-fences-light-desc">Worker A claims the task with fence token 41 and sends heartbeats. Its machine stops at 25 s, and the lease expires at 50 s. At about 52 s, worker B claims the task with fence token 57. At 70 s, worker A starts again. At 90 s, it tries to complete the task with token 41, and PostgreSQL refuses the write because the row has 57.</desc>
-<defs><marker id="arrow-light" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#4e5359"/></marker></defs>
-<rect width="960" height="332" fill="#f9fafb"/>
-<path d="M 883,120 V 160" fill="none" stroke="#4e5359" stroke-width="1.2" marker-end="url(#arrow-light)"/>
-<path d="M 580,240 V 212" fill="none" stroke="#4e5359" stroke-width="1.2" marker-end="url(#arrow-light)"/>
-<text x="200" y="44" fill="#6d7277" font-size="8" font-family="Geist Mono" font-weight="400" text-anchor="middle">0 s</text>
-<text x="270" y="44" fill="#6d7277" font-size="8" font-family="Geist Mono" font-weight="400" text-anchor="middle">10 s</text>
-<text x="340" y="44" fill="#6d7277" font-size="8" font-family="Geist Mono" font-weight="400" text-anchor="middle">20 s</text>
-<text x="410" y="44" fill="#6d7277" font-size="8" font-family="Geist Mono" font-weight="400" text-anchor="middle">30 s</text>
-<text x="480" y="44" fill="#6d7277" font-size="8" font-family="Geist Mono" font-weight="400" text-anchor="middle">40 s</text>
-<text x="550" y="44" fill="#6d7277" font-size="8" font-family="Geist Mono" font-weight="400" text-anchor="middle">50 s</text>
-<text x="620" y="44" fill="#6d7277" font-size="8" font-family="Geist Mono" font-weight="400" text-anchor="middle">60 s</text>
-<text x="690" y="44" fill="#6d7277" font-size="8" font-family="Geist Mono" font-weight="400" text-anchor="middle">70 s</text>
-<text x="760" y="44" fill="#6d7277" font-size="8" font-family="Geist Mono" font-weight="400" text-anchor="middle">80 s</text>
-<text x="830" y="44" fill="#6d7277" font-size="8" font-family="Geist Mono" font-weight="400" text-anchor="middle">90 s</text>
-<line x1="200" y1="52" x2="936" y2="52" stroke="rgba(26,32,39,0.14)"/>
-<text x="24" y="104" fill="#1a2027" font-size="10" font-family="Geist Mono">worker A</text>
-<text x="24" y="188" fill="#1a2027" font-size="10" font-family="Geist Mono">runtime row</text>
-<text x="24" y="264" fill="#1a2027" font-size="10" font-family="Geist Mono">worker B</text>
-<rect x="200" y="80" width="175" height="40" rx="6" fill="#f9fafb"/>
-<rect x="200" y="80" width="175" height="40" rx="6" fill="#ffffff" stroke="#1a2027" stroke-width="1"/>
-<text x="287.5" y="98" fill="#1a2027" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">runs the handler</text>
-<text x="287.5" y="112" fill="#4e5359" font-size="9" font-family="Geist Mono" text-anchor="middle">heartbeats at 10 s and 20 s</text>
-<rect x="375" y="80" width="315" height="40" rx="6" fill="#f9fafb"/>
-<rect x="375" y="80" width="315" height="40" rx="6" fill="rgba(26,32,39,0.03)" stroke="rgba(26,32,39,0.4)" stroke-width="1" stroke-dasharray="4,3"/>
-<text x="532.5" y="98" fill="#1a2027" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">machine stopped</text>
-<text x="532.5" y="112" fill="#4e5359" font-size="9" font-family="Geist Mono" text-anchor="middle">no heartbeats</text>
-<rect x="690" y="80" width="140" height="40" rx="6" fill="#f9fafb"/>
-<rect x="690" y="80" width="140" height="40" rx="6" fill="#ffffff" stroke="#1a2027" stroke-width="1"/>
-<text x="760" y="98" fill="#1a2027" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">starts again</text>
-<text x="760" y="112" fill="#4e5359" font-size="9" font-family="Geist Mono" text-anchor="middle">runs the old handler</text>
-<rect x="830" y="80" width="106" height="40" rx="6" fill="#f9fafb"/>
-<rect x="830" y="80" width="106" height="40" rx="6" fill="#ffffff" stroke="#1a2027" stroke-width="1"/>
-<text x="883" y="98" fill="#1a2027" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">complete</text>
-<text x="883" y="112" fill="#4e5359" font-size="9" font-family="Geist Mono" text-anchor="middle">fence 41</text>
-<rect x="200" y="164" width="350" height="40" rx="6" fill="#f9fafb"/>
-<rect x="200" y="164" width="350" height="40" rx="6" fill="rgba(26,32,39,0.05)" stroke="#4e5359" stroke-width="1"/>
-<text x="375" y="182" fill="#1a2027" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">owner A · fence 41</text>
-<text x="375" y="196" fill="#4e5359" font-size="9" font-family="Geist Mono" text-anchor="middle">expiry 30 s → 40 s → 50 s</text>
-<rect x="564" y="164" width="372" height="40" rx="6" fill="#f9fafb"/>
-<rect x="564" y="164" width="372" height="40" rx="6" fill="rgba(213,92,19,0.08)" stroke="#aa4515" stroke-width="1.4"/>
-<text x="750" y="182" fill="#1a2027" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">owner B · fence 57</text>
-<text x="750" y="196" fill="#4e5359" font-size="9" font-family="Geist Mono" text-anchor="middle">a new lease</text>
-<rect x="564" y="240" width="372" height="40" rx="6" fill="#f9fafb"/>
-<rect x="564" y="240" width="372" height="40" rx="6" fill="#ffffff" stroke="#1a2027" stroke-width="1"/>
-<text x="750" y="264" fill="#1a2027" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">runs the handler</text>
-<rect x="333" y="64" width="84" height="12" rx="2" fill="#f9fafb"/>
-<text x="375" y="73" fill="#6d7277" font-size="8" font-family="Geist Mono" text-anchor="middle" letter-spacing="0.06em">STOPS AT 25 S</text>
-<rect x="628" y="64" width="124" height="12" rx="2" fill="#f9fafb"/>
-<text x="690" y="73" fill="#6d7277" font-size="8" font-family="Geist Mono" text-anchor="middle" letter-spacing="0.06em">STARTS AGAIN AT 70 S</text>
-<rect x="458" y="134" width="128" height="12" rx="2" fill="#f9fafb"/>
-<text x="522" y="143" fill="#6d7277" font-size="8" font-family="Geist Mono" text-anchor="middle" letter-spacing="0.06em">LEASE EXPIRES AT 50 S</text>
-<rect x="771" y="134" width="144" height="12" rx="2" fill="#f9fafb"/>
-<text x="843" y="143" fill="#6d7277" font-size="8" font-family="Geist Mono" text-anchor="middle" letter-spacing="0.06em">REFUSED · RESULT DROPPED</text>
-<rect x="428" y="220" width="144" height="12" rx="2" fill="#f9fafb"/>
-<text x="500" y="229" fill="#6d7277" font-size="8" font-family="Geist Mono" text-anchor="middle" letter-spacing="0.06em">CLAIM AT 52 S · FENCE 57</text>
-<text x="24" y="316" fill="#4e5359" font-size="9" font-family="Geist Mono" font-weight="400" text-anchor="start">A write counts only if its worker ID and fence token match the row.</text>
+<defs><marker id="arrow-light" markerWidth="8" markerHeight="8" refX="6.5" refY="4" orient="auto" markerUnits="userSpaceOnUse"><path d="M 1.5,1 L 6.5,4 L 1.5,7" fill="none" stroke="#7d7d7d" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/></marker></defs>
+<rect width="960" height="332" fill="#ffffff"/>
+<path d="M 883,120 V 160" fill="none" stroke="#7d7d7d" stroke-width="1" marker-end="url(#arrow-light)"/>
+<path d="M 580,240 V 212" fill="none" stroke="#7d7d7d" stroke-width="1" marker-end="url(#arrow-light)"/>
+<text x="200" y="44" fill="#555555" font-size="8" font-family="Timeless Grotesk, Geist, sans-serif" font-weight="400" text-anchor="middle">0 s</text>
+<text x="270" y="44" fill="#555555" font-size="8" font-family="Timeless Grotesk, Geist, sans-serif" font-weight="400" text-anchor="middle">10 s</text>
+<text x="340" y="44" fill="#555555" font-size="8" font-family="Timeless Grotesk, Geist, sans-serif" font-weight="400" text-anchor="middle">20 s</text>
+<text x="410" y="44" fill="#555555" font-size="8" font-family="Timeless Grotesk, Geist, sans-serif" font-weight="400" text-anchor="middle">30 s</text>
+<text x="480" y="44" fill="#555555" font-size="8" font-family="Timeless Grotesk, Geist, sans-serif" font-weight="400" text-anchor="middle">40 s</text>
+<text x="550" y="44" fill="#555555" font-size="8" font-family="Timeless Grotesk, Geist, sans-serif" font-weight="400" text-anchor="middle">50 s</text>
+<text x="620" y="44" fill="#555555" font-size="8" font-family="Timeless Grotesk, Geist, sans-serif" font-weight="400" text-anchor="middle">60 s</text>
+<text x="690" y="44" fill="#555555" font-size="8" font-family="Timeless Grotesk, Geist, sans-serif" font-weight="400" text-anchor="middle">70 s</text>
+<text x="760" y="44" fill="#555555" font-size="8" font-family="Timeless Grotesk, Geist, sans-serif" font-weight="400" text-anchor="middle">80 s</text>
+<text x="830" y="44" fill="#555555" font-size="8" font-family="Timeless Grotesk, Geist, sans-serif" font-weight="400" text-anchor="middle">90 s</text>
+<line x1="200" y1="52" x2="936" y2="52" stroke="#e7e7e7"/>
+<text x="24" y="104" fill="#000000" font-size="10" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="start">worker A</text>
+<text x="24" y="188" fill="#000000" font-size="10" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="start">runtime row</text>
+<text x="24" y="264" fill="#000000" font-size="10" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="start">worker B</text>
+<rect x="200" y="80" width="175" height="40" rx="8" fill="#ffffff"/>
+<rect x="200.5" y="80.5" width="174" height="39" rx="8" fill="#ffffff" stroke="#cdcdcd" stroke-width="1"/>
+<text x="287.5" y="98" fill="#000000" font-size="11" font-weight="500" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">runs the handler</text>
+<text x="287.5" y="112" fill="#555555" font-size="9" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">heartbeats at 10 s and 20 s</text>
+<rect x="375" y="80" width="315" height="40" rx="8" fill="#ffffff"/>
+<rect x="375.5" y="80.5" width="314" height="39" rx="8" fill="#ffffff" stroke="#e7e7e7" stroke-width="1"/>
+<text x="532.5" y="98" fill="#555555" font-size="11" font-weight="500" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">machine stopped</text>
+<text x="532.5" y="112" fill="#555555" font-size="9" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">no heartbeats</text>
+<rect x="690" y="80" width="140" height="40" rx="8" fill="#ffffff"/>
+<rect x="690.5" y="80.5" width="139" height="39" rx="8" fill="#ffffff" stroke="#cdcdcd" stroke-width="1"/>
+<text x="760" y="98" fill="#000000" font-size="11" font-weight="500" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">starts again</text>
+<text x="760" y="112" fill="#555555" font-size="9" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">runs the old handler</text>
+<rect x="830" y="80" width="106" height="40" rx="8" fill="#ffffff"/>
+<rect x="830.5" y="80.5" width="105" height="39" rx="8" fill="#ffffff" stroke="#cdcdcd" stroke-width="1"/>
+<text x="883" y="98" fill="#000000" font-size="11" font-weight="500" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">complete</text>
+<text x="883" y="112" fill="#555555" font-size="9" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">fence 41</text>
+<rect x="200" y="164" width="350" height="40" rx="8" fill="#ffffff"/>
+<rect x="200.5" y="164.5" width="349" height="39" rx="8" fill="#f4f4f4" stroke="#e7e7e7" stroke-width="1"/>
+<text x="375" y="182" fill="#000000" font-size="11" font-weight="500" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">owner A · fence 41</text>
+<text x="375" y="196" fill="#555555" font-size="9" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">expiry 30 s → 40 s → 50 s</text>
+<rect x="564" y="164" width="372" height="40" rx="8" fill="#ffffff"/>
+<rect x="564.5" y="164.5" width="371" height="39" rx="8" fill="rgba(207,145,72,0.12)" stroke="#cf9148" stroke-width="1"/>
+<text x="750" y="182" fill="#000000" font-size="11" font-weight="500" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">owner B · fence 57</text>
+<text x="750" y="196" fill="#555555" font-size="9" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">a new lease</text>
+<rect x="564" y="240" width="372" height="40" rx="8" fill="#ffffff"/>
+<rect x="564.5" y="240.5" width="371" height="39" rx="8" fill="#ffffff" stroke="#cdcdcd" stroke-width="1"/>
+<text x="750" y="264" fill="#000000" font-size="11" font-weight="500" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">runs the handler</text>
+<rect x="329" y="64" width="92" height="12" rx="2" fill="#ffffff"/>
+<text x="375" y="73" fill="#555555" font-size="9" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">STOPS AT 25 S</text>
+<rect x="624" y="64" width="132" height="12" rx="2" fill="#ffffff"/>
+<text x="690" y="73" fill="#555555" font-size="9" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">STARTS AGAIN AT 70 S</text>
+<rect x="452" y="134" width="140" height="12" rx="2" fill="#ffffff"/>
+<text x="522" y="143" fill="#555555" font-size="9" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">LEASE EXPIRES AT 50 S</text>
+<rect x="765" y="134" width="156" height="12" rx="2" fill="#ffffff"/>
+<text x="843" y="143" fill="#555555" font-size="9" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">REFUSED · RESULT DROPPED</text>
+<rect x="422" y="220" width="156" height="12" rx="2" fill="#ffffff"/>
+<text x="500" y="229" fill="#555555" font-size="9" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">CLAIM AT 52 S · FENCE 57</text>
+<text x="24" y="316" fill="#555555" font-size="9" font-family="Timeless Grotesk, Geist, sans-serif" font-weight="400" text-anchor="start">A write counts only if its worker ID and fence token match the row.</text>
 </svg>

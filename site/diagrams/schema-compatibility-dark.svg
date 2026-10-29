@@ -1,71 +1,71 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 272" width="960" height="272" role="img" aria-labelledby="schema-compatibility-dark-title schema-compatibility-dark-desc">
 <title id="schema-compatibility-dark-title">schemaCompatibilityRefusal tests in this order; the first failed test decides</title>
 <desc id="schema-compatibility-dark-desc">A missing schema version gives schema-not-installed. A version below MINIMUM_SCHEMA_VERSION gives schema-too-old. A client protocol below MINIMUM_PROTOCOL_VERSION gives client-protocol-too-old, and above MAXIMUM_PROTOCOL_VERSION gives client-protocol-too-new. If the schema declares served protocols without the client protocol, a lower client protocol gives schema-too-new, and a higher one gives schema-too-old. Otherwise the schema is compatible.</desc>
-<defs><marker id="arrow-dark" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#ced1d4"/></marker></defs>
-<rect width="960" height="272" fill="#04080e"/>
-<path d="M 164,74 H 180" fill="none" stroke="#ced1d4" stroke-width="1.2" marker-end="url(#arrow-dark)"/>
-<path d="M 94,100 V 174" fill="none" stroke="#ced1d4" stroke-width="1.2" stroke-dasharray="5,4" marker-end="url(#arrow-dark)"/>
-<path d="M 322,74 H 338" fill="none" stroke="#ced1d4" stroke-width="1.2" marker-end="url(#arrow-dark)"/>
-<path d="M 252,100 V 174" fill="none" stroke="#ced1d4" stroke-width="1.2" stroke-dasharray="5,4" marker-end="url(#arrow-dark)"/>
-<path d="M 480,74 H 496" fill="none" stroke="#ced1d4" stroke-width="1.2" marker-end="url(#arrow-dark)"/>
-<path d="M 410,100 V 174" fill="none" stroke="#ced1d4" stroke-width="1.2" stroke-dasharray="5,4" marker-end="url(#arrow-dark)"/>
-<path d="M 638,74 H 654" fill="none" stroke="#ced1d4" stroke-width="1.2" marker-end="url(#arrow-dark)"/>
-<path d="M 568,100 V 174" fill="none" stroke="#ced1d4" stroke-width="1.2" stroke-dasharray="5,4" marker-end="url(#arrow-dark)"/>
-<path d="M 796,74 H 812" fill="none" stroke="#ced1d4" stroke-width="1.2" marker-end="url(#arrow-dark)"/>
-<path d="M 726,100 V 174" fill="none" stroke="#ced1d4" stroke-width="1.2" stroke-dasharray="5,4" marker-end="url(#arrow-dark)"/>
-<rect x="24" y="48" width="140" height="52" rx="6" fill="#04080e"/>
-<rect x="24" y="48" width="140" height="52" rx="6" fill="#0a1017" stroke="#f2f4f5" stroke-width="1"/>
-<text x="94" y="72" fill="#f2f4f5" font-size="10" font-weight="600" font-family="Geist" text-anchor="middle">schema version</text>
-<text x="94" y="86" fill="#ced1d4" font-size="9" font-family="Geist Mono" text-anchor="middle">readable</text>
-<rect x="68" y="138" width="52" height="12" rx="2" fill="#04080e"/>
-<text x="94" y="147" fill="#95999d" font-size="8" font-family="Geist Mono" text-anchor="middle" letter-spacing="0.06em">MISSING</text>
-<rect x="24" y="176" width="140" height="48" rx="6" fill="#04080e"/>
-<rect x="24" y="176" width="140" height="48" rx="6" fill="rgba(242,244,245,0.03)" stroke="rgba(242,244,245,0.4)" stroke-width="1" stroke-dasharray="4,3"/>
-<text x="94" y="198" fill="#f2f4f5" font-size="10" font-weight="600" font-family="Geist" text-anchor="middle">schema-not-installed</text>
-<text x="94" y="212" fill="#ced1d4" font-size="9" font-family="Geist Mono" text-anchor="middle">reinstall</text>
-<rect x="182" y="48" width="140" height="52" rx="6" fill="#04080e"/>
-<rect x="182" y="48" width="140" height="52" rx="6" fill="#0a1017" stroke="#f2f4f5" stroke-width="1"/>
-<text x="252" y="72" fill="#f2f4f5" font-size="10" font-weight="600" font-family="Geist" text-anchor="middle">schema version</text>
-<text x="252" y="86" fill="#ced1d4" font-size="9" font-family="Geist Mono" text-anchor="middle">≥ the minimum</text>
-<rect x="232" y="138" width="40" height="12" rx="2" fill="#04080e"/>
-<text x="252" y="147" fill="#95999d" font-size="8" font-family="Geist Mono" text-anchor="middle" letter-spacing="0.06em">BELOW</text>
-<rect x="182" y="176" width="140" height="48" rx="6" fill="#04080e"/>
-<rect x="182" y="176" width="140" height="48" rx="6" fill="rgba(242,244,245,0.03)" stroke="rgba(242,244,245,0.4)" stroke-width="1" stroke-dasharray="4,3"/>
-<text x="252" y="198" fill="#f2f4f5" font-size="10" font-weight="600" font-family="Geist" text-anchor="middle">schema-too-old</text>
-<text x="252" y="212" fill="#ced1d4" font-size="9" font-family="Geist Mono" text-anchor="middle">migrate</text>
-<rect x="340" y="48" width="140" height="52" rx="6" fill="#04080e"/>
-<rect x="340" y="48" width="140" height="52" rx="6" fill="#0a1017" stroke="#f2f4f5" stroke-width="1"/>
-<text x="410" y="72" fill="#f2f4f5" font-size="10" font-weight="600" font-family="Geist" text-anchor="middle">client protocol</text>
-<text x="410" y="86" fill="#ced1d4" font-size="9" font-family="Geist Mono" text-anchor="middle">≥ the minimum</text>
-<rect x="390" y="138" width="40" height="12" rx="2" fill="#04080e"/>
-<text x="410" y="147" fill="#95999d" font-size="8" font-family="Geist Mono" text-anchor="middle" letter-spacing="0.06em">BELOW</text>
-<rect x="340" y="176" width="140" height="48" rx="6" fill="#04080e"/>
-<rect x="340" y="176" width="140" height="48" rx="6" fill="rgba(242,244,245,0.03)" stroke="rgba(242,244,245,0.4)" stroke-width="1" stroke-dasharray="4,3"/>
-<text x="410" y="198" fill="#f2f4f5" font-size="10" font-weight="600" font-family="Geist" text-anchor="middle">client-protocol-too-old</text>
-<text x="410" y="212" fill="#ced1d4" font-size="9" font-family="Geist Mono" text-anchor="middle">other build</text>
-<rect x="498" y="48" width="140" height="52" rx="6" fill="#04080e"/>
-<rect x="498" y="48" width="140" height="52" rx="6" fill="#0a1017" stroke="#f2f4f5" stroke-width="1"/>
-<text x="568" y="72" fill="#f2f4f5" font-size="10" font-weight="600" font-family="Geist" text-anchor="middle">client protocol</text>
-<text x="568" y="86" fill="#ced1d4" font-size="9" font-family="Geist Mono" text-anchor="middle">≤ the maximum</text>
-<rect x="548" y="138" width="40" height="12" rx="2" fill="#04080e"/>
-<text x="568" y="147" fill="#95999d" font-size="8" font-family="Geist Mono" text-anchor="middle" letter-spacing="0.06em">ABOVE</text>
-<rect x="498" y="176" width="140" height="48" rx="6" fill="#04080e"/>
-<rect x="498" y="176" width="140" height="48" rx="6" fill="rgba(242,244,245,0.03)" stroke="rgba(242,244,245,0.4)" stroke-width="1" stroke-dasharray="4,3"/>
-<text x="568" y="198" fill="#f2f4f5" font-size="10" font-weight="600" font-family="Geist" text-anchor="middle">client-protocol-too-new</text>
-<text x="568" y="212" fill="#ced1d4" font-size="9" font-family="Geist Mono" text-anchor="middle">other build</text>
-<rect x="656" y="48" width="140" height="52" rx="6" fill="#04080e"/>
-<rect x="656" y="48" width="140" height="52" rx="6" fill="#0a1017" stroke="#f2f4f5" stroke-width="1"/>
-<text x="726" y="72" fill="#f2f4f5" font-size="10" font-weight="600" font-family="Geist" text-anchor="middle">served set</text>
-<text x="726" y="86" fill="#ced1d4" font-size="9" font-family="Geist Mono" text-anchor="middle">if declared</text>
-<rect x="692" y="138" width="68" height="12" rx="2" fill="#04080e"/>
-<text x="726" y="147" fill="#95999d" font-size="8" font-family="Geist Mono" text-anchor="middle" letter-spacing="0.06em">NOT SERVED</text>
-<rect x="656" y="176" width="140" height="48" rx="6" fill="#04080e"/>
-<rect x="656" y="176" width="140" height="48" rx="6" fill="rgba(242,244,245,0.03)" stroke="rgba(242,244,245,0.4)" stroke-width="1" stroke-dasharray="4,3"/>
-<text x="726" y="198" fill="#f2f4f5" font-size="10" font-weight="600" font-family="Geist" text-anchor="middle">schema-too-new</text>
-<text x="726" y="212" fill="#ced1d4" font-size="9" font-family="Geist Mono" text-anchor="middle">or schema-too-old</text>
-<rect x="814" y="48" width="122" height="52" rx="6" fill="#04080e"/>
-<rect x="814" y="48" width="122" height="52" rx="6" fill="rgba(252,152,76,0.08)" stroke="#fc984c" stroke-width="1.4"/>
-<text x="875" y="72" fill="#f2f4f5" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">compatible</text>
-<text x="875" y="86" fill="#ced1d4" font-size="9" font-family="Geist Mono" text-anchor="middle">returns null</text>
-<text x="24" y="256" fill="#ced1d4" font-size="9" font-family="Geist Mono" font-weight="400" text-anchor="start">The Go and Python checks return the same five codes. Go applies no upper bound to the schema version.</text>
+<defs><marker id="arrow-dark" markerWidth="8" markerHeight="8" refX="6.5" refY="4" orient="auto" markerUnits="userSpaceOnUse"><path d="M 1.5,1 L 6.5,4 L 1.5,7" fill="none" stroke="#838383" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/></marker></defs>
+<rect width="960" height="272" fill="#000000"/>
+<path d="M 164,74 H 180" fill="none" stroke="#838383" stroke-width="1" marker-end="url(#arrow-dark)"/>
+<path d="M 94,100 V 174" fill="none" stroke="#838383" stroke-width="1" stroke-dasharray="4,3" marker-end="url(#arrow-dark)"/>
+<path d="M 322,74 H 338" fill="none" stroke="#838383" stroke-width="1" marker-end="url(#arrow-dark)"/>
+<path d="M 252,100 V 174" fill="none" stroke="#838383" stroke-width="1" stroke-dasharray="4,3" marker-end="url(#arrow-dark)"/>
+<path d="M 480,74 H 496" fill="none" stroke="#838383" stroke-width="1" marker-end="url(#arrow-dark)"/>
+<path d="M 410,100 V 174" fill="none" stroke="#838383" stroke-width="1" stroke-dasharray="4,3" marker-end="url(#arrow-dark)"/>
+<path d="M 638,74 H 654" fill="none" stroke="#838383" stroke-width="1" marker-end="url(#arrow-dark)"/>
+<path d="M 568,100 V 174" fill="none" stroke="#838383" stroke-width="1" stroke-dasharray="4,3" marker-end="url(#arrow-dark)"/>
+<path d="M 796,74 H 812" fill="none" stroke="#838383" stroke-width="1" marker-end="url(#arrow-dark)"/>
+<path d="M 726,100 V 174" fill="none" stroke="#838383" stroke-width="1" stroke-dasharray="4,3" marker-end="url(#arrow-dark)"/>
+<rect x="24" y="48" width="140" height="52" rx="8" fill="#000000"/>
+<rect x="24.5" y="48.5" width="139" height="51" rx="8" fill="#000000" stroke="#3d3d3d" stroke-width="1"/>
+<text x="94" y="72" fill="#f4f4f4" font-size="10" font-weight="500" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">schema version</text>
+<text x="94" y="86" fill="#ababab" font-size="9" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">readable</text>
+<rect x="66" y="138" width="56" height="12" rx="2" fill="#000000"/>
+<text x="94" y="147" fill="#ababab" font-size="9" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">MISSING</text>
+<rect x="24" y="176" width="140" height="48" rx="8" fill="#000000"/>
+<rect x="24.5" y="176.5" width="139" height="47" rx="8" fill="#000000" stroke="#2b2b2b" stroke-width="1"/>
+<text x="94" y="198" fill="#cfcfcf" font-size="10" font-weight="500" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">schema-not-installed</text>
+<text x="94" y="212" fill="#ababab" font-size="9" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">reinstall</text>
+<rect x="182" y="48" width="140" height="52" rx="8" fill="#000000"/>
+<rect x="182.5" y="48.5" width="139" height="51" rx="8" fill="#000000" stroke="#3d3d3d" stroke-width="1"/>
+<text x="252" y="72" fill="#f4f4f4" font-size="10" font-weight="500" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">schema version</text>
+<text x="252" y="86" fill="#ababab" font-size="9" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">≥ the minimum</text>
+<rect x="230" y="138" width="44" height="12" rx="2" fill="#000000"/>
+<text x="252" y="147" fill="#ababab" font-size="9" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">BELOW</text>
+<rect x="182" y="176" width="140" height="48" rx="8" fill="#000000"/>
+<rect x="182.5" y="176.5" width="139" height="47" rx="8" fill="#000000" stroke="#2b2b2b" stroke-width="1"/>
+<text x="252" y="198" fill="#cfcfcf" font-size="10" font-weight="500" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">schema-too-old</text>
+<text x="252" y="212" fill="#ababab" font-size="9" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">migrate</text>
+<rect x="340" y="48" width="140" height="52" rx="8" fill="#000000"/>
+<rect x="340.5" y="48.5" width="139" height="51" rx="8" fill="#000000" stroke="#3d3d3d" stroke-width="1"/>
+<text x="410" y="72" fill="#f4f4f4" font-size="10" font-weight="500" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">client protocol</text>
+<text x="410" y="86" fill="#ababab" font-size="9" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">≥ the minimum</text>
+<rect x="388" y="138" width="44" height="12" rx="2" fill="#000000"/>
+<text x="410" y="147" fill="#ababab" font-size="9" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">BELOW</text>
+<rect x="340" y="176" width="140" height="48" rx="8" fill="#000000"/>
+<rect x="340.5" y="176.5" width="139" height="47" rx="8" fill="#000000" stroke="#2b2b2b" stroke-width="1"/>
+<text x="410" y="198" fill="#cfcfcf" font-size="10" font-weight="500" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">client-protocol-too-old</text>
+<text x="410" y="212" fill="#ababab" font-size="9" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">other build</text>
+<rect x="498" y="48" width="140" height="52" rx="8" fill="#000000"/>
+<rect x="498.5" y="48.5" width="139" height="51" rx="8" fill="#000000" stroke="#3d3d3d" stroke-width="1"/>
+<text x="568" y="72" fill="#f4f4f4" font-size="10" font-weight="500" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">client protocol</text>
+<text x="568" y="86" fill="#ababab" font-size="9" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">≤ the maximum</text>
+<rect x="546" y="138" width="44" height="12" rx="2" fill="#000000"/>
+<text x="568" y="147" fill="#ababab" font-size="9" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">ABOVE</text>
+<rect x="498" y="176" width="140" height="48" rx="8" fill="#000000"/>
+<rect x="498.5" y="176.5" width="139" height="47" rx="8" fill="#000000" stroke="#2b2b2b" stroke-width="1"/>
+<text x="568" y="198" fill="#cfcfcf" font-size="10" font-weight="500" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">client-protocol-too-new</text>
+<text x="568" y="212" fill="#ababab" font-size="9" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">other build</text>
+<rect x="656" y="48" width="140" height="52" rx="8" fill="#000000"/>
+<rect x="656.5" y="48.5" width="139" height="51" rx="8" fill="#000000" stroke="#3d3d3d" stroke-width="1"/>
+<text x="726" y="72" fill="#f4f4f4" font-size="10" font-weight="500" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">served set</text>
+<text x="726" y="86" fill="#ababab" font-size="9" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">if declared</text>
+<rect x="690" y="138" width="72" height="12" rx="2" fill="#000000"/>
+<text x="726" y="147" fill="#ababab" font-size="9" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">NOT SERVED</text>
+<rect x="656" y="176" width="140" height="48" rx="8" fill="#000000"/>
+<rect x="656.5" y="176.5" width="139" height="47" rx="8" fill="#000000" stroke="#2b2b2b" stroke-width="1"/>
+<text x="726" y="198" fill="#cfcfcf" font-size="10" font-weight="500" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">schema-too-new</text>
+<text x="726" y="212" fill="#ababab" font-size="9" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">or schema-too-old</text>
+<rect x="814" y="48" width="122" height="52" rx="8" fill="#000000"/>
+<rect x="814.5" y="48.5" width="121" height="51" rx="8" fill="rgba(207,145,72,0.12)" stroke="#cf9148" stroke-width="1"/>
+<text x="875" y="72" fill="#f4f4f4" font-size="11" font-weight="500" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">compatible</text>
+<text x="875" y="86" fill="#ababab" font-size="9" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">returns null</text>
+<text x="24" y="256" fill="#cfcfcf" font-size="9" font-family="Timeless Grotesk, Geist, sans-serif" font-weight="400" text-anchor="start">The Go and Python checks return the same five codes. Go applies no upper bound to the schema version.</text>
 </svg>

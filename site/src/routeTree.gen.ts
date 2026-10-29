@@ -12,12 +12,16 @@ import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as SlugRouteImport } from './routes/$slug'
 import { Route as BlogRouteImport } from './routes/blog'
+import { Route as CompareRouteImport } from './routes/compare'
+import { Route as DemoRouteImport } from './routes/demo'
 import { Route as DocsRouteImport } from './routes/docs'
+import { Route as FeaturesRouteImport } from './routes/features'
 import { Route as NotFoundRouteImport } from './routes/not-found'
 import { Route as ApiSearchRouteImport } from './routes/api/search'
 import { Route as BlogIndexRouteImport } from './routes/blog/index'
 import { Route as BlogSlugRouteImport } from './routes/blog/$slug'
-import { Route as DocsIndexRouteImport } from './routes/docs/index'
+import { Route as CompareIndexRouteImport } from './routes/compare/index'
+import { Route as CompareSlugRouteImport } from './routes/compare/$slug'
 import { Route as DocsSplatRouteImport } from './routes/docs/$'
 
 const IndexRoute = IndexRouteImport.update({
@@ -35,9 +39,24 @@ const BlogRoute = BlogRouteImport.update({
   path: '/blog',
   getParentRoute: () => rootRouteImport,
 } as any)
+const CompareRoute = CompareRouteImport.update({
+  id: '/compare',
+  path: '/compare',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const DemoRoute = DemoRouteImport.update({
+  id: '/demo',
+  path: '/demo',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const DocsRoute = DocsRouteImport.update({
   id: '/docs',
   path: '/docs',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const FeaturesRoute = FeaturesRouteImport.update({
+  id: '/features',
+  path: '/features',
   getParentRoute: () => rootRouteImport,
 } as any)
 const NotFoundRoute = NotFoundRouteImport.update({
@@ -60,10 +79,15 @@ const BlogSlugRoute = BlogSlugRouteImport.update({
   path: '/$slug',
   getParentRoute: () => BlogRoute,
 } as any)
-const DocsIndexRoute = DocsIndexRouteImport.update({
+const CompareIndexRoute = CompareIndexRouteImport.update({
   id: '/',
   path: '/',
-  getParentRoute: () => DocsRoute,
+  getParentRoute: () => CompareRoute,
+} as any)
+const CompareSlugRoute = CompareSlugRouteImport.update({
+  id: '/$slug',
+  path: '/$slug',
+  getParentRoute: () => CompareRoute,
 } as any)
 const DocsSplatRoute = DocsSplatRouteImport.update({
   id: '/$',
@@ -75,36 +99,48 @@ export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/$slug': typeof SlugRoute
   '/blog': typeof BlogRouteWithChildren
+  '/compare': typeof CompareRouteWithChildren
+  '/demo': typeof DemoRoute
   '/docs': typeof DocsRouteWithChildren
+  '/features': typeof FeaturesRoute
   '/not-found': typeof NotFoundRoute
   '/api/search': typeof ApiSearchRoute
   '/blog/$slug': typeof BlogSlugRoute
+  '/compare/$slug': typeof CompareSlugRoute
   '/docs/$': typeof DocsSplatRoute
   '/blog/': typeof BlogIndexRoute
-  '/docs/': typeof DocsIndexRoute
+  '/compare/': typeof CompareIndexRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/$slug': typeof SlugRoute
+  '/demo': typeof DemoRoute
+  '/docs': typeof DocsRouteWithChildren
+  '/features': typeof FeaturesRoute
   '/not-found': typeof NotFoundRoute
   '/api/search': typeof ApiSearchRoute
   '/blog/$slug': typeof BlogSlugRoute
+  '/compare/$slug': typeof CompareSlugRoute
   '/docs/$': typeof DocsSplatRoute
   '/blog': typeof BlogIndexRoute
-  '/docs': typeof DocsIndexRoute
+  '/compare': typeof CompareIndexRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
   '/$slug': typeof SlugRoute
   '/blog': typeof BlogRouteWithChildren
+  '/compare': typeof CompareRouteWithChildren
+  '/demo': typeof DemoRoute
   '/docs': typeof DocsRouteWithChildren
+  '/features': typeof FeaturesRoute
   '/not-found': typeof NotFoundRoute
   '/api/search': typeof ApiSearchRoute
   '/blog/$slug': typeof BlogSlugRoute
+  '/compare/$slug': typeof CompareSlugRoute
   '/docs/$': typeof DocsSplatRoute
   '/blog/': typeof BlogIndexRoute
-  '/docs/': typeof DocsIndexRoute
+  '/compare/': typeof CompareIndexRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -112,42 +148,57 @@ export interface FileRouteTypes {
     | '/'
     | '/$slug'
     | '/blog'
+    | '/compare'
+    | '/demo'
     | '/docs'
+    | '/features'
     | '/not-found'
     | '/api/search'
     | '/blog/$slug'
+    | '/compare/$slug'
     | '/docs/$'
     | '/blog/'
-    | '/docs/'
+    | '/compare/'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
     | '/$slug'
+    | '/demo'
+    | '/docs'
+    | '/features'
     | '/not-found'
     | '/api/search'
     | '/blog/$slug'
+    | '/compare/$slug'
     | '/docs/$'
     | '/blog'
-    | '/docs'
+    | '/compare'
   id:
     | '__root__'
     | '/'
     | '/$slug'
     | '/blog'
+    | '/compare'
+    | '/demo'
     | '/docs'
+    | '/features'
     | '/not-found'
     | '/api/search'
     | '/blog/$slug'
+    | '/compare/$slug'
     | '/docs/$'
     | '/blog/'
-    | '/docs/'
+    | '/compare/'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   SlugRoute: typeof SlugRoute
   BlogRoute: typeof BlogRouteWithChildren
+  CompareRoute: typeof CompareRouteWithChildren
+  DemoRoute: typeof DemoRoute
   DocsRoute: typeof DocsRouteWithChildren
+  FeaturesRoute: typeof FeaturesRoute
   NotFoundRoute: typeof NotFoundRoute
   ApiSearchRoute: typeof ApiSearchRoute
 }
@@ -175,11 +226,32 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof BlogRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/compare': {
+      id: '/compare'
+      path: '/compare'
+      fullPath: '/compare'
+      preLoaderRoute: typeof CompareRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/demo': {
+      id: '/demo'
+      path: '/demo'
+      fullPath: '/demo'
+      preLoaderRoute: typeof DemoRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/docs': {
       id: '/docs'
       path: '/docs'
       fullPath: '/docs'
       preLoaderRoute: typeof DocsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/features': {
+      id: '/features'
+      path: '/features'
+      fullPath: '/features'
+      preLoaderRoute: typeof FeaturesRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/not-found': {
@@ -210,12 +282,19 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof BlogSlugRouteImport
       parentRoute: typeof BlogRoute
     }
-    '/docs/': {
-      id: '/docs/'
+    '/compare/': {
+      id: '/compare/'
       path: '/'
-      fullPath: '/docs/'
-      preLoaderRoute: typeof DocsIndexRouteImport
-      parentRoute: typeof DocsRoute
+      fullPath: '/compare/'
+      preLoaderRoute: typeof CompareIndexRouteImport
+      parentRoute: typeof CompareRoute
+    }
+    '/compare/$slug': {
+      id: '/compare/$slug'
+      path: '/$slug'
+      fullPath: '/compare/$slug'
+      preLoaderRoute: typeof CompareSlugRouteImport
+      parentRoute: typeof CompareRoute
     }
     '/docs/$': {
       id: '/docs/$'
@@ -239,14 +318,25 @@ const BlogRouteChildren: BlogRouteChildren = {
 
 const BlogRouteWithChildren = BlogRoute._addFileChildren(BlogRouteChildren)
 
+interface CompareRouteChildren {
+  CompareSlugRoute: typeof CompareSlugRoute
+  CompareIndexRoute: typeof CompareIndexRoute
+}
+
+const CompareRouteChildren: CompareRouteChildren = {
+  CompareSlugRoute: CompareSlugRoute,
+  CompareIndexRoute: CompareIndexRoute,
+}
+
+const CompareRouteWithChildren =
+  CompareRoute._addFileChildren(CompareRouteChildren)
+
 interface DocsRouteChildren {
   DocsSplatRoute: typeof DocsSplatRoute
-  DocsIndexRoute: typeof DocsIndexRoute
 }
 
 const DocsRouteChildren: DocsRouteChildren = {
   DocsSplatRoute: DocsSplatRoute,
-  DocsIndexRoute: DocsIndexRoute,
 }
 
 const DocsRouteWithChildren = DocsRoute._addFileChildren(DocsRouteChildren)
@@ -255,7 +345,10 @@ const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   SlugRoute: SlugRoute,
   BlogRoute: BlogRouteWithChildren,
+  CompareRoute: CompareRouteWithChildren,
+  DemoRoute: DemoRoute,
   DocsRoute: DocsRouteWithChildren,
+  FeaturesRoute: FeaturesRoute,
   NotFoundRoute: NotFoundRoute,
   ApiSearchRoute: ApiSearchRoute,
 }

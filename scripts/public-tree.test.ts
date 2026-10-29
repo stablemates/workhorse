@@ -73,7 +73,10 @@ describe("public repository hygiene", () => {
       try {
         contents = await readFile(path);
       } catch (error) {
-        if ((error as NodeJS.ErrnoException).code === "ENOENT") continue;
+        const { code } = error as NodeJS.ErrnoException;
+        // A tracked link to a directory, such as `site/blume/public`, has no text of its own. The
+        // sweep reads the files of that directory through their own tracked paths.
+        if (code === "ENOENT" || code === "EISDIR") continue;
         throw error;
       }
       if (contents.includes(0)) continue;

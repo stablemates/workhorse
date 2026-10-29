@@ -2,6 +2,10 @@
 // landing-<name>-kotlin` region is one snippet. Each nested object holds one snippet, as each
 // module
 // of `rust/examples/landing.rs` does, so that two snippets can use the same function name.
+//
+// The landing page shows the pillar snippets beside their execution journals, in a pane of about
+// 72 columns. ktfmt joins every expression that fits in 100 columns, so a `spotless:off` fence
+// keeps those regions in its style at 72 columns.
 
 package run.workhorse.examples
 
@@ -97,24 +101,33 @@ object LandingKotlin {
 
   /** Checkpoints. */
   object CheckpointsExample {
+    // spotless:off
     // docs:start landing-checkpoints-kotlin
-    fun chargeCard(amount: Any?): Map<String, Any?> = mapOf("id" to "ch_$amount")
+    fun chargeCard(amount: Any?): Map<String, Any?> =
+      mapOf("id" to "ch_$amount")
 
-    fun renderInvoice(chargeId: Any?): Map<String, Any?> = mapOf("chargeId" to chargeId)
+    fun renderInvoice(chargeId: Any?): Map<String, Any?> =
+      mapOf("chargeId" to chargeId)
 
     fun WorkerScope.registerInvoice() {
       handle<Map<String, Any?>>("invoice.issue") { context, invoice ->
-        // After Workhorse stores a checkpoint result, later runs return it.
+        // Later runs return the stored checkpoint result.
         val charge =
-          context.checkpoint<Map<String, Any?>>("charge") { chargeCard(invoice["amount"]) }
+          context.checkpoint<Map<String, Any?>>("charge") {
+            chargeCard(invoice["amount"])
+          }
 
-        val pdf = context.checkpoint<Map<String, Any?>>("render") { renderInvoice(charge["id"]) }
+        val pdf =
+          context.checkpoint<Map<String, Any?>>("render") {
+            renderInvoice(charge["id"])
+          }
 
         println("email ${invoice["email"]} $pdf")
         mapOf("chargeId" to charge["id"])
       }
     }
     // docs:end
+    // spotless:on
   }
 
   /** A durable sleep. */
@@ -180,44 +193,69 @@ object LandingKotlin {
 
   /** Schedules. */
   object SchedulesExample {
+    // spotless:off
     // docs:start landing-schedules-kotlin
     suspend fun run(dataSource: DataSource) {
       // Run on every deployment with the complete list.
-      val task = ScheduledTask.of("invoices.generate", emptyMap<String, Any?>())
-      val schedule = ScheduleDefinition("nightly-invoice-run", "0 2 * * *", task)
+      val task =
+        ScheduledTask.of("invoices.generate", emptyMap<String, Any?>())
+      val schedule =
+        ScheduleDefinition("nightly-invoice-run", "0 2 * * *", task)
       Queue(ConnectionSource.of(dataSource))
         .syncSchedulesSuspend("billing", listOf(schedule), prune = true)
 
       // Any worker in the namespace fires due schedules itself.
-      val worker = workhorseWorker(dataSource) { scheduleNamespaces = listOf("billing") }
+      val worker =
+        workhorseWorker(dataSource) {
+          scheduleNamespaces = listOf("billing")
+        }
       WorkerProcess.runWorkerProcess(worker)
     }
     // docs:end
+    // spotless:on
   }
 
   /** Concurrency and rate limits. */
   object FlowControlExample {
+    // spotless:off
     // docs:start landing-flow-control-kotlin
-    suspend fun configure(queue: Queue, messageId: String, tenantId: String) {
+    suspend fun configure(
+      queue: Queue,
+      messageId: String,
+      tenantId: String,
+    ) {
       // At most 20 mail tasks active; at most 2 per tenant.
       val mail = ConcurrencyPolicyDefinition("mail", 20, 2)
-      queue.syncConcurrencyPoliciesSuspend("workers", listOf(mail), prune = false)
+      queue.syncConcurrencyPoliciesSuspend(
+        "workers",
+        listOf(mail),
+        prune = false,
+      )
 
-      val provider =
-        RateLimitPolicyDefinition("provider-api", RateLimit(100, Duration.ofSeconds(1), 200))
-      queue.syncRateLimitPoliciesSuspend("workers", listOf(provider), prune = false)
+      val rate = RateLimit(100, Duration.ofSeconds(1), 200)
+      val provider = RateLimitPolicyDefinition("provider-api", rate)
+      queue.syncRateLimitPoliciesSuspend(
+        "workers",
+        listOf(provider),
+        prune = false,
+      )
 
       queue.enqueueSuspend(
         "mail.send",
         mapOf("messageId" to messageId),
-        EnqueueOptions.builder().queue("mail").concurrencyKey("tenant:$tenantId").build(),
+        EnqueueOptions.builder()
+          .queue("mail")
+          .concurrencyKey("tenant:$tenantId")
+          .build(),
       )
     }
     // docs:end
+    // spotless:on
   }
 
   /** Dependencies and child tasks. */
   object DependenciesExample {
+    // spotless:off
     // docs:start landing-dependencies-kotlin
     suspend fun confirm(queue: Queue, orderId: String) {
       val order = mapOf("orderId" to orderId)
@@ -242,11 +280,17 @@ object LandingKotlin {
         val options = EnqueueOptions.builder().queue("payments").build()
         val capture = mapOf("orderId" to order["id"])
         val receipt =
-          context.runChild<Map<String, Any?>>("charge", "payment.capture", capture, options)
+          context.runChild<Map<String, Any?>>(
+            "charge",
+            "payment.capture",
+            capture,
+            options,
+          )
         mapOf("receipt" to receipt)
       }
     }
     // docs:end
+    // spotless:on
   }
 
   /** Debounce. */
@@ -274,19 +318,29 @@ object LandingKotlin {
 
   /** Signals and human waits. */
   object ExternalWaitsExample {
+    // spotless:off
     // docs:start landing-external-waits-kotlin
     fun WorkerScope.registerRelease() {
       handle<Map<String, Any?>>("release.publish") { context, release ->
         val scan = context.waitForSignal<Any?>("security-scan")
 
         val request = mapOf("releaseId" to release["id"], "scan" to scan)
-        val review = context.waitForHuman<Map<String, Any?>>("release-approval", request)
+        val review =
+          context.waitForHuman<Map<String, Any?>>(
+            "release-approval",
+            request,
+          )
 
         mapOf("published" to review["approved"])
       }
     }
 
-    suspend fun deliverScan(queue: Queue, taskId: UUID, result: Any?, deliveryId: String) {
+    suspend fun deliverScan(
+      queue: Queue,
+      taskId: UUID,
+      result: Any?,
+      deliveryId: String,
+    ) {
       queue.sendSignalSuspend(
         taskId,
         "security-scan",
@@ -296,6 +350,7 @@ object LandingKotlin {
       )
     }
     // docs:end
+    // spotless:on
   }
 
   /** Batch handlers. */

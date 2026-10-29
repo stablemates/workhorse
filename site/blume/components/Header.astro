@@ -1,0 +1,126 @@
+---
+import data from "blume:data";
+
+import blogIndex from "../../.source/blog-index.json";
+import { currentNavItem, headerIcons, siteNavItems } from "../../lib/site-nav.ts";
+import markSvg from "../../public/brand/workhorse-mark.svg?raw";
+import wordmarkSvg from "../../public/brand/workhorse-wordmark.svg?raw";
+import { siteConfig } from "../../lib/site.ts";
+import Search from "../node_modules/blume/src/components/layout/Search.astro";
+// oxlint-disable-next-line import/no-unassigned-import -- the header styles are a global side effect.
+import "../../components/site-header.css";
+
+/**
+ * The site header on the documentation pages. It replaces Blume's header and
+ * renders the markup of `site/components/site-header.tsx`, which the other
+ * pages use. Both read `site/lib/site-nav.ts` and
+ * `site/components/site-header.css`, so the logo, the items, and the controls
+ * stay in the same place when a reader moves between the docs and the site.
+ * Change the two together.
+ *
+ * Blume's own search runs here, because the documentation pages search with
+ * Blume's index. Below 1024px the menu button opens Blume's sidebar drawer,
+ * and `MobileNav.astro` lists the header items at the top of that drawer.
+ *
+ * Blume's header also holds the script for its theme and drawer buttons. That
+ * script is repeated below with the same data attributes.
+ */
+
+interface Props {
+  route: string;
+  searchEnabled: boolean;
+  navigation: Parameters<typeof Search>[0]["navigation"];
+  assistantEnabled?: boolean;
+  searchStrings?: Parameters<typeof Search>[0]["strings"];
+  searchLocale?: string;
+  searchVersion?: string | null;
+}
+
+const {
+  route,
+  searchEnabled,
+  navigation,
+  assistantEnabled = false,
+  searchStrings,
+  searchLocale,
+  searchVersion = null,
+} = Astro.props;
+
+const items = siteNavItems({ hasPosts: blogIndex.posts.length > 0 });
+const current = currentNavItem(items, route);
+
+// Blume's header script, without its banner part: the theme toggle flips
+// `data-theme` with transitions off, and the drawer toggle measures the
+// header's bottom edge into `--blume-drawer-top` before it opens the drawer.
+const clickScript = `(()=>{if(window.__whHeader){return;}window.__whHeader=true;const dr=()=>{const h=document.querySelector("[data-blume-header]");if(h){document.documentElement.style.setProperty("--blume-drawer-top",h.getBoundingClientRect().bottom+"px");}};document.addEventListener("click",(e)=>{const t=e.target.closest("[data-blume-theme-toggle]");if(t){const d=document.documentElement;const next=d.dataset.theme==="dark"?"light":"dark";const s=document.createElement("style");s.appendChild(document.createTextNode("*,*::before,*::after{transition:none!important}"));document.head.appendChild(s);d.dataset.theme=next;window.getComputedStyle(d).opacity;setTimeout(()=>document.head.removeChild(s),1);try{localStorage.setItem("blume-theme",next);}catch{}}const n=e.target.closest("[data-blume-nav-toggle]");if(n){const d=document.documentElement;if(d.toggleAttribute("data-blume-nav-open")){dr();}}});addEventListener("resize",()=>{const d=document.documentElement;if(!d.hasAttribute("data-blume-nav-open")){return;}if(matchMedia("(min-width:64rem)").matches){d.removeAttribute("data-blume-nav-open");}else{dr();}});})();`;
+---
+
+<header class="wh-hdr" data-blume-header data-wh-header>
+  <a class="wh-hdr-brand" href="/" aria-label="Workhorse home">
+    <span class="wh-hdr-mark" set:html={markSvg} />
+    <span class="wh-hdr-wordmark" set:html={wordmarkSvg} />
+  </a>
+  <nav class="wh-hdr-nav" aria-label="Main">
+    {
+      items.map((item) =>
+        item.match.kind === "external" ? (
+          <a class="wh-hdr-link" href={item.href} target="_blank" rel="noreferrer noopener">
+            {item.label}
+            <span class="wh-hdr-ext" set:html={headerIcons.external} />
+          </a>
+        ) : (
+          <a
+            class="wh-hdr-link"
+            href={item.href}
+            aria-current={item === current ? "page" : undefined}
+          >
+            {item.label}
+          </a>
+        ),
+      )
+    }
+  </nav>
+  <div class="wh-hdr-actions">
+    {
+      searchEnabled && (
+        <Search
+          assistantEnabled={assistantEnabled}
+          locale={searchLocale}
+          navigation={navigation}
+          popularPages={data.config.search.popular}
+          strings={searchStrings}
+          version={searchVersion}
+        />
+      )
+    }
+    <button
+      type="button"
+      class="wh-hdr-icon"
+      aria-label="Toggle the colour scheme"
+      data-blume-theme-toggle
+    >
+      <span class="wh-hdr-sun" set:html={headerIcons.sun} />
+      <span class="wh-hdr-moon" set:html={headerIcons.moon} />
+    </button>
+    <a
+      class="wh-hdr-icon"
+      href={siteConfig.github}
+      aria-label="Workhorse on GitHub"
+      target="_blank"
+      rel="noreferrer noopener"
+    >
+      <span set:html={headerIcons.github} />
+    </a>
+    <button
+      type="button"
+      class="wh-hdr-icon wh-hdr-menu"
+      aria-label="Menu"
+      aria-controls="blume-nav-drawer"
+      aria-expanded="false"
+      data-blume-nav-toggle
+    >
+      <span set:html={headerIcons.menu} />
+    </button>
+  </div>
+</header>
+<script is:inline set:html={clickScript} />

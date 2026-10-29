@@ -16,19 +16,118 @@
  */
 import { transformerStyleToClass } from "@shikijs/transformers";
 
-/**
- * The documentation theme pair, used by the MDX pipeline.
- */
-export const docsCodeThemes = { light: "github-light", dark: "github-dark-dimmed" } as const;
+/** The part of a Shiki theme registration that the two landing themes use. */
+interface CodeTheme {
+  name: string;
+  type: "light" | "dark";
+  colors: { "editor.background": string; "editor.foreground": string };
+  tokenColors: { scope: string[]; settings: { foreground: string; fontStyle?: string } }[];
+}
+
+/** The four token roles a landing theme colours. Everything else takes the foreground. */
+interface CodeThemeRoles {
+  background: string;
+  foreground: string;
+  strong: string;
+  keyword: string;
+  quiet: string;
+  literal: string;
+}
 
 /**
- * The landing page theme pair.
- *
- * `one-light` and `one-dark-pro` share a hue assignment (keywords violet,
- * strings green, types yellow, calls blue), which keeps a snippet legible as
- * the same code in either scheme.
+ * Builds a restrained theme: names and calls in the strongest neutral, plain
+ * text one step down, and keywords, comments, and punctuation in the quieter
+ * neutral. Comments stay upright, because Geist Mono has no italic face and
+ * the browser would slant the regular one. Literals take the role the caller
+ * gives them.
  */
-export const landingCodeThemes = { light: "one-light", dark: "one-dark-pro" } as const;
+function restrainedTheme(name: string, type: CodeTheme["type"], roles: CodeThemeRoles): CodeTheme {
+  return {
+    name,
+    type,
+    colors: { "editor.background": roles.background, "editor.foreground": roles.foreground },
+    tokenColors: [
+      {
+        scope: ["comment", "punctuation.definition.comment"],
+        settings: { foreground: roles.quiet },
+      },
+      {
+        scope: [
+          "keyword",
+          "storage",
+          "storage.type",
+          "storage.modifier",
+          "constant.language",
+          "variable.language",
+        ],
+        settings: { foreground: roles.keyword },
+      },
+      {
+        scope: ["punctuation", "meta.brace", "keyword.operator"],
+        settings: { foreground: roles.quiet },
+      },
+      {
+        scope: [
+          "string",
+          "string.quoted",
+          "string.template",
+          "punctuation.definition.string",
+          "constant.numeric",
+          "constant.character",
+        ],
+        settings: { foreground: roles.literal },
+      },
+      {
+        scope: [
+          "entity.name.function",
+          "support.function",
+          "entity.name.type",
+          "entity.name.class",
+          "support.type",
+          "support.class",
+        ],
+        settings: { foreground: roles.strong },
+      },
+    ],
+  };
+}
+
+/**
+ * The theme pair of every code sample the site highlights: the landing and
+ * features pages, and through the MDX pipeline the comparison pages and the
+ * blog. The stock GitHub themes that the MDX pipeline used before had light
+ * tokens at 3.2:1 to 4.4:1 and dark comments at 4.2:1 on these fills.
+ *
+ * A snippet on the landing page or the features page is evidence, not
+ * decoration, so its colours stay inside the neutral ramp, except strings and
+ * numbers, which take the amber key color as the rest of those pages do
+ * (`src/styles/marketing.css`). Names and calls read strongest and everything
+ * else recedes. The background is the panel fill of the frame: n3 in light and
+ * n2 in dark. Each colour has at least 4.5:1 contrast on it, so the quieter
+ * roles use n8 in light and n7 in dark, and light mode uses the darker amber
+ * ink (#8f5b1d, 5.2:1 on n3). The amber itself is 5.2:1 on n2.
+ */
+export const siteCodeThemes = {
+  light: restrainedTheme("workhorse-light", "light", {
+    background: "#f4f4f4",
+    foreground: "#333333",
+    strong: "#000000",
+    keyword: "#555555",
+    quiet: "#555555",
+    literal: "#8f5b1d",
+  }),
+  dark: restrainedTheme("workhorse-dark", "dark", {
+    background: "#202020",
+    foreground: "#cfcfcf",
+    strong: "#ffffff",
+    keyword: "#ababab",
+    quiet: "#ababab",
+    literal: "#cf9148",
+  }),
+};
+
+/** The theme pair, as the highlighting scripts receive it. */
+export type CodeThemePair = typeof siteCodeThemes;
 
 /**
  * Six characters of the hash Shiki derives from a token's colours.

@@ -1,17 +1,49 @@
 # @stablemates/workhorse-site
 
-The documentation site: a TanStack Start app serving the landing page at `/`,
-the Fumadocs-rendered product documentation under `/docs`, and long-form posts
-under `/blog`. Content rules for the documentation itself live in the
-repository root `CLAUDE.md`; this file records conventions of the site's own
-UI and of the blog.
+The documentation site: a TanStack Start app serving the landing page at `/`
+and long-form posts under `/blog`, and the product documentation under `/docs`,
+which Blume builds from `blume/`. Content rules for the documentation itself
+live in the repository root `CLAUDE.md`; this file records conventions of the
+site's own UI and of the blog.
+
+## The documentation pages: Blume
+
+The pages stay in `content/docs/`. `blume/` is a Blume project that reads them
+from there, and its folder name gives every page its `/docs/<slug>` URL. The
+site build runs both builds and `scripts/merge-docs.ts` copies the Blume pages
+into the one output that nginx serves.
+
+- `blume/` is not a pnpm workspace package. Blume's dependencies changed how
+  the workspace lockfile resolved the peers of other packages, so the project
+  has its own `pnpm-lock.yaml`. The site build installs it with
+  `pnpm --dir blume install --ignore-workspace --frozen-lockfile`.
+- `scripts/gen-docs-index.ts` writes the sidebar (`.source/blume-sidebar.json`)
+  from `content/docs/meta.json` and `integrations.json`.
+  It also keeps every agent file: the Markdown twins, `llms.txt`, the sitemap,
+  and `robots.txt`. Blume emits none of these.
+- `blume/components.ts` maps the page components to Blume: `<Tab value>` to
+  Blume's `<Tab title>`, and `Diagram`, `IntegrationCatalog`, and
+  `ReleaseTable` to the files in `blume/components/`.
+- The docs and the other pages share one header. `components/site-header.tsx`
+  renders it for the TanStack Start pages and `blume/components/Header.astro`
+  for the docs. Both read the items from `lib/site-nav.ts` and the styles from
+  `components/site-header.css`, so change the two files together.
+- `blume/theme.css` holds the Untitled theme, and `blume/code-themes.ts` the
+  code colours. `blume/public` links to `public/`.
+- Run `pnpm docs:dev` to work on the documentation pages. It starts the
+  Blume development server, which serves them at `/docs`.
+- Run `pnpm site:dev` to work on the landing page, the blog, and the other
+  pages. Its `vite dev` server does not serve `/docs`, so a link to the
+  documentation there opens an empty page.
+- Run `pnpm docs:build` to build the whole site, and `pnpm docs:start` to
+  serve the build with the documentation pages.
 
 ## Wide-viewport density: viewport-gated zoom
 
 The site was reviewed on a wide monitor and judged best at the density of
 roughly 150% browser zoom. Rather than inflate every font size — which would
-cramp laptop layouts that already fill their width — both the landing page
-and the docs layout reproduce that verdict with CSS `zoom` rules, gated by
+cramp laptop layouts that already fill their width — the landing page
+reproduces that verdict with CSS `zoom` rules, gated by
 viewport width, on the `.wh-page-scale` wrapper in `src/styles/global.css`:
 
 | Viewport width | zoom |
@@ -33,27 +65,16 @@ Points that keep this safe, and that any change must preserve:
 - Each route wraps its whole layout — header and sidebar included — so
   proportions match browser zoom exactly. Portalled UI (the search dialog)
   renders outside the wrappers and stays 1:1 on purpose.
-- The landing wrapper is in `src/routes/index.tsx`; the docs wrapper is in
-  `src/routes/docs.tsx`. Unlike browser zoom, element `zoom` does not shrink
-  viewport units, so after touching the docs layout verify the sticky
-  sidebar and table of contents on a wide screen.
+- The landing wrapper is in `src/routes/index.tsx`. The Blume documentation
+  pages have no zoom wrapper.
 - Firefox supports `zoom` from version 126; older browsers simply render the
   unscaled layout.
 
-## Laptop and Derby checks
+## Laptop checks
 
 Review the landing at CSS viewport sizes of 1280×800, 1440×900, and 1512×982, then
 check 390×844 for mobile. These represent browser layout space, not Retina panel pixels.
-The hero uses tighter vertical padding below the wide-screen zoom threshold, so laptop
-readers can see the start of the feature navigation without shrinking the headline.
-
-The Derby keeps horse selection separate from its seeded simulation. Standings share
-places when progress is tied; lanes never reorder during a race. A rematch keeps the pick,
-while “Change horse” reopens selection. Reduced motion runs the same simulation directly
-to its result. Verify both paths, including a rematch with the same winner, keyboard selection,
-and leaving mid-race. The event panel opens by default and retains the full race history,
-newest first, in a bounded scrollable region. It includes progress milestones and resumed work
-alongside failures and recovery.
+Check each size in light and dark.
 
 ## The integration catalog
 
@@ -102,9 +123,11 @@ voice, one instruction per step, and the condition first.
 
 ## The comparison pages
 
-`comparisons.json` holds every fact of the "Compare" group (ADR 0104). The
-sidebar, the hub at `/docs/compare`, each product page, and the Markdown twins
-read it. To add a product page, do these steps:
+`comparisons.json` holds every fact of the comparison pages (ADR 0104). They
+are site pages, not docs pages (ADR 0116): the TanStack Start app renders the
+hub at `/compare` and each product page at `/compare/<slug>` from the MDX files
+in `content/docs/compare/`. Blume excludes that folder, and nginx redirects each
+old `/docs/compare` URL to its new URL. To add a product page, do these steps:
 
 1. In the product entry, set `page` to `"published"`.
 2. Remove `issue` from the entry.
@@ -113,11 +136,12 @@ read it. To add a product page, do these steps:
 4. Write `content/docs/compare/<slug>.mdx` with
    `<ComparisonTable product="<slug>" />`.
 
-The hub matrix and the sidebar read the data file, so a new page needs no other
-change.
+The hub, the prerender list, the sitemap, and `llms.txt` read the data file, so
+a new page needs no other change.
 
-- `content/docs/meta.json` keeps the `---Compare---` separator but may not list a
-  page under it. `scripts/gen-docs-index.ts` fills the group from the data file.
+- `components/comparison.tsx` renders the matrices and the numbered sources at
+  the end of each page. The route draws the title and the line about each
+  product from the data file.
 - Each competitor cell has a value, a source URL at a release tag, the product
   version, and evidence from the source. Each Workhorse status names the row of
   `docs/features.md` or `docs/parity.md` that it restates.
@@ -167,9 +191,15 @@ date: 2026-09-07
   time by `scripts/gen-landing-code.ts`, and ship as static markup — the
   landing serves no client JavaScript for code. Verify every snippet against
   the current API surface before changing it.
-- Concept diagrams live in `components/landing-diagrams.tsx`, are pure
-  HTML/CSS, and may name only identifiers present in the verified snippets.
-- The docs sidebar footer shows the Workhorse version and carries
-  `aria-label="Workhorse version <x.y.z>"`, which
-  `typescript/core/test/site-smoke.ts` asserts on `/docs/api`. Keep the label
-  if the footer moves.
+- The line diagrams of the landing page live in `components/queue-diagrams.tsx`.
+  The concept diagrams of `/features` live in `components/landing-diagrams.tsx`,
+  are pure HTML/CSS, and may name only identifiers present in the verified
+  snippets. Both use one drawing style: dashed boxes, mono labels, thin
+  connectors, and one amber path.
+- The site chrome does not show the Workhorse version: the shared header,
+  the docs drawer, and the landing page have no version number.
+  `/docs/releases` and the compatibility pages state it.
+  `scripts/public-beta-release.test.ts` fails on a version number in the
+  chrome, and requires the current release in `docs/compatibility.md` and
+  `content/docs/compatibility.mdx`. `typescript/core/test/site-smoke.ts`
+  requires the newest release of each changelog on `/docs/releases`.

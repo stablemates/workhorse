@@ -22,9 +22,19 @@ kotlin {
 
 // The README snippets quote `jvm/release-consumer`, which no formatter checks, and
 // `scripts/readme-alignment.test.ts` holds them to it. Their files keep that layout.
+//
+// The landing page shows each pillar snippet in a pane of about 72 columns, and the formatters join
+// every line that fits in 100. The pillar regions of `Landing.java` and `Landing.kt` sit between
+// `spotless:off` and `spotless:on`, so they keep the style of each formatter at 72 columns.
 spotless {
-  java { targetExclude("src/main/java/run/workhorse/examples/ReadmeExample.java") }
-  kotlin { targetExclude("src/main/kotlin/run/workhorse/examples/ReadmeExample.kt") }
+  java {
+    targetExclude("src/main/java/run/workhorse/examples/ReadmeExample.java")
+    toggleOffOn()
+  }
+  kotlin {
+    targetExclude("src/main/kotlin/run/workhorse/examples/ReadmeExample.kt")
+    toggleOffOn()
+  }
 }
 
 // The tests use the scratch database support of the core's test sources.

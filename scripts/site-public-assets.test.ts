@@ -58,6 +58,14 @@ describe("site/public", () => {
     expect(loaded.filter((image) => !used.has(image))).toEqual([]);
   });
 
+  // The site logo inlines its SVGs through a relative import, so it can follow currentColor. The
+  // prune step must keep them, because the nginx smoke check requests the mark.
+  it("counts an image that a site module imports by a relative path", async () => {
+    const used = await siteImageUses();
+    expect(used).toContain("brand/workhorse-mark.svg");
+    expect(used).toContain("brand/workhorse-wordmark.svg");
+  });
+
   it("names no image that does not exist", async () => {
     const images = new Set(await publicImages());
     const missing = [...(await siteImageUses())].filter((image) => !images.has(image));

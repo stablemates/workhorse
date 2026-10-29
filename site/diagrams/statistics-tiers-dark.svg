@@ -1,30 +1,30 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 228" width="960" height="228" role="img" aria-labelledby="statistics-tiers-dark-title statistics-tiers-dark-desc">
 <title id="statistics-tiers-dark-title">Workhorse counts from summary rows, so a count stays fast as the history grows</title>
 <desc id="statistics-tiers-dark-desc">Workhorse keeps summary rows for each queue and task type. The oldest history has day rows, older history has hour rows, and recent history has minute rows. Each row holds the last error. Only the newest part, after the watermark, is read from the raw history.</desc>
-<defs><marker id="arrow-dark" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#ced1d4"/></marker></defs>
-<rect width="960" height="228" fill="#04080e"/>
-<text x="24" y="40" fill="#95999d" font-size="9" font-family="Geist Mono" font-weight="400" text-anchor="start">older</text>
-<text x="936" y="40" fill="#95999d" font-size="9" font-family="Geist Mono" font-weight="400" text-anchor="middle">now</text>
-<path d="M 72,37 H 900" fill="none" stroke="#ced1d4" stroke-width="1.2" marker-end="url(#arrow-dark)"/>
-<rect x="24" y="60" width="300" height="52" rx="6" fill="#04080e"/>
-<rect x="24" y="60" width="300" height="52" rx="6" fill="rgba(242,244,245,0.05)" stroke="#ced1d4" stroke-width="1"/>
-<text x="174" y="84" fill="#f2f4f5" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">day rows</text>
-<text x="174" y="98" fill="#ced1d4" font-size="9" font-family="Geist Mono" text-anchor="middle">the oldest history</text>
-<rect x="332" y="60" width="236" height="52" rx="6" fill="#04080e"/>
-<rect x="332" y="60" width="236" height="52" rx="6" fill="rgba(242,244,245,0.05)" stroke="#ced1d4" stroke-width="1"/>
-<text x="450" y="84" fill="#f2f4f5" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">hour rows</text>
-<text x="450" y="98" fill="#ced1d4" font-size="9" font-family="Geist Mono" text-anchor="middle">older history</text>
-<rect x="576" y="60" width="200" height="52" rx="6" fill="#04080e"/>
-<rect x="576" y="60" width="200" height="52" rx="6" fill="rgba(242,244,245,0.05)" stroke="#ced1d4" stroke-width="1"/>
-<text x="676" y="84" fill="#f2f4f5" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">minute rows</text>
-<text x="676" y="98" fill="#ced1d4" font-size="9" font-family="Geist Mono" text-anchor="middle">recent history</text>
-<rect x="784" y="60" width="152" height="52" rx="6" fill="#04080e"/>
-<rect x="784" y="60" width="152" height="52" rx="6" fill="rgba(242,244,245,0.03)" stroke="rgba(242,244,245,0.4)" stroke-width="1" stroke-dasharray="4,3"/>
-<text x="860" y="84" fill="#f2f4f5" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">raw history</text>
-<text x="860" y="98" fill="#ced1d4" font-size="9" font-family="Geist Mono" text-anchor="middle">after the watermark</text>
-<rect x="24" y="136" width="752" height="44" rx="6" fill="#04080e"/>
-<rect x="24" y="136" width="752" height="44" rx="6" fill="rgba(252,152,76,0.08)" stroke="#fc984c" stroke-width="1.4"/>
-<text x="400" y="156" fill="#f2f4f5" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">one row for each queue and task type in each period</text>
-<text x="400" y="170" fill="#ced1d4" font-size="9" font-family="Geist Mono" text-anchor="middle">it counts tasks and attempts, and holds the last error</text>
-<text x="24" y="212" fill="#ced1d4" font-size="9" font-family="Geist Mono" font-weight="400" text-anchor="start">A count reads a bounded number of summary rows, and the raw history only for its newest part.</text>
+<defs><marker id="arrow-dark" markerWidth="8" markerHeight="8" refX="6.5" refY="4" orient="auto" markerUnits="userSpaceOnUse"><path d="M 1.5,1 L 6.5,4 L 1.5,7" fill="none" stroke="#838383" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/></marker></defs>
+<rect width="960" height="228" fill="#000000"/>
+<text x="24" y="40" fill="#ababab" font-size="9" font-family="Timeless Grotesk, Geist, sans-serif" font-weight="400" text-anchor="start">older</text>
+<text x="936" y="40" fill="#ababab" font-size="9" font-family="Timeless Grotesk, Geist, sans-serif" font-weight="400" text-anchor="middle">now</text>
+<path d="M 72,37 H 900" fill="none" stroke="#838383" stroke-width="1" marker-end="url(#arrow-dark)"/>
+<rect x="24" y="60" width="300" height="52" rx="8" fill="#000000"/>
+<rect x="24.5" y="60.5" width="299" height="51" rx="8" fill="#202020" stroke="#2b2b2b" stroke-width="1"/>
+<text x="174" y="84" fill="#f4f4f4" font-size="11" font-weight="500" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">day rows</text>
+<text x="174" y="98" fill="#ababab" font-size="9" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">the oldest history</text>
+<rect x="332" y="60" width="236" height="52" rx="8" fill="#000000"/>
+<rect x="332.5" y="60.5" width="235" height="51" rx="8" fill="#202020" stroke="#2b2b2b" stroke-width="1"/>
+<text x="450" y="84" fill="#f4f4f4" font-size="11" font-weight="500" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">hour rows</text>
+<text x="450" y="98" fill="#ababab" font-size="9" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">older history</text>
+<rect x="576" y="60" width="200" height="52" rx="8" fill="#000000"/>
+<rect x="576.5" y="60.5" width="199" height="51" rx="8" fill="#202020" stroke="#2b2b2b" stroke-width="1"/>
+<text x="676" y="84" fill="#f4f4f4" font-size="11" font-weight="500" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">minute rows</text>
+<text x="676" y="98" fill="#ababab" font-size="9" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">recent history</text>
+<rect x="784" y="60" width="152" height="52" rx="8" fill="#000000"/>
+<rect x="784.5" y="60.5" width="151" height="51" rx="8" fill="#000000" stroke="#2b2b2b" stroke-width="1"/>
+<text x="860" y="84" fill="#cfcfcf" font-size="11" font-weight="500" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">raw history</text>
+<text x="860" y="98" fill="#ababab" font-size="9" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">after the watermark</text>
+<rect x="24" y="136" width="752" height="44" rx="8" fill="#000000"/>
+<rect x="24.5" y="136.5" width="751" height="43" rx="8" fill="rgba(207,145,72,0.12)" stroke="#cf9148" stroke-width="1"/>
+<text x="400" y="156" fill="#f4f4f4" font-size="11" font-weight="500" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">one row for each queue and task type in each period</text>
+<text x="400" y="170" fill="#ababab" font-size="9" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">it counts tasks and attempts, and holds the last error</text>
+<text x="24" y="212" fill="#cfcfcf" font-size="9" font-family="Timeless Grotesk, Geist, sans-serif" font-weight="400" text-anchor="start">A count reads a bounded number of summary rows, and the raw history only for its newest part.</text>
 </svg>

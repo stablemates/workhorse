@@ -181,6 +181,50 @@ public static async Task RunAsync(NpgsqlDataSource dataSource, CancellationToken
         (HandlerContext context, Welcome welcome) => Task.FromResult(new { deliveredTo = welcome.To }));
     await worker.RunAsync(stoppingToken);
 }`,
+  // The four modes of the hero card. Each one is short enough to read beside its result.
+  heroEnqueue: `const taskId = await queue.enqueue("email.welcome", {
+  to: "ada@example.com",
+});
+
+worker.handle("email.welcome", async ({ to }) => ({
+  deliveredTo: to,
+}));`,
+
+  heroSchedule: `await queue.syncSchedules("billing", [
+  {
+    name: "nightly-invoices",
+    schedule: "0 2 * * *",
+    timezone: "Europe/London",
+    task: { type: "invoices.generate", payload: {} },
+  },
+]);
+
+// Any worker in the namespace fires a due schedule.
+const worker = new Worker(queue, { scheduleNamespaces: ["billing"] });`,
+
+  heroThrottle: `const rebuild = () =>
+  queue.enqueueWithResult(
+    "search.rebuild",
+    { index: "products" },
+    { throttle: { key: "rebuild:products", windowMs: 60_000 } },
+  );
+
+const first = await rebuild();
+const second = await rebuild(); // same minute, same task`,
+
+  heroHumanWait: `worker.handle("refund.issue", async (refund, ctx) => {
+  const review = await ctx.waitForHuman("approval", {
+    refundId: refund.id,
+  });
+  return { refunded: review.approved };
+});
+
+// Later, from your admin screen:
+await queue.completeHumanWait(taskId, "approval", { approved: true }, {
+  idempotencyKey: "review-7",
+  requestedBy: "ops@example.com",
+});`,
+
   languageTypeScript: `import { Pool, Queue } from "@stablemates/workhorse";
 
 const pool = new Pool({ connectionString: process.env.DATABASE_URL });
@@ -367,7 +411,7 @@ end`,
     await transaction.CommitAsync();
 }`,
   checkpoints: `worker.handle("invoice.issue", async (payload, ctx) => {
-  // After Workhorse stores a checkpoint result, later runs return it.
+  // Later runs return the stored checkpoint result.
   const charge = await ctx.checkpoint("charge", () =>
     payments.charge(payload.amount),
   );
@@ -399,10 +443,19 @@ def render_invoice(charge_id: Json) -> dict[str, Json]:
 
 
 def register_invoice(worker: Worker) -> None:
-    def issue(payload: Invoice, context: HandlerContext) -> dict[str, Json]:
-        # After Workhorse stores a checkpoint result, later runs return it.
-        charge = context.checkpoint("charge", lambda: charge_card(payload["amount"]))
-        pdf = context.checkpoint("render", lambda: render_invoice(charge["id"]))
+    def issue(
+        payload: Invoice,
+        context: HandlerContext,
+    ) -> dict[str, Json]:
+        # Later runs return the stored checkpoint result.
+        charge = context.checkpoint(
+            "charge",
+            lambda: charge_card(payload["amount"]),
+        )
+        pdf = context.checkpoint(
+            "render",
+            lambda: render_invoice(charge["id"]),
+        )
         print("email", payload["email"], pdf)
         return {"chargeId": charge["id"]}
 
@@ -436,9 +489,11 @@ func renderInvoice(chargeID string) (map[string]any, error) {
 
 func registerInvoice(worker *workhorse.Worker) {
 	worker.Handle("invoice.issue", workhorse.Typed(func(
-		_ context.Context, payload invoice, handler *workhorse.HandlerContext,
+		_ context.Context,
+		payload invoice,
+		handler *workhorse.HandlerContext,
 	) (any, error) {
-		// After Workhorse stores a checkpoint result, later runs return it.
+		// Later runs return the stored checkpoint result.
 		stored, err := handler.Checkpoint("charge", func() (any, error) {
 			return chargeCard(payload.Amount)
 		})
@@ -474,18 +529,19 @@ async fn charge_card(amount: i64) -> Result<Value, HandlerError> {
     Ok(json!({ "id": format!("ch_{amount}") }))
 }
 
-async fn render_invoice(charge_id: Value) -> Result<Value, HandlerError> {
-    Ok(json!({ "chargeId": charge_id }))
+async fn render_invoice(id: Value) -> Result<Value, HandlerError> {
+    Ok(json!({ "chargeId": id }))
 }
 
 pub fn register_invoice(worker: &Worker) {
-    worker.handle("invoice.issue", |invoice: Invoice, context| async move {
-        // After Workhorse stores a checkpoint result, later runs return it.
-        let charge: Value =
-            context.checkpoint("charge", || charge_card(invoice.amount)).await?;
+    worker.handle("invoice.issue", |invoice: Invoice, cx| async move {
+        // Later runs return the stored checkpoint result.
+        let amount = invoice.amount;
+        let charge = cx.checkpoint("charge", || charge_card(amount));
+        let charge = charge.await?;
 
-        let pdf: Value =
-            context.checkpoint("render", || render_invoice(charge["id"].clone())).await?;
+        let id = charge["id"].clone();
+        let pdf = cx.checkpoint("render", || render_invoice(id)).await?;
 
         println!("email {} {pdf}", invoice.email);
         Ok(json!({ "chargeId": charge["id"] }))
@@ -498,8 +554,10 @@ def self.render_invoice(charge_id) = {"chargeId" => charge_id}
 
 def self.register_invoice(worker)
   worker.handle("invoice.issue") do |invoice, context|
-    # After Workhorse stores a checkpoint result, later runs return it.
-    charge = context.checkpoint("charge") { charge_card(invoice.fetch("amount")) }
+    # Later runs return the stored checkpoint result.
+    charge = context.checkpoint("charge") do
+      charge_card(invoice.fetch("amount"))
+    end
 
     pdf = context.checkpoint("render") { render_invoice(charge["id"]) }
 
@@ -512,7 +570,8 @@ end`,
   return Map.of("id", "ch_" + amount);
 }
 
-static Map<String, @Nullable Object> renderInvoice(@Nullable Object chargeId) {
+static Map<String, @Nullable Object> renderInvoice(
+    @Nullable Object chargeId) {
   return Map.of("chargeId", chargeId);
 }
 
@@ -521,29 +580,42 @@ static Worker.Builder registerInvoice(Worker.Builder worker) {
       "invoice.issue",
       Map.class,
       (context, invoice) -> {
-        // After Workhorse stores a checkpoint result, later runs return it.
+        // Later runs return the stored checkpoint result.
         Map<?, ?> charge =
-            context.checkpoint("charge", Map.class, () -> chargeCard(invoice.get("amount")));
+            context.checkpoint(
+                "charge",
+                Map.class,
+                () -> chargeCard(invoice.get("amount")));
 
         Map<?, ?> pdf =
-            context.checkpoint("render", Map.class, () -> renderInvoice(charge.get("id")));
+            context.checkpoint(
+                "render",
+                Map.class,
+                () -> renderInvoice(charge.get("id")));
 
         System.out.println("email " + invoice.get("email") + " " + pdf);
         return Map.of("chargeId", charge.get("id"));
       });
 }`,
 
-  checkpointsKotlin: `fun chargeCard(amount: Any?): Map<String, Any?> = mapOf("id" to "ch_$amount")
+  checkpointsKotlin: `fun chargeCard(amount: Any?): Map<String, Any?> =
+  mapOf("id" to "ch_$amount")
 
-fun renderInvoice(chargeId: Any?): Map<String, Any?> = mapOf("chargeId" to chargeId)
+fun renderInvoice(chargeId: Any?): Map<String, Any?> =
+  mapOf("chargeId" to chargeId)
 
 fun WorkerScope.registerInvoice() {
   handle<Map<String, Any?>>("invoice.issue") { context, invoice ->
-    // After Workhorse stores a checkpoint result, later runs return it.
+    // Later runs return the stored checkpoint result.
     val charge =
-      context.checkpoint<Map<String, Any?>>("charge") { chargeCard(invoice["amount"]) }
+      context.checkpoint<Map<String, Any?>>("charge") {
+        chargeCard(invoice["amount"])
+      }
 
-    val pdf = context.checkpoint<Map<String, Any?>>("render") { renderInvoice(charge["id"]) }
+    val pdf =
+      context.checkpoint<Map<String, Any?>>("render") {
+        renderInvoice(charge["id"])
+      }
 
     println("email \${invoice["email"]} $pdf")
     mapOf("chargeId" to charge["id"])
@@ -556,22 +628,28 @@ public sealed record Charge(string Id);
 
 public sealed record Pdf(string ChargeId);
 
-public static Task<Charge> ChargeCardAsync(long amount) => Task.FromResult(new Charge($"ch_{amount}"));
+public static Task<Charge> ChargeCardAsync(long amount) =>
+    Task.FromResult(new Charge($"ch_{amount}"));
 
-public static Task<Pdf> RenderInvoiceAsync(string chargeId) => Task.FromResult(new Pdf(chargeId));
+public static Task<Pdf> RenderInvoiceAsync(string chargeId) =>
+    Task.FromResult(new Pdf(chargeId));
 
 public static void RegisterInvoice(Worker worker)
 {
-    worker.Handle("invoice.issue", async (HandlerContext context, Invoice invoice) =>
-    {
-        // After Workhorse stores a checkpoint result, later runs return it.
-        var charge = await context.CheckpointAsync("charge", _ => ChargeCardAsync(invoice.Amount));
+    worker.Handle(
+        "invoice.issue",
+        async (HandlerContext context, Invoice invoice) =>
+        {
+            // Later runs return the stored checkpoint result.
+            var charge = await context.CheckpointAsync(
+                "charge", _ => ChargeCardAsync(invoice.Amount));
 
-        var pdf = await context.CheckpointAsync("render", _ => RenderInvoiceAsync(charge.Id));
+            var pdf = await context.CheckpointAsync(
+                "render", _ => RenderInvoiceAsync(charge.Id));
 
-        Console.WriteLine($"email {invoice.Email} {pdf}");
-        return new { chargeId = charge.Id };
-    });
+            Console.WriteLine($"email {invoice.Email} {pdf}");
+            return new { chargeId = charge.Id };
+        });
 }`,
   sleep: `worker.handle("order.settle", async (payload, ctx) => {
   const order = await ctx.checkpoint("place", () =>
@@ -1025,16 +1103,25 @@ def run_billing(database_url: str) -> None:
                 ScheduleDefinition(
                     name="nightly-invoice-run",
                     schedule="0 2 * * *",
-                    task=ScheduledTask(type="invoices.generate", payload={}),
+                    task=ScheduledTask(
+                        type="invoices.generate",
+                        payload={},
+                    ),
                 ),
             ),
         )
 
-    def generate(_payload: object, _context: HandlerContext) -> dict[str, Json]:
+    def generate(
+        _payload: object,
+        _context: HandlerContext,
+    ) -> dict[str, Json]:
         return {"generated": True}
 
     with ConnectionPool(
-        database_url, min_size=3, max_size=3, kwargs={"autocommit": True}
+        database_url,
+        min_size=3,
+        max_size=3,
+        kwargs={"autocommit": True},
     ) as pool:
         Worker(
             pool,
@@ -1052,15 +1139,17 @@ import (
 
 func runBilling(ctx context.Context, pool *pgxpool.Pool) error {
 	queue := workhorse.NewQueue(workhorse.NewPGXExecutor(pool), "default")
-	if err := queue.SyncSchedules(ctx, "billing", []workhorse.ScheduleDefinition{
+	schedules := []workhorse.ScheduleDefinition{
 		{
 			Name:     "nightly-invoice-run",
 			Schedule: "0 2 * * *",
 			Task: workhorse.ScheduledTask{
-				Type: "invoices.generate", Payload: map[string]any{},
+				Type:    "invoices.generate",
+				Payload: map[string]any{},
 			},
 		},
-	}); err != nil {
+	}
+	if err := queue.SyncSchedules(ctx, "billing", schedules); err != nil {
 		return err
 	}
 	worker, err := workhorse.NewWorker(pool, workhorse.WorkerOptions{
@@ -1070,7 +1159,9 @@ func runBilling(ctx context.Context, pool *pgxpool.Pool) error {
 		return err
 	}
 	worker.Handle("invoices.generate", func(
-		_ context.Context, payload any, _ *workhorse.HandlerContext,
+		_ context.Context,
+		payload any,
+		_ *workhorse.HandlerContext,
 	) (any, error) {
 		return map[string]any{"generated": true}, nil
 	})
@@ -1079,19 +1170,21 @@ func runBilling(ctx context.Context, pool *pgxpool.Pool) error {
 
   schedulesRust: `use serde_json::json;
 use workhorse::deadpool_postgres::Pool;
-use workhorse::{
-    run_worker_process, Queue, ScheduleDefinition, ScheduledTask, Worker, WorkerOptions,
-};
+use workhorse::{run_worker_process, Queue, Worker, WorkerOptions};
+use workhorse::{ScheduleDefinition, ScheduledTask};
 
 pub async fn run(pool: Pool) -> Result<(), Box<dyn std::error::Error>> {
     // Run on every deployment with the complete list.
     let task = ScheduledTask::new("invoices.generate", json!({}));
-    let schedule = ScheduleDefinition::new("nightly-invoice-run", "0 2 * * *", task);
-    Queue::new(&pool, "default").sync_schedules("billing", vec![schedule], true).await?;
+    let name = "nightly-invoice-run";
+    let schedule = ScheduleDefinition::new(name, "0 2 * * *", task);
+    let queue = Queue::new(&pool, "default");
+    queue.sync_schedules("billing", vec![schedule], true).await?;
 
     // Any worker in the namespace fires due schedules itself.
-    let options =
-        WorkerOptions { schedule_namespaces: vec!["billing".into()], ..Default::default() };
+    let schedule_namespaces = vec!["billing".into()];
+    let defaults = WorkerOptions::default();
+    let options = WorkerOptions { schedule_namespaces, ..defaults };
     let worker = Worker::new(pool, options)?;
     run_worker_process(&worker).await?;
     Ok(())
@@ -1099,14 +1192,23 @@ pub async fn run(pool: Pool) -> Result<(), Box<dyn std::error::Error>> {
 
   schedulesRuby: `def self.run(pool)
   # Run on every deployment with the complete list.
-  task = Stablemates::Workhorse::ScheduledTask.new(task_type: "invoices.generate", payload: {})
-  schedule = Stablemates::Workhorse::ScheduleDefinition.new(
-    name: "nightly-invoice-run", schedule: "0 2 * * *", task: task
+  task = Stablemates::Workhorse::ScheduledTask.new(
+    task_type: "invoices.generate",
+    payload: {}
   )
-  Stablemates::Workhorse::Queue.new(pool).sync_schedules("billing", [schedule], prune: true)
+  schedule = Stablemates::Workhorse::ScheduleDefinition.new(
+    name: "nightly-invoice-run",
+    schedule: "0 2 * * *",
+    task: task
+  )
+  queue = Stablemates::Workhorse::Queue.new(pool)
+  queue.sync_schedules("billing", [schedule], prune: true)
 
   # Any worker in the namespace fires due schedules itself.
-  worker = Stablemates::Workhorse::Worker.new(pool, schedule_namespaces: ["billing"])
+  worker = Stablemates::Workhorse::Worker.new(
+    pool,
+    schedule_namespaces: ["billing"]
+  )
   Stablemates::Workhorse.run_worker_process(worker)
 end`,
 
@@ -1115,38 +1217,57 @@ end`,
   ScheduledTask task = ScheduledTask.of("invoices.generate", Map.of());
   ScheduleDefinition schedule =
       new ScheduleDefinition("nightly-invoice-run", "0 2 * * *", task);
-  new Queue(ConnectionSource.of(dataSource)).syncSchedules("billing", List.of(schedule), true);
+  Queue queue = new Queue(ConnectionSource.of(dataSource));
+  queue.syncSchedules("billing", List.of(schedule), true);
 
   // Any worker in the namespace fires due schedules itself.
-  Worker worker = Worker.builder(dataSource).scheduleNamespaces("billing").build();
+  Worker worker =
+      Worker.builder(dataSource).scheduleNamespaces("billing").build();
   WorkerProcess.runWorkerProcess(worker);
 }`,
 
   schedulesKotlin: `suspend fun run(dataSource: DataSource) {
   // Run on every deployment with the complete list.
-  val task = ScheduledTask.of("invoices.generate", emptyMap<String, Any?>())
-  val schedule = ScheduleDefinition("nightly-invoice-run", "0 2 * * *", task)
+  val task =
+    ScheduledTask.of("invoices.generate", emptyMap<String, Any?>())
+  val schedule =
+    ScheduleDefinition("nightly-invoice-run", "0 2 * * *", task)
   Queue(ConnectionSource.of(dataSource))
     .syncSchedulesSuspend("billing", listOf(schedule), prune = true)
 
   // Any worker in the namespace fires due schedules itself.
-  val worker = workhorseWorker(dataSource) { scheduleNamespaces = listOf("billing") }
+  val worker =
+    workhorseWorker(dataSource) {
+      scheduleNamespaces = listOf("billing")
+    }
   WorkerProcess.runWorkerProcess(worker)
 }`,
 
-  schedulesCSharp: `public static async Task RunAsync(NpgsqlDataSource dataSource, CancellationToken stoppingToken)
+  schedulesCSharp: `public static async Task RunAsync(
+    NpgsqlDataSource dataSource,
+    CancellationToken stoppingToken)
 {
     // Run on every deployment with the complete list.
     var schedule = new ScheduleDefinition
     {
         Name = "nightly-invoice-run",
         Schedule = "0 2 * * *",
-        Task = new ScheduledTask { TaskType = "invoices.generate", Payload = new { } },
+        Task = new ScheduledTask
+        {
+            TaskType = "invoices.generate",
+            Payload = new { },
+        },
     };
-    await new Queue(dataSource).SyncSchedulesAsync("billing", [schedule], prune: true, stoppingToken);
+    var queue = new Queue(dataSource);
+    await queue.SyncSchedulesAsync(
+        "billing", [schedule], prune: true, stoppingToken);
 
     // Any worker in the namespace fires due schedules itself.
-    await using var worker = new Worker(dataSource, new WorkerOptions { ScheduleNamespaces = ["billing"] });
+    var options = new WorkerOptions
+    {
+        ScheduleNamespaces = ["billing"],
+    };
+    await using var worker = new Worker(dataSource, options);
     await worker.RunAsync(stoppingToken);
 }`,
   flowControl: `await queue.syncConcurrencyPolicies("workers", [
@@ -1176,7 +1297,11 @@ await queue.enqueue(
 )
 
 
-def configure_flow_control(queue: Queue, message_id: str, tenant_id: str) -> None:
+def configure_flow_control(
+    queue: Queue,
+    message_id: str,
+    tenant_id: str,
+) -> None:
     queue.sync_concurrency_policies(
         "workers",
         (
@@ -1197,7 +1322,10 @@ def configure_flow_control(queue: Queue, message_id: str, tenant_id: str) -> Non
     queue.enqueue(
         "mail.send",
         {"messageId": message_id},
-        EnqueueOptions(queue="mail", concurrency_key=f"tenant:{tenant_id}"),
+        EnqueueOptions(
+            queue="mail",
+            concurrency_key=f"tenant:{tenant_id}",
+        ),
     )`,
 
   flowControlGo: `package example
@@ -1215,30 +1343,40 @@ func configureFlowControl(
 	tenantID string,
 ) error {
 	maxPerTenant := 2
-	if _, err := queue.SyncConcurrencyPolicies(ctx, "workers", []workhorse.ConcurrencyPolicyDefinition{
-		{Queue: "mail", MaxActive: 20, MaxActivePerKey: &maxPerTenant},
-	}); err != nil {
+	mail := []workhorse.ConcurrencyPolicyDefinition{{
+		Queue:           "mail",
+		MaxActive:       20,
+		MaxActivePerKey: &maxPerTenant,
+	}}
+	_, err := queue.SyncConcurrencyPolicies(ctx, "workers", mail)
+	if err != nil {
 		return err
 	}
-	if _, err := queue.SyncRateLimitPolicies(ctx, "workers", []workhorse.RateLimitPolicyDefinition{
-		{
-			Queue: "provider-api",
-			Rate:  workhorse.RateLimit{Limit: 100, IntervalMS: 1_000, Burst: 200},
+	provider := []workhorse.RateLimitPolicyDefinition{{
+		Queue: "provider-api",
+		Rate: workhorse.RateLimit{
+			Limit:      100,
+			IntervalMS: 1_000,
+			Burst:      200,
 		},
-	}); err != nil {
+	}}
+	_, err = queue.SyncRateLimitPolicies(ctx, "workers", provider)
+	if err != nil {
 		return err
 	}
-	_, err := queue.Enqueue(ctx, "mail.send", map[string]any{
+	_, err = queue.Enqueue(ctx, "mail.send", map[string]any{
 		"messageId": messageID,
 	}, workhorse.EnqueueOptions{
-		Queue: "mail", ConcurrencyKey: "tenant:" + tenantID,
+		Queue:          "mail",
+		ConcurrencyKey: "tenant:" + tenantID,
 	})
 	return err
 }`,
 
   flowControlRust: `use serde_json::json;
 use workhorse::deadpool_postgres::Pool;
-use workhorse::policies::{ConcurrencyPolicyDefinition, RateLimit, RateLimitPolicyDefinition};
+use workhorse::policies::ConcurrencyPolicyDefinition;
+use workhorse::policies::{RateLimit, RateLimitPolicyDefinition};
 use workhorse::{EnqueueOptions, Error, Queue};
 
 pub async fn configure(
@@ -1259,14 +1397,16 @@ pub async fn configure(
         rate: RateLimit { limit: 100, interval_ms: 1_000, burst: 200 },
         per_key: None,
     };
-    queue.sync_rate_limit_policies("workers", &[provider], false).await?;
+    let policies = [provider];
+    queue.sync_rate_limit_policies("workers", &policies, false).await?;
 
     let options = EnqueueOptions {
         queue: Some("mail".into()),
         concurrency_key: Some(format!("tenant:{tenant_id}")),
         ..Default::default()
     };
-    queue.enqueue("mail.send", &json!({ "messageId": message_id }), options).await?;
+    let message = json!({ "messageId": message_id });
+    queue.enqueue("mail.send", &message, options).await?;
     Ok(())
 }`,
 
@@ -1277,9 +1417,11 @@ pub async fn configure(
   )
   queue.sync_concurrency_policies("workers", [mail], prune: false)
 
+  rate = Stablemates::Workhorse::RateLimit.new(
+    limit: 100, interval: 1, burst: 200
+  )
   provider = Stablemates::Workhorse::RateLimitPolicyDefinition.new(
-    queue: "provider-api",
-    rate: Stablemates::Workhorse::RateLimit.new(limit: 100, interval: 1, burst: 200)
+    queue: "provider-api", rate: rate
   )
   queue.sync_rate_limit_policies("workers", [provider], prune: false)
 
@@ -1289,53 +1431,91 @@ end`,
 
   flowControlJava: `static void configure(Queue queue, String messageId, String tenantId) {
   // At most 20 mail tasks active; at most 2 per tenant.
-  ConcurrencyPolicyDefinition mail = new ConcurrencyPolicyDefinition("mail", 20, 2);
+  ConcurrencyPolicyDefinition mail =
+      new ConcurrencyPolicyDefinition("mail", 20, 2);
   queue.syncConcurrencyPolicies("workers", List.of(mail), false);
 
+  RateLimit rate = new RateLimit(100, Duration.ofSeconds(1), 200);
   RateLimitPolicyDefinition provider =
-      new RateLimitPolicyDefinition(
-          "provider-api", new RateLimit(100, Duration.ofSeconds(1), 200));
+      new RateLimitPolicyDefinition("provider-api", rate);
   queue.syncRateLimitPolicies("workers", List.of(provider), false);
 
   queue.enqueue(
       "mail.send",
       Map.of("messageId", messageId),
-      EnqueueOptions.builder().queue("mail").concurrencyKey("tenant:" + tenantId).build());
+      EnqueueOptions.builder()
+          .queue("mail")
+          .concurrencyKey("tenant:" + tenantId)
+          .build());
 }`,
 
-  flowControlKotlin: `suspend fun configure(queue: Queue, messageId: String, tenantId: String) {
+  flowControlKotlin: `suspend fun configure(
+  queue: Queue,
+  messageId: String,
+  tenantId: String,
+) {
   // At most 20 mail tasks active; at most 2 per tenant.
   val mail = ConcurrencyPolicyDefinition("mail", 20, 2)
-  queue.syncConcurrencyPoliciesSuspend("workers", listOf(mail), prune = false)
+  queue.syncConcurrencyPoliciesSuspend(
+    "workers",
+    listOf(mail),
+    prune = false,
+  )
 
-  val provider =
-    RateLimitPolicyDefinition("provider-api", RateLimit(100, Duration.ofSeconds(1), 200))
-  queue.syncRateLimitPoliciesSuspend("workers", listOf(provider), prune = false)
+  val rate = RateLimit(100, Duration.ofSeconds(1), 200)
+  val provider = RateLimitPolicyDefinition("provider-api", rate)
+  queue.syncRateLimitPoliciesSuspend(
+    "workers",
+    listOf(provider),
+    prune = false,
+  )
 
   queue.enqueueSuspend(
     "mail.send",
     mapOf("messageId" to messageId),
-    EnqueueOptions.builder().queue("mail").concurrencyKey("tenant:$tenantId").build(),
+    EnqueueOptions.builder()
+      .queue("mail")
+      .concurrencyKey("tenant:$tenantId")
+      .build(),
   )
 }`,
 
-  flowControlCSharp: `public static async Task ConfigureAsync(Queue queue, string messageId, string tenantId)
+  flowControlCSharp: `public static async Task ConfigureAsync(
+    Queue queue,
+    string messageId,
+    string tenantId)
 {
     // At most 20 mail tasks active; at most 2 per tenant.
-    var mail = new ConcurrencyPolicyDefinition { Queue = "mail", MaxActive = 20, MaxActivePerKey = 2 };
-    await queue.SyncConcurrencyPoliciesAsync("workers", [mail], prune: false);
+    var mail = new ConcurrencyPolicyDefinition
+    {
+        Queue = "mail",
+        MaxActive = 20,
+        MaxActivePerKey = 2,
+    };
+    await queue.SyncConcurrencyPoliciesAsync(
+        "workers", [mail], prune: false);
 
     var provider = new RateLimitPolicyDefinition
     {
         Queue = "provider-api",
-        Rate = new RateLimit { Limit = 100, Interval = TimeSpan.FromSeconds(1), Burst = 200 },
+        Rate = new RateLimit
+        {
+            Limit = 100,
+            Interval = TimeSpan.FromSeconds(1),
+            Burst = 200,
+        },
     };
-    await queue.SyncRateLimitPoliciesAsync("workers", [provider], prune: false);
+    await queue.SyncRateLimitPoliciesAsync(
+        "workers", [provider], prune: false);
 
     await queue.EnqueueAsync(
         "mail.send",
         new { messageId },
-        new EnqueueOptions { Queue = "mail", ConcurrencyKey = $"tenant:{tenantId}" });
+        new EnqueueOptions
+        {
+            Queue = "mail",
+            ConcurrencyKey = $"tenant:{tenantId}",
+        });
 }`,
   dependencies: `const inventoryId = await queue.enqueue(
   "inventory.reserve",
@@ -1365,11 +1545,25 @@ worker.handle("order.fulfill", async (order, ctx) => {
   return { receipt };
 });`,
 
-  dependenciesPython: `from workhorse import Dependencies, EnqueueOptions, HandlerContext, Json, Queue, Worker
+  dependenciesPython: `from workhorse import (
+    Dependencies,
+    EnqueueOptions,
+    HandlerContext,
+    Json,
+    Queue,
+    Worker,
+)
 
 
-def configure_checkout(queue: Queue, worker: Worker, order_id: str) -> None:
-    inventory_id = queue.enqueue("inventory.reserve", {"orderId": order_id})
+def configure_checkout(
+    queue: Queue,
+    worker: Worker,
+    order_id: str,
+) -> None:
+    inventory_id = queue.enqueue(
+        "inventory.reserve",
+        {"orderId": order_id},
+    )
     queue.enqueue(
         "order.confirm",
         {"orderId": order_id},
@@ -1383,7 +1577,10 @@ def configure_checkout(queue: Queue, worker: Worker, order_id: str) -> None:
         ),
     )
 
-    def fulfill(order: Json, context: HandlerContext) -> dict[str, Json]:
+    def fulfill(
+        order: Json,
+        context: HandlerContext,
+    ) -> dict[str, Json]:
         receipt = context.run_child("charge", "payment.capture", order)
         return {"receipt": receipt}
 
@@ -1397,56 +1594,72 @@ import (
 	workhorse "github.com/stablemates/workhorse/go"
 )
 
-func configureCheckout(ctx context.Context, queue *workhorse.Queue, worker *workhorse.Worker, orderID string) error {
-	inventoryID, err := queue.Enqueue(ctx, "inventory.reserve", map[string]any{"orderId": orderID})
+func configureCheckout(
+	ctx context.Context,
+	queue *workhorse.Queue,
+	worker *workhorse.Worker,
+	orderID string,
+) error {
+	order := map[string]any{"orderId": orderID}
+	inventoryID, err := queue.Enqueue(ctx, "inventory.reserve", order)
 	if err != nil {
 		return err
 	}
-	if _, err := queue.Enqueue(ctx, "order.confirm", map[string]any{
-		"orderId": orderID,
-	}, workhorse.EnqueueOptions{Dependencies: &workhorse.Dependencies{
-		PrerequisiteTaskIDs: []string{inventoryID},
-		OnSuccess:           workhorse.DependencyRelease,
-		OnFailure:           workhorse.DependencyCancel,
-		OnCancellation:      workhorse.DependencyCancel,
-	}}); err != nil {
+	options := workhorse.EnqueueOptions{
+		Dependencies: &workhorse.Dependencies{
+			PrerequisiteTaskIDs: []string{inventoryID},
+			OnSuccess:           workhorse.DependencyRelease,
+			OnFailure:           workhorse.DependencyCancel,
+			OnCancellation:      workhorse.DependencyCancel,
+		},
+	}
+	_, err = queue.Enqueue(ctx, "order.confirm", order, options)
+	if err != nil {
 		return err
 	}
 
 	worker.Handle("order.fulfill", func(
-		_ context.Context, order any, handler *workhorse.HandlerContext,
+		_ context.Context,
+		order any,
+		handler *workhorse.HandlerContext,
 	) (any, error) {
-		return handler.RunChild("charge", "payment.capture", order, workhorse.EnqueueOptions{})
+		return handler.RunChild(
+			"charge", "payment.capture", order, workhorse.EnqueueOptions{},
+		)
 	})
 	return nil
 }`,
 
   dependenciesRust: `use serde_json::{json, Value};
 use workhorse::deadpool_postgres::Pool;
-use workhorse::{Dependencies, DependencyTerminalPolicy, EnqueueOptions, Error, Queue, Worker};
+use workhorse::{Dependencies, DependencyTerminalPolicy};
+use workhorse::{EnqueueOptions, Error, Queue, Worker};
 
-pub async fn confirm(queue: &Queue<Pool>, order_id: &str) -> Result<(), Error> {
-    let order = json!({ "orderId": order_id });
-    let inventory =
-        queue.enqueue("inventory.reserve", &order, EnqueueOptions::default()).await?;
+pub async fn confirm(queue: &Queue<Pool>, id: &str) -> Result<(), Error> {
+    let order = json!({ "orderId": id });
+    let options = EnqueueOptions::default();
+    let inventory = queue.enqueue("inventory.reserve", &order, options);
+    let inventory = inventory.await?;
 
-    let dependencies = Dependencies {
+    let dependencies = Some(Dependencies {
         prerequisite_task_ids: vec![inventory.task_id],
         on_success: DependencyTerminalPolicy::Release,
         on_failure: DependencyTerminalPolicy::Cancel,
         on_cancellation: DependencyTerminalPolicy::Cancel,
-    };
-    let options = EnqueueOptions { dependencies: Some(dependencies), ..Default::default() };
+    });
+    let options = EnqueueOptions { dependencies, ..Default::default() };
     queue.enqueue("order.confirm", &order, options).await?;
     Ok(())
 }
 
 pub fn register_fulfillment(worker: &Worker) {
-    worker.handle("order.fulfill", |order: Value, context| async move {
-        let options = EnqueueOptions { queue: Some("payments".into()), ..Default::default() };
+    worker.handle("order.fulfill", |order: Value, cx| async move {
+        let queue = Some("payments".into());
+        let options = EnqueueOptions { queue, ..Default::default() };
         let capture = json!({ "orderId": order["id"] });
-        let receipt: Value =
-            context.run_child("charge", "payment.capture", &capture, options).await?;
+        let task = "payment.capture";
+        let child = cx.run_child("charge", task, &capture, options);
+        let receipt: Value = child.await?;
         Ok(json!({ "receipt": receipt }))
     });
 }`,
@@ -1466,7 +1679,9 @@ end
 
 def self.register_fulfillment(worker)
   worker.handle("order.fulfill") do |order, context|
-    receipt = context.run_child("charge", "payment.capture", {"orderId" => order["id"]}, queue: "payments")
+    capture = {"orderId" => order["id"]}
+    receipt = context.run_child("charge", "payment.capture", capture,
+      queue: "payments")
     {"receipt" => receipt}
   end
 end`,
@@ -1481,8 +1696,9 @@ end`,
           DependencyPolicy.RELEASE,
           DependencyPolicy.CANCEL,
           DependencyPolicy.CANCEL);
-  queue.enqueue(
-      "order.confirm", order, EnqueueOptions.builder().dependencies(dependencies).build());
+  EnqueueOptions options =
+      EnqueueOptions.builder().dependencies(dependencies).build();
+  queue.enqueue("order.confirm", order, options);
 }
 
 static Worker.Builder registerFulfillment(Worker.Builder worker) {
@@ -1490,10 +1706,17 @@ static Worker.Builder registerFulfillment(Worker.Builder worker) {
       "order.fulfill",
       Map.class,
       (context, order) -> {
-        EnqueueOptions options = EnqueueOptions.builder().queue("payments").build();
-        Map<String, @Nullable Object> capture = Map.of("orderId", order.get("id"));
+        EnqueueOptions options =
+            EnqueueOptions.builder().queue("payments").build();
+        Map<String, @Nullable Object> capture =
+            Map.of("orderId", order.get("id"));
         Map<?, ?> receipt =
-            context.runChild("charge", "payment.capture", capture, options, Map.class);
+            context.runChild(
+                "charge",
+                "payment.capture",
+                capture,
+                options,
+                Map.class);
         return Map.of("receipt", receipt);
       });
 }`,
@@ -1521,7 +1744,12 @@ fun WorkerScope.registerFulfillment() {
     val options = EnqueueOptions.builder().queue("payments").build()
     val capture = mapOf("orderId" to order["id"])
     val receipt =
-      context.runChild<Map<String, Any?>>("charge", "payment.capture", capture, options)
+      context.runChild<Map<String, Any?>>(
+        "charge",
+        "payment.capture",
+        capture,
+        options,
+      )
     mapOf("receipt" to receipt)
   }
 }`,
@@ -1529,7 +1757,8 @@ fun WorkerScope.registerFulfillment() {
   dependenciesCSharp: `public static async Task ConfirmAsync(Queue queue, string orderId)
 {
     var order = new { orderId };
-    var inventory = await queue.EnqueueAsync("inventory.reserve", order);
+    var inventory = await queue.EnqueueAsync(
+        "inventory.reserve", order);
 
     var dependencies = new Dependencies
     {
@@ -1538,7 +1767,8 @@ fun WorkerScope.registerFulfillment() {
         OnFailure = DependencyPolicy.Cancel,
         OnCancellation = DependencyPolicy.Cancel,
     };
-    await queue.EnqueueAsync("order.confirm", order, new EnqueueOptions { Dependencies = dependencies });
+    var options = new EnqueueOptions { Dependencies = dependencies };
+    await queue.EnqueueAsync("order.confirm", order, options);
 }
 
 public sealed record Fulfillment(string Id);
@@ -1547,13 +1777,17 @@ public sealed record Capture(string OrderId);
 
 public static void RegisterFulfillment(Worker worker)
 {
-    worker.Handle("order.fulfill", async (HandlerContext context, Fulfillment order) =>
-    {
-        var options = new EnqueueOptions { Queue = "payments" };
-        var receipt = await context.RunChildAsync<Capture, JsonElement>(
-            "charge", "payment.capture", new Capture(order.Id), options);
-        return new { receipt };
-    });
+    worker.Handle(
+        "order.fulfill",
+        async (HandlerContext context, Fulfillment order) =>
+        {
+            var options = new EnqueueOptions { Queue = "payments" };
+            var capture = new Capture(order.Id);
+            var receipt = await context
+                .RunChildAsync<Capture, JsonElement>(
+                    "charge", "payment.capture", capture, options);
+            return new { receipt };
+        });
 }`,
   coalescing: `const options = {
   debounce: {
@@ -1737,7 +1971,10 @@ class Review(TypedDict):
 
 
 def configure_release(worker: Worker) -> None:
-    def publish(release: Release, context: HandlerContext) -> dict[str, Json]:
+    def publish(
+        release: Release,
+        context: HandlerContext,
+    ) -> dict[str, Json]:
         scan = context.wait_for_signal("security-scan")
         review = cast(
             Review,
@@ -1751,7 +1988,12 @@ def configure_release(worker: Worker) -> None:
     worker.handle("release.publish", publish)
 
 
-def deliver_scan(queue: Queue, task_id: str, result: Json, delivery_id: str) -> None:
+def deliver_scan(
+    queue: Queue,
+    task_id: str,
+    result: Json,
+    delivery_id: str,
+) -> None:
     queue.send_signal(
         task_id,
         "security-scan",
@@ -1774,15 +2016,16 @@ type review struct {
 
 func configureRelease(worker *workhorse.Worker) {
 	worker.Handle("release.publish", func(
-		_ context.Context, release any, handler *workhorse.HandlerContext,
+		_ context.Context,
+		release any,
+		handler *workhorse.HandlerContext,
 	) (any, error) {
 		scan, err := handler.WaitForSignal("security-scan")
 		if err != nil {
 			return nil, err
 		}
-		response, err := handler.WaitForHuman("release-approval", map[string]any{
-			"release": release, "scan": scan,
-		})
+		request := map[string]any{"release": release, "scan": scan}
+		response, err := handler.WaitForHuman("release-approval", request)
 		if err != nil {
 			return nil, err
 		}
@@ -1794,10 +2037,20 @@ func configureRelease(worker *workhorse.Worker) {
 	})
 }
 
-func deliverScan(ctx context.Context, queue *workhorse.Queue, taskID string, result any, deliveryID string) error {
-	_, err := queue.SendSignal(ctx, taskID, "security-scan", result, workhorse.ExternalWaitDelivery{
-		IdempotencyKey: deliveryID, RequestedBy: "security-scanner",
-	})
+func deliverScan(
+	ctx context.Context,
+	queue *workhorse.Queue,
+	taskID string,
+	result any,
+	deliveryID string,
+) error {
+	delivery := workhorse.ExternalWaitDelivery{
+		IdempotencyKey: deliveryID,
+		RequestedBy:    "security-scanner",
+	}
+	_, err := queue.SendSignal(
+		ctx, taskID, "security-scan", result, delivery,
+	)
 	return err
 }`,
 
@@ -1807,12 +2060,13 @@ use workhorse::deadpool_postgres::Pool;
 use workhorse::{DeliveryOptions, Error, Queue, Worker};
 
 pub fn register_release(worker: &Worker) {
-    worker.handle("release.publish", |release: Value, context| async move {
-        let scan: Value = context.wait_for_signal("security-scan", None).await?.payload;
+    worker.handle("release.publish", |release: Value, cx| async move {
+        let scan = cx.wait_for_signal("security-scan", None).await?;
+        let scan: Value = scan.payload;
 
-        let request = json!({ "releaseId": release["id"], "scan": scan });
-        let review: Value =
-            context.wait_for_human("release-approval", &request, None).await?.result;
+        let req = json!({ "releaseId": release["id"], "scan": scan });
+        let review = cx.wait_for_human("release-approval", &req, None);
+        let review: Value = review.await?.result;
 
         Ok(json!({ "published": review["approved"] }))
     });
@@ -1828,7 +2082,8 @@ pub async fn deliver_scan(
         idempotency_key: delivery_id.into(),
         requested_by: "security-scanner".into(),
     };
-    queue.send_signal(task_id, "security-scan", result, delivery).await?;
+    let name = "security-scan";
+    queue.send_signal(task_id, name, result, delivery).await?;
     Ok(())
 }`,
 
@@ -1853,18 +2108,23 @@ end`,
       "release.publish",
       Map.class,
       (context, release) -> {
-        Object scan = context.waitForSignal("security-scan", Object.class, null);
+        Object scan =
+            context.waitForSignal("security-scan", Object.class, null);
 
         Map<String, @Nullable Object> request =
             Map.of("releaseId", release.get("id"), "scan", scan);
-        Map<?, ?> review = context.waitForHuman("release-approval", request, Map.class, null);
+        Map<?, ?> review =
+            context.waitForHuman(
+                "release-approval", request, Map.class, null);
 
         return Map.of("published", review.get("approved"));
       });
 }
 
-static void deliverScan(Queue queue, UUID taskId, Object result, String deliveryId) {
-  queue.sendSignal(taskId, "security-scan", result, deliveryId, "security-scanner");
+static void deliverScan(
+    Queue queue, UUID taskId, Object result, String deliveryId) {
+  queue.sendSignal(
+      taskId, "security-scan", result, deliveryId, "security-scanner");
 }`,
 
   externalWaitsKotlin: `fun WorkerScope.registerRelease() {
@@ -1872,13 +2132,22 @@ static void deliverScan(Queue queue, UUID taskId, Object result, String delivery
     val scan = context.waitForSignal<Any?>("security-scan")
 
     val request = mapOf("releaseId" to release["id"], "scan" to scan)
-    val review = context.waitForHuman<Map<String, Any?>>("release-approval", request)
+    val review =
+      context.waitForHuman<Map<String, Any?>>(
+        "release-approval",
+        request,
+      )
 
     mapOf("published" to review["approved"])
   }
 }
 
-suspend fun deliverScan(queue: Queue, taskId: UUID, result: Any?, deliveryId: String) {
+suspend fun deliverScan(
+  queue: Queue,
+  taskId: UUID,
+  result: Any?,
+  deliveryId: String,
+) {
   queue.sendSignalSuspend(
     taskId,
     "security-scan",
@@ -1890,26 +2159,41 @@ suspend fun deliverScan(queue: Queue, taskId: UUID, result: Any?, deliveryId: St
 
   externalWaitsCSharp: `public sealed record Release(string Id);
 
-public sealed record ApprovalRequest(string ReleaseId, JsonElement Scan);
+public sealed record ApprovalRequest(
+    string ReleaseId,
+    JsonElement Scan);
 
 public sealed record Review(bool Approved);
 
 public static void RegisterRelease(Worker worker)
 {
-    worker.Handle("release.publish", async (HandlerContext context, Release release) =>
-    {
-        var scan = await context.WaitForSignalAsync<JsonElement>("security-scan", timeout: null);
+    worker.Handle(
+        "release.publish",
+        async (HandlerContext context, Release release) =>
+        {
+            var scan = await context.WaitForSignalAsync<JsonElement>(
+                "security-scan", timeout: null);
 
-        var request = new ApprovalRequest(release.Id, scan);
-        var review = await context.WaitForHumanAsync<ApprovalRequest, Review>(
-            "release-approval", request, timeout: null);
+            var request = new ApprovalRequest(release.Id, scan);
+            var review = await context
+                .WaitForHumanAsync<ApprovalRequest, Review>(
+                    "release-approval", request, timeout: null);
 
-        return new { published = review.Approved };
-    });
+            return new { published = review.Approved };
+        });
 }
 
-public static Task DeliverScanAsync(Queue queue, Guid taskId, object result, string deliveryId) =>
-    queue.SendSignalAsync(taskId, "security-scan", result, deliveryId, "security-scanner");`,
+public static Task DeliverScanAsync(
+    Queue queue,
+    Guid taskId,
+    object result,
+    string deliveryId) =>
+    queue.SendSignalAsync(
+        taskId,
+        "security-scan",
+        result,
+        deliveryId,
+        "security-scanner");`,
   batchHandlers: `worker.handleBatch(
   "email.send",
   { maxSize: batchSize, lingerMs: batchLingerMs },

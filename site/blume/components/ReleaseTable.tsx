@@ -1,5 +1,5 @@
-import resolved from "@/.source/releases.json";
-import type { ResolvedReleaseLine } from "@/lib/releases";
+import resolved from "../../.source/releases.json" with { type: "json" };
+import type { ResolvedReleaseLine } from "../../lib/releases";
 
 /**
  * The published versions of the release lines, rendered from
@@ -47,7 +47,7 @@ function Released({ date }: { date: string }) {
 
 const cell = "wh-rule border-b py-3 pr-6 align-baseline last:pr-0";
 
-export function ReleaseTable() {
+export default function ReleaseTable() {
   const superseded = lines.flatMap((line) =>
     line.earlier.map((release) => ({ line, release, key: `${line.id}-${release.version}` })),
   );
@@ -65,7 +65,7 @@ export function ReleaseTable() {
                   <a href={line.registryUrl} className="wh-link-underline font-mono text-[12.5px]">
                     {line.artifact}
                   </a>
-                  <span className="ml-2 text-fd-muted-foreground">on {line.registry}</span>
+                  <span className="ml-2 text-muted-foreground">on {line.registry}</span>
                 </td>
                 {line.current ? (
                   <>
@@ -77,9 +77,9 @@ export function ReleaseTable() {
                   </>
                 ) : (
                   <>
-                    <td className={`${cell} text-fd-muted-foreground`}>Not yet released</td>
-                    <td className={`${cell} text-fd-muted-foreground`}>—</td>
-                    <td className={`${cell} text-fd-muted-foreground`}>—</td>
+                    <td className={`${cell} text-muted-foreground`}>Not yet released</td>
+                    <td className={`${cell} text-muted-foreground`}>—</td>
+                    <td className={`${cell} text-muted-foreground`}>—</td>
                   </>
                 )}
               </tr>
@@ -92,7 +92,7 @@ export function ReleaseTable() {
           an empty table under this heading would say the opposite of the truth. */}
       {superseded.length > 0 ? (
         <div>
-          <p className="text-fd-muted-foreground">
+          <p className="text-muted-foreground">
             Every earlier published version is superseded and receives no fix.
           </p>
           <div className="mt-4 overflow-x-auto">
@@ -106,7 +106,7 @@ export function ReleaseTable() {
                     <td className={cell}>
                       <Released date={release.date} />
                     </td>
-                    <td className={`${cell} text-fd-muted-foreground`}>No</td>
+                    <td className={`${cell} text-muted-foreground`}>No</td>
                   </tr>
                 ))}
               </tbody>

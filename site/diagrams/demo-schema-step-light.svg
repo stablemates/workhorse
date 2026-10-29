@@ -1,33 +1,33 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 272" width="960" height="272" role="img" aria-labelledby="demo-schema-step-light-title demo-schema-step-light-desc">
 <title id="demo-schema-step-light-title">The demo prepares its schema from the new image before any container starts</title>
 <desc id="demo-schema-step-light-desc">After the image is built and pushed, the pipeline runs node dist/prepare-schema.js in a container from the same image, with the same environment and volumes. It installs or migrates the Workhorse schema and the demo tables in every workspace and verifies each one. A refusal exits non-zero and fails the deploy before the container swap. After the swap, the server asserts compatibility and opens /up only when the step ran.</desc>
-<defs><marker id="arrow-light" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#4e5359"/></marker></defs>
-<rect width="960" height="272" fill="#f9fafb"/>
-<rect x="24" y="48" width="204" height="52" rx="6" fill="#f9fafb"/>
-<rect x="24" y="48" width="204" height="52" rx="6" fill="#ffffff" stroke="#1a2027" stroke-width="1"/>
-<text x="126" y="72" fill="#1a2027" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">build and push</text>
-<text x="126" y="86" fill="#4e5359" font-size="9" font-family="Geist Mono" text-anchor="middle">the image of the release</text>
-<path d="M 228,74 H 256" fill="none" stroke="#4e5359" stroke-width="1.2" marker-end="url(#arrow-light)"/>
-<rect x="258" y="48" width="204" height="52" rx="6" fill="#f9fafb"/>
-<rect x="258" y="48" width="204" height="52" rx="6" fill="rgba(213,92,19,0.08)" stroke="#aa4515" stroke-width="1.4"/>
-<text x="360" y="72" fill="#1a2027" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">prepare-schema.js</text>
-<text x="360" y="86" fill="#4e5359" font-size="9" font-family="Geist Mono" text-anchor="middle">a container from that image</text>
-<path d="M 462,74 H 490" fill="none" stroke="#4e5359" stroke-width="1.2" marker-end="url(#arrow-light)"/>
-<rect x="492" y="48" width="204" height="52" rx="6" fill="#f9fafb"/>
-<rect x="492" y="48" width="204" height="52" rx="6" fill="#ffffff" stroke="#1a2027" stroke-width="1"/>
-<text x="594" y="72" fill="#1a2027" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">container swap</text>
-<text x="594" y="86" fill="#4e5359" font-size="9" font-family="Geist Mono" text-anchor="middle">only after exit 0</text>
-<path d="M 696,74 H 724" fill="none" stroke="#4e5359" stroke-width="1.2" marker-end="url(#arrow-light)"/>
-<rect x="726" y="48" width="204" height="52" rx="6" fill="#f9fafb"/>
-<rect x="726" y="48" width="204" height="52" rx="6" fill="rgba(26,32,39,0.05)" stroke="#4e5359" stroke-width="1"/>
-<text x="828" y="72" fill="#1a2027" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">server starts</text>
-<text x="828" y="86" fill="#4e5359" font-size="9" font-family="Geist Mono" text-anchor="middle">asserts compatibility · /up</text>
-<path d="M 360,100 V 174" fill="none" stroke="#4e5359" stroke-width="1.2" stroke-dasharray="5,4" marker-end="url(#arrow-light)"/>
-<rect x="286" y="132" width="148" height="12" rx="2" fill="#f9fafb"/>
-<text x="360" y="141" fill="#6d7277" font-size="8" font-family="Geist Mono" text-anchor="middle" letter-spacing="0.06em">A REFUSAL · NON-ZERO EXIT</text>
-<rect x="258" y="176" width="204" height="48" rx="6" fill="#f9fafb"/>
-<rect x="258" y="176" width="204" height="48" rx="6" fill="rgba(26,32,39,0.03)" stroke="rgba(26,32,39,0.4)" stroke-width="1" stroke-dasharray="4,3"/>
-<text x="360" y="198" fill="#1a2027" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">the deploy fails</text>
-<text x="360" y="212" fill="#4e5359" font-size="9" font-family="Geist Mono" text-anchor="middle">before the swap</text>
-<text x="24" y="256" fill="#4e5359" font-size="9" font-family="Geist Mono" font-weight="400" text-anchor="start">Nothing prepares a schema at startup. The entry point starts processes only.</text>
+<defs><marker id="arrow-light" markerWidth="8" markerHeight="8" refX="6.5" refY="4" orient="auto" markerUnits="userSpaceOnUse"><path d="M 1.5,1 L 6.5,4 L 1.5,7" fill="none" stroke="#7d7d7d" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/></marker></defs>
+<rect width="960" height="272" fill="#ffffff"/>
+<rect x="24" y="48" width="204" height="52" rx="8" fill="#ffffff"/>
+<rect x="24.5" y="48.5" width="203" height="51" rx="8" fill="#ffffff" stroke="#cdcdcd" stroke-width="1"/>
+<text x="126" y="72" fill="#000000" font-size="11" font-weight="500" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">build and push</text>
+<text x="126" y="86" fill="#555555" font-size="9" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">the image of the release</text>
+<path d="M 228,74 H 256" fill="none" stroke="#7d7d7d" stroke-width="1" marker-end="url(#arrow-light)"/>
+<rect x="258" y="48" width="204" height="52" rx="8" fill="#ffffff"/>
+<rect x="258.5" y="48.5" width="203" height="51" rx="8" fill="rgba(207,145,72,0.12)" stroke="#cf9148" stroke-width="1"/>
+<text x="360" y="72" fill="#000000" font-size="11" font-weight="500" font-family="Geist Mono, monospace" text-anchor="middle">prepare-schema.js</text>
+<text x="360" y="86" fill="#555555" font-size="9" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">a container from that image</text>
+<path d="M 462,74 H 490" fill="none" stroke="#7d7d7d" stroke-width="1" marker-end="url(#arrow-light)"/>
+<rect x="492" y="48" width="204" height="52" rx="8" fill="#ffffff"/>
+<rect x="492.5" y="48.5" width="203" height="51" rx="8" fill="#ffffff" stroke="#cdcdcd" stroke-width="1"/>
+<text x="594" y="72" fill="#000000" font-size="11" font-weight="500" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">container swap</text>
+<text x="594" y="86" fill="#555555" font-size="9" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">only after exit 0</text>
+<path d="M 696,74 H 724" fill="none" stroke="#7d7d7d" stroke-width="1" marker-end="url(#arrow-light)"/>
+<rect x="726" y="48" width="204" height="52" rx="8" fill="#ffffff"/>
+<rect x="726.5" y="48.5" width="203" height="51" rx="8" fill="#f4f4f4" stroke="#e7e7e7" stroke-width="1"/>
+<text x="828" y="72" fill="#000000" font-size="11" font-weight="500" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">server starts</text>
+<text x="828" y="86" fill="#555555" font-size="9" font-family="Geist Mono, monospace" text-anchor="middle">asserts compatibility · /up</text>
+<path d="M 360,100 V 174" fill="none" stroke="#7d7d7d" stroke-width="1" stroke-dasharray="4,3" marker-end="url(#arrow-light)"/>
+<rect x="278" y="132" width="164" height="12" rx="2" fill="#ffffff"/>
+<text x="360" y="141" fill="#555555" font-size="9" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">A REFUSAL · NON-ZERO EXIT</text>
+<rect x="258" y="176" width="204" height="48" rx="8" fill="#ffffff"/>
+<rect x="258.5" y="176.5" width="203" height="47" rx="8" fill="#ffffff" stroke="#e7e7e7" stroke-width="1"/>
+<text x="360" y="198" fill="#555555" font-size="11" font-weight="500" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">the deploy fails</text>
+<text x="360" y="212" fill="#555555" font-size="9" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">before the swap</text>
+<text x="24" y="256" fill="#555555" font-size="9" font-family="Timeless Grotesk, Geist, sans-serif" font-weight="400" text-anchor="start">Nothing prepares a schema at startup. The entry point starts processes only.</text>
 </svg>

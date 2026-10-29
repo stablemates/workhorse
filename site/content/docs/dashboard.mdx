@@ -472,15 +472,15 @@ callback.
 <details>
 <summary>Reference: standalone CLI defaults</summary>
 
-| Option                  | Default         | Rule                                                   |
-| ----------------------- | --------------- | ------------------------------------------------------ |
-| `--port`                | `3000`          | A positive integer.                                    |
-| `--host`                | `127.0.0.1`     | Cannot be combined with `--socket`.                    |
-| `--socket`              | none            | Listens on a Unix socket. Excludes `--host`, `--port`. |
-| `--public-origin`       | none            | HTTPS origin for a remote authenticated listener.      |
-| `--allow-mutations`     | off             | Enables queue, task, and worker mutations.             |
-| `--reveal-error-stacks` | off             | Shows worker stack traces on a remote listener.        |
-| `--actor`               | `workhorse-cli` | The actor recorded for mutations.                      |
+| Option                  | Default         | Rule                                                         |
+| ----------------------- | --------------- | ------------------------------------------------------------ |
+| `--port`                | `3000`          | A positive integer.                                          |
+| `--host`                | `127.0.0.1`     | Cannot be combined with `--socket`.                          |
+| `--socket`              | none            | Listens on a Unix socket. Excludes `--host`, `--port`.       |
+| `--public-origin`       | none            | HTTPS origin for a remote authenticated listener.            |
+| `--allow-mutations`     | off             | Enables queue, task, worker, schedule, and settings changes. |
+| `--reveal-error-stacks` | off             | Shows worker stack traces on a remote listener.              |
+| `--actor`               | `workhorse-cli` | The actor recorded for mutations.                            |
 
 - Without `WORKHORSE_DASHBOARD_USERNAME` and `WORKHORSE_DASHBOARD_PASSWORD_HASH`, the listener is
   limited to loopback or a Unix socket.

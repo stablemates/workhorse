@@ -18,10 +18,9 @@
     "noUncheckedIndexedAccess": true,
     "forceConsistentCasingInFileNames": true,
     "paths": {
-      "@/*": ["./*"],
-      "@stablemates/workhorse/version": ["../typescript/core/src/version.ts"]
+      "@/*": ["./*"]
     }
   },
   "include": ["**/*.ts", "**/*.tsx"],
-  "exclude": ["node_modules", "dist", ".output", ".source"]
+  "exclude": ["node_modules", "dist", ".output", ".source", "blume"]
 }

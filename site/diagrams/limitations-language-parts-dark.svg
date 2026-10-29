@@ -1,80 +1,80 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 392" width="960" height="392" role="img" aria-labelledby="limitations-language-parts-dark-title limitations-language-parts-dark-desc">
 <title id="limitations-language-parts-dark-title">Each language runs the queue; only TypeScript changes the schema</title>
 <desc id="limitations-language-parts-dark-desc">TypeScript, Python, Go, Rust, Ruby, and the JVM SDK for Java and Kotlin each have a transactional queue client, a complete worker runtime, and an Admin operator client. Schema installation and migration, the workhorse admin CLI, and the TUI are only in the TypeScript package. A deployment with many languages runs the CLI as a deployment step.</desc>
-<defs><marker id="arrow-dark" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#ced1d4"/></marker></defs>
-<rect width="960" height="392" fill="#04080e"/>
-<text x="264" y="44" fill="#95999d" font-size="8" font-family="Geist Mono" font-weight="400" text-anchor="middle">queue client</text>
-<text x="452" y="44" fill="#95999d" font-size="8" font-family="Geist Mono" font-weight="400" text-anchor="middle">worker runtime</text>
-<text x="640" y="44" fill="#95999d" font-size="8" font-family="Geist Mono" font-weight="400" text-anchor="middle">Admin client</text>
-<text x="828" y="44" fill="#95999d" font-size="8" font-family="Geist Mono" font-weight="400" text-anchor="middle">schema tools · CLI · TUI</text>
-<line x1="176" y1="52" x2="916" y2="52" stroke="rgba(242,244,245,0.14)"/>
-<text x="24" y="91" fill="#f2f4f5" font-size="11" font-family="Geist" font-weight="600" text-anchor="start">TypeScript</text>
-<rect x="176" y="68" width="176" height="36" rx="6" fill="#04080e"/>
-<rect x="176" y="68" width="176" height="36" rx="6" fill="#0a1017" stroke="#f2f4f5" stroke-width="1"/>
-<text x="264" y="90" fill="#f2f4f5" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">yes</text>
-<rect x="364" y="68" width="176" height="36" rx="6" fill="#04080e"/>
-<rect x="364" y="68" width="176" height="36" rx="6" fill="#0a1017" stroke="#f2f4f5" stroke-width="1"/>
-<text x="452" y="90" fill="#f2f4f5" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">yes</text>
-<rect x="552" y="68" width="176" height="36" rx="6" fill="#04080e"/>
-<rect x="552" y="68" width="176" height="36" rx="6" fill="#0a1017" stroke="#f2f4f5" stroke-width="1"/>
-<text x="640" y="90" fill="#f2f4f5" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">yes</text>
-<rect x="740" y="68" width="176" height="36" rx="6" fill="#04080e"/>
-<rect x="740" y="68" width="176" height="36" rx="6" fill="rgba(252,152,76,0.08)" stroke="#fc984c" stroke-width="1.4"/>
-<text x="828" y="90" fill="#f2f4f5" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">yes</text>
-<text x="24" y="139" fill="#f2f4f5" font-size="11" font-family="Geist" font-weight="600" text-anchor="start">Python</text>
-<rect x="176" y="116" width="176" height="36" rx="6" fill="#04080e"/>
-<rect x="176" y="116" width="176" height="36" rx="6" fill="#0a1017" stroke="#f2f4f5" stroke-width="1"/>
-<text x="264" y="138" fill="#f2f4f5" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">yes</text>
-<rect x="364" y="116" width="176" height="36" rx="6" fill="#04080e"/>
-<rect x="364" y="116" width="176" height="36" rx="6" fill="#0a1017" stroke="#f2f4f5" stroke-width="1"/>
-<text x="452" y="138" fill="#f2f4f5" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">yes</text>
-<rect x="552" y="116" width="176" height="36" rx="6" fill="#04080e"/>
-<rect x="552" y="116" width="176" height="36" rx="6" fill="#0a1017" stroke="#f2f4f5" stroke-width="1"/>
-<text x="640" y="138" fill="#f2f4f5" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">yes</text>
-<text x="828" y="138" fill="#95999d" font-size="9" font-family="Geist Mono" font-weight="400" text-anchor="middle">not in this SDK</text>
-<text x="24" y="187" fill="#f2f4f5" font-size="11" font-family="Geist" font-weight="600" text-anchor="start">Go</text>
-<rect x="176" y="164" width="176" height="36" rx="6" fill="#04080e"/>
-<rect x="176" y="164" width="176" height="36" rx="6" fill="#0a1017" stroke="#f2f4f5" stroke-width="1"/>
-<text x="264" y="186" fill="#f2f4f5" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">yes</text>
-<rect x="364" y="164" width="176" height="36" rx="6" fill="#04080e"/>
-<rect x="364" y="164" width="176" height="36" rx="6" fill="#0a1017" stroke="#f2f4f5" stroke-width="1"/>
-<text x="452" y="186" fill="#f2f4f5" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">yes</text>
-<rect x="552" y="164" width="176" height="36" rx="6" fill="#04080e"/>
-<rect x="552" y="164" width="176" height="36" rx="6" fill="#0a1017" stroke="#f2f4f5" stroke-width="1"/>
-<text x="640" y="186" fill="#f2f4f5" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">yes</text>
-<text x="828" y="186" fill="#95999d" font-size="9" font-family="Geist Mono" font-weight="400" text-anchor="middle">not in this SDK</text>
-<text x="24" y="235" fill="#f2f4f5" font-size="11" font-family="Geist" font-weight="600" text-anchor="start">Rust</text>
-<rect x="176" y="212" width="176" height="36" rx="6" fill="#04080e"/>
-<rect x="176" y="212" width="176" height="36" rx="6" fill="#0a1017" stroke="#f2f4f5" stroke-width="1"/>
-<text x="264" y="234" fill="#f2f4f5" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">yes</text>
-<rect x="364" y="212" width="176" height="36" rx="6" fill="#04080e"/>
-<rect x="364" y="212" width="176" height="36" rx="6" fill="#0a1017" stroke="#f2f4f5" stroke-width="1"/>
-<text x="452" y="234" fill="#f2f4f5" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">yes</text>
-<rect x="552" y="212" width="176" height="36" rx="6" fill="#04080e"/>
-<rect x="552" y="212" width="176" height="36" rx="6" fill="#0a1017" stroke="#f2f4f5" stroke-width="1"/>
-<text x="640" y="234" fill="#f2f4f5" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">yes</text>
-<text x="828" y="234" fill="#95999d" font-size="9" font-family="Geist Mono" font-weight="400" text-anchor="middle">not in this SDK</text>
-<text x="24" y="283" fill="#f2f4f5" font-size="11" font-family="Geist" font-weight="600" text-anchor="start">Ruby</text>
-<rect x="176" y="260" width="176" height="36" rx="6" fill="#04080e"/>
-<rect x="176" y="260" width="176" height="36" rx="6" fill="#0a1017" stroke="#f2f4f5" stroke-width="1"/>
-<text x="264" y="282" fill="#f2f4f5" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">yes</text>
-<rect x="364" y="260" width="176" height="36" rx="6" fill="#04080e"/>
-<rect x="364" y="260" width="176" height="36" rx="6" fill="#0a1017" stroke="#f2f4f5" stroke-width="1"/>
-<text x="452" y="282" fill="#f2f4f5" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">yes</text>
-<rect x="552" y="260" width="176" height="36" rx="6" fill="#04080e"/>
-<rect x="552" y="260" width="176" height="36" rx="6" fill="#0a1017" stroke="#f2f4f5" stroke-width="1"/>
-<text x="640" y="282" fill="#f2f4f5" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">yes</text>
-<text x="828" y="282" fill="#95999d" font-size="9" font-family="Geist Mono" font-weight="400" text-anchor="middle">not in this SDK</text>
-<text x="24" y="331" fill="#f2f4f5" font-size="11" font-family="Geist" font-weight="600" text-anchor="start">JVM</text>
-<rect x="176" y="308" width="176" height="36" rx="6" fill="#04080e"/>
-<rect x="176" y="308" width="176" height="36" rx="6" fill="#0a1017" stroke="#f2f4f5" stroke-width="1"/>
-<text x="264" y="330" fill="#f2f4f5" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">yes</text>
-<rect x="364" y="308" width="176" height="36" rx="6" fill="#04080e"/>
-<rect x="364" y="308" width="176" height="36" rx="6" fill="#0a1017" stroke="#f2f4f5" stroke-width="1"/>
-<text x="452" y="330" fill="#f2f4f5" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">yes</text>
-<rect x="552" y="308" width="176" height="36" rx="6" fill="#04080e"/>
-<rect x="552" y="308" width="176" height="36" rx="6" fill="#0a1017" stroke="#f2f4f5" stroke-width="1"/>
-<text x="640" y="330" fill="#f2f4f5" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">yes</text>
-<text x="828" y="330" fill="#95999d" font-size="9" font-family="Geist Mono" font-weight="400" text-anchor="middle">not in this SDK</text>
-<text x="24" y="376" fill="#ced1d4" font-size="9" font-family="Geist Mono" font-weight="400" text-anchor="start">Run the TypeScript CLI as a deployment step. Pin it to the SDK version of your application.</text>
+<defs><marker id="arrow-dark" markerWidth="8" markerHeight="8" refX="6.5" refY="4" orient="auto" markerUnits="userSpaceOnUse"><path d="M 1.5,1 L 6.5,4 L 1.5,7" fill="none" stroke="#838383" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/></marker></defs>
+<rect width="960" height="392" fill="#000000"/>
+<text x="264" y="44" fill="#ababab" font-size="8" font-family="Timeless Grotesk, Geist, sans-serif" font-weight="400" text-anchor="middle">queue client</text>
+<text x="452" y="44" fill="#ababab" font-size="8" font-family="Timeless Grotesk, Geist, sans-serif" font-weight="400" text-anchor="middle">worker runtime</text>
+<text x="640" y="44" fill="#ababab" font-size="8" font-family="Timeless Grotesk, Geist, sans-serif" font-weight="400" text-anchor="middle">Admin client</text>
+<text x="828" y="44" fill="#ababab" font-size="8" font-family="Timeless Grotesk, Geist, sans-serif" font-weight="400" text-anchor="middle">schema tools · CLI · TUI</text>
+<line x1="176" y1="52" x2="916" y2="52" stroke="#2b2b2b"/>
+<text x="24" y="91" fill="#f4f4f4" font-size="11" font-family="Timeless Grotesk, Geist, sans-serif" font-weight="500" text-anchor="start">TypeScript</text>
+<rect x="176" y="68" width="176" height="36" rx="8" fill="#000000"/>
+<rect x="176.5" y="68.5" width="175" height="35" rx="8" fill="#000000" stroke="#3d3d3d" stroke-width="1"/>
+<text x="264" y="90" fill="#f4f4f4" font-size="11" font-weight="500" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">yes</text>
+<rect x="364" y="68" width="176" height="36" rx="8" fill="#000000"/>
+<rect x="364.5" y="68.5" width="175" height="35" rx="8" fill="#000000" stroke="#3d3d3d" stroke-width="1"/>
+<text x="452" y="90" fill="#f4f4f4" font-size="11" font-weight="500" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">yes</text>
+<rect x="552" y="68" width="176" height="36" rx="8" fill="#000000"/>
+<rect x="552.5" y="68.5" width="175" height="35" rx="8" fill="#000000" stroke="#3d3d3d" stroke-width="1"/>
+<text x="640" y="90" fill="#f4f4f4" font-size="11" font-weight="500" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">yes</text>
+<rect x="740" y="68" width="176" height="36" rx="8" fill="#000000"/>
+<rect x="740.5" y="68.5" width="175" height="35" rx="8" fill="rgba(207,145,72,0.12)" stroke="#cf9148" stroke-width="1"/>
+<text x="828" y="90" fill="#f4f4f4" font-size="11" font-weight="500" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">yes</text>
+<text x="24" y="139" fill="#f4f4f4" font-size="11" font-family="Timeless Grotesk, Geist, sans-serif" font-weight="500" text-anchor="start">Python</text>
+<rect x="176" y="116" width="176" height="36" rx="8" fill="#000000"/>
+<rect x="176.5" y="116.5" width="175" height="35" rx="8" fill="#000000" stroke="#3d3d3d" stroke-width="1"/>
+<text x="264" y="138" fill="#f4f4f4" font-size="11" font-weight="500" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">yes</text>
+<rect x="364" y="116" width="176" height="36" rx="8" fill="#000000"/>
+<rect x="364.5" y="116.5" width="175" height="35" rx="8" fill="#000000" stroke="#3d3d3d" stroke-width="1"/>
+<text x="452" y="138" fill="#f4f4f4" font-size="11" font-weight="500" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">yes</text>
+<rect x="552" y="116" width="176" height="36" rx="8" fill="#000000"/>
+<rect x="552.5" y="116.5" width="175" height="35" rx="8" fill="#000000" stroke="#3d3d3d" stroke-width="1"/>
+<text x="640" y="138" fill="#f4f4f4" font-size="11" font-weight="500" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">yes</text>
+<text x="828" y="138" fill="#ababab" font-size="9" font-family="Timeless Grotesk, Geist, sans-serif" font-weight="400" text-anchor="middle">not in this SDK</text>
+<text x="24" y="187" fill="#f4f4f4" font-size="11" font-family="Timeless Grotesk, Geist, sans-serif" font-weight="500" text-anchor="start">Go</text>
+<rect x="176" y="164" width="176" height="36" rx="8" fill="#000000"/>
+<rect x="176.5" y="164.5" width="175" height="35" rx="8" fill="#000000" stroke="#3d3d3d" stroke-width="1"/>
+<text x="264" y="186" fill="#f4f4f4" font-size="11" font-weight="500" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">yes</text>
+<rect x="364" y="164" width="176" height="36" rx="8" fill="#000000"/>
+<rect x="364.5" y="164.5" width="175" height="35" rx="8" fill="#000000" stroke="#3d3d3d" stroke-width="1"/>
+<text x="452" y="186" fill="#f4f4f4" font-size="11" font-weight="500" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">yes</text>
+<rect x="552" y="164" width="176" height="36" rx="8" fill="#000000"/>
+<rect x="552.5" y="164.5" width="175" height="35" rx="8" fill="#000000" stroke="#3d3d3d" stroke-width="1"/>
+<text x="640" y="186" fill="#f4f4f4" font-size="11" font-weight="500" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">yes</text>
+<text x="828" y="186" fill="#ababab" font-size="9" font-family="Timeless Grotesk, Geist, sans-serif" font-weight="400" text-anchor="middle">not in this SDK</text>
+<text x="24" y="235" fill="#f4f4f4" font-size="11" font-family="Timeless Grotesk, Geist, sans-serif" font-weight="500" text-anchor="start">Rust</text>
+<rect x="176" y="212" width="176" height="36" rx="8" fill="#000000"/>
+<rect x="176.5" y="212.5" width="175" height="35" rx="8" fill="#000000" stroke="#3d3d3d" stroke-width="1"/>
+<text x="264" y="234" fill="#f4f4f4" font-size="11" font-weight="500" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">yes</text>
+<rect x="364" y="212" width="176" height="36" rx="8" fill="#000000"/>
+<rect x="364.5" y="212.5" width="175" height="35" rx="8" fill="#000000" stroke="#3d3d3d" stroke-width="1"/>
+<text x="452" y="234" fill="#f4f4f4" font-size="11" font-weight="500" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">yes</text>
+<rect x="552" y="212" width="176" height="36" rx="8" fill="#000000"/>
+<rect x="552.5" y="212.5" width="175" height="35" rx="8" fill="#000000" stroke="#3d3d3d" stroke-width="1"/>
+<text x="640" y="234" fill="#f4f4f4" font-size="11" font-weight="500" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">yes</text>
+<text x="828" y="234" fill="#ababab" font-size="9" font-family="Timeless Grotesk, Geist, sans-serif" font-weight="400" text-anchor="middle">not in this SDK</text>
+<text x="24" y="283" fill="#f4f4f4" font-size="11" font-family="Timeless Grotesk, Geist, sans-serif" font-weight="500" text-anchor="start">Ruby</text>
+<rect x="176" y="260" width="176" height="36" rx="8" fill="#000000"/>
+<rect x="176.5" y="260.5" width="175" height="35" rx="8" fill="#000000" stroke="#3d3d3d" stroke-width="1"/>
+<text x="264" y="282" fill="#f4f4f4" font-size="11" font-weight="500" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">yes</text>
+<rect x="364" y="260" width="176" height="36" rx="8" fill="#000000"/>
+<rect x="364.5" y="260.5" width="175" height="35" rx="8" fill="#000000" stroke="#3d3d3d" stroke-width="1"/>
+<text x="452" y="282" fill="#f4f4f4" font-size="11" font-weight="500" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">yes</text>
+<rect x="552" y="260" width="176" height="36" rx="8" fill="#000000"/>
+<rect x="552.5" y="260.5" width="175" height="35" rx="8" fill="#000000" stroke="#3d3d3d" stroke-width="1"/>
+<text x="640" y="282" fill="#f4f4f4" font-size="11" font-weight="500" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">yes</text>
+<text x="828" y="282" fill="#ababab" font-size="9" font-family="Timeless Grotesk, Geist, sans-serif" font-weight="400" text-anchor="middle">not in this SDK</text>
+<text x="24" y="331" fill="#f4f4f4" font-size="11" font-family="Timeless Grotesk, Geist, sans-serif" font-weight="500" text-anchor="start">JVM</text>
+<rect x="176" y="308" width="176" height="36" rx="8" fill="#000000"/>
+<rect x="176.5" y="308.5" width="175" height="35" rx="8" fill="#000000" stroke="#3d3d3d" stroke-width="1"/>
+<text x="264" y="330" fill="#f4f4f4" font-size="11" font-weight="500" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">yes</text>
+<rect x="364" y="308" width="176" height="36" rx="8" fill="#000000"/>
+<rect x="364.5" y="308.5" width="175" height="35" rx="8" fill="#000000" stroke="#3d3d3d" stroke-width="1"/>
+<text x="452" y="330" fill="#f4f4f4" font-size="11" font-weight="500" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">yes</text>
+<rect x="552" y="308" width="176" height="36" rx="8" fill="#000000"/>
+<rect x="552.5" y="308.5" width="175" height="35" rx="8" fill="#000000" stroke="#3d3d3d" stroke-width="1"/>
+<text x="640" y="330" fill="#f4f4f4" font-size="11" font-weight="500" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">yes</text>
+<text x="828" y="330" fill="#ababab" font-size="9" font-family="Timeless Grotesk, Geist, sans-serif" font-weight="400" text-anchor="middle">not in this SDK</text>
+<text x="24" y="376" fill="#cfcfcf" font-size="9" font-family="Timeless Grotesk, Geist, sans-serif" font-weight="400" text-anchor="start">Run the TypeScript CLI as a deployment step. Pin it to the SDK version of your application.</text>
 </svg>

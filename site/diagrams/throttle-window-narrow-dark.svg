@@ -1,37 +1,37 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 344" width="400" height="344" role="img" aria-labelledby="throttle-window-narrow-dark-title throttle-window-narrow-dark-desc">
 <title id="throttle-window-narrow-dark-title">Throttle accepts one task in each window</title>
 <desc id="throttle-window-narrow-dark-desc">Each change in acct-7 sends a request with a window of 10 min. At 0 min, the first request is accepted and opens the window. At 2 min, a request is coalesced. At 3 min, the task succeeds. At 7 min, a request is still coalesced, because the end of the task does not close the window. At 12 min, the window is closed, so a request is accepted with a new task.</desc>
-<defs><marker id="arrow-dark" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#ced1d4"/></marker></defs>
-<rect width="400" height="344" fill="#04080e"/>
-<text x="24" y="49" fill="#f2f4f5" font-size="9" font-family="Geist Mono">0 min</text>
-<rect x="112" y="24" width="264" height="42" rx="6" fill="#04080e"/>
-<rect x="112" y="24" width="264" height="42" rx="6" fill="rgba(242,244,245,0.05)" stroke="#ced1d4" stroke-width="1"/>
-<text x="244" y="43" fill="#f2f4f5" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">change 1: accepted</text>
-<text x="244" y="57" fill="#ced1d4" font-size="9" font-family="Geist Mono" text-anchor="middle">the window ends at 10 min</text>
-<path d="M 248,66 V 78" fill="none" stroke="#ced1d4" stroke-width="1.2" marker-end="url(#arrow-dark)"/>
-<text x="24" y="105" fill="#f2f4f5" font-size="9" font-family="Geist Mono">2 min</text>
-<rect x="112" y="80" width="264" height="42" rx="6" fill="#04080e"/>
-<rect x="112" y="80" width="264" height="42" rx="6" fill="rgba(242,244,245,0.03)" stroke="rgba(242,244,245,0.4)" stroke-width="1" stroke-dasharray="4,3"/>
-<text x="244" y="99" fill="#f2f4f5" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">change 2: coalesced</text>
-<text x="244" y="113" fill="#ced1d4" font-size="9" font-family="Geist Mono" text-anchor="middle">the same taskId</text>
-<path d="M 248,122 V 134" fill="none" stroke="#ced1d4" stroke-width="1.2" marker-end="url(#arrow-dark)"/>
-<text x="24" y="161" fill="#f2f4f5" font-size="9" font-family="Geist Mono">3 min</text>
-<rect x="112" y="136" width="264" height="42" rx="6" fill="#04080e"/>
-<rect x="112" y="136" width="264" height="42" rx="6" fill="#0a1017" stroke="#f2f4f5" stroke-width="1"/>
-<text x="244" y="155" fill="#f2f4f5" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">the task succeeds</text>
-<text x="244" y="169" fill="#ced1d4" font-size="9" font-family="Geist Mono" text-anchor="middle">the window stays open</text>
-<path d="M 248,178 V 190" fill="none" stroke="#ced1d4" stroke-width="1.2" marker-end="url(#arrow-dark)"/>
-<text x="24" y="217" fill="#f2f4f5" font-size="9" font-family="Geist Mono">7 min</text>
-<rect x="112" y="192" width="264" height="42" rx="6" fill="#04080e"/>
-<rect x="112" y="192" width="264" height="42" rx="6" fill="rgba(252,152,76,0.08)" stroke="#fc984c" stroke-width="1.4"/>
-<text x="244" y="211" fill="#f2f4f5" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">change 3: coalesced</text>
-<text x="244" y="225" fill="#ced1d4" font-size="9" font-family="Geist Mono" text-anchor="middle">the same taskId</text>
-<path d="M 248,234 V 246" fill="none" stroke="#ced1d4" stroke-width="1.2" marker-end="url(#arrow-dark)"/>
-<text x="24" y="273" fill="#f2f4f5" font-size="9" font-family="Geist Mono">12 min</text>
-<rect x="112" y="248" width="264" height="42" rx="6" fill="#04080e"/>
-<rect x="112" y="248" width="264" height="42" rx="6" fill="rgba(242,244,245,0.05)" stroke="#ced1d4" stroke-width="1"/>
-<text x="244" y="267" fill="#f2f4f5" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">change 4: accepted</text>
-<text x="244" y="281" fill="#ced1d4" font-size="9" font-family="Geist Mono" text-anchor="middle">a new task · ends at 22 min</text>
-<text x="24" y="312" fill="#ced1d4" font-size="9" font-family="Geist Mono" font-weight="400" text-anchor="start">Four requests make two tasks. The end of</text>
-<text x="24" y="327" fill="#ced1d4" font-size="9" font-family="Geist Mono" font-weight="400" text-anchor="start">a task does not close its window.</text>
+<defs><marker id="arrow-dark" markerWidth="8" markerHeight="8" refX="6.5" refY="4" orient="auto" markerUnits="userSpaceOnUse"><path d="M 1.5,1 L 6.5,4 L 1.5,7" fill="none" stroke="#838383" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/></marker></defs>
+<rect width="400" height="344" fill="#000000"/>
+<text x="24" y="49" fill="#f4f4f4" font-size="9" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="start">0 min</text>
+<rect x="112" y="24" width="264" height="42" rx="8" fill="#000000"/>
+<rect x="112.5" y="24.5" width="263" height="41" rx="8" fill="#202020" stroke="#2b2b2b" stroke-width="1"/>
+<text x="244" y="43" fill="#f4f4f4" font-size="11" font-weight="500" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">change 1: accepted</text>
+<text x="244" y="57" fill="#ababab" font-size="9" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">the window ends at 10 min</text>
+<path d="M 248,66 V 78" fill="none" stroke="#838383" stroke-width="1" marker-end="url(#arrow-dark)"/>
+<text x="24" y="105" fill="#f4f4f4" font-size="9" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="start">2 min</text>
+<rect x="112" y="80" width="264" height="42" rx="8" fill="#000000"/>
+<rect x="112.5" y="80.5" width="263" height="41" rx="8" fill="#000000" stroke="#2b2b2b" stroke-width="1"/>
+<text x="244" y="99" fill="#cfcfcf" font-size="11" font-weight="500" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">change 2: coalesced</text>
+<text x="244" y="113" fill="#ababab" font-size="9" font-family="Geist Mono, monospace" text-anchor="middle">the same taskId</text>
+<path d="M 248,122 V 134" fill="none" stroke="#838383" stroke-width="1" marker-end="url(#arrow-dark)"/>
+<text x="24" y="161" fill="#f4f4f4" font-size="9" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="start">3 min</text>
+<rect x="112" y="136" width="264" height="42" rx="8" fill="#000000"/>
+<rect x="112.5" y="136.5" width="263" height="41" rx="8" fill="#000000" stroke="#3d3d3d" stroke-width="1"/>
+<text x="244" y="155" fill="#f4f4f4" font-size="11" font-weight="500" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">the task succeeds</text>
+<text x="244" y="169" fill="#ababab" font-size="9" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">the window stays open</text>
+<path d="M 248,178 V 190" fill="none" stroke="#838383" stroke-width="1" marker-end="url(#arrow-dark)"/>
+<text x="24" y="217" fill="#f4f4f4" font-size="9" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="start">7 min</text>
+<rect x="112" y="192" width="264" height="42" rx="8" fill="#000000"/>
+<rect x="112.5" y="192.5" width="263" height="41" rx="8" fill="rgba(207,145,72,0.12)" stroke="#cf9148" stroke-width="1"/>
+<text x="244" y="211" fill="#f4f4f4" font-size="11" font-weight="500" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">change 3: coalesced</text>
+<text x="244" y="225" fill="#ababab" font-size="9" font-family="Geist Mono, monospace" text-anchor="middle">the same taskId</text>
+<path d="M 248,234 V 246" fill="none" stroke="#838383" stroke-width="1" marker-end="url(#arrow-dark)"/>
+<text x="24" y="273" fill="#f4f4f4" font-size="9" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="start">12 min</text>
+<rect x="112" y="248" width="264" height="42" rx="8" fill="#000000"/>
+<rect x="112.5" y="248.5" width="263" height="41" rx="8" fill="#202020" stroke="#2b2b2b" stroke-width="1"/>
+<text x="244" y="267" fill="#f4f4f4" font-size="11" font-weight="500" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">change 4: accepted</text>
+<text x="244" y="281" fill="#ababab" font-size="9" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">a new task · ends at 22 min</text>
+<text x="24" y="312" fill="#cfcfcf" font-size="9" font-family="Timeless Grotesk, Geist, sans-serif" font-weight="400" text-anchor="start">Four requests make two tasks. The end of</text>
+<text x="24" y="327" fill="#cfcfcf" font-size="9" font-family="Timeless Grotesk, Geist, sans-serif" font-weight="400" text-anchor="start">a task does not close its window.</text>
 </svg>

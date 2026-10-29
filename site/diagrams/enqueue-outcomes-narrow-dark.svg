@@ -1,24 +1,24 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 248" width="400" height="248" role="img" aria-labelledby="enqueue-outcomes-narrow-dark-title enqueue-outcomes-narrow-dark-desc">
 <title id="enqueue-outcomes-narrow-dark-title">One transaction keeps the account and its task together</title>
 <desc id="enqueue-outcomes-narrow-dark-desc">The app server inserts the row for acc-7 and enqueues account.created. In one transaction with COMMIT, both become visible at the same time, and a worker sends the email. In one transaction with ROLLBACK, PostgreSQL discards both, and no worker sees the task. With two separate commits, the account commits, the process stops before the enqueue, and no task sends the email.</desc>
-<defs><marker id="arrow-dark" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#ced1d4"/></marker></defs>
-<rect width="400" height="248" fill="#04080e"/>
-<text x="24" y="49" fill="#f2f4f5" font-size="9" font-family="Geist Mono">COMMIT</text>
-<rect x="112" y="24" width="264" height="42" rx="6" fill="#04080e"/>
-<rect x="112" y="24" width="264" height="42" rx="6" fill="#0a1017" stroke="#f2f4f5" stroke-width="1"/>
-<text x="244" y="43" fill="#f2f4f5" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">row and task committed</text>
-<text x="244" y="57" fill="#ced1d4" font-size="9" font-family="Geist Mono" text-anchor="middle">a worker sends the email</text>
-<text x="24" y="105" fill="#f2f4f5" font-size="9" font-family="Geist Mono">ROLLBACK</text>
-<rect x="112" y="80" width="264" height="42" rx="6" fill="#04080e"/>
-<rect x="112" y="80" width="264" height="42" rx="6" fill="rgba(242,244,245,0.03)" stroke="rgba(242,244,245,0.4)" stroke-width="1" stroke-dasharray="4,3"/>
-<text x="244" y="99" fill="#f2f4f5" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">row and task discarded</text>
-<text x="244" y="113" fill="#ced1d4" font-size="9" font-family="Geist Mono" text-anchor="middle">no worker sees the task</text>
-<text x="24" y="161" fill="#f2f4f5" font-size="9" font-family="Geist Mono">2 commits</text>
-<rect x="112" y="136" width="264" height="42" rx="6" fill="#04080e"/>
-<rect x="112" y="136" width="264" height="42" rx="6" fill="rgba(252,152,76,0.08)" stroke="#fc984c" stroke-width="1.4"/>
-<text x="244" y="155" fill="#f2f4f5" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">row committed, no task</text>
-<text x="244" y="169" fill="#ced1d4" font-size="9" font-family="Geist Mono" text-anchor="middle">acc-7 gets no email</text>
-<text x="24" y="200" fill="#ced1d4" font-size="9" font-family="Geist Mono" font-weight="400" text-anchor="start">In one transaction, PostgreSQL commits the</text>
-<text x="24" y="215" fill="#ced1d4" font-size="9" font-family="Geist Mono" font-weight="400" text-anchor="start">row and the task together, or rolls back</text>
-<text x="24" y="230" fill="#ced1d4" font-size="9" font-family="Geist Mono" font-weight="400" text-anchor="start">both.</text>
+<defs><marker id="arrow-dark" markerWidth="8" markerHeight="8" refX="6.5" refY="4" orient="auto" markerUnits="userSpaceOnUse"><path d="M 1.5,1 L 6.5,4 L 1.5,7" fill="none" stroke="#838383" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/></marker></defs>
+<rect width="400" height="248" fill="#000000"/>
+<text x="24" y="49" fill="#f4f4f4" font-size="9" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="start">COMMIT</text>
+<rect x="112" y="24" width="264" height="42" rx="8" fill="#000000"/>
+<rect x="112.5" y="24.5" width="263" height="41" rx="8" fill="#000000" stroke="#3d3d3d" stroke-width="1"/>
+<text x="244" y="43" fill="#f4f4f4" font-size="11" font-weight="500" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">row and task committed</text>
+<text x="244" y="57" fill="#ababab" font-size="9" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">a worker sends the email</text>
+<text x="24" y="105" fill="#f4f4f4" font-size="9" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="start">ROLLBACK</text>
+<rect x="112" y="80" width="264" height="42" rx="8" fill="#000000"/>
+<rect x="112.5" y="80.5" width="263" height="41" rx="8" fill="#000000" stroke="#2b2b2b" stroke-width="1"/>
+<text x="244" y="99" fill="#cfcfcf" font-size="11" font-weight="500" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">row and task discarded</text>
+<text x="244" y="113" fill="#ababab" font-size="9" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">no worker sees the task</text>
+<text x="24" y="161" fill="#f4f4f4" font-size="9" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="start">2 commits</text>
+<rect x="112" y="136" width="264" height="42" rx="8" fill="#000000"/>
+<rect x="112.5" y="136.5" width="263" height="41" rx="8" fill="rgba(207,145,72,0.12)" stroke="#cf9148" stroke-width="1"/>
+<text x="244" y="155" fill="#f4f4f4" font-size="11" font-weight="500" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">row committed, no task</text>
+<text x="244" y="169" fill="#ababab" font-size="9" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">acc-7 gets no email</text>
+<text x="24" y="200" fill="#cfcfcf" font-size="9" font-family="Timeless Grotesk, Geist, sans-serif" font-weight="400" text-anchor="start">In one transaction, PostgreSQL commits the</text>
+<text x="24" y="215" fill="#cfcfcf" font-size="9" font-family="Timeless Grotesk, Geist, sans-serif" font-weight="400" text-anchor="start">row and the task together, or rolls back</text>
+<text x="24" y="230" fill="#cfcfcf" font-size="9" font-family="Timeless Grotesk, Geist, sans-serif" font-weight="400" text-anchor="start">both.</text>
 </svg>

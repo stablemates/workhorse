@@ -1,6 +1,6 @@
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { readFile, readdir } from "node:fs/promises";
+import { lstat, readFile, readdir, readlink } from "node:fs/promises";
 import path from "node:path";
 
 function generatedBundle(file: string): boolean {
@@ -47,12 +47,22 @@ export async function treeFingerprint(
   return hashFiles(root, files);
 }
 
+/**
+ * The bytes that stand for one path. A symbolic link stands for its target path, because git
+ * tracks the link and not what it points to. The docs site links `site/blume/public` to a
+ * directory, which `readFile` cannot read.
+ */
+async function fileContent(file: string): Promise<Buffer | string> {
+  if ((await lstat(file)).isSymbolicLink()) return `symlink:${await readlink(file)}`;
+  return readFile(file);
+}
+
 async function hashFiles(root: string, files: readonly string[], salt = ""): Promise<string> {
   const hash = createHash("sha256").update(salt);
   for (const file of [...new Set(files)].toSorted()) {
     hash.update(file).update("\0");
     try {
-      hash.update(await readFile(path.join(root, file)));
+      hash.update(await fileContent(path.join(root, file)));
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
       hash.update("deleted");

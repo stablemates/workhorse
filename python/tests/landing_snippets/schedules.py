@@ -19,16 +19,25 @@ def run_billing(database_url: str) -> None:
                 ScheduleDefinition(
                     name="nightly-invoice-run",
                     schedule="0 2 * * *",
-                    task=ScheduledTask(type="invoices.generate", payload={}),
+                    task=ScheduledTask(
+                        type="invoices.generate",
+                        payload={},
+                    ),
                 ),
             ),
         )
 
-    def generate(_payload: object, _context: HandlerContext) -> dict[str, Json]:
+    def generate(
+        _payload: object,
+        _context: HandlerContext,
+    ) -> dict[str, Json]:
         return {"generated": True}
 
     with ConnectionPool(
-        database_url, min_size=3, max_size=3, kwargs={"autocommit": True}
+        database_url,
+        min_size=3,
+        max_size=3,
+        kwargs={"autocommit": True},
     ) as pool:
         Worker(
             pool,

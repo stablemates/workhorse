@@ -1,25 +1,25 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 247" width="400" height="247" role="img" aria-labelledby="debounce-preserve-narrow-light-title debounce-preserve-narrow-light-desc">
 <title id="debounce-preserve-narrow-light-title">With preserve, the first request sets the run time</title>
 <desc id="debounce-preserve-narrow-light-desc">Requests for doc-42 use a window of 2 s and schedule preserve. Revision 1 at 0 s creates a task that runs at 2 s. Revision 2 at 1 s replaces the payload, and the run time stays at 2 s. Soon after 2 s, a worker indexes revision 2.</desc>
-<defs><marker id="arrow-light" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#4e5359"/></marker></defs>
-<rect width="400" height="247" fill="#f9fafb"/>
-<text x="24" y="49" fill="#1a2027" font-size="9" font-family="Geist Mono">0 s</text>
-<rect x="112" y="24" width="264" height="42" rx="6" fill="#f9fafb"/>
-<rect x="112" y="24" width="264" height="42" rx="6" fill="rgba(26,32,39,0.05)" stroke="#4e5359" stroke-width="1"/>
-<text x="244" y="43" fill="#1a2027" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">revision 1: accepted</text>
-<text x="244" y="57" fill="#4e5359" font-size="9" font-family="Geist Mono" text-anchor="middle">the task runs at 2 s</text>
-<path d="M 248,66 V 78" fill="none" stroke="#4e5359" stroke-width="1.2" marker-end="url(#arrow-light)"/>
-<text x="24" y="105" fill="#1a2027" font-size="9" font-family="Geist Mono">1 s</text>
-<rect x="112" y="80" width="264" height="42" rx="6" fill="#f9fafb"/>
-<rect x="112" y="80" width="264" height="42" rx="6" fill="rgba(26,32,39,0.05)" stroke="#4e5359" stroke-width="1"/>
-<text x="244" y="99" fill="#1a2027" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">revision 2: replaced</text>
-<text x="244" y="113" fill="#4e5359" font-size="9" font-family="Geist Mono" text-anchor="middle">the run time stays at 2 s</text>
-<path d="M 248,122 V 134" fill="none" stroke="#4e5359" stroke-width="1.2" marker-end="url(#arrow-light)"/>
-<text x="24" y="161" fill="#1a2027" font-size="9" font-family="Geist Mono">2 s</text>
-<rect x="112" y="136" width="264" height="42" rx="6" fill="#f9fafb"/>
-<rect x="112" y="136" width="264" height="42" rx="6" fill="rgba(213,92,19,0.08)" stroke="#aa4515" stroke-width="1.4"/>
-<text x="244" y="155" fill="#1a2027" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">the task runs</text>
-<text x="244" y="169" fill="#4e5359" font-size="9" font-family="Geist Mono" text-anchor="middle">indexes revision 2</text>
-<text x="24" y="200" fill="#4e5359" font-size="9" font-family="Geist Mono" font-weight="400" text-anchor="start">Later requests replace only the payload.</text>
-<text x="24" y="215" fill="#4e5359" font-size="9" font-family="Geist Mono" font-weight="400" text-anchor="start">The task runs by a known time.</text>
+<defs><marker id="arrow-light" markerWidth="8" markerHeight="8" refX="6.5" refY="4" orient="auto" markerUnits="userSpaceOnUse"><path d="M 1.5,1 L 6.5,4 L 1.5,7" fill="none" stroke="#7d7d7d" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/></marker></defs>
+<rect width="400" height="247" fill="#ffffff"/>
+<text x="24" y="49" fill="#000000" font-size="9" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="start">0 s</text>
+<rect x="112" y="24" width="264" height="42" rx="8" fill="#ffffff"/>
+<rect x="112.5" y="24.5" width="263" height="41" rx="8" fill="#f4f4f4" stroke="#e7e7e7" stroke-width="1"/>
+<text x="244" y="43" fill="#000000" font-size="11" font-weight="500" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">revision 1: accepted</text>
+<text x="244" y="57" fill="#555555" font-size="9" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">the task runs at 2 s</text>
+<path d="M 248,66 V 78" fill="none" stroke="#7d7d7d" stroke-width="1" marker-end="url(#arrow-light)"/>
+<text x="24" y="105" fill="#000000" font-size="9" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="start">1 s</text>
+<rect x="112" y="80" width="264" height="42" rx="8" fill="#ffffff"/>
+<rect x="112.5" y="80.5" width="263" height="41" rx="8" fill="#f4f4f4" stroke="#e7e7e7" stroke-width="1"/>
+<text x="244" y="99" fill="#000000" font-size="11" font-weight="500" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">revision 2: replaced</text>
+<text x="244" y="113" fill="#555555" font-size="9" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">the run time stays at 2 s</text>
+<path d="M 248,122 V 134" fill="none" stroke="#7d7d7d" stroke-width="1" marker-end="url(#arrow-light)"/>
+<text x="24" y="161" fill="#000000" font-size="9" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="start">2 s</text>
+<rect x="112" y="136" width="264" height="42" rx="8" fill="#ffffff"/>
+<rect x="112.5" y="136.5" width="263" height="41" rx="8" fill="rgba(207,145,72,0.12)" stroke="#cf9148" stroke-width="1"/>
+<text x="244" y="155" fill="#000000" font-size="11" font-weight="500" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">the task runs</text>
+<text x="244" y="169" fill="#555555" font-size="9" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">indexes revision 2</text>
+<text x="24" y="200" fill="#555555" font-size="9" font-family="Timeless Grotesk, Geist, sans-serif" font-weight="400" text-anchor="start">Later requests replace only the payload.</text>
+<text x="24" y="215" fill="#555555" font-size="9" font-family="Timeless Grotesk, Geist, sans-serif" font-weight="400" text-anchor="start">The task runs by a known time.</text>
 </svg>

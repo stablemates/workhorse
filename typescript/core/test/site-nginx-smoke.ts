@@ -262,6 +262,7 @@ function twinVectors(path: string, twin: string): Vector[] {
 const notes: string[] = [];
 const vectors: Vector[] = [
   ...twinVectors("/", "/index.md"),
+  ...twinVectors("/features", "/features.md"),
   ...twinVectors("/docs", "/docs.md"),
   ...twinVectors("/docs/quickstart", "/docs/quickstart.md"),
 ];
@@ -335,6 +336,25 @@ vectors.push(
     vary: false,
     location: "/docs/child-tasks",
   },
+  // ADR 0116 moved the comparison pages from /docs/compare to /compare. Each
+  // old URL, twin, and trailing-slash form takes one redirect to the new URL.
+  // The rule does not read the slug, so a placeholder stands for a product.
+  ...[
+    { path: "/docs/compare", location: "/compare" },
+    { path: "/docs/compare/", location: "/compare" },
+    { path: "/docs/compare.md", location: "/compare.md" },
+    { path: "/docs/compare/example", location: "/compare/example" },
+    { path: "/docs/compare/example/", location: "/compare/example" },
+    { path: "/docs/compare/example.md", location: "/compare/example.md" },
+  ].map(({ path, location }) => ({
+    path,
+    accept: undefined,
+    status: 301,
+    type: "text/html",
+    vary: false,
+    location,
+    cacheControl: "public, max-age=3600",
+  })),
   {
     path: "/nope",
     accept: markdownOnly,

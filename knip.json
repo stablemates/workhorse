@@ -58,7 +58,7 @@
       "ignoreDependencies": ["typeorm"]
     },
     "site": {
-      "entry": ["vite.config.ts"],
+      "entry": ["vite.config.ts", "blume/components/*.tsx"],
       "vite": {
         "config": []
       }

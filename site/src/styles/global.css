@@ -8,96 +8,247 @@
  * colour.
  */
 @import "../../.source/code-theme.css";
+/* The framed column of the landing page and /features. */
+@import "./marketing.css";
+/* The header, shared with the Blume documentation pages. Its `--wh-hdr-*` values are set below. */
+@import "../../components/site-header.css";
+/* The tables of the comparison pages at `/compare`. */
+@import "../../components/comparison.css";
 
 /*
- * Workhorse visual system
- * -----------------------
- * A developer-infrastructure identity built around three ideas:
- *   1. PostgreSQL-native: slate/ink surfaces, hairline rules, table-like density.
- *   2. Precise: a single signal-orange accent used only for state and emphasis.
- *   3. Evidence-first: monospace metadata, no decorative gradients.
+ * Workhorse visual system: the "Untitled" theme
+ * ----------------------------------------------
+ * One neutral ramp, and status colours only where a state has a meaning. The
+ * amber accent marks keyboard focus, checked controls, and the running state
+ * dot, and nothing else. The primary action is the darkest neutral. The theme
+ * sets every border width to zero: surfaces separate by fill (n2, n3) and
+ * space, and only rows inside a table or a list get a 1px hairline. Only a
+ * floating popup casts a shadow.
+ *
+ * The raw values live once, in `:root` and `.dark` below. Everything else,
+ * the Tailwind utilities of `@theme inline`, the Fumadocs `--color-fd-*`
+ * variables, and the older `--wh-*` names that components read, refers to
+ * them.
+ */
+
+/*
+ * Timeless Grotesk is the theme font. Its files sit behind an email form at
+ * https://timeless.co/type, so the repository does not carry them. To use the
+ * font, put `TimelessGrotesk-Regular.woff2`, `-Medium.woff2`, and
+ * `-SemiBold.woff2` in `site/public/fonts/`, remove the comment markers from
+ * the three rules below, and put "Timeless Grotesk" first in `--font-sans`.
+ * Until then the stack names only Geist. A family name with no rule here
+ * matches a font that the reader installed, which can lack the 600 weight,
+ * and then the browser draws a synthetic bold.
+ *
+ * @font-face { font-family: "Timeless Grotesk"; font-weight: 400; font-display: swap;
+ *   src: url("/fonts/TimelessGrotesk-Regular.woff2") format("woff2"); }
+ * @font-face { font-family: "Timeless Grotesk"; font-weight: 500; font-display: swap;
+ *   src: url("/fonts/TimelessGrotesk-Medium.woff2") format("woff2"); }
+ * @font-face { font-family: "Timeless Grotesk"; font-weight: 600; font-display: swap;
+ *   src: url("/fonts/TimelessGrotesk-SemiBold.woff2") format("woff2"); }
  */
 
 @theme {
-  /* Self-hosted through @fontsource-variable, imported in the root route. */
+  /* Geist is self-hosted through @fontsource-variable, imported in the root route. */
   --font-geist-sans: "Geist Variable";
   --font-geist-mono: "Geist Mono Variable";
   --font-sans: var(--font-geist-sans), ui-sans-serif, system-ui, sans-serif;
   --font-mono: var(--font-geist-mono), ui-monospace, SFMono-Regular, monospace;
 
-  /* Signal orange. Reserved for accents, state, and focus. */
-  --color-signal-50: oklch(0.97 0.02 62);
-  --color-signal-100: oklch(0.94 0.045 62);
-  --color-signal-200: oklch(0.89 0.08 62);
-  --color-signal-300: oklch(0.83 0.115 60);
-  --color-signal-400: oklch(0.77 0.15 55);
-  --color-signal-500: oklch(0.7 0.175 50);
-  --color-signal-600: oklch(0.62 0.17 45);
-  --color-signal-700: oklch(0.52 0.145 42);
-  --color-signal-800: oklch(0.42 0.11 40);
-  --color-signal-900: oklch(0.33 0.08 40);
+  /* Type scale: 12/16, 14/20, 16/24, 24/32, 36/40, 48/52. */
+  --text-ui-xs: 0.75rem;
+  --text-ui-xs--line-height: 1rem;
+  --text-ui-s: 0.875rem;
+  --text-ui-s--line-height: 1.25rem;
+  --text-ui-m: 1rem;
+  --text-ui-m--line-height: 1.5rem;
+  --text-ui-l: 1.5rem;
+  --text-ui-l--line-height: 2rem;
+  --text-ui-xl: 2.25rem;
+  --text-ui-xl--line-height: 2.5rem;
+  --text-ui-xxl: 3rem;
+  --text-ui-xxl--line-height: 3.25rem;
 
-  /* Safety green, used only for "supported"/healthy state. */
-  --color-safety-400: oklch(0.79 0.16 148);
-  --color-safety-500: oklch(0.7 0.16 150);
-  --color-safety-600: oklch(0.58 0.14 152);
+  /* Radius: xs 4, s 8 (buttons, inputs), m 12 (surfaces). */
+  --radius-ui-xs: 4px;
+  --radius-ui-s: 8px;
+  --radius-ui-m: 12px;
+
+  --ease-ui: cubic-bezier(0.16, 1, 0.3, 1);
 
   /*
-   * Corporate navy. The landing page's enterprise identity color. Docs pages
-   * never reference these tokens, so declaring them here changes nothing for
-   * them; the landing scope activates them in `.wh-landing`.
+   * Older colour scales that shared components still name. They resolve to
+   * the neutral ramp. The amber accent has no scale, so a component cannot
+   * reach for it by mistake.
    */
-  --color-brand-50: oklch(0.97 0.008 255);
-  --color-brand-100: oklch(0.94 0.018 255);
-  --color-brand-200: oklch(0.89 0.032 255);
-  --color-brand-300: oklch(0.8 0.055 255);
-  --color-brand-400: oklch(0.68 0.08 255);
-  --color-brand-500: oklch(0.58 0.09 255);
-  --color-brand-600: oklch(0.49 0.09 256);
-  --color-brand-700: oklch(0.41 0.078 257);
-  --color-brand-800: oklch(0.33 0.062 257);
-  --color-brand-900: oklch(0.26 0.048 257);
-  --color-brand-950: oklch(0.185 0.038 258);
+  --color-brand-50: #fbfbfb;
+  --color-brand-100: #f4f4f4;
+  --color-brand-200: #e7e7e7;
+  --color-brand-300: #cdcdcd;
+  --color-brand-400: #a1a1a1;
+  --color-brand-500: #7d7d7d;
+  --color-brand-600: #333333;
+  --color-brand-700: #000000;
+  --color-brand-800: #202020;
+  --color-brand-900: #2b2b2b;
+  --color-brand-950: #000000;
 
-  --color-ink-50: oklch(0.985 0.002 250);
-  --color-ink-100: oklch(0.965 0.003 250);
-  --color-ink-200: oklch(0.922 0.004 250);
-  --color-ink-300: oklch(0.86 0.005 250);
-  --color-ink-400: oklch(0.68 0.008 250);
-  --color-ink-500: oklch(0.55 0.01 250);
-  --color-ink-600: oklch(0.44 0.012 250);
-  --color-ink-700: oklch(0.34 0.014 250);
-  --color-ink-800: oklch(0.24 0.016 250);
-  --color-ink-900: oklch(0.17 0.018 253);
-  --color-ink-950: oklch(0.13 0.018 255);
+  --color-ink-50: #fbfbfb;
+  --color-ink-100: #f4f4f4;
+  --color-ink-200: #e7e7e7;
+  --color-ink-300: #cdcdcd;
+  --color-ink-400: #a1a1a1;
+  --color-ink-500: #7d7d7d;
+  --color-ink-600: #555555;
+  --color-ink-700: #3d3d3d;
+  --color-ink-800: #2b2b2b;
+  --color-ink-900: #202020;
+  --color-ink-950: #000000;
+}
+
+/* Semantic utilities such as `bg-wh-panel` and `text-wh-muted`, which follow the colour scheme. */
+@theme inline {
+  --color-wh-page: var(--wh-page);
+  --color-wh-panel: var(--wh-panel);
+  --color-wh-subtle: var(--wh-subtle);
+  --color-wh-line: var(--wh-line);
+  --color-wh-fg: var(--wh-fg);
+  --color-wh-body: var(--wh-body);
+  --color-wh-muted: var(--wh-muted);
+  --color-wh-faint: var(--wh-faint);
+  --color-wh-decor: var(--wh-decor);
+  --color-wh-primary: var(--wh-primary);
+  --color-wh-on-primary: var(--wh-on-primary);
+  --color-wh-success: var(--wh-success);
+  --color-wh-warning: var(--wh-warning);
+  --color-wh-error: var(--wh-error);
+  --shadow-ui-s: var(--wh-shadow-s);
+  --shadow-ui-m: var(--wh-shadow-m);
 }
 
 :root {
-  --wh-accent: var(--color-signal-600);
-  --wh-rule: color-mix(in oklab, var(--color-ink-900) 12%, transparent);
-  --wh-surface: var(--color-ink-50);
-  --wh-panel: #fff;
-  --wh-docs-code-border: color-mix(in oklab, var(--color-ink-900) 20%, transparent);
-  --wh-docs-code-surface: color-mix(in oklab, var(--color-ink-100) 78%, white);
-  --wh-docs-inline-code: color-mix(in oklab, var(--color-ink-100) 86%, white);
+  /* Neutral ramp, light. */
+  --wh-n-1: #ffffff;
+  --wh-n-2: #fbfbfb;
+  --wh-n-3: #f4f4f4;
+  --wh-n-4: #e7e7e7;
+  --wh-n-5: #cdcdcd;
+  --wh-n-6: #a1a1a1;
+  --wh-n-7: #7d7d7d;
+  --wh-n-8: #555555;
+  --wh-n-9: #333333;
+  --wh-n-10: #000000;
 
-  --color-fd-primary: var(--color-signal-600);
-  --color-fd-ring: var(--color-signal-500);
-  --color-fd-muted-foreground: hsl(0 0% 38%);
+  /*
+   * The one accent. It feeds the focus outline, a checked control, and the
+   * running state dot, and nothing else. The navy stays in reserve.
+   */
+  --wh-amber: #cf9148;
+  --wh-navy: #07376b;
+
+  /* Status colours. Use them only for a state that has that meaning. */
+  --wh-success: #00906c;
+  --wh-warning: #ffea00;
+  --wh-error: #fc032d;
+
+  /*
+   * Roles. The page is the theme canvas (n1). A panel, such as a code frame or
+   * the task table, is a filled surface: n3 in light, because n2 on the white
+   * canvas has almost no contrast, and n2 in dark. A control, such as a
+   * secondary button, a search field, or a tab track, is n3, and its hover is
+   * n4. A line is the hairline between rows of a table or a list.
+   */
+  --wh-page: var(--wh-n-1);
+  --wh-panel: var(--wh-n-3);
+  --wh-subtle: var(--wh-n-3);
+  --wh-control: var(--wh-n-3);
+  --wh-control-hover: var(--wh-n-4);
+  --wh-line: var(--wh-n-4);
+  --wh-fg: var(--wh-n-10);
+  --wh-body: var(--wh-n-9);
+  --wh-muted: var(--wh-n-8);
+  /* Small text. It keeps 4.5:1 contrast on the page, a panel, and a subtle fill. */
+  --wh-faint: var(--wh-n-8);
+  /* Icons, markers, and dots that are not text. */
+  --wh-decor: var(--wh-n-7);
+  --wh-primary: var(--wh-n-10);
+  --wh-on-primary: var(--wh-n-2);
+  --wh-accent: var(--wh-amber);
+
+  /* The theme's small shadow has zero opacity. Only a floating popup casts the medium one. */
+  --wh-shadow-s: none;
+  --wh-shadow-m: 0 8px 24px rgb(0 0 0 / 0.12);
+
+  --wh-duration: 160ms;
+  --wh-ease: cubic-bezier(0.16, 1, 0.3, 1);
+
+  /* Names that shared components read. */
+  --wh-rule: var(--wh-line);
+  --wh-surface: var(--wh-page);
+  --wh-docs-code-surface: var(--wh-panel);
+  --wh-docs-inline-code: var(--wh-subtle);
+
+  /* The shared header (`components/site-header.css`). `blume/theme.css` sets the same values. */
+  --wh-hdr-bg: var(--wh-n-1);
+  --wh-hdr-fg: var(--wh-n-10);
+  --wh-hdr-muted: var(--wh-n-8);
+  --wh-hdr-line: var(--wh-n-4);
+  --wh-hdr-hover: var(--wh-n-3);
+  --wh-hdr-accent: var(--wh-amber);
+  --wh-hdr-font: var(--font-sans);
+
+  /* Fumadocs UI. */
+  --color-fd-background: var(--wh-page);
+  --color-fd-foreground: var(--wh-fg);
+  --color-fd-muted: var(--wh-subtle);
+  --color-fd-muted-foreground: var(--wh-muted);
+  /* A popup floats on the medium shadow: n1 in light, n2 in dark. */
+  --color-fd-popover: var(--wh-n-1);
+  --color-fd-popover-foreground: var(--wh-fg);
+  --color-fd-card: var(--wh-panel);
+  --color-fd-card-foreground: var(--wh-fg);
+  --color-fd-border: var(--wh-line);
+  --color-fd-primary: var(--wh-primary);
+  --color-fd-primary-foreground: var(--wh-on-primary);
+  --color-fd-secondary: var(--wh-subtle);
+  --color-fd-secondary-foreground: var(--wh-fg);
+  --color-fd-accent: var(--wh-subtle);
+  --color-fd-accent-foreground: var(--wh-fg);
+  --color-fd-ring: var(--wh-amber);
 }
 
 .dark {
-  --wh-accent: var(--color-signal-400);
-  --wh-rule: color-mix(in oklab, var(--color-ink-50) 14%, transparent);
-  --wh-surface: var(--color-ink-950);
-  --wh-panel: color-mix(in oklab, var(--color-ink-900) 88%, black);
-  --wh-docs-code-border: color-mix(in oklab, var(--color-ink-50) 20%, transparent);
-  --wh-docs-code-surface: color-mix(in oklab, var(--color-ink-900) 88%, black);
-  --wh-docs-inline-code: color-mix(in oklab, var(--color-ink-800) 82%, black);
+  --color-fd-popover: var(--wh-n-2);
 
-  --color-fd-primary: var(--color-signal-400);
-  --color-fd-ring: var(--color-signal-400);
-  --color-fd-muted-foreground: hsl(0 0% 68%);
+  /* Neutral ramp, dark. */
+  --wh-n-1: #000000;
+  --wh-n-2: #202020;
+  --wh-n-3: #2b2b2b;
+  --wh-n-4: #3d3d3d;
+  --wh-n-5: #565656;
+  --wh-n-6: #838383;
+  --wh-n-7: #ababab;
+  --wh-n-8: #cfcfcf;
+  --wh-n-9: #f4f4f4;
+  --wh-n-10: #ffffff;
+
+  /* Dark mode raises a panel above the page instead of sinking it. */
+  --wh-page: var(--wh-n-1);
+  --wh-panel: var(--wh-n-2);
+  --wh-subtle: var(--wh-n-3);
+  --wh-line: var(--wh-n-4);
+  --wh-body: var(--wh-n-8);
+  --wh-muted: var(--wh-n-7);
+  --wh-faint: var(--wh-n-7);
+  --wh-decor: var(--wh-n-6);
+  --wh-on-primary: var(--wh-n-1);
+
+  --wh-shadow-m: 0 8px 24px rgb(0 0 0 / 0.5);
+
+  --wh-hdr-muted: var(--wh-n-7);
+  --wh-hdr-line: var(--wh-n-3);
+  --wh-hdr-hover: var(--wh-n-2);
 }
 
 html {
@@ -117,45 +268,6 @@ body {
 
 /* ---------- Structural primitives ---------- */
 
-.wh-derby-track {
-  position: relative;
-  height: 1.25rem;
-  overflow: hidden;
-  background: repeating-linear-gradient(
-    to right,
-    transparent 0,
-    transparent calc(25% - 1px),
-    var(--wh-rule) calc(25% - 1px),
-    var(--wh-rule) 25%
-  );
-  border-bottom: 1px solid var(--wh-rule);
-  border-right: 2px dashed currentColor;
-}
-
-.wh-derby-distance {
-  position: absolute;
-  inset: 0;
-  background: currentColor;
-  opacity: 0.12;
-  transform: scaleX(var(--race-progress));
-  transform-origin: left;
-}
-
-.wh-derby-runner {
-  position: absolute;
-  inset: 0 1.5rem 0 0;
-  display: flex;
-  align-items: center;
-  transform: translateX(calc(var(--race-progress) * 100%));
-}
-
-@media (prefers-reduced-motion: no-preference) {
-  .wh-derby-runner,
-  .wh-derby-distance {
-    transition: transform 120ms linear;
-  }
-}
-
 /* Full-bleed hairline that reads like a schema separator. */
 .wh-rule {
   border-color: var(--wh-rule);
@@ -163,70 +275,61 @@ body {
 
 .wh-panel {
   background-color: var(--wh-panel);
-  border: 1px solid var(--wh-rule);
+  border-radius: var(--radius-ui-m);
 }
 
+/* A small monospace label in sentence case. The theme keeps letter spacing within 0.02em. */
 .wh-mono-label {
   font-family: var(--font-mono);
-  font-size: 0.6875rem;
-  letter-spacing: 0.14em;
-  text-transform: uppercase;
-  color: var(--color-fd-muted-foreground);
+  font-size: var(--text-ui-xs);
+  line-height: var(--text-ui-xs--line-height);
+  letter-spacing: 0.02em;
+  color: var(--wh-muted);
 }
 
-.wh-accent-text {
-  color: var(--wh-accent);
-}
-
-/* Ticking status dot used for live/supported indicators. */
-.wh-status-dot {
-  block-size: 0.5rem;
-  inline-size: 0.5rem;
-  border-radius: 9999px;
-  background-color: var(--color-safety-500);
-  box-shadow: 0 0 0 3px color-mix(in oklab, var(--color-safety-500) 20%, transparent);
-}
-
-@media (prefers-reduced-motion: no-preference) {
-  .wh-status-dot {
-    animation: wh-pulse 2.4s ease-in-out infinite;
-  }
-}
-
-@keyframes wh-pulse {
-  0%,
-  100% {
-    box-shadow: 0 0 0 3px color-mix(in oklab, var(--color-safety-500) 20%, transparent);
-  }
-  50% {
-    box-shadow: 0 0 0 6px color-mix(in oklab, var(--color-safety-500) 6%, transparent);
-  }
-}
-
-/* Terminal / SQL-ish code frame used on the landing page. */
+/* A surface for code, screenshots, and the task table: an n2 fill, no edge, no shadow. */
 .wh-frame {
-  border: 1px solid var(--wh-rule);
   background-color: var(--wh-panel);
-  border-radius: 0.75rem;
+  border-radius: var(--radius-ui-m);
   overflow: hidden;
-  box-shadow:
-    0 1px 2px color-mix(in oklab, var(--color-ink-950) 5%, transparent),
-    0 16px 40px -24px color-mix(in oklab, var(--color-ink-950) 22%, transparent);
 }
 
+/* The header row of a frame. It sits on the frame fill, so it needs no fill or rule of its own. */
 .wh-frame-bar {
-  border-bottom: 1px solid var(--wh-rule);
-  background-color: color-mix(in oklab, var(--wh-panel) 92%, var(--color-ink-500));
+  background-color: transparent;
+}
+
+/* A text link with an arrow. The arrow moves a little on hover. */
+.wh-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+  color: var(--wh-fg);
+  font-size: var(--text-ui-s);
+  line-height: var(--text-ui-s--line-height);
+  font-weight: 500;
+}
+
+.wh-link > svg {
+  color: var(--wh-decor);
+  transition:
+    transform var(--wh-duration) var(--wh-ease),
+    color var(--wh-duration) var(--wh-ease);
+}
+
+.wh-link:hover > svg {
+  color: var(--wh-fg);
+  transform: translateX(2px);
 }
 
 .wh-link-underline {
   text-decoration-line: underline;
-  text-decoration-color: color-mix(in oklab, var(--wh-accent) 45%, transparent);
+  text-decoration-color: var(--wh-n-5);
   text-underline-offset: 3px;
 }
 
 .wh-link-underline:hover {
-  text-decoration-color: var(--wh-accent);
+  text-decoration-color: var(--wh-fg);
 }
 
 /* ---------- Code surface ----------
@@ -246,13 +349,13 @@ body {
 
 /* ---------- Documentation typography ----------
  *
- * API pages carry far more identifiers than ordinary prose. Stronger section
- * boundaries and separate inline/block code surfaces keep those identifiers
- * scannable without changing the content hierarchy emitted by Fumadocs.
+ * The blog posts and the site pages (`lib/mdx-loader.tsx`). Space and type
+ * weight mark each section, not rules. Inline and block code sit on fills,
+ * without an edge.
  */
 .wh-docs-title {
   color: var(--color-fd-foreground);
-  letter-spacing: -0.035em;
+  letter-spacing: -0.02em;
   line-height: 1.12;
 }
 
@@ -268,9 +371,7 @@ html:has(.wh-diagram-dialog[open]) {
 
 .wh-docs-description {
   max-width: 48rem;
-  margin-bottom: 2.25rem;
-  padding-bottom: 1.5rem;
-  border-bottom: 1px solid var(--wh-rule);
+  margin-bottom: 2.5rem;
   line-height: 1.65;
 }
 
@@ -282,52 +383,48 @@ html:has(.wh-diagram-dialog[open]) {
 }
 
 .wh-docs-body > h2 {
-  margin-top: 3rem;
-  padding-top: 1.5rem;
-  border-top: 1px solid var(--wh-rule);
-  font-size: 1.4rem;
-  font-weight: 650;
-  letter-spacing: -0.025em;
-  line-height: 1.25;
+  margin-top: 3.5rem;
+  font-size: var(--text-ui-l);
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  line-height: var(--text-ui-l--line-height);
 }
 
 .wh-docs-body > h3 {
   margin-top: 2.25rem;
-  font-size: 1.1rem;
-  font-weight: 650;
-  letter-spacing: -0.015em;
+  font-size: var(--text-ui-m);
+  font-weight: 600;
+  letter-spacing: 0;
 }
 
 .wh-docs-body strong {
   color: var(--color-fd-foreground);
-  font-weight: 650;
+  font-weight: 600;
 }
 
 .wh-docs-body :where(p, li, td, th, h2, h3) code {
   padding: 0.1em 0.34em;
-  border: 1px solid var(--wh-docs-code-border);
-  border-radius: 0.3rem;
+  border: 0;
+  border-radius: var(--radius-ui-xs);
   background-color: var(--wh-docs-inline-code);
   box-decoration-break: clone;
   color: var(--color-fd-foreground);
   font-size: 0.88em;
-  font-weight: 520;
+  font-weight: 500;
   overflow-wrap: anywhere;
 }
 
 .wh-docs-body :where(ul, ol) > li::marker {
-  color: var(--wh-accent);
-  font-weight: 650;
+  color: var(--wh-faint);
+  font-weight: 600;
 }
 
 .wh-docs-body figure.shiki {
   margin-block: 1.75rem;
-  border-color: var(--wh-docs-code-border);
-  border-radius: 0.75rem;
+  border-width: 0;
+  border-radius: var(--radius-ui-m);
   background-color: var(--wh-docs-code-surface);
-  box-shadow:
-    inset 3px 0 0 color-mix(in oklab, var(--wh-accent) 72%, transparent),
-    0 12px 30px -24px color-mix(in oklab, var(--color-ink-950) 45%, transparent);
+  box-shadow: none;
 }
 
 /*
@@ -415,12 +512,12 @@ html:has(.wh-diagram-dialog[open]) {
 
 .wh-docs-body figure.shiki > div[class~="flex"] {
   height: 2.5rem;
-  border-color: var(--wh-docs-code-border);
-  background-color: color-mix(in oklab, var(--wh-docs-code-surface) 82%, var(--wh-panel));
+  border-width: 0;
+  background-color: transparent;
   font-family: var(--font-mono);
-  font-size: 0.72rem;
-  font-weight: 600;
-  letter-spacing: 0.04em;
+  font-size: var(--text-ui-xs);
+  font-weight: 500;
+  letter-spacing: 0;
 }
 
 /* ---------- Reference blocks ----------
@@ -432,25 +529,21 @@ html:has(.wh-diagram-dialog[open]) {
  */
 .wh-docs-body details {
   margin-block: 1.75rem;
-  border: 1px solid var(--wh-docs-code-border);
-  border-radius: 0.75rem;
-  background-color: color-mix(in oklab, var(--wh-docs-code-surface) 55%, transparent);
+  border: 0;
+  border-radius: var(--radius-ui-m);
+  background-color: var(--wh-panel);
 }
 
 .wh-docs-body details > summary {
   cursor: pointer;
   padding: 0.75rem 1rem;
   color: var(--color-fd-foreground);
-  font-size: 0.9rem;
-  font-weight: 600;
+  font-size: var(--text-ui-s);
+  font-weight: 500;
 }
 
 .wh-docs-body details > summary::marker {
-  color: var(--wh-accent);
-}
-
-.wh-docs-body details[open] > summary {
-  border-bottom: 1px solid var(--wh-docs-code-border);
+  color: var(--wh-decor);
 }
 
 .wh-docs-body details > :not(summary) {
@@ -461,280 +554,139 @@ html:has(.wh-diagram-dialog[open]) {
   margin-bottom: 1rem;
 }
 
-/* ---------- CSS-only tab group ----------
- *
- * The panels are server-highlighted markup, so the switcher must not require
- * hydration. Radio inputs carry the state, native radiogroup semantics carry
- * the keyboard and screen-reader behaviour, and the pairing rules below map
- * the nth checked input to the nth label and nth panel. Ten tabs is the
- * ceiling; add another pair here before adding an eleventh tab.
- */
-.wh-tabs {
-  position: relative;
-}
-
-.wh-tabs > input {
-  position: absolute;
-  opacity: 0;
-  pointer-events: none;
-}
-
-.wh-tab {
-  cursor: pointer;
-  white-space: nowrap;
-  border-radius: 0.375rem;
-  padding: 0.3125rem 0.625rem;
-  font-family: var(--font-mono);
-  font-size: 0.75rem;
-  color: var(--color-fd-muted-foreground);
-  transition:
-    color 120ms ease,
-    background-color 120ms ease;
-}
-
-.wh-tab:hover {
-  color: var(--color-fd-foreground);
-}
-
-.wh-tab-panel {
-  display: none;
-}
-
-/* Focus follows the hidden input, so the visible label has to render the ring. */
-.wh-tabs > input:focus-visible ~ .wh-tablist > .wh-tab:nth-of-type(1),
-.wh-tabs > input:nth-of-type(1):checked ~ .wh-tablist > .wh-tab:nth-of-type(1),
-.wh-tabs > input:nth-of-type(2):checked ~ .wh-tablist > .wh-tab:nth-of-type(2),
-.wh-tabs > input:nth-of-type(3):checked ~ .wh-tablist > .wh-tab:nth-of-type(3),
-.wh-tabs > input:nth-of-type(4):checked ~ .wh-tablist > .wh-tab:nth-of-type(4),
-.wh-tabs > input:nth-of-type(5):checked ~ .wh-tablist > .wh-tab:nth-of-type(5),
-.wh-tabs > input:nth-of-type(6):checked ~ .wh-tablist > .wh-tab:nth-of-type(6),
-.wh-tabs > input:nth-of-type(7):checked ~ .wh-tablist > .wh-tab:nth-of-type(7),
-.wh-tabs > input:nth-of-type(8):checked ~ .wh-tablist > .wh-tab:nth-of-type(8),
-.wh-tabs > input:nth-of-type(9):checked ~ .wh-tablist > .wh-tab:nth-of-type(9),
-.wh-tabs > input:nth-of-type(10):checked ~ .wh-tablist > .wh-tab:nth-of-type(10) {
-  background-color: color-mix(in oklab, var(--wh-accent) 12%, transparent);
-  color: var(--wh-accent);
-}
-
-.wh-tabs > input:nth-of-type(1):checked ~ .wh-tab-panel:nth-of-type(1),
-.wh-tabs > input:nth-of-type(2):checked ~ .wh-tab-panel:nth-of-type(2),
-.wh-tabs > input:nth-of-type(3):checked ~ .wh-tab-panel:nth-of-type(3),
-.wh-tabs > input:nth-of-type(4):checked ~ .wh-tab-panel:nth-of-type(4),
-.wh-tabs > input:nth-of-type(5):checked ~ .wh-tab-panel:nth-of-type(5),
-.wh-tabs > input:nth-of-type(6):checked ~ .wh-tab-panel:nth-of-type(6),
-.wh-tabs > input:nth-of-type(7):checked ~ .wh-tab-panel:nth-of-type(7),
-.wh-tabs > input:nth-of-type(8):checked ~ .wh-tab-panel:nth-of-type(8),
-.wh-tabs > input:nth-of-type(9):checked ~ .wh-tab-panel:nth-of-type(9),
-.wh-tabs > input:nth-of-type(10):checked ~ .wh-tab-panel:nth-of-type(10) {
-  display: block;
-}
-
-.wh-tabs > input:focus-visible ~ .wh-tablist {
-  outline: 2px solid var(--color-fd-ring);
-  outline-offset: -2px;
-  border-radius: 0.5rem;
-}
-
-/* ---------- Capability matrix ---------- */
-
-/* A hairline cell grid.
- *
- * Interior rules are drawn on one side only so they stay single-width, and the
- * column-1 cells keep zero left padding so the grid's text edge lines up with
- * the band heading above it. The column count changes at each breakpoint, so
- * which cells are "column 1" has to be recomputed rather than set in the JSX.
- */
-.wh-cell {
-  border-top: 1px solid var(--wh-rule);
-  padding-block: 1.25rem;
-}
-
-@media (min-width: 640px) {
-  .wh-cell:nth-child(2n + 1) {
-    padding-right: 1.25rem;
+@layer components {
+  /*
+   * Buttons, from the theme's button specification: 12px by 24px of padding,
+   * 14/20 medium text, an 8px radius, no edge, and no shadow. Primary is an
+   * n10 fill. Secondary is an n3 fill with n10 text. Ghost has no fill until
+   * hover.
+   */
+  .wh-button {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.5rem;
+    padding: 0.75rem 1.5rem;
+    border: 0;
+    border-radius: var(--radius-ui-s);
+    font-size: var(--text-ui-s);
+    line-height: var(--text-ui-s--line-height);
+    font-weight: 500;
+    letter-spacing: 0.01em;
+    white-space: nowrap;
+    cursor: pointer;
+    user-select: none;
+    transition:
+      background-color var(--wh-duration) var(--wh-ease),
+      transform var(--wh-duration) var(--wh-ease);
   }
-  .wh-cell:nth-child(2n) {
-    border-left: 1px solid var(--wh-rule);
-    padding-left: 1.25rem;
+
+  .wh-button:active {
+    transform: translateY(1px);
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .wh-button:active {
+      transform: none;
+    }
+  }
+
+  .wh-button:disabled {
+    pointer-events: none;
+    opacity: 0.5;
+  }
+
+  .wh-button-primary {
+    background-color: var(--wh-primary);
+    color: var(--wh-on-primary);
+  }
+
+  .wh-button-primary:hover {
+    background-color: var(--wh-n-9);
+  }
+
+  .wh-button-secondary {
+    background-color: var(--wh-control);
+    color: var(--wh-fg);
+  }
+
+  .wh-button-secondary:hover {
+    background-color: var(--wh-control-hover);
+  }
+
+  .wh-button-ghost {
+    background-color: transparent;
+    color: var(--wh-fg);
+  }
+
+  .wh-button-ghost:hover {
+    background-color: var(--wh-control);
+  }
+
+  /* A compact size for a control inside a frame. */
+  .wh-button-small {
+    padding: 0.375rem 0.75rem;
+  }
+
+  .wh-button > svg {
+    color: currentColor;
+    opacity: 0.7;
   }
 }
 
-@media (min-width: 1024px) {
-  .wh-cell:nth-child(2n) {
-    border-left: none;
-    padding-left: 0;
-  }
-  .wh-cell:nth-child(2n + 1) {
-    padding-right: 0;
-  }
-  .wh-cell:not(:nth-child(3n + 1)) {
-    border-left: 1px solid var(--wh-rule);
-    padding-left: 1.25rem;
-  }
-  .wh-cell:not(:nth-child(3n)) {
-    padding-right: 1.25rem;
-  }
-}
-
-/* Status pip used by the capability matrix and the honesty band. */
-.wh-pip {
-  display: inline-block;
+/* The live demo marker. It is a status, so it takes the success colour. */
+.wh-status-dot {
   block-size: 0.375rem;
   inline-size: 0.375rem;
   border-radius: 9999px;
-  background-color: var(--color-safety-500);
+  background-color: var(--wh-success);
 }
 
-.wh-pip[data-state="partial"] {
-  background-color: var(--color-signal-500);
-}
-
-.wh-pip[data-state="none"] {
-  background-color: color-mix(in oklab, var(--color-fd-muted-foreground) 55%, transparent);
-}
-
-/* ---------- Landing enterprise theme ----------
- *
- * Everything below is scoped to `.wh-landing`, the wrapper class on the
- * landing route. Tailwind v4 utilities compile to `var(--color-*)`
- * references, so overriding those custom properties here restyles every
- * descendant utility without touching the components. Docs pages never enter
- * this scope and keep the original identity.
+/*
+ * A secondary button on a filled panel takes the canvas colour, so it does not
+ * vanish into a fill of its own colour. The theme does the same for a selected
+ * tab on its track.
  */
-
-.wh-landing {
-  /* Corporate navy replaces signal orange as the landing accent. */
-  --color-signal-50: oklch(0.97 0.01 255);
-  --color-signal-100: oklch(0.95 0.02 255);
-  --color-signal-200: oklch(0.9 0.032 255);
-  --color-signal-300: oklch(0.83 0.05 255);
-  --color-signal-400: oklch(0.7 0.08 255);
-  --color-signal-500: oklch(0.58 0.09 255);
-  --color-signal-600: oklch(0.5 0.09 256);
-  --color-signal-700: oklch(0.42 0.078 257);
-  --color-signal-800: oklch(0.34 0.062 257);
-  --color-signal-900: oklch(0.27 0.05 257);
-
-  --wh-accent: var(--color-brand-600);
-  --wh-rule: color-mix(in oklab, var(--color-ink-900) 14%, transparent);
-  --wh-panel: #fff;
+.wh-on-panel .wh-button-secondary {
+  background-color: var(--wh-page);
 }
 
-.dark .wh-landing {
-  --wh-accent: var(--color-brand-400);
-  --wh-rule: color-mix(in oklab, var(--color-ink-50) 16%, transparent);
-  --wh-panel: color-mix(in oklab, var(--color-ink-900) 88%, black);
+.wh-on-panel .wh-button-secondary:hover {
+  background-color: var(--wh-control-hover);
 }
 
-/* ---------- Hero: the work ledger ----------
- *
- * The first view keeps the page surface in both schemes. A static schema
- * grid sits behind the copy and fades out before the ledger.
+/* ---------- Search dialog ---------- */
+
+/* The search dialog floats, so it takes the medium shadow and no edge. */
+[role="dialog"].bg-fd-popover {
+  border-width: 0;
+  border-radius: var(--radius-ui-m);
+  box-shadow: var(--wh-shadow-m);
+}
+
+[role="dialog"].bg-fd-popover :is(button, kbd).border,
+[role="dialog"].bg-fd-popover [class~="border"] {
+  border-width: 0;
+}
+
+[role="dialog"].bg-fd-popover :is(button, kbd).border {
+  background-color: var(--wh-control);
+}
+
+/*
+ * Prose tables and inline code, in a page and in a search result preview.
+ * Fumadocs draws an edge around each table and each inline code span. A table
+ * keeps only its row hairlines, on a panel fill.
  */
-.wh-hero-grid {
-  top: 2rem;
-  block-size: 50%;
-  --wh-grid-line: color-mix(in oklab, var(--color-ink-900) 9%, transparent);
-  background-image:
-    linear-gradient(to right, var(--wh-grid-line) 1px, transparent 1px),
-    linear-gradient(to bottom, var(--wh-grid-line) 1px, transparent 1px);
-  background-size: 48px 48px;
-  mask-image: linear-gradient(to bottom, transparent, black 15%, black 70%, transparent);
+.wh-docs-body table,
+[role="dialog"].bg-fd-popover table {
+  border-width: 0;
+  border-radius: var(--radius-ui-m);
+  background-color: var(--wh-panel);
 }
 
-.dark .wh-hero-grid {
-  --wh-grid-line: color-mix(in oklab, var(--color-ink-50) 8%, transparent);
-}
-
-.wh-ledger-head,
-.wh-ledger-row {
-  grid-template-columns: 5.5rem 7rem minmax(0, 1fr) 6.5rem 4rem 6rem;
-  border-color: var(--wh-rule);
-}
-
-@media (max-width: 639px) {
-  .wh-ledger-head,
-  .wh-ledger-row {
-    grid-template-columns: 5rem minmax(0, 1fr) auto;
-  }
-  .wh-ledger-head > :nth-child(2),
-  .wh-ledger-head > :nth-child(3),
-  .wh-ledger-head > :nth-child(5),
-  .wh-ledger-row > :nth-child(2),
-  .wh-ledger-row > :nth-child(3),
-  .wh-ledger-row > :nth-child(5) {
-    display: none;
-  }
-}
-
-.wh-ledger-window {
-  block-size: 13.5rem;
-  mask-image: linear-gradient(to bottom, transparent, black 10%, black 70%, transparent);
-}
-
-@media (prefers-reduced-motion: no-preference) {
-  .wh-ledger-roll {
-    animation: wh-ledger-roll 42s linear infinite;
-  }
-}
-
-@keyframes wh-ledger-roll {
-  to {
-    transform: translateY(-50%);
-  }
-}
-
-.wh-ledger-dot {
-  block-size: 0.4rem;
-  inline-size: 0.4rem;
-  border-radius: 9999px;
-  background-color: currentColor;
-}
-
-.wh-ledger-ok {
-  color: var(--color-safety-600);
-}
-.dark .wh-ledger-ok {
-  color: var(--color-safety-400);
-}
-.wh-ledger-live {
-  color: var(--wh-accent);
-}
-.wh-ledger-live .wh-ledger-dot {
-  animation: wh-pulse 2.4s ease-in-out infinite;
-}
-.wh-ledger-idle {
-  color: var(--color-fd-muted-foreground);
-}
-.wh-ledger-warn {
-  color: var(--color-signal-700);
-}
-.dark .wh-ledger-warn {
-  color: var(--color-signal-300);
-}
-.wh-ledger-dead {
-  color: color-mix(in oklab, var(--color-ink-900) 70%, var(--color-signal-700));
-}
-.dark .wh-ledger-dead {
-  color: var(--color-ink-300);
-}
-
-.wh-band-grid {
-  background-image:
-    linear-gradient(to right, rgb(255 255 255 / 0.055) 1px, transparent 1px),
-    linear-gradient(to bottom, rgb(255 255 255 / 0.055) 1px, transparent 1px);
-  background-size: 32px 32px;
-}
-
-.wh-landing .wh-frame {
-  border-radius: 0.375rem;
-  box-shadow: 0 1px 2px color-mix(in oklab, var(--color-ink-950) 7%, transparent);
-}
-
-.wh-landing .wh-frame-bar {
-  background-color: color-mix(in oklab, var(--color-ink-900) 3.5%, var(--wh-panel));
-}
-
-.dark .wh-landing .wh-frame-bar {
-  background-color: color-mix(in oklab, var(--wh-panel) 92%, var(--color-ink-500));
+[role="dialog"].bg-fd-popover code {
+  border-width: 0;
+  border-radius: var(--radius-ui-xs);
+  background-color: var(--wh-control);
 }

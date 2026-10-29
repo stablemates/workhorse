@@ -1,34 +1,34 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 308" width="960" height="308" role="img" aria-labelledby="multi-tenancy-options-dark-title multi-tenancy-options-dark-desc">
 <title id="multi-tenancy-options-dark-title">One tenant identifier goes into three enqueue options</title>
 <desc id="multi-tenancy-options-dark-desc">The app enqueues report.generate on the queue reports for the tenant acme. It writes acme into concurrencyKey, budget, and a tenant:acme tag. The concurrency policy of reports lets acme run 4 tasks at the same time. The budget acme lets acme run 8 tasks across all queues. The tag lets an operator filter the task list. Workhorse does not check that the three agree.</desc>
-<defs><marker id="arrow-dark" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#ced1d4"/></marker></defs>
-<rect width="960" height="308" fill="#04080e"/>
-<path d="M 420,98 H 536" fill="none" stroke="#ced1d4" stroke-width="1.2" marker-end="url(#arrow-dark)"/>
-<path d="M 420,162 H 536" fill="none" stroke="#ced1d4" stroke-width="1.2" marker-end="url(#arrow-dark)"/>
-<path d="M 420,226 H 536" fill="none" stroke="#ced1d4" stroke-width="1.2" marker-end="url(#arrow-dark)"/>
-<rect x="24" y="56" width="396" height="204" rx="8" fill="rgba(242,244,245,0.02)" stroke="rgba(242,244,245,0.12)" stroke-width="0.8"/>
-<rect x="36" y="50" width="216" height="12" rx="2" fill="#04080e"/>
-<text x="144" y="59" fill="#95999d" font-size="7" font-family="Geist Mono" text-anchor="middle" letter-spacing="0.14em">TASK · report.generate · queue reports</text>
-<rect x="40" y="72" width="364" height="44" rx="6" fill="#04080e"/>
-<rect x="40" y="72" width="364" height="44" rx="6" fill="rgba(242,244,245,0.05)" stroke="#ced1d4" stroke-width="1"/>
-<text x="222" y="98" fill="#f2f4f5" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">concurrencyKey: acme</text>
-<rect x="40" y="136" width="364" height="44" rx="6" fill="#04080e"/>
-<rect x="40" y="136" width="364" height="44" rx="6" fill="rgba(242,244,245,0.05)" stroke="#ced1d4" stroke-width="1"/>
-<text x="222" y="162" fill="#f2f4f5" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">budget: acme</text>
-<rect x="40" y="200" width="364" height="44" rx="6" fill="#04080e"/>
-<rect x="40" y="200" width="364" height="44" rx="6" fill="rgba(242,244,245,0.05)" stroke="#ced1d4" stroke-width="1"/>
-<text x="222" y="226" fill="#f2f4f5" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">tags: tenant:acme</text>
-<rect x="538" y="72" width="398" height="44" rx="6" fill="#04080e"/>
-<rect x="538" y="72" width="398" height="44" rx="6" fill="#0a1017" stroke="#f2f4f5" stroke-width="1"/>
-<text x="737" y="92" fill="#f2f4f5" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">concurrency policy of reports</text>
-<text x="737" y="106" fill="#ced1d4" font-size="9" font-family="Geist Mono" text-anchor="middle">4 active for acme · fair share</text>
-<rect x="538" y="136" width="398" height="44" rx="6" fill="#04080e"/>
-<rect x="538" y="136" width="398" height="44" rx="6" fill="#0a1017" stroke="#f2f4f5" stroke-width="1"/>
-<text x="737" y="156" fill="#f2f4f5" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">budget acme</text>
-<text x="737" y="170" fill="#ced1d4" font-size="9" font-family="Geist Mono" text-anchor="middle">8 active across all queues</text>
-<rect x="538" y="200" width="398" height="44" rx="6" fill="#04080e"/>
-<rect x="538" y="200" width="398" height="44" rx="6" fill="#0a1017" stroke="#f2f4f5" stroke-width="1"/>
-<text x="737" y="220" fill="#f2f4f5" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">tag filter</text>
-<text x="737" y="234" fill="#ced1d4" font-size="9" font-family="Geist Mono" text-anchor="middle">the operator sees only acme</text>
-<text x="24" y="292" fill="#ced1d4" font-size="9" font-family="Geist Mono" font-weight="400" text-anchor="start">Your app keeps the three options consistent. Workhorse does not check that they agree.</text>
+<defs><marker id="arrow-dark" markerWidth="8" markerHeight="8" refX="6.5" refY="4" orient="auto" markerUnits="userSpaceOnUse"><path d="M 1.5,1 L 6.5,4 L 1.5,7" fill="none" stroke="#838383" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/></marker></defs>
+<rect width="960" height="308" fill="#000000"/>
+<path d="M 420,98 H 536" fill="none" stroke="#838383" stroke-width="1" marker-end="url(#arrow-dark)"/>
+<path d="M 420,162 H 536" fill="none" stroke="#838383" stroke-width="1" marker-end="url(#arrow-dark)"/>
+<path d="M 420,226 H 536" fill="none" stroke="#838383" stroke-width="1" marker-end="url(#arrow-dark)"/>
+<rect x="24" y="56" width="396" height="204" rx="12" fill="none" stroke="#2b2b2b" stroke-width="1"/>
+<rect x="36" y="50" width="204" height="12" fill="#000000"/>
+<text x="138" y="59" fill="#ababab" font-size="8" font-weight="500" font-family="Geist Mono, monospace" text-anchor="middle" letter-spacing="0.04em">TASK · report.generate · queue reports</text>
+<rect x="40" y="72" width="364" height="44" rx="8" fill="#000000"/>
+<rect x="40.5" y="72.5" width="363" height="43" rx="8" fill="#202020" stroke="#2b2b2b" stroke-width="1"/>
+<text x="222" y="98" fill="#f4f4f4" font-size="11" font-weight="500" font-family="Geist Mono, monospace" text-anchor="middle">concurrencyKey: acme</text>
+<rect x="40" y="136" width="364" height="44" rx="8" fill="#000000"/>
+<rect x="40.5" y="136.5" width="363" height="43" rx="8" fill="#202020" stroke="#2b2b2b" stroke-width="1"/>
+<text x="222" y="162" fill="#f4f4f4" font-size="11" font-weight="500" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">budget: acme</text>
+<rect x="40" y="200" width="364" height="44" rx="8" fill="#000000"/>
+<rect x="40.5" y="200.5" width="363" height="43" rx="8" fill="#202020" stroke="#2b2b2b" stroke-width="1"/>
+<text x="222" y="226" fill="#f4f4f4" font-size="11" font-weight="500" font-family="Geist Mono, monospace" text-anchor="middle">tags: tenant:acme</text>
+<rect x="538" y="72" width="398" height="44" rx="8" fill="#000000"/>
+<rect x="538.5" y="72.5" width="397" height="43" rx="8" fill="#000000" stroke="#3d3d3d" stroke-width="1"/>
+<text x="737" y="92" fill="#f4f4f4" font-size="11" font-weight="500" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">concurrency policy of reports</text>
+<text x="737" y="106" fill="#ababab" font-size="9" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">4 active for acme · fair share</text>
+<rect x="538" y="136" width="398" height="44" rx="8" fill="#000000"/>
+<rect x="538.5" y="136.5" width="397" height="43" rx="8" fill="#000000" stroke="#3d3d3d" stroke-width="1"/>
+<text x="737" y="156" fill="#f4f4f4" font-size="11" font-weight="500" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">budget acme</text>
+<text x="737" y="170" fill="#ababab" font-size="9" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">8 active across all queues</text>
+<rect x="538" y="200" width="398" height="44" rx="8" fill="#000000"/>
+<rect x="538.5" y="200.5" width="397" height="43" rx="8" fill="#000000" stroke="#3d3d3d" stroke-width="1"/>
+<text x="737" y="220" fill="#f4f4f4" font-size="11" font-weight="500" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">tag filter</text>
+<text x="737" y="234" fill="#ababab" font-size="9" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">the operator sees only acme</text>
+<text x="24" y="292" fill="#cfcfcf" font-size="9" font-family="Timeless Grotesk, Geist, sans-serif" font-weight="400" text-anchor="start">Your app keeps the three options consistent. Workhorse does not check that they agree.</text>
 </svg>

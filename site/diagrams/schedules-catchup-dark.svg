@@ -1,66 +1,66 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 344" width="960" height="344" role="img" aria-labelledby="schedules-catchup-dark-title schedules-catchup-dark-desc">
 <title id="schedules-catchup-dark-title">After a gap, the catch-up policy decides which missed occurrences fire</title>
 <desc id="schedules-catchup-dark-desc">invoice-run is due each night at 02:00. Every worker that offers billing-production stops on Monday at 01:30 and starts again on Thursday at 09:00, so four occurrences are missed. With skip, none of them fires. With latest, one task fires, for Thursday at 02:00. With all, four tasks fire. Each policy fires Friday at 02:00 normally.</desc>
-<defs><marker id="arrow-dark" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#ced1d4"/></marker></defs>
-<rect width="960" height="344" fill="#04080e"/>
-<text x="24" y="40" fill="#f2f4f5" font-size="12" font-family="Geist" font-weight="600" text-anchor="start">invoice-run</text>
-<text x="24" y="55" fill="#ced1d4" font-size="9" font-family="Geist Mono" font-weight="400" text-anchor="start">0 2 * * *</text>
-<text x="268.8" y="44" fill="#95999d" font-size="8" font-family="Geist Mono" font-weight="400" text-anchor="middle">Mon 02:00</text>
-<text x="418.40000000000003" y="44" fill="#95999d" font-size="8" font-family="Geist Mono" font-weight="400" text-anchor="middle">Tue 02:00</text>
-<text x="568" y="44" fill="#95999d" font-size="8" font-family="Geist Mono" font-weight="400" text-anchor="middle">Wed 02:00</text>
-<text x="717.5999999999999" y="44" fill="#95999d" font-size="8" font-family="Geist Mono" font-weight="400" text-anchor="middle">Thu 02:00</text>
-<text x="867.1999999999999" y="44" fill="#95999d" font-size="8" font-family="Geist Mono" font-weight="400" text-anchor="middle">Fri 02:00</text>
-<line x1="200" y1="52" x2="936" y2="52" stroke="rgba(242,244,245,0.14)"/>
-<text x="24" y="97" fill="#f2f4f5" font-size="10" font-family="Geist Mono">workers</text>
-<rect x="200" y="72" width="586.4" height="40" rx="6" fill="#04080e"/>
-<rect x="200" y="72" width="586.4" height="40" rx="6" fill="rgba(242,244,245,0.03)" stroke="rgba(242,244,245,0.4)" stroke-width="1" stroke-dasharray="4,3"/>
-<text x="493.2" y="90" fill="#f2f4f5" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">every worker stopped</text>
-<text x="493.2" y="104" fill="#ced1d4" font-size="9" font-family="Geist Mono" text-anchor="middle">Mon 01:30 to Thu 09:00 · 4 occurrences missed</text>
-<rect x="798.4" y="72" width="137.6" height="40" rx="6" fill="#04080e"/>
-<rect x="798.4" y="72" width="137.6" height="40" rx="6" fill="#0a1017" stroke="#f2f4f5" stroke-width="1"/>
-<text x="867.1999999999999" y="90" fill="#f2f4f5" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">running</text>
-<text x="867.1999999999999" y="104" fill="#ced1d4" font-size="9" font-family="Geist Mono" text-anchor="middle">since Thu 09:00</text>
-<text x="24" y="161" fill="#f2f4f5" font-size="10" font-family="Geist Mono">skip</text>
-<text x="268.8" y="160" fill="#95999d" font-size="8" font-family="Geist Mono" font-weight="400" text-anchor="middle">not fired</text>
-<text x="418.40000000000003" y="160" fill="#95999d" font-size="8" font-family="Geist Mono" font-weight="400" text-anchor="middle">not fired</text>
-<text x="568" y="160" fill="#95999d" font-size="8" font-family="Geist Mono" font-weight="400" text-anchor="middle">not fired</text>
-<text x="717.5999999999999" y="160" fill="#95999d" font-size="8" font-family="Geist Mono" font-weight="400" text-anchor="middle">not fired</text>
-<rect x="798.4" y="136" width="137.6" height="40" rx="6" fill="#04080e"/>
-<rect x="798.4" y="136" width="137.6" height="40" rx="6" fill="#0a1017" stroke="#f2f4f5" stroke-width="1"/>
-<text x="867.1999999999999" y="154" fill="#f2f4f5" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">a task</text>
-<text x="867.1999999999999" y="168" fill="#ced1d4" font-size="9" font-family="Geist Mono" text-anchor="middle">on time</text>
-<text x="24" y="217" fill="#f2f4f5" font-size="10" font-family="Geist Mono">latest</text>
-<text x="268.8" y="216" fill="#95999d" font-size="8" font-family="Geist Mono" font-weight="400" text-anchor="middle">not fired</text>
-<text x="418.40000000000003" y="216" fill="#95999d" font-size="8" font-family="Geist Mono" font-weight="400" text-anchor="middle">not fired</text>
-<text x="568" y="216" fill="#95999d" font-size="8" font-family="Geist Mono" font-weight="400" text-anchor="middle">not fired</text>
-<rect x="648.8" y="192" width="137.6" height="40" rx="6" fill="#04080e"/>
-<rect x="648.8" y="192" width="137.6" height="40" rx="6" fill="rgba(252,152,76,0.08)" stroke="#fc984c" stroke-width="1.4"/>
-<text x="717.5999999999999" y="210" fill="#f2f4f5" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">a task</text>
-<text x="717.5999999999999" y="224" fill="#ced1d4" font-size="9" font-family="Geist Mono" text-anchor="middle">after the restart</text>
-<rect x="798.4" y="192" width="137.6" height="40" rx="6" fill="#04080e"/>
-<rect x="798.4" y="192" width="137.6" height="40" rx="6" fill="#0a1017" stroke="#f2f4f5" stroke-width="1"/>
-<text x="867.1999999999999" y="210" fill="#f2f4f5" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">a task</text>
-<text x="867.1999999999999" y="224" fill="#ced1d4" font-size="9" font-family="Geist Mono" text-anchor="middle">on time</text>
-<text x="24" y="273" fill="#f2f4f5" font-size="10" font-family="Geist Mono">all</text>
-<rect x="200" y="248" width="137.6" height="40" rx="6" fill="#04080e"/>
-<rect x="200" y="248" width="137.6" height="40" rx="6" fill="rgba(242,244,245,0.05)" stroke="#ced1d4" stroke-width="1"/>
-<text x="268.8" y="266" fill="#f2f4f5" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">a task</text>
-<text x="268.8" y="280" fill="#ced1d4" font-size="9" font-family="Geist Mono" text-anchor="middle">after the restart</text>
-<rect x="349.6" y="248" width="137.6" height="40" rx="6" fill="#04080e"/>
-<rect x="349.6" y="248" width="137.6" height="40" rx="6" fill="rgba(242,244,245,0.05)" stroke="#ced1d4" stroke-width="1"/>
-<text x="418.40000000000003" y="266" fill="#f2f4f5" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">a task</text>
-<text x="418.40000000000003" y="280" fill="#ced1d4" font-size="9" font-family="Geist Mono" text-anchor="middle">after the restart</text>
-<rect x="499.2" y="248" width="137.6" height="40" rx="6" fill="#04080e"/>
-<rect x="499.2" y="248" width="137.6" height="40" rx="6" fill="rgba(242,244,245,0.05)" stroke="#ced1d4" stroke-width="1"/>
-<text x="568" y="266" fill="#f2f4f5" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">a task</text>
-<text x="568" y="280" fill="#ced1d4" font-size="9" font-family="Geist Mono" text-anchor="middle">after the restart</text>
-<rect x="648.8" y="248" width="137.6" height="40" rx="6" fill="#04080e"/>
-<rect x="648.8" y="248" width="137.6" height="40" rx="6" fill="rgba(242,244,245,0.05)" stroke="#ced1d4" stroke-width="1"/>
-<text x="717.5999999999999" y="266" fill="#f2f4f5" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">a task</text>
-<text x="717.5999999999999" y="280" fill="#ced1d4" font-size="9" font-family="Geist Mono" text-anchor="middle">after the restart</text>
-<rect x="798.4" y="248" width="137.6" height="40" rx="6" fill="#04080e"/>
-<rect x="798.4" y="248" width="137.6" height="40" rx="6" fill="#0a1017" stroke="#f2f4f5" stroke-width="1"/>
-<text x="867.1999999999999" y="266" fill="#f2f4f5" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">a task</text>
-<text x="867.1999999999999" y="280" fill="#ced1d4" font-size="9" font-family="Geist Mono" text-anchor="middle">on time</text>
-<text x="24" y="328" fill="#ced1d4" font-size="9" font-family="Geist Mono" font-weight="400" text-anchor="start">By default, Workhorse skips missed occurrences, so an outage does not make a backlog of tasks.</text>
+<defs><marker id="arrow-dark" markerWidth="8" markerHeight="8" refX="6.5" refY="4" orient="auto" markerUnits="userSpaceOnUse"><path d="M 1.5,1 L 6.5,4 L 1.5,7" fill="none" stroke="#838383" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/></marker></defs>
+<rect width="960" height="344" fill="#000000"/>
+<text x="24" y="40" fill="#f4f4f4" font-size="12" font-family="Timeless Grotesk, Geist, sans-serif" font-weight="500" text-anchor="start">invoice-run</text>
+<text x="24" y="55" fill="#cfcfcf" font-size="9" font-family="Geist Mono, monospace" font-weight="400" text-anchor="start">0 2 * * *</text>
+<text x="268.8" y="44" fill="#ababab" font-size="8" font-family="Geist Mono, monospace" font-weight="400" text-anchor="middle">Mon 02:00</text>
+<text x="418.40000000000003" y="44" fill="#ababab" font-size="8" font-family="Geist Mono, monospace" font-weight="400" text-anchor="middle">Tue 02:00</text>
+<text x="568" y="44" fill="#ababab" font-size="8" font-family="Geist Mono, monospace" font-weight="400" text-anchor="middle">Wed 02:00</text>
+<text x="717.5999999999999" y="44" fill="#ababab" font-size="8" font-family="Geist Mono, monospace" font-weight="400" text-anchor="middle">Thu 02:00</text>
+<text x="867.1999999999999" y="44" fill="#ababab" font-size="8" font-family="Geist Mono, monospace" font-weight="400" text-anchor="middle">Fri 02:00</text>
+<line x1="200" y1="52" x2="936" y2="52" stroke="#2b2b2b"/>
+<text x="24" y="97" fill="#f4f4f4" font-size="10" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="start">workers</text>
+<rect x="200" y="72" width="586.4" height="40" rx="8" fill="#000000"/>
+<rect x="200.5" y="72.5" width="585.4" height="39" rx="8" fill="#000000" stroke="#2b2b2b" stroke-width="1"/>
+<text x="493.2" y="90" fill="#cfcfcf" font-size="11" font-weight="500" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">every worker stopped</text>
+<text x="493.2" y="104" fill="#ababab" font-size="9" font-family="Geist Mono, monospace" text-anchor="middle">Mon 01:30 to Thu 09:00 · 4 occurrences missed</text>
+<rect x="798.4" y="72" width="137.6" height="40" rx="8" fill="#000000"/>
+<rect x="798.9" y="72.5" width="136.6" height="39" rx="8" fill="#000000" stroke="#3d3d3d" stroke-width="1"/>
+<text x="867.1999999999999" y="90" fill="#f4f4f4" font-size="11" font-weight="500" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">running</text>
+<text x="867.1999999999999" y="104" fill="#ababab" font-size="9" font-family="Geist Mono, monospace" text-anchor="middle">since Thu 09:00</text>
+<text x="24" y="161" fill="#f4f4f4" font-size="10" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="start">skip</text>
+<text x="268.8" y="160" fill="#ababab" font-size="8" font-family="Timeless Grotesk, Geist, sans-serif" font-weight="400" text-anchor="middle">not fired</text>
+<text x="418.40000000000003" y="160" fill="#ababab" font-size="8" font-family="Timeless Grotesk, Geist, sans-serif" font-weight="400" text-anchor="middle">not fired</text>
+<text x="568" y="160" fill="#ababab" font-size="8" font-family="Timeless Grotesk, Geist, sans-serif" font-weight="400" text-anchor="middle">not fired</text>
+<text x="717.5999999999999" y="160" fill="#ababab" font-size="8" font-family="Timeless Grotesk, Geist, sans-serif" font-weight="400" text-anchor="middle">not fired</text>
+<rect x="798.4" y="136" width="137.6" height="40" rx="8" fill="#000000"/>
+<rect x="798.9" y="136.5" width="136.6" height="39" rx="8" fill="#000000" stroke="#3d3d3d" stroke-width="1"/>
+<text x="867.1999999999999" y="154" fill="#f4f4f4" font-size="11" font-weight="500" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">a task</text>
+<text x="867.1999999999999" y="168" fill="#ababab" font-size="9" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">on time</text>
+<text x="24" y="217" fill="#f4f4f4" font-size="10" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="start">latest</text>
+<text x="268.8" y="216" fill="#ababab" font-size="8" font-family="Timeless Grotesk, Geist, sans-serif" font-weight="400" text-anchor="middle">not fired</text>
+<text x="418.40000000000003" y="216" fill="#ababab" font-size="8" font-family="Timeless Grotesk, Geist, sans-serif" font-weight="400" text-anchor="middle">not fired</text>
+<text x="568" y="216" fill="#ababab" font-size="8" font-family="Timeless Grotesk, Geist, sans-serif" font-weight="400" text-anchor="middle">not fired</text>
+<rect x="648.8" y="192" width="137.6" height="40" rx="8" fill="#000000"/>
+<rect x="649.3" y="192.5" width="136.6" height="39" rx="8" fill="rgba(207,145,72,0.12)" stroke="#cf9148" stroke-width="1"/>
+<text x="717.5999999999999" y="210" fill="#f4f4f4" font-size="11" font-weight="500" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">a task</text>
+<text x="717.5999999999999" y="224" fill="#ababab" font-size="9" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">after the restart</text>
+<rect x="798.4" y="192" width="137.6" height="40" rx="8" fill="#000000"/>
+<rect x="798.9" y="192.5" width="136.6" height="39" rx="8" fill="#000000" stroke="#3d3d3d" stroke-width="1"/>
+<text x="867.1999999999999" y="210" fill="#f4f4f4" font-size="11" font-weight="500" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">a task</text>
+<text x="867.1999999999999" y="224" fill="#ababab" font-size="9" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">on time</text>
+<text x="24" y="273" fill="#f4f4f4" font-size="10" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="start">all</text>
+<rect x="200" y="248" width="137.6" height="40" rx="8" fill="#000000"/>
+<rect x="200.5" y="248.5" width="136.6" height="39" rx="8" fill="#202020" stroke="#2b2b2b" stroke-width="1"/>
+<text x="268.8" y="266" fill="#f4f4f4" font-size="11" font-weight="500" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">a task</text>
+<text x="268.8" y="280" fill="#ababab" font-size="9" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">after the restart</text>
+<rect x="349.6" y="248" width="137.6" height="40" rx="8" fill="#000000"/>
+<rect x="350.1" y="248.5" width="136.6" height="39" rx="8" fill="#202020" stroke="#2b2b2b" stroke-width="1"/>
+<text x="418.40000000000003" y="266" fill="#f4f4f4" font-size="11" font-weight="500" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">a task</text>
+<text x="418.40000000000003" y="280" fill="#ababab" font-size="9" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">after the restart</text>
+<rect x="499.2" y="248" width="137.6" height="40" rx="8" fill="#000000"/>
+<rect x="499.7" y="248.5" width="136.6" height="39" rx="8" fill="#202020" stroke="#2b2b2b" stroke-width="1"/>
+<text x="568" y="266" fill="#f4f4f4" font-size="11" font-weight="500" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">a task</text>
+<text x="568" y="280" fill="#ababab" font-size="9" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">after the restart</text>
+<rect x="648.8" y="248" width="137.6" height="40" rx="8" fill="#000000"/>
+<rect x="649.3" y="248.5" width="136.6" height="39" rx="8" fill="#202020" stroke="#2b2b2b" stroke-width="1"/>
+<text x="717.5999999999999" y="266" fill="#f4f4f4" font-size="11" font-weight="500" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">a task</text>
+<text x="717.5999999999999" y="280" fill="#ababab" font-size="9" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">after the restart</text>
+<rect x="798.4" y="248" width="137.6" height="40" rx="8" fill="#000000"/>
+<rect x="798.9" y="248.5" width="136.6" height="39" rx="8" fill="#000000" stroke="#3d3d3d" stroke-width="1"/>
+<text x="867.1999999999999" y="266" fill="#f4f4f4" font-size="11" font-weight="500" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">a task</text>
+<text x="867.1999999999999" y="280" fill="#ababab" font-size="9" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">on time</text>
+<text x="24" y="328" fill="#cfcfcf" font-size="9" font-family="Timeless Grotesk, Geist, sans-serif" font-weight="400" text-anchor="start">By default, Workhorse skips missed occurrences, so an outage does not make a backlog of tasks.</text>
 </svg>

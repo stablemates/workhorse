@@ -143,6 +143,21 @@ updates:
       - dependency-name: "@opentelemetry/auto-instrumentations-node"
         versions: [">=0.82.0"]
 
+  # The documentation pages. site/blume is outside the pnpm workspace and has its own
+  # pnpm-lock.yaml, so the root entry does not update it. `pnpm tooling:vuln` audits that lockfile.
+  - package-ecosystem: npm
+    directory: /site/blume
+    schedule:
+      interval: monthly
+    cooldown:
+      default-days: 7
+      semver-major-days: 30
+    open-pull-requests-limit: 5
+    groups:
+      docs:
+        patterns: ["*"]
+        update-types: [minor, patch]
+
   # `uv`, not `pip`: the Python half locks with uv.lock, and the pip ecosystem would edit
   # pyproject.toml without updating that lockfile. CI runs under UV_LOCKED, so such a pull request
   # would fail rather than merge.

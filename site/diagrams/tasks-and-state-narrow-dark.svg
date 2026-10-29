@@ -1,53 +1,53 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 812" width="400" height="812" role="img" aria-labelledby="tasks-and-state-narrow-dark-title tasks-and-state-narrow-dark-desc">
 <title id="tasks-and-state-narrow-dark-title">One task after enqueue, after the claim, and after success</title>
 <desc id="tasks-and-state-narrow-dark-desc">After enqueue, the task has a task row and a ready task_runtime row. After the claim, the runtime row is active. After success, the runtime row is gone and a succeeded task_outcome row exists. task_event and attempt_history keep the history apart.</desc>
-<defs><marker id="arrow-dark" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#ced1d4"/></marker></defs>
-<rect width="400" height="812" fill="#04080e"/>
-<text x="24" y="36" fill="#f2f4f5" font-size="12" font-family="Geist" font-weight="600" text-anchor="start">1 · After enqueue</text>
-<text x="24" y="51" fill="#ced1d4" font-size="9" font-family="Geist Mono" font-weight="400" text-anchor="start">both rows in one transaction</text>
-<rect x="24" y="76" width="352" height="44" rx="6" fill="#04080e"/>
-<rect x="24" y="76" width="352" height="44" rx="6" fill="rgba(242,244,245,0.05)" stroke="#ced1d4" stroke-width="1"/>
-<text x="200" y="96" fill="#f2f4f5" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">task</text>
-<text x="200" y="110" fill="#ced1d4" font-size="9" font-family="Geist Mono" text-anchor="middle">resize-image · media</text>
-<rect x="24" y="132" width="352" height="44" rx="6" fill="#04080e"/>
-<rect x="24" y="132" width="352" height="44" rx="6" fill="#0a1017" stroke="#f2f4f5" stroke-width="1"/>
-<text x="200" y="152" fill="#f2f4f5" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">task_runtime</text>
-<text x="200" y="166" fill="#ced1d4" font-size="9" font-family="Geist Mono" text-anchor="middle">ready</text>
-<rect x="24" y="188" width="352" height="44" rx="6" fill="#04080e"/>
-<rect x="24" y="188" width="352" height="44" rx="6" fill="rgba(242,244,245,0.03)" stroke="rgba(242,244,245,0.4)" stroke-width="1" stroke-dasharray="4,3"/>
-<text x="200" y="214" fill="#95999d" font-size="9" font-family="Geist Mono" font-weight="400" text-anchor="middle">task_outcome · no row</text>
-<path d="M 200,236 V 254" fill="none" stroke="#ced1d4" stroke-width="1.2" marker-end="url(#arrow-dark)"/>
-<text x="24" y="272" fill="#f2f4f5" font-size="12" font-family="Geist" font-weight="600" text-anchor="start">2 · After the claim</text>
-<text x="24" y="287" fill="#ced1d4" font-size="9" font-family="Geist Mono" font-weight="400" text-anchor="start">only task_runtime changes</text>
-<rect x="24" y="312" width="352" height="44" rx="6" fill="#04080e"/>
-<rect x="24" y="312" width="352" height="44" rx="6" fill="rgba(242,244,245,0.05)" stroke="#ced1d4" stroke-width="1"/>
-<text x="200" y="332" fill="#f2f4f5" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">task</text>
-<text x="200" y="346" fill="#ced1d4" font-size="9" font-family="Geist Mono" text-anchor="middle">resize-image · media</text>
-<rect x="24" y="368" width="352" height="44" rx="6" fill="#04080e"/>
-<rect x="24" y="368" width="352" height="44" rx="6" fill="#0a1017" stroke="#f2f4f5" stroke-width="1"/>
-<text x="200" y="388" fill="#f2f4f5" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">task_runtime</text>
-<text x="200" y="402" fill="#ced1d4" font-size="9" font-family="Geist Mono" text-anchor="middle">active · worker A</text>
-<rect x="24" y="424" width="352" height="44" rx="6" fill="#04080e"/>
-<rect x="24" y="424" width="352" height="44" rx="6" fill="rgba(242,244,245,0.03)" stroke="rgba(242,244,245,0.4)" stroke-width="1" stroke-dasharray="4,3"/>
-<text x="200" y="450" fill="#95999d" font-size="9" font-family="Geist Mono" font-weight="400" text-anchor="middle">task_outcome · no row</text>
-<path d="M 200,472 V 490" fill="none" stroke="#ced1d4" stroke-width="1.2" marker-end="url(#arrow-dark)"/>
-<text x="24" y="508" fill="#f2f4f5" font-size="12" font-family="Geist" font-weight="600" text-anchor="start">3 · After success</text>
-<text x="24" y="523" fill="#ced1d4" font-size="9" font-family="Geist Mono" font-weight="400" text-anchor="start">delete and insert in one transaction</text>
-<rect x="24" y="548" width="352" height="44" rx="6" fill="#04080e"/>
-<rect x="24" y="548" width="352" height="44" rx="6" fill="rgba(242,244,245,0.05)" stroke="#ced1d4" stroke-width="1"/>
-<text x="200" y="568" fill="#f2f4f5" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">task</text>
-<text x="200" y="582" fill="#ced1d4" font-size="9" font-family="Geist Mono" text-anchor="middle">resize-image · media</text>
-<rect x="24" y="604" width="352" height="44" rx="6" fill="#04080e"/>
-<rect x="24" y="604" width="352" height="44" rx="6" fill="rgba(242,244,245,0.03)" stroke="rgba(242,244,245,0.4)" stroke-width="1" stroke-dasharray="4,3"/>
-<text x="200" y="630" fill="#95999d" font-size="9" font-family="Geist Mono" font-weight="400" text-anchor="middle">task_runtime · no row</text>
-<rect x="24" y="660" width="352" height="44" rx="6" fill="#04080e"/>
-<rect x="24" y="660" width="352" height="44" rx="6" fill="rgba(252,152,76,0.08)" stroke="#fc984c" stroke-width="1.4"/>
-<text x="200" y="680" fill="#f2f4f5" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">task_outcome</text>
-<text x="200" y="694" fill="#ced1d4" font-size="9" font-family="Geist Mono" text-anchor="middle">succeeded · result</text>
-<line x1="24" y1="736" x2="376" y2="736" stroke="rgba(242,244,245,0.14)"/>
-<text x="24" y="760" fill="#95999d" font-size="9" font-family="Geist Mono">History, kept apart from these rows:</text>
-<text x="24" y="778" fill="#f2f4f5" font-size="9" font-family="Geist Mono">task_event</text>
-<text x="144" y="778" fill="#ced1d4" font-size="9" font-family="Geist Mono">enqueued · claimed · succeeded</text>
-<text x="24" y="796" fill="#f2f4f5" font-size="9" font-family="Geist Mono">attempt_history</text>
-<text x="144" y="796" fill="#ced1d4" font-size="9" font-family="Geist Mono">attempt 1 · succeeded</text>
+<defs><marker id="arrow-dark" markerWidth="8" markerHeight="8" refX="6.5" refY="4" orient="auto" markerUnits="userSpaceOnUse"><path d="M 1.5,1 L 6.5,4 L 1.5,7" fill="none" stroke="#838383" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/></marker></defs>
+<rect width="400" height="812" fill="#000000"/>
+<text x="24" y="36" fill="#f4f4f4" font-size="12" font-family="Timeless Grotesk, Geist, sans-serif" font-weight="500" text-anchor="start">1 · After enqueue</text>
+<text x="24" y="51" fill="#cfcfcf" font-size="9" font-family="Timeless Grotesk, Geist, sans-serif" font-weight="400" text-anchor="start">both rows in one transaction</text>
+<rect x="24" y="76" width="352" height="44" rx="8" fill="#000000"/>
+<rect x="24.5" y="76.5" width="351" height="43" rx="8" fill="#202020" stroke="#2b2b2b" stroke-width="1"/>
+<text x="200" y="96" fill="#f4f4f4" font-size="11" font-weight="500" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">task</text>
+<text x="200" y="110" fill="#ababab" font-size="9" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">resize-image · media</text>
+<rect x="24" y="132" width="352" height="44" rx="8" fill="#000000"/>
+<rect x="24.5" y="132.5" width="351" height="43" rx="8" fill="#000000" stroke="#3d3d3d" stroke-width="1"/>
+<text x="200" y="152" fill="#f4f4f4" font-size="11" font-weight="500" font-family="Geist Mono, monospace" text-anchor="middle">task_runtime</text>
+<text x="200" y="166" fill="#ababab" font-size="9" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">ready</text>
+<rect x="24" y="188" width="352" height="44" rx="8" fill="#000000"/>
+<rect x="24.5" y="188.5" width="351" height="43" rx="8" fill="#000000" stroke="#2b2b2b" stroke-width="1"/>
+<text x="200" y="214" fill="#ababab" font-size="9" font-family="Geist Mono, monospace" font-weight="400" text-anchor="middle">task_outcome · no row</text>
+<path d="M 200,236 V 254" fill="none" stroke="#838383" stroke-width="1" marker-end="url(#arrow-dark)"/>
+<text x="24" y="272" fill="#f4f4f4" font-size="12" font-family="Timeless Grotesk, Geist, sans-serif" font-weight="500" text-anchor="start">2 · After the claim</text>
+<text x="24" y="287" fill="#cfcfcf" font-size="9" font-family="Geist Mono, monospace" font-weight="400" text-anchor="start">only task_runtime changes</text>
+<rect x="24" y="312" width="352" height="44" rx="8" fill="#000000"/>
+<rect x="24.5" y="312.5" width="351" height="43" rx="8" fill="#202020" stroke="#2b2b2b" stroke-width="1"/>
+<text x="200" y="332" fill="#f4f4f4" font-size="11" font-weight="500" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">task</text>
+<text x="200" y="346" fill="#ababab" font-size="9" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">resize-image · media</text>
+<rect x="24" y="368" width="352" height="44" rx="8" fill="#000000"/>
+<rect x="24.5" y="368.5" width="351" height="43" rx="8" fill="#000000" stroke="#3d3d3d" stroke-width="1"/>
+<text x="200" y="388" fill="#f4f4f4" font-size="11" font-weight="500" font-family="Geist Mono, monospace" text-anchor="middle">task_runtime</text>
+<text x="200" y="402" fill="#ababab" font-size="9" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">active · worker A</text>
+<rect x="24" y="424" width="352" height="44" rx="8" fill="#000000"/>
+<rect x="24.5" y="424.5" width="351" height="43" rx="8" fill="#000000" stroke="#2b2b2b" stroke-width="1"/>
+<text x="200" y="450" fill="#ababab" font-size="9" font-family="Geist Mono, monospace" font-weight="400" text-anchor="middle">task_outcome · no row</text>
+<path d="M 200,472 V 490" fill="none" stroke="#838383" stroke-width="1" marker-end="url(#arrow-dark)"/>
+<text x="24" y="508" fill="#f4f4f4" font-size="12" font-family="Timeless Grotesk, Geist, sans-serif" font-weight="500" text-anchor="start">3 · After success</text>
+<text x="24" y="523" fill="#cfcfcf" font-size="9" font-family="Timeless Grotesk, Geist, sans-serif" font-weight="400" text-anchor="start">delete and insert in one transaction</text>
+<rect x="24" y="548" width="352" height="44" rx="8" fill="#000000"/>
+<rect x="24.5" y="548.5" width="351" height="43" rx="8" fill="#202020" stroke="#2b2b2b" stroke-width="1"/>
+<text x="200" y="568" fill="#f4f4f4" font-size="11" font-weight="500" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">task</text>
+<text x="200" y="582" fill="#ababab" font-size="9" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">resize-image · media</text>
+<rect x="24" y="604" width="352" height="44" rx="8" fill="#000000"/>
+<rect x="24.5" y="604.5" width="351" height="43" rx="8" fill="#000000" stroke="#2b2b2b" stroke-width="1"/>
+<text x="200" y="630" fill="#ababab" font-size="9" font-family="Geist Mono, monospace" font-weight="400" text-anchor="middle">task_runtime · no row</text>
+<rect x="24" y="660" width="352" height="44" rx="8" fill="#000000"/>
+<rect x="24.5" y="660.5" width="351" height="43" rx="8" fill="rgba(207,145,72,0.12)" stroke="#cf9148" stroke-width="1"/>
+<text x="200" y="680" fill="#f4f4f4" font-size="11" font-weight="500" font-family="Geist Mono, monospace" text-anchor="middle">task_outcome</text>
+<text x="200" y="694" fill="#ababab" font-size="9" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">succeeded · result</text>
+<line x1="24" y1="736" x2="376" y2="736" stroke="#2b2b2b"/>
+<text x="24" y="760" fill="#ababab" font-size="9" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="start">History, kept apart from these rows:</text>
+<text x="24" y="778" fill="#f4f4f4" font-size="9" font-family="Geist Mono, monospace" text-anchor="start">task_event</text>
+<text x="144" y="778" fill="#cfcfcf" font-size="9" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="start">enqueued · claimed · succeeded</text>
+<text x="24" y="796" fill="#f4f4f4" font-size="9" font-family="Geist Mono, monospace" text-anchor="start">attempt_history</text>
+<text x="144" y="796" fill="#cfcfcf" font-size="9" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="start">attempt 1 · succeeded</text>
 </svg>

@@ -1,81 +1,57 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 504" width="960" height="504" role="img" aria-labelledby="readme-overview-light-title readme-overview-light-desc">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 484" width="960" height="484" role="img" aria-labelledby="readme-overview-light-title readme-overview-light-desc">
 <title id="readme-overview-light-title">One protocol for your workers and your dashboard</title>
 <desc id="readme-overview-light-desc">Any of the seven SDKs serves one dashboard from a route in your own server. The dashboard and workers in TypeScript, Python, Go, Rust, Ruby, Java, Kotlin, and C# call the same versioned SQL functions. PostgreSQL holds durable task state and history, and applies priority, concurrency limits, rate limits, budgets, and queue pause when a worker claims a task.</desc>
-<defs><marker id="arrow-light" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#4e5359"/></marker></defs>
-<rect width="960" height="504" fill="#f9fafb"/>
-<path d="M 160,92 H 260" fill="none" stroke="#4e5359" stroke-width="1.2" marker-end="url(#arrow-light)"/>
-<path d="M 480,156 V 188" fill="none" stroke="#4e5359" stroke-width="1.2" marker-end="url(#arrow-light)"/>
-<path d="M 480,156 V 124" fill="none" stroke="#4e5359" stroke-width="1.2" marker-end="url(#arrow-light)"/>
-<path d="M 72,400 V 352" fill="none" stroke="#4e5359" stroke-width="1.2" marker-end="url(#arrow-light)"/>
-<path d="M 96,348 V 396" fill="none" stroke="#4e5359" stroke-width="1.2" stroke-dasharray="5,4" marker-end="url(#arrow-light)"/>
-<path d="M 204,400 V 352" fill="none" stroke="#4e5359" stroke-width="1.2" marker-end="url(#arrow-light)"/>
-<path d="M 228,348 V 396" fill="none" stroke="#4e5359" stroke-width="1.2" stroke-dasharray="5,4" marker-end="url(#arrow-light)"/>
-<path d="M 336,400 V 352" fill="none" stroke="#4e5359" stroke-width="1.2" marker-end="url(#arrow-light)"/>
-<path d="M 360,348 V 396" fill="none" stroke="#4e5359" stroke-width="1.2" stroke-dasharray="5,4" marker-end="url(#arrow-light)"/>
-<path d="M 468,400 V 352" fill="none" stroke="#4e5359" stroke-width="1.2" marker-end="url(#arrow-light)"/>
-<path d="M 492,348 V 396" fill="none" stroke="#4e5359" stroke-width="1.2" stroke-dasharray="5,4" marker-end="url(#arrow-light)"/>
-<path d="M 600,400 V 352" fill="none" stroke="#4e5359" stroke-width="1.2" marker-end="url(#arrow-light)"/>
-<path d="M 624,348 V 396" fill="none" stroke="#4e5359" stroke-width="1.2" stroke-dasharray="5,4" marker-end="url(#arrow-light)"/>
-<path d="M 732,400 V 352" fill="none" stroke="#4e5359" stroke-width="1.2" marker-end="url(#arrow-light)"/>
-<path d="M 756,348 V 396" fill="none" stroke="#4e5359" stroke-width="1.2" stroke-dasharray="5,4" marker-end="url(#arrow-light)"/>
-<path d="M 864,400 V 352" fill="none" stroke="#4e5359" stroke-width="1.2" marker-end="url(#arrow-light)"/>
-<path d="M 888,348 V 396" fill="none" stroke="#4e5359" stroke-width="1.2" stroke-dasharray="5,4" marker-end="url(#arrow-light)"/>
-<rect x="232" y="40" width="496" height="104" rx="8" fill="rgba(26,32,39,0.02)" stroke="rgba(26,32,39,0.12)" stroke-width="0.8"/>
-<rect x="244" y="34" width="228" height="12" rx="2" fill="#f9fafb"/>
-<text x="358" y="43" fill="#6d7277" font-size="7" font-family="Geist Mono" text-anchor="middle" letter-spacing="0.14em">YOUR SERVER · YOUR LOGIN · ANY OF 7 SDKS</text>
-<rect x="24" y="168" width="912" height="204" rx="8" fill="rgba(26,32,39,0.02)" stroke="rgba(26,32,39,0.12)" stroke-width="0.8"/>
-<rect x="36" y="162" width="68" height="12" rx="2" fill="#f9fafb"/>
-<text x="70" y="171" fill="#6d7277" font-size="7" font-family="Geist Mono" text-anchor="middle" letter-spacing="0.14em">POSTGRESQL</text>
-<rect x="24" y="64" width="136" height="56" rx="6" fill="#f9fafb"/>
-<rect x="24" y="64" width="136" height="56" rx="6" fill="rgba(26,32,39,0.03)" stroke="rgba(26,32,39,0.4)" stroke-width="1" stroke-dasharray="4,3"/>
-<text x="92" y="90" fill="#1a2027" font-size="12" font-weight="600" font-family="Geist" text-anchor="middle">Operator</text>
-<text x="92" y="104" fill="#4e5359" font-size="9" font-family="Geist Mono" text-anchor="middle">browser</text>
-<rect x="264" y="64" width="432" height="56" rx="6" fill="#f9fafb"/>
-<rect x="264" y="64" width="432" height="56" rx="6" fill="rgba(213,92,19,0.08)" stroke="#aa4515" stroke-width="1.4"/>
-<text x="480" y="90" fill="#1a2027" font-size="12" font-weight="600" font-family="Geist" text-anchor="middle">One dashboard</text>
-<text x="480" y="104" fill="#4e5359" font-size="9" font-family="Geist Mono" text-anchor="middle">mounted on a route you choose · no extra service</text>
-<rect x="48" y="192" width="864" height="156" rx="6" fill="#f9fafb"/>
-<rect x="48" y="192" width="864" height="156" rx="6" fill="rgba(26,32,39,0.05)" stroke="#4e5359" stroke-width="1"/>
-<line x1="64" y1="244" x2="896" y2="244" stroke="rgba(26,32,39,0.14)"/>
-<line x1="64" y1="296" x2="896" y2="296" stroke="rgba(26,32,39,0.14)"/>
-<text x="480" y="214" fill="#1a2027" font-size="12" font-family="Geist" font-weight="600" text-anchor="middle">One schema · one protocol</text>
-<text x="480" y="229" fill="#4e5359" font-size="9" font-family="Geist Mono" font-weight="400" text-anchor="middle">versioned SQL functions · the same calls from the dashboard and all 7 SDKs</text>
-<text x="480" y="266" fill="#1a2027" font-size="12" font-family="Geist" font-weight="600" text-anchor="middle">Durable task state and history</text>
-<text x="480" y="281" fill="#4e5359" font-size="9" font-family="Geist Mono" font-weight="400" text-anchor="middle">attempts · events · checkpoints · waits · signals · progress · schedules · task groups</text>
-<text x="480" y="318" fill="#1a2027" font-size="12" font-family="Geist" font-weight="600" text-anchor="middle">Flow control at claim</text>
-<text x="480" y="333" fill="#4e5359" font-size="9" font-family="Geist Mono" font-weight="400" text-anchor="middle">priority · queue and keyed concurrency limits · rate limits · budgets across queues · queue pause</text>
-<rect x="24" y="400" width="120" height="48" rx="6" fill="#f9fafb"/>
-<rect x="24" y="400" width="120" height="48" rx="6" fill="#ffffff" stroke="#1a2027" stroke-width="1"/>
-<text x="84" y="422" fill="#1a2027" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">TypeScript</text>
-<text x="84" y="436" fill="#4e5359" font-size="9" font-family="Geist Mono" text-anchor="middle">N workers</text>
-<rect x="156" y="400" width="120" height="48" rx="6" fill="#f9fafb"/>
-<rect x="156" y="400" width="120" height="48" rx="6" fill="#ffffff" stroke="#1a2027" stroke-width="1"/>
-<text x="216" y="422" fill="#1a2027" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">Python</text>
-<text x="216" y="436" fill="#4e5359" font-size="9" font-family="Geist Mono" text-anchor="middle">N workers</text>
-<rect x="288" y="400" width="120" height="48" rx="6" fill="#f9fafb"/>
-<rect x="288" y="400" width="120" height="48" rx="6" fill="#ffffff" stroke="#1a2027" stroke-width="1"/>
-<text x="348" y="422" fill="#1a2027" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">Go</text>
-<text x="348" y="436" fill="#4e5359" font-size="9" font-family="Geist Mono" text-anchor="middle">N workers</text>
-<rect x="420" y="400" width="120" height="48" rx="6" fill="#f9fafb"/>
-<rect x="420" y="400" width="120" height="48" rx="6" fill="#ffffff" stroke="#1a2027" stroke-width="1"/>
-<text x="480" y="422" fill="#1a2027" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">Rust</text>
-<text x="480" y="436" fill="#4e5359" font-size="9" font-family="Geist Mono" text-anchor="middle">N workers</text>
-<rect x="552" y="400" width="120" height="48" rx="6" fill="#f9fafb"/>
-<rect x="552" y="400" width="120" height="48" rx="6" fill="#ffffff" stroke="#1a2027" stroke-width="1"/>
-<text x="612" y="422" fill="#1a2027" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">Ruby</text>
-<text x="612" y="436" fill="#4e5359" font-size="9" font-family="Geist Mono" text-anchor="middle">N workers</text>
-<rect x="684" y="400" width="120" height="48" rx="6" fill="#f9fafb"/>
-<rect x="684" y="400" width="120" height="48" rx="6" fill="#ffffff" stroke="#1a2027" stroke-width="1"/>
-<text x="744" y="422" fill="#1a2027" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">JVM</text>
-<text x="744" y="436" fill="#4e5359" font-size="9" font-family="Geist Mono" text-anchor="middle">N workers</text>
-<rect x="816" y="400" width="120" height="48" rx="6" fill="#f9fafb"/>
-<rect x="816" y="400" width="120" height="48" rx="6" fill="#ffffff" stroke="#1a2027" stroke-width="1"/>
-<text x="876" y="422" fill="#1a2027" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">.NET</text>
-<text x="876" y="436" fill="#4e5359" font-size="9" font-family="Geist Mono" text-anchor="middle">N workers</text>
-<rect x="176" y="72" width="40" height="12" rx="2" fill="#f9fafb"/>
-<text x="196" y="81" fill="#6d7277" font-size="8" font-family="Geist Mono" text-anchor="middle" letter-spacing="0.06em">HTTPS</text>
-<path d="M 24,476 H 52" fill="none" stroke="#4e5359" stroke-width="1.2" marker-end="url(#arrow-light)"/>
-<text x="60" y="479" fill="#4e5359" font-size="9" font-family="Geist Mono">claim · heartbeat · complete · fail</text>
-<path d="M 300,476 H 328" fill="none" stroke="#4e5359" stroke-width="1.2" stroke-dasharray="5,4" marker-end="url(#arrow-light)"/>
-<text x="336" y="479" fill="#4e5359" font-size="9" font-family="Geist Mono">task · payload · fence token</text>
+<defs><marker id="arrow-light" markerWidth="8" markerHeight="8" refX="6.5" refY="4" orient="auto" markerUnits="userSpaceOnUse"><path d="M 1.5,1 L 6.5,4 L 1.5,7" fill="none" stroke="#7d7d7d" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/></marker></defs>
+<rect width="960" height="484" fill="#ffffff"/>
+<path d="M 188,52 H 319" fill="none" stroke="#7d7d7d" stroke-width="1" marker-end="url(#arrow-light)"/>
+<path d="M 480,98 V 116" fill="none" stroke="#7d7d7d" stroke-width="1" marker-end="url(#arrow-light)"/>
+<path d="M 480,98 V 81" fill="none" stroke="#7d7d7d" stroke-width="1" marker-end="url(#arrow-light)"/>
+<path d="M 468,376 V 329" fill="none" stroke="#7d7d7d" stroke-width="1" marker-end="url(#arrow-light)"/>
+<path d="M 492,328 V 375" fill="none" stroke="#7d7d7d" stroke-width="1" stroke-dasharray="4,3" marker-end="url(#arrow-light)"/>
+<rect x="24" y="116" width="912" height="212" rx="12" fill="none" stroke="#e7e7e7" stroke-width="1"/>
+<rect x="36" y="110" width="68" height="12" fill="#ffffff"/>
+<text x="70" y="119" fill="#555555" font-size="8" font-weight="500" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle" letter-spacing="0.04em">POSTGRESQL</text>
+<rect x="24" y="376" width="912" height="84" rx="12" fill="none" stroke="#e7e7e7" stroke-width="1"/>
+<rect x="36" y="370" width="188" height="12" fill="#ffffff"/>
+<text x="130" y="379" fill="#555555" font-size="8" font-weight="500" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle" letter-spacing="0.04em">WORKERS · ANY NUMBER OF PROCESSES</text>
+<rect x="24" y="28" width="164" height="48" rx="8" fill="#ffffff"/>
+<rect x="24.5" y="28.5" width="163" height="47" rx="8" fill="#ffffff" stroke="#e7e7e7" stroke-width="1"/>
+<text x="106" y="56" fill="#555555" font-size="12" font-weight="500" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">Operator</text>
+<rect x="320" y="24" width="320" height="56" rx="8" fill="#ffffff"/>
+<rect x="320.5" y="24.5" width="319" height="55" rx="8" fill="rgba(207,145,72,0.12)" stroke="#cf9148" stroke-width="1"/>
+<text x="480" y="50" fill="#000000" font-size="12" font-weight="500" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">Dashboard</text>
+<text x="480" y="64" fill="#555555" font-size="9" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">A route in your own server</text>
+<rect x="48" y="140" width="864" height="164" rx="8" fill="#ffffff"/>
+<rect x="48.5" y="140.5" width="863" height="163" rx="8" fill="#f4f4f4" stroke="#e7e7e7" stroke-width="1"/>
+<line x1="64" y1="194" x2="896" y2="194" stroke="#e7e7e7"/>
+<line x1="64" y1="248" x2="896" y2="248" stroke="#e7e7e7"/>
+<text x="480" y="164" fill="#000000" font-size="12" font-family="Timeless Grotesk, Geist, sans-serif" font-weight="500" text-anchor="middle">One schema, one protocol</text>
+<text x="480" y="179" fill="#555555" font-size="10" font-family="Timeless Grotesk, Geist, sans-serif" font-weight="400" text-anchor="middle">Versioned SQL functions that the dashboard and every SDK call</text>
+<text x="480" y="218" fill="#000000" font-size="12" font-family="Timeless Grotesk, Geist, sans-serif" font-weight="500" text-anchor="middle">Durable state and history</text>
+<text x="480" y="233" fill="#555555" font-size="10" font-family="Timeless Grotesk, Geist, sans-serif" font-weight="400" text-anchor="middle">Attempts, events, checkpoints, waits, and schedules</text>
+<text x="480" y="272" fill="#000000" font-size="12" font-family="Timeless Grotesk, Geist, sans-serif" font-weight="500" text-anchor="middle">Flow control at claim</text>
+<text x="480" y="287" fill="#555555" font-size="10" font-family="Timeless Grotesk, Geist, sans-serif" font-weight="400" text-anchor="middle">Priority, concurrency limits, rate limits, and queue pause</text>
+<text x="456" y="355" fill="#555555" font-size="10" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="end">claim · heartbeat · complete · fail</text>
+<text x="504" y="355" fill="#555555" font-size="10" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="start">task · payload · fence token</text>
+<rect x="52" y="400" width="112" height="40" rx="8" fill="#ffffff"/>
+<rect x="52.5" y="400.5" width="111" height="39" rx="8" fill="#ffffff" stroke="#cdcdcd" stroke-width="1"/>
+<text x="108" y="424" fill="#000000" font-size="11" font-weight="500" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">TypeScript</text>
+<rect x="176" y="400" width="112" height="40" rx="8" fill="#ffffff"/>
+<rect x="176.5" y="400.5" width="111" height="39" rx="8" fill="#ffffff" stroke="#cdcdcd" stroke-width="1"/>
+<text x="232" y="424" fill="#000000" font-size="11" font-weight="500" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">Python</text>
+<rect x="300" y="400" width="112" height="40" rx="8" fill="#ffffff"/>
+<rect x="300.5" y="400.5" width="111" height="39" rx="8" fill="#ffffff" stroke="#cdcdcd" stroke-width="1"/>
+<text x="356" y="424" fill="#000000" font-size="11" font-weight="500" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">Go</text>
+<rect x="424" y="400" width="112" height="40" rx="8" fill="#ffffff"/>
+<rect x="424.5" y="400.5" width="111" height="39" rx="8" fill="#ffffff" stroke="#cdcdcd" stroke-width="1"/>
+<text x="480" y="424" fill="#000000" font-size="11" font-weight="500" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">Rust</text>
+<rect x="548" y="400" width="112" height="40" rx="8" fill="#ffffff"/>
+<rect x="548.5" y="400.5" width="111" height="39" rx="8" fill="#ffffff" stroke="#cdcdcd" stroke-width="1"/>
+<text x="604" y="424" fill="#000000" font-size="11" font-weight="500" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">Ruby</text>
+<rect x="672" y="400" width="112" height="40" rx="8" fill="#ffffff"/>
+<rect x="672.5" y="400.5" width="111" height="39" rx="8" fill="#ffffff" stroke="#cdcdcd" stroke-width="1"/>
+<text x="728" y="424" fill="#000000" font-size="11" font-weight="500" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">JVM</text>
+<rect x="796" y="400" width="112" height="40" rx="8" fill="#ffffff"/>
+<rect x="796.5" y="400.5" width="111" height="39" rx="8" fill="#ffffff" stroke="#cdcdcd" stroke-width="1"/>
+<text x="852" y="424" fill="#000000" font-size="11" font-weight="500" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">.NET</text>
 </svg>

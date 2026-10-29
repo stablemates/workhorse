@@ -1,4 +1,4 @@
-import { Diagram, MONO, SANS, type Theme } from "./diagram-svg.js";
+import { Diagram, SANS, type Theme } from "./diagram-svg.js";
 
 /**
  * The README overview diagram: one dashboard, one schema, and workers in all seven SDKs. The JVM
@@ -6,8 +6,8 @@ import { Diagram, MONO, SANS, type Theme } from "./diagram-svg.js";
  *
  * Read from top to bottom:
  *
- * 1. An operator's browser opens the dashboard. Any of the seven SDKs serves it from a route in
- *    your own server (`docs/parity.md`, "Embedded dashboard backend").
+ * 1. An operator opens the dashboard. Any of the seven SDKs serves it from a route in your own
+ *    server (`docs/parity.md`, "Embedded dashboard backend").
  * 2. The dashboard and the schema exchange reads and operator actions. One arrow with a head at
  *    each end shows that exchange.
  * 3. One block in PostgreSQL holds three rows:
@@ -19,18 +19,18 @@ import { Diagram, MONO, SANS, type Theme } from "./diagram-svg.js";
  *      keyed concurrency policies, rate limits, budgets, and queue pause
  *      (`docs/guides/240-concurrency-policies.md`, `docs/guides/250-rate-limits.md`). Debounce
  *      and throttle act at enqueue, so this row leaves them out.
- * 4. One box per SDK. The JVM box runs Java and Kotlin handlers, and the .NET box runs C#
- *    handlers. "N workers" says that any number of worker processes of that SDK can share the
- *    schema, because PostgreSQL decides each claim (`docs/guides/310-workers.md`). Each box has a
- *    solid arrow up for its calls and a dashed arrow down for what it receives. The legend under
- *    the boxes names both.
+ *    Each row names a subset, so the diagram stays short. The description lists them in full.
+ * 4. One pair of arrows joins PostgreSQL and the workers: a solid arrow up for the calls of a
+ *    worker and a dashed arrow down for what it receives. Their labels replace a legend.
+ * 5. One box per SDK in a region for the workers. Any number of worker processes of an SDK can
+ *    share the schema, because PostgreSQL decides each claim (`docs/guides/310-workers.md`).
  *
  * Check each fact against its source before you change a label.
  */
 
 const SDKS = ["TypeScript", "Python", "Go", "Rust", "Ruby", "JVM", ".NET"] as const;
-const COLUMN_WIDTH = 120;
-const columns = SDKS.map((_, index) => 24 + index * 132);
+const COLUMN_WIDTH = 112;
+const columns = SDKS.map((_, index) => 52 + index * 124);
 const title = "One protocol for your workers and your dashboard";
 const description =
   "Any of the seven SDKs serves one dashboard from a route in your own server. The dashboard and " +
@@ -44,79 +44,46 @@ export const readmeOverview = {
   render(theme: Theme): string {
     const d = new Diagram(theme);
 
-    d.arrow("M 160,92 H 260");
-    d.arrow("M 480,156 V 188");
-    d.arrow("M 480,156 V 124");
-    for (const x of columns) {
-      const cx = x + COLUMN_WIDTH / 2;
-      d.arrow(`M ${cx - 12},400 V 352`);
-      d.arrow(`M ${cx + 12},348 V 396`, { dashed: true });
-    }
+    d.arrow("M 188,52 H 319");
+    d.arrow("M 480,98 V 116");
+    d.arrow("M 480,98 V 81");
+    d.arrow("M 468,376 V 329");
+    d.arrow("M 492,328 V 375", { dashed: true });
 
-    d.zone(232, 40, 496, 104, "YOUR SERVER · YOUR LOGIN · ANY OF 7 SDKS");
-    d.zone(24, 168, 912, 204, "POSTGRESQL");
+    d.zone(24, 116, 912, 212, "POSTGRESQL");
+    d.zone(24, 376, 912, 84, "WORKERS · ANY NUMBER OF PROCESSES");
 
-    d.box(24, 64, 136, 56, "external", "Operator", "browser");
-    d.box(
-      264,
-      64,
-      432,
-      56,
-      "focal",
-      "One dashboard",
-      "mounted on a route you choose · no extra service",
-    );
-    d.box(48, 192, 864, 156, "store");
-    d.divider(64, 896, 244);
-    d.divider(64, 896, 296);
-    d.rows(480, 214, [
-      ["One schema · one protocol", 12, "ink", SANS, 600],
-      [
-        "versioned SQL functions · the same calls from the dashboard and all 7 SDKs",
-        9,
-        "muted",
-        MONO,
-        400,
-      ],
+    d.box(24, 28, 164, 48, "external", "Operator");
+    d.box(320, 24, 320, 56, "focal", "Dashboard", "A route in your own server");
+    d.box(48, 140, 864, 164, "store");
+    d.divider(64, 896, 194);
+    d.divider(64, 896, 248);
+    d.rows(480, 164, [
+      ["One schema, one protocol", 12, "ink", SANS, 500],
+      ["Versioned SQL functions that the dashboard and every SDK call", 10, "soft", SANS, 400],
     ]);
-    d.rows(480, 266, [
-      ["Durable task state and history", 12, "ink", SANS, 600],
-      [
-        "attempts · events · checkpoints · waits · signals · progress · schedules · task groups",
-        9,
-        "muted",
-        MONO,
-        400,
-      ],
+    d.rows(480, 218, [
+      ["Durable state and history", 12, "ink", SANS, 500],
+      ["Attempts, events, checkpoints, waits, and schedules", 10, "soft", SANS, 400],
     ]);
-    d.rows(480, 318, [
-      ["Flow control at claim", 12, "ink", SANS, 600],
-      [
-        "priority · queue and keyed concurrency limits · rate limits · budgets across queues · queue pause",
-        9,
-        "muted",
-        MONO,
-        400,
-      ],
+    d.rows(480, 272, [
+      ["Flow control at claim", 12, "ink", SANS, 500],
+      ["Priority, concurrency limits, rate limits, and queue pause", 10, "soft", SANS, 400],
     ]);
+    d.text(456, 355, "claim · heartbeat · complete · fail", { size: 10, anchor: "end" });
+    d.text(504, 355, "task · payload · fence token", { size: 10 });
     SDKS.forEach((name, index) => {
-      d.box(columns[index]!, 400, COLUMN_WIDTH, 48, "backend", name, "N workers", 11);
+      d.box(columns[index]!, 400, COLUMN_WIDTH, 40, "backend", name, undefined, 11);
     });
 
-    d.label(196, 72, "HTTPS");
-    d.arrow("M 24,476 H 52");
-    d.text(60, 479, "claim · heartbeat · complete · fail");
-    d.arrow("M 300,476 H 328", { dashed: true });
-    d.text(336, 479, "task · payload · fence token");
-
-    return d.render(this.slug, 960, 504, this.title, description);
+    return d.render(this.slug, 960, 484, this.title, description);
   },
 };
 
 /**
- * The same diagram for screens up to 600 px wide. It is 400 px wide, so a phone shows it at almost
- * full size: the subtitles wrap to two lines in a larger font, and the SDK boxes are narrower. The
- * boxes have no room for "N workers", so a legend line under them says it.
+ * The same diagram for screens up to 600 px wide, and for the first page of the docs. It is 400 px
+ * wide, so a phone shows it at almost full size. The subtitles wrap to two lines, and the SDK boxes
+ * sit in two rows.
  */
 export const readmeOverviewNarrow = {
   slug: "readme-overview-narrow",
@@ -124,48 +91,46 @@ export const readmeOverviewNarrow = {
   render(theme: Theme): string {
     const d = new Diagram(theme);
 
-    d.arrow("M 104,86 H 136");
-    d.arrow("M 256,140 V 172");
-    d.arrow("M 256,140 V 116");
-    SDKS.forEach((_, index) => {
-      const cx = 24 + index * 50 + 22;
-      d.arrow(`M ${cx - 8},436 V 384`);
-      d.arrow(`M ${cx + 8},380 V 432`, { dashed: true });
-    });
+    d.arrow("M 112,52 H 147");
+    d.arrow("M 262,98 V 116");
+    d.arrow("M 262,98 V 81");
+    d.arrow("M 268,416 V 361");
+    d.arrow("M 292,360 V 415", { dashed: true });
 
-    d.zone(124, 40, 264, 88, "YOUR SERVER · YOUR LOGIN · ANY OF 7 SDKS");
-    d.zone(12, 152, 376, 252, "POSTGRESQL");
+    d.zone(12, 116, 376, 244, "POSTGRESQL");
+    d.zone(12, 416, 376, 128, "WORKERS · ANY NUMBER OF PROCESSES");
 
-    d.box(24, 60, 80, 52, "external", "Operator", "browser", 11);
-    d.box(140, 60, 232, 52, "focal", "One dashboard", "on a route you choose · no extra service");
-    d.box(24, 176, 352, 204, "store");
-    d.divider(40, 360, 244);
-    d.divider(40, 360, 312);
-    d.rows(200, 198, [
-      ["One schema · one protocol", 13, "ink", SANS, 600],
-      ["versioned SQL functions · the same calls", 10, "muted", MONO, 400],
-      ["from the dashboard and all 7 SDKs", 10, "muted", MONO, 400],
+    d.box(24, 28, 88, 48, "external", "Operator", undefined, 11);
+    d.box(148, 24, 228, 56, "focal", "Dashboard", "A route in your own server");
+    d.box(24, 136, 352, 204, "store");
+    d.divider(40, 360, 204);
+    d.divider(40, 360, 272);
+    d.rows(200, 160, [
+      ["One schema, one protocol", 13, "ink", SANS, 500],
+      ["Versioned SQL functions that the", 10, "soft", SANS, 400],
+      ["dashboard and every SDK call", 10, "soft", SANS, 400],
     ]);
-    d.rows(200, 266, [
-      ["Durable task state and history", 13, "ink", SANS, 600],
-      ["attempts · events · checkpoints · waits", 10, "muted", MONO, 400],
-      ["signals · progress · schedules · task groups", 10, "muted", MONO, 400],
+    d.rows(200, 228, [
+      ["Durable state and history", 13, "ink", SANS, 500],
+      ["Attempts, events, checkpoints,", 10, "soft", SANS, 400],
+      ["waits, and schedules", 10, "soft", SANS, 400],
     ]);
-    d.rows(200, 334, [
-      ["Flow control at claim", 13, "ink", SANS, 600],
-      ["priority · queue and keyed concurrency limits", 10, "muted", MONO, 400],
-      ["rate limits · budgets across queues · queue pause", 10, "muted", MONO, 400],
+    d.rows(200, 296, [
+      ["Flow control at claim", 13, "ink", SANS, 500],
+      ["Priority, concurrency limits,", 10, "soft", SANS, 400],
+      ["rate limits, and queue pause", 10, "soft", SANS, 400],
     ]);
+    d.text(256, 384, "claim · heartbeat", { size: 10, anchor: "end" });
+    d.text(256, 397, "complete · fail", { size: 10, anchor: "end" });
+    d.text(304, 384, "task · payload", { size: 10 });
+    d.text(304, 397, "fence token", { size: 10 });
     SDKS.forEach((name, index) => {
-      d.box(24 + index * 50, 436, 46, 36, "backend", name, undefined, 8);
+      const row = index < 4 ? 0 : 1;
+      const column = row === 0 ? index : index - 4;
+      const x = row === 0 ? 24 + column * 90 : 69 + column * 90;
+      d.box(x, 436 + row * 52, 82, 40, "backend", name, undefined, 11);
     });
 
-    d.text(24, 495, "each SDK box: N workers");
-    d.arrow("M 24,512 H 52");
-    d.text(60, 515, "claim · heartbeat · complete · fail");
-    d.arrow("M 24,530 H 52", { dashed: true });
-    d.text(60, 533, "task · payload · fence token");
-
-    return d.render(this.slug, 400, 548, title, description);
+    return d.render(this.slug, 400, 568, title, description);
   },
 };

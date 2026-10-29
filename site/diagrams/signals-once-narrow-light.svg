@@ -1,25 +1,25 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 232" width="400" height="232" role="img" aria-labelledby="signals-once-narrow-light-title signals-once-narrow-light-desc">
 <title id="signals-once-narrow-light-title">Workhorse accepts only the first delivery of a signal</title>
 <desc id="signals-once-narrow-light-desc">The task for ord-381 waits for the approval signal. At 3 h, the review service sends approval with the key review-77, and Workhorse resumes the task. At 3 h + 5 s, the service sends the same key again, and Workhorse returns duplicate. At 3 h + 1 min, a second reviewer sends the key review-78, and Workhorse returns already_delivered with the first payload. The task resumes one time.</desc>
-<defs><marker id="arrow-light" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#4e5359"/></marker></defs>
-<rect width="400" height="232" fill="#f9fafb"/>
-<text x="24" y="49" fill="#1a2027" font-size="9" font-family="Geist Mono">3 h</text>
-<rect x="112" y="24" width="264" height="42" rx="6" fill="#f9fafb"/>
-<rect x="112" y="24" width="264" height="42" rx="6" fill="rgba(213,92,19,0.08)" stroke="#aa4515" stroke-width="1.4"/>
-<text x="244" y="43" fill="#1a2027" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">review-77: delivered</text>
-<text x="244" y="57" fill="#4e5359" font-size="9" font-family="Geist Mono" text-anchor="middle">the task resumes</text>
-<path d="M 248,66 V 78" fill="none" stroke="#4e5359" stroke-width="1.2" marker-end="url(#arrow-light)"/>
-<text x="24" y="105" fill="#1a2027" font-size="9" font-family="Geist Mono">3 h + 5 s</text>
-<rect x="112" y="80" width="264" height="42" rx="6" fill="#f9fafb"/>
-<rect x="112" y="80" width="264" height="42" rx="6" fill="rgba(26,32,39,0.05)" stroke="#4e5359" stroke-width="1"/>
-<text x="244" y="99" fill="#1a2027" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">review-77 again: duplicate</text>
-<text x="244" y="113" fill="#4e5359" font-size="9" font-family="Geist Mono" text-anchor="middle">no change</text>
-<path d="M 248,122 V 134" fill="none" stroke="#4e5359" stroke-width="1.2" marker-end="url(#arrow-light)"/>
-<text x="24" y="161" fill="#1a2027" font-size="9" font-family="Geist Mono">3 h + 1 min</text>
-<rect x="112" y="136" width="264" height="42" rx="6" fill="#f9fafb"/>
-<rect x="112" y="136" width="264" height="42" rx="6" fill="rgba(26,32,39,0.05)" stroke="#4e5359" stroke-width="1"/>
-<text x="244" y="155" fill="#1a2027" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">review-78: already_delivered</text>
-<text x="244" y="169" fill="#4e5359" font-size="9" font-family="Geist Mono" text-anchor="middle">no change · first payload</text>
-<text x="24" y="200" fill="#4e5359" font-size="9" font-family="Geist Mono" font-weight="400" text-anchor="start">The first accepted delivery resumes the</text>
-<text x="24" y="215" fill="#4e5359" font-size="9" font-family="Geist Mono" font-weight="400" text-anchor="start">task. A later delivery does not change it.</text>
+<defs><marker id="arrow-light" markerWidth="8" markerHeight="8" refX="6.5" refY="4" orient="auto" markerUnits="userSpaceOnUse"><path d="M 1.5,1 L 6.5,4 L 1.5,7" fill="none" stroke="#7d7d7d" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/></marker></defs>
+<rect width="400" height="232" fill="#ffffff"/>
+<text x="24" y="49" fill="#000000" font-size="9" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="start">3 h</text>
+<rect x="112" y="24" width="264" height="42" rx="8" fill="#ffffff"/>
+<rect x="112.5" y="24.5" width="263" height="41" rx="8" fill="rgba(207,145,72,0.12)" stroke="#cf9148" stroke-width="1"/>
+<text x="244" y="43" fill="#000000" font-size="11" font-weight="500" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">review-77: delivered</text>
+<text x="244" y="57" fill="#555555" font-size="9" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">the task resumes</text>
+<path d="M 248,66 V 78" fill="none" stroke="#7d7d7d" stroke-width="1" marker-end="url(#arrow-light)"/>
+<text x="24" y="105" fill="#000000" font-size="9" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="start">3 h + 5 s</text>
+<rect x="112" y="80" width="264" height="42" rx="8" fill="#ffffff"/>
+<rect x="112.5" y="80.5" width="263" height="41" rx="8" fill="#f4f4f4" stroke="#e7e7e7" stroke-width="1"/>
+<text x="244" y="99" fill="#000000" font-size="11" font-weight="500" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">review-77 again: duplicate</text>
+<text x="244" y="113" fill="#555555" font-size="9" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">no change</text>
+<path d="M 248,122 V 134" fill="none" stroke="#7d7d7d" stroke-width="1" marker-end="url(#arrow-light)"/>
+<text x="24" y="161" fill="#000000" font-size="9" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="start">3 h + 1 min</text>
+<rect x="112" y="136" width="264" height="42" rx="8" fill="#ffffff"/>
+<rect x="112.5" y="136.5" width="263" height="41" rx="8" fill="#f4f4f4" stroke="#e7e7e7" stroke-width="1"/>
+<text x="244" y="155" fill="#000000" font-size="11" font-weight="500" font-family="Geist Mono, monospace" text-anchor="middle">review-78: already_delivered</text>
+<text x="244" y="169" fill="#555555" font-size="9" font-family="Timeless Grotesk, Geist, sans-serif" text-anchor="middle">no change · first payload</text>
+<text x="24" y="200" fill="#555555" font-size="9" font-family="Timeless Grotesk, Geist, sans-serif" font-weight="400" text-anchor="start">The first accepted delivery resumes the</text>
+<text x="24" y="215" fill="#555555" font-size="9" font-family="Timeless Grotesk, Geist, sans-serif" font-weight="400" text-anchor="start">task. A later delivery does not change it.</text>
 </svg>

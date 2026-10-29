@@ -4,6 +4,8 @@
 - **Date:** 2026-10-17
 - **Amends:** [ADR 0052](0052-publish-long-form-content-on-the-site.md) (comparisons are docs pages,
   not posts)
+- **Amended by:** [ADR 0116](0116-serve-the-comparison-pages-as-site-pages.md) (the pages are
+  site pages at `/compare`)
 - **Related:** [ADR 0051](0051-lead-with-durable-job-queue.md)
 - **Issue:** SM-1362, SM-1363, SM-1415
 

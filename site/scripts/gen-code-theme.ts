@@ -21,9 +21,9 @@ import { mkdir, readFile, readdir, writeFile } from "node:fs/promises";
 import { highlight } from "fumadocs-core/highlight";
 
 import {
+  type CodeThemePair,
   createTokenClassTransformer,
-  docsCodeThemes,
-  landingCodeThemes,
+  siteCodeThemes,
 } from "../lib/code-highlighting.js";
 import {
   landingSnippetLanguages,
@@ -68,7 +68,7 @@ const transformer = createTokenClassTransformer();
 // Fumadocs resolves an unknown language by falling back, and a language Shiki
 // cannot load throws. Neither should fail the build over one code fence, but the
 // miss has to be visible rather than silent.
-async function collect(code: string, lang: string, themes: Record<string, string>) {
+async function collect(code: string, lang: string, themes: CodeThemePair) {
   try {
     await highlight(code, { lang, themes, defaultColor: false, transformers: [transformer] });
   } catch (error) {
@@ -80,12 +80,12 @@ let documentationBlocks = 0;
 for (const file of await mdxFiles(contentRoot)) {
   for (const block of fencedBlocks(await readFile(file, "utf8"))) {
     documentationBlocks += 1;
-    await collect(block.code, block.lang, docsCodeThemes);
+    await collect(block.code, block.lang, siteCodeThemes);
   }
 }
 
 for (const [id, code] of Object.entries(landingSnippets)) {
-  await collect(code, landingSnippetLanguages[id as LandingSnippetId] ?? "ts", landingCodeThemes);
+  await collect(code, landingSnippetLanguages[id as LandingSnippetId] ?? "ts", siteCodeThemes);
 }
 
 const css = transformer.getCSS();

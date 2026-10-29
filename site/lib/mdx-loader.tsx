@@ -1,43 +1,18 @@
-import { DocsBody, DocsDescription, DocsPage, DocsTitle } from "fumadocs-ui/page";
-
 import browserCollections from "@/.source/browser";
+import { ComparisonTable } from "@/components/comparison";
 import { formatPostDate } from "@/lib/blog";
 import { getMDXComponents } from "@/mdx-components";
 
 /**
- * Renders one doc from the browser collection, which imports each MDX module
- * lazily. `lib/source.ts` stays build-only: it imports every MDX file eagerly,
- * which belongs in the prerender graph and not in the client bundle.
- *
- * The whole page renders here, not just the body, because the table of contents
- * carries React nodes. Route loader data crosses a serialization boundary and
- * React nodes do not survive it, so the table of contents has to come from the
- * loaded module instead.
+ * Each loader below renders one entry of a browser collection, which imports
+ * each MDX module lazily. `lib/source.ts` stays build-only: it imports every
+ * MDX file eagerly, which belongs in the prerender graph and not in the client
+ * bundle. The documentation pages are not here: Blume builds them from
+ * `site/blume`.
  *
  * The loader id is required. TanStack Start can split this module into several
  * chunks, and the id shares one cache between them.
  */
-export const clientLoader = browserCollections.docs.createClientLoader<Record<string, never>>({
-  id: "docs",
-  component: (loaded) => {
-    const MDX = loaded.default;
-    const { title, description, full } = loaded.frontmatter;
-
-    return (
-      <DocsPage
-        toc={loaded.toc}
-        full={full ?? false}
-        tableOfContent={{ style: "clerk", single: false }}
-      >
-        <DocsTitle className="wh-docs-title">{title}</DocsTitle>
-        <DocsDescription className="wh-docs-description">{description}</DocsDescription>
-        <DocsBody className="wh-docs-body">
-          <MDX components={getMDXComponents()} />
-        </DocsBody>
-      </DocsPage>
-    );
-  },
-});
 
 /**
  * Renders one blog post from the browser collection. The post's date is not in
@@ -56,8 +31,8 @@ export const postLoader = browserCollections.blog.createClientLoader<{ readonly 
           <time dateTime={date} className="wh-mono-label">
             {formatPostDate(date)}
           </time>
-          <h1 className="wh-docs-title mt-3 text-3xl font-semibold sm:text-4xl">{title}</h1>
-          <p className="wh-docs-description mt-4 text-lg text-fd-muted-foreground">{description}</p>
+          <h1 className="wh-docs-title mt-3 text-ui-xl font-semibold sm:text-ui-xxl">{title}</h1>
+          <p className="wh-docs-description mt-4 text-ui-m text-wh-muted">{description}</p>
         </header>
         <div className="prose wh-docs-body">
           <MDX components={getMDXComponents()} />
@@ -81,13 +56,31 @@ export const pageLoader = browserCollections.pages.createClientLoader<Record<str
     return (
       <article className="mx-auto w-full max-w-3xl px-5 py-12 lg:px-8">
         <header>
-          <h1 className="wh-docs-title text-3xl font-semibold sm:text-4xl">{title}</h1>
-          <p className="wh-docs-description mt-4 text-lg text-fd-muted-foreground">{description}</p>
+          <h1 className="wh-docs-title text-ui-xl font-semibold sm:text-ui-xxl">{title}</h1>
+          <p className="wh-docs-description mt-4 text-ui-m text-wh-muted">{description}</p>
         </header>
         <div className="prose wh-docs-body">
           <MDX components={getMDXComponents()} />
         </div>
       </article>
+    );
+  },
+});
+
+/**
+ * Renders the body of one comparison page (ADR 0116). The route draws the
+ * title, the two products, and the sources around it, because they come from
+ * `comparisons.json` and not from the MDX file. `<ComparisonTable />` is the
+ * one component a comparison page uses.
+ */
+export const compareLoader = browserCollections.compare.createClientLoader<Record<string, never>>({
+  id: "compare",
+  component: (loaded) => {
+    const MDX = loaded.default;
+    return (
+      <div className="prose wh-docs-body wh-compare-body">
+        <MDX components={getMDXComponents({ ComparisonTable })} />
+      </div>
     );
   },
 });

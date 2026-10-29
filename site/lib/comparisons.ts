@@ -5,9 +5,9 @@ import data from "../comparisons.json" with { type: "json" };
  * group names, which facts it states about each one, and where each fact comes
  * from (ADR 0104).
  *
- * Four surfaces read it: the docs sidebar, the hub at `/docs/compare`, each
- * product page, and the Markdown twin of all three. Adding a product page is one
- * MDX file under `content/docs/compare/` and one entry here.
+ * Three surfaces read it: the hub at `/compare`, each product page at
+ * `/compare/<product>`, and the Markdown twin of both (ADR 0116). Adding a
+ * product page is one MDX file under `content/docs/compare/` and one entry here.
  */
 
 /** The status words of `docs/features.md` and `docs/parity.md`. */
@@ -34,8 +34,17 @@ interface WorkhorseStatusCell {
   readonly note?: string;
 }
 
+/**
+ * Whether a product needs a service beside the application database: "none"
+ * when a SQL database is all it needs, "optional" when a database backend is
+ * one choice beside a service, and "required" otherwise. Only the
+ * `infrastructure` row states it, from the same source as its value.
+ */
+type ExtraService = "none" | "optional" | "required";
+
 interface WorkhorseTextCell {
   readonly value: string;
+  readonly extraService?: ExtraService;
   /** A repository path that states the value. */
   readonly source: string;
   readonly page?: string;
@@ -73,12 +82,15 @@ interface CompetitorStatusCell extends CompetitorCellBase {
 
 interface CompetitorTextCell extends CompetitorCellBase {
   readonly value: string;
+  readonly extraService?: ExtraService;
 }
 
-type CompetitorCell = CompetitorStatusCell | CompetitorTextCell;
+export type CompetitorCell = CompetitorStatusCell | CompetitorTextCell;
 
 interface ComparisonCategory {
   readonly id: string;
+  /** The short name of the approach, for a column head. */
+  readonly label: string;
   readonly title: string;
   /** What the products of this category have in common, in one or two sentences. */
   readonly summary: string;
@@ -111,7 +123,7 @@ interface ProductRow extends ComparisonRow {
 type PageStatus = "published" | "planned";
 
 export interface ComparisonProduct {
-  /** The page under `content/docs/compare/`, and therefore `/docs/compare/<slug>`. */
+  /** The page under `content/docs/compare/`, and therefore `/compare/<slug>`. */
   readonly slug: string;
   readonly name: string;
   /** Other spellings of the name, such as a package name, for the name guard. */
@@ -139,9 +151,12 @@ interface ComparisonData {
 
 export const comparisons = data as ComparisonData;
 
+/** The URL of the hub. Before ADR 0116 it was `/docs/compare`, which now redirects here. */
+export const compareHubUrl = "/compare";
+
 /** The URL of a product page. */
 export function productUrl(product: ComparisonProduct): string {
-  return `/docs/compare/${product.slug}`;
+  return `${compareHubUrl}/${product.slug}`;
 }
 
 export function isPublished(product: ComparisonProduct): boolean {
@@ -212,6 +227,202 @@ export function cellText(cell: WorkhorseCell | CompetitorCell): string {
     : cell.status;
 }
 
+/** One numbered source of a page: the URL that a competitor cell cites. */
+export interface SourceReference {
+  readonly number: number;
+  readonly url: string;
+}
+
+/**
+ * Numbers each distinct source URL in the order that a reader meets it. Cells
+ * that cite the same URL share one number.
+ */
+function numberSources(cells: readonly CompetitorCell[]): readonly SourceReference[] {
+  const numbers = new Map<string, number>();
+  for (const cell of cells) {
+    if (!numbers.has(cell.source)) numbers.set(cell.source, numbers.size + 1);
+  }
+  return [...numbers].map(([url, number]) => ({ number, url }));
+}
+
+/** The sources of one product page, in the order of its table. */
+export function productSources(product: ComparisonProduct): readonly SourceReference[] {
+  return numberSources(productGroups(product).flatMap(({ rows }) => rows.map(({ cell }) => cell)));
+}
+
+/** The number of `url` in `sources`. Every cell's source is in its page's list. */
+export function sourceNumber(sources: readonly SourceReference[], url: string): number {
+  const reference = sources.find((entry) => entry.url === url);
+  if (!reference) throw new Error(`The source ${url} is not in the list of the page`);
+  return reference.number;
+}
+
+/** The competitor cell of `product` for `row`, or an error that names both. */
+function productCell(product: ComparisonProduct, rowId: string): CompetitorCell {
+  const cell = product.cells[rowId];
+  if (!cell) throw new Error(`The product "${product.slug}" has no cell for the row "${rowId}"`);
+  return cell;
+}
+
+/** The row with `id`, or an error that names it. */
+function sharedRow(id: string): ComparisonRow {
+  const row = comparisons.rows.find((entry) => entry.id === id);
+  if (!row) throw new Error(`site/comparisons.json has no row "${id}"`);
+  return row;
+}
+
+// The approach matrix of the hub. It compares the ways to run background work,
+// not the products: each column is Workhorse or one category, and each cell of
+// a category counts what its products state in `comparisons.json`.
+
+/** The mark of a product or an approach for one capability. */
+export type Mark = "Supported" | "Partial" | "Not supported";
+
+/**
+ * Languages that one runtime shares count as one language, so a product with
+ * TypeScript and JavaScript workers has one worker language.
+ */
+const sameLanguage: Readonly<Record<string, string>> = {
+  JavaScript: "TypeScript",
+  Kotlin: "Java",
+  "C#": ".NET",
+  ".NET (C#)": ".NET",
+};
+
+/** The distinct worker languages of a `worker-languages` value. */
+export function workerLanguages(value: string): readonly string[] {
+  const names = value
+    .split(/,|\/|\bor\b/)
+    .map((name) => name.trim())
+    .filter((name) => name !== "")
+    .map((name) => sameLanguage[name] ?? name);
+  return [...new Set(names)];
+}
+
+const extraServiceMark = {
+  none: "Supported",
+  optional: "Partial",
+  required: "Not supported",
+} as const;
+
+/** The mark of one cell. A status cell gives its free edition, and a text cell needs `read`. */
+type CellReader = (cell: ComparisonRow["workhorse"] | CompetitorCell) => Mark;
+
+function statusOf(cell: ComparisonRow["workhorse"] | CompetitorCell): Mark {
+  if (!("status" in cell)) throw new Error("A status capability reads a text cell");
+  if (cell.status === "Supported" || cell.status === "Partial") return cell.status;
+  return "Not supported";
+}
+
+function textOf(cell: ComparisonRow["workhorse"] | CompetitorCell): string {
+  if ("status" in cell) throw new Error("A text capability reads a status cell");
+  return cell.value;
+}
+
+export interface ApproachCapability {
+  /** The row of `comparisons.json` that each cell reads. */
+  readonly row: string;
+  readonly label: string;
+  /** What a product must do to count, in one sentence. */
+  readonly rule: string;
+  readonly read: CellReader;
+}
+
+/** The rows of the approach matrix, in the order of the page. */
+export const approachCapabilities: readonly ApproachCapability[] = [
+  {
+    row: "transactional-enqueue",
+    label: "Enqueue in the application's transaction",
+    rule: "The task commits or rolls back together with the writes of the application.",
+    read: statusOf,
+  },
+  {
+    row: "checkpoints",
+    label: "Checkpoints that skip completed steps",
+    rule: "When a task runs again, it skips steps that already completed.",
+    read: statusOf,
+  },
+  {
+    row: "durable-waits",
+    label: "Durable timers and signals",
+    rule: "A task waits for a timer or a signal, and no worker holds it while it waits.",
+    read: statusOf,
+  },
+  {
+    row: "task-dependencies",
+    label: "Task dependencies",
+    rule: "A task starts only after the tasks that it depends on finish.",
+    read: statusOf,
+  },
+  {
+    row: "worker-languages",
+    label: "Workers in more than one language",
+    rule: "Workers in two or more languages process tasks. Languages that share a runtime count as one.",
+    read: (cell) => (workerLanguages(textOf(cell)).length > 1 ? "Supported" : "Not supported"),
+  },
+  {
+    row: "infrastructure",
+    label: "No service beside the database",
+    rule: "A SQL database is the only service that the product needs. Partial: a database backend is one choice.",
+    read: (cell) => {
+      if ("status" in cell || !cell.extraService) {
+        throw new Error("The infrastructure row needs an extraService on each cell");
+      }
+      return extraServiceMark[cell.extraService];
+    },
+  },
+];
+
+/** One product inside an approach cell. */
+interface ApproachProduct {
+  readonly product: ComparisonProduct;
+  readonly mark: Mark;
+}
+
+/** The cell of one approach for one capability: its mark and the count behind it. */
+export interface ApproachCell {
+  readonly mark: Mark;
+  readonly supported: number;
+  readonly partial: number;
+  readonly products: readonly ApproachProduct[];
+}
+
+/** The mark of Workhorse for one capability. */
+export function workhorseMark(capability: ApproachCapability): Mark {
+  return capability.read(sharedRow(capability.row).workhorse);
+}
+
+/**
+ * The cell of one category. It is "Supported" when every product supports the
+ * capability, "Not supported" when none supports it even in part, and
+ * "Partial" otherwise.
+ */
+export function approachCell(
+  capability: ApproachCapability,
+  products: readonly ComparisonProduct[],
+): ApproachCell {
+  const marks = products.map((product) => ({
+    product,
+    mark: capability.read(productCell(product, capability.row)),
+  }));
+  const supported = marks.filter(({ mark }) => mark === "Supported").length;
+  const partial = marks.filter(({ mark }) => mark === "Partial").length;
+  const mark: Mark =
+    supported === marks.length
+      ? "Supported"
+      : supported + partial === 0
+        ? "Not supported"
+        : "Partial";
+  return { mark, supported, partial, products: marks };
+}
+
+/** The count line under an approach mark, for example "7 of 8 products, 1 in part". */
+export function approachCount(cell: ApproachCell): string {
+  const total = cell.products.length;
+  const base = `${cell.supported} of ${total} ${total === 1 ? "product" : "products"}`;
+  return cell.partial > 0 ? `${base}, ${cell.partial} in part` : base;
+}
+
 /** The ISO date as a reader spells it, for example "17 October 2026". */
 function readableDate(date: string): string {
   return new Date(`${date}T00:00:00Z`).toLocaleDateString("en-GB", {
@@ -274,11 +485,29 @@ function productNameMarkdown(product: ComparisonProduct, base: string): string {
 }
 
 /**
- * The Markdown of the hub, in the order of the HTML: one table for each hub
- * row, with Workhorse first and a bold line for each category, then one table
- * of versions and check dates for each category.
+ * The Markdown of the hub: the approach matrix of the HTML page, then one
+ * table for each hub row, with Workhorse first and a bold line for each
+ * category, then one table of versions and check dates for each category.
  */
 export function hubMarkdown(base: string): string {
+  const categories = hubCategories();
+  const approaches = [
+    "| Capability | Workhorse | " +
+      categories.map(({ category }) => tableText(category.label)).join(" | ") +
+      " |",
+    `| --- | --- | ${categories.map(() => "---").join(" | ")} |`,
+    ...approachCapabilities.map(
+      (capability) =>
+        `| ${tableText(capability.label)} | ${workhorseMark(capability)} | ` +
+        categories
+          .map(({ products }) => {
+            const cell = approachCell(capability, products);
+            return `${cell.mark} (${approachCount(cell)})`;
+          })
+          .join(" | ") +
+        " |",
+    ),
+  ].join("\n");
   const features = hubRows().map((row) => {
     const rows = hubCategories().flatMap(({ category, products }) =>
       [`| **${tableText(category.title)}** | |`].concat(
@@ -302,7 +531,7 @@ export function hubMarkdown(base: string): string {
       ...rows,
     ].join("\n");
   });
-  const categories = hubCategories().map(({ category, products }) =>
+  const lists = categories.map(({ category, products }) =>
     [
       `### ${category.title}`,
       "",
@@ -316,5 +545,10 @@ export function hubMarkdown(base: string): string {
       ),
     ].join("\n"),
   );
-  return [...features, ...categories].join("\n\n");
+  return [
+    approaches,
+    "The tables below give the status of each product for each feature of the hub.",
+    ...features,
+    ...lists,
+  ].join("\n\n");
 }

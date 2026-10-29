@@ -50,8 +50,10 @@ module LandingExamples
 
     def self.register_invoice(worker)
       worker.handle("invoice.issue") do |invoice, context|
-        # After Workhorse stores a checkpoint result, later runs return it.
-        charge = context.checkpoint("charge") { charge_card(invoice.fetch("amount")) }
+        # Later runs return the stored checkpoint result.
+        charge = context.checkpoint("charge") do
+          charge_card(invoice.fetch("amount"))
+        end
 
         pdf = context.checkpoint("render") { render_invoice(charge["id"]) }
 
@@ -115,14 +117,23 @@ module LandingExamples
     # docs:start landing-schedules
     def self.run(pool)
       # Run on every deployment with the complete list.
-      task = Stablemates::Workhorse::ScheduledTask.new(task_type: "invoices.generate", payload: {})
-      schedule = Stablemates::Workhorse::ScheduleDefinition.new(
-        name: "nightly-invoice-run", schedule: "0 2 * * *", task: task
+      task = Stablemates::Workhorse::ScheduledTask.new(
+        task_type: "invoices.generate",
+        payload: {}
       )
-      Stablemates::Workhorse::Queue.new(pool).sync_schedules("billing", [schedule], prune: true)
+      schedule = Stablemates::Workhorse::ScheduleDefinition.new(
+        name: "nightly-invoice-run",
+        schedule: "0 2 * * *",
+        task: task
+      )
+      queue = Stablemates::Workhorse::Queue.new(pool)
+      queue.sync_schedules("billing", [schedule], prune: true)
 
       # Any worker in the namespace fires due schedules itself.
-      worker = Stablemates::Workhorse::Worker.new(pool, schedule_namespaces: ["billing"])
+      worker = Stablemates::Workhorse::Worker.new(
+        pool,
+        schedule_namespaces: ["billing"]
+      )
       Stablemates::Workhorse.run_worker_process(worker)
     end
     # docs:end
@@ -137,9 +148,11 @@ module LandingExamples
       )
       queue.sync_concurrency_policies("workers", [mail], prune: false)
 
+      rate = Stablemates::Workhorse::RateLimit.new(
+        limit: 100, interval: 1, burst: 200
+      )
       provider = Stablemates::Workhorse::RateLimitPolicyDefinition.new(
-        queue: "provider-api",
-        rate: Stablemates::Workhorse::RateLimit.new(limit: 100, interval: 1, burst: 200)
+        queue: "provider-api", rate: rate
       )
       queue.sync_rate_limit_policies("workers", [provider], prune: false)
 
@@ -166,7 +179,9 @@ module LandingExamples
 
     def self.register_fulfillment(worker)
       worker.handle("order.fulfill") do |order, context|
-        receipt = context.run_child("charge", "payment.capture", {"orderId" => order["id"]}, queue: "payments")
+        capture = {"orderId" => order["id"]}
+        receipt = context.run_child("charge", "payment.capture", capture,
+          queue: "payments")
         {"receipt" => receipt}
       end
     end

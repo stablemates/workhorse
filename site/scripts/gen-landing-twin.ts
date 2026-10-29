@@ -1,11 +1,13 @@
 /**
- * Writes `/index.md`, the landing page's Markdown twin.
+ * Writes `/index.md` and `/features.md`, the Markdown twins of the landing page
+ * and the feature tour.
  *
- * Every documentation page has a twin an agent can read instead of the HTML.
- * The landing page had none, and it is the page an agent is most likely to
- * reach first: `llms.txt` is linked from the footer, so an agent that starts at
- * the front door must read the whole page to find the pointer. That page is
- * about 346 KB of markup around 49 KB of text.
+ * Every documentation page has a twin an agent can read instead of the HTML,
+ * and `llms.txt` tells an agent to append `.md` to any page URL. The landing
+ * page is the page an agent is most likely to reach first: `llms.txt` is linked
+ * from the footer, so an agent that starts at the front door must read the
+ * whole page to find the pointer. That page is about 346 KB of markup around
+ * 49 KB of text. The feature tour has the same shape.
  *
  * The twin is derived from the built page rather than written beside it. A
  * second copy of the landing copy would drift from the route within a release,
@@ -27,13 +29,10 @@ type Element = DefaultTreeAdapterTypes.Element;
 type ParentNode = DefaultTreeAdapterTypes.ParentNode;
 type TextNode = DefaultTreeAdapterTypes.TextNode;
 
-const builtPage = new URL("../dist/client/index.html", import.meta.url);
-const twin = new URL("../dist/client/index.md", import.meta.url);
-
 /** Elements whose content is navigation or decoration rather than the page's argument. */
 const skipped = new Set(["nav", "footer", "header", "script", "style", "noscript", "svg", "input"]);
 
-/** Skipped tags, plus anything the page itself hides from assistive technology. */
+/** Skipped tags, and anything the page itself hides from assistive technology. */
 function isSkipped(element: Element): boolean {
   return skipped.has(element.tagName) || attribute(element, "aria-hidden") === "true";
 }
@@ -81,16 +80,22 @@ function textOf(node: ParentNode): string {
 
 /**
  * Inline Markdown for a subtree: links and inline code survive, everything else
- * becomes its text. The landing copy uses no other inline mark.
+ * becomes its text. The pages use no other inline mark.
  */
 function inline(node: ParentNode): string {
   let out = "";
+  let previousIsElement = false;
   for (const child of childrenOf(node)) {
     if (isText(child)) {
       out += child.value;
+      previousIsElement = false;
       continue;
     }
     if (!isElement(child) || isSkipped(child)) continue;
+    // Two elements side by side, such as a package name and its description,
+    // are separate words on the page because of their layout.
+    if (previousIsElement && !/\s$/.test(out)) out += " ";
+    previousIsElement = true;
     if (child.tagName === "code") {
       out += `\`${textOf(child).trim()}\``;
     } else if (child.tagName === "a") {
@@ -123,9 +128,15 @@ function tidy(text: string): string {
  * expands all of them under a bold label, the way a documentation twin does.
  */
 function tabs(node: Element): string[] {
-  const labels = descendants(node, (element) => element.tagName === "input")
-    .map((element) => attribute(element, "aria-label") ?? "")
-    .filter((label) => label !== "");
+  const tabElements = descendants(node, (element) => attribute(element, "role") === "tab").filter(
+    (element) => tidy(textOf(element)) !== "",
+  );
+  const labels = tabElements.map((element) => tidy(textOf(element)));
+  // A tab names the language of its code in `data-language`, because its label
+  // is a display name such as "C#" or an integration such as "Prisma".
+  const languages = tabElements.map(
+    (element) => attribute(element, "data-language") ?? tidy(textOf(element)),
+  );
   const panels = descendants(node, (element) => classesOf(element).includes("wh-tab-panel"));
   if (panels.length === 0) {
     return descendants(node, (element) => element.tagName === "pre").map((block) =>
@@ -148,6 +159,7 @@ function tabs(node: Element): string[] {
     const [block] = descendants(panel, (element) => element.tagName === "pre");
     if (!block) return;
     const label = labels[index] ?? "";
+    const language = languages[index] ?? "";
     // The panel names the file the snippet belongs in, which is the one thing
     // an agent needs that the code itself does not say.
     const file = descendants(panel, (element) => element.tagName === "span")
@@ -156,7 +168,7 @@ function tabs(node: Element): string[] {
     const heading = [label && `**${label}**`, file && `\`${file}\``].filter(Boolean).join(" — ");
     const caption = shared === undefined ? captions[index] : "";
     if (heading !== "") out.push(heading);
-    out.push(fence(block, label));
+    out.push(fence(block, language));
     if (caption) out.push(caption);
   });
 
@@ -223,6 +235,15 @@ function blocks(node: ParentNode, out: string[]): void {
       if (text !== "") out.push(text);
       continue;
     }
+    // A feature of the tour is an item with a heading and paragraphs.
+    if (
+      child.tagName === "li" &&
+      descendants(child, (element) => /^h[1-6]$/.test(element.tagName)).length > 0
+    ) {
+      flush();
+      blocks(child, out);
+      continue;
+    }
     if (child.tagName === "li") {
       flush();
       const text = tidy(inline(child));
@@ -259,28 +280,83 @@ function blocks(node: ParentNode, out: string[]): void {
   flush();
 }
 
-const document = parse(await readFile(builtPage, "utf8"));
-const [main] = descendants(document, (element) => element.tagName === "main");
-if (!main) throw new Error("The built landing page has no <main>; the twin cannot be derived");
+/** A route that `src/routes` renders without a Markdown source of its own. */
+interface DerivedTwin {
+  /** The name of the page in messages. */
+  name: string;
+  /** The built HTML page, relative to `dist/client`. */
+  page: string;
+  /** The twin, relative to `dist/client`. */
+  twin: string;
+  /** The title of the twin. `undefined` uses the `<title>` of the built page. */
+  title?: string;
+  /** The description of the twin. `undefined` uses the meta description of the built page. */
+  description?: string;
+  canonical: string;
+}
 
-const body: string[] = [];
-blocks(main, body);
+const derivedTwins: readonly DerivedTwin[] = [
+  {
+    name: "landing page",
+    page: "index.html",
+    twin: "index.md",
+    title: `${siteConfig.name}: ${siteConfig.tagline}`,
+    description: siteConfig.description,
+    canonical: siteConfig.url,
+  },
+  {
+    name: "feature tour",
+    page: "features/index.html",
+    twin: "features.md",
+    canonical: `${siteConfig.url}/features`,
+  },
+];
 
-// A run of identical paragraphs means a carousel rendered every slide. The page
-// shows one at a time and the twin should read that way too.
-const deduplicated = body.filter((block, index) => block !== body[index - 1]);
+/** The content of the one `<meta name="…">` in the head of a built page. */
+function metaContent(document: ParentNode, name: string): string | undefined {
+  const [meta] = descendants(
+    document,
+    (element) => element.tagName === "meta" && attribute(element, "name") === name,
+  );
+  return meta ? attribute(meta, "content") : undefined;
+}
 
-const frontmatter = [
-  "---",
-  `title: ${JSON.stringify(`${siteConfig.name}: ${siteConfig.tagline}`)}`,
-  `description: ${JSON.stringify(siteConfig.description)}`,
-  `canonical: ${JSON.stringify(siteConfig.url)}`,
-  "---",
-].join("\n");
+function pageTitle(document: ParentNode): string | undefined {
+  const [title] = descendants(document, (element) => element.tagName === "title");
+  return title ? tidy(textOf(title)) : undefined;
+}
 
-const markdown = `${frontmatter}\n\n${deduplicated.join("\n\n")}\n`;
-await writeFile(twin, markdown);
+for (const derived of derivedTwins) {
+  const document = parse(
+    await readFile(new URL(`../dist/client/${derived.page}`, import.meta.url), "utf8"),
+  );
+  const [main] = descendants(document, (element) => element.tagName === "main");
+  if (!main) throw new Error(`The built ${derived.name} has no <main>; the twin cannot be derived`);
 
-process.stdout.write(
-  `Wrote the landing twin: ${deduplicated.length} blocks, ${Buffer.byteLength(markdown)} bytes\n`,
-);
+  const body: string[] = [];
+  blocks(main, body);
+
+  // A run of identical paragraphs means a carousel rendered every slide. The page
+  // shows one at a time and the twin should read that way too.
+  const deduplicated = body.filter((block, index) => block !== body[index - 1]);
+
+  const title = derived.title ?? pageTitle(document);
+  const description = derived.description ?? metaContent(document, "description");
+  if (title === undefined || description === undefined) {
+    throw new Error(`The built ${derived.name} has no title or description for its twin`);
+  }
+  const frontmatter = [
+    "---",
+    `title: ${JSON.stringify(title)}`,
+    `description: ${JSON.stringify(description)}`,
+    `canonical: ${JSON.stringify(derived.canonical)}`,
+    "---",
+  ].join("\n");
+
+  const markdown = `${frontmatter}\n\n${deduplicated.join("\n\n")}\n`;
+  await writeFile(new URL(`../dist/client/${derived.twin}`, import.meta.url), markdown);
+
+  process.stdout.write(
+    `Wrote the ${derived.name} twin: ${deduplicated.length} blocks, ${Buffer.byteLength(markdown)} bytes\n`,
+  );
+}

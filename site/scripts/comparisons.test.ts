@@ -8,12 +8,16 @@ import { describe, expect, it } from "vitest";
 import {
   type ComparisonProduct,
   type ComparisonRow,
+  approachCapabilities,
+  approachCell,
   cellText,
   comparisons,
   hubCategories,
   hubMarkdown,
   hubRows,
   productMarkdown,
+  workerLanguages,
+  workhorseMark,
 } from "../lib/comparisons.js";
 
 /**
@@ -380,6 +384,42 @@ describe("the comparison data", () => {
       }
     }
     expect(errors).toEqual([]);
+  });
+
+  it("states for each infrastructure cell whether a service runs beside the database", () => {
+    const allowed = new Set(["none", "optional", "required"]);
+    const cells = [
+      {
+        where: "workhorse",
+        cell: comparisons.rows.find((row) => row.id === "infrastructure")?.workhorse,
+      },
+      ...comparisons.products.map((product) => ({
+        where: product.slug,
+        cell: product.cells.infrastructure,
+      })),
+    ];
+    const errors = cells
+      .filter(
+        ({ cell }) => !cell || !("extraService" in cell) || !allowed.has(String(cell.extraService)),
+      )
+      .map(({ where }) => `${where}.infrastructure has no extraService`);
+    expect(errors).toEqual([]);
+  });
+
+  it("counts one language for each runtime and gives each approach a mark", () => {
+    expect(workerLanguages("TypeScript/JavaScript, Python, Kotlin/Java")).toEqual([
+      "TypeScript",
+      "Python",
+      "Java",
+    ]);
+    expect(workerLanguages(".NET (C#)")).toEqual([".NET"]);
+    for (const capability of approachCapabilities) {
+      expect(workhorseMark(capability)).toBe("Supported");
+      for (const { products } of hubCategories()) {
+        const cell = approachCell(capability, products);
+        expect(cell.supported + cell.partial).toBeLessThanOrEqual(products.length);
+      }
+    }
   });
 
   it("gives the hub one table for each feature, Workhorse first, then each category", () => {

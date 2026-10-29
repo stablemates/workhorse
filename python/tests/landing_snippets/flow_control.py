@@ -7,7 +7,11 @@ from workhorse import (
 )
 
 
-def configure_flow_control(queue: Queue, message_id: str, tenant_id: str) -> None:
+def configure_flow_control(
+    queue: Queue,
+    message_id: str,
+    tenant_id: str,
+) -> None:
     queue.sync_concurrency_policies(
         "workers",
         (
@@ -28,5 +32,8 @@ def configure_flow_control(queue: Queue, message_id: str, tenant_id: str) -> Non
     queue.enqueue(
         "mail.send",
         {"messageId": message_id},
-        EnqueueOptions(queue="mail", concurrency_key=f"tenant:{tenant_id}"),
+        EnqueueOptions(
+            queue="mail",
+            concurrency_key=f"tenant:{tenant_id}",
+        ),
     )

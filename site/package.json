@@ -6,18 +6,22 @@
   "type": "module",
   "scripts": {
     "dev": "tsx scripts/gen-code-theme.ts && tsx scripts/gen-docs-index.ts && tsx scripts/gen-landing-code.ts && vite dev",
-    "build": "tsx scripts/check-language-examples.ts && tsx scripts/gen-code-theme.ts && tsx scripts/gen-docs-index.ts && tsx scripts/gen-landing-code.ts && vite build && tsx scripts/gen-landing-twin.ts",
+    "dev:docs": "tsx scripts/gen-docs-index.ts && pnpm blume:install && pnpm --dir blume run dev",
+    "blume:install": "pnpm --dir blume install --ignore-workspace --frozen-lockfile --prefer-offline",
+    "docs:index": "tsx scripts/gen-docs-index.ts",
+    "build": "tsx scripts/check-language-examples.ts && tsx scripts/gen-code-theme.ts && tsx scripts/gen-docs-index.ts && tsx scripts/gen-landing-code.ts && vite build && tsx scripts/gen-landing-twin.ts && pnpm blume:install && pnpm --dir blume run build && tsx scripts/merge-docs.ts",
     "start": "vite preview",
-    "typecheck": "fumadocs-mdx && tsx scripts/check-language-examples.ts && tsx scripts/gen-code-theme.ts && tsx scripts/gen-docs-index.ts && tsx scripts/gen-landing-code.ts && tsc --noEmit"
+    "typecheck": "fumadocs-mdx && tsx scripts/check-language-examples.ts && tsx scripts/gen-code-theme.ts && tsx scripts/gen-docs-index.ts && tsx scripts/gen-landing-code.ts && tsc --noEmit && pnpm blume:install && tsc -p blume/tsconfig.json"
   },
   "dependencies": {
+    "@base-ui/react": "^1.9.0",
     "@hugeicons/core-free-icons": "4.3.5",
     "@hugeicons/react": "^1.1.10",
-    "@stablemates/workhorse": "workspace:*",
     "@tanstack/react-router": "^1.170.46",
     "@tanstack/react-start": "^1.169.4",
     "fumadocs-core": "16.17.7",
     "fumadocs-ui": "16.17.7",
+    "lucide-react": "^1.58.0",
     "react": "19.3.1",
     "react-dom": "19.3.1"
   },

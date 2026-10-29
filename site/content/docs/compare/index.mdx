@@ -1,56 +1,62 @@
 ---
 title: Compare Workhorse with other task queues and workflow platforms
-description: Compare Workhorse with PostgreSQL task queues, Redis task queues, and workflow platforms. Each fact links its source at a stated version.
+description: "Compare four ways to run background work: database task queues, Redis and broker queues, workflow platforms, and Workhorse. Each product page links its sources at a stated version."
 ---
 
 Workhorse is a durable task queue for PostgreSQL. It makes three claims. You enqueue a task inside
 your own transaction. A handler that stops during a task continues after its completed checkpoints.
-Workers in eight languages use one SQL protocol and one dashboard. This page helps you compare
-Workhorse with the products that you already know.
+Workers in eight languages use one SQL protocol and one dashboard.
 
-## Find the category of your product
+Other products put background work in one of three places. A database task queue keeps tasks in a
+SQL database, often the database of the application. A Redis or broker queue keeps them in a second
+service beside the database. A workflow platform runs a server that records each step, or offers a
+cloud service. Each place gives different guarantees, so compare the approach first, then the
+product.
 
-The products on this page are in three categories. Each category solves a different problem, so
-start with the category of the product that you use now.
+## Compare the approaches
 
-- **Task queues that store work in a database.** The queue is a set of tables in a SQL database,
-  often the database of the application. Workhorse is in this category. Most products in it can
-  enqueue a task in the application's transaction.
-- **Task queues on Redis or a message broker.** The queue is in Redis or in a broker such as
-  RabbitMQ. The broker is a second service beside the application database. A task cannot commit
-  in the same transaction as the application data.
-- **Workflow platforms.** These platforms run multi-step workflows and record each completed step.
-  Most of them need their own server or a cloud service. Workhorse is a task queue, not a workflow
-  platform. It has checkpoints, durable waits, and child tasks, but no workflow runtime.
-
-## Compare the products
-
-Each section below compares one feature that often decides the choice. Open a section to see its
-table. The table has one row for Workhorse, then one row for each product, in the order of the
-three categories. Each cell links its source at the version after the product name. A product name
-is a link when the product has its own page. A product page has about 20 rows and tells you when
-the other product is the better choice.
-
-After the sections, a table for each category gives the version of each product and the date of the
-last check.
-
-A cell describes the free edition of the product. If a paid edition or a managed service has more,
-the cell also names it and its status, for example "Partial; Supported with Sidekiq Enterprise".
-The note of each limit cell states its scope: one process, one queue, or each key. A limit cell
-says "Supported" only when the product limits a queue and each key across all workers. A limit for
-one process only is "Not supported". A limiter that the task code must call is "Partial".
+The matrix compares Workhorse with each approach. An approach cell counts the products of that
+approach, from the same facts as the product pages. Each fact describes the free edition of a
+product, at the version on its page.
 
 <ComparisonTable />
 
+## When Workhorse fits
+
+Workhorse fits these cases:
+
+- Your application uses PostgreSQL, and you do not want to run a second service.
+- A task must commit in the same transaction as your data.
+- A task has steps that are slow or costly to repeat.
+- A task waits for a timer, a signal, or a person.
+- More than one language must run workers on the same queue.
+
+## When another approach fits
+
+Another approach fits these cases:
+
+- Your application does not use PostgreSQL. Workhorse needs PostgreSQL.
+- Your application runs in one language, and a retry that runs the whole handler again is
+  acceptable. A database task queue for that language can be sufficient.
+- You already run Redis, and your application has no PostgreSQL database.
+- You must define and deploy a workflow separately from the application code. Workhorse has no
+  separate language to define workflows. Read [Limitations](/docs/limitations).
+- Your workflows run for weeks or months and change while they run. Some workflow platforms keep
+  each running workflow compatible with its history. Workhorse detects only some changes, such as a
+  changed checkpoint input.
+- A client must read the state of a running workflow and get a reply. A Workhorse signal delivers
+  data to a waiting task and returns no value.
+- You do not want to operate the database yourself. Some workflow platforms offer a managed
+  service. Workhorse uses your PostgreSQL database, and you operate that database.
+
+In each approach, a checkpoint or a recorded step does not make an external effect run one time
+only. If a worker stops after the effect and before the record commits, the effect runs again. Thus
+the effect must be idempotent.
+
 ## How this page stays correct
 
-Each fact comes from the documentation or the source code of the product, at the version in the
-table. The facts give no performance numbers. A person checks each product page every quarter
-against the newest release, then changes the version and the date. If you find a fact that is not
-correct, open an issue in the [Workhorse repository](https://github.com/stablemates/workhorse).
-
-## Next
-
-- [Migrate to Workhorse](/docs/migrate) gives the procedure to move work from another queue.
-- [Limitations](/docs/limitations) lists what Workhorse does not do.
-- [Concepts](/docs/concepts) explains tasks, workers, and leases.
+Each fact comes from the documentation or the source code of the product, at the version on its
+page. The facts give no performance numbers. A person checks each product page every quarter
+against the newest release. If you find a fact that is not correct, open an issue in the
+[Workhorse repository](https://github.com/stablemates/workhorse). To move work from another queue,
+read [Migrate to Workhorse](/docs/migrate).

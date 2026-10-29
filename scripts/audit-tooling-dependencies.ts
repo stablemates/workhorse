@@ -21,7 +21,8 @@ import {
  * puts that tooling inside the advisory gate, in its own lane, and this file is that lane.
  *
  * The lane reads two trees. The npm half runs `pnpm audit` over the whole workspace, development
- * dependencies included. The Python half runs `pip-audit` over the uv export with every dependency
+ * dependencies included, and over site/blume, the documentation build with its own lockfile. The
+ * Python half runs `pip-audit` over the uv export with every dependency
  * group, plus `python/build-constraints.txt`, which pins the build backend that uv.lock does not
  * cover.
  *
@@ -87,6 +88,31 @@ export const toolingAcceptanceFileName = "scripts/tooling-advisory-acceptances.j
 const buildConstraints = "python/build-constraints.txt";
 
 const heading = "Build and publication tooling advisories need a decision:";
+
+/**
+ * The npm projects outside the pnpm workspace, each with its own lockfile. Nothing in them is
+ * published, so every advisory in them is a tooling advisory. The name is the directory written the
+ * way `pnpm audit` writes a workspace package, which is what an acceptance names.
+ */
+const standaloneProjects = [{ directory: "site/blume", name: "site__blume" }] as const;
+const standaloneNames: ReadonlySet<string> = new Set(standaloneProjects.map(({ name }) => name));
+
+/**
+ * Label the findings of a standalone project with its name.
+ *
+ * `pnpm audit` starts every path of a standalone project with `.`, the same first segment as a
+ * dependency of the workspace root. Without the label, an acceptance for the workspace root would
+ * also cover the standalone project, and a failure would not say which lockfile to change.
+ */
+export function inStandaloneProject(
+  findings: readonly AdvisoryFinding[],
+  name: string,
+): readonly AdvisoryFinding[] {
+  return findings.map((finding) => {
+    const [, ...rest] = finding.dependencyPath.split(">");
+    return { ...finding, dependencyPath: [name, ...rest].join(">"), workspacePackage: name };
+  });
+}
 
 /**
  * Flatten one or more `pip-audit` reports into one entry per advisory and distribution.
@@ -161,8 +187,10 @@ function productionClaim(label: string, productionList: string): AuditProblem {
 /**
  * Judge the npm development tree.
  *
- * `all` is the report over the whole workspace and `production` the report the production gate
- * reads. An advisory present in `production` is left to that gate, whatever path it takes in `all`.
+ * `all` is the report over the whole workspace and the standalone projects, and `production` the
+ * report the production gate reads. An advisory present in `production` is left to that gate,
+ * whatever path it takes through the workspace. The production gate does not read a standalone
+ * project, so this lane judges each standalone finding, even for an advisory the gate also reports.
  * What remains is held to the production gate's own rules, under the tooling list.
  */
 export function findNpmToolingProblems(
@@ -175,7 +203,8 @@ export function findNpmToolingProblems(
   const problems: AuditProblem[] = [];
   const toolingAcceptances: Acceptance[] = [];
   for (const acceptance of acceptances) {
-    if (productionAdvisories.has(acceptance.advisory)) {
+    const namesWorkspace = acceptance.workspacePackages.some((name) => !standaloneNames.has(name));
+    if (namesWorkspace && productionAdvisories.has(acceptance.advisory)) {
       problems.push(
         productionClaim(
           `npm advisory ${String(acceptance.advisory)}`,
@@ -186,7 +215,10 @@ export function findNpmToolingProblems(
       toolingAcceptances.push(acceptance);
     }
   }
-  const toolingFindings = all.filter((finding) => !productionAdvisories.has(finding.advisory));
+  const toolingFindings = all.filter(
+    (finding) =>
+      standaloneNames.has(finding.workspacePackage) || !productionAdvisories.has(finding.advisory),
+  );
   problems.push(
     ...findProblems(toolingFindings, toolingAcceptances, today, toolingAcceptanceFileName),
   );
@@ -405,9 +437,18 @@ export async function auditToolingDependencies(lanes: ToolingLanes = "all"): Pro
   const directory = await mkdtemp(path.join(tmpdir(), "workhorse-tooling-audit-"));
   let scan: ToolingScan;
   try {
-    const npmAll = collectFindings(
-      await readAuditReport(repositoryRoot, "all", toolingAcceptanceFileName),
-    );
+    const npmAll = [
+      ...collectFindings(await readAuditReport(repositoryRoot, "all", toolingAcceptanceFileName)),
+    ];
+    for (const project of standaloneProjects) {
+      const report = await readAuditReport(
+        path.join(repositoryRoot, project.directory),
+        "all",
+        toolingAcceptanceFileName,
+        "standalone",
+      );
+      npmAll.push(...inStandaloneProject(collectFindings(report), project.name));
+    }
     const npmProduction = collectFindings(
       await readAuditReport(repositoryRoot, "prod", toolingAcceptanceFileName),
     );
@@ -435,9 +476,9 @@ export async function auditToolingDependencies(lanes: ToolingLanes = "all"): Pro
   if (problems.length > 0) throw new Error(describeProblems(problems, heading));
   process.stdout.write(
     lanes === "npm"
-      ? "pnpm audit over the development tree reports no advisory outside the production gate " +
-          "that is not accepted.\n"
-      : "pnpm audit over the development tree and pip-audit over the development and build " +
+      ? "pnpm audit over the development tree and site/blume reports no advisory outside the " +
+          "production gate that is not accepted.\n"
+      : "pnpm audit over the development tree and site/blume and pip-audit over the development and build " +
           "tooling report no advisory outside the production gates that is not accepted.\n",
   );
 }

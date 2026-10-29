@@ -1,0 +1,11 @@
+---
+import BlumeTab from "blume/components/content/Tab.astro";
+
+interface Props {
+  value: string;
+}
+
+const { value } = Astro.props;
+---
+
+<BlumeTab title={value}><slot /></BlumeTab>

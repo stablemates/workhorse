@@ -25,8 +25,10 @@ const sizesFile = path.join(repositoryRoot, "site/lib/diagram-sizes.json");
 const fonts = path.join(repositoryRoot, "node_modules/geist/dist/fonts");
 const fontFiles = [
   "geist-sans/Geist-Regular.ttf",
+  "geist-sans/Geist-Medium.ttf",
   "geist-sans/Geist-SemiBold.ttf",
   "geist-mono/GeistMono-Regular.ttf",
+  "geist-mono/GeistMono-Medium.ttf",
 ].map((file) => path.join(fonts, file));
 
 function renderPng(svg: string): Buffer {

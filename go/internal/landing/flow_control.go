@@ -13,23 +13,32 @@ func configureFlowControl(
 	tenantID string,
 ) error {
 	maxPerTenant := 2
-	if _, err := queue.SyncConcurrencyPolicies(ctx, "workers", []workhorse.ConcurrencyPolicyDefinition{
-		{Queue: "mail", MaxActive: 20, MaxActivePerKey: &maxPerTenant},
-	}); err != nil {
+	mail := []workhorse.ConcurrencyPolicyDefinition{{
+		Queue:           "mail",
+		MaxActive:       20,
+		MaxActivePerKey: &maxPerTenant,
+	}}
+	_, err := queue.SyncConcurrencyPolicies(ctx, "workers", mail)
+	if err != nil {
 		return err
 	}
-	if _, err := queue.SyncRateLimitPolicies(ctx, "workers", []workhorse.RateLimitPolicyDefinition{
-		{
-			Queue: "provider-api",
-			Rate:  workhorse.RateLimit{Limit: 100, IntervalMS: 1_000, Burst: 200},
+	provider := []workhorse.RateLimitPolicyDefinition{{
+		Queue: "provider-api",
+		Rate: workhorse.RateLimit{
+			Limit:      100,
+			IntervalMS: 1_000,
+			Burst:      200,
 		},
-	}); err != nil {
+	}}
+	_, err = queue.SyncRateLimitPolicies(ctx, "workers", provider)
+	if err != nil {
 		return err
 	}
-	_, err := queue.Enqueue(ctx, "mail.send", map[string]any{
+	_, err = queue.Enqueue(ctx, "mail.send", map[string]any{
 		"messageId": messageID,
 	}, workhorse.EnqueueOptions{
-		Queue: "mail", ConcurrencyKey: "tenant:" + tenantID,
+		Queue:          "mail",
+		ConcurrencyKey: "tenant:" + tenantID,
 	})
 	return err
 }
