@@ -2,46 +2,10 @@
 
 Instructions for coding agents and contributors.
 
-## Work from Linear
-
-All repository work lives in Linear's `stablemates` workspace, under the `SM` team identifier
-and the `Workhorse Development` project. Linear is authoritative for priorities, blockers, and
-completion.
-Use the connected Linear tools or the hosted workspace at `https://linear.app/stablemates`.
-Scope every issue search and creation to this workspace, team, and `Workhorse Development` project;
-the `SM` team can contain other projects.
-
-If a request names an exact `SM-*` issue, that issue is the target. If a request names an outcome,
-search open issues in `Workhorse Development` for one that owns it. If none matches, create an issue with
-checkable acceptance criteria. When asked for the next piece of work, select the highest-priority,
-oldest, unblocked Todo issue without an active owner.
-
-Before changing tracked files:
-
-1. Read the target issue, its comments, and linked dependencies. Verify that it belongs to
-   `stablemates`, the `SM` team, and the `Workhorse Development` project.
-2. Establish ownership through the issue's assignee and move it to In Progress. Re-read the issue
-   before starting; if another contributor owns the work, choose another eligible issue or report
-   the conflict. Assignment is coordination, not an atomic lease.
-3. Read `CONTEXT.md` and relevant decision records when the work changes domain behavior.
-
-For iterative work, especially UI, design, copy, or exploratory changes, keep one review loop on
-the original issue. After implementation and verification, keep the issue In Progress until the
-requester accepts the result or explicitly asks to finish. Apply refinements toward the same outcome
-to that issue; if it was closed prematurely, reopen it. Create a separate issue only when feedback
-defines an independently deliverable outcome.
-
-Keep the issue current with comments for material decisions, scope changes, and verification
-evidence. Finish only after every acceptance item is verified and relevant repository checks pass.
-Record the exact evidence, update the checklist, and move the issue to Done in the same task.
-When another contributor can continue the work as-is, record the handoff and move it to Todo.
-When a human decision or action is required, record the boundary and move it to Backlog.
-Clear your assignment when handing off or waiting. Use the team's configured workflow states
-corresponding to these stages.
-
-Linear starts fresh: do not migrate old tickets or translate `WH-*` numbers into `SM-*` numbers.
+Read `CONTEXT.md` and relevant decision records when the work changes domain behavior.
+Finish only after every acceptance item is verified and relevant repository checks pass.
 When following historical issue references in commits or decision records, read
-[tracker history](docs/tracker-history.md). Use `SM-*` identifiers for new work and commit subjects.
+[tracker history](docs/tracker-history.md).
 
 ## Sign agent commits with the model
 
@@ -61,15 +25,15 @@ commit keeps that body a single current message with correct trailers.
 An agent's pull request branch holds exactly one commit on top of its base. Review, CI, and
 follow-up changes amend that commit. When the base moves, rebase onto it and keep one commit.
 
-On each amend, rewrite the message to describe the whole change, not the first iteration. Keep the
-`SM-*` identifier in the subject and one trailer per model that produced any part of the change.
+On each amend, rewrite the message to describe the whole change, not the first iteration. Keep
+one trailer per model that produced any part of the change.
 
 After an amend or rebase, the agent may push with `git push --force-with-lease` to its own pull
 request branch. Never force-push `main` or another contributor's branch. If someone else pushed to
 the branch, ask a maintainer before rewriting it.
 
-Amending discards the intermediate commits. Record verification evidence in Linear and in pull
-request comments instead.
+Amending discards the intermediate commits. Record verification evidence in the pull request
+description instead.
 
 ## Write commit messages and pull request descriptions as documentation
 
@@ -77,10 +41,10 @@ Commit messages and pull request descriptions follow "Write in Simplified Techni
 use the terms `CONTEXT.md` defines and follow "Keep benchmark comparisons private".
 
 A commit message has no Markdown headings, because the squash merge copies it into `git log` on
-`main`. The subject is the `SM-*` identifier and an imperative summary, about 72 characters long.
+`main`. The subject is a plain imperative summary, about 72 characters long.
 The body wraps at 72 columns and states why first, as a short scenario when behavior changes. Then
-it states what changes. Verification and review stay out of the message, in Linear and in pull
-request comments. The trailers follow the body.
+it states what changes. Verification and review stay out of the message, in the pull request
+description. The trailers follow the body.
 
 A pull request description uses these headings in order, as `.github/pull_request_template.md`
 lays out:
@@ -181,7 +145,7 @@ Write "the skip-CI marker" instead.
 ## Keep benchmark comparisons private
 
 Benchmark results stay private until a maintainer decides to publish them. Comparative results
-live only in the private operations repository and in Linear. Never put a benchmark number or a
+live only in the private operations repository. Never put a benchmark number or a
 performance claim about another product in this repository, a commit message, or a pull request.
 
 The name of a compared product can appear only in `site/comparisons.json` and in
