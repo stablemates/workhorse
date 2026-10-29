@@ -9,6 +9,15 @@ Workhorse is a public beta. Any 0.x minor release may change behaviour. From `0.
 upgrades in place: every release ships ordered migrations, and inside a major line a migration only
 adds.
 
+## Unreleased
+
+### The OpenTelemetry API dependency is 1.67.0
+
+The core and the starter declare the OpenTelemetry API 1.67.0 as an optional dependency. Before,
+they declared 1.62.0. Versions below 1.67.0 have GHSA-ccrj-gw8r-854m: the W3C trace context
+propagator uses quadratic CPU time to parse a crafted `tracestate` header. Use 1.67.0 or later in
+an application that enables the `opentelemetry` feature.
+
 ## 0.11.0 — 2026-10-28
 
 The npm packages, Python distribution, Go module, Rust crate, Ruby gem, JVM artifacts, and .NET

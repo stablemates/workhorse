@@ -1802,3 +1802,24 @@ those SDKs:
 4. Each control has a caller form with a `Connection`. The Kotlin module adds `setQueueTierSuspend`
    and `setQueueHistorySuspend`.
 5. The public SDK operator table in `docs/parity.md` has the row "Queue tier and history controls".
+
+## Amendment: the OpenTelemetry API floor rises to 1.67.0 (2026-10-28)
+
+GHSA-ccrj-gw8r-854m affects `io.opentelemetry:opentelemetry-api` before 1.67.0. The W3C trace
+context propagator uses quadratic CPU time to parse a crafted `tracestate` header. `pnpm jvm:vuln`
+fails on each version below 1.67.0.
+
+| Dependency                                              | Old floor | New floor | Advisory that the new floor fixes |
+| ------------------------------------------------------- | --------- | --------- | --------------------------------- |
+| OpenTelemetry API, `io.opentelemetry:opentelemetry-api` | 1.62.0    | 1.67.0    | GHSA-ccrj-gw8r-854m               |
+
+The JVM SDK compiles against `opentelemetry-api` 1.67.0, and the optional dependency names that
+version. This supersedes the 1.62.0 statement in "the JVM floors rise past their known advisories".
+`opentelemetry-sdk-testing` moves with the API, because it shares the version in the catalog.
+
+No Spring Boot BOM manages 1.67.0 on 2026-10-28: 4.1.2 manages 1.62.0, and 4.0.9 manages 1.55.0.
+The SDK still uses no API that is newer than 1.55.0, and it refuses no older API at run time. So
+the versions that the SDK runs on do not narrow, and ADR 0058 asks for no notice.
+
+1.67.0 deprecates `TextMapGetter.keys` and gives it a default body. The SDK keeps its override of
+`keys`, because the method is abstract in 1.55.0.

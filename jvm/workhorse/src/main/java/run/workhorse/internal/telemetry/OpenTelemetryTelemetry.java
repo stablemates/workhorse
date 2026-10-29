@@ -48,7 +48,10 @@ public final class OpenTelemetryTelemetry implements Telemetry {
 
   private static final TextMapGetter<Map<String, String>> GETTER =
       new TextMapGetter<>() {
+        // 1.67.0 deprecates keys and gives it a default body, but it is abstract in the 1.55.0 API
+        // of the Spring Boot 4.0 BOM. The override keeps the getter complete on that API.
         @Override
+        @SuppressWarnings("deprecation")
         public Iterable<String> keys(Map<String, String> carrier) {
           return carrier.keySet();
         }
