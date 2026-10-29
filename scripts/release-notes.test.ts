@@ -484,7 +484,9 @@ describe("0.11.0 release notes", () => {
       expect(breaking).toMatch(/heartbeat|sharedHeartbeats|SharedHeartbeats|shared_heartbeats/i);
       const behavior = subsection(section, "### Behavior changes");
       for (const issue of ["SM-1899", "SM-1901", "SM-1902"]) expect(behavior).toContain(issue);
-      expect(read(path)).not.toMatch(/^## Unreleased/m);
+      // The removal shipped in 0.11.0, so no newer entry repeats it.
+      const newer = read(path).split(release0110)[0]!;
+      expect(newer).not.toMatch(/SM-(1899|1901|1902)/);
     });
   });
 

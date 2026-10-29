@@ -5,9 +5,9 @@
 pgjdbc = "42.7.12"
 jspecify = "1.0.0"
 # The OpenTelemetry API that the core compiles against, an optional dependency (ADR 0103,
-# "Telemetry"). 1.62.0 is the first release that fixes GHSA-rcgg-9c38-7xpx. Spring Boot 4.1 manages
-# it, and the Spring Boot floor manages 1.55.0.
-opentelemetry = "1.62.0"
+# "Telemetry"). 1.67.0 is the first release that fixes GHSA-ccrj-gw8r-854m. No Spring Boot BOM
+# manages it yet: 4.1.2 manages 1.62.0, and the Spring Boot floor manages 1.55.0.
+opentelemetry = "1.67.0"
 # The dashboard backend compiles against the Jakarta Servlet floor of ADR 0103.
 jakarta-servlet = "6.0.0"
 # The servlet container for the dashboard tests: the Tomcat that Spring Boot 4.1.1, the newest 4.1

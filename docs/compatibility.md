@@ -105,7 +105,7 @@ floor. The `spring-boot` CI job tests the same jar on the newest tested Spring B
 CI job tests it on the next Spring Boot snapshot. That CI job does not block a release.
 
 The JVM floors exclude the releases with the advisories that ADR 0103 lists. The core and the
-starter declare the OpenTelemetry API 1.62.0 as an optional dependency. The `jackson` feature of the
+starter declare the OpenTelemetry API 1.67.0 as an optional dependency. The `jackson` feature of the
 starter declares `jackson-databind` 3.1.7. Spring Boot 4.0.0 to 4.0.7 manage a PgJDBC release below
 the floor, so the starter needs Spring Boot 4.0.8 or later, or a `postgresql.version` override. If
 an application imports the Spring Boot BOM as Maven dependency management, or through the Spring
