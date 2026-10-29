@@ -46,7 +46,11 @@ function packageDirectories(...names: readonly string[]): RegExp {
  * Rolldown also puts each captured module's dependencies into its group. A higher priority makes
  * a group capture its own packages before a lower group takes them as dependencies. React has the
  * highest priority, so React, React DOM, and the scheduler stay in the eager `react` chunk and no
- * Mantine or icon chunk holds them. The chart group takes Recharts and its Redux store as its
+ * Mantine or icon chunk holds them. The icon group holds every icon package, including the
+ * Hugeicons glyphs of the Graphical components. The Base UI group holds the primitives of those
+ * components, which the shell loads at once; without it, they and the Graphical source made one
+ * chunk above the 500 KB limit of `scripts/generate-dashboard-bundle.ts`. The motion group holds the
+ * animation library of those components. The chart group takes Recharts and its Redux store as its
  * dependencies, so that code loads only with the lazy activity chart. Every module that no group
  * matches, such as the page modules, stays in Rolldown's default chunking.
  * `src/bundle-architecture.test.ts` builds the bundle and pins the contents of each chunk.
@@ -54,7 +58,17 @@ function packageDirectories(...names: readonly string[]): RegExp {
 const dashboardVendorChunks = [
   { name: "react", test: packageDirectories("react", "react-dom", "scheduler"), priority: 50 },
   { name: "mantine", test: packageDirectories("@mantine/core", "@mantine/hooks"), priority: 40 },
-  { name: "icons", test: packageDirectories("@phosphor-icons/react"), priority: 30 },
+  {
+    name: "icons",
+    test: packageDirectories("@hugeicons/react", "@hugeicons/core-free-icons", "lucide-react"),
+    priority: 30,
+  },
+  { name: "base-ui", test: packageDirectories("@base-ui/react", "@base-ui/utils"), priority: 35 },
+  {
+    name: "motion",
+    test: packageDirectories("motion", "motion-dom", "motion-utils", "framer-motion"),
+    priority: 25,
+  },
   { name: "notifications", test: packageDirectories("@mantine/notifications"), priority: 20 },
   { name: "mantine-charts", test: packageDirectories("@mantine/charts"), priority: 10 },
 ] as const;

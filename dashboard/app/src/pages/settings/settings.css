@@ -1,0 +1,62 @@
+/* Settings: browser preferences first, then database-wide policy, then values set at deploy. */
+.settings-form {
+  max-width: 30rem;
+}
+
+.settings-panel {
+  display: flex;
+  flex-direction: column;
+  gap: var(--mantine-spacing-md);
+}
+
+.settings-panel__title {
+  margin: 0;
+  font-size: var(--mantine-font-size-sm);
+  line-height: var(--mantine-line-height-sm);
+  font-weight: 600;
+}
+
+/*
+ * The maintenance form keeps a reading width, so each input stays near its label and the Save
+ * button stays near the inputs. The legend and its description sit together, and the fields
+ * start one step below them.
+ */
+.settings-fieldset {
+  margin: 0;
+  padding: 0;
+  border: 0;
+  min-width: 0;
+  max-width: 48rem;
+}
+
+/* The Graphical stack sets its own gap, so this rule names the panel to win over it. */
+.settings-panel .settings-fieldset {
+  gap: 4px;
+}
+
+.settings-fieldset .settings-fieldset__legend {
+  margin: 0;
+  padding: 0;
+  font-size: var(--mantine-font-size-sm);
+  line-height: var(--mantine-line-height-sm);
+  font-weight: 600;
+}
+
+.settings-fieldset > .mantine-Grid-root {
+  margin-top: var(--mantine-spacing-sm);
+}
+
+.settings-fieldset > .mantine-Group-root {
+  margin-top: var(--mantine-spacing-sm);
+}
+
+.settings-policy {
+  display: flex;
+  flex-direction: column;
+  gap: var(--mantine-spacing-xs);
+  margin-top: var(--mantine-spacing-xs);
+}
+
+.settings-policy-table :is(th, td):first-child {
+  width: 40%;
+}

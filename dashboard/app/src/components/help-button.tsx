@@ -1,5 +1,6 @@
 import { ActionIcon, Tooltip } from "@mantine/core";
-import { Info } from "@phosphor-icons/react";
+import { InformationCircleIcon } from "@hugeicons/core-free-icons";
+import { HugeiconsIcon } from "@hugeicons/react";
 
 /**
  * Inline explanation next to a heading or metric.
@@ -17,7 +18,7 @@ export function HelpButton({ label, help }: { label: string; help: string }) {
         size="sm"
         variant="subtle"
       >
-        <Info size={14} />
+        <HugeiconsIcon icon={InformationCircleIcon} size={14} />
       </ActionIcon>
     </Tooltip>
   );

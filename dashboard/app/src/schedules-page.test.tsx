@@ -1,14 +1,25 @@
 import { MantineProvider } from "@mantine/core";
+import { readFileSync } from "node:fs";
 import type { DashboardCronPage } from "@stablemates/workhorse-dashboard-server/wire";
-import { createElement } from "react";
+import { createElement, type ReactNode } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { GraphicalProvider, theme } from "./ui.js";
 
 Object.defineProperty(globalThis, "localStorage", {
   value: { getItem: () => null, setItem: () => undefined },
 });
 
 afterEach(() => vi.useRealTimers());
+
+/** The Graphical buttons on this page need their theme provider beside Mantine's. */
+function ThemeProviders({ children }: { children: ReactNode }) {
+  return createElement(
+    MantineProvider,
+    null,
+    createElement(GraphicalProvider, { document: theme, colorMode: "light" }, children),
+  );
+}
 
 const page: DashboardCronPage = {
   capturedAt: "2026-08-26T12:00:00.000Z",
@@ -86,7 +97,7 @@ describe("schedules page", () => {
     const render = (scheduleCount: number) =>
       renderToStaticMarkup(
         createElement(
-          MantineProvider,
+          ThemeProviders,
           null,
           createElement(CronPage, {
             data: { ...page, scheduleCount },
@@ -109,7 +120,7 @@ describe("schedules page", () => {
     const render = (schedule: DashboardCronPage["schedules"][number]) =>
       renderToStaticMarkup(
         createElement(
-          MantineProvider,
+          ThemeProviders,
           null,
           createElement(CronPage, {
             data: { ...page, schedules: [schedule] },
@@ -159,7 +170,7 @@ describe("schedules page", () => {
     const [invoices] = page.schedules;
     const capped = renderToStaticMarkup(
       createElement(
-        MantineProvider,
+        ThemeProviders,
         null,
         createElement(CronPage, {
           data: {
@@ -202,7 +213,7 @@ describe("schedules page", () => {
     vi.setSystemTime(skippedAt + 24 * hour);
     const markup = renderToStaticMarkup(
       createElement(
-        MantineProvider,
+        ThemeProviders,
         null,
         createElement(CronPage, {
           data: { ...page, schedules: [{ ...invoices!, ...skip }] },
@@ -224,7 +235,7 @@ describe("schedules page", () => {
     expect(presentSchedules(page)[0]?.lastFiredAt).toBe("2026-08-26T11:59:59.010Z");
     const html = renderToStaticMarkup(
       createElement(
-        MantineProvider,
+        ThemeProviders,
         null,
         createElement(CronPage, {
           data: page,
@@ -243,8 +254,15 @@ describe("schedules page", () => {
     expect(html).toContain("Destination: billing, priority 0, task type invoice.generate");
     expect(html).toContain("2 workers");
     expect(html).toContain(">All<");
-    expect(html).toContain("--badge-bg:var(--mantine-color-green-light)");
+    // Each status is one quiet label, and the action is a separate button with a clear name.
+    expect(html).toContain(">On schedule<");
+    expect(html).toContain(">Active<");
+    expect(html).toContain("Status: Active");
     expect(html).not.toContain(">Enabled<");
+    expect(html).toMatch(/<button[^>]*aria-label="Pause invoices"[^>]*>Pause<\/button>/);
+    expect(html).toContain('aria-haspopup="dialog"');
+    // The destination queue links to its row on the Queues page.
+    expect(html).toContain('href="/queues#queue-billing"');
     expect(html).toContain(formatExact("2026-08-26T11:59:59.010Z"));
     expect(html).toContain("23 retained");
     expect(html).toContain('href="/tasks?queue=billing&amp;type=invoice.generate"');
@@ -268,5 +286,73 @@ describe("schedules page", () => {
     expect(runHtml).toContain("succeeded");
     expect(runHtml).toContain("2 rows affected");
     expect(runHtml).toContain("promote · 2 rows");
+  });
+  it("shows a paused schedule as a label and offers Resume as a button", async () => {
+    const { CronPage, scheduleState } = await import("./pages/schedules.js");
+    const { presentSchedules } = await import("./presentation-policy.js");
+    const [invoices] = page.schedules;
+    const paused = {
+      ...invoices!,
+      paused: true,
+      pausedBy: "ops@example.com",
+      pausedAt: "2026-08-26T11:00:00.000Z",
+    };
+    const html = renderToStaticMarkup(
+      createElement(
+        ThemeProviders,
+        null,
+        createElement(CronPage, {
+          data: { ...page, schedules: [paused] },
+          togglingSchedule: null,
+          setSchedulePaused: () => undefined,
+          scheduleTasksHref: () => "/tasks",
+        }),
+      ),
+    );
+    expect(html).toContain(">Paused<");
+    expect(html).toMatch(/<button[^>]*aria-label="Resume invoices"[^>]*>Resume<\/button>/);
+    expect(html).not.toContain(">Pause<");
+
+    const presented = presentSchedules({ ...page, schedules: [paused] });
+    const user = presented.find((schedule) => schedule.kind === "user")!;
+    expect(scheduleState(user).detail).toContain("Paused by ops@example.com");
+    expect(scheduleState({ ...user, paused: false, configuredEnabled: false }).text).toBe(
+      "Config off",
+    );
+    expect(scheduleState({ ...user, paused: false }).text).toBe("Active");
+  });
+
+  it("builds queue and task links under the mounted base path", async () => {
+    const { queueRowHref, siblingRouteHref, taskDrawerHref } = await import("./pages/schedules.js");
+    const tasks = "/workhorse/tasks?queue=billing&type=invoice.generate";
+    expect(siblingRouteHref(tasks, "/queues")).toBe("/workhorse/queues");
+    expect(siblingRouteHref("/tasks", "/queues")).toBe("/queues");
+    // A base path that holds `/tasks` keeps all of its segments.
+    expect(siblingRouteHref("/ops/tasks-team/tasks?queue=billing", "/queues")).toBe(
+      "/ops/tasks-team/queues",
+    );
+    expect(siblingRouteHref("/tasks/tasks", "/queues")).toBe("/tasks/queues");
+    expect(queueRowHref("/ops/tasks-team/tasks?type=invoice", "billing")).toBe(
+      "/ops/tasks-team/queues#queue-billing",
+    );
+    expect(queueRowHref(tasks, "billing jobs")).toBe("/workhorse/queues#queue-billing%20jobs");
+    expect(taskDrawerHref(tasks, "0198")).toBe(
+      "/workhorse/tasks?queue=billing&type=invoice.generate&task=0198",
+    );
+    expect(taskDrawerHref("/tasks", "0198")).toBe("/tasks?task=0198");
+  });
+
+  it("reloads the recent tasks on each page refresh and on each fire", () => {
+    const source = readFileSync(new URL("./pages/schedules.tsx", import.meta.url), "utf8");
+    const component = source.slice(source.indexOf("function ScheduleRecentTasks("));
+    const effect = component.slice(component.indexOf("reader.current?.request("));
+    const deps = /\n  \}, \[([^\]]*)\]\);/.exec(effect)?.[1] ?? "";
+    // A poll changes `capturedAt`, so a task that finishes shows its new state. A fire after the
+    // occurrence count reaches its cap still changes `lastFiredAt`.
+    expect(deps).toContain("capturedAt");
+    expect(deps).toContain("schedule.lastFiredAt");
+    // Both reloads go through the coalesced reader, so a slow read does not pile up requests.
+    expect(component).toContain("createCoalescedRead");
+    expect(component).not.toContain("client\n      .tasksCursor(");
   });
 });

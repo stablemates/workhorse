@@ -1,8 +1,18 @@
 import { MantineProvider } from "@mantine/core";
-import { createElement } from "react";
+import { createElement, type ReactNode } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import type { DashboardWorkersPage } from "@stablemates/workhorse-dashboard-server/wire";
+import { GraphicalProvider, theme } from "./ui.js";
+
+/** The Graphical controls on this page need their theme provider beside Mantine's. */
+function ThemeProviders({ children }: { children: ReactNode }) {
+  return createElement(
+    MantineProvider,
+    null,
+    createElement(GraphicalProvider, { document: theme, colorMode: "light" }, children),
+  );
+}
 
 Object.defineProperty(globalThis, "localStorage", {
   value: { getItem: () => null, setItem: () => undefined },
@@ -18,7 +28,7 @@ describe("workers page", () => {
     };
     const html = renderToStaticMarkup(
       createElement(
-        MantineProvider,
+        ThemeProviders,
         null,
         createElement(WorkersPage, {
           data,
@@ -62,7 +72,7 @@ describe("workers page", () => {
     };
     const html = renderToStaticMarkup(
       createElement(
-        MantineProvider,
+        ThemeProviders,
         null,
         createElement(WorkersPage, {
           data,
@@ -111,7 +121,7 @@ describe("workers page", () => {
     };
     const html = renderToStaticMarkup(
       createElement(
-        MantineProvider,
+        ThemeProviders,
         null,
         createElement(WorkersPage, {
           data,
@@ -165,7 +175,7 @@ describe("workers page", () => {
     };
     const html = renderToStaticMarkup(
       createElement(
-        MantineProvider,
+        ThemeProviders,
         null,
         createElement(WorkersPage, {
           data,
@@ -236,7 +246,7 @@ describe("workers page", () => {
     };
     const html = renderToStaticMarkup(
       createElement(
-        MantineProvider,
+        ThemeProviders,
         null,
         createElement(WorkersPage, {
           data,

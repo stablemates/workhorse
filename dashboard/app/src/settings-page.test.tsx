@@ -1,7 +1,9 @@
+import { readFileSync } from "node:fs";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { MantineProvider } from "@mantine/core";
 import { describe, expect, it } from "vitest";
+import { GraphicalProvider, theme } from "./ui.js";
 import type { DashboardSettingsPage } from "@stablemates/workhorse-dashboard-server/wire";
 
 const storage = new Map<string, string>();
@@ -103,14 +105,18 @@ describe("settings page", () => {
         RefreshBlockerProvider,
         null,
         createElement(
-          MantineProvider,
-          null,
-          createElement(SettingsPage, {
-            data,
-            saving: false,
-            onSaveMaintenance: async () => undefined,
-            onRevertMaintenance: async () => undefined,
-          }),
+          GraphicalProvider,
+          { document: theme, colorMode: "light" },
+          createElement(
+            MantineProvider,
+            null,
+            createElement(SettingsPage, {
+              data,
+              saving: false,
+              onSaveMaintenance: async () => undefined,
+              onRevertMaintenance: async () => undefined,
+            }),
+          ),
         ),
       ),
     );
@@ -155,7 +161,7 @@ describe("settings page", () => {
     expect(html).not.toContain("Default: 5 minutes");
     expect(html).not.toContain("Default: 200 groups");
     expect(html).toContain("Default: 14 days");
-    expect(html).toContain("Effective: 7 days");
+    expect(html).toMatch(/Effective: <\/span>7 days/);
     expect(html).not.toContain('aria-label="Task events"');
     expect(html).not.toContain('aria-label="Finished tasks per cleanup pass"');
     expect(html).not.toContain("Preview impact");
@@ -210,5 +216,124 @@ describe("display time zone choices", () => {
       ({ value }) => value,
     );
     expect(values).toEqual(["system", "UTC", "Asia/Kolkata", "Asia/Calcutta"]);
+  });
+});
+
+describe("maintenance draft", () => {
+  it("keeps an unsaved edit when a fresh settings answer arrives", async () => {
+    const { followMaintenanceAnswer } = await import("./pages/settings/index.js");
+    // 1. The operator opens Settings. The cached answer shows, and a new read starts.
+    const cached = { timezone: "UTC", historyRetentionLocalTime: "03:00" };
+    // 2. Before the read ends, the operator changes the daily retention time.
+    const draft = { timezone: "UTC", historyRetentionLocalTime: "04:30" };
+    // 3. The new answer arrives. Another operator changed the timezone meanwhile.
+    const fresh = { timezone: "Europe/Berlin", historyRetentionLocalTime: "03:00" };
+    // 4. The edit stays, and the field the operator did not touch follows the answer.
+    expect(followMaintenanceAnswer({ draft, previous: cached, next: fresh })).toEqual({
+      timezone: "Europe/Berlin",
+      historyRetentionLocalTime: "04:30",
+    });
+  });
+
+  it("follows the answer when the draft has no edits, and keeps the same draft otherwise", async () => {
+    const { followMaintenanceAnswer } = await import("./pages/settings/index.js");
+    const saved = { timezone: "UTC", historyRetentionLocalTime: "03:00" };
+    const next = { timezone: "Asia/Tokyo", historyRetentionLocalTime: "05:00" };
+    expect(followMaintenanceAnswer({ draft: saved, previous: saved, next })).toEqual(next);
+    // A save writes the draft, so the answer after it equals the draft and nothing is unsaved.
+    const draft = { timezone: "Asia/Tokyo", historyRetentionLocalTime: "05:00" };
+    expect(followMaintenanceAnswer({ draft, previous: saved, next })).toBe(draft);
+  });
+
+  it("takes a value that another operator sets before the reload after a save", async () => {
+    const { followMaintenanceAnswer, followMaintenanceSave } =
+      await import("./pages/settings/index.js");
+    // 1. The page shows the stored daily retention time 03:00.
+    const answered = { timezone: "UTC", historyRetentionLocalTime: "03:00" };
+    // 2. The operator changes it to 04:30 and saves. Workhorse accepts the save.
+    const draft = { timezone: "UTC", historyRetentionLocalTime: "04:30" };
+    const previous = followMaintenanceSave({
+      answered,
+      submitted: { historyRetentionLocalTime: "04:30" },
+    });
+    // 3. Another operator sets 05:00 before the reload ends.
+    const next = { timezone: "UTC", historyRetentionLocalTime: "05:00" };
+    // 4. The draft takes 05:00, so it equals the answer and has no unsaved change.
+    expect(followMaintenanceAnswer({ draft, previous, next })).toEqual(next);
+  });
+
+  it("keeps an edit that the operator makes after the submit", async () => {
+    const { followMaintenanceAnswer, followMaintenanceSave } =
+      await import("./pages/settings/index.js");
+    // 1. The operator saves 04:30 over 03:00 in UTC. Workhorse accepts the save.
+    const answered = { timezone: "UTC", historyRetentionLocalTime: "03:00" };
+    const previous = followMaintenanceSave({
+      answered,
+      submitted: { historyRetentionLocalTime: "04:30" },
+    });
+    // 2. Before the reload ends, the operator changes the time again and changes the timezone.
+    const draft = { timezone: "Asia/Tokyo", historyRetentionLocalTime: "06:15" };
+    // 3. The reload returns the saved value.
+    const next = { timezone: "UTC", historyRetentionLocalTime: "04:30" };
+    // 4. Both later edits stay.
+    expect(followMaintenanceAnswer({ draft, previous, next })).toBe(draft);
+  });
+
+  it("keeps the draft dirty when the save fails", async () => {
+    const { followMaintenanceAnswer } = await import("./pages/settings/index.js");
+    // 1. The page shows 03:00. The operator changes it to 04:30 and saves.
+    const answered = { timezone: "UTC", historyRetentionLocalTime: "03:00" };
+    const draft = { timezone: "UTC", historyRetentionLocalTime: "04:30" };
+    // 2. Workhorse rejects the save. The controller does not call `onSaved`, so the answer that
+    //    the draft follows stays at 03:00.
+    // 3. A later answer still holds 03:00, and the edit stays unsaved.
+    expect(followMaintenanceAnswer({ draft, previous: answered, next: answered })).toBe(draft);
+  });
+
+  it("discards to the saved values when the reload after a save fails", async () => {
+    const { maintenanceFormChanges, updateMaintenanceForm } =
+      await import("./pages/settings/index.js");
+    // 1. The page shows the stored daily retention time 03:00 in UTC.
+    const stored = { timezone: "UTC", historyRetentionLocalTime: "03:00" };
+    let form = { answered: stored, draft: stored };
+    // 2. The operator changes it to 04:30 and saves. Workhorse accepts the save.
+    form = updateMaintenanceForm(form, {
+      kind: "edit",
+      change: { historyRetentionLocalTime: "04:30" },
+    });
+    form = updateMaintenanceForm(form, {
+      kind: "saved",
+      submitted: maintenanceFormChanges(form),
+    });
+    expect(maintenanceFormChanges(form)).toEqual({});
+    // 3. The reload fails, so the last answer still holds 03:00. The operator edits the timezone.
+    form = updateMaintenanceForm(form, { kind: "edit", change: { timezone: "Asia/Tokyo" } });
+    expect(maintenanceFormChanges(form)).toEqual({ timezone: "Asia/Tokyo" });
+    // 4. Discard gives the saved values, with no unsaved change.
+    form = updateMaintenanceForm(form, { kind: "discard" });
+    const saved = { timezone: "UTC", historyRetentionLocalTime: "04:30" };
+    expect(form.draft).toEqual(saved);
+    expect(maintenanceFormChanges(form)).toEqual({});
+    // 5. The next answer holds a value from another operator. The draft follows it.
+    const next = { timezone: "Europe/Berlin", historyRetentionLocalTime: "04:30" };
+    form = updateMaintenanceForm(form, { kind: "answer", answer: next });
+    expect(form.draft).toEqual(next);
+    expect(maintenanceFormChanges(form)).toEqual({});
+  });
+
+  it("moves focus to the retention time before Discard or Save leaves the keyboard operator", () => {
+    const source = readFileSync(new URL("./pages/settings/index.tsx", import.meta.url), "utf8");
+    // 1. The operator presses Enter on Discard changes. Focus moves, then the button leaves.
+    expect(source).toMatch(
+      /keepFocusOnRemoval\(\{\s*removed: event\.currentTarget,\s*active: document\.activeElement,\s*target: retentionTimeField\.current,\s*\}\);\s*updateMaintenance\(\{ kind: "discard" \}\);/,
+    );
+    // 2. The operator presses Enter on Save. Focus moves, then the button is disabled.
+    expect(source).toMatch(
+      /keepFocusOnRemoval\(\{\s*removed: event\.currentTarget,\s*active: document\.activeElement,\s*target: retentionTimeField\.current,\s*\}\);\s*saveMaintenance\(\);/,
+    );
+    // 3. The retention time field takes the ref. The timezone field opens its list on focus.
+    expect(source).toMatch(
+      /ref=\{retentionTimeField\}\s*value=\{maintenance\.historyRetentionLocalTime\}/,
+    );
   });
 });

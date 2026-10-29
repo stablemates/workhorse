@@ -1,0 +1,53 @@
+/* The reading notes: a quiet disclosure under the page heading, not a full-width button. */
+.workers-notes {
+  gap: 0;
+}
+
+.workers-notes .workers-notes__trigger {
+  justify-content: flex-start;
+  gap: var(--mantine-spacing-xxs, 4px);
+  width: max-content;
+  min-height: 0;
+  padding: 0;
+  background: transparent;
+  box-shadow: none;
+  color: var(--mantine-color-text);
+  font-size: var(--mantine-font-size-sm);
+  line-height: var(--mantine-line-height-sm);
+  font-weight: 500;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.workers-notes__chevron {
+  transition: rotate 160ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.workers-notes__trigger[data-panel-open] .workers-notes__chevron {
+  rotate: 180deg;
+}
+
+.workers-notes__list {
+  max-width: 48rem;
+  padding-top: var(--mantine-spacing-xs);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .workers-notes__chevron {
+    transition: none;
+  }
+}
+
+/* The worker name is the row identity: monospace at the body size, with no code chip. */
+.workers-table__identity .workers-table__code {
+  padding: 0;
+  background: transparent;
+  font-size: var(--mantine-font-size-sm);
+  font-weight: 500;
+}
+
+/* Metrics and times stay on one line, so every row keeps the same height. */
+.dashboard-table--workers td[style*="text-align"],
+.dashboard-table--workers td:nth-last-child(-n + 2) {
+  white-space: nowrap;
+}

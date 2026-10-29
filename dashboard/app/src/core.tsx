@@ -1,4 +1,5 @@
 import { createContext, lazy, useContext } from "react";
+import type { BarShapeProps } from "recharts";
 import type { DashboardClient } from "@stablemates/workhorse-dashboard-server";
 import type {
   DashboardCronPage,
@@ -16,18 +17,6 @@ import type {
 } from "@stablemates/workhorse-dashboard-server/wire";
 import { readStoredValue } from "./browser-storage.js";
 import { formatCount } from "./count-format.js";
-import {
-  ArrowCounterClockwise,
-  CheckCircle,
-  Clock,
-  ListDashes,
-  ListChecks,
-  PlayCircle,
-  Prohibit,
-  UserFocus,
-  WarningCircle,
-  XCircle,
-} from "@phosphor-icons/react";
 import { dashboardTaskFilters } from "@stablemates/workhorse-dashboard-server/wire";
 import { parseEventsLocation, type EventsLocationState } from "./events-location.js";
 import { parseTaskLocation, taskLocationHref, type TaskLocationState } from "./task-location.js";
@@ -56,26 +45,51 @@ export interface SystemOutcomeChartPoint {
   leaseExpired: number;
   canceled: number;
 }
+/**
+ * Attempt outcomes from the baseline of a bar to its top. The dataviz palette validator chose this
+ * order, so that the green and red segments never touch.
+ */
+const systemOutcomeSeries = [
+  { id: "succeeded", label: "Succeeded", color: "var(--workhorse-chart-succeeded)" },
+  { id: "leaseExpired", label: "Lease expired", color: "var(--workhorse-chart-lease-expired)" },
+  { id: "retry", label: "Retry", color: "var(--workhorse-chart-retry)" },
+  { id: "failed", label: "Failed", color: "var(--workhorse-chart-failed)" },
+  // Cancellation is deliberate operator action, so it never joins the failure series.
+  { id: "canceled", label: "Canceled", color: "var(--workhorse-chart-canceled)" },
+] as const;
 export const SystemOutcomeChart = lazy(async () => {
+  // Destructure each dynamic import directly, so the bundler keeps only the named exports.
   const {
     Bar,
     CartesianGrid,
     ComposedChart,
     Legend,
     Line,
+    Rectangle,
     ResponsiveContainer,
     Tooltip: RechartsTooltip,
     XAxis,
     YAxis,
+    matchByDataKey,
   } = await import("recharts");
+  const { ChartTooltip, chartRow, isTopOfStack } = await import("./charts/chart-tooltip.js");
+  const { useChartSeriesAnimation } = await import("./charts/chart-motion.js");
+  // The legend lists the top segment first, the same order as the stack.
+  // oxlint-disable-next-line unicorn/no-array-reverse -- ES2022 lacks Array.prototype.toReversed.
+  const legendOrder: string[] = [...systemOutcomeSeries].reverse().map(({ label }) => label);
+  const stackIds: string[] = systemOutcomeSeries.map(({ id }) => id);
+  // A bar or a point moves to the bucket with the same label, so a refresh slides each minute to
+  // its new place. A bucket that only one answer holds grows or shrinks in place.
+  const matchBucket = matchByDataKey("bucket");
 
-  return {
-    default: ({ data }: { data: SystemOutcomeChartPoint[] }) => (
-      <ResponsiveContainer width="100%" height="100%">
-        {/* Every refresh hands this chart a new series, and an animated redraw would replay the
-            bars from zero each time. The operator is watching a number change, not a reveal. */}
+  function OutcomeChart({ data }: { data: SystemOutcomeChartPoint[] }) {
+    // A new time range or a refresh moves each bar from its previous height to the new one. The
+    // first paint and reduced motion do not animate.
+    const animation = useChartSeriesAnimation();
+    return (
+      <ResponsiveContainer width="100%" height="100%" className="chart-motion">
         <ComposedChart data={data} margin={{ top: 12, right: 12, bottom: 0, left: -12 }}>
-          <CartesianGrid stroke="var(--mantine-color-default-border)" strokeDasharray="3 3" />
+          <CartesianGrid stroke="var(--workhorse-divider)" strokeDasharray="3 3" />
           <XAxis
             dataKey="bucket"
             minTickGap={36}
@@ -90,52 +104,81 @@ export const SystemOutcomeChart = lazy(async () => {
             tickLine={false}
           />
           <RechartsTooltip
-            formatter={(value) => (typeof value === "number" ? formatCount(value) : value)}
-          />
-          <Legend wrapperStyle={{ fontSize: 12 }} />
-          <Bar
-            dataKey="succeeded"
-            stackId="outcomes"
-            fill="var(--mantine-color-teal-6)"
+            offset={16}
             isAnimationActive={false}
+            cursor={{ fill: "var(--workhorse-neutral-3)", stroke: "none" }}
+            wrapperStyle={{ zIndex: 3, pointerEvents: "none" }}
+            content={({ active, payload, label }) => {
+              const values = chartRow(payload?.[0]?.payload);
+              if (!active || values.size === 0) return null;
+              return (
+                <ChartTooltip
+                  title={typeof label === "string" ? label : null}
+                  values={values}
+                  series={systemOutcomeSeries}
+                  unit={{ one: "outcome", other: "outcomes" }}
+                  footer={
+                    <span className="chart-key">
+                      <span
+                        className="chart-key__swatch"
+                        style={{ background: "var(--workhorse-neutral-10)", height: 2 }}
+                        aria-hidden
+                      />
+                      <span className="chart-key__label">Enqueued</span>
+                      <span className="chart-key__count">
+                        {formatCount(Number(values.get("enqueued")) || 0)}
+                      </span>
+                    </span>
+                  }
+                />
+              );
+            }}
           />
-          <Bar
-            dataKey="failed"
-            stackId="outcomes"
-            fill="var(--mantine-color-red-6)"
-            isAnimationActive={false}
+          {/* The swatch carries the series color. The label stays in the text color, because a
+              pale series such as retry would fail text contrast. */}
+          <Legend
+            wrapperStyle={{ fontSize: 12 }}
+            itemSorter={(item) => {
+              const index = legendOrder.indexOf(String(item.value));
+              return index === -1 ? legendOrder.length : index;
+            }}
+            formatter={(value: string) => (
+              <span style={{ color: "var(--mantine-color-text)" }}>{value}</span>
+            )}
           />
-          <Bar
-            dataKey="retry"
-            stackId="outcomes"
-            fill="var(--mantine-color-orange-6)"
-            isAnimationActive={false}
-          />
-          <Bar
-            dataKey="leaseExpired"
-            stackId="outcomes"
-            fill="var(--mantine-color-grape-6)"
-            isAnimationActive={false}
-          />
-          {/* Cancellation is deliberate operator action, so it never joins the failure series. */}
-          <Bar
-            dataKey="canceled"
-            stackId="outcomes"
-            fill="var(--mantine-color-gray-6)"
-            isAnimationActive={false}
-          />
+          {systemOutcomeSeries.map(({ id, label, color }) => (
+            <Bar
+              key={id}
+              dataKey={id}
+              name={label}
+              stackId="outcomes"
+              fill={color}
+              className="chart-series"
+              {...animation}
+              animationMatchBy={matchBucket}
+              shape={(props: BarShapeProps) => (
+                <Rectangle
+                  {...props}
+                  radius={isTopOfStack(props.payload, id, stackIds) ? [3, 3, 0, 0] : 0}
+                />
+              )}
+            />
+          ))}
           <Line
             dataKey="enqueued"
+            name="Enqueued"
             type="monotone"
-            stroke="var(--mantine-color-blue-7)"
+            stroke="var(--workhorse-neutral-10)"
             strokeWidth={2}
             dot={false}
-            isAnimationActive={false}
+            {...animation}
+            animationMatchBy={matchBucket}
           />
         </ComposedChart>
       </ResponsiveContainer>
-    ),
-  };
+    );
+  }
+  return { default: OutcomeChart };
 });
 export function readStoredSystemWindow(): DashboardSystemWindow {
   const stored = readStoredValue(systemWindowStorageKey) as DashboardSystemWindow | null;
@@ -147,18 +190,6 @@ export const activityGroupings: Array<{ value: ActivityGroupBy; label: string }>
   { value: "worker", label: "Worker" },
   { value: "task", label: "Task" },
   { value: "status", label: "Status" },
-];
-export const activitySeriesColors = [
-  "#4fa9e8",
-  "#ff9a5c",
-  "#45d18e",
-  "#b183f0",
-  "#f5c242",
-  "#2fd3c4",
-  "#f57bae",
-  "#8199f2",
-  "#a6d147",
-  "#f57676",
 ];
 export type PageRoute =
   | "/tasks"
@@ -218,40 +249,25 @@ const pageRoutes = new Set<PageRoute>([
   "/workers",
   "/settings",
 ]);
-const taskFilterPresentation: Record<
-  DashboardTaskFilter,
-  {
-    label: string;
-    icon: typeof ListChecks;
-  }
-> = {
-  all: { label: "All tasks", icon: ListChecks },
-  blocked: { label: "Blocked", icon: WarningCircle },
-  waiting: { label: "Waiting", icon: UserFocus },
-  scheduled: { label: "Scheduled", icon: Clock },
-  retried: { label: "Retried", icon: ArrowCounterClockwise },
-  queued: { label: "Queued", icon: ListDashes },
-  running: { label: "Running", icon: PlayCircle },
-  completed: { label: "Completed", icon: CheckCircle },
-  discarded: { label: "Discarded", icon: XCircle },
+const taskFilterLabels: Record<DashboardTaskFilter, string> = {
+  all: "All tasks",
+  blocked: "Blocked",
+  waiting: "Waiting",
+  scheduled: "Scheduled",
+  retried: "Retried",
+  queued: "Queued",
+  running: "Running",
+  completed: "Completed",
+  discarded: "Discarded",
   // Cancellation is a distinct terminal state, never folded into discarded work.
-  canceled: { label: "Canceled", icon: Prohibit },
+  canceled: "Canceled",
 };
 export const taskFilters = dashboardTaskFilters.map((value) => ({
   value,
-  label: taskFilterPresentation[value].label,
-  icon: taskFilterPresentation[value].icon,
+  label: taskFilterLabels[value],
 }));
 export const blockedTaskDescription =
   "Blocked tasks are held until their dependencies or child tasks reach the required outcomes. They are not waiting for an operator decision.";
-/** Header badge color for the deployment environment label. */
-export function environmentColor(environment: string): string {
-  const normalized = environment.toLowerCase();
-  if (normalized.startsWith("prod")) return "red";
-  if (normalized.startsWith("stag")) return "orange";
-  if (normalized.startsWith("test") || normalized === "ci") return "grape";
-  return "blue";
-}
 export function normalizeBasePath(basePath: string): string {
   const normalized = `/${basePath}`.replaceAll(/\/+/g, "/").replace(/\/$/, "");
   return normalized === "/" ? "" : normalized;
@@ -259,25 +275,30 @@ export function normalizeBasePath(basePath: string): string {
 export function mountedHref(basePath: string, href: string): string {
   return `${basePath}${href}` || "/";
 }
-export function readLocation(basePath = ""): {
+export type DashboardLocation = {
   route: PageRoute;
   events: EventsLocationState;
   groups: TaskGroupsLocationState;
-} & TaskLocationState {
+} & TaskLocationState;
+export function readLocation(basePath = ""): DashboardLocation {
   const pathname =
     basePath && window.location.pathname.startsWith(`${basePath}/`)
       ? window.location.pathname.slice(basePath.length)
       : window.location.pathname === basePath
         ? "/tasks"
         : window.location.pathname;
+  return parseLocation(pathname, window.location.search);
+}
+/** The location of a dashboard path, such as `/events?window=24h`, without the mount path. */
+export function parseLocation(pathname: string, search: string): DashboardLocation {
   const route = pageRoutes.has(pathname as PageRoute) ? (pathname as PageRoute) : "/tasks";
   const storedPeriod = readStoredValue("workhorse-activity-period") as ActivityPeriod | null;
   const storedGroup = readStoredValue("workhorse-activity-group") as ActivityGroupBy | null;
   return {
     route,
-    events: parseEventsLocation(window.location.search),
-    groups: parseTaskGroupsLocation(route === "/groups" ? window.location.search : ""),
-    ...parseTaskLocation(route === "/events" || route === "/groups" ? "" : window.location.search, {
+    events: parseEventsLocation(search),
+    groups: parseTaskGroupsLocation(route === "/groups" ? search : ""),
+    ...parseTaskLocation(route === "/events" || route === "/groups" ? "" : search, {
       period: storedPeriod && activityPeriods.includes(storedPeriod) ? storedPeriod : "1h",
       group:
         storedGroup && activityGroupings.some(({ value }) => value === storedGroup)

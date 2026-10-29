@@ -17,10 +17,21 @@ export function StatusText({ text, label }: { text: ReactNode; label: string }) 
   );
 }
 
-/** A state label whose accessible meaning does not depend on its decorative color. */
+/**
+ * A state label whose accessible meaning does not depend on its decorative color. The label is
+ * a neutral chip, and only its dot has the state hue.
+ */
 export function StatusBadge({ state }: { state: string }) {
+  const color = statusColor(state);
   return (
-    <Badge color={statusColor(state)} variant="light" tt="capitalize" style={{ flexShrink: 0 }}>
+    <Badge
+      className="status-label"
+      color={color}
+      data-state-color={color}
+      variant="dot"
+      tt="none"
+      style={{ flexShrink: 0 }}
+    >
       <StatusText text={state} label={`Status: ${state}`} />
     </Badge>
   );
@@ -44,10 +55,10 @@ export function StatusLabel({
     <Badge
       className="status-label"
       size="sm"
-      radius={0}
-      variant="light"
+      variant="dot"
       color={color}
-      tt="uppercase"
+      data-state-color={color}
+      tt="none"
       w="max-content"
       styles={{ root: { justifyContent: "flex-start", textAlign: "left", flexShrink: 0 } }}
       tabIndex={children ? 0 : undefined}

@@ -1,0 +1,32 @@
+.task-group__back {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--mantine-spacing-xxs, 4px);
+  align-self: flex-start;
+  color: var(--mantine-color-dimmed);
+}
+
+.task-group__id {
+  font-size: var(--mantine-font-size-xs);
+  overflow-wrap: anywhere;
+}
+
+.task-group__summary {
+  display: flex;
+  flex-direction: column;
+  gap: var(--mantine-spacing-md);
+}
+
+.task-group__count {
+  font-variant-numeric: tabular-nums;
+}
+
+.task-group__events td {
+  vertical-align: top;
+}
+
+/* A group row opens the group, and a member row opens the task. The link in the row is the
+   keyboard path. */
+.data-table .task-group-row {
+  cursor: pointer;
+}

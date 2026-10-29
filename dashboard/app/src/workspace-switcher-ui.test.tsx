@@ -1,27 +1,19 @@
-import { MantineProvider } from "@mantine/core";
-import { createElement, type ComponentType } from "react";
+import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
+import { GraphicalProvider, theme } from "./ui.js";
+import {
+  WorkspaceSwitcher,
+  workspaceMenuEntries,
+  type WorkspaceSwitcherProps,
+} from "./shell/WorkspaceSwitcher.js";
 
-Object.defineProperty(globalThis, "localStorage", {
-  value: { getItem: () => null, setItem: () => undefined },
-});
-
-// Imported after the stub above because the dashboard module reads localStorage on evaluation.
-const { DashboardWorkspaceSwitcher } = await import("./dashboard.js");
-
-function render(props: Record<string, unknown>): string {
+function render(props: WorkspaceSwitcherProps): string {
   return renderToStaticMarkup(
     createElement(
-      MantineProvider,
-      null,
-      createElement(DashboardWorkspaceSwitcher as ComponentType, {
-        // Render the dropdown inline so static markup includes the menu items.
-        opened: true,
-        withinPortal: false,
-        transitionProps: { duration: 0 },
-        ...props,
-      }),
+      GraphicalProvider,
+      { document: theme, colorMode: "light" },
+      createElement(WorkspaceSwitcher, props),
     ),
   );
 }
@@ -36,23 +28,40 @@ const workspaces = [
   { name: "staging", url: "/workhorse/staging" },
 ];
 
-describe("DashboardWorkspaceSwitcher", () => {
-  it("labels the control with the active workspace and lists the others as links", () => {
+describe("WorkspaceSwitcher", () => {
+  it("names the current workspace on the trigger, without a prefix in its text", () => {
     const html = render({ workspaces, workspace: "staging" });
-    expect(html).toContain('aria-label="Workspace staging"');
-    expect(html).toContain('href="/workhorse/production/tasks"');
-    expect(html).toContain("staging");
+    expect(html).toContain('aria-label="Workspace: staging"');
+    expect(html).toContain('aria-haspopup="menu"');
+    expect(html).toMatch(/<span class="workspace-switcher__name">staging<\/span>/);
+    expect(html).not.toContain(">Workspace<");
   });
 
-  it("shows the database host and name behind a workspace when the host supplies them", () => {
-    const html = render({ workspaces, workspace: "staging" });
-    expect(html).toContain("db.internal:5432 · workhorse_demo");
+  it("shows the database of the current workspace on a second line when the host names it", () => {
+    expect(render({ workspaces, workspace: "production" })).toContain(
+      '<span class="workspace-switcher__detail">db.internal:5432 · workhorse_demo</span>',
+    );
+    expect(render({ workspaces, workspace: "staging" })).not.toContain(
+      "workspace-switcher__detail",
+    );
+  });
+
+  it("links each workspace to its task list as a full document", () => {
+    expect(workspaceMenuEntries({ workspaces, workspace: "staging" })).toEqual([
+      {
+        name: "production",
+        href: "/workhorse/production/tasks",
+        detail: "db.internal:5432 · workhorse_demo",
+        current: false,
+      },
+      { name: "staging", href: "/workhorse/staging/tasks", detail: null, current: true },
+    ]);
   });
 
   it("renders nothing in single-workspace mode", () => {
-    const empty = render({ workspaces: [], workspace: null });
-    expect(empty).not.toContain("aria-label");
-    const alone = render({ workspaces: [workspaces[0]], workspace: "production" });
-    expect(alone).not.toContain("aria-label");
+    expect(render({ workspaces: [], workspace: null })).not.toContain("<button");
+    expect(render({ workspaces: [workspaces[0]!], workspace: "production" })).not.toContain(
+      "<button",
+    );
   });
 });

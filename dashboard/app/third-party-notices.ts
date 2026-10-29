@@ -9,6 +9,8 @@ interface OutputChunkLike {
 
 interface OutputAssetLike {
   readonly type: "asset";
+  /** The source files of an emitted asset, such as a font that a stylesheet imports. */
+  readonly originalFileNames?: readonly string[];
 }
 
 type OutputBundleLike = Readonly<Record<string, OutputChunkLike | OutputAssetLike>>;
@@ -35,9 +37,15 @@ function sorted<T>(values: readonly T[], compare?: (left: T, right: T) => number
   return [...values].sort(compare);
 }
 
-function modulePaths(bundle: OutputBundleLike): readonly string[] {
+/**
+ * The source files of every module and asset in the bundle. A font file has no module. Vite
+ * names the source of an asset relative to its root directory.
+ */
+function modulePaths(bundle: OutputBundleLike, viteRoot: string): readonly string[] {
   return Object.values(bundle).flatMap((output) =>
-    output.type === "chunk" ? Object.keys(output.modules) : [],
+    output.type === "chunk"
+      ? Object.keys(output.modules)
+      : (output.originalFileNames ?? []).map((name) => path.resolve(viteRoot, name)),
   );
 }
 
@@ -91,9 +99,12 @@ async function legalFiles(
   );
 }
 
-async function createDashboardThirdPartyNotices(bundle: OutputBundleLike): Promise<string> {
+async function createDashboardThirdPartyNotices(
+  bundle: OutputBundleLike,
+  viteRoot: string,
+): Promise<string> {
   const packages = (
-    await Promise.all([...new Set(modulePaths(bundle))].map((id) => packageForModule(id)))
+    await Promise.all([...new Set(modulePaths(bundle, viteRoot))].map((id) => packageForModule(id)))
   ).filter((entry): entry is RuntimePackage => entry !== undefined);
   const uniquePackages = new Map(
     packages.map((entry) => [`${entry.manifest.name}@${entry.manifest.version}`, entry]),
@@ -124,7 +135,7 @@ async function createDashboardThirdPartyNotices(bundle: OutputBundleLike): Promi
   return [
     "Workhorse dashboard third-party notices",
     "",
-    "This file is generated from the modules in the production dashboard bundle.",
+    "This file is generated from the modules and assets in the production dashboard bundle.",
     "Run `pnpm dashboard-bundle:generate` after changing dashboard dependencies.",
     "Review every dependency, licence expression, and included legal text before release.",
     "",
@@ -133,14 +144,18 @@ async function createDashboardThirdPartyNotices(bundle: OutputBundleLike): Promi
 }
 
 export function dashboardThirdPartyNotices(): Plugin {
+  let viteRoot = process.cwd();
   return {
     name: "workhorse-dashboard-third-party-notices",
     apply: "build",
+    configResolved(config) {
+      viteRoot = config.root;
+    },
     async generateBundle(_options, bundle) {
       this.emitFile({
         type: "asset",
         fileName: noticeName,
-        source: await createDashboardThirdPartyNotices(bundle),
+        source: await createDashboardThirdPartyNotices(bundle, viteRoot),
       });
     },
   };

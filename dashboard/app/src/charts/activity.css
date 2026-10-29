@@ -1,2 +1,108 @@
 @import "@mantine/core/styles/ColorSwatch.css";
 @import "@mantine/charts/styles.css";
+
+/*
+ * The legend is a column on the left of a wide chart, so long task type names stay readable. On a
+ * narrow screen that column would take the full width, so the legend wraps above the chart. The
+ * column shows for every grouping, also with one series, so the plot keeps its width when the
+ * operator changes the grouping.
+ */
+.activity-chart-figure {
+  position: relative;
+  margin: 0;
+}
+
+.activity-chart {
+  display: grid;
+  grid-template-columns: minmax(160px, 240px) minmax(0, 1fr);
+  align-items: center;
+  gap: var(--mantine-spacing-md);
+}
+
+/*
+ * After a new grouping, a copy of the previous chart covers the new one and fades out. Each bar
+ * keeps its total height, so the operator sees the colors change in place and no empty frame. The
+ * new chart under the copy does not fade in, so the two layers never show the panel through them.
+ */
+.activity-chart__outgoing {
+  position: absolute;
+  inset: 0;
+  background: var(--panel-bg, var(--mantine-color-body));
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 280ms cubic-bezier(0.23, 1, 0.32, 1);
+}
+
+@starting-style {
+  .activity-chart__outgoing {
+    opacity: 1;
+  }
+}
+
+.activity-chart-figure--dissolve .recharts-bar.chart-series,
+.activity-chart-figure--dissolve .recharts-cartesian-axis-tick,
+.activity-chart-figure--dissolve .chart-key {
+  transition: none;
+}
+
+.activity-chart__plot {
+  grid-column: -2 / -1;
+  min-width: 0;
+}
+
+/*
+ * The legend starts at the top of the plot. A centered legend moved up or down each time a status
+ * view or a grouping changed the number of series.
+ */
+.activity-chart__legend {
+  display: flex;
+  flex-direction: column;
+  align-self: start;
+  gap: 2px;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+/* A series that joins the legend fades in with its bars. */
+.activity-chart__legend .chart-key {
+  transition: opacity 280ms cubic-bezier(0.23, 1, 0.32, 1);
+}
+
+@starting-style {
+  .activity-chart__legend .chart-key {
+    opacity: 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .activity-chart__legend .chart-key {
+    transition: none;
+  }
+}
+
+@media (max-width: 47.99em) {
+  .activity-chart {
+    grid-template-columns: minmax(0, 1fr);
+    gap: var(--mantine-spacing-sm);
+  }
+
+  .activity-chart__plot {
+    grid-column: auto;
+  }
+
+  /*
+   * Two columns with room for four rows hold the largest legend: six groups and "Other", or the
+   * seven task states. The legend keeps that height for every grouping, so the plot under it does
+   * not move when the operator changes the grouping.
+   */
+  .activity-chart__legend {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    align-content: start;
+    column-gap: var(--mantine-spacing-md);
+    row-gap: 0;
+    min-height: calc(4 * 24px);
+  }
+}

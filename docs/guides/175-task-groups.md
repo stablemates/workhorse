@@ -331,6 +331,9 @@ a time, and its newest events. If the dashboard supports the task group cancel, 
 a group that is not finished. The cancel has the same result as `Admin.cancelTaskGroup`, and the operator must give a
 reason.
 
+The task drawer of a member task shows a Group row. The row gives the position of the task in the
+group and the state of the group, and it links to the group detail.
+
 <details>
 <summary>Reference: dashboard</summary>
 

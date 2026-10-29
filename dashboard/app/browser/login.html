@@ -6,128 +6,114 @@
     <meta name="color-scheme" content="light dark" />
     <title>Sign in · Workhorse</title>
     <style>
+      /* The Untitled theme: neutral fills, no borders, amber only for keyboard focus. */
       :root {
         color-scheme: light dark;
-        font-family:
-          Inter,
-          ui-sans-serif,
-          system-ui,
-          -apple-system,
-          BlinkMacSystemFont,
-          "Segoe UI",
-          sans-serif;
-        --background: #f4f6f8;
-        --panel: #ffffff;
-        --border: #ccd3da;
-        --text: #1f252b;
-        --muted: #626f7b;
-        --field: #ffffff;
-        --button: #535e68;
-        --button-hover: #454e57;
-        --error: #c92a2a;
+        font-family: "Timeless Grotesk", "Geist Variable", ui-sans-serif, system-ui, sans-serif;
+        --n1: #ffffff;
+        --n2: #fbfbfb;
+        --n3: #f4f4f4;
+        --n8: #555555;
+        --n10: #000000;
+        --focus: #cf9148;
+        --error: #bd0222;
       }
       * {
         box-sizing: border-box;
       }
       body {
         align-items: center;
-        background: var(--background);
-        color: var(--text);
+        background: var(--n1);
+        color: var(--n10);
         display: flex;
+        font-size: 14px;
         justify-content: center;
+        line-height: 20px;
         margin: 0;
         min-height: 100vh;
         padding: 24px;
       }
       main {
-        max-width: 420px;
+        max-width: 400px;
         width: 100%;
       }
       .brand {
         align-items: center;
         display: flex;
-        gap: 10px;
-        margin-bottom: 20px;
+        gap: 8px;
+        margin-bottom: 24px;
       }
       .brand svg {
-        height: 42px;
-        width: 42px;
+        height: 32px;
+        width: 32px;
       }
       .brand-name {
-        font-size: 25px;
-        font-weight: 750;
-        letter-spacing: -0.04em;
+        font-size: 24px;
+        font-weight: 600;
+        line-height: 32px;
       }
       .login-panel {
-        background: var(--panel);
-        border: 1px solid var(--border);
-        border-radius: 10px;
-        padding: 32px;
+        background: var(--n2);
+        border-radius: 12px;
+        padding: 24px;
       }
       h1 {
         font-size: 24px;
-        letter-spacing: -0.025em;
+        font-weight: 600;
+        line-height: 32px;
         margin: 0 0 8px;
       }
       .intro {
-        color: var(--muted);
-        line-height: 1.5;
+        color: var(--n8);
         margin: 0 0 24px;
+        text-wrap: pretty;
       }
       form {
         display: grid;
-        gap: 18px;
+        gap: 16px;
       }
       label {
         display: grid;
-        font-size: 14px;
-        font-weight: 650;
-        gap: 7px;
+        font-weight: 500;
+        gap: 8px;
       }
       input {
-        background: var(--field);
-        border: 1px solid var(--border);
-        border-radius: 5px;
-        color: var(--text);
+        background: var(--n3);
+        border: 0;
+        border-radius: 8px;
+        color: var(--n10);
         font: inherit;
-        min-height: 42px;
-        padding: 9px 11px;
+        min-height: 40px;
+        padding: 10px 12px;
       }
-      input:focus {
-        border-color: #768592;
-        outline: 2px solid #ccd3da;
-        outline-offset: 1px;
+      input:focus-visible,
+      button:focus-visible {
+        outline: 2px solid var(--focus);
+        outline-offset: 2px;
       }
       button {
-        background: var(--button);
+        background: var(--n10);
         border: 0;
-        border-radius: 5px;
-        color: #ffffff;
+        border-radius: 8px;
+        color: var(--n1);
         cursor: pointer;
         font: inherit;
-        font-weight: 700;
-        min-height: 42px;
-        padding: 9px 16px;
-      }
-      button:hover {
-        background: var(--button-hover);
+        font-weight: 500;
+        margin-top: 8px;
+        padding: 12px 24px;
       }
       .login-error {
         color: var(--error);
-        font-size: 14px;
-        margin: 0 0 18px;
+        margin: 0 0 16px;
       }
       @media (prefers-color-scheme: dark) {
         :root {
-          --background: #141618;
-          --panel: #1a1d20;
-          --border: #454e57;
-          --text: #f1efea;
-          --muted: #afb9c3;
-          --field: #202428;
-          --button: #768592;
-          --button-hover: #8594a1;
-          --error: #ff8787;
+          --n1: #000000;
+          --n2: #202020;
+          --n3: #2b2b2b;
+          --n8: #cfcfcf;
+          --n10: #ffffff;
+          --error: #fe8ea0;
         }
       }
     </style>
@@ -135,18 +121,21 @@
   <body>
     <main>
       <div class="brand">
-        <svg aria-hidden="true" viewBox="0 0 512 512" xmlns="http://www.w3.org/2000/svg">
+        <svg aria-hidden="true" viewBox="65 63 383 383" xmlns="http://www.w3.org/2000/svg">
           <path
-            fill="#96938f"
-            d="M388 102v3l-14 19-12 17-8 12 9 2 13 15 9 11 11 13 15 28 14 24 11 19v32l-5 8-5-2-13-23-2-3 9 28h-22l-19-28-10-5-41-17-4-2-12-22-4-6h-1l-7 53v8l34 101 5 15-2 0-5-8-13-16-14-17-11-13-11-14-10-11-9-11-10-11-9-11-14-15-7-8-6-7-2-1 2-4 9-9 8-7 14-14 8-7 8-8 8-7 10-10 6-5 5-5 16-12 16-12-55 15-48 12-21 5-3-1 27-16 25-15 25-15 56-8 9-5 28-17 18-11 18-11zm-32 93 2 4 7 11 5 7 6 1 24 1-5-4-15-10-21-9z"
+            fill="currentColor"
+            transform="translate(388,102)"
+            d="M0,0 L0,3 L-14,22 L-26,39 L-34,51 L-25,53 L-12,68 L-3,79 L8,92 L23,120 L37,144 L48,163 L48,195 L43,203 L38,201 L25,178 L23,175 L32,203 L10,203 L-9,175 L-19,170 L-60,153 L-64,151 L-76,129 L-80,123 L-81,123 L-88,176 L-88,184 L-54,285 L-49,300 L-51,300 L-56,292 L-69,276 L-83,259 L-94,246 L-105,232 L-115,221 L-124,210 L-134,199 L-143,188 L-157,173 L-164,165 L-170,158 L-172,157 L-170,153 L-161,144 L-153,137 L-139,123 L-131,116 L-123,108 L-115,101 L-105,91 L-99,86 L-94,81 L-78,69 L-62,57 L-117,72 L-165,84 L-186,89 L-189,88 L-162,72 L-137,57 L-112,42 L-56,34 L-47,29 L-19,12 L-1,1 Z M-32,93 L-30,97 L-23,108 L-18,115 L-12,116 L12,117 L7,113 L-8,103 L-29,94 Z"
           />
           <path
-            fill="#b8b5b0"
-            d="M267 183l2 1-18 20-8 7-13 13-8 7-12 12-8 7-6 5-35 17-28 13-36 17-13 6-5 2 5-5 10-9 11-9 10-9 11-9 12-11 11-9 13-12 8-7 10-9 5-4 37-15 37-15z"
+            fill="#cf9148"
+            transform="translate(267,183)"
+            d="M0,0 L2,1 L-18,21 L-26,28 L-39,41 L-47,48 L-59,60 L-67,67 L-73,72 L-108,89 L-136,102 L-172,119 L-185,125 L-190,127 L-185,122 L-175,113 L-164,104 L-154,95 L-143,86 L-131,75 L-120,66 L-107,54 L-99,47 L-89,38 L-84,34 L-47,19 L-10,4 Z"
           />
           <path
-            fill="#626f7b"
-            d="m195 271 4 2 21 21 8 7 81 81 2 1v2l4 2 14 14 7 6-3 0-16-10-18-10-23-13-24-13-23-13-23-12-22-12-26-14-15-8v-2l24-13 23-13z"
+            fill="#cf9148"
+            transform="translate(195,271)"
+            d="M0,0 L4,2 L25,23 L33,30 L114,111 L116,112 L116,114 L120,116 L134,130 L141,136 L138,136 L122,126 L104,116 L81,103 L57,90 L34,77 L11,65 L-11,53 L-37,39 L-52,31 L-52,29 L-28,16 L-5,3 Z"
           />
         </svg>
         <span class="brand-name">Workhorse</span>

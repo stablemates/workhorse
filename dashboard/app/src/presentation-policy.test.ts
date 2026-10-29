@@ -13,6 +13,7 @@ import {
   healthCheckMessages,
   presentSchedules,
   retryBucketLabel,
+  scheduleKey,
   sortQueuesByRisk,
   workerStatus,
 } from "./presentation-policy.js";
@@ -216,9 +217,35 @@ describe("dashboard presentation policy", () => {
       ],
     } as DashboardActivityPage;
     const model = activityChartModel(page);
-    expect(model.series).toHaveLength(10);
+    // Six named series, one for each palette color, and one series for the rest.
+    expect(model.series).toHaveLength(7);
+    expect(model.series.filter((series) => !series.overflow).map(({ label }) => label)).toEqual([
+      "group-10",
+      "group-5",
+      "group-6",
+      "group-7",
+      "group-8",
+      "group-9",
+    ]);
     expect(model.series.at(-1)).toMatchObject({ label: "Other", overflow: true });
-    expect(model.buckets[0]!.values[model.series.at(-1)!.id]).toBe(3);
+    expect(model.buckets[0]!.values[model.series.at(-1)!.id]).toBe(1 + 2 + 3 + 4 + 5);
+  });
+
+  it("keeps every task state when activity is grouped by status", () => {
+    const groups = ["active", "blocked", "canceled", "failed", "ready", "scheduled", "succeeded"];
+    const page = {
+      groupBy: "status",
+      groups,
+      buckets: [
+        {
+          bucketStart: "2026-08-17T12:00:00.000Z",
+          counts: Object.fromEntries(groups.map((group, index) => [group, index + 1])),
+        },
+      ],
+    } as DashboardActivityPage;
+    const model = activityChartModel(page);
+    expect(model.series.map(({ label }) => label)).toEqual(groups);
+    expect(model.series.some((series) => series.overflow)).toBe(false);
   });
 
   it("keys activity series by position, never by a group name", () => {
@@ -263,7 +290,7 @@ describe("dashboard presentation policy", () => {
     const overflow = model.series.find((series) => series.overflow)!;
     expect(named.overflow).toBe(false);
     expect(model.buckets[0]!.values[named.id]).toBe(100);
-    expect(model.buckets[0]!.values[overflow.id]).toBe(1 + 2);
+    expect(model.buckets[0]!.values[overflow.id]).toBe(1 + 2 + 3 + 4 + 5);
   });
 
   it("fabricates maintenance schedule labels and expressions in the SPA", () => {
@@ -291,5 +318,15 @@ describe("dashboard presentation policy", () => {
     expect(schedules[0]).toMatchObject({ cron: "every 1s", description: expect.any(String) });
     expect(schedules[1]).toMatchObject({ cron: "every 1m" });
     expect(schedules[3]).toMatchObject({ cron: "every 5m" });
+  });
+
+  it("gives each schedule a key that no other namespace and name can produce", () => {
+    const keys = [
+      scheduleKey({ kind: "user", namespace: "a", name: "b:c" }),
+      scheduleKey({ kind: "user", namespace: "a:b", name: "c" }),
+      scheduleKey({ kind: "user", namespace: "workhorse", name: "tick" }),
+      scheduleKey({ kind: "system", namespace: "workhorse", name: "tick" }),
+    ];
+    expect(new Set(keys).size).toBe(keys.length);
   });
 });

@@ -25,6 +25,18 @@ The `dashboard/v1` task detail document gains `group`, with the group ID, the me
 the group state of a member task, an additive change. The migration does not raise the SDK
 compatibility floor.
 
+The bundled task drawer shows a Group row that links to the group detail.
+
+### The dashboard bundle uses the Untitled theme
+
+The JVM dashboard backend serves the shared dashboard browser bundle. The dashboard redesign rebuilt
+that bundle. The `run.workhorse:workhorse` jar now carries the rebuilt `read-surface-1.tar.gz`. Its
+`bundle.json` records the sha256 `8170477f88999c778e8f0e4d86a46c7b31c9ef45ab776ad94bd2a2faa1ef99bc`.
+
+The bundled dashboard uses the Untitled theme. The sidebar collapses to a rail, the Tasks page
+has status tabs, and the task drawer shows the same attempt as the task table. The `dashboard/v1`
+procedures and the read surface version do not change.
+
 ## 0.11.0 — 2026-10-28
 
 The npm packages, Python distribution, Go module, Rust crate, Ruby gem, JVM artifacts, and .NET

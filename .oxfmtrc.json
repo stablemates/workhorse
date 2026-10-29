@@ -1,6 +1,10 @@
 {
   "$schema": "./node_modules/oxfmt/configuration_schema.json",
   "ignorePatterns": [
+    ".agents/skills/graphical-*/**",
+    "GUI.md",
+    "gui/**",
+    "dashboard/app/src/components/graphical/**",
     "dashboard/v1/*.json",
     "docs/benchmarks/results/2026-08-24-dashboard-read-surface.json",
     "docs/benchmarks/results/**",

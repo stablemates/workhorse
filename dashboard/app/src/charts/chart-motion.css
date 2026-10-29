@@ -1,0 +1,30 @@
+/*
+ * A chart moves from one answer to the next instead of a swap. A series that joins fades in while
+ * its bars grow. A series that leaves fades out while its bars shrink. A new axis label fades in,
+ * so a rescaled axis does not snap. The duration matches `chartTransitionMs`.
+ *
+ * Recharts copies the class of a series to each of its bars too, and it mounts new bars when an
+ * animation starts. The rules select the group of the series only, so a bar never fades in again.
+ */
+.recharts-bar.chart-series,
+.chart-motion .recharts-cartesian-axis-tick {
+  transition: opacity 280ms cubic-bezier(0.23, 1, 0.32, 1);
+}
+
+@starting-style {
+  .recharts-bar.chart-series,
+  .chart-motion .recharts-cartesian-axis-tick {
+    opacity: 0;
+  }
+}
+
+.recharts-bar.chart-series--leaving {
+  opacity: 0;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .recharts-bar.chart-series,
+  .chart-motion .recharts-cartesian-axis-tick {
+    transition: none;
+  }
+}

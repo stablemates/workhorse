@@ -17,7 +17,8 @@ const DAY_MS = 86_400_000;
 const CEILING_PRESSURE = 0.8;
 const WORKER_REGISTRATION_STALE_MS = 30_000;
 const RECENT_WORKER_MS = 5 * 60_000;
-const MAX_ACTIVITY_GROUPS = 10;
+/** The chart palette has six colors, so more groups fold into one neutral series. */
+const MAX_NAMED_ACTIVITY_SERIES = 6;
 
 export interface DashboardSettingsRecommendation {
   id:
@@ -570,6 +571,9 @@ export interface ActivityChartModel {
 /**
  * Cap the activity legend and key each series by position.
  *
+ * The six groups with the most tasks keep their names, and the remaining groups fold into one
+ * "Other" series. Task states are a fixed set with their own colors, so they have no cap.
+ *
  * A group name is application data. Used as a chart key, a dot reads as a nested path, a name
  * can equal the axis key, and a group named "other" would merge with the overflow. Keys built
  * from the series position cannot collide with any of them.
@@ -586,7 +590,9 @@ export function activityChartModel(page: DashboardActivityPage): ActivityChartMo
     .sort((left, right) => right[1] - left[1] || left[0].localeCompare(right[0]))
     .map(([group]) => group);
   const kept =
-    ranked.length > MAX_ACTIVITY_GROUPS ? ranked.slice(0, MAX_ACTIVITY_GROUPS - 1) : ranked;
+    page.groupBy !== "status" && ranked.length > MAX_NAMED_ACTIVITY_SERIES
+      ? ranked.slice(0, MAX_NAMED_ACTIVITY_SERIES)
+      : ranked;
   // oxlint-disable-next-line unicorn/no-array-sort -- ES2022 lacks Array.prototype.toSorted.
   const series: ActivitySeries[] = [...kept].sort().map((label, index) => ({
     id: `series-${index}`,
@@ -631,6 +637,17 @@ export interface PresentedScheduleRow extends Omit<
     recordedRunCount: number;
     runs: DashboardMaintenanceRun[];
   } | null;
+}
+
+/**
+ * The key of one schedule row, for selection, React keys, and the pause in flight.
+ *
+ * A namespace and a name can both contain any character, so the key encodes the parts as a JSON
+ * array. A joined string lets `a` and `b:c` collide with `a:b` and `c`. The kind keeps a user
+ * schedule apart from a maintenance routine with the same namespace and name.
+ */
+export function scheduleKey(identity: PresentedScheduleRow["identity"]): string {
+  return JSON.stringify([identity.kind, identity.namespace, identity.name]);
 }
 
 /** Human units for a maintenance cadence, so an expression reads "every 6h", not "every 21600000ms". */

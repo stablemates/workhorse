@@ -78,14 +78,15 @@ describe("task listing identity", () => {
 
   it("keeps ordering out of the filters and beside the page size", async () => {
     const { TaskListingFilters, TaskSortSelect } = await import("./dashboard.js");
-    const html = render(TaskListingFilters, {
-      data: {
-        tags: [],
-        sort: "updated",
-        queue: null,
-        worker: null,
-        taskType: null,
-      },
+    const { GraphicalProvider, theme } = await import("./ui.js");
+    const withTheme = (component: unknown, props: Record<string, unknown>) =>
+      render(GraphicalProvider, {
+        document: theme,
+        colorMode: "light",
+        children: createElement(component as never, props),
+      });
+    const html = withTheme(TaskListingFilters, {
+      selection: { tags: [], queue: null, worker: null, taskType: null, search: null },
       searchInput: "",
       setSearchInput: () => undefined,
       taskFacets: {
@@ -95,20 +96,19 @@ describe("task listing identity", () => {
         load: () => undefined,
       },
       updateLocation: () => undefined,
+      onClearFilters: () => undefined,
     });
 
     expect(html).not.toContain('aria-label="Filter tasks by exact priority"');
     // Ordering selects nothing out of the list, so it left the filter row for the toolbar, where
     // it stands next to the page size: both describe how one selection is presented.
     expect(html).not.toContain('aria-label="Sort tasks"');
-    expect(render(TaskSortSelect, { sort: "updated", updateLocation: () => undefined })).toContain(
-      'aria-label="Sort tasks"',
-    );
+    expect(
+      withTheme(TaskSortSelect, { sort: "updated", updateLocation: () => undefined }),
+    ).toContain('aria-label="Sort tasks"');
 
     const page = readFileSync(new URL("./pages/tasks.tsx", import.meta.url), "utf8");
-    expect(page.indexOf("<TaskSortSelect")).toBeLessThan(
-      page.indexOf('aria-label="Tasks per page"'),
-    );
+    expect(page.indexOf("<TaskSortSelect")).toBeLessThan(page.indexOf('label="Tasks per page"'));
   });
 
   it("states task state without relying on badge color", async () => {

@@ -1,5 +1,5 @@
 import type { DashboardBudgetSummary } from "@stablemates/workhorse-dashboard-server/wire";
-import { Box, Code, Group, Paper, ScrollArea, Table, Text } from "@mantine/core";
+import { Box, Code, Group, ScrollArea, Table, Text } from "@mantine/core";
 import {
   budgetCappedFootnote,
   describeBudgetBlocked,
@@ -15,7 +15,7 @@ export { budgetCappedFootnote };
 /** Named budgets span queues, so both the Queues page and the health page show one table. */
 export function BudgetsTable({ budgets }: { budgets: readonly DashboardBudgetSummary[] }) {
   return (
-    <Paper withBorder>
+    <Box className="panel data-table__panel">
       <Box p="md">
         <Group gap={4} wrap="nowrap">
           <Text fw={650}>Budgets</Text>
@@ -35,9 +35,7 @@ export function BudgetsTable({ budgets }: { budgets: readonly DashboardBudgetSum
       >
         <Table
           highlightOnHover
-          verticalSpacing={6}
-          horizontalSpacing="md"
-          className="dashboard-table dashboard-table--budgets"
+          className="data-table dashboard-table dashboard-table--budgets"
           miw={760}
         >
           <Table.Thead>
@@ -100,6 +98,6 @@ export function BudgetsTable({ budgets }: { budgets: readonly DashboardBudgetSum
           </Table.Tbody>
         </Table>
       </ScrollArea>
-    </Paper>
+    </Box>
   );
 }

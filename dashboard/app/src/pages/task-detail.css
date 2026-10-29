@@ -1,0 +1,213 @@
+/*
+ * Task detail drawer content. The drawer frame and its resize handle keep their shell styles, and
+ * the parts that the event drawer shares are in `components/task-drawer.css`.
+ */
+
+/*
+ * The panel reads at the compact scale of the task table, so properties and code line up. The
+ * shared `.task-drawer__content` scale in `styles.css` comes after this sheet, so this rule names
+ * both classes to win by specificity, not by order.
+ */
+.task-drawer__content.task-drawer__content--task {
+  --mantine-font-size-xs: 0.75rem;
+  --mantine-font-size-sm: 0.8125rem;
+  --mantine-line-height-xs: 1.5;
+  --mantine-line-height-sm: 1.54;
+}
+
+/* The drawer's own title is a quiet label. The task type below it is the visible heading. */
+.task-drawer__content--task .task-drawer__title {
+  color: var(--mantine-color-dimmed);
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 20px;
+}
+
+.task-drawer__content--task .mantine-Drawer-header {
+  min-height: 48px;
+  padding-block: 8px;
+}
+
+.task-drawer__content--task .mantine-Drawer-body {
+  padding-top: 4px;
+  padding-bottom: var(--mantine-spacing-xl);
+}
+
+/* A slot between the title and the close button, for task navigation. */
+.task-drawer__header-aside {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: auto;
+  margin-right: 4px;
+  color: var(--mantine-color-dimmed);
+  font-size: 12px;
+}
+
+.task-detail__title-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--mantine-spacing-xs);
+}
+
+.task-detail__type {
+  min-width: 0;
+  margin: 0;
+  color: var(--mantine-color-text);
+  font-size: 18px;
+  font-weight: 600;
+  line-height: 26px;
+  overflow-wrap: anywhere;
+}
+
+.task-detail__type:focus-visible {
+  outline: 2px solid var(--workhorse-focus-ring);
+  outline-offset: 2px;
+  border-radius: var(--mantine-radius-sm);
+}
+
+.task-detail__actions {
+  flex-shrink: 0;
+}
+
+/* Items wrap as whole units and are separated by space, so a wrap never leaves a stray mark. */
+.task-detail__meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 2px 14px;
+  margin-top: 4px;
+  color: var(--mantine-color-dimmed);
+  font-size: 13px;
+  line-height: 20px;
+}
+
+.task-detail__meta .task-detail__status {
+  color: var(--mantine-color-text);
+  font-weight: 500;
+}
+
+.task-detail__id {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  color: var(--mantine-color-text);
+}
+
+.task-detail__properties {
+  display: grid;
+}
+
+.task-detail__summary .task-detail__properties {
+  margin-top: var(--mantine-spacing-md);
+  padding-top: var(--mantine-spacing-xs);
+  box-shadow: inset 0 1px 0 var(--workhorse-divider);
+}
+
+.task-detail__tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.task-detail__tags li {
+  padding-inline: 6px;
+  border-radius: var(--mantine-radius-sm);
+  background: var(--workhorse-neutral-3);
+  font-size: 12px;
+  line-height: 20px;
+}
+
+/* The attempts: one dot per attempt on a thin rail, oldest first. */
+.task-detail__timeline {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.task-detail__attempt {
+  position: relative;
+  display: grid;
+  grid-template-columns: 8px minmax(0, 1fr);
+  column-gap: 12px;
+  padding-bottom: 10px;
+}
+
+.task-detail__attempt > .task-detail__dot {
+  margin-top: 6px;
+}
+
+.task-detail__attempt:not(:last-child)::before {
+  content: "";
+  position: absolute;
+  top: 18px;
+  bottom: 0;
+  left: 3.5px;
+  width: 1px;
+  background: var(--workhorse-neutral-4);
+}
+
+[data-mantine-color-scheme="dark"] .task-detail__attempt:not(:last-child)::before {
+  background: var(--workhorse-neutral-3);
+}
+
+.task-detail__attempt-line {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0 10px;
+  font-size: 13px;
+  line-height: 20px;
+}
+
+.task-detail__attempt-name {
+  font-weight: 500;
+}
+
+.task-detail__attempt-time {
+  margin-left: auto;
+}
+
+.task-detail__attempt-error {
+  display: -webkit-box;
+  margin: 2px 0 0;
+  overflow: hidden;
+  color: var(--workhorse-color-danger-text);
+  font-size: 12.5px;
+  line-height: 18px;
+  overflow-wrap: anywhere;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.task-detail__attempt .task-drawer__disclosure {
+  margin-top: 2px;
+}
+
+.task-detail__attempt-facts {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: 2px var(--mantine-spacing-md);
+  margin: 0 0 var(--mantine-spacing-xs);
+  font-size: 12.5px;
+  line-height: 18px;
+}
+
+.task-detail__attempt-facts dt {
+  color: var(--mantine-color-dimmed);
+}
+
+.task-detail__attempt-facts dd {
+  margin: 0;
+  font-variant-numeric: tabular-nums;
+}
+
+/* The closed disclosures at the end sit close together, as one group. */
+.task-detail__more {
+  display: grid;
+  gap: 2px;
+}

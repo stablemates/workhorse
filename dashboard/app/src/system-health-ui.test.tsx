@@ -115,7 +115,13 @@ describe("individual system health checks", () => {
   it("shows every check when none needs attention", () => {
     const html = renderChecks([]);
     expect(html.match(/<li\b/g)).toHaveLength(14);
-    expect(html.match(/>Passing<\/span>/g)).toHaveLength(14);
+    // One summary line answers the question. A passing row has a dot and hidden text, no badge.
+    expect(html).toContain("All 14 checks passing");
+    expect(html.match(/: Passing<\/span>/g)).toHaveLength(14);
+    expect(html).not.toContain(">Passing</span>");
+    expect(html).not.toContain("health-check__badge");
+    // The summary line and its dot, then one dot for each check.
+    expect(html.match(/data-tone="success"/g)).toHaveLength(16);
     expect(html).toContain("Worker leases");
     expect(html).toContain("Retention cleanup");
     expect(html).toContain("Rate limits");
@@ -134,6 +140,8 @@ describe("individual system health checks", () => {
     ]);
     expect(html.match(/<li\b/g)).toHaveLength(14);
     expect(html.match(/>Degraded<\/span>/g)).toHaveLength(1);
+    expect(html).toContain("1 of 14 needs attention");
+    expect(html).toMatch(/class="health-checks__summary" data-tone="warning"/);
     expect(html).toContain("Terminal cleanup pace");
     expect(html).toContain("Terminal cleanup is not keeping pace");
   });
@@ -155,6 +163,9 @@ describe("individual system health checks", () => {
     expect(html.match(/<li\b/g)).toHaveLength(14);
     expect(html.match(/>Critical<\/span>/g)).toHaveLength(4);
     expect(html.match(/>Degraded<\/span>/g)).toHaveLength(1);
+    // A critical check gives the summary the danger tone.
+    expect(html).toContain("5 of 14 need attention");
+    expect(html).toMatch(/class="health-checks__summary" data-tone="danger"/);
     expect(html).toContain("Tasks are past their deadlines");
     expect(html).toContain("Attempts are past their execution limits");
     expect(html).toContain("Daily history storage is missing");
@@ -258,7 +269,7 @@ describe("individual system health checks", () => {
     expect(activity).toBeDefined();
     expect(current).toBeDefined();
     for (const label of [
-      "Full + fast tiers",
+      "full-tier and fast-tier queues",
       "Activity time range",
       "Completion rate",
       "Failed attempts",
@@ -287,6 +298,45 @@ describe("individual system health checks", () => {
     }
     expect(activity).not.toContain("Health checks");
     expect(html.indexOf("Health checks")).toBeLessThan(html.indexOf("Activity over time"));
+  });
+});
+
+describe("system health time range", () => {
+  it("moves the control on the click and dims the windowed metrics until they arrive", async () => {
+    const { SystemPage } = await import("./pages/overview.js");
+    const { PagePendingContext } = await import("./pending-results.js");
+    const render = (pending: boolean) =>
+      renderToStaticMarkup(
+        createElement(
+          MantineProvider,
+          null,
+          createElement(
+            PagePendingContext.Provider,
+            { value: pending },
+            createElement(SystemPage, {
+              data: systemPage,
+              requestedWindow: "24h",
+              setWindow: () => undefined,
+              navigate: () => undefined,
+            }),
+          ),
+        ),
+      );
+    const html = render(true);
+    expect(systemPage.window).not.toBe("24h");
+    expect(html).toMatch(/data-active="true"><input[^>]*value="24h"/);
+    const activity = html.match(
+      /<section[^>]*aria-labelledby="system-activity-title"[^>]*>([\s\S]*?)<\/section>/,
+    )?.[1];
+    const current = html.match(
+      /<section[^>]*aria-labelledby="system-current-title"[^>]*>([\s\S]*?)<\/section>/,
+    )?.[1];
+    // The metrics of the previous window stay mounted while the new window loads.
+    expect(activity).toMatch(/class="pending-results" data-pending="true" aria-busy="true"/);
+    expect(activity).toContain("Completion rate");
+    // Current operations do not depend on the window, so they do not dim.
+    expect(current).not.toContain("data-pending");
+    expect(render(false)).not.toContain("data-pending");
   });
 });
 

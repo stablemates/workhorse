@@ -1,35 +1,38 @@
 import { useTaskActions } from "../task-actions.js";
-import { TaskRowActions, TaskTags } from "../components/task-list.js";
+import { TaskRowActions } from "../components/task-list.js";
 import { taskHref } from "../core.js";
 import { humanWaitQuickAction, type TaskActionTarget } from "../presentation.js";
 import type { DashboardTaskDetail } from "@stablemates/workhorse-dashboard-server/wire";
-import { Badge, Box, Center, Code, Group, Loader, Paper, Stack, Text } from "@mantine/core";
+import { Alert, Box, Center, Loader } from "@mantine/core";
+import { AlertCircleIcon } from "@hugeicons/core-free-icons";
+import { HugeiconsIcon } from "@hugeicons/react";
 import { ResizableTaskDrawer } from "../components/resizable-task-drawer.js";
-import { StatusLabel } from "../status-badge.js";
-import { formatClock, formatDuration, formatExact, formatRelative } from "../preferences.js";
+import { hasStoredValue } from "../preferences.js";
 import {
+  DrawerDisclosure,
   DrawerSection,
+  JsonValue,
   TaskCheckpoints,
+  TaskOutcome,
   TaskProgress,
   TaskStoredValue,
-  MetaRow,
-  TaskOutcome,
 } from "../components/task-detail-overview.js";
+import { BatchExecutions, TaskEnqueueSection } from "../components/task-detail-relations.js";
 import {
-  BatchExecutions,
-  TaskEnqueueSection,
-  RetryPolicyLine,
-  TaskIdChip,
-} from "../components/task-detail-relations.js";
-import { HelpButton } from "../components/help-button.js";
-import {
+  BoundaryTimeline,
+  boundaryEvents,
   ChildLine,
-  ConcurrencyPolicyLine,
   DependencyLine,
   DurableWaits,
   RedriveLine,
-  TimingPolicyLine,
 } from "../components/task-detail-durability.js";
+import {
+  TaskAttempts,
+  TaskDetailHeader,
+  TaskExecutionPolicy,
+  TaskProperties,
+  type TaskPageNavigation,
+} from "../components/task-detail-summary.js";
 import { SignalTaskPanel } from "../components/signal-task.js";
 import type { useDashboardController } from "../shell/controller.js";
 import {
@@ -53,6 +56,8 @@ interface TaskDetailDrawerProps {
     closeOnEscape: boolean;
   };
   taskLinkHref: (taskId: string) => string;
+  /** The links to other dashboard pages, such as the group of a member task. */
+  pageNavigation: TaskPageNavigation;
 }
 
 export function TaskDetailDrawer({
@@ -60,6 +65,7 @@ export function TaskDetailDrawer({
   controller,
   drawerProps,
   taskLinkHref,
+  pageNavigation,
 }: TaskDetailDrawerProps) {
   const {
     selectedTaskId,
@@ -113,14 +119,20 @@ export function TaskDetailDrawer({
       // The panel sits beside the task list instead of over it, so a row behind it stays
       // clickable and picking another task swaps the contents in place.
       {...drawerProps}
-      classNames={{ content: "task-drawer__content" }}
+      classNames={{ content: "task-drawer__content task-drawer__content--task" }}
     >
       {taskDetailError ? (
-        <Text c="red" size="sm" mb={body === "detail" ? "md" : undefined}>
+        // Stale detail stays readable under a warning. A task that never loaded shows the error.
+        <Alert
+          color={body === "detail" ? "yellow" : "red"}
+          icon={<HugeiconsIcon icon={AlertCircleIcon} size={16} />}
+          mb="md"
+          title={body === "detail" ? "These details can be out of date" : "Task not loaded"}
+        >
           {body === "detail"
             ? `Workhorse could not reload this task. The detail below can be out of date. ${taskDetailError}`
             : taskDetailError}
-        </Text>
+        </Alert>
       ) : null}
       {body === "detail" && selectedTask ? (
         <Box onFocusCapture={trackFocus}>
@@ -129,6 +141,7 @@ export function TaskDetailDrawer({
             controller={controller}
             task={selectedTask}
             taskLinkHref={taskLinkHref}
+            pageNavigation={pageNavigation}
             onOpenTask={inspectTask}
             reload={reloadSelectedTask}
           />
@@ -147,6 +160,7 @@ function TaskDetailContent({
   auditActor,
   task,
   taskLinkHref,
+  pageNavigation,
   onOpenTask,
   reload,
 }: {
@@ -154,138 +168,107 @@ function TaskDetailContent({
   controller: DashboardController;
   task: DashboardTaskDetail;
   taskLinkHref: (taskId: string) => string;
+  pageNavigation: TaskPageNavigation;
   onOpenTask: DashboardController["inspectTask"];
   reload: DashboardController["reloadSelectedTask"];
 }) {
+  const navigation = { taskLinkHref, onOpenTask };
+  const hasLineage =
+    task.identity.prerequisiteTaskIds.length > 0 ||
+    task.dependencyLineage.records.length > 0 ||
+    task.childLineage.records.length > 0 ||
+    task.redriveLineage.records.length > 0;
+  // A failed task's error is the first thing an operator reads, so it comes before the input.
+  const errorFirst = task.current.outcome?.state === "failed";
+  const outcome = <TaskOutcome task={task} />;
+  const eventCount = boundaryEvents(task).length;
   return (
-    <Stack gap="xl">
-      {/* The overview answers "what task is this, and under which rules does it run?" as one
-          aligned label/value grid, so every policy and limit reads from the same column instead
-          of each line wrapping at its own offset. */}
-      <Box component="section" aria-labelledby={taskOverviewHeadingId}>
-        <Group justify="space-between" align="flex-start" wrap="nowrap" gap="sm">
-          <Box style={{ minWidth: 0, flex: 1 }}>
-            <Group gap="xs" wrap="nowrap" align="center">
-              <Text
-                id={taskOverviewHeadingId}
-                component="h3"
-                // Focus target when an action removes the control that held focus. It takes
-                // focus from a script only, so it does not join the tab order.
-                tabIndex={-1}
-                fw={700}
-                size="lg"
-                my={0}
-                style={{ minWidth: 0, overflowWrap: "anywhere" }}
-              >
-                {task.identity.type}
-              </Text>
-              <TaskDetailActions
-                key={task.identity.id}
-                task={task}
-                controller={controller}
-                auditActor={auditActor}
-              />
-            </Group>
-            <Text c="dimmed" size="xs" title={formatExact(task.identity.createdAt)}>
-              Queue {task.identity.queue} · created {formatRelative(task.identity.createdAt)}
-            </Text>
-          </Box>
-          <StatusLabel state={task.identity.state} />
-        </Group>
-        {task.tags && task.tags.length > 0 ? (
-          <Box mt="xs">
-            <TaskTags tags={task.tags} />
-          </Box>
-        ) : null}
-        <Stack gap={6} mt="md">
-          <MetaRow label="Task id">
-            <TaskIdChip id={task.identity.id} />
-          </MetaRow>
-          <MetaRow label="Priority">
-            <Badge size="xs" variant="light" color="orange" tt="none">
-              {task.identity.priority}
-            </Badge>
-            <HelpButton
-              label="Priority"
-              help="Higher values are claimed first; equal values keep FIFO order."
+    <div className="task-detail">
+      {/* The overview answers "what task is this, and what state is it in?" in a header and a
+          short grid of plain values. Rules and evidence that most reads do not need follow it. */}
+      <Box
+        component="section"
+        aria-labelledby={taskOverviewHeadingId}
+        className="task-detail__summary"
+      >
+        <TaskDetailHeader
+          task={task}
+          heading={
+            <h3
+              id={taskOverviewHeadingId}
+              // Focus target when an action removes the control that held focus. It takes
+              // focus from a script only, so it does not join the tab order.
+              tabIndex={-1}
+              className="task-detail__type"
+            >
+              {task.identity.type}
+            </h3>
+          }
+          actions={
+            <TaskDetailActions
+              key={task.identity.id}
+              task={task}
+              controller={controller}
+              auditActor={auditActor}
             />
-          </MetaRow>
-          <RetryPolicyLine task={task} />
-          <TimingPolicyLine task={task} />
-          <ConcurrencyPolicyLine task={task} />
-          <DependencyLine task={task} taskLinkHref={taskLinkHref} onOpenTask={onOpenTask} />
-          <ChildLine task={task} taskLinkHref={taskLinkHref} onOpenTask={onOpenTask} />
-          <RedriveLine task={task} taskLinkHref={taskLinkHref} onOpenTask={onOpenTask} />
-        </Stack>
+          }
+        />
+        <TaskProperties task={task} navigation={pageNavigation} />
       </Box>
-      <BatchExecutions task={task} taskLinkHref={taskLinkHref} onOpenTask={onOpenTask} />
-      <DrawerSection id="task-input-heading" title="Input">
+      {hasLineage ? (
+        <DrawerSection id="related-tasks-heading" title="Related tasks">
+          <div className="task-detail__properties">
+            <DependencyLine task={task} {...navigation} />
+            <ChildLine task={task} {...navigation} />
+            <RedriveLine task={task} {...navigation} />
+          </div>
+        </DrawerSection>
+      ) : null}
+      <SignalTaskPanel task={task} auditActor={auditActor} reload={reload} />
+      {task.humanWait && hasStoredValue(task.humanWait.context) ? (
+        <DrawerSection id="human-wait-heading" title="Decision context">
+          <JsonValue
+            label="JSON"
+            value={task.humanWait.context}
+            emptyLabel="The decision has no context."
+            copyLabel="the decision context"
+            maxHeight={200}
+          />
+        </DrawerSection>
+      ) : null}
+      {errorFirst ? outcome : null}
+      <DrawerSection id="task-input-heading" title="Payload">
         <TaskStoredValue
           taskId={task.identity.id}
           kind="payload"
           omitted={task.payloadOmitted}
           valueBytes={task.payloadBytes}
           value={task.payload}
-          label="Stored payload"
-          emptyLabel="This task was enqueued without input."
-          copyLabel="the task input"
+          label="JSON"
+          emptyLabel="This task was enqueued without a payload."
+          copyLabel="the task payload"
         />
       </DrawerSection>
-      <TaskOutcome task={task} />
-      <TaskEnqueueSection task={task} />
-      <SignalTaskPanel task={task} auditActor={auditActor} reload={reload} />
+      {errorFirst ? null : outcome}
+      <BatchExecutions task={task} {...navigation} />
       <TaskProgress task={task} />
       <TaskCheckpoints task={task} />
       <DurableWaits task={task} />
-      <DrawerSection
-        id="attempt-history-heading"
-        title="Attempt history"
-        aside={
-          <Badge variant="light" color={task.attempts.length > 0 ? "blue" : "gray"}>
-            {formatCount(task.attempts.length)}
-            {task.truncated.attempts ? "+" : ""}
-          </Badge>
-        }
-      >
-        {task.truncated.attempts ? (
-          <Text c="dimmed" size="xs" mb="sm">
-            This task has attempted more times than the drawer shows. These are its most recent
-            attempts; the event feed filtered by this task holds the rest.
-          </Text>
-        ) : null}
-        {task.attempts.length === 0 ? (
-          <Text c="dimmed" size="sm">
-            No attempt has finished yet.
-          </Text>
-        ) : (
-          <Stack gap="sm">
-            {task.attempts.map((attempt) => (
-              <Paper key={attempt.attempt} withBorder p="sm">
-                <Group justify="space-between">
-                  <Text fw={600} size="sm">
-                    Attempt {attempt.attempt}
-                  </Text>
-                  <StatusLabel state={attempt.outcome} />
-                </Group>
-                <Text c="dimmed" size="xs" mt={4} title={formatExact(attempt.startedAt)}>
-                  {attempt.workerId} · executing {formatDuration(attempt.executionMs)} · elapsed{" "}
-                  {formatDuration(attempt.elapsedMs)}
-                </Text>
-                <Text c="dimmed" size="xs" title={formatExact(attempt.claimedAt)}>
-                  Logical start {formatClock(attempt.startedAt)} · final claim{" "}
-                  {formatClock(attempt.claimedAt)}
-                </Text>
-                {attempt.error ? (
-                  <Code block mt="sm">
-                    {JSON.stringify(attempt.error, null, 2)}
-                  </Code>
-                ) : null}
-              </Paper>
-            ))}
-          </Stack>
+      <TaskAttempts task={task} />
+      <TaskEnqueueSection task={task} />
+      {/* Detail that most reads do not need stays closed at the end of the drawer. */}
+      <div className="task-drawer__section task-detail__more">
+        {eventCount === 0 ? null : (
+          <DrawerDisclosure
+            title="Event history"
+            summary={`${formatCount(eventCount)}${task.truncated.events ? "+" : ""} ${eventCount === 1 ? "event" : "events"}`}
+          >
+            <BoundaryTimeline task={task} />
+          </DrawerDisclosure>
         )}
-      </DrawerSection>
-    </Stack>
+        <TaskExecutionPolicy task={task} />
+      </div>
+    </div>
   );
 }
 
@@ -343,28 +326,26 @@ function TaskDetailActions({
   return (
     <>
       {actions.confirmations}
-      <Group gap="xs">
-        <TaskRowActions
-          task={target}
-          showOpenDetails={false}
-          onAction={actions.runRowAction}
-          capabilities={{
-            runNow: controller.runTaskNow !== null,
-            completeHumanWait: task.canCompleteHumanWait ?? false,
-          }}
-          pendingAction={
-            actions.cancelingTaskId === task.identity.id
-              ? "cancel"
-              : actions.completingHumanWaitTaskId === task.identity.id
-                ? "complete-human-wait"
-                : actions.redrivingTaskId === task.identity.id
-                  ? "redrive"
-                  : actions.runningNowTaskId === task.identity.id
-                    ? "run-now"
-                    : null
-          }
-        />
-      </Group>
+      <TaskRowActions
+        task={target}
+        showOpenDetails={false}
+        onAction={actions.runRowAction}
+        capabilities={{
+          runNow: controller.runTaskNow !== null,
+          completeHumanWait: task.canCompleteHumanWait ?? false,
+        }}
+        pendingAction={
+          actions.cancelingTaskId === task.identity.id
+            ? "cancel"
+            : actions.completingHumanWaitTaskId === task.identity.id
+              ? "complete-human-wait"
+              : actions.redrivingTaskId === task.identity.id
+                ? "redrive"
+                : actions.runningNowTaskId === task.identity.id
+                  ? "run-now"
+                  : null
+        }
+      />
     </>
   );
 }

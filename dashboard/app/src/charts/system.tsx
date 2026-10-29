@@ -6,7 +6,6 @@ import {
   Code,
   Divider,
   Group,
-  Paper,
   ScrollArea,
   Stack,
   Table,
@@ -20,16 +19,17 @@ import type {
   DashboardSystemWindow,
 } from "@stablemates/workhorse-dashboard-server/wire";
 import {
-  ArrowCounterClockwise,
-  ArrowClockwise,
-  Clock,
-  FunnelSimple,
-  Lightning,
-  ListChecks,
-  Pulse,
-  UserFocus,
-  WarningCircle,
-} from "@phosphor-icons/react";
+  AlertCircleIcon,
+  CheckListIcon,
+  Clock01Icon,
+  FilterIcon,
+  FlashIcon,
+  Pulse01Icon,
+  RefreshIcon,
+  UndoIcon,
+  UserIdVerificationIcon,
+} from "@hugeicons/core-free-icons";
+import { HugeiconsIcon } from "@hugeicons/react";
 import { type ReactNode } from "react";
 import {
   concurrencyCappedFootnote,
@@ -97,9 +97,9 @@ function RetryBars({ buckets }: { buckets: DashboardSystemRetryBucket[] }) {
           <Text c="dimmed" size="xs" w={34} ta="right">
             {retryBucketLabel(bucket)}
           </Text>
-          <Box bg="var(--mantine-color-default-hover)" h={7} style={{ flex: 1, borderRadius: 8 }}>
+          <Box bg="var(--workhorse-neutral-3)" h={7} style={{ flex: 1, borderRadius: 8 }}>
             <Box
-              bg="var(--mantine-color-orange-6)"
+              bg="var(--workhorse-neutral-8)"
               h="100%"
               w={`${(bucket.count / maximum) * 100}%`}
               style={{ borderRadius: 8 }}
@@ -119,7 +119,7 @@ function HealthKpi({
   detail,
   help,
   scope,
-  color = "blue",
+  color = "gray",
   icon,
   children,
   divided = false,
@@ -140,7 +140,7 @@ function HealthKpi({
     <Box
       px="md"
       py={12}
-      style={divided ? { borderTop: "1px solid var(--mantine-color-default-border)" } : undefined}
+      style={divided ? { borderTop: "1px solid var(--workhorse-divider)" } : undefined}
     >
       <Group justify="space-between" align="center" gap="sm" wrap="nowrap">
         <Group gap={10} wrap="nowrap" style={{ minWidth: 0, flex: 1 }}>
@@ -220,7 +220,7 @@ export function QueuePressure({
   return (
     // The numeric columns need the full page width; narrower viewports scroll the table
     // horizontally rather than dropping any of them.
-    <Paper withBorder h="100%">
+    <Box className="panel data-table__panel" h="100%">
       <Group justify="space-between" p="md">
         <Box>
           <Group gap={4} wrap="nowrap">
@@ -239,7 +239,7 @@ export function QueuePressure({
         </Badge>
       </Group>
       <ScrollArea>
-        <Table highlightOnHover verticalSpacing={6} horizontalSpacing="sm" miw={980}>
+        <Table highlightOnHover className="data-table" miw={980}>
           <Table.Thead>
             <Table.Tr>
               <Table.Th>Queue</Table.Th>
@@ -286,7 +286,7 @@ export function QueuePressure({
                     </Code>
                   </Table.Td>
                   <Table.Td>
-                    <Badge color={queue.paused ? "yellow" : "teal"} variant="light" size="sm">
+                    <Badge color={queue.paused ? "yellow" : "gray"} variant="light" size="sm">
                       {queue.paused ? "Paused" : "Running"}
                     </Badge>
                   </Table.Td>
@@ -356,7 +356,7 @@ export function QueuePressure({
           {rateLimitCappedFootnote}
         </Text>
       ) : null}
-    </Paper>
+    </Box>
   );
 }
 export function QueueActivity({
@@ -367,7 +367,7 @@ export function QueueActivity({
   navigate: (href: string) => void;
 }) {
   return (
-    <Paper withBorder>
+    <Box className="panel data-table__panel">
       <Box p="md">
         <Group gap={4} wrap="nowrap">
           <Text fw={650}>Queue activity</Text>
@@ -381,7 +381,7 @@ export function QueueActivity({
         </Text>
       </Box>
       <ScrollArea>
-        <Table highlightOnHover verticalSpacing={6} horizontalSpacing="sm" miw={440}>
+        <Table highlightOnHover className="data-table" miw={440}>
           <Table.Thead>
             <Table.Tr>
               <Table.Th>Queue</Table.Th>
@@ -414,7 +414,7 @@ export function QueueActivity({
           </Table.Tbody>
         </Table>
       </ScrollArea>
-    </Paper>
+    </Box>
   );
 }
 export function SystemWindowKpis({ data }: { data: DashboardSystemPage }) {
@@ -423,7 +423,7 @@ export function SystemWindowKpis({ data }: { data: DashboardSystemPage }) {
       ? "red"
       : data.kpis.errorRate.current >= systemErrorRateCaution
         ? "yellow"
-        : "teal";
+        : "gray";
   const recentOutcomes = data.outcomes.slice(-30);
   const queueWaitPercentiles = [
     { label: "p50", duration: data.kpis.queueWait.p50Ms },
@@ -433,25 +433,25 @@ export function SystemWindowKpis({ data }: { data: DashboardSystemPage }) {
 
   return (
     // One panel of hairline-separated rows, sized to sit beside the activity chart.
-    <Paper withBorder h="100%">
+    <Box className="panel" h="100%">
       <HealthKpi
         title="Completion rate"
         value={`${formatRate(data.kpis.drain.completedPerMinute)}/min`}
         detail={`${formatRate(data.kpis.drain.enqueuedPerMinute)} added · net ${data.kpis.drain.netPerMinute >= 0 ? "+" : ""}${formatRate(data.kpis.drain.netPerMinute)}/min`}
         help="This rate compares finished tasks with new tasks during the selected window. A negative net means tasks arrived faster than workers finished them."
         scope={data.window}
-        color={data.kpis.drain.netPerMinute < 0 ? "yellow" : "teal"}
-        icon={<ArrowClockwise size={16} />}
+        color={data.kpis.drain.netPerMinute < 0 ? "yellow" : "gray"}
+        icon={<HugeiconsIcon icon={RefreshIcon} size={16} />}
       >
         <MiniTrend
           series={[
             {
               values: recentOutcomes.map((bucket) => bucket.enqueued),
-              color: "var(--mantine-color-blue-6)",
+              color: "var(--workhorse-neutral-10)",
             },
             {
               values: recentOutcomes.map((bucket) => bucket.succeeded + bucket.failed),
-              color: "var(--mantine-color-teal-6)",
+              color: "var(--workhorse-neutral-6)",
             },
           ]}
         />
@@ -464,7 +464,7 @@ export function SystemWindowKpis({ data }: { data: DashboardSystemPage }) {
         help="This is the share of attempts that did not succeed. The comparison uses the previous window of the same length."
         scope={data.window}
         color={errorColor}
-        icon={<WarningCircle size={16} />}
+        icon={<HugeiconsIcon icon={AlertCircleIcon} size={16} />}
       />
       <HealthKpi
         divided
@@ -487,7 +487,7 @@ export function SystemWindowKpis({ data }: { data: DashboardSystemPage }) {
         help="These percentiles measure the time between enqueue and first claim during the selected window."
         scope={data.window}
         color="indigo"
-        icon={<Clock size={16} />}
+        icon={<HugeiconsIcon icon={Clock01Icon} size={16} />}
       />
       <HealthKpi
         divided
@@ -496,10 +496,10 @@ export function SystemWindowKpis({ data }: { data: DashboardSystemPage }) {
         detail="Attempts closed after their leases expired"
         help="This count shows attempts that ended because their leases expired during the selected time range."
         scope={data.window}
-        color="blue"
-        icon={<Pulse size={16} />}
+        color="gray"
+        icon={<HugeiconsIcon icon={Pulse01Icon} size={16} />}
       />
-    </Paper>
+    </Box>
   );
 }
 export function SystemKpiList({
@@ -510,7 +510,7 @@ export function SystemKpiList({
   navigate: (href: string) => void;
 }) {
   const backlogColor =
-    (data.kpis.backlog.oldestReadyMs ?? 0) > systemOldestReadyWarningMs ? "yellow" : "blue";
+    (data.kpis.backlog.oldestReadyMs ?? 0) > systemOldestReadyWarningMs ? "yellow" : "gray";
   const deadline = data.kpis.deadline ?? {
     pending: 0,
     overdue: 0,
@@ -521,7 +521,7 @@ export function SystemKpiList({
   };
 
   return (
-    <Paper withBorder className="system-current-kpis">
+    <Box className="panel system-current-kpis">
       <HealthKpi
         title="Ready backlog"
         value={data.kpis.backlog.ready}
@@ -529,7 +529,7 @@ export function SystemKpiList({
         help="This count shows tasks that are ready for workers. An older task can mean that its queue is draining slowly."
         scope="now"
         color={backlogColor}
-        icon={<ListChecks size={16} />}
+        icon={<HugeiconsIcon icon={CheckListIcon} size={16} />}
       />
       <HealthKpi
         title="Retries in backoff"
@@ -537,8 +537,8 @@ export function SystemKpiList({
         detail={`${formatCount(data.kpis.retry.dueSoon)} due in the next 5m`}
         help="This count shows tasks in backoff before another attempt. The second count shows how many become ready within five minutes."
         scope="now"
-        color={data.kpis.retry.dueSoon > 0 ? "orange" : "blue"}
-        icon={<ArrowCounterClockwise size={16} />}
+        color={data.kpis.retry.dueSoon > 0 ? "orange" : "gray"}
+        icon={<HugeiconsIcon icon={UndoIcon} size={16} />}
       />
       <HealthKpi
         title="Expired leases"
@@ -546,8 +546,8 @@ export function SystemKpiList({
         detail={`${formatCount(data.kpis.lease.expiringSoon)} expire in 30s`}
         help="This count shows active tasks whose leases expired. It also shows leases nearing expiry."
         scope="now"
-        color={data.kpis.lease.expired > 0 ? "red" : "teal"}
-        icon={<Pulse size={16} />}
+        color={data.kpis.lease.expired > 0 ? "red" : "gray"}
+        icon={<HugeiconsIcon icon={Pulse01Icon} size={16} />}
       />
       <HealthKpi
         title="Overdue tasks"
@@ -560,9 +560,9 @@ export function SystemKpiList({
             ? "red"
             : deadline.dueWithinMinute > 0
               ? "orange"
-              : "teal"
+              : "gray"
         }
-        icon={<Clock size={16} />}
+        icon={<HugeiconsIcon icon={Clock01Icon} size={16} />}
       />
       <HealthKpi
         title="Blocked dependencies"
@@ -590,9 +590,9 @@ export function SystemKpiList({
             ? "orange"
             : data.kpis.dependencies.blockedTasks > 0
               ? "yellow"
-              : "teal"
+              : "gray"
         }
-        icon={<FunnelSimple size={16} />}
+        icon={<HugeiconsIcon icon={FilterIcon} size={16} />}
       />
       <HealthKpi
         title="Waiting parents"
@@ -605,9 +605,9 @@ export function SystemKpiList({
             ? "orange"
             : data.kpis.children.waitingParents > 0 || data.kpis.children.unjoinedResults > 0
               ? "yellow"
-              : "teal"
+              : "gray"
         }
-        icon={<UserFocus size={16} />}
+        icon={<HugeiconsIcon icon={UserIdVerificationIcon} size={16} />}
       />
       <HealthKpi
         title="Pending external waits"
@@ -632,10 +632,10 @@ export function SystemKpiList({
         detail={`${formatCount(data.kpis.externalWaits.pendingSignals)} signals · ${formatCount(data.kpis.externalWaits.pendingHumanDecisions)} human decisions · ${formatCount(data.kpis.externalWaits.overdue)} overdue · oldest ${formatDuration(data.kpis.externalWaits.oldestPendingAgeMs)} · ${formatCount(data.kpis.externalWaits.rejectedDeliveries)} rejected deliveries/24h${data.kpis.externalWaits.capped ? " · Counts reached the scan limit" : ""}`}
         help="These handlers are suspended for a signal or human decision. Overdue waits remain critical until deadline maintenance resolves them."
         scope="now"
-        color={data.kpis.externalWaits.overdue > 0 ? "red" : "teal"}
-        icon={<Lightning size={16} />}
+        color={data.kpis.externalWaits.overdue > 0 ? "red" : "gray"}
+        icon={<HugeiconsIcon icon={FlashIcon} size={16} />}
       />
-    </Paper>
+    </Box>
   );
 }
 export function ExternalWaitAlert({
@@ -648,7 +648,11 @@ export function ExternalWaitAlert({
   if (externalWaits.overdue === 0) return null;
 
   return (
-    <Alert color="red" icon={<WarningCircle size={18} />} title="External waits are overdue">
+    <Alert
+      color="red"
+      icon={<HugeiconsIcon icon={AlertCircleIcon} size={18} />}
+      title="External waits are overdue"
+    >
       <Group justify="space-between" align="center">
         <Text size="sm">
           A signal or human decision passed its deadline. Deadline maintenance will resolve the
@@ -663,7 +667,7 @@ export function ExternalWaitAlert({
 }
 export function RetryStorm({ data }: { data: DashboardSystemPage }) {
   return (
-    <Paper withBorder p="md" h="100%">
+    <Box className="panel" p="md" h="100%">
       <Group gap={4} wrap="nowrap">
         <Text fw={650}>Upcoming retries</Text>
         <HelpButton
@@ -695,13 +699,13 @@ export function RetryStorm({ data }: { data: DashboardSystemPage }) {
                   {type.queue}
                 </Text>
               </Box>
-              <Badge color="orange" variant="light">
+              <Badge color="gray" variant="light">
                 {formatCount(type.count)}
               </Badge>
             </Group>
           ))}
         </Stack>
       )}
-    </Paper>
+    </Box>
   );
 }

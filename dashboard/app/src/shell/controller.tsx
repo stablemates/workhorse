@@ -17,6 +17,7 @@ import {
 import { useDisclosure } from "@mantine/hooks";
 import {
   useCallback,
+  useContext,
   useEffect,
   lazy,
   Suspense,
@@ -24,6 +25,7 @@ import {
   useMemo,
   useRef,
   useState,
+  type ComponentType,
   type MouseEvent,
   type ReactNode,
 } from "react";
@@ -42,7 +44,6 @@ import {
 } from "../task-drawer.js";
 import {
   defaultEventsLocation,
-  eventsListingKey,
   eventsLocationHref,
   type EventsLocationState,
 } from "../events-location.js";
@@ -51,21 +52,21 @@ import {
   taskCursorSpent,
   taskDetailNavigation,
   taskListingHeadHref,
-  taskListingKey,
   taskListingPinned,
   taskLocationHref,
 } from "../task-location.js";
 import { notifyDashboard, notifyEnqueueTest, notifyFailure } from "../notifications.js";
 import type { MaintenancePolicyDefinition, MaintenancePolicySetting } from "@stablemates/workhorse";
 import { requestRunNow, type RunNowFeedback } from "../run-now.js";
-import { Button, Center, Loader, Stack, Text, VisuallyHidden } from "@mantine/core";
-import { WarningCircle } from "@phosphor-icons/react";
+import { Button, Center, Loader, Stack, Text } from "@mantine/core";
+import { AlertCircleIcon } from "@hugeicons/core-free-icons";
+import { HugeiconsIcon } from "@hugeicons/react";
 import {
   DemoTaskKind,
   LoadState,
-  PageData,
   PageRoute,
   mountedHref,
+  parseLocation,
   readLocation,
   readStoredSystemWindow,
   systemWindowStorageKey,
@@ -81,39 +82,134 @@ import {
 } from "../render-identity.js";
 import { subscribeTimeZone } from "../preferences.js";
 import type { DemoTaskOptions } from "../pages/tasks.js";
-import { seekDashboardTaskPage } from "../task-page-seek.js";
-import { taskGroupsListingKey } from "../task-groups-location.js";
+import {
+  createPageCache,
+  fetchPageData,
+  pageRequestKey,
+  readPage,
+  type PageRequest,
+} from "../page-cache.js";
+import { createForegroundLoads } from "../foreground-load.js";
+import { createPageLoadClaims } from "../page-load-claims.js";
+import { PageAnswerContext, PagePendingContext, pagePending } from "../pending-results.js";
+import { DashboardMutationFeedContext } from "../mutation-observer.js";
 import { createDashboardRouter } from "../dashboard-routing.js";
 import { createDashboardRefreshController } from "../dashboard-refresh-controller.js";
 import { useMutationInFlight } from "../mutation-in-flight.js";
 import { formatCount } from "../count-format.js";
 import { describeQueueTier, describeTierSwitch } from "../queue-tier.js";
 import { randomUuid } from "../random-uuid.js";
+import { scheduleKey } from "../presentation-policy.js";
 
-const TasksPage = lazy(() =>
-  import("../pages/tasks.js").then((module) => ({ default: module.TasksPage })),
+/**
+ * A route page whose chunk loads on first use, or earlier when `preload` runs.
+ *
+ * The dashboard preloads each page chunk while the browser is idle, so a later click renders the
+ * page in the same commit. A page that mounts before its chunk arrives suspends as a lazy
+ * component. Each mount keeps the component it started with, so a chunk that arrives later does
+ * not remount a page that is on screen.
+ */
+function preloadablePage<Props extends object>(load: () => Promise<ComponentType<Props>>) {
+  let loaded: ComponentType<Props> | null = null;
+  let pending: Promise<ComponentType<Props>> | null = null;
+  const preload = (): Promise<ComponentType<Props>> => {
+    pending ??= load().then(
+      (component) => (loaded = component),
+      (cause: unknown) => {
+        // A failed chunk request can succeed later, so the next use asks again.
+        pending = null;
+        throw cause;
+      },
+    );
+    return pending;
+  };
+  const Lazy = lazy(() => preload().then((component) => ({ default: component })));
+  function Page(props: Props) {
+    const [Component] = useState<ComponentType<Props>>(() => loaded ?? Lazy);
+    return <Component {...props} />;
+  }
+  return { Page, preload };
+}
+
+const tasksPage = preloadablePage(() =>
+  import("../pages/tasks.js").then((module) => module.TasksPage),
 );
-const EventsPage = lazy(() =>
-  import("../pages/events.js").then((module) => ({ default: module.EventsPage })),
+const eventsPage = preloadablePage(() =>
+  import("../pages/events.js").then((module) => module.EventsPage),
 );
-const TaskGroupsPage = lazy(() =>
-  import("../pages/task-groups.js").then((module) => ({ default: module.TaskGroupsPage })),
+const taskGroupsPage = preloadablePage(() =>
+  import("../pages/task-groups.js").then((module) => module.TaskGroupsPage),
 );
-const CronPage = lazy(() =>
-  import("../pages/schedules.js").then((module) => ({ default: module.CronPage })),
+const cronPage = preloadablePage(() =>
+  import("../pages/schedules.js").then((module) => module.CronPage),
 );
-const QueuesPage = lazy(() =>
-  import("../pages/queues.js").then((module) => ({ default: module.QueuesPage })),
+const queuesPage = preloadablePage(() =>
+  import("../pages/queues.js").then((module) => module.QueuesPage),
 );
-const SystemPage = lazy(() =>
-  import("../pages/overview.js").then((module) => ({ default: module.SystemPage })),
+const systemPage = preloadablePage(() =>
+  import("../pages/overview.js").then((module) => module.SystemPage),
 );
-const WorkersPage = lazy(() =>
-  import("../pages/workers.js").then((module) => ({ default: module.WorkersPage })),
+const workersPage = preloadablePage(() =>
+  import("../pages/workers.js").then((module) => module.WorkersPage),
 );
-const SettingsPage = lazy(() =>
-  import("../pages/settings/index.js").then((module) => ({ default: module.SettingsPage })),
+const settingsPage = preloadablePage(() =>
+  import("../pages/settings/index.js").then((module) => module.SettingsPage),
 );
+const TasksPage = tasksPage.Page;
+const EventsPage = eventsPage.Page;
+const TaskGroupsPage = taskGroupsPage.Page;
+const CronPage = cronPage.Page;
+const QueuesPage = queuesPage.Page;
+const SystemPage = systemPage.Page;
+const WorkersPage = workersPage.Page;
+const SettingsPage = settingsPage.Page;
+
+/** The chunk of each route page, so navigation can fetch it before the click. */
+const pageChunks = {
+  "/tasks": tasksPage.preload,
+  "/events": eventsPage.preload,
+  "/groups": taskGroupsPage.preload,
+  "/cron": cronPage.preload,
+  "/queues": queuesPage.preload,
+  "/system": systemPage.preload,
+  "/workers": workersPage.preload,
+  "/settings": settingsPage.preload,
+} as const satisfies Record<PageRoute, () => Promise<unknown>>;
+
+/** The sidebar destinations, in the order the dashboard prefetches them after the first load. */
+const prefetchedRoutes: readonly PageRoute[] = [
+  "/tasks",
+  "/events",
+  "/groups",
+  "/cron",
+  "/queues",
+  "/workers",
+  "/system",
+  "/settings",
+];
+
+/**
+ * A prefetch skips a page whose cached answer is younger than this. A pointer that moves over
+ * the sidebar then does not send a request for each row it crosses.
+ */
+const prefetchFreshMs = 5_000;
+
+/** Runs `work` when the browser is idle, or after a short delay where idle callbacks do not exist. */
+function whenIdle(work: () => void): () => void {
+  if (typeof window.requestIdleCallback === "function") {
+    const handle = window.requestIdleCallback(work, { timeout: 2_000 });
+    return () => window.cancelIdleCallback(handle);
+  }
+  const handle = window.setTimeout(work, 300);
+  return () => window.clearTimeout(handle);
+}
+
+interface PageLoadOptions {
+  /** A poll. It writes nothing while a refresh blocker holds. */
+  background?: boolean;
+  /** The load after the location changed. It can use a prefetch answer. */
+  navigation?: boolean;
+}
 
 /** What a load that decided to write nothing hands back. */
 const applyNothing = () => undefined;
@@ -151,13 +247,6 @@ export function documentTitle(route: PageRoute): string {
   return `${routeHeading(route)} · Workhorse`;
 }
 /**
- * Pages that draw no visible page heading.
- *
- * Focus moves to the page heading after navigation, so the shell gives these pages a heading that
- * only assistive technology reads.
- */
-const routesWithoutPageHeading = new Set<PageRoute>(["/tasks", "/events"]);
-/**
  * The route that the page area shows, or null while it shows the loading screen.
  *
  * Right after navigation the page area can still show the previous page for one render. Focus
@@ -179,6 +268,7 @@ export function useDashboardController(
   basePath: string,
 ) {
   const client = useDashboardClient();
+  const mutations = useContext(DashboardMutationFeedContext);
   const refreshBlockers = useRefreshBlockers();
   const router = useMemo(() => createDashboardRouter(basePath), [basePath]);
   const refreshController = useMemo(
@@ -186,6 +276,20 @@ export function useDashboardController(
     [refreshBlockers.isBlocked],
   );
   const refreshRequests = useMemo(() => createRefreshRequests(), [client]);
+  /** The last answer of each page load. Each client is one workspace, so each has its own. */
+  const pageCache = useMemo(() => createPageCache(), [client]);
+  /**
+   * After each mutation, drop the cached pages and stop sharing the reads in flight. No view then
+   * shows the state from before the change, whichever page or drawer sent the mutation.
+   */
+  useEffect(
+    () =>
+      mutations?.subscribe(() => {
+        pageCache.invalidate();
+        refreshRequests.forget();
+      }),
+    [mutations, pageCache, refreshRequests],
+  );
   const [navbarOpened, { toggle: toggleNavbar, close: closeNavbar }] = useDisclosure();
   // Timestamps format through module-level displayTimeZone; re-render everything on change.
   const [, setTimeZoneTick] = useState(0);
@@ -296,7 +400,7 @@ export function useDashboardController(
     setRefreshInterval(value);
     storeValue(refreshStorageKey, value);
   }, []);
-  const requestId = useRef(0);
+  const pageLoads = useRef(createPageLoadClaims());
   /**
    * The request that the page data on screen answers, and when it last succeeded.
    *
@@ -304,13 +408,9 @@ export function useDashboardController(
    * for another listing, another window, or another route is not usable for it.
    */
   const loadedPage = useRef<{ key: string; refreshedAt: string } | null>(null);
-  /**
-   * The operator's page load that is still in progress, if any.
-   *
-   * A stale page keeps its state while the operator retries, so the refresh control reads the
-   * request from here to show its spinner.
-   */
+  /** The operator's page load that is still in progress, if any. */
   const [foregroundRequest, setForegroundRequest] = useState<number | null>(null);
+  const foregroundLoads = useMemo(() => createForegroundLoads(setForegroundRequest), []);
   const shouldDiscardBackgroundRefresh = refreshController.shouldDiscardBackground;
 
   const navigate = useCallback(
@@ -346,6 +446,10 @@ export function useDashboardController(
     },
     [navigate],
   );
+  const taskStatusNavigation = useMemo(
+    () => ({ href: (path: string) => mountedHref(basePath, path), followLink: handleLink }),
+    [basePath, handleLink],
+  );
 
   /**
    * What the task listing request is made of, separated from the rest of the location.
@@ -365,19 +469,52 @@ export function useDashboardController(
   useEffect(() => {
     document.title = documentTitle(route);
   }, [route]);
-  const listingKey = taskListingKey(location);
   const listingRef = useRef(location);
   listingRef.current = location;
   // The events feed follows the same shape as the task listing: the request is keyed on a
   // serialized copy of the filters, and the values themselves are read from a ref at send time.
-  const eventsKey = eventsListingKey(eventsQuery);
   const eventsRef = useRef(eventsQuery);
   eventsRef.current = eventsQuery;
   // The task groups page follows the same shape: the list filters or the open group and its
   // member page key the request.
-  const groupsKey = taskGroupsListingKey(location.groups);
   const groupsRef = useRef(location.groups);
   groupsRef.current = location.groups;
+  /** The identity of the page load that the location asks for. */
+  const pageKey = pageRequestKey({
+    route,
+    listing: location,
+    events: eventsQuery,
+    groups: location.groups,
+    systemWindow,
+  });
+  /** The page that the location asks for now, readable from an async callback. */
+  const pageKeyRef = useRef(pageKey);
+  pageKeyRef.current = pageKey;
+  /**
+   * Show the cached answer of a page in the same render as the click that asks for it.
+   *
+   * The page load still runs after this render, and its answer replaces the cached one. If the
+   * load fails, the page stays and the warning states the time of the cached answer. With no
+   * cached answer, the loading screen shows as before.
+   */
+  const [shownPageKey, setShownPageKey] = useState(pageKey);
+  /**
+   * The page whose cached answer is on screen, until the page load replaces it.
+   *
+   * The new answer can add rows above the cached ones. Keyed rows then slide down, which reads as
+   * a jump. `pageAnswer` counts these replacements, so the rows mount again in place instead.
+   */
+  const cachedAnswerKey = useRef<string | null>(null);
+  const [pageAnswer, setPageAnswer] = useState(0);
+  if (shownPageKey !== pageKey) {
+    setShownPageKey(pageKey);
+    const cached = pageCache.read(pageKey);
+    cachedAnswerKey.current = cached === null ? null : pageKey;
+    if (cached !== null) {
+      loadedPage.current = { key: pageKey, refreshedAt: cached.refreshedAt };
+      setLoadState((current) => readyLoadState(current, cached.data));
+    }
+  }
 
   /**
    * Fetch one page and hand back what applying its answer would do.
@@ -387,122 +524,70 @@ export function useDashboardController(
    * screen changes; nothing is written until it makes that call.
    */
   const preparePageLoad = useCallback(
-    async ({ background = false }: { background?: boolean } = {}): Promise<() => void> => {
+    async ({ background = false, navigation = false }: PageLoadOptions = {}): Promise<
+      () => void
+    > => {
       if (shouldDiscardBackgroundRefresh(background)) return applyNothing;
-      const key = JSON.stringify([route, listingKey, systemWindow, eventsKey, groupsKey]);
+      // The request is a value from here on. A Refresh can wait for a read in flight, and a
+      // filter change during that wait must not send other filters under this key.
+      const request: PageRequest = {
+        route,
+        listing: listingRef.current,
+        events: eventsRef.current,
+        groups: groupsRef.current,
+        systemWindow,
+      };
+      const key = pageRequestKey(request);
       if (background && refreshRequests.has(key)) return applyNothing;
-      const activeRequest = ++requestId.current;
+      // Each navigation takes a claim, also when the cache serves it, so an answer for the page
+      // that the operator left can no longer write.
+      const claim = pageLoads.current.claim(key);
+      // A page that a prefetch loaded a moment ago needs no other read. The render showed its
+      // answer, unless the prefetch wrote it after that render read the cache. Then this
+      // navigation shows it.
+      if (navigation && pageCache.holdsFresh(key, prefetchFreshMs)) {
+        // The cached answer replaces the page that the operator left. A slow read for that page
+        // must not keep Refresh busy on this one.
+        if (!background) foregroundLoads.supersede();
+        const cached = pageCache.read(key);
+        if (cached === null || loadedPage.current?.key === key) return applyNothing;
+        return () => {
+          if (!pageLoads.current.holds(claim, pageKeyRef.current)) return;
+          loadedPage.current = { key, refreshedAt: cached.refreshedAt };
+          setLoadState((current) => readyLoadState(current, cached.data));
+        };
+      }
+      const activeRequest = claim.id;
       // The answer is judged against the listing that asked for it. While a pager click is in
       // flight the page on screen is still the one the operator left, and its own first-page
       // report must not be read as an answer about the cursor now in the URL.
-      const requestedListing = listingRef.current;
+      const requestedListing = request.listing;
       if (!background) {
-        setForegroundRequest(activeRequest);
+        foregroundLoads.start(activeRequest);
         const sameRequest = loadedPage.current?.key === key;
         setLoadState((current) => startedLoadState(current, sameRequest));
       }
       // Every outcome ends this request's spinner, including an answer that a newer request
       // made too late to write.
       const settleForeground = () => {
-        if (!background) {
-          setForegroundRequest((current) => (current === activeRequest ? null : current));
-        }
+        if (!background) foregroundLoads.settle(activeRequest);
       };
       try {
-        const data = await refreshRequests.run(
-          key,
-          async () => {
-            let pageData: PageData;
-            if (route === "/tasks") {
-              const listing = listingRef.current;
-              const query = {
-                filter: listing.filter,
-                queue: listing.queue,
-                worker: listing.worker,
-                taskType: listing.taskType,
-                sort: listing.sort,
-                tags: listing.tags,
-                search: listing.search ?? undefined,
-                pageSize: listing.pageSize,
-              };
-              pageData = {
-                route: "/tasks",
-                value:
-                  listing.page > 1 && !listing.cursor
-                    ? await seekDashboardTaskPage(client, query, listing.page)
-                    : await client.tasksCursor({
-                        ...query,
-                        cursor: listing.cursor ?? null,
-                        direction: listing.direction ?? "next",
-                        count: "none",
-                      }),
-              };
-            } else if (route === "/events") {
-              const events = eventsRef.current;
-              pageData = {
-                route: "/events",
-                value: await client.events({
-                  window: events.window,
-                  rangeStart: events.from,
-                  rangeEnd: events.to,
-                  page: events.page,
-                  pageSize: events.pageSize,
-                  kind: events.kind,
-                  queue: events.queue,
-                  taskType: events.taskType,
-                  types: events.types,
-                  worker: events.worker,
-                  search: events.search,
-                  taskId: events.taskId,
-                }),
-              };
-            } else if (route === "/groups") {
-              const groups = groupsRef.current;
-              pageData = {
-                route: "/groups",
-                value:
-                  groups.groupId === null
-                    ? {
-                        kind: "list",
-                        list: await client.taskGroups({
-                          state: groups.state,
-                          page: groups.page,
-                          pageSize: groups.pageSize,
-                        }),
-                      }
-                    : {
-                        kind: "detail",
-                        detail: await client.taskGroupDetail({
-                          id: groups.groupId,
-                          after: groups.after,
-                          pageSize: groups.pageSize,
-                        }),
-                      },
-              };
-            } else if (route === "/cron") {
-              pageData = { route: "/cron", value: await client.cron() };
-            } else if (route === "/queues") {
-              pageData = { route: "/queues", value: await client.queues() };
-            } else if (route === "/system") {
-              pageData = {
-                route: "/system",
-                value: await client.system({ window: systemWindow }),
-              };
-            } else if (route === "/settings") {
-              pageData = { route: "/settings", value: await client.settings() };
-            } else {
-              pageData = {
-                route: "/workers",
-                value: await client.workers(),
-              };
-            }
-            return pageData;
-          },
-          !background,
-        );
+        const { data, kept } = await readPage({
+          requests: refreshRequests,
+          cache: pageCache,
+          request,
+          read: (sent) => fetchPageData(client, sent),
+          // A navigation can use the answer of a prefetch in flight. A refresh after a mutation
+          // or a click on Refresh must read again.
+          fresh: !background && !navigation,
+        });
+        // A read that started before a mutation is old. A poll does not show it, and the next
+        // poll reads again. An operator's load shows it, because the operator waits for it.
+        if (!kept && background) return applyNothing;
         return () => {
           settleForeground();
-          if (activeRequest !== requestId.current) return;
+          if (!pageLoads.current.holds(claim, pageKeyRef.current)) return;
           if (shouldDiscardBackgroundRefresh(background)) return;
           /**
            * Keep the state object when the answer repeats what is on screen.
@@ -513,6 +598,10 @@ export function useDashboardController(
            */
           setLoadState((current) => readyLoadState(current, data));
           loadedPage.current = { key, refreshedAt: new Date().toISOString() };
+          if (!background && cachedAnswerKey.current === key) {
+            cachedAnswerKey.current = null;
+            setPageAnswer((count) => count + 1);
+          }
           /**
            * Release a cursor this answer proved spent.
            *
@@ -532,7 +621,7 @@ export function useDashboardController(
       } catch (cause) {
         return () => {
           settleForeground();
-          if (activeRequest !== requestId.current) return;
+          if (!pageLoads.current.holds(claim, pageKeyRef.current)) return;
           if (shouldDiscardBackgroundRefresh(background)) return;
           const error =
             cause instanceof Error ? cause.message : "Workhorse could not load this page";
@@ -540,24 +629,25 @@ export function useDashboardController(
           setLoadState((current) => failedLoadState(current, { route, error }, retained));
         };
       }
-      // `listingKey` is the dependency the task listing actually has; the values themselves are
-      // read from a ref so that a re-render for an unrelated reason cannot send a stale request.
+      // `pageKey` is the dependency the page load actually has; the values themselves are read
+      // from a ref when the load starts, so that a re-render for an unrelated reason cannot send
+      // a stale request.
     },
     [
       client,
       route,
-      listingKey,
+      pageKey,
       systemWindow,
-      eventsKey,
-      groupsKey,
       replace,
       shouldDiscardBackgroundRefresh,
       refreshRequests,
+      pageCache,
+      foregroundLoads,
     ],
   );
 
   const loadPage = useCallback(
-    async (options: { background?: boolean } = {}) => {
+    async (options: PageLoadOptions = {}) => {
       (await preparePageLoad(options))();
     },
     [preparePageLoad],
@@ -605,8 +695,7 @@ export function useDashboardController(
 
   const toggleSchedule = useCallback(
     async (namespace: string, name: string, paused: boolean) => {
-      const scheduleKey = `${namespace}:${name}`;
-      togglingSchedule.start(scheduleKey);
+      togglingSchedule.start(scheduleKey({ kind: "user", namespace, name }));
       try {
         await client.setSchedulePaused({
           kind: "user",
@@ -622,8 +711,8 @@ export function useDashboardController(
         notifyDashboard({
           title: paused ? "Schedule paused" : "Schedule resumed",
           message: paused
-            ? `${scheduleKey} stopped firing and stays paused across deploys. Occurrences already enqueued are untouched.`
-            : `${scheduleKey} can fire again when its deployment configuration is enabled.`,
+            ? `${namespace}/${name} stopped firing and stays paused across deploys. Occurrences already enqueued are untouched.`
+            : `${namespace}/${name} can fire again when its deployment configuration is enabled.`,
           tone: "success",
         });
         await loadPage();
@@ -789,7 +878,13 @@ export function useDashboardController(
   );
 
   const saveMaintenanceSettings = useCallback(
-    async (definition: Partial<MaintenancePolicyDefinition>) => {
+    async ({
+      definition,
+      onSaved,
+    }: {
+      definition: Partial<MaintenancePolicyDefinition>;
+      onSaved(): void;
+    }) => {
       savingSettings.start(true);
       try {
         await client.overrideMaintenancePolicy({
@@ -800,6 +895,7 @@ export function useDashboardController(
             requestId: randomUuid(),
           },
         });
+        onSaved();
         notifyDashboard({
           title: "Maintenance policy updated",
           message: "Every worker now uses the database-owned policy.",
@@ -1065,9 +1161,66 @@ export function useDashboardController(
   }, [closeNavbar]);
 
   useEffect(() => {
-    void loadPage();
+    void loadPage({ navigation: true });
     void loadTaskCounts();
   }, [loadPage, loadTaskCounts]);
+
+  /**
+   * Load the chunk and the read model of the page behind `href` into the cache, without showing
+   * them. A click on that page then renders at once. A failure leaves the cache as it was, and
+   * the page load after the click reports it.
+   */
+  const prefetchPage = useCallback(
+    async (href: string): Promise<void> => {
+      const url = new URL(href, window.location.origin);
+      const target = parseLocation(url.pathname, url.search);
+      const chunk = pageChunks[target.route]().catch(() => undefined);
+      const request: PageRequest = {
+        route: target.route,
+        listing: target,
+        events: target.events,
+        groups: target.groups,
+        systemWindow,
+      };
+      const key = pageRequestKey(request);
+      if (pageCache.holdsFresh(key, prefetchFreshMs) || refreshRequests.has(key)) {
+        await chunk;
+        return;
+      }
+      const generation = pageCache.generation();
+      try {
+        const data = await refreshRequests.run(key, () => fetchPageData(client, request));
+        pageCache.write(key, data, generation);
+      } catch {
+        // The page load after a click reports the failure.
+      }
+      await chunk;
+    },
+    [client, pageCache, refreshRequests, systemWindow],
+  );
+  const prefetchPageRef = useRef(prefetchPage);
+  prefetchPageRef.current = prefetchPage;
+  /**
+   * After the first page shows, prefetch every sidebar destination while the browser is idle.
+   * The requests go one at a time, so the prefetch does not compete with the page on screen.
+   */
+  const hasPageData = loadState.data !== null;
+  useEffect(() => {
+    if (!hasPageData) return;
+    let stopped = false;
+    const cancel = whenIdle(() => {
+      void (async () => {
+        for (const destination of prefetchedRoutes) {
+          if (stopped) return;
+          await prefetchPageRef.current(destination);
+        }
+      })();
+    });
+    return () => {
+      stopped = true;
+      cancel();
+    };
+  }, [hasPageData]);
 
   const refreshBlocked = refreshBlockers.blocked;
   const previousRefreshBlocked = useRef(refreshBlocked);
@@ -1102,8 +1255,6 @@ export function useDashboardController(
   useEffect(() => pollingClock.setPaused(autoRefreshPaused), [autoRefreshPaused, pollingClock]);
   useEffect(() => () => pollingClock.stop(), [pollingClock]);
 
-  const connected =
-    loadState.status !== "error" && loadState.status !== "stale" && loadState.data !== null;
   const loading = loadState.status === "loading" || foregroundRequest !== null;
   const selectedEvent = inspectedEvent?.id === selectedEventId ? inspectedEvent : null;
 
@@ -1111,7 +1262,7 @@ export function useDashboardController(
   let content: ReactNode;
   if (shownRoute === null) {
     content = (
-      <Center mih="60vh">
+      <Center mih="60vh" className="dashboard-page-loading">
         <Stack align="center" gap="sm">
           <Loader size="sm" />
           <Text c="dimmed" size="sm">
@@ -1124,7 +1275,7 @@ export function useDashboardController(
     content = (
       <Center mih="60vh">
         <Stack align="center" gap="sm">
-          <WarningCircle size={28} color="var(--mantine-color-red-6)" />
+          <HugeiconsIcon icon={AlertCircleIcon} size={28} color="var(--mantine-color-red-6)" />
           <Text component="h1" fw={600} size="md" my={0}>
             Workhorse could not load this page.
           </Text>
@@ -1152,6 +1303,8 @@ export function useDashboardController(
         auditActor={auditActor}
         reload={reloadTasks}
         activityPollTick={activityPollTick}
+        taskCounts={taskCounts}
+        statusNavigation={taskStatusNavigation}
       />
     );
   } else if (loadState.data?.route === "/events") {
@@ -1212,7 +1365,12 @@ export function useDashboardController(
     );
   } else if (loadState.data?.route === "/system") {
     content = (
-      <SystemPage data={loadState.data.value} setWindow={changeSystemWindow} navigate={navigate} />
+      <SystemPage
+        data={loadState.data.value}
+        requestedWindow={systemWindow}
+        setWindow={changeSystemWindow}
+        navigate={navigate}
+      />
     );
   } else if (loadState.data?.route === "/workers") {
     content = (
@@ -1236,29 +1394,24 @@ export function useDashboardController(
   }
 
   if (content !== null) {
+    // A control that asks again in place keeps the previous answer on screen until the new one
+    // arrives. The page dims the rows that the answer replaces.
+    const contentPending = pagePending(loadState, loadedPage.current?.key ?? null, pageKey);
     content = (
-      <Suspense
-        fallback={
-          <Center mih="60vh">
-            <Loader size="sm" />
-          </Center>
-        }
-      >
-        {content}
-      </Suspense>
+      <PagePendingContext.Provider value={contentPending}>
+        <PageAnswerContext.Provider value={pageAnswer}>
+          <Suspense
+            fallback={
+              <Center mih="60vh" className="dashboard-page-loading">
+                <Loader size="sm" />
+              </Center>
+            }
+          >
+            {content}
+          </Suspense>
+        </PageAnswerContext.Provider>
+      </PagePendingContext.Provider>
     );
-    if (
-      loadState.status !== "error" &&
-      shownRoute === location.route &&
-      routesWithoutPageHeading.has(location.route)
-    ) {
-      content = (
-        <>
-          <VisuallyHidden component="h1">{routeHeading(location.route)}</VisuallyHidden>
-          {content}
-        </>
-      );
-    }
   }
 
   return {
@@ -1266,10 +1419,10 @@ export function useDashboardController(
     toggleNavbar,
     environment,
     loadState,
-    connected,
     loading,
     shownRoute,
     loadPage,
+    prefetchPage,
     refreshInterval,
     autoRefreshPaused,
     resumeCountdown,

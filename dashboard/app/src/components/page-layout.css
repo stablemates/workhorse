@@ -1,0 +1,365 @@
+/*
+ * One layout system for the dashboard pages.
+ *
+ * A page is a column 16px apart, and two sections are 24px apart. A panel holds one section's
+ * content with 16px inside it. Related controls sit 8px apart. The shell sets the content padding
+ * around the page, with 16px above the page heading, so the content starts near the header.
+ *
+ * The theme draws no borders. A panel is a `neutral-2` fill on the page, and the only line is a
+ * `--workhorse-divider` hairline between the rows of a table or a list.
+ */
+
+.page {
+  display: flex;
+  flex-direction: column;
+  gap: var(--mantine-spacing-md);
+  min-width: 0;
+}
+
+/* A section that follows other content gets 8px more, so each section reads as its own group. */
+.page > :not(.page-header) + .page-section {
+  margin-top: var(--mantine-spacing-xs);
+}
+
+.page--narrow {
+  max-width: 70rem;
+}
+
+.page-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--mantine-spacing-sm) var(--mantine-spacing-lg);
+}
+
+.page-header__text {
+  flex: 1 1 22rem;
+  min-width: 0;
+}
+
+.page-header__title-row {
+  display: flex;
+  align-items: center;
+  gap: var(--mantine-spacing-xs);
+}
+
+.page-header__title {
+  margin: 0;
+  font-size: var(--mantine-font-size-lg);
+  line-height: var(--mantine-line-height-lg);
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  text-wrap: balance;
+}
+
+.page-header__description {
+  margin: var(--mantine-spacing-xxs, 4px) 0 0;
+  max-width: 48rem;
+  color: var(--mantine-color-dimmed);
+  font-size: var(--mantine-font-size-sm);
+  line-height: var(--mantine-line-height-sm);
+  text-wrap: pretty;
+}
+
+.page-header__actions {
+  display: flex;
+  flex: 0 1 auto;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--mantine-spacing-xs);
+}
+
+/* The actions stay on the title line, so the header has one height when they change. */
+.page-header--inline {
+  align-items: center;
+}
+
+.page-header--inline .page-header__text {
+  flex: 0 1 auto;
+}
+
+/* The actions fill the rest of the line from the right, so an action that comes or goes for one
+   view does not move the others. */
+.page-header--inline .page-header__actions {
+  flex: 1 1 auto;
+  justify-content: flex-end;
+}
+
+/* A section heading inside a page: 16/24, with an optional note and actions on the right. */
+.page-section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--mantine-spacing-sm);
+  min-width: 0;
+}
+
+.page-section__header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: var(--mantine-spacing-xs) var(--mantine-spacing-md);
+}
+
+.page-section__title {
+  margin: 0;
+  font-size: var(--mantine-font-size-md);
+  line-height: var(--mantine-line-height-md);
+  font-weight: 600;
+}
+
+.page-section__description {
+  margin: 0;
+  color: var(--mantine-color-dimmed);
+  font-size: var(--mantine-font-size-xs);
+  line-height: var(--mantine-line-height-xs);
+  text-wrap: pretty;
+}
+
+.panel {
+  --panel-bg: var(--workhorse-neutral-2);
+  border-radius: var(--mantine-radius-md);
+  background: var(--panel-bg);
+  min-width: 0;
+}
+
+.panel--padded {
+  padding: var(--mantine-spacing-md);
+}
+
+/* A toolbar of controls above a table: groups 16px apart, controls in a group 8px apart. */
+.page-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: var(--mantine-spacing-md);
+}
+
+.page-toolbar__group {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: var(--mantine-spacing-xs);
+}
+
+.page-toolbar__end {
+  margin-left: auto;
+}
+
+.page-footnote {
+  margin: 0;
+  color: var(--mantine-color-dimmed);
+  font-size: var(--mantine-font-size-xs);
+  line-height: var(--mantine-line-height-xs);
+  text-wrap: pretty;
+}
+
+.page-pager {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--mantine-spacing-xs);
+}
+
+/*
+ * Data tables: one line per row at about 44px, a quiet header, numbers right-aligned in tabular
+ * figures. The panel clips the corners, and the scroll viewport inside it scrolls sideways.
+ */
+.data-table {
+  font-variant-numeric: tabular-nums;
+}
+
+.data-table :is(th, td) {
+  padding: 10px var(--mantine-spacing-sm);
+}
+
+.data-table > thead > tr > th,
+.data-table > thead > tr > td {
+  padding-block: 8px;
+  color: var(--mantine-color-dimmed);
+  font-size: var(--mantine-font-size-xs);
+  line-height: var(--mantine-line-height-xs);
+  font-weight: 500;
+  background: var(--panel-bg, var(--mantine-color-body));
+}
+
+.data-table > tbody > tr {
+  border-top: 1px solid var(--workhorse-divider);
+}
+
+.data-table > thead > tr {
+  border-bottom: 0;
+}
+
+.data-table :is(th, td):first-child {
+  padding-left: var(--mantine-spacing-md);
+}
+
+.data-table :is(th, td):last-child {
+  padding-right: var(--mantine-spacing-md);
+}
+
+.data-table .data-table__metric {
+  text-align: right;
+  white-space: nowrap;
+}
+
+.data-table .data-table__muted {
+  color: var(--mantine-color-dimmed);
+}
+
+.data-table__panel {
+  overflow: hidden;
+}
+
+.data-table__panel .data-table > thead > tr > th:first-child {
+  border-top-left-radius: var(--mantine-radius-md);
+}
+
+.data-table__panel .data-table > thead > tr > th:last-child {
+  border-top-right-radius: var(--mantine-radius-md);
+}
+
+/* A key-value list inside a panel: label on the left, a value on the right. */
+.facts {
+  display: flex;
+  flex-direction: column;
+  margin: 0;
+}
+
+.facts__row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--mantine-spacing-md);
+  padding-block: var(--mantine-spacing-xs);
+}
+
+.facts__row + .facts__row {
+  border-top: 1px solid var(--workhorse-divider);
+}
+
+.facts__label {
+  min-width: 0;
+}
+
+.facts__value {
+  flex-shrink: 0;
+  margin: 0;
+  text-align: right;
+  font-size: var(--mantine-font-size-sm);
+  line-height: var(--mantine-line-height-sm);
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+}
+
+.facts__value[data-tone="warning"] {
+  color: var(--workhorse-color-warning-text);
+}
+
+.facts__value[data-tone="danger"] {
+  color: var(--workhorse-color-danger-text);
+}
+
+/* Empty states: a title that names what is missing, an explanation, and an optional action. */
+.empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--mantine-spacing-xs);
+  padding: var(--mantine-spacing-xl) var(--mantine-spacing-lg);
+}
+
+.empty-state__title {
+  margin: 0;
+  font-size: var(--mantine-font-size-sm);
+  line-height: var(--mantine-line-height-sm);
+  font-weight: 600;
+}
+
+.empty-state__body {
+  margin: 0;
+  max-width: 40rem;
+  color: var(--mantine-color-dimmed);
+  font-size: var(--mantine-font-size-sm);
+  line-height: var(--mantine-line-height-sm);
+  text-wrap: pretty;
+}
+
+.empty-state__action {
+  margin-top: var(--mantine-spacing-xxs, 4px);
+}
+
+@media (max-width: 48em) {
+  .page-header__actions {
+    width: 100%;
+  }
+
+  .page-header--inline .page-header__actions {
+    width: auto;
+  }
+
+  .empty-state {
+    padding: var(--mantine-spacing-lg) var(--mantine-spacing-md);
+  }
+
+  .panel--padded {
+    padding: var(--mantine-spacing-sm);
+  }
+}
+
+/* Confirmation dialogs: the Graphical popup sets the surface; this sets the content rhythm. */
+.confirm-dialog {
+  width: min(28rem, calc(100vw - 2rem));
+}
+
+.confirm-dialog__body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--mantine-spacing-sm);
+  margin-top: var(--mantine-spacing-xs);
+  font-size: var(--mantine-font-size-sm);
+  line-height: var(--mantine-line-height-sm);
+}
+
+.confirm-dialog__body p {
+  margin: 0;
+  text-wrap: pretty;
+}
+
+.confirm-dialog__actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: var(--mantine-spacing-xs);
+  margin-top: var(--mantine-spacing-lg);
+}
+
+/*
+ * A row menu column stays at the right edge while a wide table scrolls, so the row actions are
+ * always in reach.
+ */
+.data-table .data-table__actions {
+  position: sticky;
+  right: 0;
+  z-index: 1;
+  width: 1%;
+  padding-inline: var(--mantine-spacing-xs);
+  background: var(--panel-bg, var(--mantine-color-body));
+}
+
+.data-table > thead .data-table__actions {
+  background: var(--panel-bg, var(--mantine-color-body));
+}
+
+.data-table > tbody > tr:hover .data-table__actions {
+  background: var(--table-hover-color);
+}
+
+@media (hover: hover) {
+  .data-table > tbody > tr[data-hover]:hover .data-table__actions {
+    background: var(--tr-hover-bg);
+  }
+}

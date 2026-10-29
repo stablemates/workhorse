@@ -20,5 +20,14 @@ export function createRefreshRequests() {
     has(key: string): boolean {
       return pending.has(key);
     },
+    /**
+     * Stop sharing the reads in flight now. A later read of the same key sends its own request.
+     * A mutation calls this, because a read that started before it can return the old state.
+     */
+    forget(): void {
+      pending.clear();
+    },
   };
 }
+
+export type RefreshRequests = ReturnType<typeof createRefreshRequests>;

@@ -9,7 +9,13 @@ import type { DashboardClient, DashboardDemoTools } from "@stablemates/workhorse
 import type { DashboardWorkspaceLink } from "@stablemates/workhorse-dashboard-server/server";
 import { RefreshBlockerProvider } from "./refresh-blockers.js";
 import { DropdownActivityProvider } from "./dropdown-activity.js";
+import { useMemo } from "react";
 import { DashboardClientContext, normalizeBasePath } from "./core.js";
+import {
+  createMutationFeed,
+  DashboardMutationFeedContext,
+  observeMutations,
+} from "./mutation-observer.js";
 import { DashboardContent } from "./shell/AppShell.js";
 
 export interface DashboardProps {
@@ -43,22 +49,35 @@ export function Dashboard({
   workhorseRevision = undefined,
 }: DashboardProps) {
   const basePath = normalizeBasePath(basePathInput);
+  // Every mutation goes through these wrappers, so the shell learns of each one, also of a
+  // mutation that a page or the task drawer sends itself.
+  const mutations = useMemo(() => createMutationFeed(), []);
+  const observedClient = useMemo(
+    () => observeMutations(client, mutations.settled),
+    [client, mutations],
+  );
+  const observedDemoTools = useMemo(
+    () => (demoTools ? observeMutations(demoTools, mutations.settled) : null),
+    [demoTools, mutations],
+  );
   return (
-    <DashboardClientContext.Provider value={client}>
-      <RefreshBlockerProvider>
-        <DropdownActivityProvider>
-          <DashboardContent
-            auditActor={auditActor}
-            logoutUrl={logoutUrl ?? null}
-            demoTools={demoTools ?? null}
-            basePath={basePath}
-            workspaces={workspaces}
-            workspace={workspace}
-            workhorseVersion={workhorseVersion}
-            workhorseRevision={workhorseRevision}
-          />
-        </DropdownActivityProvider>
-      </RefreshBlockerProvider>
+    <DashboardClientContext.Provider value={observedClient}>
+      <DashboardMutationFeedContext.Provider value={mutations}>
+        <RefreshBlockerProvider>
+          <DropdownActivityProvider>
+            <DashboardContent
+              auditActor={auditActor}
+              logoutUrl={logoutUrl ?? null}
+              demoTools={observedDemoTools}
+              basePath={basePath}
+              workspaces={workspaces}
+              workspace={workspace}
+              workhorseVersion={workhorseVersion}
+              workhorseRevision={workhorseRevision}
+            />
+          </DropdownActivityProvider>
+        </RefreshBlockerProvider>
+      </DashboardMutationFeedContext.Provider>
     </DashboardClientContext.Provider>
   );
 }

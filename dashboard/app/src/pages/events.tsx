@@ -1,6 +1,8 @@
-import { taskStatusColors } from "../status-colors.js";
+import { dangerTextColor, taskStatusColors } from "../status-colors.js";
 import { StatusLabel } from "../status-badge.js";
 import { TaskTableId } from "../components/task-table-id.js";
+import { Cancel01Icon } from "@hugeicons/core-free-icons";
+import { HugeiconsIcon } from "@hugeicons/react";
 import type {
   DashboardEventRow,
   DashboardEventsPage,
@@ -11,7 +13,11 @@ import {
   dashboardPageMax,
   dashboardTaskEventTypes,
 } from "@stablemates/workhorse-dashboard-server/wire";
-import { isEventTypeFilter, type EventsLocationState } from "../events-location.js";
+import {
+  eventsListingKey,
+  isEventTypeFilter,
+  type EventsLocationState,
+} from "../events-location.js";
 import { eventDetailSummary, eventsWindowOptions } from "../event-presentation.js";
 import {
   Box,
@@ -19,10 +25,7 @@ import {
   Group,
   Loader,
   Pagination,
-  Paper,
-  ScrollArea,
   SegmentedControl,
-  Stack,
   Table,
   Text,
   TextInput,
@@ -30,16 +33,28 @@ import {
   UnstyledButton,
 } from "@mantine/core";
 import { MultiSelect, Select } from "../dropdown-activity.js";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { boundaryEventPresentation } from "../components/task-detail-overview.js";
 import {
-  EmptyState,
   includeSelectedOption,
   includeSelectedOptions,
   useTaskFacets,
 } from "../components/task-list.js";
+import { EmptyState } from "../components/empty-state.js";
+import { keepFocusOnRemoval } from "../components/task-filter-bar.js";
+import { Page, PageHeader, TablePanel } from "../components/page-header.js";
 import { formatDuration, formatExact, formatRelative } from "../preferences.js";
 import { formatCount } from "../count-format.js";
+import {
+  PendingResults,
+  PendingRows,
+  ResultsAnnouncement,
+  usePagePending,
+} from "../pending-results.js";
+import { useRowKeyboardNavigation } from "../list-keyboard.js";
+
+/** The scroll region of the events table, which holds the rows that the keyboard moves through. */
+const eventTableSelector = "[role='region'][aria-label='Events table']";
 
 export const eventsKindOptions = [
   { value: "all", label: "All" },
@@ -108,6 +123,35 @@ export function continueEventsRange(
   return { from: range.rangeStart, to: new Date(to).toISOString(), skipsTies };
 }
 /**
+ * Remove the search and every filter, also the task filter. The time window and the custom range
+ * stay.
+ *
+ * The search field writes its text to the URL 300 ms after the last keystroke. Its draft must
+ * clear with the filters, or that write puts the search back after the clear.
+ */
+export function clearEventFilters({
+  query,
+  setQuery,
+  setSearchDraft,
+}: {
+  query: EventsLocationState;
+  setQuery: (next: EventsLocationState) => void;
+  setSearchDraft: (draft: string | null) => void;
+}): void {
+  setSearchDraft(null);
+  setQuery({
+    ...query,
+    search: null,
+    queue: null,
+    taskType: null,
+    worker: null,
+    types: [],
+    taskId: null,
+    page: 1,
+    eventId: null,
+  });
+}
+/**
  * The fleet-wide feed of durable lifecycle history.
  *
  * Rows come from `task_event` and `attempt_history`, never from the PostgreSQL notification
@@ -130,7 +174,12 @@ export function EventsPage({
   setQuery: (next: EventsLocationState) => void;
   inspectEvent: (event: DashboardEventRow) => void;
 }) {
+  // A source, range, filter, or pager change keeps these rows, dimmed, until the new rows arrive.
+  const pending = usePagePending();
   const [searchDraft, setSearchDraft] = useState<string | null>(null);
+  // The task filter remove button and Clear filters leave the page with their filter, so keyboard
+  // focus moves to the search.
+  const searchField = useRef<HTMLInputElement>(null);
   const [customRangeOpen, setCustomRangeOpen] = useState(query.from !== null);
   const [fromDraft, setFromDraft] = useState(() =>
     query.from === null ? "" : dateTimeLocalValue(query.from),
@@ -139,6 +188,24 @@ export function EventsPage({
     query.to === null ? "" : dateTimeLocalValue(query.to),
   );
   const [rangeError, setRangeError] = useState<string | null>(null);
+  // ArrowDown, ArrowUp, j, and k move through the events, and through the drawer while it is open.
+  useRowKeyboardNavigation({
+    list: () => document.querySelector<HTMLElement>(eventTableSelector),
+    rowSelector: ".task-table__open",
+    panel: {
+      id: "event-detail-drawer",
+      ids: data.events.map((event) => event.id),
+      openId: query.eventId,
+      open: (id) => {
+        const event = data.events.find((one) => one.id === id);
+        if (event !== undefined) inspectEvent(event);
+      },
+      rowControl: (id) =>
+        document.querySelector<HTMLElement>(
+          `${eventTableSelector} [data-event-id="${CSS.escape(id)}"]`,
+        ),
+    },
+  });
   useEffect(() => {
     if (searchDraft === null) return;
     const timer = setTimeout(() => {
@@ -194,7 +261,8 @@ export function EventsPage({
   const pagination = (label: string) =>
     totalPages > 1 ? (
       <Pagination
-        value={Math.min(data.page, totalPages)}
+        // The pager moves on the click. The rows follow when they arrive.
+        value={Math.min(pending ? query.page : data.page, totalPages)}
         onChange={(page) => setQuery({ ...query, page, eventId: null })}
         total={totalPages}
         size="xs"
@@ -223,108 +291,143 @@ export function EventsPage({
       ? `between ${formatExact(query.from)} and ${formatExact(query.to)}`
       : `in the last ${query.window}`;
 
+  const filtered =
+    query.search !== null ||
+    query.queue !== null ||
+    query.taskType !== null ||
+    query.worker !== null ||
+    query.types.length > 0 ||
+    query.taskId !== null;
+  const customRange = customRangeOpen ? (
+    <div className="page-toolbar__group" role="group" aria-label="Custom time range">
+      <TextInput
+        size="xs"
+        type="datetime-local"
+        label="From"
+        value={fromDraft}
+        onChange={(event) => {
+          setFromDraft(event.currentTarget.value);
+          setRangeError(null);
+        }}
+      />
+      <TextInput
+        size="xs"
+        type="datetime-local"
+        label="To"
+        value={toDraft}
+        onChange={(event) => {
+          setToDraft(event.currentTarget.value);
+          setRangeError(null);
+        }}
+      />
+      <Button
+        size="xs"
+        onClick={() => {
+          const range = parseEventRange(fromDraft, toDraft);
+          if ("error" in range) {
+            setRangeError(range.error);
+            return;
+          }
+          setRangeError(null);
+          filter(range);
+        }}
+      >
+        Apply range
+      </Button>
+      {rangeError === null ? null : (
+        <Text c={dangerTextColor} size="xs" role="alert" pb={6}>
+          {rangeError}
+        </Text>
+      )}
+    </div>
+  ) : null;
+
   return (
-    <Stack gap="xl">
-      <Paper withBorder p="md">
-        <Group gap="md" align="flex-end" wrap="wrap" mih={55} role="group" aria-label="Event scope">
-          <Box>
-            <Text c="dimmed" fw={600} size="xs" mb={4}>
-              Source
-            </Text>
-            <SegmentedControl
-              size="xs"
-              value={query.kind}
-              data={eventsKindOptions}
-              onChange={(value) => filter({ kind: value as EventsLocationState["kind"] })}
-            />
-          </Box>
-          <Box>
-            <Text c="dimmed" fw={600} size="xs" mb={4}>
-              Window
-            </Text>
-            <SegmentedControl
-              size="xs"
-              value={customRangeOpen ? "custom" : query.window}
-              data={[...eventsWindowOptions, { value: "custom", label: "Custom" }]}
-              onChange={(value) => {
-                if (value === "custom") {
-                  setCustomRangeOpen(true);
-                  setRangeError(null);
-                  if (!fromDraft || !toDraft) {
-                    const to = new Date();
-                    to.setSeconds(0, 0);
-                    const from = new Date(to.valueOf() - 60 * 60 * 1000);
-                    setFromDraft(dateTimeLocalValue(from));
-                    setToDraft(dateTimeLocalValue(to));
-                  }
-                  return;
-                }
-                setCustomRangeOpen(false);
-                setRangeError(null);
-                filter({
-                  window: value as DashboardEventsWindow,
-                  from: null,
-                  to: null,
-                });
-              }}
-            />
-          </Box>
-          {pagination("Events pagination above table")}
-          {pageSizeSelector("Events per page above table")}
-          {customRangeOpen ? (
-            <>
-              <TextInput
+    <Page>
+      <PageHeader
+        title="Events"
+        description="Lifecycle transitions and attempt outcomes from durable history, newest first."
+      />
+      <div className="panel panel--padded events-controls">
+        <div className="page-toolbar" role="group" aria-label="Event scope">
+          <div className="page-toolbar__group">
+            <Box>
+              <Text c="dimmed" fw={500} size="xs" mb={4}>
+                Source
+              </Text>
+              <SegmentedControl
                 size="xs"
-                type="datetime-local"
-                label="From"
-                value={fromDraft}
-                onChange={(event) => {
-                  setFromDraft(event.currentTarget.value);
-                  setRangeError(null);
-                }}
+                value={query.kind}
+                data={eventsKindOptions}
+                onChange={(value) => filter({ kind: value as EventsLocationState["kind"] })}
               />
-              <TextInput
+            </Box>
+            <Box>
+              <Text c="dimmed" fw={500} size="xs" mb={4}>
+                Time range
+              </Text>
+              <SegmentedControl
                 size="xs"
-                type="datetime-local"
-                label="To"
-                value={toDraft}
-                onChange={(event) => {
-                  setToDraft(event.currentTarget.value);
-                  setRangeError(null);
-                }}
-              />
-              <Button
-                size="xs"
-                onClick={() => {
-                  const range = parseEventRange(fromDraft, toDraft);
-                  if ("error" in range) {
-                    setRangeError(range.error);
+                value={customRangeOpen ? "custom" : query.window}
+                data={[...eventsWindowOptions, { value: "custom", label: "Custom" }]}
+                onChange={(value) => {
+                  if (value === "custom") {
+                    setCustomRangeOpen(true);
+                    setRangeError(null);
+                    if (!fromDraft || !toDraft) {
+                      const to = new Date();
+                      to.setSeconds(0, 0);
+                      const from = new Date(to.valueOf() - 60 * 60 * 1000);
+                      setFromDraft(dateTimeLocalValue(from));
+                      setToDraft(dateTimeLocalValue(to));
+                    }
                     return;
                   }
+                  setCustomRangeOpen(false);
                   setRangeError(null);
-                  filter(range);
+                  filter({
+                    window: value as DashboardEventsWindow,
+                    from: null,
+                    to: null,
+                  });
+                }}
+              />
+            </Box>
+          </div>
+          <div className="page-toolbar__group page-toolbar__end">
+            {pagination("Events pagination above table")}
+            {pageSizeSelector("Events per page above table")}
+          </div>
+        </div>
+        {customRange}
+        <div className="page-toolbar" role="group" aria-label="Event filters">
+          {query.taskId === null ? null : (
+            <Box>
+              <Text c="dimmed" fw={500} size="xs" mb={4}>
+                Task
+              </Text>
+              <Button
+                size="xs"
+                variant="default"
+                title={query.taskId}
+                aria-label={`Remove task filter ${query.taskId}`}
+                rightSection={<HugeiconsIcon icon={Cancel01Icon} size={14} aria-hidden />}
+                onClick={(event) => {
+                  keepFocusOnRemoval({
+                    removed: event.currentTarget,
+                    active: document.activeElement,
+                    target: searchField.current,
+                  });
+                  filter({ taskId: null });
                 }}
               >
-                Apply range
+                {query.taskId.slice(0, 8)}
               </Button>
-              {rangeError === null ? null : (
-                <Text c="red" size="xs" role="alert" pb={6}>
-                  {rangeError}
-                </Text>
-              )}
-            </>
-          ) : null}
-        </Group>
-        <Group
-          mt="md"
-          gap="md"
-          align="flex-end"
-          wrap="wrap"
-          role="group"
-          aria-label="Event filters"
-        >
+            </Box>
+          )}
           <TextInput
             size="xs"
+            ref={searchField}
             label="Search"
             placeholder="Task ID, name, event, or error"
             w={260}
@@ -384,28 +487,52 @@ export function EventsPage({
             value={query.types}
             onChange={(value) => filter({ types: value.filter(isEventTypeFilter) })}
           />
-        </Group>
-      </Paper>
+        </div>
+      </div>
       {/* Queue and task filters are matched against the task a history row points at. History
           outlives the task it describes, so rows whose task has already been retained away can only
           be reached with those filters cleared. */}
-      {data.events.length === 0 ? (
-        <EmptyState>
-          Workhorse recorded no matching events {rangeDescription}. Retention limits available
-          history: {retentionNote}.
-        </EmptyState>
-      ) : (
-        <Paper withBorder>
-          <ScrollArea
-            type="auto"
-            offsetScrollbars="x"
-            viewportProps={{ tabIndex: 0, role: "region", "aria-label": "Events table" }}
+      <ResultsAnnouncement
+        requestKey={eventsListingKey(query)}
+        pending={pending}
+        count={data.events.length}
+        message={
+          data.events.length === 0
+            ? "No events match these filters."
+            : `The table shows ${formatCount(data.events.length)} ${data.events.length === 1 ? "event" : "events"}.`
+        }
+      />
+      <PendingResults pending={pending} requestKey={eventsListingKey(query)}>
+        {data.events.length === 0 ? (
+          <EmptyState
+            title={filtered ? "No events match these filters" : "No events in this time range"}
+            action={
+              filtered ? (
+                <Button
+                  size="xs"
+                  variant="default"
+                  onClick={(event) => {
+                    keepFocusOnRemoval({
+                      removed: event.currentTarget,
+                      active: document.activeElement,
+                      target: searchField.current,
+                    });
+                    clearEventFilters({ query, setQuery, setSearchDraft });
+                  }}
+                >
+                  Clear filters
+                </Button>
+              ) : undefined
+            }
           >
+            Workhorse recorded no matching events {rangeDescription}. Retention limits available
+            history: {retentionNote}.
+          </EmptyState>
+        ) : (
+          <TablePanel label="Events table">
             <Table
               highlightOnHover
-              verticalSpacing={6}
-              horizontalSpacing="md"
-              className="dashboard-table dashboard-table--events"
+              className="data-table dashboard-table dashboard-table--events"
               miw={1100}
             >
               <Table.Thead>
@@ -424,37 +551,44 @@ export function EventsPage({
                   <Table.Th w={160} style={{ whiteSpace: "nowrap" }}>
                     Worker
                   </Table.Th>
-                  <Table.Th className="event-table__col--attempt" ta="right">
+                  <Table.Th className="event-table__col--attempt data-table__metric">
                     Attempt
                   </Table.Th>
-                  <Table.Th className="event-table__col--duration" ta="right">
+                  <Table.Th className="event-table__col--duration data-table__metric">
                     Duration
                   </Table.Th>
                   <Table.Th w={280}>Detail</Table.Th>
                 </Table.Tr>
               </Table.Thead>
               <Table.Tbody>
-                {data.events.map((event) => (
-                  <EventRow key={event.id} event={event} inspectEvent={inspectEvent} />
-                ))}
+                <PendingRows>
+                  {data.events.map((event) => (
+                    <EventRow
+                      key={event.id}
+                      event={event}
+                      inspectEvent={inspectEvent}
+                      selected={query.eventId === event.id}
+                    />
+                  ))}
+                </PendingRows>
               </Table.Tbody>
             </Table>
-          </ScrollArea>
-        </Paper>
-      )}
-      <Group justify="space-between" wrap="wrap" gap="xs">
-        <Group gap="xs" wrap="wrap">
+          </TablePanel>
+        )}
+      </PendingResults>
+      <div className="page-toolbar">
+        <div className="page-toolbar__group">
           {pagination("Events pagination below table")}
           {pageSizeSelector("Events per page below table")}
-        </Group>
+        </div>
         {/* Pages are offsets into a list whose head keeps moving, so say so rather than let an
             operator wonder why a row they were reading moved down a page. */}
         {totalPages > 1 && data.page > 1 ? (
-          <Text c="dimmed" size="xs">
+          <p className="page-footnote">
             When the dashboard refreshes, new events can move rows between pages.
-          </Text>
+          </p>
         ) : null}
-      </Group>
+      </div>
       {beyondLastPage ? (
         <Group gap="xs" wrap="wrap">
           <Text size="xs">
@@ -479,34 +613,51 @@ export function EventsPage({
           )}
         </Group>
       ) : null}
-      <Text c="dimmed" size="xs">
+      <p className="page-footnote">
         A task completion can record both a lifecycle transition and an attempt outcome. Use Source
         to view either separately. This feed stays complete when notifications are missed because
         Workhorse reads durable history. Retention limits its depth: {retentionNote}. Open a task to
         see its complete timeline.
-      </Text>
-    </Stack>
+      </p>
+    </Page>
   );
 }
+/**
+ * The id of the button that opens an event. Event ids are unique across the merged feed, so the
+ * id is unique on the page, and the pending results keep focus on it when the rows change.
+ */
+export function eventOpenButtonId(eventId: string): string {
+  return `event-open-${eventId}`;
+}
+
 export function EventRow({
   event,
   inspectEvent,
+  selected = false,
 }: {
   event: DashboardEventRow;
   inspectEvent: (event: DashboardEventRow) => void;
+  /** True while the event drawer shows this event. */
+  selected?: boolean;
 }) {
   const detail = event.errorMessage ?? eventDetailSummary(event.details);
   const label = `${event.kind === "attempt" ? "Attempt" : "Task"} ${event.type.replaceAll("_", " ")}`;
   return (
     // The row stays a table row, so assistive technology keeps each cell's column. A pointer
     // click anywhere opens the event; the keyboard and screen readers use the named button.
-    <Table.Tr onClick={() => inspectEvent(event)} style={{ cursor: "pointer" }}>
+    <Table.Tr
+      onClick={() => inspectEvent(event)}
+      style={{ cursor: "pointer" }}
+      data-selected={selected || undefined}
+    >
       <Table.Td className="event-table__col--id">
         <TaskTableId id={event.taskId} />
       </Table.Td>
       <Table.Td className="event-table__col--status">
         <UnstyledButton
+          id={eventOpenButtonId(event.id)}
           className="task-table__open"
+          data-event-id={event.id}
           // The name starts from the visible label, so speech input can say what it sees.
           aria-label={`${label} event, inspect for ${event.taskType ?? event.taskId}`}
           onClick={(clickEvent) => {
@@ -541,16 +692,16 @@ export function EventRow({
           {event.workerId ?? "—"}
         </Text>
       </Table.Td>
-      <Table.Td className="event-table__col--attempt" ta="right">
+      <Table.Td className="event-table__col--attempt data-table__metric">
         <Text size="sm">{event.attempt ?? "—"}</Text>
       </Table.Td>
-      <Table.Td className="event-table__col--duration" ta="right">
+      <Table.Td className="event-table__col--duration data-table__metric">
         <Text size="sm">{formatDuration(event.durationMs)}</Text>
       </Table.Td>
       <Table.Td style={{ maxWidth: 280 }}>
         {detail ? (
           <Tooltip label={detail} withArrow multiline maw={480}>
-            <Text size="xs" c={event.errorMessage ? "red" : "dimmed"} truncate>
+            <Text size="xs" c={event.errorMessage ? dangerTextColor : "dimmed"} truncate>
               {detail}
             </Text>
           </Tooltip>

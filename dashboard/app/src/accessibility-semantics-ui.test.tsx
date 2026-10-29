@@ -1,9 +1,10 @@
-import { DEFAULT_THEME, MantineProvider } from "@mantine/core";
+import { DEFAULT_THEME, MantineProvider, mergeMantineTheme } from "@mantine/core";
 import { readdirSync, readFileSync } from "node:fs";
 import { createElement, type ComponentType } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { DashboardTaskRow } from "@stablemates/workhorse-dashboard-server/wire";
+import { dashboardMantineTheme, dashboardPageColor } from "./mantine-theme.js";
 
 const sourceRoot = new URL("./", import.meta.url);
 
@@ -47,33 +48,6 @@ const contrast = (foreground: readonly number[], background: readonly number[]) 
   ];
   return (high + 0.05) / (low + 0.05);
 };
-const toHsl = ([red, green, blue]: readonly number[]) => {
-  const [r, g, b] = [red!, green!, blue!].map((channel) => channel / 255) as [
-    number,
-    number,
-    number,
-  ];
-  const max = Math.max(r, g, b);
-  const min = Math.min(r, g, b);
-  const lightness = (max + min) / 2;
-  if (max === min) return [0, 0, lightness] as const;
-  const delta = max - min;
-  const saturation = lightness > 0.5 ? delta / (2 - max - min) : delta / (max + min);
-  const hue =
-    max === r
-      ? (g - b) / delta + (g < b ? 6 : 0)
-      : max === g
-        ? (b - r) / delta + 2
-        : (r - g) / delta + 4;
-  return [hue * 60, saturation, lightness] as const;
-};
-const fromHsl = ([hue, saturation, lightness]: readonly [number, number, number]) => {
-  const k = (n: number) => (n + hue / 30) % 12;
-  const a = saturation * Math.min(lightness, 1 - lightness);
-  const f = (n: number) => lightness - a * Math.max(-1, Math.min(k(n) - 3, Math.min(9 - k(n), 1)));
-  return [f(0), f(8), f(4)].map((channel) => Math.round(channel * 255));
-};
-
 const media = (matches: boolean) => {
   const listeners = new Set<() => void>();
   const query = {
@@ -135,16 +109,24 @@ describe("status labels are static text", () => {
   });
 
   it("keeps live regions only where one element reports one change", () => {
-    // Each entry is a deliberate notification: the connection state, a failed refresh, and the
-    // result of a copy. A label that repeats for each row must never be a live region.
+    // Each entry is a deliberate notification: a failed refresh in the shell, the connection
+    // state in the header, the result of a copy, a filter editor that loads its values, the
+    // schedule drawer that loads recent tasks, the chart tooltip that reads the bucket the arrow
+    // keys select, and the one region of a table page that says its new row count after a control
+    // changed the request. A label that repeats for each row must never be a live region.
     const liveRegions = sourceFiles(sourceRoot).flatMap((file) => {
       const source = readFileSync(file, "utf8");
       const count = source.match(/role="status"|aria-live=/g)?.length ?? 0;
       return count === 0 ? [] : [[file.pathname.slice(sourceRoot.pathname.length), count]];
     });
     expect(Object.fromEntries(liveRegions)).toEqual({
+      "charts/chart-tooltip.tsx": 2,
       "components/task-detail-overview.tsx": 2,
-      "shell/AppShell.tsx": 2,
+      "components/task-filter-bar.tsx": 1,
+      "pages/schedules.tsx": 1,
+      "pending-results.tsx": 2,
+      "shell/AppShell.tsx": 1,
+      "shell/HeaderControls.tsx": 1,
     });
   });
 });
@@ -205,11 +187,12 @@ describe("task and event drawers", () => {
 });
 
 describe("status text contrast", () => {
-  const { colors } = DEFAULT_THEME;
+  // The palettes that the dashboard gives Mantine, not Mantine's defaults.
+  const { colors } = mergeMantineTheme(DEFAULT_THEME, dashboardMantineTheme);
   // The body, a striped row, and a hovered row of a Mantine table, in each color scheme.
   const backgrounds = {
-    light: ["#ffffff", colors.gray[0], colors.gray[1]],
-    dark: [colors.dark[7], colors.dark[6], colors.dark[5]],
+    light: [dashboardPageColor.light, colors.gray[0], colors.gray[1]],
+    dark: [dashboardPageColor.dark, colors.dark[6], colors.dark[5]],
   };
 
   it("gives warning and danger notes 4.5:1 in the light and dark themes", async () => {
@@ -224,34 +207,23 @@ describe("status text contrast", () => {
     expect(low).toEqual([]);
   });
 
-  it("gives each status badge 4.5:1 in the light and dark themes", async () => {
-    const { statusColor, taskStatusColors } = await import("./status-colors.js");
+  it("gives each status label 4.5:1 in the light and dark themes", async () => {
+    const { theme } = await import("./components/graphical/theme.js");
+    const { resolveColor } = await import("./components/graphical/lib/theme-model.js");
     const styles = readFileSync(new URL("styles.css", sourceRoot), "utf8");
-    // The stylesheet rules that the computation below models.
-    expect(styles).toContain("color: hsl(from var(--badge-color) h s 25%);");
-    expect(styles).toContain("background: hsl(from var(--badge-color) h s 27%);");
-    expect(styles).toContain("color: color-mix(in srgb, var(--badge-color) 20%, white);");
+    // The stylesheet rule that the computation below models: the state hue is only on the dot,
+    // and the label is `neutral-10` text on a `neutral-3` chip.
+    expect(styles).toContain(`.mantine-Badge-root[data-variant="dot"] {
+  background: var(--workhorse-neutral-3);
+  border-color: transparent;
+  color: var(--workhorse-neutral-10);`);
 
-    const badgeColors = new Set<string>([
-      ...Object.values(taskStatusColors),
-      ...["failed", "succeeded", "blocked", "canceled", "unknown"].map(statusColor),
-    ]);
-    const low: string[] = [];
-    for (const name of badgeColors) {
-      const palette = colors[name]!;
-      // Mantine's light badge has shade 9 text on shade 1; the stylesheet sets 25% lightness.
-      const [hue, saturation] = toHsl(hex(palette[9]));
-      const light = contrast(fromHsl([hue, saturation, 0.25]), hex(palette[1]));
-      // Mantine's dark badge text is shade 0; the stylesheet derives both colors from it.
-      const base = hex(palette[0]);
-      const [darkHue, darkSaturation] = toHsl(base);
-      const darkBackground = fromHsl([darkHue, darkSaturation, 0.27]);
-      const darkText = base.map((channel) => Math.round(channel * 0.2 + 255 * 0.8));
-      const dark = contrast(darkText, darkBackground);
-      if (light < 4.5) low.push(`${name} light ${light.toFixed(2)}`);
-      if (dark < 4.5) low.push(`${name} dark ${dark.toFixed(2)}`);
-    }
-    expect(badgeColors.size).toBeGreaterThan(5);
+    const low = (["light", "dark"] as const).flatMap((mode) => {
+      const text = hex(resolveColor(theme.theme, mode, "neutral-10"));
+      const chip = hex(resolveColor(theme.theme, mode, "neutral-3"));
+      const ratio = contrast(text, chip);
+      return ratio < 4.5 ? [`${mode} ${ratio.toFixed(2)}`] : [];
+    });
     expect(low).toEqual([]);
   });
 
@@ -291,17 +263,34 @@ describe("theme preference", () => {
     expect(readStoredThemePreference()).toBe("system");
   });
 
-  it("offers System next to Light and Dark, and selects it before a choice", async () => {
+  it("offers System next to Light and Dark, and uses it before a choice", async () => {
     const setItem = vi.fn<(key: string, value: string) => void>();
     vi.stubGlobal("localStorage", { getItem: () => null, setItem });
+    // The browser prefers dark, and the button still names the preference, not the result.
     vi.stubGlobal("window", { matchMedia: () => media(true).query });
-    const { ThemeSchemeSwitch, WorkhorseThemeProvider } = await import("./theme.js");
+    const { WorkhorseThemeProvider } = await import("./theme.js");
+    const { AppearanceToggle, appearanceOptions } = await import("./shell/HeaderControls.js");
     const html = renderToStaticMarkup(
-      createElement(WorkhorseThemeProvider, null, createElement(ThemeSchemeSwitch)),
+      createElement(WorkhorseThemeProvider, null, createElement(AppearanceToggle)),
     );
-    for (const label of ["Light", "Dark", "System"]) expect(html).toContain(`>${label}<`);
-    expect(html).toMatch(/value="system"[^>]*checked|checked[^>]*value="system"/);
+    expect(appearanceOptions.map((option) => option.label)).toEqual(["Light", "Dark", "System"]);
+    expect(html).toContain('aria-label="Appearance: System. Change to Light"');
+    expect(html).not.toContain("aria-haspopup");
     expect(setItem).not.toHaveBeenCalled();
+  });
+
+  it("names a stored choice on the appearance button", async () => {
+    vi.stubGlobal("localStorage", {
+      getItem: (key: string) => (key === "workhorse-theme-scheme" ? "dark" : null),
+      setItem: () => undefined,
+    });
+    vi.stubGlobal("window", { matchMedia: () => media(false).query });
+    const { WorkhorseThemeProvider } = await import("./theme.js");
+    const { AppearanceToggle } = await import("./shell/HeaderControls.js");
+    const html = renderToStaticMarkup(
+      createElement(WorkhorseThemeProvider, null, createElement(AppearanceToggle)),
+    );
+    expect(html).toContain('aria-label="Appearance: Dark. Change to System"');
   });
 
   it("follows each browser color scheme change until it stops", async () => {

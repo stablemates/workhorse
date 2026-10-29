@@ -1,6 +1,7 @@
 # Working in this repository
 
-Instructions for coding agents and contributors.
+Instructions for coding agents and contributors. For UI work, follow `GUI.md` and use the
+`graphical-ui`, `graphical-convert`, or `graphical-audit` skill in `.agents/skills/`.
 
 Read `CONTEXT.md` and relevant decision records when the work changes domain behavior.
 Finish only after every acceptance item is verified and relevant repository checks pass.

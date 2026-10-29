@@ -6,6 +6,7 @@ import type {
   DashboardTaskRow,
   DashboardSignalWaitRow,
 } from "@stablemates/workhorse-dashboard-server/wire";
+import { taskStatusColors } from "./status-colors.js";
 
 Object.defineProperty(globalThis, "localStorage", {
   value: { getItem: () => null, setItem: () => undefined },
@@ -23,9 +24,17 @@ const signalWait: DashboardSignalWaitRow = {
 
 describe("dashboard signal waits", () => {
   it.each([
-    { kind: "signal", color: "violet", label: "Waiting for signal: account-approval" },
-    { kind: "human", color: "pink", label: "Waiting for decision: account-review" },
-    { kind: "durable", color: "indigo", label: "Durable wait: retry-delay" },
+    {
+      kind: "signal",
+      color: taskStatusColors.signalWait,
+      label: "Waiting for signal: account-approval",
+    },
+    {
+      kind: "human",
+      color: taskStatusColors.humanWait,
+      label: "Waiting for decision: account-review",
+    },
+    { kind: "durable", color: taskStatusColors.durableWait, label: "Durable wait: retry-delay" },
   ])(
     "uses one $kind waiting indicator instead of also showing scheduled",
     async ({ kind, color, label }) => {
@@ -50,7 +59,7 @@ describe("dashboard signal waits", () => {
       expect(html.match(/mantine-Badge-root/g)).toHaveLength(1);
       expect(html).toContain(`>${label}<`);
       expect(html).not.toContain('role="status"');
-      expect(html).toContain(`--mantine-color-${color}-light`);
+      expect(html).toContain(`--mantine-color-${color}-filled`);
       expect(html).toContain(
         kind === "durable"
           ? ">Durable wait<"

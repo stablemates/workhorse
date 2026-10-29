@@ -1,5 +1,6 @@
 import { ActionIcon, Code, Group, Tooltip } from "@mantine/core";
-import { Copy } from "@phosphor-icons/react";
+import { Copy01Icon } from "@hugeicons/core-free-icons";
+import { HugeiconsIcon } from "@hugeicons/react";
 import { notifyDashboard } from "../notifications.js";
 import { copyToClipboard } from "../preferences.js";
 
@@ -30,7 +31,7 @@ export function TaskTableId({ id }: { id: string }) {
             );
           }}
         >
-          <Copy size={14} />
+          <HugeiconsIcon icon={Copy01Icon} size={14} />
         </ActionIcon>
       </Tooltip>
     </Group>

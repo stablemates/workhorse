@@ -1,0 +1,472 @@
+/*
+ * The dashboard sidebar: 232px expanded, a 56px rail when collapsed, and a modal drawer on narrow
+ * windows. Every size is on a 2px grid.
+ *
+ * Both forms share one icon column: each icon is centered 28px from the left edge, the center of
+ * the rail. The list has a 10px inset, and each item starts with a 36px by 32px icon box, so the
+ * label starts 46px from the edge. The brand mark, the workspace tile, and the icons keep the same
+ * x and y in both forms.
+ *
+ * The sidebar always lays out at 232px. The rail is a 56px window onto it: the panel slides left
+ * with a transform, and its contents slide right by the same distance, so they stay in place while
+ * the edge moves. In the rail the selected and hover surface of an item covers only the icon box.
+ *
+ * The sidebar is a flat list of top-level pages, each with a 16px icon. The status views of Tasks
+ * are on the Tasks page itself.
+ */
+/* The colors also apply to the portaled rail menus, which sit outside the sidebar. */
+.dashboard-sidebar,
+.dashboard-sidebar-menu {
+  --sidebar-hover: color-mix(in srgb, var(--workhorse-neutral-4) 60%, transparent);
+  /* The selected item is a raised white surface on the `neutral-2` sidebar. */
+  --sidebar-selected: var(--workhorse-neutral-1);
+  --sidebar-selected-edge: inset 0 0 0 1px var(--workhorse-neutral-4), 0 1px 2px rgb(0 0 0 / 0.06);
+  --sidebar-label: var(--workhorse-neutral-9);
+  --sidebar-strong: var(--workhorse-neutral-10);
+  /* About 7:1 on the sidebar fill in both schemes, so an icon alone reads in the rail. */
+  --sidebar-icon: var(--workhorse-neutral-8);
+  /* About 4.6:1 on the sidebar fill in both schemes: the quietest text that stays readable. */
+  --sidebar-faint: color-mix(in srgb, var(--workhorse-neutral-7) 75%, var(--workhorse-neutral-8));
+}
+
+[data-mantine-color-scheme="dark"] :is(.dashboard-sidebar, .dashboard-sidebar-menu) {
+  --sidebar-hover: var(--workhorse-neutral-3);
+  --sidebar-selected: var(--workhorse-neutral-4);
+  --sidebar-selected-edge: inset 0 0 0 1px
+    color-mix(in srgb, var(--workhorse-neutral-5) 60%, transparent);
+  --sidebar-label: var(--workhorse-neutral-8);
+  --sidebar-icon: var(--workhorse-neutral-7);
+  --sidebar-faint: color-mix(in srgb, var(--workhorse-neutral-6) 75%, var(--workhorse-neutral-7));
+}
+
+.dashboard-sidebar {
+  --sidebar-row-height: 32px;
+  --sidebar-inset: 10px;
+  --sidebar-glyph: 36px;
+
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+  color: var(--sidebar-label);
+  font-size: 13px;
+  line-height: 20px;
+}
+
+/*
+ * The theme draws no rail border. A `neutral-2` fill separates the navigation from the page.
+ * Mantine places the navbar; the rules below replace its width with the panel and rail transforms.
+ */
+.mantine-AppShell-navbar.dashboard-navbar {
+  --sidebar-panel-width: 232px;
+
+  background: var(--workhorse-neutral-2);
+}
+
+/*
+ * The panel keeps its 232px width, and a transform shows 56px of it as the rail. Its contents take
+ * the opposite transform, so the icons stay where they are. `sidebar-motion.ts` slides both
+ * transforms on the clock of the page slide, so these rules state only where they rest.
+ */
+@media (min-width: 48em) {
+  .mantine-AppShell-navbar.dashboard-navbar {
+    width: var(--sidebar-panel-width);
+    overflow: hidden;
+    transform: translateX(calc(var(--app-shell-navbar-width) - var(--sidebar-panel-width)));
+    transition: background-color 180ms ease;
+  }
+
+  .dashboard-navbar .dashboard-sidebar[data-variant="panel"] {
+    transform: translateX(calc(var(--sidebar-panel-width) - var(--app-shell-navbar-width)));
+  }
+}
+
+/* Touch items in the drawer are taller, and the text is one step larger. */
+.dashboard-sidebar[data-variant="drawer"] {
+  --sidebar-row-height: 36px;
+
+  font-size: 14px;
+}
+
+/* Header: the brand on a 56px row level with the top bar, then the workspace control. */
+.dashboard-sidebar__header {
+  flex-shrink: 0;
+  padding-inline: var(--sidebar-inset);
+}
+
+.dashboard-sidebar__brand-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  height: 56px;
+}
+
+/* The mark is 24px in a 36px box, so its center is on the icon column. */
+.dashboard-sidebar__brand {
+  position: relative;
+  isolation: isolate;
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  height: 36px;
+  padding-inline: 6px 10px;
+  color: inherit;
+  text-decoration: none;
+}
+
+.dashboard-sidebar__brand:focus-visible {
+  outline: none;
+}
+
+.dashboard-sidebar .workhorse-brand {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  color: var(--mantine-color-text);
+}
+
+/* A 24px mark with a 12px wordmark keeps the wordmark's cap height near the navigation labels. */
+.dashboard-sidebar .workhorse-brand__mark {
+  flex-shrink: 0;
+  width: 24px;
+  height: 24px;
+}
+
+.dashboard-sidebar .workhorse-brand__wordmark {
+  width: auto;
+  height: 12px;
+}
+
+.dashboard-sidebar__workspace {
+  padding-bottom: 12px;
+}
+
+/* The scrolling list between the header and the footer. */
+.dashboard-sidebar .dashboard-sidebar__scroll {
+  flex: 1;
+  width: auto;
+  height: auto;
+  min-height: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+/* The thumb shows only while the list scrolls or the pointer is over it. */
+.dashboard-sidebar .dashboard-sidebar__scroll .ui-scrollbar {
+  width: 6px;
+  margin: 2px;
+  opacity: 0;
+  transition: opacity 150ms ease-out;
+}
+
+.dashboard-sidebar .dashboard-sidebar__scroll .ui-scrollbar:is([data-hovering], [data-scrolling]) {
+  opacity: 1;
+}
+
+/* The rail clips the scrollbar, so it does not show at the edge of the panel. */
+.dashboard-sidebar[data-rail] .dashboard-sidebar__scroll .ui-scrollbar {
+  visibility: hidden;
+}
+
+.dashboard-sidebar__list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.dashboard-sidebar__viewport > .dashboard-sidebar__list {
+  padding: 4px var(--sidebar-inset) 8px;
+}
+
+.dashboard-sidebar__row {
+  position: relative;
+  isolation: isolate;
+  display: flex;
+  align-items: center;
+  width: 100%;
+  min-width: 0;
+  height: var(--sidebar-row-height);
+  padding: 0 10px 0 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: start;
+  text-decoration: none;
+  cursor: pointer;
+  transition: color 120ms ease-out;
+}
+
+/*
+ * The surface of an item: the hover fill, the selected fill, and the focus ring. It has two
+ * layers. `::after` covers the full row. `::before` covers only the icon box, so in the rail the
+ * surface is centered. Only their opacity changes, which the compositor runs, so the surface keeps
+ * the clock of the sidebar edge while the page renders.
+ *
+ * On collapse the box layer shows at once under the row layer, and the row layer fades out as the
+ * edge closes over it. On expand the row layer fades in with the labels, and the box layer hides
+ * when the row layer covers it.
+ */
+:is(.dashboard-sidebar__row, .dashboard-sidebar__brand)::before,
+:is(.dashboard-sidebar__row, .dashboard-sidebar__brand)::after {
+  position: absolute;
+  z-index: -1;
+  inset-block: 0;
+  inset-inline-start: 0;
+  border-radius: var(--mantine-radius-sm);
+  background: transparent;
+  content: "";
+}
+
+:is(.dashboard-sidebar__row, .dashboard-sidebar__brand)::before {
+  width: var(--sidebar-glyph);
+  opacity: 0;
+  transition:
+    opacity 0ms linear 270ms,
+    background-color 120ms ease-out,
+    box-shadow 120ms ease-out;
+}
+
+:is(.dashboard-sidebar__row, .dashboard-sidebar__brand)::after {
+  width: 100%;
+  transition:
+    opacity 180ms ease-out 90ms,
+    background-color 120ms ease-out,
+    box-shadow 120ms ease-out;
+}
+
+.dashboard-sidebar[data-rail] :is(.dashboard-sidebar__row, .dashboard-sidebar__brand)::before {
+  opacity: 1;
+  transition:
+    opacity 0ms,
+    background-color 120ms ease-out,
+    box-shadow 120ms ease-out;
+}
+
+.dashboard-sidebar[data-rail] :is(.dashboard-sidebar__row, .dashboard-sidebar__brand)::after {
+  opacity: 0;
+  transition:
+    opacity 120ms ease-out,
+    background-color 120ms ease-out,
+    box-shadow 120ms ease-out;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .dashboard-sidebar__row:hover {
+    color: var(--sidebar-strong);
+  }
+
+  .dashboard-sidebar__row:hover::before,
+  .dashboard-sidebar__row:hover::after {
+    background: var(--sidebar-hover);
+  }
+}
+
+.dashboard-sidebar__row[data-popup-open] {
+  color: var(--sidebar-strong);
+}
+
+.dashboard-sidebar__row[data-popup-open]::before,
+.dashboard-sidebar__row[data-popup-open]::after {
+  background: var(--sidebar-hover);
+}
+
+.dashboard-sidebar__row[aria-current="page"] {
+  color: var(--sidebar-strong);
+}
+
+.dashboard-sidebar__row[aria-current="page"]::before,
+.dashboard-sidebar__row[aria-current="page"]::after {
+  background: var(--sidebar-selected);
+  box-shadow: var(--sidebar-selected-edge);
+}
+
+.dashboard-sidebar__row[aria-current="page"] .dashboard-sidebar__label {
+  font-weight: 500;
+}
+
+.dashboard-sidebar__row:focus-visible,
+.dashboard-sidebar__icon-button:focus-visible {
+  outline: none;
+}
+
+:is(.dashboard-sidebar__row, .dashboard-sidebar__brand):focus-visible::before,
+:is(.dashboard-sidebar__row, .dashboard-sidebar__brand):focus-visible::after {
+  box-shadow: inset 0 0 0 2px var(--workhorse-focus-ring);
+}
+
+.dashboard-sidebar__icon-button:focus-visible {
+  box-shadow: inset 0 0 0 2px var(--workhorse-focus-ring);
+}
+
+/* The icon box: the visible item in the rail, and the anchor of rail tooltips and menus. */
+.dashboard-sidebar__glyph {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: var(--sidebar-glyph);
+  height: 100%;
+}
+
+.dashboard-sidebar__icon {
+  flex-shrink: 0;
+  color: var(--sidebar-icon);
+  transition: color 120ms ease-out;
+}
+
+.dashboard-sidebar__row:is([data-popup-open], [aria-current="page"]) .dashboard-sidebar__icon {
+  color: var(--sidebar-strong);
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .dashboard-sidebar__row:hover .dashboard-sidebar__icon {
+    color: var(--sidebar-strong);
+  }
+}
+
+/* A label clips instead of ending in an ellipsis, so it does not step while the width changes. */
+.dashboard-sidebar__label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: clip;
+  white-space: nowrap;
+}
+
+/* The short revision after an About entry of the Help menu. */
+.dashboard-sidebar__count {
+  flex-shrink: 0;
+  margin-inline-start: auto;
+  color: var(--sidebar-faint);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  line-height: 16px;
+}
+
+/* Footer: Settings and Help. */
+.dashboard-sidebar__footer {
+  flex-shrink: 0;
+  padding: 8px var(--sidebar-inset) 12px;
+}
+
+.dashboard-sidebar__icon-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--mantine-radius-sm);
+  background: transparent;
+  color: var(--sidebar-icon);
+  cursor: pointer;
+  transition:
+    background-color 120ms ease-out,
+    color 120ms ease-out;
+}
+
+.dashboard-sidebar__icon-button:hover {
+  background: var(--sidebar-hover);
+  color: var(--sidebar-strong);
+}
+
+.dashboard-sidebar[data-variant="drawer"] .dashboard-sidebar__icon-button {
+  width: 36px;
+  height: 36px;
+}
+
+/*
+ * The rail: the labels, the wordmark, and the workspace name fade, and the rail clips them.
+ * Nothing else moves. On collapse they fade out at once, before the edge closes over them. On
+ * expand they fade in after a short delay, when the edge has opened enough to show them.
+ */
+.dashboard-sidebar .dashboard-sidebar__label,
+.dashboard-sidebar .workhorse-brand__wordmark,
+.dashboard-sidebar .workspace-switcher__text,
+.dashboard-sidebar .workspace-switcher__chevron {
+  transition: opacity 180ms ease-out 90ms;
+}
+
+.dashboard-sidebar[data-rail]
+  :is(
+    .dashboard-sidebar__label,
+    .workhorse-brand__wordmark,
+    .workspace-switcher__text,
+    .workspace-switcher__chevron
+  ) {
+  opacity: 0;
+  transition: opacity 90ms ease-out;
+}
+
+/* Menus and tooltips from the sidebar open above the app shell's header and sidebar. */
+.dashboard-sidebar-layer {
+  z-index: 300;
+}
+
+.dashboard-sidebar-menu {
+  min-width: 220px;
+}
+
+.dashboard-sidebar-menu [aria-current="page"] {
+  background: var(--workhorse-neutral-4);
+  font-weight: 500;
+}
+
+[data-mantine-color-scheme="dark"] .dashboard-sidebar-menu [aria-current="page"] {
+  background: var(--workhorse-neutral-3);
+}
+
+/*
+ * Narrow windows: the navigation slides in from the left edge as a modal drawer. It sits on the
+ * modal layer, under the popover layer, so the workspace and Help menus open above it.
+ */
+.ui-backdrop.dashboard-nav-drawer__backdrop {
+  z-index: var(--mantine-z-index-modal);
+}
+
+.ui-drawer-viewport.dashboard-nav-drawer__viewport {
+  z-index: calc(var(--mantine-z-index-modal) + 1);
+  align-items: stretch;
+  justify-content: flex-start;
+}
+
+.ui-drawer.dashboard-nav-drawer {
+  width: min(288px, calc(100vw - 48px));
+  max-height: none;
+  height: 100dvh;
+  padding: 0;
+  border-radius: 0;
+  overflow: hidden;
+  transform: translateX(var(--drawer-swipe-movement-x, 0px));
+}
+
+.ui-drawer.dashboard-nav-drawer[data-starting-style],
+.ui-drawer.dashboard-nav-drawer[data-ending-style] {
+  transform: translateX(-100%);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .dashboard-sidebar__row,
+  :is(.dashboard-sidebar__row, .dashboard-sidebar__brand)::before,
+  :is(.dashboard-sidebar__row, .dashboard-sidebar__brand)::after,
+  .dashboard-sidebar__label,
+  .dashboard-sidebar .workhorse-brand__wordmark,
+  .dashboard-sidebar .workspace-switcher__text,
+  .dashboard-sidebar .workspace-switcher__chevron,
+  .dashboard-sidebar__icon,
+  .dashboard-sidebar__icon-button,
+  .ui-drawer.dashboard-nav-drawer,
+  .dashboard-nav-drawer__backdrop {
+    transition: none;
+  }
+}
