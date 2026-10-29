@@ -637,6 +637,13 @@ export const SCHEMA_MIGRATIONS: readonly SchemaMigrationStep[] = [
     description: "settle a fast-tier cancellation at its deadline after its timeout",
     kind: "additive",
   },
+  {
+    fromVersion: 89,
+    toVersion: 90,
+    file: "0091-show-the-task-group-in-the-task-detail.sql",
+    description: "show the task group in the task detail",
+    kind: "additive",
+  },
 ];
 
 /**

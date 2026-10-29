@@ -6309,6 +6309,16 @@
         "canCompleteHumanWait": {
           "type": "boolean"
         },
+        "group": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DashboardTaskGroupMembership"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "identity": {
           "type": "object",
           "properties": {
@@ -7647,6 +7657,29 @@
         "outcome",
         "addedAt",
         "countedAt"
+      ]
+    },
+    "DashboardTaskGroupMembership": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "position": {
+          "type": "number"
+        },
+        "state": {
+          "enum": [
+            "finished",
+            "open",
+            "sealed"
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "position",
+        "state"
       ]
     },
     "DashboardTaskGroupsPage": {

@@ -1709,6 +1709,27 @@ benchmarked configuration is not a statement that other supported versions are s
 Requirements for making a performance claim at all are in [`benchmarking.md`](benchmarking.md);
 until a scenario has a recorded live artifact, no performance claim is made for any version.
 
+## Upgrade from 0.11.x to the next release
+
+The next release shows the task group of a member task in the dashboard task detail. The upgrade
+is a rolling deployment, and a mixed fleet is supported while it runs.
+
+1. Run `workhorse schema migrate`. It applies migration 0091 and leaves the schema at version 90.
+2. Roll out the new processes in any order.
+
+A 0.11.0 database is at schema version 89. The migration only adds a key to a dashboard document:
+
+| Migration                                         | Schema version | Changes                                                            |
+| ------------------------------------------------- | -------------- | ------------------------------------------------------------------ |
+| `0091-show-the-task-group-in-the-task-detail.sql` | 90             | `dashboard_task_detail_v1` returns the task group of a member task |
+
+Schema version 90 does not raise the floor, so it stays 76. Migration 0091 replaces the body of
+`dashboard_task_detail_v1`, and its document gains the key `group`. For a member task, `group` holds
+the group ID, the position of the member, and the state of the group. For another task, it is null.
+A dashboard host of every SDK version passes the document through, so it serves the key when the
+migration commits. A dashboard of the next release on a schema below 90 gets no `group` key and
+shows no group in the task detail.
+
 ## Upgrade from 0.10.x to 0.11.0
 
 A 0.10.0 database is at schema version 86. Migrations 0088 through 0090 do not raise the SDK schema

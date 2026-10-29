@@ -18,6 +18,13 @@ they declared 1.62.0. Versions below 1.67.0 have GHSA-ccrj-gw8r-854m: the W3C tr
 propagator uses quadratic CPU time to parse a crafted `tracestate` header. Use 1.67.0 or later in
 an application that enables the `opentelemetry` feature.
 
+### The dashboard task detail shows the task group of a member task
+
+Migration 0091 (`0091-show-the-task-group-in-the-task-detail.sql`) moves the schema to version 90.
+The `dashboard/v1` task detail document gains `group`, with the group ID, the member position, and
+the group state of a member task, an additive change. The migration does not raise the SDK
+compatibility floor.
+
 ## 0.11.0 — 2026-10-28
 
 The npm packages, Python distribution, Go module, Rust crate, Ruby gem, JVM artifacts, and .NET

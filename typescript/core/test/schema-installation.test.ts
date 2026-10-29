@@ -705,6 +705,10 @@ describe("schema installation", () => {
         version: 89,
         description: "settle a fast-tier cancellation at its deadline after its timeout",
       },
+      {
+        version: 90,
+        description: "show the task group in the task detail",
+      },
     ]);
 
     const protocols = await pool.query<{ version: number }>(

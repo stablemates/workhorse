@@ -21356,6 +21356,12 @@ AS $$
       'name', wait.token_name, 'context', wait.context,
       'deadlineAt', workhorse.dashboard_iso_v1(wait.deadline_at))
       FROM workhorse.dashboard_human_wait_v1 wait WHERE wait.task_id = task.id),
+    -- A task is a member of one group at most, so the member row is the one group of the task.
+    'group', (SELECT jsonb_build_object(
+      'id', task_group.id::text, 'position', member.position, 'state', task_group.state)
+      FROM workhorse.task_group_member member
+      JOIN workhorse.task_group task_group ON task_group.id = member.group_id
+     WHERE member.task_id = task.id),
     'identity', identity.value,
     'dependencyLineage', dependency_lineage.value,
     'childLineage', child_lineage.value,
@@ -22919,10 +22925,11 @@ INSERT INTO workhorse.schema_migration(version, description) VALUES
   (86, 'show the last schedule skip on the dashboard'),
   (87, 'count only prunable rows as row retention lag'),
   (88, 'settle cancel-requested timeouts and bound the dashboard schedule reads'),
-  (89, 'settle a fast-tier cancellation at its deadline after its timeout')
+  (89, 'settle a fast-tier cancellation at its deadline after its timeout'),
+  (90, 'show the task group in the task detail')
 ON CONFLICT DO NOTHING;
 
-INSERT INTO workhorse.schema_version(version) VALUES (89) ON CONFLICT DO NOTHING;
+INSERT INTO workhorse.schema_version(version) VALUES (90) ON CONFLICT DO NOTHING;
 
 INSERT INTO workhorse.protocol_version(version) VALUES (5) ON CONFLICT DO NOTHING;
 SELECT workhorse.create_history_day_v1(

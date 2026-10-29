@@ -1149,6 +1149,7 @@ class DashboardTaskDetail(TypedDict, total=False):
     tags: Required[list[str]]
     humanWait: Required[DashboardHumanWaitSummary | None]
     canCompleteHumanWait: Required[bool]
+    group: NotRequired[DashboardTaskGroupMembership | None]
     identity: Required[DashboardTaskDetailIdentity]
     dependencyLineage: Required[DashboardTaskDetailDependencyLineage]
     childLineage: Required[DashboardTaskDetailChildLineage]
@@ -1229,6 +1230,12 @@ class DashboardTaskGroupMember(TypedDict, total=False):
     outcome: Required[Literal["canceled"] | Literal["failed"] | Literal["succeeded"] | None]
     addedAt: Required[str]
     countedAt: Required[str | None]
+
+
+class DashboardTaskGroupMembership(TypedDict, total=False):
+    id: Required[str]
+    position: Required[float]
+    state: Required[Literal["finished", "open", "sealed"]]
 
 
 class DashboardTaskGroupsPage(TypedDict, total=False):
@@ -2429,6 +2436,7 @@ __all__ = [
     "DashboardTaskGroupDetail",
     "DashboardTaskGroupEvent",
     "DashboardTaskGroupMember",
+    "DashboardTaskGroupMembership",
     "DashboardTaskGroupsPage",
     "DashboardTaskRow",
     "DashboardTaskRowDurability",

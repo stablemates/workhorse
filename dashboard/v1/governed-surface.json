@@ -3619,6 +3619,23 @@
         "events[].type": {
           "type": "string"
         },
+        "group": {
+          "type": "null|object"
+        },
+        "group.id": {
+          "type": "string"
+        },
+        "group.position": {
+          "type": "number"
+        },
+        "group.state": {
+          "type": "enum",
+          "enum": [
+            "finished",
+            "open",
+            "sealed"
+          ]
+        },
         "humanWait": {
           "type": "null|object"
         },

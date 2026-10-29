@@ -20,6 +20,22 @@ Workhorse is a public beta. While the line is `0.x`, any minor release may chang
 a major line a migration only adds. Breaking changes are always listed with
 upgrade steps.
 
+## Unreleased
+
+### The task detail shows the task group of a member task
+
+An operator opened a member task of a task group in the dashboard task drawer. The drawer showed
+nothing about the group, so the operator could not see that the task is a member or go to the
+group.
+
+Migration 0091 (`0091-show-the-task-group-in-the-task-detail.sql`) moves the schema to version 90.
+It replaces the body of `dashboard_task_detail_v1`, which now returns `group` with `id`,
+`position`, and `state` for a member task, and null for another task. The `dashboard/v1` task detail
+document gains the optional key `group`, an additive change.
+
+The migration does not raise the SDK compatibility floor and changes no rows. Run
+`workhorse schema migrate`.
+
 ## 0.11.0 — 2026-10-28
 
 The npm packages, Python distribution, Go module, Rust crate, Ruby gem, JVM artifacts, and .NET

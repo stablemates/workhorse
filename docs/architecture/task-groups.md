@@ -429,7 +429,9 @@ with another `state` reads `task_group_state_created_idx`, because its statement
 `(state, created_at, id)` descending. Thus a page of a state that few groups have reads only the
 groups of that state, also in a generic plan. Before schema version 69, one statement served both
 cases, and such a page could read every group. The dashboard reads task groups only through functions, so the
-task group tables are not a governed dashboard read. The dashboard detail of a group reads its
+task group tables are not a governed dashboard read. `dashboard_task_detail_v1` returns the group
+ID, the member position, and the group state of a member task as `group`
+([Dashboard: Task detail](dashboard.md#task-detail)). The dashboard detail of a group reads its
 newest 101 events through `list_newest_task_group_events_v1`, shows 100, and sets `eventsTruncated`
 when the group has older events.
 

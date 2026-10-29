@@ -57,3 +57,20 @@ it("accepts a schedule row without the occurrence cap key that schema 88 adds", 
   expect(row.required).not.toContain("occurrenceCountCapped");
   expect(row.required).toContain("occurrenceCount");
 });
+
+it("accepts a task detail without the group key that schema 90 adds", async () => {
+  const committed = await readFile(join(artifactDirectory, "procedures.json"), "utf8");
+  const contract = JSON.parse(committed) as {
+    $defs: Record<string, { properties: Record<string, unknown>; required: string[] }>;
+  };
+  const detail = contract.$defs.DashboardTaskDetail!;
+  // The dashboard accepts schema 76 and later, and a database below schema 90 returns no group key.
+  expect(Object.keys(detail.properties)).toContain("group");
+  expect(detail.required).not.toContain("group");
+  expect(detail.required).toContain("humanWait");
+  expect(contract.$defs.DashboardTaskGroupMembership!.required).toEqual([
+    "id",
+    "position",
+    "state",
+  ]);
+});
