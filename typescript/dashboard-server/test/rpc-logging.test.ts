@@ -191,6 +191,26 @@ describe("dashboard compatibility logging", () => {
     ]);
   });
 
+  it("names the dashboard when the database has no Workhorse schema", async () => {
+    const empty = {
+      query: async () => {
+        throw Object.assign(new Error('relation "workhorse.schema_version" does not exist'), {
+          code: "42P01",
+        });
+      },
+    } as unknown as Queryable;
+    const host = createDashboardHost({ database: empty, path: "/", authorize: () => true });
+
+    const response = await host.handle(new Request("http://dashboard.test/tasks"));
+
+    expect(response?.status).toBe(503);
+    expect(await response?.json()).toEqual({
+      error:
+        "Workhorse schema is not installed. Install it with `workhorse schema install` or installSchema before you mount the dashboard.",
+    });
+    expect(records).toEqual([]);
+  });
+
   it("answers a compatibility refusal with its version message and logs nothing", async () => {
     const outdated = {
       query: async () => ({

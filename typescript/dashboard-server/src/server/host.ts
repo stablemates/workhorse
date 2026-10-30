@@ -643,7 +643,9 @@ export function createDashboardHost(options: DashboardHostOptions): DashboardHos
       }
       const basePath = workspace.basePath;
 
-      workspace.compatibility ??= assertSchemaCompatible(workspace.queryable);
+      workspace.compatibility ??= assertSchemaCompatible(workspace.queryable, {
+        caller: "dashboard",
+      });
       try {
         await workspace.compatibility;
       } catch (error) {

@@ -29,9 +29,11 @@ export type {
   WorkhorseAdapterOptions,
 } from "./adapter.js";
 export type {
+  AssertSchemaCompatibleOptions,
   ContractSchemaOptions,
   MigrateSchemaOptions,
   MigrateSchemaResult,
+  SchemaCheckCaller,
   SchemaContractOutcome,
   WorkerClientProtocol,
 } from "./schema.js";

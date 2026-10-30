@@ -216,7 +216,7 @@ export class Admin {
   ) {
     // Each statement waits for the compatibility check, so every method checks after it validates
     // its arguments and before its first statement.
-    this.database = schemaCheckedQueryable(database, new CachedSchemaCompatibilityCheck());
+    this.database = schemaCheckedQueryable(database, new CachedSchemaCompatibilityCheck(), "admin");
     this.modules = createQueueModules(
       createQueueModuleContext(this.database, defaultQueue, validateQueueOptions(options)),
     );

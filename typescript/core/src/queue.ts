@@ -275,12 +275,12 @@ export class Queue {
   // has the answer. A schema the release cannot use then fails with `SchemaCompatibilityError`
   // before the first statement of the call.
   private checkSchema(database: Queryable = this.database): Promise<void> {
-    return this.moduleState.compatibility.assert(database);
+    return this.moduleState.compatibility.assert(database, "queue");
   }
 
   /** @internal */
   [workerSchemaCheck](): Promise<void> {
-    return this.checkSchema();
+    return this.moduleState.compatibility.assert(this.database, "worker");
   }
 
   /** @internal Bind the facade to another database while retaining process-local module caches. */
@@ -1098,7 +1098,7 @@ export class Queue {
         let borrowed: Awaited<ReturnType<typeof connection.borrow>>;
         try {
           borrowed = await connection.borrow(deadline - monotonicNow(), signal, (client) =>
-            compatibility.assert(client),
+            compatibility.assert(client, "worker"),
           );
         } catch (error) {
           // A schema verdict is not a connection budget problem, so it reaches the caller as is.

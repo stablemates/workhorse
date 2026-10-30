@@ -719,6 +719,30 @@ export {
 };
 
 /**
+ * The component that runs a schema compatibility check. The `schema-not-installed` refusal names
+ * it, so an application that only enqueues is not told to mount the dashboard.
+ */
+export type SchemaCheckCaller = "application" | "queue" | "admin" | "worker" | "dashboard";
+
+export interface AssertSchemaCompatibleOptions {
+  /** The component that waits for the schema. Defaults to `"application"`. */
+  caller?: SchemaCheckCaller;
+}
+
+const SCHEMA_NOT_INSTALLED_DEADLINES: Readonly<Record<SchemaCheckCaller, string>> = {
+  application: "before the application starts",
+  queue: "before you use the Queue",
+  admin: "before you use the Admin",
+  worker: "before you start the Worker",
+  dashboard: "before you mount the dashboard",
+};
+
+/** The sentence a caller reads when the database has no Workhorse schema. */
+function schemaNotInstalledMessage(caller: SchemaCheckCaller): string {
+  return `Workhorse schema is not installed. Install it with \`workhorse schema install\` or installSchema ${SCHEMA_NOT_INSTALLED_DEADLINES[caller]}.`;
+}
+
+/**
  * Check compatibility without creating or changing database objects.
  *
  * The runtime declares a floor and no ceiling. Inside a major line a migration only adds
@@ -730,25 +754,39 @@ export {
  *
  * A refusal throws {@link SchemaCompatibilityError}, whose `code` names it in the vocabulary
  * Python and Go share. A database this cannot read at all throws a plain `Error`, because an
- * unreachable database is not a verdict about versions.
+ * unreachable database is not a verdict about versions. `options.caller` names the component in
+ * the `schema-not-installed` message.
  */
-export async function assertSchemaCompatible(database: Queryable): Promise<void> {
-  return checkSchemaCompatibility(database, (error) => {
+export async function assertSchemaCompatible(
+  database: Queryable,
+  options: AssertSchemaCompatibleOptions = {},
+): Promise<void> {
+  const caller = options.caller ?? "application";
+  if (!Object.hasOwn(SCHEMA_NOT_INSTALLED_DEADLINES, caller)) {
+    throw new TypeError(
+      `Schema check caller must be one of ${Object.keys(SCHEMA_NOT_INSTALLED_DEADLINES).join(", ")}`,
+    );
+  }
+  const refusal = await readSchemaRefusal(database, (error) => {
     throw new Error(
       "Unable to verify Workhorse schema compatibility because the database query failed.",
       { cause: error },
     );
   });
+  if (refusal !== null) throw refusal(caller);
 }
 
+/** A refusal before it names its caller. Each call builds a new error. */
+type SchemaRefusal = (caller: SchemaCheckCaller) => SchemaCompatibilityError;
+
 /**
- * The check of {@link assertSchemaCompatible}. `unreadable` decides what a query failure that is
- * not a missing relation throws.
+ * The check of {@link assertSchemaCompatible}: the refusal, or `null` when this runtime accepts
+ * the schema. `unreadable` decides what a query failure that is not a missing relation throws.
  */
-async function checkSchemaCompatibility(
+async function readSchemaRefusal(
   database: Queryable,
   unreadable: (error: unknown) => never,
-): Promise<void> {
+): Promise<SchemaRefusal | null> {
   let state: CompatibilityState;
   try {
     state = await readCompatibilityState(database);
@@ -757,42 +795,44 @@ async function checkSchemaCompatibility(
     // Any other query failure is the database being unreachable or unreadable, which is not a
     // compatibility verdict and must not be catchable as one.
     if (isMissingDatabaseRelationError(error)) {
-      throw new SchemaCompatibilityError(
-        "schema-not-installed",
-        "Workhorse schema is not installed. Run the application's explicit Workhorse schema installation step before mounting the dashboard.",
-        { installedVersion: null, expectedVersion: WORKHORSE_SCHEMA_VERSION },
-        { cause: error },
-      );
+      return (caller) =>
+        new SchemaCompatibilityError(
+          "schema-not-installed",
+          schemaNotInstalledMessage(caller),
+          { installedVersion: null, expectedVersion: WORKHORSE_SCHEMA_VERSION },
+          { cause: error },
+        );
     }
     unreadable(error);
   }
   const refusal = schemaCompatibilityRefusal(state);
-  if (refusal !== null) {
-    throw new SchemaCompatibilityError(refusal.code, refusal.message, {
+  if (refusal === null) return null;
+  return () =>
+    new SchemaCompatibilityError(refusal.code, refusal.message, {
       installedVersion: state.schemaVersion,
       expectedVersion: WORKHORSE_SCHEMA_VERSION,
     });
-  }
 }
 
 /**
  * Run the compatibility check until PostgreSQL answers it, then reuse that answer.
  *
- * The answer is success or a {@link SchemaCompatibilityError}. A driver error is not an answer, so
- * the next call queries again. The call gets the driver error unchanged, so a caller that branches
- * on its SQLSTATE sees the same error as from the statement of the call. Each `Queue` and each
- * `Admin` holds one for its lifetime, as the `Queue` and `Admin` of the other SDKs do.
+ * The answer is success or a refusal, which reaches each call as a {@link SchemaCompatibilityError}
+ * that names the caller of that call. A driver error is not an answer, so the next call queries
+ * again. The call gets the driver error unchanged, so a caller that branches on its SQLSTATE sees
+ * the same error as from the statement of the call. Each `Queue` and each `Admin` holds one for its
+ * lifetime, as the `Queue` and `Admin` of the other SDKs do. A worker shares the one of its queue.
  *
  * The answer is shared, but a query in flight is not: calls that overlap on one connection share
  * its query, and a call on another connection sends its own. Otherwise a caller transaction that
  * holds the last pooled connection would wait for a check that waits for that connection.
  */
 export class CachedSchemaCompatibilityCheck {
-  private answer: { readonly refusal: SchemaCompatibilityError | null } | undefined;
+  private answer: { readonly refusal: SchemaRefusal | null } | undefined;
   private readonly inFlight = new WeakMap<Queryable, Promise<void>>();
 
   /** Check through `database`, the connection the call uses, unless an answer is known. */
-  async assert(database: Queryable): Promise<void> {
+  async assert(database: Queryable, caller: SchemaCheckCaller): Promise<void> {
     if (this.answer === undefined) {
       let check = this.inFlight.get(database);
       if (check === undefined) {
@@ -801,35 +841,33 @@ export class CachedSchemaCompatibilityCheck {
       }
       await check;
     }
-    if (this.answer?.refusal) throw this.answer.refusal;
+    if (this.answer?.refusal) throw this.answer.refusal(caller);
   }
 
   private async query(database: Queryable): Promise<void> {
     try {
-      await checkSchemaCompatibility(database, (error) => {
+      const refusal = await readSchemaRefusal(database, (error) => {
         throw error;
       });
-      this.answer ??= { refusal: null };
-    } catch (error) {
-      if (!(error instanceof SchemaCompatibilityError)) throw error;
-      this.answer ??= { refusal: error };
+      this.answer ??= { refusal };
     } finally {
       this.inFlight.delete(database);
     }
   }
 }
 
-/** `database`, with the compatibility check before each statement. */
+/** `database`, with the compatibility check for `caller` before each statement. */
 export function schemaCheckedQueryable(
   database: Queryable,
   check: CachedSchemaCompatibilityCheck,
+  caller: SchemaCheckCaller,
 ): Queryable {
   return {
     async query<R extends QueryResultRow = QueryResultRow>(
       text: string,
       values?: readonly unknown[],
     ): Promise<QueryResult<R>> {
-      await check.assert(database);
+      await check.assert(database, caller);
       return database.query<R>(text, values);
     },
   };
