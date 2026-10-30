@@ -151,7 +151,7 @@ jobs:
       # installs a different set of packages, so each job keeps its own cache entry (SM-1874).
       - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
         with:
-          version: 0.12.21 # Pinned to the uv version in mise.toml.
+          version: 0.13.6 # Pinned to the uv version in mise.toml.
           enable-cache: true
           cache-suffix: static
       # `sql-catalogues:check` and `dashboard-spec:check` format the Rust catalogues with rustfmt, so
@@ -277,7 +277,7 @@ jobs:
           cache: pnpm
       - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
         with:
-          version: 0.12.21 # Pinned to the uv version in mise.toml.
+          version: 0.13.6 # Pinned to the uv version in mise.toml.
           enable-cache: true
           cache-suffix: unit
       - run: pnpm install --frozen-lockfile
@@ -430,7 +430,7 @@ jobs:
           python-version: ${{ matrix.python }}
       - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
         with:
-          version: 0.12.21 # Pinned to the uv version in mise.toml.
+          version: 0.13.6 # Pinned to the uv version in mise.toml.
           enable-cache: true
           cache-suffix: python-${{ matrix.python }}
       - run: pnpm install --frozen-lockfile
@@ -587,7 +587,7 @@ jobs:
           cache: pnpm
       - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
         with:
-          version: 0.12.21 # Pinned to the uv version in mise.toml.
+          version: 0.13.6 # Pinned to the uv version in mise.toml.
           enable-cache: true
           cache-suffix: packed
       - run: pnpm install --frozen-lockfile
@@ -1194,7 +1194,7 @@ jobs:
           cache-dependency-path: go/go.sum
       - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
         with:
-          version: 0.12.21 # Pinned to the uv version in mise.toml.
+          version: 0.13.6 # Pinned to the uv version in mise.toml.
           enable-cache: true
           cache-suffix: demo
       # The development demo runs its JVM worker on the JDK, and its .NET worker with `dotnet run`

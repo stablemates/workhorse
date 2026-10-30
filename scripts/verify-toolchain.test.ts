@@ -74,7 +74,7 @@ describe("mise pin matching", () => {
   it("reads every pin this repository declares", async () => {
     const pins = await readPins(repositoryRoot);
 
-    expect(pins.get("uv")).toBe("0.12.21");
+    expect(pins.get("uv")).toBe("0.13.6");
     expect([...pins.keys()]).toEqual(
       expect.arrayContaining(["dotnet", "go", "lefthook", "node", "pnpm", "python", "uv"]),
     );

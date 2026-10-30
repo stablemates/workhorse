@@ -92,7 +92,7 @@ RUN --mount=type=cache,target=/root/.nuget/packages \
 # The .NET runtime that runs the .NET worker. It matches the runtime of the SDK above.
 FROM mcr.microsoft.com/dotnet/runtime:10.0.14-alpine3.24@sha256:54d48f739ebffdef82388056d420af37ed39c722b8d5ee5dedca6878537c2737 AS dotnet-runtime
 
-FROM ghcr.io/astral-sh/uv:0.13.5@sha256:32a7bb39b496babbd997b0a39a4d66c126bdaf5661b302bf6f06abda8deca6ff AS uv
+FROM ghcr.io/astral-sh/uv:0.13.6@sha256:af22a52f5eafef3d78e551599d405c02df61919d18028f0cea8eda93bc9986d0 AS uv
 
 # The dependencies install on the runtime stage's base and its pinned python3, not on a Python
 # image, so the build and the runtime use one interpreter. uv leaves its install lock in the target
