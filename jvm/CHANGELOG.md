@@ -25,6 +25,14 @@ The `dashboard/v1` task detail document gains `group`, with the group ID, the me
 the group state of a member task, an additive change. The migration does not raise the SDK
 compatibility floor.
 
+### The dashboard task estimate follows the current size of the task table
+
+Migration 0092 (`0092-scale-the-dashboard-task-estimate-by-the-table-size.sql`) moves the schema to
+version 91. `dashboard_task_estimate_v1` now scales the stored rows per page of the task table by
+its current number of pages. After a bulk enqueue, the dashboard sidebar counts and the Queues page
+use their estimates before autoanalyze runs. The migration does not raise the SDK compatibility
+floor.
+
 ## 0.11.0 — 2026-10-28
 
 The npm packages, Python distribution, Go module, Rust crate, Ruby gem, JVM artifacts, and .NET

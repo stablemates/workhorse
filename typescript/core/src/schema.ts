@@ -644,6 +644,13 @@ export const SCHEMA_MIGRATIONS: readonly SchemaMigrationStep[] = [
     description: "show the task group in the task detail",
     kind: "additive",
   },
+  {
+    fromVersion: 90,
+    toVersion: 91,
+    file: "0092-scale-the-dashboard-task-estimate-by-the-table-size.sql",
+    description: "scale the dashboard task estimate by the current size of the task table",
+    kind: "additive",
+  },
 ];
 
 /**

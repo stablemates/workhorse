@@ -709,6 +709,10 @@ describe("schema installation", () => {
         version: 90,
         description: "show the task group in the task detail",
       },
+      {
+        version: 91,
+        description: "scale the dashboard task estimate by the current size of the task table",
+      },
     ]);
 
     const protocols = await pool.query<{ version: number }>(
