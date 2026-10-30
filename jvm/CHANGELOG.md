@@ -33,6 +33,26 @@ its current number of pages. After a bulk enqueue, the dashboard sidebar counts 
 use their estimates before autoanalyze runs. The migration does not raise the SDK compatibility
 floor.
 
+### A batch that the drain interrupts gives its tasks back
+
+At the end of the shutdown grace, the drain cancels each running task with `SHUTDOWN` and interrupts
+its thread. The interrupt closes the socket of a virtual thread. Thus a batch handler that runs a
+JDBC statement then gets an I/O error, for example a `PSQLException` caused by
+`SocketException: Closed by interrupt`.
+
+0.11.0 released a task for that error only in an ordinary handler (SM-1889). For a batch handler,
+the worker called `fail_v1` for each task in the batch. Each task lost an attempt, or failed
+permanently on its last attempt. 0.10.0 has the same defect.
+
+Now the worker applies the 0.11.0 rule to the thread that runs the batch handler. The drain can
+interrupt that thread, and the handler can then throw an I/O failure that the interrupt caused. In
+that case, each task in the batch goes back to its queue through `release_owned_v1`. No attempt is
+charged. This applies also to a task whose own thread did not run the handler. Any other error of
+the batch handler still fails each task, as before (SM-1890).
+
+The drain now cancels every running task before it interrupts any thread. Thus each task in the
+batch holds `SHUTDOWN` when the batch error reaches it.
+
 ## 0.11.0 — 2026-10-28
 
 The npm packages, Python distribution, Go module, Rust crate, Ruby gem, JVM artifacts, and .NET
