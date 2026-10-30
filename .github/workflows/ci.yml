@@ -75,8 +75,16 @@ jobs:
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 22
-          cache: pnpm
-      - run: pnpm install --frozen-lockfile
+      # The two plan scripts import only Node built-in modules, and tsx runs them. Thus the job
+      # installs only the dev dependencies of the root package, and runs no install scripts. A full
+      # install also ran `prisma generate` in typescript/prisma, which once stalled for 9 minutes
+      # and used the time limit of the job (SM-1888).
+      #
+      # The job uses no pnpm cache. The cache key of setup-node does not change between a full
+      # install and a filtered install, and the action saves no cache after a hit. If this partial
+      # store filled the key first, each other job would download the remaining packages in each
+      # run.
+      - run: pnpm install --frozen-lockfile --ignore-scripts --filter workhorse-monorepo
       - id: matrix
         run: pnpm --silent exec tsx scripts/ci-matrix.ts "$GITHUB_EVENT_NAME" "${{ github.event.schedule }}" >> "$GITHUB_OUTPUT"
       - id: lanes
