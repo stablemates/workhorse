@@ -4,12 +4,14 @@
  * The release workflows publish a commit only after a successful `CI` push run on `main` for that
  * commit. Since SM-1878, a push run plans only the lanes that its changed files select. A
  * successful run that skipped lanes did not check every line, so this script also requires that
- * the run planned each lane of {@link FULL_PUSH_LANES}.
+ * the run planned each lane of {@link RELEASE_PUSH_LANES}: every push lane and the `packed` lane,
+ * which installs the packed npm packages (SM-1893).
  *
  * The script reads the plan that the run used: the plan job of each push run uploads the
  * {@link LANE_PLAN_ARTIFACT} artifact. The script does not compute the plan again from the
  * changed files. If GitHub cannot list the runs, or no successful run has a plan that it can read
- * and that names every lane, the script fails. The message names each run and its missing lanes.
+ * and that names every release lane, the script fails. The message names each run and its missing
+ * lanes.
  *
  * `scripts/release-go.sh` uses the same check before it reuses a main CI run.
  *
@@ -23,11 +25,11 @@ import { pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 
 import {
-  FULL_PUSH_LANES,
   LANE_NAMES,
   LANE_PLAN_ARTIFACT,
   LANE_PLAN_FILE,
   type LaneName,
+  RELEASE_PUSH_LANES,
 } from "./ci-lanes.js";
 
 /** Runs gh with these arguments and gives its standard output. A failure rejects the promise. */
@@ -53,7 +55,7 @@ export interface RunAttempt {
  * attempt must not be newer than the successful attempt. A "re-run failed jobs" attempt keeps the
  * plan of an earlier attempt, but a newer plan comes from an attempt that the listed result does
  * not include. The plan must give a boolean for each lane that this commit knows and no other
- * lane. Then the result names each lane of {@link FULL_PUSH_LANES} that the plan did not run.
+ * lane. Then the result names each lane of {@link RELEASE_PUSH_LANES} that the plan did not run.
  * Otherwise the result gives the reason.
  */
 export function readLanePlan(
@@ -101,7 +103,7 @@ export function readLanePlan(
   const invalid = LANE_NAMES.filter((lane) => typeof values[lane] !== "boolean");
   if (invalid.length > 0)
     return { reason: `its lane plan gives no decision for ${invalid.join(", ")}` };
-  return { missing: FULL_PUSH_LANES.filter((lane) => values[lane] !== true) };
+  return { missing: RELEASE_PUSH_LANES.filter((lane) => values[lane] !== true) };
 }
 
 const isPositiveInteger = (value: unknown) =>
@@ -185,8 +187,8 @@ async function downloadPlan(
 const errorMessage = (error: unknown) => (error instanceof Error ? error.message : String(error));
 
 /**
- * Checks that a successful `CI` push run on `main` for the commit planned every lane. `directory`
- * must be an empty directory that the check can write the downloaded plans to.
+ * Checks that a successful `CI` push run on `main` for the commit planned every release lane.
+ * `directory` must be an empty directory that the check can write the downloaded plans to.
  */
 export async function checkMainCiPlan({
   repository,
@@ -229,13 +231,14 @@ export async function checkMainCiPlan({
     if ("reason" in plan) problems.push(`${url}: ${plan.reason}`);
     else if (plan.missing.length > 0)
       problems.push(`${url}: it did not plan the lanes ${plan.missing.join(", ")}`);
-    else return { ok: true, message: `The main CI run ${url} planned every lane for ${sha}.` };
+    else
+      return { ok: true, message: `The main CI run ${url} planned every release lane for ${sha}.` };
   }
   return {
     ok: false,
     message: [
-      `No successful main CI push run for ${sha} planned every lane. A release needs a run that`,
-      "planned every lane, such as the run of the release candidate commit.",
+      `No successful main CI push run for ${sha} planned every release lane. A release needs a`,
+      "run that planned every release lane, such as the run of the release candidate commit.",
       ...problems.map((problem) => `- ${problem}.`),
     ].join("\n"),
   };

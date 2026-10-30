@@ -915,7 +915,9 @@ for the distribution being published.
 
 The release workflows publish a commit only after a full `main` CI run checked it. A push run on
 `main` plans only the CI lanes that its changed files select, so a successful push run can skip CI
-lanes. A release candidate commit changes release files, so its push run plans every CI lane.
+lanes. A release candidate commit changes release files. Thus its push run plans every CI lane
+that a push runs, and also the weekly `packed` CI lane. A changelog entry under `## Unreleased`
+alone is not a release change.
 
 **Example.**
 
@@ -948,8 +950,8 @@ The check fails, and the release publishes nothing, in each of these conditions:
    of the run, because a later attempt replaced the plan after GitHub listed the result.
 6. The plan gives no boolean for a CI lane in `LANE_NAMES`, or names a CI lane that `LANE_NAMES`
    does not hold.
-7. No run gives `true` for each CI lane of `FULL_PUSH_LANES` in `scripts/ci-lanes.ts`. These are
-   all CI lanes except the weekly CI lanes.
+7. No run gives `true` for each CI lane of `RELEASE_PUSH_LANES` in `scripts/ci-lanes.ts`. These
+   are all CI lanes except the weekly CI lanes, and the weekly `packed` CI lane.
 
 The error output names each run and the reason, or the CI lanes that the run did not plan.
 
