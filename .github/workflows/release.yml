@@ -68,7 +68,7 @@ jobs:
           node-version: 22
           package-manager-cache: false
           registry-url: https://registry.npmjs.org
-      - uses: actions-rust-lang/setup-rust-toolchain@c8ff772090ab9d00f7f7bd7b388f3c3032282e3b # v1
+      - uses: actions-rust-lang/setup-rust-toolchain@b328d6be848e9b620901df2e49d27ad7e5536c0b # v1
         with:
           toolchain: 1.89.0 # Pinned to the rust version in mise.toml.
           components: rustfmt, clippy
@@ -199,7 +199,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: actions-rust-lang/setup-rust-toolchain@c8ff772090ab9d00f7f7bd7b388f3c3032282e3b # v1
+      - uses: actions-rust-lang/setup-rust-toolchain@b328d6be848e9b620901df2e49d27ad7e5536c0b # v1
         with:
           toolchain: 1.89.0 # Pinned to the rust version in mise.toml.
           cache: false
