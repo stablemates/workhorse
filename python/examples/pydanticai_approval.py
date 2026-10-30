@@ -46,7 +46,7 @@ from workhorse import AsyncAdmin, AsyncHandlerContext, AsyncQueue, AsyncWorker, 
 
 ai_models.ALLOW_MODEL_REQUESTS = False
 
-VERSION = "2.59.0"
+VERSION = "2.60.0"
 RECIPE = "local-credit-v1"
 TASK_TYPE = "pydanticai.credit"
 WAIT_NAME = "credit-approval"
@@ -230,7 +230,11 @@ def build_agent(
         if await cursor.fetchone() is None:
             raise RecipeRejected("Conversation request budget exhausted, including lost turns")
         await hook("model-enter", writer)
-        if any(isinstance(part, ToolReturnPart) for message in messages for part in message.parts):
+        if any(
+            isinstance(part, ToolReturnPart) and part.outcome != "retried"
+            for message in messages
+            for part in message.parts
+        ):
             return ModelResponse(parts=[TextPart("Reviewed local credit")])
         return ModelResponse(parts=[ToolCallPart("credit", request, tool_call_id=TOOL_CALL_ID)])
 

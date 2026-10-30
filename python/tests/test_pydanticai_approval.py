@@ -29,7 +29,6 @@ from pydantic_ai.exceptions import UnexpectedModelBehavior, UserError
 from pydantic_ai.messages import (
     ModelMessagesTypeAdapter,
     ModelResponse,
-    RetryPromptPart,
     TextPart,
     ToolCallPart,
     ToolReturnPart,
@@ -46,6 +45,14 @@ assert SPEC is not None and SPEC.loader is not None
 recipe = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(recipe)
 REQUEST = {"account": "account-a", "amount": 7}
+
+
+def retried(messages: Any) -> bool:
+    return any(
+        isinstance(part, ToolReturnPart) and part.outcome == "retried"
+        for message in messages
+        for part in message.parts
+    )
 
 
 @pytest.fixture(autouse=True)
@@ -447,9 +454,9 @@ async def test_native_model_retry_is_bounded_not_a_task_retry(repair: bool) -> N
 
     def respond(messages: Any, _info: Any) -> ModelResponse:
         parts = [part for message in messages for part in message.parts]
-        if any(isinstance(part, ToolReturnPart) for part in parts):
+        if any(isinstance(part, ToolReturnPart) and part.outcome != "retried" for part in parts):
             return ModelResponse(parts=[TextPart("repaired")])
-        amount = 7 if repair and any(isinstance(part, RetryPromptPart) for part in parts) else -1
+        amount = 7 if repair and retried(messages) else -1
         return ModelResponse(
             parts=[ToolCallPart("credit", {"amount": amount}, tool_call_id="repair")]
         )
@@ -475,9 +482,7 @@ async def test_native_model_retry_is_bounded_not_a_task_retry(repair: bool) -> N
 
 async def test_approved_model_repair_needs_new_approval_and_new_run_id() -> None:
     def respond(messages: Any, _info: Any) -> ModelResponse:
-        repaired = any(
-            isinstance(part, RetryPromptPart) for message in messages for part in message.parts
-        )
+        repaired = retried(messages)
         return ModelResponse(
             parts=[
                 ToolCallPart("credit", {"amount": 7 if repaired else -1}, tool_call_id="same-id")
@@ -574,9 +579,7 @@ async def test_recipe_rejects_native_repaired_deferred_request(
 ) -> None:
     def repairing_agent(*_args: Any) -> Agent[None, str | DeferredToolRequests]:
         def respond(messages: Any, _info: Any) -> ModelResponse:
-            repaired = any(
-                isinstance(part, RetryPromptPart) for message in messages for part in message.parts
-            )
+            repaired = retried(messages)
             return ModelResponse(
                 parts=[
                     ToolCallPart(
