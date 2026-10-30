@@ -1,16 +1,5 @@
 import type { DashboardTaskDetail } from "@stablemates/workhorse-dashboard-server/wire";
-import {
-  ActionIcon,
-  Badge,
-  Box,
-  Code,
-  CopyButton,
-  Group,
-  Paper,
-  Stack,
-  Text,
-  Tooltip,
-} from "@mantine/core";
+import { ActionIcon, Box, Code, CopyButton, Group, Stack, Text, Tooltip } from "@mantine/core";
 import {
   describeCancelOutcome,
   describeIdempotency,
@@ -22,7 +11,8 @@ import {
 import { readDashboardIdempotencyEvidence } from "@stablemates/workhorse-dashboard-server/wire";
 import type { RetryPolicy } from "@stablemates/workhorse";
 import { Fragment } from "react";
-import { CheckCircle, Copy, LinkSimple } from "@phosphor-icons/react";
+import { CheckmarkCircle02Icon, Copy01Icon, Link04Icon } from "@hugeicons/core-free-icons";
+import { HugeiconsIcon } from "@hugeicons/react";
 import {
   DrawerSection,
   TaskEvent,
@@ -78,17 +68,17 @@ export function CoalescingSection({ task }: { task: DashboardTaskDetail }) {
     <DrawerSection
       id="coalescing-heading"
       title={label}
+      help={`${
+        evidence.mode === "debounce"
+          ? "New submissions with this key can replace the task's input while it is pending."
+          : "Matching submissions within this window return this task without changing its input. A different request with the same key is rejected."
+      } The raw key is never shown; the digest identifies matching submissions without exposing it.`}
       aside={
-        <Badge size="xs" variant="light" color="grape" tt="none">
+        <span className="task-detail__muted">
           {evidence.mode === "debounce" ? "Replace pending" : "Keep first"}
-        </Badge>
+        </span>
       }
     >
-      <Text size="sm" mb="sm">
-        {evidence.mode === "debounce"
-          ? "New submissions with this key can replace the task's input while it is pending."
-          : "Matching submissions within this window return this task without changing its input. A different request with the same key is rejected."}
-      </Text>
       <Stack gap={8}>
         <MetaRow label="Window">
           <Text size="sm">{formatDuration(evidence.windowMs)}</Text>
@@ -105,17 +95,13 @@ export function CoalescingSection({ task }: { task: DashboardTaskDetail }) {
           </MetaRow>
         )}
         <MetaRow label="Submissions">
-          <Badge variant="light" color="teal" tt="none">
+          <Text size="sm">
             {enqueueCount(
               evidence.absorbed,
               evidence.mode === "debounce" ? "replaced" : "absorbed",
             )}
-          </Badge>
-          {evidence.rejected > 0 ? (
-            <Badge variant="light" color="orange" tt="none">
-              {enqueueCount(evidence.rejected, "rejected")}
-            </Badge>
-          ) : null}
+            {evidence.rejected > 0 ? ` · ${enqueueCount(evidence.rejected, "rejected")}` : ""}
+          </Text>
         </MetaRow>
         <KeyEvidenceRows {...evidence} />
         {initialRequest ? (
@@ -134,9 +120,6 @@ export function CoalescingSection({ task }: { task: DashboardTaskDetail }) {
           </MetaRow>
         )}
       </Stack>
-      <Text c="dimmed" size="xs" mt="sm">
-        The raw key is never shown; the digest identifies matching submissions without exposing it.
-      </Text>
     </DrawerSection>
   );
 }
@@ -201,10 +184,11 @@ function IdempotencySection({ task }: { task: DashboardTaskDetail }) {
     <DrawerSection
       id="idempotency-heading"
       title="Idempotency"
+      help="The raw key is never recorded with the task, so it is never shown here."
       aside={
-        <Badge size="xs" variant="light" color="violet" tt="none" title={described.exact}>
+        <span className="task-detail__muted" title={described.exact}>
           {described.label}
-        </Badge>
+        </span>
       }
     >
       <Text size="sm" mb="sm" style={{ overflowWrap: "anywhere" }}>
@@ -224,9 +208,6 @@ function IdempotencySection({ task }: { task: DashboardTaskDetail }) {
           </MetaRow>
         )}
       </Stack>
-      <Text c="dimmed" size="xs" mt="sm">
-        The raw key is never recorded with the task, so it is never shown here.
-      </Text>
     </DrawerSection>
   );
 }
@@ -273,12 +254,10 @@ export function RetryPolicyLine({ task }: { task: DashboardTaskDetail }) {
   const isDefaultPolicy = task.identity.retryPolicy === null;
   return (
     <MetaRow label="Retry policy">
-      <Badge size="xs" variant="light" color="orange" title={title} tt="none">
+      <Text size="sm" title={title}>
         {policy.label}
-      </Badge>
-      <Text c="dimmed" size="xs" title={title}>
-        {isDefaultPolicy ? budget : `${policy.summary} · ${budget}`}
-        {exhausted ? " · budget exhausted, no further retry is scheduled" : ""}
+        {isDefaultPolicy ? ` · ${budget}` : ` · ${policy.summary} · ${budget}`}
+        {exhausted ? " · budget used" : ""}
       </Text>
       {isDefaultPolicy ? <HelpButton label="Default backoff" help={`${policy.summary}.`} /> : null}
     </MetaRow>
@@ -308,7 +287,11 @@ export function TaskIdChip({ id }: { id: string }) {
               aria-label={copied ? "Task id copied to the clipboard" : "Copy task id"}
               onClick={copy}
             >
-              {copied ? <CheckCircle size={12} weight="bold" /> : <Copy size={12} />}
+              {copied ? (
+                <HugeiconsIcon icon={CheckmarkCircle02Icon} size={12} strokeWidth={2} />
+              ) : (
+                <HugeiconsIcon icon={Copy01Icon} size={12} />
+              )}
             </ActionIcon>
           </Tooltip>
         )}
@@ -356,7 +339,7 @@ export function RelatedTaskLink({
       }}
     >
       {/* The icon marks the identifier as a task link, not inert monospace text. */}
-      <LinkSimple size={11} aria-hidden style={{ flexShrink: 0 }} />
+      <HugeiconsIcon icon={Link04Icon} size={11} aria-hidden style={{ flexShrink: 0 }} />
       {shortTaskId(id)}
     </Text>
   );
@@ -395,7 +378,7 @@ export function BatchExecutionLine({
   const otherMembers = batch.members.filter((member) => member.id !== selectedTaskId);
   const sharedFailure = batchFailureMessage(batch);
   return (
-    <Paper withBorder p="sm">
+    <Box className="task-drawer__card">
       <Group justify="space-between" align="flex-start" gap="xs">
         <Box>
           <Text fw={600} size="sm">
@@ -406,9 +389,9 @@ export function BatchExecutionLine({
           </Text>
         </Box>
         {sharedFailure === null ? null : (
-          <Badge color="red" variant="light" tt="none">
+          <Text c="red" size="xs" fw={600}>
             Batch-wide failure
-          </Badge>
+          </Text>
         )}
       </Group>
       {sharedFailure === null ? null : (
@@ -432,7 +415,7 @@ export function BatchExecutionLine({
           </>
         )}
       </Text>
-    </Paper>
+    </Box>
   );
 }
 export function BatchExecutions({

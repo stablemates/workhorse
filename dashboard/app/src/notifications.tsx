@@ -1,6 +1,11 @@
 import { Button, Stack, Text } from "@mantine/core";
 import { Notifications, notifications } from "@mantine/notifications";
-import { CheckCircle, Info, WarningCircle } from "@phosphor-icons/react";
+import {
+  AlertCircleIcon,
+  CheckmarkCircle02Icon,
+  InformationCircleIcon,
+} from "@hugeicons/core-free-icons";
+import { HugeiconsIcon } from "@hugeicons/react";
 import type { ReactNode } from "react";
 import {
   cancelOutcomeTone,
@@ -64,9 +69,10 @@ const toneAutoClose: Record<DashboardResultTone, number> = {
 };
 
 function toneIcon(tone: DashboardResultTone): ReactNode {
-  if (tone === "success") return <CheckCircle size={18} weight="fill" />;
-  if (tone === "failure") return <WarningCircle size={18} weight="fill" />;
-  return <Info size={18} />;
+  if (tone === "success")
+    return <HugeiconsIcon icon={CheckmarkCircle02Icon} size={18} strokeWidth={2} />;
+  if (tone === "failure") return <HugeiconsIcon icon={AlertCircleIcon} size={18} strokeWidth={2} />;
+  return <HugeiconsIcon icon={InformationCircleIcon} size={18} />;
 }
 
 /**
@@ -88,7 +94,6 @@ export function notifyDashboard(notification: DashboardNotification): string {
     color: toneColor[tone],
     icon: toneIcon(tone),
     title: notification.title,
-    withBorder: true,
     autoClose: notification.autoClose ?? toneAutoClose[tone],
     role: tone === "failure" ? "alert" : "status",
     // The action sits under the sentence rather than beside it. Sharing one row makes the button

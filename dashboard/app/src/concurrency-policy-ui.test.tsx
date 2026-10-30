@@ -1,4 +1,4 @@
-import { createElement } from "react";
+import { createElement, type ReactNode } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { MantineProvider } from "@mantine/core";
 import { describe, expect, it } from "vitest";
@@ -17,6 +17,16 @@ import {
   describeConcurrencyLimit,
   describeTaskConcurrency,
 } from "./concurrency-policy.js";
+import { GraphicalProvider, theme } from "./ui.js";
+
+/** The Graphical controls on this page need their theme provider beside Mantine's. */
+function ThemeProviders({ children }: { children: ReactNode }) {
+  return createElement(
+    MantineProvider,
+    null,
+    createElement(GraphicalProvider, { document: theme, colorMode: "light" }, children),
+  );
+}
 
 const storage = new Map<string, string>();
 Object.defineProperty(globalThis, "localStorage", {
@@ -75,7 +85,7 @@ function queuesPage(overrides: Partial<DashboardQueuesPage> = {}): DashboardQueu
 function renderQueues(data: DashboardQueuesPage, QueuesPage: unknown): string {
   return renderToStaticMarkup(
     createElement(
-      MantineProvider,
+      ThemeProviders,
       null,
       createElement(QueuesPage as never, {
         data,
@@ -100,7 +110,7 @@ function renderQueuePressure(
 ): string {
   return renderToStaticMarkup(
     createElement(
-      MantineProvider,
+      ThemeProviders,
       null,
       createElement(QueuePressure as never, {
         data: data as DashboardSystemPage,
@@ -481,7 +491,7 @@ describe("task drawer concurrency line", () => {
     const { ConcurrencyPolicyLine } = await import("./dashboard.js");
     const html = renderToStaticMarkup(
       createElement(
-        MantineProvider,
+        ThemeProviders,
         null,
         createElement(ConcurrencyPolicyLine, {
           task: task({
@@ -495,10 +505,11 @@ describe("task drawer concurrency line", () => {
     expect(html).toContain("Concurrency");
     expect(html).toContain("tenant-a");
     expect(html).toContain("in use 4 of 10");
-    // The key badge carries its own explanation, so assistive technology hears why it never
-    // changes rather than only hearing the raw key echoed back.
+    // The key is plain text with its explanation in the title. A generic element cannot have an
+    // accessible name, so the explanation is not an aria-label.
     expect(html).toContain("The key is part of the task and never changes");
-    expect(html).toContain('aria-label="This task was enqueued with concurrency key tenant-a');
+    expect(html).toContain('title="This task was enqueued with concurrency key tenant-a');
+    expect(html).not.toContain("mantine-Badge-root");
     expect(html).not.toContain("queue policy now");
     expect(html).not.toContain("usage not measured");
   });
@@ -507,7 +518,7 @@ describe("task drawer concurrency line", () => {
     const { ConcurrencyPolicyLine } = await import("./dashboard.js");
     const html = renderToStaticMarkup(
       createElement(
-        MantineProvider,
+        ThemeProviders,
         null,
         createElement(ConcurrencyPolicyLine, {
           task: task({
@@ -526,7 +537,7 @@ describe("task drawer concurrency line", () => {
     const { ConcurrencyPolicyLine } = await import("./dashboard.js");
     const html = renderToStaticMarkup(
       createElement(
-        MantineProvider,
+        ThemeProviders,
         null,
         createElement(ConcurrencyPolicyLine, {
           task: task({
@@ -554,7 +565,7 @@ describe("task drawer concurrency line", () => {
     const { ConcurrencyPolicyLine } = await import("./dashboard.js");
     const html = renderToStaticMarkup(
       createElement(
-        MantineProvider,
+        ThemeProviders,
         null,
         createElement(ConcurrencyPolicyLine, {
           task: task({
@@ -577,7 +588,7 @@ describe("task drawer concurrency line", () => {
     const { ConcurrencyPolicyLine } = await import("./dashboard.js");
     const html = renderToStaticMarkup(
       createElement(
-        MantineProvider,
+        ThemeProviders,
         null,
         createElement(ConcurrencyPolicyLine, {
           task: task({ runtimeState: null }) as unknown as DashboardTaskDetail,

@@ -1,0 +1,6 @@
+/* Events: scope controls on the first row, custom dates under them, then search and facets. */
+.events-controls {
+  display: flex;
+  flex-direction: column;
+  gap: var(--mantine-spacing-md);
+}

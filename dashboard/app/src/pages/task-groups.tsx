@@ -12,32 +12,38 @@ import {
 } from "@stablemates/workhorse-dashboard-server/wire";
 import {
   Anchor,
-  Badge,
+  Box,
   Button,
   Code,
   Group,
-  Modal,
-  Paper,
   Progress,
-  ScrollArea,
   SegmentedControl,
   SimpleGrid,
   Stack,
   Table,
   Text,
   TextInput,
-  Title,
   Tooltip,
 } from "@mantine/core";
+import { ArrowLeft01Icon } from "@hugeicons/core-free-icons";
+import { HugeiconsIcon } from "@hugeicons/react";
 import { useRef, useState, type MouseEvent } from "react";
 import { useDashboardClient, type TaskGroupsPageData } from "../core.js";
-import { useConfirmationActivity } from "../dropdown-activity.js";
-import { EmptyState, PageHeader } from "../components/task-list.js";
+import { EmptyState } from "../components/empty-state.js";
+import { Page, PageHeader, PageSection, TablePanel } from "../components/page-header.js";
+import { ConfirmDialog } from "../components/confirm-dialog.js";
 import { notifyDashboard, notifyFailure } from "../notifications.js";
 import { formatExact, formatJson, formatRelative } from "../preferences.js";
 import { statusColor } from "../status-colors.js";
+import { StatusLabel } from "../status-badge.js";
 import { formatCount } from "../count-format.js";
-import { taskGroupsLocationHref, type TaskGroupsLocationState } from "../task-groups-location.js";
+import {
+  taskGroupsListingKey,
+  taskGroupsLocationHref,
+  type TaskGroupsLocationState,
+} from "../task-groups-location.js";
+import { PendingResults, ResultsAnnouncement, usePagePending } from "../pending-results.js";
+import { useRowKeyboardNavigation } from "../list-keyboard.js";
 import { randomUuid } from "../random-uuid.js";
 
 /** The navigation a task groups view needs from the shell. */
@@ -128,30 +134,44 @@ export function TaskGroupProgress({
   );
 }
 
+/**
+ * The state of a group as one status label. A finished group shows its result, because the
+ * result answers the operator's question. An open or sealed group shows its state.
+ */
 function TaskGroupStateBadges({ group }: { group: DashboardTaskGroup }) {
+  const result = group.state === "finished" ? group.result : null;
+  const color =
+    result !== null
+      ? statusColor(result)
+      : group.state === "sealed"
+        ? statusColor("active")
+        : "gray";
   return (
     <Group gap={6} wrap="nowrap">
-      <Badge variant="light" color={group.state === "finished" ? "gray" : "blue"}>
-        {group.state}
-      </Badge>
-      {group.result ? (
-        <Badge variant="light" color={statusColor(group.result)}>
-          {group.result}
-        </Badge>
-      ) : null}
+      <StatusLabel
+        state={group.state}
+        text={result ?? group.state}
+        label={result === null ? `State: ${group.state}` : `State: finished, result: ${result}`}
+        color={color}
+      />
       {group.canceledAt ? (
-        <Badge variant="outline" color="gray">
-          canceled
-        </Badge>
+        <Text component="span" size="xs" c="dimmed">
+          Canceled
+        </Text>
       ) : null}
     </Group>
   );
 }
 
 function Timestamp({ value }: { value: string | null }) {
-  if (value === null) return <Text c="dimmed">—</Text>;
+  if (value === null)
+    return (
+      <Text c="dimmed" size="sm">
+        —
+      </Text>
+    );
   return (
-    <Text size="sm" title={formatExact(value)}>
+    <Text size="sm" c="dimmed" title={formatExact(value)}>
       {formatRelative(value)}
     </Text>
   );
@@ -172,16 +192,26 @@ export function TaskGroupsList({
   navigation: TaskGroupsNavigation;
   navigate: (href: string) => void;
 }) {
+  // A state or pager change keeps these rows, dimmed, until the new rows arrive.
+  const pending = usePagePending();
   const groupPath = (groupId: string) =>
     taskGroupsLocationHref({ ...location, groupId, after: null });
+  // ArrowDown, ArrowUp, j, and k move through the group links. Enter opens the group.
+  useRowKeyboardNavigation({
+    list: () => document.querySelector("[role='region'][aria-label='Task groups table']"),
+    rowSelector: ".task-group-row__link",
+    panel: null,
+  });
   return (
-    <Stack gap="lg">
+    <Page>
       <PageHeader
         title="Task groups"
         description="A task group tracks a set of tasks as one unit. When every member task is finished, Workhorse enqueues the callbacks of the group."
       />
-      <Group justify="space-between">
+      <div className="page-toolbar">
         <SegmentedControl
+          size="xs"
+          aria-label="Task group state"
           value={location.state}
           data={dashboardTaskGroupStateFilters.map((value) => ({
             value,
@@ -197,33 +227,78 @@ export function TaskGroupsList({
             )
           }
         />
-      </Group>
-      {data.groups.length === 0 ? (
-        <EmptyState>
-          {location.state === "all"
-            ? "No task groups exist."
-            : `No ${location.state} task groups exist.`}
-        </EmptyState>
-      ) : (
-        <Paper withBorder>
-          <ScrollArea>
-            <Table verticalSpacing="sm" highlightOnHover>
+      </div>
+      <ResultsAnnouncement
+        requestKey={taskGroupsListingKey(location)}
+        pending={pending}
+        count={data.groups.length}
+        message={
+          data.groups.length === 0
+            ? "No task groups match this state."
+            : `The table shows ${formatCount(data.groups.length)} task ${data.groups.length === 1 ? "group" : "groups"}.`
+        }
+      />
+      <PendingResults pending={pending} requestKey={taskGroupsListingKey(location)}>
+        {data.groups.length === 0 ? (
+          location.state === "all" ? (
+            <EmptyState title="No task groups">
+              An application creates a task group when it enqueues a set of tasks as one unit.
+            </EmptyState>
+          ) : (
+            <EmptyState
+              title={`No ${location.state} task groups`}
+              action={
+                <Button
+                  size="xs"
+                  variant="default"
+                  onClick={() =>
+                    navigate(taskGroupsLocationHref({ ...location, state: "all", page: 1 }))
+                  }
+                >
+                  Show all task groups
+                </Button>
+              }
+            >
+              No task group is {location.state} now. Other states can still hold groups.
+            </EmptyState>
+          )
+        ) : (
+          <TablePanel label="Task groups table">
+            <Table highlightOnHover className="data-table" miw={760}>
               <Table.Thead>
                 <Table.Tr>
                   <Table.Th>Group</Table.Th>
                   <Table.Th>State</Table.Th>
                   <Table.Th>Progress</Table.Th>
-                  <Table.Th>Failed</Table.Th>
-                  <Table.Th>Canceled</Table.Th>
+                  <Table.Th className="data-table__metric">Failed</Table.Th>
+                  <Table.Th className="data-table__metric">Canceled</Table.Th>
                   <Table.Th>Created</Table.Th>
                   <Table.Th>Finished</Table.Th>
                 </Table.Tr>
               </Table.Thead>
               <Table.Tbody>
                 {data.groups.map((group) => (
-                  <Table.Tr key={group.id}>
+                  <Table.Tr
+                    key={group.id}
+                    className="task-group-row"
+                    onClick={(event) => {
+                      // A click on the group link or another control acts on that control.
+                      if (
+                        (event.target as HTMLElement).closest("a, button, input, .status-label")
+                      ) {
+                        return;
+                      }
+                      const path = groupPath(group.id);
+                      if (event.metaKey || event.ctrlKey) {
+                        window.open(navigation.href(path), "_blank", "noopener");
+                        return;
+                      }
+                      navigate(path);
+                    }}
+                  >
                     <Table.Td>
                       <Anchor
+                        className="task-group-row__link"
                         href={navigation.href(groupPath(group.id))}
                         onClick={(event) => navigation.followLink(event, groupPath(group.id))}
                         ff="monospace"
@@ -239,8 +314,12 @@ export function TaskGroupsList({
                     <Table.Td>
                       <TaskGroupProgress counts={group.counts} size="sm" />
                     </Table.Td>
-                    <Table.Td>{formatCount(group.counts.failed)}</Table.Td>
-                    <Table.Td>{formatCount(group.counts.canceled)}</Table.Td>
+                    <Table.Td className="data-table__metric">
+                      {formatCount(group.counts.failed)}
+                    </Table.Td>
+                    <Table.Td className="data-table__metric">
+                      {formatCount(group.counts.canceled)}
+                    </Table.Td>
                     <Table.Td>
                       <Timestamp value={group.createdAt} />
                     </Table.Td>
@@ -251,10 +330,10 @@ export function TaskGroupsList({
                 ))}
               </Table.Tbody>
             </Table>
-          </ScrollArea>
-        </Paper>
-      )}
-      <Group justify="flex-end" gap="xs">
+          </TablePanel>
+        )}
+      </PendingResults>
+      <nav className="page-pager" aria-label="Task group pages">
         <Button
           variant="default"
           size="xs"
@@ -276,8 +355,8 @@ export function TaskGroupsList({
         >
           Next page
         </Button>
-      </Group>
-    </Stack>
+      </nav>
+    </Page>
   );
 }
 
@@ -312,12 +391,14 @@ export function TaskGroupDetailView({
   reload: () => Promise<void>;
 }) {
   const client = useDashboardClient();
+  // A member pager change keeps these rows, dimmed, until the new rows arrive.
+  const pending = usePagePending();
   const { group } = data;
   const [confirming, setConfirming] = useState(false);
   const [reason, setReason] = useState("");
   const [canceling, setCanceling] = useState(false);
   const cancelInFlight = useRef(false);
-  useConfirmationActivity(confirming);
+  const reasonInput = useRef<HTMLInputElement>(null);
   const listPath = taskGroupsLocationHref({ ...location, groupId: null, after: null });
   const memberPage = (after: number | null) =>
     navigate(taskGroupsLocationHref({ ...location, after }));
@@ -362,22 +443,22 @@ export function TaskGroupDetailView({
   };
 
   return (
-    <Stack gap="lg">
+    <Page>
       <Anchor
+        className="task-group__back"
         href={navigation.href(listPath)}
         onClick={(event) => navigation.followLink(event, listPath)}
         size="sm"
       >
-        ← All task groups
+        <HugeiconsIcon icon={ArrowLeft01Icon} size={16} aria-hidden />
+        All task groups
       </Anchor>
-      <Group justify="space-between" align="flex-start">
-        <Stack gap={4}>
-          <Title order={1}>Task group</Title>
-          <Code>{group.id}</Code>
-        </Stack>
-        <Group gap="sm">
-          <TaskGroupStateBadges group={group} />
-          {group.state === "finished" ? null : !data.canCancel ? (
+      <PageHeader
+        title="Task group"
+        titleAside={<TaskGroupStateBadges group={group} />}
+        description={<Code className="task-group__id">{group.id}</Code>}
+        actions={
+          group.state === "finished" ? undefined : !data.canCancel ? (
             <Text size="sm" c="dimmed">
               This dashboard cannot cancel task groups.
             </Text>
@@ -392,65 +473,70 @@ export function TaskGroupDetailView({
             >
               Cancel group
             </Button>
-          )}
-        </Group>
-      </Group>
-      <Paper withBorder p="md">
-        <Stack gap="md">
-          <TaskGroupProgress counts={group.counts} size="lg" />
-          <SimpleGrid cols={{ base: 2, sm: 5 }}>
-            {(["total", "succeeded", "failed", "canceled", "pending"] as const).map((name) => (
-              <Stack key={name} gap={0}>
-                <Text size="xs" c="dimmed" tt="capitalize">
-                  {name}
-                </Text>
-                <Text fw={600}>{formatCount(group.counts[name])}</Text>
-              </Stack>
-            ))}
-          </SimpleGrid>
-          <SimpleGrid cols={{ base: 2, sm: 4 }}>
-            {(
-              [
-                ["Created", group.createdAt],
-                ["Sealed", group.sealedAt],
-                ["Finished", group.finishedAt],
-                ["Canceled", group.canceledAt],
-              ] as const
-            ).map(([label, value]) => (
-              <Stack key={label} gap={0}>
-                <Text size="xs" c="dimmed">
-                  {label}
-                </Text>
-                <Timestamp value={value} />
-              </Stack>
-            ))}
-          </SimpleGrid>
-          {group.canceledAt ? (
-            <Text size="sm">
-              {group.canceledBy} canceled this group: {group.cancelReason}
-            </Text>
-          ) : null}
-          {group.state === "open" ? (
-            <Text size="sm" c="dimmed">
-              This group is open. It cannot finish until the application seals it.
-            </Text>
-          ) : null}
-        </Stack>
-      </Paper>
-
-      <Stack gap="xs">
-        <Title order={3}>Callbacks</Title>
-        {group.callbacks.length === 0 ? (
-          <Text size="sm" c="dimmed">
-            This group has no callbacks.
+          )
+        }
+      />
+      <section className="panel panel--padded task-group__summary" aria-label="Progress">
+        <TaskGroupProgress counts={group.counts} size="lg" />
+        <SimpleGrid cols={{ base: 2, sm: 5 }} spacing="md">
+          {(["total", "succeeded", "failed", "canceled", "pending"] as const).map((name) => (
+            <Stack key={name} gap={0}>
+              <Text size="xs" c="dimmed" tt="capitalize">
+                {name}
+              </Text>
+              <Text fw={600} className="task-group__count">
+                {formatCount(group.counts[name])}
+              </Text>
+            </Stack>
+          ))}
+        </SimpleGrid>
+        <SimpleGrid cols={{ base: 2, sm: 4 }} spacing="md">
+          {(
+            [
+              ["Created", group.createdAt],
+              ["Sealed", group.sealedAt],
+              ["Finished", group.finishedAt],
+              ["Canceled", group.canceledAt],
+            ] as const
+          ).map(([label, value]) => (
+            <Stack key={label} gap={0}>
+              <Text size="xs" c="dimmed">
+                {label}
+              </Text>
+              <Timestamp value={value} />
+            </Stack>
+          ))}
+        </SimpleGrid>
+        {group.canceledAt ? (
+          <Text size="sm">
+            {group.canceledBy} canceled this group: {group.cancelReason}
           </Text>
+        ) : null}
+        {group.state === "open" ? (
+          <Text size="sm" c="dimmed">
+            This group is open. It cannot finish until the application seals it.
+          </Text>
+        ) : null}
+      </section>
+
+      <PageSection id="task-group-callbacks" title="Callbacks">
+        {group.callbacks.length === 0 ? (
+          <EmptyState title="No callbacks">
+            This group enqueues no task when it finishes.
+          </EmptyState>
         ) : (
-          <Paper withBorder>
-            <Table verticalSpacing="xs">
+          <TablePanel label="Callbacks table">
+            <Table className="data-table">
+              <Table.Thead>
+                <Table.Tr>
+                  <Table.Th w={140}>Callback</Table.Th>
+                  <Table.Th>Task</Table.Th>
+                </Table.Tr>
+              </Table.Thead>
               <Table.Tbody>
                 {group.callbacks.map((callback) => (
                   <Table.Tr key={callback.kind}>
-                    <Table.Td w={140}>
+                    <Table.Td>
                       <Code>{callbackLabels[callback.kind]}</Code>
                     </Table.Td>
                     <Table.Td>
@@ -475,25 +561,24 @@ export function TaskGroupDetailView({
                 ))}
               </Table.Tbody>
             </Table>
-          </Paper>
+          </TablePanel>
         )}
-      </Stack>
+      </PageSection>
 
-      <Stack gap="xs">
-        <Title order={3}>Member tasks</Title>
-        {data.members.length === 0 ? (
-          <Text size="sm" c="dimmed">
-            {location.after === null
-              ? "This group has no member tasks."
-              : "No member tasks follow this position."}
-          </Text>
-        ) : (
-          <Paper withBorder>
-            <ScrollArea>
-              <Table verticalSpacing="xs" highlightOnHover>
+      <PageSection id="task-group-members" title="Member tasks">
+        <PendingResults pending={pending} requestKey={taskGroupsListingKey(location)}>
+          {data.members.length === 0 ? (
+            <EmptyState title="No member tasks">
+              {location.after === null
+                ? "This group has no member tasks."
+                : "No member tasks follow this position."}
+            </EmptyState>
+          ) : (
+            <TablePanel label="Member tasks table">
+              <Table highlightOnHover className="data-table" miw={760}>
                 <Table.Thead>
                   <Table.Tr>
-                    <Table.Th>#</Table.Th>
+                    <Table.Th className="data-table__metric">#</Table.Th>
                     <Table.Th>Task</Table.Th>
                     <Table.Th>Type</Table.Th>
                     <Table.Th>Queue</Table.Th>
@@ -504,8 +589,20 @@ export function TaskGroupDetailView({
                 </Table.Thead>
                 <Table.Tbody>
                   {data.members.map((member) => (
-                    <Table.Tr key={member.taskId}>
-                      <Table.Td>{member.position}</Table.Td>
+                    <Table.Tr
+                      key={member.taskId}
+                      className="task-group-row"
+                      onClick={(event) => {
+                        if ((event.target as HTMLElement).closest("a, button, input")) return;
+                        const path = navigation.taskPath(member.taskId);
+                        if (event.metaKey || event.ctrlKey) {
+                          window.open(navigation.href(path), "_blank", "noopener");
+                          return;
+                        }
+                        navigate(path);
+                      }}
+                    >
+                      <Table.Td className="data-table__metric">{member.position}</Table.Td>
                       <Table.Td>
                         <Anchor
                           href={navigation.href(navigation.taskPath(member.taskId))}
@@ -519,22 +616,32 @@ export function TaskGroupDetailView({
                           {shortId(member.taskId)}
                         </Anchor>
                       </Table.Td>
-                      <Table.Td>{member.taskType ?? <Text c="dimmed">deleted</Text>}</Table.Td>
-                      <Table.Td>{member.queue ?? <Text c="dimmed">—</Text>}</Table.Td>
+                      <Table.Td>
+                        {member.taskType ?? (
+                          <Text c="dimmed" size="sm">
+                            deleted
+                          </Text>
+                        )}
+                      </Table.Td>
+                      <Table.Td>
+                        {member.queue ?? (
+                          <Text c="dimmed" size="sm">
+                            —
+                          </Text>
+                        )}
+                      </Table.Td>
                       <Table.Td>
                         {member.state ? (
-                          <Badge variant="light" color={statusColor(member.state)}>
-                            {member.state}
-                          </Badge>
+                          <StatusLabel state={member.state} />
                         ) : (
-                          <Text c="dimmed">—</Text>
+                          <Text c="dimmed" size="sm">
+                            —
+                          </Text>
                         )}
                       </Table.Td>
                       <Table.Td>
                         {member.outcome ? (
-                          <Badge variant="outline" color={statusColor(member.outcome)}>
-                            {member.outcome}
-                          </Badge>
+                          <StatusLabel state={member.outcome} />
                         ) : (
                           <Text size="sm" c="dimmed">
                             pending
@@ -548,10 +655,10 @@ export function TaskGroupDetailView({
                   ))}
                 </Table.Tbody>
               </Table>
-            </ScrollArea>
-          </Paper>
-        )}
-        <Group justify="flex-end" gap="xs">
+            </TablePanel>
+          )}
+        </PendingResults>
+        <nav className="page-pager" aria-label="Member task pages">
           <Button
             variant="default"
             size="xs"
@@ -568,27 +675,34 @@ export function TaskGroupDetailView({
           >
             Next page
           </Button>
-        </Group>
-      </Stack>
+        </nav>
+      </PageSection>
 
-      <Stack gap="xs">
-        <Title order={3}>Events</Title>
-        {data.eventsTruncated ? (
-          <Text size="sm" c="dimmed">
-            This list shows the newest {dashboardTaskGroupEventLimit} events of the group.
-          </Text>
-        ) : null}
-        <Paper withBorder>
-          <Table verticalSpacing="xs">
+      <PageSection
+        id="task-group-events"
+        title="Events"
+        description={
+          data.eventsTruncated
+            ? `This list shows the newest ${dashboardTaskGroupEventLimit} events of the group.`
+            : undefined
+        }
+      >
+        <TablePanel label="Task group events table">
+          <Table className="data-table task-group__events">
+            <Table.Thead>
+              <Table.Tr>
+                <Table.Th w={200}>Event</Table.Th>
+                <Table.Th w={140}>When</Table.Th>
+                <Table.Th>Details</Table.Th>
+              </Table.Tr>
+            </Table.Thead>
             <Table.Tbody>
               {data.events.map((event) => (
                 <Table.Tr key={event.id}>
-                  <Table.Td w={180}>
-                    <Badge variant="light" color="gray">
-                      {event.type}
-                    </Badge>
+                  <Table.Td>
+                    <Code>{event.type}</Code>
                   </Table.Td>
-                  <Table.Td w={140}>
+                  <Table.Td>
                     <Timestamp value={event.occurredAt} />
                   </Table.Td>
                   <Table.Td>
@@ -598,55 +712,45 @@ export function TaskGroupDetailView({
               ))}
             </Table.Tbody>
           </Table>
-        </Paper>
-      </Stack>
+        </TablePanel>
+      </PageSection>
 
-      <Modal
-        opened={confirming}
-        onClose={() => {
+      <ConfirmDialog
+        open={confirming}
+        title="Cancel this task group?"
+        tone="danger"
+        confirmLabel="Cancel group"
+        cancelLabel="Keep group"
+        pending={canceling}
+        confirmDisabled={reason.trim() === ""}
+        initialFocus={reasonInput}
+        onCancel={() => {
           if (!cancelInFlight.current) setConfirming(false);
         }}
-        title="Cancel this task group?"
-        centered
-        closeOnClickOutside={!canceling}
-        closeOnEscape={!canceling}
-        withCloseButton={!canceling}
+        onConfirm={() => void cancelGroup()}
       >
-        <Code block mb="sm">
-          {group.id}
-        </Code>
-        <Text size="sm" mb="sm">
+        <Code block>{group.id}</Code>
+        <p>
           Workhorse seals this group, so no task can join it. Then it cancels each member task that
           is not finished. An active member task stops when its handler observes the cancellation.
           The group finishes with the result failed, and its onFinish and onFailure callbacks run.
           You cannot undo a cancellation.
-        </Text>
-        <TextInput
-          data-autofocus
-          required
-          label="Reason"
-          description="Workhorse records this reason in the group events."
-          placeholder="Why are you canceling this task group?"
-          value={reason}
-          maxLength={2_000}
-          disabled={canceling}
-          onChange={(event) => setReason(event.currentTarget.value)}
-        />
-        <Group justify="flex-end" mt="lg">
-          <Button variant="default" disabled={canceling} onClick={() => setConfirming(false)}>
-            Keep group
-          </Button>
-          <Button
-            color="red"
-            loading={canceling}
-            disabled={reason.trim() === ""}
-            onClick={() => void cancelGroup()}
-          >
-            Cancel group
-          </Button>
-        </Group>
-      </Modal>
-    </Stack>
+        </p>
+        <Box>
+          <TextInput
+            ref={reasonInput}
+            required
+            label="Reason"
+            description="Workhorse records this reason in the group events."
+            placeholder="Why are you canceling this task group?"
+            value={reason}
+            maxLength={2_000}
+            disabled={canceling}
+            onChange={(event) => setReason(event.currentTarget.value)}
+          />
+        </Box>
+      </ConfirmDialog>
+    </Page>
   );
 }
 

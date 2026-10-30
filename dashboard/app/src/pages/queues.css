@@ -1,0 +1,32 @@
+/* Queues: the queue name column can be narrower than the shared minimum, so metrics fit. */
+.dashboard-table--queues.data-table :is(th, td):first-child {
+  min-width: 7rem;
+}
+
+/* A link from a schedule opens this page at the queue row and marks that row. */
+.dashboard-table--queues .queue-row {
+  scroll-margin-top: 72px;
+}
+
+/* The sticky first and last cells paint their own background, so each cell takes the mark. */
+.data-table.dashboard-table--queues > tbody > .queue-row[data-linked] > td {
+  background: var(--table-hover-color);
+}
+
+.data-table.dashboard-table--queues > tbody > .queue-row[data-linked] > td:first-child {
+  box-shadow: inset 2px 0 0 var(--workhorse-neutral-10);
+}
+
+/* The queue name is the row identity: monospace at the body size, with no code chip. */
+.dashboard-table--queues .queue-row__name {
+  padding: 0;
+  background: transparent;
+  font-size: var(--mantine-font-size-sm);
+  font-weight: 500;
+}
+
+/* A metric stays on one line, so every row keeps the same height. */
+.dashboard-table--queues td[style*="text-align"],
+.dashboard-table--queues .data-table__metric {
+  white-space: nowrap;
+}

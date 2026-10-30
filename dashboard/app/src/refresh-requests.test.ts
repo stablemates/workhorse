@@ -40,6 +40,26 @@ describe("dashboard refresh requests", () => {
     expect(read).toHaveBeenCalledTimes(1);
   });
 
+  it("stops sharing a read that started before a mutation", async () => {
+    const requests = createRefreshRequests();
+    let finish!: (value: string) => void;
+    const old = requests.run(
+      "queues",
+      () =>
+        new Promise<string>((resolve) => {
+          finish = resolve;
+        }),
+    );
+    requests.forget();
+    expect(requests.has("queues")).toBe(false);
+    // A navigation after the mutation does not join the old read.
+    const updated = requests.run("queues", async () => "new");
+    expect(await updated).toBe("new");
+    finish("old");
+    expect(await old).toBe("old");
+    expect(requests.has("queues")).toBe(false);
+  });
+
   it("allows retry after rejection", async () => {
     const requests = createRefreshRequests();
     await expect(

@@ -50,19 +50,24 @@
     }
   },
   "scripts": {
-    "build": "tsc -p tsconfig.json && cp src/styles.css dist/library/styles.css && rm -rf dist/library/assets dist/app && mkdir -p dist/library/assets && cp -R src/assets/. dist/library/assets/ && vite build",
+    "build": "tsc -p tsconfig.json && node ../../scripts/copy-dashboard-library-styles.mjs src dist/library && rm -rf dist/library/assets dist/app && mkdir -p dist/library/assets && cp -R src/assets/. dist/library/assets/ && vite build",
     "build:dev": "pnpm build:library",
-    "build:library": "tsc -p tsconfig.json && cp src/styles.css dist/library/styles.css && rm -rf dist/library/assets && mkdir -p dist/library/assets && cp -R src/assets/. dist/library/assets/",
+    "build:library": "tsc -p tsconfig.json && node ../../scripts/copy-dashboard-library-styles.mjs src dist/library && rm -rf dist/library/assets && mkdir -p dist/library/assets && cp -R src/assets/. dist/library/assets/",
     "dev": "vite",
     "typecheck": "tsc -b tsconfig.typecheck.json"
   },
   "dependencies": {
+    "@base-ui/react": "^1.9.0",
+    "@fontsource-variable/geist": "^5.3.0",
+    "@hugeicons/core-free-icons": "4.3.5",
+    "@hugeicons/react": "^1.1.10",
     "@mantine/charts": "^9.7.4",
     "@mantine/core": "^9.7.4",
     "@mantine/hooks": "^9.7.4",
     "@mantine/notifications": "^9.7.4",
-    "@phosphor-icons/react": "^2.1.10",
     "@stablemates/workhorse-dashboard-server": "workspace:*",
+    "lucide-react": "^1.58.0",
+    "motion": "^14.3.0",
     "recharts": "^3.10.1"
   },
   "devDependencies": {

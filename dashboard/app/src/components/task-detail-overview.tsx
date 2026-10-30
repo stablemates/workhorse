@@ -2,24 +2,25 @@ import { taskStatusColors } from "../status-colors.js";
 import { useCallback, useEffect, useState, type ReactNode } from "react";
 import {
   ActionIcon,
-  Badge,
   Box,
   Button,
   Code,
   Group,
-  Paper,
   ScrollArea,
   Stack,
   Stepper,
   Text,
   Tooltip,
 } from "@mantine/core";
-import { CheckCircle, Clock, Copy, Prohibit } from "@phosphor-icons/react";
 import {
-  describeDurableBoundary,
-  readTaskResultEvidence,
-  type TaskResultState,
-} from "../presentation.js";
+  ArrowRight01Icon,
+  CheckmarkCircle02Icon,
+  Clock01Icon,
+  Copy01Icon,
+  UnavailableIcon,
+} from "@hugeicons/core-free-icons";
+import { HugeiconsIcon } from "@hugeicons/react";
+import { describeDurableBoundary, readTaskResultEvidence } from "../presentation.js";
 import type { DashboardTaskDetail } from "@stablemates/workhorse-dashboard-server/wire";
 import {
   checkpointOutput,
@@ -31,59 +32,111 @@ import {
 } from "../preferences.js";
 import { useDashboardClient } from "../core.js";
 import { formatCount } from "../count-format.js";
+import { HelpButton } from "./help-button.js";
 
 type Checkpoint = DashboardTaskDetail["checkpoints"][number];
 
 /**
  * One top-level block of the task detail drawer.
  *
- * Every section shares this wrapper so the drawer reads as a sequence of separated, identically
- * headed blocks instead of one continuous column. The separator is a border on the section itself
- * rather than a sibling `Divider`, because most sections render conditionally and a divider next
- * to a section that returned null would leave a stray rule.
+ * Every section shares this wrapper so the drawer reads as a sequence of identically headed
+ * blocks. Sections render conditionally, so each one carries its own space above it instead of a
+ * sibling divider that could be left behind.
  */
 export function DrawerSection({
   id,
   title,
+  help,
   aside,
   children,
 }: {
   /** Stable heading element id, used as the section's aria-labelledby target. */
   id: string;
   title: string;
-  /** Optional right-aligned heading companion, typically a count or state badge. */
+  /** An explanation of the section, behind an information control beside the title. */
+  help?: string;
+  /** Optional right-aligned heading companion, such as a count in plain muted text. */
   aside?: ReactNode;
   children: ReactNode;
 }) {
   return (
     <Box component="section" aria-labelledby={id} className="task-drawer__section">
-      <Group justify="space-between" align="center" mb="xs" wrap="nowrap">
-        <Text id={id} component="h3" fw={600} size="sm" my={0}>
+      <div className="task-drawer__section-head">
+        <h3 id={id} className="task-drawer__section-title">
           {title}
-        </Text>
-        {aside ?? null}
-      </Group>
+        </h3>
+        {help ? <HelpButton label={title} help={help} /> : null}
+        {aside ? <span className="task-drawer__section-aside">{aside}</span> : null}
+      </div>
       {children}
     </Box>
   );
 }
 /**
- * One aligned label/value row of drawer metadata.
+ * Secondary detail that stays closed until an operator asks for it.
  *
- * The label column has a fixed width so every value in the overview starts on the same vertical
- * line; without it each row's label, badge, and explainer run together at a different offset and
- * the block reads as one dense paragraph.
+ * It is a native disclosure, so the keyboard, screen readers, and find-in-page work without
+ * script, and a refresh keeps it open or closed because React does not own its `open` state.
+ */
+export function DrawerDisclosure({
+  title,
+  summary,
+  compact = false,
+  children,
+}: {
+  title: string;
+  /** A short digest beside the title, so the closed disclosure still says something. */
+  summary?: ReactNode;
+  /** A smaller disclosure inside another block, such as the error of one attempt. */
+  compact?: boolean;
+  children: ReactNode;
+}) {
+  return (
+    <details
+      className={
+        compact
+          ? "task-drawer__disclosure task-drawer__disclosure--compact"
+          : "task-drawer__disclosure"
+      }
+    >
+      <summary>
+        <HugeiconsIcon
+          icon={ArrowRight01Icon}
+          size={14}
+          strokeWidth={2}
+          aria-hidden
+          className="task-drawer__disclosure-icon"
+        />
+        <span className="task-drawer__disclosure-title">{title}</span>
+        {summary ? <span className="task-drawer__disclosure-summary">{summary}</span> : null}
+      </summary>
+      <div className="task-drawer__disclosure-body">{children}</div>
+    </details>
+  );
+}
+/** A small round mark in a state hue. The text beside it carries the meaning. */
+export function StateDot({ color }: { color: string }) {
+  return (
+    <span
+      className="task-detail__dot"
+      data-color={color}
+      aria-hidden="true"
+      style={{ ["--task-detail-dot" as string]: `var(--mantine-color-${color}-filled)` }}
+    />
+  );
+}
+/**
+ * One label/value row of drawer metadata.
+ *
+ * Rows sit in a two-column grid with a fixed label column, so every value starts on the same
+ * vertical line.
  */
 export function MetaRow({ label, children }: { label: string; children: ReactNode }) {
   return (
-    <Group gap="sm" align="baseline" wrap="nowrap">
-      <Text c="dimmed" size="xs" fw={600} className="task-drawer__meta-label">
-        {label}
-      </Text>
-      <Group gap="xs" align="baseline" wrap="wrap" style={{ flex: 1, minWidth: 0 }}>
-        {children}
-      </Group>
-    </Group>
+    <div className="task-drawer__meta-row">
+      <div className="task-drawer__meta-label">{label}</div>
+      <div className="task-drawer__meta-value">{children}</div>
+    </div>
   );
 }
 /**
@@ -101,7 +154,8 @@ export function JsonValue({
   value,
   emptyLabel,
   copyLabel,
-  maxHeight = 220,
+  maxHeight = 280,
+  tone = "neutral",
 }: {
   label: string;
   value: unknown;
@@ -109,6 +163,8 @@ export function JsonValue({
   /** What to name this value to a screen reader on the copy control. */
   copyLabel: string;
   maxHeight?: number;
+  /** An error value gets a red edge, so it does not read as a result. */
+  tone?: "neutral" | "error";
 }) {
   const [copied, setCopied] = useState(false);
   const [copyError, setCopyError] = useState<string | null>(null);
@@ -130,67 +186,55 @@ export function JsonValue({
       () => setCopyError("Copying is not available in this browser. Select the text to copy it."),
     );
   }, [text]);
+  if (!present) {
+    return <p className="task-detail__note">{emptyLabel}</p>;
+  }
   return (
     <Box>
-      <Group justify="space-between" align="center" mb={4} wrap="nowrap">
-        <Text fw={600} size="xs">
-          {label}
-        </Text>
-        {present ? (
+      <div className="task-drawer__code" data-tone={tone}>
+        <div className="task-drawer__code-head">
+          <span className="task-drawer__code-label">{label}</span>
           <Tooltip label={copied ? "Copied" : `Copy ${copyLabel}`} withArrow>
             <ActionIcon
               size="sm"
               variant="subtle"
-              color={copied ? "teal" : "gray"}
+              color="gray"
               aria-label={copied ? `${copyLabel} copied to the clipboard` : `Copy ${copyLabel}`}
               onClick={copy}
             >
-              {copied ? <CheckCircle size={14} weight="bold" /> : <Copy size={14} />}
+              <HugeiconsIcon
+                icon={copied ? CheckmarkCircle02Icon : Copy01Icon}
+                size={14}
+                strokeWidth={copied ? 2 : 1.5}
+              />
             </ActionIcon>
           </Tooltip>
+        </div>
+        <ScrollArea.Autosize mah={maxHeight} type="auto">
+          <pre className="task-drawer__code-body">{text}</pre>
+        </ScrollArea.Autosize>
+      </div>
+      {/* Copy feedback is announced, not only shown as an icon. */}
+      <Box role="status" aria-live="polite">
+        {copyError ? (
+          <Text c="red" size="xs" mt={4}>
+            {copyError}
+          </Text>
+        ) : copied ? (
+          <Text c="dimmed" size="xs" mt={4}>
+            Copied {copyLabel} to the clipboard.
+          </Text>
         ) : null}
-      </Group>
-      {present ? (
-        <>
-          <ScrollArea.Autosize mah={maxHeight} type="auto">
-            <Code block fz="xs">
-              {text}
-            </Code>
-          </ScrollArea.Autosize>
-          {/* Copy feedback is announced, not only coloured, so the result is never icon-only. */}
-          <Box role="status" aria-live="polite">
-            {copyError ? (
-              <Text c="red" size="xs" mt={4}>
-                {copyError}
-              </Text>
-            ) : copied ? (
-              <Text c="dimmed" size="xs" mt={4}>
-                Copied {copyLabel} to the clipboard.
-              </Text>
-            ) : null}
-          </Box>
-        </>
-      ) : (
-        <Text c="dimmed" size="xs">
-          {emptyLabel}
-        </Text>
-      )}
+      </Box>
     </Box>
   );
 }
-const outcomeStateColor: Record<TaskResultState, string> = {
-  succeeded: "teal",
-  failed: "red",
-  canceled: "gray",
-  pending: "yellow",
-};
 /**
- * Final outcome of one task, stated before any interim evidence.
+ * Final outcome of one task: the stored result, the terminal error, or the latest attempt error.
  *
- * An operator opening this drawer is usually asking "did this finish, and what did it produce?".
- * That question is answered from the stored terminal row alone: a task that has not finished says
- * so instead of showing an empty result, and a retrying task's latest error is labelled as an
- * attempt error so it is never mistaken for a terminal one.
+ * The header already states the task's state, so this section shows only the value. A task that
+ * has not finished and has no attempt error has nothing to show, and the section is omitted. A
+ * retrying task's error is titled as an attempt error, so it is never read as a terminal one.
  */
 export function TaskOutcome({ task }: { task: DashboardTaskDetail }) {
   const outcome = task.current.outcome;
@@ -202,29 +246,19 @@ export function TaskOutcome({ task }: { task: DashboardTaskDetail }) {
     blockedByPersistentFailure: task.durability?.persistentFailure != null,
   });
   const described = evidence.description;
+  if (described.state === "pending" && described.valueLabel === null) return null;
+  const isResult = described.state === "succeeded";
+  const title = isResult
+    ? "Result"
+    : described.state === "pending"
+      ? "Latest attempt error"
+      : described.state === "canceled"
+        ? "Cancellation"
+        : "Error";
+  const valueLabel = isResult || described.state === "canceled" ? "JSON" : "Error";
+  const copyLabel = (described.valueLabel ?? "final result").toLowerCase();
   return (
-    <DrawerSection
-      id="task-outcome-heading"
-      title="Outcome"
-      aside={
-        <Badge
-          variant="light"
-          color={outcomeStateColor[described.state]}
-          tt="none"
-          title={outcome ? `Finished ${formatExact(outcome.finishedAt)}` : described.summary}
-        >
-          {described.label}
-        </Badge>
-      }
-    >
-      <Text c="dimmed" size="xs" mb="xs">
-        {described.summary}
-      </Text>
-      {outcome ? (
-        <Text c="dimmed" size="xs" mb="xs" title={formatExact(outcome.finishedAt)}>
-          Attempt {outcome.attempt} finished {formatRelative(outcome.finishedAt)}
-        </Text>
-      ) : null}
+    <DrawerSection id="task-outcome-heading" title={title} help={described.summary}>
       {/* Only a succeeded outcome shows the stored result; every other value here is an error,
           which task detail always carries. */}
       {outcome?.state === "succeeded" && described.valueLabel !== null ? (
@@ -234,16 +268,17 @@ export function TaskOutcome({ task }: { task: DashboardTaskDetail }) {
           omitted={outcome.resultOmitted}
           valueBytes={outcome.resultBytes}
           value={evidence.value}
-          label={described.valueLabel ?? "Final result"}
+          label={valueLabel}
           emptyLabel={described.emptyLabel ?? "Nothing was stored."}
-          copyLabel={(described.valueLabel ?? "final result").toLowerCase()}
+          copyLabel={copyLabel}
         />
       ) : (
         <JsonValue
-          label={described.valueLabel ?? "Final result"}
+          label={valueLabel}
           value={evidence.value}
           emptyLabel={described.emptyLabel ?? "Nothing was stored."}
-          copyLabel={(described.valueLabel ?? "final result").toLowerCase()}
+          copyLabel={copyLabel}
+          tone={described.state === "failed" || described.state === "pending" ? "error" : "neutral"}
         />
       )}
     </DrawerSection>
@@ -308,25 +343,21 @@ function StoredValue({
     );
   }
   return (
-    <Stack gap={4}>
-      <Text fw={600} size="xs">
-        {label}
-      </Text>
-      <Text c="dimmed" size="xs">
-        Workhorse stored {formatBytes(valueBytes)} here, which the drawer does not carry with the
-        rest of the task.
-      </Text>
+    <div className="task-drawer__code task-drawer__code--withheld">
+      <div className="task-drawer__code-head">
+        <span className="task-drawer__code-label">
+          {label} · {formatBytes(valueBytes)}, not loaded with the task
+        </span>
+        <Button size="compact-xs" variant="default" loading={loading} onClick={() => void load()}>
+          Show this value
+        </Button>
+      </div>
       {error === null ? null : (
-        <Text c="red" size="xs">
+        <Text c="red" size="xs" px="sm" pb="xs">
           {error}
         </Text>
       )}
-      <Group>
-        <Button size="compact-xs" variant="light" loading={loading} onClick={() => void load()}>
-          Show this value
-        </Button>
-      </Group>
-    </Stack>
+    </div>
   );
 }
 
@@ -463,24 +494,21 @@ function PlannedDurability({ task }: { task: DashboardTaskDetail }) {
     );
   return (
     <Box>
-      <Group justify="space-between" align="flex-start" mb="sm">
-        <Box>
-          <Text fw={600} size="sm">
-            {plan.label}
-          </Text>
-          <Text c="dimmed" size="xs">
-            {plan.description}
-          </Text>
-        </Box>
-        <Badge variant="light" color="violet">
-          {formatCount(completedPlanSteps)}/{formatCount(plan.steps.length)} durable
-        </Badge>
-      </Group>
+      <div className="task-drawer__item-head">
+        <span className="task-drawer__item-title">{plan.label}</span>
+        <span className="task-detail__muted task-detail__number">
+          {formatCount(completedPlanSteps)} of {formatCount(plan.steps.length)} saved
+        </span>
+        <HelpButton
+          label={plan.label}
+          help={`${plan.description} This demo defines the stage plan. Workhorse stores checkpoint and wait records, not the plan.`}
+        />
+      </div>
       {persistentFailure ? (
         /* State is carried by the heading text and the icon, never by colour alone. */
-        <Paper withBorder p="xs" mb="sm">
+        <Box className="task-drawer__callout" mb="sm">
           <Group gap={6} align="center" wrap="nowrap" mb={2}>
-            <Prohibit size={13} weight="bold" aria-hidden />
+            <HugeiconsIcon icon={UnavailableIcon} size={13} strokeWidth={2} aria-hidden />
             <Text fw={600} size="xs">
               {hasEvidencePastPersistentBoundary
                 ? "Earlier demo evidence detected"
@@ -493,7 +521,7 @@ function PlannedDurability({ task }: { task: DashboardTaskDetail }) {
               : "Workhorse keeps the interim results that it already saved. "}
             {persistentFailure.reason}
           </Text>
-        </Paper>
+        </Box>
       ) : null}
       <Stepper
         active={resolvedActiveStep}
@@ -502,13 +530,23 @@ function PlannedDurability({ task }: { task: DashboardTaskDetail }) {
         color="violet"
         iconSize={28}
         allowNextStepsSelect={false}
-        completedIcon={<CheckCircle size={15} weight="bold" />}
+        completedIcon={<HugeiconsIcon icon={CheckmarkCircle02Icon} size={15} strokeWidth={2} />}
         progressIcon={
           // A blocked task is not waiting for anything, so it never shows a waiting clock.
           persistentFailure && !hasEvidencePastPersistentBoundary ? (
-            <Prohibit size={14} weight="bold" style={{ display: "block" }} />
+            <HugeiconsIcon
+              icon={UnavailableIcon}
+              size={14}
+              strokeWidth={2}
+              style={{ display: "block" }}
+            />
           ) : (
-            <Clock size={14} weight="bold" style={{ display: "block" }} />
+            <HugeiconsIcon
+              icon={Clock01Icon}
+              size={14}
+              strokeWidth={2}
+              style={{ display: "block" }}
+            />
           )
         }
       >
@@ -542,7 +580,7 @@ function PlannedDurability({ task }: { task: DashboardTaskDetail }) {
             </Text>
           ) : (
             <Text
-              c={task.identity.state === "succeeded" ? "teal" : "violet"}
+              c={task.identity.state === "succeeded" ? "teal" : undefined}
               fw={600}
               size="sm"
               mt="xs"
@@ -554,10 +592,6 @@ function PlannedDurability({ task }: { task: DashboardTaskDetail }) {
           )}
         </Stepper.Completed>
       </Stepper>
-      <Text c="dimmed" size="xs" mt="sm">
-        This demo defines the stage plan. Workhorse stores checkpoint and wait records, not the
-        plan.
-      </Text>
       {unmatchedCheckpoints.length > 0 ? (
         <Box mt="md">
           <Text fw={600} size="xs" mb={4}>
@@ -565,14 +599,13 @@ function PlannedDurability({ task }: { task: DashboardTaskDetail }) {
           </Text>
           <Stack gap="xs">
             {unmatchedCheckpoints.map((checkpoint) => (
-              <Paper key={checkpoint.name} withBorder p="xs">
-                <CheckpointValue
-                  taskId={task.identity.id}
-                  checkpoint={checkpoint}
-                  label={checkpoint.name}
-                  maxHeight={160}
-                />
-              </Paper>
+              <CheckpointValue
+                key={checkpoint.name}
+                taskId={task.identity.id}
+                checkpoint={checkpoint}
+                label={checkpoint.name}
+                maxHeight={160}
+              />
             ))}
           </Stack>
         </Box>
@@ -580,63 +613,45 @@ function PlannedDurability({ task }: { task: DashboardTaskDetail }) {
     </Box>
   );
 }
+/** Saved interim results. Omitted for a task that saved none and declares no stage plan. */
 export function TaskCheckpoints({ task }: { task: DashboardTaskDetail }) {
+  if (!task.durability && task.checkpoints.length === 0) return null;
   const currentAttempt = task.current.outcome?.attempt ?? task.current.runtime?.attempt ?? 1;
   return (
     <DrawerSection
       id="interim-results-heading"
       title="Interim results"
+      help="Interim results show completed work rather than current progress. Workhorse saves each result at a named restart boundary, and later attempts reuse it."
       aside={
-        <Badge variant="light" color={task.checkpoints.length > 0 ? "teal" : "gray"}>
+        <span className="task-detail__muted task-detail__number">
           {formatCount(task.checkpoints.length)}
           {task.truncated.checkpoints ? "+" : ""}
-        </Badge>
+        </span>
       }
     >
-      {/* Named once, here, so the rest of the section never has to re-explain what it is showing. */}
-      <Text c="dimmed" size="xs" mb="sm">
-        Interim results show completed work rather than current progress. Workhorse saves each
-        result at a named restart boundary, and later attempts reuse it.
-        {task.truncated.checkpoints
-          ? " This task saved more results than the drawer shows; these are its most recent."
-          : ""}
-      </Text>
+      {task.truncated.checkpoints ? (
+        <p className="task-detail__note">
+          This task saved more results than the drawer shows. These are its most recent.
+        </p>
+      ) : null}
       {task.durability ? (
         <PlannedDurability task={task} />
-      ) : task.checkpoints.length === 0 ? (
-        <Text c="dimmed" size="sm">
-          This task has not reached a named restart boundary.
-        </Text>
       ) : (
-        <Stack gap="sm">
+        <Stack gap="md">
           {task.checkpoints.map((checkpoint) => {
             const persistedAcrossRetry = currentAttempt > checkpoint.attempt;
             return (
-              <Paper key={checkpoint.name} withBorder p="sm">
-                <Group justify="space-between" align="flex-start">
-                  <Box>
-                    <Text fw={600} size="sm">
-                      {checkpoint.name}
-                    </Text>
-                    <Text c="dimmed" size="xs" title={formatExact(checkpoint.createdAt)}>
-                      Attempt {checkpoint.attempt} · {checkpoint.workerId}
-                    </Text>
-                    <Text c="dimmed" size="xs" title={formatExact(checkpoint.createdAt)}>
-                      Fence {checkpoint.fenceToken} · {formatRelative(checkpoint.createdAt)}
-                    </Text>
-                  </Box>
-                  <Badge variant="light" color={persistedAcrossRetry ? "violet" : "teal"}>
-                    {persistedAcrossRetry ? "Persisted across retry" : "Saved"}
-                  </Badge>
-                </Group>
-                <Box mt="sm">
-                  <CheckpointValue
-                    taskId={task.identity.id}
-                    checkpoint={checkpoint}
-                    label="Checkpoint output"
-                  />
-                </Box>
-              </Paper>
+              <Box key={checkpoint.name}>
+                <div className="task-drawer__item-head">
+                  <span className="task-drawer__item-title">{checkpoint.name}</span>
+                  <span className="task-detail__muted" title={formatExact(checkpoint.createdAt)}>
+                    {persistedAcrossRetry ? "Kept across retry · " : ""}attempt {checkpoint.attempt}{" "}
+                    · {checkpoint.workerId} · fence {checkpoint.fenceToken} ·{" "}
+                    {formatRelative(checkpoint.createdAt)}
+                  </span>
+                </div>
+                <CheckpointValue taskId={task.identity.id} checkpoint={checkpoint} label="JSON" />
+              </Box>
             );
           })}
         </Stack>
@@ -644,36 +659,27 @@ export function TaskCheckpoints({ task }: { task: DashboardTaskDetail }) {
     </DrawerSection>
   );
 }
+/** The latest mutable progress. Omitted when the task reported none. */
 export function TaskProgress({ task }: { task: DashboardTaskDetail }) {
   const progress = task.progress;
+  if (!progress) return null;
   return (
     <DrawerSection
       id="task-progress-heading"
-      title="Latest progress"
+      title="Progress"
       aside={
-        <Badge variant="light" color={progress ? "blue" : "gray"}>
-          {progress ? `Revision ${progress.revision}` : "Not reported"}
-        </Badge>
+        <span className="task-detail__muted" title={formatExact(progress.updatedAt)}>
+          Revision {progress.revision} · attempt {progress.attempt} · {progress.workerId} · fence{" "}
+          {progress.fenceToken} · updated {formatRelative(progress.updatedAt)}
+        </span>
       }
     >
-      {progress ? (
-        <Paper withBorder p="sm">
-          <Text c="dimmed" size="xs" mb="sm" title={formatExact(progress.updatedAt)}>
-            Attempt {progress.attempt} · {progress.workerId} · fence {progress.fenceToken} · updated{" "}
-            {formatRelative(progress.updatedAt)}
-          </Text>
-          <JsonValue
-            label="Mutable progress"
-            value={progress.value}
-            emptyLabel="The worker reported JSON null as its latest progress."
-            copyLabel="the latest task progress"
-          />
-        </Paper>
-      ) : (
-        <Text c="dimmed" size="sm">
-          This task has not reported mutable progress.
-        </Text>
-      )}
+      <JsonValue
+        label={`Revision ${progress.revision}`}
+        value={progress.value}
+        emptyLabel="The worker reported JSON null as its latest progress."
+        copyLabel="the latest task progress"
+      />
     </DrawerSection>
   );
 }

@@ -379,6 +379,8 @@ try {
     "dist/server.js",
     "dist/standalone.js",
     "dist/styles.css",
+    "dist/components/graphical/styles.css",
+    "dist/shell/sidebar.css",
     "dist/assets/workhorse-mark.svg",
     "dist/assets/workhorse-wordmark.svg",
     "development/browser/index.html",

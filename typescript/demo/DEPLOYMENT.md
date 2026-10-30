@@ -733,12 +733,12 @@ Build the demo image with the checkout's commit as the `WORKHORSE_REVISION` buil
 docker build --build-arg WORKHORSE_REVISION="$(git rev-parse HEAD)" .
 ```
 
-The dashboard then shows the commit's short hash beside the Workhorse version and links it to the
-commit. A build from `main` keeps the version of the last release, so the hash is what tells a
+The About section of the dashboard Help menu then shows the commit's short hash beside the
+Workhorse version and links it to the commit. A build from `main` keeps the version of the last release, so the hash is what tells a
 visitor which revision serves the demo. It also confirms a deploy published the expected commit. The
 build context excludes `.git`, so the image cannot find the commit itself. The argument must be a
 hexadecimal commit hash; the demo refuses to start on any other value. Without the argument, the
-dashboard shows the version alone. The argument sits after every filesystem layer of the runtime
+Help menu shows the version alone. The argument sits after every filesystem layer of the runtime
 stage, so a new commit invalidates none of the cached layers.
 
 ### Dashboard schema

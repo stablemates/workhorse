@@ -27,6 +27,8 @@ export interface TaskListRowProps {
   canCompleteHumanWait: boolean;
   /** The action in flight for this row, or null while it is idle. */
   pendingAction: TaskRowActionId | null;
+  /** True while the task drawer shows this task. */
+  selected: boolean;
   /** The instant the listing is being shown at, which the "updated" label is measured from. */
   shownAt: number;
   /** The time zone the absolute timestamps are written in. */
@@ -52,6 +54,7 @@ export function sameTaskRow(previous: TaskListRowProps, next: TaskListRowProps):
     previous.canRunNow === next.canRunNow &&
     previous.canCompleteHumanWait === next.canCompleteHumanWait &&
     previous.pendingAction === next.pendingAction &&
+    previous.selected === next.selected &&
     previous.timeZone === next.timeZone &&
     sameStructure(previous.task, next.task) &&
     formatRelative(previous.task.updatedAt, previous.shownAt) ===
@@ -68,10 +71,16 @@ export const TaskListRow = memo(function TaskListRow({
   canRunNow,
   canCompleteHumanWait,
   pendingAction,
+  selected,
   shownAt,
 }: TaskListRowProps) {
   return (
-    <Table.Tr onClick={() => onOpen(task.id)} style={{ cursor: "pointer" }}>
+    <Table.Tr
+      onClick={() => onOpen(task.id)}
+      style={{ cursor: "pointer" }}
+      className="task-table__row"
+      data-selected={selected || undefined}
+    >
       <Table.Td className="task-table__col--actions">
         <TaskRowActions
           task={task}
@@ -101,7 +110,7 @@ export const TaskListRow = memo(function TaskListRow({
               <Badge
                 size="xs"
                 variant="light"
-                color="orange"
+                color="gray"
                 tt="none"
                 title={`Priority ${task.priority}; higher-priority ready tasks are claimed first.`}
               >

@@ -1,4 +1,4 @@
-import { createElement } from "react";
+import { createElement, type ReactNode } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { MantineProvider } from "@mantine/core";
 import { describe, expect, it } from "vitest";
@@ -7,6 +7,16 @@ import type {
   DashboardQueuesPage,
 } from "@stablemates/workhorse-dashboard-server/wire";
 import { describeQueueTier, describeTierSwitch, queueTierActions } from "./queue-tier.js";
+import { GraphicalProvider, theme } from "./ui.js";
+
+/** The Graphical controls on this page need their theme provider beside Mantine's. */
+function ThemeProviders({ children }: { children: ReactNode }) {
+  return createElement(
+    MantineProvider,
+    null,
+    createElement(GraphicalProvider, { document: theme, colorMode: "light" }, children),
+  );
+}
 
 const storage = new Map<string, string>();
 Object.defineProperty(globalThis, "localStorage", {
@@ -51,7 +61,7 @@ async function renderQueues(data: DashboardQueuesPage): Promise<string> {
   const { QueuesPage } = await import("./dashboard.js");
   return renderToStaticMarkup(
     createElement(
-      MantineProvider,
+      ThemeProviders,
       null,
       createElement(QueuesPage as never, {
         data,
@@ -186,9 +196,35 @@ describe("tier switch outcome", () => {
 });
 
 describe("queues page tier menu", () => {
-  it("offers a tier and history menu on each row", async () => {
+  it("offers one row menu for clear, tier, and history on each row", async () => {
     const markup = await renderQueues(queuesPage([queueRow({ queue: "events", tier: "fast" })]));
-    expect(markup).toContain('aria-label="Tier and history for events"');
-    expect(markup).toContain("from the queue&#x27;s menu in the Actions column");
+    expect(markup).toContain('aria-label="Actions for events: clear, tier, and history"');
+    expect(markup).toContain("from the queue&#x27;s row menu");
+    // Clear moved into the row menu; the row itself keeps only the pause switch.
+    expect(markup).not.toContain(">Clear<");
+  });
+});
+
+describe("queues page linked row", () => {
+  it("reads the queue from the fragment and ignores a malformed fragment", async () => {
+    const { queueFromFragment } = await import("./pages/queues.js");
+    expect(queueFromFragment("#queue-billing%20jobs")).toBe("billing jobs");
+    expect(queueFromFragment("#budgets")).toBeNull();
+    expect(queueFromFragment("")).toBeNull();
+    expect(queueFromFragment("#%")).toBeNull();
+    expect(queueFromFragment("#queue-%E0%A4%A")).toBeNull();
+  });
+
+  it("renders the page for the malformed fragment of /queues#%", async () => {
+    Object.defineProperty(globalThis, "window", {
+      configurable: true,
+      value: { location: { hash: "#%" } },
+    });
+    try {
+      const html = await renderQueues(queuesPage([queueRow({ queue: "mail" })]));
+      expect(html).toContain("mail");
+    } finally {
+      Reflect.deleteProperty(globalThis, "window");
+    }
   });
 });

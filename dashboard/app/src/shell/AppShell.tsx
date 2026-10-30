@@ -1,57 +1,16 @@
-import { taskFilterHref, taskListingHeadHref, taskListingPinned } from "../task-location.js";
+import { taskListingHeadHref, taskListingPinned } from "../task-location.js";
 import type { DashboardDemoTools } from "@stablemates/workhorse-dashboard-server";
 import type { DashboardWorkspaceLink } from "@stablemates/workhorse-dashboard-server/server";
-import { Menu, useDropdownActivity } from "../dropdown-activity.js";
-import {
-  Alert,
-  Anchor,
-  AppShell,
-  Badge,
-  Box,
-  Burger,
-  Button,
-  Center,
-  Divider,
-  Drawer,
-  Group,
-  Loader,
-  NavLink,
-  ScrollArea,
-  Stack,
-  Text,
-  type MenuProps,
-} from "@mantine/core";
-import {
-  ArrowClockwise,
-  BookOpenText,
-  Buildings,
-  CalendarDots,
-  CaretUpDown,
-  CheckCircle,
-  GearSix,
-  Lightning,
-  ListDashes,
-  Pulse,
-  Stack as StackIcon,
-  Robot,
-  UserFocus,
-  WarningCircle,
-} from "@phosphor-icons/react";
+import { useDropdownActivity } from "../dropdown-activity.js";
+import { Alert, AppShell, Box, Center, Drawer, Loader, Text } from "@mantine/core";
+import { AlertCircleIcon } from "@hugeicons/core-free-icons";
+import { HugeiconsIcon } from "@hugeicons/react";
 import {
   useRefreshBlockingInputCapture,
   useDashboardWindowActivityRefreshBlocker,
 } from "../refresh-blockers.js";
 import { useMediaQuery } from "@mantine/hooks";
-import {
-  lazy,
-  Suspense,
-  useCallback,
-  useLayoutEffect,
-  useRef,
-  useState,
-  type MouseEvent,
-} from "react";
-import { dashboardRefreshIntervalMs, dashboardRefreshIntervals } from "../refresh-policy.js";
+import { lazy, Suspense, useCallback, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
   taskDrawerCloseOnEscape,
   taskDrawerFocusChange,
@@ -59,24 +18,39 @@ import {
   taskDrawerViewportProps,
 } from "../task-drawer.js";
 import { taskOpenButtonId } from "../task-table-ui.js";
-import { WorkhorseBrand, WorkhorseVersion } from "../brand.js";
-import { ThemeSchemeSwitch } from "../theme.js";
 import type { DashboardProps } from "../dashboard-root.js";
-import { useDashboardController } from "./controller.js";
-import {
-  blockedTaskDescription,
-  environmentColor,
-  mountedHref,
-  taskFilters,
-  taskHref,
-} from "../core.js";
+import { routeHeading, useDashboardController } from "./controller.js";
+import { mountedHref, taskHref } from "../core.js";
 import { EventDetails } from "../components/event-details.js";
-import { formatCount } from "../count-format.js";
 import { formatClock, formatExact } from "../preferences.js";
 import { firstConnected, focusPageHeading, usePageHeadingFocus } from "../page-focus.js";
+import { Tooltip } from "../ui.js";
+import {
+  AccountMenu,
+  AppearanceToggle,
+  ConnectionIndicator,
+  dashboardConnectionStatus,
+  EnvironmentIndicator,
+  namesDeploymentEnvironment,
+  NavigationToggle,
+  RefreshControl,
+} from "./HeaderControls.js";
+import { WorkspaceSwitcher } from "./WorkspaceSwitcher.js";
+import { useSidebarSlide } from "./sidebar-motion.js";
+import {
+  DashboardNavigationDrawer,
+  DashboardSidebar,
+  dashboardSidebarWidth,
+  navigationShortcut,
+  onApplePlatform,
+  useNavigationShortcut,
+  useSidebarCollapsed,
+} from "./Sidebar.js";
 
 /** The page area: the skip link and the page heading focus move here. */
 const mainContentId = "dashboard-main";
+/** The navigation region that the header toggle opens and closes. */
+const navigationId = "dashboard-navigation";
 
 /**
  * The first focusable element on the page. It lets a keyboard user go past the header and the
@@ -112,7 +86,7 @@ export function PageRefreshWarning({ error, refreshedAt }: { error: string; refr
       role="none"
       color="orange"
       variant="light"
-      icon={<WarningCircle size={18} />}
+      icon={<HugeiconsIcon icon={AlertCircleIcon} size={18} />}
       title="Refresh failed"
       mb="md"
     >
@@ -153,69 +127,6 @@ function TaskDrawerPresence({ onPresent }: { onPresent: () => void }) {
   return null;
 }
 
-/**
- * Header control that switches between the host's workspaces. Renders nothing with one.
- * Extra props reach the menu so tests can render the dropdown statically.
- */
-export function DashboardWorkspaceSwitcher({
-  workspaces,
-  workspace,
-  ...menuProps
-}: {
-  workspaces: readonly DashboardWorkspaceLink[];
-  workspace: string | null;
-} & MenuProps) {
-  if (workspaces.length < 2 || !workspace) return null;
-  return (
-    <Menu position="bottom-start" withinPortal {...menuProps}>
-      <Menu.Target>
-        <Button
-          variant="default"
-          size="xs"
-          w={220}
-          leftSection={<Buildings size={14} />}
-          rightSection={<CaretUpDown size={12} />}
-          aria-label={`Workspace ${workspace}`}
-          title={workspace}
-          styles={{
-            // A fixed width keeps the header stable across workspaces; longer names truncate.
-            label: { flex: 1, display: "flex", alignItems: "center", gap: 6, minWidth: 0 },
-          }}
-        >
-          <Text component="span" size="xs" c="dimmed">
-            Workspace
-          </Text>
-          <Text component="span" size="xs" fw={500} truncate style={{ flex: 1, textAlign: "left" }}>
-            {workspace}
-          </Text>
-        </Button>
-      </Menu.Target>
-      <Menu.Dropdown>
-        <Menu.Label>Workspaces</Menu.Label>
-        {workspaces.map((entry) => (
-          // A plain link on purpose: each workspace is its own document with its own runtime
-          // configuration, so switching is a navigation, not a state change.
-          <Menu.Item
-            key={entry.name}
-            component="a"
-            href={`${entry.url}/tasks`}
-            disabled={entry.name === workspace}
-            rightSection={entry.name === workspace ? <CheckCircle size={14} /> : null}
-          >
-            <Text component="span" size="sm" display="block">
-              {entry.name}
-            </Text>
-            {entry.databaseHost || entry.databaseName ? (
-              <Text component="span" size="xs" c="dimmed" display="block">
-                {[entry.databaseHost, entry.databaseName].filter(Boolean).join(" · ")}
-              </Text>
-            ) : null}
-          </Menu.Item>
-        ))}
-      </Menu.Dropdown>
-    </Menu>
-  );
-}
 export function DashboardContent({
   auditActor,
   logoutUrl,
@@ -238,28 +149,32 @@ export function DashboardContent({
   const controller = useDashboardController(auditActor, demoTools, basePath);
   const dropdownOpened = useDropdownActivity();
   const narrowDetailDrawer = useMediaQuery("(max-width: 47.99em)");
+  // Below the `sm` breakpoint the navigation is a drawer over the page; above it, a sidebar that
+  // the same toggle collapses to a rail and expands again. The rail choice is stored.
+  const narrowNavigation = narrowDetailDrawer;
+  const [sidebarCollapsed, setSidebarCollapsed] = useSidebarCollapsed();
   const refreshBlockingInputCapture = useRefreshBlockingInputCapture();
   const previousTaskDrawerId = useRef<string | null>(null);
   const mainContent = useRef<HTMLElement | null>(null);
+  const pageContent = useRef<HTMLDivElement | null>(null);
+  const headerStart = useRef<HTMLDivElement | null>(null);
+  const sidebarPanel = useRef<HTMLDivElement | null>(null);
   const taskDrawerReturnTarget = useRef<HTMLElement | null>(null);
   const {
     navbarOpened,
     toggleNavbar,
     environment,
     loadState,
-    connected,
     loading,
     shownRoute,
     loadPage,
+    prefetchPage,
     refreshInterval,
     autoRefreshPaused,
-    resumeCountdown,
     refreshPauseDescription,
-    refreshScheduleResetKey,
     resetRefreshSchedule,
     changeRefreshInterval,
     location,
-    taskCounts,
     handleLink,
     content,
     selectedTaskId,
@@ -279,7 +194,6 @@ export function DashboardContent({
   if (selectedTaskId !== null && !taskDrawerRequested) setTaskDrawerRequested(true);
   const [taskDrawerPresent, setTaskDrawerPresent] = useState(false);
   const markTaskDrawerPresent = useCallback(() => setTaskDrawerPresent(true), []);
-  const refreshProgressDuration = dashboardRefreshIntervalMs(refreshInterval);
   const taskDetailDrawerProps = {
     ...taskDrawerViewportProps(narrowDetailDrawer),
     closeOnEscape: taskDrawerCloseOnEscape(dropdownOpened),
@@ -325,350 +239,109 @@ export function DashboardContent({
     document.getElementById("task-detail-drawer-close")?.focus();
   }, [selectedTaskId, taskDrawerPresent]);
   usePageHeadingFocus(location.route, shownRoute, mainContent);
+  // The sidebar, the page, and the header title slide on one clock instead of a layout each frame.
+  const captureSlide = useSidebarSlide(sidebarCollapsed, {
+    panel: sidebarPanel,
+    followers: [pageContent, headerStart],
+  });
+  const toggleNavigation = narrowNavigation
+    ? toggleNavbar
+    : () => {
+        captureSlide();
+        setSidebarCollapsed(!sidebarCollapsed);
+      };
+  // Command-B or Control-B does what the header toggle does, and the toggle names the shortcut.
+  useNavigationShortcut(toggleNavigation);
+  const shortcut = useMemo(() => navigationShortcut(onApplePlatform()), []);
+  const sidebarProps = {
+    location,
+    basePath,
+    onNavigate: handleLink,
+    onPrefetch: (href: string) => void prefetchPage(href),
+    workspaceControl: <WorkspaceSwitcher workspaces={workspaces} workspace={workspace} />,
+    version: workhorseVersion,
+    revision: workhorseRevision,
+  };
   const lineageTaskHref = useCallback(
     (id: string) => mountedHref(basePath, taskHref({ ...location, taskId: id })),
     [basePath, location],
+  );
+  const drawerPageNavigation = useMemo(
+    () => ({ href: (path: string) => mountedHref(basePath, path), followLink: handleLink }),
+    [basePath, handleLink],
   );
 
   return (
     <AppShell
       {...refreshBlockingInputCapture}
-      header={{ height: { base: 104, md: 56 } }}
+      layout="alt"
+      header={{ height: 56 }}
+      // The page padding changes in one step. `useSidebarSlide` animates the change with
+      // transforms, because an animated padding lays out the page on every frame.
+      transitionDuration={0}
+      data-sidebar={sidebarCollapsed ? "rail" : "panel"}
       navbar={{
-        width: { sm: 232, xl: 256 },
+        width: dashboardSidebarWidth[sidebarCollapsed ? "collapsed" : "expanded"],
         breakpoint: "sm",
-        collapsed: { mobile: !navbarOpened },
+        // Narrow windows show the navigation in a drawer instead.
+        collapsed: { mobile: true },
       }}
-      padding={{ base: "sm", sm: "md", xl: "xl" }}
+      padding={{ base: "md", sm: "lg" }}
     >
       <SkipToContentLink targetId={mainContentId} />
       <AppShell.Header>
         {/* The right padding tracks the main-area padding so the last header item lines up with
-            the content's right edge; the left stays at the sidebar's inset. */}
-        <Group
-          className="dashboard-header"
-          h="100%"
-          pl={{ base: "sm", sm: "md" }}
-          pr={{ base: "sm", sm: "md", xl: "xl" }}
-          justify="space-between"
-          wrap="nowrap"
-        >
-          <Group className="dashboard-header__left" gap={0} wrap="nowrap">
-            <Group
-              className="dashboard-header__brand"
-              gap="sm"
-              wrap="nowrap"
-              w={{ sm: 216, xl: 240 }}
-            >
-              <Burger
-                opened={navbarOpened}
-                onClick={toggleNavbar}
-                hiddenFrom="sm"
-                size="sm"
-                aria-label="Open or close navigation"
-              />
-              {/* The brand is the conventional way home: it links to the host's root page. */}
-              <Box
-                component="a"
-                href={mountedHref(basePath, "/")}
-                aria-label="Workhorse home"
-                style={{ textDecoration: "none", color: "inherit", display: "flex" }}
-                onClick={(event) => handleLink(event, "/")}
-              >
-                <WorkhorseBrand />
-              </Box>
-            </Group>
-            {workspaces.length >= 2 && workspace ? (
-              <Box
-                className="dashboard-header__workspace"
-                ml={{ sm: "md" }}
-                style={{ flexShrink: 0 }}
-              >
-                <DashboardWorkspaceSwitcher workspaces={workspaces} workspace={workspace} />
-              </Box>
-            ) : null}
-            <Group gap={0} wrap="nowrap" ml={{ sm: "md" }} className="dashboard-refresh-control">
-              <Button
-                variant="default"
-                size="xs"
-                w={120}
-                leftSection={<ArrowClockwise size={14} />}
+            the content's right edge. */}
+        <div className="dashboard-header">
+          <div className="dashboard-header__left" ref={headerStart}>
+            <NavigationToggle
+              expanded={narrowNavigation ? navbarOpened : !sidebarCollapsed}
+              onToggle={toggleNavigation}
+              controls={navigationId}
+              shortcut={shortcut}
+            />
+            <span className="dashboard-header__section">{routeHeading(location.route)}</span>
+          </div>
+          <Tooltip.Provider>
+            <div className="dashboard-header__controls">
+              <RefreshControl
                 loading={loading}
-                onClick={() => {
+                onRefresh={() => {
                   resetRefreshSchedule();
                   void loadPage();
                 }}
-                style={{ borderTopRightRadius: 0, borderBottomRightRadius: 0 }}
-              >
-                {resumeCountdown === null ? "Refresh" : `Refresh (${resumeCountdown})`}
-              </Button>
-              <Menu position="bottom-start" withinPortal>
-                <Menu.Target>
-                  <Button
-                    variant="default"
-                    size="xs"
-                    w={56}
-                    px={6}
-                    style={{
-                      borderTopLeftRadius: 0,
-                      borderBottomLeftRadius: 0,
-                      borderLeft: "none",
-                    }}
-                    aria-label={refreshPauseDescription}
-                    // The reason auto refresh stopped was reaching assistive technology only.
-                    title={refreshPauseDescription}
-                  >
-                    {autoRefreshPaused
-                      ? "paused"
-                      : refreshInterval === "off"
-                        ? "manual"
-                        : refreshInterval}
-                  </Button>
-                </Menu.Target>
-                <Menu.Dropdown>
-                  <Menu.Label>Auto refresh</Menu.Label>
-                  {dashboardRefreshIntervals.map((option) => (
-                    <Menu.Item
-                      key={option.value}
-                      onClick={() => changeRefreshInterval(option.value)}
-                      rightSection={
-                        refreshInterval === option.value ? <CheckCircle size={14} /> : null
-                      }
-                    >
-                      {option.label}
-                    </Menu.Item>
-                  ))}
-                </Menu.Dropdown>
-              </Menu>
-              {refreshProgressDuration !== null ? (
-                <Box
-                  key={`${location.route}-${refreshInterval}-${refreshScheduleResetKey}`}
-                  className="dashboard-refresh-control__progress"
-                  style={{
-                    animationDuration: `${refreshProgressDuration}ms`,
-                    animationPlayState: autoRefreshPaused ? "paused" : "running",
-                  }}
-                  aria-hidden
-                />
-              ) : null}
-            </Group>
-            {/* The refresh control says auto refresh is paused; this says what holds it and
-                offers the way out, beside the control the operator is already looking at. It is a
-                link because it is an action, not a status. The pager repeats the fact where the
-                header has no room. */}
-            {location.route === "/tasks" && taskListingPinned(location) ? (
-              <Anchor
-                href={mountedHref(basePath, taskListingHeadHref(location))}
-                onClick={(event: MouseEvent<HTMLElement>) =>
-                  handleLink(event, taskListingHeadHref(location))
+                interval={refreshInterval}
+                onIntervalChange={changeRefreshInterval}
+                paused={autoRefreshPaused}
+                pauseDescription={refreshPauseDescription}
+                firstPageHref={
+                  location.route === "/tasks" && taskListingPinned(location)
+                    ? mountedHref(basePath, taskListingHeadHref(location))
+                    : null
                 }
-                className="dashboard-header__pinned"
-                size="xs"
-                c="blue"
-                td="underline"
-                visibleFrom="sm"
-                ml={{ sm: "xs" }}
-                style={{ whiteSpace: "nowrap", flexShrink: 0 }}
-                title="This page is anchored, so it neither follows new tasks nor auto refreshes. Return to the first page to follow the list again."
-              >
-                Back to first page
-              </Anchor>
-            ) : null}
-          </Group>
-          <Group className="dashboard-header__status" gap="sm" wrap="nowrap">
-            {logoutUrl ? (
-              <Menu position="bottom-end" withinPortal>
-                <Menu.Target>
-                  <Button
-                    variant="default"
-                    size="xs"
-                    leftSection={<UserFocus size={14} />}
-                    className="dashboard-header__account"
-                    aria-label={`Signed in as ${auditActor}`}
-                    title={auditActor}
-                  >
-                    {auditActor}
-                  </Button>
-                </Menu.Target>
-                <Menu.Dropdown>
-                  <Menu.Label>Signed in as {auditActor}</Menu.Label>
-                  <form action={logoutUrl} method="post">
-                    <Menu.Item component="button" type="submit">
-                      Sign out
-                    </Menu.Item>
-                  </form>
-                </Menu.Dropdown>
-              </Menu>
-            ) : null}
-            {environment ? (
-              <Badge
-                color={environmentColor(environment)}
-                variant="light"
-                visibleFrom="xs"
-                title="Deployment environment"
-              >
-                {environment}
-              </Badge>
-            ) : null}
-            <Badge
-              color={
-                loadState.status === "error"
-                  ? "red"
-                  : loadState.status === "stale"
-                    ? "orange"
-                    : connected
-                      ? "teal"
-                      : "gray"
-              }
-              variant="light"
-              leftSection={
-                loadState.status === "error" || loadState.status === "stale" ? (
-                  <WarningCircle size={12} />
-                ) : (
-                  <CheckCircle size={12} />
-                )
-              }
-              visibleFrom="xl"
-              role="status"
-              aria-label={
-                loadState.status === "error"
-                  ? "Dashboard disconnected"
-                  : loadState.status === "stale"
-                    ? "Dashboard refresh failed"
-                    : connected
-                      ? "Dashboard connected"
-                      : "Dashboard connecting"
-              }
-            >
-              {loadState.status === "error"
-                ? "Disconnected"
-                : loadState.status === "stale"
-                  ? "Refresh failed"
-                  : connected
-                    ? "Connected"
-                    : "Connecting"}
-            </Badge>
-            <ThemeSchemeSwitch />
-          </Group>
-        </Group>
+                onFirstPage={(event) => handleLink(event, taskListingHeadHref(location))}
+              />
+              {environment && namesDeploymentEnvironment(environment) ? (
+                <EnvironmentIndicator environment={environment} />
+              ) : null}
+              <ConnectionIndicator status={dashboardConnectionStatus(loadState)} />
+              <AppearanceToggle />
+              {logoutUrl ? <AccountMenu actor={auditActor} logoutUrl={logoutUrl} /> : null}
+            </div>
+          </Tooltip.Provider>
+        </div>
       </AppShell.Header>
 
-      <AppShell.Navbar className="dashboard-navbar" p="sm">
-        <AppShell.Section grow component={ScrollArea} type="auto" scrollbars="y">
-          <Stack gap={2}>
-            <Text c="dimmed" fw={600} size="xs" px="sm" mb={4}>
-              Tasks
-            </Text>
-            {taskFilters.map((filter) => {
-              const href = taskFilterHref(location, filter.value);
-              const count = taskCounts?.[filter.value];
-              const Icon = filter.icon;
-              return (
-                <NavLink
-                  key={filter.value}
-                  component="a"
-                  href={mountedHref(basePath, href)}
-                  active={location.route === "/tasks" && location.filter === filter.value}
-                  label={filter.label}
-                  title={filter.value === "blocked" ? blockedTaskDescription : undefined}
-                  leftSection={<Icon size={18} />}
-                  variant="light"
-                  rightSection={
-                    count === undefined ? null : (
-                      <Badge variant="light" color="gray" miw={32}>
-                        {formatCount(count)}
-                      </Badge>
-                    )
-                  }
-                  onClick={(event) => handleLink(event, href)}
-                />
-              );
-            })}
-          </Stack>
-          <Divider my="sm" />
-          <Stack gap={2}>
-            <Text c="dimmed" fw={600} size="xs" px="sm" mb={4}>
-              Operations
-            </Text>
-            <NavLink
-              component="a"
-              href={mountedHref(basePath, "/events")}
-              active={location.route === "/events"}
-              label="Events"
-              leftSection={<Lightning size={18} />}
-              variant="light"
-              onClick={(event) => handleLink(event, "/events")}
-            />
-            <NavLink
-              component="a"
-              href={mountedHref(basePath, "/groups")}
-              active={location.route === "/groups"}
-              label="Task groups"
-              leftSection={<StackIcon size={18} />}
-              variant="light"
-              onClick={(event) => handleLink(event, "/groups")}
-            />
-            <NavLink
-              component="a"
-              href={mountedHref(basePath, "/cron")}
-              active={location.route === "/cron"}
-              label="Schedules"
-              leftSection={<CalendarDots size={18} />}
-              variant="light"
-              onClick={(event) => handleLink(event, "/cron")}
-            />
-            <NavLink
-              component="a"
-              href={mountedHref(basePath, "/queues")}
-              active={location.route === "/queues"}
-              label="Queues"
-              leftSection={<ListDashes size={18} />}
-              variant="light"
-              onClick={(event) => handleLink(event, "/queues")}
-            />
-            <NavLink
-              component="a"
-              href={mountedHref(basePath, "/system")}
-              active={location.route === "/system"}
-              label="System health"
-              leftSection={<Pulse size={18} />}
-              variant="light"
-              onClick={(event) => handleLink(event, "/system")}
-            />
-            <NavLink
-              component="a"
-              href={mountedHref(basePath, "/workers")}
-              active={location.route === "/workers"}
-              label="Workers"
-              leftSection={<Robot size={18} />}
-              variant="light"
-              onClick={(event) => handleLink(event, "/workers")}
-            />
-            <NavLink
-              component="a"
-              href={mountedHref(basePath, "/settings")}
-              active={location.route === "/settings"}
-              label="Settings"
-              leftSection={<GearSix size={18} />}
-              variant="light"
-              onClick={(event) => handleLink(event, "/settings")}
-            />
-          </Stack>
-        </AppShell.Section>
-        <AppShell.Section>
-          <NavLink
-            component="a"
-            href="https://workhorse.run/docs"
-            label="Documentation"
-            leftSection={<BookOpenText size={18} />}
-            variant="light"
-          />
-          {/* Breathing room keeps the beta badge from reading as part of the link above. */}
-          <Box className="dashboard-navbar__version" mt="xs" px="sm">
-            <WorkhorseVersion version={workhorseVersion} revision={workhorseRevision} />
-          </Box>
-        </AppShell.Section>
+      <AppShell.Navbar className="dashboard-navbar" id={navigationId} ref={sidebarPanel}>
+        <DashboardSidebar {...sidebarProps} collapsed={sidebarCollapsed} />
       </AppShell.Navbar>
+      <DashboardNavigationDrawer
+        {...sidebarProps}
+        opened={navbarOpened}
+        onOpenChange={(opened) => {
+          if (opened !== navbarOpened) toggleNavbar();
+        }}
+      />
 
       <AppShell.Main
         className="dashboard-main"
@@ -677,7 +350,7 @@ export function DashboardContent({
         // The skip link moves focus here from a script; it does not join the tab order.
         tabIndex={-1}
       >
-        <Box w="100%">
+        <Box w="100%" ref={pageContent}>
           <div role="status" aria-atomic="true">
             {loadState.status === "stale" ? (
               <PageRefreshWarning error={loadState.error} refreshedAt={loadState.refreshedAt} />
@@ -694,6 +367,7 @@ export function DashboardContent({
             controller={controller}
             drawerProps={taskDetailDrawerProps}
             taskLinkHref={lineageTaskHref}
+            pageNavigation={drawerPageNavigation}
           />
         </Suspense>
       ) : null}

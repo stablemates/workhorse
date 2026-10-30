@@ -22,4 +22,4 @@ export { eventTypeColor, parseEventRange } from "./pages/events.js";
 export { QueuesPage } from "./pages/queues.js";
 export { SettingsPage, type SettingsPageProps } from "./pages/settings/index.js";
 export { WorkersPage } from "./pages/workers.js";
-export { DashboardWorkspaceSwitcher } from "./shell/AppShell.js";
+export { WorkspaceSwitcher, type WorkspaceSwitcherProps } from "./shell/WorkspaceSwitcher.js";

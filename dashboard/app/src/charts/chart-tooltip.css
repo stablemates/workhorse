@@ -1,0 +1,80 @@
+/* A chart key row: a color square, the name in the text color, and a right-aligned count. */
+.chart-key {
+  display: grid;
+  grid-template-columns: 10px minmax(0, 1fr) auto;
+  align-items: center;
+  column-gap: var(--mantine-spacing-xs);
+  min-height: 24px;
+  font-size: var(--mantine-font-size-sm);
+  line-height: 1.25;
+}
+
+.chart-key__swatch {
+  width: 10px;
+  height: 10px;
+  border-radius: 2px;
+}
+
+/* Only the square carries the series color. A pale series color would fail text contrast. */
+.chart-key__label {
+  overflow: hidden;
+  color: var(--mantine-color-text);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chart-key__count {
+  color: var(--mantine-color-dimmed);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.chart-tooltip {
+  min-width: 200px;
+  max-width: 280px;
+  padding: var(--mantine-spacing-xs) var(--mantine-spacing-sm);
+  /* `neutral-4`, not the divider: the dark popup surface has the same fill as the dark panel. */
+  border: 1px solid var(--workhorse-neutral-4);
+  border-radius: 8px;
+  background: var(--workhorse-surface-popup);
+  box-shadow: var(--workhorse-shadow-m);
+  color: var(--mantine-color-text);
+}
+
+.chart-tooltip__header {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--mantine-spacing-md);
+  margin-bottom: 4px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--workhorse-divider);
+  font-size: var(--mantine-font-size-xs);
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.chart-tooltip__number {
+  font-variant-numeric: tabular-nums;
+}
+
+.chart-tooltip__rows {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.chart-tooltip .chart-key {
+  min-height: 22px;
+  font-size: var(--mantine-font-size-xs);
+}
+
+.chart-tooltip__empty {
+  color: var(--mantine-color-dimmed);
+  font-size: var(--mantine-font-size-xs);
+}
+
+.chart-tooltip__footer {
+  margin-top: 4px;
+  padding-top: 6px;
+  border-top: 1px solid var(--workhorse-divider);
+}

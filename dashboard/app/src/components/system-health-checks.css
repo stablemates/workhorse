@@ -1,0 +1,146 @@
+/*
+ * System health checks: one summary line, then one row for each check. A passing row shows a
+ * green dot only. A row that needs attention also shows a badge, so color is never the only cue.
+ */
+.health-checks__header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--mantine-spacing-xs) var(--mantine-spacing-lg);
+  padding: var(--mantine-spacing-md);
+}
+
+.health-checks__title {
+  margin: 0;
+  font-size: var(--mantine-font-size-md);
+  line-height: var(--mantine-line-height-md);
+  font-weight: 600;
+}
+
+.health-checks__note {
+  margin: 0;
+  color: var(--mantine-color-dimmed);
+  font-size: var(--mantine-font-size-xs);
+  line-height: var(--mantine-line-height-xs);
+  text-wrap: pretty;
+}
+
+.health-checks__summary {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px var(--mantine-spacing-xs);
+  margin: 0;
+  font-size: var(--mantine-font-size-sm);
+  line-height: var(--mantine-line-height-sm);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.health-checks__summary[data-tone="warning"] {
+  color: var(--workhorse-color-warning-text);
+}
+
+.health-checks__summary[data-tone="danger"] {
+  color: var(--workhorse-color-danger-text);
+}
+
+.health-checks__limits {
+  color: var(--mantine-color-dimmed);
+  font-weight: 400;
+}
+
+.health-checks__limits::before {
+  content: "·";
+  margin-inline-end: var(--mantine-spacing-xs);
+}
+
+.health-checks__dot {
+  flex-shrink: 0;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--workhorse-neutral-6);
+}
+
+.health-checks__dot[data-tone="success"] {
+  background: var(--mantine-color-success);
+}
+
+.health-checks__dot[data-tone="warning"] {
+  background: var(--workhorse-color-warning-text);
+}
+
+.health-checks__dot[data-tone="danger"] {
+  background: var(--workhorse-color-danger-text);
+}
+
+.health-checks__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.health-check {
+  display: grid;
+  grid-template-columns: 8px minmax(10rem, 14rem) minmax(0, 1fr) auto;
+  grid-template-areas: "dot name details badge";
+  align-items: start;
+  column-gap: var(--mantine-spacing-sm);
+  padding: 10px var(--mantine-spacing-md);
+  border-top: 1px solid var(--workhorse-divider);
+  font-size: var(--mantine-font-size-sm);
+  line-height: var(--mantine-line-height-sm);
+}
+
+/* The dot sits on the center of the first 20px text line. */
+.health-check > .health-checks__dot {
+  grid-area: dot;
+  align-self: start;
+  margin-top: 6px;
+}
+
+.health-check__name {
+  grid-area: name;
+  font-weight: 500;
+}
+
+.health-check__details {
+  grid-area: details;
+  display: flex;
+  flex-direction: column;
+  gap: var(--mantine-spacing-xs);
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.health-check__details p {
+  margin: 0;
+  text-wrap: pretty;
+}
+
+.health-check__summary,
+.health-check__advice {
+  color: var(--mantine-color-dimmed);
+}
+
+.health-check__advice {
+  font-size: var(--mantine-font-size-xs);
+  line-height: var(--mantine-line-height-xs);
+}
+
+.health-check__badge {
+  grid-area: badge;
+  align-self: start;
+}
+
+@media (max-width: 48em) {
+  .health-check {
+    grid-template-columns: 8px minmax(0, 1fr) auto;
+    grid-template-areas:
+      "dot name badge"
+      ". details details";
+    row-gap: 2px;
+  }
+}

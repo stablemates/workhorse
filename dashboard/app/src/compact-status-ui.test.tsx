@@ -37,7 +37,7 @@ describe("compact status presentation", () => {
     expect(render("succeeded")).toContain("--mantine-color-teal");
   });
   it.each(["event", "attempt"] as const)(
-    "shows %s success as a colored badge after the task ID",
+    "shows %s success as a badge with a state dot after the task ID",
     async (kind) => {
       const { EventRow } = await import("./pages/events.js");
       const event = {
@@ -74,7 +74,8 @@ describe("compact status presentation", () => {
       expect(html).toContain(kind === "attempt" ? ">Attempt succeeded<" : ">Task succeeded<");
       expect(html).not.toContain("status-square");
       expect(html).toContain("mantine-Badge-root");
-      expect(html).toContain("--mantine-color-teal-light");
+      expect(html).toContain('data-variant="dot"');
+      expect(html).toContain("--mantine-color-teal-filled");
       expect(html.indexOf(">billing<")).toBeLessThan(html.indexOf(">billing.invoice<"));
       expect(html).toContain('title="worker-123"');
       expect(html).not.toContain("Copy event ID");

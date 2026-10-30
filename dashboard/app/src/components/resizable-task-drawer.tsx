@@ -1,5 +1,5 @@
 import { Drawer, type DrawerProps } from "@mantine/core";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import {
   clampTaskDrawerWidth,
   defaultTaskDrawerWidth,
@@ -16,6 +16,7 @@ import {
  */
 export function ResizableTaskDrawer({
   title,
+  headerAside,
   size,
   withOverlay = true,
   overlayProps,
@@ -23,7 +24,13 @@ export function ResizableTaskDrawer({
   closeButtonProps,
   children,
   ...props
-}: DrawerProps) {
+}: DrawerProps & {
+  /**
+   * Controls or hints between the title and the close button, such as task navigation. The slot
+   * stays outside the title, so the dialog's name is still the title alone.
+   */
+  headerAside?: ReactNode;
+}) {
   const [preferredWidth, setPreferredWidth] = useState(readTaskDrawerWidth);
   const [viewportWidth, setViewportWidth] = useState(() => window.innerWidth);
   const drag = useRef<{ x: number; width: number; preference: number } | null>(null);
@@ -110,6 +117,7 @@ export function ResizableTaskDrawer({
               }}
             />
           ) : null}
+          {headerAside ? <div className="task-drawer__header-aside">{headerAside}</div> : null}
           {withCloseButton ? <Drawer.CloseButton {...closeButtonProps} /> : null}
         </Drawer.Header>
         <Drawer.Body>{children}</Drawer.Body>

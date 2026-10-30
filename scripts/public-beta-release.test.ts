@@ -198,7 +198,6 @@ describe("the public beta line", () => {
     const surfaces = [
       "README.md",
       "site/content/docs/index.mdx",
-      "dashboard/app/src/brand.tsx",
       "CHANGELOG.md",
       "python/CHANGELOG.md",
       "go/CHANGELOG.md",

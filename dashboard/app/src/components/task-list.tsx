@@ -6,46 +6,31 @@ import type {
   DashboardTaskFacets,
   DashboardTaskSort,
   DashboardTasksPage,
-  DashboardTasksCursorPage,
 } from "@stablemates/workhorse-dashboard-server/wire";
-import {
-  ActionIcon,
-  Badge,
-  Box,
-  Center,
-  Code,
-  Group,
-  Loader,
-  Paper,
-  Stack,
-  Text,
-  TextInput,
-  ThemeIcon,
-  Title,
-  Tooltip,
-} from "@mantine/core";
+import { ActionIcon, Badge, Box, Code, Group, Loader, Stack, Text, Tooltip } from "@mantine/core";
 import {
   describeCancellationRequest,
   describeRetryPolicy,
   taskRowActionGroups,
 } from "../presentation.js";
 import {
-  ArrowCounterClockwise,
-  CheckCircle,
-  Clock,
-  Copy,
-  DotsThreeVertical,
-  FunnelSimple,
-  Info,
-  Lightning,
-  MagnifyingGlass,
-  PlayCircle,
-  Prohibit,
-  UserFocus,
-} from "@phosphor-icons/react";
+  CheckmarkCircle02Icon,
+  Clock01Icon,
+  Copy01Icon,
+  FilterIcon,
+  FlashIcon,
+  InformationCircleIcon,
+  MoreVerticalIcon,
+  PlayCircleIcon,
+  UnavailableIcon,
+  UndoIcon,
+  UserIdVerificationIcon,
+} from "@hugeicons/core-free-icons";
+import { HugeiconsIcon } from "@hugeicons/react";
 import { Fragment, useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { type TaskLocationState } from "../task-location.js";
-import { Menu, MultiSelect, Select } from "../dropdown-activity.js";
+import { Menu } from "../dropdown-activity.js";
+import { TaskViewSelect } from "./task-filter-bar.js";
 import type {
   TaskActionTarget,
   TaskRowActionCapabilities,
@@ -110,7 +95,7 @@ export function CancelRequestedBadge({
       size="sm"
       variant="light"
       color="gray"
-      leftSection={<Prohibit size={11} weight="bold" />}
+      leftSection={<HugeiconsIcon icon={UnavailableIcon} size={11} strokeWidth={2} />}
       tt="none"
       title={`${described.exact} Requested ${formatExact(cancellation.requestedAt)}.`}
       style={{ flexShrink: 0 }}
@@ -255,7 +240,7 @@ export function TaskWaitBadge({ task }: { task: DashboardTaskRow }) {
         size="sm"
         variant="light"
         color="violet"
-        leftSection={<Lightning size={11} weight="bold" />}
+        leftSection={<HugeiconsIcon icon={FlashIcon} size={11} strokeWidth={2} />}
         tt="none"
         title={`Waiting for signal ${task.signalWait.name} · deadline ${formatExact(task.signalWait.deadlineAt)}`}
         style={{ flexShrink: 0 }}
@@ -273,7 +258,7 @@ export function TaskWaitBadge({ task }: { task: DashboardTaskRow }) {
         size="sm"
         variant="light"
         color="violet"
-        leftSection={<UserFocus size={11} weight="bold" />}
+        leftSection={<HugeiconsIcon icon={UserIdVerificationIcon} size={11} strokeWidth={2} />}
         tt="none"
         title={`Waiting for decision ${task.humanWait.name} · deadline ${formatExact(task.humanWait.deadlineAt)}`}
         style={{ flexShrink: 0 }}
@@ -291,7 +276,7 @@ export function TaskWaitBadge({ task }: { task: DashboardTaskRow }) {
       size="sm"
       variant="light"
       color={due ? "cyan" : "indigo"}
-      leftSection={<Clock size={11} weight="bold" />}
+      leftSection={<HugeiconsIcon icon={Clock01Icon} size={11} strokeWidth={2} />}
       tt="none"
       title={`Durable wait ${scheduledWait.name} · not before ${formatExact(scheduledWait.wakeAt)}`}
       style={{ flexShrink: 0 }}
@@ -308,33 +293,6 @@ export function taskDuration(task: DashboardTaskRow): string | null {
   if (!task.finishedAt) return null;
   const elapsed = new Date(task.finishedAt).getTime() - new Date(task.createdAt).getTime();
   return elapsed >= 0 ? formatDuration(elapsed) : null;
-}
-export function PageHeader({ title, description }: { title: string; description: ReactNode }) {
-  return (
-    <Box>
-      <Title order={1}>{title}</Title>
-      <Text c="dimmed" mt={4}>
-        {description}
-      </Text>
-    </Box>
-  );
-}
-export function EmptyState({ children }: { children: ReactNode }) {
-  return (
-    <Paper withBorder p="xl">
-      <Center mih={180}>
-        <Stack align="center" gap="xs">
-          <ThemeIcon variant="light" color="gray" size="xl" radius="xl">
-            <CheckCircle size={22} />
-          </ThemeIcon>
-          <Text fw={600}>No results</Text>
-          <Text c="dimmed" size="sm">
-            {children}
-          </Text>
-        </Stack>
-      </Center>
-    </Paper>
-  );
 }
 export function includeSelectedOption(values: string[], selected: string | null): string[] {
   return selected && !values.includes(selected) ? [selected, ...values] : values;
@@ -397,72 +355,13 @@ export function useTaskFacets({
     load,
   };
 }
-export function TaskListingFilters({
-  data,
-  searchInput,
-  setSearchInput,
-  taskFacets,
-  updateLocation,
-}: {
-  data: DashboardTasksPage | DashboardTasksCursorPage;
-  searchInput: string;
-  setSearchInput: (value: string) => void;
-  taskFacets: ReturnType<typeof useTaskFacets>;
-  updateLocation: (updates: Partial<TaskLocationState>) => void;
-}) {
-  const nothingFoundMessage = taskFacets.loading ? "Loading filters…" : taskFacets.error;
-  return (
-    <Group gap="xs" wrap="wrap">
-      <TextInput
-        size="xs"
-        value={searchInput}
-        onChange={(event) => setSearchInput(event.currentTarget.value)}
-        leftSection={<MagnifyingGlass size={14} />}
-        placeholder="Search tasks. Use * as a wildcard."
-        aria-label="Search tasks"
-        style={{ flex: "1 1 220px" }}
-      />
-      <MultiSelect
-        size="xs"
-        data={taskFacets.facets.tags}
-        value={data.tags}
-        onChange={(tags) => updateLocation({ tags })}
-        onDropdownOpen={taskFacets.load}
-        placeholder="Any tag"
-        aria-label="Filter tasks by tags"
-        searchable
-        clearable
-        rightSection={taskFacets.loading ? <Loader size={14} /> : undefined}
-        nothingFoundMessage={nothingFoundMessage ?? "No tags found"}
-        maxDropdownHeight={240}
-        style={{ flex: "1 1 220px" }}
-      />
-      {(
-        [
-          ["Queue", data.queue, taskFacets.facets.queues, "queue"],
-          ["Worker", data.worker, taskFacets.facets.workers, "worker"],
-          ["Task type", data.taskType, taskFacets.facets.taskTypes, "taskType"],
-        ] as const
-      ).map(([placeholder, value, values, key]) => (
-        <Select
-          key={key}
-          size="xs"
-          data={values}
-          value={value}
-          onChange={(next) => updateLocation({ [key]: next })}
-          onDropdownOpen={taskFacets.load}
-          placeholder={placeholder}
-          aria-label={`Filter tasks by ${placeholder.toLowerCase()}`}
-          searchable
-          clearable
-          rightSection={taskFacets.loading ? <Loader size={14} /> : undefined}
-          nothingFoundMessage={nothingFoundMessage ?? `No ${placeholder.toLowerCase()} found`}
-          style={{ flex: "1 1 150px" }}
-        />
-      ))}
-    </Group>
-  );
-}
+/** The filter bar, under the name earlier releases exported it by. */
+export { TaskFilterBar as TaskListingFilters } from "./task-filter-bar.js";
+
+const taskSortOptions = [
+  { value: "updated", label: "Recently updated" },
+  { value: "priority", label: "Highest priority" },
+] as const satisfies readonly { value: DashboardTaskSort; label: string }[];
 
 /**
  * Ordering, which selects nothing out of the list and so does not belong with the filters.
@@ -478,28 +377,23 @@ export function TaskSortSelect({
   updateLocation: (updates: Partial<TaskLocationState>) => void;
 }) {
   return (
-    <Select
-      size="xs"
-      w={160}
+    <TaskViewSelect
+      label="Sort tasks"
       value={sort}
-      onChange={(next) => updateLocation({ sort: next === "priority" ? "priority" : "updated" })}
-      data={[
-        { value: "updated", label: "Recently updated" },
-        { value: "priority", label: "Highest priority" },
-      ]}
-      allowDeselect={false}
-      aria-label="Sort tasks"
+      options={taskSortOptions}
+      onChange={(next) => updateLocation({ sort: next })}
+      width={168}
     />
   );
 }
 export function taskRowActionIcon(id: TaskRowActionId): ReactNode {
-  if (id === "inspect") return <Info size={16} />;
-  if (id === "copy-id" || id === "copy-args") return <Copy size={16} />;
-  if (id === "cancel") return <Prohibit size={16} />;
-  if (id === "run-now") return <PlayCircle size={16} />;
-  if (id === "redrive") return <ArrowCounterClockwise size={16} />;
-  if (id === "complete-human-wait") return <CheckCircle size={16} />;
-  return <FunnelSimple size={16} />;
+  if (id === "inspect") return <HugeiconsIcon icon={InformationCircleIcon} size={16} />;
+  if (id === "copy-id" || id === "copy-args") return <HugeiconsIcon icon={Copy01Icon} size={16} />;
+  if (id === "cancel") return <HugeiconsIcon icon={UnavailableIcon} size={16} />;
+  if (id === "run-now") return <HugeiconsIcon icon={PlayCircleIcon} size={16} />;
+  if (id === "redrive") return <HugeiconsIcon icon={UndoIcon} size={16} />;
+  if (id === "complete-human-wait") return <HugeiconsIcon icon={CheckmarkCircle02Icon} size={16} />;
+  return <HugeiconsIcon icon={FilterIcon} size={16} />;
 }
 
 /** A real browser link so task history can stay open beside the task listing. */
@@ -508,7 +402,7 @@ export function TaskEventsMenuItem({ taskId, href }: { taskId: string; href: str
     <Menu.Item
       component="a"
       {...taskEventsLinkProps(taskId, href)}
-      leftSection={<Clock size={16} />}
+      leftSection={<HugeiconsIcon icon={Clock01Icon} size={16} />}
     >
       <Text size="sm" lh={1.3}>
         View task events
@@ -568,7 +462,7 @@ export function TaskRowActions({
           // The row itself opens the drawer on click, which is not what opening this menu means.
           onClick={(event) => event.stopPropagation()}
         >
-          <DotsThreeVertical size={16} weight="bold" />
+          <HugeiconsIcon icon={MoreVerticalIcon} size={16} strokeWidth={2} />
         </ActionIcon>
       </Menu.Target>
       <Menu.Dropdown onClick={(event) => event.stopPropagation()}>

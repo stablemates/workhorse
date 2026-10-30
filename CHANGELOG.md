@@ -36,6 +36,34 @@ document gains the optional key `group`, an additive change.
 The migration does not raise the SDK compatibility floor and changes no rows. Run
 `workhorse schema migrate`.
 
+The task drawer shows a Group row with the short group ID, the position, and the group state. The
+short ID links to the group detail. On a schema below 90, the drawer shows no Group row.
+
+### The dashboard uses the Untitled theme
+
+An operator opened the dashboard to find a failed task and act on it. The sidebar, the header, and
+the pages used different controls and spacing. The standalone dashboard could not pause a schedule
+or change a policy.
+
+The dashboard now uses the Untitled theme, Base UI, and Hugeicons. The sidebar collapses to a rail
+with Cmd+B or Ctrl+B. The Tasks page has status tabs, and the arrow keys move through its rows.
+The task drawer shows the same attempt as the task table. Tables and charts stay on screen while a
+control loads new data.
+
+Every release line serves the shared dashboard browser bundle, and the redesign rebuilt it.
+`@stablemates/workhorse-dashboard-server` serves the rebuilt browser assets from `dist/app`. The
+other lines carry the rebuilt `read-surface-1.tar.gz`. Its `bundle.json` records the sha256
+`8170477f88999c778e8f0e4d86a46c7b31c9ef45ab776ad94bd2a2faa1ef99bc`.
+
+- `@stablemates/workhorse-dashboard` adds `@base-ui/react` `^1.9.0`,
+  `@fontsource-variable/geist` `^5.3.0`, `@hugeicons/core-free-icons` `4.3.5`, `@hugeicons/react`
+  `^1.1.10`, `lucide-react` `^1.58.0`, and `motion` `^14.3.0`. It removes `@phosphor-icons/react`.
+- If a standalone `@stablemates/workhorse-dashboard-server` process allows mutations, it also
+  enables schedule and settings mutations. After each successful policy change, it writes one JSON
+  line with the event `workhorse.dashboard.policy_changed` to standard output.
+
+The `dashboard/v1` procedures and the read surface version do not change.
+
 ## 0.11.0 — 2026-10-28
 
 The npm packages, Python distribution, Go module, Rust crate, Ruby gem, JVM artifacts, and .NET

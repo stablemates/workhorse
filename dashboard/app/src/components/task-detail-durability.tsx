@@ -1,5 +1,5 @@
 import type { DashboardTaskDetail } from "@stablemates/workhorse-dashboard-server/wire";
-import { Badge, Box, Code, Divider, Group, Paper, Stack, Text } from "@mantine/core";
+import { Box, Code, Group, Stack, Text } from "@mantine/core";
 import { describeTaskConcurrency } from "../concurrency-policy.js";
 import { readDashboardIdempotencyEvidence } from "@stablemates/workhorse-dashboard-server/wire";
 import {
@@ -22,6 +22,7 @@ import {
   DrawerSection,
   DurableWait,
   MetaRow,
+  StateDot,
   boundaryEventPresentation,
   eventDetail,
   genericEventLabel,
@@ -30,7 +31,6 @@ import {
   waitPhaseLabel,
   waitReplayWording,
 } from "./task-detail-overview.js";
-import { HelpButton } from "./help-button.js";
 import { eventDetailSummary } from "../event-presentation.js";
 import { formatCount } from "../count-format.js";
 
@@ -110,9 +110,10 @@ export function DependencyLine({
           <span>
             <RelatedTaskLinks ids={explicitPrerequisiteIds} {...navigation} />
           </span>
-          <Badge size="xs" variant="light" color={blocked ? "yellow" : "teal"} tt="none">
+          <span className="task-detail__status">
+            <StateDot color={blocked ? "yellow" : "teal"} />
             {blocked ? "blocked" : "released"}
-          </Badge>
+          </span>
           <Text c="dimmed" size="xs">
             {summary}
           </Text>
@@ -241,43 +242,28 @@ export function ConcurrencyPolicyLine({ task }: { task: DashboardTaskDetail }) {
   const described = describeTaskConcurrency(task);
   if (described === null) return null;
   return (
-    <MetaRow label="Concurrency">
+    <>
       {described.concurrencyKey === null ? null : (
-        <Badge
-          size="xs"
-          variant="light"
-          color="grape"
-          tt="none"
-          title={described.keyTitle}
-          aria-label={described.keyTitle}
-        >
-          {described.concurrencyKey}
-        </Badge>
+        <MetaRow label="Concurrency key">
+          <span className="task-detail__mono" title={described.keyTitle}>
+            {described.concurrencyKey}
+          </span>
+        </MetaRow>
       )}
-      {/* The numbers below state no tense of their own, so this marker is what keeps a finished
-          task's ceilings from reading as the ones it ran under. It is a badge rather than italic
-          prose because it qualifies the numbers instead of continuing the sentence. */}
-      {described.basisLabel === null ? null : (
-        <Badge size="xs" variant="outline" color="gray" tt="none" title={described.title}>
-          {described.basisLabel}
-        </Badge>
-      )}
-      <Text c="dimmed" size="xs" title={described.title} aria-label={described.title}>
-        {described.summary}
-      </Text>
-      {described.utilizationKnown ? null : (
-        <Badge
-          size="xs"
-          variant="light"
-          color="gray"
-          tt="none"
-          title={described.title}
-          aria-label={described.title}
-        >
-          usage not measured
-        </Badge>
-      )}
-    </MetaRow>
+      <MetaRow label="Concurrency">
+        <Text size="sm" title={described.title}>
+          {described.summary}
+          {described.utilizationKnown ? "" : " · usage not measured"}
+        </Text>
+        {/* The numbers state no tense of their own, so this marker keeps a finished task's
+            ceilings from reading as the ones it ran under. */}
+        {described.basisLabel === null ? null : (
+          <Text c="dimmed" size="xs" title={described.title}>
+            {described.basisLabel}
+          </Text>
+        )}
+      </MetaRow>
+    </>
   );
 }
 /**
@@ -294,13 +280,9 @@ export function TimingPolicyLine({ task }: { task: DashboardTaskDetail }) {
     // answer in the row — while the wordier explanation moves behind the help icon.
     return (
       <MetaRow label="Time limits">
-        <Text c="dimmed" size="xs">
+        <Text size="sm" title="No lifetime deadline and no per-attempt execution limit.">
           None set
         </Text>
-        <HelpButton
-          label="Time limits"
-          help="No lifetime deadline and no per-attempt execution limit."
-        />
       </MetaRow>
     );
   }
@@ -314,7 +296,7 @@ export function TimingPolicyLine({ task }: { task: DashboardTaskDetail }) {
   ].filter((part): part is string => part !== null);
   return (
     <MetaRow label="Time limits">
-      <Text c="dimmed" size="xs" title={parts.join("; ")}>
+      <Text size="sm" title={parts.join("; ")}>
         {parts.join(" · ")}
       </Text>
     </MetaRow>
@@ -325,12 +307,17 @@ export function TimingPolicyLine({ task }: { task: DashboardTaskDetail }) {
  * claims inside one attempt are called out, because a durable wait releases
  * ownership without closing the logical attempt.
  */
-export function BoundaryTimeline({ task }: { task: DashboardTaskDetail }) {
-  // Acceptance is a boundary worth showing only when it deduplicated something. An unkeyed task
-  // keeps exactly the timeline it had before this feature existed.
-  const events = task.events.filter(
+/**
+ * The events the history shows. Acceptance is a boundary worth showing only when it deduplicated
+ * something, so an unkeyed task's `enqueued` event is left out.
+ */
+export function boundaryEvents(task: DashboardTaskDetail): DashboardTaskDetail["events"] {
+  return task.events.filter(
     (event) => event.type !== "enqueued" || readDashboardIdempotencyEvidence(event) !== null,
   );
+}
+export function BoundaryTimeline({ task }: { task: DashboardTaskDetail }) {
+  const events = boundaryEvents(task);
   if (events.length === 0) return null;
   const claimsPerAttempt = new Map<number | null, number>();
   const claimOrdinals = new Map<string, number>();
@@ -345,17 +332,13 @@ export function BoundaryTimeline({ task }: { task: DashboardTaskDetail }) {
     if (count > 1) repeatedClaimAttempts.push(attempt);
   }
   return (
-    <Box mt="md">
-      <Text fw={600} size="xs" mb={6}>
-        Task history
-      </Text>
+    <Box>
       {task.truncated.events ? (
-        <Text c="dimmed" size="xs" mb={6}>
-          This task recorded more events than the drawer shows. These are its most recent ones; the
-          event feed filtered by this task holds the rest.
-        </Text>
+        <p className="task-detail__note">
+          Only the most recent events show here. The event feed for this task has the rest.
+        </p>
       ) : null}
-      <Stack gap={4}>
+      <ol className="task-drawer__events">
         {events.map((event) => {
           const claimIndex = claimOrdinals.get(event.id) ?? null;
           const name = eventDetail(event, "name");
@@ -389,42 +372,41 @@ export function BoundaryTimeline({ task }: { task: DashboardTaskDetail }) {
             .filter(Boolean)
             .join("\n\n");
           return (
-            <Group key={event.id} gap="xs" wrap="nowrap" align="flex-start">
-              <Badge
-                size="xs"
-                variant="light"
-                color={boundaryEventPresentation[event.type]?.color ?? "gray"}
-                tt="none"
-                miw={116}
-                styles={{ root: { justifyContent: "start" } }}
-                title={eventLabel}
-              >
+            <li key={event.id} className="task-drawer__event">
+              <span className="task-drawer__event-name" title={eventLabel}>
+                <StateDot color={boundaryEventPresentation[event.type]?.color ?? "gray"} />
                 {eventLabel}
-              </Badge>
+              </span>
               <Text
                 c="dimmed"
                 size="xs"
-                style={{ flex: 1, minWidth: 0 }}
+                className="task-drawer__event-summary"
                 lineClamp={1}
                 title={hoverDetails}
               >
                 {summary}
               </Text>
-              <Text c="dimmed" size="xs" title={formatExact(event.occurredAt)} ta="right">
+              <Text
+                c="dimmed"
+                size="xs"
+                className="task-detail__number"
+                title={formatExact(event.occurredAt)}
+                ta="right"
+              >
                 {formatClock(event.occurredAt)}
               </Text>
-            </Group>
+            </li>
           );
         })}
-      </Stack>
+      </ol>
       {repeatedClaimAttempts.length > 0 ? (
-        <Text c="dimmed" size="xs" mt={6}>
+        <p className="task-detail__note">
           {repeatedClaimAttempts.length === 1
             ? `Attempt ${repeatedClaimAttempts[0]} has ${formatCount(claimsPerAttempt.get(repeatedClaimAttempts[0]!) ?? 0)} claims.`
             : `Attempts ${repeatedClaimAttempts.join(", ")} each have more than one claim.`}{" "}
           A durable wait releases ownership without closing the logical attempt, so one attempt can
           hold several claims with different fence tokens.
-        </Text>
+        </p>
       ) : null}
     </Box>
   );
@@ -443,7 +425,7 @@ function DurableWaitCard({
   const runtime = task.current.runtime;
   const suspended = phase !== "resumed" && runtime !== null;
   return (
-    <Paper withBorder p="sm">
+    <Box className="task-drawer__card">
       <Group justify="space-between" align="flex-start">
         <Box style={{ minWidth: 0 }}>
           <Text fw={600} size="sm">
@@ -455,11 +437,12 @@ function DurableWaitCard({
               : `Absolute · requested ${formatExact(wait.requestedWakeAt)}`}
           </Text>
         </Box>
-        <Badge variant="light" color={waitPhaseColor[phase]} tt="none">
+        <span className="task-detail__status">
+          <StateDot color={waitPhaseColor[phase]} />
           {waitPhaseLabel[phase]}
-        </Badge>
+        </span>
       </Group>
-      <Divider my="sm" />
+      <Box className="task-drawer__card-rule" />
       <Stack gap={4}>
         <Group justify="space-between" gap="xs" wrap="nowrap">
           <Text c="dimmed" size="xs">
@@ -480,7 +463,7 @@ function DurableWaitCard({
           </Text>
         </Group>
       </Stack>
-      <Divider my="sm" />
+      <Box className="task-drawer__card-rule" />
       <Text fw={600} size="xs" mb={4}>
         {suspended ? "Ownership released while scheduled" : "Ownership at this boundary"}
       </Text>
@@ -504,7 +487,7 @@ function DurableWaitCard({
           This wait is no longer active. Its events below record how Workhorse released it.
         </Text>
       )}
-      <Divider my="sm" />
+      <Box className="task-drawer__card-rule" />
       <Text fw={600} size="xs" mb={4}>
         Attempt preserved across the wait
       </Text>
@@ -519,7 +502,7 @@ function DurableWaitCard({
           </Text>
         ) : null}
       </Stack>
-      <Divider my="sm" />
+      <Box className="task-drawer__card-rule" />
       <Text fw={600} size="xs" mb={4}>
         Immutable wait provenance
       </Text>
@@ -527,7 +510,7 @@ function DurableWaitCard({
         Authorized by {wait.workerId} · fence {wait.fenceToken} · attempt {wait.attempt} ·{" "}
         {formatRelative(wait.createdAt)}
       </Text>
-    </Paper>
+    </Box>
   );
 }
 /**
@@ -537,9 +520,8 @@ function DurableWaitCard({
 export function DurableWaits({ task }: { task: DashboardTaskDetail }) {
   const runtimeWaitName = task.current.runtime?.waitName ?? null;
   const nowMs = useNow(runtimeWaitName !== null);
-  // A task can record retry and claim boundaries without ever suspending on a durable wait, so the
-  // timeline stands alone rather than disappearing with the wait panel.
-  if (task.waits.length === 0) return <BoundaryTimeline task={task} />;
+  // The event history renders under the attempts, so a task without a wait has no section here.
+  if (task.waits.length === 0) return null;
   const planNames = new Set((task.durability?.steps ?? []).map((step) => step.name));
   const unmatchedWaits = task.waits.filter((wait) => !planNames.has(wait.name));
   const matchedWaits = task.waits.filter((wait) => planNames.has(wait.name));
@@ -547,11 +529,12 @@ export function DurableWaits({ task }: { task: DashboardTaskDetail }) {
     <DrawerSection
       id="durable-wait-heading"
       title="Durable wait"
+      help={`The target is the earliest wake time. If a queue is paused, or a worker or database is unavailable, the task can wake later. ${waitReplayWording} Workhorse stores checkpoint and wait records, not a workflow graph.`}
       aside={
-        <Badge variant="light" color="indigo">
+        <span className="task-detail__muted task-detail__number">
           {formatCount(task.waits.length)}
           {task.truncated.waits ? "+" : ""}
-        </Badge>
+        </span>
       }
     >
       <Stack gap="sm">
@@ -573,14 +556,6 @@ export function DurableWaits({ task }: { task: DashboardTaskDetail }) {
           </Stack>
         </Box>
       ) : null}
-      <Text c="dimmed" size="xs" mt="sm">
-        The target is the earliest wake time. If a queue is paused, or a worker or database is
-        unavailable, the task can wake later. {waitReplayWording}
-      </Text>
-      <Text c="dimmed" size="xs" mt={6}>
-        Workhorse stores checkpoint and wait records, not a workflow graph.
-      </Text>
-      <BoundaryTimeline task={task} />
     </DrawerSection>
   );
 }

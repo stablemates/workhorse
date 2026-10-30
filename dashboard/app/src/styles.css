@@ -1,3 +1,12 @@
+/*
+ * This is the one stylesheet of the dashboard. A library module does not import a stylesheet,
+ * because Node cannot load a `.css` import when a server imports the package. Each component
+ * stylesheet comes in here. The first three stylesheets come before the Mantine styles, in the
+ * order that the browser bundle used when their components imported them.
+ */
+@import "./pending-results.css";
+@import "./components/task-drawer.css";
+@import "./shell/sidebar.css";
 @import "@mantine/core/styles/baseline.css";
 @import "@mantine/core/styles/global.css";
 @import "@mantine/core/styles/default-css-variables.css";
@@ -50,6 +59,71 @@
 @import "@mantine/core/styles/ThemeIcon.css";
 @import "@mantine/core/styles/Title.css";
 @import "@mantine/notifications/styles.css";
+@import "@fontsource-variable/geist";
+@import "./components/graphical/styles.css";
+@import "./components/page-layout.css";
+@import "./components/system-health-checks.css";
+@import "./components/task-status-tabs.css";
+@import "./charts/chart-motion.css";
+@import "./charts/chart-tooltip.css";
+@import "./charts/activity.css";
+@import "./pages/events.css";
+@import "./pages/queues.css";
+@import "./pages/schedules.css";
+@import "./pages/settings/settings.css";
+@import "./pages/task-detail.css";
+@import "./pages/task-groups.css";
+@import "./pages/workers.css";
+
+/*
+ * The Untitled theme uses Timeless Grotesk at weights 400, 500, and 600. Its download needs an
+ * email form, so the repository does not include the files yet. Until then each stack in
+ * `theme-document.ts` falls back to Geist. To use the theme font, put the files in
+ * `assets/fonts/` as `assets/fonts/README.md` describes, then remove the comment markers.
+ *
+ * @font-face {
+ *   font-family: "Timeless Grotesk";
+ *   font-style: normal;
+ *   font-weight: 400;
+ *   font-display: swap;
+ *   src: url("./assets/fonts/TimelessGrotesk-Regular.woff2") format("woff2");
+ * }
+ *
+ * @font-face {
+ *   font-family: "Timeless Grotesk";
+ *   font-style: normal;
+ *   font-weight: 500;
+ *   font-display: swap;
+ *   src: url("./assets/fonts/TimelessGrotesk-Medium.woff2") format("woff2");
+ * }
+ *
+ * @font-face {
+ *   font-family: "Timeless Grotesk";
+ *   font-style: normal;
+ *   font-weight: 600;
+ *   font-display: swap;
+ *   src: url("./assets/fonts/TimelessGrotesk-SemiBold.woff2") format("woff2");
+ * }
+ */
+
+/*
+ * The Graphical components stack their popups at z-index 40 to 51. The Mantine shell puts its
+ * header at 100, its navigation at 101, and its drawers at 200, so a Graphical menu opened over the
+ * navigation drew under it. These rules put the Graphical layers on the Mantine scale.
+ */
+.ui-positioner,
+.combobox-positioner,
+.themed-select-positioner {
+  z-index: var(--mantine-z-index-popover);
+}
+
+.ui-backdrop {
+  z-index: var(--mantine-z-index-modal);
+}
+
+.ui-modal {
+  z-index: calc(var(--mantine-z-index-modal) + 1);
+}
 
 html,
 body,
@@ -61,58 +135,633 @@ body {
   margin: 0;
 }
 
-.workhorse-brand__mark {
-  align-items: center;
-  background: transparent;
-  border-radius: 9px;
-  display: flex;
-  height: 38px;
-  justify-content: center;
-  width: 38px;
+/*
+ * The theme draws keyboard focus in `color-1`. Mantine draws it in the primary color, which is
+ * black or white here, so these rules give Mantine controls the theme focus ring.
+ */
+.mantine-focus-auto:focus-visible,
+.mantine-focus-always:focus {
+  outline-color: var(--workhorse-focus-ring);
 }
 
-.workhorse-brand__wordmark {
-  display: block;
-  filter: brightness(0.26) contrast(1.25);
-  height: auto;
-  width: 158px;
+/* A segmented option draws the theme ring inside its own edge, so a neighbor cannot cover it. */
+.mantine-SegmentedControl-input:focus-visible + .mantine-SegmentedControl-label {
+  outline: 2px solid var(--workhorse-focus-ring);
+  outline-offset: -2px;
 }
 
-.theme-switch {
-  border: 1px solid var(--mantine-color-default-border);
-}
-
-.dashboard-refresh-control {
-  position: relative;
+@media (prefers-reduced-motion: reduce) {
+  .mantine-SegmentedControl-indicator,
+  .mantine-SegmentedControl-label {
+    transition: none !important;
+  }
 }
 
 /*
- * The bar stays inside the buttons' rounded outline: inset horizontally by the corner radius
- * and lifted above the 1px border. A full-width bar flush with the bottom edge painted over
- * the border and made the control read taller than its 30px neighbours.
+ * A switch: a 36 x 20 track with a round 16px thumb. Checked is amber, unchecked is gray, and the
+ * thumb is white in both modes. `aria-busy` marks a change that waits for the server: the thumb
+ * shows the requested position and a spinner, and the cursor says that work is in progress.
  */
-.dashboard-refresh-control__progress {
-  animation-iteration-count: infinite;
-  animation-name: dashboard-refresh-progress;
-  animation-timing-function: linear;
-  background: var(--mantine-primary-color-filled);
-  border-radius: 1px;
-  bottom: 1px;
-  height: 2px;
-  left: var(--mantine-radius-sm);
-  pointer-events: none;
-  position: absolute;
-  right: var(--mantine-radius-sm);
-  transform-origin: left;
+.dashboard-switch {
+  --switch-inset: 2px;
+  --switch-thumb-size: 16px;
+  --switch-travel: 16px;
+  --control-fill: var(--workhorse-switch-on);
+  --control-gap: var(--mantine-spacing-xs);
+  width: 36px;
+  height: 20px;
+  border-radius: 999px;
+  background: var(--workhorse-switch-off);
 }
 
-@keyframes dashboard-refresh-progress {
+/* The thumb stays round, so it does not stretch on press. */
+.dashboard-switch.themed-switch:active {
+  --switch-stretch: 0px;
+}
+
+.dashboard-switch .themed-switch-thumb {
+  width: var(--switch-thumb-size);
+  border-radius: 50%;
+  background: #fff;
+  box-shadow:
+    0 1px 2px rgb(0 0 0 / 0.2),
+    0 0 0 0.5px rgb(0 0 0 / 0.06);
+}
+
+/* The ring stands 2px off the track, so an amber ring stays visible around an amber track. */
+.dashboard-switch.themed-switch:focus-visible {
+  outline-offset: 2px;
+}
+
+.dashboard-switch[data-disabled] {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+.dashboard-switch[aria-busy="true"] {
+  cursor: progress;
+}
+
+.dashboard-switch[aria-busy="true"] .themed-switch-thumb::after {
+  position: absolute;
+  inset: 3px;
+  border: 1.5px solid var(--workhorse-switch-off);
+  border-top-color: transparent;
+  border-radius: 50%;
+  content: "";
+  animation: dashboard-switch-spin 700ms linear infinite;
+}
+
+.dashboard-switch[aria-busy="true"][data-checked] .themed-switch-thumb::after {
+  border-color: var(--workhorse-switch-on);
+  border-top-color: transparent;
+}
+
+@keyframes dashboard-switch-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .dashboard-switch[aria-busy="true"] .themed-switch-thumb::after {
+    animation: none;
+  }
+}
+
+/*
+ * Theme inputs have a `neutral-3` fill and no visible edge until they have focus. Mantine sets
+ * these variables on the wrapper with the same specificity, so this later rule wins. Its error
+ * rule is more specific and still marks an invalid input.
+ */
+[data-mantine-color-scheme] .mantine-Input-wrapper[data-variant="default"] {
+  --input-bd: transparent;
+  --input-bg: var(--workhorse-neutral-3);
+  --input-bd-focus: var(--workhorse-focus-ring);
+}
+
+/*
+ * Header: the navigation toggle and the current section on the left, the quiet controls on the
+ * right. Every control is 32px high in the 56px bar. Color marks only what needs attention.
+ */
+.dashboard-header {
+  align-items: center;
+  display: flex;
+  gap: var(--mantine-spacing-sm);
+  height: 100%;
+  justify-content: space-between;
+  padding-inline: var(--mantine-spacing-md);
+}
+
+@media (min-width: 48em) {
+  .dashboard-header {
+    padding-inline: var(--mantine-spacing-lg);
+  }
+}
+
+/* The left side takes the space the controls leave, and drops the section name before it shows
+   only a sliver of it. The page heading still names the page. */
+.dashboard-header__left {
+  align-items: center;
+  container-type: inline-size;
+  display: flex;
+  flex: 1 1 auto;
+  gap: var(--mantine-spacing-xs);
+  min-width: 0;
+}
+
+@container (max-width: 6rem) {
+  .dashboard-header__section {
+    display: none;
+  }
+}
+
+.dashboard-header__section {
+  font-size: var(--mantine-font-size-sm);
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The controls can shrink: the account name truncates before a control leaves the screen. */
+.dashboard-header__controls {
+  align-items: center;
+  display: flex;
+  gap: 4px;
+  min-width: 0;
+}
+
+.dashboard-header__controls > * {
+  flex-shrink: 0;
+}
+
+.dashboard-header-button {
+  color: var(--mantine-color-text);
+}
+
+.dashboard-header__controls > .dashboard-header-button--account {
+  flex-shrink: 1;
+  max-width: 10rem;
+  min-width: 0;
+}
+
+.dashboard-account__name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Text that a screen reader reads and the screen does not show. */
+.dashboard-visually-hidden {
+  clip-path: inset(50%);
+  height: 1px;
+  overflow: hidden;
+  position: absolute;
+  white-space: nowrap;
+  width: 1px;
+}
+
+/*
+ * On a narrow screen the header shows the environment, a connection failure, and the account as
+ * icons only. Each name stays for assistive technology, and the tooltip shows it.
+ */
+@media (max-width: 48em) {
+  .dashboard-environment__label,
+  .dashboard-connection__label,
+  .dashboard-account__name {
+    clip-path: inset(50%);
+    height: 1px;
+    overflow: hidden;
+    position: absolute;
+    white-space: nowrap;
+    width: 1px;
+  }
+
+  .dashboard-connection[data-status] .dashboard-connection__mark {
+    padding-inline: 0;
+  }
+}
+
+/*
+ * Attention text: the theme accent, darkened on light pages to keep 4.5:1 for small text. The
+ * production environment and the pause mark use it.
+ */
+:root {
+  --dashboard-attention-text: color-mix(in srgb, var(--workhorse-color-1) 65%, black);
+}
+
+:root[data-mantine-color-scheme="dark"] {
+  --dashboard-attention-text: var(--workhorse-color-1);
+}
+
+.dashboard-environment {
+  align-items: center;
+  color: var(--mantine-color-dimmed);
+  display: inline-flex;
+  font-size: var(--mantine-font-size-xs);
+  font-weight: 500;
+  gap: 6px;
+  padding-inline: 6px;
+  white-space: nowrap;
+}
+
+.dashboard-environment[data-production] {
+  color: var(--dashboard-attention-text);
+}
+
+.dashboard-connection {
+  display: inline-flex;
+}
+
+.dashboard-connection__mark {
+  align-items: center;
+  border-radius: var(--mantine-radius-sm);
+  color: var(--mantine-color-dimmed);
+  display: inline-flex;
+  font-size: var(--mantine-font-size-xs);
+  font-weight: 500;
+  gap: 6px;
+  justify-content: center;
+  min-height: 32px;
+  min-width: 32px;
+  white-space: nowrap;
+}
+
+.dashboard-connection[data-status="disconnected"] .dashboard-connection__mark {
+  color: var(--workhorse-color-danger-text);
+  padding-inline: 6px;
+}
+
+.dashboard-connection[data-status="refreshFailed"] .dashboard-connection__mark {
+  color: var(--workhorse-color-warning-text);
+  padding-inline: 6px;
+}
+
+/* The refresh button and its settings button read as one control. */
+.dashboard-refresh {
+  align-items: center;
+  display: inline-flex;
+  position: relative;
+}
+
+.dashboard-refresh__icon {
+  display: inline-flex;
+}
+
+.dashboard-refresh__paused {
+  color: var(--dashboard-attention-text);
+  display: inline-flex;
+}
+
+@keyframes dashboard-refresh-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .dashboard-refresh__icon[data-loading] {
+    animation: dashboard-refresh-spin 800ms linear infinite;
+  }
+}
+
+/*
+ * The auto refresh settings: a compact list, about as wide as its longest row. Each row is one
+ * radio with 6px by 10px padding, and a quiet check mark marks the selected interval.
+ */
+.ui-popover.dashboard-refresh-popup {
+  gap: 0;
+  min-width: 152px;
+  padding: 4px;
+  width: max-content;
+}
+
+.dashboard-refresh-popup__title {
+  color: var(--mantine-color-dimmed);
+  font-size: var(--mantine-font-size-xs);
+  font-weight: 500;
+  line-height: 16px;
+  margin: 0;
+  padding: 6px 10px 4px;
+}
+
+.dashboard-refresh-settings {
+  display: flex;
+  flex-direction: column;
+}
+
+.dashboard-refresh-settings__options {
+  display: flex;
+  flex-direction: column;
+}
+
+.dashboard-refresh-option {
+  align-items: center;
+  border-radius: calc(var(--mantine-radius-sm) - 2px);
+  color: var(--mantine-color-text);
+  cursor: default;
+  display: flex;
+  font-size: var(--mantine-font-size-sm);
+  gap: 12px;
+  justify-content: space-between;
+  line-height: 20px;
+  outline: none;
+  padding: 6px 10px;
+  user-select: none;
+  white-space: nowrap;
+}
+
+.dashboard-refresh-option:hover {
+  background: var(--workhorse-neutral-3);
+}
+
+.dashboard-refresh-option:focus-visible {
+  background: var(--workhorse-neutral-3);
+  outline: 2px solid var(--workhorse-focus-ring);
+  outline-offset: -2px;
+}
+
+.dashboard-refresh-option[data-checked] {
+  font-weight: 500;
+}
+
+.dashboard-refresh-option__check {
+  color: var(--mantine-color-dimmed);
+  display: inline-flex;
+}
+
+.dashboard-refresh-settings p {
+  font-size: var(--mantine-font-size-xs);
+  line-height: 16px;
+  margin: 0;
+  max-width: 220px;
+  padding: 6px 10px;
+  text-wrap: pretty;
+}
+
+.dashboard-refresh-settings p:first-of-type {
+  border-top: 1px solid var(--workhorse-neutral-4);
+  margin-top: 4px;
+}
+
+.dashboard-refresh-settings__status {
+  align-items: flex-start;
+  color: var(--mantine-color-dimmed);
+  display: flex;
+  gap: 6px;
+}
+
+.dashboard-refresh-settings__status svg {
+  color: var(--dashboard-attention-text);
+  flex-shrink: 0;
+  margin-top: 2px;
+}
+
+.dashboard-refresh-settings__pinned a {
+  color: inherit;
+  font-weight: 500;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+/* A tooltip with a keyboard shortcut after its label. */
+.dashboard-header-tooltip {
+  align-items: center;
+  display: inline-flex;
+  gap: 8px;
+}
+
+.dashboard-header-tooltip__shortcut {
+  color: inherit;
+  font-family: inherit;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  opacity: 0.7;
+}
+
+/*
+ * The loading screen of a page that has no cached answer. It shows only after a short delay, so a
+ * fast load does not flash it.
+ */
+.dashboard-page-loading {
+  animation: dashboard-page-loading-in 150ms ease-out 200ms both;
+}
+
+@keyframes dashboard-page-loading-in {
   from {
-    transform: scaleX(0);
+    opacity: 0;
   }
 
   to {
-    transform: scaleX(1);
+    opacity: 1;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .dashboard-page-loading {
+    animation-duration: 1ms;
+  }
+}
+
+.dashboard-header-menu {
+  min-width: 180px;
+}
+
+/*
+ * The workspace switcher under the sidebar brand: a full-width control on a quiet neutral surface,
+ * with a low-contrast initial tile, the name, the database, and an up and down chevron. The tile
+ * is centered on the sidebar icon column.
+ *
+ * In the collapsed rail the sidebar clips and fades the text and the chevron. The surface has two
+ * layers, as the sidebar items have: `::after` is the full control and fades out in the rail, and
+ * `::before` is a 36px square around the tile that shows only in the rail. The tile is then the
+ * control, and the square gives it a hover fill and a focus ring.
+ */
+.workspace-switcher {
+  position: relative;
+  isolation: isolate;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-width: 0;
+  min-height: 40px;
+  padding: 4px 8px 4px 6px;
+  border: 0;
+  background: transparent;
+  color: var(--mantine-color-text);
+  font: inherit;
+  text-align: start;
+  cursor: pointer;
+}
+
+.workspace-switcher::before,
+.workspace-switcher::after {
+  position: absolute;
+  z-index: -1;
+  inset-inline-start: 0;
+  border-radius: var(--mantine-radius-sm);
+  content: "";
+}
+
+.workspace-switcher::after {
+  inset-block: 0;
+  width: 100%;
+  background: var(--workhorse-neutral-1);
+  box-shadow: inset 0 0 0 1px var(--workhorse-neutral-4);
+  transition:
+    opacity 180ms ease-out 90ms,
+    background-color 120ms ease-out,
+    box-shadow 120ms ease-out;
+}
+
+.workspace-switcher::before {
+  inset-block: 2px;
+  width: 36px;
+  opacity: 0;
+  transition:
+    opacity 0ms linear 270ms,
+    background-color 120ms ease-out,
+    box-shadow 120ms ease-out;
+}
+
+.workspace-switcher:hover::after,
+.workspace-switcher[data-popup-open]::after {
+  background: var(--workhorse-neutral-3);
+}
+
+.workspace-switcher:active::after,
+.workspace-switcher[data-pressed]::after {
+  background: var(--workhorse-neutral-4);
+}
+
+.workspace-switcher:focus-visible {
+  outline: none;
+}
+
+.workspace-switcher:focus-visible::after,
+.workspace-switcher:focus-visible::before {
+  box-shadow: inset 0 0 0 2px var(--workhorse-focus-ring);
+}
+
+[data-mantine-color-scheme="dark"] .workspace-switcher::after {
+  background: var(--workhorse-neutral-3);
+  box-shadow: inset 0 0 0 1px var(--workhorse-neutral-4);
+}
+
+[data-mantine-color-scheme="dark"] .workspace-switcher:hover::after,
+[data-mantine-color-scheme="dark"] .workspace-switcher[data-popup-open]::after {
+  background: var(--workhorse-neutral-4);
+}
+
+[data-mantine-color-scheme="dark"] .workspace-switcher:active::after,
+[data-mantine-color-scheme="dark"] .workspace-switcher[data-pressed]::after {
+  background: var(--workhorse-neutral-5);
+}
+
+.dashboard-sidebar[data-rail] .workspace-switcher::after {
+  opacity: 0;
+  transition:
+    opacity 120ms ease-out,
+    background-color 120ms ease-out,
+    box-shadow 120ms ease-out;
+}
+
+.dashboard-sidebar[data-rail] .workspace-switcher::before {
+  opacity: 1;
+  transition:
+    opacity 0ms,
+    background-color 120ms ease-out,
+    box-shadow 120ms ease-out;
+}
+
+.dashboard-sidebar[data-rail] .workspace-switcher:hover::before,
+.dashboard-sidebar[data-rail] .workspace-switcher[data-popup-open]::before {
+  background: var(--sidebar-hover);
+}
+
+.workspace-switcher__tile {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 24px;
+  height: 24px;
+  border-radius: var(--mantine-radius-xs);
+  background: var(--workhorse-neutral-3);
+  box-shadow: inset 0 0 0 1px var(--workhorse-neutral-4);
+  color: var(--workhorse-neutral-8);
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1;
+}
+
+/* On the dark switcher surface the tile is one step up, so it stays a quiet monogram. */
+[data-mantine-color-scheme="dark"] .workspace-switcher__tile {
+  background: var(--workhorse-neutral-4);
+  box-shadow: inset 0 0 0 1px var(--workhorse-neutral-5);
+}
+
+.workspace-switcher__text {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.workspace-switcher__name,
+.workspace-switcher__detail {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.workspace-switcher__name {
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 16px;
+}
+
+.workspace-switcher__detail {
+  color: var(--mantine-color-dimmed);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  line-height: 16px;
+}
+
+.workspace-switcher__chevron {
+  flex-shrink: 0;
+  color: var(--mantine-color-dimmed);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .workspace-switcher::before,
+  .workspace-switcher::after {
+    transition: none;
+  }
+}
+
+/* The database line sets the width, up to the theme's maximum popup width. */
+.ui-menu-detailed.workspace-switcher__popup {
+  min-width: 216px;
+  width: max-content;
+}
+
+.workspace-switcher__entry {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.workspace-switcher__entry-detail {
+  color: var(--mantine-color-dimmed);
+  font-size: var(--mantine-font-size-xs);
+  line-height: 16px;
+}
+
+@media (max-width: 35.99em) {
+  .dashboard-account__name {
+    display: none;
   }
 }
 
@@ -152,43 +801,13 @@ body {
 }
 
 .task-drawer__resize-handle:hover,
-.task-drawer__resize-handle:focus-visible,
 .task-drawer__resize-handle:active {
-  background: var(--mantine-primary-color-light);
-  box-shadow: inset 2px 0 var(--mantine-primary-color-filled);
-  outline: none;
+  background: var(--workhorse-neutral-4);
 }
 
-/*
- * Each drawer section carries its own separator, because sections render conditionally and a
- * standalone divider beside a section that returned null would leave a stray rule.
- */
-.task-drawer__section {
-  border-top: 1px solid var(--mantine-color-default-border);
-  padding-top: var(--mantine-spacing-md);
-}
-
-/*
- * Fixed label column for the metadata rows in the drawer overview, so every value starts on the
- * same vertical line instead of each row wrapping at its own offset.
- */
-.task-drawer__meta-label {
-  flex: 0 0 6.5rem;
-}
-
-.task-drawer__evidence-value {
-  max-width: 100%;
-  white-space: normal;
-  overflow-wrap: anywhere;
-}
-
-/*
- * Metadata values align on their text baseline. The square help control has no text baseline of
- * its own, so lower it to center the information glyph beside the text it explains.
- */
-.task-drawer__content .task-drawer__help {
-  position: relative;
-  top: 2px;
+.task-drawer__resize-handle:focus-visible {
+  outline: 2px solid var(--workhorse-focus-ring);
+  outline-offset: -2px;
 }
 
 /*
@@ -223,51 +842,117 @@ body {
   width: 100%;
   max-width: 100%;
   text-align: left;
+  /* A row scrolled into view clears the 56px header. */
+  scroll-margin-block: calc(56px + var(--mantine-spacing-md)) var(--mantine-spacing-md);
 }
 
 .task-table__open:focus-visible {
-  outline: 2px solid var(--mantine-primary-color-filled);
+  outline: 2px solid var(--workhorse-focus-ring);
   outline-offset: 3px;
 }
 
-/* Let table viewports shrink inside the shell instead of widening the document. */
+/*
+ * A row that the keyboard reaches, or that the drawer shows, gets the hover fill, so the operator
+ * sees the row and not only its open control. The task, event, and task group lists use it.
+ */
+tbody > tr:has(.task-table__open:focus-visible) > td,
+tbody > tr[data-selected] > td,
+.task-group-row:has(.task-group-row__link:focus-visible) > td {
+  background-color: var(--tr-hover-bg, var(--table-hover-color));
+}
+
+.task-group-row__link {
+  scroll-margin-block: calc(56px + var(--mantine-spacing-md)) var(--mantine-spacing-md);
+}
+
+.task-keyboard-hint {
+  margin: 0;
+  color: var(--mantine-color-dimmed);
+  font-size: var(--mantine-font-size-xs);
+  line-height: var(--mantine-line-height-xs);
+}
+
+.task-keyboard-hint kbd {
+  padding: 0 4px;
+  border-radius: var(--mantine-radius-xs);
+  background: var(--workhorse-neutral-3);
+  color: var(--mantine-color-text);
+  font-family: inherit;
+  font-size: 11px;
+  line-height: 16px;
+}
+
+.tasks-redrive__short {
+  display: none;
+}
+
+/* A phone has no keys to name, and the Tasks header actions stay on the title line. */
+@media (max-width: 47.99em) {
+  .task-keyboard-hint {
+    display: none;
+  }
+
+  .tasks-redrive__long {
+    display: none;
+  }
+
+  .tasks-redrive__short {
+    display: inline;
+  }
+}
+
+/*
+ * Let table viewports shrink inside the shell instead of widening the document. The page starts
+ * 12px under the header on a narrow window and 16px under it on a wide one, so the content starts
+ * soon after the bar.
+ */
 .dashboard-main {
   min-width: 0;
+  padding-top: calc(var(--app-shell-header-offset, 0rem) + var(--mantine-spacing-sm));
 }
 
-.dashboard-navbar .mantine-NavLink-root {
-  min-height: 2rem;
-  padding: 0.3125rem 0.625rem;
-  border-radius: var(--mantine-radius-sm);
+@media (min-width: 48em) {
+  .dashboard-main {
+    padding-top: calc(var(--app-shell-header-offset, 0rem) + var(--mantine-spacing-md));
+  }
 }
 
-.dashboard-navbar .mantine-Badge-root,
+/*
+ * Beside the sidebar, the page and the header title start one page padding past the sidebar edge,
+ * plus 8px beside the rail, so the page heading does not crowd the rail. The header spans the full
+ * width under the sidebar, so its fill covers the page while the sidebar edge moves.
+ *
+ * The padding changes in one step when the sidebar collapses or expands. `sidebar-motion.ts` then
+ * slides the page from its old place with a transform. The page clips its horizontal overflow, so
+ * the part that slides in past the right edge does not widen the document.
+ */
+@media (min-width: 48em) {
+  .mantine-AppShell-root[data-sidebar="rail"] {
+    --dashboard-rail-gap: 8px;
+  }
+
+  .dashboard-main {
+    padding-inline-start: calc(
+      var(--app-shell-navbar-offset, 0rem) + var(--app-shell-padding) +
+        var(--dashboard-rail-gap, 0rem)
+    );
+    overflow-x: clip;
+  }
+
+  .mantine-AppShell-header {
+    margin-inline-start: 0;
+  }
+
+  .dashboard-header {
+    padding-inline-start: calc(
+      var(--app-shell-navbar-offset, 0rem) + var(--mantine-spacing-lg) +
+        var(--dashboard-rail-gap, 0rem)
+    );
+  }
+}
+
 .dashboard-table {
   font-variant-numeric: tabular-nums;
-}
-
-/* Short laptop windows need less navigation chrome, not smaller type. */
-@media (min-width: 48em) and (max-height: 50em) {
-  .dashboard-navbar {
-    padding-block: 0.5rem;
-  }
-
-  .dashboard-navbar .mantine-NavLink-root {
-    min-height: 1.625rem;
-    padding-block: 0.125rem;
-  }
-
-  .dashboard-navbar .mantine-Stack-root {
-    gap: 0;
-  }
-
-  .dashboard-navbar .mantine-Divider-root {
-    margin-block: 0.375rem;
-  }
-
-  .dashboard-navbar__version {
-    margin-top: 0.25rem;
-  }
 }
 
 /* Minimums belong to columns: a minimum on the table alone still lets names collapse. */
@@ -457,12 +1142,6 @@ html[data-mantine-color-scheme="dark"] .workhorse-brand__wordmark {
   filter: none;
 }
 
-@media (max-width: 36em) {
-  .workhorse-brand__wordmark {
-    width: 124px;
-  }
-}
-
 @media (prefers-reduced-motion: no-preference) {
   .mantine-AppShell-header,
   .mantine-AppShell-navbar,
@@ -473,66 +1152,8 @@ html[data-mantine-color-scheme="dark"] .workhorse-brand__wordmark {
   }
 }
 
-@media (prefers-reduced-motion: reduce) {
-  .dashboard-refresh-control__progress {
-    display: none;
-  }
-}
-
-/* Keep navigation and theme on the first narrow header row, controls on the second. */
-@media (max-width: 61.99em) {
-  .dashboard-header {
-    flex-wrap: wrap;
-    gap: 0.25rem 0.5rem;
-    align-content: center;
-  }
-
-  .dashboard-header__left {
-    display: contents;
-  }
-
-  .dashboard-header__brand {
-    order: 0;
-  }
-
-  .dashboard-header__status {
-    order: 1;
-    margin-left: auto;
-  }
-
-  .dashboard-header__workspace {
-    order: 2;
-    width: calc(100% - 11.5rem);
-    min-width: 0;
-  }
-
-  .dashboard-header__workspace .mantine-Button-root {
-    width: 100% !important;
-  }
-
-  .dashboard-refresh-control {
-    order: 3;
-    margin-left: auto;
-  }
-
-  /* The pinned-listing notice rides the same row as the control it explains, after it. */
-  .dashboard-header__pinned {
-    order: 3;
-  }
-}
-
 .task-table-viewport {
   container: task-list / inline-size;
-}
-
-.dashboard-header__account {
-  max-width: 8rem;
-}
-
-.dashboard-header__account .mantine-Button-label {
-  display: block;
-  overflow: hidden;
-  text-overflow: ellipsis;
 }
 
 @media (min-width: 48em) {
@@ -543,47 +1164,70 @@ html[data-mantine-color-scheme="dark"] .workhorse-brand__wordmark {
     position: sticky;
     left: 0;
     z-index: 1;
-    background: var(--mantine-color-body);
-    border-right: 1px solid var(--mantine-color-default-border);
+    background: var(--panel-bg, var(--mantine-color-body));
   }
 
   .dashboard-table--queues tr:hover td:first-child,
   .dashboard-table--workers tr:hover td:first-child,
   .dashboard-table--schedules tr:hover td:first-child {
-    background: var(--mantine-color-default-hover);
-  }
-}
-
-@media (max-width: 35.99em) {
-  .dashboard-header__brand .workhorse-brand__wordmark {
-    display: none;
+    background: var(--table-hover-color);
   }
 }
 
 .status-label:focus-visible,
 .explained-value:focus-visible {
-  outline: 2px solid var(--mantine-primary-color-filled);
+  outline: 2px solid var(--workhorse-focus-ring);
   outline-offset: 3px;
 }
 
 /*
- * The light theme keeps the badge hue and sets the text lightness to 25%. Mantine's shade 9 gives
- * yellow, orange, green, and teal badges less than 4.5:1 contrast on their shade 1 background.
+ * A state label is a `neutral-3` chip with a dot in the state hue. On a light page the warning
+ * and wait hues are too pale for a small dot, and on a dark page `color-2` is too dark, so
+ * those dots take a stronger shade. Mantine sets the dot color inline.
  */
-html[data-mantine-color-scheme="light"] .mantine-Badge-root[data-variant="light"] {
-  color: hsl(from var(--badge-color) h s 25%);
+.mantine-Badge-root[data-variant="dot"] {
+  background: var(--workhorse-neutral-3);
+  border-color: transparent;
+  color: var(--workhorse-neutral-10);
+  font-weight: 500;
 }
 
-html[data-mantine-color-scheme="dark"] .mantine-Badge-root[data-variant="light"] {
-  background: hsl(from var(--badge-color) h s 27%);
-  color: color-mix(in srgb, var(--badge-color) 20%, white);
+.status-label .mantine-Badge-label::first-letter {
+  text-transform: uppercase;
+}
+
+html[data-mantine-color-scheme="light"] .status-label[data-state-color="yellow"] {
+  --badge-dot-color: var(--workhorse-color-warning-text) !important;
+}
+
+html[data-mantine-color-scheme="light"] .status-label[data-state-color="orange"] {
+  --badge-dot-color: var(--mantine-color-orange-8) !important;
+}
+
+/* Page buttons are ghost controls. The current page keeps the `neutral-3` fill. */
+.mantine-Pagination-control {
+  border-color: transparent;
+}
+
+.mantine-Pagination-control:not([data-active]) {
+  background-color: transparent;
+}
+
+.mantine-Pagination-control:not([data-active], :disabled, [data-disabled]):hover {
+  background-color: var(--workhorse-neutral-3);
+}
+
+/* A bordered Paper is a panel: a `neutral-2` fill, because the theme draws no borders. */
+.mantine-Paper-root[data-with-border] {
+  --panel-bg: var(--workhorse-neutral-2);
+  background: var(--panel-bg);
 }
 
 .task-table__col--actions {
   position: sticky;
   left: 0;
   z-index: 1;
-  background: var(--mantine-color-body);
+  background: var(--panel-bg, var(--mantine-color-body));
   width: 44px;
   min-width: 44px;
 }
@@ -649,7 +1293,6 @@ html[data-mantine-color-scheme="dark"] .mantine-Badge-root[data-variant="light"]
 }
 
 .system-section {
-  border-top: 1px solid var(--mantine-color-default-border);
   padding-top: var(--mantine-spacing-lg);
 }
 
@@ -659,11 +1302,7 @@ html[data-mantine-color-scheme="dark"] .mantine-Badge-root[data-variant="light"]
 }
 
 .system-current-kpis > :nth-child(n + 3) {
-  border-top: 1px solid var(--mantine-color-default-border);
-}
-
-.system-current-kpis > :nth-child(even) {
-  border-left: 1px solid var(--mantine-color-default-border);
+  border-top: 1px solid var(--workhorse-divider);
 }
 
 .system-current-kpis > :last-child:nth-child(odd) {
@@ -676,46 +1315,7 @@ html[data-mantine-color-scheme="dark"] .mantine-Badge-root[data-variant="light"]
   }
 
   .system-current-kpis > :nth-child(n + 2) {
-    border-top: 1px solid var(--mantine-color-default-border);
-    border-left: 0;
-  }
-}
-
-.system-health-checks {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-}
-
-.system-health-check {
-  display: grid;
-  grid-template-columns: minmax(10rem, 1fr) 6rem minmax(0, 3fr);
-  grid-template-areas: "name status details";
-  align-items: start;
-  gap: var(--mantine-spacing-md);
-  padding: var(--mantine-spacing-sm) var(--mantine-spacing-md);
-  border-top: 1px solid var(--mantine-color-default-border);
-}
-
-.system-health-check__name {
-  grid-area: name;
-}
-
-.system-health-check__status {
-  grid-area: status;
-}
-
-.system-health-check__details {
-  grid-area: details;
-  min-width: 0;
-  overflow-wrap: anywhere;
-}
-
-@media (max-width: 48em) {
-  .system-health-check {
-    grid-template-columns: minmax(0, 1fr) auto;
-    grid-template-areas: "name status" "details details";
-    row-gap: var(--mantine-spacing-xs);
+    border-top: 1px solid var(--workhorse-divider);
   }
 }
 
@@ -726,9 +1326,8 @@ html[data-mantine-color-scheme="dark"] .mantine-Badge-root[data-variant="light"]
   left: var(--mantine-spacing-xs);
   z-index: 1000;
   padding: var(--mantine-spacing-xs) var(--mantine-spacing-sm);
-  border: 1px solid var(--mantine-color-default-border);
   border-radius: var(--mantine-radius-sm);
-  background: var(--mantine-color-body);
+  background: var(--workhorse-neutral-3);
   color: var(--mantine-color-text);
   transform: translateY(-200%);
 }

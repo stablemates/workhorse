@@ -1,6 +1,7 @@
 import type { DashboardEventDetail } from "@stablemates/workhorse-dashboard-server/wire";
 import { Code, Group, Stack, Text } from "@mantine/core";
-import { ArrowSquareOut } from "@phosphor-icons/react";
+import { LinkSquare02Icon } from "@hugeicons/core-free-icons";
+import { HugeiconsIcon } from "@hugeicons/react";
 import type { ReactNode } from "react";
 import { JsonValue } from "./task-detail-overview.js";
 import { TaskIdChip } from "./task-detail-relations.js";
@@ -31,7 +32,7 @@ export function EventDetails({
           title={`Open task ${event.taskId}`}
           aria-label={`Open task ${event.taskId} in a new window`}
         >
-          <ArrowSquareOut size={14} aria-hidden />
+          <HugeiconsIcon icon={LinkSquare02Icon} size={14} aria-hidden />
         </Text>
       ) : null}
     </Group>

@@ -96,6 +96,27 @@ function useTrackedDropdown(blocksRefresh = false): (opened: boolean) => void {
   return track;
 }
 
+/**
+ * Tracks a Base UI menu or popover. Pass the result to the popup's `onOpenChange`.
+ *
+ * While the popup is open, Escape closes it rather than the task drawer underneath. The popup
+ * does not pause refresh.
+ */
+export function usePopupActivity(): (opened: boolean) => void {
+  return useTrackedDropdown();
+}
+
+/**
+ * Tracks a Base UI popup whose open state the caller holds, such as a task filter editor.
+ *
+ * While the popup is open, Escape closes it rather than the task drawer underneath. The popup
+ * does not pause refresh. A focused text input inside it still does, as every focused input does.
+ */
+export function useControlledPopupActivity(opened: boolean): void {
+  const track = useTrackedDropdown();
+  useEffect(() => track(opened), [opened, track]);
+}
+
 /** A confirmation pauses refresh and owns Escape ahead of the task drawer underneath it. */
 export function useConfirmationActivity(opened: boolean): void {
   const track = useTrackedDropdown(true);

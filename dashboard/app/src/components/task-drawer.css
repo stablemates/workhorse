@@ -1,0 +1,349 @@
+/*
+ * Parts that the task drawer and the event drawer share: section headings, label/value rows,
+ * stored JSON values, disclosures, and the event history. The theme draws no native borders, so
+ * every edge is an inset shadow.
+ */
+
+/* Each section carries its own space above it, because sections render conditionally. */
+.task-drawer__section {
+  padding-top: var(--mantine-spacing-lg);
+}
+
+.task-drawer__section-head {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  min-height: 28px;
+  margin-bottom: var(--mantine-spacing-xs);
+}
+
+.task-drawer__section-title {
+  margin: 0;
+  color: var(--mantine-color-text);
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 20px;
+}
+
+.task-drawer__section-aside {
+  min-width: 0;
+  margin-left: auto;
+  padding-left: var(--mantine-spacing-sm);
+  text-align: end;
+  color: var(--mantine-color-dimmed);
+  font-size: 12px;
+  line-height: 18px;
+}
+
+/*
+ * One label/value row. The fixed label column keeps every value on the same vertical line, and the
+ * value column can shrink, so a long value wraps inside it instead of widening the drawer.
+ */
+.task-drawer__meta-row {
+  display: grid;
+  grid-template-columns: 7.5rem minmax(0, 1fr);
+  column-gap: var(--mantine-spacing-sm);
+  align-items: baseline;
+  padding-block: 4px;
+  font-size: 13px;
+  line-height: 20px;
+}
+
+.task-drawer__meta-label {
+  color: var(--mantine-color-dimmed);
+}
+
+.task-drawer__meta-value {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 2px 8px;
+  min-width: 0;
+  color: var(--mantine-color-text);
+  overflow-wrap: anywhere;
+}
+
+/* A related task link reads as text with an underline, not in the browser's link blue. */
+.task-drawer__meta-value a {
+  color: var(--mantine-color-text);
+  text-decoration: underline;
+  text-decoration-color: var(--workhorse-neutral-5);
+  text-underline-offset: 3px;
+}
+
+.task-drawer__meta-value a:hover {
+  text-decoration-color: currentColor;
+}
+
+.task-drawer__evidence-value {
+  max-width: 100%;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+/*
+ * Values align on their text baseline. The square help control has no baseline of its own, so
+ * lower it to center the glyph beside the text it explains.
+ */
+.task-drawer__content .task-drawer__meta-value .task-drawer__help {
+  position: relative;
+  top: 3px;
+}
+
+/* A stored JSON value: a quiet header with its label and copy control, then the text. */
+.task-drawer__code {
+  border-radius: var(--mantine-radius-md);
+  background: var(--workhorse-neutral-2);
+  box-shadow: inset 0 0 0 1px var(--workhorse-neutral-4);
+}
+
+[data-mantine-color-scheme="dark"] .task-drawer__code {
+  background: var(--workhorse-neutral-1);
+  box-shadow: inset 0 0 0 1px var(--workhorse-neutral-3);
+}
+
+/* An error keeps a red edge on its left, so it never reads as a result. */
+.task-drawer__code[data-tone="error"],
+[data-mantine-color-scheme="dark"] .task-drawer__code[data-tone="error"] {
+  box-shadow:
+    inset 2px 0 0 var(--workhorse-color-danger-text),
+    inset 0 0 0 1px var(--workhorse-neutral-4);
+}
+
+.task-drawer__code-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--mantine-spacing-xs);
+  min-height: 32px;
+  padding: 4px 6px 0 12px;
+}
+
+.task-drawer__code-label {
+  min-width: 0;
+  color: var(--mantine-color-dimmed);
+  font-size: 12px;
+  line-height: 18px;
+}
+
+.task-drawer__code--withheld .task-drawer__code-head {
+  padding-block: 6px;
+}
+
+.task-drawer__code-body {
+  margin: 0;
+  padding: 2px 12px 12px;
+  color: var(--mantine-color-text);
+  font-family: var(--mantine-font-family-monospace);
+  font-size: 12.5px;
+  line-height: 20px;
+  /* Long strings, such as a stack trace, wrap inside the block instead of scrolling sideways. */
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  tab-size: 2;
+}
+
+/* Secondary detail behind a native disclosure. */
+.task-drawer__disclosure > summary {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 32px;
+  border-radius: var(--mantine-radius-sm);
+  color: var(--mantine-color-text);
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 20px;
+  list-style: none;
+  cursor: pointer;
+  user-select: none;
+}
+
+.task-drawer__disclosure > summary::-webkit-details-marker {
+  display: none;
+}
+
+.task-drawer__disclosure > summary:focus-visible {
+  outline: 2px solid var(--workhorse-focus-ring);
+  outline-offset: 2px;
+}
+
+.task-drawer__disclosure-icon {
+  flex-shrink: 0;
+  color: var(--mantine-color-dimmed);
+  transition: transform 150ms cubic-bezier(0.215, 0.61, 0.355, 1);
+}
+
+.task-drawer__disclosure[open] > summary .task-drawer__disclosure-icon {
+  transform: rotate(90deg);
+}
+
+.task-drawer__disclosure-title {
+  flex-shrink: 0;
+}
+
+.task-drawer__disclosure-summary {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--mantine-color-dimmed);
+  font-size: 12px;
+  font-weight: 400;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.task-drawer__disclosure-body {
+  padding: 4px 0 var(--mantine-spacing-xs) 20px;
+}
+
+.task-drawer__disclosure--compact > summary {
+  min-height: 24px;
+  color: var(--mantine-color-dimmed);
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.task-drawer__disclosure--compact > summary:hover {
+  color: var(--mantine-color-text);
+}
+
+.task-drawer__disclosure--compact .task-drawer__disclosure-body {
+  padding-left: 0;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .task-drawer__disclosure-icon {
+    transition: none;
+  }
+}
+
+/* A round state mark. The text beside it carries the meaning. */
+.task-detail__dot {
+  display: inline-block;
+  flex-shrink: 0;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--task-detail-dot, var(--workhorse-neutral-6));
+}
+
+html[data-mantine-color-scheme="light"] .task-detail__dot[data-color="yellow"] {
+  background: var(--workhorse-color-warning-text);
+}
+
+html[data-mantine-color-scheme="light"] .task-detail__dot[data-color="orange"] {
+  background: var(--mantine-color-orange-8);
+}
+
+.task-detail__status {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.task-detail__muted {
+  color: var(--mantine-color-dimmed);
+}
+
+.task-detail__number {
+  font-variant-numeric: tabular-nums;
+}
+
+.task-detail__mono {
+  font-family: var(--mantine-font-family-monospace);
+  font-size: 12.5px;
+}
+
+.task-detail__note {
+  margin: 0 0 var(--mantine-spacing-xs);
+  color: var(--mantine-color-dimmed);
+  font-size: 12px;
+  line-height: 18px;
+  text-wrap: pretty;
+}
+
+/* A bordered group inside a section, such as one durable wait or one batch dispatch. */
+.task-drawer__card {
+  padding: var(--mantine-spacing-sm);
+  border-radius: var(--mantine-radius-md);
+  box-shadow: inset 0 0 0 1px var(--workhorse-divider);
+}
+
+.task-drawer__card-rule {
+  height: 1px;
+  margin-block: var(--mantine-spacing-sm);
+  background: var(--workhorse-divider);
+}
+
+.task-drawer__callout {
+  padding: 8px 10px;
+  border-radius: var(--mantine-radius-md);
+  background: var(--workhorse-neutral-3);
+}
+
+.task-drawer__item-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 2px 8px;
+  margin-bottom: 6px;
+  font-size: 12px;
+  line-height: 18px;
+}
+
+.task-drawer__item-title {
+  color: var(--mantine-color-text);
+  font-family: var(--mantine-font-family-monospace);
+  font-size: 12.5px;
+  font-weight: 500;
+}
+
+/* The event history: event name, summary, and clock time on one line. */
+.task-drawer__events {
+  display: grid;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.task-drawer__event {
+  display: grid;
+  grid-template-columns: 11.5rem minmax(0, 1fr) auto;
+  column-gap: 10px;
+  align-items: baseline;
+  padding-block: 2px;
+}
+
+.task-drawer__event-name {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--mantine-color-text);
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 18px;
+  white-space: nowrap;
+}
+
+.task-drawer__event-summary {
+  min-width: 0;
+}
+
+@media (max-width: 48em) {
+  .task-drawer__event {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+
+  .task-drawer__event-summary {
+    grid-column: 1 / -1;
+    grid-row: 2;
+    padding-left: 16px;
+  }
+
+  .task-drawer__meta-row {
+    grid-template-columns: 6.5rem minmax(0, 1fr);
+  }
+}

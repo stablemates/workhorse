@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { createServer } from "node:http";
 import { isIP } from "node:net";
 import type { DashboardStandaloneModule } from "@stablemates/workhorse-dashboard-contract";
@@ -6,6 +7,11 @@ import { createDashboardHost } from "./host.js";
 import { dashboardNodeMiddleware, normalizeDashboardPublicOrigin } from "./node.js";
 import { createDashboardOperatorControllers } from "./operator-controllers.js";
 import { trustedProxyCheck } from "./trusted-proxy.js";
+import type {
+  DashboardAuditContext,
+  DashboardScheduleController,
+  DashboardSettingsController,
+} from "./types.js";
 
 /**
  * Serve the operator dashboard as its own process against any Workhorse database.
@@ -45,6 +51,128 @@ const STANDALONE_SECURITY_HEADERS: Readonly<Record<string, string>> = {
   "x-frame-options": "DENY",
   "x-robots-tag": "noindex, nofollow, noarchive",
 };
+
+/**
+ * Schedule pause and resume for a standalone process that allows mutations.
+ *
+ * No client wraps `set_schedule_paused_v1`, so the host calls it as the other SDK hosts do. The
+ * function records the actor and the reason of the request as the pause attribution.
+ */
+function standaloneScheduleController(database: Queryable): DashboardScheduleController {
+  return {
+    async setSchedulePaused(namespace, name, paused, audit) {
+      const result = await database.query<{ paused: boolean | null }>(
+        "SELECT workhorse.set_schedule_paused_v1($1::text, $2::text, $3::boolean, $4::text, $5::text) AS paused",
+        [namespace, name, paused, audit.actor, audit.reason],
+      );
+      const changed = result.rows[0]?.paused;
+      if (changed === null || changed === undefined) {
+        throw new Error(`Schedule ${namespace}/${name} not found`);
+      }
+      return { paused: changed };
+    },
+  };
+}
+
+/** One policy change of a standalone dashboard, with the audit context of the request. */
+interface StandalonePolicyAuditRecord {
+  event: "workhorse.dashboard.policy_changed";
+  action:
+    | "overrideMaintenancePolicy"
+    | "revertMaintenancePolicy"
+    | "overrideRetentionPolicy"
+    | "revertRetentionPolicy";
+  /** The definition of an override, or the settings of a revert. */
+  change: unknown;
+  /** The workspace that the change applies to. Single-workspace mode has no name and no field. */
+  workspace?: string;
+  actor: string;
+  reason: string;
+  /** The request ID as `queue_control` keeps it: a short preview, a digest, and the length. */
+  requestIdPreview: string;
+  requestIdDigest: string;
+  requestIdLength: number;
+  occurredAt: string;
+}
+
+/** The request ID evidence that `set_queue_paused_v1` stores, so a log line holds no raw ID. */
+function requestIdEvidence(
+  requestId: string,
+): Pick<StandalonePolicyAuditRecord, "requestIdPreview" | "requestIdDigest" | "requestIdLength"> {
+  const characters = [...requestId];
+  const length = characters.length;
+  const preview =
+    length <= 4
+      ? "•".repeat(length)
+      : length <= 8
+        ? `${characters.slice(0, 2).join("")}…${characters.slice(-2).join("")}`
+        : `${characters.slice(0, 8).join("")}…${characters.slice(-4).join("")}`;
+  return {
+    requestIdPreview: preview,
+    requestIdDigest: createHash("sha256").update(requestId, "utf8").digest("hex").slice(0, 12),
+    requestIdLength: length,
+  };
+}
+
+/** Write one audit record as one JSON line on the standard output of the process. */
+function writePolicyAuditRecord(record: StandalonePolicyAuditRecord): void {
+  process.stdout.write(`${JSON.stringify(record)}\n`);
+}
+
+/** Run one policy change, then write its audit record. A failed change writes none. */
+async function audited(
+  action: StandalonePolicyAuditRecord["action"],
+  change: unknown,
+  workspace: string | null,
+  audit: DashboardAuditContext,
+  operation: () => Promise<unknown>,
+): Promise<void> {
+  await operation();
+  writePolicyAuditRecord({
+    event: "workhorse.dashboard.policy_changed",
+    action,
+    change,
+    // The RPC log names the workspace the same way.
+    ...(workspace === null ? {} : { workspace }),
+    actor: audit.actor,
+    reason: audit.reason,
+    ...requestIdEvidence(audit.requestId),
+    occurredAt: audit.occurredAt ?? new Date().toISOString(),
+  });
+}
+
+/**
+ * Database-wide maintenance and retention policy changes, through the workspace queue.
+ *
+ * The policy functions keep no attribution, and the standalone process owns no audit table in the
+ * database of the operator. After each successful change, the process writes the actor, the
+ * reason, and the request ID evidence to its log, as an embedded host records them in its own
+ * audit table. A failed change writes no record. A process that serves several workspaces names
+ * the workspace in each record.
+ */
+function standaloneSettingsController(
+  queue: Queue,
+  workspace: string | null,
+): DashboardSettingsController {
+  return {
+    overrideMaintenancePolicy: (definition, audit) =>
+      audited("overrideMaintenancePolicy", definition, workspace, audit, () =>
+        queue.overrideMaintenancePolicy(definition),
+      ),
+    revertMaintenancePolicy: (settings, audit) =>
+      audited("revertMaintenancePolicy", settings, workspace, audit, () =>
+        queue.revertMaintenancePolicy(settings),
+      ),
+    overrideRetentionPolicy: (definition, audit) =>
+      audited("overrideRetentionPolicy", definition, workspace, audit, () =>
+        queue.overrideRetentionPolicy(definition),
+      ),
+    revertRetentionPolicy: (settings, audit) =>
+      audited("revertRetentionPolicy", settings, workspace, audit, () =>
+        queue.revertRetentionPolicy(settings),
+      ),
+  };
+}
 
 function isLoopbackHostname(hostname: string): boolean {
   const normalized = hostname.toLowerCase().replace(/^\[|\]$/g, "");
@@ -111,13 +239,17 @@ export const startDashboardServer: DashboardStandaloneModule<Queryable>["startDa
       (publicOrigin !== undefined && !isLoopbackHostname(new URL(publicOrigin).hostname));
     const redactErrorStacks = remotelyReachable && !options.revealErrorStacks;
     // Each database gets its own clients so mutations in one workspace can never reach another.
-    const workspaceControls = (workspaceDatabase: Queryable) => {
+    const workspaceControls = (workspaceDatabase: Queryable, workspace: string | null) => {
       const queue = new Queue(workspaceDatabase);
       const admin = new Admin(workspaceDatabase);
       const controls = options.allowMutations
-        ? createDashboardOperatorControllers({
-            run: (_action, operation) => operation({ admin, queue }),
-          })
+        ? {
+            ...createDashboardOperatorControllers({
+              run: (_action, operation) => operation({ admin, queue }),
+            }),
+            scheduleController: standaloneScheduleController(workspaceDatabase),
+            settingsController: standaloneSettingsController(queue, workspace),
+          }
         : { operator: { mode: "read-only" as const } };
       return { ...controls, redactErrorStacks };
     };
@@ -162,12 +294,12 @@ export const startDashboardServer: DashboardStandaloneModule<Queryable>["startDa
               workspaces: Object.fromEntries(
                 Object.entries(workspaceTarget.workspaces).map(([name, workspaceDatabase]) => [
                   name,
-                  { database: workspaceDatabase, ...workspaceControls(workspaceDatabase) },
+                  { database: workspaceDatabase, ...workspaceControls(workspaceDatabase, name) },
                 ]),
               ),
               defaultWorkspace: workspaceTarget.defaultWorkspace,
             }
-          : { database: database as Queryable, ...workspaceControls(database as Queryable) }),
+          : { database: database as Queryable, ...workspaceControls(database as Queryable, null) }),
       });
 
       const middleware = dashboardNodeMiddleware(host, { publicOrigin, trustedProxies });

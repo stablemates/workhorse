@@ -1,67 +1,32 @@
+import { readFileSync } from "node:fs";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
-import { MantineProvider } from "@mantine/core";
-import { WorkhorseBrand, WorkhorseVersion } from "./brand.js";
+import { WorkhorseBrand, workhorseMarkPaths, workhorseMarkViewBox } from "./brand.js";
 
 describe("WorkhorseBrand", () => {
   it("does not include the Workhorse version", () => {
-    const html = renderToStaticMarkup(
-      <MantineProvider>
-        <WorkhorseBrand />
-      </MantineProvider>,
-    );
+    const html = renderToStaticMarkup(<WorkhorseBrand />);
 
     expect(html).not.toContain("Workhorse version");
   });
-});
 
-describe("WorkhorseVersion", () => {
-  it("shows the beta label and current version", () => {
-    const html = renderToStaticMarkup(
-      <MantineProvider>
-        <WorkhorseVersion version="9.8.7" />
-      </MantineProvider>,
-    );
+  it("shows the mark and the wordmark, or the mark alone for the rail", () => {
+    const full = renderToStaticMarkup(<WorkhorseBrand />);
+    const mark = renderToStaticMarkup(<WorkhorseBrand markOnly />);
 
-    expect(html).toContain('aria-label="Workhorse version 9.8.7"');
-    expect(html).toContain("v9.8.7");
-    expect(html).toContain("Public beta");
-    expect(html).not.toContain("inside a major line a migration only adds");
+    expect(full).toContain('class="workhorse-brand__mark"');
+    expect(full).toContain('class="workhorse-brand__wordmark"');
+    expect(mark).toContain('class="workhorse-brand__mark"');
+    expect(mark).not.toContain("workhorse-brand__wordmark");
   });
 
-  it("links the source revision beside the version when the build names one", () => {
-    const revision = "8d94d3fd0123456789abcdef0123456789abcdef";
-    const html = renderToStaticMarkup(
-      <MantineProvider>
-        <WorkhorseVersion version="9.8.7" revision={revision} />
-      </MantineProvider>,
-    );
+  it("draws the same mark as the brand file", () => {
+    const file = readFileSync(new URL("./assets/workhorse-mark.svg", import.meta.url), "utf8");
+    const filePaths = [
+      ...file.matchAll(/<path fill="([^"]*)" transform="([^"]*)" d="([^"]*)"\/>/g),
+    ].map(([, fill, transform, d]) => ({ fill, transform, d }));
 
-    expect(html).toContain('aria-label="Workhorse version 9.8.7"');
-    expect(html).toContain(`href="https://github.com/stablemates/workhorse/commit/${revision}"`);
-    expect(html).toContain(`aria-label="Workhorse revision ${revision}"`);
-    expect(html).toContain(">8d94d3f</a>");
-  });
-
-  it("shows no revision for a published release", () => {
-    const html = renderToStaticMarkup(
-      <MantineProvider>
-        <WorkhorseVersion version="9.8.7" />
-      </MantineProvider>,
-    );
-
-    expect(html).not.toContain("Workhorse revision");
-    expect(html).not.toContain("/commit/");
-  });
-
-  it("omits the version when a direct React consumer does not supply one", () => {
-    const html = renderToStaticMarkup(
-      <MantineProvider>
-        <WorkhorseVersion />
-      </MantineProvider>,
-    );
-
-    expect(html).toContain("Public beta");
-    expect(html).not.toContain("Workhorse version");
+    expect(file).toContain(`viewBox="${workhorseMarkViewBox}"`);
+    expect(filePaths).toEqual(workhorseMarkPaths);
   });
 });

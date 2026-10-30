@@ -25,6 +25,7 @@
     },
     "dashboard/app": {
       "entry": ["browser/react-grab.ts", "src/browser.tsx", "vite.config.ts"],
+      "ignore": ["src/components/graphical/**"],
       "vite": {
         "config": []
       }
@@ -35,11 +36,16 @@
     },
     "typescript/dashboard": {
       "ignoreDependencies": [
+        "@hugeicons/core-free-icons",
+        "@hugeicons/react",
         "@mantine/charts",
         "@mantine/core",
         "@mantine/hooks",
         "@mantine/notifications",
-        "@phosphor-icons/react",
+        "@base-ui/react",
+        "@fontsource-variable/geist",
+        "lucide-react",
+        "motion",
         "@stablemates/workhorse",
         "@stablemates/workhorse-dashboard-server",
         "react",

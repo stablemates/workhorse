@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { MantineProvider, Table } from "@mantine/core";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
@@ -91,7 +92,7 @@ describe("dashboard event history", () => {
       ),
     );
 
-    const windowSelector = html.indexOf(">Window<");
+    const windowSelector = html.indexOf(">Time range<");
     const topPagination = html.indexOf('aria-label="Events pagination above table"');
     const topPageSize = html.indexOf('aria-label="Events per page above table"');
     const filters = html.indexOf('aria-label="Event filters"');
@@ -104,6 +105,137 @@ describe("dashboard event history", () => {
     expect(filters).toBeGreaterThan(topPageSize);
     expect(bottomPagination).toBeGreaterThan(filters);
     expect(bottomPageSize).toBeGreaterThan(bottomPagination);
+    // A feed that is not on one task shows no task filter.
+    expect(html).not.toContain("Remove task filter");
+  });
+
+  it("keeps the rows dimmed and moves the pager while the next page loads", async () => {
+    const { EventsPage } = await import("./pages/events.js");
+    const { PagePendingContext } = await import("./pending-results.js");
+    const event = {
+      id: "event:018f0000-0000-7000-8000-000000000045",
+      kind: "event",
+      recordId: "018f0000-0000-7000-8000-000000000045",
+      taskId: "task-10",
+      queue: "billing",
+      taskType: "invoice.send",
+      occurredAt: "2026-08-16T11:20:00.123Z",
+      attempt: 1,
+      type: "claimed",
+      details: null,
+      workerId: null,
+      fenceToken: null,
+      durationMs: null,
+      errorMessage: null,
+    } satisfies DashboardEventRow;
+    const data = {
+      capturedAt: "2026-08-16T12:00:00.000Z",
+      window: "1h",
+      windowSeconds: 3600,
+      rangeStart: "2026-08-16T11:00:00.000Z",
+      rangeEnd: "2026-08-16T12:00:00.000Z",
+      events: [event],
+      page: 1,
+      pageSize: 50,
+      total: 151,
+      retention: { taskEventDays: null, attemptHistoryDays: null },
+    } satisfies DashboardEventsPage;
+    const render = (pending: boolean) =>
+      renderToStaticMarkup(
+        createElement(
+          MantineProvider,
+          null,
+          createElement(
+            DashboardClientContext.Provider,
+            {
+              value: {
+                taskFacets: async () => ({ queues: [], workers: [], taskTypes: [], tags: [] }),
+              } as DashboardClient,
+            },
+            createElement(
+              PagePendingContext.Provider,
+              { value: pending },
+              createElement(EventsPage, {
+                data,
+                query: { ...defaultEventsLocation, page: 3 },
+                setQuery: () => undefined,
+                inspectEvent: () => undefined,
+              }),
+            ),
+          ),
+        ),
+      );
+    const pending = render(true);
+    // The rows of page 1 stay on screen, dimmed and busy, while page 3 loads.
+    expect(pending).toContain("task-10");
+    expect(pending).toMatch(/class="pending-results" data-pending="true" aria-busy="true"/);
+    expect(pending).toMatch(/aria-current="page"[^>]*>3</);
+    const settled = render(false);
+    expect(settled).not.toContain("data-pending");
+    expect(settled).toMatch(/aria-current="page"[^>]*>1</);
+    // One polite region says the new count after the request settles.
+    expect(settled.match(/aria-live="polite"/g)).toHaveLength(1);
+  });
+
+  it("gives each event button a unique id, so the pending results keep its focus", async () => {
+    const { EventsPage, eventOpenButtonId } = await import("./pages/events.js");
+    const lifecycle = {
+      id: "event:7",
+      kind: "event",
+      recordId: "7",
+      taskId: "task-11",
+      queue: "billing",
+      taskType: "invoice.send",
+      occurredAt: "2026-08-16T11:20:00.123Z",
+      attempt: 1,
+      type: "succeeded",
+      details: null,
+      workerId: null,
+      fenceToken: null,
+      durationMs: null,
+      errorMessage: null,
+    } satisfies DashboardEventRow;
+    // The attempt has the same record id as the lifecycle event, from its own table.
+    const attempt = { ...lifecycle, id: "attempt:7", kind: "attempt" } satisfies DashboardEventRow;
+    const html = renderToStaticMarkup(
+      createElement(
+        MantineProvider,
+        null,
+        createElement(
+          DashboardClientContext.Provider,
+          {
+            value: {
+              taskFacets: async () => ({ queues: [], workers: [], taskTypes: [], tags: [] }),
+            } as DashboardClient,
+          },
+          createElement(EventsPage, {
+            data: {
+              capturedAt: "2026-08-16T12:00:00.000Z",
+              window: "1h",
+              windowSeconds: 3600,
+              rangeStart: "2026-08-16T11:00:00.000Z",
+              rangeEnd: "2026-08-16T12:00:00.000Z",
+              events: [lifecycle, attempt],
+              page: 1,
+              pageSize: 50,
+              total: 2,
+              retention: { taskEventDays: null, attemptHistoryDays: null },
+            } satisfies DashboardEventsPage,
+            query: defaultEventsLocation,
+            setQuery: () => undefined,
+            inspectEvent: () => undefined,
+          }),
+        ),
+      ),
+    );
+    expect(eventOpenButtonId(lifecycle.id)).toBe("event-open-event:7");
+    const buttons = html.match(/<button[^>]*task-table__open[^>]*>/g) ?? [];
+    expect(buttons.map((button) => /\sid="([^"]+)"/.exec(button)?.[1])).toEqual([
+      eventOpenButtonId(lifecycle.id),
+      eventOpenButtonId(attempt.id),
+    ]);
+    const ids = [...html.matchAll(/\sid="([^"]+)"/g)].map((match) => match[1]);
+    expect(new Set(ids).size).toBe(ids.length);
   });
 
   it("caps the pager at the page the server accepts and offers to continue", async () => {
@@ -469,5 +601,99 @@ describe("dashboard event history", () => {
     );
     expect(html).not.toContain("coalescing-heading");
     expect(html).not.toContain(">search</code>");
+  });
+});
+
+/** A pattern for a handler that moves focus to the search field, then makes the change. */
+function moveFocusThen(change: string): RegExp {
+  return new RegExp(
+    String.raw`keepFocusOnRemoval\(\{\s*removed: event\.currentTarget,\s*active: document\.activeElement,\s*target: searchField\.current,\s*\}\);\s*` +
+      change.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"),
+  );
+}
+
+describe("Events Clear filters", () => {
+  it("clears the search draft with the filters, so the debounce cannot write it back", async () => {
+    const { clearEventFilters } = await import("./pages/events.js");
+    // 1. The operator types "timeout", and the debounce wrote it to the URL with a queue filter.
+    const query = {
+      ...defaultEventsLocation,
+      window: "24h" as const,
+      search: "timeout",
+      queue: "email",
+      taskId: "0190a3f4-0000-7000-8000-000000000001",
+      page: 3,
+    };
+    // 2. The operator types more. The draft waits 300 ms for the debounce.
+    let draft: string | null = "timeout retry";
+    let shown = query;
+    // 3. The operator clicks Clear filters before the debounce runs.
+    clearEventFilters({
+      query,
+      setQuery: (next) => {
+        shown = next;
+      },
+      setSearchDraft: (next) => {
+        draft = next;
+      },
+    });
+    // 4. No draft is left for the debounce, and only the time window stays.
+    expect(draft).toBeNull();
+    expect(shown).toEqual({ ...defaultEventsLocation, window: "24h" });
+  });
+
+  it("shows a task filter, and offers Clear filters when the task is the only filter", async () => {
+    const { EventsPage } = await import("./pages/events.js");
+    // 1. The operator opens "View task events" from a task, so the feed shows one task.
+    const taskId = "0190a3f4-0000-7000-8000-000000000001";
+    const query = { ...defaultEventsLocation, taskId };
+    const data = {
+      capturedAt: "2026-08-16T12:00:00.000Z",
+      window: "1h",
+      windowSeconds: 3600,
+      rangeStart: "2026-08-16T11:00:00.000Z",
+      rangeEnd: "2026-08-16T12:00:00.000Z",
+      events: [],
+      page: 1,
+      pageSize: 50,
+      total: 0,
+      retention: { taskEventDays: null, attemptHistoryDays: null },
+    } satisfies DashboardEventsPage;
+    const client = {
+      taskFacets: async () => ({ queues: [], workers: [], taskTypes: [], tags: [] }),
+    } as DashboardClient;
+    const html = renderToStaticMarkup(
+      createElement(
+        MantineProvider,
+        null,
+        createElement(
+          DashboardClientContext.Provider,
+          { value: client },
+          createElement(EventsPage, {
+            data,
+            query,
+            setQuery: () => undefined,
+            inspectEvent: () => undefined,
+          }),
+        ),
+      ),
+    );
+    // 2. The filter bar names the task, and the empty state offers Clear filters.
+    const filters = html.slice(html.indexOf('aria-label="Event filters"'));
+    expect(filters).toContain(`aria-label="Remove task filter ${taskId}"`);
+    expect(filters).toContain(">0190a3f4<");
+    expect(html).toContain("No events match these filters");
+    expect(html).toContain(">Clear filters<");
+  });
+
+  it("moves keyboard focus to the search field before a filter control leaves the page", () => {
+    const source = readFileSync(new URL("./pages/events.tsx", import.meta.url), "utf8");
+    // 1. The operator presses Enter on the task filter remove button. Focus moves, then the filter goes.
+    expect(source).toMatch(moveFocusThen("filter({ taskId: null });"));
+    // 2. The operator presses Enter on Clear filters. Focus moves, then the filters go.
+    expect(source).toMatch(
+      moveFocusThen("clearEventFilters({ query, setQuery, setSearchDraft });"),
+    );
+    expect(source).toContain("ref={searchField}");
   });
 });

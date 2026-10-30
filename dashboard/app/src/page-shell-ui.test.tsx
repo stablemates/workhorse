@@ -66,10 +66,9 @@ describe("skip link and page focus", () => {
     );
   });
 
-  it("gives the pages without a visible heading one for assistive technology", () => {
-    expect(controllerSource).toContain(
-      '<VisuallyHidden component="h1">{routeHeading(location.route)}</VisuallyHidden>',
-    );
+  it("leaves the page heading to each page and draws none of its own", () => {
+    // Every page draws one visible `h1` through `PageHeader`, so the shell adds no hidden one.
+    expect(controllerSource).not.toContain('<VisuallyHidden component="h1">');
     expect(controllerSource).toMatch(/<Text component="h1"[^>]*>\s*Workhorse could not load/);
   });
 });

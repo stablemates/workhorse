@@ -64,6 +64,7 @@ function rowProps(overrides: Partial<TaskListRowProps> = {}): TaskListRowProps {
     canRunNow: true,
     canCompleteHumanWait: false,
     pendingAction: null,
+    selected: false,
     shownAt: Date.parse("2026-09-20T13:00:00.000Z"),
     timeZone: "UTC",
     ...overrides,
@@ -155,6 +156,7 @@ describe("what a poll makes a task row redraw", () => {
 
   it("redraws a row whose action started or finished", () => {
     expect(sameTaskRow(rowProps(), rowProps({ pendingAction: "cancel" }))).toBe(false);
+    expect(sameTaskRow(rowProps(), rowProps({ selected: true }))).toBe(false);
   });
 
   it("redraws a row whose menu gained an action the host now offers", () => {

@@ -1,4 +1,5 @@
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
+import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { build, type Rolldown, type UserConfig } from "vite";
@@ -17,7 +18,8 @@ const appShell = readFileSync(new URL("./shell/AppShell.tsx", import.meta.url), 
 
 describe("dashboard bundle boundaries", () => {
   it("keeps route pages and the activity chart behind dynamic imports", () => {
-    expect(controller.match(/lazy\(\(\) =>\s*import\(/g)).toHaveLength(8);
+    expect(controller.match(/preloadablePage\(\(\) =>\s*import\(/g)).toHaveLength(8);
+    expect(controller).toContain("const Lazy = lazy(() => preload()");
     expect(taskList).not.toContain("@mantine/charts");
     expect(activityChart).toContain('from "@mantine/charts"');
   });
@@ -48,6 +50,25 @@ describe("dashboard bundle boundaries", () => {
     expect(styles).toContain('@import "@mantine/core/styles/default-css-variables.css"');
     expect(styles).toContain('@import "@mantine/core/styles/baseline.css"');
     expect(styles).toContain('@import "@mantine/core/styles/AppShell.css"');
+  });
+
+  // Node cannot load a `.css` import. A server that imports the package would fail, so only the
+  // browser entry imports a stylesheet, and the package stylesheet imports each component sheet.
+  it("keeps stylesheet imports out of the library modules", () => {
+    const sourceRoot = fileURLToPath(new URL(".", import.meta.url));
+    const sources = readdirSync(sourceRoot, { recursive: true, encoding: "utf8" });
+    const stylesheetImport = /^\s*import\s+["'][^"']+\.css["'];?\s*$/m;
+    const importers = sources
+      .filter((file) => /\.tsx?$/.test(file) && !/\.test\.tsx?$/.test(file))
+      .filter((file) => file !== "browser.tsx")
+      .filter((file) => stylesheetImport.test(readFileSync(path.join(sourceRoot, file), "utf8")));
+    expect(importers).toEqual([]);
+
+    const sheets = sources
+      .filter((file) => file.endsWith(".css") && file !== "styles.css")
+      .map((file) => file.split(path.sep).join("/"));
+    const missing = sheets.filter((sheet) => !styles.includes(`@import "./${sheet}";`));
+    expect(missing).toEqual([]);
   });
 
   it("loads Mantine base component styles before the components that extend them", () => {
@@ -114,8 +135,11 @@ describe("dashboard vendor chunks in the production build", () => {
     vi.unstubAllEnvs();
   });
 
+  // Rolldown names an application chunk after one of its modules, so `src/notifications.tsx` can
+  // give an application chunk the name of the notifications vendor group. A vendor chunk holds
+  // npm packages, and an application chunk holds none.
   const chunk = (name: string): OutputChunk => {
-    const found = chunks.filter((item) => item.name === name);
+    const found = chunks.filter((item) => item.name === name && packagesIn(item).size > 0);
     expect(found, `exactly one ${name} chunk`).toHaveLength(1);
     return found[0]!;
   };
@@ -140,12 +164,25 @@ describe("dashboard vendor chunks in the production build", () => {
   });
 
   it("keeps each other vendor chunk to its own libraries", () => {
-    expect([...packagesIn(chunk("icons"))]).toEqual(["@phosphor-icons/react"]);
+    expect([...packagesIn(chunk("icons"))].toSorted()).toEqual([
+      "@hugeicons/core-free-icons",
+      "@hugeicons/react",
+      "lucide-react",
+    ]);
+    expect([...packagesIn(chunk("motion"))].toSorted()).toEqual([
+      "framer-motion",
+      "motion",
+      "motion-dom",
+      "motion-utils",
+    ]);
+    const baseUi = packagesIn(chunk("base-ui"));
+    expect(baseUi).toContain("@base-ui/react");
+    expect(baseUi).toContain("@base-ui/utils");
     const mantine = packagesIn(chunk("mantine"));
     expect(mantine).toContain("@mantine/core");
     expect(mantine).toContain("@mantine/hooks");
     expect(packagesIn(chunk("notifications"))).toContain("@mantine/notifications");
-    for (const name of ["mantine", "icons", "notifications"]) {
+    for (const name of ["mantine", "base-ui", "icons", "motion", "notifications"]) {
       const packages = packagesIn(chunk(name));
       for (const chartPackage of chartOnlyPackages) {
         expect(packages.has(chartPackage), `${name} holds ${chartPackage}`).toBe(false);
@@ -170,7 +207,15 @@ describe("dashboard vendor chunks in the production build", () => {
   });
 
   it("keeps application modules out of the vendor chunks", () => {
-    for (const name of ["react", "mantine", "icons", "notifications", "mantine-charts"]) {
+    for (const name of [
+      "react",
+      "mantine",
+      "base-ui",
+      "icons",
+      "motion",
+      "notifications",
+      "mantine-charts",
+    ]) {
       const applicationModules = Object.keys(chunk(name).modules).filter(
         (id) => packageOf(id) === undefined,
       );

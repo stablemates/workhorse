@@ -1421,6 +1421,10 @@ member task. A task is a member of one group at most. `group` comes from `task_g
 `group` is null for a task that is not a member, also for a callback task of a group. A database
 below schema version 90 returns no `group` key.
 
+In the task drawer, a member task shows a Group row with the short group ID, the position, and the
+group state. The short ID links to the group detail at `/groups?group=<id>`. A task without `group`
+shows no Group row.
+
 The concurrency utilization of a live task comes from the supplied `health` document. When the
 caller supplied none, it comes from `queue_health_v1()`.
 
@@ -1860,7 +1864,16 @@ The backend entry owns `Queue`, `createDashboardOperatorControllers`, `createDas
 
 - It binds `options.hostname` and `options.port`.
 - It uses `/` as the dashboard path.
-- It enables queue, task, and worker mutations only when `options.allowMutations` is true.
+- It enables queue, task, worker, schedule, and settings mutations only when
+  `options.allowMutations` is true.
+- It pauses and resumes a schedule with `set_schedule_paused_v1`, which records the actor and the
+  reason of the request. It changes the maintenance and retention policies through `Queue`.
+- The policy functions record no attribution. After each successful policy change, the process
+  writes one JSON line to standard output. The line has `event`
+  (`workhorse.dashboard.policy_changed`), `action`, `change`, `actor`, `reason`, and `occurredAt`.
+  It has the request ID evidence that `queue_control` keeps: `requestIdPreview`, `requestIdDigest`,
+  and `requestIdLength`. If the process serves several workspaces, the line also has `workspace`,
+  the name of the workspace that the change applies to. A failed change writes no line.
 
 ### Single-admin authentication
 

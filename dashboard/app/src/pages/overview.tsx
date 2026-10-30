@@ -12,15 +12,13 @@ import {
   Grid,
   Group,
   Loader,
-  Paper,
   ScrollArea,
   SegmentedControl,
   Stack,
   Table,
   Text,
-  Title,
 } from "@mantine/core";
-import { Suspense } from "react";
+import { Suspense, type ReactNode } from "react";
 import {
   ExternalWaitAlert,
   QueueActivity,
@@ -42,21 +40,32 @@ import {
 import { SystemOutcomeChart, systemWindows } from "../core.js";
 import { BudgetsTable, budgetCappedFootnote } from "../budgets-table.js";
 import { HelpButton } from "../components/help-button.js";
+import { EmptyState } from "../components/empty-state.js";
+import { Page, PageHeader, PageSection } from "../components/page-header.js";
 import { dangerTextColor, warningTextColor } from "../status-colors.js";
+import { StatusLabel } from "../status-badge.js";
 import { SystemHealthChecks } from "../components/system-health-checks.js";
 import { taskDisplayName } from "../components/task-list.js";
 import { presentStorageRelation, retentionCategoryLabels } from "../presentation-policy.js";
 import { formatCount } from "../count-format.js";
+import { PendingResults, usePagePending } from "../pending-results.js";
 
 export function SystemPage({
   data,
+  requestedWindow = data.window,
   setWindow,
   navigate,
 }: {
   data: DashboardSystemPage;
+  /**
+   * The window that the control names. It can differ from `data.window` while the new window
+   * loads, so the control moves on the click and the metrics follow when they arrive.
+   */
+  requestedWindow?: DashboardSystemWindow;
   setWindow: (window: DashboardSystemWindow) => void;
   navigate: (href: string) => void;
 }) {
+  const pending = usePagePending() && requestedWindow !== data.window;
   const outcomeChartData = data.outcomes.map((bucket) => ({
     bucket: systemBucketLabel(bucket.bucketStart, data.window),
     enqueued: bucket.enqueued,
@@ -99,231 +108,196 @@ export function SystemPage({
   const retentionBehind = data.status.reasons.some((reason) => reason.code === "retention-lag");
 
   return (
-    <Stack gap="xl">
-      <Stack gap="sm">
-        <Group justify="space-between" align="flex-start">
-          <Box>
-            <Group gap="sm" mb={4}>
-              <Title order={1} size="h3">
-                System health
-              </Title>
-              <HelpButton
-                label="System health"
-                help="Each check reports whether work or maintenance needs attention. Rate limits, concurrency limits, and shared budgets protect capacity as configured."
-              />
+    <Page>
+      <PageHeader
+        title="System health"
+        titleAside={
+          <HelpButton
+            label="System health"
+            help="Each check reports whether work or maintenance needs attention. Rate limits, concurrency limits, and shared budgets protect capacity as configured."
+          />
+        }
+        description={
+          data.pausedQueues.length > 0 ? (
+            <Group component="span" gap={6}>
+              <span>Paused queues:</span>
+              {data.pausedQueues.map((queue) => (
+                <Badge key={queue} color="yellow" variant="light" size="sm" tt="none">
+                  {queue}
+                </Badge>
+              ))}
             </Group>
-            {data.pausedQueues.length > 0 ? (
-              <Group gap={6} mt="xs">
-                <Text c="dimmed" size="xs">
-                  Paused
-                </Text>
-                {data.pausedQueues.map((queue) => (
-                  <Badge key={queue} color="yellow" variant="light" size="sm">
-                    {queue}
-                  </Badge>
-                ))}
-              </Group>
-            ) : null}
-          </Box>
-          <Text c="dimmed" size="xs" title={formatExact(data.capturedAt)}>
+          ) : undefined
+        }
+        actions={
+          <Text c="dimmed" size="sm" title={formatExact(data.capturedAt)}>
             Captured {formatRelative(data.capturedAt)}
           </Text>
-        </Group>
+        }
+      />
 
-        <SystemHealthChecks reasons={data.status.reasons} />
-      </Stack>
+      <SystemHealthChecks reasons={data.status.reasons} />
 
       <ExternalWaitAlert externalWaits={data.kpis.externalWaits} navigate={navigate} />
 
-      <Stack
-        component="section"
-        aria-labelledby="system-activity-title"
-        className="system-section"
-        gap="lg"
+      <PageSection
+        id="system-activity-title"
+        title="Activity over time"
+        description="Metrics in this section use the selected time range. They include full-tier and fast-tier queues."
+        actions={
+          <SegmentedControl
+            aria-label="Activity time range"
+            aria-controls="system-activity-metrics"
+            size="xs"
+            value={requestedWindow}
+            onChange={(value) => setWindow(value as DashboardSystemWindow)}
+            data={systemWindows.map((value) => ({ value, label: value }))}
+          />
+        }
       >
-        <Group justify="space-between" align="flex-end">
-          <Box>
-            <Group gap="xs">
-              <Title order={2} size="h4" id="system-activity-title">
-                Activity over time
-              </Title>
-              <Badge variant="light" color="gray" size="sm" tt="none">
-                Full + fast tiers
-              </Badge>
-            </Group>
-            <Text c="dimmed" size="xs">
-              Metrics in this section use the selected time range.
-            </Text>
-          </Box>
-          <Stack gap={6}>
-            <Text c="dimmed" size="xs">
-              Time range
-            </Text>
-            <SegmentedControl
-              aria-label="Activity time range"
-              aria-controls="system-activity-metrics"
-              size="xs"
-              value={data.window}
-              onChange={(value) => setWindow(value as DashboardSystemWindow)}
-              data={systemWindows.map((value) => ({ value, label: value }))}
-            />
-          </Stack>
-        </Group>
-
-        <Stack id="system-activity-metrics" gap="lg">
-          <Grid gap="xl">
-            <Grid.Col span={{ base: 12, lg: 4 }}>
-              <SystemWindowKpis data={data} />
-            </Grid.Col>
-            <Grid.Col span={{ base: 12, lg: 8 }}>
-              {/* A flex column lets the chart absorb whatever height the measures column sets,
+        <PendingResults pending={pending}>
+          <Stack id="system-activity-metrics" gap="lg">
+            <Grid gap="lg">
+              <Grid.Col span={{ base: 12, lg: 4 }}>
+                <SystemWindowKpis data={data} />
+              </Grid.Col>
+              <Grid.Col span={{ base: 12, lg: 8 }}>
+                {/* A flex column lets the chart absorb whatever height the measures column sets,
               so the panel never shows dead space under the plot. */}
-              <Paper
-                withBorder
-                p="md"
-                h="100%"
-                style={{ display: "flex", flexDirection: "column" }}
-              >
-                <Group justify="space-between" mb="sm">
-                  <Box>
-                    <Group gap={4} wrap="nowrap">
-                      <Text fw={650}>Task activity</Text>
-                      <HelpButton
-                        label="Task activity"
-                        help="Each bar shows attempt outcomes for one minute. The line shows tasks added during that minute."
-                      />
-                    </Group>
-                    <Text c="dimmed" size="xs">
-                      Tasks added and attempts finished each minute
-                    </Text>
+                <Box
+                  className="panel panel--padded"
+                  h="100%"
+                  style={{ display: "flex", flexDirection: "column" }}
+                >
+                  <Group justify="space-between" mb="sm">
+                    <Box>
+                      <Group gap={4} wrap="nowrap">
+                        <Text fw={650}>Task activity</Text>
+                        <HelpButton
+                          label="Task activity"
+                          help="Each bar shows attempt outcomes for one minute. The line shows tasks added during that minute."
+                        />
+                      </Group>
+                      <Text c="dimmed" size="xs">
+                        Tasks added and attempts finished each minute
+                      </Text>
+                    </Box>
+                  </Group>
+                  <Box mih={320} style={{ flex: 1 }}>
+                    <Suspense
+                      fallback={
+                        <Center h="100%">
+                          <Loader size="sm" />
+                        </Center>
+                      }
+                    >
+                      <SystemOutcomeChart data={outcomeChartData} />
+                    </Suspense>
                   </Box>
-                </Group>
-                <Box mih={320} style={{ flex: 1 }}>
-                  <Suspense
-                    fallback={
-                      <Center h="100%">
-                        <Loader size="sm" />
-                      </Center>
-                    }
-                  >
-                    <SystemOutcomeChart data={outcomeChartData} />
-                  </Suspense>
                 </Box>
-              </Paper>
-            </Grid.Col>
-          </Grid>
+              </Grid.Col>
+            </Grid>
 
-          <QueueActivity data={data} navigate={navigate} />
+            <QueueActivity data={data} navigate={navigate} />
 
-          <Paper withBorder>
-            <Box p="md">
-              <Group gap={4} wrap="nowrap">
-                <Text fw={650}>Task types with failures</Text>
-                <HelpButton
-                  label="Task types with failures"
-                  help="This table ranks task types by failed attempts in the selected window. The last columns describe the newest matching attempt."
-                />
-              </Group>
-              <Text c="dimmed" size="xs">
-                Closed attempts in the selected window
-              </Text>
-            </Box>
-            {data.failingTypes.length === 0 ? (
-              <Center mih={180}>
-                <Text c="dimmed" size="sm">
-                  No failed attempts in this window.
+            <Box className="panel data-table__panel">
+              <Box p="md">
+                <Group gap={4} wrap="nowrap">
+                  <Text fw={650}>Task types with failures</Text>
+                  <HelpButton
+                    label="Task types with failures"
+                    help="This table ranks task types by failed attempts in the selected window. The last columns describe the newest matching attempt."
+                  />
+                </Group>
+                <Text c="dimmed" size="xs">
+                  Closed attempts in the selected window
                 </Text>
-              </Center>
-            ) : (
-              <ScrollArea>
-                <Table highlightOnHover verticalSpacing={6} horizontalSpacing="sm" miw={760}>
-                  <Table.Thead>
-                    <Table.Tr>
-                      <Table.Th>Queue and task type</Table.Th>
-                      <Table.Th ta="right">Attempts</Table.Th>
-                      <Table.Th ta="right">Error %</Table.Th>
-                      <Table.Th ta="right">Terminal</Table.Th>
-                      <Table.Th>Last error</Table.Th>
-                      <Table.Th>Last seen</Table.Th>
-                    </Table.Tr>
-                  </Table.Thead>
-                  <Table.Tbody>
-                    {data.failingTypes.map((type) => (
-                      <Table.Tr key={`${type.queue}:${type.type}`}>
-                        <Table.Td>
-                          <Text size="sm" fw={600}>
-                            {taskDisplayName(type.type, type.queue)}
-                          </Text>
-                          <Text c="dimmed" size="xs">
-                            {type.queue}
-                          </Text>
-                        </Table.Td>
-                        <Table.Td ta="right">{formatCount(type.attempts)}</Table.Td>
-                        <Table.Td ta="right">
-                          <Text
-                            c={type.errorRate >= 0.05 ? dangerTextColor : warningTextColor}
-                            size="sm"
-                          >
-                            {formatPercent(type.errorRate)}
-                          </Text>
-                        </Table.Td>
-                        <Table.Td ta="right">{formatCount(type.terminalFailures)}</Table.Td>
-                        <Table.Td maw={220}>
-                          <Text size="xs" lineClamp={1} title={type.lastError ?? undefined}>
-                            {type.lastError ?? "—"}
-                          </Text>
-                        </Table.Td>
-                        <Table.Td>
-                          <Text c="dimmed" size="xs" title={formatExact(type.lastSeenAt)}>
-                            {formatRelative(type.lastSeenAt)}
-                          </Text>
-                        </Table.Td>
+              </Box>
+              {data.failingTypes.length === 0 ? (
+                <EmptyState framed={false} title="No failed attempts">
+                  No attempt failed in the last {data.window}. Choose a longer time range to look
+                  further back.
+                </EmptyState>
+              ) : (
+                <ScrollArea
+                  type="auto"
+                  offsetScrollbars="x"
+                  viewportProps={{
+                    tabIndex: 0,
+                    role: "region",
+                    "aria-label": "Task types with failures table",
+                  }}
+                >
+                  <Table highlightOnHover className="data-table" miw={760}>
+                    <Table.Thead>
+                      <Table.Tr>
+                        <Table.Th>Queue and task type</Table.Th>
+                        <Table.Th ta="right">Attempts</Table.Th>
+                        <Table.Th ta="right">Error %</Table.Th>
+                        <Table.Th ta="right">Terminal</Table.Th>
+                        <Table.Th>Last error</Table.Th>
+                        <Table.Th>Last seen</Table.Th>
                       </Table.Tr>
-                    ))}
-                  </Table.Tbody>
-                </Table>
-              </ScrollArea>
-            )}
-          </Paper>
-        </Stack>
-      </Stack>
+                    </Table.Thead>
+                    <Table.Tbody>
+                      {data.failingTypes.map((type) => (
+                        <Table.Tr key={`${type.queue}:${type.type}`}>
+                          <Table.Td>
+                            <Text size="sm" fw={600}>
+                              {taskDisplayName(type.type, type.queue)}
+                            </Text>
+                            <Text c="dimmed" size="xs">
+                              {type.queue}
+                            </Text>
+                          </Table.Td>
+                          <Table.Td ta="right">{formatCount(type.attempts)}</Table.Td>
+                          <Table.Td ta="right">
+                            <Text
+                              c={type.errorRate >= 0.05 ? dangerTextColor : warningTextColor}
+                              size="sm"
+                            >
+                              {formatPercent(type.errorRate)}
+                            </Text>
+                          </Table.Td>
+                          <Table.Td ta="right">{formatCount(type.terminalFailures)}</Table.Td>
+                          <Table.Td maw={220}>
+                            <Text size="xs" lineClamp={1} title={type.lastError ?? undefined}>
+                              {type.lastError ?? "—"}
+                            </Text>
+                          </Table.Td>
+                          <Table.Td>
+                            <Text c="dimmed" size="xs" title={formatExact(type.lastSeenAt)}>
+                              {formatRelative(type.lastSeenAt)}
+                            </Text>
+                          </Table.Td>
+                        </Table.Tr>
+                      ))}
+                    </Table.Tbody>
+                  </Table>
+                </ScrollArea>
+              )}
+            </Box>
+          </Stack>
+        </PendingResults>
+      </PageSection>
 
-      <Stack
-        component="section"
-        aria-labelledby="system-current-title"
-        className="system-section"
-        gap="lg"
+      <PageSection
+        id="system-current-title"
+        title="Current operations"
+        description="A snapshot at the latest refresh. Queue state, retries, maintenance, and storage are independent of the time range."
       >
-        <Box>
-          <Group gap="xs">
-            <Title order={2} size="h4" id="system-current-title">
-              Current operations
-            </Title>
-            <Badge variant="light" color="gray" size="sm" tt="none">
-              Now
-            </Badge>
-          </Group>
-          <Text c="dimmed" size="xs">
-            Queue state, retries, maintenance, and storage are independent of the time range.
-          </Text>
-        </Box>
-
         <SystemKpiList data={data} navigate={navigate} />
         <QueuePressure data={data} navigate={navigate} />
         {data.budgets.length === 0 ? null : <BudgetsTable budgets={data.budgets} />}
-        {data.budgetsCapped ? (
-          <Text c="dimmed" size="xs">
-            {budgetCappedFootnote}
-          </Text>
-        ) : null}
+        {data.budgetsCapped ? <p className="page-footnote">{budgetCappedFootnote}</p> : null}
 
         {/* The retry outlook and the maintenance checks both answer "what happens next". */}
-        <Grid gap="xl">
+        <Grid gap="lg">
           <Grid.Col span={{ base: 12, lg: 5 }}>
             <RetryStorm data={data} />
           </Grid.Col>
           <Grid.Col span={{ base: 12, lg: 7 }}>
-            <Paper withBorder p="md" h="100%">
+            <Box className="panel" p="md" h="100%">
               <Group gap={4} wrap="nowrap">
                 <Text fw={650}>Background maintenance</Text>
                 <HelpButton
@@ -343,13 +317,9 @@ export function SystemPage({
                     Still scheduled after their start time
                   </Text>
                 </Box>
-                <Badge
-                  color={data.integrity.dueButUnpromoted > 0 ? "red" : "teal"}
-                  variant="light"
-                  size="lg"
-                >
+                <MeasuredValue tone={data.integrity.dueButUnpromoted > 0 ? "danger" : null}>
                   {formatCount(data.integrity.dueButUnpromoted)}
-                </Badge>
+                </MeasuredValue>
               </Group>
               <Table verticalSpacing={6} horizontalSpacing="xs" captionSide="top">
                 <Table.Caption ta="left" c="dimmed" fz="xs" mt={0} mb={4}>
@@ -378,22 +348,18 @@ export function SystemPage({
                         </Text>
                       </Table.Th>
                       <Table.Td ta="center">
-                        <Badge
-                          color={partition.eventExists ? "teal" : "red"}
-                          variant="dot"
-                          size="sm"
-                        >
-                          {partition.eventExists ? "Ready" : "Missing"}
-                        </Badge>
+                        <StatusLabel
+                          state={partition.eventExists ? "succeeded" : "failed"}
+                          text={partition.eventExists ? "Ready" : "Missing"}
+                          label={`Task events: ${partition.eventExists ? "ready" : "missing"}`}
+                        />
                       </Table.Td>
                       <Table.Td ta="center">
-                        <Badge
-                          color={partition.attemptExists ? "teal" : "red"}
-                          variant="dot"
-                          size="sm"
-                        >
-                          {partition.attemptExists ? "Ready" : "Missing"}
-                        </Badge>
+                        <StatusLabel
+                          state={partition.attemptExists ? "succeeded" : "failed"}
+                          text={partition.attemptExists ? "Ready" : "Missing"}
+                          label={`Attempt history: ${partition.attemptExists ? "ready" : "missing"}`}
+                        />
                       </Table.Td>
                     </Table.Tr>
                   ))}
@@ -423,17 +389,13 @@ export function SystemPage({
                             }`}
                     </Text>
                   </Box>
-                  <Badge
-                    color={retentionBehind ? "yellow" : "teal"}
-                    variant="light"
-                    title={retentionDetail}
-                  >
+                  <MeasuredValue tone={retentionBehind ? "warning" : null} title={retentionDetail}>
                     {enabledRetention.length === 0
                       ? "Not applicable"
                       : retention.maxLagMs === null || retention.maxLagMs === 0
                         ? "On time"
                         : `${formatSpan(retention.maxLagMs)} behind`}
-                  </Badge>
+                  </MeasuredValue>
                 </Group>
                 <Group justify="space-between" wrap="nowrap" align="flex-start">
                   <Box>
@@ -446,15 +408,11 @@ export function SystemPage({
                         : "No history retained yet"}
                     </Text>
                   </Box>
-                  <Badge
-                    color="gray"
-                    variant="light"
-                    title={formatExact(retention.oldestRetainedAt ?? undefined)}
-                  >
+                  <MeasuredValue title={formatExact(retention.oldestRetainedAt ?? undefined)}>
                     {retention.oldestRetainedAt === null
                       ? "—"
                       : formatRelative(retention.oldestRetainedAt)}
-                  </Badge>
+                  </MeasuredValue>
                 </Group>
                 <Group justify="space-between" wrap="nowrap" align="flex-start">
                   <Box>
@@ -471,14 +429,13 @@ export function SystemPage({
                       Current total, not windowed
                     </Text>
                   </Box>
-                  <Badge
-                    color={eligiblePartitions > 0 ? "yellow" : "teal"}
-                    variant="light"
+                  <MeasuredValue
+                    tone={eligiblePartitions > 0 ? "warning" : null}
                     title={`${formatCount(retention.eligibleHistoryPartitions.taskEvents)} task-event days, ${formatCount(retention.eligibleHistoryPartitions.attemptHistory)} attempt-history days`}
                   >
                     {formatCount(retention.eligibleHistoryPartitions.taskEvents)} events ·{" "}
                     {formatCount(retention.eligibleHistoryPartitions.attemptHistory)} attempts
-                  </Badge>
+                  </MeasuredValue>
                 </Group>
                 <Group justify="space-between" wrap="nowrap" align="flex-start">
                   <Box>
@@ -495,23 +452,50 @@ export function SystemPage({
                       Database-wide, not windowed
                     </Text>
                   </Box>
-                  <Badge color={defaultSpill > 0 ? "yellow" : "teal"} variant="light">
+                  <MeasuredValue tone={defaultSpill > 0 ? "warning" : null}>
                     {formatCount(retention.defaultHistoryRows.taskEvents)}
                     {retention.defaultHistoryRowsCapped.taskEvents ? "+" : ""} events ·{" "}
                     {formatCount(retention.defaultHistoryRows.attemptHistory)}
                     {retention.defaultHistoryRowsCapped.attemptHistory ? "+" : ""} attempts
-                  </Badge>
+                  </MeasuredValue>
                 </Group>
               </Stack>
-            </Paper>
+            </Box>
           </Grid.Col>
         </Grid>
 
         <StoragePanel storage={data.integrity.storage} retention={retention} />
-      </Stack>
-    </Stack>
+      </PageSection>
+    </Page>
   );
 }
+/**
+ * A measured value beside its label, such as "On time" or "1.6 MB". It is plain text, not a badge.
+ * Only a value that needs attention takes a status color.
+ */
+function MeasuredValue({
+  tone = null,
+  title,
+  children,
+}: {
+  tone?: "warning" | "danger" | null;
+  title?: string;
+  children: ReactNode;
+}) {
+  return (
+    <Text
+      component="span"
+      size="sm"
+      fw={500}
+      c={tone === "danger" ? dangerTextColor : tone === "warning" ? warningTextColor : undefined}
+      title={title}
+      style={{ flexShrink: 0, whiteSpace: "nowrap", fontVariantNumeric: "tabular-nums" }}
+    >
+      {children}
+    </Text>
+  );
+}
+
 export const storageGroupLabels: Record<"tasks" | "history" | "statistics", string> = {
   tasks: "Tasks",
   history: "History",
@@ -539,7 +523,7 @@ export function StoragePanel({
       ? null
       : new Date(rollup.newestBucketAt).getTime() - new Date(rollup.oldestBucketAt).getTime();
   return (
-    <Paper withBorder p="md">
+    <Box className="panel" p="md">
       <Group gap={4} wrap="nowrap">
         <Text fw={650}>Storage</Text>
         <HelpButton
@@ -565,13 +549,12 @@ export function StoragePanel({
                 : `Last pass ${formatRelative(rollup.lastRunAt)}`}
             </Text>
           </Box>
-          <Badge
-            color={rollup.stalled ? "yellow" : "teal"}
-            variant="light"
+          <MeasuredValue
+            tone={rollup.stalled ? "warning" : null}
             title={`Summarized through ${formatExact(rollup.rolledUpThrough)}`}
           >
             {rollup.stalled ? `${formatSpan(rollup.lagMs)} behind` : "Up to date"}
-          </Badge>
+          </MeasuredValue>
         </Group>
         <Group justify="space-between" wrap="nowrap" align="flex-start">
           <Box>
@@ -584,9 +567,7 @@ export function StoragePanel({
                 : `Covering ${formatSpan(coveredMs)}`}
             </Text>
           </Box>
-          <Badge color="gray" variant="light">
-            {formatRows(rollup.buckets)}
-          </Badge>
+          <MeasuredValue>{formatRows(rollup.buckets)}</MeasuredValue>
         </Group>
         <Group justify="space-between" wrap="nowrap" align="flex-start">
           <Box>
@@ -597,12 +578,12 @@ export function StoragePanel({
               Independent of history retention
             </Text>
           </Box>
-          <Badge color="gray" variant="light">
+          <MeasuredValue>
             {statisticsRetention?.retentionDays === null ||
             statisticsRetention?.retentionDays === undefined
               ? "Forever"
               : `${statisticsRetention.retentionDays} days`}
-          </Badge>
+          </MeasuredValue>
         </Group>
         <Group justify="space-between" wrap="nowrap" align="flex-start">
           <Box>
@@ -613,9 +594,7 @@ export function StoragePanel({
               Tables and indexes together
             </Text>
           </Box>
-          <Badge color="gray" variant="light">
-            {formatBytes(storage.totalBytes)}
-          </Badge>
+          <MeasuredValue>{formatBytes(storage.totalBytes)}</MeasuredValue>
         </Group>
       </Stack>
       <Divider mb="md" />
@@ -651,9 +630,9 @@ export function StoragePanel({
                   ) : null}
                 </Table.Th>
                 <Table.Td>
-                  <Badge color="gray" variant="light" size="sm">
+                  <Text c="dimmed" size="xs">
                     {storageGroupLabels[row.group]}
-                  </Badge>
+                  </Text>
                 </Table.Td>
                 <Table.Td ta="right">
                   <Text size="xs" title={`${row.tableBytes} B table, ${row.indexBytes} B index`}>
@@ -677,6 +656,6 @@ export function StoragePanel({
           })}
         </Table.Tbody>
       </Table>
-    </Paper>
+    </Box>
   );
 }

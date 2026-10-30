@@ -1,0 +1,146 @@
+/*
+ * The status views above the task list: a row of text links on a hairline. The current view has a
+ * strong label and a 2px underline that slides to it. Counts are muted tabular numbers, and a zero
+ * count is fainter. On a narrow window the row scrolls sideways inside its own box, so the page
+ * never overflows.
+ */
+.task-status-tabs {
+  --status-tab-label: var(--workhorse-neutral-9);
+  --status-tab-strong: var(--workhorse-neutral-10);
+  --status-tab-count: var(--workhorse-neutral-8);
+  /* About 4.6:1 on the page in both schemes: the quietest text that stays readable. */
+  --status-tab-faint: color-mix(
+    in srgb,
+    var(--workhorse-neutral-7) 75%,
+    var(--workhorse-neutral-8)
+  );
+  --status-tab-rule: var(--workhorse-neutral-4);
+
+  min-width: 0;
+  box-shadow: inset 0 -1px 0 var(--status-tab-rule);
+}
+
+[data-mantine-color-scheme="dark"] .task-status-tabs {
+  --status-tab-label: var(--workhorse-neutral-8);
+  --status-tab-count: var(--workhorse-neutral-7);
+  --status-tab-faint: color-mix(
+    in srgb,
+    var(--workhorse-neutral-6) 75%,
+    var(--workhorse-neutral-7)
+  );
+}
+
+.task-status-tabs__list {
+  position: relative;
+  display: flex;
+  gap: 12px;
+  /* Each tab has a 4px inset for its focus ring, so the row starts 4px early to align the text. */
+  margin: 0 -4px;
+  padding: 0;
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  list-style: none;
+  scrollbar-width: none;
+}
+
+.task-status-tabs__list::-webkit-scrollbar {
+  display: none;
+}
+
+.task-status-tabs__list > li {
+  flex-shrink: 0;
+}
+
+.task-status-tabs__tab {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 36px;
+  padding-inline: 4px;
+  color: var(--status-tab-label);
+  font-size: 13px;
+  line-height: 20px;
+  text-decoration: none;
+  white-space: nowrap;
+  transition: color 120ms ease-out;
+}
+
+.task-status-tabs__tab:hover {
+  color: var(--status-tab-strong);
+}
+
+.task-status-tabs__tab[aria-current="page"] {
+  color: var(--status-tab-strong);
+  font-weight: 500;
+}
+
+/*
+ * Each label reserves the width of its heavier current form, so the tabs after it do not move when
+ * the current view changes.
+ */
+.task-status-tabs__label {
+  display: inline-flex;
+  flex-direction: column;
+}
+
+.task-status-tabs__label::after {
+  height: 0;
+  overflow: hidden;
+  font-weight: 500;
+  visibility: hidden;
+  content: attr(data-text);
+  pointer-events: none;
+  user-select: none;
+}
+
+.task-status-tabs__info {
+  flex-shrink: 0;
+  margin-inline-start: -2px;
+  color: var(--status-tab-count);
+}
+
+/*
+ * One underline for the row. A script places it under the current tab with a 1px width scaled to
+ * the label, so the move is a transform and lays out nothing.
+ */
+.task-status-tabs__indicator {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  width: 1px;
+  height: 2px;
+  background: var(--status-tab-strong);
+  opacity: 0;
+  pointer-events: none;
+  transform-origin: left center;
+}
+
+.task-status-tabs__indicator[data-ready] {
+  transition: transform 180ms cubic-bezier(0.23, 1, 0.32, 1);
+}
+
+.task-status-tabs__tab:focus-visible {
+  border-radius: var(--mantine-radius-xs);
+  outline: 2px solid var(--workhorse-focus-ring);
+  outline-offset: -2px;
+}
+
+.task-status-tabs__count {
+  color: var(--status-tab-count);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  font-weight: 400;
+  line-height: 16px;
+}
+
+.task-status-tabs__count[data-zero] {
+  color: var(--status-tab-faint);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .task-status-tabs__tab,
+  .task-status-tabs__indicator[data-ready] {
+    transition: none;
+  }
+}
