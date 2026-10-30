@@ -3,7 +3,12 @@ import { describe, expect, it, vi } from "vitest";
 import { Admin } from "../src/admin.js";
 import { SchemaCompatibilityError } from "../src/errors.js";
 import { Queue } from "../src/queue.js";
-import { MINIMUM_SCHEMA_VERSION, PROTOCOL_VERSION } from "../src/schema.js";
+import {
+  assertSchemaCompatible,
+  MINIMUM_SCHEMA_VERSION,
+  PROTOCOL_VERSION,
+  WORKHORSE_SCHEMA_VERSION,
+} from "../src/schema.js";
 import { SQL_STATEMENTS } from "../src/queue/sql-catalogue.generated.js";
 import type { Queryable } from "../src/types.js";
 import { Worker } from "../src/worker.js";
@@ -275,5 +280,117 @@ describe("Worker schema compatibility check", () => {
 
     await expect(worker.run()).rejects.toMatchObject({ code: "schema-too-old" });
     expect(fake.statements).toEqual([COMPATIBILITY]);
+  });
+});
+
+const missingRelation = () =>
+  Object.assign(new Error('relation "workhorse.schema_version" does not exist'), {
+    code: "42P01",
+  });
+
+/** A database with no Workhorse schema: the compatibility query fails on a missing relation. */
+function emptyDatabase() {
+  const fake = fakeDatabase(MINIMUM_SCHEMA_VERSION);
+  const query = fake.database.query;
+  fake.database.query = (async (text: string, values?: readonly unknown[]) => {
+    if (text === COMPATIBILITY) {
+      fake.statements.push(text);
+      throw missingRelation();
+    }
+    return query.call(fake.database, text, values);
+  }) as Queryable["query"];
+  return fake;
+}
+
+const notInstalled = (deadline: string) => ({
+  name: "SchemaCompatibilityError",
+  code: "schema-not-installed",
+  installedVersion: null,
+  expectedVersion: WORKHORSE_SCHEMA_VERSION,
+  message: `Workhorse schema is not installed. Install it with \`workhorse schema install\` or installSchema ${deadline}.`,
+});
+
+describe("schema-not-installed message", () => {
+  it("names the Queue for an enqueue", async () => {
+    const fake = emptyDatabase();
+
+    await expect(new Queue(fake.database).enqueue("email.send", null)).rejects.toMatchObject(
+      notInstalled("before you use the Queue"),
+    );
+    expect(fake.otherStatements()).toEqual([]);
+  });
+
+  it("names the Admin for an Admin call", async () => {
+    const fake = emptyDatabase();
+
+    await expect(new Admin(fake.database).listTasks()).rejects.toMatchObject(
+      notInstalled("before you use the Admin"),
+    );
+    expect(fake.otherStatements()).toEqual([]);
+  });
+
+  it("names the Worker for runOnce", async () => {
+    const fake = emptyDatabase();
+    const worker = new Worker(unreservedQueue(new Queue(fake.database, "mail")), {
+      workerId: "schema-check-worker",
+      queues: ["mail"],
+    });
+
+    await expect(worker.runOnce()).rejects.toMatchObject(
+      notInstalled("before you start the Worker"),
+    );
+    expect(fake.otherStatements()).toEqual([]);
+  });
+
+  it("names the caller of each call when a worker and its queue share one answer", async () => {
+    const fake = emptyDatabase();
+    const queue = new Queue(fake.database, "mail");
+    const worker = new Worker(unreservedQueue(queue), {
+      workerId: "schema-check-worker",
+      queues: ["mail"],
+    });
+
+    await expect(queue.enqueue("email.send", null)).rejects.toMatchObject(
+      notInstalled("before you use the Queue"),
+    );
+    await expect(worker.runOnce()).rejects.toMatchObject(
+      notInstalled("before you start the Worker"),
+    );
+    await expect(queue.health()).rejects.toMatchObject(notInstalled("before you use the Queue"));
+    expect(fake.compatibilityQueries()).toBe(1);
+  });
+
+  it("names the application by default and the dashboard when the dashboard asks", async () => {
+    const fake = emptyDatabase();
+
+    await expect(assertSchemaCompatible(fake.database)).rejects.toMatchObject(
+      notInstalled("before the application starts"),
+    );
+    await expect(
+      assertSchemaCompatible(fake.database, { caller: "dashboard" }),
+    ).rejects.toMatchObject(notInstalled("before you mount the dashboard"));
+  });
+
+  it("does not name the dashboard for a caller other than the dashboard", async () => {
+    const fake = emptyDatabase();
+    const messages = await Promise.all(
+      [
+        new Queue(fake.database).enqueue("email.send", null),
+        new Admin(fake.database).listTasks(),
+        assertSchemaCompatible(fake.database),
+        assertSchemaCompatible(fake.database, { caller: "worker" }),
+      ].map((call) => call.then(String, (error: Error) => error.message)),
+    );
+
+    for (const message of messages) expect(message).not.toMatch(/dashboard/i);
+  });
+
+  it("refuses an unknown caller before it sends a statement", async () => {
+    const fake = emptyDatabase();
+
+    await expect(
+      assertSchemaCompatible(fake.database, { caller: "cron" as "worker" }),
+    ).rejects.toBeInstanceOf(TypeError);
+    expect(fake.statements).toEqual([]);
   });
 });

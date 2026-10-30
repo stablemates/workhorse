@@ -22,6 +22,7 @@ interface AdapterConnectionPool
 type AdapterConnectionPoolSource
 class Admin
 interface AdminAudit
+interface AssertSchemaCompatibleOptions
 interface BatchExecutionRecord
 type BatchHandler
 type BatchHandlerContext
@@ -246,6 +247,7 @@ type ScheduleTaskDefinition
 type ScheduleWaitRequest
 interface ScheduleWaitResult
 interface ScheduledTask
+type SchemaCheckCaller
 type SchemaCompatibilityCode
 class SchemaCompatibilityError
 interface SchemaCompatibilityVersions
@@ -992,6 +994,11 @@ interface AdminAudit {
   actor: string;
   reason: string;
   requestId: string;
+}
+
+interface AssertSchemaCompatibleOptions {
+  /** The component that waits for the schema. Defaults to `"application"`. */
+  caller?: SchemaCheckCaller;
 }
 
 interface BatchExecutionRecord {
@@ -4759,6 +4766,8 @@ interface ScheduledTask {
   retryPolicy?: RetryPolicy;
 }
 
+type SchemaCheckCaller = "application" | "queue" | "admin" | "worker" | "dashboard";
+
 type SchemaCompatibilityCode = "schema-not-installed" | "schema-too-old" | "schema-too-new" | "client-protocol-too-old" | "client-protocol-too-new";
 
 class SchemaCompatibilityError extends WorkhorseError {
@@ -5924,7 +5933,7 @@ function WorkhorseThemeProvider({ children }: {
   children: ReactNode;
 }): import("react").JSX.Element;
 
-function assertSchemaCompatible(database: Queryable): Promise<void>;
+function assertSchemaCompatible(database: Queryable, options?: AssertSchemaCompatibleOptions): Promise<void>;
 
 function assertSupportedPostgres(database: Queryable): Promise<void>;
 

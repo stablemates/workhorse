@@ -36,6 +36,20 @@ document gains the optional key `group`, an additive change.
 The migration does not raise the SDK compatibility floor and changes no rows. Run
 `workhorse schema migrate`.
 
+### The schema-not-installed message names its caller
+
+An application enqueued a task on a database with no Workhorse schema. The `Queue` refused the
+call with `SchemaCompatibilityError` and the code `schema-not-installed`. The message told the
+application to install the schema "before mounting the dashboard", but that application does not
+mount the dashboard.
+
+The message now names the component that refused the call: the `Queue`, the `Admin`, the
+`Worker` (`runOnce` and `run`), or the dashboard. Each message tells the reader to run
+`workhorse schema install` or `installSchema`. `assertSchemaCompatible` takes the new optional
+`{ caller }` argument, of type `SchemaCheckCaller`, and names the application when you do not give
+it. The error code stays `schema-not-installed`. A caller that compares the message text must
+update that comparison.
+
 ## 0.11.0 — 2026-10-28
 
 The npm packages, Python distribution, Go module, Rust crate, Ruby gem, JVM artifacts, and .NET

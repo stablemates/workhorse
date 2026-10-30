@@ -576,13 +576,32 @@ against.
 - Any other query failure stays a plain `Error`. The reason is that an unreadable database gives no
   result about versions.
 
+The `schema-not-installed` sentence for a missing relation names the caller, so an application
+that only enqueues is not told to mount the dashboard. The `caller` option of
+`assertSchemaCompatible` has the type `SchemaCheckCaller`. Its default is `application`.
+
+| Caller        | Who passes it                         | The sentence ends with            |
+| ------------- | ------------------------------------- | --------------------------------- |
+| `application` | `assertSchemaCompatible` by default   | `before the application starts.`  |
+| `queue`       | each `Queue` method                   | `before you use the Queue.`       |
+| `admin`       | each `Admin` method                   | `before you use the Admin.`       |
+| `worker`      | `Worker.runOnce()` and `Worker.run()` | `before you start the Worker.`    |
+| `dashboard`   | the dashboard host                    | `before you mount the dashboard.` |
+
+Each sentence states that the schema is not installed. It tells the reader to run
+`workhorse schema install` or `installSchema`. An unknown `caller` throws a `TypeError` before the
+check sends a statement. A schema with a missing or ambiguous version row gives the sentence of
+`schemaCompatibilityRefusal` to each caller.
+
 Each `Queue` and each `Admin` holds one `CachedSchemaCompatibilityCheck` from
 `typescript/core/src/schema.ts`. It runs `assertSchemaCompatible` until PostgreSQL answers. Then it
-keeps the answer: success or a `SchemaCompatibilityError`. It does not keep a driver error, so the
-next call queries again, and the call gets the driver error unchanged. Calls that overlap on one
-connection share one query. A call on another connection sends its own query, so a caller
-transaction that holds the last pooled connection does not wait for the pool. After the first answer,
-a call sends no extra statement.
+keeps the answer: success or a refusal. Each call that meets a kept refusal gets a new
+`SchemaCompatibilityError` that names the caller of that call. A worker and its queue share one
+answer, so `runOnce()` names the worker after a queue call kept the refusal. The cache does not keep
+a driver error, so the next call queries again, and the call gets the driver error unchanged. Calls
+that overlap on one connection share one query. A call on another connection sends its own query, so
+a caller transaction that holds the last pooled connection does not wait for the pool. After the
+first answer, a call sends no extra statement.
 
 - Each `Queue` method that sends a statement runs the check first. An empty `enqueueMany` or
   `enqueueManyWithResults` batch sends no statement and runs no check. A method that takes a caller
