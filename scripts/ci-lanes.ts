@@ -9,12 +9,14 @@
 // The map fails open. If a changed file matches a shared input, or no entry of the map names it,
 // every lane runs. A docs-only pull request runs only the always-run lanes that check the
 // documentation (SM-1681). A push to `main` uses the same map for the files that it changes, but it
-// runs every lane if it changes a release file or if the plan cannot list its files (SM-1878). The
-// release workflows require a successful push run for the tagged commit that planned every lane, so
-// the release candidate commit must run every lane. The plan job uploads the plan of each push run,
-// and scripts/check-main-ci-plan.ts reads it for a release (SM-1886). `workflow_dispatch` runs and the weekly schedule run every lane that
-// their event runs, whatever changed. scripts/ci-lanes.test.ts holds the map to the workflow and to
-// the files each lane names in its sources.
+// runs every release lane if it changes a release file or if the plan cannot decide (SM-1878). A
+// changelog is a release file only for a change outside its `## Unreleased` section (SM-1887). The
+// release lanes are every push lane and the `packed` lane (SM-1893). The release workflows require
+// a successful push run for the tagged commit that planned every release lane, so the release
+// candidate commit must run them. The plan job uploads the plan of each push run, and
+// scripts/check-main-ci-plan.ts reads it for a release (SM-1886). `workflow_dispatch` runs and the
+// weekly schedule run every lane that their event runs, whatever changed. scripts/ci-lanes.test.ts
+// holds the map to the workflow and to the files each lane names in its sources.
 //
 // `tsx scripts/ci-lanes.ts --docs-only` reads changed paths from standard input and tells whether
 // the change is docs-only, for the merge rule in AGENTS.md.
@@ -72,13 +74,25 @@ export const SHARED_INPUTS = [
  */
 export const ALWAYS_RUN_LANES = ["static", "unit", "npm-release-scope", "demo"] as const;
 
-/** Lanes that run only on `workflow_dispatch` and on the weekly schedule (ADR 0083). */
+/**
+ * Lanes that run only on `workflow_dispatch` and on the weekly schedule (ADR 0083), and the lanes
+ * of {@link RELEASE_WEEKLY_LANES} on a release push.
+ */
 export const WEEKLY_LANES = [
   "packed",
   "ruby-rails",
   "ruby-rails-main",
   "spring-boot-snapshot",
 ] as const;
+
+/**
+ * Weekly lanes that a release push also runs (SM-1893). The `packed` lane installs the packed npm
+ * packages that the release publishes. The other weekly lanes test a variation of a suite or a
+ * preview of an upstream release, so they stay weekly.
+ */
+export const RELEASE_WEEKLY_LANES = [
+  "packed",
+] as const satisfies readonly (typeof WEEKLY_LANES)[number][];
 
 export interface FilteredLane {
   /**
@@ -221,16 +235,21 @@ export const ALWAYS_RUN_LANE_INPUTS = [
   "lefthook.yml",
 ] as const;
 
+/** The changelog of each line. A push that adds an entry under `## Unreleased` is not a release. */
+const CHANGELOGS = "**/CHANGELOG.md";
+
 /**
  * Files that a release candidate commit changes. A push to `main` that changes one of them runs
- * every lane, because the release workflows accept the tagged commit only after a successful push
- * run of this workflow that planned every lane (SM-1878, SM-1886). The globs hold each file that
- * scripts/check-release.ts reads for the release version or the frozen schema, each changelog, and
- * each release workflow. Each release candidate changes every changelog, so a candidate always
+ * every release lane, because the release workflows accept the tagged commit only after a
+ * successful push run of this workflow that planned every release lane (SM-1878, SM-1886). The
+ * globs hold each file that scripts/check-release.ts reads for the release version or the frozen
+ * schema, each changelog, and each release workflow. A changelog counts only for a change outside
+ * its `## Unreleased` section, as {@link changelogIsRelease} decides (SM-1887). Each release
+ * candidate changes the version files and dates its changelog entries, so a candidate always
  * matches this list.
  */
 export const RELEASE_FILES = [
-  "**/CHANGELOG.md",
+  CHANGELOGS,
   // The npm manifests and their peer ranges, and the dashboard application manifest.
   "**/package.json",
   "typescript/core/src/version.ts",
@@ -288,11 +307,22 @@ export const FILTERED_LANE_NAMES = Object.keys(FILTERED_LANES) as FilteredLaneNa
 export const LANE_NAMES: readonly LaneName[] = [...ALWAYS_RUN_LANES, ...FILTERED_LANE_NAMES];
 
 /**
- * The lanes that a push to `main` runs when it runs every lane. The release workflows accept the
- * tagged commit only after a successful push run that planned each of these lanes (SM-1886).
+ * The lanes that a push to `main` runs when it runs every lane but is not a release: every lane but
+ * the weekly lanes. A shared input, a file that the map does not name, or a push without files
+ * selects them.
  */
 export const FULL_PUSH_LANES: readonly LaneName[] = LANE_NAMES.filter(
   (lane) => !(WEEKLY_LANES as readonly string[]).includes(lane),
+);
+
+/**
+ * The lanes that a release push runs: {@link FULL_PUSH_LANES} and {@link RELEASE_WEEKLY_LANES}. The
+ * release workflows accept the tagged commit only after a successful push run that planned each of
+ * these lanes (SM-1886, SM-1893).
+ */
+export const RELEASE_PUSH_LANES: readonly LaneName[] = LANE_NAMES.filter(
+  (lane) =>
+    FULL_PUSH_LANES.includes(lane) || (RELEASE_WEEKLY_LANES as readonly string[]).includes(lane),
 );
 
 /**
@@ -356,16 +386,22 @@ function matchesAny(file: string, globs: readonly string[]): boolean {
   return globs.some((glob) => matchesGlob(file, glob));
 }
 
+/**
+ * The lanes that a change selects. `release` is true when a push runs the release lanes: it changes
+ * a release file, or the plan cannot decide whether it is a release.
+ */
 export type LaneSelection =
-  | { readonly all: true; readonly reason: string }
+  | { readonly all: true; readonly release: boolean; readonly reason: string }
   | { readonly all: false; readonly lanes: ReadonlySet<FilteredLaneName> };
 
 /** Selects the filtered lanes that a pull request with these changed files must run. */
 export function selectLanes(changedFiles: readonly string[]): LaneSelection {
-  if (changedFiles.length === 0) return { all: true, reason: "the change lists no files" };
+  if (changedFiles.length === 0)
+    return { all: true, release: false, reason: "the change lists no files" };
   const lanes = new Set<FilteredLaneName>();
   for (const file of changedFiles) {
-    if (matchesAny(file, SHARED_INPUTS)) return { all: true, reason: `${file} is a shared input` };
+    if (matchesAny(file, SHARED_INPUTS))
+      return { all: true, release: false, reason: `${file} is a shared input` };
     let named = matchesAny(file, ALWAYS_RUN_LANE_INPUTS);
     for (const lane of FILTERED_LANE_NAMES) {
       if (matchesAny(file, FILTERED_LANES[lane].inputs)) {
@@ -373,49 +409,152 @@ export function selectLanes(changedFiles: readonly string[]): LaneSelection {
         named = true;
       }
     }
-    if (!named) return { all: true, reason: `the lane-input map does not name ${file}` };
+    if (!named)
+      return { all: true, release: false, reason: `the lane-input map does not name ${file}` };
   }
   return { all: false, lanes };
 }
 
+/** The text of a changed changelog in the commit before a push and in the pushed commit. */
+export interface ChangelogEdit {
+  readonly before: string;
+  readonly after: string;
+}
+
+// The headings of CommonMark. An ATX heading of level 1 or 2 ends a section, and it can have up to
+// three spaces before it. A Setext heading underlines a paragraph line with `=` or `-`.
+const sectionHeading = /^ {0,3}#{1,2}(?:[ \t]|$)/;
+const unreleasedHeading = /^ {0,3}##[ \t]+Unreleased(?:[ \t]+#+)?[ \t]*$/;
+const setextUnderline = /^ {0,3}(?:=+|-+)[ \t]*$/;
+// A fence of three or more backticks or tildes, indented by up to three spaces. A code block closes
+// only at a fence of the same character that is at least as long and has no info string.
+const fence = /^ {0,3}(`{3,}|~{3,})(.*)$/;
+
+/**
+ * Gives the text of a changelog without its `## Unreleased` section: the heading and each line up
+ * to the next heading of level 1 or 2. A heading inside a fenced code block does not count. The
+ * result is undefined if the plan cannot find the end of the section with certainty:
+ *
+ * - The changelog has more than one such section, so the plan cannot tell which one holds the new
+ *   entries.
+ * - A code block does not close, so the plan cannot find the headings after it.
+ * - A line in the section can be the underline of a Setext heading, which can end the section.
+ */
+export function releasedText(changelog: string): string | undefined {
+  const kept: string[] = [];
+  let sections = 0;
+  let inUnreleased = false;
+  let openFence: string | undefined;
+  let afterText = false;
+  for (const line of changelog.split("\n")) {
+    const [, marker, rest = ""] = fence.exec(line) ?? [];
+    let text = false;
+    if (openFence !== undefined) {
+      const closes =
+        marker !== undefined &&
+        marker[0] === openFence[0] &&
+        marker.length >= openFence.length &&
+        rest.trim() === "";
+      if (closes) openFence = undefined;
+    } else if (marker !== undefined) openFence = marker;
+    else if (sectionHeading.test(line)) {
+      inUnreleased = unreleasedHeading.test(line);
+      if (inUnreleased) sections += 1;
+    } else if (inUnreleased && afterText && setextUnderline.test(line)) return undefined;
+    else text = line.trim() !== "";
+    afterText = text;
+    if (!inUnreleased) kept.push(line);
+  }
+  return sections > 1 || openFence !== undefined ? undefined : kept.join("\n");
+}
+
+/**
+ * Tells whether a changelog edit is a release change: it changes text outside the `## Unreleased`
+ * section. A fix commit adds an entry under `## Unreleased`, or adds that section, and is not a
+ * release change. A release candidate dates the entries, so it changes the text outside. The result
+ * is undefined if the plan cannot parse one of the two texts.
+ */
+export function changelogIsRelease(edit: ChangelogEdit): boolean | undefined {
+  const before = releasedText(edit.before);
+  const after = releasedText(edit.after);
+  if (before === undefined || after === undefined) return undefined;
+  return before !== after;
+}
+
 /**
  * Selects the filtered lanes that a push to `main` with these changed files must run. A release
- * file runs every lane. Other files use the map, as for a pull request.
+ * file runs every release lane. A changed changelog is a release file only if `changelogs` holds
+ * its two texts and {@link changelogIsRelease} finds a release change. If the plan cannot read or
+ * parse a changed changelog, the push runs every release lane. Other files use the map, as for a
+ * pull request.
  */
-export function selectPushLanes(changedFiles: readonly string[]): LaneSelection {
-  const release = changedFiles.find((file) => matchesAny(file, RELEASE_FILES));
-  if (release !== undefined) return { all: true, reason: `${release} is a release file` };
+export function selectPushLanes(
+  changedFiles: readonly string[],
+  changelogs: ReadonlyMap<string, ChangelogEdit> = new Map(),
+): LaneSelection {
+  for (const file of changedFiles) {
+    if (matchesGlob(file, CHANGELOGS)) {
+      const edit = changelogs.get(file);
+      if (!edit)
+        return {
+          all: true,
+          release: true,
+          reason: `the plan could not read ${file} before and after the push`,
+        };
+      const release = changelogIsRelease(edit);
+      if (release === undefined)
+        return { all: true, release: true, reason: `the plan could not parse ${file}` };
+      if (release)
+        return {
+          all: true,
+          release: true,
+          reason: `${file} changes outside its Unreleased section`,
+        };
+    } else if (matchesAny(file, RELEASE_FILES))
+      return { all: true, release: true, reason: `${file} is a release file` };
+  }
   return selectLanes(changedFiles);
 }
 
 /**
  * Decides which lanes run. `changedFiles` is undefined when the event is not a pull request or a
  * push, or when the plan could not list the changed files; then every lane that the event runs
- * runs.
+ * runs. A push that cannot list its files runs every release lane. `changelogs` holds the two texts
+ * of each changelog that a push changes.
  */
 export function planLanes(
   eventName: string,
   schedule: string,
   changedFiles: readonly string[] | undefined,
+  changelogs: ReadonlyMap<string, ChangelogEdit> = new Map(),
 ): { readonly plan: LanePlan; readonly reason: string } {
   const weekly = eventName === "schedule" && schedule === WEEKLY_COMPATIBILITY_SCHEDULE;
   // The workflow has only the weekly schedule. A schedule it does not know runs nothing.
   const eventRuns = eventName !== "schedule" || weekly;
   const eventRunsWeekly = eventName === "workflow_dispatch" || weekly;
 
-  let selection: LaneSelection = { all: true, reason: `a ${eventName} event runs every lane` };
+  let selection: LaneSelection = {
+    all: true,
+    release: false,
+    reason: `a ${eventName} event runs every lane`,
+  };
   if (eventName === "pull_request" || eventName === "push") {
-    const select = eventName === "push" ? selectPushLanes : selectLanes;
+    const push = eventName === "push";
     selection = changedFiles
-      ? select(changedFiles)
-      : { all: true, reason: "the plan could not list the changed files" };
+      ? push
+        ? selectPushLanes(changedFiles, changelogs)
+        : selectLanes(changedFiles)
+      : { all: true, release: push, reason: "the plan could not list the changed files" };
   }
+  // A release push also runs the weekly lanes that check what the release publishes.
+  const releaseRuns = eventName === "push" && selection.all && selection.release;
   const docsOnly = !selection.all && changedFiles !== undefined && isDocsOnlyChange(changedFiles);
 
   const plan = {} as LanePlan;
   for (const lane of LANE_NAMES) {
     const eventGate = (WEEKLY_LANES as readonly string[]).includes(lane)
-      ? eventRunsWeekly
+      ? eventRunsWeekly ||
+        (releaseRuns && (RELEASE_WEEKLY_LANES as readonly string[]).includes(lane))
       : eventRuns;
     const alwaysRun =
       (ALWAYS_RUN_LANES as readonly string[]).includes(lane) &&
@@ -491,22 +630,32 @@ export function pushBase(
   return { base: before };
 }
 
+const errorMessage = (error: unknown) => (error instanceof Error ? error.message : String(error));
+
 /** Runs git with these arguments and gives its standard output. A failure rejects the promise. */
 export type Git = (args: readonly string[]) => Promise<string>;
 
 /** The number of commits of the pushed history that the plan fetches to find the `before` commit. */
 const PUSH_HISTORY_DEPTH = 50;
 
+/** The files that a push changes, and the two texts of each changelog among them. */
+export interface PushChange {
+  readonly files: readonly string[];
+  readonly changelogs: ReadonlyMap<string, ChangelogEdit>;
+}
+
 /**
  * Lists the files that a push to `main` changes. actions/checkout fetches only two commits, so the
  * plan fetches more history of the pushed commit. The `before` commit must be an ancestor of the
- * pushed commit in that history. Then the plan compares the two trees. Any failure lists no files,
- * and then the plan runs every lane.
+ * pushed commit in that history. Then the plan compares the two trees and reads each changed
+ * changelog in both commits. Any failure to list the files gives undefined, and then the plan runs
+ * every release lane. A changelog that the plan cannot read in both commits, for example one that
+ * the push adds or deletes, is not in `changelogs`, and then the plan also runs every release lane.
  */
 export async function pushFiles(
   eventPath: string | undefined,
   git: Git,
-): Promise<readonly string[] | undefined> {
+): Promise<PushChange | undefined> {
   try {
     if (!eventPath) throw new Error("GITHUB_EVENT_PATH is not set");
     const event: unknown = JSON.parse(await readFile(eventPath, "utf8"));
@@ -518,10 +667,20 @@ export async function pushFiles(
     // it. A shallow history cannot make an ancestor of a commit that is not one.
     await git(["merge-base", "--is-ancestor", found.base, head]);
     const stdout = await git(["diff", "--name-only", "--no-renames", "-z", found.base, head]);
-    return stdout.split("\0").filter(Boolean);
+    const files = stdout.split("\0").filter(Boolean);
+    const changelogs = new Map<string, ChangelogEdit>();
+    for (const file of files.filter((changed) => matchesGlob(changed, CHANGELOGS))) {
+      try {
+        const before = await git(["cat-file", "blob", `${found.base}:${file}`]);
+        const after = await git(["cat-file", "blob", `${head}:${file}`]);
+        changelogs.set(file, { before, after });
+      } catch (error) {
+        process.stderr.write(`Could not read ${file}: ${errorMessage(error)}\n`);
+      }
+    }
+    return { files, changelogs };
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    process.stderr.write(`Could not list the changed files: ${message}\n`);
+    process.stderr.write(`Could not list the changed files: ${errorMessage(error)}\n`);
     return undefined;
   }
 }
@@ -556,13 +715,10 @@ async function main(): Promise<void> {
   if (!eventName)
     throw new Error("Usage: scripts/ci-lanes.ts <event-name> [schedule] | --docs-only");
   const schedule = process.argv[3] ?? "";
-  const changedFiles =
-    eventName === "pull_request"
-      ? await pullRequestFiles()
-      : eventName === "push"
-        ? await pushFiles(process.env.GITHUB_EVENT_PATH, runGit)
-        : undefined;
-  const { plan, reason } = planLanes(eventName, schedule, changedFiles);
+  const push =
+    eventName === "push" ? await pushFiles(process.env.GITHUB_EVENT_PATH, runGit) : undefined;
+  const changedFiles = eventName === "pull_request" ? await pullRequestFiles() : push?.files;
+  const { plan, reason } = planLanes(eventName, schedule, changedFiles, push?.changelogs);
 
   process.stderr.write(`Lane plan: ${reason}\n`);
   const summary = process.env.GITHUB_STEP_SUMMARY;

@@ -99,15 +99,19 @@ CI costs money for each run. Maintainers and agents cancel CI runs on `main` to 
 CI cancels an older run automatically only on a pull request, so each push to `main` starts a run.
 
 A push to `main` that is not a release runs only its lanes. The plan uses the files that the push
-changes, as it does for a pull request (ADR 0083). A push runs every lane when it changes a release
-file: a `CHANGELOG.md`, a `package.json`, a version file, `sql/releases/`, or a release workflow.
-`RELEASE_FILES` in `scripts/ci-lanes.ts` lists them. A push also runs every lane when the plan cannot
-list its files, for example after a force push.
+changes, as it does for a pull request (ADR 0083). A push runs the release lanes when it changes a
+release file: a `package.json`, a version file, `sql/releases/`, or a release workflow.
+`RELEASE_FILES` in `scripts/ci-lanes.ts` lists them. A `CHANGELOG.md` is a release file only for a
+change outside its `## Unreleased` section. Thus a fix that adds an entry under `## Unreleased` runs
+only its lanes. The release lanes are every push lane and the weekly `packed` lane, as
+`RELEASE_PUSH_LANES` lists them. A push also runs the release lanes when the plan cannot decide. For
+example, the plan cannot list the files after a force push, or it cannot parse a changelog.
 
 The release workflows publish a commit only after a successful `main` push run that planned every
-lane. The plan job of each push run uploads its plan as the `lane-plan` artifact.
+release lane. The plan job of each push run uploads its plan as the `lane-plan` artifact.
 `scripts/check-main-ci-plan.ts` reads that artifact before any publish step. If the run skipped a
-lane, or the plan cannot be read, the release fails. Thus tag only the release candidate commit.
+release lane, or the plan cannot be read, the release fails. Thus tag only the release candidate
+commit.
 
 - A canceled CI run on `main` is not a failure. Do not report it as a failure.
 - Do not start a canceled run on `main` again, and do not wait for it.

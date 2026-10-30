@@ -6,7 +6,8 @@
 # lane only when it changes an input of that lane, as scripts/ci-lanes.ts maps them. A file that the
 # map does not name runs every lane. A docs-only pull request skips the unit lane, the one always-run
 # lane that reads no documentation. A push to main uses the same map for the files that it changes,
-# but a push that changes a release file, such as a changelog, runs every lane.
+# but a push that changes a release file, such as a version file, runs every push lane and the
+# packed lane.
 name: CI
 
 on:

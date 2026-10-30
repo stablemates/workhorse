@@ -9,9 +9,11 @@ import {
   ALWAYS_RUN_LANES,
   DOC_CHECK_LANES,
   DOC_PATHS,
+  changelogIsRelease,
   type FilteredLaneName,
   FILTERED_LANE_NAMES,
   FILTERED_LANES,
+  FULL_PUSH_LANES,
   LANE_NAMES,
   LANE_PLAN_FILE,
   isDocsOnlyChange,
@@ -21,6 +23,9 @@ import {
   pushBase,
   pushFiles,
   RELEASE_FILES,
+  RELEASE_PUSH_LANES,
+  RELEASE_WEEKLY_LANES,
+  releasedText,
   SHARED_INPUTS,
   selectLanes,
   WEEKLY_LANES,
@@ -340,6 +345,7 @@ describe("selecting lanes for a pull request", () => {
   it("runs every lane for a file that the map does not name", () => {
     expect(selectLanes(["go/worker.go", "Dockerfile"])).toEqual({
       all: true,
+      release: false,
       reason: "the lane-input map does not name Dockerfile",
     });
     expect(selected(["Dockerfile"])).toEqual(everyLane);
@@ -774,10 +780,50 @@ describe("the JVM verification metadata lane", () => {
   });
 });
 
+// The plan of a push that runs the always-run lanes and these lanes.
+const onlyLanes = (...lanes: readonly string[]) =>
+  Object.fromEntries(
+    LANE_NAMES.map((lane) => [
+      lane,
+      (ALWAYS_RUN_LANES as readonly string[]).includes(lane) || lanes.includes(lane),
+    ]),
+  );
+
+// A changelog in the shape of each line: an introduction, the `## Unreleased` section if the line
+// has unreleased notes, and the released entries, newest first.
+const released = [
+  "## 0.11.0 — 2026-10-28",
+  "",
+  "- The worker settles the due cause after a lapsed lease (SM-1884).",
+  "",
+  "## 0.10.0 — 2026-10-26",
+  "",
+  "- No code changes.",
+  "",
+].join("\n");
+const introduction = "# Changelog\n\nWorkhorse is a public beta.\n\n";
+const unreleased = (...entries: readonly string[]) =>
+  ["## Unreleased", "", ...entries.flatMap((entry) => [entry, ""])].join("\n");
+const changelog = (...entries: readonly string[]) =>
+  `${introduction}${entries.length > 0 ? unreleased(...entries) : ""}${released}`;
+
+// A changelog whose 0.10.0 entry holds a code block with an Unreleased heading and this entry.
+const fenced = (entry: string) =>
+  changelog("- A fix.").replace("- No code changes.", `\`\`\`md\n## Unreleased\n${entry}\n\`\`\``);
+
 describe("planning lanes for a push to main", () => {
   const nonWeekly = Object.fromEntries(
     LANE_NAMES.map((lane) => [lane, !(WEEKLY_LANES as readonly string[]).includes(lane)]),
   );
+  // A release push runs every push lane and the packed lane, and no other weekly lane.
+  const releasePlan = Object.fromEntries(
+    LANE_NAMES.map((lane) => [lane, nonWeekly[lane] === true || lane === "packed"]),
+  );
+
+  it("runs only the packed lane of the weekly lanes on a release push", () => {
+    expect(RELEASE_WEEKLY_LANES).toEqual(["packed"]);
+    expect(RELEASE_PUSH_LANES).toEqual(LANE_NAMES.filter((lane) => releasePlan[lane]));
+  });
 
   // The files of the 0.11.0 release candidate commit: the version of each line, the changelog of
   // each line, the documentation that names the version, and the frozen schema of the release.
@@ -814,24 +860,140 @@ describe("planning lanes for a push to main", () => {
     "typescript/otel/CHANGELOG.md",
     "typescript/otel/package.json",
   ];
+  // The candidate moves the Unreleased notes of each changelog under a dated heading.
+  const candidateChangelogs = new Map(
+    releaseCandidate
+      .filter((file) => file.endsWith("CHANGELOG.md"))
+      .map((file) => [
+        file,
+        {
+          before: changelog("- The worker settles the due cause (SM-1884)."),
+          after: `${introduction}## 0.12.0 — 2026-11-04\n\n- The worker settles the due cause (SM-1884).\n\n${released}`,
+        },
+      ]),
+  );
 
-  it("runs every lane for the release candidate commit", () => {
-    const { plan, reason } = planLanes("push", "", releaseCandidate);
-    expect(plan).toEqual(nonWeekly);
-    expect(reason).toMatch(/is a release file$/);
+  it("runs every release lane for the release candidate commit", () => {
+    const { plan, reason } = planLanes("push", "", releaseCandidate, candidateChangelogs);
+    expect(plan).toEqual(releasePlan);
+    expect(reason).toBe("CHANGELOG.md changes outside its Unreleased section");
+  });
+
+  it("runs every release lane for the release candidate commit without its changelogs", () => {
+    const files = releaseCandidate.filter((file) => !file.endsWith("CHANGELOG.md"));
+    const { plan, reason } = planLanes("push", "", files);
+    expect(plan).toEqual(releasePlan);
+    expect(reason).toBe("Cargo.lock is a release file");
+  });
+
+  // A fix commit adds an entry under `## Unreleased` of each changelog that it touches. The first
+  // fix after a release also adds the heading.
+  it.each([
+    ["adds an entry", changelog("- A fix."), changelog("- A fix.", "- Another fix.")],
+    ["adds the section", changelog(), changelog("- A fix.")],
+    ["changes an entry", changelog("- A fix."), changelog("- A better fix.")],
+    ["removes the section", changelog("- A fix."), changelog()],
+  ])("runs only the lanes of a fix commit that %s under Unreleased", (_name, before, after) => {
+    const files = ["python/src/workhorse/worker.py", "python/CHANGELOG.md", "CHANGELOG.md"];
+    const changelogs = new Map([
+      ["python/CHANGELOG.md", { before, after }],
+      ["CHANGELOG.md", { before, after }],
+    ]);
+    const { plan, reason } = planLanes("push", "", files, changelogs);
+    expect(plan).toEqual(onlyLanes("python"));
+    expect(reason).toBe("the change runs python");
+  });
+
+  it("runs every release lane for a changelog change outside Unreleased", () => {
+    // The commit after the 0.11.0 candidate changed the dated 0.11.0 entry of each changelog.
+    const after = changelog("- A fix.").replace("lapsed lease", "lapsed lease or a deadline");
+    const { plan, reason } = planLanes(
+      "push",
+      "",
+      ["python/CHANGELOG.md"],
+      new Map([["python/CHANGELOG.md", { before: changelog("- A fix."), after }]]),
+    );
+    expect(plan).toEqual(releasePlan);
+    expect(reason).toBe("python/CHANGELOG.md changes outside its Unreleased section");
+  });
+
+  // A second Unreleased section, or a code block that does not close and so hides the headings
+  // after it.
+  it.each([
+    ["two Unreleased sections", `${changelog("- A fix.")}\n${unreleased("- A second section.")}`],
+    ["a code block that does not close", changelog("- A fix.", "```sh\npnpm test")],
+  ])("runs every release lane for a changelog with %s", (_name, after) => {
+    expect(releasedText(after)).toBeUndefined();
+    const { plan, reason } = planLanes(
+      "push",
+      "",
+      ["CHANGELOG.md"],
+      new Map([["CHANGELOG.md", { before: after, after }]]),
+    );
+    expect(plan).toEqual(releasePlan);
+    expect(reason).toBe("the plan could not parse CHANGELOG.md");
+  });
+
+  it("runs every release lane for a changelog that it cannot read", () => {
+    const { plan, reason } = planLanes("push", "", ["CHANGELOG.md", "python/CHANGELOG.md"]);
+    expect(plan).toEqual(releasePlan);
+    expect(reason).toBe("the plan could not read CHANGELOG.md before and after the push");
+  });
+
+  // A tilde line does not close a backtick code block, and a shorter fence does not close a longer
+  // one. Thus the dated heading after each block stays a heading.
+  it.each([
+    ["a tilde line in a backtick block", "```text\n~~~\n```"],
+    ["a short fence in a long block", "````text\n```\n````"],
+  ])("finds a released edit after a code block with %s", (_name, block) => {
+    const text = (note: string) =>
+      `${introduction}${unreleased(block)}${released.replace("- No code changes.", `- ${note}\n\n${block}`)}`;
+    expect(changelogIsRelease({ before: text("Old note."), after: text("New note.") })).toBe(true);
+    expect(changelogIsRelease({ before: text("Old note."), after: text("Old note.") })).toBe(false);
+  });
+
+  // CommonMark also reads each of these lines as the heading that ends the Unreleased section.
+  it.each([
+    ["an indented heading", " ## 0.11.0 — 2026-10-28"],
+    ["a tab after the heading marker", "##\t0.11.0 — 2026-10-28"],
+    ["a level-1 heading", "# 0.11.0 — 2026-10-28"],
+  ])("finds a released edit after %s", (_name, heading) => {
+    const text = (note: string) =>
+      `${introduction}${unreleased("- A fix.")}${heading}\n\n- ${note}\n\n${released}`;
+    expect(changelogIsRelease({ before: text("Old note."), after: text("New note.") })).toBe(true);
+    expect(changelogIsRelease({ before: text("Old note."), after: text("Old note.") })).toBe(false);
+  });
+
+  it.each([
+    ["an indented Unreleased heading", " ## Unreleased"],
+    ["a closed Unreleased heading", "## Unreleased ##"],
+  ])("reads %s as the Unreleased section", (_name, heading) => {
+    const text = (entry: string) =>
+      `${introduction}${unreleased(entry).replace("## Unreleased", heading)}${released}`;
+    expect(changelogIsRelease({ before: text("- A fix."), after: text("- Another fix.") })).toBe(
+      false,
+    );
+  });
+
+  // A paragraph line and an underline make a Setext heading, which ends the section. The plan does
+  // not decide whether the underline is a thematic break instead, so it cannot parse the changelog.
+  it.each([
+    ["a level-2 underline", "0.11.0 — 2026-10-28\n---"],
+    ["a level-1 underline", "0.11.0 — 2026-10-28\n==="],
+  ])("cannot parse a Setext heading with %s in the Unreleased section", (_name, heading) => {
+    expect(releasedText(changelog("- A fix.", heading))).toBeUndefined();
+    // A thematic break after a blank line is not an underline.
+    expect(releasedText(changelog("- A fix.", "---"))).toBeDefined();
+  });
+
+  it("reads an Unreleased heading in a code block as text", () => {
+    expect(releasedText(fenced("old"))).not.toBe(releasedText(fenced("new")));
+    expect(changelogIsRelease({ before: fenced("old"), after: fenced("new") })).toBe(true);
   });
 
   // Each kind of file that scripts/check-release.ts reads for the release version or the frozen
-  // schema, and each release workflow. Each one alone runs every lane.
+  // schema, and each release workflow. Each one alone runs every release lane.
   it.each([
-    "CHANGELOG.md",
-    "python/CHANGELOG.md",
-    "go/CHANGELOG.md",
-    "rust/CHANGELOG.md",
-    "ruby/CHANGELOG.md",
-    "jvm/CHANGELOG.md",
-    "dotnet/CHANGELOG.md",
-    "typescript/otel/CHANGELOG.md",
     "typescript/knex/package.json",
     "dashboard/app/package.json",
     "typescript/core/src/version.ts",
@@ -850,13 +1012,31 @@ describe("planning lanes for a push to main", () => {
     "sql/releases/0089.sql",
     ".github/workflows/release.yml",
     ".github/workflows/release-python.yml",
-  ])("runs every lane for a push that changes the release file %s", (file) => {
+  ])("runs every release lane for a push that changes the release file %s", (file) => {
     expect(RELEASE_FILES.some((glob) => matchesGlob(file, glob))).toBe(true);
-    expect(planLanes("push", "", [file]).plan).toEqual(nonWeekly);
+    expect(planLanes("push", "", [file]).plan).toEqual(releasePlan);
   });
 
-  // A file that the release check reads, a changelog, or a release workflow runs every lane when a
-  // push changes it, as a release file or as a shared input.
+  it.each([
+    "CHANGELOG.md",
+    "python/CHANGELOG.md",
+    "go/CHANGELOG.md",
+    "rust/CHANGELOG.md",
+    "ruby/CHANGELOG.md",
+    "jvm/CHANGELOG.md",
+    "dotnet/CHANGELOG.md",
+    "typescript/otel/CHANGELOG.md",
+  ])("runs only the lanes that read %s for an entry under Unreleased", (file) => {
+    expect(RELEASE_FILES.some((glob) => matchesGlob(file, glob))).toBe(true);
+    const changelogs = new Map([[file, { before: changelog(), after: changelog("- A fix.") }]]);
+    const { plan } = planLanes("push", "", [file], changelogs);
+    expect(plan).toEqual(planLanes("pull_request", "", [file]).plan);
+    expect(plan).not.toEqual(nonWeekly);
+    expect(plan.packed).toBe(false);
+  });
+
+  // A file that the release check reads, a changelog, or a release workflow runs every push lane
+  // when a push changes it, as a release file or as a shared input.
   it("runs every lane for each file that the release check reads", () => {
     const source = readFileSync(path.join(repository, "scripts/check-release.ts"), "utf8");
     const named = [...source.matchAll(/"([\w./-]+\.\w+)"/g)]
@@ -872,9 +1052,10 @@ describe("planning lanes for a push to main", () => {
       ),
     ];
     expect(named.length).toBeGreaterThan(10);
-    const narrowed = files.filter(
-      (file) => JSON.stringify(planLanes("push", "", [file]).plan) !== JSON.stringify(nonWeekly),
-    );
+    const narrowed = files.filter((file) => {
+      const { plan } = planLanes("push", "", [file]);
+      return FULL_PUSH_LANES.some((lane) => !plan[lane]);
+    });
     expect(narrowed).toEqual([]);
   });
 
@@ -883,14 +1064,7 @@ describe("planning lanes for a push to main", () => {
       "python/src/workhorse/worker.py",
       "python/tests/test_worker.py",
     ]);
-    expect(plan).toEqual(
-      Object.fromEntries(
-        LANE_NAMES.map((lane) => [
-          lane,
-          (ALWAYS_RUN_LANES as readonly string[]).includes(lane) || lane === "python",
-        ]),
-      ),
-    );
+    expect(plan).toEqual(onlyLanes("python"));
     expect(reason).toBe("the change runs python");
   });
 
@@ -903,17 +1077,17 @@ describe("planning lanes for a push to main", () => {
     );
   });
 
-  it("runs every lane for a push that changes a shared input", () => {
+  it("runs every push lane but no weekly lane for a push that changes a shared input", () => {
     expect(planLanes("push", "", ["scripts/ci-lanes.ts"]).plan).toEqual(nonWeekly);
   });
 
-  it("runs every lane when a push cannot list its files", () => {
+  it("runs every release lane when a push cannot list its files", () => {
     const { plan, reason } = planLanes("push", "", undefined);
-    expect(plan).toEqual(nonWeekly);
+    expect(plan).toEqual(releasePlan);
     expect(reason).toBe("the plan could not list the changed files");
   });
 
-  it("runs every lane for a push without files", () => {
+  it("runs every push lane for a push without files", () => {
     expect(planLanes("push", "", []).plan).toEqual(nonWeekly);
   });
 
@@ -956,35 +1130,88 @@ describe("listing the files of a push", () => {
     JSON.stringify({ before, after: head, forced: false, created: false }),
   );
 
-  // A git stand-in that fails the one command whose first argument is `fails`.
-  function fakeGit(fails?: string) {
+  // A git stand-in that fails the one command whose first argument is `fails`. `diff` lists the
+  // changed files, and `cat-file` gives the text of a changelog in a commit. A changelog that
+  // `missing` names is not in the `before` commit.
+  function fakeGit(fails?: string, changed = ["python/src/workhorse/worker.py"], missing = "") {
     const calls: string[][] = [];
     const git = async (args: readonly string[]): Promise<string> => {
       calls.push([...args]);
       if (args[0] === fails) throw new Error(`git ${args[0]} failed`);
       if (args[0] === "rev-parse") return `${head}\n`;
-      if (args[0] === "diff")
-        return "python/src/workhorse/worker.py\0python/tests/test_worker.py\0";
+      if (args[0] === "diff") return changed.map((file) => `${file}\0`).join("");
+      if (args[0] === "cat-file") {
+        const [commit, file] = (args[2] ?? "").split(":");
+        if (commit === before && file === missing) throw new Error(`fatal: no ${file}`);
+        return `# Changelog of ${file} at ${commit}\n`;
+      }
       return "";
     };
     return { git, calls };
   }
 
-  async function listed(eventPath: string | undefined, fails?: string) {
+  async function listed(
+    eventPath: string | undefined,
+    fails?: string,
+    changed?: readonly string[],
+    missing?: string,
+  ) {
     const stderr = vi.spyOn(process.stderr, "write").mockReturnValue(true);
     try {
-      const fake = fakeGit(fails);
-      return { files: await pushFiles(eventPath, fake.git), calls: fake.calls };
+      const fake = fakeGit(fails, changed ? [...changed] : undefined, missing);
+      const change = await pushFiles(eventPath, fake.git);
+      return { files: change?.files, changelogs: change?.changelogs, calls: fake.calls };
     } finally {
       stderr.mockRestore();
     }
   }
 
   it("lists the files between the before commit and the pushed commit", async () => {
-    const { files, calls } = await listed(fastForward);
+    const { files, changelogs, calls } = await listed(fastForward, undefined, [
+      "python/src/workhorse/worker.py",
+      "python/tests/test_worker.py",
+    ]);
     expect(files).toEqual(["python/src/workhorse/worker.py", "python/tests/test_worker.py"]);
+    expect(changelogs).toEqual(new Map());
     expect(calls).toContainEqual(["merge-base", "--is-ancestor", before, head]);
     expect(calls.at(-1)).toEqual(["diff", "--name-only", "--no-renames", "-z", before, head]);
+  });
+
+  it("reads each changed changelog in both commits", async () => {
+    const { files, changelogs, calls } = await listed(fastForward, undefined, [
+      "python/CHANGELOG.md",
+      "python/src/workhorse/worker.py",
+    ]);
+    expect(files).toEqual(["python/CHANGELOG.md", "python/src/workhorse/worker.py"]);
+    expect(changelogs).toEqual(
+      new Map([
+        [
+          "python/CHANGELOG.md",
+          {
+            before: `# Changelog of python/CHANGELOG.md at ${before}\n`,
+            after: `# Changelog of python/CHANGELOG.md at ${head}\n`,
+          },
+        ],
+      ]),
+    );
+    expect(calls.slice(-2)).toEqual([
+      ["cat-file", "blob", `${before}:python/CHANGELOG.md`],
+      ["cat-file", "blob", `${head}:python/CHANGELOG.md`],
+    ]);
+  });
+
+  it("leaves out a changelog that is not in both commits, so the plan runs every release lane", async () => {
+    const { files, changelogs } = await listed(
+      fastForward,
+      undefined,
+      ["typescript/new/CHANGELOG.md", "CHANGELOG.md"],
+      "typescript/new/CHANGELOG.md",
+    );
+    expect(files).toEqual(["typescript/new/CHANGELOG.md", "CHANGELOG.md"]);
+    expect([...(changelogs?.keys() ?? [])]).toEqual(["CHANGELOG.md"]);
+    expect(planLanes("push", "", files, changelogs).reason).toBe(
+      "the plan could not read typescript/new/CHANGELOG.md before and after the push",
+    );
   });
 
   it.each(["rev-parse", "fetch", "merge-base", "diff"])(

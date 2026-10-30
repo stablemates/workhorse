@@ -12,6 +12,7 @@ import {
   LANE_PLAN_FILE,
   lanePlanRecord,
   planLanes,
+  RELEASE_PUSH_LANES,
 } from "./ci-lanes.js";
 
 const repositoryRoot = path.resolve(import.meta.dirname, "..");
@@ -83,14 +84,14 @@ describe("the main CI plan check before a release publishes", () => {
 
   const check = (gh: Gh) => checkMainCiPlan({ repository, sha, gh, directory });
 
-  it("passes a successful push run that planned every lane", async () => {
-    const { gh, calls } = fakeGh([ciRun(42)], { 42: planFile(["CHANGELOG.md"]) });
+  it("passes a successful push run that planned every release lane", async () => {
+    const { gh, calls } = fakeGh([ciRun(42)], { 42: planFile(["go/version.go"]) });
 
     const outcome = await check(gh);
 
     expect(outcome).toEqual({
       ok: true,
-      message: `The main CI run https://github.com/${repository}/actions/runs/42 planned every lane for ${sha}.`,
+      message: `The main CI run https://github.com/${repository}/actions/runs/42 planned every release lane for ${sha}.`,
     });
     expect(calls[0]).toEqual([
       "api",
@@ -185,7 +186,7 @@ describe("the main CI plan check before a release publishes", () => {
     ],
     [
       "the plan gives its lanes as a list",
-      changedPlan((record) => (record.lanes = [...FULL_PUSH_LANES])),
+      changedPlan((record) => (record.lanes = [...RELEASE_PUSH_LANES])),
       "its lane plan has no lanes",
     ],
     [
@@ -269,7 +270,7 @@ describe("the main CI plan check before a release publishes", () => {
     expect(await check(gh)).toMatchObject({ ok: true });
   });
 
-  it("passes when one of several successful runs planned every lane", async () => {
+  it("passes when one of several successful runs planned every release lane", async () => {
     const { gh } = fakeGh([ciRun(43), ciRun(42)], {
       43: planFile(["go/queue.go"], { runId: 43 }),
       42: planFile(undefined),
@@ -278,7 +279,7 @@ describe("the main CI plan check before a release publishes", () => {
     const outcome = await check(gh);
 
     expect(outcome).toMatchObject({ ok: true });
-    expect(outcome.message).toContain("/actions/runs/42 planned every lane");
+    expect(outcome.message).toContain("/actions/runs/42 planned every release lane");
   });
 
   it("refuses a repository or a commit that is not well formed, before it asks GitHub", async () => {
@@ -304,10 +305,21 @@ describe("reading a lane plan", () => {
     expect(missing).not.toContain("static");
   });
 
-  it("requires every lane that a push runs when it runs every lane", () => {
-    const { plan } = planLanes("push", "", undefined);
+  it("requires every lane that a release push runs, with the packed lane", () => {
+    const { plan } = planLanes("push", "", ["go/version.go"]);
+    expect(RELEASE_PUSH_LANES).toEqual(LANE_NAMES.filter((lane) => plan[lane]));
+    expect(RELEASE_PUSH_LANES).toContain("packed");
+    expect(RELEASE_PUSH_LANES).not.toContain("ruby-rails");
+  });
+
+  // A change to a shared input runs every push lane but not the packed lane, as the push run of a
+  // commit before SM-1893 did. Such a run cannot release.
+  it("names the packed lane when a push run skipped it", () => {
+    const { plan } = planLanes("push", "", ["scripts/ci-lanes.ts"]);
     expect(FULL_PUSH_LANES).toEqual(LANE_NAMES.filter((lane) => plan[lane]));
-    expect(FULL_PUSH_LANES).not.toContain("packed");
+    expect(readLanePlan(planFile(["scripts/ci-lanes.ts"]), sha, { id: 42, attempt: 1 })).toEqual({
+      missing: ["packed"],
+    });
   });
 });
 

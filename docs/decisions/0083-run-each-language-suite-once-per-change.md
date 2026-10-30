@@ -11,7 +11,13 @@
   [SM-1877](https://linear.app/stablemates/issue/SM-1877)
   (a pull request runs only the static steps that it needs),
   [SM-1878](https://linear.app/stablemates/issue/SM-1878)
-  (a push to `main` runs only its lanes, except for a release file)
+  (a push to `main` runs only its lanes, except for a release file),
+  [SM-1886](https://linear.app/stablemates/issue/SM-1886)
+  (a release needs a push run that planned every lane),
+  [SM-1887](https://linear.app/stablemates/issue/SM-1887) and
+  [SM-1893](https://linear.app/stablemates/issue/SM-1893)
+  (a changelog entry under `## Unreleased` is not a release change, and a release push also runs
+  the `packed` lane)
 - **Related:** [ADR 0043](0043-public-ci-and-release-policy.md),
   [ADR 0079](0079-govern-the-rust-api-as-an-eighth-surface.md),
   [SM-970](https://linear.app/stablemates/issue/SM-970)
@@ -218,6 +224,76 @@ release fails in these conditions, and the message names each run and its missin
 script runs the full `pnpm check`. `scripts/check-main-ci-plan.test.ts` holds the check to these
 conditions and holds the workflows to the step.
 
+_Amended by [SM-1887](https://linear.app/stablemates/issue/SM-1887) and
+[SM-1893](https://linear.app/stablemates/issue/SM-1893)._ A push to `main` runs the release lanes
+only for a release change, and the release lanes include the `packed` lane. Before this amendment,
+each changelog edit ran every lane, and most fixes add a changelog entry. Also, no push ran the
+`packed` lane. The `main` run of the release candidate `9e73e758` passed without it. Then the npm
+dry run of the release rehearsal failed on the packed OpenTelemetry smoke (SM-1891).
+
+This amendment replaces the first condition of the SM-1878 list. It also replaces `FULL_PUSH_LANES`
+in the SM-1886 list with `RELEASE_PUSH_LANES`.
+
+The release lanes are `RELEASE_PUSH_LANES` in `scripts/ci-lanes.ts`. They are each lane of
+`FULL_PUSH_LANES` and each lane of `RELEASE_WEEKLY_LANES`, which holds only `packed`. A push runs
+the release lanes when it changes a release file of `RELEASE_FILES`. A release file is a version
+file, a `package.json`, or a lockfile that `scripts/check-release.ts` reads. `sql/releases/` and the
+release workflows are also release files. A changed `CHANGELOG.md` is a release file only for a
+change outside its `## Unreleased` section.
+
+The `plan` job reads each changed changelog in the `before` commit and in the pushed commit. It
+removes the `## Unreleased` section from each text: the heading and each line up to the next
+heading of level 1 or 2. It finds the headings as CommonMark does, so a heading in a fenced code
+block does not count. If the two texts that remain are
+different, the change is a release change. Thus:
+
+1. A fix commit that adds, changes, or removes an entry under `## Unreleased` runs only its lanes.
+   So does the first fix after a release, which adds the `## Unreleased` heading.
+2. A release candidate moves the notes under a dated heading, so it runs the release lanes. It
+   also changes the version files, which run the release lanes alone.
+3. A change to a dated entry or to the introduction of a changelog runs the release lanes. For
+   example, the 0.11.0 tag is on a commit that changed the dated 0.11.0 entries.
+
+If the plan cannot decide, the push runs the release lanes. This occurs in these conditions:
+
+- The plan cannot read a changed changelog in both commits, for example because the push adds or
+  deletes it.
+- The plan cannot parse a changed changelog. It has more than one `## Unreleased` section or a
+  fenced code block that does not close. Or the Unreleased section has a line that can underline a
+  Setext heading.
+- The plan cannot list the changed files, in each condition of the SM-1878 list after the first.
+
+A push that runs every lane for another reason runs only `FULL_PUSH_LANES`, without `packed`. These
+reasons are a shared input, a file that the map does not name, and a push without files. The
+release check refuses such a run, and its message names `packed`.
+
+The other weekly lanes stay weekly:
+
+- `ruby-rails` tests the Ruby adapter on Rails 8.0. This is a variation of the Ruby suite. A push
+  run does not run the language and PostgreSQL variations either, so this lane stays with them.
+- `ruby-rails-main` and `spring-boot-snapshot` test previews of upstream releases. They have
+  `continue-on-error`, and the `required` job does not need them. Thus they cannot stop a release.
+
+The CI cost of this decision comes from the weekly runs of 2026-10-18 and 2026-10-25 and from the
+push run of the 0.11.0 candidate `f9d483da9`:
+
+| Lane                                       | Runner time on one runner           |
+| ------------------------------------------ | ----------------------------------- |
+| A full push run, `FULL_PUSH_LANES`         | 3,835 s in 24 jobs, 432 s wall time |
+| `packed`, which joins the release lanes    | 165 s and 177 s                     |
+| `ruby-rails`, which stays weekly           | 43 s and 47 s                       |
+| `ruby-rails-main`, which stays weekly      | 52 s and 53 s                       |
+| `spring-boot-snapshot`, which stays weekly | 81 s and 129 s                      |
+
+Thus `packed` adds about 5% of runner time to a release push run. It takes less time than the
+`static` lane, which took 391 s in that run, so the run does not take more wall time. The three
+other lanes together would add about 3 to 4 more minutes of runner time to each release run.
+
+`scripts/ci-lanes.test.ts` plans the 0.11.0 candidate shape and a fix commit with only an
+`## Unreleased` entry. It also plans a change to a dated entry, an unreadable changelog, and a
+changelog that the plan cannot parse. `scripts/check-main-ci-plan.test.ts` holds the release check to the
+`packed` lane.
+
 ## Consequences
 
 A change gets one result per language, and the Rust and Go lanes stop setting the wait for every
@@ -264,3 +340,16 @@ The artifact expires after the artifact retention period of the repository. Then
 read the plan, and the release fails. A `workflow_dispatch` run of CI does not replace the push
 run, because the check accepts only a push run. Thus a maintainer must tag the release candidate
 commit before its artifact expires, or make a new release candidate commit.
+
+_Amended by [SM-1887](https://linear.app/stablemates/issue/SM-1887) and
+[SM-1893](https://linear.app/stablemates/issue/SM-1893)._ A change that adds a changelog entry
+under `## Unreleased` runs only its lanes. Of the last 60 commits on `main` on 2026-10-30, 9 commits
+changed a changelog and no other release file or shared input. Before this amendment each of them
+ran every lane, and now each runs only its lanes. A change to a version file still runs the release
+lanes. The version files include `package.json`, `python/pyproject.toml`, and the lockfiles that the
+release check reads, so a dependency update also runs them.
+
+A release push costs about 3 more minutes of runner time for the `packed` lane. In exchange, the
+`main` run of a release candidate installs and tests the packed npm packages before a release
+workflow starts. A regression of the Rails 8.0 adapter or of an upstream preview still surfaces only
+in the weekly run.
