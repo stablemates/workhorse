@@ -256,6 +256,7 @@
   "pnpm": {
     "overrides": {
       "deepmerge-ts": "^8.0.0",
+      "gcp-metadata@8>gaxios": "^7.1.4",
       "js-yaml@4": "^4.3.2"
     }
   }
