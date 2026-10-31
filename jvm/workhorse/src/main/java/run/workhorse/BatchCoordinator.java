@@ -33,6 +33,10 @@ import run.workhorse.internal.SqlCatalogue;
  * <p>A cancellation or a lease loss removes a member that no batch took yet. The member then fails
  * with the {@link CancelledException} of its reason, and the handler never gets it. A member that a
  * batch already took stays in that batch, and the handler reads its cancellation.
+ *
+ * <p>The drain's interrupt closes the socket of a virtual thread. The handler can then throw an I/O
+ * failure that the interrupt caused. If the drain interrupted the thread that runs the handler,
+ * each member of that batch returns to its queue without an attempt (SM-1890).
  */
 final class BatchCoordinator {
   /** How often a lingering member checks for the last arrival while the worker stops. */
@@ -110,6 +114,8 @@ final class BatchCoordinator {
       }
       waiting.add(index, member);
       dropCancelled(queue);
+      // Each lock section leaves fewer than maxSize members waiting. Thus a full list holds this
+      // member, and the take removes every member, this one too.
       batch = waiting.size() >= maxSize ? take(queue) : List.of();
       firstArrivedAt = member.arrivedAt;
       for (Member other : pending.getOrDefault(queue, List.of())) {
@@ -121,9 +127,9 @@ final class BatchCoordinator {
     AutoCloseable cancellation =
         context.cancellation().onCancel(() -> leave(member, queue, context));
     try {
-      interrupted |= dispatch(batch, interrupted);
-      // A member that the full batch left behind lingers too. Once its linger ends, it runs every
-      // batch ahead of it and then its own, so no member waits for a later arrival.
+      interrupted |= dispatch(task, batch, interrupted);
+      // A member that no full batch took lingers. Once its linger ends, it takes every member that
+      // still waits, itself too, so no member waits for a later arrival.
       boolean settled;
       while (true) {
         try {
@@ -134,21 +140,16 @@ final class BatchCoordinator {
         }
       }
       if (!settled) {
-        while (true) {
-          List<Member> next;
-          lock.lock();
-          try {
-            dropCancelled(queue);
-            List<Member> waiting = pending.get(queue);
-            next = waiting != null && waiting.contains(member) ? take(queue) : null;
-          } finally {
-            lock.unlock();
-          }
-          if (next == null) {
-            break;
-          }
-          interrupted |= dispatch(next, interrupted);
+        List<Member> next;
+        lock.lock();
+        try {
+          dropCancelled(queue);
+          List<Member> waiting = pending.get(queue);
+          next = waiting != null && waiting.contains(member) ? take(queue) : List.of();
+        } finally {
+          lock.unlock();
         }
+        interrupted |= dispatch(task, next, interrupted);
       }
       return outcome(member);
     } finally {
@@ -251,7 +252,8 @@ final class BatchCoordinator {
 
   /**
    * Removes the next batch from a queue's waiting list. The caller holds {@link #lock}, and it
-   * drops the cancelled members first, so one check decides each selection.
+   * drops the cancelled members first, so one check decides each selection. A list holds at most
+   * {@link #maxSize} members, so the batch is the whole list, with the member that takes it.
    */
   private List<Member> take(String queue) {
     List<Member> waiting = pending.get(queue);
@@ -268,16 +270,17 @@ final class BatchCoordinator {
   }
 
   /**
-   * Runs one batch on this thread and settles each of its members. If {@code interrupted}, the
-   * thread has a pending interrupt, which the handler receives. Returns whether the handler left
-   * this thread interrupted, so the caller can set the interrupt again when it returns.
+   * Runs one batch on this thread, the handler thread of {@code runner}, and settles each of its
+   * members. {@code runner} is the member that took the batch. If {@code interrupted}, the thread
+   * has a pending interrupt, which the handler receives. Returns whether the handler left this
+   * thread interrupted, so the caller can set the interrupt again when it returns.
    */
-  private boolean dispatch(List<Member> batch, boolean interrupted) {
+  private boolean dispatch(Worker.Active runner, List<Member> batch, boolean interrupted) {
     if (batch.isEmpty()) {
       return false;
     }
     try {
-      return dispatchBatch(batch, interrupted);
+      return dispatchBatch(runner, batch, interrupted);
     } catch (RuntimeException | Error error) {
       // Telemetry or the caller's logger threw outside the handler. A member
       // on another thread waits for its result, so each member that has none fails with the error,
@@ -291,7 +294,7 @@ final class BatchCoordinator {
     }
   }
 
-  private boolean dispatchBatch(List<Member> batch, boolean interrupted) {
+  private boolean dispatchBatch(Worker.Active runner, List<Member> batch, boolean interrupted) {
     UUID batchId = UUID.randomUUID();
     boolean full = batch.size() == maxSize;
     long firstArrivedAt = Long.MAX_VALUE;
@@ -319,7 +322,15 @@ final class BatchCoordinator {
       worker.recordBatchEvidence(
           SqlCatalogue.RECORD_BATCH_FAILURE_V1, "failure", batchId, taskType, tasks, full);
       Exception failure = settleable(error);
+      // The drain interrupts the handler thread of each attempt. This thread is the one of {@code
+      // runner}, so its interrupt, and not the interrupt of another member, shows whether the
+      // drain stopped the handler's I/O. Each member then returns to its queue without an
+      // attempt, as a handler does after its own I/O stops (SM-1890).
+      boolean drainStopped = runner.drainInterrupted() && Worker.interruptedIo(failure);
       for (Member member : batch) {
+        if (drainStopped) {
+          member.task.recordDrainStoppedBatch();
+        }
         member.result.completeExceptionally(failure);
       }
       signal();

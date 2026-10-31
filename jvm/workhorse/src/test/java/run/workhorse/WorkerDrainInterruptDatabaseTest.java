@@ -17,6 +17,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.CompletionException;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
@@ -29,6 +30,8 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import run.workhorse.testing.ScratchDataSource;
 import run.workhorse.testing.ScratchDatabase;
 
@@ -41,6 +44,12 @@ import run.workhorse.testing.ScratchDatabase;
 @Timeout(value = 120, unit = TimeUnit.SECONDS)
 class WorkerDrainInterruptDatabaseTest {
   private static final Duration WAIT = Duration.ofSeconds(20);
+
+  /**
+   * A handler query whose reply the driver must wait for. The JDK reports the drain's interrupt
+   * only when a socket read or write waits, and a reply that already arrived needs no wait.
+   */
+  private static final String WAITING_QUERY = "SELECT pg_sleep(1)";
 
   private final ScratchDataSource scratch = new ScratchDataSource(true);
   private final Queue queue = new Queue(ConnectionSource.of(scratch));
@@ -445,7 +454,7 @@ class WorkerDrainInterruptDatabaseTest {
                     LockSupport.parkNanos(TimeUnit.MILLISECONDS.toNanos(1));
                   }
                   try (Connection connection = ScratchDatabase.connect();
-                      PreparedStatement statement = connection.prepareStatement("SELECT 1")) {
+                      PreparedStatement statement = connection.prepareStatement(WAITING_QUERY)) {
                     statement.execute();
                   } catch (SQLException error) {
                     handlerErrors.add(error.getClass().getName());
@@ -477,6 +486,144 @@ class WorkerDrainInterruptDatabaseTest {
                 + " AND task_id = ANY(?::uuid[])",
             List.of(taskId)),
         "the task waits in its queue and did not use its attempt");
+  }
+
+  /** Waits on this thread until the drain's interrupt arrives, for at most {@link #WAIT}. */
+  private static void awaitDrainInterrupt() {
+    long limit = System.nanoTime() + WAIT.toNanos();
+    while (!Thread.currentThread().isInterrupted() && System.nanoTime() < limit) {
+      LockSupport.parkNanos(TimeUnit.MILLISECONDS.toNanos(1));
+    }
+  }
+
+  /** Starts the worker, waits until its handler starts, and stops the worker. */
+  private static void drainWhileRunning(Worker worker, CountDownLatch started)
+      throws InterruptedException {
+    worker.start();
+    try {
+      assertTrue(started.await(WAIT.toSeconds(), TimeUnit.SECONDS), "the handler started");
+    } finally {
+      try {
+        worker.close();
+      } catch (ShutdownIncompleteException slow) {
+        // The attempts still end on their own threads; the waits after this cover them.
+      }
+    }
+  }
+
+  /**
+   * SM-1890: the batch handler runs on the thread of one member, and the drain's interrupt closes
+   * the socket of its running query. The batch stopped because of the shutdown. Thus each member
+   * goes back to its queue without an attempt. This includes a member whose own thread did not run
+   * the handler. A handler can wrap the error in a {@link CompletionException}, which the
+   * coordinator unwraps.
+   */
+  @ParameterizedTest
+  @ValueSource(booleans = {false, true})
+  void releasesEachBatchMemberWhoseHandlerQueryTheDrainInterruptStops(boolean wrapped)
+      throws Exception {
+    List<UUID> taskIds = List.of(enqueue("batch-query"), enqueue("batch-query"));
+    String marker = "batch-query-" + UUID.randomUUID();
+    List<String> handlerErrors = new CopyOnWriteArrayList<>();
+    Worker worker =
+        worker(scratch)
+            .concurrency(2)
+            .handleBatch(
+                "batch-query",
+                Object.class,
+                new BatchOptions(2, Duration.ofSeconds(5)),
+                items -> {
+                  try (Connection connection = ScratchDatabase.connect();
+                      PreparedStatement statement =
+                          connection.prepareStatement(
+                              "SELECT pg_sleep(" + WAIT.toSeconds() + "), '" + marker + "'")) {
+                    statement.execute();
+                  } catch (SQLException error) {
+                    handlerErrors.add(error.getClass().getName());
+                    if (wrapped) {
+                      throw new CompletionException(error);
+                    }
+                    throw error;
+                  }
+                  return items.stream()
+                      .<BatchHandlerOutcome>map(item -> new BatchSucceeded("done"))
+                      .toList();
+                })
+            .build();
+
+    worker.start();
+    try {
+      // The drain starts only after PostgreSQL runs the query, so the interrupt stops that query
+      // and not the connection setup.
+      waitForCount(
+          "PostgreSQL runs the batch handler's query", 1, () -> runningQueries("%" + marker + "%"));
+    } finally {
+      try {
+        worker.close();
+      } catch (ShutdownIncompleteException slow) {
+        // The attempts still end on their own threads; the waits after this cover them.
+      }
+    }
+    waitForCount("each member goes back to its queue", 2, () -> events("released", taskIds));
+
+    assertEquals(
+        List.of("org.postgresql.util.PSQLException"),
+        handlerErrors,
+        "the interrupt stopped the batch handler's query");
+    assertEquals(
+        2,
+        count(
+            "SELECT count(*) FROM workhorse.task_runtime WHERE state = 'ready' AND current_attempt = 1"
+                + " AND task_id = ANY(?::uuid[])",
+            taskIds),
+        "each member waits in its queue and did not use its attempt");
+  }
+
+  /** The number of other sessions whose active query matches {@code pattern}. */
+  private static long runningQueries(String pattern) throws SQLException {
+    try (Connection connection = ScratchDatabase.connect();
+        PreparedStatement statement =
+            connection.prepareStatement(
+                "SELECT count(*) FROM pg_stat_activity WHERE pid <> pg_backend_pid()"
+                    + " AND state = 'active' AND query LIKE ?")) {
+      statement.setString(1, pattern);
+      try (ResultSet result = statement.executeQuery()) {
+        result.next();
+        return result.getLong(1);
+      }
+    }
+  }
+
+  /** A batch handler error of its own after the drain's interrupt still fails each member. */
+  @Test
+  void stillFailsEachBatchMemberWhenTheBatchHandlerFailsOnItsOwnAfterTheStop() throws Exception {
+    List<UUID> taskIds = List.of(enqueue("batch-own"), enqueue("batch-own"));
+    CountDownLatch started = new CountDownLatch(1);
+    Worker worker =
+        worker(scratch)
+            .concurrency(2)
+            .handleBatch(
+                "batch-own",
+                Object.class,
+                new BatchOptions(2, Duration.ofSeconds(5)),
+                items -> {
+                  started.countDown();
+                  awaitDrainInterrupt();
+                  throw new IllegalStateException("the batch failed on its own");
+                })
+            .build();
+
+    drainWhileRunning(worker, started);
+    waitForCount(
+        "each member fails",
+        2,
+        () ->
+            count(
+                "SELECT count(*) FROM workhorse.task_outcome WHERE state = 'failed'"
+                    + " AND task_id = ANY(?::uuid[])",
+                taskIds));
+
+    assertEquals(0, events("released", taskIds), "no member goes back to its queue");
   }
 
   // SM-1525 (m2): a child request reads its payload contract through the drain's interrupt. Without

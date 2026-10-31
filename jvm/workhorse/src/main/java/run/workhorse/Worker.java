@@ -2316,8 +2316,12 @@ public final class Worker implements AutoCloseable {
                 .start(() -> unstarted.forEach(this::releaseUnstarted));
     List<Active> remaining = new ArrayList<>(active);
     if (!remaining.isEmpty()) {
+      // Every token gets SHUTDOWN before any thread gets the interrupt. A batch that the interrupt
+      // stops then finds SHUTDOWN on each of its members, also on a member the loop reaches later.
       for (Active task : remaining) {
         task.cancellation.cancel(CancellationReason.SHUTDOWN);
+      }
+      for (Active task : remaining) {
         task.interrupt();
       }
       waitUntilIdle(Math.min(System.nanoTime() + UNWIND_WINDOW_NANOS, end));
@@ -2653,6 +2657,12 @@ public final class Worker implements AutoCloseable {
      */
     private boolean drainInterrupted;
 
+    /**
+     * Whether the drain's interrupt stopped the batch of this attempt. An attempt joins one batch
+     * only, and the batch coordinator sets this before it settles the attempt (SM-1890).
+     */
+    private volatile boolean drainStoppedBatch;
+
     private static final int QUEUED = 0;
     private static final int STARTED = 1;
     private static final int ABANDONED = 2;
@@ -2769,6 +2779,23 @@ public final class Worker implements AutoCloseable {
       } finally {
         lock.unlock();
       }
+    }
+
+    /**
+     * Records that the drain's interrupt stopped the batch of this member. The batch handler can
+     * run on the thread of another member. Thus the coordinator decides from the attempt whose
+     * thread ran the handler. Then it records the result on each member (SM-1890).
+     */
+    void recordDrainStoppedBatch() {
+      drainStoppedBatch = true;
+    }
+
+    /**
+     * Whether the drain's interrupt stopped the batch of this member. Then the error that the
+     * member throws is the error of that batch, or the cause that the coordinator unwraps from it.
+     */
+    boolean drainStoppedBatch() {
+      return drainStoppedBatch;
     }
 
     void interrupt() {
@@ -3012,10 +3039,12 @@ public final class Worker implements AutoCloseable {
       }
       // A handler that stopped for shutdown returns the task to the queue without an attempt. The
       // drain's interrupt closes a virtual thread's socket, so after it, an I/O failure that the
-      // interrupt caused in the handler call also counts as that stop (SM-1889). The rule does not
-      // apply to a batch member: the batch handler can run on another member's thread, so this
-      // member's interrupt does not show what caused the shared error.
-      boolean interruptedIo = handlerThrew && task.drainInterrupted() && interruptedIo(error);
+      // interrupt caused in the handler call also counts as that stop (SM-1889). A batch handler
+      // can run on another member's thread, so this member's interrupt does not show what caused
+      // the shared error. The coordinator decides from the thread that ran the handler (SM-1890).
+      boolean interruptedIo =
+          (handlerThrew && task.drainInterrupted() && interruptedIo(error))
+              || task.drainStoppedBatch();
       if (cancellation.reason() == CancellationReason.SHUTDOWN
           && (interruptedIo || shutdownCancellation(error))) {
         releaseOwned(claimed, arbiter, ownership);

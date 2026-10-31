@@ -3189,9 +3189,10 @@ After `stop()`, the worker shuts down in this order:
 2. It gives up its listener subscription. The shared listener gives its connection back to the pool
    when the last worker on the `DataSource` leaves.
 3. It waits up to `shutdownGrace` for running handlers.
-4. It cancels the rest with `SHUTDOWN` and calls `Thread.interrupt()` on their threads. The
-   interrupt waits while the worker's own statement runs on that thread. A child request also
-   defers it while it gets a connection, reads a payload contract, and gives the connection back.
+4. It cancels the rest with `SHUTDOWN`. Then it calls `Thread.interrupt()` on their threads. Each
+   token is cancelled before any thread gets the interrupt. The interrupt waits while the worker's
+   own statement runs on that thread. A child request also defers it while it gets a connection,
+   reads a payload contract, and gives the connection back.
 5. It waits the 250 millisecond unwind window.
 6. It abandons a handler that still runs after that window, and stops renewing its lease. A task
    that the caller's `executor` never started goes back to its queue through `release_owned_v1`,
@@ -3232,9 +3233,8 @@ The worker installs no JVM shutdown hook and traps no signal.
   `interruptedIo` looks in the cause chain for a `SocketException` whose `getMessage()` is
   `Closed by interrupt`, a `ClosedByInterruptException`, or an `InterruptedIOException` that is not
   a `SocketTimeoutException`. Another error of the handler's own still fails the attempt. The rule
-  does not apply to the payload decode or to a batch member. A batch shares one error among its
-  members, and the batch handler can run on the thread of another member, so the interrupt of one
-  member does not show what caused that error.
+  does not apply to the payload decode. A batch applies it to the thread that runs the batch
+  handler, as "JVM batch handlers" states (SM-1890).
 - A `LeaseLostException` settles nothing, because the fence already refuses the write.
 - Before it completes a task, the worker checks the result. A NUL character fails the attempt with
   `<task type> result contains a NUL character, which PostgreSQL jsonb cannot store`. The codec
@@ -3285,6 +3285,11 @@ item, in the same order: `new BatchSucceeded(result)` or `new BatchFailed(except
 - A thrown `Error` fails every task with a `WorkhorseException` that names it.
 - If the worker's telemetry or the caller's logger throws before the handler runs, every task in the
   batch fails with that error in the same way.
+- The batch handler runs on the handler thread of one task in the batch. That task filled the batch,
+  or its linger ended first. The drain can interrupt that thread. Then `interruptedIo` looks
+  in the thrown error for an I/O failure that the interrupt caused. If it finds one, each task in
+  the batch goes back to its queue through `release_owned_v1` (SM-1890). No attempt is charged. A
+  task whose token holds a reason other than `SHUTDOWN` still settles the error as a failure.
 - Every task in the batch still settles under its own lease and fence.
 
 The worker records `record_batch_dispatch_v1` before the call, and `record_batch_failure_v1` after
