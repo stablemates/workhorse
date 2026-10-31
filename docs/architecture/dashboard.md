@@ -541,8 +541,43 @@ projected a redacted `result`, every reader of that view would join to `task`. T
 the task list and the activity chart, which never read a result.
 `docs/benchmarks/results/2026-08-22-dashboard-read-surface.json` records both plans.
 
-`dashboard_task_estimate_v1()` returns the planner tuple estimate for the private `task` table.
-The dashboard uses it to choose exact counts or estimates without naming the private relation.
+`dashboard_task_estimate_v1()` returns an estimate of the number of rows in the private `task`
+table. The dashboard uses it to choose exact counts or estimates without naming the private
+relation. `dashboard_task_counts_v1` and `dashboard_queues_v1` compare it with 50,000.
+
+The function is volatile, because the current number of pages can change inside one statement.
+
+The function estimates the rows as the planner does. `ANALYZE` and `VACUUM` store `reltuples` and
+`relpages` in `pg_class`, and a later insert changes neither value. Thus the function reads the
+current number of pages, `pg_relation_size` divided by `block_size`, and applies the first rule
+that matches:
+
+1. If the table has no pages, the estimate is 0.
+2. If `reltuples` and `relpages` are both above 0, the estimate is `reltuples / relpages`
+   multiplied by the current number of pages, rounded.
+3. Otherwise no stored density exists. `reltuples` is -1 before the first `ANALYZE` or `VACUUM`.
+   `relpages` is 0 after an `ANALYZE` of an empty table. `reltuples` is 0 on the old pages after an
+   `ANALYZE` that found no live row, for example after a `DELETE` of every task. The estimate is then
+   the current number of pages multiplied by `(block_size - 24) / (28 + width)`, in integer division
+   and at least 1. `width` is the sum of the column widths. The width of a column is its `avg_width`
+   in `pg_stats`, if the last `ANALYZE` stored one. Otherwise it is the length of the column type,
+   or 32 bytes for a variable-length type.
+
+Rule 3 uses the row width that the planner uses for a table without a stored density. The function
+differs from the planner in three points:
+
+- It assumes no minimum of 10 pages for a table that has never been analyzed.
+- It applies rule 3 when `reltuples` is 0 and `relpages` is above 0. The planner uses the stored
+  density 0 there, so its estimate stays at 1 row after a refill. Thus, after a `DELETE` of every
+  task and an `ANALYZE`, the function estimates rows on the dead pages until `VACUUM` removes them.
+- It assumes the fill factor 100, the default of `task`. PostgreSQL 17 and later apply the fill
+  factor of the table in rule 3.
+
+`pg_stats` shows a column only to a role that can read it, so another role can get the type width.
+
+Since schema version 91, a bulk insert after the last `ANALYZE` therefore raises the estimate at
+once. Before, the estimate was the stored `reltuples`. Until autoanalyze ran, a bulk enqueue left the
+estimate below the threshold, and the sidebar counts read every task row.
 
 ### Redaction scope
 

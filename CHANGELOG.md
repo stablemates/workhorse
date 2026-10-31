@@ -50,6 +50,24 @@ The message now names the component that refused the call: the `Queue`, the `Adm
 it. The error code stays `schema-not-installed`. A caller that compares the message text must
 update that comparison.
 
+### The dashboard task estimate follows the current size of the task table
+
+A deployment had 2,006 tasks, and the last `ANALYZE` stored that count. A bulk enqueue then added
+50,000 tasks. Until autoanalyze ran, `dashboard_task_estimate_v1` still returned 2,006. Thus the
+sidebar counts and the Queues page took their exact branches, and the sidebar counts read every
+task row.
+
+Migration 0092 (`0092-scale-the-dashboard-task-estimate-by-the-table-size.sql`) moves the schema to
+version 91. It replaces `dashboard_task_estimate_v1`, which now scales the stored rows per page by
+the current number of pages of the task table, as the planner does. If no stored density exists, the
+estimate uses a density from the column widths. A stored row count of 0, for example after a
+`DELETE` of every task and an `ANALYZE`, also counts as no stored density. The function is now
+volatile, because the number of pages can change inside one statement. The migration also replaces
+the body of `dashboard_task_counts_v1` to change only a comment.
+
+The migration does not raise the SDK compatibility floor and changes no rows. Run
+`workhorse schema migrate`.
+
 ## 0.11.0 — 2026-10-28
 
 The npm packages, Python distribution, Go module, Rust crate, Ruby gem, JVM artifacts, and .NET

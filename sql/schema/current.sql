@@ -19631,13 +19631,44 @@ CREATE OR REPLACE VIEW workhorse.dashboard_worker_registry_v1 AS
          client_protocol_version, sdk_language, sdk_version
     FROM workhorse.worker_registry;
 
+-- The number of task rows, estimated as the planner estimates a table. ANALYZE and VACUUM store
+-- reltuples and relpages. A bulk insert after them adds pages but leaves both values. Thus the
+-- estimate scales the stored rows per page by the current number of pages. If no stored density
+-- exists, it divides the free page space by the row width. That is the case if reltuples is -1, if
+-- relpages is 0, or if reltuples is 0. An ANALYZE after a DELETE of every task stores 0 rows on the
+-- old pages, and a density of 0 would keep the estimate at 0 after a refill. The width of a column
+-- is its average width from the last ANALYZE, or else the length of its type, with 32 bytes for a
+-- variable-length type. The function is volatile, because the current number of pages can change
+-- inside one statement.
 CREATE OR REPLACE FUNCTION workhorse.dashboard_task_estimate_v1()
 RETURNS TABLE (estimate bigint)
 LANGUAGE sql
-STABLE
+VOLATILE
 PARALLEL SAFE
 AS $$
-  SELECT reltuples::bigint FROM pg_class WHERE oid = 'workhorse.task'::regclass;
+  SELECT CASE
+           WHEN size.pages = 0 THEN 0
+           WHEN class.reltuples > 0 AND class.relpages > 0
+             THEN round(class.reltuples::numeric / class.relpages * size.pages)::bigint
+           ELSE size.pages * GREATEST(1, (size.block_size - 24) / (28 + (
+             SELECT sum(COALESCE(
+                      NULLIF(stats.avg_width, 0),
+                      CASE WHEN attribute.attlen > 0 THEN attribute.attlen ELSE 32 END
+                    ))::integer
+               FROM pg_attribute attribute
+               LEFT JOIN pg_stats stats
+                 ON stats.schemaname = 'workhorse' AND stats.tablename = 'task'
+                AND stats.attname = attribute.attname AND NOT stats.inherited
+              WHERE attribute.attrelid = class.oid AND attribute.attnum > 0
+                AND NOT attribute.attisdropped
+           )))
+         END
+    FROM pg_class class
+   CROSS JOIN LATERAL (
+     SELECT current_setting('block_size')::integer AS block_size,
+            pg_relation_size(class.oid) / current_setting('block_size')::integer AS pages
+   ) size
+   WHERE class.oid = 'workhorse.task'::regclass;
 $$;
 
 -- Dashboard procedures return the versioned wire document directly. Language backends validate
@@ -20393,7 +20424,8 @@ DECLARE
   v_retried_terminal integer;
 BEGIN
   SELECT estimate INTO v_estimate FROM workhorse.dashboard_task_estimate_v1();
-  -- reltuples is -1 until the first vacuum/analyze; treat unknown as small.
+  -- The estimate follows the current size of task, so a bulk insert before ANALYZE still selects
+  -- the estimate branch.
   IF v_estimate < 50000 THEN
     RETURN (
       WITH tasks AS (
@@ -22926,10 +22958,11 @@ INSERT INTO workhorse.schema_migration(version, description) VALUES
   (87, 'count only prunable rows as row retention lag'),
   (88, 'settle cancel-requested timeouts and bound the dashboard schedule reads'),
   (89, 'settle a fast-tier cancellation at its deadline after its timeout'),
-  (90, 'show the task group in the task detail')
+  (90, 'show the task group in the task detail'),
+  (91, 'scale the dashboard task estimate by the current size of the task table')
 ON CONFLICT DO NOTHING;
 
-INSERT INTO workhorse.schema_version(version) VALUES (90) ON CONFLICT DO NOTHING;
+INSERT INTO workhorse.schema_version(version) VALUES (91) ON CONFLICT DO NOTHING;
 
 INSERT INTO workhorse.protocol_version(version) VALUES (5) ON CONFLICT DO NOTHING;
 SELECT workhorse.create_history_day_v1(

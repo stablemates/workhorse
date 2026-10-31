@@ -1713,24 +1713,34 @@ until a scenario has a recorded live artifact, no performance claim is made for 
 
 ## Upgrade from 0.11.x to the next release
 
-The next release shows the task group of a member task in the dashboard task detail. The upgrade
-is a rolling deployment, and a mixed fleet is supported while it runs.
+The next release shows the task group of a member task in the dashboard task detail. It also makes
+the dashboard task estimate follow the current size of the task table. The upgrade is a rolling
+deployment, and a mixed fleet is supported while it runs.
 
-1. Run `workhorse schema migrate`. It applies migration 0091 and leaves the schema at version 90.
+1. Run `workhorse schema migrate`. It applies migrations 0091 through 0092 and leaves the schema at
+   version 91.
 2. Roll out the new processes in any order.
 
-A 0.11.0 database is at schema version 89. The migration only adds a key to a dashboard document:
+A 0.11.0 database is at schema version 89. The migrations replace dashboard functions and change no
+stored rows:
 
-| Migration                                         | Schema version | Changes                                                            |
-| ------------------------------------------------- | -------------- | ------------------------------------------------------------------ |
-| `0091-show-the-task-group-in-the-task-detail.sql` | 90             | `dashboard_task_detail_v1` returns the task group of a member task |
+| Migration                                                      | Schema version | Changes                                                                       |
+| -------------------------------------------------------------- | -------------- | ----------------------------------------------------------------------------- |
+| `0091-show-the-task-group-in-the-task-detail.sql`              | 90             | `dashboard_task_detail_v1` returns the task group of a member task            |
+| `0092-scale-the-dashboard-task-estimate-by-the-table-size.sql` | 91             | `dashboard_task_estimate_v1` scales the stored task density by the table size |
 
-Schema version 90 does not raise the floor, so it stays 76. Migration 0091 replaces the body of
+Each of the two migrations does not raise the floor, so it stays 76. Migration 0091 replaces the body of
 `dashboard_task_detail_v1`, and its document gains the key `group`. For a member task, `group` holds
 the group ID, the position of the member, and the state of the group. For another task, it is null.
 A dashboard host of every SDK version passes the document through, so it serves the key when the
 migration commits. A dashboard of the next release on a schema below 90 gets no `group` key and
 shows no group in the task detail.
+
+Migration 0092 replaces `dashboard_task_estimate_v1`. Before it, the estimate was `reltuples` as the
+last `ANALYZE` or `VACUUM` stored it. Thus, after a bulk enqueue, the sidebar counts and the Queues
+page counted every task row exactly until autoanalyze ran. Now the estimate scales the stored rows
+per page by the current number of pages, so both reads use their estimates at once. The migration
+also replaces the body of `dashboard_task_counts_v1`, to change only a comment.
 
 ## Upgrade from 0.10.x to 0.11.0
 

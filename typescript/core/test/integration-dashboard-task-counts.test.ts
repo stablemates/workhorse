@@ -13,14 +13,14 @@ const blockBound = 1000;
 // plan (SM-1896). The per-relation counters exclude the catalogs. They count fetches, not only
 // hits, so a block that shared buffers evicted still counts. Pending counters cannot flush between
 // these reads, so the difference measures this statement.
-async function workhorseBlocks(sql: string): Promise<number> {
+async function workhorseBlocks(sql: string, values: unknown[] = []): Promise<number> {
   const blocks = `SELECT COALESCE(sum(pg_stat_get_xact_blocks_fetched(oid)), 0)::bigint AS blocks
                     FROM pg_class WHERE relnamespace = 'workhorse'::regnamespace`;
   const client = await database.pool.connect();
   try {
     await client.query("BEGIN");
     const before = await client.query<{ blocks: string }>(blocks);
-    await client.query(sql);
+    await client.query(sql, values);
     const after = await client.query<{ blocks: string }>(blocks);
     await client.query("COMMIT");
     return Number(after.rows[0]!.blocks) - Number(before.rows[0]!.blocks);
@@ -36,9 +36,42 @@ async function waitingCount(): Promise<number> {
   return result.rows[0]!.counts.waiting;
 }
 
+// Past the threshold, `all` is the estimate itself, and the read fetches far fewer blocks than an
+// exact count of every task row.
+async function expectEstimateBranch(estimate: number): Promise<void> {
+  const result = await database.pool.query<{ counts: { all: number; waiting: number } }>(
+    "SELECT workhorse.dashboard_task_counts_v1('{}'::jsonb) AS counts",
+  );
+  expect(result.rows[0]!.counts).toMatchObject({ all: estimate, waiting: 5 });
+  expect(
+    await workhorseBlocks("SELECT workhorse.dashboard_task_counts_v1('{}'::jsonb)"),
+  ).toBeLessThan(blockBound);
+}
+
+// Past the threshold, the Queues page estimates its terminal counts with EXPLAIN probes. It does
+// not join every outcome to its task, as the exact branch does. The read gets the health document
+// as input, as the dashboard gives it, so the count measures only the terminal counts.
+async function expectQueuesEstimateBranch(): Promise<void> {
+  const health = await database.pool.query<{ health: unknown }>(
+    "SELECT workhorse.queue_health_v1() AS health",
+  );
+  const input = JSON.stringify({ health: health.rows[0]!.health });
+  const result = await database.pool.query<{
+    queues: { queues: { queue: string; terminalCountsApproximate: boolean }[] };
+  }>("SELECT workhorse.dashboard_queues_v1($1::jsonb) AS queues", [input]);
+  const queues = result.rows[0]!.queues.queues;
+  expect(queues.map((queue) => queue.queue)).toEqual(["dashboard-counts", "dashboard-counts-bulk"]);
+  expect(queues.every((queue) => queue.terminalCountsApproximate)).toBe(true);
+  expect(
+    await workhorseBlocks("SELECT workhorse.dashboard_queues_v1($1::jsonb)", [input]),
+  ).toBeLessThan(blockBound);
+}
+
 describe("dashboard task counts", () => {
   beforeAll(async () => {
     await database.setup();
+    // Autovacuum stays off for task, so only an explicit ANALYZE changes its statistics.
+    await database.pool.query("ALTER TABLE workhorse.task SET (autovacuum_enabled = false)");
     await database.pool.query(
       `INSERT INTO workhorse.task(id, queue_name, task_type, payload, max_attempts)
        SELECT md5('counts-' || i)::uuid, 'dashboard-counts', 'dashboard.counts', '{}'::jsonb, 1
@@ -127,17 +160,91 @@ describe("dashboard task counts", () => {
     );
     expect(activityWaiting - activityAll).toBeLessThan(blockBound);
 
-    // Past the estimate threshold, the read counts live rows from task_runtime alone.
+    // Past the estimate threshold, the read counts live rows from task_runtime alone. The statistics
+    // still describe the 2,006 rows that beforeAll analyzed. The bulk tasks succeeded, so an exact
+    // Queues read would join 50,000 outcomes to their tasks.
+    await database.pool.query(
+      `WITH bulk AS (
+         INSERT INTO workhorse.task(queue_name, task_type, payload, max_attempts)
+         SELECT 'dashboard-counts-bulk', 'dashboard.counts', '{}'::jsonb, 1
+           FROM generate_series(1, 50000)
+         RETURNING id
+       )
+       INSERT INTO workhorse.task_outcome(task_id, state, current_attempt, fence_token, run_at)
+       SELECT id, 'succeeded', 1, 1, clock_timestamp() FROM bulk`,
+    );
+
+    // The estimate scales the stale rows per page by the current number of pages.
+    const stale = await database.pool.query<{ reltuples: number; estimate: string }>(
+      `SELECT class.reltuples, estimate.estimate::text AS estimate
+         FROM pg_class class, workhorse.dashboard_task_estimate_v1() estimate
+        WHERE class.oid = 'workhorse.task'::regclass`,
+    );
+    expect(stale.rows[0]!.reltuples).toBe(readyTasks + 6);
+    expect(Number(stale.rows[0]!.estimate)).toBeGreaterThanOrEqual(50000);
+    await expectEstimateBranch(Number(stale.rows[0]!.estimate));
+    await expectQueuesEstimateBranch();
+
+    await database.pool.query("ANALYZE workhorse.task");
+    const analyzed = await database.pool.query<{ estimate: string }>(
+      "SELECT estimate::text AS estimate FROM workhorse.dashboard_task_estimate_v1()",
+    );
+    await expectEstimateBranch(Number(analyzed.rows[0]!.estimate));
+    await expectQueuesEstimateBranch();
+  });
+
+  it("estimates from the column widths when no stored density exists", async () => {
+    // An ANALYZE of an empty table stores 0 rows on 0 pages, so the rows per page are unknown.
+    await database.pool.query("TRUNCATE workhorse.task CASCADE");
+    await database.pool.query("ANALYZE workhorse.task");
     await database.pool.query(
       `INSERT INTO workhorse.task(queue_name, task_type, payload, max_attempts)
        SELECT 'dashboard-counts-bulk', 'dashboard.counts', '{}'::jsonb, 1
-         FROM generate_series(1, 50000)`,
+         FROM generate_series(1, 20000)`,
     );
-    await database.pool.query("ANALYZE workhorse.task");
 
-    expect(await waitingCount()).toBe(5);
-    expect(
-      await workhorseBlocks("SELECT workhorse.dashboard_task_counts_v1('{}'::jsonb)"),
-    ).toBeLessThan(blockBound);
+    const stored = await database.pool.query<{
+      reltuples: number;
+      relpages: number;
+      estimate: string;
+    }>(
+      `SELECT class.reltuples, class.relpages, estimate.estimate::text AS estimate
+         FROM pg_class class, workhorse.dashboard_task_estimate_v1() estimate
+        WHERE class.oid = 'workhorse.task'::regclass`,
+    );
+    const plan = await database.pool.query<{ "QUERY PLAN": [{ Plan: { "Plan Rows": number } }] }>(
+      "EXPLAIN (FORMAT JSON) SELECT 1 FROM workhorse.task",
+    );
+    expect(stored.rows[0]).toMatchObject({ reltuples: 0, relpages: 0 });
+    expect(Number(stored.rows[0]!.estimate)).toBe(plan.rows[0]!["QUERY PLAN"][0].Plan["Plan Rows"]);
+  });
+
+  it("estimates from the column widths after a DELETE of every task", async () => {
+    // An ANALYZE after the DELETE stores 0 rows on the old pages. A refill adds pages, and a stored
+    // density of 0 would keep the estimate at 0.
+    await database.pool.query("DELETE FROM workhorse.task");
+    await database.pool.query("ANALYZE workhorse.task");
+    await database.pool.query(
+      `INSERT INTO workhorse.task(queue_name, task_type, payload, max_attempts)
+       SELECT 'dashboard-counts-bulk', 'dashboard.counts', '{}'::jsonb, 1
+         FROM generate_series(1, 120000)`,
+    );
+
+    const stored = await database.pool.query<{
+      reltuples: number;
+      relpages: number;
+      estimate: string;
+    }>(
+      `SELECT class.reltuples, class.relpages, estimate.estimate::text AS estimate
+         FROM pg_class class, workhorse.dashboard_task_estimate_v1() estimate
+        WHERE class.oid = 'workhorse.task'::regclass`,
+    );
+    expect(stored.rows[0]!.reltuples).toBe(0);
+    expect(stored.rows[0]!.relpages).toBeGreaterThan(0);
+    expect(Number(stored.rows[0]!.estimate)).toBeGreaterThanOrEqual(50000);
+    const counts = await database.pool.query<{ counts: { all: number } }>(
+      "SELECT workhorse.dashboard_task_counts_v1('{}'::jsonb) AS counts",
+    );
+    expect(counts.rows[0]!.counts.all).toBe(Number(stored.rows[0]!.estimate));
   });
 });
