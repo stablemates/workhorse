@@ -3,7 +3,7 @@
  *
  * An observation is a snapshot, not a log. PostgreSQL keeps no history of partition creation or of
  * a retention pass, and both raw history and daily statistics are pruned after their retention
- * window, so a single read at the end of a 30-day soak cannot see the 30 days behind it. A series
+ * window, so a single read at the end of a soak cannot see all the days behind it. A series
  * of overlapping snapshots can: a partition that appears between two observations was rolled over,
  * one that disappears was retired by retention, and a day's statistics are immutable once the day
  * closes, so whichever observation saw them is authoritative.

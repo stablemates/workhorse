@@ -4,8 +4,8 @@
  *
  * Usage: pnpm soak:observe -- --output DIRECTORY [--database-url URL] [options]
  *
- * The soak this feeds is Gate 4 of ADR 0056: one database runs 30 consecutive days under
- * continuous work, is never reinstalled, and is carried across releases by migration. The public
+ * The soak this feeds is Gate 4 of ADR 0056: one database proves at least 14 consecutive complete UTC days of
+ * task processing, is never reinstalled, and is carried across releases by migration. The public
  * demo host is the subject. Run this on a schedule against that host, at least once a day, and
  * keep every observation; `soak:report` derives the report from the series.
  *

@@ -116,6 +116,8 @@ deployment, and it is the closest thing this project can produce on its own sche
 
 ### Gate 4. It survives time under load
 
+The [retention amendment](#amendment-verify-processing-through-retention) replaces this criterion.
+
 One database runs 30 consecutive days with continuous work. It is never reinstalled, and it is
 carried across at least two releases by migration. Inside that window it records at least 30 daily
 partition rollovers, at least one retention pass that dropped a partition, and at least one
@@ -278,3 +280,43 @@ The tag lands no earlier than the latest of four moments:
 
 The floor no longer includes six weeks after the last non-additive change to a governed surface.
 The floor stays derived, so slipping work still moves it.
+
+## Amendment: verify processing through retention
+
+The maintainer accepts this amendment on 2026-11-03. It replaces Gate 4 above and its
+2026-10-18 amendment. Other release gates do not change.
+
+A collector failure can leave gaps in observation files while the database continues to process tasks.
+Retained daily completion records can prove processing for those dates.
+The original 30-day and 30-rollover counts have no separate technical basis.
+The revised criterion tests processing beyond the default 14-day retention period and after cleanup.
+
+### Gate 4. Verify one installation through retention
+
+One database must prove at least 14 consecutive complete UTC days with successful task completions.
+A day with conflicting completion records does not count.
+The same installation must also provide all of this evidence:
+
+1. At least 14 daily history partition rollovers.
+2. At least one retention pass that drops an expired partition.
+3. Successful task completions on a complete UTC day after that deletion is observed.
+4. At least two releases applied by migration, without a database reinstall.
+5. At least one ungraceful worker stop under load, followed by recovery with no lost or duplicated task.
+
+The observation series defines the evidence window for that installation.
+The consecutive processing run can occupy part of that window.
+Migration and recovery evidence from the same installation can precede that run.
+A reinstall invalidates the series. Container restarts do not invalidate it.
+Fourteen elapsed days alone do not satisfy the gate: the retention deletion and later processing must also be verified.
+
+The report counts retained daily completion records, including records collected after the day ends.
+These records can precede the first collector observation, but not the installation baseline.
+A missing collector file does not invalidate a day with completion evidence.
+A collector file alone does not prove task processing.
+The report lists missing observations separately and keeps queue-health snapshots at both ends of its evidence window.
+
+Operator statements remain separate from recorded evidence.
+Record the speaker, statement date, claimed operating dates, and supporting records when those dates are available.
+Do not invent dates or count an operator statement as a recorded completion, partition deletion, migration, or recovery.
+Evidence stays in the private operations repository.
+Automatic collection continues after the gate passes.
