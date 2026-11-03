@@ -62,7 +62,7 @@ so an advisory in the .NET graph fails the build until it is fixed. `pnpm toolin
 development tree and the Python development and build tooling in a separate lane. That lane runs in
 CI and again before each release is built for publication, and its acceptances cannot answer an
 advisory in a published tree.
-[`docs/compatibility.md`](docs/compatibility.md) states that policy.
+[`docs/dependency-advisories.md`](docs/dependency-advisories.md) states that policy.
 
 The JVM build checks each artifact that it downloads, because the release stage signs the JVM
 artifacts in that build. [`jvm/gradle/verification-metadata.xml`](jvm/gradle/verification-metadata.xml)
@@ -103,8 +103,8 @@ The six lines are these:
 - The three `run.workhorse` JVM artifacts for Java, Kotlin, and Spring Boot. Maven Central serves
   them with one version.
 
-[`docs/compatibility.md`](docs/compatibility.md) defines the supported runtimes and the release
-process.
+[`docs/compatibility.md`](docs/compatibility.md) defines the supported runtimes.
+[`docs/releasing.md`](docs/releasing.md) defines the release process.
 
 **A fix reaches a database only at or above the supported schema floor, which is schema 6, the
 `0.2.0` baseline.** The `0.1.x` line had no production install and is not carried forward, so the

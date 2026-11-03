@@ -19,7 +19,7 @@
  * retries a status request that fails with a network error, HTTP 429, or HTTP 5xx, and fails only
  * after `statusAttempts` such failures in a row. When the script fails after the Portal accepted
  * the bundle, the Portal keeps the deployment and can still publish it. "Recover from a failed
- * Maven Central upload" in `docs/compatibility.md` states what the maintainer does then.
+ * Maven Central upload" in `docs/releasing.md` states what the maintainer does then.
  *
  * Before the upload, the script asks the Portal whether Maven Central has each of the three
  * artifacts at the version (SM-1838). The Portal API documents this request as

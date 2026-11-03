@@ -35,6 +35,10 @@ published site; they do not own product behavior.
 - [`benchmarking.md`](benchmarking.md) explains how to run benchmarks and preserve evidence.
 - [`demo-feature-coverage.md`](demo-feature-coverage.md) maps demo scenarios to product features,
   while [`demo-findings.md`](demo-findings.md) records what the demo proves.
+- [`releasing.md`](releasing.md) owns the release train, the steps for each registry, the
+  publication credentials, and the recovery from a partly published release.
+- [`dependency-advisories.md`](dependency-advisories.md) owns the advisory scan of each package
+  line and the rule for an accepted advisory.
 - [`schema-lifecycle.md`](schema-lifecycle.md) owns the procedure for changing and releasing the
   database schema.
 - [`dashboard-security-review.md`](dashboard-security-review.md) owns the security review checklist
