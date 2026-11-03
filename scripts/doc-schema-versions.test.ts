@@ -126,7 +126,7 @@ describe("schema numbers in the documentation", () => {
   });
 
   it("states the target schema, the last migration, and the floor in the upgrade section", () => {
-    const file = "docs/compatibility.md";
+    const file = "docs/upgrading.md";
     const text = section(file, read(file), upgradeHeading);
     const where = `${file}, "${upgradeHeading.slice(3)}"`;
 

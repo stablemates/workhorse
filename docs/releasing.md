@@ -5,7 +5,7 @@ maintainer procedure for that work. It states the checks that stop a defective c
 for each registry, and the recovery from a release that stops part way.
 
 [Compatibility and support boundary](compatibility.md) states what a release supports, and
-[What SemVer governs](compatibility.md#what-semver-governs) states what a version number promises.
+[What SemVer governs](versioning.md) states what a version number promises.
 
 Every release is a tag that points to a green public CI commit. Each tag then runs the focused gate
 for the distribution being published.

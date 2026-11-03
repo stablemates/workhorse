@@ -212,4 +212,5 @@ file, and `SchemaStatusReport` is on the CLI surface without being on the TypeSc
 A declaration a dependency owns is named without its members. `Pool` comes from `pg`, and its shape
 moves with a dependency range rather than with a release here; "Moving a dependency range" in
 [`docs/compatibility.md`](../docs/compatibility.md) governs that move. Nothing here says whether an
-API is experimental either — the Experimental table in that document is the only authority.
+API is experimental either — the Experimental table in
+[`docs/versioning.md`](../docs/versioning.md#experimental-surface) is the only authority.

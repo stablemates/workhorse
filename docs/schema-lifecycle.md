@@ -487,7 +487,7 @@ state the same numbers:
 
 - In `docs/features.md`, the schema version and SQL protocol of the snapshot and of the Versioned
   SQL API row.
-- In the upgrade section of the newest release in `docs/compatibility.md`, the last migration, the
+- In the upgrade section of the newest release in `docs/upgrading.md`, the last migration, the
   target schema version, the last row of the migration table, and the new schema floor.
 
 Thus a migration that changes the schema version fails the test until it updates these sentences.
