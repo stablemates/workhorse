@@ -222,7 +222,7 @@ advisory is either outside the closure or accepted with a reason and a review da
   the row silent.
 
 `python:vuln`, `go:vuln`, `rust:vuln`, and `ruby:vuln` cover the other four lines. This row covers
-npm. [`docs/compatibility.md`](compatibility.md) owns the policy the five commands share.
+npm. [`docs/dependency-advisories.md`](dependency-advisories.md) owns the policy the five commands share.
 
 **Re-walk when** a published package gains a dependency, or when `pnpm npm:vuln` fails.
 

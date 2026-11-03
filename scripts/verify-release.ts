@@ -20,7 +20,7 @@ import { corePackage, publishedPackages, repositoryRoot } from "./packages.js";
  * target restores `dotnet/release-consumer` with an empty package folder, from nuget.org or from the
  * local feed that `scripts/check-dotnet-release.ts` packs, and runs one task through it. The npm,
  * crates.io, and Go provenance review and the enqueue-and-worker smoke stay with the maintainer;
- * `docs/compatibility.md` → Release train lists them.
+ * `docs/releasing.md` → Release train lists them.
  */
 
 type VerifyTarget = "crate" | "go" | "maven" | "npm" | "nuget" | "python";

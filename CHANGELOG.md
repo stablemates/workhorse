@@ -12,8 +12,9 @@ gem, three JVM artifacts, and four .NET packages release from that same commit. 
 packages are `Workhorse`, `Workhorse.Hosting`, `Workhorse.EntityFrameworkCore`, and
 `Workhorse.AspNetCore`. Each entry states its required schema version and upgrade steps.
 
-The supported Node.js and PostgreSQL versions, the schema compatibility guarantees, and the release
-process are in [`docs/compatibility.md`](docs/compatibility.md).
+The supported Node.js and PostgreSQL versions and the schema compatibility guarantees are in
+[`docs/compatibility.md`](docs/compatibility.md). The release process is in
+[`docs/releasing.md`](docs/releasing.md).
 
 Workhorse is a public beta. While the line is `0.x`, any minor release may change behaviour. From
 `0.1.0` the schema upgrades in place: every release ships ordered, immutable migrations, and inside

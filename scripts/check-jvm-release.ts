@@ -70,7 +70,7 @@ const stagingDirectory = path.join(jvmDirectory, "build", "staging-deploy");
 const consumerDirectory = path.join(jvmDirectory, "release-consumer");
 /**
  * The fingerprint of the release key, an ed25519 primary key that signs, with no subkey. SM-1384
- * records it, and "Publication credentials" in `docs/compatibility.md` publishes it.
+ * records it, and "Publication credentials" in `docs/releasing.md` publishes it.
  */
 export const releaseKeyFingerprint = "B933E2F16C3FA58E5414849A024210DB67A17773";
 /** The Maven group of the three artifacts. */

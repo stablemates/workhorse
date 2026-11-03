@@ -130,7 +130,7 @@ describe("findPreflightProblems", () => {
     expect(message).toContain("This publisher refuses\n  to resume it");
     expect(message).toContain("this project recovers a partial release by re-cutting the train");
     expect(message).not.toContain("ever existed");
-    expect(message).toContain("Recover it with docs/compatibility.md");
+    expect(message).toContain("Recover it with docs/releasing.md");
   });
 
   it("reports a version that is already fully published without calling it partial", () => {

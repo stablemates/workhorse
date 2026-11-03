@@ -68,7 +68,8 @@ availability must be independent from the application database.
 - [API reference](https://workhorse.run/docs/api) documents the public TypeScript surface.
 - [Architecture](docs/architecture.md) defines exact protocol behavior and invariants.
 - [Feature matrix](docs/features.md) separates supported, partial, and unsupported behavior.
-- [Compatibility](docs/compatibility.md) defines supported runtimes, schema policy, and releases.
+- [Compatibility](docs/compatibility.md) defines supported runtimes and schema policy.
+- [Release process](docs/releasing.md) states how a release publishes each package line.
 - [Operations](https://workhorse.run/docs/operations) covers health, retention, and maintenance.
 - [Dashboard](https://workhorse.run/docs/dashboard) explains the operator UI and deployment boundary.
 - [Changelog](CHANGELOG.md) records releases and required schema versions.

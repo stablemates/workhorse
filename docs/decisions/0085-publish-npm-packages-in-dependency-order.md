@@ -31,7 +31,7 @@ The rest of ADR 0045 stands: Python publishes first, npm second, Go last.
 A failed npm publication leaves only versions whose requirements are already on npm, so each one
 installs. The publisher does not resume the train from the same commit: it refuses any package
 version that already exists. Recovery re-cuts the whole train at a higher patch version, as
-[Recovering a partially published release](../compatibility.md#recovering-a-partially-published-release)
+[Recovering a partially published release](../releasing.md#recovering-a-partially-published-release)
 describes.
 
 The order changes whenever a manifest gains or loses a published dependency. The release scripts

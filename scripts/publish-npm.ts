@@ -53,7 +53,7 @@ const oidcFloor = "11.5.1";
 const workflowReference = ".github/workflows/release.yml";
 
 /** Where a maintainer goes when the registry already holds part of this version. */
-const recoveryReference = "docs/compatibility.md, “Recovering a partially published release”";
+const recoveryReference = "docs/releasing.md, “Recovering a partially published release”";
 
 /** Whether the surrounding job can hand npm an identity to exchange, and why it cannot. */
 export type OidcIdentity =

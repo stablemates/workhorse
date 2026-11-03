@@ -746,7 +746,7 @@ Requires **schema v73**, Java **21** or newer, and PostgreSQL **15** or newer.
   and an IDE show the Kotlin API documentation.
 - The release key signs every file of the three artifacts. It is an ed25519 key with the
   fingerprint `B933E2F16C3FA58E5414849A024210DB67A17773`. Use it to check a `.asc` file from Maven
-  Central. [Publication credentials](../docs/compatibility.md#publication-credentials) states it.
+  Central. [Publication credentials](../docs/releasing.md#publication-credentials) states it.
 - A `Float` value reaches PostgreSQL with its shortest `float` digits, so `0.1f` is `0.1`, also in a
   checkpoint input fingerprint (SM-1528). A result, a checkpoint value, progress, and a payload
   refuse a number with more fraction digits than `numeric` stores before any statement, also when

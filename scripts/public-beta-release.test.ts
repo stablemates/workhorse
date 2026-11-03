@@ -286,25 +286,22 @@ describe("the public beta line", () => {
   });
 
   it("records the standing release train and its stop conditions", async () => {
-    const compatibility = await read("docs/compatibility.md");
-    const pythonPosition = compatibility.indexOf("Publish Python first");
-    const npmPosition = compatibility.indexOf("Publish npm second");
-    const goPosition = compatibility.indexOf("Publish Go last");
+    const releasing = await read("docs/releasing.md");
+    const pythonPosition = releasing.indexOf("Publish Python first");
+    const npmPosition = releasing.indexOf("Publish npm second");
+    const goPosition = releasing.indexOf("Publish Go last");
 
     expect(pythonPosition).toBeGreaterThan(-1);
     expect(npmPosition).toBeGreaterThan(pythonPosition);
     expect(goPosition).toBeGreaterThan(npmPosition);
-    expect(compatibility).toContain("Any failure stops the release train");
-    expect(compatibility).toContain("A published version is never reused");
-    expect(compatibility).toContain("Test registries are not part of the rehearsal");
+    expect(releasing).toContain("Any failure stops the release train");
+    expect(releasing).toContain("A published version is never reused");
+    expect(releasing).toContain("Test registries are not part of the rehearsal");
 
     // The train is the standing process, so it names no version and no commit. The beta's three
     // source commits live in the changelog entries that date them.
     const trainSection = prose(
-      compatibility.slice(
-        compatibility.indexOf("### Release train"),
-        compatibility.indexOf("### npm packages"),
-      ),
+      releasing.slice(releasing.indexOf("## Release train"), releasing.indexOf("## npm packages")),
     );
     expect(trainSection).toContain("from one source commit");
     expect(trainSection).toContain("every tag names the candidate commit");
