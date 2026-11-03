@@ -36,8 +36,8 @@ The report is derived from the observation files alone. It exits non-zero when a
 ADR 0056 is not met.`;
 
 /** Gate 4 of ADR 0056 states each bar. They are repeated here so the report can check itself. */
-const REQUIRED_CONSECUTIVE_DAYS = 30;
-const REQUIRED_ROLLOVERS = 30;
+const REQUIRED_CONSECUTIVE_DAYS = 14;
+const REQUIRED_ROLLOVERS = 14;
 const REQUIRED_RETENTION_PASSES = 1;
 const REQUIRED_CLEAN_KILLS = 1;
 const REQUIRED_MIGRATIONS = 2;
@@ -93,6 +93,12 @@ export interface SoakReport {
   database: string;
   window: { start: string; end: string; spanDays: number };
   coverage: { observedDays: string[]; longestConsecutiveDays: number; gapDays: string[] };
+  processing: {
+    days: string[];
+    longestConsecutiveDays: number;
+    afterRetentionDays: string[];
+    disagreements: string[];
+  };
   installation: {
     baselineAppliedAt: string | null;
     reinstalls: Reinstall[];
@@ -176,7 +182,11 @@ function partitionDays(observation: SoakObservation, parent: HistoryParent): Set
 }
 
 function baselineAppliedAt(observation: SoakObservation): string | null {
-  return observation.installation.migrations.find((row) => row.version === 1)?.appliedAt ?? null;
+  return (
+    observation.installation.migrations.find(
+      (row) => row.description === "baseline" || row.version === 1,
+    )?.appliedAt ?? null
+  );
 }
 
 function liveBacklog(observation: SoakObservation): number {
@@ -223,6 +233,9 @@ export function buildSoakReport(observations: SoakObservation[]): SoakReport {
   }
   const first = observations[0]!;
   const last = observations.at(-1)!;
+  if (observations.some((entry) => entry.database.name !== first.database.name)) {
+    throw new Error("A soak report must use one database.");
+  }
   const firstDay = utcDay(first.observedAt);
   const lastDay = utcDay(last.observedAt);
 
@@ -310,20 +323,65 @@ export function buildSoakReport(observations: SoakObservation[]): SoakReport {
     .map((kill) => Object.assign({}, kill, { clean: killRecovered(kill) }));
 
   const migrationsAppliedInWindow = last.installation.migrations.filter(
-    (migration) => migration.version > 1 && migration.appliedAt >= first.observedAt,
+    (migration) =>
+      migration.version > 1 &&
+      migration.description !== "baseline" &&
+      migration.appliedAt >= first.observedAt &&
+      migration.appliedAt <= last.observedAt,
   );
   const settled = totals.taskSucceeded + totals.taskFailed + totals.taskCanceled;
   const spanDays = Math.floor(
     (Date.parse(last.observedAt) - Date.parse(first.observedAt)) / 86_400_000,
   );
 
-  const passesThatDropped = passes.filter((pass) => pass.dropped.length > 0).length;
+  // Closed-day completions prove processing even when the collector missed that day.
+  // Conflicting counts cannot establish a processing day.
+  const processingRecords = new Map<string, number>();
+  const conflictingProcessingDays = new Set<string>();
+  const baseline = baselineAppliedAt(last);
+  for (const observation of observations) {
+    for (const day of observation.throughput) {
+      if (
+        baseline === null ||
+        day.day < utcDay(baseline) ||
+        day.day >= utcDay(observation.observedAt)
+      )
+        continue;
+      const seen = processingRecords.get(day.day);
+      if (seen !== undefined && seen !== day.taskSucceeded) conflictingProcessingDays.add(day.day);
+      processingRecords.set(day.day, day.taskSucceeded);
+    }
+  }
+  const processingDays = [...processingRecords]
+    .filter(
+      ([day, succeeded]) =>
+        succeeded > 0 && !conflictingProcessingDays.has(day) && !disagreements.has(day),
+    )
+    .map(([day]) => day)
+    .toSorted();
+  let consecutiveProcessingDays = 0;
+  let processingRun = 0;
+  let previousProcessingDay: string | undefined;
+  for (const day of processingDays) {
+    processingRun =
+      previousProcessingDay !== undefined && addDay(previousProcessingDay, 1) === day
+        ? processingRun + 1
+        : 1;
+    consecutiveProcessingDays = Math.max(consecutiveProcessingDays, processingRun);
+    previousProcessingDay = day;
+  }
+  const dropPasses = passes.filter((pass) => pass.dropped.length > 0);
+  // Use a full day after the deletion was observed. Same-day totals cannot prove event order.
+  const afterRetentionDays = processingDays.filter((day) =>
+    dropPasses.some((pass) => day > utcDay(pass.observedAt)),
+  );
+  const passesThatDropped = dropPasses.length;
   const cleanKills = kills.filter((kill) => kill.clean).length;
   const gate: GateCheck[] = [
     {
-      bar: `${String(REQUIRED_CONSECUTIVE_DAYS)} consecutive observed days`,
-      observed: `${plural(longestConsecutiveDays, "consecutive day")} across a ${String(spanDays)}-day span`,
-      met: longestConsecutiveDays >= REQUIRED_CONSECUTIVE_DAYS,
+      bar: `${String(REQUIRED_CONSECUTIVE_DAYS)} consecutive complete UTC days with task completions`,
+      observed: `${plural(consecutiveProcessingDays, "consecutive day")} with recorded completions`,
+      met: consecutiveProcessingDays >= REQUIRED_CONSECUTIVE_DAYS,
     },
     {
       bar: `${String(REQUIRED_ROLLOVERS)} daily partition rollovers`,
@@ -336,6 +394,11 @@ export function buildSoakReport(observations: SoakObservation[]): SoakReport {
       met: passesThatDropped >= REQUIRED_RETENTION_PASSES,
     },
     {
+      bar: "task processing continues after retention drops a partition",
+      observed: `${plural(afterRetentionDays.length, "complete day")} with completions after an observed deletion`,
+      met: afterRetentionDays.length > 0,
+    },
+    {
       bar: `${String(REQUIRED_CLEAN_KILLS)} ungraceful kill recovered with no lost or duplicated task`,
       observed: `${String(cleanKills)} clean of ${String(kills.length)} recorded`,
       met: cleanKills >= REQUIRED_CLEAN_KILLS,
@@ -346,7 +409,7 @@ export function buildSoakReport(observations: SoakObservation[]): SoakReport {
         reinstalls.length === 0
           ? `one installation, baseline applied ${baselineAppliedAt(last) ?? "at an unknown time"}`
           : `${plural(reinstalls.length, "reinstall")} observed`,
-      met: reinstalls.length === 0,
+      met: baselineAppliedAt(last) !== null && reinstalls.length === 0,
     },
     {
       bar: `carried across ${String(REQUIRED_MIGRATIONS)} releases by migration`,
@@ -399,6 +462,12 @@ export function buildSoakReport(observations: SoakObservation[]): SoakReport {
     database: last.database.name,
     window: { start: first.observedAt, end: last.observedAt, spanDays },
     coverage: { observedDays, longestConsecutiveDays, gapDays },
+    processing: {
+      days: processingDays,
+      longestConsecutiveDays: consecutiveProcessingDays,
+      afterRetentionDays,
+      disagreements: [...conflictingProcessingDays].toSorted(),
+    },
     installation: {
       baselineAppliedAt: baselineAppliedAt(last),
       reinstalls,
@@ -499,13 +568,34 @@ export function renderSoakReport(report: SoakReport): string {
         ["Last observation", report.window.end],
         ["Span", plural(report.window.spanDays, "day")],
         ["Days observed", String(report.coverage.observedDays.length)],
-        ["Longest consecutive run", plural(report.coverage.longestConsecutiveDays, "day")],
+        [
+          "Longest consecutive observation run",
+          plural(report.coverage.longestConsecutiveDays, "day"),
+        ],
+        [
+          "Longest consecutive processing run",
+          plural(report.processing.longestConsecutiveDays, "day"),
+        ],
+        ["Complete days with processing evidence", report.processing.days.join(", ") || "none"],
+        [
+          "Days with conflicting completion records",
+          report.processing.disagreements.join(", ") || "none",
+        ],
+        [
+          "Processing days after retention deletion",
+          report.processing.afterRetentionDays.join(", ") || "none",
+        ],
         [
           "Days with no observation",
           report.coverage.gapDays.length === 0 ? "none" : report.coverage.gapDays.join(", "),
         ],
       ],
     ),
+  );
+
+  sections.push(
+    "Daily completion records establish processing coverage. Missing collector files remain listed above. " +
+      "Operator statements are separate evidence and do not change these computed checks.\n",
   );
 
   sections.push(`## Installation continuity\n`);

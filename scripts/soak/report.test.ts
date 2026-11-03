@@ -104,6 +104,43 @@ function series(): SoakObservation[] {
   ];
 }
 
+function retainedProcessingSeries(): SoakObservation[] {
+  const days = Array.from(
+    { length: 16 },
+    (_, index) => `2026-01-${String(index + 1).padStart(2, "0")}`,
+  );
+  return [
+    observation("2026-01-01T00:10:00.000Z", {
+      partitionDays: ["2025-12-10", ...days.slice(0, 3)],
+    }),
+    observation("2026-01-15T12:00:00.000Z", {
+      partitionDays: days,
+      retainedBefore: "2026-01-01T00:00:00.000Z",
+    }),
+    observation("2026-01-17T00:10:00.000Z", {
+      partitionDays: [...days, "2026-01-17"],
+      retainedBefore: "2026-01-01T00:00:00.000Z",
+      throughput: days.map((day) => throughputDay(day, 100, 100)),
+      migrations: [
+        { version: 1, description: "baseline", appliedAt: "2025-12-01T00:00:00.000Z" },
+        { version: 2, description: "first release", appliedAt: "2026-01-02T00:00:00.000Z" },
+        { version: 3, description: "second release", appliedAt: "2026-01-03T00:00:00.000Z" },
+      ],
+      killRecovery: {
+        workerId: "killed-worker",
+        killedAt: "2026-01-02T09:00:00.000Z",
+        windowEnd: "2026-01-02T10:00:00.000Z",
+        leaseExpiredAttempts: 1,
+        affectedTasks: 1,
+        tasksSettled: 1,
+        tasksLive: 0,
+        tasksLost: 0,
+        tasksSucceededMoreThanOnce: 0,
+      },
+    }),
+  ];
+}
+
 describe("soak report", () => {
   it("refuses to report on nothing", () => {
     expect(() => buildSoakReport([])).toThrow(/at least one observation/);
@@ -302,6 +339,91 @@ describe("soak report", () => {
 
     expect(report.met).toBe(false);
     expect(report.gate.filter((check) => check.met)).toHaveLength(2);
+  });
+
+  it("accepts retained completion records without daily collector files", () => {
+    const report = buildSoakReport(retainedProcessingSeries());
+
+    expect(report.coverage.longestConsecutiveDays).toBe(1);
+    expect(report.processing.longestConsecutiveDays).toBe(16);
+    expect(report.processing.afterRetentionDays).toEqual(["2026-01-16"]);
+    expect(report.met).toBe(true);
+  });
+
+  it("counts retained processing days before the first collector observation", () => {
+    const report = buildSoakReport([retainedProcessingSeries()[2]!]);
+    expect(report.coverage.observedDays).toEqual(["2026-01-17"]);
+    expect(report.processing.longestConsecutiveDays).toBe(16);
+    expect(report.gate[0]?.met).toBe(true);
+    expect(report.met).toBe(false);
+  });
+
+  it("requires fourteen complete processing days and accepts exactly fourteen", () => {
+    const observations = retainedProcessingSeries();
+    observations[2]!.throughput = observations[2]!.throughput.slice(2);
+    expect(buildSoakReport(observations).met).toBe(true);
+
+    observations[2]!.throughput = observations[2]!.throughput.slice(1);
+    expect(buildSoakReport(observations).gate[0]?.met).toBe(false);
+  });
+
+  it("does not count idle days or the observation's current day", () => {
+    const observations = retainedProcessingSeries();
+    observations[2]!.throughput[7]!.taskSucceeded = 0;
+    observations[2]!.throughput.push(throughputDay("2026-01-17", 100, 100));
+    const report = buildSoakReport(observations);
+
+    expect(report.processing.longestConsecutiveDays).toBe(8);
+    expect(report.processing.days).not.toContain("2026-01-17");
+    expect(report.met).toBe(false);
+  });
+
+  it("does not count a day with conflicting completion records", () => {
+    const observations = retainedProcessingSeries();
+    observations[1]!.throughput = [throughputDay("2026-01-08", 99, 99)];
+    const report = buildSoakReport(observations);
+
+    expect(report.throughput.disagreements).toEqual(["2026-01-08"]);
+    expect(report.processing.longestConsecutiveDays).toBe(8);
+    expect(report.met).toBe(false);
+  });
+
+  it("requires processing on a complete day after an observed retention deletion", () => {
+    const observations = retainedProcessingSeries();
+    observations[2]!.throughput.pop();
+    const report = buildSoakReport(observations);
+
+    expect(report.processing.longestConsecutiveDays).toBe(15);
+    expect(report.retention.passesThatDroppedAPartition).toBe(1);
+    expect(report.processing.afterRetentionDays).toEqual([]);
+    expect(report.met).toBe(false);
+  });
+
+  it("does not combine evidence from databases with different names", () => {
+    const observations = retainedProcessingSeries();
+    observations[2]!.database.name = "another_database";
+    expect(() => buildSoakReport(observations)).toThrow(/one database/);
+  });
+
+  it("recognizes a baseline after the migration chain was pruned", () => {
+    const observations = retainedProcessingSeries();
+    for (const entry of observations) {
+      entry.installation.migrations = [
+        { version: 91, description: "baseline", appliedAt: "2025-12-01T00:00:00.000Z" },
+      ];
+    }
+    const report = buildSoakReport(observations);
+    expect(report.installation.baselineAppliedAt).toBe("2025-12-01T00:00:00.000Z");
+    expect(report.gate.find((check) => check.bar.includes("never reinstalled"))?.met).toBe(true);
+  });
+
+  it("does not prove installation continuity without a baseline", () => {
+    const observations = retainedProcessingSeries();
+    for (const entry of observations) entry.installation.migrations = [];
+    expect(
+      buildSoakReport(observations).gate.find((check) => check.bar.includes("never reinstalled"))
+        ?.met,
+    ).toBe(false);
   });
 
   it("renders every section a reader has to check", () => {
