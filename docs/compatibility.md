@@ -446,16 +446,10 @@ the decision.
 An installation that runs cold export also stops its exporters across migration 0052, as
 [the current schema policy](schema-lifecycle.md#current-policy) describes.
 
-`.github/workflows/release.yml` publishes the ten npm packages with provenance. It then creates the
-GitHub release for the tag and attaches `sql/schema.sql`. That artifact is the clean-install schema
-for the version, provided so a Python or Go developer with no Node.js toolchain can create a
-development database with `psql -f schema.sql`. It applies none of the CLI's guards, so deployments
-run `workhorse schema install` or `workhorse schema migrate` instead.
-
-The GitHub release becomes public only after the `crates-io`, `rubygems`, `maven-central`, and
-`nuget` jobs succeed. If the version of a crate, gem, JVM artifact, or .NET package does not match
-the tag, that line skips publication, and its job still succeeds. The release then still appears. A failed
-crate, gem, Maven Central, or nuget.org publication ends the run before the release exists.
+The GitHub release of each `vX.Y.Z` tag attaches `sql/schema.sql`. That artifact is the
+clean-install schema for the version, provided so a Python or Go developer with no Node.js toolchain
+can create a development database with `psql -f schema.sql`. It applies none of the CLI's guards, so
+deployments run `workhorse schema install` or `workhorse schema migrate` instead.
 
 The asset is reachable at
 `https://github.com/stablemates/workhorse/releases/download/vX.Y.Z/schema.sql`. `support.json`
@@ -464,31 +458,8 @@ and `scripts/install-commands.test.ts` fails a URL that names a different versio
 release step does not attach. A tag pushed before that step existed has no release and no asset;
 the first release that carries one is `v0.1.0`.
 
-Each line carries its own tag on that one commit, because npm, PyPI, and the Go module proxy have
-separate build and publication identities. The Go module proxy also resolves a subdirectory module
-only from a `go/`-prefixed tag. The crate, the gem, the JVM artifacts, and the .NET packages publish
-from the TypeScript `vX.Y.Z` tag, so seven registries share three tags.
-[ADR 0050](decisions/0050-release-0-1-0-without-a-prerelease-suffix.md) records that the tags name
-one commit and one version number.
-
-The Python package releases from its own `python/vX.Y.Z` tag. The tag must match
-`python/pyproject.toml` and a heading in `python/CHANGELOG.md`. `.github/workflows/release-python.yml`
-requires a successful `main` CI push run on the tagged commit that planned every CI lane. It then
-runs `pnpm python:release-check`, which builds a source distribution and universal wheel with uv.
-It runs no Rust check. The required `main` CI run includes `pnpm rust:gates`, and the build job of
-`release.yml` runs `pnpm rust:release-check` before any npm, crate, or gem publish.
-A separate `pypi` environment publishes those artifacts through PyPI trusted publishing with
-`id-token: write`.
-Before publication, the publish task generates a PEP 740 attestation beside each distribution.
-An attestation rehearsal job proves on every run, dry runs included, that the pinned uv uploads them.
-
-The Go module releases from its own `go/vX.Y.Z` tag. `scripts/release-go.sh X.Y.Z` requires
-a clean worktree and a matching `go/CHANGELOG.md` heading. It also requires that `HEAD` is an
-ancestor of `origin/main`, and that `vX.Y.Z` and `python/vX.Y.Z` on origin point to `HEAD`. It
-rehearses the module release and resets the test database. If the `origin` repository has a
-successful `main` CI push run for exactly `HEAD` that planned every CI lane, the script runs only
-`pnpm go:test` and `pnpm go:vuln`. If not, it runs `pnpm check`. It then creates an annotated tag
-and pushes that tag to `origin`.
+[Release process](releasing.md) states how each line publishes its version, and which tag each line
+uses.
 
 ## What SemVer governs
 

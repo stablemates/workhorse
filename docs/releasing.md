@@ -117,7 +117,8 @@ describes.
    and uploads the three JVM artifacts to Maven Central. Each of these versions is verified on its
    registry before the train continues. The same run also pushes the four .NET packages to
    nuget.org. The run creates the public GitHub release last, after the `crates-io`, `rubygems`,
-   `maven-central`, and `nuget` jobs succeed.
+   `maven-central`, and `nuget` jobs succeed. The release attaches `sql/schema.sql`, the
+   clean-install schema of the version.
 4. Publish Go last. The `go/vX.Y.Z` tag is pushed after the gate passes, and the version is
    verified through the public module proxy.
 
@@ -268,8 +269,8 @@ pipeline.
    for that commit.
 3. `pnpm python:release-check` runs the [release check](#release-train). It rebuilds the embedded
    dashboard bundle, checks Python format, lint, types, and dependencies, then runs every Python
-   test against PostgreSQL. It builds the wheel and source distribution once and tests those exact
-   files.
+   test against PostgreSQL. It uses uv to build the universal wheel and source distribution once.
+   It tests those exact files.
    It then runs `pnpm release:verify python` against that wheel, so a post-publish check the
    package cannot satisfy fails the rehearsal before `python/vX.Y.Z` is tagged.
 4. The `attestation-rehearsal` job runs on every run, dry runs included, without the `pypi`
@@ -279,8 +280,12 @@ pipeline.
    uploads attestations only from uv 0.9.12, and an older uv still exits 0. That is how 0.6.0
    reached PyPI without provenance.
 5. After the rehearsal passes, the `pypi` environment generates attestations again and publishes
-   both distributions and their attestations through trusted publishing.
+   both distributions and their attestations through trusted publishing. The publish job requires
+   `id-token: write`.
 6. `pnpm release:verify python X.Y.Z` fails unless PyPI shows an attestation for every file.
+
+`release-python.yml` runs no Rust check. The required `main` CI run includes `pnpm rust:gates`, and
+the build job of `release.yml` runs `pnpm rust:release-check` before any npm, crate, or gem publish.
 
 `workhorse.__version__` is public Python API from the release after 0.4.0, and `api/python.txt`
 records it. The post-publish Python check therefore fails against 0.4.0, which predates the
@@ -321,6 +326,10 @@ attribute. For 0.4.0, `importlib.metadata.version("stablemates-workhorse")` is t
       `pnpm check`. A canceled, failed, or unfinished run does not count. The script also runs the
       full check in these conditions: `gh` is missing or fails, `origin` is not one github.com URL,
       or `origin` has a different or a second push URL.
+
+   Before the checks, the script resets the test database. Before the full `pnpm check`, it also
+   resets the packed test database.
+
 6. The script creates `go/vX.Y.Z` on `HEAD`, and pushes the tag only after the gate passes.
 
 ## Rust crate
@@ -588,6 +597,13 @@ Each tag prefix publishes a fixed set of packages:
 | `v*`        | The ten npm packages, the crate, the gem, the three JVM artifacts, and the four .NET packages | `.github/workflows/release.yml`         |
 | `python/v*` | The PyPI distribution                                                                         | `.github/workflows/release-python.yml`  |
 | `go/v*`     | The Go module, through the module proxy                                                       | None; `scripts/release-go.sh` pushes it |
+
+Each line has its own tag on the one candidate commit, because npm, PyPI, and the Go module proxy
+have separate build and publication identities. The Go module proxy also resolves a subdirectory
+module only from a `go/`-prefixed tag. The crate, the gem, the JVM artifacts, and the .NET packages
+publish from the TypeScript `vX.Y.Z` tag, so seven registries share three tags.
+[ADR 0050](decisions/0050-release-0-1-0-without-a-prerelease-suffix.md) records that the tags name
+one commit and one version number.
 
 Two repository tag rulesets cover `refs/tags/v*`, `refs/tags/python/v*`, and `refs/tags/go/v*`.
 
