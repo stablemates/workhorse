@@ -635,7 +635,7 @@ If an operator selects the quick action in a row, the SPA reads `dashboard.taskD
 longer waits on that decision, the SPA reports this and sends nothing.
 
 The removal of `context` from listed rows was an in-place `dashboard/v1` break under the ADR 0064
-exception in [compatibility.md](../compatibility.md).
+exception in [What SemVer governs](../versioning.md#two-surfaces-classify-their-own-changes).
 
 #### Total and `hasMore`
 

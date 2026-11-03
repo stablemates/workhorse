@@ -11,7 +11,7 @@ columns, and the internal helpers listed beside them. `scripts/generate-sql-cata
 it from `v1/manifest.json`, the three dashboard backends, and the published `dashboard_*_v1` views,
 then classifies a change against it. The generator adds to the file and never drops from it, so
 `pnpm sql-catalogues:check` fails a removed or retyped entry by name and passes an addition. See
-[Compatibility](../docs/compatibility.md#the-governed-sql-surface) for the membership rule.
+[What SemVer governs](../docs/versioning.md#the-governed-sql-surface) for the membership rule.
 
 `v1/scenarios.json` is an ordered list of raw PostgreSQL calls. Each step supplies SQL, positional
 parameters, canonical result rows, optional captured values, and optional structured error fields.

@@ -108,7 +108,7 @@
     },
     {
       "word": "public API",
-      "files": "docs/compatibility.md",
+      "files": "docs/versioning.md",
       "context": "may break the public API|which artifact is the public API",
       "reason": "The sentence quotes SemVer's wording to explain why governed surfaces need naming."
     },

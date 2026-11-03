@@ -16,6 +16,9 @@ published site; they do not own product behavior.
 
 - [`compatibility.md`](compatibility.md) owns supported runtimes, PostgreSQL versions, and release
   compatibility.
+- [`versioning.md`](versioning.md) owns what SemVer governs on each surface, the retention of
+  superseded functions, and the 1.0.0 gates.
+- [`upgrading.md`](upgrading.md) owns the upgrade notes of each minor line.
 - [`features.md`](features.md) owns the current product capability matrix.
 - [`parity.md`](parity.md) is the generated matrix of capabilities exposed by each language SDK.
 
