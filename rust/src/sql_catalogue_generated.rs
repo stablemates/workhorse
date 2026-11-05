@@ -363,6 +363,9 @@ pub const CONCURRENCY_POLICY: &str = r#"SELECT namespace, queue_name, max_active
 /// `queue_control` (internal)
 pub const QUEUE_CONTROL: &str = r#"SELECT queue_name, paused, tier, record_attempts, record_claims FROM workhorse.queue_control"#;
 
+/// `queue_tier` (internal)
+pub const QUEUE_TIER: &str = r#"SELECT COALESCE((SELECT tier FROM workhorse.queue_control WHERE queue_name = $1::text), 'full') AS tier"#;
+
 /// `schedule_definition` (internal)
 pub const SCHEDULE_DEFINITION: &str =
     r#"SELECT DISTINCT namespace FROM workhorse.schedule_definition ORDER BY namespace"#;

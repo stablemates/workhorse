@@ -337,11 +337,15 @@ configuration does not name a tier. The worker finds the tier of each queue itse
 
 **Example.** Worker W serves two queues: `emails` is fast-tier, and `reports` is full-tier.
 
-1. W starts and tries a fast claim on each queue. On `emails`, the fast claim succeeds.
-2. On `reports`, Workhorse rejects the fast claim. W marks `reports` as full-tier for some time.
-3. W claims from `reports` with the full claim. Later, W tries a fast claim on `reports` again.
+1. W starts and reads the tier of each queue. `emails` is fast-tier, so W sends a fast claim to it.
+2. `reports` is full-tier, so W claims from `reports` with the full claim. W sends no fast claim to
+   `reports`.
+3. After some time, W reads the tier of `reports` again.
 4. An `emails` handler returns. W sends one statement that completes the task and claims new
    `emails` tasks for the free slots.
+
+The tier read is a plain read. Thus a worker that serves only full-tier queues makes PostgreSQL
+write no error to its log.
 
 If a worker has an old belief about a tier, the result is still correct. Workhorse sends each claim
 to the current tier of the queue. Thus, an old belief costs one round trip and no correctness.
@@ -373,9 +377,15 @@ that is too large only because of a defect. On the full tier, a result that is t
 <details>
 <summary>Reference: tier probe, combined completion, and cohorts</summary>
 
-**Tier probe.** A worker probes a queue with a fast claim through `complete_many_and_claim_v1`. A
-`P1007` answer marks the queue full-tier for 30 seconds. The worker then claims through
-`claim_many_v1` until the next probe.
+**Tier probe.** Before a worker claims from a queue of unknown tier, it reads `queue_control.tier`
+through the `queue_tier` statement. A queue without a `queue_control` row reads as `full`.
+
+- A `fast` answer sends the claim through `complete_many_and_claim_v1`.
+- A `full` answer marks the queue full-tier for 30 seconds. The worker then claims through
+  `claim_many_v1` until the next probe.
+- A queue whose last claim answered on the fast tier gets no read.
+- A queue that moved to the full tier after the read rejects the fast claim with `P1007`. That
+  answer also marks the queue full-tier for 30 seconds.
 
 | SDK        | Probe interval constant        |
 | ---------- | ------------------------------ |

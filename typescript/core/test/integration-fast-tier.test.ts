@@ -3,6 +3,7 @@ import { setTimeout as sleep } from "node:timers/promises";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { FastTierUnsupportedError, Worker } from "../src/index.js";
 import { InjectedCrashError } from "../src/worker.js";
+import { workerQueueTierRead } from "../src/worker-internal.js";
 import { createIntegrationTestContext } from "./support/integration.js";
 
 const { pool, queue, admin, adminAudit } = createIntegrationTestContext(import.meta.url);
@@ -321,24 +322,63 @@ describe("fast task tier", () => {
     });
   });
 
-  it("claims a full-tier queue after its fast claim is rejected", async () => {
-    const id = await queue.enqueue("full-work", {}, { queue: "full-queue" });
+  it("reads the tier and sends no fast claim to a full-tier queue", async () => {
     const claimFast = vi.spyOn(queue, "claimFast");
+    const tierRead = vi.spyOn(queue, workerQueueTierRead);
     const worker = new Worker(queue, { workerId: "prober", queue: "full-queue" }).handle(
       "full-work",
       () => ({ ok: true }),
     );
-    expect(await worker.runOnce()).toBe(true);
-    await expect(admin.getTask(id)).resolves.toMatchObject({ state: "succeeded" });
-    await expect(claimFast.mock.results[0]!.value).rejects.toMatchObject({
-      name: "FastTierUnsupportedError",
-      feature: "batched completion",
-    });
+    const fullTierUntil = (worker as unknown as { fullTierUntil: Map<string, number> })
+      .fullTierUntil;
+    for (let probe = 1; probe <= 2; probe += 1) {
+      const id = await queue.enqueue("full-work", {}, { queue: "full-queue" });
+      expect(await worker.runOnce()).toBe(true);
+      await expect(admin.getTask(id)).resolves.toMatchObject({ state: "succeeded" });
+      expect(tierRead).toHaveBeenCalledTimes(probe);
+      // The worker remembers the full tier and claims the next task without a read.
+      await queue.enqueue("full-work", {}, { queue: "full-queue" });
+      expect(await worker.runOnce()).toBe(true);
+      expect(tierRead).toHaveBeenCalledTimes(probe);
+      // End the probe interval, so the next claim reads the tier again.
+      fullTierUntil.set("full-queue", 0);
+    }
+    // No probe sent the fast claim that PostgreSQL rejects with a logged error.
+    expect(claimFast).not.toHaveBeenCalled();
 
-    // The worker remembers the full tier and claims the next task without probing again.
-    await queue.enqueue("full-work", {}, { queue: "full-queue" });
+    // A queue that moves to the fast tier reaches the worker at its next probe.
+    await makeFast("full-queue");
+    const fastId = await queue.enqueue("full-work", {}, { queue: "full-queue" });
     expect(await worker.runOnce()).toBe(true);
+    await expect(outcomeCounts([fastId])).resolves.toEqual([
+      { task_id: fastId, state: "succeeded", attempt: 1 },
+    ]);
     expect(claimFast).toHaveBeenCalledTimes(1);
+    await expect(claimFast.mock.results[0]!.value).resolves.toHaveLength(1);
+  });
+
+  it("starts the lease of a claimed task at its claim, not at a slow tier read", async () => {
+    const leaseMs = 500;
+    const read = queue[workerQueueTierRead].bind(queue);
+    // The tier read takes longer than the whole lease.
+    vi.spyOn(queue, workerQueueTierRead).mockImplementation(async (queueName) => {
+      await sleep(leaseMs + 300);
+      return read(queueName);
+    });
+    let ran = 0;
+    const worker = new Worker(queue, {
+      workerId: "slow-probe",
+      queue: "full-queue",
+      leaseMs,
+    }).handle("full-work", () => {
+      ran += 1;
+      return { ok: true };
+    });
+    const id = await queue.enqueue("full-work", {}, { queue: "full-queue" });
+    expect(await worker.runOnce()).toBe(true);
+
+    expect(ran).toBe(1);
+    await expect(admin.getTask(id)).resolves.toMatchObject({ state: "succeeded" });
   });
 
   it("refuses every claim entry point under serializable isolation", async () => {

@@ -474,6 +474,12 @@ internal static class SqlCatalogue
         "SELECT queue_name, paused, tier, record_attempts, record_claims FROM workhorse.queue_control",
         0);
 
+    /// <summary><c>queue_tier</c> (internal).</summary>
+    internal static readonly Statement QueueTier = new(
+        "queue_tier",
+        "SELECT COALESCE((SELECT tier FROM workhorse.queue_control WHERE queue_name = $1::text), 'full') AS tier",
+        1);
+
     /// <summary><c>schedule_definition</c> (internal).</summary>
     internal static readonly Statement ScheduleDefinition = new(
         "schedule_definition",
@@ -1085,6 +1091,7 @@ internal static class SqlCatalogue
         PurgeQueueV1,
         ConcurrencyPolicy,
         QueueControl,
+        QueueTier,
         ScheduleDefinition,
         WorkerRegistry,
         SyncRateLimitPoliciesV1Queue,

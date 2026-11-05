@@ -669,6 +669,14 @@ public final class SqlCatalogue {
           0,
           new int[] {});
 
+  /** {@code queue_tier} (internal). */
+  public static final Statement QUEUE_TIER =
+      new Statement(
+          "queue_tier",
+          "SELECT COALESCE((SELECT tier FROM workhorse.queue_control WHERE queue_name = ?::text), 'full') AS tier",
+          1,
+          new int[] {1});
+
   /** {@code schedule_definition} (internal). */
   public static final Statement SCHEDULE_DEFINITION =
       new Statement(
@@ -1458,6 +1466,7 @@ public final class SqlCatalogue {
           PURGE_QUEUE_V1,
           CONCURRENCY_POLICY,
           QUEUE_CONTROL,
+          QUEUE_TIER,
           SCHEDULE_DEFINITION,
           WORKER_REGISTRY,
           SYNC_RATE_LIMIT_POLICIES_V1__QUEUE,

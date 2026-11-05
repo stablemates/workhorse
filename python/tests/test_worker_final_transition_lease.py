@@ -53,6 +53,8 @@ class HeldSettlement:
         self.fast_completions = 0
 
     def rows(self, statement: DriverStatement, parameters: Sequence[object] = ()) -> list[Any]:
+        if statement is STATEMENTS.queue_tier:
+            return [{"tier": "fast" if self.fast else "full"}]
         if statement is STATEMENTS.claim_many:
             return self._take()
         if statement is STATEMENTS.acknowledge_cancel:

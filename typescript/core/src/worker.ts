@@ -113,8 +113,8 @@ export function dispatchRefillBatch(concurrency: number): number {
 }
 
 /**
- * How long a worker treats a queue that rejected a fast claim as full-tier before it probes again.
- * A tier change reaches a running worker within this interval.
+ * How long a worker treats a full-tier queue as full-tier before it reads the tier again. A tier
+ * change reaches a running worker within this interval.
  */
 const TIER_PROBE_INTERVAL_MS = 30_000;
 // A reporter callback that always fails writes at most one report in this interval.
@@ -760,8 +760,8 @@ export class Worker {
   // Tasks claimed from a queue that answered as fast-tier (ADR 0077). Their handlers get the
   // fast-tier context, and their completions take the fused path.
   private readonly fastTasks = new WeakSet<ClaimedTask>();
-  // Queues that rejected a fast claim, with the time to probe them again. A stale entry is safe:
-  // PostgreSQL routes every claim and completion by the queue's current tier.
+  // Queues that read or answered as full-tier, with the time to probe them again. A stale entry is
+  // safe: PostgreSQL routes every claim and completion by the queue's current tier.
   private readonly fullTierUntil = new Map<string, number>();
   // Queues whose last claim answered as fast-tier.
   private readonly fastTierQueues = new Set<string>();
@@ -1548,18 +1548,31 @@ export class Worker {
     }
   }
 
-  // Claims through the fast-tier path first. A full-tier queue rejects that claim, and the worker
-  // then claims from it through claim_many_v1 until the next probe.
+  // Claims through the fast-tier path first. Before it probes a queue of unknown tier, the worker
+  // reads the tier. A full-tier answer makes the worker claim through claim_many_v1 until the next
+  // probe. Thus a full-tier queue never receives the fast claim, which PostgreSQL rejects with an
+  // error that it writes to its log. A queue that moved to the full tier after the read still
+  // rejects the fast claim, and the worker then marks it full-tier.
   private async claimFromQueue(
     queueName: string,
     limit: number,
     fastLimit = limit,
   ): Promise<ClaimedTask[]> {
     const options = { queue: queueName, leaseMs: this.leaseMs };
-    const sentAt = monotonicNow();
+    const probedAt = monotonicNow();
     let claimed: ClaimedTask[] | undefined;
-    if (this.queue.claimFast && (this.fullTierUntil.get(queueName) ?? 0) <= sentAt) {
-      if (fastLimit <= 0) return [];
+    let fast =
+      this.queue.claimFast !== undefined && (this.fullTierUntil.get(queueName) ?? 0) <= probedAt;
+    if (fast && fastLimit <= 0) return [];
+    if (fast && !(await this.readsFastTier(queueName))) {
+      this.fullTierUntil.set(queueName, probedAt + TIER_PROBE_INTERVAL_MS);
+      this.fastTierQueues.delete(queueName);
+      fast = false;
+    }
+    // The lease of a claimed task starts at its claim, not at the tier read. Thus a slow read
+    // cannot make a task that the claim just leased look expired.
+    let sentAt = monotonicNow();
+    if (fast) {
       try {
         claimed = await this.warnIfSlow("claim", () =>
           this.gated(() =>
@@ -1571,8 +1584,9 @@ export class Worker {
         for (const task of claimed) this.fastTasks.add(task);
       } catch (error) {
         if (!(error instanceof FastTierUnsupportedError)) throw error;
-        this.fullTierUntil.set(queueName, sentAt + TIER_PROBE_INTERVAL_MS);
+        this.fullTierUntil.set(queueName, probedAt + TIER_PROBE_INTERVAL_MS);
         this.fastTierQueues.delete(queueName);
+        sentAt = monotonicNow();
       }
     }
     if (claimed === undefined) {
@@ -1583,6 +1597,15 @@ export class Worker {
     }
     for (const task of claimed) this.claimSentAt.set(task, sentAt);
     return claimed;
+  }
+
+  // Reports whether a probe can send a fast claim to the queue. A queue whose last claim answered
+  // as fast-tier needs no read. A queue without a tier read keeps the probe by fast claim.
+  private async readsFastTier(queueName: string): Promise<boolean> {
+    if (this.fastTierQueues.has(queueName)) return true;
+    const read = (this.queue as Partial<WorkerQueueTierRead>)[workerQueueTierRead];
+    if (!read) return true;
+    return this.warnIfSlow("claim", () => this.gated(() => read.call(this.queue, queueName)));
   }
 
   // Gives the tasks of one claim_many_v1 result one shared tier read. Their first durable context

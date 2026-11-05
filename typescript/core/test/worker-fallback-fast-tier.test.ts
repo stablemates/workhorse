@@ -37,28 +37,21 @@ function claimRow(id: string): object {
   };
 }
 
-// PostgreSQL's answer when the fused fast-tier statement meets a full-tier queue.
-function fullTierRejection(): Error {
-  return Object.assign(new Error("queue is full-tier"), {
-    code: "P1007",
-    detail: JSON.stringify({ queue: QUEUE, feature: "fast claims" }),
-  });
-}
-
 interface FakeDatabaseOptions {
-  // Answers the tier read. A thrown error fails that read.
+  // Answers each tier read after the probe. A thrown error fails that read.
   tier: () => "fast" | "full";
   claimed?: readonly string[];
 }
 
-// Answers the fast probe as full tier, then returns `claimed` once from claim_many_v1.
+// Answers the tier read of the probe as full tier, then returns `claimed` once from claim_many_v1.
 function fakeDatabase(options: FakeDatabaseOptions) {
   const statements: string[] = [];
   let pending = [...(options.claimed ?? ["fast-task"])];
+  let probed = false;
+  let contextReads = 0;
   const query = (async (text: string) => {
     statements.push(text);
     if (text === SQL_STATEMENTS.complete_many_and_claim_v1) {
-      if (statements.filter((entry) => entry === text).length === 1) throw fullTierRejection();
       return result([{ accepted: [], task_id: null }]);
     }
     if (text === SQL_STATEMENTS.claim_many_v1) {
@@ -66,16 +59,13 @@ function fakeDatabase(options: FakeDatabaseOptions) {
       pending = [];
       return result(rows);
     }
-    if (text === SQL_STATEMENTS.queue_control) {
-      return result([
-        {
-          queue_name: QUEUE,
-          paused: false,
-          tier: options.tier(),
-          record_attempts: false,
-          record_claims: false,
-        },
-      ]);
+    if (text === SQL_STATEMENTS.queue_tier) {
+      if (!probed) {
+        probed = true;
+        return result([{ tier: "full" }]);
+      }
+      contextReads += 1;
+      return result([{ tier: options.tier() }]);
     }
     if (text === SQL_STATEMENTS.complete_v1) return result([{ accepted: true }]);
     if (text === SQL_STATEMENTS.fail_v1) return result([{ status: "failed" }]);
@@ -83,7 +73,13 @@ function fakeDatabase(options: FakeDatabaseOptions) {
   }) as Queryable["query"];
   const count = (statement: string): number =>
     statements.filter((entry) => entry === statement).length;
-  return { database: answerSchemaCheck({ query } satisfies Queryable), statements, count };
+  return {
+    database: answerSchemaCheck({ query } satisfies Queryable),
+    statements,
+    count,
+    // The tier reads that a durable context call made, not the read of the probe.
+    contextReads: () => contextReads,
+  };
 }
 
 function fallbackWorker(database: Queryable): Worker {
@@ -177,7 +173,7 @@ describe("worker fallback claims from a queue that became fast-tier", () => {
     const reads = new Set<string>([
       SQL_STATEMENTS.complete_many_and_claim_v1,
       SQL_STATEMENTS.claim_many_v1,
-      SQL_STATEMENTS.queue_control,
+      SQL_STATEMENTS.queue_tier,
       SQL_STATEMENTS.complete_v1,
       SQL_STATEMENTS.tick_v1,
       SQL_STATEMENTS.run_maintenance_v1,
@@ -226,7 +222,7 @@ describe("worker fallback claims from a queue that became fast-tier", () => {
 
     expect(fake.count(SQL_STATEMENTS.claim_many_v1)).toBe(1);
     expect(rejections).toBe(4);
-    expect(fake.count(SQL_STATEMENTS.queue_control)).toBe(1);
+    expect(fake.contextReads()).toBe(1);
   });
 
   it("reads the tier again after a failed read, and writes nothing", async () => {
@@ -261,7 +257,7 @@ describe("worker fallback claims from a queue that became fast-tier", () => {
 
     await runOnce(fake.database, async () => "done");
 
-    expect(fake.count(SQL_STATEMENTS.queue_control)).toBe(0);
+    expect(fake.contextReads()).toBe(0);
     expect(fake.count(SQL_STATEMENTS.complete_v1)).toBe(1);
   });
 
@@ -291,7 +287,9 @@ describe("worker fallback claims from a queue that became fast-tier", () => {
 
     await worker.runOnce();
 
-    expect(fake.count(SQL_STATEMENTS.complete_many_and_claim_v1)).toBe(2);
+    // The fast answer ends the probe interval, so the next claim is a fast claim with no read.
+    expect(fake.count(SQL_STATEMENTS.complete_many_and_claim_v1)).toBe(1);
+    expect(fake.count(SQL_STATEMENTS.queue_tier)).toBe(2);
     expect(fake.count(SQL_STATEMENTS.claim_many_v1)).toBe(1);
   });
 
@@ -304,7 +302,7 @@ describe("worker fallback claims from a queue that became fast-tier", () => {
 
     await worker.runOnce();
 
-    expect(fake.count(SQL_STATEMENTS.complete_many_and_claim_v1)).toBe(1);
+    expect(fake.count(SQL_STATEMENTS.complete_many_and_claim_v1)).toBe(0);
     expect(fake.count(SQL_STATEMENTS.claim_many_v1)).toBe(2);
   });
 });

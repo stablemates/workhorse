@@ -1,11 +1,11 @@
+import { SQL_STATEMENTS } from "../../src/queue/sql-catalogue.generated.js";
+
 /**
- * The error PostgreSQL raises when a worker probes a full-tier queue with the fast claim. A fake
- * database throws it so the worker under test falls back to `claim_many_v1`, as it would against a
- * real installation.
+ * Answers the tier read that a worker sends before it probes a queue of unknown tier. A fake
+ * database returns this answer, so the worker under test claims through `claim_many_v1`, as it
+ * would against a full-tier queue of a real installation. It returns `undefined` for every other
+ * statement.
  */
-export function fullTierProbeRejection(queue = "default"): Error {
-  return Object.assign(new Error("queue is not on the fast tier"), {
-    code: "P1007",
-    detail: JSON.stringify({ queue, feature: "batched completion" }),
-  });
+export function fullTierRead(sql: string): { rows: Array<{ tier: "full" }> } | undefined {
+  return sql === SQL_STATEMENTS.queue_tier ? { rows: [{ tier: "full" }] } : undefined;
 }

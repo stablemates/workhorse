@@ -47,9 +47,15 @@ internal sealed class Intercept : IAsyncDisposable
     /// </summary>
     internal static Intercept Create(ConformanceDatabase database, Hook hook, Action<NpgsqlConnectionStringBuilder>? connection = null)
     {
-        _ = Listener;
         var builder = database.Builder();
         connection?.Invoke(builder.ConnectionStringBuilder);
+        return Create(builder, hook);
+    }
+
+    /// <summary>A data source from <paramref name="builder"/> whose statements <paramref name="hook"/> sees.</summary>
+    internal static Intercept Create(NpgsqlDataSourceBuilder builder, Hook hook)
+    {
+        _ = Listener;
         builder.ConfigureTracing(tracing => tracing
             .ConfigureCommandFilter(command =>
             {

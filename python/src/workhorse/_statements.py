@@ -323,6 +323,10 @@ SQL_STATEMENTS: dict[str, tuple[str, str]] = {
         "SELECT queue_name, paused, tier, record_attempts, record_claims FROM workhorse.queue_control",
         "SELECT queue_name, paused, tier, record_attempts, record_claims FROM workhorse.queue_control",
     ),
+    "queue_tier": (
+        "SELECT COALESCE((SELECT tier FROM workhorse.queue_control WHERE queue_name = %s::text), 'full') AS tier",
+        "SELECT COALESCE((SELECT tier FROM workhorse.queue_control WHERE queue_name = $1::text), 'full') AS tier",
+    ),
     "schedule_definition": (
         "SELECT DISTINCT namespace FROM workhorse.schedule_definition ORDER BY namespace",
         "SELECT DISTINCT namespace FROM workhorse.schedule_definition ORDER BY namespace",
@@ -728,6 +732,7 @@ class StatementRegistry:
     update_progress: DriverStatement
     wait_for_human: DriverStatement
     wait_for_signal: DriverStatement
+    queue_tier: DriverStatement
     compatibility: DriverStatement
     database_time: DriverStatement
 
@@ -772,6 +777,7 @@ STATEMENTS = StatementRegistry(
     update_progress=_statement("update_progress_v1"),
     wait_for_human=_statement("wait_for_human_v1"),
     wait_for_signal=_statement("wait_for_signal_v1"),
+    queue_tier=_statement("queue_tier"),
     compatibility=_statement("compatibility_state"),
     database_time=_statement("database_time"),
 )

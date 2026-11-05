@@ -7,10 +7,16 @@ import static org.junit.jupiter.api.Assertions.assertNotSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import java.io.PrintWriter;
+import java.lang.reflect.Field;
+import java.lang.reflect.InvocationTargetException;
+import java.lang.reflect.Method;
+import java.lang.reflect.Proxy;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
+import java.sql.SQLFeatureNotSupportedException;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -23,6 +29,8 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.BooleanSupplier;
+import java.util.logging.Logger;
+import javax.sql.DataSource;
 import org.jspecify.annotations.Nullable;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -242,16 +250,182 @@ class WorkerFastTierDatabaseTest {
   }
 
   @Test
-  void aFullTierQueueClaimsThroughClaimManyAfterTheFastProbeRejectsIt() throws SQLException {
-    UUID taskId = enqueue("full", Map.of("index", 1));
+  void aWorkerReadsTheTierAndSendsNoFastClaimToAFullTierQueue() throws Exception {
+    RecordingDataSource recording = new RecordingDataSource(dataSource);
     List<Worker.FusedStatement> statements = new CopyOnWriteArrayList<>();
-    Worker worker = worker().handle("full", Object.class, (ctx, payload) -> index(payload)).build();
+    Worker worker =
+        Worker.builder(recording)
+            .queues(queueName)
+            .pollingOnly(true)
+            .pollInterval(Duration.ofMillis(10))
+            .disableRegistry(true)
+            .handle("full", Object.class, (ctx, payload) -> index(payload))
+            .build();
     worker.fusedStatementHook = statements::add;
+    Field field = Worker.class.getDeclaredField("fullTierUntil");
+    field.setAccessible(true);
+    @SuppressWarnings("unchecked")
+    Map<String, Long> fullTierUntil = (Map<String, Long>) field.get(worker);
+    List<UUID> taskIds = new ArrayList<>();
+    for (int index = 0; index < 2; index++) {
+      taskIds.add(enqueue("full", Map.of("index", index)));
+      assertTrue(worker.runOnce());
+      // The tier read holds the queue on claim_many_v1 until the next probe.
+      assertTrue(fullTierUntil.containsKey(queueName));
+      // End the interval, so the next claim probes the tier again.
+      fullTierUntil.remove(queueName);
+    }
 
+    assertEquals(
+        Map.of(taskIds.get(0), "succeeded", taskIds.get(1), "succeeded"), fullStates(taskIds));
+    assertEquals(List.of(), statements, "a full-tier queue accepts no fused statement");
+    // Each probe read the tier, and no probe sent a fast claim that PostgreSQL rejects.
+    assertEquals(List.of(), recording.errors());
+    assertEquals(0, recording.count(SqlCatalogue.COMPLETE_MANY_AND_CLAIM_V1));
+    assertEquals(2, recording.count(SqlCatalogue.QUEUE_TIER));
+
+    // A queue that moves to the fast tier reaches the worker at its next probe.
+    makeFast();
+    UUID fast = enqueue("full", Map.of("index", 3));
+    assertTrue(worker.runOnce());
+    assertEquals(Map.of(fast, "succeeded"), fastOutcomes(List.of(fast)));
+    assertEquals(List.of(), recording.errors());
+  }
+
+  @Test
+  void aWorkerStartsTheLeaseOfAClaimedTaskAtItsClaimNotAtASlowTierRead() throws Exception {
+    long leaseMs = 500;
+    RecordingDataSource recording = new RecordingDataSource(dataSource);
+    // The tier read takes longer than the whole lease.
+    recording.tierReadDelayMs = leaseMs + 300;
+    AtomicInteger ran = new AtomicInteger();
+    Worker worker =
+        Worker.builder(recording)
+            .queues(queueName)
+            .pollingOnly(true)
+            .pollInterval(Duration.ofMillis(10))
+            .disableRegistry(true)
+            .lease(Duration.ofMillis(leaseMs))
+            .handle(
+                "full",
+                Object.class,
+                (ctx, payload) -> {
+                  ran.incrementAndGet();
+                  return Map.of("ok", true);
+                })
+            .build();
+    UUID taskId = enqueue("full", Map.of());
     assertTrue(worker.runOnce());
 
+    assertEquals(1, recording.count(SqlCatalogue.QUEUE_TIER));
+    assertEquals(1, ran.get(), "the handler runs the task that the slow probe claimed");
     assertEquals(Map.of(taskId, "succeeded"), fullStates(List.of(taskId)));
-    assertEquals(List.of(), statements, "a full-tier queue accepts no fused statement");
+  }
+
+  /**
+   * A {@link DataSource} that records the SQL of each prepared statement and each {@link
+   * SQLException} that a statement raises.
+   */
+  private static final class RecordingDataSource implements DataSource {
+    private final DataSource delegate;
+    private final List<String> sql = new CopyOnWriteArrayList<>();
+    private final List<SQLException> errors = new CopyOnWriteArrayList<>();
+
+    /** The time that each {@code queue_tier} statement waits before it is prepared. */
+    volatile long tierReadDelayMs;
+
+    RecordingDataSource(DataSource delegate) {
+      this.delegate = delegate;
+    }
+
+    long count(SqlCatalogue.Statement statement) {
+      return sql.stream().filter(statement.sql()::equals).count();
+    }
+
+    List<SQLException> errors() {
+      return List.copyOf(errors);
+    }
+
+    @Override
+    public Connection getConnection() throws SQLException {
+      Connection connection = delegate.getConnection();
+      return (Connection)
+          Proxy.newProxyInstance(
+              Connection.class.getClassLoader(),
+              new Class<?>[] {Connection.class},
+              (proxy, method, arguments) -> {
+                if (method.getName().equals("prepareStatement")
+                    && SqlCatalogue.QUEUE_TIER.sql().equals(arguments[0])
+                    && tierReadDelayMs > 0) {
+                  Thread.sleep(tierReadDelayMs);
+                }
+                Object result = invoke(method, connection, arguments);
+                if (method.getName().equals("prepareStatement")) {
+                  sql.add((String) arguments[0]);
+                  return statement((PreparedStatement) result);
+                }
+                return result;
+              });
+    }
+
+    private Object statement(PreparedStatement statement) {
+      return Proxy.newProxyInstance(
+          PreparedStatement.class.getClassLoader(),
+          new Class<?>[] {PreparedStatement.class},
+          (proxy, method, arguments) -> {
+            try {
+              return invoke(method, statement, arguments);
+            } catch (SQLException error) {
+              errors.add(error);
+              throw error;
+            }
+          });
+    }
+
+    private static @Nullable Object invoke(
+        Method method, Object target, @Nullable Object @Nullable [] arguments) throws Throwable {
+      try {
+        return method.invoke(target, arguments);
+      } catch (InvocationTargetException error) {
+        throw error.getCause();
+      }
+    }
+
+    @Override
+    public Connection getConnection(String username, String password) throws SQLException {
+      throw new SQLFeatureNotSupportedException();
+    }
+
+    @Override
+    public @Nullable PrintWriter getLogWriter() {
+      return null;
+    }
+
+    @Override
+    public void setLogWriter(@Nullable PrintWriter out) {}
+
+    @Override
+    public void setLoginTimeout(int seconds) {}
+
+    @Override
+    public int getLoginTimeout() {
+      return 0;
+    }
+
+    @Override
+    public Logger getParentLogger() throws SQLFeatureNotSupportedException {
+      throw new SQLFeatureNotSupportedException();
+    }
+
+    @Override
+    public <T> T unwrap(Class<T> type) throws SQLException {
+      throw new SQLException("not a wrapper");
+    }
+
+    @Override
+    public boolean isWrapperFor(Class<?> type) {
+      return false;
+    }
   }
 
   @Test

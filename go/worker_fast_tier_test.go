@@ -4,10 +4,12 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strconv"
 	"sync"
@@ -358,11 +360,77 @@ func TestFastTaskContextRejectsDurableFeatures(t *testing.T) {
 	}
 }
 
-func TestWorkerClaimsAFullTierQueueAfterTheFastClaimIsRefused(t *testing.T) {
-	pool := fastTierPool(t, "fast-probe")
+// statementTracer records the SQL of each statement that a pool sends, and each statement that
+// fails.
+type statementTracer struct {
+	mu         sync.Mutex
+	statements []string
+	errors     []error
+}
+
+type statementTraceKey struct{}
+
+func (tracer *statementTracer) TraceQueryStart(
+	ctx context.Context,
+	_ *pgx.Conn,
+	data pgx.TraceQueryStartData,
+) context.Context {
+	tracer.mu.Lock()
+	tracer.statements = append(tracer.statements, data.SQL)
+	tracer.mu.Unlock()
+	return context.WithValue(ctx, statementTraceKey{}, data.SQL)
+}
+
+func (tracer *statementTracer) TraceQueryEnd(ctx context.Context, _ *pgx.Conn, data pgx.TraceQueryEndData) {
+	if data.Err == nil {
+		return
+	}
+	statement, _ := ctx.Value(statementTraceKey{}).(string)
+	tracer.mu.Lock()
+	tracer.errors = append(tracer.errors, fmt.Errorf("%s: %w", statement, data.Err))
+	tracer.mu.Unlock()
+}
+
+func (tracer *statementTracer) count(statement string) int {
+	tracer.mu.Lock()
+	defer tracer.mu.Unlock()
+	count := 0
+	for _, sent := range tracer.statements {
+		if sent == statement {
+			count++
+		}
+	}
+	return count
+}
+
+func (tracer *statementTracer) failures() []error {
+	tracer.mu.Lock()
+	defer tracer.mu.Unlock()
+	return slices.Clone(tracer.errors)
+}
+
+func TestWorkerReadsTheTierAndSendsNoFastClaimToAFullTierQueue(t *testing.T) {
 	ctx := context.Background()
+	databaseURL := createConformanceDatabase(t, testDatabaseURL(t), "fast-probe")
+	pool, err := pgxpool.New(ctx, databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(pool.Close)
+	tracer := &statementTracer{}
+	recordingConfig, err := pgxpool.ParseConfig(databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	recordingConfig.ConnConfig.Tracer = tracer
+	recordingPool, err := pgxpool.NewWithConfig(ctx, recordingConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(recordingPool.Close)
+
 	queue := workhorse.NewQueue(workhorse.NewPGXExecutor(pool), "go-full-queue")
-	worker, err := workhorse.NewWorker(pool, workhorse.WorkerOptions{
+	worker, err := workhorse.NewWorker(recordingPool, workhorse.WorkerOptions{
 		Queue: "go-full-queue", WorkerID: "go-prober", LeaseDuration: 5 * time.Second,
 	})
 	if err != nil {
@@ -388,6 +456,121 @@ func TestWorkerClaimsAFullTierQueueAfterTheFastClaimIsRefused(t *testing.T) {
 		if snapshot == nil || snapshot.State != "succeeded" {
 			t.Fatalf("unexpected full-tier snapshot %#v", snapshot)
 		}
+		// The tier read holds the queue on claim_many_v1 until the next probe interval.
+		if !workhorse.FullTierQueueForTest(worker, "go-full-queue") {
+			t.Fatal("the worker does not hold the queue as full tier")
+		}
+		// End the interval, so the next claim probes the tier again.
+		workhorse.EndFullTierIntervalForTest(worker, "go-full-queue")
+	}
+	// Each probe read the tier, and no probe sent a fast claim that PostgreSQL rejects.
+	if reads := tracer.count(workhorse.QueueTierStatementForTest); reads != 2 {
+		t.Fatalf("the worker read the tier %d times, want 2", reads)
+	}
+	if claims := tracer.count(workhorse.FastClaimStatementForTest); claims != 0 {
+		t.Fatalf("the worker sent %d fast claims to a full-tier queue", claims)
+	}
+	if failures := tracer.failures(); len(failures) != 0 {
+		t.Fatalf("statements failed: %v", failures)
+	}
+
+	// A queue that moves to the fast tier reaches the worker at its next probe.
+	makeFastQueue(t, pool, "go-full-queue")
+	fastTaskID, err := queue.Enqueue(ctx, "full-work", map[string]any{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	processed, err := worker.RunOnce(ctx)
+	if err != nil || !processed {
+		t.Fatalf("RunOnce returned processed=%t err=%v", processed, err)
+	}
+	outcomes := fastOutcomes(t, pool, []string{fastTaskID})
+	if len(outcomes) != 1 || outcomes[0].State != "succeeded" || outcomes[0].Attempt != 1 {
+		t.Fatalf("unexpected fast-tier outcomes %#v", outcomes)
+	}
+	if workhorse.FullTierQueueForTest(worker, "go-full-queue") {
+		t.Fatal("the worker still holds the queue as full tier")
+	}
+	if failures := tracer.failures(); len(failures) != 0 {
+		t.Fatalf("statements failed: %v", failures)
+	}
+}
+
+// slowTierReadTracer delays each tier read by delay before the pool sends it.
+type slowTierReadTracer struct {
+	delay time.Duration
+}
+
+func (tracer slowTierReadTracer) TraceQueryStart(
+	ctx context.Context,
+	_ *pgx.Conn,
+	data pgx.TraceQueryStartData,
+) context.Context {
+	if data.SQL == workhorse.QueueTierStatementForTest {
+		time.Sleep(tracer.delay)
+	}
+	return ctx
+}
+
+func (slowTierReadTracer) TraceQueryEnd(context.Context, *pgx.Conn, pgx.TraceQueryEndData) {}
+
+func TestWorkerStartsTheLeaseOfAClaimedTaskAtItsClaimNotAtASlowTierRead(t *testing.T) {
+	ctx := context.Background()
+	const leaseDuration = 500 * time.Millisecond
+	databaseURL := createConformanceDatabase(t, testDatabaseURL(t), "slow-probe")
+	pool, err := pgxpool.New(ctx, databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(pool.Close)
+	slowConfig, err := pgxpool.ParseConfig(databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The tier read takes longer than the whole lease.
+	slowConfig.ConnConfig.Tracer = slowTierReadTracer{delay: leaseDuration + 300*time.Millisecond}
+	slowPool, err := pgxpool.NewWithConfig(ctx, slowConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(slowPool.Close)
+
+	queue := workhorse.NewQueue(workhorse.NewPGXExecutor(pool), "go-full-queue")
+	worker, err := workhorse.NewWorker(slowPool, workhorse.WorkerOptions{
+		Queue: "go-full-queue", WorkerID: "go-slow-prober", LeaseDuration: leaseDuration,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var ran atomic.Int32
+	// The handler runs for a short time, so the lease watchdog can stop it if the lease looks
+	// expired at the claim.
+	worker.Handle("full-work", func(handlerContext context.Context, _ any, _ *workhorse.HandlerContext) (any, error) {
+		ran.Add(1)
+		select {
+		case <-time.After(100 * time.Millisecond):
+			return map[string]any{"ok": true}, nil
+		case <-handlerContext.Done():
+			return nil, context.Cause(handlerContext)
+		}
+	})
+	taskID, err := queue.Enqueue(ctx, "full-work", map[string]any{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	processed, err := worker.RunOnce(ctx)
+	if err != nil || !processed {
+		t.Fatalf("RunOnce returned processed=%t err=%v", processed, err)
+	}
+	if count := ran.Load(); count != 1 {
+		t.Fatalf("the handler ran %d times, want 1", count)
+	}
+	snapshot, err := workhorse.NewAdmin(workhorse.NewPGXExecutor(pool)).GetTask(ctx, taskID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snapshot == nil || snapshot.State != "succeeded" {
+		t.Fatalf("unexpected full-tier snapshot %#v", snapshot)
 	}
 }
 

@@ -178,6 +178,8 @@ class FastClaims:
                 self.plain_claims.append(limit)
                 claimed, self._backlog = self._backlog[:limit], self._backlog[limit:]
             return claimed
+        if statement is STATEMENTS.queue_tier:
+            return [{"tier": "full" if self.full_tier else "fast"}]
         if statement is not STATEMENTS.complete_many_and_claim:
             return []
         if self.full_tier:

@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using Npgsql;
 using Workhorse.Internal;
 using Workhorse.Internal.Database;
+using Workhorse.Tests.Conformance;
 using Workhorse.Tests.Testing;
 using static Workhorse.Tests.Testing.WorkerHarness;
 
@@ -155,10 +156,48 @@ public sealed class WorkerFastTierTests(ScratchDatabase database) : IClassFixtur
             await run.StopAsync();
         }
 
-        // The queue rejected the fast-tier probe, so no fused statement ran.
+        // The probe read the full tier, so no fused statement ran.
         Assert.Empty(statements);
         Assert.Equal(tasks, await CountAsync("attempt_history", ids));
         Assert.Equal(0, await CountAsync("fast_task_outcome", ids));
+    }
+
+    /// <summary>
+    /// The probe reads the tier and sends no fast claim to a full-tier queue, so PostgreSQL raises no
+    /// error and writes nothing to its log (SM-1920).
+    /// </summary>
+    [Fact]
+    public async Task TheProbeReadsTheTierAndSendsNoFastClaimToAFullTierQueue()
+    {
+        var queue = UniqueQueue("probe");
+        var calls = new ConcurrentQueue<Intercept.Call>();
+        await using var intercept = Intercept.Create(database.CreateDataSourceBuilder(), new Intercept.Callbacks(after: calls.Enqueue));
+        await using var worker = new Worker(intercept.DataSource, Options(queue));
+        worker.Handle<Order, Total>("work", (_, order) => Task.FromResult(new Total(order.OrderId)));
+        var ids = new List<Guid>();
+        for (var order = 0; order < 2; order++)
+        {
+            ids.Add(await EnqueueAsync(database.DataSource, queue, "work", new { orderId = order }));
+            Assert.True(await worker.RunOnceAsync(TestContext.Current.CancellationToken));
+            // End the interval, so the next claim probes the tier again.
+            worker.EndProbeInterval(queue);
+        }
+
+        Assert.Equal(
+            "succeeded,succeeded",
+            await ScalarAsync(database.DataSource, "SELECT string_agg(state, ',') FROM workhorse.task_outcome WHERE task_id = ANY($1)", ids.ToArray()));
+        // Each probe read the tier, and no probe sent a fast claim that PostgreSQL rejects.
+        Assert.Equal(2, calls.Count(call => call.Is(SqlCatalogue.QueueTier)));
+        Assert.DoesNotContain(calls, call => call.Is(SqlCatalogue.CompleteManyAndClaimV1));
+        Assert.DoesNotContain(calls, call => call.Failed);
+
+        // A queue that moves to the fast tier reaches the worker at its next probe.
+        await FastTierAsync(database.DataSource, queue);
+        var fast = await EnqueueAsync(database.DataSource, queue, "work", new { orderId = 2 });
+        Assert.True(await worker.RunOnceAsync(TestContext.Current.CancellationToken));
+        Assert.Equal("succeeded", await ScalarAsync(database.DataSource, "SELECT state FROM workhorse.fast_task_outcome WHERE task_id = $1", fast));
+        Assert.Contains(calls, call => call.Is(SqlCatalogue.CompleteManyAndClaimV1));
+        Assert.DoesNotContain(calls, call => call.Failed);
     }
 
     [Fact]

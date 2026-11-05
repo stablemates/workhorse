@@ -59,6 +59,10 @@ class Database:
         assert self.lend.wait(EVENT_SECONDS), "the test never lent the connection"
 
     def run(self, sql: str, parameters: Sequence[object]) -> list[dict[str, object]]:
+        # Every queue reads as fast-tier, so a claim is the fused fast claim. The read is not
+        # recorded, so the statements of each test stay the ones that it checks.
+        if sql in (STATEMENTS.queue_tier.psycopg, STATEMENTS.queue_tier.asyncpg):
+            return [{"tier": "fast"}]
         sent = tuple(parameters)
         self.statements.append((sql, sent))
         if self.on_statement is not None:

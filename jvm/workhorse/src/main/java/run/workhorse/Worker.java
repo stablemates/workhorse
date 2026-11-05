@@ -204,7 +204,10 @@ public final class Worker implements AutoCloseable {
    */
   private final ReentrantLock stateLock = new ReentrantLock();
 
-  /** The queues that rejected a fast-tier statement, each until its next probe. */
+  /**
+   * The queues whose tier read answered full, or that rejected a fast-tier statement, each until
+   * its next probe.
+   */
   private final Map<String, Long> fullTierUntil = new HashMap<>();
 
   /** The queues that answered a fast-tier statement. */
@@ -1852,11 +1855,15 @@ public final class Worker implements AutoCloseable {
 
   private void claim(RunState run, String name, int limit, int fastLimit, List<Claimed> claimed) {
     long startedAt = System.nanoTime();
-    List<Row> fast = claimFast(run, name, limit, fastLimit, startedAt);
+    // The lease of a claimed task starts at its claim, not at the tier read, so a slow read cannot
+    // make a just-leased task look expired. The claim statement sets this time just before it goes
+    // out. The start time stays the probe time and the start of the claim duration.
+    AtomicLong sentAt = new AtomicLong(startedAt);
+    List<Row> fast = claimFast(run, name, limit, fastLimit, startedAt, sentAt);
     List<Claimed> tasks = new ArrayList<>();
     if (fast != null) {
       for (Row row : fast) {
-        tasks.add(claimed(row, name, startedAt, Worker::fastTier, true));
+        tasks.add(claimed(row, name, sentAt.get(), Worker::fastTier, true));
       }
     } else {
       TierRead tier = new TierRead(name);
@@ -1869,22 +1876,25 @@ public final class Worker implements AutoCloseable {
       try {
         rows =
             withConnection(
-                connection ->
-                    permit.admit()
-                        ? Sql.rows(
-                            connection,
-                            SqlCatalogue.CLAIM_MANY_V1,
-                            name,
-                            workerId,
-                            Integer.toString(limit),
-                            Long.toString(leaseMs))
-                        : List.of());
+                connection -> {
+                  if (!permit.admit()) {
+                    return List.of();
+                  }
+                  sentAt.set(System.nanoTime());
+                  return Sql.rows(
+                      connection,
+                      SqlCatalogue.CLAIM_MANY_V1,
+                      name,
+                      workerId,
+                      Integer.toString(limit),
+                      Long.toString(leaseMs));
+                });
       } finally {
         watch.run();
         permit.release();
       }
       for (Row row : rows) {
-        tasks.add(claimed(row, name, startedAt, tier::fast, false));
+        tasks.add(claimed(row, name, sentAt.get(), tier::fast, false));
       }
     }
     claimed.addAll(tasks);
@@ -1921,23 +1931,41 @@ public final class Worker implements AutoCloseable {
 
   /**
    * Claims through the fast tier, or returns {@code null} when the queue is on the full tier. The
-   * fast claim is {@code complete_many_and_claim_v1} with no completions. A full-tier queue rejects
-   * it, and the worker then claims that queue through {@code claim_many_v1} until the next probe.
+   * fast claim is {@code complete_many_and_claim_v1} with no completions. At each probe, the worker
+   * first reads the tier of a queue that is not known fast-tier. If the read answers full, the
+   * worker sends no fast claim, because PostgreSQL rejects it with an error in its log. The worker
+   * then claims that queue through {@code claim_many_v1} until the next probe. A queue can move to
+   * the full tier after the read, so a rejected fast claim also marks the queue full-tier.
+   *
+   * <p>{@code probeAt} is the time of the probe. {@code sentAt} gets the time just before each send
+   * of the fast claim, which is the lease start of the tasks that it claims.
    */
   private @Nullable List<Row> claimFast(
-      RunState run, String name, int limit, int fastLimit, long sentAt) {
+      RunState run, String name, int limit, int fastLimit, long probeAt, AtomicLong sentAt) {
+    boolean knownFast;
     stateLock.lock();
     try {
       Long until = fullTierUntil.get(name);
-      if (until != null && until - sentAt > 0) {
+      if (until != null && until - probeAt > 0) {
         return null;
       }
+      knownFast = fastTierQueues.contains(name);
     } finally {
       stateLock.unlock();
     }
     int claimLimit = Math.min(limit, fastLimit);
     if (claimLimit <= 0) {
       return List.of();
+    }
+    if (!knownFast) {
+      String tier = readTier(run, name);
+      if (tier == null) {
+        return List.of();
+      }
+      if (!"fast".equals(tier)) {
+        markFullTier(name, probeAt);
+        return null;
+      }
     }
     List<Row> rows;
     // The claim gate is read on the borrowed connection before each attempt, a resend after a
@@ -1958,6 +1986,7 @@ public final class Worker implements AutoCloseable {
                           withdrawn.set(true);
                           return null;
                         }
+                        sentAt.set(System.nanoTime());
                         return new @Nullable Object[] {
                           workerId,
                           new String[0],
@@ -1969,7 +1998,7 @@ public final class Worker implements AutoCloseable {
                         };
                       }));
     } catch (FastTierUnsupportedException fullTier) {
-      markFullTier(name, sentAt);
+      markFullTier(name, probeAt);
       return null;
     } finally {
       watch.run();
@@ -1990,7 +2019,26 @@ public final class Worker implements AutoCloseable {
     return claimed;
   }
 
-  /** Claims a queue that rejected a fast-tier statement through {@code claim_many_v1}. */
+  /**
+   * Reads the tier of a queue through {@code queue_tier}, or returns {@code null} when the claim
+   * gate is closed. A queue with no control row is on the full tier.
+   */
+  private @Nullable String readTier(RunState run, String name) {
+    ClaimPermit permit = new ClaimPermit(run);
+    Runnable watch = watchStatement("claim");
+    try {
+      return withConnection(
+          connection ->
+              permit.admit()
+                  ? Sql.rows(connection, SqlCatalogue.QUEUE_TIER, name).get(0).text("tier")
+                  : null);
+    } finally {
+      watch.run();
+      permit.release();
+    }
+  }
+
+  /** Claims a full-tier queue through {@code claim_many_v1} until its next probe. */
   private void markFullTier(String name, long sentAt) {
     stateLock.lock();
     try {

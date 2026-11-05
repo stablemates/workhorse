@@ -184,7 +184,7 @@ impl Inner {
                     rows_claimed.push(row);
                 }
             }
-            self.claimed_tasks(&rows_claimed, queue, sent_at, true, &mut claimed)?;
+            self.claimed_tasks(&rows_claimed, queue, sent_at, sent_at, true, &mut claimed)?;
         }
         Ok((accepted, claimed))
     }

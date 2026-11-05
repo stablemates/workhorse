@@ -160,6 +160,69 @@ RSpec.describe "Worker on the fast tier against PostgreSQL" do
     expect(subject.instance_variable_get(:@full_tier_until)).not_to have_key(@queue_name)
   end
 
+  # SM-1920: a fast claim to a full-tier queue raises an error that PostgreSQL writes to its log.
+  it "reads the tier and sends no fast claim to a full-tier queue" do
+    subject = worker(concurrency: 1).handle("full-work") { {"ok" => true} }
+    statements = Concurrent::Array.new
+    errors = Concurrent::Array.new
+    executor = subject.instance_variable_get(:@executor)
+    original = executor.method(:rows)
+    executor.define_singleton_method(:rows) do |sql, params = []|
+      statements << sql
+      original.call(sql, params)
+    rescue => e
+      errors << e
+      raise
+    end
+
+    task_ids = Array.new(2) do
+      task_id = queue.enqueue("full-work", {}).task_id
+      expect(subject.run_once).to be(true)
+      # The tier read holds the queue on claim_many_v1 until the next probe interval.
+      expect(subject.instance_variable_get(:@full_tier_until)).to have_key(@queue_name)
+      # End the interval, so the next claim reads the tier again.
+      subject.instance_variable_get(:@full_tier_until)[@queue_name] = -Float::INFINITY
+      task_id
+    end
+
+    admin = W::Admin.new(@connection)
+    expect(task_ids.map { |task_id| admin.get_task(task_id).state.to_s }).to eq(%w[succeeded succeeded])
+    expect(statements).not_to include(W::SqlCatalogue::COMPLETE_MANY_AND_CLAIM_V1)
+    expect(errors).to be_empty
+    expect(statements.count(W::SqlCatalogue::QUEUE_TIER)).to eq(2)
+
+    # A queue that moves to the fast tier reaches the worker at its next probe.
+    audit = W::AdminAudit.new("ruby-fast-tier-spec", "exercise the tier read", SecureRandom.uuid)
+    expect(admin.set_queue_tier(@queue_name, :fast, audit: audit)).to eq(:fast)
+    fast_task = queue.enqueue("full-work", {}).task_id
+    expect(subject.run_once).to be(true)
+
+    expect(outcomes([fast_task])).to eq([[fast_task, "succeeded", "1"]])
+    expect(subject.instance_variable_get(:@fast_tier_queues)).to include(@queue_name)
+    expect(errors).to be_empty
+  end
+
+  it "starts the lease of a claimed task at its claim, not at a slow tier read" do
+    ran = Concurrent::AtomicFixnum.new
+    subject = worker(concurrency: 1, lease: 0.5, heartbeat: 0.1).handle("full-work") do
+      ran.increment
+      {"ok" => true}
+    end
+    executor = subject.instance_variable_get(:@executor)
+    original = executor.method(:rows)
+    executor.define_singleton_method(:rows) do |sql, params = []|
+      # The tier read takes longer than the whole lease.
+      sleep 0.8 if sql == W::SqlCatalogue::QUEUE_TIER
+      original.call(sql, params)
+    end
+    task_id = queue.enqueue("full-work", {}).task_id
+
+    expect(subject.run_once).to be(true)
+
+    expect(ran.value).to eq(1)
+    expect(W::Admin.new(@connection).get_task(task_id).state.to_s).to eq("succeeded")
+  end
+
   # The lease of the slow tier-read specs, in seconds. A loaded host can keep every heartbeat round
   # from an answer for more than 2 s. The lease watchdog then ends the attempt as LeaseExpired
   # (SM-1794). A read that no heartbeat covers waits 2 s past this lease, so the lease still expires.

@@ -686,9 +686,30 @@ fact inside the window, as [the statistics inputs](data-model.md#fast-tier-input
 
 #### Tier probe
 
-A worker does not configure the tier. Each SDK worker probes a queue with a fast claim through
-`complete_many_and_claim_v1`. A `P1007` answer marks the queue full-tier for 30 seconds. The worker
-then claims through `claim_many_v1` until the next probe.
+A worker does not configure the tier. Each SDK worker finds the tier of a queue with a probe. A
+probe is due when the worker has no tier for the queue, or when the 30-second full-tier interval of
+the queue has ended. The probe works in these steps:
+
+1. If the last claim of the queue answered on the fast tier, the worker skips the read.
+2. Otherwise, the worker reads the tier with the internal `queue_tier` statement. The statement
+   returns one row: `SELECT COALESCE((SELECT tier FROM workhorse.queue_control WHERE queue_name =
+   $1::text), 'full') AS tier`. Thus a queue without a `queue_control` row reads as `full`.
+3. If the read answers `full`, the worker marks the queue full-tier for 30 seconds. It then claims
+   through `claim_many_v1` until the next probe. It sends no fast claim.
+4. If the read answers `fast`, the worker claims through `complete_many_and_claim_v1`.
+
+The read runs on the connection, claim gate, and slow-statement watch of the claim. The worker
+measures the lease of a claimed task from the send of its claim, not from the read. Thus a slow
+read cannot make a task that the claim just leased look expired to the worker.
+
+A queue can move to the full tier between the read and the fast claim. Then the fast claim raises
+`P1007` with feature `batched completion`. That answer also marks the queue full-tier for 30
+seconds. A tier change needs an empty queue, so this case occurs only at a tier change.
+
+In earlier releases, the probe was the fast claim itself (SM-1920). PostgreSQL wrote each `P1007`
+answer to its log as an `ERROR` with `DETAIL`, `HINT`, `CONTEXT`, and `STATEMENT` lines. Thus each
+full-tier queue of a worker added one such entry every 30 seconds. With the read, a worker that
+serves only full-tier queues makes PostgreSQL write no `ERROR` during normal operation.
 
 | SDK        | Probe interval constant        |
 | ---------- | ------------------------------ |

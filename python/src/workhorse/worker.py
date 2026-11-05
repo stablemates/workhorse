@@ -699,8 +699,8 @@ def _catalogue_statement(name: str) -> _DriverStatement:
 _TASK_CHILD = _catalogue_statement("task_child")
 _GET_TASK = _catalogue_statement("get_task")
 
-# How long a worker claims a queue that rejected a fast claim through claim_many before probing it
-# again. A queue can move to the fast tier only while it holds no live tasks (ADR 0077).
+# How long a worker claims a full-tier queue through claim_many before it reads the tier again. A
+# queue can move to the fast tier only while it holds no live tasks (ADR 0077).
 _TIER_PROBE_INTERVAL_SECONDS = 30.0
 
 
@@ -2929,15 +2929,20 @@ class Worker:
                 "workhorse.claim",
                 {"workhorse.queue.name": queue_name},
             ) as claim_span:
-                rows = self._claim_queue(
+                fast_claim = self._claim_queue(
                     queue_name,
                     limit - len(claimed),
                     claim_started_at,
                     fast_limit - len(claimed),
                     generation,
                 )
-                if rows is None:
+                if fast_claim is not None:
+                    rows, leased_at = fast_claim
+                else:
                     claim_span.set_attribute("workhorse.queue.tier", "full")
+                    # The lease of a claimed task starts at its claim, not at the tier read. Thus
+                    # a slow read cannot make a task that the claim just leased look expired.
+                    leased_at = monotonic()
                     with self._statement_watch.watch("claim"):
                         rows = self._claim_executor(generation).rows(
                             _STATEMENTS.claim_many,
@@ -2963,28 +2968,39 @@ class Worker:
                         "workhorse.worker.id": self.worker_id,
                     },
                 )
-                claimed.append((task, claim_started_at))
+                claimed.append((task, leased_at))
 
     def _claim_queue(
         self,
         queue_name: str,
         limit: int,
-        sent_at: float,
+        probed_at: float,
         fast_limit: int | None = None,
         generation: int | None = None,
-    ) -> list[_Row] | None:
+    ) -> tuple[list[_Row], float] | None:
         """Claim through the fast-tier path, or return None when the queue is full-tier.
 
+        The answer holds the claimed rows and the time the fast claim was sent, which is the lease
+        start of those tasks. probed_at is the time of the probe, which sets the probe interval.
+
         The fast claim is complete_many_and_claim_v1 with no completions, and asks for at most
-        fast_limit tasks. A full-tier queue rejects it, and the worker then claims that queue
-        through claim_many until the next probe.
+        fast_limit tasks. Before it sends a fast claim to a queue of unknown tier, the worker reads
+        the tier. A full-tier answer makes the worker claim that queue through claim_many until the
+        next probe. Thus a full-tier queue never receives the fast claim, which PostgreSQL rejects
+        with an error that it writes to its log. A queue that moved to the full tier after the read
+        still rejects the fast claim, and the worker then marks it full-tier.
         """
         with self._state_lock:
-            if self._full_tier_until.get(queue_name, float("-inf")) > sent_at:
+            if self._full_tier_until.get(queue_name, float("-inf")) > probed_at:
                 return None
+            known_fast = queue_name in self._fast_tier_queues
+        if not known_fast and not self._reads_fast_tier(queue_name, generation):
+            self._mark_full_tier(queue_name, probed_at)
+            return None
         fast_limit = limit if fast_limit is None else min(limit, fast_limit)
         if fast_limit <= 0:
-            return []
+            return [], probed_at
+        sent_at = monotonic()
         try:
             with self._statement_watch.watch("claim"):
                 rows = _fenced_write_rows(
@@ -2995,7 +3011,7 @@ class Worker:
         except Exception as error:
             if not isinstance(_translate_database_error(error), FastTierUnsupportedError):
                 raise
-            self._mark_full_tier(queue_name, sent_at)
+            self._mark_full_tier(queue_name, probed_at)
             return None
         # A claim that finds nothing still returns one row, with every claim column null.
         claimed = [row for row in rows if row["task_id"] is not None]
@@ -3003,7 +3019,13 @@ class Worker:
             self._full_tier_until.pop(queue_name, None)
             self._fast_tier_queues.add(queue_name)
             self._fast_task_ids.update(str(row["task_id"]) for row in claimed)
-        return claimed
+        return claimed, sent_at
+
+    def _reads_fast_tier(self, queue_name: str, generation: int | None) -> bool:
+        """Read the tier of a queue. A queue without a queue_control row is full-tier."""
+        with self._statement_watch.watch("claim"):
+            rows = self._claim_executor(generation).rows(_STATEMENTS.queue_tier, (queue_name,))
+        return bool(rows) and rows[0]["tier"] == "fast"
 
     def _mark_full_tier(self, queue_name: str, sent_at: float) -> None:
         """Claim a queue that rejected a fast-tier statement through claim_many until the probe."""

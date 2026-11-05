@@ -754,6 +754,13 @@
       "catalogues": ["internal"]
     },
     {
+      "name": "queue_tier",
+      "pythonBinding": "queue_tier",
+      "arity": 1,
+      "contract": "SELECT COALESCE((SELECT tier FROM workhorse.queue_control WHERE queue_name = $1::text), 'full') AS tier",
+      "catalogues": ["internal"]
+    },
+    {
       "name": "schedule_definition",
       "arity": 0,
       "contract": "SELECT DISTINCT namespace FROM workhorse.schedule_definition ORDER BY namespace",
