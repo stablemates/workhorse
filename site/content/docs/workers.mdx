@@ -936,9 +936,14 @@ three `email.send` tasks.
 1. At 0 s, the process stops claiming new tasks. The three tasks continue to run, and their leases
    continue to renew.
 2. At 4 s, two tasks finish and write their results.
-3. The third handler ignores its abort signal and continues to run.
-4. At the drain deadline, the process exits. The third task is still active, so its lease expires.
-   Then [recovery](#know-which-worker-owns-a-task) gives the task to another worker.
+3. At the drain deadline, the process aborts the signal of the third handler.
+4. The third handler ignores its abort signal and continues to run.
+5. After a short unwind window, the process exits. The third task is still active, so its lease
+   expires. Then [recovery](#know-which-worker-owns-a-task) gives the task to another worker.
+
+If the third handler stops at its abort signal and throws, the worker releases the task to its
+queue before the process exits. The task keeps its attempt, so the deploy does not use one of its
+retries. If the handler returns a value in the window, the worker completes the task.
 
 If all three tasks finish before the deadline, the process closes its connections after the last
 final write. A second signal makes the process exit at once, without the drain.
@@ -979,11 +984,13 @@ after the drain.
 | Event                          | Exit                                                             |
 | ------------------------------ | ---------------------------------------------------------------- |
 | Second signal                  | Conventional signal code                                         |
-| Missed deadline                | Code 1                                                           |
+| Missed deadline                | Code 1, after the handler abort and a 250 ms unwind window       |
 | Unexpected worker-loop failure | Stops sibling workers, applies the same drain, fails the process |
 
 The second signal to a Python process calls `force_exit` with 128 plus the signal number: 130 for
-`SIGINT`, 143 for `SIGTERM`. A missed deadline calls `force_exit(1)`.
+`SIGINT`, 143 for `SIGTERM`. A missed deadline cancels the token of each running handler, waits
+0.25 s, and calls `force_exit(1)`. In that window, a handler that raises releases its task through
+`release_owned_v1`, and a handler that returns a value completes it.
 
 The first signal marks readiness false and calls `stop()` on every worker. Active handlers and their
 heartbeat batch continue. Process termination never writes a durable task cancellation.

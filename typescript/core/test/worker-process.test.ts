@@ -243,6 +243,9 @@ describe("dedicated worker process runtime", () => {
       await vi.advanceTimersByTimeAsync(0);
       signals.emit("SIGTERM");
       await vi.advanceTimersByTimeAsync(50);
+      // The deadline aborts the handlers first and gives them the unwind window.
+      expect(forceExit).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(250);
 
       expect(forceExit).toHaveBeenCalledWith(1);
       worker.runResult.resolve();
@@ -269,6 +272,9 @@ describe("dedicated worker process runtime", () => {
       await vi.advanceTimersByTimeAsync(0);
       workers[0]!.runResult.reject(failure);
       await vi.advanceTimersByTimeAsync(50);
+      // The deadline aborts the handlers first and gives them the unwind window.
+      expect(forceExit).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(250);
 
       expect(forceExit).toHaveBeenCalledWith(1);
       workers[1]!.runResult.resolve();

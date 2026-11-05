@@ -1,10 +1,17 @@
 import type { WorkhorseAdapter } from "./adapter.js";
 import type { Worker, WorkerOptions } from "./worker.js";
-import { observeWorkerFailure, observeWorkerStartup } from "./worker-failure.js";
+import {
+  abortWorkerHandlers,
+  observeWorkerFailure,
+  observeWorkerStartup,
+} from "./worker-failure.js";
 import { createServer } from "node:http";
 import type { Server } from "node:http";
 
 const DEFAULT_SHUTDOWN_TIMEOUT_MS = 25_000;
+// How long the handlers have to unwind after the shutdown abort, as Go handlerUnwindPeriod. A
+// handler that reacts to the abort gives its task back in this window.
+const HANDLER_UNWIND_MS = 250;
 const SIGNAL_EXIT_CODES: Readonly<Record<WorkerProcessSignal, number>> = {
   SIGINT: 130,
   SIGTERM: 143,
@@ -40,7 +47,10 @@ export interface WorkerProcessDefinition<TTransaction = unknown> {
   adapter(): MaybePromise<WorkhorseAdapter<TTransaction>>;
   /** One definition per independently configured Worker instance. */
   workers: readonly WorkerProcessWorkerDefinition[];
-  /** Hard-exit deadline after the first termination signal. Defaults to 25 seconds. */
+  /**
+   * Shutdown grace after the first termination signal. Defaults to 25 seconds. At its end, the
+   * runner aborts the signal of each handler that still runs, waits 250 ms, and exits the process.
+   */
   shutdownTimeoutMs?: number;
   /** Optional probe-only HTTP listener for container orchestrators. */
   probes?: WorkerProcessProbeOptions;
@@ -356,8 +366,11 @@ function defaultLogger(): WorkerProcessLogger {
  * Run a standalone worker process until it is terminated or a worker fails.
  *
  * The first SIGINT/SIGTERM stops new claims and starts a bounded drain. A second signal exits
- * immediately using the conventional signal exit code. Exceeding the deadline exits with code 1 so
- * the platform can recover any remaining leases after they expire.
+ * immediately using the conventional signal exit code. At the end of the shutdown grace, the runner
+ * aborts the signal of each handler that still runs. A handler that returns or throws in the next
+ * 250 ms gives its task back: a value completes the task, and an error releases it without an
+ * attempt. Then the process exits with code 1. Lease recovery settles the task of a handler that
+ * did not return.
  */
 export async function runWorkerProcess<TTransaction = unknown>(
   definition: WorkerProcessDefinition<TTransaction>,
@@ -373,6 +386,9 @@ export async function runWorkerProcess<TTransaction = unknown>(
 
   let firstSignal: WorkerProcessSignal | undefined;
   let deadline: NodeJS.Timeout | undefined;
+  let expired = false;
+  // The expiry of the grace. runWorkerProcess resolves only after it called forceExit.
+  let expiry: Promise<void> | undefined;
   let runtime: StartedWorkerProcess | undefined;
   const listeners = new Map<WorkerProcessSignal, () => void>();
 
@@ -381,9 +397,29 @@ export async function runWorkerProcess<TTransaction = unknown>(
     forceExit(code);
   };
 
+  // The end of the grace aborts the handlers, as Go cancels them, and gives them one unwind window.
+  // The process exits after that window or after the drain completes, whichever comes first.
+  const expire = async (message: string): Promise<void> => {
+    expired = true;
+    logger.error(message);
+    for (const worker of runtime?.workers ?? []) abortWorkerHandlers(worker);
+    let unwindTimer: NodeJS.Timeout | undefined;
+    const unwind = new Promise<void>((resolve) => {
+      unwindTimer = setTimeout(resolve, HANDLER_UNWIND_MS);
+    });
+    try {
+      await Promise.race([runtime?.completed.catch(() => undefined) ?? unwind, unwind]);
+    } finally {
+      clearTimeout(unwindTimer);
+    }
+    forceExit(1);
+  };
+
   const armDeadline = (message: string): void => {
     if (deadline) return;
-    deadline = setTimeout(() => force(1, message), timeoutMs);
+    deadline = setTimeout(() => {
+      expiry = expire(message);
+    }, timeoutMs);
   };
 
   for (const signal of ["SIGINT", "SIGTERM"] as const) {
@@ -395,7 +431,9 @@ export async function runWorkerProcess<TTransaction = unknown>(
 
       firstSignal = signal;
       logger.info(`Received ${signal}; stopping claims and draining active tasks`);
-      armDeadline(`Graceful shutdown exceeded ${timeoutMs}ms; exiting immediately`);
+      armDeadline(
+        `Graceful shutdown exceeded ${timeoutMs}ms; stopping active handlers and exiting`,
+      );
       void runtime?.shutdown().catch(() => undefined);
     };
     listeners.set(signal, listener);
@@ -409,13 +447,17 @@ export async function runWorkerProcess<TTransaction = unknown>(
     );
     void runtime.failure.then((error) => {
       logger.error("A worker stopped unexpectedly; draining sibling workers", error);
-      armDeadline(`Worker failure shutdown exceeded ${timeoutMs}ms; exiting immediately`);
+      armDeadline(
+        `Worker failure shutdown exceeded ${timeoutMs}ms; stopping active handlers and exiting`,
+      );
     });
     if (firstSignal) void runtime.shutdown().catch(() => undefined);
     await runtime.completed;
-    if (firstSignal) logger.info("Graceful worker shutdown completed");
+    if (firstSignal && !expired) logger.info("Graceful worker shutdown completed");
   } finally {
     if (deadline) clearTimeout(deadline);
     for (const [signal, listener] of listeners) signalSource.off(signal, listener);
+    // A drain that ends inside the unwind window must not return before the exit with code 1.
+    if (expiry) await expiry;
   }
 }

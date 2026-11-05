@@ -219,10 +219,10 @@ The default shutdown deadline is 25 seconds and may be configured from 1 millise
 
 - A second `SIGINT` exits immediately with code 130.
 - A second `SIGTERM` exits immediately with code 143.
-- A missed graceful-shutdown deadline exits immediately with code 1.
+- A missed graceful-shutdown deadline aborts the signal of each active handler with a `WorkerShutdownError` reason. The runner waits 250 ms, or until the drain ends, and then exits with code 1. A handler that returns a value in that window completes its task. A handler that throws releases its task through `release_owned_v1`, and the task keeps its attempt.
 - A fatal worker-loop failure starts the same deadline when the worker first observes it. The deadline exits with code 1 if the failing worker and its siblings do not settle in time.
 
-A hard exit does not invent a task failure or retry transition. Active leases remain durable PostgreSQL state. Another worker recovers them after lease expiry using the existing fenced recovery protocol. External effects remain at least once, so handlers must retain their normal idempotency strategy.
+A hard exit does not invent a task failure or retry transition. A handler that does not return in the unwind window keeps its lease until the lease expires. Active leases remain durable PostgreSQL state. Another worker recovers them after lease expiry using the existing fenced recovery protocol. External effects remain at least once, so handlers must retain their normal idempotency strategy.
 
 The deadline exists because JavaScript cannot safely preempt an arbitrary promise or synchronous computation. A handler that never settles can otherwise keep graceful shutdown pending forever.
 

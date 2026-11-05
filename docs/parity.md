@@ -142,8 +142,7 @@ lease loss can cancel a waiting task. In all seven SDKs, the worker then removes
 batch at once. The task settles with its cancellation, and the batch handler never gets it. The
 other waiting tasks keep their order and dispatch.
 
-In the Go, Rust, Ruby, JVM, and .NET workers, the shutdown cancellation at the end of the drain
-grace has the same effect. A task that still waits then leaves its batch, and the handler does not
+In all seven SDKs, the shutdown cancellation at the end of the drain grace has the same effect. A task that still waits then leaves its batch, and the handler does not
 run it. The
 [Batch handlers](architecture/lifecycle.md#batch-handlers) section of the lifecycle page states the
 rule.
@@ -261,7 +260,7 @@ differ today, and the reasons follow the table.
 | Worker registry interval                          | 5,000 ms                                                  | 5,000 ms                                                  | 5,000 ms                                                  | 5,000 ms                                                  | 5,000 ms                                                  | 5,000 ms                                                  | 5,000 ms                                                  |
 | Schedule catch-up limit                           | 100                                                       | 100                                                       | 100                                                       | 100                                                       | 100                                                       | 100                                                       | 100                                                       |
 | Dispatch cohorts                                  | 1 below concurrency 8, else concurrency / 8 within 2 to 8 | 1 below concurrency 8, else concurrency / 8 within 2 to 8 | 1 below concurrency 8, else concurrency / 8 within 2 to 8 | 1 below concurrency 8, else concurrency / 8 within 2 to 8 | 1 below concurrency 8, else concurrency / 8 within 2 to 8 | 1 below concurrency 8, else concurrency / 8 within 2 to 8 | 1 below concurrency 8, else concurrency / 8 within 2 to 8 |
-| Shutdown grace, then                              | 25,000 ms, then exit the process                          | 25,000 ms, then exit the process                          | 25,000 ms, then abandon the handlers                      | 25,000 ms, then abandon the handlers                      | 25,000 ms, then abandon the handlers                      | 25,000 ms, then abandon the handlers                      | 25,000 ms, then abandon the handlers                      |
+| Shutdown grace, then                              | 25,000 ms, cancel, then exit the process                  | 25,000 ms, cancel, then exit the process                  | 25,000 ms, cancel, then abandon the handlers              | 25,000 ms, cancel, then abandon the handlers              | 25,000 ms, cancel, then abandon the handlers              | 25,000 ms, cancel, then abandon the handlers              | 25,000 ms, cancel, then abandon the handlers              |
 | Handler retry delay override                      | `retryDelayMs`, unset                                     | `retry_delay_ms`, unset                                   | `RetryDelay`, unset                                       | `retry_delay`, unset                                      | `retry_delay`, unset                                      | `retryDelay`, unset                                       | `RetryDelay`, unset                                       |
 | Handler retry delay override range                | 0 to 2,147,483,647 ms, refused outside                    | 0 to 2,147,483,647 ms, refused outside                    | 0 to 2,147,483,647 ms, refused outside                    | 0 to 2,147,483,647 ms, refused outside                    | 0 to 2,147,483,647 ms, refused outside                    | 0 to 2,147,483,647 ms, refused outside                    | 0 to 2,147,483,647 ms, refused outside                    |
 | Enqueue execution timeout                         | Unset or 0 is none; else 1 to 31,536,000,000 ms           | Unset or 0 is none; else 1 to 31,536,000,000 ms           | Unset or 0 is none; else 1 to 31,536,000,000 ms           | Unset or 0 is none; else 1 to 31,536,000,000 ms           | Unset or 0 is none; else 1 to 31,536,000,000 ms           | Unset or 0 is none; else 1 to 31,536,000,000 ms           | Unset or 0 is none; else 1 to 31,536,000,000 ms           |
@@ -327,20 +326,23 @@ Seven rows carry a condition the setting name alone cannot.
   records.
 
 The shutdown deadline agrees at 25,000 ms, and it sits under the 30 second termination grace a
-container platform gives a process by default. What follows that deadline cannot agree, and it is
-the one accepted exception.
+container platform gives a process by default. What PostgreSQL sees after that deadline also
+agrees. [ADR 0116](decisions/0116-give-back-a-task-at-the-end-of-the-shutdown-grace-in-every-sdk.md)
+records the rule.
 
-A TypeScript or Python worker owns a process, so its deadline ends that process. A Go, Rust, Ruby,
-JVM, or .NET `Worker` runs inside a caller's process, and a library that ends someone else's process is wrong. Its deadline
-cancels the handlers, gives them one short window to unwind, then stops renewing the leases of
-whatever still runs. It returns `ErrShutdownIncomplete` in Go or `Error::ShutdownIncomplete` in
-Rust. It raises `ShutdownIncompleteError` in Ruby and throws `ShutdownIncompleteException` on the
-JVM and in .NET. The caller decides whether to exit.
+At the deadline, all seven SDKs cancel the handlers that still run and give them a 250 ms window to
+unwind. The heartbeat keeps each lease alive in that window. If a handler returns a value in the
+window, the worker completes the task. If it fails, the worker releases the task through
+`release_owned_v1`, and the task keeps its `current_attempt`. A handler that does not return in the
+window holds a lease that nobody renews. `recover_expired_telemetry_v1` then recovers its task and
+charges the attempt.
 
-PostgreSQL sees the same thing either way. An abandoned handler holds a lease no one renews, so
-`recover_expired_telemetry_v1` recovers its task exactly as it recovers the task of a process that
-exited at its own deadline. What differs is what the handler observes: a Go, Rust, Ruby, JVM, or .NET
-handler observes cancellation, where a TypeScript or Python handler observes termination.
+The one difference is what comes after the window. A TypeScript or Python worker owns a process, so
+its process runner exits that process with code 1. A Go, Rust, Ruby, JVM, or .NET `Worker` runs
+inside a caller's process, and a library must not end the process of another program. It stops
+renewing the leases of the handlers that still run. It returns `ErrShutdownIncomplete` in Go or
+`Error::ShutdownIncomplete` in Rust. It raises `ShutdownIncompleteError` in Ruby and throws
+`ShutdownIncompleteException` on the JVM and in .NET. The caller decides whether to exit.
 
 The queue of a handler task group add agrees. A handler can add a task to its own task group. If
 the request names no queue, all seven SDKs put the task in the queue of the member task that adds it.

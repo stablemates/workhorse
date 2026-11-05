@@ -2179,37 +2179,37 @@ export const PARITY_DEFAULT_ROWS: readonly ParityDefaultRow[] = [
   {
     setting: "Shutdown grace, then",
     dotnet: {
-      value: "25,000 ms, then abandon the handlers",
+      value: "25,000 ms, cancel, then abandon the handlers",
       file: "dotnet/src/Workhorse/WorkerOptions.cs",
       pattern: "public TimeSpan ShutdownGrace { get; set; } = TimeSpan.FromSeconds(25);",
     },
     jvm: {
-      value: "25,000 ms, then abandon the handlers",
+      value: "25,000 ms, cancel, then abandon the handlers",
       file: "jvm/workhorse/src/main/java/run/workhorse/Worker.java",
       pattern: "private long shutdownGraceMs = 25_000;",
     },
     rust: {
-      value: "25,000 ms, then abandon the handlers",
+      value: "25,000 ms, cancel, then abandon the handlers",
       file: "rust/src/worker/mod.rs",
       pattern: "shutdown_grace_period: Duration::from_secs(25),",
     },
     typescript: {
-      value: "25,000 ms, then exit the process",
+      value: "25,000 ms, cancel, then exit the process",
       file: "typescript/core/src/worker-process.ts",
       pattern: "DEFAULT_SHUTDOWN_TIMEOUT_MS = 25_000",
     },
     python: {
-      value: "25,000 ms, then exit the process",
+      value: "25,000 ms, cancel, then exit the process",
       file: "python/src/workhorse/worker_process.py",
       pattern: "_DEFAULT_SHUTDOWN_TIMEOUT_MS = 25_000",
     },
     go: {
-      value: "25,000 ms, then abandon the handlers",
+      value: "25,000 ms, cancel, then abandon the handlers",
       file: "go/worker.go",
       pattern: "defaultShutdownGracePeriod = 25 * time.Second",
     },
     ruby: {
-      value: "25,000 ms, then abandon the handlers",
+      value: "25,000 ms, cancel, then abandon the handlers",
       file: "ruby/lib/stablemates/workhorse/worker.rb",
       pattern: "shutdown_grace: 25,",
     },
