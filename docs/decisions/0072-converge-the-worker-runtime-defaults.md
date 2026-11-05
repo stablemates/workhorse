@@ -4,6 +4,8 @@
 - **Date:** 2026-09-20
 - **Amended by:** [ADR 0078](0078-start-a-long-running-workers-first-claim-beside-its-startup-maintenance-pass.md)
   (a long-running worker starts its first claim beside its startup maintenance pass)
+  and [ADR 0116](0116-give-back-a-task-at-the-end-of-the-shutdown-grace-in-every-sdk.md)
+  (every SDK gives back a task at the end of the shutdown grace)
 - **Related:** [ADR 0011](0011-daily-retention-and-split-maintenance.md), [ADR 0054](0054-define-what-1-0-0-promises.md)
 
 ## Context

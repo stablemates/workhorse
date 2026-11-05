@@ -138,12 +138,13 @@ interface SdkVariant {
 }
 
 /**
- * The TypeScript and Python workers have no shutdown grace. Their process runners exit the process
- * with status 1 when the grace passes, and the probes do the same.
+ * The TypeScript and Python workers have no shutdown grace. Their process runners abort the
+ * handlers when the grace passes, wait 250 ms for them to unwind, and exit the process with
+ * status 1.
  */
-const noGraceUnwind = (runner: string) => ({
-  ms: 0,
-  source: `${runner}; no unwind window after the grace`,
+const processRunnerUnwind = (runner: string) => ({
+  ms: 250,
+  source: `${runner}; 250 ms unwind window after the grace`,
 });
 
 function sdkVersion({ manifest: [path, pattern] }: SdkVariant): string | null {
@@ -184,8 +185,8 @@ function pythonVariant(variant: string): SdkVariant {
       ]),
     ],
     manifest: ["python/pyproject.toml", /^version = "([^"]+)"/m],
-    unwind: noGraceUnwind(
-      "python/src/workhorse/worker_process.py: run_worker_process exits at shutdown_timeout_ms",
+    unwind: processRunnerUnwind(
+      "python/src/workhorse/worker_process.py: run_worker_process aborts the handlers at shutdown_timeout_ms",
     ),
   };
 }
@@ -203,8 +204,8 @@ const sdkVariants: Record<string, SdkVariant> = {
       ]),
     versions: [mise(["node", "--version"])],
     manifest: ["typescript/core/package.json", /"version": "([^"]+)"/],
-    unwind: noGraceUnwind(
-      "typescript/core/src/worker-process.ts: runWorkerProcess exits at shutdownTimeoutMs",
+    unwind: processRunnerUnwind(
+      "typescript/core/src/worker-process.ts: runWorkerProcess aborts the handlers at shutdownTimeoutMs",
     ),
   },
   go: {

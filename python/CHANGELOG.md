@@ -10,6 +10,17 @@ adds.
 
 ## Unreleased
 
+### A deploy no longer charges an attempt to a handler that stops at the shutdown abort
+
+At the end of its shutdown grace, `run_worker_process` exited the process. Lease recovery then charged
+an attempt to each task that still ran, so a task with few attempts could fail only because of
+deploys. Now the runner first cancels the token of each active handler and waits up to 250 ms. If
+a handler raises in that window, the worker releases its task through `release_owned_v1`, and the
+task keeps its attempt. If a handler returns a value, the worker completes the task. Then the
+process exits with code 1, as before. A waiting batch member leaves its batch and is released. Go,
+Rust, Ruby, the JVM, and .NET already did this ([ADR
+0116](../docs/decisions/0116-give-back-a-task-at-the-end-of-the-shutdown-grace-in-every-sdk.md)).
+
 ### The dashboard task detail shows the task group of a member task
 
 Migration 0091 (`0091-show-the-task-group-in-the-task-detail.sql`) moves the schema to version 90.

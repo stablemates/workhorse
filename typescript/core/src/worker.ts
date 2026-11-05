@@ -91,7 +91,11 @@ import {
   workerWaitsRead,
   type WorkerSchemaCheck,
 } from "./worker-internal.js";
-import { reportWorkerFailure, reportWorkerStartup } from "./worker-failure.js";
+import {
+  onWorkerShutdownAbort,
+  reportWorkerFailure,
+  reportWorkerStartup,
+} from "./worker-failure.js";
 import { createHandlerContext } from "./handler-context.js";
 import { TaskAttempt } from "./task-attempt.js";
 
@@ -736,6 +740,11 @@ export class Worker {
   // For each reporter callback, when the worker last reported a failure of it.
   private readonly reporterFailures = new Map<ReporterName, ReporterFailureState>();
   private stopping = false;
+  // The attempts whose handlers run now. The shutdown abort reaches each of them.
+  private readonly activeAttempts = new Set<TaskAttempt>();
+  // Set when the process runner aborted the handlers at the end of its shutdown grace. An attempt
+  // that starts after that gets the abort at once.
+  private shutdownAborted = false;
   private locallyPaused = false;
   private remotelyPaused = false;
   private activeSlots = 0;
@@ -1145,6 +1154,10 @@ export class Worker {
           "heartbeat connection, and one statement.",
       );
     }
+    onWorkerShutdownAbort(this, () => {
+      this.shutdownAborted = true;
+      for (const attempt of this.activeAttempts) attempt.abortForShutdown();
+    });
   }
 
   handle<TPayload extends Json = Json, TResult extends Json = Json>(
@@ -1728,6 +1741,8 @@ export class Worker {
       activation,
       this.claimSentAt.get(task) ?? monotonicNow(),
     );
+    this.activeAttempts.add(attempt);
+    if (this.shutdownAborted) attempt.abortForShutdown();
     try {
       let writeCompletion: (claim?: CompletionClaim) => Promise<CompletionClaimResult>;
       try {
@@ -1745,16 +1760,7 @@ export class Worker {
             "workhorse.queue.name": task.queue,
             "workhorse.worker.id": this.workerId,
           });
-          const released = await this.queue.releaseOwned(task, this.workerId);
-          span.setAttribute("workhorse.handler.outcome", released);
-          if (released === "cancel_requested") {
-            if (!(await attempt.acknowledgeRequestedCancellation())) {
-              span.setAttribute("workhorse.handler.outcome", "stale");
-            }
-          } else if (released === "stale") {
-            // A lease that lapsed under an unchanged fence can still settle a due boundary.
-            span.setAttribute("workhorse.handler.outcome", await attempt.reconcileStale());
-          } else attempt.recordRelease(released);
+          await this.releaseOwned(task, span, attempt);
           return;
         }
         await this.inject("beforeHandler", task);
@@ -1787,7 +1793,8 @@ export class Worker {
           attempt.recordExecution("lease_lost");
           return;
         }
-        attempt.requireLease();
+        // A value that the handler returns after the shutdown abort still completes the task.
+        attempt.requireSettlementLease();
         await this.inject("beforeComplete", task);
         writeCompletion = await this.prepareCompletion(task, result);
       } catch (error) {
@@ -1796,7 +1803,21 @@ export class Worker {
       }
       // The write runs outside the handler's try. A database error here is a settlement failure,
       // not the handler's, so it propagates like a failing fail_v1 instead of charging the attempt.
-      const accepted = await this.writeCompletion(task, writeCompletion);
+      // After the shutdown abort, the completion goes alone through complete_v1, as Go
+      // settleAfterShutdown does. A fused completion could wait behind a batch in flight, and the
+      // stopped worker claims nothing.
+      let accepted: boolean;
+      if (attempt.stoppedForShutdown) {
+        try {
+          accepted = (await writeCompletion()).accepted;
+        } catch (error) {
+          // As after a failed release, lease recovery settles the task.
+          this.logShutdownSettlementFailure(task, error);
+          return;
+        }
+      } else {
+        accepted = await this.writeCompletion(task, writeCompletion);
+      }
       if (!accepted) {
         if (await attempt.acknowledgeCancellation()) {
           // No heartbeat delivered the request that made complete_v1 refuse the write, so the
@@ -1820,6 +1841,7 @@ export class Worker {
       attempt.recordExecution("succeeded");
       await this.inject("afterComplete", task);
     } finally {
+      this.activeAttempts.delete(attempt);
       attempt.stop();
     }
   }
@@ -1876,6 +1898,52 @@ export class Worker {
     } finally {
       reservation?.settle(claimed);
     }
+  }
+
+  // Gives an owned task back through release_owned_v1 and records the verdict of PostgreSQL.
+  private async releaseOwned(
+    task: ClaimedTask,
+    span: WorkhorseTelemetrySpan,
+    attempt: TaskAttempt,
+  ): Promise<void> {
+    const released = await this.queue.releaseOwned(task, this.workerId);
+    span.setAttribute("workhorse.handler.outcome", released);
+    if (released === "cancel_requested") {
+      if (!(await attempt.acknowledgeRequestedCancellation())) {
+        span.setAttribute("workhorse.handler.outcome", "stale");
+      }
+    } else if (released === "stale") {
+      // A lease that lapsed under an unchanged fence can still settle a due boundary.
+      span.setAttribute("workhorse.handler.outcome", await attempt.reconcileStale());
+    } else attempt.recordRelease(released);
+  }
+
+  // Releases the task of a handler that the shutdown abort ended, as Go settleAfterShutdown does.
+  // If the release fails, the worker logs the failure, and lease recovery settles the task.
+  private async releaseAfterShutdown(
+    task: ClaimedTask,
+    span: WorkhorseTelemetrySpan,
+    attempt: TaskAttempt,
+  ): Promise<void> {
+    try {
+      await this.releaseOwned(task, span, attempt);
+    } catch (error) {
+      this.logShutdownSettlementFailure(task, error);
+    }
+  }
+
+  // A completion or a release after the shutdown abort failed. Lease recovery settles the task.
+  private logShutdownSettlementFailure(task: ClaimedTask, error: unknown): void {
+    logWarn(
+      "workhorse.worker.shutdown_settlement_failed",
+      "Worker could not settle a task after the shutdown abort",
+      {
+        ...taskSpanAttributes(task),
+        "workhorse.queue.name": task.queue,
+        "workhorse.worker.id": this.workerId,
+        "error.type": error instanceof Error ? error.name : typeof error,
+      },
+    );
   }
 
   // Settles an attempt whose handler, hooks, or completion threw.
@@ -1943,6 +2011,12 @@ export class Worker {
         "workhorse.handler.outcome",
         executionTimedOut ? "timeout_exceeded" : "deadline_exceeded",
       );
+      return;
+    }
+    // The process runner aborted the handler at the end of its shutdown grace. The stop is not a
+    // failure of the task, so the worker gives the task back and its attempt stays (SM-1919).
+    if (attempt.stoppedForShutdown) {
+      await this.releaseAfterShutdown(task, span, attempt);
       return;
     }
     span.recordException(errorForTelemetry(error, task.redactErrorDetails));
@@ -2219,6 +2293,7 @@ export class Worker {
     requestedStopVersion: number,
   ): Promise<void> {
     this.stopping = this.stopVersion !== requestedStopVersion;
+    this.shutdownAborted = false;
     this.draining = false;
     this.running = true;
     logInfo("workhorse.worker.started", "Worker started", {

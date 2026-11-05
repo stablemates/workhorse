@@ -28,6 +28,9 @@ class FixtureWorker:
             _emit("ready")
             self._ready = True
 
+    def _abort_handlers_for_shutdown(self) -> None:
+        pass
+
     def _stop_version_snapshot(self) -> int:
         with self._state_lock:
             return self._stop_version

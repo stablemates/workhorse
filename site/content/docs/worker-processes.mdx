@@ -96,19 +96,22 @@ process waits for its active tasks to finish and takes no new tasks.
 2. The process sets readiness to false and calls `Worker.stop` on each worker.
 3. The workers stop asking PostgreSQL for tasks. The 3 active tasks keep their leases.
 4. Two tasks finish. The third task is still running when the 25-second deadline ends.
-5. The process exits. Another worker recovers the third task after its lease expires.
+5. The process aborts the signal of the third handler, waits a short time, and exits. The handler
+   did not stop, so another worker recovers the third task after its lease expires.
 
 If a claim was already in progress when the signal arrived, that claim can still commit. The
 process then owns that lease, so it also drains that task.
 
-`shutdownTimeoutMs` sets the drain deadline. If the deadline ends, the process exits. The remaining
-leases stay in PostgreSQL. After a lease expires, the fenced recovery of Workhorse gives the task to
+`shutdownTimeoutMs` sets the drain deadline. If the deadline ends, the process aborts
+`HandlerContext.signal` of each active handler, and then it exits. If a handler stops at that
+signal and throws, the worker releases its task, and the task keeps its attempt. If it returns a
+value, the worker completes the task. The remaining leases stay in PostgreSQL. After a lease expires, the fenced recovery of Workhorse gives the task to
 another worker. Thus, each task finishes in this process or in another worker.
 
 Two limits apply:
 
-- Process shutdown does not abort `HandlerContext.signal`, and it does not record a cancellation.
-  If the task itself must stop, call `queue.cancel`.
+- Process shutdown does not record a cancellation. If the task itself must stop, call
+  `queue.cancel`.
 - Set the drain deadline shorter than the termination window of your platform. A second signal
   makes the process exit immediately. Thus, a handler must be safe to recover after a forced stop.
   A handler that uses checkpoints and is idempotent is safe.
@@ -124,7 +127,10 @@ The [Kubernetes deployment reference](/docs/kubernetes) uses a 110-second proces
   Adapter resources close only after every run loop settles.
 - A claim transaction that is in flight can commit after shutdown starts. The worker drains that
   lease.
-- Process termination does not abort a handler and does not cancel a task.
+- Process termination does not cancel a task. At the deadline, the runner aborts the signal of
+  each active handler with a `WorkerShutdownError` reason. It waits 250 ms or until the drain ends,
+  and then it exits. In that window, a handler that throws releases its task through
+  `release_owned_v1`, and a handler that returns a value completes its task.
 - `shutdownTimeoutMs` is a safe integer from 1 to 3,600,000. The default is 25,000 ms.
 
 | Event                          | Exit                                                                         |
@@ -132,7 +138,7 @@ The [Kubernetes deployment reference](/docs/kubernetes) uses a 110-second proces
 | Clean drain                    | Code 0                                                                       |
 | Second `SIGINT`                | Code 130                                                                     |
 | Second `SIGTERM`               | Code 143                                                                     |
-| Missed deadline                | Code 1                                                                       |
+| Missed deadline                | Code 1, after the handler abort and the 250 ms unwind window                 |
 | Unexpected worker-loop failure | Stops sibling workers, applies the same bounded drain, and exits with code 1 |
 
 A hard exit leaves active leases for the usual fenced recovery after lease expiry.

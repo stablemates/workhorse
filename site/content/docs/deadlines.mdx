@@ -318,12 +318,14 @@ on `EnqueueOptions.builder()` in Java and Kotlin. Set `Deadline` with `Execution
 
 1. At 30 s, a rolling deploy stops the worker process. The worker claims no new tasks and waits for
    its running handlers.
-2. The drain period ends, and the handler still waits for the call.
-3. The process exits, and the handler stops with it.
+2. The drain period ends. The process aborts the signal of the handler, and the handler still waits
+   for the call.
+3. After a short unwind window, the process exits, and the handler stops with it.
 4. Later, the lease of the attempt expires, and recovery returns the task.
 
 Thus, a handler that runs longer than the drain period ends without a result, and recovery must
-return its task. The drain period is the time that a stopping worker process waits for its running
+return its task. If the handler stops at its abort signal in the unwind window, the worker gives
+the task back, and the task keeps its attempt. The drain period is the time that a stopping worker process waits for its running
 handlers. When a worker process stops, it does not cancel a task or create a deadline or a timeout.
 
 Make each handler end well before the drain period of your deployment ends. For long work, do not
@@ -339,9 +341,10 @@ waits. Then each short stage can start again without the stages before it.
 - The recommendation is not a database limit, because deployment grace periods vary.
 - On the first `SIGINT` or `SIGTERM`, a worker process stops claiming. Active handlers and their
   heartbeats continue.
-- Process termination does not create a durable cancellation or abort a handler.
-- `shutdownTimeoutMs` bounds that drain. The default is 25,000 ms. A missed deadline exits the
-  process with code 1.
+- The first signal does not create a durable cancellation or abort a handler.
+- `shutdownTimeoutMs` bounds that drain. The default is 25,000 ms. At a missed deadline, the process
+  aborts each active handler and waits 250 ms. A handler that throws in that window releases its
+  task without a charged attempt. Then the process exits with code 1.
 - Hard termination leaves active leases for ordinary expiry recovery.
 - Set execution timeouts deliberately rather than relying on an unbounded handler.
 

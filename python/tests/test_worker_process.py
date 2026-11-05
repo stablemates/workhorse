@@ -17,7 +17,7 @@ import pytest
 from eventual_conditions import eventually
 from reservations import Compatible, ScriptedHeartbeats, ScriptedPool
 
-from workhorse import ClaimedTask, Queue, Worker, run_worker_process
+from workhorse import ClaimedTask, EnqueueOptions, Queue, Worker, run_worker_process
 from workhorse._statements import STATEMENTS, DriverStatement
 
 PROCESS_RUNNER_FIXTURE = Path(__file__).parent / "fixtures" / "process_runner.py"
@@ -524,3 +524,113 @@ def test_handler_system_exit_releases_ownership_and_exits_the_process(database_u
         ).fetchone()
     assert outcome == ("succeeded", 2, {"recovered": True})
     assert completions == 1
+
+
+# SM-1919: at the end of the shutdown grace, run_worker_process exited the process, and lease
+# recovery charged the attempt of each task that still ran. The runner now cancels the handlers
+# first. A handler that reacts gives its task back, and the task keeps its attempt.
+@pytest.mark.integration
+@pytest.mark.skipif(os.name == "nt", reason="POSIX process signals are required")
+@pytest.mark.parametrize("returns", [False, True], ids=["raises", "returns"])
+def test_shutdown_grace_end_gives_back_the_task_of_a_handler_that_reacts(
+    database_url: str, returns: bool
+) -> None:
+    with psycopg.connect(database_url) as enqueue_connection:
+        task_id = Queue(enqueue_connection).enqueue(
+            "process.shutdown", {}, options=EnqueueOptions(max_attempts=1)
+        )
+        enqueue_connection.commit()
+    reasons: list[BaseException] = []
+
+    def handler(_payload: object, context: Any) -> dict[str, bool]:
+        os.kill(os.getpid(), signal.SIGTERM)
+        assert context.cancellation.wait(10)
+        reasons.append(context.cancellation.reason)
+        if returns:
+            return {"stopped": True}
+        raise context.cancellation.reason
+
+    worker = Worker(worker_pool, worker_id=f"python-shutdown-{returns}", poll_ms=10).handle(
+        "process.shutdown", handler
+    )
+    exits: list[int] = []
+    run_worker_process(
+        worker,
+        shutdown_timeout_ms=100,
+        force_exit=exits.append,  # type: ignore[arg-type]
+    )
+
+    assert exits == [1]
+    assert [type(reason).__name__ for reason in reasons] == ["_WorkerShutdownError"]
+    with psycopg.connect(database_url, autocommit=True) as connection:
+        if returns:
+            outcome = connection.execute(
+                "SELECT state, current_attempt FROM workhorse.task_outcome WHERE task_id = %s",
+                (task_id,),
+            ).fetchone()
+            assert outcome == ("succeeded", 1)
+        else:
+            runtime = connection.execute(
+                "SELECT state, current_attempt FROM workhorse.task_runtime WHERE task_id = %s",
+                (task_id,),
+            ).fetchone()
+            assert runtime == ("ready", 1)
+            events = connection.execute(
+                "SELECT event_type FROM workhorse.task_event WHERE task_id = %s"
+                " ORDER BY occurred_at, event_id",
+                (task_id,),
+            ).fetchall()
+            assert [event for (event,) in events] == ["enqueued", "claimed", "released"]
+
+
+# The runner cancels the tokens one at a time. A batch callback can wake at the first token and
+# raise while the token of another member is still live. That member must be released too.
+@pytest.mark.integration
+@pytest.mark.skipif(os.name == "nt", reason="POSIX process signals are required")
+def test_shutdown_grace_end_releases_a_batch_member_whose_token_is_still_live(
+    database_url: str,
+) -> None:
+    with psycopg.connect(database_url) as enqueue_connection:
+        queue = Queue(enqueue_connection)
+        task_ids = [
+            queue.enqueue("process.batch-shutdown", {}, options=EnqueueOptions(max_attempts=1))
+            for _ in range(2)
+        ]
+        enqueue_connection.commit()
+
+    def states() -> list[str]:
+        with psycopg.connect(database_url, autocommit=True) as connection:
+            rows = connection.execute(
+                "SELECT state FROM workhorse.task_runtime WHERE task_id = ANY(%s)"
+                " UNION ALL"
+                " SELECT state FROM workhorse.task_outcome WHERE task_id = ANY(%s)",
+                (task_ids, task_ids),
+            ).fetchall()
+        return [state for (state,) in rows]
+
+    def hold_the_next_cancellation(_reason: BaseException) -> None:
+        # This runs on the cancelling thread, so the next token stays live until both settle.
+        deadline = monotonic() + 5
+        while monotonic() < deadline and "active" in states():
+            sleep(0.01)
+
+    def batch(items: list[Any]) -> list[Any]:
+        for item in items:
+            item.context.cancellation._on_cancel(hold_the_next_cancellation)
+        os.kill(os.getpid(), signal.SIGTERM)
+        while not any(item.context.cancellation.cancelled for item in items):
+            sleep(0.005)
+        raise RuntimeError("stopped at the shutdown abort")
+
+    worker = Worker(
+        worker_pool, worker_id="python-batch-shutdown", poll_ms=10, concurrency=2
+    ).handle_batch("process.batch-shutdown", batch, max_size=2, linger_ms=5_000)
+    exits: list[int] = []
+    run_worker_process(
+        worker,
+        shutdown_timeout_ms=100,
+        force_exit=exits.append,  # type: ignore[arg-type]
+    )
+
+    assert exits == [1]
+    assert states() == ["ready", "ready"]

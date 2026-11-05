@@ -83,7 +83,9 @@ When the process gets the first `SIGINT` or `SIGTERM`, it sets readiness to fals
 A claim transaction that is already in progress can commit after the shutdown starts. The worker
 drains that committed lease. It does not abandon the lease.
 
-Process termination does not create a durable task cancellation. It also does not abort a handler.
+Process termination does not create a durable task cancellation. The first signal does not abort a
+handler. At the shutdown deadline, the process runner aborts each handler that still runs, as
+[Shutdown deadline and failure](#shutdown-deadline-and-failure) states.
 
 ### Shutdown deadline and failure
 
@@ -95,11 +97,24 @@ from 1 through 3,600,000, and its default is 25,000 ms. The process refuses zero
 | Event                          | Exit                                                                     |
 | ------------------------------ | ------------------------------------------------------------------------ |
 | Second signal                  | Conventional signal code                                                 |
-| Missed deadline                | Code 1                                                                   |
+| Missed deadline                | Code 1, after the shutdown abort and the 250 ms unwind window            |
 | Unexpected worker-loop failure | Stops sibling workers, applies the same bounded drain, fails the process |
 
-Hard termination leaves active leases to ordinary fenced expiry recovery. If the process fails, an
-external supervisor can restart it.
+At the deadline, the process runner aborts the signal of each handler that still runs. The abort
+reason is a `WorkerShutdownError`, and the heartbeat keeps the lease alive. Then the runner waits
+250 ms, `HANDLER_UNWIND_MS`, or until the drain ends, and exits with code 1. A drain that ends in
+that window does not make `runWorkerProcess` return before the exit. In that window, the
+worker settles each handler that returns, as Go `settleAfterShutdown` does:
+
+1. If the handler returns a value, the worker completes the task.
+2. If the handler throws, or the result cannot be stored, the worker releases the task through
+   `release_owned_v1`. The task keeps its `current_attempt`.
+3. If the completion or the release fails, the worker logs `workhorse.worker.shutdown_settlement_failed`. Lease
+   recovery then settles the task.
+
+A handler that does not return in the window holds a lease that nobody renews. Ordinary fenced
+expiry recovery settles its task and charges the attempt as `lease_expired`. If the process fails,
+an external supervisor can restart it.
 
 <picture>
   <source media="(max-width: 600px) and (prefers-color-scheme: dark)" srcset="../../site/public/diagrams/worker-shutdown-narrow-dark.png">

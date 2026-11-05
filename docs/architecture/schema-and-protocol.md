@@ -1303,8 +1303,9 @@ arrives, the task raises the reason and does not join a batch. The other waiting
 order and their linger deadline. A task that the coordinator selected for a batch stays in that
 batch, and the handler reads its `cancellation`.
 
-The Python worker cancels no token when it stops. Its stop deadline ends the process, so a stop
-does not remove a waiting task.
+`Worker.stop()` cancels no token. At the end of its shutdown grace, `run_worker_process` cancels the
+token of each running attempt with `_WorkerShutdownError`. A waiting task then leaves its batch, and
+the worker releases it through `release_owned_v1` without a charged attempt.
 
 #### Items and outcomes
 
@@ -1503,7 +1504,17 @@ handler of the main thread.
 - If the worker drains before the deadline, the function restores the previous handlers and returns.
 - A second signal calls `force_exit` with 128 plus its signal number. That gives 130 for `SIGINT`
   and 143 for `SIGTERM`.
-- An expired deadline calls `force_exit(1)`.
+- An expired deadline calls `Worker._abort_handlers_for_shutdown()` on the timer thread. It cancels
+  the `CancellationToken` of each running handler with `_WorkerShutdownError`. Then the runner waits
+  0.25 s, `_HANDLER_UNWIND_SECONDS`, or until the drain ends, and calls `force_exit(1)`. If a handler
+  returns a value in that window, the worker completes the task. If it raises, the worker releases
+  the task through `release_owned_v1`, and the task keeps its attempt. If the completion or the
+  release fails, the worker logs `workhorse.worker.shutdown_settlement_failed`.
+- The worker sets `_shutdown_aborted` before it cancels the first token. A handler whose token is
+  still live, such as a batch member whose callback raised at the token of another member, reads
+  that flag and is released too.
+- If the expiry started, the main thread waits for its `force_exit(1)` call before
+  `run_worker_process` returns, also when the drain ends inside the window.
 
 A fatal worker error starts the same deadline. When `Worker` observes the first fatal error of a
 run, it reports it through `_report_fatal_error`, before `_drain_active_threads` waits. That

@@ -27,6 +27,20 @@ const EXPIRATION_RETRY_MAX_MS = 1_000;
 // bound their retries of a not_due answer.
 const SHARED_EXPIRATION_BUDGET_MS = 1_000;
 
+/**
+ * AbortSignal reason when the worker process reaches the end of its shutdown grace.
+ *
+ * The worker still owns the task, so the heartbeat keeps the lease alive while the handler unwinds.
+ * A value that the handler returns then completes the task, and an error releases it without an
+ * attempt (SM-1919).
+ */
+class WorkerShutdownError extends Error {
+  constructor(readonly taskId: string) {
+    super(`The worker is shutting down and stopped the handler of task ${taskId}`);
+    this.name = "WorkerShutdownError";
+  }
+}
+
 type AttemptOutcome =
   | "completed"
   | "failed"
@@ -108,6 +122,8 @@ export class TaskAttempt {
   // verdict, so asking it to expire ownership continues after the attempt stops.
   private expiryReported = false;
   private removeHeartbeatLease: (() => void) | undefined;
+  // Set when the shutdown abort ended the handler signal before any other outcome.
+  private shutdownRequested = false;
 
   constructor(
     readonly task: ClaimedTask,
@@ -156,6 +172,34 @@ export class TaskAttempt {
     }
     if (this.controller.signal.aborted)
       throw this.controller.signal.reason ?? new Error("Task lease was lost");
+  }
+
+  /**
+   * The check before the worker writes the final transition of the attempt. The shutdown abort does
+   * not end the ownership, so the worker can still complete or release the task after it.
+   */
+  requireSettlementLease(): void {
+    if (this.leaseWindowEndsAt !== undefined && monotonicNow() >= this.leaseWindowEndsAt) {
+      this.endLeaseWindow();
+    }
+    if (this.controller.signal.aborted && !this.stoppedForShutdown)
+      throw this.controller.signal.reason ?? new Error("Task lease was lost");
+  }
+
+  /**
+   * Aborts the handler signal at the end of the shutdown grace. The heartbeat continues, because
+   * `release_owned_v1` and `complete_v1` refuse an expired lease. Another outcome that already won
+   * keeps its signal reason.
+   */
+  abortForShutdown(): void {
+    if (this.arbiter.outcome !== undefined || this.controller.signal.aborted) return;
+    this.shutdownRequested = true;
+    this.controller.abort(new WorkerShutdownError(this.task.id));
+  }
+
+  /** True when the shutdown abort ended the handler and no other outcome won after it. */
+  get stoppedForShutdown(): boolean {
+    return this.shutdownRequested && this.arbiter.outcome === undefined;
   }
 
   /** Suspend on a durable wait or child, even if another outcome already won. */

@@ -1007,12 +1007,11 @@ schema and SQL protocol page names the error that the removed task settles with:
 [.NET](schema-and-protocol.md#net-batch-handlers). The Go and Rust workers return the cancellation
 error of the task.
 
-In the Go, Rust, Ruby, JVM, and .NET workers, the rule also applies to the shutdown cancellation at
-the end of the drain grace. A task that still waits at that point leaves its batch, and the callback
-does not run it. In Ruby, the JVM, and .NET, the drain flush dispatches a lingering batch before that
-point when all its tasks have arrived. Those three workers release a task that left for the shutdown
-to its queue without a charged attempt. The Python worker cancels no token when it stops, because its
-stop deadline ends the process.
+In all seven SDKs, the rule also applies to the shutdown cancellation at the end of the drain grace.
+In TypeScript and Python, the process runner sends that cancellation before the process exits. A
+task that still waits at that point leaves its batch, and the callback does not run it. The worker
+releases that task to its queue without a charged attempt. In Ruby, the JVM, and .NET, the drain
+flush dispatches a lingering batch before that point when all its tasks have arrived.
 
 A task stops waiting when the coordinator selects it for a batch. After the selection, the callback
 owns the outcome of the task, also while the dispatch evidence is written. If the signal of a
@@ -1104,10 +1103,14 @@ Two logs cover batches, without payloads or task IDs:
 - `resume()` clears the local pause and makes claims immediately eligible.
 - `stop()` enters draining state and prevents later claims. It allows every already active handler
   and its final fenced transition to finish before `run()` resolves. In TypeScript and Python,
-  `Worker.run()` waits for these handlers without a bound. The worker process runner exits at its
-  shutdown deadline. Go, Rust, Ruby, the JVM, and .NET cancel the handlers at the end of their
-  shutdown grace, and then abandon each handler that still runs. [ADR 0072](../decisions/0072-converge-the-worker-runtime-defaults.md)
-  records this exception, and [Parity](../parity.md) states the defaults.
+  `Worker.run()` waits for these handlers without a bound. All seven SDKs cancel the handlers at the
+  end of the shutdown grace and give them a 250 ms unwind window. In TypeScript and Python, the
+  worker process runner sends that cancellation. A handler that returns a value in the window
+  completes its task. A handler that fails in the window releases its task through
+  `release_owned_v1`, and the task keeps its attempt. Then the TypeScript and Python runners exit
+  the process, and the other five SDKs abandon each handler that still runs.
+  [ADR 0116](../decisions/0116-give-back-a-task-at-the-end-of-the-shutdown-grace-in-every-sdk.md)
+  records this rule, and [Parity](../parity.md) states the defaults.
 
 A worker has two pause sources, and either one stops claims:
 
@@ -2013,8 +2016,8 @@ writes nothing. Each `run()` announces a new `instanceId`, and `deregister_worke
 row only while it names that instance. A late registration write of the ended run could still
 replace the row and the pause state of the later run. Each `run()` writes its first
 registration at once, also within the registry interval of the ended run. In `runWorkerProcess`, the shutdown grace is `shutdownTimeoutMs`, 25,000
-ms by default. At the grace, the process exits with code 1, so every wait on its stop path ends by
-the grace.
+ms by default. At the grace, the runner aborts the handlers, waits at most 250 ms, and exits with
+code 1. Thus every wait on its stop path ends by the grace plus that window.
 
 **Deregistration order.** A registration write can wait for a pooled connection or for the
 `workhorse:worker-registry:<id>` advisory lock, and then commit after the stop deadline. If the

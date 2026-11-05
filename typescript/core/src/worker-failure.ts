@@ -29,3 +29,18 @@ export function observeWorkerStartup(worker: object, observer: () => void): void
 export function reportWorkerStartup(worker: object): void {
   startupObservers.get(worker)?.();
 }
+
+/**
+ * The channel in the other direction. At the end of its shutdown grace, the process runner aborts
+ * the signal of each handler that still runs, so the worker can give the task back before the
+ * process exits (SM-1919).
+ */
+const shutdownAborts = new WeakMap<object, () => void>();
+
+export function onWorkerShutdownAbort(worker: object, abort: () => void): void {
+  shutdownAborts.set(worker, abort);
+}
+
+export function abortWorkerHandlers(worker: object): void {
+  shutdownAborts.get(worker)?.();
+}

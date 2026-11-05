@@ -662,6 +662,19 @@ class _DurableWaitSuspension(BaseException):
     pass
 
 
+class _WorkerShutdownError(Exception):
+    """Cancellation reason when the process runner reaches the end of its shutdown grace.
+
+    The worker still owns the task, so the heartbeat keeps the lease alive while the handler
+    unwinds. A value that the handler returns then completes the task, and an error releases it
+    without an attempt (SM-1919).
+    """
+
+    def __init__(self, task_id: str) -> None:
+        super().__init__(f"The worker is shutting down and stopped the handler of task {task_id}")
+        self.task_id = task_id
+
+
 _MAX_WAIT_DURATION_MS = 31_536_000_000
 
 _MAX_CHILD_TASKS = 100
@@ -1714,6 +1727,13 @@ class Worker:
         self._remotely_paused = False
         self._stopping = False
         self._stop_version = 0
+        # The cancellation token and the arbiter of each handler that runs now. The shutdown abort
+        # of the process runner reaches each of them. An attempt that starts after the abort gets
+        # it at once.
+        self._active_attempts: dict[
+            tuple[str, int], tuple[CancellationToken, _AttemptOutcomeArbiter]
+        ] = {}
+        self._shutdown_aborted = False
         # The end of the stop budget, fixed by the first stop of a run (ADR 0071, rule 8).
         self._stop_deadline: float | None = None
         self._heartbeat_lock = Lock()
@@ -2276,6 +2296,19 @@ class Worker:
                 with self._state_lock:
                     self._fatal_error_observer = None
 
+    def _abort_handlers_for_shutdown(self) -> None:
+        """Cancel each running handler at the end of the shutdown grace of the process runner.
+
+        The heartbeat continues, because release_owned_v1 and complete_v1 refuse an expired lease.
+        An attempt whose outcome already won keeps its own cancellation reason.
+        """
+        with self._state_lock:
+            self._shutdown_aborted = True
+            attempts = list(self._active_attempts.items())
+        for (task_id, _fence), (cancellation, arbiter) in attempts:
+            if arbiter.outcome is None:
+                cancellation._cancel(_WorkerShutdownError(task_id))
+
     def pause(self) -> None:
         """Stop new claims without interrupting running handlers."""
         with self._state_lock:
@@ -2501,6 +2534,7 @@ class Worker:
     def _run_loop(self, *, continuous: bool, requested_stop_version: int) -> bool:
         with self._state_lock:
             self._cleanup_deadline = None
+            self._shutdown_aborted = False
         hub, detach_hub, reservation_subscription = self._start_connections()
         try:
             on_connections_ready = self._on_connections_ready
@@ -4004,6 +4038,12 @@ class Worker:
         )
         expiration_thread = Thread(target=watch_expiration, name=f"workhorse-expiration-{task.id}")
         expiration_thread.start()
+        with self._state_lock:
+            # Keyed by the attempt, so a later attempt of the same task keeps its own entry.
+            self._active_attempts[(task.id, task.fence_token)] = (cancellation, arbiter)
+            shutdown_aborted = self._shutdown_aborted
+        if shutdown_aborted:
+            cancellation._cancel(_WorkerShutdownError(task.id))
         try:
             self._run_supervised_attempt(
                 task,
@@ -4019,6 +4059,8 @@ class Worker:
             # The one place this attempt leaves supervision, on every path: a written settlement,
             # an error, a BaseException such as SystemExit, cancellation, expiry, or an accepted
             # durable suspension. Joining the non-daemon expiration thread lets the process exit.
+            with self._state_lock:
+                self._active_attempts.pop((task.id, task.fence_token), None)
             unregister_heartbeat()
             heartbeat_stop.set()
             expiration_thread.join()
@@ -4072,6 +4114,11 @@ class Worker:
         except Exception as error:
             if finish_ownership_lifecycle(error):
                 return
+            if self._stopped_for_shutdown(cancellation):
+                # The process runner stopped the handler at the end of its shutdown grace. The stop
+                # is not a failure of the task, so the worker gives it back and its attempt stays.
+                self._release_after_shutdown(task, arbiter, span_outcome)
+                return
             try:
                 failure_outcome, failure_state = self._settle_failure(task, error)
             except StaleLeaseError:
@@ -4098,31 +4145,41 @@ class Worker:
                     },
                 )
             return
-        with _start_span("workhorse.complete", _task_span_attributes(task)) as completion_span:
-            accepted = (
-                self._complete_fast_task(task, encoded_result)
-                if fast_tier
-                else _require_lifecycle_row(
-                    _fenced_write_rows(
-                        self._executor,
-                        _STATEMENTS.complete,
-                        (task.id, self.worker_id, task.fence_token, encoded_result),
-                    )
-                )["accepted"]
-            )
-            completion_span.set_attribute("workhorse.complete.accepted", accepted is True)
-            _emit_log(
-                "INFO",
-                "workhorse.task.completed"
-                if accepted is True
-                else "workhorse.task.completion_rejected",
-                "Task completed" if accepted is True else "Stale task completion rejected",
-                {
-                    **_task_span_attributes(task),
-                    "workhorse.complete.accepted": accepted is True,
-                    "workhorse.worker.id": self.worker_id,
-                },
-            )
+        # After the shutdown abort, the completion goes alone through complete_v1, as Go
+        # settleAfterShutdown does. A batched completion could wait behind a statement in flight.
+        stopped_for_shutdown = self._stopped_for_shutdown(cancellation)
+        try:
+            with _start_span("workhorse.complete", _task_span_attributes(task)) as completion_span:
+                accepted = (
+                    self._complete_fast_task(task, encoded_result)
+                    if fast_tier and not stopped_for_shutdown
+                    else _require_lifecycle_row(
+                        _fenced_write_rows(
+                            self._executor,
+                            _STATEMENTS.complete,
+                            (task.id, self.worker_id, task.fence_token, encoded_result),
+                        )
+                    )["accepted"]
+                )
+                completion_span.set_attribute("workhorse.complete.accepted", accepted is True)
+                _emit_log(
+                    "INFO",
+                    "workhorse.task.completed"
+                    if accepted is True
+                    else "workhorse.task.completion_rejected",
+                    "Task completed" if accepted is True else "Stale task completion rejected",
+                    {
+                        **_task_span_attributes(task),
+                        "workhorse.complete.accepted": accepted is True,
+                        "workhorse.worker.id": self.worker_id,
+                    },
+                )
+        except Exception as error:
+            if not stopped_for_shutdown:
+                raise
+            # As after a failed release, lease recovery settles the task.
+            self._log_shutdown_settlement_failure(task, error)
+            return
         if accepted is not True:
             self._reconcile_rejected_completion(task, arbiter)
             return
@@ -4218,6 +4275,61 @@ class Worker:
             "No handler registered for the claimed task type",
             attributes,
         )
+        return self._release_owned(task, attributes)
+
+    def _release_after_shutdown(
+        self,
+        task: ClaimedTask,
+        arbiter: _AttemptOutcomeArbiter,
+        span_outcome: dict[str, str],
+    ) -> None:
+        """Release the task of a handler that the shutdown abort ended, as Go settleAfterShutdown.
+
+        If the release fails, the worker logs the failure, and lease recovery settles the task.
+        """
+        attributes = {
+            **_task_span_attributes(task),
+            "workhorse.queue.name": task.queue,
+            "workhorse.worker.id": self.worker_id,
+        }
+        try:
+            outcome, status = self._release_owned(task, attributes)
+        except Exception as error:
+            self._log_shutdown_settlement_failure(task, error)
+            return
+        span_outcome["value"] = status
+        arbiter.submit(outcome)
+
+    def _stopped_for_shutdown(self, cancellation: CancellationToken) -> bool:
+        """Whether the shutdown abort of the process runner ended this handler.
+
+        The runner sets the worker flag before it cancels the first token. A batch callback can
+        wake at one token and raise before the other tokens of its batch are cancelled, so a member
+        whose token is still live reads the flag.
+        """
+        if cancellation.cancelled:
+            return isinstance(cancellation.reason, _WorkerShutdownError)
+        with self._state_lock:
+            return self._shutdown_aborted
+
+    def _log_shutdown_settlement_failure(self, task: ClaimedTask, error: Exception) -> None:
+        """A completion or a release after the shutdown abort failed. Lease recovery settles it."""
+        _emit_log(
+            "WARN",
+            "workhorse.worker.shutdown_settlement_failed",
+            "Worker could not settle a task after the shutdown abort",
+            {
+                **_task_span_attributes(task),
+                "workhorse.queue.name": task.queue,
+                "workhorse.worker.id": self.worker_id,
+                "error.type": type(error).__name__,
+            },
+        )
+
+    def _release_owned(
+        self, task: ClaimedTask, attributes: dict[str, Any]
+    ) -> tuple[_AttemptOutcome, str]:
+        """Give back an owned task through release_owned_v1 and read the verdict of PostgreSQL."""
         status = _require_lifecycle_row(
             _fenced_write_rows(
                 self._executor,

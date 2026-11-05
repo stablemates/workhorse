@@ -633,8 +633,8 @@ worker maps the `System.Logger` levels to severities in this way:
 
 The Java SDK does not emit these TypeScript events: the enqueue, debounce, and throttle events, the
 cancellation, run-now, redrive, promotion, recovery, and policy events, the queue administration
-events, `workhorse.schedules.synchronized`, `workhorse.task.heartbeat_accepted`, and
-`workhorse.worker_registry.pruned`.
+events, `workhorse.schedules.synchronized`, `workhorse.task.heartbeat_accepted`,
+`workhorse.worker.shutdown_settlement_failed`, and `workhorse.worker_registry.pruned`.
 
 #### .NET logs
 
@@ -724,6 +724,11 @@ successful configuration changes at info.
   [Statement bounds](lifecycle.md#statement-bounds) states the stop budget of each SDK. The .NET
   record names the three values `WorkerId`, `Statement`, and `ElapsedMs` by its log template
   ([ADR 0107](../decisions/0107-shape-the-dotnet-sdk-as-a-csharp-core-with-hosting-ef-core-and-asp-net-core-packages.md#telemetry)).
+
+- `workhorse.worker.shutdown_settlement_failed` carries bounded task and worker identity and
+  `error.type`. The TypeScript and Python workers emit it when the completion or the release after the
+  shutdown abort fails. Lease recovery then settles the task
+  ([Shutdown deadline and failure](operations.md#shutdown-deadline-and-failure)).
 
 - `workhorse.worker.reporter_failed` carries `workhorse.worker.id`, `workhorse.worker.reporter`,
   and `error.type`. `workhorse.worker.reporter` names the reporter callback that failed:
