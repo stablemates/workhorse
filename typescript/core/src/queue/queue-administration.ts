@@ -1,4 +1,5 @@
 import { SQL_STATEMENTS } from "./sql-catalogue.generated.js";
+import { claimDatabase } from "../heartbeat-connection.js";
 import { expectOneRow } from "../errors.js";
 import { logInfo } from "../telemetry.js";
 import { QueueModule } from "./module-context.js";
@@ -74,12 +75,16 @@ export class QueueAdministrationModule extends QueueModule {
     return changed;
   }
 
-  /** Reads a queue's tier. A queue without a control row is full-tier. */
+  /**
+   * Reads a queue's tier. A queue without a control row is full-tier. Inside the claim gate of a
+   * worker, the read is a claim statement, so a closed gate stops the tier read of a probe.
+   */
   async queueTier(queueName: string): Promise<QueueTier> {
-    const result = await this.context.database.query<{ queue_name: string; tier: QueueTier }>(
-      SQL_STATEMENTS["queue_control"],
+    const result = await claimDatabase(this.context.database).query<{ tier: QueueTier }>(
+      SQL_STATEMENTS["queue_tier"],
+      [queueName],
     );
-    return result.rows.find((row) => row.queue_name === queueName)?.tier ?? "full";
+    return result.rows[0]?.tier ?? "full";
   }
 
   async setQueueHistory(

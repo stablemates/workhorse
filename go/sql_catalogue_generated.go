@@ -49,6 +49,7 @@ var internalStatementRegistry = map[string]string{
         WHERE cardinality($1::text[]) = 0 OR queue_name = ANY($1::text[])
         ORDER BY queue_name`,
 	"queue_control":       `SELECT queue_name, paused, tier, record_attempts, record_claims FROM workhorse.queue_control`,
+	"queue_tier":          `SELECT COALESCE((SELECT tier FROM workhorse.queue_control WHERE queue_name = $1::text), 'full') AS tier`,
 	"schedule_definition": `SELECT DISTINCT namespace FROM workhorse.schedule_definition ORDER BY namespace`,
 	"worker_registry": `SELECT served.queue_name,
                CASE WHEN last_heartbeat_at < clock_timestamp() - interval '30 seconds'

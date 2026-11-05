@@ -7,12 +7,14 @@ require_relative "support/scratch_database"
 
 W = Stablemates::Workhorse
 
-# Answers each statement from a block, after reporting a compatible schema.
+# Answers each statement from a block, after reporting a compatible schema. Each queue reads as
+# fast-tier, so the worker sends its fast claim. A block makes a queue full-tier when it rejects that claim.
 class FakeExecutor < W::Executor
   COMPATIBLE = [
     {"kind" => "schema", "version" => W::SqlCatalogue::MAXIMUM_SCHEMA_VERSION.to_s},
     {"kind" => "protocol", "version" => W::SqlCatalogue::CLIENT_PROTOCOL_VERSION.to_s}
   ].freeze
+  FAST_TIER = [{"tier" => "fast"}].freeze
 
   attr_reader :statements
 
@@ -26,6 +28,7 @@ class FakeExecutor < W::Executor
     params = params.call if params.respond_to?(:call)
     return COMPATIBLE if sql == W::SqlCatalogue::COMPATIBILITY_STATE
     return [] if sql == W::SqlCatalogue::GET_CONTRACT_DEFINITION_V1
+    return FAST_TIER if sql == W::SqlCatalogue::QUEUE_TIER
 
     @statements << [sql, params]
     @answer ? @answer.call(sql, params) : []

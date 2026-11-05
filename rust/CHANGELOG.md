@@ -11,6 +11,14 @@ adds.
 
 ## Unreleased
 
+### A full-tier queue no longer makes PostgreSQL log an error at each tier probe
+
+Before a tier probe, the worker now reads the tier of the queue from `queue_control` with one
+`SELECT`. It sends the fast claim only to a fast-tier queue. Before, PostgreSQL rejected the probe
+of each full-tier queue every 30 seconds and wrote that error to its log. A tier change still
+reaches a running worker within 30 seconds. The change needs no migration and does not change the
+SDK compatibility floor.
+
 ### The dashboard task detail shows the task group of a member task
 
 Migration 0091 (`0091-show-the-task-group-in-the-task-detail.sql`) moves the schema to version 90.

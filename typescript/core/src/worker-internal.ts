@@ -117,7 +117,9 @@ export const workerListenerPoolMaxSize = Symbol("workhorse.worker.listener-pool-
 
 /**
  * Reads whether a queue is fast-tier now. A queue without a control row is full-tier. The worker
- * reads it for tasks that claim_many_v1 returned, which carry no tier marker (ADR 0077).
+ * reads it before it probes a queue of unknown tier, so a full-tier queue never receives a fast
+ * claim that PostgreSQL rejects. It also reads it for tasks that claim_many_v1 returned, which
+ * carry no tier marker (ADR 0077).
  */
 export const workerQueueTierRead = Symbol("workhorse.worker.queue-tier-read");
 

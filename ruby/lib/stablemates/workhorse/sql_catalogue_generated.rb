@@ -347,6 +347,9 @@ module Stablemates
       # `queue_control` (internal)
       QUEUE_CONTROL = 'SELECT queue_name, paused, tier, record_attempts, record_claims FROM workhorse.queue_control'
 
+      # `queue_tier` (internal)
+      QUEUE_TIER = 'SELECT COALESCE((SELECT tier FROM workhorse.queue_control WHERE queue_name = $1::text), \'full\') AS tier'
+
       # `schedule_definition` (internal)
       SCHEDULE_DEFINITION = 'SELECT DISTINCT namespace FROM workhorse.schedule_definition ORDER BY namespace'
 

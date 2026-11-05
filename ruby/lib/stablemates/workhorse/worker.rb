@@ -44,6 +44,8 @@ module Stablemates
       # a stop statement of the previous run, checks for a stop again.
       STARTUP_STOP_CHECK = 0.05
       COMPLETION_BATCH_LIMIT = 100
+      # How long, in seconds, a worker claims a full-tier queue through claim_many_v1 before it reads
+      # the tier again. A queue can move to the fast tier only while it holds no live tasks (ADR 0077).
       TIER_PROBE_INTERVAL = 30
       # Maintenance writes shared due times and retention cutoffs, so the database clock chooses its
       # time. PostgreSQL resolves this timestamptz input at the start of the autocommit statement.
@@ -961,12 +963,15 @@ module Stablemates
         end
       end
 
+      # The lease of a claimed task starts at its claim statement, not at the tier read before it, so
+      # a slow read cannot make a task look expired as soon as the worker leases it.
       def claim(queue, limit, fast_limit, gate)
         started_at = monotonic
         Telemetry.span("workhorse.claim", {"workhorse.queue.name" => queue}) do |span|
-          rows = claim_queue(queue, limit, started_at, fast_limit, gate)
+          rows, leased_at = claim_queue(queue, limit, started_at, fast_limit, gate)
           if rows.nil?
             Telemetry.set_attribute(span, "workhorse.queue.tier", "full")
+            leased_at = monotonic
             rows = @statement_watch.watch("claim") do
               permitted(gate) do |build|
                 @executor.rows(SqlCatalogue::CLAIM_MANY_V1, build.call { [queue, @worker_id, limit.to_s, @lease_ms.to_s] })
@@ -977,7 +982,7 @@ module Stablemates
           tasks = rows.map { |row| ClaimedTask.from_row(row, queue) }
           record_claimed(queue, started_at, tasks)
           Telemetry.task_span_attributes(tasks.first).each { |key, value| Telemetry.set_attribute(span, key, value) } if tasks.any?
-          tasks.map { |task| [task, started_at] }
+          tasks.map { |task| [task, leased_at] }
         end
       end
 
@@ -1014,14 +1019,26 @@ module Stablemates
       end
 
       # Claims through the fast tier, or returns nil when the queue is on the full tier. The fast
-      # claim is complete_many_and_claim_v1 with no completions. A full-tier queue rejects it, and
-      # the worker then claims that queue through claim_many_v1 until the next probe.
-      def claim_queue(queue, limit, sent_at, fast_limit, gate)
-        return nil if @state_lock.synchronize { @full_tier_until.fetch(queue, -Float::INFINITY) > sent_at }
-
+      # claim is complete_many_and_claim_v1 with no completions. Before the worker sends a fast claim
+      # to a queue of unknown tier, it reads the tier. A full-tier answer makes the worker claim that
+      # queue through claim_many_v1 until the next probe. Thus a full-tier queue never receives the
+      # fast claim, which PostgreSQL rejects with an error that it writes to its log. A queue that
+      # moved to the full tier after the read still rejects the fast claim, and the worker then marks
+      # it full-tier. Returns the claimed rows and the monotonic time the claim was sent.
+      # +probed_at+ times the probe interval. The lease starts at the claim, after the tier read.
+      def claim_queue(queue, limit, probed_at, fast_limit, gate)
+        full_until, known_fast = @state_lock.synchronize do
+          [@full_tier_until.fetch(queue, -Float::INFINITY), @fast_tier_queues.include?(queue)]
+        end
+        return nil if full_until > probed_at
+        unless known_fast || reads_fast_tier?(queue, gate)
+          mark_full_tier(queue, probed_at)
+          return nil
+        end
         fast_limit = [limit, fast_limit].min
-        return [] if fast_limit <= 0
+        return [[], monotonic] if fast_limit <= 0
 
+        sent_at = monotonic
         begin
           rows = @statement_watch.watch("claim") do
             permitted(gate) do |build|
@@ -1030,7 +1047,7 @@ module Stablemates
             end
           end
         rescue FastTierUnsupportedError
-          mark_full_tier(queue, sent_at)
+          mark_full_tier(queue, probed_at)
           return nil
         end
         # A claim that finds nothing still returns one row, with every claim column null.
@@ -1040,10 +1057,18 @@ module Stablemates
           @fast_tier_queues.add(queue)
           claimed.each { |row| @fast_task_ids.add(row["task_id"]) }
         end
-        claimed
+        [claimed, sent_at]
       end
 
-      # Claims a queue that rejected a fast-tier statement through claim_many_v1 until the probe.
+      # Reads the tier of +queue+ through the claim's gate. A queue with no control row is full-tier.
+      def reads_fast_tier?(queue, gate)
+        rows = @statement_watch.watch("claim") do
+          permitted(gate) { |build| @executor.rows(SqlCatalogue::QUEUE_TIER, build.call { [queue] }) }
+        end
+        rows.first&.fetch("tier") == "fast"
+      end
+
+      # Claims a full-tier queue through claim_many_v1 until the probe.
       def mark_full_tier(queue, sent_at)
         @state_lock.synchronize do
           @full_tier_until[queue] = sent_at + TIER_PROBE_INTERVAL

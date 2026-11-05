@@ -21,6 +21,14 @@ process exits with code 1, as before. A waiting batch member leaves its batch an
 Rust, Ruby, the JVM, and .NET already did this ([ADR
 0116](../docs/decisions/0116-give-back-a-task-at-the-end-of-the-shutdown-grace-in-every-sdk.md)).
 
+### A full-tier queue no longer makes PostgreSQL log an error at each tier probe
+
+Before a tier probe, the worker now reads the tier of the queue from `queue_control` with one
+`SELECT`. It sends the fast claim only to a fast-tier queue. Before, PostgreSQL rejected the probe
+of each full-tier queue every 30 seconds and wrote that error to its log. A tier change still
+reaches a running worker within 30 seconds. The change needs no migration and does not change the
+SDK compatibility floor.
+
 ### The dashboard task detail shows the task group of a member task
 
 Migration 0091 (`0091-show-the-task-group-in-the-task-detail.sql`) moves the schema to version 90.

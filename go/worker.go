@@ -68,8 +68,8 @@ const (
 	// the ceiling between empty claims. A worker without a live subscription starts at the shorter
 	// interval and backs off toward the same ceiling.
 	defaultNotificationPollInterval = maximumEmptyPollInterval
-	// A queue whose fast claim was refused is claimed through claim_many_v1 for this long before
-	// the worker tries the fast claim again, so a tier change reaches running workers.
+	// The worker claims a full-tier queue through claim_many_v1 for this long before it reads the
+	// tier again, so a tier change reaches running workers.
 	fastTierProbeInterval = 30 * time.Second
 	// completionBatchLimit bounds both the completions one complete_many_and_claim_v1 call settles
 	// and the tasks it claims, which is the statement's own per-call limit.
@@ -335,8 +335,8 @@ type Worker struct {
 	queues         []string
 	queueCursorMu  sync.Mutex
 	nextQueueIndex int
-	// fullTierUntil holds, per queue, when the worker next tries a fast claim after PostgreSQL
-	// refused one. fullTierMu guards it because claims overlap.
+	// fullTierUntil holds, per queue, when the worker next probes a queue that read or answered as
+	// full tier. fullTierMu guards it because claims overlap.
 	fullTierMu    sync.Mutex
 	fullTierUntil map[string]time.Time
 	// fastTierQueues holds the queues whose last claim PostgreSQL answered on the fast tier.
@@ -1891,7 +1891,7 @@ func (worker *Worker) claimNextMany(
 		}
 		queue := worker.nextClaimQueue()
 		startedAt := time.Now()
-		rows, fast, err := worker.claimQueue(ctx, executor, queue, limit-len(tasks), fastLimit-len(tasks))
+		rows, fast, sentAt, err := worker.claimQueue(ctx, executor, queue, limit-len(tasks), fastLimit-len(tasks))
 		if err != nil {
 			return tasks, err
 		}
@@ -1909,7 +1909,7 @@ func (worker *Worker) claimNextMany(
 				),
 			)
 		}
-		tasks, err = worker.appendClaimedTasks(ctx, tasks, rows, queue, startedAt, fast)
+		tasks, err = worker.appendClaimedTasks(ctx, tasks, rows, queue, sentAt, fast)
 		if err != nil {
 			return tasks, err
 		}
@@ -2218,20 +2218,37 @@ func (worker *Worker) completeChunk(queue string, chunk []*completionEntry) {
 }
 
 // claimQueue claims from one queue. It tries the fast claim first, because only PostgreSQL knows a
-// queue's tier. A refusal marks the queue as full tier until the next probe, and the worker then
-// claims through claim_many_v1. A fast-tier queue takes at most fastLimit tasks.
+// queue's tier. Before it probes a queue of unknown tier, the worker reads the tier. A full-tier
+// answer marks the queue as full tier until the next probe, and the worker then claims through
+// claim_many_v1. Thus a full-tier queue never receives the fast claim, which PostgreSQL refuses
+// with an error that it writes to its log. A queue that moved to the full tier after the read
+// still refuses the fast claim, and the refusal also marks it full tier. A fast-tier queue takes
+// at most fastLimit tasks. sentAt is when the worker sent the claim statement that returned rows.
+//
+// The lease of a claimed task starts at its claim, not at the tier read, so a slow read cannot
+// make a just-leased task look expired. Thus sentAt is taken right before each claim statement,
+// and the probe interval keeps its own clock.
 func (worker *Worker) claimQueue(
 	ctx context.Context,
 	executor Executor,
 	queue string,
 	limit int,
 	fastLimit int,
-) ([]Row, bool, error) {
+) ([]Row, bool, time.Time, error) {
 	leaseMS := int(worker.leaseDuration / time.Millisecond)
 	if worker.probesFastTier(queue) {
 		if fastLimit <= 0 {
-			return nil, false, nil
+			return nil, false, time.Time{}, nil
 		}
+		fast, err := worker.readsFastTier(ctx, executor, queue)
+		if err != nil {
+			return nil, false, time.Time{}, err
+		}
+		if !fast {
+			worker.markFullTier(queue)
+			return worker.claimFullTier(ctx, executor, queue, limit)
+		}
+		var sentAt time.Time
 		rows, err := func() ([]Row, error) {
 			defer worker.warnWhenSlow(ctx, claimStatementKind)()
 			return queryFencedWriteEach(
@@ -2242,6 +2259,7 @@ func (worker *Worker) claimQueue(
 					if !worker.heartbeatReady() {
 						return nil, errHeartbeatClaimGateClosed
 					}
+					sentAt = time.Now()
 					return []any{
 						worker.workerID, []string{}, []int64{}, []json.RawMessage{}, queue, min(limit, fastLimit), leaseMS,
 					}, nil
@@ -2250,27 +2268,61 @@ func (worker *Worker) claimQueue(
 		}()
 		if err == nil {
 			worker.markFastTier(queue)
-			return claimedFastRows(rows), true, nil
+			return claimedFastRows(rows), true, sentAt, nil
 		}
 		if fastTierRejection(err) == nil {
-			return nil, false, err
+			return nil, false, time.Time{}, err
 		}
 		worker.markFullTier(queue)
 	}
-	// The fallback after a refused fast claim is a new statement, so it reads the gate again.
+	return worker.claimFullTier(ctx, executor, queue, limit)
+}
+
+// claimFullTier claims from a full-tier queue through claim_many_v1. sentAt is when the worker
+// sent claim_many_v1, which is when the lease of each claimed task starts.
+func (worker *Worker) claimFullTier(
+	ctx context.Context,
+	executor Executor,
+	queue string,
+	limit int,
+) ([]Row, bool, time.Time, error) {
+	// The claim after a tier read or a refused fast claim is a new statement, so it reads the gate
+	// again.
 	if !worker.heartbeatReady() {
-		return nil, false, errHeartbeatClaimGateClosed
+		return nil, false, time.Time{}, errHeartbeatClaimGateClosed
 	}
 	defer worker.warnWhenSlow(ctx, claimStatementKind)()
+	sentAt := time.Now()
 	rows, err := executor.Query(
 		ctx,
 		protocolStatementRegistry[claimManyStatementName],
 		queue,
 		worker.workerID,
 		limit,
-		leaseMS,
+		int(worker.leaseDuration/time.Millisecond),
 	)
-	return rows, false, err
+	return rows, false, sentAt, err
+}
+
+// readsFastTier reports whether a probe can send the fast claim to queue. A queue whose last claim
+// PostgreSQL answered on the fast tier needs no read. A queue without a queue_control row is full
+// tier.
+func (worker *Worker) readsFastTier(ctx context.Context, executor Executor, queue string) (bool, error) {
+	worker.fullTierMu.Lock()
+	_, known := worker.fastTierQueues[queue]
+	worker.fullTierMu.Unlock()
+	if known {
+		return true, nil
+	}
+	if !worker.heartbeatReady() {
+		return false, errHeartbeatClaimGateClosed
+	}
+	defer worker.warnWhenSlow(ctx, claimStatementKind)()
+	rows, err := executor.Query(ctx, internalStatementRegistry[queueTierStatementName], queue)
+	if err != nil {
+		return false, err
+	}
+	return len(rows) > 0 && QueueTier(stringValue(rows[0][rowTierField])) == QueueTierFast, nil
 }
 
 func (worker *Worker) probesFastTier(queue string) bool {

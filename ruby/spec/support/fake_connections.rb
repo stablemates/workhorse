@@ -62,7 +62,11 @@ class FakeHeartbeatConnection
   def exec_params(sql, _params = [], _format = 0, _type_map = nil)
     raise PG::ConnectionBad, "connection lost" unless status == PG::CONNECTION_OK
 
-    Result.new((sql == W::SqlCatalogue::COMPATIBILITY_STATE) ? FakeExecutor::COMPATIBLE.map(&:dup) : [])
+    case sql
+    when W::SqlCatalogue::COMPATIBILITY_STATE then Result.new(FakeExecutor::COMPATIBLE.map(&:dup))
+    when W::SqlCatalogue::QUEUE_TIER then Result.new(FakeExecutor::FAST_TIER.map(&:dup))
+    else Result.new([])
+    end
   end
 
   def send_query_params(sql, params, _format, _type_map)
@@ -237,6 +241,7 @@ class FakeThroughPool
 
   def answer(sql, params)
     return FakeExecutor::COMPATIBLE.map(&:dup) if sql == W::SqlCatalogue::COMPATIBILITY_STATE
+    return FakeExecutor::FAST_TIER.map(&:dup) if sql == W::SqlCatalogue::QUEUE_TIER
 
     @statements << [sql, params, Thread.current]
     before_answer&.call(sql, params, Thread.current)

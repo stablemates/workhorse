@@ -32,8 +32,8 @@ public sealed partial class Worker
     private async Task<bool> FastTierAsync(string queue, CancellationToken cancellationToken)
     {
         await using var connection = await DataSources.OpenAsync(_dataSource, cancellationToken).ConfigureAwait(false);
-        var rows = await Sql.RowsAsync(connection, SqlCatalogue.QueueControl, [], cancellationToken).ConfigureAwait(false);
-        return rows.Any(row => row.Text("queue_name") == queue && row.Text("tier") == "fast");
+        var rows = await Sql.RowsAsync(connection, SqlCatalogue.QueueTier, [Parameters.Text(queue)], cancellationToken).ConfigureAwait(false);
+        return rows.Single().Text("tier") == "fast";
     }
 
     /// <summary>

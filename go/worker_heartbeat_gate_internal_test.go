@@ -338,6 +338,8 @@ func TestAClaimSendsNoDeadlockRetryAfterTheHeartbeatConnectionWentAway(t *testin
 		connection: connection,
 		failure:    &pgconn.PgError{Code: deadlockDetectedSQLState, Message: "deadlock detected"},
 	}
+	// The last claim answered on the fast tier, so the claim sends the fast claim with no tier read.
+	worker.markFastTier(worker.queues[0])
 	_, err := worker.claimNextMany(context.Background(), executor, 2, 2)
 	if !errors.Is(err, errHeartbeatClaimGateClosed) || len(executor.statements) != 1 {
 		t.Fatalf("statements %d, err %v; want one statement and the closed gate", len(executor.statements), err)
@@ -352,6 +354,8 @@ func TestAClaimSendsNoFullTierFallbackAfterTheHeartbeatConnectionWentAway(t *tes
 		connection: connection,
 		failure:    &pgconn.PgError{Code: fastTierUnsupportedSQLState, Message: "fast tier unsupported"},
 	}
+	// The last claim answered on the fast tier, so the claim sends the fast claim with no tier read.
+	worker.markFastTier(worker.queues[0])
 	_, err := worker.claimNextMany(context.Background(), executor, 2, 2)
 	if !errors.Is(err, errHeartbeatClaimGateClosed) || len(executor.statements) != 1 {
 		t.Fatalf("statements %d, err %v; want one statement and the closed gate", len(executor.statements), err)

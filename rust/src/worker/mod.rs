@@ -84,8 +84,8 @@ const MIN_DEDICATED_POOL: usize = 3;
 const STARTUP_FLOOR: Duration = Duration::from_secs(5);
 /// A worker statement waits for a pooled connection for the larger of the lease and this floor.
 const CHECKOUT_FLOOR: Duration = Duration::from_secs(5);
-/// How long a worker claims a queue that rejected a fast claim through `claim_many_v1` before
-/// probing it again. A queue can change tier only while it holds no live tasks (ADR 0077).
+/// How long a worker claims a full-tier queue through `claim_many_v1` before it reads the tier
+/// again. A queue can change tier only while it holds no live tasks (ADR 0077).
 const TIER_PROBE_INTERVAL: Duration = Duration::from_secs(30);
 
 /// The ownership outcome PostgreSQL reports for a heartbeat, expiration or release.
@@ -381,10 +381,16 @@ pub(crate) struct Inner {
     next_queue: AtomicUsize,
     /// Compiled result schemas, keyed by task type and contract version.
     contracts: Mutex<HashMap<(String, String), Arc<ContractSchema>>>,
-    /// Queues that rejected a fast claim, with the instant to probe them again.
+    /// Queues that read or answered as full-tier, with the instant to probe them again.
     full_tier_until: Mutex<HashMap<String, Instant>>,
     /// Queues whose last claim answered on the fast tier.
     fast_tier_queues: Mutex<HashSet<String>>,
+    /// Each claim statement the worker sends, so a test can check what a probe sends.
+    #[cfg(test)]
+    claim_statements: Mutex<Vec<&'static str>>,
+    /// A delay after each tier read, so a test can make the read slower than the lease.
+    #[cfg(test)]
+    tier_read_delay: Mutex<Option<Duration>>,
     completions: completion::Batcher,
     /// The shared connections of the pool identity, while a run holds them.
     subscription: Mutex<Option<shared::Subscription>>,
@@ -709,6 +715,10 @@ impl Worker {
             next_queue: AtomicUsize::new(0),
             full_tier_until: Mutex::new(HashMap::new()),
             fast_tier_queues: Mutex::default(),
+            #[cfg(test)]
+            claim_statements: Mutex::default(),
+            #[cfg(test)]
+            tier_read_delay: Mutex::default(),
             completions: completion::Batcher::default(),
             contracts: Mutex::default(),
             subscription: Mutex::default(),
@@ -1588,28 +1598,32 @@ impl Inner {
                 break;
             }
             let queue = &queues[self.next_queue.fetch_add(1, Ordering::SeqCst) % queues.len()];
-            let sent_at = Instant::now();
+            let probed_at = Instant::now();
             let fast_remaining = fast_limit.saturating_sub(tasks.len());
             let claimed =
-                self.claim_queue(&gate, queue, remaining, fast_remaining, lease, sent_at).await;
-            let (rows, fast_tier) = match claimed {
+                self.claim_queue(&gate, queue, remaining, fast_remaining, lease, probed_at).await;
+            let (rows, fast_tier, sent_at) = match claimed {
                 Ok(Some(claimed)) => claimed,
                 // The gate closed while the claim waited for its connection. That is no failure.
                 Ok(None) => break,
                 Err(error) => return (tasks, Some(error)),
             };
-            if let Err(error) = self.claimed_tasks(&rows, queue, sent_at, fast_tier, &mut tasks) {
+            let claimed =
+                self.claimed_tasks(&rows, queue, probed_at, sent_at, fast_tier, &mut tasks);
+            if let Err(error) = claimed {
                 return (tasks, Some(error));
             }
         }
         (tasks, None)
     }
 
-    /// Converts the claimed rows of one claim statement, and records the claim's metrics.
+    /// Converts the claimed rows of one claim statement, and records the claim's metrics. The
+    /// claim duration starts at `probed_at`, and the lease of each task starts at `sent_at`.
     fn claimed_tasks(
         &self,
         rows: &[tokio_postgres::Row],
         queue: &str,
+        probed_at: Instant,
         sent_at: Instant,
         fast_tier: bool,
         tasks: &mut Vec<ClaimedTask>,
@@ -1617,7 +1631,7 @@ impl Inner {
         let result = if rows.is_empty() { "empty" } else { "claimed" };
         self.metrics.record(
             Histogram::ClaimDuration,
-            sent_at.elapsed().as_secs_f64() * 1000.0,
+            probed_at.elapsed().as_secs_f64() * 1000.0,
             &[
                 ("workhorse.queue.name", Attribute::Text(queue)),
                 ("workhorse.claim.result", Attribute::Text(result)),
@@ -1647,15 +1661,22 @@ impl Inner {
         Ok(())
     }
 
-    /// Records which tier answered a claim of `queue` sent at `sent_at`.
-    fn record_tier(&self, queue: &str, fast_tier: bool, sent_at: Instant) {
+    /// Records which tier answered a claim of `queue` probed at `probed_at`.
+    fn record_tier(&self, queue: &str, fast_tier: bool, probed_at: Instant) {
         if fast_tier {
             lock(&self.full_tier_until).remove(queue);
             lock(&self.fast_tier_queues).insert(queue.into());
         } else {
-            lock(&self.full_tier_until).insert(queue.into(), sent_at + TIER_PROBE_INTERVAL);
+            lock(&self.full_tier_until).insert(queue.into(), probed_at + TIER_PROBE_INTERVAL);
             lock(&self.fast_tier_queues).remove(queue);
         }
+    }
+
+    /// Returns `statement`, and records it for the tests.
+    fn claim_statement(&self, statement: &'static str) -> &'static str {
+        #[cfg(test)]
+        lock(&self.claim_statements).push(statement);
+        statement
     }
 
     /// Whether every queue answered its last claim on the fast tier.
@@ -1665,12 +1686,16 @@ impl Inner {
     }
 
     /// Claims one queue through the fast-tier path, or through `claim_many_v1` when the queue is
-    /// full-tier, and reports which path answered. Returns `None` when the claim gate closed
-    /// before a claim statement went out.
+    /// full-tier, and reports which path answered and when the claim statement went out. Returns
+    /// `None` when the claim gate closed before a claim statement went out. `probed_at` is the
+    /// instant that the 30 s probe interval of the queue counts from.
     ///
     /// The fast claim is `complete_many_and_claim_v1` with no completions, and claims at most
-    /// `fast_limit`. A full-tier queue rejects it, and the worker then claims that queue through
-    /// `claim_many_v1` until the next probe.
+    /// `fast_limit`. Before it sends a fast claim to a queue of unknown tier, the worker reads the
+    /// tier. A full-tier answer makes the worker claim that queue through `claim_many_v1` until the
+    /// next probe. Thus a full-tier queue never receives the fast claim, which PostgreSQL rejects
+    /// with an error that it writes to its log. A queue that moved to the full tier after the read
+    /// still rejects the fast claim, and the worker then marks it full-tier.
     async fn claim_queue(
         &self,
         gate: &RunGate,
@@ -1678,15 +1703,46 @@ impl Inner {
         limit: usize,
         fast_limit: usize,
         lease: i32,
-        sent_at: Instant,
-    ) -> Result<Option<(Vec<tokio_postgres::Row>, bool)>, Error> {
+        probed_at: Instant,
+    ) -> Result<Option<(Vec<tokio_postgres::Row>, bool, Instant)>, Error> {
         let allowed = || gate.permit();
-        let probe_due =
-            lock(&self.full_tier_until).get(queue).is_none_or(|until| sent_at >= *until);
-        if probe_due {
-            if fast_limit == 0 {
-                return Ok(Some((Vec::new(), true)));
+        let mut probe_due =
+            lock(&self.full_tier_until).get(queue).is_none_or(|until| probed_at >= *until);
+        if probe_due && fast_limit == 0 {
+            return Ok(Some((Vec::new(), true, probed_at)));
+        }
+        if probe_due && !lock(&self.fast_tier_queues).contains(queue) {
+            let gated = self.statements().gated(&allowed);
+            let read = self
+                .warn_when_slow(
+                    "claim",
+                    gated.rows(self.claim_statement(sql::QUEUE_TIER), &[&queue]),
+                )
+                .await;
+            #[cfg(test)]
+            {
+                let delay = *lock(&self.tier_read_delay);
+                if let Some(delay) = delay {
+                    tokio::time::sleep(delay).await;
+                }
             }
+            if gated.refused() {
+                return Ok(None);
+            }
+            // A queue without a `queue_control` row is full-tier.
+            let fast_tier = match read?.first() {
+                Some(row) => row.try_get::<_, &str>("tier")? == "fast",
+                None => false,
+            };
+            if !fast_tier {
+                self.record_tier(queue, false, probed_at);
+                probe_due = false;
+            }
+        }
+        // The lease of a claimed task starts at its claim, not at the tier read. Thus a slow read
+        // cannot make a task that the claim just leased look expired.
+        let mut sent_at = Instant::now();
+        if probe_due {
             let fast_limit = limit.min(fast_limit) as i32;
             let gated = self.statements().gated(&allowed);
             let claimed = self
@@ -1694,7 +1750,7 @@ impl Inner {
                     "claim",
                     fenced_rows(
                         &gated,
-                        sql::COMPLETE_MANY_AND_CLAIM_V1,
+                        self.claim_statement(sql::COMPLETE_MANY_AND_CLAIM_V1),
                         &[
                             &self.worker_id,
                             &Vec::<Uuid>::new(),
@@ -1713,7 +1769,7 @@ impl Inner {
             }
             match claimed {
                 Ok(rows) => {
-                    self.record_tier(queue, true, sent_at);
+                    self.record_tier(queue, true, probed_at);
                     // A claim that finds nothing still returns one row, with every claim column
                     // null.
                     let mut claimed = Vec::with_capacity(rows.len());
@@ -1722,9 +1778,12 @@ impl Inner {
                             claimed.push(row);
                         }
                     }
-                    return Ok(Some((claimed, true)));
+                    return Ok(Some((claimed, true, sent_at)));
                 }
-                Err(Error::FastTierUnsupported { .. }) => self.record_tier(queue, false, sent_at),
+                Err(Error::FastTierUnsupported { .. }) => {
+                    self.record_tier(queue, false, probed_at);
+                    sent_at = Instant::now();
+                }
                 Err(error) => return Err(error),
             }
         }
@@ -1733,13 +1792,16 @@ impl Inner {
         let rows = self
             .warn_when_slow(
                 "claim",
-                gated.rows(sql::CLAIM_MANY_V1, &[&queue, &self.worker_id, &limit, &lease]),
+                gated.rows(
+                    self.claim_statement(sql::CLAIM_MANY_V1),
+                    &[&queue, &self.worker_id, &limit, &lease],
+                ),
             )
             .await;
         if gated.refused() {
             return Ok(None);
         }
-        Ok(Some((rows?, false)))
+        Ok(Some((rows?, false, sent_at)))
     }
 }
 
@@ -2362,5 +2424,110 @@ mod tests {
                 polling >= Duration::from_millis(4500) && polling <= Duration::from_millis(5500)
             );
         }
+    }
+
+    // SM-1920: a full-tier queue never receives the fast claim, so PostgreSQL logs no error. The
+    // worker reads the tier at each probe, and a queue that moves to the fast tier gets the fast
+    // claim at the next probe.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_probe_reads_the_tier_and_sends_no_fast_claim_to_a_full_tier_queue() {
+        let Some(database) = scratch::scratch_database("tier_read").await else { return };
+        let queue = crate::Queue::connect(database.url(), "full-queue").await.unwrap();
+        let admin = crate::Admin::connect(database.url()).await.unwrap();
+        let manager =
+            deadpool_postgres::Manager::new(database.url().parse().unwrap(), tokio_postgres::NoTls);
+        let pool = deadpool_postgres::Pool::builder(manager).max_size(6).build().unwrap();
+        let options = WorkerOptions {
+            queues: vec!["full-queue".into()],
+            polling_only: true,
+            poll_interval: Some(Duration::from_millis(20)),
+            ..WorkerOptions::default()
+        };
+        let worker = Worker::new(pool, options).unwrap();
+        worker.handle("full-work", |_: Value, _| async { Ok(serde_json::json!({"ok": true})) });
+        let enqueue = || async {
+            let options = crate::EnqueueOptions::default();
+            queue.enqueue("full-work", &serde_json::json!({}), options).await.unwrap().task_id
+        };
+        let sent = |statement: &str| {
+            lock(&worker.0.claim_statements).iter().filter(|sent| **sent == statement).count()
+        };
+
+        for _ in 0..2 {
+            let task = enqueue().await;
+            assert!(worker.run_once().await.unwrap());
+            let snapshot = admin.get_task(task).await.unwrap().unwrap();
+            assert_eq!(snapshot.state, crate::TaskState::Succeeded);
+            // The tier read holds the queue on claim_many_v1 until the next probe.
+            assert!(lock(&worker.0.full_tier_until).contains_key("full-queue"));
+            // End the interval, so the next claim probes the tier again.
+            lock(&worker.0.full_tier_until).insert("full-queue".into(), Instant::now());
+        }
+        // Each probe read the tier, and no probe sent a fast claim that PostgreSQL rejects.
+        assert_eq!(sent(sql::COMPLETE_MANY_AND_CLAIM_V1), 0);
+        assert_eq!(sent(sql::QUEUE_TIER), 2);
+        assert_eq!(sent(sql::CLAIM_MANY_V1), 2);
+
+        // A queue that moves to the fast tier reaches the worker at its next probe.
+        let audit = crate::AdminAudit {
+            actor: "ops".into(),
+            reason: "test".into(),
+            request_id: "req-1".into(),
+        };
+        let tier = admin.set_queue_tier("full-queue", crate::QueueTier::Fast, &audit).await;
+        assert_eq!(tier.unwrap(), crate::QueueTier::Fast);
+        let task = enqueue().await;
+        assert!(worker.run_once().await.unwrap());
+        let outcomes: i64 = database
+            .connect()
+            .await
+            .query_one(
+                "SELECT count(*) FROM workhorse.fast_task_outcome
+                  WHERE task_id = $1 AND state = 'succeeded'",
+                &[&task],
+            )
+            .await
+            .unwrap()
+            .get(0);
+        assert_eq!(outcomes, 1);
+        assert!(lock(&worker.0.fast_tier_queues).contains("full-queue"));
+        assert_eq!(sent(sql::QUEUE_TIER), 3);
+        assert_eq!(sent(sql::COMPLETE_MANY_AND_CLAIM_V1), 1);
+    }
+
+    // The lease of a claimed task starts at its claim. A tier read slower than the whole lease
+    // must not make the task that the next claim leases look expired.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn starts_the_lease_of_a_claimed_task_at_its_claim_not_at_a_slow_tier_read() {
+        let Some(database) = scratch::scratch_database("slow_tier_read").await else { return };
+        let queue = crate::Queue::connect(database.url(), "full-queue").await.unwrap();
+        let admin = crate::Admin::connect(database.url()).await.unwrap();
+        let manager =
+            deadpool_postgres::Manager::new(database.url().parse().unwrap(), tokio_postgres::NoTls);
+        let pool = deadpool_postgres::Pool::builder(manager).max_size(6).build().unwrap();
+        let lease = Duration::from_millis(500);
+        let options = WorkerOptions {
+            queues: vec!["full-queue".into()],
+            polling_only: true,
+            poll_interval: Some(Duration::from_millis(20)),
+            lease_duration: lease,
+            ..WorkerOptions::default()
+        };
+        let worker = Worker::new(pool, options).unwrap();
+        // The tier read takes longer than the whole lease.
+        *lock(&worker.0.tier_read_delay) = Some(lease + Duration::from_millis(300));
+        let ran = Arc::new(AtomicUsize::new(0));
+        let runs = Arc::clone(&ran);
+        worker.handle("full-work", move |_: Value, _| {
+            runs.fetch_add(1, Ordering::SeqCst);
+            async { Ok(serde_json::json!({"ok": true})) }
+        });
+        let options = crate::EnqueueOptions::default();
+        let task = queue.enqueue("full-work", &serde_json::json!({}), options).await.unwrap();
+        assert!(worker.run_once().await.unwrap());
+
+        assert_eq!(ran.load(Ordering::SeqCst), 1);
+        let snapshot = admin.get_task(task.task_id).await.unwrap().unwrap();
+        assert_eq!(snapshot.state, crate::TaskState::Succeeded);
     }
 }

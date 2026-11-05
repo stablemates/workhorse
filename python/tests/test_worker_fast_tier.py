@@ -249,12 +249,38 @@ def test_fast_task_context_rejects_durable_features(
     assert snapshot is not None and snapshot.state == "failed"
 
 
-def test_worker_claims_a_full_tier_queue_after_the_probe_is_rejected(
+class _RecordingExecutor:
+    """Run every statement, and record each statement and each error that PostgreSQL raises."""
+
+    dialect = "psycopg"
+
+    def __init__(self, pool: ConnectionPool, tier_read_delay: float = 0.0) -> None:
+        self._inner = PooledSyncExecutor(pool)
+        self._lock = Lock()
+        self._tier_read_delay = tier_read_delay
+        self.statements: list[DriverStatement] = []
+        self.errors: list[BaseException] = []
+
+    def rows(self, statement: DriverStatement, parameters: Sequence[object] = ()) -> list[Any]:
+        with self._lock:
+            self.statements.append(statement)
+        if statement == STATEMENTS.queue_tier:
+            time.sleep(self._tier_read_delay)
+        try:
+            return self._inner.rows(statement, parameters)
+        except psycopg.Error as error:
+            with self._lock:
+                self.errors.append(error)
+            raise
+
+
+def test_worker_reads_the_tier_and_sends_no_fast_claim_to_a_full_tier_queue(
     database_url: str, worker_pool: ConnectionPool
 ) -> None:
-    worker = Worker(worker_pool, worker_id="python-prober", queue="full-queue").handle(
-        "full-work", lambda _payload, _context: {"ok": True}
-    )
+    executor = _RecordingExecutor(worker_pool)
+    worker = Worker(
+        worker_pool, worker_id="python-prober", queue="full-queue", _executor=executor
+    ).handle("full-work", lambda _payload, _context: {"ok": True})
     task_ids: list[str] = []
     for _ in range(2):
         with psycopg.connect(database_url, autocommit=True) as connection:
@@ -262,8 +288,10 @@ def test_worker_claims_a_full_tier_queue_after_the_probe_is_rejected(
                 Queue(connection).enqueue("full-work", {}, EnqueueOptions(queue="full-queue"))
             )
         assert worker.run_once() is True
-        # The rejected probe holds the queue on claim_many until the next probe interval.
+        # The tier read holds the queue on claim_many until the next probe interval.
         assert "full-queue" in worker._full_tier_until
+        # End the interval, so the next claim probes the tier again.
+        worker._full_tier_until["full-queue"] = float("-inf")
     with psycopg.connect(database_url, autocommit=True) as connection:
         admin = Admin(connection)
         states = [admin.get_task(task_id) for task_id in task_ids]
@@ -271,6 +299,49 @@ def test_worker_claims_a_full_tier_queue_after_the_probe_is_rejected(
         "succeeded",
         "succeeded",
     ]
+    # Each probe read the tier, and no probe sent a fast claim that PostgreSQL rejects.
+    assert executor.statements.count(STATEMENTS.queue_tier) == 2
+    assert STATEMENTS.complete_many_and_claim not in executor.statements
+    assert executor.errors == []
+
+    # A queue that moves to the fast tier reaches the worker at its next probe.
+    _make_fast(database_url, "full-queue")
+    with psycopg.connect(database_url, autocommit=True) as connection:
+        fast_task = Queue(connection).enqueue("full-work", {}, EnqueueOptions(queue="full-queue"))
+    assert worker.run_once() is True
+    assert _outcomes(database_url, [fast_task]) == [(fast_task, "succeeded", 1)]
+    assert "full-queue" in worker._fast_tier_queues
+    assert executor.errors == []
+
+
+def test_worker_starts_the_lease_of_a_claimed_task_at_its_claim_not_at_a_slow_tier_read(
+    database_url: str, worker_pool: ConnectionPool
+) -> None:
+    # The tier read takes longer than the whole lease.
+    executor = _RecordingExecutor(worker_pool, tier_read_delay=0.8)
+    ran: list[str] = []
+
+    def work(_payload: object, context: HandlerContext) -> Json:
+        ran.append(context.task.id)
+        time.sleep(0.1)
+        return {"ok": True}
+
+    worker = Worker(
+        worker_pool,
+        worker_id="python-slow-probe",
+        queue="full-queue",
+        lease_ms=500,
+        heartbeat_ms=100,
+        _executor=executor,
+    ).handle("full-work", work)
+    with psycopg.connect(database_url, autocommit=True) as connection:
+        task_id = Queue(connection).enqueue("full-work", {}, EnqueueOptions(queue="full-queue"))
+    assert worker.run_once() is True
+
+    assert ran == [task_id]
+    with psycopg.connect(database_url, autocommit=True) as connection:
+        snapshot = Admin(connection).get_task(task_id)
+    assert snapshot is not None and snapshot.state == "succeeded"
 
 
 def test_expired_fast_claim_reruns_once_and_rejects_the_stale_completion(

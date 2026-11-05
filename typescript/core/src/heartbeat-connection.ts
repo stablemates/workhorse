@@ -288,6 +288,8 @@ const CLAIM_STATEMENTS = new Set<string>([
   SQL_STATEMENTS["claim_v1"],
   SQL_STATEMENTS["claim_many_v1"],
   SQL_STATEMENTS["complete_many_and_claim_v1"],
+  // The tier read of a probe runs before its claim, so the gate covers it too.
+  SQL_STATEMENTS["queue_tier"],
 ]);
 
 // The heartbeat gate of the worker whose claim or completion runs in the current async context.

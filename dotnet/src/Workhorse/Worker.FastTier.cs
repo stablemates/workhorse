@@ -8,13 +8,13 @@ namespace Workhorse;
 
 public sealed partial class Worker
 {
-    /// <summary>How long a queue that rejected a fast-tier statement is claimed as full-tier before the next probe.</summary>
+    /// <summary>How long the worker claims a full-tier queue through <c>claim_many_v1</c> before the next probe.</summary>
     private static readonly long TierProbeNanos = Monotonic.Millis(30_000);
 
     /// <summary>The most completions, and the largest claim limit, of one fused statement.</summary>
     private const int CompletionBatchLimit = 100;
 
-    /// <summary>The queues that rejected a fast-tier statement, each until its next probe. It changes under the state lock.</summary>
+    /// <summary>The queues that read or answered as full-tier, each until its next probe. It changes under the state lock.</summary>
     private readonly Dictionary<string, long> _fullTierUntil = new(StringComparer.Ordinal);
 
     /// <summary>The queues that answered a fast-tier statement. It changes under the state lock.</summary>
@@ -58,18 +58,25 @@ public sealed partial class Worker
 
     /// <summary>
     /// Claims through the fast tier, or returns <c>null</c> when the queue is on the full tier. The
-    /// fast claim is <c>complete_many_and_claim_v1</c> with no completions. A full-tier queue rejects
-    /// it, and the worker then claims that queue through <c>claim_many_v1</c> until the next probe.
+    /// fast claim is <c>complete_many_and_claim_v1</c> with no completions. Before the worker sends
+    /// it to a queue of unknown tier, the worker reads the tier through <c>queue_tier</c>. A
+    /// full-tier answer makes the worker claim that queue through <c>claim_many_v1</c> until the
+    /// next probe. Thus a full-tier queue never gets the fast claim, which PostgreSQL rejects with an
+    /// error that it writes to its log. A queue that moved to the full tier after the read still
+    /// rejects the fast claim, and the worker then marks it full-tier.
     /// </summary>
     private async Task<List<Claimed>?> ClaimFastAsync(RunState run, string queue, int limit)
     {
         var probedAt = Monotonic.Now();
+        bool knownFast;
         lock (_stateLock)
         {
             if (_fullTierUntil.TryGetValue(queue, out var until) && until - probedAt > 0)
             {
                 return null;
             }
+
+            knownFast = _fastTierQueues.Contains(queue);
         }
 
         if (limit <= 0)
@@ -84,6 +91,12 @@ public sealed partial class Worker
         try
         {
             await using var connection = await DataSources.OpenAsync(_dataSource, CancellationToken.None).ConfigureAwait(false);
+            if (!knownFast && !await ReadsFastTierAsync(connection, permit, queue).ConfigureAwait(false))
+            {
+                MarkFullTier(queue, probedAt);
+                return null;
+            }
+
             // The claim gate is read on the open connection before each attempt, a resend after a
             // deadlock too. A run whose heartbeat lost its connection meanwhile sends nothing. The
             // local lease window starts when the statement goes out, after the wait for the pool.
@@ -127,6 +140,31 @@ public sealed partial class Worker
         return claimed;
     }
 
+    /// <summary>
+    /// Reads the tier of <paramref name="queue"/> on the connection of the probe. A queue without a
+    /// <c>queue_control</c> row is on the full tier. The read takes the claim permit, so a run whose
+    /// claim gate closed sends nothing.
+    /// </summary>
+    private static async Task<bool> ReadsFastTierAsync(NpgsqlConnection connection, ClaimPermit permit, string queue)
+    {
+        if (!permit.Admit())
+        {
+            throw new ClaimWithdrawnException();
+        }
+
+        var rows = await Sql.RowsAsync(connection, SqlCatalogue.QueueTier, [Parameters.Text(queue)], CancellationToken.None).ConfigureAwait(false);
+        return rows.Single().Text("tier") == "fast";
+    }
+
+    /// <summary>Ends the probe interval of <paramref name="queue"/>, so the next claim probes its tier again. A test calls it.</summary>
+    internal void EndProbeInterval(string queue)
+    {
+        lock (_stateLock)
+        {
+            _fullTierUntil.Remove(queue);
+        }
+    }
+
     private NpgsqlParameter[] FusedParameters(Guid[] ids, long[] fences, string[] results, string queue, int limit) =>
     [
         Parameters.Text(WorkerId),
@@ -160,7 +198,7 @@ public sealed partial class Worker
     /// The tier read of a durable context. A task that a fast-tier statement claimed is on the fast
     /// tier, so its context reads nothing. <c>claim_many_v1</c> claims a queue that moved to the fast
     /// tier during the probe interval with no tier marker, so the context of such a task reads
-    /// <c>queue_control</c> on its first durable call. The tier cannot change while the queue has a
+    /// <c>queue_tier</c> on its first durable call. The tier cannot change while the queue has a
     /// live task, so one answer holds for the attempt.
     /// </summary>
     private Func<CancellationToken, Task<bool>> TierRead(Active task)

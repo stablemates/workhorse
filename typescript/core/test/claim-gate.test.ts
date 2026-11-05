@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import { holdHeartbeatConnection, withClaimGate } from "../src/heartbeat-connection.js";
 import { createProviderQueryable, Queue, type Queryable } from "../src/index.js";
 import type { ClaimedTask } from "../src/types.js";
+import { workerQueueTierRead } from "../src/worker-internal.js";
 import { answerSchemaCheck } from "./support/schema-check.js";
 
 // ADR 0071, rule 6, for the TypeScript claim path (SM-1575). A claim or a fused completion reads
@@ -11,6 +12,7 @@ import { answerSchemaCheck } from "./support/schema-check.js";
 
 const FUSED = "workhorse.complete_many_and_claim_v1(";
 const CLAIM_MANY = "workhorse.claim_many_v1(";
+const QUEUE_TIER = "FROM workhorse.queue_control WHERE queue_name";
 
 type Sent = { text: string; values: readonly unknown[] };
 
@@ -170,6 +172,30 @@ describe("claim gate on an ORM adapter", () => {
     );
     expect(fused).toHaveLength(1);
     expect(fused[0]!.values[5]).toBe(0);
+  });
+
+  it("runs no tier read of a probe whose connection arrived after the loss", async () => {
+    const attached = controlledPool({ holdConnects: true });
+    const adapter = adapterOn(attached);
+    const queue = new Queue(answerSchemaCheck(adapter.queryable));
+    let open = true;
+
+    const read = withClaimGate(
+      () => open,
+      () => queue[workerQueueTierRead]("gate"),
+    );
+    // 1. The tier read waits for its connection.
+    await vi.waitFor(() => expect(attached.held).toHaveLength(1));
+    // 2. The heartbeat connection is lost.
+    open = false;
+    // 3. The connection arrives.
+    for (const lend of attached.held.splice(0)) lend();
+
+    await expect(read).rejects.toThrow(/no usable heartbeat connection/);
+    const reads = [...attached.sent, ...adapter.executed].filter((statement) =>
+      statement.text.includes(QUEUE_TIER),
+    );
+    expect(reads).toEqual([]);
   });
 });
 

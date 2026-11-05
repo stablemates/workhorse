@@ -2401,20 +2401,6 @@ async fn a_fast_task_fails_when_it_asks_for_durable_execution_state() {
 }
 
 #[tokio::test]
-async fn a_full_tier_queue_is_claimed_after_its_fast_claim_is_rejected() {
-    let Some(harness) = harness("fast_probe").await else { return };
-    let worker = harness.worker(serving("full-queue"));
-    worker.handle("full-work", |_: Value, _| async { Ok(json!({"ok": true})) });
-    // The second claim reuses the remembered tier instead of probing again.
-    for _ in 0..2 {
-        let task = harness.enqueue("full-work", json!({}), on("full-queue")).await;
-        assert!(worker.run_once().await.unwrap());
-        assert_eq!(harness.state(task).await, TaskState::Succeeded);
-    }
-    assert_eq!(harness.runtime_rows("full-queue").await, 0);
-}
-
-#[tokio::test]
 async fn a_crashed_fast_worker_loses_no_task_and_records_one_outcome_each() {
     let Some(harness) = harness("fast_crash").await else { return };
     harness.make_fast("fast-crash").await;
