@@ -105,8 +105,13 @@ const started = spawn(command, commandArguments, {
 });
 child = started;
 
-const exitCode = await new Promise<number | null>((resolve, reject) => {
-  started.once("error", reject);
-  started.once("exit", resolve);
-});
-process.exitCode = exitCode ?? 1;
+// A command that a signal stops has no exit code. The wrapper then exits with 128 plus the signal
+// number, as a shell does. Thus a caller can tell a stop by a signal from an ordinary failure.
+const [exitCode, exitSignal] = await new Promise<[number | null, NodeJS.Signals | null]>(
+  (resolve, reject) => {
+    started.once("error", reject);
+    started.once("exit", (code, signal) => resolve([code, signal]));
+  },
+);
+const signalNumber = exitSignal === null ? undefined : constants.signals[exitSignal];
+process.exitCode = exitCode ?? (signalNumber === undefined ? 1 : 128 + signalNumber);

@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { constants, tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { afterEach, describe, expect, it } from "vitest";
@@ -95,6 +95,28 @@ describe("repository command environment", () => {
       );
 
       expect(result.port).toBe("4123");
+    },
+  );
+
+  it.skipIf(process.platform === "win32")(
+    "exits with 128 plus the signal number when a signal stops the command",
+    async () => {
+      const wrapper = spawn(
+        resolve(repositoryRoot, "node_modules/.bin/tsx"),
+        [
+          resolve(repositoryRoot, "scripts/with-env.ts"),
+          process.execPath,
+          "-e",
+          'process.kill(process.pid, "SIGTERM")',
+        ],
+        { cwd: repositoryRoot, env: process.env, stdio: "ignore" },
+      );
+      const exitCode = await new Promise<number | null>((resolveExit, reject) => {
+        wrapper.once("error", reject);
+        wrapper.once("exit", resolveExit);
+      });
+
+      expect(exitCode).toBe(128 + constants.signals.SIGTERM);
     },
   );
 
