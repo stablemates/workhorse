@@ -216,7 +216,11 @@ async def test_async_worker_notifications_wake_continuous_dispatch_and_stop_drai
 
     run = asyncio.create_task(worker.run())
     try:
-        await asyncio.sleep(0.15)
+        # Enqueue only after the claim that LISTEN starts found nothing. Then only the
+        # notification can wake the worker before its 5 s poll.
+        await eventually_async(
+            lambda: idle_listening(worker), f"the {driver} worker never waited for a notification"
+        )
         task_id = await asyncio.to_thread(
             enqueue, database_url, "async.notification", {}, queue=queue
         )
@@ -431,6 +435,23 @@ def test_bridge_threads_add_a_thread_for_every_call_that_blocks() -> None:
 
 async def notification_listening(worker: AsyncWorker) -> bool:
     return worker._inner._notification_listening.is_set()
+
+
+async def idle_listening(worker: AsyncWorker) -> bool:
+    """Tell whether the worker listens and waits after an empty claim that started after its
+    latest wake, with no claim in flight."""
+    inner = worker._inner
+    with inner._state_lock:
+        slots = inner._dispatch_slots
+        return (
+            inner._notification_listening.is_set()
+            and slots is not None
+            and slots.listened_at_last_wait
+            and slots.empty_wait is not None
+            and slots.empty_wait[1] == inner._dispatch_wake_version
+            and slots.whole_claims == 0
+            and not any(slots.cohort_claims)
+        )
 
 
 # SM-1071: run() cancels the listener, which skipped remove_listener and released a
