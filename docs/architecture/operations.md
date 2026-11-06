@@ -173,15 +173,25 @@ A restarted process does not continue the leases of the old process. Each claim 
 starts a new attempt.
 
 - A process that drained before it exited settled each task that it ran.
-- A process that exited at the deadline, or that the host stopped, leaves its leases active. Each
-  lease stays active until it expires. That is at most `leaseMs` after its last accepted renewal.
+- A process that exited at the deadline settled each handler that returned in the unwind window,
+  if its completion or release finished. It leaves a lease active for each other task: a handler
+  that did not return in the window, or a settlement write that failed or did not finish.
+- A process that the host stopped, for example with `SIGKILL`, leaves all its leases active.
+- Each active lease stays active until it expires. That is at most `leaseMs` after its last
+  accepted renewal. Only these leases need recovery.
 - After the expiry, a maintenance tick of any worker runs `recover_expired_v1`. It makes each
   expired attempt ready, scheduled, or terminal, as the retry policy selects. A scheduled retry
   starts after its retry delay.
 - A late write of the old process matches no row, because recovery replaced its lease generation.
 
-Thus a task of a stopped process can start again only after its lease expires, a tick recovers it,
-and its retry delay ends. Recovery can take more than one maintenance interval. It locks expired rows
+If `release_owned_v1` released a task in the unwind window, the task is `ready` at once. It waits
+for no lease expiry and no retry delay. It keeps its `current_attempt`, so the shutdown charges no
+attempt ([Task lifecycle: Owned release](lifecycle.md#owned-release)).
+
+A task whose lease stays active after the shutdown can start again only after three events: its
+lease expires, a tick recovers it, and its retry delay ends. This applies to a handler that did not
+return in the window, a settlement write that failed or did not finish, and each task of a host
+stop. Recovery can take more than one maintenance interval. It locks expired rows
 in bounded batches, it skips a row that another transaction locks, and a tick skips the lease scan
 if another tick ran it recently ([Task lifecycle: Expired-lease recovery](lifecycle.md#expired-lease-recovery)).
 

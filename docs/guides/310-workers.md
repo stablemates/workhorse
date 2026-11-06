@@ -216,9 +216,10 @@ due tasks to `ready`, notifies each affected queue separately. [Recovery](020-le
 does the same. Thus, tasks on one queue do not wake the workers of another queue. A notification
 wakes the claim loop only. It does not change the timing of maintenance or registration.
 
-TypeScript, Go, Ruby, and Python workers that share a database pool also share one listener
-connection. .NET workers that share one `NpgsqlDataSource` also share one listener connection. A
-Rust, Java, or Kotlin worker holds its own.
+In every SDK, the workers that share one pool identity also share one listener connection. The
+pool identity is the object or address that each language uses as the key, such as a TypeScript
+pool or a JVM `DataSource`. [Connection pooling](390-connection-pooling.md) gives the key for each
+language.
 
 <details>
 <summary>Reference: polling cadence</summary>

@@ -278,7 +278,11 @@ describe("documentation site guide coverage", () => {
     }
     expect(guide).toContain("AsyncWorker.from_asyncpg(worker_pool,");
     expect(guide).not.toContain("Workers that share a database pool also share the listener");
-    expect(guide).toContain("A Rust, Java, or Kotlin worker holds its own.");
+    // Rust and the JVM share one listener per pool identity too, as guide 390 states.
+    expect(guide).not.toContain("A Rust, Java, or Kotlin worker holds its own.");
+    expect(guide).toContain(
+      "In every SDK, the workers that share one pool identity also share one listener connection.",
+    );
     expect(readme).toContain("Queue(application_connection).enqueue(");
     expect(readme).toContain("Worker(worker_pool)");
   });
