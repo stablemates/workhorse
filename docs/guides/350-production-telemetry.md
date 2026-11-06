@@ -197,11 +197,11 @@ settlements, rejected heartbeats, recovery, and batch dispatch.
 <details>
 <summary>Reference: log severities and content</summary>
 
-| Severity | Records cover                                                                                                                                                                          |
-| -------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Debug    | Enqueue acceptance and replay, claims, accepted heartbeats, handler registration and execution boundaries, checkpoints, progress, schedule replay, and worker deregistration.          |
-| Info     | Queue and worker lifecycle, final execution outcomes, rejected heartbeats, completion and failure, cancellation, durable waits, promotion and recovery, schedule changes, and redrive. |
-| Warning  | `workhorse.handler.signal_swallowed`, `workhorse.worker.polling_only`, `workhorse.worker.reporter_failed`, and `workhorse.worker.statement_slow`.                                      |
+| Severity | Records cover                                                                                                                                                                                                                                                            |
+| -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Debug    | Enqueue acceptance and replay, claims, accepted heartbeats, handler registration and execution boundaries, checkpoints, progress, schedule replay, and worker deregistration.                                                                                            |
+| Info     | Queue and worker lifecycle, final execution outcomes, rejected heartbeats, completion and failure, cancellation, durable waits, promotion and recovery, schedule changes, and redrive.                                                                                   |
+| Warning  | `workhorse.handler.signal_swallowed`, `workhorse.handler.missing`, `workhorse.handler.batch_evidence_failed`, `workhorse.worker.polling_only`, `workhorse.worker.reporter_failed`, `workhorse.worker.shutdown_settlement_failed`, and `workhorse.worker.statement_slow`. |
 
 `workhorse.maintenance.completed` is info, and only when the phase changes rows or returns an error.
 Successful no-ops and skipped advisory locks emit no log. Maintenance counters and duration

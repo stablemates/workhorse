@@ -39,9 +39,10 @@ worker.
 The Rust worker records the metrics of the worker when its `opentelemetry` feature is on. It records
 the same worker metrics as the Go worker. It does not record schedule firing or routines.
 
-The Ruby and JVM workers record the same metrics as the Python worker. The JVM worker is the Java
+The Ruby worker records the same metrics as the Python worker. The JVM worker records the same
+metrics as the Python worker, and also `workhorse.maintenance.drift`. The JVM worker is the Java
 worker, which the Kotlin module and the Spring Boot starter also run. The .NET worker records the
-same metrics as the Python worker, and also `workhorse.maintenance.drift`.
+same metrics as the JVM worker.
 
 Execution metrics use the queue, the task type, and the outcome as attributes. They never use a
 task ID, a payload, a worker ID, or an error message. These values have no stable bound. As metric
@@ -63,7 +64,7 @@ use traces.
 | `workhorse.leases.expired`                                     | Yes        | Yes    | Yes | Yes  | Yes  | Yes | Yes  |
 | `workhorse.schedule.fired`, `workhorse.schedule.lag`           | Yes        | Yes    | No  | No   | Yes  | Yes | Yes  |
 | `workhorse.maintenance.runs`, `.rows`, `.duration`, `.errors`  | Yes        | Yes    | No  | No   | Yes  | Yes | Yes  |
-| `workhorse.maintenance.drift`                                  | Yes        | No     | No  | No   | No   | No  | Yes  |
+| `workhorse.maintenance.drift`                                  | Yes        | No     | No  | No   | No   | Yes | Yes  |
 
 The five handler instruments are `workhorse.handler.executions`, `workhorse.handler.duration`,
 `workhorse.handler.runtime`, `workhorse.handler.batch.size`, and `workhorse.handler.batch.linger`.
