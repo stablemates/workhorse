@@ -10,6 +10,14 @@ adds.
 
 ## Unreleased
 
+### A failed shutdown settlement now logs its event name
+
+If the completion or the release after the shutdown cancellation fails, the worker logs a warning
+with `event.name` `workhorse.worker.shutdown_settlement_failed` and `error.type`. The TypeScript and
+Python workers log the same event. Before, the Go warning had no event name, so an alert rule that
+reads the event name did not see it. The message text, the warn level, and the `error` field do not
+change. Lease recovery still settles the task.
+
 ### A full-tier queue no longer makes PostgreSQL log an error at each tier probe
 
 Before a tier probe, the worker now reads the tier of the queue from `queue_control` with one

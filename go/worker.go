@@ -3557,10 +3557,19 @@ func (worker *Worker) settleAfterShutdown(
 		})
 	}
 	if err != nil {
-		worker.logger.WarnContext(
+		logWorkerEvent(
 			ctx,
+			worker.logger,
+			slog.LevelWarn,
+			shutdownSettlementFailedEvent,
 			shutdownSettlementFailedMessage,
-			append(taskLogAttributes(task, worker.workerID), slog.String(errorLogField, err.Error()))...,
+			func() []any {
+				return append(
+					taskLogAttributes(task, worker.workerID),
+					slog.String(errorTypeAttribute, fmt.Sprintf(goTypeFormat, err)),
+					slog.String(errorLogField, err.Error()),
+				)
+			},
 		)
 	}
 	return outcome

@@ -561,6 +561,7 @@ const (
 	leasesRecoveredEvent           = "workhorse.leases.recovered"
 	batchDispatchedEvent           = "workhorse.handler.batch_dispatched"
 	statementSlowEvent             = "workhorse.worker.statement_slow"
+	shutdownSettlementFailedEvent  = "workhorse.worker.shutdown_settlement_failed"
 	taskClaimedLogMessage          = "Task claimed"
 	handlerStartedLogMessage       = "Task handler started"
 	executionFinishedLogMessage    = "Task execution finished"
