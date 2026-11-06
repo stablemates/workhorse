@@ -466,7 +466,9 @@ async def test_one_startup_deadline_bounds_a_late_reservation_and_a_stalled_quer
     """
     async with domain_core(domain, reserved=False) as gated:
         gated.heartbeats.delay.clear()
-        reservation_late = threading.Timer(1.0, gated.heartbeats.delay.set)
+        # The reservation arrives 2.5 s late. A deadline that wrongly restarts then ends at
+        # about 7.5 s, far above the bound below.
+        reservation_late = threading.Timer(2.5, gated.heartbeats.delay.set)
 
         def stall(sql: str, _parameters: tuple[object, ...]) -> None:
             if sql in {STATEMENTS.compatibility.psycopg, STATEMENTS.compatibility.asyncpg}:
@@ -481,7 +483,7 @@ async def test_one_startup_deadline_bounds_a_late_reservation_and_a_stalled_quer
         reservation_late.cancel()
 
     assert gated.core._connection_budget_seconds == 5
-    assert 4.9 < elapsed < 5.6, elapsed
+    assert 4.9 < elapsed < 6.5, elapsed
     assert "compatibility check" in str(refused.value)
     assert "5000 ms" in str(refused.value)
     assert str(refused.value).endswith(
