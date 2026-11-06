@@ -263,6 +263,12 @@ fn random_fraction() -> f64 {
     (Uuid::new_v4().as_u128() >> 75) as f64 / (1u64 << 53) as f64
 }
 
+/// `delay` scaled by a random factor from 0.9 through 1.1, with a floor of 1 millisecond. The
+/// jitter keeps workers that wait at the same time from waking at the same time.
+fn jitter(delay: Duration) -> Duration {
+    delay.mul_f64(0.9 + 0.2 * random_fraction()).max(Duration::from_millis(1))
+}
+
 fn hostname() -> String {
     #[cfg(unix)]
     {
@@ -1357,7 +1363,7 @@ impl Inner {
                 delay *= 2;
             }
         }
-        delay.mul_f64(0.9 + 0.2 * random_fraction()).max(Duration::from_millis(1))
+        jitter(delay)
     }
 
     async fn registry_loop(self: Arc<Self>, wake: Arc<Notify>, stop: StopToken) {

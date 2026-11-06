@@ -88,6 +88,12 @@ func workerPollDelay(base time.Duration, consecutiveEmpty int, backoff bool) tim
 			delay *= 2
 		}
 	}
+	return jitterDelay(delay)
+}
+
+// jitterDelay scales delay by a random factor from 0.9 through 1.1, with a floor of 1 millisecond.
+// The jitter keeps workers that wait at the same time from waking at the same time.
+func jitterDelay(delay time.Duration) time.Duration {
 	jitter := 0.9 + pseudorand.Float64()*0.2
 	return max(time.Millisecond, time.Duration(float64(delay)*jitter))
 }

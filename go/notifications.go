@@ -226,7 +226,7 @@ func (hub *taskNotificationHub) listen(ctx context.Context) {
 
 		hub.report(err)
 		hub.wakeAll()
-		reconnectTimer := time.NewTimer(reconnectDelay)
+		reconnectTimer := time.NewTimer(jitterDelay(reconnectDelay))
 		select {
 		case <-ctx.Done():
 			if !reconnectTimer.Stop() {
