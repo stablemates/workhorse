@@ -1,5 +1,5 @@
 import { readFile } from "node:fs/promises";
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import { Worker } from "../src/index.js";
 import { createIntegrationTestContext } from "./support/integration.js";
 
@@ -13,11 +13,107 @@ function pidOf(client: unknown): number {
   return (client as { processID: number }).processID;
 }
 
+const dayMs = 86_400_000;
+
+/**
+ * The start of the UTC day on the PostgreSQL clock when the test starts. Workhorse dates the
+ * history and the open export day from that clock, so each seed and expectation of one test
+ * counts back from this one sample, not from the Node clock.
+ */
+let seedDay: Date;
+
+beforeEach(async () => {
+  const result = await pool.query<{ day: Date }>(
+    "SELECT date_trunc('day', clock_timestamp() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC' AS day",
+  );
+  seedDay = result.rows[0]!.day;
+});
+
 function utcDay(daysAgo: number): Date {
-  const day = new Date();
-  day.setUTCHours(0, 0, 0, 0);
-  day.setUTCDate(day.getUTCDate() - daysAgo);
-  return day;
+  return new Date(seedDay.getTime() - daysAgo * dayMs);
+}
+
+function startOfUtcDay(instant: Date): Date {
+  return new Date(Math.floor(instant.getTime() / dayMs) * dayMs);
+}
+
+/** One read of the inputs that bound the export: the PostgreSQL clock and the statistics. */
+type ExportInputs = { now: Date; rolledUpThrough: Date };
+
+async function readExportInputs(): Promise<ExportInputs> {
+  const result = await pool.query<ExportInputs>(
+    `SELECT clock_timestamp() AS "now", rolled_up_through AS "rolledUpThrough"
+       FROM workhorse.task_stat_state WHERE singleton`,
+  );
+  return result.rows[0]!;
+}
+
+/**
+ * The open UTC days that an operation can see between two reads of the PostgreSQL clock around
+ * it. This is one day, unless a UTC midnight fell between the reads. Only then can the operation
+ * see either day.
+ */
+function openDaysBetween(before: Date, after: Date): Date[] {
+  const days: Date[] = [];
+  const last = startOfUtcDay(after).getTime();
+  for (let day = startOfUtcDay(before).getTime(); day <= last; day += dayMs) {
+    days.push(new Date(day));
+  }
+  return days;
+}
+
+/**
+ * The export limits that an operation can see between two input reads around it. The limit is
+ * the earlier of the open UTC day and the UTC day that the statistics rolled up through. Thus a
+ * UTC midnight moves the limit only if the statistics also passed it.
+ */
+function exportLimits(before: ExportInputs, after: ExportInputs): Date[] {
+  const limits = new Set<number>();
+  for (const openDay of openDaysBetween(before.now, after.now)) {
+    for (const inputs of [before, after]) {
+      limits.add(Math.min(openDay.getTime(), startOfUtcDay(inputs.rolledUpThrough).getTime()));
+    }
+  }
+  return [...limits].map((limit) => new Date(limit));
+}
+
+/**
+ * The days that an exporter can take in order from `start` between two input reads. For each
+ * possible limit, the exporter takes each whole day that ends at or before that limit.
+ */
+function handOutOptions(start: Date, before: ExportInputs, after: ExportInputs): Date[][] {
+  return exportLimits(before, after).map((limit) => {
+    const days: Date[] = [];
+    for (let day = start.getTime(); day + dayMs <= limit.getTime(); day += dayMs) {
+      days.push(new Date(day));
+    }
+    return days;
+  });
+}
+
+/**
+ * The oldest UTC day that a day partition of `dataset` covers, from the partition bounds in the
+ * catalog, or null when no day partition remains.
+ */
+async function oldestPartitionDay(dataset: "task_event" | "attempt_history"): Promise<Date | null> {
+  const result = await pool.query<{ day: Date | null }>(
+    `SELECT min((regexp_match(pg_get_expr(child.relpartbound, child.oid),
+                              $$FROM \\('([^']+)'\\)$$))[1]::timestamptz) AS day
+       FROM pg_inherits
+       JOIN pg_class AS parent ON parent.oid = pg_inherits.inhparent
+       JOIN pg_namespace ON pg_namespace.oid = parent.relnamespace
+       JOIN pg_class AS child ON child.oid = pg_inherits.inhrelid
+      WHERE pg_namespace.nspname = 'workhorse'
+        AND parent.relname = $1
+        AND child.relname <> $1 || '_default'`,
+    [dataset],
+  );
+  return result.rows[0]?.day ?? null;
+}
+
+/** The export watermark after an exporter completes `days` in order. */
+function dayAfterLast(days: Date[]): Date {
+  return new Date(days.at(-1)!.getTime() + dayMs);
 }
 
 /** Run `count` tasks to completion and move their history into the hour after `day` began. */
@@ -146,31 +242,51 @@ describe("cold history export", () => {
     // Today's rows stay: the day is open and no exporter may take it yet.
     await seedHistory("cold-export-today", 1, utcDay(0));
 
+    const beforeEnable = await readExportInputs();
     const enabled = await queue.setColdExportPolicy({ enabled: true });
+    const afterEnable = await readExportInputs();
     expect(enabled.enabled).toBe(true);
     expect(enabled.datasets.task_event.exportedThrough).toEqual(utcDay(2));
     expect(enabled.datasets.attempt_history.exportedThrough).toEqual(utcDay(2));
-    expect(enabled.datasets.task_event.exportableThrough).toEqual(utcDay(0));
+    expect(exportLimits(beforeEnable, afterEnable)).toContainEqual(
+      enabled.datasets.task_event.exportableThrough,
+    );
 
+    // The watermarks and the segment count below follow from these days, so they follow the same
+    // inputs.
+    const exportedDays = { task_event: [] as Date[], attempt_history: [] as Date[] };
     for (const dataset of ["task_event", "attempt_history"] as const) {
-      for (const day of [utcDay(2), utcDay(1)]) {
-        const exported = await exportNextDay(dataset);
-        expect(exported?.claim).toMatchObject({ segment_start: day, attempts: 1 });
-        expect(exported?.ids).toEqual(await historyIds(dataset, day));
-        expect(exported?.ids.length).toBeGreaterThan(0);
+      const before = await readExportInputs();
+      for (
+        let exported = await exportNextDay(dataset);
+        exported;
+        exported = await exportNextDay(dataset)
+      ) {
+        const day = exported.claim.segment_start;
+        expect(exported.claim.attempts).toBe(1);
+        expect(exported.ids).toEqual(await historyIds(dataset, day));
+        expect(exported.ids.length).toBeGreaterThan(0);
+        exportedDays[dataset].push(day);
       }
-      expect((await exportNextDay(dataset))?.exportedThrough).toBeUndefined();
+      const after = await readExportInputs();
+      // The seed day is open, so no exporter takes it. The exporter takes it last only if the
+      // clock and the statistics both passed it.
+      expect(handOutOptions(utcDay(2), before, after)).toContainEqual(exportedDays[dataset]);
     }
 
     const status = await queue.getColdExportStatus();
     expect(status.datasets.task_event).toMatchObject({
-      exportedThrough: utcDay(0),
-      completeSegments: 2,
+      exportedThrough: dayAfterLast(exportedDays.task_event),
+      completeSegments: exportedDays.task_event.length,
       exporting: null,
       lastError: null,
     });
-    expect(status.datasets.attempt_history.exportedThrough).toEqual(utcDay(0));
-    expect(await countRows("cold_export_segment")).toBe(4);
+    expect(status.datasets.attempt_history.exportedThrough).toEqual(
+      dayAfterLast(exportedDays.attempt_history),
+    );
+    expect(await countRows("cold_export_segment")).toBe(
+      exportedDays.task_event.length + exportedDays.attempt_history.length,
+    );
   });
 
   it("holds history retention at the export watermark and releases it once the day is exported", async () => {
@@ -189,22 +305,31 @@ describe("cold history export", () => {
     expect(await countRows("attempt_history")).toBe(attempts);
 
     // Three days per dataset: the seeded day and two empty ones, which complete without an object.
+    let emptyDays = 0;
     for (const dataset of ["task_event", "attempt_history"] as const) {
-      const days = [];
+      const days: Date[] = [];
+      const rows: number[] = [];
+      const before = await readExportInputs();
       for (
         let exported = await exportNextDay(dataset);
         exported;
         exported = await exportNextDay(dataset)
       ) {
-        days.push(exported.ids.length);
+        days.push(exported.claim.segment_start);
+        rows.push(exported.ids.length);
       }
-      expect(days).toEqual([expect.any(Number), 0, 0]);
-      expect(days[0]).toBeGreaterThan(0);
+      const after = await readExportInputs();
+      // The exporter takes the empty seed day too, but only if the clock and the statistics both
+      // passed it.
+      expect(handOutOptions(utcDay(3), before, after)).toContainEqual(days);
+      expect(rows[0]).toBeGreaterThan(0);
+      expect(rows.slice(1)).toEqual(rows.slice(1).map(() => 0));
+      emptyDays += rows.length - 1;
     }
     const empty = await pool.query<{ object_key: string | null; row_count: string }>(
       "SELECT object_key, row_count FROM workhorse.cold_export_segment WHERE row_count = 0",
     );
-    expect(empty.rows).toHaveLength(4);
+    expect(empty.rows).toHaveLength(emptyDays);
     expect(empty.rows.every((row) => row.object_key === null)).toBe(true);
 
     await queue.retainHistory({ force: true });
@@ -269,7 +394,6 @@ describe("cold history export", () => {
   ])(
     "hands out 24-hour UTC days across both daylight-saving transitions in $timeZone",
     async ({ timeZone, spring, fall }) => {
-      const dayMs = 86_400_000;
       const client = await pool.connect();
       try {
         await client.query(`SET TimeZone = '${timeZone}'`);
@@ -852,9 +976,27 @@ describe("cold history export", () => {
     expect(await countRows("task_event")).toBe(0);
 
     // The rows below the watermark are gone, so re-enabling cannot export them and says so by
-    // moving the watermark to the oldest retained day, which is now today.
+    // moving the watermark to the oldest retained day. No row remains, so that day is the oldest
+    // day partition that retention kept. Only if no day partition remains is it the open day.
+    const beforeAgain = await readExportInputs();
     const again = await queue.setColdExportPolicy({ enabled: true });
-    expect(again.datasets.task_event.exportedThrough).toEqual(utcDay(0));
-    expect(await claimSegment("task_event")).toBeNull();
+    const afterAgain = await readExportInputs();
+    const retainedDay = await oldestPartitionDay("task_event");
+    const oldestRetained =
+      retainedDay === null ? openDaysBetween(beforeAgain.now, afterAgain.now) : [retainedDay];
+    const watermark = again.datasets.task_event.exportedThrough!;
+    expect(
+      oldestRetained.map((day) => new Date(Math.max(day.getTime(), utcDay(2).getTime()))),
+    ).toContainEqual(watermark);
+    // The open day is not finalized, so no exporter takes it. The claim takes the watermark day
+    // only if the clock and the statistics both passed the end of that day.
+    const beforeClaim = await readExportInputs();
+    const claimed = await claimSegment("task_event");
+    const afterClaim = await readExportInputs();
+    expect(
+      exportLimits(beforeClaim, afterClaim).map((limit) =>
+        watermark.getTime() + dayMs <= limit.getTime() ? watermark : null,
+      ),
+    ).toContainEqual(claimed?.segment_start ?? null);
   });
 });

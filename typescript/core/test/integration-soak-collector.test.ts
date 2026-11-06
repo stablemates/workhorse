@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it } from "vitest";
 import { OBSERVATION_FORMAT } from "../../../scripts/soak/observation.js";
 import { collectSoakObservation, observationFileName } from "../../../scripts/soak/observe.js";
 import { buildSoakReport } from "../../../scripts/soak/report.js";
@@ -8,10 +8,66 @@ import { createIntegrationTestContext } from "./support/integration.js";
 
 const { pool, queue } = createIntegrationTestContext(import.meta.url);
 
-/** The UTC day a live installation is on, which is the day its newest partitions cover. */
-function today(): string {
-  return new Date().toISOString().slice(0, 10);
+/** Read the PostgreSQL clock, which also dates the partitions and the statistics. */
+async function databaseNow(): Promise<Date> {
+  const result = await pool.query<{ now: Date }>("SELECT clock_timestamp() AS now");
+  return result.rows[0]!.now;
 }
+
+const dayMs = 86_400_000;
+
+function utcDayOf(instant: Date | string | number): string {
+  return new Date(instant).toISOString().slice(0, 10);
+}
+
+/**
+ * The UTC days from the day of `before` through the day of `after`. Both are reads of the
+ * PostgreSQL clock around one operation. This is one day, unless a UTC midnight fell between the
+ * reads. Only then can the operation see either day.
+ */
+function daysBetween(before: Date | string, after: Date | string): string[] {
+  const days: string[] = [];
+  const last = Date.parse(`${utcDayOf(after)}T00:00:00Z`);
+  for (let day = Date.parse(`${utcDayOf(before)}T00:00:00Z`); day <= last; day += dayMs) {
+    days.push(utcDayOf(day));
+  }
+  return days;
+}
+
+/** The observation read the clock between `before` and `after`, as each collection must. */
+function expectObservedBetween(observation: { observedAt: string }, before: Date, after: Date) {
+  expect(Date.parse(observation.observedAt)).toBeGreaterThanOrEqual(before.getTime());
+  expect(Date.parse(observation.observedAt)).toBeLessThanOrEqual(after.getTime());
+}
+
+/**
+ * The oldest UTC day that a history partition of this file covers. The harness prepares the
+ * partitions from the PostgreSQL clock, so the test reads the day from the partition bounds in
+ * the catalog. It does not read a clock again, and it does not use the partition names that the
+ * collector parses.
+ */
+let partitionDay: string;
+
+beforeAll(async () => {
+  const result = await pool.query<{ day: string }>(
+    `SELECT min(
+              ((regexp_match(pg_get_expr(child.relpartbound, child.oid),
+                             $$FROM \\('([^']+)'\\)$$))[1]::timestamptz
+                AT TIME ZONE 'UTC')::date
+            )::text AS day
+       FROM pg_inherits
+       JOIN pg_class AS parent ON parent.oid = pg_inherits.inhparent
+       JOIN pg_namespace ON pg_namespace.oid = parent.relnamespace
+       JOIN pg_class AS child ON child.oid = pg_inherits.inhrelid
+      WHERE pg_namespace.nspname = 'workhorse'
+        AND parent.relname IN ('task_event', 'attempt_history')`,
+  );
+  const day = result.rows[0]?.day;
+  if (day === undefined || !/^\d{4}-\d{2}-\d{2}$/.test(day)) {
+    throw new Error(`the history partitions have no lower bound: ${String(day)}`);
+  }
+  partitionDay = day;
+});
 
 describe("soak observation collector", () => {
   it("reads a live installation without writing to it", async () => {
@@ -59,7 +115,10 @@ describe("soak observation collector", () => {
   });
 
   it("sees the daily partitions the installation prepared ahead", async () => {
+    const before = await databaseNow();
     const observation = await collectSoakObservation(pool);
+    const after = await databaseNow();
+    expectObservedBetween(observation, before, after);
 
     // Installation prepares today plus the horizon derived from the preparation cadence, which
     // stays wider than the four days the health snapshot demands.
@@ -73,11 +132,17 @@ describe("soak observation collector", () => {
     expect(expectedDays).toBeGreaterThan(4);
     for (const parent of observation.partitions.parents) {
       expect(parent.days).toHaveLength(expectedDays);
-      expect(parent.days).toContain(today());
+      expect(parent.days).toContain(partitionDay);
       expect(parent.defaultRows).toBe(0);
     }
-    expect(observation.partitions.oldestSurvivingDay).toBe(today());
-    expect(observation.partitions.oldestSurvivingAgeDays).toBe(0);
+    expect(observation.partitions.oldestSurvivingDay).toBe(partitionDay);
+    // The age counts whole days from the partition day to the clock of the observation. In a run
+    // on one UTC day, that is 0. A second age is correct only if the clock reads around the
+    // collection show a UTC midnight between them.
+    const ageOn = (day: string) => (Date.parse(day) - Date.parse(partitionDay)) / dayMs;
+    expect(daysBetween(before, after).map(ageOn)).toContain(
+      observation.partitions.oldestSurvivingAgeDays,
+    );
   });
 
   it("takes the queue-health snapshot and the live backlog", async () => {
@@ -122,7 +187,9 @@ describe("soak observation collector", () => {
   });
 
   it("reports the closed days the daily statistics tier holds", async () => {
+    const beforeEnqueue = await databaseNow();
     const taskId = await queue.enqueue("soak-throughput", {});
+    const afterEnqueue = await databaseNow();
     const claimed = await queue.claim("soak-throughput-worker");
     expect(claimed?.id).toBe(taskId);
     expect(await queue.complete(claimed!, "soak-throughput-worker", null)).toBe(true);
@@ -137,16 +204,22 @@ describe("soak observation collector", () => {
               daily_rolled_up_through = date_bin('1 day', clock_timestamp(),
                 timestamp '2000-01-01' AT TIME ZONE 'UTC')`,
     );
+    // One day after the database clock closes the day of the enqueue, whichever day that is.
     const result = await queue.rollupStatistics({
       force: true,
-      now: new Date(Date.now() + 24 * 60 * 60_000),
+      now: new Date((await databaseNow()).getTime() + 24 * 60 * 60_000),
       maxBuckets: 2 * 24 * 60,
     });
     expect(result.every(({ error }) => error === null)).toBe(true);
 
     const observation = await collectSoakObservation(pool);
 
-    const day = observation.throughput.find((entry) => entry.day === today());
+    // The enqueue counts on the UTC day of its database clock. That is one day, unless the clock
+    // reads around the enqueue show a UTC midnight between them.
+    const enqueueDays = new Set(daysBetween(beforeEnqueue, afterEnqueue));
+    const day = observation.throughput.find(
+      (entry) => enqueueDays.has(entry.day) && entry.enqueued >= 1,
+    );
     expect(day).toMatchObject({ enqueued: expect.any(Number), taskSucceeded: expect.any(Number) });
     expect(day!.enqueued).toBeGreaterThanOrEqual(1);
   });
@@ -160,13 +233,24 @@ describe("soak observation collector", () => {
   });
 
   it("builds a report from observations of the live installation", async () => {
+    const before = await databaseNow();
     const observations = [await collectSoakObservation(pool), await collectSoakObservation(pool)];
+    const after = await databaseNow();
+    for (const observation of observations) expectObservedBetween(observation, before, after);
 
     const report = buildSoakReport(observations);
 
     expect(report.observations).toBe(2);
     expect(report.installation.reinstalls).toEqual([]);
-    expect(report.partitions.rolloverDays).toEqual([today()]);
+    // Each day from the first to the last observation held a partition. In a run on one UTC day,
+    // that is the day of both clock reads. Two days are correct only if a UTC midnight fell
+    // between the reads, and the bounds above hold each observation to that window.
+    expect(report.partitions.rolloverDays).toEqual(
+      daysBetween(observations[0]!.observedAt, observations[1]!.observedAt),
+    );
+    expect(daysBetween(before, after)).toEqual(
+      expect.arrayContaining(report.partitions.rolloverDays),
+    );
     // A fresh installation meets neither the time bar nor the rollover bar, and says so.
     expect(report.met).toBe(false);
     expect(report.gate.find((check) => check.bar.includes("never reinstalled"))?.met).toBe(true);
