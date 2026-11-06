@@ -120,10 +120,19 @@ The modes share one ownership table, hash, and lock order. This sharing does not
 | `windowMs` | An integer from 1 through 31,536,000,000 (365 days).            |
 | `schedule` | `reset` or `preserve`.                                          |
 
-A request with `debounce` cannot also supply `idempotency`, `runAt`, `prerequisiteTaskId`, or
-`dependencies`. `Queue.enqueueManyWithResults` rejects these combinations before querying
-PostgreSQL. `enqueue_debounce_v1` rejects them for direct SQL callers. PostgreSQL derives the
-initial run time from `clock_timestamp() + windowMs`.
+A request with `debounce` cannot also supply `idempotency`, `throttle`, `runAt`,
+`prerequisiteTaskId`, or `dependencies`. `Queue.enqueueManyWithResults` rejects these combinations
+before querying PostgreSQL. For direct SQL callers, these functions enforce the exclusions:
+
+- `enqueue_many_v1` rejects a member that supplies more than one of `idempotency`, `debounce`, and
+  `throttle`, before it enqueues any member. It sends each `debounce` member to
+  `enqueue_debounce_v1`.
+- `enqueue_debounce_v1` rejects `idempotency`, `runAt`, `prerequisiteTaskId`, and `dependencies`.
+  It does not reject `throttle`. A direct call ignores a `throttle` field, because
+  `enqueue_batch_v1` does not read it and the request fingerprint does not contain it.
+- `enqueue_throttle_v1` rejects a request that also supplies `debounce`.
+
+PostgreSQL derives the initial run time from `clock_timestamp() + windowMs`.
 
 `enqueue_debounce_v1` hashes the scoped key and takes the same transaction advisory lock as enqueue
 idempotency. It stores `coalescing_mode = 'debounce'` on `enqueue_idempotency`. It never persists

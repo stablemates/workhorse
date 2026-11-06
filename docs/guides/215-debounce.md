@@ -207,8 +207,13 @@ A request with `debounce` cannot also set:
 - `prerequisiteTaskId`;
 - `dependencies`.
 
-The SDK rejects these combinations before it sends a query. `enqueue_debounce_v1` rejects them for
-direct SQL calls. A fast-tier queue rejects debounce.
+The SDK rejects these combinations before it sends a query. For direct SQL calls:
+
+- `enqueue_many_v1` rejects each combination in this list.
+- `enqueue_debounce_v1` rejects each combination except `throttle`. It ignores a `throttle` field.
+- `enqueue_throttle_v1` rejects a request that also sets `debounce`.
+
+A fast-tier queue rejects debounce.
 
 More detail: [Task lifecycle: Keyed debounce](../architecture/lifecycle.md#keyed-debounce).
 
