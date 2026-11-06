@@ -48,6 +48,9 @@ pub(super) trait Dispatch: Send + Sync + 'static {
     /// Receives the empty wait each time the loop changes it: its deadline, and whether a
     /// notification can end it.
     fn observe_empty_wait(&self, _wait: Option<(Instant, bool)>) {}
+    /// Receives, when a run starts, a reader of the claims in flight in that run. The reader
+    /// returns zero after the run ends.
+    fn observe_claims(&self, _claims: ClaimsInFlight) {}
     /// Whether the claim gate is open.
     fn claims_allowed(&self) -> bool {
         true
@@ -78,6 +81,9 @@ pub(super) trait Dispatch: Send + Sync + 'static {
         ticket: Ticket<Self::Task>,
     ) -> bool;
 }
+
+/// Reads how many claims are in flight: plain claims and reserved fused claims.
+pub(super) type ClaimsInFlight = Box<dyn Fn() -> usize + Send + Sync>;
 
 /// Free slots that let a second claim start while one is in flight: a quarter of the concurrency,
 /// rounded up.
@@ -136,6 +142,13 @@ impl Slots {
                 (active + cohort.active, handed_over + cohort.handed_over)
             });
         self.concurrency as isize - active as isize + handed_over as isize - self.reserved as isize
+    }
+
+    /// Plain claims in flight, and fused claims reserved and not yet handed to the loop.
+    fn claims_in_flight(&self) -> usize {
+        self.whole_claims
+            + self.cohorts.iter().map(|cohort| cohort.claims).sum::<usize>()
+            + self.fused
     }
 
     /// The cohort with the most free slots, the first on a tie.
@@ -346,20 +359,28 @@ impl<D: Dispatch> Dispatcher<D> {
             wake_version: 0,
             fused: 0,
         };
+        let shared = Arc::new(Shared {
+            slots: Mutex::new(slots),
+            handoffs: sender,
+            paused: Box::new({
+                let worker = Arc::clone(worker);
+                move || worker.paused()
+            }),
+            claims_allowed: Box::new({
+                let worker = Arc::clone(worker);
+                move || worker.claims_allowed()
+            }),
+        });
+        worker.observe_claims({
+            // A weak reference, so the worker does not keep the slots of an ended run.
+            let shared = Arc::downgrade(&shared);
+            Box::new(move || {
+                shared.upgrade().map_or(0, |shared| lock(&shared.slots).claims_in_flight())
+            })
+        });
         Self {
             worker: Arc::clone(worker),
-            shared: Arc::new(Shared {
-                slots: Mutex::new(slots),
-                handoffs: sender,
-                paused: Box::new({
-                    let worker = Arc::clone(worker);
-                    move || worker.paused()
-                }),
-                claims_allowed: Box::new({
-                    let worker = Arc::clone(worker);
-                    move || worker.claims_allowed()
-                }),
-            }),
+            shared,
             handoffs,
             claims: JoinSet::new(),
             plain: HashMap::new(),
