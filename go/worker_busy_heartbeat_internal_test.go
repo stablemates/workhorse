@@ -15,10 +15,25 @@ import (
 // of the heartbeat statement. Each attempt registers through superviseOwnership, so the lease
 // watchdog is the real one.
 
-// fakeHeartbeatRound is one call of the fake round: when it started and the task IDs it sent.
+// fakeHeartbeatRound is one call of the fake round: when it started, the task IDs it sent, the
+// deadline that the scheduler gave it, and the lease window end of each member when it started.
 type fakeHeartbeatRound struct {
-	at    time.Time
-	tasks []string
+	at        time.Time
+	tasks     []string
+	deadline  time.Time
+	leaseEnds map[string]time.Time
+}
+
+// scheduledStart is the instant at which the scheduler started a regular round. A regular round's
+// deadline is that instant plus heartbeatRoundBound, so the value comes from the scheduler's own
+// clock reading and not from when the fake ran.
+func (round fakeHeartbeatRound) scheduledStart(worker *Worker) time.Time {
+	return round.deadline.Add(-worker.heartbeatRoundBound)
+}
+
+// nextSlot is the regular slot after a regular round: its scheduled start plus one interval.
+func (round fakeHeartbeatRound) nextSlot(worker *Worker) time.Time {
+	return round.scheduledStart(worker).Add(worker.heartbeatInterval)
 }
 
 // fakeHeartbeat records every round and answers each one with answer, by task ID. If
@@ -32,7 +47,7 @@ type fakeHeartbeat struct {
 	answerMembers func(members []*heartbeatMember) []ownershipStatus
 }
 
-func (fake *fakeHeartbeat) round(members []*heartbeatMember, _ time.Time) ([]ownershipStatus, error) {
+func (fake *fakeHeartbeat) round(members []*heartbeatMember, deadline time.Time) ([]ownershipStatus, error) {
 	active := fake.active.Add(1)
 	defer fake.active.Add(-1)
 	for {
@@ -42,13 +57,19 @@ func (fake *fakeHeartbeat) round(members []*heartbeatMember, _ time.Time) ([]own
 		}
 	}
 	tasks := make([]string, 0, len(members))
+	leaseEnds := make(map[string]time.Time, len(members))
 	for _, member := range members {
 		tasks = append(tasks, member.task.ID)
+		if end := member.leaseEnd.Load(); end != nil {
+			leaseEnds[member.task.ID] = *end
+		}
 	}
 	slices.Sort(tasks)
 	fake.mu.Lock()
 	call := len(fake.rounds)
-	fake.rounds = append(fake.rounds, fakeHeartbeatRound{at: time.Now(), tasks: tasks})
+	fake.rounds = append(fake.rounds, fakeHeartbeatRound{
+		at: time.Now(), tasks: tasks, deadline: deadline, leaseEnds: leaseEnds,
+	})
 	fake.mu.Unlock()
 	if fake.answerMembers != nil {
 		return fake.answerMembers(members), nil
@@ -187,21 +208,27 @@ func TestABusyLeaseIsRetriedAloneBeforeTheNextRegularRound(t *testing.T) {
 	busy := superviseAttempt(t, worker, "busy", 1)
 	superviseAttempt(t, worker, "free", 1)
 
-	rounds := fake.waitForRounds(t, 2, 3*interval)
+	rounds := fake.waitForRounds(t, 3, 6*interval)
 	if !slices.Equal(rounds[0].tasks, []string{"busy", "free"}) {
 		t.Fatalf("the regular round sent %v; want both leases", rounds[0].tasks)
 	}
 	if !slices.Equal(rounds[1].tasks, []string{"busy"}) {
 		t.Fatalf("the retry sent %v; want only the busy lease", rounds[1].tasks)
 	}
-	// The base is min(100 ms, interval / 8) = 50 ms, so the retry falls due within 100 ms.
-	if gap := rounds[1].at.Sub(rounds[0].at); gap >= interval/2 {
-		t.Fatalf("the busy retry came %s after the round; want less than %s", gap, interval/2)
+	// A retry never runs past the next regular slot, so its deadline puts it inside the interval
+	// of the busy round. TestBusyRetryDelayIsTheBaseTimesOneToTwo checks the delay itself. The
+	// checks use the deadlines that the scheduler gave, so a slow host cannot change the result.
+	slot := rounds[0].nextSlot(worker)
+	if rounds[1].deadline.After(slot) {
+		t.Fatalf("the busy retry had the deadline %s; want no later than the next regular slot %s",
+			rounds[1].deadline, slot)
 	}
-	// The retry got accepted, so no further retry runs before the next regular slot.
-	time.Sleep(interval / 2)
-	if count := len(fake.snapshot()); count != 2 {
-		t.Fatalf("the scheduler sent %d rounds before the next regular slot; want 2", count)
+	// The retry got accepted, so no further retry runs: the next round is the regular one.
+	if !slices.Equal(rounds[2].tasks, []string{"busy", "free"}) {
+		t.Fatalf("the round after the accepted retry sent %v; want the regular round", rounds[2].tasks)
+	}
+	if start := rounds[2].scheduledStart(worker); start.Before(slot) {
+		t.Fatalf("the round after the accepted retry started %s before the regular slot", slot.Sub(start))
 	}
 	if busy.cause() != nil {
 		t.Fatalf("a busy lease aborted its attempt: %v", busy.cause())
@@ -220,31 +247,77 @@ func TestBusyRetriesKeepTheRegularSlotsAndOneRoundInFlight(t *testing.T) {
 	superviseAttempt(t, worker, "busy", 1)
 	superviseAttempt(t, worker, "free", 1)
 
-	time.Sleep(time.Until(registeredAt.Add(3*interval + interval/2)))
-	var regular []time.Time
+	// The test reads the rounds up to the fifth regular round, so it sees four whole intervals. It
+	// compares the deadlines that the scheduler gave each round, and not the wall clock, so a slow
+	// host or -race cannot change the result.
+	const regularCount = 5
+	var rounds, regular []fakeHeartbeatRound
+	for until := time.Now().Add(4 * regularCount * interval); len(regular) < regularCount; time.Sleep(time.Millisecond) {
+		if time.Now().After(until) {
+			t.Fatalf("the scheduler sent %d regular rounds in %d intervals; want %d",
+				len(regular), 4*regularCount, regularCount)
+		}
+		rounds, regular = nil, nil
+		for _, round := range fake.snapshot() {
+			if len(regular) == regularCount {
+				break
+			}
+			rounds = append(rounds, round)
+			if len(round.tasks) == 2 {
+				regular = append(regular, round)
+			}
+		}
+	}
+	if len(rounds[0].tasks) != 2 {
+		t.Fatalf("the first round sent %v; want the regular round with both leases", rounds[0].tasks)
+	}
+	// The first slot is one interval after the heartbeat loop starts, which is after registeredAt.
+	first := regular[0].scheduledStart(worker)
+	if first.Before(registeredAt.Add(interval)) {
+		t.Fatalf("the first regular round started %s after the registration; want at least %s",
+			first.Sub(registeredAt), interval)
+	}
+	// Each retry ends by the slot after the regular round before it, which is the regular start
+	// plus one interval. A correct scheduler meets this at any timing, because a retry deadline is
+	// never later than the scheduler's next slot. A retry that moved the slot later, or a schedule
+	// that drifts, gives a later retry a deadline after it.
+	// TestABusyRetryDeadlineIsTheEarliestOfTheBoundTheSlotAndTheWindowEnd checks the cap itself.
 	retries := 0
-	for _, round := range fake.snapshot() {
+	var slot time.Time
+	for _, round := range rounds {
 		if len(round.tasks) == 2 {
-			regular = append(regular, round.at)
+			slot = round.nextSlot(worker)
 			continue
 		}
 		if !slices.Equal(round.tasks, []string{"busy"}) {
 			t.Fatalf("a retry sent %v; want only the busy lease", round.tasks)
 		}
+		if round.deadline.After(slot) {
+			t.Fatalf("a busy retry had the deadline %s; want no later than the regular slot %s",
+				round.deadline, slot)
+		}
 		retries++
 	}
-	if len(regular) != 3 {
-		t.Fatalf("the scheduler sent %d regular rounds in 3.5 intervals; want 3", len(regular))
-	}
-	// Regular slots stay one interval apart from the registration, however many retries run.
-	for index, at := range regular {
-		want := registeredAt.Add(time.Duration(index+1) * interval)
-		if drift := at.Sub(want); drift < 0 || drift > 60*time.Millisecond {
-			t.Fatalf("regular round %d started %s after its slot; want [0, 60 ms]", index+1, drift)
-		}
-	}
 	if retries < 4 {
-		t.Fatalf("the scheduler sent %d busy retries; want at least 4", retries)
+		t.Fatalf("the scheduler sent %d busy retries in four intervals; want at least 4", retries)
+	}
+	// A regular round never starts before its slot. The scheduler counts each slot from the
+	// start of the round before it, so a timer delay moves every later slot too. The delays of
+	// all rounds add up, so the test bounds the start of each regular round against the first
+	// one. Timer and scheduler delay over four intervals stays well under half an interval on a
+	// loaded host or with -race. A schedule that drifts more than one eighth of an interval in
+	// each round goes past that bound. Less drift than that, or one delay of almost half an
+	// interval, passes: the bound gives up that much to stay free of host timing.
+	for index := 1; index < len(regular); index++ {
+		start := regular[index].scheduledStart(worker)
+		if late := start.Sub(regular[index-1].nextSlot(worker)); late < 0 {
+			t.Fatalf("regular round %d started %s before its slot", index+1, -late)
+		}
+		ideal := first.Add(time.Duration(index) * interval)
+		if drift := start.Sub(ideal); drift >= interval/2 {
+			t.Fatalf("regular round %d started %s after %d intervals from the first regular round; want less than %s",
+				index+1, drift, index, interval/2)
+		}
 	}
 	if overlap := fake.maxActive.Load(); overlap != 1 {
 		t.Fatalf("%d heartbeat rounds were in flight at once; want 1", overlap)
@@ -257,8 +330,13 @@ func TestContinuousBusyLetsTheWatchdogEndTheAttemptAtTheLeaseEnd(t *testing.T) {
 		return statusesFor(tasks, workerOwnershipBusy, nil), nil
 	}}
 	worker := newBusyHeartbeatWorker(t, lease, 150*time.Millisecond, fake)
-	claimedAt := time.Now()
 	attempt := superviseAttempt(t, worker, "busy", 1)
+	member := attempt.member()
+	if member == nil {
+		t.Fatal("the attempt did not register for heartbeats")
+	}
+	// The claim opened this lease window. The watchdog arms its timer at its end.
+	window := *member.leaseEnd.Load()
 
 	var abortedAt time.Time
 	select {
@@ -270,14 +348,26 @@ func TestContinuousBusyLetsTheWatchdogEndTheAttemptAtTheLeaseEnd(t *testing.T) {
 	if !errors.As(attempt.cause(), &lost) {
 		t.Fatalf("the attempt ended with %v; want a lease loss", attempt.cause())
 	}
-	// The busy results renewed nothing, so the watchdog fires at the end of the claim's lease,
-	// and not before it.
-	if elapsed := abortedAt.Sub(claimedAt); elapsed < lease || elapsed > lease+200*time.Millisecond {
-		t.Fatalf("the watchdog ended the attempt %s after the claim; want [%s, %s]",
-			elapsed, lease, lease+200*time.Millisecond)
+	// The busy results renewed nothing, so the watchdog fires at the end of the window that the
+	// claim opened, and not before it. Each round started with that same window end. These checks
+	// compare the window end that the worker stores, so a slow host cannot change the result. A
+	// late abort comes only from timer and scheduler delay, which stays under half a lease.
+	if abortedAt.Before(window) {
+		t.Fatalf("the watchdog ended the attempt %s before the end of the lease window", window.Sub(abortedAt))
 	}
-	if rounds := fake.snapshot(); len(rounds) < 5 {
+	if late := abortedAt.Sub(window); late >= lease/2 {
+		t.Fatalf("the watchdog ended the attempt %s after the end of the lease window; want less than %s",
+			late, lease/2)
+	}
+	rounds := fake.snapshot()
+	if len(rounds) < 5 {
 		t.Fatalf("the scheduler sent %d rounds during the lease; want busy retries", len(rounds))
+	}
+	for index, round := range rounds {
+		if end := round.leaseEnds["busy"]; !end.Equal(window) {
+			t.Fatalf("round %d started with the lease window end %s; want the claim's window end %s",
+				index, end, window)
+		}
 	}
 }
 
@@ -441,8 +531,11 @@ func TestAFailedBusyRetrySchedulesNoFurtherRetry(t *testing.T) {
 	attempt := superviseAttempt(t, worker, "busy", 1)
 
 	rounds := fake.waitForRounds(t, 3, 4*interval)
-	if gap := rounds[1].at.Sub(rounds[0].at); gap >= interval/2 {
-		t.Fatalf("the busy retry came %s after the round; want less than %s", gap, interval/2)
+	// A retry never runs past the next regular slot, so its deadline puts it inside the interval
+	// of the busy round.
+	if slot := rounds[0].nextSlot(worker); rounds[1].deadline.After(slot) {
+		t.Fatalf("the busy retry had the deadline %s; want no later than the next regular slot %s",
+			rounds[1].deadline, slot)
 	}
 	// The failed retry left no retry behind, so the next round is the regular one.
 	if gap := rounds[2].at.Sub(rounds[0].at); gap < interval-20*time.Millisecond {
@@ -529,6 +622,41 @@ func TestABusyRetrySelectionNeedsTheMinimumBeforeItsDeadline(t *testing.T) {
 		selection, _ := worker.busyRetrySelection(busy, testCase.now, testCase.next)
 		if runs := len(selection) == 1; runs != testCase.runs {
 			t.Errorf("%s: the retry runs = %t; want %t", testCase.name, runs, testCase.runs)
+		}
+	}
+}
+
+func TestABusyRetryDeadlineIsTheEarliestOfTheBoundTheSlotAndTheWindowEnd(t *testing.T) {
+	fake := &fakeHeartbeat{answer: func(_ int, tasks []string) (map[string]ownershipStatus, error) {
+		return statusesFor(tasks, workerOwnershipBusy, nil), nil
+	}}
+	// The regular slot falls due long after the test, so the window end does not move. The test
+	// gives each instant, so no timer or scheduler delay can change the result.
+	worker := newBusyHeartbeatWorker(t, time.Minute, 30*time.Second, fake)
+	member := superviseAttempt(t, worker, "task", 1).member()
+	if member == nil {
+		t.Fatal("the attempt did not register for heartbeats")
+	}
+	end := *member.leaseEnd.Load()
+	bound := worker.heartbeatRoundBound
+	busy := []*heartbeatMember{member}
+	for _, testCase := range []struct {
+		name string
+		now  time.Time
+		next time.Time
+		want time.Time
+	}{
+		{"the next regular slot before the round bound", end.Add(-40 * time.Second), end.Add(-39 * time.Second), end.Add(-39 * time.Second)},
+		{"the round bound before the next regular slot", end.Add(-40 * time.Second), end.Add(-40*time.Second + bound + time.Second), end.Add(-40*time.Second + bound)},
+		{"the lease window end before the bound and the slot", end.Add(-time.Second), end.Add(time.Minute), end},
+	} {
+		selection, deadline := worker.busyRetrySelection(busy, testCase.now, testCase.next)
+		if len(selection) != 1 {
+			t.Errorf("%s: the retry selected %d leases; want 1", testCase.name, len(selection))
+		}
+		if !deadline.Equal(testCase.want) {
+			t.Errorf("%s: the retry deadline is %s after now; want %s",
+				testCase.name, deadline.Sub(testCase.now), testCase.want.Sub(testCase.now))
 		}
 	}
 }
