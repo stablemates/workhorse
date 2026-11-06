@@ -230,10 +230,47 @@ async fn an_operator_pause_stops_claims_until_it_is_cleared() {
     .await
     .expect("the worker registers");
     harness.admin.set_worker_paused(&worker_id, true, &audit()).await.unwrap().unwrap();
-    tokio::time::sleep(Duration::from_millis(300)).await;
+    // The registry loop stores the pause after its refresh statement returns, and it starts the
+    // next refresh after that store. So a refresh after the first refresh that read the pause
+    // proves the store. A run writes no other heartbeat to its registry row.
+    let (client, connection) =
+        tokio_postgres::connect(harness.database.url(), NoTls).await.unwrap();
+    tokio::spawn(connection);
+    tokio::time::timeout(WAIT, async {
+        let mut pause_read = None;
+        loop {
+            let row = client
+                .query_one(
+                    "SELECT last_heartbeat_at::text, last_heartbeat_at > paused_at \
+                     FROM workhorse.worker_registry WHERE worker_id = $1",
+                    &[&worker_id],
+                )
+                .await
+                .unwrap();
+            let (refreshed_at, after_pause): (String, bool) = (row.get(0), row.get(1));
+            match &pause_read {
+                None if after_pause => pause_read = Some(refreshed_at),
+                Some(read) if *read != refreshed_at => break,
+                _ => {}
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("the worker never stored the pause");
+    // A claim that started before the pause can still lease a task. With the pause stored, the
+    // loop starts no claim, so zero claims in flight means none can start.
+    tokio::time::timeout(WAIT, async {
+        while worker.claims_in_flight_for_test() != 0 {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("a claim from before the pause never ended");
     let task = harness.enqueue("rust.echo", json!({}), EnqueueOptions::default()).await;
-    tokio::time::sleep(Duration::from_millis(500)).await;
+    tokio::time::sleep(Duration::from_millis(250)).await;
     assert_eq!(harness.state(task).await, TaskState::Ready, "a paused worker claimed");
+    assert_eq!(worker.claims_in_flight_for_test(), 0, "a paused worker started a claim");
     harness.admin.set_worker_paused(&worker_id, false, &audit()).await.unwrap().unwrap();
     harness.wait_for(task, TaskState::Succeeded).await;
     stop.send(()).unwrap();

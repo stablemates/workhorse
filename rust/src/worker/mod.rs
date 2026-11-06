@@ -403,6 +403,8 @@ pub(crate) struct Inner {
     registration_reporter: Mutex<ReporterFailures>,
     /// The empty wait of the dispatch loop: its deadline, and whether a notification can end it.
     empty_wait: Mutex<Option<(Instant, bool)>>,
+    /// Reads the claims in flight of the dispatch loop. `None` before the first run.
+    claims_in_flight: Mutex<Option<dispatch::ClaimsInFlight>>,
 }
 
 /// A reporter callback that always fails logs at most once in this interval.
@@ -726,6 +728,7 @@ impl Worker {
             late: Mutex::default(),
             registration_reporter: Mutex::default(),
             empty_wait: Mutex::default(),
+            claims_in_flight: Mutex::default(),
         })))
     }
 
@@ -740,6 +743,16 @@ impl Worker {
     #[doc(hidden)]
     pub fn empty_wait_for_test(&self) -> Option<(std::time::Instant, bool)> {
         lock(&self.0.empty_wait).map(|(deadline, wakeable)| (deadline.into_std(), wakeable))
+    }
+
+    /// The claims in flight of the dispatch loop: plain claims, and fused claims reserved and not
+    /// yet handed to the loop. Zero without a run.
+    ///
+    /// Public only so a test can wait until the claims from before a pause end; not part of the
+    /// API.
+    #[doc(hidden)]
+    pub fn claims_in_flight_for_test(&self) -> usize {
+        lock(&self.0.claims_in_flight).as_ref().map_or(0, |claims| claims())
     }
 
     /// Holds each heartbeat round at its start until the future that `gate` returns resolves. The
@@ -992,6 +1005,10 @@ impl dispatch::Dispatch for WorkerDispatch {
 
     fn observe_empty_wait(&self, wait: Option<(Instant, bool)>) {
         *lock(&self.inner.empty_wait) = wait;
+    }
+
+    fn observe_claims(&self, claims: dispatch::ClaimsInFlight) {
+        *lock(&self.inner.claims_in_flight) = Some(claims);
     }
 
     fn claims_allowed(&self) -> bool {
