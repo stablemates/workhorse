@@ -4,6 +4,7 @@ import (
 	"os"
 	"regexp"
 	"testing"
+	"time"
 )
 
 func TestTaskNotificationProtocolMatchesTypeScript(t *testing.T) {
@@ -30,5 +31,28 @@ func TestTaskNotificationProtocolMatchesTypeScript(t *testing.T) {
 	}
 	if taskNotificationMatches("billing", []string{"email", "reports"}) {
 		t.Fatal("an unrelated queue notification woke the Go worker")
+	}
+}
+
+// The listener reconnect delay carries the same ±10% jitter as the other SDKs. So a PostgreSQL
+// restart does not reconnect a fleet of Go listeners at the same moment.
+func TestListenerReconnectDelayCarriesJitter(t *testing.T) {
+	for delay := notificationReconnectInitial; ; delay = min(notificationReconnectMaximum, delay*2) {
+		low := time.Duration(float64(delay) * 0.9)
+		high := time.Duration(float64(delay) * 1.1)
+		seen := map[time.Duration]bool{}
+		for range 200 {
+			jittered := jitterDelay(delay)
+			if jittered < low || jittered > high {
+				t.Fatalf("reconnect delay %s waited %s, want %s to %s", delay, jittered, low, high)
+			}
+			seen[jittered] = true
+		}
+		if len(seen) < 2 {
+			t.Fatalf("reconnect delay %s waited one value 200 times, want jitter", delay)
+		}
+		if delay == notificationReconnectMaximum {
+			break
+		}
 	}
 }

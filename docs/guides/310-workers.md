@@ -237,8 +237,8 @@ language.
 - A payload that names a configured queue, or `*`, wakes the worker.
 - `promote_v1`, `run_task_now_v1`, `recover_expired_v1`, `sync_concurrency_policies_v1`, and
   `sync_rate_limit_policies_v1` notify once for each affected queue.
-- A failed listener reconnects after exponential delays from 100 ms to 5,000 ms. Every reconnect
-  wakes its subscribers.
+- A failed listener reconnects after exponential delays from 100 ms to 5,000 ms, with ±10% jitter.
+  Every reconnect wakes its subscribers.
 - A listener that has not run `LISTEN` yet, or that reconnects, counts as no listener. The worker
   uses the 250 ms starting wait until `LISTEN` succeeds.
 - A lost listener wakes the worker. The backoff then restarts at 250 ms, because the empty claims

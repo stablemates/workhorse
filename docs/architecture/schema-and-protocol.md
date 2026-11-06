@@ -1897,7 +1897,7 @@ during a connection gap.
 
 Listener failure never stops dispatch. The worker logs a warning through `WorkerOptions.Logger` and
 continues to poll. It reconnects after an exponential delay from 100 milliseconds through 5,000
-milliseconds.
+milliseconds, with ±10% jitter on each delay.
 
 `NewWorker` refuses a pool with a `MaxConns` below 3, so the pool always has a connection for the
 listener.
@@ -2800,7 +2800,7 @@ second after the later of the deadline and the end of the drain.
 #### Notifications and process signals
 
 The notification listener reconnects after an exponential delay from 100 milliseconds through 5
-seconds. On clean shutdown, it gives `UNLISTEN` 1 second.
+seconds, with ±10% jitter on each delay. On clean shutdown, it gives `UNLISTEN` 1 second.
 
 `run_worker_process(&worker)` in `rust/src/worker/process.rs` installs `SIGINT` and `SIGTERM`
 handlers. On other platforms, it waits for Ctrl-C. It passes that signal as the shutdown future. It
@@ -3092,8 +3092,9 @@ a declared size, the readiness check at the start of each run is the only check.
 notification wakes each worker whose queues it names, and `*` wakes every worker. A callback that
 throws does not stop the wakes of another worker. After a listener failure, the listener calls the
 `onNotificationError` of each worker and reconnects with a backoff of 100 milliseconds through 5
-seconds. It wakes every worker when it listens again, and the workers poll in the meantime. When
-the last worker stops, the listener gives its connection back to the pool.
+seconds, with ±10% jitter on each delay. It wakes every worker when it listens again, and the
+workers poll in the meantime. When the last worker stops, the listener gives its connection back to
+the pool.
 
 Workers built on one `DataSource` object share one dedicated heartbeat connection, with the same
 identity key. The registry holds each `DataSource` and each shared listener or heartbeat through a

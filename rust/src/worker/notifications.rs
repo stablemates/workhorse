@@ -115,7 +115,7 @@ pub(super) async fn listen(
         tracing::warn!(error = %error, "task notification listener stopped");
         tokio::select! {
             () = stop.cancelled() => return,
-            () = tokio::time::sleep(delay) => {}
+            () = tokio::time::sleep(super::jitter(delay)) => {}
         }
         delay = (delay * 2).min(RECONNECT_MAXIMUM);
     }
@@ -125,6 +125,29 @@ pub(super) async fn listen(
 mod tests {
     use super::*;
     use crate::worker::tests::silent_server;
+
+    /// The reconnect delay carries the same ±10% jitter as the other SDKs. So a PostgreSQL restart
+    /// does not reconnect a fleet of Rust listeners at the same moment.
+    #[test]
+    fn the_reconnect_delay_carries_jitter() {
+        let mut delay = RECONNECT_INITIAL;
+        loop {
+            let (low, high) = (delay.mul_f64(0.9), delay.mul_f64(1.1));
+            let waits: std::collections::HashSet<Duration> =
+                (0..200).map(|_| crate::worker::jitter(delay)).collect();
+            for wait in &waits {
+                assert!(
+                    *wait >= low && *wait <= high,
+                    "reconnect delay {delay:?} waited {wait:?}, want {low:?} to {high:?}"
+                );
+            }
+            assert!(waits.len() > 1, "reconnect delay {delay:?} waited one value 200 times");
+            if delay == RECONNECT_MAXIMUM {
+                break;
+            }
+            delay = (delay * 2).min(RECONNECT_MAXIMUM);
+        }
+    }
 
     /// SM-1028: a server that accepts the connection and never answers cannot hold teardown.
     #[tokio::test]

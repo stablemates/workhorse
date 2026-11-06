@@ -703,8 +703,8 @@ pool or a JVM `DataSource`. [Connection pools](/docs/pgbouncer) gives the key fo
 - A payload that names a configured queue, or `*`, wakes the worker.
 - `promote_v1`, `run_task_now_v1`, `recover_expired_v1`, `sync_concurrency_policies_v1`, and
   `sync_rate_limit_policies_v1` notify once for each affected queue.
-- A failed listener reconnects after exponential delays from 100 ms to 5,000 ms. Every reconnect
-  wakes its subscribers.
+- A failed listener reconnects after exponential delays from 100 ms to 5,000 ms, with ±10% jitter.
+  Every reconnect wakes its subscribers.
 - A worker never polls because its pool is small. A pool below the minimum size fails at
   construction. If the worker cannot know the size, the startup check refuses a pool that has no room
   for the startup connections. Go `WorkerOptions.PollingOnly` disables the listener for a transaction-mode pooler.
