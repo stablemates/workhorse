@@ -2606,6 +2606,12 @@ inserts one immutable `canceled` outcome immediately.
 If the handler ignores the signal until expiry, bounded recovery materializes cancellation and does
 not retry.
 
+A handler can throw its own `CancellationRequestedError`, for example after it calls `queue.cancel()`
+for its own task. The TypeScript worker then calls `acknowledge_cancel_v1` before it records an
+outcome. If PostgreSQL accepts, the attempt closes `canceled`. If no cancellation is pending,
+PostgreSQL refuses and writes nothing. The worker then settles the error through `fail_v1` as an
+ordinary handler error.
+
 Cancellation is cooperative, not an out-of-band lease revocation. Workhorse cannot interrupt
 JavaScript by force. External effects stay at least once. A handler should observe `AbortSignal`,
 stop starting new effects, and use provider idempotency, outbox/inbox, or compensation.
@@ -2665,6 +2671,20 @@ The worker copies the authoritative timestamps into local timers for prompt coop
 At the earlier of `deadline_at` and `attempt_timeout_at`, the local timer calls `expire_owned_v1`
 with the current worker and fence. PostgreSQL then closes the timed-out attempt and schedules its
 retry or terminal failure. It does not wait for lease expiry.
+
+A handler can throw its own `DeadlineExceededError` or `ExecutionTimeoutError`. The TypeScript
+worker does not read that error as an expiry. It records a deadline or a timeout only if an answer
+from PostgreSQL, such as the answer of `expire_owned_v1`, confirms the expiry. Otherwise `fail_v1`
+settles the error as an ordinary handler error, and the attempt history keeps it.
+
+A handler can also end while an `expire_owned_v1` request is in flight. The TypeScript worker then
+reads only the answer of that request. If the answer is `not_due`, the worker sends no further
+request, and `fail_v1` settles the handler's error. If a heartbeat already reported the expiry, the
+worker asks again until PostgreSQL settles it. The worker waits for the answer for at most
+1,000 ms. If the request fails or gives no answer in that time, the worker logs
+`workhorse.worker.expiration_request_failed`, and `fail_v1` settles the attempt. `fail_v1` checks
+each boundary again under the row lock. A `stale` answer goes to the reconciliation that a stale
+failure uses.
 
 Every SDK cancels the handler for an expiry only after PostgreSQL confirms it. If the answer is
 `not_due`, the handler continues to run under its lease, and the worker asks again. Thus a worker

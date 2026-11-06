@@ -1,7 +1,11 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { DeadlineExceededError, ExecutionTimeoutError } from "../src/errors.js";
 import { TaskAttempt, type TaskAttemptServices } from "../src/task-attempt.js";
-import type { TaskExecutionOutcome } from "../src/telemetry.js";
+import {
+  registerTelemetryProvider,
+  type TaskExecutionOutcome,
+  type WorkhorseTelemetryProvider,
+} from "../src/telemetry.js";
 import type { ClaimedTask, ExpireOwnedStatus, HeartbeatBatchStatus } from "../src/types.js";
 
 function claimedTask(overrides: Partial<ClaimedTask> = {}): ClaimedTask {
@@ -67,6 +71,37 @@ function thrownBy(operation: () => unknown): unknown {
   return undefined;
 }
 
+// A telemetry provider that keeps each workhorse.worker.expiration_request_failed record.
+function recordExpirationRequestFailures() {
+  const records: Parameters<WorkhorseTelemetryProvider["emitLog"]>[0][] = [];
+  const unregister = registerTelemetryProvider({
+    emitLog(record) {
+      if (record.eventName === "workhorse.worker.expiration_request_failed") records.push(record);
+    },
+    createCounter: () => ({ add() {} }),
+    createHistogram: () => ({ record() {} }),
+    createGauge: () => ({ record() {} }),
+    registerObservations: () => () => {},
+    activeContext: () => undefined,
+    injectTraceContext: () => null,
+    extractTraceContext: () => undefined,
+    withSpan: async (_name, _attributes, operation) =>
+      operation({
+        setAttribute() {
+          return this;
+        },
+        setAttributes() {
+          return this;
+        },
+        setStatus() {
+          return this;
+        },
+        recordException() {},
+      }),
+  });
+  return { records, unregister };
+}
+
 function startAttempt(task = claimedTask(), claimSentAt = performance.now()) {
   const { services, heartbeat } = fakeServices();
   const activation: { outcome: TaskExecutionOutcome } = { outcome: "unknown" };
@@ -114,6 +149,76 @@ describe("TaskAttempt", () => {
     expect(activation.outcome).toBe("lease_lost");
     expect(attempt.arbiter.is("lease_expired")).toBe(true);
     attempt.stop();
+  });
+
+  it("logs a failed expiration request and settles with an empty arbiter", async () => {
+    const { records, unregister } = recordExpirationRequestFailures();
+    try {
+      const { attempt, services, heartbeat } = startAttempt();
+      vi.mocked(services.expireOwned).mockRejectedValue(new TypeError("connection lost"));
+      heartbeat.status?.("deadline_exceeded", performance.now());
+
+      await expect(attempt.settleExpiration()).resolves.toBeUndefined();
+
+      expect(attempt.arbiter.outcome).toBeUndefined();
+      expect(records).toEqual([
+        expect.objectContaining({
+          severity: "warn",
+          attributes: expect.objectContaining({
+            "workhorse.worker.id": "attempt-worker",
+            "error.type": "TypeError",
+          }),
+        }),
+      ]);
+      attempt.stop();
+    } finally {
+      unregister();
+    }
+  });
+
+  it("waits at most one second for an expiration request that never answers", async () => {
+    vi.useFakeTimers({ now: 0 });
+    const { records, unregister } = recordExpirationRequestFailures();
+    const unhandled: unknown[] = [];
+    const recordUnhandled = (reason: unknown): void => {
+      unhandled.push(reason);
+    };
+    process.on("unhandledRejection", recordUnhandled);
+    try {
+      const { attempt, services, heartbeat } = startAttempt();
+      const expiry = deferredExpiry();
+      vi.mocked(services.expireOwned).mockImplementation(() => expiry.promise);
+      heartbeat.status?.("deadline_exceeded", performance.now());
+      let settled = false;
+      const settlement = attempt.settleExpiration().then(() => {
+        settled = true;
+      });
+
+      await vi.advanceTimersByTimeAsync(999);
+      expect(settled).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+      await settlement;
+
+      expect(attempt.arbiter.outcome).toBeUndefined();
+      expect(records).toEqual([
+        expect.objectContaining({
+          severity: "warn",
+          attributes: expect.objectContaining({ "error.type": "timeout" }),
+        }),
+      ]);
+      // A late rejection after the wait ended is consumed, not left unhandled.
+      expiry.reject(new Error("connection closed"));
+      await vi.advanceTimersByTimeAsync(0);
+      vi.useRealTimers();
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+      expect(unhandled).toEqual([]);
+      attempt.stop();
+    } finally {
+      process.off("unhandledRejection", recordUnhandled);
+      unregister();
+    }
   });
 
   it("allows durable effects while the lease is held and refuses them after it is lost", () => {

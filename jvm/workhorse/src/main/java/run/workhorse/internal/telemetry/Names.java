@@ -147,6 +147,7 @@ public final class Names {
           "workhorse.tasks.promoted",
           "workhorse.tasks.redrive_processed",
           "workhorse.worker.deregistered",
+          "workhorse.worker.expiration_request_failed",
           "workhorse.worker.paused",
           "workhorse.worker.polling_only",
           "workhorse.worker.registered",

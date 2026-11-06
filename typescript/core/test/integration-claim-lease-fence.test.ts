@@ -590,6 +590,176 @@ describe("claim lease fence", () => {
     expect(await admin.getTask(id)).toMatchObject({ state: "canceled", result: null });
   });
 
+  it.each([
+    ["CancellationRequestedError", (id: string) => new CancellationRequestedError(id)],
+    ["DeadlineExceededError", (id: string) => new DeadlineExceededError(id)],
+    ["ExecutionTimeoutError", (id: string) => new ExecutionTimeoutError(id, 1)],
+  ])(
+    "fails an attempt whose handler throws its own %s with no verdict pending",
+    async (name, create) => {
+      const type = `handler-thrown-${name}`;
+      const id = await queue.enqueue(type, null);
+      const thrown = create(id);
+      const worker = new Worker(queue, {
+        workerId: `${type}-worker`,
+        // The lease outlives the test, so only fail_v1 can move the task out of active.
+        leaseMs: 60_000,
+        heartbeatMs: 10_000,
+        retryDelayMs: 0,
+      }).handle(type, async () => {
+        throw thrown;
+      });
+
+      await worker.runOnce();
+
+      expect(await admin.getTask(id)).toMatchObject({ state: "ready" });
+      const history = await pool.query<{ outcome: string; name: string; message: string }>(
+        `SELECT outcome, error->>'name' AS name, error->>'message' AS message
+           FROM workhorse.attempt_history WHERE task_id = $1`,
+        [id],
+      );
+      expect(history.rows).toEqual([
+        { outcome: "retry", name: thrown.name, message: thrown.message },
+      ]);
+    },
+  );
+
+  it("cancels a task whose handler requests its cancellation and throws CancellationRequestedError", async () => {
+    const id = await queue.enqueue("self-cancel", null);
+    const worker = new Worker(queue, {
+      workerId: "self-cancel-worker",
+      leaseMs: 60_000,
+      // No heartbeat runs before the handler throws, so the settlement must find the request.
+      heartbeatMs: 10_000,
+    }).handle("self-cancel", async (_payload, context) => {
+      expect((await queue.cancel(context.task.id)).status).toBe("cancel_requested");
+      throw new CancellationRequestedError(context.task.id);
+    });
+
+    await worker.runOnce();
+
+    expect(await admin.getTask(id)).toMatchObject({ state: "canceled", result: null });
+    const history = await pool.query<{ outcome: string }>(
+      "SELECT outcome FROM workhorse.attempt_history WHERE task_id = $1",
+      [id],
+    );
+    expect(history.rows).toEqual([{ outcome: "canceled" }]);
+  });
+
+  it("fails an attempt whose handler throws while an early expiry request waits for its boundary", async () => {
+    // The local timer fires about 60 s before the stored attempt timeout, so expire_owned_v1
+    // answers not_due and the worker would ask again until the boundary.
+    const notDue = deferred();
+    const earlyTimerQueue = new Proxy(queue, {
+      get(target, property, receiver) {
+        if (property === "claimMany") {
+          return async (...args: Parameters<Queue["claimMany"]>) => {
+            const claimed = await target.claimMany(...args);
+            for (const task of claimed) {
+              // The worker counts the expiry from the claim reading, leaseExpiresAt minus the lease.
+              if (task.attemptTimeoutAt) {
+                task.attemptTimeoutAt = new Date(task.leaseExpiresAt.getTime() - 60_000 + 20);
+              }
+            }
+            return claimed;
+          };
+        }
+        if (property === "expireOwned") {
+          return async (...args: Parameters<Queue["expireOwned"]>) => {
+            const status = await target.expireOwned(...args);
+            if (status === "not_due") notDue.resolve();
+            return status;
+          };
+        }
+        return Reflect.get(target, property, receiver);
+      },
+    });
+    const id = await queue.enqueue("early-expiry-failure", null, { executionTimeoutMs: 60_000 });
+    const thrown = new TypeError("payment provider refused the charge");
+    const worker = new Worker(earlyTimerQueue, {
+      workerId: "early-expiry-failure-worker",
+      leaseMs: 60_000,
+      heartbeatMs: 100,
+      retryDelayMs: 0,
+    }).handle("early-expiry-failure", async () => {
+      await notDue.promise;
+      throw thrown;
+    });
+
+    const execution = worker.runOnce();
+    const settled = await Promise.race([
+      execution.then(() => "settled"),
+      sleep(5_000).then(() => "waiting"),
+    ]);
+
+    expect(settled).toBe("settled");
+    expect(await admin.getTask(id)).toMatchObject({ state: "ready" });
+    const history = await pool.query<{ outcome: string; name: string; message: string }>(
+      `SELECT outcome, error->>'name' AS name, error->>'message' AS message
+         FROM workhorse.attempt_history WHERE task_id = $1`,
+      [id],
+    );
+    expect(history.rows).toEqual([
+      { outcome: "retry", name: "TypeError", message: thrown.message },
+    ]);
+  });
+
+  it("fails an attempt whose handler throws while its expiry request never answers", async () => {
+    // The local timer fires early, and the expiry request stays unanswered, as on a connection that
+    // stops receiving replies. Settlement must not wait for it.
+    const requested = deferred();
+    const silentExpiryQueue = new Proxy(queue, {
+      get(target, property, receiver) {
+        if (property === "claimMany") {
+          return async (...args: Parameters<Queue["claimMany"]>) => {
+            const claimed = await target.claimMany(...args);
+            for (const task of claimed) {
+              if (task.attemptTimeoutAt) {
+                task.attemptTimeoutAt = new Date(task.leaseExpiresAt.getTime() - 60_000 + 20);
+              }
+            }
+            return claimed;
+          };
+        }
+        if (property === "expireOwned") {
+          return () => {
+            requested.resolve();
+            return new Promise<never>(() => {});
+          };
+        }
+        return Reflect.get(target, property, receiver);
+      },
+    });
+    const id = await queue.enqueue("silent-expiry-failure", null, { executionTimeoutMs: 60_000 });
+    const thrown = new TypeError("inventory service rejected the reservation");
+    const worker = new Worker(silentExpiryQueue, {
+      workerId: "silent-expiry-failure-worker",
+      leaseMs: 60_000,
+      heartbeatMs: 100,
+      retryDelayMs: 0,
+    }).handle("silent-expiry-failure", async () => {
+      await requested.promise;
+      throw thrown;
+    });
+
+    const execution = worker.runOnce();
+    const settled = await Promise.race([
+      execution.then(() => "settled"),
+      sleep(5_000).then(() => "waiting"),
+    ]);
+
+    expect(settled).toBe("settled");
+    expect(await admin.getTask(id)).toMatchObject({ state: "ready" });
+    const history = await pool.query<{ outcome: string; name: string; message: string }>(
+      `SELECT outcome, error->>'name' AS name, error->>'message' AS message
+         FROM workhorse.attempt_history WHERE task_id = $1`,
+      [id],
+    );
+    expect(history.rows).toEqual([
+      { outcome: "retry", name: "TypeError", message: thrown.message },
+    ]);
+  });
+
   it("materializes cancellation while a handler is scheduling a durable wait", async () => {
     const schedulingStarted = deferred();
     const releaseScheduling = deferred();
