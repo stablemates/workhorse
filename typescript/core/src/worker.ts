@@ -1991,12 +1991,11 @@ export class Worker {
       attempt.recordExecution("lease_lost");
       return;
     }
+    // Only the signal reason, the arbiter, or an expiry request in flight carries PostgreSQL's
+    // verdict. A handler can throw its own instance of a lifecycle error class. That instance
+    // proves nothing about the task, so it takes the ordinary failure path below.
     const abortReason: unknown = attempt.signal.reason;
-    if (
-      arbiter.is("cancelled") ||
-      error instanceof CancellationRequestedError ||
-      abortReason instanceof CancellationRequestedError
-    ) {
+    if (arbiter.is("cancelled") || abortReason instanceof CancellationRequestedError) {
       arbiter.submit("cancelled");
       await attempt.acknowledgeCancellation();
       span.setAttribute("workhorse.handler.outcome", "canceled");
@@ -2005,10 +2004,9 @@ export class Worker {
     if (
       arbiter.is("deadline_exceeded") ||
       arbiter.is("attempt_timeout") ||
-      error instanceof DeadlineExceededError ||
-      error instanceof ExecutionTimeoutError ||
       abortReason instanceof DeadlineExceededError ||
-      abortReason instanceof ExecutionTimeoutError
+      abortReason instanceof ExecutionTimeoutError ||
+      attempt.expirationRequested
     ) {
       await attempt.settleExpiration();
       if (arbiter.is("cancelled")) {
@@ -2021,19 +2019,24 @@ export class Worker {
         span.setAttribute("workhorse.handler.outcome", "stale");
         return;
       }
-      if (arbiter.outcome === undefined) {
-        arbiter.submit(
-          error instanceof ExecutionTimeoutError || abortReason instanceof ExecutionTimeoutError
-            ? "attempt_timeout"
-            : "deadline_exceeded",
+      if (arbiter.is("deadline_exceeded") || arbiter.is("attempt_timeout")) {
+        const executionTimedOut = arbiter.is("attempt_timeout");
+        attempt.recordExecution(executionTimedOut ? "timeout" : "deadline_exceeded");
+        span.setAttribute(
+          "workhorse.handler.outcome",
+          executionTimedOut ? "timeout_exceeded" : "deadline_exceeded",
         );
+        return;
       }
-      const executionTimedOut = arbiter.is("attempt_timeout");
-      attempt.recordExecution(executionTimedOut ? "timeout" : "deadline_exceeded");
-      span.setAttribute(
-        "workhorse.handler.outcome",
-        executionTimedOut ? "timeout_exceeded" : "deadline_exceeded",
-      );
+      // PostgreSQL settled no expiry, so fail_v1 settles the attempt.
+    }
+    // A handler can request the cancellation itself and throw before a heartbeat delivers it. The
+    // arbiter takes the outcome only after PostgreSQL accepts the acknowledgement. A refused
+    // acknowledgement writes nothing, so fail_v1 settles the attempt.
+    if (error instanceof CancellationRequestedError && (await attempt.acknowledgeCancellation())) {
+      arbiter.submit("cancelled");
+      attempt.recordExecution("canceled");
+      span.setAttribute("workhorse.handler.outcome", "canceled");
       return;
     }
     // The process runner aborted the handler at the end of its shutdown grace. The stop is not a

@@ -6,6 +6,7 @@ import {
 import type { FailureStatus } from "./queue/claim-lease-fence.js";
 import {
   logInfo,
+  logWarn,
   recordHandlerExecution,
   taskSpanAttributes,
   type TaskExecutionOutcome,
@@ -121,6 +122,11 @@ export class TaskAttempt {
   // Set once a heartbeat answer reports the deadline or attempt timeout. That is PostgreSQL's
   // verdict, so asking it to expire ownership continues after the attempt stops.
   private expiryReported = false;
+  // Set when the worker settles the attempt after its handler ended. Then an expiry request that
+  // PostgreSQL answers not_due does not ask again.
+  private settling = false;
+  // Ends the wait between two expiry requests, so settlement does not wait for the next request.
+  private wakeExpirationRetry: (() => void) | undefined;
   private removeHeartbeatLease: (() => void) | undefined;
   // Set when the shutdown abort ended the handler signal before any other outcome.
   private shutdownRequested = false;
@@ -325,9 +331,58 @@ export class TaskAttempt {
     return "stale";
   }
 
-  /** Waits for the answer to an expiry this attempt asked PostgreSQL for, if it asked. */
+  /** True when this attempt asked PostgreSQL to expire its ownership. */
+  get expirationRequested(): boolean {
+    return this.expirationPromise !== undefined;
+  }
+
+  /**
+   * Waits for the answer of the expiry request in flight, if this attempt asked PostgreSQL for one.
+   *
+   * The handler has ended, so settlement reads only that answer. A `not_due` answer ends the retry
+   * loop, and the worker then settles the handler's error through `fail_v1`. If a heartbeat already
+   * reported the expiry, the loop continues until PostgreSQL settles it. Settlement waits for the
+   * answer for at most {@link SHARED_EXPIRATION_BUDGET_MS}, so a connection that stops answering
+   * cannot hold the worker slot. A failed request or the end of that wait proves nothing about the
+   * expiry. Then settlement logs `workhorse.worker.expiration_request_failed` and continues with an
+   * empty arbiter. The fenced `fail_v1`, and `reconcileStale` after a `stale` answer, check each
+   * boundary again in PostgreSQL.
+   */
   async settleExpiration(): Promise<void> {
-    await this.expirationPromise;
+    this.settling = true;
+    this.wakeExpirationRetry?.();
+    const pending = this.expirationPromise;
+    if (pending === undefined) return;
+    let cancel: (() => void) | undefined;
+    const timeout = new Promise<{ errorType: string }>((resolve) => {
+      const timer = setTimeout(resolve, SHARED_EXPIRATION_BUDGET_MS, { errorType: "timeout" });
+      cancel = () => clearTimeout(timer);
+    });
+    try {
+      // The handlers on pending also consume a rejection that arrives after the budget.
+      const failure = await Promise.race([
+        pending.then(
+          () => undefined,
+          (error: unknown) => ({
+            errorType: error instanceof Error ? error.name : typeof error,
+          }),
+        ),
+        timeout,
+      ]);
+      if (failure === undefined) return;
+      logWarn(
+        "workhorse.worker.expiration_request_failed",
+        "Worker settles a task without the answer of its expiry request",
+        {
+          ...taskSpanAttributes(this.task),
+          "workhorse.queue.name": this.task.queue,
+          "workhorse.worker.id": this.services.workerId,
+          "error.type": failure.errorType,
+        },
+      );
+    } finally {
+      cancel?.();
+    }
   }
 
   /** Records the activation's outcome once; later calls keep the first. */
@@ -403,8 +458,8 @@ export class TaskAttempt {
    * expiry. The attempt still owns the task then, so the handler keeps running and the question is
    * asked again. The wait runs to the database-relative due time, and at least a short backoff. A
    * truncated timestamp can make the local timer lead by a fraction of a millisecond. Once another
-   * outcome wins, or the attempt stops before any heartbeat reported the expiry, asking stops and
-   * the answer stays "not_due".
+   * outcome wins, or the attempt stops or settles before any heartbeat reported the expiry, asking
+   * stops and the answer stays "not_due". Settlement also ends the wait before the next request.
    */
   private async requestExpiration(): Promise<ExpireOwnedStatus> {
     let retryMs = EXPIRATION_RETRY_MIN_MS;
@@ -413,15 +468,23 @@ export class TaskAttempt {
       if (status !== "not_due" || this.finished()) return status;
       const waitMs = Math.max(retryMs, (this.expirationDueAt ?? 0) - monotonicNow());
       await new Promise<void>((resolve) => {
-        setTimeout(resolve, waitMs);
+        const timer = setTimeout(resolve, waitMs);
+        this.wakeExpirationRetry = () => {
+          clearTimeout(timer);
+          resolve();
+        };
       });
+      this.wakeExpirationRetry = undefined;
       if (this.finished()) return status;
       retryMs = Math.min(retryMs * 2, EXPIRATION_RETRY_MAX_MS);
     }
   }
 
   private finished(): boolean {
-    return this.arbiter.outcome !== undefined || (this.heartbeatStopped && !this.expiryReported);
+    return (
+      this.arbiter.outcome !== undefined ||
+      ((this.heartbeatStopped || this.settling) && !this.expiryReported)
+    );
   }
 
   private armExpirationTimer(atMs: number, retryMs: number): void {
@@ -462,8 +525,8 @@ export class TaskAttempt {
   }
 
   private expireOwnershipInBackground(): void {
-    // Observe the memoized promise without replacing it: the settlement path still awaits the
-    // original rejection, while a handler that ignores abort cannot cause an unhandled rejection.
+    // Observe the memoized promise without replacing it. Settlement still reads the original
+    // rejection and logs it, and a handler that ignores abort cannot cause an unhandled rejection.
     void this.expireOwnership().catch((error: unknown) => this.controller.abort(error));
   }
 

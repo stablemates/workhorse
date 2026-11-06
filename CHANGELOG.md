@@ -23,6 +23,19 @@ upgrade steps.
 
 ## Unreleased
 
+### A handler that throws a lifecycle error no longer leaves its task active
+
+A handler threw its own `CancellationRequestedError`, `DeadlineExceededError`, or
+`ExecutionTimeoutError`, but no cancellation or expiry was pending. The TypeScript worker read the
+error as the verdict of PostgreSQL and wrote nothing. The task stayed active until its lease
+expired. Lease recovery then retried it with a lease-expiry error, and the handler's error was
+lost. Now the worker reads only a verdict that PostgreSQL gave. Otherwise `fail_v1` settles the
+error as an ordinary handler error, and the attempt history keeps it. A handler that calls
+`queue.cancel()` for its own task and then throws `CancellationRequestedError` still closes the
+task `canceled`. While the worker settles the attempt, it waits at most 1,000 ms for an expiry
+request in flight. If the request fails or gives no answer in that time, the worker logs the new
+warning `workhorse.worker.expiration_request_failed`, and `WorkhorseLogEvent` includes it.
+
 ### A deploy no longer charges an attempt to a handler that stops at the shutdown abort
 
 At the end of its shutdown grace, `runWorkerProcess` exited the process. Lease recovery then charged
