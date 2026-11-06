@@ -169,11 +169,13 @@ tier.
 | ------------------------------ | ------------------------------------------------------------------------- |
 | First `SIGINT` or `SIGTERM`    | Readiness turns false, claims stop, active handlers and heartbeats go on. |
 | Second signal                  | Exits with the conventional signal code.                                  |
-| Missed deadline                | Exits with code 1. The default deadline is 25 seconds.                    |
+| Missed deadline                | Aborts each running handler, waits a 250 ms unwind window, exits code 1.  |
 | Unexpected worker-loop failure | Stops sibling workers, applies the same bounded drain, fails the process. |
 
-`shutdownTimeoutMs` sets the deadline. Hard termination leaves active leases for ordinary fenced
-expiry recovery.
+`shutdownTimeoutMs` sets the deadline. The default deadline is 25 seconds. In the unwind window, the
+worker completes or releases each handler that returns. A lease that the window does not settle
+stays active, and ordinary fenced expiry recovery settles its task. A host stop leaves all leases
+active.
 
 More detail: [Operations and CLI: Worker process lifecycle](../architecture/operations.md#worker-process-lifecycle).
 

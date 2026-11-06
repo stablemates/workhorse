@@ -331,14 +331,19 @@ agrees. [ADR 0116](decisions/0116-give-back-a-task-at-the-end-of-the-shutdown-gr
 records the rule.
 
 At the deadline, all seven SDKs cancel the handlers that still run and give them a 250 ms window to
-unwind. The heartbeat keeps each lease alive in that window. If a handler returns a value in the
-window, the worker completes the task. If it fails, the worker releases the task through
-`release_owned_v1`, and the task keeps its `current_attempt`. A handler that does not return in the
-window holds a lease that nobody renews. `recover_expired_telemetry_v1` then recovers its task and
-charges the attempt.
+unwind. Every SDK keeps an unwinding handler in the heartbeat round, so its lease stays alive. The
+SDKs differ during the final write, as
+[After the handler returns](architecture/lifecycle.md#after-the-handler-returns) describes. A
+TypeScript, Python, or Go task stays in the round until that write ends. A Rust task leaves it when
+its handler returns. A Ruby, JVM, or .NET task leaves it after the worker checks the result.
 
-The one difference is what comes after the window. A TypeScript or Python worker owns a process, so
-its process runner exits that process with code 1. A Go, Rust, Ruby, JVM, or .NET `Worker` runs
+If a handler returns a value in the window, the worker completes the task. If it fails, the worker
+releases the task through `release_owned_v1`, and the task keeps its `current_attempt`. A handler
+that does not return in the window holds a lease that nobody renews.
+`recover_expired_telemetry_v1` then recovers its task and charges the attempt.
+
+The other difference is what comes after the window. A TypeScript or Python worker owns a process,
+so its process runner exits that process with code 1. A Go, Rust, Ruby, JVM, or .NET `Worker` runs
 inside a caller's process, and a library must not end the process of another program. It stops
 renewing the leases of the handlers that still run. It returns `ErrShutdownIncomplete` in Go or
 `Error::ShutdownIncomplete` in Rust. It raises `ShutdownIncompleteError` in Ruby and throws
