@@ -804,7 +804,16 @@ describe("continuous integration", () => {
       "ruby-rails",
       "demo",
     ]);
-    expect(workflow).toContain('cron: "17 4 * * 0" # Weekly full compatibility matrix.');
+    // The lane plan selects the weekly lanes only for this schedule, so a scheduled run of any
+    // other cron plans no lanes. One constant names the schedule for the plan and the workflow.
+    expect(workflow).toContain(
+      `cron: "${WEEKLY_COMPATIBILITY_SCHEDULE}" # Weekly full compatibility matrix.`,
+    );
+    const scheduleComparisons = [...workflow.matchAll(/github\.event\.schedule == '([^']*)'/g)];
+    expect(scheduleComparisons.length).toBeGreaterThan(0);
+    for (const [, schedule] of scheduleComparisons) {
+      expect(schedule).toBe(WEEKLY_COMPATIBILITY_SCHEDULE);
+    }
     expect(workflow.match(/- cron:/g)).toHaveLength(1);
     // SM-1548: every lane runs only when the lane plan selects it, and the required job holds each
     // result to that plan. A selected lane must succeed, so a failed or canceled lane fails the
@@ -828,7 +837,7 @@ describe("continuous integration", () => {
   it("runs each language suite once per change and every variation weekly", async () => {
     const workflow = await read(".github/workflows/ci.yml");
     const scripts = (await readManifest("package.json")).scripts as Record<string, string>;
-    const weekly = "\n        if: github.event.schedule == '17 4 * * 0'";
+    const weekly = `\n        if: github.event.schedule == '${WEEKLY_COMPATIBILITY_SCHEDULE}'`;
 
     // ADR 0083: a variation of a suite never delays a pull request.
     expect(workflow).toContain(`- run: pnpm go:test\n      - run: pnpm go:test:race${weekly}`);
