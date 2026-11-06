@@ -649,11 +649,11 @@ The .NET SDK has no OpenTelemetry logs dependency. It emits no OpenTelemetry log
 
 #### Severity coverage
 
-| Severity | Records cover                                                                                                                                                                                                                             |
-| -------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Debug    | Enqueue acceptance and replay, claims, accepted heartbeats, handler registration and execution boundaries, checkpoints, progress, schedule replay, and worker deregistration.                                                             |
-| Info     | Queue and worker lifecycle, final execution outcomes, rejected heartbeats, completion and failure, cancellation, durable waits, promotion and recovery, schedule changes, redrive, and maintenance that changes rows or returns an error. |
-| Warning  | Handlers that catch a durable-wait suspension signal and return normally, a worker that polls without a notification listener, a reporter callback that fails, and a maintenance pass or a claim that waits longer than the stop budget.  |
+| Severity | Records cover                                                                                                                                                                                                                                                                                                                                                                             |
+| -------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Debug    | Enqueue acceptance and replay, claims, accepted heartbeats, handler registration and execution boundaries, checkpoints, progress, schedule replay, and worker deregistration.                                                                                                                                                                                                             |
+| Info     | Queue and worker lifecycle, final execution outcomes, rejected heartbeats, completion and failure, cancellation, durable waits, promotion and recovery, schedule changes, redrive, and maintenance that changes rows or returns an error.                                                                                                                                                 |
+| Warning  | Handlers that catch a durable-wait suspension signal and return normally, a claimed task that has no handler, batch evidence that the worker cannot record, a worker that polls without a notification listener, a reporter callback that fails, a completion or a release after the shutdown abort that fails, and a maintenance pass or a claim that waits longer than the stop budget. |
 
 #### Debug event names
 
@@ -714,6 +714,17 @@ successful configuration changes at info.
 
 - `workhorse.handler.signal_swallowed` carries bounded task and worker identity plus
   `workhorse.handler.outcome`. It never carries the swallowed value or error.
+- `workhorse.handler.missing` carries `workhorse.task.id`, `workhorse.task.type`,
+  `workhorse.task.attempt`, `workhorse.queue.name`, and `workhorse.worker.id`. The worker emits it
+  when it claims a task of a type that it has no handler for. The worker then returns the task to
+  its queue through `release_owned_v1` ([Owned release](lifecycle.md#owned-release)).
+- `workhorse.handler.batch_evidence_failed` carries `workhorse.queue.name`, `workhorse.task.type`,
+  `workhorse.handler.batch.full`, `workhorse.handler.batch.size`,
+  `workhorse.handler.batch.evidence_phase` (`dispatch` or `failure`), `workhorse.worker.id`, and
+  `error.type`. The worker emits it when it cannot record the dispatch or the failure evidence of a
+  batch. The worker still calls the batch callback ([Batch evidence](lifecycle.md#batch-evidence)).
+  The TypeScript worker also emits it with `error.type` `UnsupportedOperation` when its queue
+  implementation has no batch evidence operation.
 - `workhorse.worker.polling_only` carries `workhorse.worker.id`, `workhorse.worker.queues`, and
   `workhorse.worker.pool_max_size`, the pool maximum size that the worker found or `unknown`. A
   `Worker.run()` that starts without a notification subscription emits it once.
