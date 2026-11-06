@@ -28,6 +28,7 @@ import {
   releasedText,
   SHARED_INPUTS,
   selectLanes,
+  skipCiVerdict,
   WEEKLY_LANES,
 } from "./ci-lanes.js";
 import { databaseTestFiles } from "../vitest.config.js";
@@ -514,6 +515,39 @@ describe("a docs-only pull request", () => {
 
   it("is not a change without files", () => {
     expect(isDocsOnlyChange([])).toBe(false);
+  });
+});
+
+// The merge rule in AGENTS.md forbids the skip-CI marker for a change to any changelog. The root
+// changelog matches the `*.md` glob of DOC_PATHS, so the gate refuses changelogs by name.
+describe("the docs-only merge gate", () => {
+  it("accepts a change to documentation only", () => {
+    expect(skipCiVerdict(["docs/architecture.md", "README.md", "site/content/docs/a.mdx"])).toEqual(
+      { docsOnly: true, reason: "3 files" },
+    );
+  });
+
+  it.each([
+    ["CHANGELOG.md"],
+    ["typescript/core/CHANGELOG.md"],
+    ["docs/architecture.md", "CHANGELOG.md"],
+  ])("refuses a change to a changelog: %s", (...files) => {
+    const verdict = skipCiVerdict(files);
+    expect(verdict.docsOnly).toBe(false);
+    expect(verdict.reason).toContain("CHANGELOG.md: a change to a CHANGELOG.md file must not");
+  });
+
+  it("refuses a change outside the documentation and a change without files", () => {
+    expect(skipCiVerdict(["docs/architecture.md", "go/worker.go"])).toEqual({
+      docsOnly: false,
+      reason: "go/worker.go",
+    });
+    expect(skipCiVerdict([]).docsOnly).toBe(false);
+  });
+
+  // Lane planning still counts the root changelog as documentation.
+  it("leaves lane planning unchanged for the root changelog", () => {
+    expect(isDocsOnlyChange(["CHANGELOG.md"])).toBe(true);
   });
 
   it.each(DOC_PATHS)("never runs every lane for a tracked file of %s", (glob) => {
