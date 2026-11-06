@@ -19,7 +19,8 @@
 // holds the map to the workflow and to the files each lane names in its sources.
 //
 // `tsx scripts/ci-lanes.ts --docs-only` reads changed paths from standard input and tells whether
-// the change is docs-only, for the merge rule in AGENTS.md.
+// the change is docs-only, for the merge rule in AGENTS.md. That gate also refuses a change to a
+// changelog, because the merge of such a change must not get the skip-CI marker.
 import { execFile } from "node:child_process";
 import { appendFile, readFile, writeFile } from "node:fs/promises";
 import { pathToFileURL } from "node:url";
@@ -685,6 +686,29 @@ export async function pushFiles(
   }
 }
 
+/**
+ * Tells whether the squash merge of a change can skip its push run, for the merge rule in
+ * AGENTS.md. The change must be docs-only, and it must not change a changelog. A changelog matches
+ * {@link DOC_PATHS} at the root, but AGENTS.md forbids the skip-CI marker for a change to any
+ * changelog. Lane planning does not use this rule: {@link isDocsOnlyChange} still counts the root
+ * changelog as documentation.
+ */
+export function skipCiVerdict(changedFiles: readonly string[]): {
+  readonly docsOnly: boolean;
+  readonly reason: string;
+} {
+  if (changedFiles.length === 0) return { docsOnly: false, reason: "the change lists no files" };
+  const changelog = changedFiles.find((file) => matchesGlob(file, CHANGELOGS));
+  if (changelog !== undefined)
+    return {
+      docsOnly: false,
+      reason: `${changelog}: a change to a CHANGELOG.md file must not get the skip-CI marker`,
+    };
+  const other = changedFiles.find((file) => !matchesAny(file, DOC_PATHS));
+  if (other !== undefined) return { docsOnly: false, reason: other };
+  return { docsOnly: true, reason: `${changedFiles.length} files` };
+}
+
 async function runGit(args: readonly string[]): Promise<string> {
   const { stdout } = await run("git", args, { maxBuffer: 64 * 1024 * 1024 });
   return stdout;
@@ -692,7 +716,8 @@ async function runGit(args: readonly string[]): Promise<string> {
 
 /**
  * Reads changed file paths from standard input, one on each line, and tells whether the change is
- * docs-only. The exit code is 0 for a docs-only change and 1 for another change.
+ * docs-only, as {@link skipCiVerdict} decides. The exit code is 0 for a docs-only change and 1 for
+ * another change.
  */
 async function checkDocsOnly(): Promise<void> {
   let input = "";
@@ -701,10 +726,10 @@ async function checkDocsOnly(): Promise<void> {
     .split("\n")
     .map((line) => line.trim())
     .filter(Boolean);
-  const other = files.find((file) => !matchesAny(file, DOC_PATHS));
-  if (isDocsOnlyChange(files)) process.stdout.write(`docs-only: ${files.length} files\n`);
+  const { docsOnly, reason } = skipCiVerdict(files);
+  if (docsOnly) process.stdout.write(`docs-only: ${reason}\n`);
   else {
-    process.stdout.write(`not docs-only: ${other ?? "the change lists no files"}\n`);
+    process.stdout.write(`not docs-only: ${reason}\n`);
     process.exitCode = 1;
   }
 }
