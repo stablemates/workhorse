@@ -9,7 +9,30 @@ Workhorse is a public beta. Any 0.x minor release may change behaviour. From `0.
 upgrades in place: every release ships ordered migrations, and inside a major line a migration only
 adds.
 
-## Unreleased
+## 0.12.0 — 2026-11-07
+
+The npm packages, Python distribution, Go module, Rust crate, Ruby gem, JVM artifacts, and .NET
+packages release from one source commit.
+
+Requires **schema v76**, Java **21** or newer, and PostgreSQL **15** or newer.
+
+### Upgrade steps
+
+**Migrate the schema before starting updated processes.** Run `workhorse schema migrate` before any
+process of this release starts, producers too. Migrations 0091 and 0092 move the schema from
+version 89 to version **91**. They replace function bodies and change no stored rows. The SDK
+compatibility floor stays at **76**. A 0.11 process keeps working on version 91, because a
+migration inside a major line only adds.
+
+### Behavior changes
+
+These changes can make code that worked on 0.11 act differently:
+
+1. The core and the starter declare the optional OpenTelemetry API 1.67.0, not 1.62.0. See "The
+   OpenTelemetry API dependency is 1.67.0".
+2. If the drain interrupts a batch handler and the handler throws the I/O error that the interrupt
+   caused, each task of the batch now goes back to its queue and keeps its attempt (SM-1890). See "A
+   batch that the drain interrupts gives its tasks back".
 
 ### A full-tier queue no longer makes PostgreSQL log an error at each tier probe
 

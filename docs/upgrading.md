@@ -7,9 +7,9 @@ schema version, and the steps that the upgrade needs.
 [Compatibility and support boundary](compatibility.md) states the schema guarantees that every
 upgrade keeps. Each changelog states the full changes of its release.
 
-## Upgrade from 0.11.x to the next release
+## Upgrade from 0.11.x to 0.12.0
 
-The next release shows the task group of a member task in the dashboard task detail. It also makes
+0.12.0 shows the task group of a member task in the dashboard task detail. It also makes
 the dashboard task estimate follow the current size of the task table. The upgrade is a rolling
 deployment, and a mixed fleet is supported while it runs.
 
@@ -29,7 +29,7 @@ Each of the two migrations does not raise the floor, so it stays 76. Migration 0
 `dashboard_task_detail_v1`, and its document gains the key `group`. For a member task, `group` holds
 the group ID, the position of the member, and the state of the group. For another task, it is null.
 A dashboard host of every SDK version passes the document through, so it serves the key when the
-migration commits. A dashboard of the next release on a schema below 90 gets no `group` key and
+migration commits. A dashboard of 0.12.0 on a schema below 90 gets no `group` key and
 shows no group in the task detail.
 
 Migration 0092 replaces `dashboard_task_estimate_v1`. Before it, the estimate was `reltuples` as the
@@ -37,6 +37,9 @@ last `ANALYZE` or `VACUUM` stored it. Thus, after a bulk enqueue, the sidebar co
 page counted every task row exactly until autoanalyze ran. Now the estimate scales the stored rows
 per page by the current number of pages, so both reads use their estimates at once. The migration
 also replaces the body of `dashboard_task_counts_v1`, to change only a comment.
+
+A 0.11 process keeps working on schema version 91, because a migration inside a major line only
+adds. 0.12.0 freezes `sql/releases/0091.sql`.
 
 ## Upgrade from 0.10.x to 0.11.0
 

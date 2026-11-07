@@ -3,7 +3,20 @@
 `stablemates-workhorse` gem versions and release notes live here. The gem carries the version the
 other SDKs carry, because every tag names one release of all of them.
 
-## Unreleased
+## 0.12.0 — 2026-11-07
+
+The npm packages, Python distribution, Go module, Rust crate, Ruby gem, JVM artifacts, and .NET
+packages release from one source commit.
+
+Requires **schema v76**, Ruby **3.3** or newer, and PostgreSQL **15** or newer.
+
+### Upgrade steps
+
+**Migrate the schema before starting updated processes.** Run `workhorse schema migrate` before any
+process of this release starts, producers too. Migrations 0091 and 0092 move the schema from
+version 89 to version **91**. They replace function bodies and change no stored rows. The SDK
+compatibility floor stays at **76**. A 0.11 process keeps working on version 91, because a
+migration inside a major line only adds.
 
 ### A full-tier queue no longer makes PostgreSQL log an error at each tier probe
 

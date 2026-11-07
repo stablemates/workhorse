@@ -8,7 +8,28 @@ Workhorse is a public beta. Any 0.x minor release may change behaviour. From `0.
 upgrades in place: every release ships ordered migrations, and inside a major line a migration only
 adds.
 
-## Unreleased
+## 0.12.0 — 2026-11-07
+
+The npm packages, Python distribution, Go module, Rust crate, Ruby gem, JVM artifacts, and .NET
+packages release from one source commit.
+
+Requires **schema v76** and Go **1.25** or newer.
+
+### Upgrade steps
+
+**Migrate the schema before starting updated processes.** Run `workhorse schema migrate` before any
+process of this release starts, producers too. Migrations 0091 and 0092 move the schema from
+version 89 to version **91**. They replace function bodies and change no stored rows. The SDK
+compatibility floor stays at **76**. A 0.11 process keeps working on version 91, because a
+migration inside a major line only adds.
+
+### The listener reconnect delay carries jitter
+
+When PostgreSQL restarts, each notification listener reconnects with a delay that starts at 100 ms,
+doubles, and stops at 5,000 ms. The Go listener used the same delays in every process. Thus all
+Go listeners of a fleet reconnected at the same moments. Now the listener scales each delay by a
+random factor from 0.9 through 1.1, as the TypeScript, Python, Ruby, JVM, and .NET listeners do.
+The first delay, the doubling, and the cap do not change.
 
 ### A failed shutdown settlement now logs its event name
 
