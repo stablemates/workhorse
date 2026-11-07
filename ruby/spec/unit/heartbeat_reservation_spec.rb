@@ -88,11 +88,15 @@ RSpec.describe "Worker heartbeat reservation" do
 
   # Whether the heartbeat thread of +source+ waits in +acquire+ while +cycle+ is still the current
   # cycle: it starts no second checkout then.
+  # Ruby 3.4 labels a frame "Heartbeat#acquire" and Ruby 3.3 labels it "acquire", so the check
+  # reads the base label and the path of each frame, not the backtrace text.
   def waits_for_cycle?(source, cycle)
     heartbeat = heartbeat_of(source)
     thread = heartbeat.instance_variable_get(:@thread)
     heartbeat.instance_variable_get(:@acquisition).equal?(cycle) && thread&.alive? &&
-      thread.backtrace&.any? { |line| line.include?("Heartbeat#acquire") }
+      thread.backtrace_locations&.any? do |location|
+        location.base_label == "acquire" && location.path.end_with?("/worker/heartbeat.rb")
+      end
   end
 
   # The wake event of a heartbeat, which pauses the heartbeat thread at its next wait once armed.
