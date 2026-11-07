@@ -8,7 +8,29 @@ Workhorse is a public beta. Any 0.x minor release may change behaviour. From `0.
 upgrades in place: every release ships ordered migrations, and inside a major line a migration only
 adds.
 
-## Unreleased
+## 0.12.0 — 2026-11-07
+
+The npm packages, Python distribution, Go module, Rust crate, Ruby gem, JVM artifacts, and .NET
+packages release from one source commit.
+
+Requires **schema v76** and Python **3.12** or newer.
+
+### Upgrade steps
+
+**Migrate the schema before starting updated processes.** Run `workhorse schema migrate` before any
+process of this release starts, producers too. Migrations 0091 and 0092 move the schema from
+version 89 to version **91**. They replace function bodies and change no stored rows. The SDK
+compatibility floor stays at **76**. A 0.11 process keeps working on version 91, because a
+migration inside a major line only adds.
+
+### Behavior changes
+
+These changes can make code that worked on 0.11 act differently:
+
+1. At the end of the shutdown grace, `run_worker_process` now cancels the token of each active
+   handler. If the handler stops in 250 ms, the worker gives its task back, and the task keeps its
+   attempt. See "A deploy no longer charges an attempt to a handler that stops at the shutdown
+   abort".
 
 ### A deploy no longer charges an attempt to a handler that stops at the shutdown abort
 

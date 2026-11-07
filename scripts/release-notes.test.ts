@@ -518,6 +518,54 @@ describe("0.11.0 release notes", () => {
   });
 });
 
+/** The 0.12.0 release: the first entry whose notes cover migrations 0091 and 0092. */
+const release0120 = "## 0.12.0 — 2026-11-07";
+
+describe("0.12.0 release notes", () => {
+  const lines = [...changelogs, "jvm/CHANGELOG.md", "dotnet/CHANGELOG.md"];
+
+  describe.each(lines)("%s", (path) => {
+    const section = entry(path, release0120);
+
+    it("states the train, the floor, and the migrations", () => {
+      expect(section).toMatch(phrase("release from one source commit"));
+      expect(section).toMatch(/^Requires \*\*schema v76\*\*/m);
+      expect(section).toMatch(phrase("Migrate the schema before starting updated processes"));
+      expect(section).toMatch(
+        phrase("Migrations 0091 and 0092 move the schema from version 89 to version **91**"),
+      );
+      expect(section).toMatch(phrase("compatibility floor stays at **76**"));
+    });
+  });
+
+  it("names every migration added after 0.11.0 in the root notes", () => {
+    // 0.11.0 shipped schema version 89, and 0.12.0 ships 91, so migrations 0091 and 0092 are new
+    // in 0.12.0.
+    const section = entry("CHANGELOG.md", release0120);
+    const added = readdirSync(join(root, "sql/migrations"))
+      .map((name) => /^(\d{4})-/.exec(name)?.[1])
+      .filter(
+        (number): number is string =>
+          number !== undefined && Number(number) > 90 && Number(number) <= 92,
+      );
+    expect(added).toHaveLength(2);
+    for (const number of added) expect(section, `migration ${number}`).toContain(number);
+  });
+
+  describe.each([...lines, "typescript/otel/CHANGELOG.md"])("%s", (path) => {
+    it("links only to files and headings that exist", () => {
+      const broken = links(path, entry(path, release0120))
+        .filter(({ file, anchor }) => {
+          if (file === undefined) return false;
+          if (!existsSync(join(root, file))) return true;
+          return anchor !== undefined && file.endsWith(".md") && !anchors(file).has(anchor);
+        })
+        .map(({ target }) => target);
+      expect(broken).toEqual([]);
+    });
+  });
+});
+
 /**
  * The first entry of the .NET changelog, the oldest one. It stays `## Unreleased` until the
  * release candidate of the first .NET publish dates it.
