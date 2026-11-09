@@ -77,7 +77,7 @@
     "react-grab": "^0.2.0",
     "typescript": "^5.8.3",
     "vite": "^8.3.5",
-    "vitest": "^4.1.12"
+    "vitest": "^5.0.3"
   },
   "peerDependencies": {
     "@stablemates/workhorse": ">=0.12.0 <0.13.0",
