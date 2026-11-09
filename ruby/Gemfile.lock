@@ -182,7 +182,7 @@ GEM
       rubocop-ast (>= 1.47.1, < 2.0)
     ruby-progressbar (1.13.0)
     securerandom (0.4.1)
-    sequel (5.109.0)
+    sequel (5.110.0)
       bigdecimal
     standard (1.57.0)
       language_server-protocol (~> 3.17.0.2)
@@ -228,7 +228,7 @@ DEPENDENCIES
   rake (~> 13.2)
   rspec (~> 3.13)
   rubocop (~> 1.91)
-  sequel (= 5.109.0)
+  sequel (= 5.110.0)
   stablemates-workhorse!
   standard (~> 1.56)
 
@@ -304,7 +304,7 @@ CHECKSUMS
   rubocop-performance (1.26.1) sha256=cd19b936ff196df85829d264b522fd4f98b6c89ad271fa52744a8c11b8f71834
   ruby-progressbar (1.13.0) sha256=80fc9c47a9b640d6834e0dc7b3c94c9df37f08cb072b7761e4a71e22cff29b33
   securerandom (0.4.1) sha256=cc5193d414a4341b6e225f0cb4446aceca8e50d5e1888743fac16987638ea0b1
-  sequel (5.109.0) sha256=e0d1d474442d620c8497d7f4851c0cc3a277920519051b8014b2877aa55efffe
+  sequel (5.110.0) sha256=c316335b352adb4109bb02ade237b1a6dbd493493def34542ce05893f62138ae
   stablemates-workhorse (0.12.0)
   standard (1.57.0) sha256=4a65ea92421fbaf77fb54da91e16093cf79b335b8f62c35aaa3dd714c8592858
   standard-custom (1.0.2) sha256=424adc84179a074f1a2a309bb9cf7cd6bfdb2b6541f20c6bf9436c0ba22a652b
