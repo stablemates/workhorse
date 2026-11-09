@@ -88,7 +88,8 @@ function policyObject(literal: string): Record<string, unknown> {
   const policy: Record<string, unknown> = {};
   for (let index = 0; index < tokens.length; index += 2) {
     const key = tokens[index];
-    if (typeof key !== "string") throw new Error(`retry policy key is not a string: ${literal}`);
+    if (typeof key !== "string")
+      throw new TypeError(`retry policy key is not a string: ${literal}`);
     policy[key] = tokens[index + 1];
   }
   return policy;

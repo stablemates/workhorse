@@ -512,7 +512,7 @@ export function SystemPage({
     </Stack>
   );
 }
-export const storageGroupLabels: Record<"tasks" | "history" | "statistics", string> = {
+const storageGroupLabels: Record<"tasks" | "history" | "statistics", string> = {
   tasks: "Tasks",
   history: "History",
   statistics: "Statistics",
@@ -525,7 +525,7 @@ export const storageGroupLabels: Record<"tasks" | "history" | "statistics", stri
  * stalled rollup shows up first as history that stops shrinking, which is impossible to diagnose
  * from a size number alone.
  */
-export function StoragePanel({
+function StoragePanel({
   storage,
   retention,
 }: {

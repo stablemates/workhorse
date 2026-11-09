@@ -20,7 +20,7 @@
     "typecheck": "tsc -b tsconfig.typecheck.json"
   },
   "dependencies": {
-    "@hono/node-server": "^2.1.5",
+    "@hono/node-server": "^2.1.6",
     "@opentelemetry/api": "^1.9.1",
     "@opentelemetry/api-logs": "0.223.0",
     "@opentelemetry/auto-instrumentations-node": "^0.81.2",
@@ -35,12 +35,12 @@
     "@stablemates/workhorse-drizzle": "workspace:*",
     "@stablemates/workhorse-otel": "workspace:*",
     "drizzle-orm": "^0.45.4",
-    "hono": "^4.13.13",
+    "hono": "^4.13.16",
     "pg": "^8.23.1"
   },
   "devDependencies": {
     "@stablemates/workhorse-dashboard": "workspace:*",
-    "@types/node": "^26.6.5",
+    "@types/node": "^26.6.6",
     "@types/pg": "^8.23.1",
     "tsx": "^4.23.15",
     "typescript": "^5.8.3"

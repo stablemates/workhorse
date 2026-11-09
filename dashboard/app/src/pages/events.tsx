@@ -41,7 +41,7 @@ import {
 import { formatDuration, formatExact, formatRelative } from "../preferences.js";
 import { formatCount } from "../count-format.js";
 
-export const eventsKindOptions = [
+const eventsKindOptions = [
   { value: "all", label: "All" },
   { value: "event", label: "Lifecycle" },
   { value: "attempt", label: "Attempts" },
@@ -59,7 +59,7 @@ export function eventTypeColor(type: string): string {
   if (type === "retry") return taskStatusColors.scheduled;
   return "gray";
 }
-export function uniqueSorted(values: Array<string | null>): string[] {
+function uniqueSorted(values: Array<string | null>): string[] {
   // oxlint-disable-next-line unicorn/no-array-sort -- ES2022 lacks Array.prototype.toSorted.
   return [...new Set(values.filter((value): value is string => value !== null))].sort();
 }
@@ -69,7 +69,7 @@ function padDateTimePart(part: number): string {
 }
 
 /** Format an instant for the browser's local `datetime-local` control. */
-export function dateTimeLocalValue(value: string | Date): string {
+function dateTimeLocalValue(value: string | Date): string {
   const date = typeof value === "string" ? new Date(value) : value;
   return `${date.getFullYear()}-${padDateTimePart(date.getMonth() + 1)}-${padDateTimePart(date.getDate())}T${padDateTimePart(date.getHours())}:${padDateTimePart(date.getMinutes())}`;
 }

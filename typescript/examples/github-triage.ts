@@ -333,7 +333,7 @@ export class GitHubApi {
       seen.add(next.href);
       const response = await this.send(next, "GET");
       const page: unknown = await response.json();
-      if (!Array.isArray(page)) throw new Error("Expected a paginated API array");
+      if (!Array.isArray(page)) throw new TypeError("Expected a paginated API array");
       values.push(...(page as Value[]));
       const link: string | undefined = response.headers
         .get("link")

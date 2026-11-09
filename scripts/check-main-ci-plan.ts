@@ -145,7 +145,7 @@ async function successfulRuns(gh: Gh, repository: string, sha: string): Promise<
     "per_page=100",
   ]);
   const { workflow_runs: runs } = JSON.parse(body) as { workflow_runs?: unknown };
-  if (!Array.isArray(runs)) throw new Error("GitHub returned no list of workflow runs");
+  if (!Array.isArray(runs)) throw new TypeError("GitHub returned no list of workflow runs");
   return (runs as WorkflowRun[])
     .filter(
       (run) =>

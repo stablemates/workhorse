@@ -69,7 +69,7 @@ function record(value: unknown, what: string): Record<string, unknown> {
 function list(value: unknown, what: string): readonly unknown[] {
   if (value === undefined) return [];
   if (!Array.isArray(value))
-    throw new Error(`dotnet list package wrote ${what} that is not a list`);
+    throw new TypeError(`dotnet list package wrote ${what} that is not a list`);
   return value;
 }
 
