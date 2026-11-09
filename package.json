@@ -229,7 +229,7 @@
     "@stablemates/workhorse-knex": "workspace:*",
     "@types/node": "^26.6.5",
     "@types/pg": "^8.23.1",
-    "@vitest/coverage-v8": "4.1.12",
+    "@vitest/coverage-v8": "5.0.3",
     "geist": "1.8.2",
     "github-slugger": "2.0.0",
     "knex": "3.3.0",
