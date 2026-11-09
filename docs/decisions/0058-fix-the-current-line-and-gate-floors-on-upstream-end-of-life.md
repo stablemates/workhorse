@@ -4,7 +4,8 @@
 - **Date:** 2026-09-02
 - **Assembled by:** [ADR 0059](0059-assemble-the-1-0-0-specification.md)
 - **Amended by:** [ADR 0106](0106-keep-the-release-lines-in-lockstep-after-1-0-0.md) (a fix in one SDK
-  releases every line, and each other line publishes a version-only release)
+  releases every line, and each other line publishes a version-only release); the 2026-11-09
+  amendment below (Active Job 8.0 left without a changelog notice)
 - **Related:** [ADR 0054](0054-define-what-1-0-0-promises.md),
   [ADR 0056](0056-set-the-1-0-0-exit-criteria.md),
   [ADR 0057](0057-retain-superseded-functions-and-contract-on-the-operators-schedule.md),
@@ -203,6 +204,22 @@ advisory fails the lane, and the production gate still fails until its own list 
 A tooling advisory follows the same severity targets as any other. The exposure differs, so the
 reason in an entry can differ: tooling that never runs in CI or in a release job is a fair reason
 that would never pass for a published dependency.
+
+## Amendment: Active Job 8.0 leaves the matrix without a changelog notice (2026-11-09)
+
+Rails ended security support for 8.0 on 2026-11-07. No published minor's changelog had announced
+that Workhorse would drop Active Job 8.0, so the notice rule above was not met. The table carried
+the date, and the end-of-life check failed on the day after it, as designed. Nothing checked for the
+changelog notice before that day. SM-1921 records the failure.
+
+The minor after 0.12.0 drops Active Job 8.0 anyway, as a one-time exception. Rails no longer fixes
+8.0, so another release of support would promise fixes on a base that receives none. An application
+that uses the adapter on Rails 8.0 keeps 0.12, which works against the database it was built for.
+An application that uses only the native API takes new releases, because the gem skips the adapter
+below its floor. The changelog of that minor states the exception.
+
+The notice rule itself stands. A future floor raise still needs its changelog notice in a published
+minor before the minor that drops the version.
 
 ## Consequences
 

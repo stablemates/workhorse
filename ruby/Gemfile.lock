@@ -217,14 +217,14 @@ PLATFORMS
   x86_64-linux-musl
 
 DEPENDENCIES
-  actionpack (>= 8.0, < 9)
-  activejob (>= 8.0, < 9)
-  activerecord (>= 8.0, < 9)
+  actionpack (>= 8.1, < 9)
+  activejob (>= 8.1, < 9)
+  activerecord (>= 8.1, < 9)
   bundler-audit (~> 0.9)
   opentelemetry-api (~> 1.11)
   opentelemetry-metrics-api (~> 0.10)
   rack (>= 3.1, < 4)
-  railties (>= 8.0, < 9)
+  railties (>= 8.1, < 9)
   rake (~> 13.2)
   rspec (~> 3.13)
   rubocop (~> 1.91)

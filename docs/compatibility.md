@@ -35,7 +35,7 @@ which released versions receive fixes.
 | Go           | 1.25 and newer    | 1.25    | No date; Go supports its two most recent releases              | pgx v5.11.0 is the minimum and the tested version.                                              |
 | Rust         | 1.89 and newer    | 1.89    | No date; Rust supports only its latest stable release          | Tokio with `tokio-postgres` 0.7 and `deadpool-postgres`.                                        |
 | Ruby         | 3.3, 3.4, 4.0     | 3.3     | 3.3: 2027-03-31, 3.4: not announced, 4.0: not announced        | `pg` 1.6 alone, behind `connection_pool`, or Active Record.                                     |
-| Active Job   | 8.0, 8.1          | 8.0     | 8.0: 2026-11-07, 8.1: 2027-10-10                               | The Rails adapter. Rails dates are the end of security support.                                 |
+| Active Job   | 8.1               | 8.1     | 8.1: 2027-10-10                                                | The Rails adapter. Rails dates are the end of security support.                                 |
 | Java         | 21, 25, 27        | 21      | 21: 2029-12, 25: 2031-09, 27: 2027-03                          | Every JVM module compiles with `--release 21`. The dates are Temurin support.                   |
 | Kotlin       | 2.2 and newer     | 2.2     | No date; the Kotlin compiler drops a language version          | `workhorse-kotlin` sets language and API version 2.2. kotlinx-coroutines 1.10.2 is the minimum. |
 | Spring Boot  | 4.0, 4.1          | 4.0     | 4.0: 2026-12-31, 4.1: 2027-07-31                               | The starter. The dates are the end of open-source support.                                      |
@@ -240,7 +240,8 @@ the day that version is first supported, and `typescript/core/test/support-matri
 once a listed version is past it, so the repository notices the retirement rather than the reader.
 Before the minor that drops a version, at least one published minor's changelog says so.
 PostgreSQL takes two published minors of notice rather than one, because a PostgreSQL major
-upgrade is a database migration the operator schedules rather than a package bump.
+upgrade is a database migration the operator schedules rather than a package bump. Active Job 8.0
+is the one exception: it left the table without that notice, and ADR 0058 records why.
 
 A floor raise is a minor because it cannot reach code that already runs. The release you installed
 keeps working against the database you built it for; what a dropped runtime loses is future
@@ -406,7 +407,7 @@ rest are optional TypeScript packages.
 | `@stablemates/workhorse-dashboard-server`   | Authenticated standalone dashboard server         | `@stablemates/workhorse-dashboard-contract`                                                                   |
 | `@stablemates/workhorse-dashboard-contract` | Type-only dashboard server boundary               | None                                                                                                          |
 | `stablemates-workhorse`                     | Python clients, workers, and WSGI dashboard       | None; includes Psycopg >= 3.3 and < 4; `asyncpg` extra supports >= 0.31 and < 1                               |
-| `stablemates-workhorse` (gem)               | Ruby clients, workers, and Rack dashboard         | None; includes `pg` >= 1.6 and < 2, `connection_pool` >= 2.5 and < 4; Active Job adapter supports >= 8.0      |
+| `stablemates-workhorse` (gem)               | Ruby clients, workers, and Rack dashboard         | None; includes `pg` >= 1.6 and < 2, `connection_pool` >= 2.5 and < 4; Active Job adapter supports >= 8.1      |
 
 The ten TypeScript packages are versioned in lockstep and released from a single `vX.Y.Z` tag. An
 optional TypeScript package always declares the core version it was released with as a peer range.

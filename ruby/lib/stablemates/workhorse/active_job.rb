@@ -3,8 +3,8 @@
 require "active_job"
 require "stablemates/workhorse" unless defined?(::Stablemates::Workhorse::Worker)
 
-unless ::ActiveJob.gem_version >= Gem::Version.new("8.0")
-  raise LoadError, "the Workhorse Active Job adapter requires Active Job 8.0 or later " \
+unless ::ActiveJob.gem_version >= Gem::Version.new("8.1")
+  raise LoadError, "the Workhorse Active Job adapter requires Active Job 8.1 or later " \
     "(found #{::ActiveJob.gem_version})"
 end
 

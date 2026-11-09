@@ -2466,7 +2466,10 @@ Ruby `ActiveJob::QueueAdapters::StablematesWorkhorseAdapter` is the Active Job a
 `config.active_job.queue_adapter = :stablemates_workhorse` selects.
 
 `require "stablemates/workhorse"` registers an `ActiveSupport.on_load(:active_job)` hook that loads
-the adapter. If Active Job is older than 8.0, the load raises `LoadError`.
+the adapter. If Active Job is older than 8.1, the hook does not load the adapter, so an application
+that uses only the native API still boots. The hook defines a placeholder
+`StablematesWorkhorseAdapter` instead. Selecting the adapter or requiring
+`stablemates/workhorse/active_job` then raises `LoadError`.
 
 If `executor` is nil, `StablematesWorkhorseAdapter.new(executor = nil)` enqueues through
 `ActiveRecordExecutor.new(ActiveRecord::Base)`. If `enqueue_after_transaction_commit` is false, an

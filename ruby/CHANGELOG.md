@@ -3,6 +3,19 @@
 `stablemates-workhorse` gem versions and release notes live here. The gem carries the version the
 other SDKs carry, because every tag names one release of all of them.
 
+## Unreleased
+
+### The Active Job adapter requires Active Job 8.1
+
+Rails 8.0 reached the end of its security support on 2026-11-07, so the adapter now requires Active
+Job 8.1 or later. With Active Job 8.0, selecting or requiring the adapter raises `LoadError`. An
+application that uses only the native API still boots on Rails 8.0. An application that uses the
+adapter must upgrade Rails to 8.1 before it takes this release, or stay on 0.12.
+
+The compatibility table published that date. No earlier changelog announced the drop, which the
+compatibility policy requires. ADR 0058 records this one exception: Rails no longer fixes 8.0, so
+Workhorse does not extend its support.
+
 ## 0.12.0 — 2026-11-07
 
 The npm packages, Python distribution, Go module, Rust crate, Ruby gem, JVM artifacts, and .NET

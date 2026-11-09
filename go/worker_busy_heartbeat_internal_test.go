@@ -150,9 +150,10 @@ func superviseAttempt(t *testing.T, worker *Worker, id string, fence int64) *sup
 	ctx, cancel := context.WithCancelCause(context.Background())
 	aborted := make(chan time.Time, 1)
 	var abortOnce sync.Once
+	// Record the cause before the signal, so a test that wakes on aborted reads it.
 	cancelHandler := func(cause error) {
-		abortOnce.Do(func() { aborted <- time.Now() })
 		cancel(cause)
+		abortOnce.Do(func() { aborted <- time.Now() })
 	}
 	task := ClaimedTask{ID: id, FenceToken: fence, claimSentAt: time.Now()}
 	_, release := worker.superviseOwnership(ctx, task, cancelHandler)

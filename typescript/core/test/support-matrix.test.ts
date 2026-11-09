@@ -433,14 +433,16 @@ describe("supported version constants", () => {
   });
 
   it("matches the Ruby gem and the Active Job bundles CI runs", async () => {
-    const [manifest, gemspec, adapter, lockfile, rails80Lockfile, workflow] = await Promise.all([
-      readSupportManifest(),
-      read("ruby/stablemates-workhorse.gemspec"),
-      read("ruby/lib/stablemates/workhorse/active_job.rb"),
-      read("ruby/Gemfile.lock"),
-      read("ruby/gemfiles/rails_8_0.gemfile.lock"),
-      read(".github/workflows/ci.yml"),
-    ]);
+    const [manifest, gemspec, adapter, gemEntry, lockfile, floorLockfile, workflow] =
+      await Promise.all([
+        readSupportManifest(),
+        read("ruby/stablemates-workhorse.gemspec"),
+        read("ruby/lib/stablemates/workhorse/active_job.rb"),
+        read("ruby/lib/stablemates/workhorse.rb"),
+        read("ruby/Gemfile.lock"),
+        read("ruby/gemfiles/rails_8_1.gemfile.lock"),
+        read(".github/workflows/ci.yml"),
+      ]);
     const { activejob, ruby } = manifest.support;
 
     expect(ruby.tested[0]).toBe(ruby.minimum);
@@ -448,14 +450,20 @@ describe("supported version constants", () => {
     // RubyGems enforces the Ruby floor and the adapter refuses to load below the Active Job one,
     // so the manifest cannot claim a floor the gem does not hold.
     expect(gemspec).toContain(`spec.required_ruby_version = ">= ${ruby.minimum}"`);
-    expect(adapter).toContain(
-      `::ActiveJob.gem_version >= Gem::Version.new("${activejob.minimum}")`,
-    );
+    // The load hook of the gem skips the adapter below the same floor.
+    for (const source of [adapter, gemEntry]) {
+      expect(source).toContain(
+        `::ActiveJob.gem_version >= Gem::Version.new("${activejob.minimum}")`,
+      );
+    }
     // The default bundle runs the newest tested Active Job in every Ruby lane, and the `ruby-rails`
-    // job runs the floor through its own gemfile. Those two lockfiles are the tested versions.
-    expect([lockedActiveJob(rails80Lockfile), lockedActiveJob(lockfile)]).toEqual(activejob.tested);
+    // job runs the floor through its own gemfile. While the floor is the newest release, both
+    // lockfiles name it. A version between the two would need a lane of its own.
+    expect(lockedActiveJob(floorLockfile)).toBe(activejob.minimum);
+    expect(lockedActiveJob(lockfile)).toBe(activejob.tested.at(-1));
+    expect(activejob.tested.length).toBeLessThanOrEqual(2);
     expect(workflow).toContain(
-      "BUNDLE_GEMFILE: ${{ github.workspace }}/ruby/gemfiles/rails_8_0.gemfile",
+      "BUNDLE_GEMFILE: ${{ github.workspace }}/ruby/gemfiles/rails_8_1.gemfile",
     );
   });
 
@@ -852,9 +860,9 @@ describe("continuous integration", () => {
     expect(workflow).toContain("- run: pnpm ruby:gates");
     expect(scripts["ruby:gates"]).toContain("WORKHORSE_REQUIRE_DATABASE=1 pnpm ruby:test");
     // ADR 0075: the default lockfile tests the Active Job adapter against Rails 8.1 on every change.
-    // Rails 8.0 gates weekly, and Rails main reports weekly without gating.
+    // The Active Job floor gates weekly, and Rails main reports weekly without gating.
     expect(workflow).toContain(
-      "BUNDLE_GEMFILE: ${{ github.workspace }}/ruby/gemfiles/rails_8_0.gemfile",
+      "BUNDLE_GEMFILE: ${{ github.workspace }}/ruby/gemfiles/rails_8_1.gemfile",
     );
     expect(workflow).toContain(
       "BUNDLE_GEMFILE: ${{ github.workspace }}/ruby/gemfiles/rails_main.gemfile",

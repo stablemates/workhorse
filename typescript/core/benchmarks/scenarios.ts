@@ -4151,6 +4151,7 @@ async function workerConcurrency(
   const nullClaimRates: number[] = [];
   const pollingPressureChecks: boolean[] = [];
   const july2026ClaimStatementsPerCompletedTask = 1;
+  const workerBackgroundLoops = 3;
 
   metrics.concurrencyLevels = concurrencyLevels.join(",");
   metrics.tasksPerLevel = context.options.taskCount;
@@ -4315,11 +4316,13 @@ async function workerConcurrency(
         (actual, expected) => Number(actual) < Number(expected),
       );
     }
+    // Each slot can have a claim and a completion in flight. The heartbeat, maintenance, and
+    // registration loops run independently of the slots, so each adds at most one more statement.
     recordInvariant(
       assertions,
       `${prefix} connection pressure tracks slots`,
       afterTiming.maxConcurrentQueries,
-      concurrency * 2 + 1,
+      concurrency * 2 + workerBackgroundLoops,
       (actual, expected) => Number(actual) <= Number(expected),
     );
     recordInvariant(

@@ -138,7 +138,7 @@ async function writeFixture(root: string, version: string, pep440 = version): Pr
     "ruby/Gemfile.lock": `PATH\n  specs:\n    stablemates-workhorse (${version.replace("-", ".pre.")})\n`,
     "jvm/gradle.properties": `# The train version.\nversion=${version}\norg.gradle.daemon=false\n`,
     "dotnet/Directory.Build.props": `<Project>\n  <PropertyGroup>\n    <Version>${version}</Version>\n  </PropertyGroup>\n</Project>\n`,
-    "ruby/gemfiles/rails_8_0.gemfile.lock": `PATH\n  specs:\n    stablemates-workhorse (${version.replace("-", ".pre.")})\n`,
+    "ruby/gemfiles/rails_8_1.gemfile.lock": `PATH\n  specs:\n    stablemates-workhorse (${version.replace("-", ".pre.")})\n`,
     "support.json": JSON.stringify({
       install: {
         node: "npm install @stablemates/workhorse",
@@ -199,7 +199,7 @@ describe("checkRelease across the release train", () => {
     ["Cargo.lock", '"0.8.0"', '"0.7.1"'],
     ["ruby/lib/stablemates/workhorse/version.rb", '"0.8.0"', '"0.7.1"'],
     ["ruby/Gemfile.lock", "(0.8.0)", "(0.7.1)"],
-    ["ruby/gemfiles/rails_8_0.gemfile.lock", "(0.8.0)", "(0.7.1)"],
+    ["ruby/gemfiles/rails_8_1.gemfile.lock", "(0.8.0)", "(0.7.1)"],
     ["support.json", "download/v0.8.0/", "download/v0.7.1/"],
     ["support.json", "workhorse@0.8.0 ", "workhorse@0.7.1 "],
     ["jvm/gradle.properties", "version=0.8.0", "version=0.7.1"],
