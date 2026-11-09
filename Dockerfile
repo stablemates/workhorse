@@ -74,7 +74,7 @@ FROM eclipse-temurin:25.0.4_7-jre-alpine@sha256:2ca9adf44f5c29d28ecd26cf92d75cc0
 
 # The .NET worker, published framework-dependent and without an app host, so one build serves every
 # architecture. The SDK tag is the version that mise.toml pins.
-FROM mcr.microsoft.com/dotnet/sdk:10.0.403-alpine3.24@sha256:cc02b814237a76c4735fb6eeee87181597b5e56f2ce458a435e527674d91f4d7 AS dotnet-build
+FROM mcr.microsoft.com/dotnet/sdk:10.0.403-alpine3.24@sha256:5562fd626eec39f6f53218f9b7d7856ab7195d51d846568304fbe85071a3b6e6 AS dotnet-build
 
 WORKDIR /workhorse
 ARG BUILD_CONCURRENCY=4
@@ -90,7 +90,7 @@ RUN --mount=type=cache,target=/root/.nuget/packages \
       -p:UseAppHost=false
 
 # The .NET runtime that runs the .NET worker. It matches the runtime of the SDK above.
-FROM mcr.microsoft.com/dotnet/runtime:10.0.14-alpine3.24@sha256:54d48f739ebffdef82388056d420af37ed39c722b8d5ee5dedca6878537c2737 AS dotnet-runtime
+FROM mcr.microsoft.com/dotnet/runtime:10.0.14-alpine3.24@sha256:8ef0660a5ae5877915bc868a27aabf334c8b14c60aadbdd0fa058d81b87c52b6 AS dotnet-runtime
 
 FROM ghcr.io/astral-sh/uv:0.13.6@sha256:af22a52f5eafef3d78e551599d405c02df61919d18028f0cea8eda93bc9986d0 AS uv
 
