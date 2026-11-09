@@ -55,7 +55,7 @@ func TestGORMTransactions(t *testing.T) {
 			if err := observer.QueryRow(ctx, "SHOW server_version").Scan(&version); err != nil {
 				t.Fatal(err)
 			}
-			t.Logf("PostgreSQL %s; GORM v1.31.2; postgres dialector v1.6.3; pgx v5.11.0", version)
+			t.Logf("PostgreSQL %s; GORM v1.31.2; postgres dialector v1.6.3; pgx v5.12.0", version)
 			if _, err := observer.Exec(ctx, `CREATE TABLE orders (
 				id text PRIMARY KEY, email text NOT NULL,
 				backend_pid integer NOT NULL DEFAULT pg_backend_pid(),

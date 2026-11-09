@@ -36,7 +36,7 @@ release can leave a schema below that floor.
 Runtime processes verify compatibility instead of changing the schema. Call
 `AssertSchemaCompatible` at startup.
 
-Requires Go 1.25 or newer and PostgreSQL 15 through 18. pgx v5.11.0 is the minimum and the tested version.
+Requires Go 1.25 or newer and PostgreSQL 15 through 18. pgx v5.12.0 is the minimum and the tested version.
 
 ## Run one task
 
