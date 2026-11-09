@@ -32,7 +32,7 @@ which released versions receive fixes.
 | ------------ | ----------------- | ------- | -------------------------------------------------------------- | ----------------------------------------------------------------------------------------------- |
 | Node.js      | 22, 24            | 22      | 22: 2027-04-30, 24: 2028-04-30                                 | Even-numbered releases only. `engines.node` is `>=22`.                                          |
 | Python       | 3.12–3.14         | 3.12    | 3.12: 2028-10, 3.13: 2029-10, 3.14: 2030-10                    | `stablemates-workhorse` ships one `py3-none-any` wheel.                                         |
-| Go           | 1.25 and newer    | 1.25    | No date; Go supports its two most recent releases              | pgx v5.11.0 is the minimum and the tested version.                                              |
+| Go           | 1.25 and newer    | 1.25    | No date; Go supports its two most recent releases              | pgx v5.12.0 is the minimum and the tested version.                                              |
 | Rust         | 1.89 and newer    | 1.89    | No date; Rust supports only its latest stable release          | Tokio with `tokio-postgres` 0.7 and `deadpool-postgres`.                                        |
 | Ruby         | 3.3, 3.4, 4.0     | 3.3     | 3.3: 2027-03-31, 3.4: not announced, 4.0: not announced        | `pg` 1.6 alone, behind `connection_pool`, or Active Record.                                     |
 | Active Job   | 8.1               | 8.1     | 8.1: 2027-10-10                                                | The Rails adapter. Rails dates are the end of security support.                                 |
@@ -64,7 +64,7 @@ checks that the active Python and PostgreSQL versions belong to this matrix. Pul
 pushes run the newest Python and PostgreSQL versions. The weekly schedule runs every Python and
 PostgreSQL combination.
 
-The Go module declares Go 1.25 or newer and requires pgx v5.11.0. That is a minimum rather than a
+The Go module declares Go 1.25 or newer and requires pgx v5.12.0. That is a minimum rather than a
 pin: minimal version selection lets a consumer's own module graph choose a higher pgx v5, which is
 expected to work and is not tested. Its repository
 lane exercises enqueue through pgx transactions, pgx pools, and `database/sql` with pgx stdlib. It

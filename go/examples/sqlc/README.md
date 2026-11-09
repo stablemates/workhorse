@@ -6,7 +6,7 @@ sqlc generates only `recipe_order` queries. Workhorse keeps its existing generat
 ## Pinned baseline
 
 - sqlc v1.31.1, using `sql_package: pgx/v5`.
-- pgx v5.11.0, inherited from `go/go.mod`.
+- pgx v5.12.0, inherited from `go/go.mod`.
 - Go 1.26.10 and PostgreSQL 18.6 in the local maintained proof.
 
 `schema.sql`, `queries.sql`, and `sqlc.yaml` own the business-query source.

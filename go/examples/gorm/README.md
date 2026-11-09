@@ -5,7 +5,7 @@ This is a recipe using Workhorse's existing `NewSQLExecutor` and `NewQueue`, not
 
 ## Run the example
 
-The fixture pins GORM `v1.31.2`, `gorm.io/driver/postgres` `v1.6.3`, and its actual driver, pgx `v5.11.0`.
+The fixture pins GORM `v1.31.2`, `gorm.io/driver/postgres` `v1.6.3`, and its actual driver, pgx `v5.12.0`.
 The PostgreSQL dialector uses pgx through `database/sql`.
 Install the Workhorse schema in a disposable application database before running the example.
 Manage application tables through your application's migrations, not Workhorse's schema lifecycle.

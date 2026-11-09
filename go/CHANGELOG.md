@@ -8,6 +8,19 @@ Workhorse is a public beta. Any 0.x minor release may change behaviour. From `0.
 upgrades in place: every release ships ordered migrations, and inside a major line a migration only
 adds.
 
+## Unreleased
+
+### The Go module requires pgx 5.12.0
+
+pgx 5.12.0 fixes two high-severity advisories. GHSA-95fj-3fxw-g62g affects pgx 5.9.0 through
+5.11.0. If a connection sets `require_auth` or `channel_binding=require` and does not verify the
+server certificate, a server can skip authentication. GHSA-j38q-h3ph-jjpq affects `SendBatch` with
+the simple protocol. Workhorse does not call `SendBatch`, but an application can.
+
+The module now requires pgx 5.12.0, raised from 5.11.0. Minimum version selection raises an
+application's own pgx requirement to at least that version. pgx 5.12.0 adds a `Tx` method to the
+`BatchResults` interface, so a custom implementation or a mock of that interface must add it.
+
 ## 0.12.0 — 2026-11-07
 
 The npm packages, Python distribution, Go module, Rust crate, Ruby gem, JVM artifacts, and .NET
