@@ -131,7 +131,7 @@ jobs:
       # that sets up Gradle uses the same three steps.
       - id: setup-gradle
         if: fromJSON(needs.plan.outputs.lanes)['jvm']
-        uses: gradle/actions/setup-gradle@3f5f9adaf7d9fecd50b5935e54106014257a94e6 # v6.4.0
+        uses: gradle/actions/setup-gradle@8da46b539cd8fe6ab27ca75128919a18d757604c # v6.4.1
         timeout-minutes: 5
         continue-on-error: true
         with:
@@ -142,7 +142,7 @@ jobs:
           rm -rf "$RUNNER_TEMP/.gradle-actions/gradle-installations"
           echo "GRADLE_SETUP_FALLBACK=true" >> "$GITHUB_ENV"
       - if: fromJSON(needs.plan.outputs.lanes)['jvm'] && steps.setup-gradle.outcome != 'success'
-        uses: gradle/actions/setup-gradle@3f5f9adaf7d9fecd50b5935e54106014257a94e6 # v6.4.0
+        uses: gradle/actions/setup-gradle@8da46b539cd8fe6ab27ca75128919a18d757604c # v6.4.1
         with:
           gradle-version: 9.8.2 # Pinned to the gradle version in mise.toml.
           cache-disabled: true
@@ -158,7 +158,7 @@ jobs:
       # The action turns its cache on by default only on GitHub-hosted runners, so each setup-uv
       # step turns it on. Without the cache, each job downloads more than 100 packages. Each job
       # installs a different set of packages, so each job keeps its own cache entry (SM-1874).
-      - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
         with:
           version: 0.13.6 # Pinned to the uv version in mise.toml.
           enable-cache: true
@@ -173,13 +173,13 @@ jobs:
           cache: false
           rustflags: ""
       - if: fromJSON(needs.plan.outputs.lanes)['rust']
-        uses: taiki-e/install-action@1e29709c0ec63babbe8f266397a465f29a825f91 # v2.87.31
+        uses: taiki-e/install-action@682ce6c3c696a4cd5168a05f98e51aa02b877941 # v2.89.1
         with:
           tool: cargo-deny@0.20.2 # Pinned to the cargo-deny version in mise.toml.
       # `ruby:lint` runs RuboCop over the Ruby gem, `ruby-api:check` loads it to read its API, and
       # `ruby:vuln` runs bundler-audit from its bundle.
       - if: fromJSON(needs.plan.outputs.lanes)['ruby']
-        uses: ruby/setup-ruby@7f797815d8adceb1c412e7abefdd1ab4abc47a5f # v1.335.0
+        uses: ruby/setup-ruby@de492cf36cbab201753d720ce4f4e336cd688c94 # v1.336.0
         with:
           ruby-version: 3.4.11 # Pinned to the ruby version in mise.toml.
           working-directory: ruby
@@ -197,7 +197,7 @@ jobs:
       # mise.toml pins. The SDK goes into its own directory, so the muxer
       # finds no other SDK of the runner image.
       - if: fromJSON(needs.plan.outputs.lanes)['dotnet']
-        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v6.1.0
         env:
           DOTNET_INSTALL_DIR: ${{ runner.temp }}/dotnet
         with:
@@ -284,7 +284,7 @@ jobs:
         with:
           node-version: 22
           cache: pnpm
-      - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
         with:
           version: 0.13.6 # Pinned to the uv version in mise.toml.
           enable-cache: true
@@ -437,7 +437,7 @@ jobs:
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: ${{ matrix.python }}
-      - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
         with:
           version: 0.13.6 # Pinned to the uv version in mise.toml.
           enable-cache: true
@@ -594,7 +594,7 @@ jobs:
         with:
           node-version: ${{ matrix.node }}
           cache: pnpm
-      - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
         with:
           version: 0.13.6 # Pinned to the uv version in mise.toml.
           enable-cache: true
@@ -702,7 +702,7 @@ jobs:
         with:
           node-version: 22
           cache: pnpm
-      - uses: ruby/setup-ruby@7f797815d8adceb1c412e7abefdd1ab4abc47a5f # v1.335.0
+      - uses: ruby/setup-ruby@de492cf36cbab201753d720ce4f4e336cd688c94 # v1.336.0
         with:
           ruby-version: ${{ matrix.ruby }}
           working-directory: ruby
@@ -755,7 +755,7 @@ jobs:
       # later setup step puts its own directory ahead of /usr/bin, so the pinned tools stay first
       # (SM-1484).
       - id: setup-gradle
-        uses: gradle/actions/setup-gradle@3f5f9adaf7d9fecd50b5935e54106014257a94e6 # v6.4.0
+        uses: gradle/actions/setup-gradle@8da46b539cd8fe6ab27ca75128919a18d757604c # v6.4.1
         timeout-minutes: 5
         continue-on-error: true
         with:
@@ -766,7 +766,7 @@ jobs:
           rm -rf "$RUNNER_TEMP/.gradle-actions/gradle-installations"
           echo "GRADLE_SETUP_FALLBACK=true" >> "$GITHUB_ENV"
       - if: steps.setup-gradle.outcome != 'success'
-        uses: gradle/actions/setup-gradle@3f5f9adaf7d9fecd50b5935e54106014257a94e6 # v6.4.0
+        uses: gradle/actions/setup-gradle@8da46b539cd8fe6ab27ca75128919a18d757604c # v6.4.1
         with:
           gradle-version: 9.8.2 # Pinned to the gradle version in mise.toml.
           cache-disabled: true
@@ -834,7 +834,7 @@ jobs:
           cache: pnpm
       # Every lane builds on the SDK that mise.toml pins. It carries the .NET 10 runtime. The SDK
       # goes into its own directory, so the muxer finds no other SDK of the runner image.
-      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+      - uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v6.1.0
         env:
           DOTNET_INSTALL_DIR: ${{ runner.temp }}/dotnet
         with:
@@ -908,7 +908,7 @@ jobs:
       # later setup step puts its own directory ahead of /usr/bin, so the pinned tools stay first
       # (SM-1484).
       - id: setup-gradle
-        uses: gradle/actions/setup-gradle@3f5f9adaf7d9fecd50b5935e54106014257a94e6 # v6.4.0
+        uses: gradle/actions/setup-gradle@8da46b539cd8fe6ab27ca75128919a18d757604c # v6.4.1
         timeout-minutes: 5
         continue-on-error: true
         with:
@@ -919,7 +919,7 @@ jobs:
           rm -rf "$RUNNER_TEMP/.gradle-actions/gradle-installations"
           echo "GRADLE_SETUP_FALLBACK=true" >> "$GITHUB_ENV"
       - if: steps.setup-gradle.outcome != 'success'
-        uses: gradle/actions/setup-gradle@3f5f9adaf7d9fecd50b5935e54106014257a94e6 # v6.4.0
+        uses: gradle/actions/setup-gradle@8da46b539cd8fe6ab27ca75128919a18d757604c # v6.4.1
         with:
           gradle-version: 9.8.2 # Pinned to the gradle version in mise.toml.
           cache-disabled: true
@@ -970,7 +970,7 @@ jobs:
       # later setup step puts its own directory ahead of /usr/bin, so the pinned tools stay first
       # (SM-1484).
       - id: setup-gradle
-        uses: gradle/actions/setup-gradle@3f5f9adaf7d9fecd50b5935e54106014257a94e6 # v6.4.0
+        uses: gradle/actions/setup-gradle@8da46b539cd8fe6ab27ca75128919a18d757604c # v6.4.1
         timeout-minutes: 5
         continue-on-error: true
         with:
@@ -981,7 +981,7 @@ jobs:
           rm -rf "$RUNNER_TEMP/.gradle-actions/gradle-installations"
           echo "GRADLE_SETUP_FALLBACK=true" >> "$GITHUB_ENV"
       - if: steps.setup-gradle.outcome != 'success'
-        uses: gradle/actions/setup-gradle@3f5f9adaf7d9fecd50b5935e54106014257a94e6 # v6.4.0
+        uses: gradle/actions/setup-gradle@8da46b539cd8fe6ab27ca75128919a18d757604c # v6.4.1
         with:
           gradle-version: 9.8.2 # Pinned to the gradle version in mise.toml.
           cache-disabled: true
@@ -1034,7 +1034,7 @@ jobs:
       # later setup step puts its own directory ahead of /usr/bin, so the pinned tools stay first
       # (SM-1484).
       - id: setup-gradle
-        uses: gradle/actions/setup-gradle@3f5f9adaf7d9fecd50b5935e54106014257a94e6 # v6.4.0
+        uses: gradle/actions/setup-gradle@8da46b539cd8fe6ab27ca75128919a18d757604c # v6.4.1
         timeout-minutes: 5
         continue-on-error: true
         with:
@@ -1045,7 +1045,7 @@ jobs:
           rm -rf "$RUNNER_TEMP/.gradle-actions/gradle-installations"
           echo "GRADLE_SETUP_FALLBACK=true" >> "$GITHUB_ENV"
       - if: steps.setup-gradle.outcome != 'success'
-        uses: gradle/actions/setup-gradle@3f5f9adaf7d9fecd50b5935e54106014257a94e6 # v6.4.0
+        uses: gradle/actions/setup-gradle@8da46b539cd8fe6ab27ca75128919a18d757604c # v6.4.1
         with:
           gradle-version: 9.8.2 # Pinned to the gradle version in mise.toml.
           cache-disabled: true
@@ -1096,7 +1096,7 @@ jobs:
         with:
           node-version: 22
           cache: pnpm
-      - uses: ruby/setup-ruby@7f797815d8adceb1c412e7abefdd1ab4abc47a5f # v1.335.0
+      - uses: ruby/setup-ruby@de492cf36cbab201753d720ce4f4e336cd688c94 # v1.336.0
         with:
           ruby-version: "3.4"
           working-directory: ruby
@@ -1140,7 +1140,7 @@ jobs:
         with:
           node-version: 22
           cache: pnpm
-      - uses: ruby/setup-ruby@7f797815d8adceb1c412e7abefdd1ab4abc47a5f # v1.335.0
+      - uses: ruby/setup-ruby@de492cf36cbab201753d720ce4f4e336cd688c94 # v1.336.0
         with:
           ruby-version: "3.4"
           working-directory: ruby
@@ -1178,7 +1178,7 @@ jobs:
       # The development demo builds its JVM worker's class path with Gradle. Set up Gradle first. The
       # comment in the `static` job gives the reason (SM-1484).
       - id: setup-gradle
-        uses: gradle/actions/setup-gradle@3f5f9adaf7d9fecd50b5935e54106014257a94e6 # v6.4.0
+        uses: gradle/actions/setup-gradle@8da46b539cd8fe6ab27ca75128919a18d757604c # v6.4.1
         timeout-minutes: 5
         continue-on-error: true
         with:
@@ -1189,7 +1189,7 @@ jobs:
           rm -rf "$RUNNER_TEMP/.gradle-actions/gradle-installations"
           echo "GRADLE_SETUP_FALLBACK=true" >> "$GITHUB_ENV"
       - if: steps.setup-gradle.outcome != 'success'
-        uses: gradle/actions/setup-gradle@3f5f9adaf7d9fecd50b5935e54106014257a94e6 # v6.4.0
+        uses: gradle/actions/setup-gradle@8da46b539cd8fe6ab27ca75128919a18d757604c # v6.4.1
         with:
           gradle-version: 9.8.2 # Pinned to the gradle version in mise.toml.
           cache-disabled: true
@@ -1202,7 +1202,7 @@ jobs:
         with:
           go-version-file: go/go.mod
           cache-dependency-path: go/go.sum
-      - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
         with:
           version: 0.13.6 # Pinned to the uv version in mise.toml.
           enable-cache: true
@@ -1214,7 +1214,7 @@ jobs:
         with:
           distribution: temurin
           java-version: 25.0.4 # Pinned to the java version in mise.toml.
-      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+      - uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v6.1.0
         env:
           DOTNET_INSTALL_DIR: ${{ runner.temp }}/dotnet
         with:
@@ -1222,7 +1222,7 @@ jobs:
       # The development demo starts its Ruby worker with `bundle exec`. The demo smoke test runs a
       # copy of the tracked files, which lacks the ignored `ruby/.bundle/config` naming the bundle
       # path, so the smoke step names the installed bundle itself.
-      - uses: ruby/setup-ruby@7f797815d8adceb1c412e7abefdd1ab4abc47a5f # v1.335.0
+      - uses: ruby/setup-ruby@de492cf36cbab201753d720ce4f4e336cd688c94 # v1.336.0
         with:
           ruby-version: 3.4.11 # Pinned to the ruby version in mise.toml.
           working-directory: ruby

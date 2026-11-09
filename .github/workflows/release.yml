@@ -53,7 +53,7 @@ jobs:
       # /usr/bin, the action puts /usr/bin first on the PATH, where /usr/bin/go is an older Go. Each
       # later setup step puts its own directory ahead of /usr/bin, so the pinned tools stay first
       # (SM-1484).
-      - uses: gradle/actions/setup-gradle@3f5f9adaf7d9fecd50b5935e54106014257a94e6 # v6.4.0
+      - uses: gradle/actions/setup-gradle@8da46b539cd8fe6ab27ca75128919a18d757604c # v6.4.1
         with:
           gradle-version: 9.8.2 # Pinned to the gradle version in mise.toml.
           cache-disabled: true
@@ -75,7 +75,7 @@ jobs:
           cache: false
       # Not `bundler-cache`: the release check installs the gem's own bundle, and a cache restored
       # into the job that builds the published artifacts would let an earlier run decide its gems.
-      - uses: ruby/setup-ruby@7f797815d8adceb1c412e7abefdd1ab4abc47a5f # v1.335.0
+      - uses: ruby/setup-ruby@de492cf36cbab201753d720ce4f4e336cd688c94 # v1.336.0
         with:
           ruby-version: 3.4.11 # Pinned to the ruby version in mise.toml.
       # The JVM release check builds and signs the three artifacts. Not the Gradle cache: a cache
@@ -266,7 +266,7 @@ jobs:
           persist-credentials: false
       # No `bundler-cache`, for the same reason as the publish job: this job can mint a RubyGems
       # token, so the lockfile alone decides what runs beside it.
-      - uses: ruby/setup-ruby@7f797815d8adceb1c412e7abefdd1ab4abc47a5f # v1.335.0
+      - uses: ruby/setup-ruby@de492cf36cbab201753d720ce4f4e336cd688c94 # v1.336.0
         with:
           ruby-version: 3.4.11 # Pinned to the ruby version in mise.toml.
       - name: Compare the gem version with the tag
@@ -399,7 +399,7 @@ jobs:
       # later setup step puts its own directory ahead of /usr/bin, so the pinned tools stay first
       # (SM-1484).
       - if: steps.version.outputs.publish == 'true'
-        uses: gradle/actions/setup-gradle@3f5f9adaf7d9fecd50b5935e54106014257a94e6 # v6.4.0
+        uses: gradle/actions/setup-gradle@8da46b539cd8fe6ab27ca75128919a18d757604c # v6.4.1
         with:
           gradle-version: 9.8.2 # Pinned to the gradle version in mise.toml.
           cache-disabled: true
@@ -530,7 +530,7 @@ jobs:
           package-manager-cache: false
       # The SDK goes into its own directory, so the muxer finds no other SDK of the runner image.
       - if: steps.version.outputs.publish == 'true'
-        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v6.1.0
         env:
           DOTNET_INSTALL_DIR: ${{ runner.temp }}/dotnet
         with:
