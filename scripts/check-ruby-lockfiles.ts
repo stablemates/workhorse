@@ -1,7 +1,7 @@
 /**
  * Check that each locked Rails gemfile under `ruby/gemfiles/` agrees with `ruby/Gemfile`.
  *
- * A gemfile such as `rails_8_0.gemfile` evaluates `ruby/Gemfile` and adds its own Rails. Dependabot
+ * A gemfile such as `rails_8_1.gemfile` evaluates `ruby/Gemfile` and adds its own Rails. Dependabot
  * reads only `ruby/Gemfile`, so it updates `ruby/Gemfile.lock` and leaves these lockfiles stale.
  * The job that installs a stale one runs weekly, and its frozen `bundle install` then refuses the
  * lockfile. This check runs on every change, so the pull request that makes a lockfile stale fails.

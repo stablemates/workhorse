@@ -47,7 +47,7 @@ describe("Ruby lockfile checksums", () => {
   it("pins every registry gem and platform variant in each committed lockfile", async () => {
     const lockfiles = await committedLockfiles();
     expect(lockfiles).toEqual(
-      expect.arrayContaining(["ruby/Gemfile.lock", "ruby/gemfiles/rails_8_0.gemfile.lock"]),
+      expect.arrayContaining(["ruby/Gemfile.lock", "ruby/gemfiles/rails_8_1.gemfile.lock"]),
     );
 
     for (const relativePath of lockfiles) {

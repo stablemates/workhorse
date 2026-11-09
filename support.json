@@ -15,11 +15,10 @@
   "support": {
     "activejob": {
       "endOfLife": {
-        "8.0": "2026-11-07",
         "8.1": "2027-10-10"
       },
-      "minimum": "8.0",
-      "tested": ["8.0", "8.1"]
+      "minimum": "8.1",
+      "tested": ["8.1"]
     },
     "aspnetcore": {
       "endOfLife": {

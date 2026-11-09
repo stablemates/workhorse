@@ -9,7 +9,7 @@ the retries, and the callbacks of Active Job. It does not give the features that
 context, because `perform` never receives one. If a job needs those features, move it to a native
 handler. Its callers do not change.
 
-The adapter requires Active Job 8.0 or later.
+The adapter requires Active Job 8.1 or later.
 
 ## Select the adapter
 
@@ -28,7 +28,8 @@ through the connection of `ActiveRecord::Base`. Thus the web process needs no po
 - The adapter class is `ActiveJob::QueueAdapters::StablematesWorkhorseAdapter`.
 - `require "stablemates/workhorse"` registers an `ActiveSupport.on_load(:active_job)` hook that
   loads the adapter.
-- If Active Job is older than 8.0, the load raises `LoadError`.
+- If Active Job is older than 8.1, the hook skips the adapter, so the native API still works.
+  Selecting the adapter or requiring `stablemates/workhorse/active_job` then raises `LoadError`.
 - `StablematesWorkhorseAdapter.new(executor = nil)` enqueues through
   `ActiveRecordExecutor.new(ActiveRecord::Base)` when `executor` is nil.
 

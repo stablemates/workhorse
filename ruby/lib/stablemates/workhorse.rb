@@ -48,6 +48,17 @@ end
 
 # Rails loads the Active Job adapter when Active Job loads, so the adapter name resolves.
 # Without Rails, require "stablemates/workhorse/active_job" after Active Job.
+# Below the adapter floor, the hook does not load the adapter, so an application that uses only the
+# native API still boots. The hook registers a placeholder instead. Rails instantiates the adapter
+# it selects by name, and the placeholder then loads the adapter, which raises LoadError.
 if defined?(ActiveSupport.on_load)
-  ActiveSupport.on_load(:active_job) { require "stablemates/workhorse/active_job" }
+  ActiveSupport.on_load(:active_job) do
+    if ::ActiveJob.gem_version >= Gem::Version.new("8.1")
+      require "stablemates/workhorse/active_job"
+    else
+      ::ActiveJob::QueueAdapters.const_set(:StablematesWorkhorseAdapter, Class.new do
+        def initialize(*) = require("stablemates/workhorse/active_job")
+      end)
+    end
+  end
 end
