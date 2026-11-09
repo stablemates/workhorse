@@ -24,7 +24,7 @@
   "devDependencies": {
     "@fontsource-variable/geist": "^5.3.0",
     "@fontsource-variable/geist-mono": "^5.3.0",
-    "@shikijs/transformers": "4.6.0",
+    "@shikijs/transformers": "4.5.0",
     "@tailwindcss/vite": "^4.3.3",
     "@types/mdx": "^2.0.13",
     "@types/node": "^26.6.6",

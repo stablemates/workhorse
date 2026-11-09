@@ -95,9 +95,7 @@ function inline(node: ParentNode): string {
       out += `\`${textOf(child).trim()}\``;
     } else if (child.tagName === "a") {
       const href = attribute(child, "href") ?? "";
-      const label = inline(child)
-        .trim()
-        .replace(/\s*→$/, "");
+      const label = inline(child).trim().replace(/\s*→$/, "");
       // A bare fragment or an empty label is a control, not a reference.
       out += label === "" ? "" : href === "" ? label : `[${label}](${absolute(href)})`;
     } else if (child.tagName === "br") {

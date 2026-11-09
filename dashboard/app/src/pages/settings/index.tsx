@@ -82,7 +82,7 @@ export function displayTimeZoneOptions(
     ...values.map((value) => ({ value, label: value })),
   ];
 }
-export const supportedMaintenanceTimeZoneOptions = browserTimeZones.map((value) => ({
+const supportedMaintenanceTimeZoneOptions = browserTimeZones.map((value) => ({
   value,
   label: value,
 }));
@@ -92,7 +92,7 @@ export interface SettingsPageProps {
   onSaveMaintenance(definition: Partial<MaintenancePolicyDefinition>): Promise<void>;
   onRevertMaintenance(setting: MaintenancePolicySetting): Promise<void>;
 }
-export function OperatorOverride({
+function OperatorOverride({
   revert,
   disabled = false,
 }: {
@@ -123,7 +123,7 @@ export type RetentionField = {
   label: string;
   suffix: string;
 };
-export const retentionWindowFields: RetentionField[] = [
+const retentionWindowFields: RetentionField[] = [
   { key: "taskIdentityRetentionDays", label: "Task identity", suffix: " days" },
   {
     key: "terminalOutcomeRetentionDays",
@@ -147,7 +147,7 @@ export const retentionWindowFields: RetentionField[] = [
     suffix: " days",
   },
 ];
-export const retentionCleanupFields: RetentionField[] = [
+const retentionCleanupFields: RetentionField[] = [
   {
     key: "terminalTaskPruneLimit",
     label: "Finished tasks per cleanup pass",
@@ -174,7 +174,7 @@ export const retentionCleanupFields: RetentionField[] = [
     suffix: " rows",
   },
 ];
-export function formatMaintenanceInterval(milliseconds: number): string {
+function formatMaintenanceInterval(milliseconds: number): string {
   const day = 24 * 60 * 60_000;
   const hour = 60 * 60_000;
   if (milliseconds % day === 0) {
@@ -191,10 +191,10 @@ export function formatMaintenanceInterval(milliseconds: number): string {
   }
   return formatDuration(milliseconds);
 }
-export function formatRetentionDefault(value: number | null, suffix: string): string {
+function formatRetentionDefault(value: number | null, suffix: string): string {
   return value === null ? "indefinitely" : `${formatCount(value)}${suffix}`;
 }
-export function formatStatisticsRollupInterval(milliseconds: number): string {
+function formatStatisticsRollupInterval(milliseconds: number): string {
   return milliseconds === 0 ? "Opted out" : formatMaintenanceInterval(milliseconds);
 }
 export function SettingsPage({

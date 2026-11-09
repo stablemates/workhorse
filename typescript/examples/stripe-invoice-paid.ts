@@ -10,7 +10,7 @@ import { pathToFileURL } from "node:url";
 import { Admin, Pool, Queue, Worker, type Queryable } from "@stablemates/workhorse";
 import { Stripe } from "stripe";
 
-export const STRIPE_API_VERSION = "2026-09-30.endive";
+export const STRIPE_API_VERSION = "2026-10-28.endive";
 export const MAX_BODY_BYTES = 262_144;
 const SIGNATURE_TOLERANCE_SECONDS = 300;
 const REQUEST_TIMEOUT_MS = 5_000;

@@ -99,7 +99,7 @@ export function taskGroupProgressLabel(counts: DashboardTaskGroupCounts): string
   return `${formatCount(finished)} of ${formatCount(counts.total)} finished`;
 }
 
-export function TaskGroupProgress({
+function TaskGroupProgress({
   counts,
   size = "md",
 }: {
