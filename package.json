@@ -23,7 +23,7 @@
     "docs:start": "pnpm --filter @stablemates/workhorse-site start",
     "docs:typecheck": "pnpm --filter @stablemates/workhorse-site typecheck",
     "typecheck": "tsc -b tsconfig.typecheck.json && pnpm docs:typecheck && pnpm python:typecheck && pnpm go:vet",
-    "test": "tsx scripts/with-env.ts node node_modules/vitest/vitest.mjs run && pnpm python:test && pnpm go:test && pnpm ruby:test && pnpm jvm:test && pnpm dotnet:test",
+    "test": "pnpm test:build-check && tsx scripts/with-env.ts node node_modules/vitest/vitest.mjs run && pnpm python:test && pnpm go:test && pnpm ruby:test && pnpm jvm:test && pnpm dotnet:test",
     "test:build-check": "tsx scripts/check-test-build.ts",
     "test:unit": "tsx scripts/with-env.ts node node_modules/vitest/vitest.mjs run --config vitest.unit.config.ts && pnpm python:test:unit && pnpm go:test:unit",
     "test:database": "tsx scripts/with-env.ts node node_modules/vitest/vitest.mjs run --config vitest.database.config.ts && pnpm python:test:database && pnpm go:test:database",

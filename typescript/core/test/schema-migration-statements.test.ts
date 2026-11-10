@@ -116,11 +116,6 @@ function codeView(statement: string): CodeView {
   return { code: code.replaceAll(/\s+/g, " ").trim(), literals };
 }
 
-/** The code of each statement of a migration body, without comments or literal values. */
-function normalizedStatements(body: string): string[] {
-  return splitSqlStatements(body).map((statement) => codeView(statement).code);
-}
-
 /** A table name as PostgreSQL resolves it, so `"workhorse"."t"` and `workhorse.t` match. */
 function tableName(name: string): string {
   return name.replaceAll('"', "").toLowerCase();
@@ -128,10 +123,16 @@ function tableName(name: string): string {
 
 const CREATE_TABLE = /^CREATE (?:UNLOGGED )?TABLE (?:IF NOT EXISTS )?([\w."]+)/i;
 
-/** The tables that a body creates with a top-level CREATE TABLE, in statement order. */
+/** The tables that a body creates with CREATE TABLE, at the top level or in a DO block, in order. */
 function createdTables(body: string): string[] {
-  return normalizedStatements(body).flatMap((statement) => {
-    const table = CREATE_TABLE.exec(statement);
+  return splitSqlStatements(body).flatMap((statement) => {
+    const { code, literals } = codeView(statement);
+    if (/^DO\b/i.test(code)) {
+      return literals
+        .flatMap(blockStatements)
+        .flatMap((item) => (item.kind === "create" ? [item.table] : []));
+    }
+    const table = CREATE_TABLE.exec(code);
     return table === null ? [] : [tableName(table[1]!)];
   });
 }
@@ -253,26 +254,270 @@ function blockingIndexBuilds(body: string, existing: ReadonlySet<string> = new S
   return found;
 }
 
-/** The work in one transactional step that holds a table's ACCESS EXCLUSIVE for time its size sets. */
-function exclusiveScans(body: string): string[] {
-  const statements = normalizedStatements(body);
-  const altered = new Set<string>();
-  const found: string[] = [];
-  for (const statement of statements) {
-    const alter = /^ALTER TABLE (?:IF EXISTS )?(?:ONLY )?([\w."]+) (.*)$/i.exec(statement);
-    if (alter !== null) {
-      const [, table, action] = alter as unknown as [string, string, string];
-      if (/^VALIDATE CONSTRAINT\b/i.test(action)) {
-        if (altered.has(table)) found.push(`validates a constraint on ${table} it altered`);
+/** A column name in the code view of an ALTER TABLE subcommand. */
+const COLUMN = String.raw`(?:\w+|"[^"]*")`;
+
+/** An expression that PostgreSQL evaluates one time and stores without a table rewrite. */
+const STORED_DEFAULT =
+  /^(?:(?:\w+ |E|U&|B|X)?''|\$\$|[+-]?\d+(?:\.\d+)?(?:e[+-]?\d+)?|TRUE|FALSE|NULL|CURRENT_DATE|CURRENT_TIMESTAMP|LOCALTIMESTAMP|now\(\)|transaction_timestamp\(\))(?: ?:: ?[\w."]+(?: \w+)*(?:\(\d+(?:, ?\d+)?\))?(?:\[\])*)*$/i;
+
+/**
+ * The default expression of an ADD COLUMN subcommand, or null when it has none. The expression
+ * ends at the next column constraint.
+ */
+function addedColumnDefault(subcommand: string): string | null {
+  if (
+    !/^ADD (?:COLUMN )?(?:IF NOT EXISTS )?(?!(?:CONSTRAINT|PRIMARY|UNIQUE|CHECK|FOREIGN|EXCLUDE)\b)/i.test(
+      subcommand,
+    )
+  ) {
+    return null;
+  }
+  const value =
+    /\bDEFAULT (.+?)(?: (?:NOT NULL|NULL|CHECK|REFERENCES|UNIQUE|PRIMARY KEY|CONSTRAINT|COLLATE|GENERATED)\b.*)?$/i.exec(
+      subcommand,
+    );
+  if (value === null) return null;
+  let expression = value[1]!.trim();
+  while (/^\(.*\)$/.test(expression)) expression = expression.slice(1, -1).trim();
+  return expression;
+}
+
+/**
+ * The CHECK (column IS NOT NULL) constraints of the earlier steps, keyed by table and constraint
+ * name, with the column of each. A validated one lets SET NOT NULL skip its scan.
+ */
+interface NotNullChecks {
+  readonly pending: Map<string, string>;
+  readonly validated: Map<string, string>;
+}
+
+const noNotNullChecks = (): NotNullChecks => ({ pending: new Map(), validated: new Map() });
+
+/** An ALTER TABLE statement, with its table, its subcommands, and whether a DO block runs it. */
+interface AlterStatement {
+  kind: "alter";
+  table: string;
+  subcommands: string[];
+  inBlock: boolean;
+}
+
+/** A statement in a DO block that the scan for table-sized work reads. */
+type BlockStatement = AlterStatement | { kind: "create"; table: string };
+
+/** The ALTER TABLE that a code view starts with. */
+function alterTable(code: string, inBlock: boolean): AlterStatement | null {
+  const alter = /^ALTER TABLE (?:IF EXISTS )?(?:ONLY )?([\w."%]+) (.*)$/i.exec(code);
+  return alter === null
+    ? null
+    : { kind: "alter", table: alter[1]!, subcommands: alterSubcommands(alter[2]!), inBlock };
+}
+
+/**
+ * The CREATE TABLE and ALTER TABLE statements in the SQL text of a DO block, including dynamic SQL
+ * in its literals. PL/pgSQL puts words such as BEGIN or THEN before a statement, so a match can
+ * start at any word.
+ */
+function blockStatements(text: string): BlockStatement[] {
+  const found: BlockStatement[] = [];
+  for (const statement of splitSqlStatements(text)) {
+    const view = codeView(statement);
+    for (let at = 0; at < view.code.length; at++) {
+      if (at > 0 && !/\s/.test(view.code[at - 1]!)) continue;
+      const rest = view.code.slice(at);
+      const created = CREATE_TABLE.exec(rest);
+      if (created !== null) found.push({ kind: "create", table: tableName(created[1]!) });
+      const alter = alterTable(rest, true);
+      if (alter !== null) found.push(alter);
+    }
+    for (const literal of view.literals) found.push(...blockStatements(literal));
+  }
+  return found;
+}
+
+/** The ALTER TABLE statements of a step in order, with those of each DO block in its place. */
+function alterStatements(body: string): AlterStatement[] {
+  return splitSqlStatements(body).flatMap((statement) => {
+    const { code, literals } = codeView(statement);
+    if (/^DO\b/i.test(code)) {
+      return literals
+        .flatMap(blockStatements)
+        .filter((item): item is AlterStatement => item.kind === "alter");
+    }
+    const alter = alterTable(code, false);
+    return alter === null ? [] : [alter];
+  });
+}
+
+const NAME_END = String.raw`(?= |$)`;
+
+/**
+ * A column or constraint name as PostgreSQL resolves it: a quoted name keeps its case, and an
+ * unquoted name folds to lower case.
+ */
+function identifier(name: string): string {
+  return name.startsWith('"') ? name.slice(1, -1).replaceAll('""', '"') : name.toLowerCase();
+}
+
+/**
+ * Removes each NOT NULL check that a subcommand removes or moves. DROP CONSTRAINT drops the check,
+ * and DROP COLUMN drops each check on the column. A rename of the column, the constraint, or the
+ * table also discards the check, because the scan does not follow names.
+ */
+function removeNotNullChecks(table: string, subcommand: string, checks: Map<string, string>): void {
+  const prefix = `${tableName(table)} `;
+  const onTable = (keep: (key: string, column: string) => boolean) => {
+    for (const [key, column] of checks) {
+      if (key.startsWith(prefix) && !keep(key, column)) checks.delete(key);
+    }
+  };
+  const constraint = new RegExp(
+    String.raw`^(?:DROP CONSTRAINT (?:IF EXISTS )?|RENAME CONSTRAINT )(${COLUMN})${NAME_END}`,
+    "i",
+  ).exec(subcommand);
+  if (constraint !== null) {
+    checks.delete(`${prefix}${identifier(constraint[1]!)}`);
+    return;
+  }
+  if (/^RENAME TO\b/i.test(subcommand)) {
+    onTable(() => false);
+    return;
+  }
+  const column = new RegExp(
+    String.raw`^(?:DROP (?:COLUMN )?(?:IF EXISTS )?|RENAME (?:COLUMN )?)(${COLUMN})${NAME_END}`,
+    "i",
+  ).exec(subcommand);
+  if (column !== null) onTable((_, checked) => checked !== identifier(column[1]!));
+}
+
+/**
+ * Adds the NOT NULL checks that one step adds, validates, or removes, after the scan of the step.
+ * A DO block can run a statement in a branch that does not execute, so a check that a DO block
+ * adds or validates is no proof. A removal in a DO block still counts.
+ */
+function recordNotNullChecks(body: string, checks: NotNullChecks): void {
+  for (const { table, subcommands, inBlock } of alterStatements(body)) {
+    for (const subcommand of subcommands) {
+      removeNotNullChecks(table, subcommand, checks.pending);
+      removeNotNullChecks(table, subcommand, checks.validated);
+      if (inBlock) continue;
+      const added = new RegExp(
+        String.raw`^ADD CONSTRAINT (${COLUMN}) CHECK \(\(?(${COLUMN}) IS NOT NULL\)?\)( NOT VALID)?$`,
+        "i",
+      ).exec(subcommand);
+      if (added !== null) {
+        const key = `${tableName(table)} ${identifier(added[1]!)}`;
+        (added[3] === undefined ? checks.validated : checks.pending).set(
+          key,
+          identifier(added[2]!),
+        );
         continue;
       }
-      if (/\bADD COLUMN\b[^,]*\bCHECK\b/i.test(action)) {
-        found.push(`adds a column to ${table} with an inline CHECK`);
+      const validated = new RegExp(
+        String.raw`^VALIDATE CONSTRAINT (${COLUMN})${NAME_END}`,
+        "i",
+      ).exec(subcommand);
+      if (validated === null) continue;
+      const key = `${tableName(table)} ${identifier(validated[1]!)}`;
+      const column = checks.pending.get(key);
+      checks.pending.delete(key);
+      if (column !== undefined) checks.validated.set(key, column);
+    }
+  }
+}
+
+/**
+ * The subcommand work that scans or rewrites the whole table under ACCESS EXCLUSIVE. `proofs` holds
+ * the validated NOT NULL checks that still exist when the subcommand runs.
+ */
+function tableSizedSubcommand(
+  subcommand: string,
+  table: string,
+  proofs: ReadonlyMap<string, string>,
+): string | null {
+  const notNull = new RegExp(String.raw`^ALTER (?:COLUMN )?(${COLUMN}) SET NOT NULL\b`, "i").exec(
+    subcommand,
+  );
+  if (notNull !== null) {
+    const proven = [...proofs].some(
+      ([key, column]) =>
+        key.startsWith(`${tableName(table)} `) && column === identifier(notNull[1]!),
+    );
+    return proven ? null : `sets NOT NULL on a column of ${table}`;
+  }
+  if (
+    new RegExp(String.raw`^ALTER (?:COLUMN )?${COLUMN} (?:SET DATA )?TYPE\b`, "i").test(subcommand)
+  ) {
+    return `changes the type of a column of ${table}`;
+  }
+  const value = addedColumnDefault(subcommand);
+  if (value !== null && !STORED_DEFAULT.test(value)) {
+    return `adds a column to ${table} with a default that is not a constant`;
+  }
+  return null;
+}
+
+/** What the earlier steps and the baseline left: their tables and their NOT NULL checks. */
+interface EarlierSteps {
+  readonly existing?: ReadonlySet<string>;
+  readonly checks?: NotNullChecks;
+}
+
+/**
+ * The work in one transactional step that holds a table's ACCESS EXCLUSIVE for time its size sets.
+ * A table counts as new only when the step creates it and no earlier step or the baseline did, as
+ * in blockingIndexBuilds. SET NOT NULL, a type change, and a default that is not a constant are
+ * accepted on a new table, because it holds no rows yet. SET NOT NULL is also accepted when an
+ * earlier step validated a CHECK (column IS NOT NULL) on the column and the step has not removed
+ * it, because PostgreSQL then skips the scan. The scan reads the DO blocks of the step for these
+ * three statements.
+ */
+function exclusiveScans(
+  body: string,
+  { existing = new Set(), checks = noNotNullChecks() }: EarlierSteps = {},
+): string[] {
+  const altered = new Set<string>();
+  const created = new Set<string>();
+  const proofs = new Map(checks.validated);
+  const found: string[] = [];
+  const tableSized = ({ table, subcommands, inBlock }: AlterStatement) => {
+    for (const subcommand of subcommands) removeNotNullChecks(table, subcommand, proofs);
+    if (created.has(tableName(table))) return;
+    for (const subcommand of subcommands) {
+      const finding = tableSizedSubcommand(subcommand, table, proofs);
+      if (finding !== null) found.push(inBlock ? `${finding} in a DO block` : finding);
+    }
+  };
+  for (const statement of splitSqlStatements(body)) {
+    const { code, literals } = codeView(statement);
+    const createdTable = CREATE_TABLE.exec(code);
+    if (createdTable !== null && !existing.has(tableName(createdTable[1]!))) {
+      created.add(tableName(createdTable[1]!));
+    }
+    if (/^DO\b/i.test(code)) {
+      for (const item of literals.flatMap(blockStatements)) {
+        if (item.kind === "alter") tableSized(item);
+        else if (!existing.has(item.table)) created.add(item.table);
       }
-      altered.add(table);
       continue;
     }
-    const write = /^(?:UPDATE|DELETE FROM) (?:ONLY )?([\w."]+)/i.exec(statement);
+    const alter = alterTable(code, false);
+    if (alter !== null) {
+      const { table, subcommands } = alter;
+      const validates = subcommands.filter((subcommand) =>
+        /^VALIDATE CONSTRAINT\b/i.test(subcommand),
+      );
+      if (validates.length > 0 && altered.has(table)) {
+        found.push(`validates a constraint on ${table} it altered`);
+      }
+      if (subcommands.some((subcommand) => /^ADD COLUMN\b[^,]*\bCHECK\b/i.test(subcommand))) {
+        found.push(`adds a column to ${table} with an inline CHECK`);
+      }
+      tableSized(alter);
+      if (validates.length < subcommands.length) altered.add(table);
+      continue;
+    }
+    const write = /^(?:UPDATE|DELETE FROM) (?:ONLY )?([\w."]+)/i.exec(code);
     if (write !== null && altered.has(write[1]!)) {
       found.push(`rewrites ${write[1]!} after altering it`);
     }
@@ -356,12 +601,205 @@ describe("hot-table migration steps", () => {
       exclusiveScans(`ALTER TABLE t ADD COLUMN c integer NOT NULL DEFAULT 0 CHECK (c >= 0);
 ALTER TABLE t ADD CONSTRAINT k CHECK (c >= 0) NOT VALID;
 UPDATE t SET c = 1;
-ALTER TABLE t VALIDATE CONSTRAINT k;`),
+ALTER TABLE t VALIDATE CONSTRAINT k;
+ALTER TABLE workhorse.task_runtime ALTER COLUMN queue_name SET NOT NULL;
+ALTER TABLE t ALTER c TYPE bigint, ALTER COLUMN "d" SET DATA TYPE text;
+ALTER TABLE t ADD COLUMN started_at timestamptz NOT NULL DEFAULT clock_timestamp();
+ALTER TABLE t ADD token uuid DEFAULT gen_random_uuid() NOT NULL;
+ALTER TABLE u VALIDATE CONSTRAINT k, ALTER COLUMN c TYPE bigint;
+DO $$ BEGIN
+  ALTER TABLE workhorse.t ADD COLUMN token uuid DEFAULT gen_random_uuid();
+  EXECUTE 'ALTER TABLE workhorse.t ALTER COLUMN c SET NOT NULL';
+END $$;`),
     ).toEqual([
       "adds a column to t with an inline CHECK",
       "rewrites t after altering it",
       "validates a constraint on t it altered",
+      "sets NOT NULL on a column of workhorse.task_runtime",
+      "changes the type of a column of t",
+      "changes the type of a column of t",
+      "adds a column to t with a default that is not a constant",
+      "adds a column to t with a default that is not a constant",
+      "changes the type of a column of u",
+      "adds a column to workhorse.t with a default that is not a constant in a DO block",
+      "sets NOT NULL on a column of workhorse.t in a DO block",
     ]);
+  });
+
+  it("treats CREATE TABLE IF NOT EXISTS of an existing table as existing", () => {
+    expect(
+      exclusiveScans(
+        `CREATE TABLE IF NOT EXISTS workhorse.task (id uuid);
+ALTER TABLE workhorse.task ALTER COLUMN id SET NOT NULL;`,
+        { existing: new Set(["workhorse.task"]) },
+      ),
+    ).toEqual(["sets NOT NULL on a column of workhorse.task"]);
+  });
+
+  it("accepts SET NOT NULL after an earlier step validated a NOT NULL check on the column", () => {
+    const checks = noNotNullChecks();
+    recordNotNullChecks(
+      `ALTER TABLE workhorse.t ADD CONSTRAINT t_c_not_null CHECK (c IS NOT NULL) NOT VALID;
+ALTER TABLE workhorse.t ADD CONSTRAINT t_d_not_null CHECK (d IS NOT NULL) NOT VALID;`,
+      checks,
+    );
+    const finalStep = `ALTER TABLE workhorse.t ALTER COLUMN c SET NOT NULL;
+ALTER TABLE workhorse.t DROP CONSTRAINT t_c_not_null;`;
+    expect(exclusiveScans(finalStep, { checks })).toEqual([
+      "sets NOT NULL on a column of workhorse.t",
+    ]);
+    recordNotNullChecks("ALTER TABLE workhorse.t VALIDATE CONSTRAINT t_c_not_null;", checks);
+    expect(exclusiveScans(finalStep, { checks })).toEqual([]);
+    expect(
+      exclusiveScans("ALTER TABLE workhorse.t ALTER COLUMN d SET NOT NULL;", { checks }),
+    ).toEqual(["sets NOT NULL on a column of workhorse.t"]);
+    expect(
+      exclusiveScans("ALTER TABLE workhorse.u ALTER COLUMN c SET NOT NULL;", { checks }),
+    ).toEqual(["sets NOT NULL on a column of workhorse.u"]);
+    // A drop earlier in the step, or in the same statement, removes the proof before SET NOT NULL.
+    expect(
+      exclusiveScans(
+        `ALTER TABLE workhorse.t DROP CONSTRAINT t_c_not_null;
+ALTER TABLE workhorse.t ALTER COLUMN c SET NOT NULL;`,
+        { checks },
+      ),
+    ).toEqual(["sets NOT NULL on a column of workhorse.t"]);
+    expect(
+      exclusiveScans(
+        "ALTER TABLE workhorse.t ALTER COLUMN c SET NOT NULL, DROP CONSTRAINT t_c_not_null;",
+        { checks },
+      ),
+    ).toEqual(["sets NOT NULL on a column of workhorse.t"]);
+    recordNotNullChecks(finalStep, checks);
+    expect(
+      exclusiveScans("ALTER TABLE workhorse.t ALTER COLUMN c SET NOT NULL;", { checks }),
+    ).toEqual(["sets NOT NULL on a column of workhorse.t"]);
+  });
+
+  it("takes no NOT NULL proof from a DO block, and forgets one when its column is dropped", () => {
+    const setNotNull = "ALTER TABLE workhorse.t ALTER COLUMN c SET NOT NULL;";
+    const fromBlock = noNotNullChecks();
+    recordNotNullChecks(
+      `DO $$ BEGIN
+  IF false THEN
+    ALTER TABLE workhorse.t ADD CONSTRAINT nn CHECK (c IS NOT NULL);
+  END IF;
+END $$;`,
+      fromBlock,
+    );
+    expect(exclusiveScans(setNotNull, { checks: fromBlock })).toEqual([
+      "sets NOT NULL on a column of workhorse.t",
+    ]);
+
+    const checks = noNotNullChecks();
+    recordNotNullChecks("ALTER TABLE workhorse.t ADD CONSTRAINT nn CHECK (c IS NOT NULL);", checks);
+    expect(exclusiveScans(setNotNull, { checks })).toEqual([]);
+    expect(
+      exclusiveScans(
+        `ALTER TABLE workhorse.t DROP COLUMN c;
+ALTER TABLE workhorse.t ADD COLUMN c integer DEFAULT 0;
+${setNotNull}`,
+        { checks },
+      ),
+    ).toEqual(["sets NOT NULL on a column of workhorse.t"]);
+    recordNotNullChecks("ALTER TABLE workhorse.t DROP COLUMN IF EXISTS c;", checks);
+    expect(exclusiveScans(setNotNull, { checks })).toEqual([
+      "sets NOT NULL on a column of workhorse.t",
+    ]);
+  });
+
+  it("forgets a NOT NULL check after a rename, and keeps the case of a quoted column", () => {
+    const setNotNull = "ALTER TABLE workhorse.t ALTER COLUMN c SET NOT NULL;";
+    const validCheck = "ALTER TABLE workhorse.t ADD CONSTRAINT nn CHECK (c IS NOT NULL);";
+    for (const rename of [
+      "ALTER TABLE workhorse.t RENAME COLUMN c TO old_c;",
+      "ALTER TABLE workhorse.t RENAME c TO old_c;",
+      "ALTER TABLE workhorse.t RENAME CONSTRAINT nn TO kept;",
+      "ALTER TABLE workhorse.t RENAME TO t_old;",
+    ]) {
+      const checks = noNotNullChecks();
+      recordNotNullChecks(validCheck, checks);
+      expect(
+        exclusiveScans(
+          `${rename}
+ALTER TABLE workhorse.t ADD COLUMN c integer DEFAULT 0;
+${setNotNull}`,
+          { checks },
+        ),
+      ).toEqual(["sets NOT NULL on a column of workhorse.t"]);
+      recordNotNullChecks(rename, checks);
+      expect(exclusiveScans(setNotNull, { checks })).toEqual([
+        "sets NOT NULL on a column of workhorse.t",
+      ]);
+    }
+
+    const quoted = noNotNullChecks();
+    recordNotNullChecks(
+      'ALTER TABLE workhorse.t ADD CONSTRAINT nn CHECK ("C" IS NOT NULL);',
+      quoted,
+    );
+    expect(exclusiveScans(setNotNull, { checks: quoted })).toEqual([
+      "sets NOT NULL on a column of workhorse.t",
+    ]);
+    expect(
+      exclusiveScans('ALTER TABLE workhorse.t ALTER COLUMN "C" SET NOT NULL;', { checks: quoted }),
+    ).toEqual([]);
+  });
+
+  it("treats a table that an earlier step created in a DO block as existing", () => {
+    const existing = new Set(
+      createdTables("DO $$ BEGIN CREATE TABLE workhorse.o (id integer); END $$;"),
+    );
+    expect(
+      exclusiveScans(
+        `CREATE TABLE IF NOT EXISTS workhorse.o (id integer);
+ALTER TABLE workhorse.o ALTER COLUMN id SET NOT NULL;`,
+        { existing },
+      ),
+    ).toEqual(["sets NOT NULL on a column of workhorse.o"]);
+  });
+
+  it("forgets a NOT NULL check that a later step drops by a quoted name", () => {
+    const checks = noNotNullChecks();
+    recordNotNullChecks(
+      `ALTER TABLE workhorse.t ADD CONSTRAINT "nn" CHECK (c IS NOT NULL) NOT VALID;
+ALTER TABLE workhorse.t VALIDATE CONSTRAINT "nn";`,
+      checks,
+    );
+    const setNotNull = "ALTER TABLE workhorse.t ALTER COLUMN c SET NOT NULL;";
+    expect(exclusiveScans(setNotNull, { checks })).toEqual([]);
+    recordNotNullChecks('ALTER TABLE workhorse.t DROP CONSTRAINT "nn";', checks);
+    expect(exclusiveScans(setNotNull, { checks })).toEqual([
+      "sets NOT NULL on a column of workhorse.t",
+    ]);
+  });
+
+  it("accepts a table-sized change on a table the same step creates, and a constant default", () => {
+    expect(
+      exclusiveScans(`CREATE TABLE workhorse.n (id integer);
+ALTER TABLE workhorse.n ALTER COLUMN id SET NOT NULL;
+ALTER TABLE "workhorse"."n" ALTER COLUMN id TYPE bigint;
+ALTER TABLE workhorse.n ADD COLUMN at timestamptz DEFAULT clock_timestamp();
+ALTER TABLE t ADD COLUMN a integer NOT NULL DEFAULT 0;
+ALTER TABLE t ADD COLUMN b numeric(10, 2) DEFAULT -1.5;
+ALTER TABLE t ADD COLUMN c jsonb NOT NULL DEFAULT '{}'::jsonb;
+ALTER TABLE t ADD COLUMN d text[] DEFAULT '{}'::text[];
+ALTER TABLE t ADD COLUMN e interval DEFAULT interval '1 day';
+ALTER TABLE t ADD COLUMN f timestamptz NOT NULL DEFAULT now();
+ALTER TABLE t ADD COLUMN g boolean DEFAULT (false);
+ALTER TABLE t ADD COLUMN h text DEFAULT NULL;
+ALTER TABLE t ADD COLUMN i varchar(20) DEFAULT 'x'::character varying;
+ALTER TABLE t ADD COLUMN l text DEFAULT E'hello';
+DO $$ BEGIN ALTER TABLE workhorse.n ALTER COLUMN id SET NOT NULL; END $$;
+ALTER TABLE t ADD COLUMN m integer DEFAULT ((0));
+DO $$ BEGIN
+  CREATE TABLE workhorse.o (id integer);
+  ALTER TABLE workhorse.o ALTER COLUMN id SET NOT NULL;
+END $$;
+ALTER TABLE t ALTER COLUMN j SET DEFAULT clock_timestamp();
+ALTER TABLE t ALTER COLUMN k DROP NOT NULL;
+ALTER TABLE t ADD CONSTRAINT k CHECK (a IS NOT NULL) NOT VALID;`),
+    ).toEqual([]);
   });
 
   it("accepts each half of the split pattern as its own step", () => {
@@ -379,11 +817,18 @@ ALTER TABLE t ADD CONSTRAINT k CHECK (c >= 0) NOT VALID;`),
   it("keeps every transactional step from scanning a table it locked exclusively", async () => {
     // docs/schema-lifecycle.md, "Backfills and constraints on large tables": the ALTER takes ACCESS
     // EXCLUSIVE, and a scan in the same transaction keeps it for as long as the table takes to read.
+    const existing = new Set(createdTables(await readFile(baseline, "utf8")));
+    const checks = noNotNullChecks();
     const offenders: string[] = [];
-    for (const file of (await readdir(migrations)).filter((name) => name.endsWith(".sql"))) {
+    const files = (await readdir(migrations)).filter((name) => name.endsWith(".sql")).toSorted();
+    for (const file of files) {
       const body = await readFile(path.join(migrations, file), "utf8");
-      if (parseSchemaMigrationMetadata(file, body).execution === "nontransactional") continue;
-      const found = exclusiveScans(body);
+      const transactional =
+        parseSchemaMigrationMetadata(file, body).execution !== "nontransactional";
+      const found = transactional ? exclusiveScans(body, { existing, checks }) : [];
+      for (const table of createdTables(body)) existing.add(table);
+      recordNotNullChecks(body, checks);
+      if (!transactional) continue;
       if (EXCLUSIVE_SCANS_SHIPPED.has(file)) {
         if (found.length === 0) offenders.push(`${file}: no longer needs its exemption`);
         continue;

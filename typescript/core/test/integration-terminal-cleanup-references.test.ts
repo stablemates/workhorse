@@ -1,4 +1,3 @@
-import { setTimeout as sleep } from "node:timers/promises";
 import type { PoolClient } from "pg";
 import { describe, expect, it } from "vitest";
 import { Queue } from "../src/index.js";
@@ -69,6 +68,26 @@ const enqueueDependent = async (client: PoolClient | typeof pool, prerequisiteId
     },
   });
 
+// The transaction identifier that the backend holds, read until it appears or 10 s pass. A backend
+// gets one at its first write or row lock. The reads follow each other with no wait between them.
+const cleanupTransaction = async (pid: number): Promise<string | null> => {
+  const deadline = Date.now() + 10_000;
+  while (Date.now() < deadline) {
+    const { rows } = await pool.query<{ xid: string }>(
+      `SELECT transactionid::text AS xid FROM pg_locks
+        WHERE pid = $1 AND locktype = 'transactionid' AND mode = 'ExclusiveLock' AND granted`,
+      [pid],
+    );
+    if (rows[0] !== undefined) return rows[0].xid;
+  }
+  return null;
+};
+
+// The transaction that last locked or updated the task row.
+const rowLocker = async (id: string) =>
+  (await pool.query<{ xmax: string }>("SELECT xmax::text FROM workhorse.task WHERE id = $1", [id]))
+    .rows[0]?.xmax;
+
 const terminalTasksPhase = async () =>
   (await queue.pruneTerminalStorage({ force: true })).find(
     ({ phase }) => phase === "terminal_tasks",
@@ -124,9 +143,15 @@ describe("terminal cleanup and a concurrent reference", () => {
   // The defect needs the enqueue to commit after the cleanup statement takes its snapshot and before
   // the statement locks the prerequisite. At read committed, no lock wait occurs between those two
   // points, so a test cannot hold the statement there. This test makes the gap long: the window
-  // holds many rows, and the prerequisite is locked last. It commits the enqueue while the batch
-  // runs. With the fix, the batch keeps the prerequisite whatever the timing. Without the fix, it
-  // fails with SQLSTATE 23001 only when the commit lands inside the gap.
+  // holds many rows, and the prerequisite is locked last. With the fix, the batch keeps the
+  // prerequisite whatever the timing. Without the fix, it fails with SQLSTATE 23001 only when the
+  // commit lands inside the gap.
+  //
+  // The statement sorts the window with its snapshot, then locks the rows in order. Its first row
+  // lock assigns the transaction identifier of the cleanup, so that identifier in pg_locks shows
+  // that the snapshot exists and the locks have started. The test commits only after it sees the
+  // identifier. Then the xmax of the prerequisite shows whether the commit was in time: the cleanup
+  // locks the prerequisite only after the enqueue commits, and otherwise SKIP LOCKED skips it.
   it("keeps the rest of the batch when the enqueue commits while the batch runs", async () => {
     const ids = await seed(20_000);
     const prerequisite = ids.at(-1)!;
@@ -141,19 +166,11 @@ describe("terminal cleanup and a concurrent reference", () => {
 
       const batch = pruneFull(cleanup, 25_000);
       batch.catch(() => undefined);
-      for (let attempt = 0; attempt < 500; attempt += 1) {
-        const { rows } = await pool.query<{ active: boolean }>(
-          "SELECT state = 'active' AS active FROM pg_stat_activity WHERE pid = $1",
-          [cleanupPid],
-        );
-        if (rows[0]?.active) break;
-        await sleep(1);
-      }
-      // The statement takes its snapshot within a few milliseconds and locks the prerequisite
-      // after it has sorted and locked the other rows.
-      await sleep(10);
+      const cleanupXid = await cleanupTransaction(cleanupPid);
+      expect(cleanupXid).not.toBeNull();
       await enqueue.query("COMMIT");
       expect(await batch).toBe(ids.length - 1);
+      expect(await rowLocker(prerequisite)).toBe(cleanupXid);
     } finally {
       enqueue.release();
       cleanup.release();

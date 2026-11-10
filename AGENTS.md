@@ -230,9 +230,16 @@ variable turns either refusal off. `pnpm toolchain:verify` reports the state of 
 
 ## Building before testing
 
-`pnpm test` does not build the dashboard browser bundle. Anything that serves
-`typescript/dashboard-server/dist/app`, including `test:demo-smoke` and `test:packed`, needs a full
-`pnpm build` first. `pnpm build:runtime:dev` compiles only the library half.
+`pnpm test` does not build the dashboard browser bundle or the TypeScript declarations. Some test
+files skip their cases when a build output is missing. Thus `pnpm test` starts with
+`pnpm test:build-check`. If an output in `requiredTestBuildOutputs` of
+`scripts/test-build-outputs.ts` is missing, the command names the output and exits non-zero before
+a test runs. It does not build the outputs. Run `pnpm build:runtime` or `pnpm build` first. If you
+add a test that skips when a build output is missing, add that output to the list.
+
+Anything that serves `typescript/dashboard-server/dist/app`, including `test:demo-smoke` and
+`test:packed`, needs a full `pnpm build` first. `pnpm build:runtime:dev` compiles only the library
+half, so `pnpm test:build-check` refuses its output.
 
 `pnpm typescript-api:check` compares `api/typescript.txt` with the built declarations in
 `typescript/core/dist`, not with the source. A stale `dist` lets the check pass locally and fail in
