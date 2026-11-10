@@ -52,14 +52,19 @@ describe("test build prerequisite", () => {
     expect(result).toEqual({ exitCode: 0, stderr: "" });
   });
 
-  it("names the build command when an output is missing", async () => {
+  // Each output is a file that a test file checks before it runs its cases.
+  it.each([
+    "typescript/dashboard-server/dist/app/index.html",
+    "typescript/dashboard-server/dist/app/login.html",
+    "typescript/core/dist/src/queue.d.ts",
+  ])("names the build command when %s is missing", async (output) => {
     const root = await makeBuiltFixture();
-    await rm(path.join(root, "typescript/dashboard-server/dist/app/index.html"));
+    await rm(path.join(root, output));
 
     const result = await runCheck(root);
 
     expect(result.exitCode).toBe(1);
     expect(result.stderr).toContain("pnpm build:runtime");
-    expect(result.stderr).toContain("typescript/dashboard-server/dist/app/index.html");
+    expect(result.stderr).toContain(output);
   });
 });

@@ -36,6 +36,20 @@ hook additionally refuse a version that disagrees with its `mise.toml` pin. Noth
 refusal off; it names the `mise` command that repairs the toolchain instead. Run
 `pnpm toolchain:verify` to see the state of your own PATH.
 
+## Local checks
+
+The repository has three levels of local check. Each one covers more suites than the one before it.
+
+- `pnpm test:unit` runs the Vitest unit tests and the Python and Go unit tests.
+- `pnpm test` runs all the Vitest tests and the Python, Go, Ruby, JVM, and .NET suites. It does not
+  run the Rust suite. It needs the build outputs of `pnpm build:runtime`, and it stops before a test
+  runs if one is missing.
+- `pnpm check` is the full local gate. It builds the repository, then runs the format, lint, type,
+  API, and security checks, `pnpm test`, the Rust gates, and the packed, site, and demo smoke tests.
+
+If you change Rust code, run `pnpm rust:gates`, because `pnpm test` does not run the Rust suite. It
+runs the Rust format check, clippy, `pnpm rust:test`, and the Rust conformance check.
+
 ## Generative tooling
 
 You may use an assistant to draft a patch. You still review every line before you

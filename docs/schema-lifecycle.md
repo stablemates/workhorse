@@ -225,6 +225,16 @@ Three kinds of statement make that wait proportional to the table's size:
   own, but in the same transaction as the `ALTER` it inherits the stronger lock. Adding the
   constraint `NOT VALID` and validating it in one step therefore gains nothing.
 
+An `ALTER TABLE` can also do the scan itself, while it holds its own `ACCESS EXCLUSIVE` lock. Three
+more statements make the lock time proportional to the table's size:
+
+- **`ALTER COLUMN ... SET NOT NULL`.** PostgreSQL scans every row to verify the condition. It skips
+  the scan only when a validated `CHECK (column IS NOT NULL)` already proves it.
+- **`ALTER COLUMN ... TYPE`.** PostgreSQL rewrites every row of the table, unless the old type and
+  the new type have the same binary form.
+- **`ADD COLUMN ... DEFAULT` with a volatile default**, such as `clock_timestamp()` or
+  `gen_random_uuid()`. PostgreSQL rewrites the table to store a value in each row.
+
 `lock_timeout` does not help here. It bounds only the wait to acquire the lock, not the time the
 step holds it once acquired.
 
@@ -249,13 +259,33 @@ Step 1 still queues behind any long transaction on the table, and every later st
 table queues behind step 1. The 5-second `lock_timeout` bounds that stall. When it expires, the
 step rolls back and the deployment reruns it.
 
+To make an existing column `NOT NULL`, use the same split. Each numbered item is its own step:
+
+1. `ALTER TABLE ... ADD CONSTRAINT <name> CHECK (<column> IS NOT NULL) NOT VALID`.
+2. `ALTER TABLE ... VALIDATE CONSTRAINT <name>`. The scan takes `SHARE UPDATE EXCLUSIVE`, so reads
+   and writes continue.
+3. `ALTER TABLE ... ALTER COLUMN <column> SET NOT NULL`, then `DROP CONSTRAINT <name>`. The
+   validated check proves the condition, so PostgreSQL does not scan the table.
+
 A large backfill can also run as bounded batches in a non-transactional step, so that no single
 transaction holds many row locks. Each batch must then be idempotent; see
 [Non-transactional steps](#non-transactional-steps).
 
-`typescript/core/test/schema-migration-statements.test.ts` rejects a transactional step that adds
-a column with an inline `CHECK`, or that updates, deletes from, or validates a constraint on a
-table it altered. The shipped steps it exempts are listed in the test with their reason.
+`typescript/core/test/schema-migration-statements.test.ts` rejects a transactional step that does
+one of these:
+
+- It adds a column with an inline `CHECK`.
+- It updates, deletes from, or validates a constraint on a table that it altered.
+- It uses `SET NOT NULL`, `ALTER COLUMN ... TYPE`, or `ADD COLUMN` with a default that is not a
+  constant, on a table that an earlier step or the baseline created.
+
+A step can use the statements of the last item on a table that the same step creates, because that
+table has no rows. The test also accepts `SET NOT NULL` when an earlier step validated a
+`CHECK (column IS NOT NULL)` on that column outside a `DO` block. That check and its column must
+still exist with the same names when the `SET NOT NULL` runs. It accepts a literal, a cast of a
+literal, and `now()` as a constant default. The test also reads the `DO` blocks of the step for the
+statements of the last item. The shipped steps that it exempts are listed in the test with their
+reason.
 
 On a dedicated PostgreSQL 18 container, a step that added, backfilled, and validated a column on
 `task_runtime` in one transaction stalled single-row updates for 1–2 seconds at 2,000,000 rows. The
