@@ -63,6 +63,9 @@ not see the account or the task before the commit.
 To enqueue a task that is not part of a transaction, use `workhorse.queue`. This queue does not join
 the transaction of the caller.
 
+If PostgreSQL refuses an enqueue, it aborts your transaction, also when you catch the error. Read
+[Catch an enqueue error outside the transaction](/docs/enqueue#catch-an-enqueue-error-outside-the-transaction).
+
 ## Keep the transaction queue inside the callback
 
 Drizzle does not tell the adapter when a transaction ends. Thus a queue from `forTransaction(tx)`

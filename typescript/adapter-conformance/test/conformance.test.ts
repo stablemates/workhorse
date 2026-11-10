@@ -43,7 +43,7 @@ import {
 } from "@stablemates/workhorse";
 import { sql as drizzleSql, type SQL } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/node-postgres";
-import { Kysely, PostgresDialect, sql as kyselySql } from "kysely";
+import { CamelCasePlugin, Kysely, PostgresDialect, sql as kyselySql } from "kysely";
 import { Pool, type QueryResult, type QueryResultRow } from "pg";
 import { DataSource } from "typeorm";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -246,6 +246,64 @@ const queryableProviders: QueryableProvider[] = [
   },
 ];
 
+describe("Kysely plugin-free statements", () => {
+  it.each([
+    ["committed", { isCommitted: true, isRolledBack: false }, /already committed/],
+    ["rolled back", { isCommitted: false, isRolledBack: true }, /already rolled back/],
+  ])(
+    "refuses a statement after the caller's transaction is %s, also when the plugin-free copy runs it",
+    async (_case, state, message) => {
+      // Kysely 0.29.0 to 0.29.6 give the plugin-free copy its own completion state.
+      const copy = vi.fn<Execute>(async () => [{ task_id: "task-1" }]);
+      const executor = {
+        ...state,
+        executeQuery: async () => {
+          throw new Error("the adapter must not use the executor with plugins");
+        },
+        withoutPlugins: () => ({
+          executeQuery: async <R>(query: { sql: string; parameters: readonly unknown[] }) => ({
+            rows: (await copy(query.sql, query.parameters)) as R[],
+          }),
+        }),
+      } as unknown as KyselyExecutor;
+
+      const failure = await kyselyQueryable(executor)
+        .query(statement, values)
+        .catch((error: unknown) => error);
+
+      expect(failure).toBeInstanceOf(KyselyQueryError);
+      expect((failure as KyselyQueryError).cause).toMatchObject({
+        message: expect.stringMatching(message),
+      });
+      expect(copy).not.toHaveBeenCalled();
+    },
+  );
+
+  it("sends each statement through the plugin-free copy of the executor", async () => {
+    const copy = vi.fn<Execute>(async () => [{ task_id: "task-1" }]);
+    const withoutPlugins = vi.fn<() => KyselyExecutor>(
+      () =>
+        ({
+          executeQuery: async <R>(query: { sql: string; parameters: readonly unknown[] }) => ({
+            rows: (await copy(query.sql, query.parameters)) as R[],
+          }),
+        }) as KyselyExecutor,
+    );
+    const queryable = kyselyQueryable({
+      executeQuery: async () => {
+        throw new Error("the adapter must not use the executor with plugins");
+      },
+      withoutPlugins,
+    } as unknown as KyselyExecutor);
+
+    await queryable.query(statement, values);
+    await queryable.query(statement, values);
+
+    expect(withoutPlugins).toHaveBeenCalledOnce();
+    expect(copy).toHaveBeenCalledTimes(2);
+  });
+});
+
 const lendingPool = (max: number): AdapterConnectionPool => ({
   connect: vi.fn<() => Promise<void>>(async () => undefined),
   options: { max },
@@ -409,6 +467,17 @@ const kyselyAdapter = createKyselyAdapter(kyselyDatabase, {
   pool,
   close: () => kyselyDatabase.destroy(),
 });
+// A result plugin renames every row key and every nested JSON key, for example `task_id` to `taskId`.
+// The adapter must run its statements without it.
+const kyselyCamelCasePool = new Pool({ connectionString: databaseUrl, max: 2 });
+const kyselyCamelCaseDatabase = new Kysely<Record<string, never>>({
+  dialect: new PostgresDialect({ pool: kyselyCamelCasePool }),
+  plugins: [new CamelCasePlugin()],
+});
+const kyselyCamelCaseAdapter = createKyselyAdapter(kyselyCamelCaseDatabase, {
+  pool,
+  close: () => kyselyCamelCaseDatabase.destroy(),
+});
 const knexDatabase = knex({ client: "pg", connection: databaseUrl, pool: { min: 0, max: 2 } });
 const knexAdapter = createKnexAdapter(knexDatabase, { pool, close: () => knexDatabase.destroy() });
 const prismaProviders = prismaMajors.map((major) => {
@@ -432,6 +501,12 @@ interface IntegrationProvider {
   name: string;
   errorType: new (...arguments_: never[]) => Error;
   adapter: WorkhorseAdapter<unknown>;
+  /**
+   * What the provider's transaction call does when PostgreSQL answers its COMMIT with ROLLBACK,
+   * because a statement aborted the transaction. Kysely checks the answer from 0.29.8; the others
+   * do not.
+   */
+  abortedCommit: "resolves" | "rejects";
   transaction(value: string, run: (queue: Queue) => Promise<void>): Promise<void>;
 }
 
@@ -440,6 +515,7 @@ const integrationProviders: IntegrationProvider[] = [
     name: "Knex",
     errorType: KnexQueryError,
     adapter: knexAdapter as WorkhorseAdapter<unknown>,
+    abortedCommit: "resolves",
     transaction: (value, run) =>
       knexDatabase.transaction(async (transaction) => {
         await transaction("public.adapter_conformance").insert({ provider: "Knex", value });
@@ -450,6 +526,7 @@ const integrationProviders: IntegrationProvider[] = [
     name: "Drizzle",
     errorType: DrizzleQueryError,
     adapter: drizzleAdapter as WorkhorseAdapter<unknown>,
+    abortedCommit: "resolves",
     transaction: (value, run) =>
       drizzleDatabase.transaction(async (transaction) => {
         await transaction.execute(
@@ -462,6 +539,7 @@ const integrationProviders: IntegrationProvider[] = [
     name,
     errorType: PrismaQueryError,
     adapter: adapter as WorkhorseAdapter<unknown>,
+    abortedCommit: "resolves",
     transaction: (value, run) =>
       client.$transaction(async (transaction) => {
         await transaction.$executeRawUnsafe(
@@ -476,6 +554,7 @@ const integrationProviders: IntegrationProvider[] = [
     name: "TypeORM",
     errorType: TypeOrmQueryError,
     adapter: typeOrmAdapter as WorkhorseAdapter<unknown>,
+    abortedCommit: "resolves",
     transaction: (value, run) =>
       typeOrmDatabase.transaction(async (transaction) => {
         await transaction.query(
@@ -489,12 +568,26 @@ const integrationProviders: IntegrationProvider[] = [
     name: "Kysely",
     errorType: KyselyQueryError,
     adapter: kyselyAdapter as WorkhorseAdapter<unknown>,
+    abortedCommit: "rejects",
     transaction: (value, run) =>
       kyselyDatabase.transaction().execute(async (transaction) => {
         await kyselySql`INSERT INTO public.adapter_conformance (provider, value) VALUES (${"Kysely"}, ${value})`.execute(
           transaction,
         );
         await run(kyselyAdapter.forTransaction(transaction));
+      }),
+  },
+  {
+    name: "KyselyCamelCase",
+    errorType: KyselyQueryError,
+    adapter: kyselyCamelCaseAdapter as WorkhorseAdapter<unknown>,
+    abortedCommit: "rejects",
+    transaction: (value, run) =>
+      kyselyCamelCaseDatabase.transaction().execute(async (transaction) => {
+        await kyselySql`INSERT INTO public.adapter_conformance (provider, value) VALUES (${"KyselyCamelCase"}, ${value})`.execute(
+          transaction,
+        );
+        await run(kyselyCamelCaseAdapter.forTransaction(transaction));
       }),
   },
 ];
@@ -525,6 +618,28 @@ describe("TypeORM worker pool", () => {
   });
 });
 
+describe.each([
+  ["Kysely", kyselyDatabase, kyselyAdapter],
+  ["KyselyCamelCase", kyselyCamelCaseDatabase, kyselyCamelCaseAdapter],
+] as const)("%s controlled transaction", (name, kysely, adapter) => {
+  it.each(["commit", "rollback"] as const)(
+    "refuses an enqueue on a queue kept after %s",
+    async (finish) => {
+      const transaction = await kysely.startTransaction().execute();
+      const queue = adapter.forTransaction(transaction);
+      await queue.enqueue(`${name}.controlled.before`, { account_id: 7 });
+      await transaction[finish]().execute();
+
+      await expect(queue.enqueue(`${name}.controlled.after`, null)).rejects.toBeInstanceOf(
+        KyselyQueryError,
+      );
+      expect((await pool.query("SELECT task_type FROM workhorse.task")).rows).toEqual(
+        finish === "commit" ? [{ task_type: `${name}.controlled.before` }] : [],
+      );
+    },
+  );
+});
+
 describe.each(integrationProviders)("$name built-package conformance", (provider) => {
   it("commits and rolls back queue writes with the caller-owned transaction", async () => {
     await provider.transaction("committed", (queue) =>
@@ -544,6 +659,58 @@ describe.each(integrationProviders)("$name built-package conformance", (provider
     ).toEqual([{ provider: provider.name, value: "committed" }]);
     expect((await pool.query("SELECT task_type FROM workhorse.task")).rows).toEqual([
       { task_type: `${provider.name}.transaction.commit` },
+    ]);
+  });
+
+  it("returns the task id of an enqueue in the caller-owned transaction", async () => {
+    let taskId: unknown;
+    await provider.transaction("enqueued", async (queue) => {
+      taskId = await queue.enqueue(`${provider.name}.transaction.id`, { account_id: 7 });
+    });
+
+    expect(taskId).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
+    expect((await pool.query("SELECT id::text FROM workhorse.task")).rows).toEqual([
+      { id: taskId },
+    ]);
+  });
+
+  it("returns payload keys as the caller wrote them", async () => {
+    const payload = { account_id: 7, nested: { user_name: "a", items: [{ line_total: 2 }] } };
+    const taskId = await provider.adapter.queue.enqueue(`${provider.name}.payload.keys`, payload);
+
+    const snapshot = await provider.adapter.admin.getTask(taskId);
+
+    expect(snapshot?.id).toBe(taskId);
+    expect(snapshot?.payload).toEqual(payload);
+  });
+
+  it("loses the business row when the callback catches an enqueue conflict", async () => {
+    const type = `${provider.name}.transaction.conflict`;
+    const idempotency = { key: `${provider.name}-transaction-conflict` };
+    await provider.adapter.queue.enqueue(type, { version: 1 }, { idempotency });
+    let caught: unknown;
+
+    // The conflict aborts the transaction, so PostgreSQL answers the COMMIT with ROLLBACK.
+    const committed = provider.transaction("caught-conflict", async (queue) => {
+      try {
+        await queue.enqueue(type, { version: 2 }, { idempotency });
+      } catch (error) {
+        caught = error;
+      }
+    });
+
+    const settled = await committed.then(
+      () => "resolves" as const,
+      () => "rejects" as const,
+    );
+
+    expect(settled).toBe(provider.abortedCommit);
+    expect(caught).toBeInstanceOf(EnqueueIdempotencyConflictError);
+    expect(
+      (await pool.query("SELECT provider, value FROM public.adapter_conformance")).rows,
+    ).toEqual([]);
+    expect((await pool.query("SELECT payload FROM workhorse.task")).rows).toEqual([
+      { payload: { version: 1 } },
     ]);
   });
 

@@ -48,6 +48,9 @@ savepoint.
 The adapter does not check that a transaction comes from the Knex instance of the adapter. Give it
 the transaction that does your application write.
 
+If PostgreSQL refuses an enqueue, it aborts your transaction, also when you catch the error. Read
+[Catch an enqueue error outside the transaction](/docs/enqueue#catch-an-enqueue-error-outside-the-transaction).
+
 ## Do not keep a transaction queue after the transaction
 
 After a Knex transaction completes, Knex rejects each query through its handle. The adapter does not

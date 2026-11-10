@@ -21,6 +21,30 @@ Workhorse is a public beta. While the line is `0.x`, any minor release may chang
 a major line a migration only adds. Breaking changes are always listed with
 upgrade steps.
 
+## Unreleased
+
+### A Kysely plugin no longer changes the rows that Workhorse reads
+
+An application created its Kysely database with `CamelCasePlugin` and enqueued a task through
+`workhorse.forTransaction(transaction)`. The enqueue returned `undefined` and raised no error, and
+the task committed. A task read through the adapter returned the payload keys in camel case.
+
+`@stablemates/workhorse-kysely` now runs each Workhorse statement on `withoutPlugins()` of the
+executor. That executor uses the same connection and transaction. The caller's database and
+transaction keep their plugins for the caller's own queries. `KyselyExecutor` gains the optional
+method `withoutPlugins()`, an additive change. Each Kysely release in the peer range `>=0.29 <0.30`
+has this method. After a commit or a rollback of a `ControlledTransaction`, the adapter still
+refuses a statement, as Kysely does.
+
+### The enqueue page explains errors in a caller's transaction
+
+If PostgreSQL refuses an enqueue in the caller's transaction, it aborts that transaction. A caller
+that catches the error in the transaction callback loses its own rows at the commit. The enqueue
+page now has the section "Catch an enqueue error outside the transaction". It lists the TypeScript
+errors that abort the transaction and the errors that the SDK raises itself. The Drizzle, Prisma,
+TypeORM, Kysely, Knex, and Active Job pages and the JDBC, Spring Boot, and .NET sections link to
+it.
+
 ## 0.12.0 — 2026-11-07
 
 The npm packages, Python distribution, Go module, Rust crate, Ruby gem, JVM artifacts, and .NET

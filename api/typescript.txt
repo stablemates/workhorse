@@ -3695,6 +3695,8 @@ interface KyselyAdapterOptions extends ProviderAdapterOptions {
 
 interface KyselyExecutor {
   executeQuery<R>(query: CompiledQuery<R>): Promise<QueryResult<R>>;
+  /** If present, the adapter runs its statements on this plugin-free copy of the executor. */
+  withoutPlugins?(): KyselyExecutor;
 }
 
 class KyselyQueryError extends QueryError {
