@@ -1,5 +1,5 @@
 import { setTimeout as sleep } from "node:timers/promises";
-import type { QueryResultRow } from "pg";
+import type { PoolClient, QueryResultRow } from "pg";
 import { describe, expect, expectTypeOf, it, vi } from "vitest";
 import {
   DEFAULT_IDEMPOTENCY_SCOPE,
@@ -27,7 +27,7 @@ import {
 import { jsonbTextBytes } from "../src/queue/enqueue-contracts.js";
 import { createIntegrationTestContext } from "./support/integration.js";
 
-const { pool, queue, safeKeyDigest, safeKeyPreview, admin, adminAudit } =
+const { pool, queue, safeKeyDigest, safeKeyPreview, admin, adminAudit, waitForDatabaseCondition } =
   createIntegrationTestContext(import.meta.url);
 
 /**
@@ -3068,5 +3068,473 @@ describe("enqueue contracts", () => {
     expect(await queue.promote()).toBe(1);
     expect((await admin.getTask(id))?.state).toBe("ready");
     expect((await queue.claim("worker-a"))?.id).toBe(id);
+  });
+});
+
+interface EnqueueManyRow {
+  readonly ordinal: number;
+  readonly task_id: string;
+  readonly outcome: string;
+  readonly reason: string | null;
+}
+
+async function enqueueMany(
+  client: Queryable,
+  requests: readonly Record<string, unknown>[],
+): Promise<EnqueueManyRow[]> {
+  const result = await client.query<EnqueueManyRow>(
+    "SELECT ordinal, task_id, outcome, reason FROM workhorse.enqueue_many_v1($1::jsonb) ORDER BY ordinal",
+    [JSON.stringify(requests)],
+  );
+  return result.rows;
+}
+
+async function backendPid(client: PoolClient): Promise<number> {
+  const result = await client.query<{ pid: number }>("SELECT pg_backend_pid() AS pid");
+  return result.rows[0]!.pid;
+}
+
+/** Waits until the backend waits on a heavyweight lock, which proves that a statement is blocked. */
+async function waitForLockWait(pid: number): Promise<void> {
+  await waitForDatabaseCondition(async () => {
+    const result = await pool.query<{ waiting: boolean }>(
+      `SELECT EXISTS (
+         SELECT 1 FROM pg_stat_activity WHERE pid = $1 AND wait_event_type = 'Lock'
+       ) AS waiting`,
+      [pid],
+    );
+    return result.rows[0]!.waiting;
+  });
+}
+
+/** The tasks of one queue with their runtime state, oldest first. */
+async function queueTasks(
+  queueName: string,
+): Promise<{ id: string; payload: unknown; state: string | null }[]> {
+  const result = await pool.query<{ id: string; payload: unknown; state: string | null }>(
+    `SELECT task.id, task.payload, runtime.state
+       FROM workhorse.task task
+       LEFT JOIN workhorse.task_runtime runtime ON runtime.task_id = task.id
+      WHERE task.queue_name = $1
+      ORDER BY task.created_at, task.id`,
+    [queueName],
+  );
+  return result.rows;
+}
+
+/** The key row of a debounce key in the default scope, if one exists. */
+async function debounceKeyRow(
+  key: string,
+): Promise<{ task_id: string; coalescing_mode: string } | undefined> {
+  const result = await pool.query<{ task_id: string; coalescing_mode: string }>(
+    `SELECT task_id, coalescing_mode FROM workhorse.enqueue_idempotency
+      WHERE idempotency_scope = 'default'
+        AND idempotency_key_hash = workhorse.idempotency_key_hash_v1('default', $1)`,
+    [key],
+  );
+  return result.rows[0];
+}
+
+function debounceRequest(
+  queueName: string,
+  key: string,
+  revision: number,
+  options: { windowMs: number; schedule: "reset" | "preserve" },
+): Record<string, unknown> {
+  return {
+    queue: queueName,
+    type: "sync",
+    payload: { rev: revision },
+    debounce: { key, windowMs: options.windowMs, schedule: options.schedule },
+  };
+}
+
+describe("debounce and enqueue under lock waits", () => {
+  it("decides a debounce request after its lock wait and writes no second task", async () => {
+    const window = { windowMs: 1_000, schedule: "preserve" } as const;
+    const [first] = await enqueueMany(pool, [
+      debounceRequest("debounce-clock", "doc-42", 1, window),
+    ]);
+    expect(first).toMatchObject({ outcome: "accepted" });
+
+    const holder = await pool.connect();
+    const requester = await pool.connect();
+    const requesterPid = await backendPid(requester);
+    try {
+      // An open application transaction enqueues a dependent of the debounced task. Its
+      // prerequisite lock blocks the runtime row lock of the debounce request.
+      await holder.query("BEGIN");
+      await enqueueMany(holder, [
+        {
+          queue: "debounce-clock-other",
+          type: "after",
+          payload: {},
+          prerequisiteTaskId: first!.task_id,
+        },
+      ]);
+      const pending = enqueueMany(requester, [
+        debounceRequest("debounce-clock", "doc-42", 2, window),
+      ]);
+      pending.catch(() => undefined);
+      await waitForLockWait(requesterPid);
+
+      const remaining = await pool.query<{ ms: number }>(
+        `SELECT GREATEST(0, extract(epoch FROM (expires_at - clock_timestamp())) * 1000)::float8 AS ms
+           FROM workhorse.enqueue_idempotency WHERE task_id = $1`,
+        [first!.task_id],
+      );
+      await sleep(remaining.rows[0]!.ms + 100);
+      await holder.query("COMMIT");
+
+      await expect(pending).resolves.toEqual([
+        {
+          ordinal: 1,
+          task_id: first!.task_id,
+          outcome: "non_replaceable",
+          reason: "window_elapsed_pending",
+        },
+      ]);
+    } finally {
+      await holder.query("ROLLBACK").catch(() => undefined);
+      holder.release();
+      requester.release();
+    }
+
+    await expect(queueTasks("debounce-clock")).resolves.toEqual([
+      { id: first!.task_id, payload: { rev: 1 }, state: "scheduled" },
+    ]);
+    await expect(debounceKeyRow("doc-42")).resolves.toEqual({
+      task_id: first!.task_id,
+      coalescing_mode: "debounce",
+    });
+  });
+
+  it("writes no task, no enqueued event, and no key change for a replaced result", async () => {
+    const window = { windowMs: 60_000, schedule: "reset" } as const;
+    const [first] = await enqueueMany(pool, [
+      debounceRequest("debounce-replace", "doc-7", 1, window),
+    ]);
+    for (const revision of [2, 2, 3]) {
+      await expect(
+        enqueueMany(pool, [debounceRequest("debounce-replace", "doc-7", revision, window)]),
+      ).resolves.toEqual([
+        { ordinal: 1, task_id: first!.task_id, outcome: "replaced", reason: null },
+      ]);
+    }
+
+    await expect(queueTasks("debounce-replace")).resolves.toEqual([
+      { id: first!.task_id, payload: { rev: 3 }, state: "scheduled" },
+    ]);
+    const enqueued = await pool.query<{ count: number }>(
+      `SELECT count(*)::integer AS count FROM workhorse.task_event event
+         JOIN workhorse.task task ON task.id = event.task_id
+        WHERE task.queue_name = 'debounce-replace' AND event.event_type = 'enqueued'`,
+    );
+    expect(enqueued.rows[0]!.count).toBe(1);
+    await expect(debounceKeyRow("doc-7")).resolves.toEqual({
+      task_id: first!.task_id,
+      coalescing_mode: "debounce",
+    });
+  });
+
+  it("keeps the key of a pending debounced task through maintenance on a paused queue", async () => {
+    const window = { windowMs: 200, schedule: "reset" } as const;
+    await pool.query(
+      "SELECT workhorse.set_queue_paused_v1('debounce-paused', true, 'operator', 'incident', 'pause-1')",
+    );
+    const [canceled] = await enqueueMany(pool, [
+      debounceRequest("debounce-paused", "doc-canceled", 1, window),
+    ]);
+    const [claimed] = await enqueueMany(pool, [
+      debounceRequest("debounce-paused", "doc-claimed", 1, window),
+    ]);
+    await sleep(400);
+
+    for (let pass = 0; pass < 2; pass += 1) {
+      await pool.query("SELECT * FROM workhorse.prune_terminal_storage_v1(true)");
+      await expect(debounceKeyRow("doc-canceled")).resolves.toEqual({
+        task_id: canceled!.task_id,
+        coalescing_mode: "debounce",
+      });
+      await expect(
+        enqueueMany(pool, [debounceRequest("debounce-paused", "doc-canceled", pass + 2, window)]),
+      ).resolves.toEqual([
+        {
+          ordinal: 1,
+          task_id: canceled!.task_id,
+          outcome: "non_replaceable",
+          reason: "window_elapsed_pending",
+        },
+      ]);
+    }
+    await expect(queueTasks("debounce-paused")).resolves.toEqual([
+      { id: canceled!.task_id, payload: { rev: 1 }, state: "scheduled" },
+      { id: claimed!.task_id, payload: { rev: 1 }, state: "scheduled" },
+    ]);
+
+    // A terminal task and an active task no longer hold their expired keys.
+    await pool.query("SELECT workhorse.cancel_v1($1::uuid)", [canceled!.task_id]);
+    await pool.query(
+      "SELECT workhorse.set_queue_paused_v1('debounce-paused', false, 'operator', 'recovered', 'resume-1')",
+    );
+    await expect(queue.promote()).resolves.toBe(1);
+    const active = await pool.query<{ task_id: string }>(
+      "SELECT task_id FROM workhorse.claim_v1('debounce-paused', 'debounce-paused-worker', 30000)",
+    );
+    expect(active.rows.map((row) => row.task_id)).toEqual([claimed!.task_id]);
+    await pool.query("SELECT * FROM workhorse.prune_terminal_storage_v1(true)");
+    await expect(debounceKeyRow("doc-canceled")).resolves.toBeUndefined();
+    await expect(debounceKeyRow("doc-claimed")).resolves.toBeUndefined();
+  });
+
+  it.each([
+    {
+      operator: "run now",
+      lockFirst: "SELECT 1 FROM workhorse.task_runtime WHERE task_id = $1 FOR UPDATE",
+      run: "SELECT status FROM workhorse.run_task_now_v1($1::uuid, 'operator', 'run now', 'req-1')",
+      expected: [{ status: "released" }],
+    },
+    {
+      operator: "queue purge",
+      lockFirst: `SELECT 1 FROM workhorse.task_runtime
+                   WHERE queue_name = (SELECT queue_name FROM workhorse.task WHERE id = $1)
+                     AND state IN ('blocked', 'ready', 'scheduled')
+                   ORDER BY task_id FOR UPDATE`,
+      run: `SELECT deleted_count FROM workhorse.purge_queue_v1(
+              (SELECT queue_name FROM workhorse.task WHERE id = $1), 'operator', 'purge', 'purge-req-1'
+            )`,
+      expected: [{ deleted_count: 1 }],
+    },
+  ])(
+    "lets a same-key debounce request wait for $operator without a deadlock",
+    async ({ operator, lockFirst, run, expected }) => {
+      const queueName = `debounce-lock-order-${operator.replace(" ", "-")}`;
+      const window = { windowMs: 60_000, schedule: "reset" } as const;
+      const [first] = await enqueueMany(pool, [debounceRequest(queueName, "dl-key", 1, window)]);
+
+      const holder = await pool.connect();
+      const requester = await pool.connect();
+      const requesterPid = await backendPid(requester);
+      try {
+        // The operator holds its first lock, as its own first statement takes it. The request then
+        // waits, and the operator continues to its key row delete.
+        await holder.query("BEGIN");
+        await holder.query(lockFirst, [first!.task_id]);
+        const pending = enqueueMany(requester, [debounceRequest(queueName, "dl-key", 2, window)]);
+        pending.catch(() => undefined);
+        await waitForLockWait(requesterPid);
+        const operated = await holder.query(run, [first!.task_id]);
+        expect(operated.rows).toEqual(expected);
+        await holder.query("COMMIT");
+
+        const [replacement] = await pending;
+        expect(replacement).toMatchObject({ ordinal: 1, outcome: "accepted", reason: null });
+        expect(replacement!.task_id).not.toBe(first!.task_id);
+        await expect(debounceKeyRow("dl-key")).resolves.toEqual({
+          task_id: replacement!.task_id,
+          coalescing_mode: "debounce",
+        });
+      } finally {
+        await holder.query("ROLLBACK").catch(() => undefined);
+        holder.release();
+        requester.release();
+      }
+    },
+  );
+
+  it("lets a batch of debounce members in reverse task order wait for a purge without a deadlock", async () => {
+    const queueName = "debounce-lock-order-batch";
+    const window = { windowMs: 60_000, schedule: "reset" } as const;
+    const accepted = await enqueueMany(pool, [
+      debounceRequest(queueName, "batch-a", 1, window),
+      debounceRequest(queueName, "batch-b", 1, window),
+    ]);
+    const [low, high] = accepted
+      .map((row, index) => ({ taskId: row.task_id, key: index === 0 ? "batch-a" : "batch-b" }))
+      .toSorted((left, right) => left.taskId.localeCompare(right.taskId));
+
+    const holder = await pool.connect();
+    const requester = await pool.connect();
+    const requesterPid = await backendPid(requester);
+    try {
+      // The purge holds the lower task first. The batch names the higher task first.
+      await holder.query("BEGIN");
+      await holder.query("SELECT 1 FROM workhorse.task_runtime WHERE task_id = $1 FOR UPDATE", [
+        low!.taskId,
+      ]);
+      const pending = enqueueMany(requester, [
+        debounceRequest(queueName, high!.key, 2, window),
+        debounceRequest(queueName, low!.key, 2, window),
+      ]);
+      pending.catch(() => undefined);
+      await waitForLockWait(requesterPid);
+      const purged = await holder.query<{ deleted_count: number }>(
+        "SELECT deleted_count FROM workhorse.purge_queue_v1($1, 'operator', 'purge', 'purge-batch-1')",
+        [queueName],
+      );
+      expect(purged.rows).toEqual([{ deleted_count: 2 }]);
+      await holder.query("COMMIT");
+
+      const replacements = await pending;
+      expect(replacements.map((row) => row.outcome)).toEqual(["accepted", "accepted"]);
+    } finally {
+      await holder.query("ROLLBACK").catch(() => undefined);
+      holder.release();
+      requester.release();
+    }
+  });
+
+  it("does not lock an idempotency-keyed dependent early when a debounce member reuses its key", async () => {
+    // The dependent must sort before its prerequisite, so an identity-ordered lock takes it first.
+    // Each attempt makes a new pair, so each attempt succeeds with a chance of one half.
+    let pair: { prerequisiteId: string; dependentId: string; key: string } | undefined;
+    for (let attempt = 0; attempt < 64 && pair === undefined; attempt += 1) {
+      const candidateId = await queue.enqueue("prerequisite", { attempt });
+      const key = `keyed-dependent-${attempt}`;
+      const [row] = await enqueueMany(pool, [
+        {
+          queue: "debounce-keyed-dependent",
+          type: "after",
+          payload: {},
+          prerequisiteTaskId: candidateId,
+          idempotency: { key },
+        },
+      ]);
+      if (row!.task_id < candidateId) {
+        pair = { prerequisiteId: candidateId, dependentId: row!.task_id, key };
+      }
+    }
+    expect(pair).toBeDefined();
+    const { prerequisiteId } = pair!;
+    const dependent = { taskId: pair!.dependentId, key: pair!.key };
+
+    const holder = await pool.connect();
+    const requester = await pool.connect();
+    const requesterPid = await backendPid(requester);
+    try {
+      await holder.query("BEGIN");
+      await holder.query("SELECT 1 FROM workhorse.task_runtime WHERE task_id = $1 FOR UPDATE", [
+        prerequisiteId,
+      ]);
+      const pending = enqueueMany(requester, [
+        debounceRequest("debounce-keyed-dependent", dependent.key, 1, {
+          windowMs: 60_000,
+          schedule: "reset",
+        }),
+        {
+          queue: "debounce-keyed-dependent",
+          type: "after",
+          payload: { second: true },
+          prerequisiteTaskId: prerequisiteId,
+        },
+      ]);
+      pending.catch(() => undefined);
+      await waitForLockWait(requesterPid);
+      // The cancel resolves the dependents of the prerequisite, so it locks the keyed dependent.
+      await holder.query("SELECT status FROM workhorse.cancel_v1($1::uuid)", [prerequisiteId]);
+      await holder.query("COMMIT");
+
+      const [keyed] = await pending;
+      expect(keyed).toEqual({
+        ordinal: 1,
+        task_id: dependent.taskId,
+        outcome: "non_replaceable",
+        reason: "incompatible_key_mode",
+      });
+    } finally {
+      await holder.query("ROLLBACK").catch(() => undefined);
+      holder.release();
+      requester.release();
+    }
+  });
+
+  it("takes the batch timestamp after a wait for a purge that deletes the key", async () => {
+    const key = { key: "purged-key", ttlMs: 1_000 };
+    const [purged] = await enqueueMany(pool, [
+      { queue: "batch-clock-purged", type: "keyed", payload: {}, idempotency: key },
+    ]);
+    const request = { queue: "batch-clock-new", type: "keyed", payload: {}, idempotency: key };
+
+    const holder = await pool.connect();
+    const requester = await pool.connect();
+    const requesterPid = await backendPid(requester);
+    try {
+      // The purge deletes the key row and stays open longer than the key TTL.
+      await holder.query("BEGIN");
+      const deleted = await holder.query<{ deleted_count: number }>(
+        "SELECT deleted_count FROM workhorse.purge_queue_v1('batch-clock-purged', 'operator', 'purge', 'purge-key-1')",
+      );
+      expect(deleted.rows).toEqual([{ deleted_count: 1 }]);
+      const pending = enqueueMany(requester, [request]);
+      pending.catch(() => undefined);
+      await waitForLockWait(requesterPid);
+      await sleep(1_500);
+      await holder.query("COMMIT");
+
+      const [accepted] = await pending;
+      expect(accepted).toMatchObject({ outcome: "accepted" });
+      expect(accepted!.task_id).not.toBe(purged!.task_id);
+      // The key holds, because its TTL starts after the wait.
+      await expect(enqueueMany(pool, [request])).resolves.toEqual([
+        { ordinal: 1, task_id: accepted!.task_id, outcome: "replayed", reason: null },
+      ]);
+    } finally {
+      await holder.query("ROLLBACK").catch(() => undefined);
+      holder.release();
+      requester.release();
+    }
+  });
+
+  it("takes the batch timestamp after the prerequisite lock wait", async () => {
+    const prerequisiteId = await queue.enqueue("prerequisite", {});
+    const claimed = await queue.claim("batch-clock-worker");
+    expect(claimed?.id).toBe(prerequisiteId);
+    await expect(queue.complete(claimed!, "batch-clock-worker", null)).resolves.toBe(true);
+    const requests = ["first", "second"].map((key) => ({
+      queue: "batch-clock",
+      type: "after",
+      payload: { key },
+      prerequisiteTaskId: prerequisiteId,
+      idempotency: { key: `batch-clock-${key}`, ttlMs: 1_000 },
+    }));
+
+    const holder = await pool.connect();
+    const requester = await pool.connect();
+    const requesterPid = await backendPid(requester);
+    let lockReleasedAt: Date;
+    try {
+      // The prerequisite lock of the batch waits longer than the key TTL.
+      await holder.query("BEGIN");
+      await holder.query("SELECT 1 FROM workhorse.task WHERE id = $1 FOR UPDATE", [prerequisiteId]);
+      const pending = enqueueMany(requester, requests);
+      pending.catch(() => undefined);
+      await waitForLockWait(requesterPid);
+      await sleep(1_500);
+      const released = await holder.query<{ now: Date }>("SELECT clock_timestamp() AS now");
+      lockReleasedAt = released.rows[0]!.now;
+      await holder.query("COMMIT");
+
+      const accepted = await pending;
+      expect(accepted.map((row) => row.outcome)).toEqual(["accepted", "accepted"]);
+      // The keys still hold, because their TTL starts after the lock wait.
+      await expect(enqueueMany(pool, requests)).resolves.toEqual([
+        { ordinal: 1, task_id: accepted[0]!.task_id, outcome: "replayed", reason: null },
+        { ordinal: 2, task_id: accepted[1]!.task_id, outcome: "replayed", reason: null },
+      ]);
+    } finally {
+      await holder.query("ROLLBACK").catch(() => undefined);
+      holder.release();
+      requester.release();
+    }
+
+    const runtimes = await pool.query<{ ready_at: Date; run_at: Date }>(
+      `SELECT runtime.ready_at, runtime.run_at FROM workhorse.task_runtime runtime
+        WHERE runtime.queue_name = 'batch-clock' ORDER BY runtime.task_id`,
+    );
+    expect(runtimes.rows).toHaveLength(2);
+    const [one, two] = runtimes.rows;
+    expect(one!.ready_at.getTime()).toBeGreaterThanOrEqual(lockReleasedAt.getTime());
+    expect(two!.ready_at.getTime()).toBe(one!.ready_at.getTime());
+    expect(two!.run_at.getTime()).toBe(one!.run_at.getTime());
   });
 });

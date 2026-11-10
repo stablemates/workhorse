@@ -160,7 +160,9 @@ In C#, `result.Reason` is `IncompatibleKeyMode`, `NotPending`, or `WindowElapsed
 `EnqueueNonReplaceableReason` for a `NonReplaceable` result, and `null` for every other outcome.
 
 **Concurrency.** `enqueue_debounce_v1` takes a transaction advisory lock on the scope and key.
-Concurrent requests for one key run one at a time.
+Concurrent requests for one key run one at a time. Then it locks the `task_runtime` row before the
+key row, in the order that `run_task_now_v1` and a queue purge use. It reads `clock_timestamp()`
+after these locks. If a request waits for a lock, it tests the window at the end of the wait.
 
 **Storage.** PostgreSQL stores a hash of the key. It does not store the raw key. Events show a
 short preview and the first 12 hexadecimal characters of the key digest.
@@ -227,7 +229,9 @@ Thus, your app can tell a change of the task state from an incompatible request:
 - **`window_elapsed_pending`.** The window is closed, but no worker started the task. This reason
   also applies to a task that is in a durable wait or waits for a retry after its window. Workhorse
   does not create a new task in this case. Otherwise, a late request can add a second live task
-  next to work that is already late.
+  next to work that is already late. Workhorse keeps the key of the pending task until a worker
+  starts it, also on a paused queue. If a request waits for a lock, it uses the time at the end of
+  the wait. Thus a request that waits past the end of the window also gets this reason.
 - **`incompatible_key_mode`.** The key is in use for enqueue idempotency or throttle, not for
   debounce.
 
@@ -255,7 +259,11 @@ Thus, your app can tell a change of the task state from an incompatible request:
 A refusal appends a `debounce_rejected` event with the same reason. PostgreSQL discards the new
 payload. The accepted task does not change.
 
-More detail: [Task lifecycle: Rejection](https://github.com/stablemates/workhorse/blob/main/docs/architecture/lifecycle.md#rejection).
+Maintenance keeps an expired debounce key while its task is `ready` or `scheduled`. It deletes the
+key after the task is active or ended.
+
+More detail: [Task lifecycle: Rejection](https://github.com/stablemates/workhorse/blob/main/docs/architecture/lifecycle.md#rejection),
+[Task lifecycle: Fresh acceptance](https://github.com/stablemates/workhorse/blob/main/docs/architecture/lifecycle.md#fresh-acceptance).
 
 </details>
 
@@ -299,7 +307,9 @@ Usually, a key is free again when its window closes. Two operator actions releas
 an operator purges the queue, the next request with the key creates a new task. A task that the
 purge cancels, because a task in another queue waits for it, keeps its key, as after a cancel. If an operator runs
 a debounced task now, from the dashboard or with `Admin.runTaskNow`, its window ends. The next
-request with that key creates a new task.
+request with that key creates a new task. A request that arrives while one of these actions runs
+waits for it. Then the request creates a new task, unless the purge canceled the task and kept its
+key.
 
 <details>
 <summary>Reference: operator actions</summary>
@@ -308,6 +318,9 @@ request with that key creates a new task.
 - A task that the purge cancels keeps its key, as after a cancel.
 - `run_task_now_v1` deletes the key of the released task. The next request is `accepted` as a new
   task.
+- A same-key request that waits for a purge or for `run_task_now_v1` continues after the action
+  commits. If the action deleted the key, the request is `accepted` as a new task. If the purge
+  canceled the task, the key stays, as after a cancel.
 
 More detail: [Task lifecycle: Fresh acceptance](https://github.com/stablemates/workhorse/blob/main/docs/architecture/lifecycle.md#fresh-acceptance).
 

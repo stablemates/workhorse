@@ -9,6 +9,17 @@ Workhorse is a public beta. Any 0.x minor release may change behaviour. From `0.
 upgrades in place: every release ships ordered migrations, and inside a major line a migration only
 adds.
 
+## Unreleased
+
+### Debounce and enqueue decide with the clock after their locks
+
+Migration 0093 (`0093-decide-debounce-with-one-clock-and-keep-pending-debounce-keys.sql`) moves the
+schema to version 92. A debounce request that waits for a lock past its window no longer writes a
+second task, and it no longer deadlocks with run-now or a queue purge of its task. Maintenance keeps
+the key of a pending debounced task, so a late request on a paused queue gets
+`window_elapsed_pending`. An enqueue batch reads its timestamp after its locks. The migration does
+not raise the SDK compatibility floor.
+
 ## 0.12.0 — 2026-11-07
 
 The npm packages, Python distribution, Go module, Rust crate, Ruby gem, JVM artifacts, and .NET

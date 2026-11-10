@@ -7,6 +7,37 @@ schema version, and the steps that the upgrade needs.
 [Compatibility and support boundary](compatibility.md) states the schema guarantees that every
 upgrade keeps. Each changelog states the full changes of its release.
 
+## Upgrade from 0.12.x to the next release
+
+The next release corrects how debounce and enqueue use the clock and their locks. The upgrade is a
+rolling deployment, and a mixed fleet is supported while it runs.
+
+1. Run `workhorse schema migrate`. It applies migration 0093 and leaves the schema at version 92.
+2. Roll out the new processes in any order.
+
+A 0.12.0 database is at schema version 91. The migration replaces function bodies and changes no
+stored rows:
+
+| Migration                                                                | Schema version | Changes                                                                                                                                         |
+| ------------------------------------------------------------------------ | -------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
+| `0093-decide-debounce-with-one-clock-and-keep-pending-debounce-keys.sql` | 92             | `enqueue_debounce_v1`, `enqueue_batch_v1`, `lock_enqueue_prerequisites_internal_v1`, and `prune_enqueue_idempotency_v1` correct enqueue defects |
+
+Migration 0093 does not raise the floor, so it stays 76. The SQL functions change for every SDK
+version when the migration commits:
+
+- A debounce request reads the clock after its last lock. It no longer writes a second task when a
+  lock wait ends after its window.
+- A debounce request locks the runtime row of its task before the key row. It no longer deadlocks
+  with `run_task_now_v1` or a queue purge.
+- A batch with more than one debounce member locks the runtime rows of their tasks in task ID
+  order, the order of a purge.
+- Maintenance keeps the key of a debounced task while that task is `ready` or `scheduled`. A late
+  same-key request then returns `non_replaceable` with `window_elapsed_pending`.
+- An enqueue batch reads its timestamp after its tier and prerequisite locks.
+
+A 0.12 process keeps working on schema version 92, because a migration inside a major line only
+adds.
+
 ## Upgrade from 0.11.x to 0.12.0
 
 0.12.0 shows the task group of a member task in the dashboard task detail. It also makes

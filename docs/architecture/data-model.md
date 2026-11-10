@@ -433,7 +433,12 @@ The ownership relation stores scope and full key hash, never the raw key.
 - Structured conflicts additionally carry full SHA-256 stored and rejected request digests.
 
 A new request can replace expired ownership. Housekeeping prunes expired bindings before
-terminal task identity. `purge_queue_internal_v1` deletes the bindings of the `blocked`, `ready`,
+terminal task identity. `prune_enqueue_idempotency_v1` deletes each binding whose `expires_at` is at
+or before its cutoff, with one exception. It keeps a binding with `coalescing_mode = 'debounce'`
+while the task has a `task_runtime` row in `ready` or `scheduled`. For debounce, `expires_at` is the
+end of the window. Thus a paused or late queue keeps the key of its pending task, and a late
+same-key request gets `window_elapsed_pending` instead of a second task. When the task is active or
+terminal, the next pass deletes the expired binding. `purge_queue_internal_v1` deletes the bindings of the `blocked`, `ready`,
 and `scheduled` tasks it deletes, and of purged ready fast-tier tasks. A task that the purge cancels
 keeps its binding, as after a cancel ([Queue purge](#queue-purge)).
 

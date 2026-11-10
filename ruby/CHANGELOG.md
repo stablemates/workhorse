@@ -16,6 +16,15 @@ The compatibility table published that date. No earlier changelog announced the 
 compatibility policy requires. ADR 0058 records this one exception: Rails no longer fixes 8.0, so
 Workhorse does not extend its support.
 
+### Debounce and enqueue decide with the clock after their locks
+
+Migration 0093 (`0093-decide-debounce-with-one-clock-and-keep-pending-debounce-keys.sql`) moves the
+schema to version 92. A debounce request that waits for a lock past its window no longer writes a
+second task, and it no longer deadlocks with run-now or a queue purge of its task. Maintenance keeps
+the key of a pending debounced task, so a late request on a paused queue gets
+`window_elapsed_pending`. An enqueue batch reads its timestamp after its locks. The migration does
+not raise the SDK compatibility floor.
+
 ## 0.12.0 — 2026-11-07
 
 The npm packages, Python distribution, Go module, Rust crate, Ruby gem, JVM artifacts, and .NET
