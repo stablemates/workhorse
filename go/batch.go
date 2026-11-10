@@ -94,6 +94,13 @@ type batchMember struct {
 	arrived time.Time
 	item    BatchHandlerItem
 	result  chan batchMemberResult
+	// returnLock orders the record of the return of the batch handler against the end of the wait
+	// of this member. Only the dispatch and this member's own leave take it, never a lock that
+	// another member holds (ADR 0117).
+	returnLock sync.Mutex
+	// returned holds the result of the batch handler for this member once it returned. The
+	// dispatch sets it before the failure evidence write.
+	returned *batchMemberResult
 }
 
 type batchMemberResult struct {
@@ -188,8 +195,7 @@ func (coordinator *batchCoordinator) handle(
 				coordinator.dispatch(batch)
 			}
 		case <-ctx.Done():
-			coordinator.remove(queue, member)
-			return nil, context.Cause(ctx)
+			return coordinator.leave(ctx, queue, member)
 		}
 	}
 
@@ -197,9 +203,30 @@ func (coordinator *batchCoordinator) handle(
 	case result := <-member.result:
 		return result.value, result.err
 	case <-ctx.Done():
-		coordinator.remove(queue, member)
-		return nil, context.Cause(ctx)
+		return coordinator.leave(ctx, queue, member)
 	}
+}
+
+// leave ends the wait of a member whose context ended. If the batch handler already returned, the
+// member settles with its result, so a stop during the evidence write keeps the failure of the
+// handler and its error (ADR 0117). Otherwise the member leaves its queue with the cause.
+func (coordinator *batchCoordinator) leave(
+	ctx context.Context,
+	queue string,
+	member *batchMember,
+) (any, error) {
+	member.returnLock.Lock()
+	returned := member.returned
+	if returned == nil {
+		// The batch handler has not returned for this member, so the cancellation came first.
+		member.item.Context.handler.markReturned()
+	}
+	member.returnLock.Unlock()
+	if returned != nil {
+		return returned.value, returned.err
+	}
+	coordinator.remove(queue, member)
+	return nil, context.Cause(ctx)
 }
 
 func (coordinator *batchCoordinator) take(queue string) []*batchMember {
@@ -293,6 +320,20 @@ func (coordinator *batchCoordinator) dispatch(batch []*batchMember) {
 	var results []batchMemberResult
 	if err == nil {
 		results, err = normalizeBatchOutcomes(coordinator.taskType, outcomes, len(batch))
+	}
+	// Each member records the return of the handler and its result before the evidence write. A
+	// stop during that write then cannot turn a failure into a release, or replace its error with
+	// the cancellation (ADR 0117). The record reads the cause under the lock of the member alone,
+	// so no wait for a lock that another member holds comes between the return and the read.
+	for index, member := range batch {
+		result := batchMemberResult{err: err}
+		if err == nil {
+			result = results[index]
+		}
+		member.returnLock.Lock()
+		member.item.Context.handler.markReturned()
+		member.returned = &result
+		member.returnLock.Unlock()
 	}
 	if err != nil {
 		if hasBatchID {

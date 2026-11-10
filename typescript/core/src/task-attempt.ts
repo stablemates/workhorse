@@ -130,6 +130,8 @@ export class TaskAttempt {
   private removeHeartbeatLease: (() => void) | undefined;
   // Set when the shutdown abort ended the handler signal before any other outcome.
   private shutdownRequested = false;
+  // Whether the shutdown abort came before the handler returned, or undefined before it returns.
+  private shutdownAtReturn: boolean | undefined;
 
   constructor(
     readonly task: ClaimedTask,
@@ -206,6 +208,23 @@ export class TaskAttempt {
   /** True when the shutdown abort ended the handler and no other outcome won after it. */
   get stoppedForShutdown(): boolean {
     return this.shutdownRequested && this.arbiter.outcome === undefined;
+  }
+
+  /**
+   * Records that the handler returned. A batch member records it when the batch callback returns.
+   * Only the first call counts.
+   */
+  markHandlerReturned(): void {
+    this.shutdownAtReturn ??= this.shutdownRequested;
+  }
+
+  /**
+   * True when the shutdown abort came before the handler returned and no other outcome won. A
+   * failure then releases the task (ADR 0117). A stop that comes after the return cannot turn a
+   * failure of the handler's own into a release.
+   */
+  get failedAfterShutdown(): boolean {
+    return (this.shutdownAtReturn ?? this.shutdownRequested) && this.arbiter.outcome === undefined;
   }
 
   /** Suspend on a durable wait or child, even if another outcome already won. */

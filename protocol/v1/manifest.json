@@ -99,7 +99,8 @@
     "terminal-replay-conflict",
     "result-size-limit",
     "shutdown-cancellation-release",
-    "shutdown-cancellation-completion"
+    "shutdown-cancellation-completion",
+    "shutdown-cancellation-panic"
   ],
   "functions": [
     {

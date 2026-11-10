@@ -34,9 +34,9 @@ import run.workhorse.internal.SqlCatalogue;
  * with the {@link CancelledException} of its reason, and the handler never gets it. A member that a
  * batch already took stays in that batch, and the handler reads its cancellation.
  *
- * <p>The drain's interrupt closes the socket of a virtual thread. The handler can then throw an I/O
- * failure that the interrupt caused. If the drain interrupted the thread that runs the handler,
- * each member of that batch returns to its queue without an attempt (SM-1890).
+ * <p>After the shutdown cancellation, a batch handler failure returns each member to its queue
+ * without an attempt, whatever the error is (ADR 0117). This includes an I/O failure that the
+ * drain's interrupt causes on the thread that runs the handler (SM-1890).
  */
 final class BatchCoordinator {
   /** How often a lingering member checks for the last arrival while the worker stops. */
@@ -127,7 +127,7 @@ final class BatchCoordinator {
     AutoCloseable cancellation =
         context.cancellation().onCancel(() -> leave(member, queue, context));
     try {
-      interrupted |= dispatch(task, batch, interrupted);
+      interrupted |= dispatch(batch, interrupted);
       // A member that no full batch took lingers. Once its linger ends, it takes every member that
       // still waits, itself too, so no member waits for a later arrival.
       boolean settled;
@@ -149,7 +149,7 @@ final class BatchCoordinator {
         } finally {
           lock.unlock();
         }
-        interrupted |= dispatch(task, next, interrupted);
+        interrupted |= dispatch(next, interrupted);
       }
       return outcome(member);
     } finally {
@@ -270,17 +270,17 @@ final class BatchCoordinator {
   }
 
   /**
-   * Runs one batch on this thread, the handler thread of {@code runner}, and settles each of its
-   * members. {@code runner} is the member that took the batch. If {@code interrupted}, the thread
-   * has a pending interrupt, which the handler receives. Returns whether the handler left this
-   * thread interrupted, so the caller can set the interrupt again when it returns.
+   * Runs one batch on this thread, the handler thread of the member that took the batch, and
+   * settles each of its members. If {@code interrupted}, the thread has a pending interrupt, which
+   * the handler receives. Returns whether the handler left this thread interrupted, so the caller
+   * can set the interrupt again when it returns.
    */
-  private boolean dispatch(Worker.Active runner, List<Member> batch, boolean interrupted) {
+  private boolean dispatch(List<Member> batch, boolean interrupted) {
     if (batch.isEmpty()) {
       return false;
     }
     try {
-      return dispatchBatch(runner, batch, interrupted);
+      return dispatchBatch(batch, interrupted);
     } catch (RuntimeException | Error error) {
       // Telemetry or the caller's logger threw outside the handler. A member
       // on another thread waits for its result, so each member that has none fails with the error,
@@ -294,7 +294,7 @@ final class BatchCoordinator {
     }
   }
 
-  private boolean dispatchBatch(Worker.Active runner, List<Member> batch, boolean interrupted) {
+  private boolean dispatchBatch(List<Member> batch, boolean interrupted) {
     UUID batchId = UUID.randomUUID();
     boolean full = batch.size() == maxSize;
     long firstArrivedAt = Long.MAX_VALUE;
@@ -314,7 +314,17 @@ final class BatchCoordinator {
       if (interrupted) {
         Thread.currentThread().interrupt();
       }
-      outcomes = validate(handler.handle(List.copyOf(items)), batch.size());
+      List<BatchHandlerOutcome> returned;
+      try {
+        returned = handler.handle(List.copyOf(items));
+      } finally {
+        // Each member records the return of the handler before the evidence write, so a stop
+        // during that write cannot turn a failure into a release (ADR 0117).
+        for (Member member : batch) {
+          member.task.markHandlerReturned();
+        }
+      }
+      outcomes = validate(returned, batch.size());
     } catch (Throwable error) {
       // The worker's own writes must run without an interrupt, which closes a virtual thread's
       // socket.
@@ -322,15 +332,9 @@ final class BatchCoordinator {
       worker.recordBatchEvidence(
           SqlCatalogue.RECORD_BATCH_FAILURE_V1, "failure", batchId, taskType, tasks, full);
       Exception failure = settleable(error);
-      // The drain interrupts the handler thread of each attempt. This thread is the one of {@code
-      // runner}, so its interrupt, and not the interrupt of another member, shows whether the
-      // drain stopped the handler's I/O. Each member then returns to its queue without an
-      // attempt, as a handler does after its own I/O stops (SM-1890).
-      boolean drainStopped = runner.drainInterrupted() && Worker.interruptedIo(failure);
+      // After the shutdown cancellation, each member returns to its queue without an attempt,
+      // whatever the error is (ADR 0117).
       for (Member member : batch) {
-        if (drainStopped) {
-          member.task.recordDrainStoppedBatch();
-        }
         member.result.completeExceptionally(failure);
       }
       signal();

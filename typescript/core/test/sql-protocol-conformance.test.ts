@@ -79,6 +79,7 @@ import { createDatabaseTestHarness } from "./support/db.js";
 import { answerSchemaCheck } from "./support/schema-check.js";
 import { workerHeartbeatReservation, type WorkerHeartbeatChannel } from "../src/worker-internal.js";
 import { unreservedQueue } from "../src/worker-internal.js";
+import { abortWorkerHandlers } from "../src/worker-failure.js";
 
 const compatibilityDatabase = createDatabaseTestHarness(
   new URL("?compatibility", import.meta.url).href,
@@ -1381,51 +1382,78 @@ async function executeOversizedResultRuntimeFixture(
 }
 
 /**
- * The TypeScript worker has no shutdown grace: `stop()` waits for every running handler. So the
- * handler outlives the stop, never sees its signal abort, and completes on its only attempt. It
- * returns a value whatever `handlerResult` says, because no cancellation reaches it.
+ * The TypeScript worker has no shutdown grace of its own. `runWorkerProcess` aborts the handlers
+ * at the end of its grace through `abortWorkerHandlers`, so the runner calls that after `stop()`,
+ * as the process runner does. The handler then answers its abort as `handlerResult` says, inside
+ * the unwind window (ADR 0116, ADR 0117).
  */
 async function executeShutdownCancellationRuntimeFixture(
   queue: Queue,
   admin: Admin,
+  database: Pool,
   fixture: ShutdownCancellationRuntimeFixture,
 ): Promise<void> {
-  expect(fixture.shutdownBehavior.typescript).toBe("drain");
+  // A fixture that names no TypeScript behavior, such as a handler panic, does not apply.
+  if (fixture.shutdownBehavior.typescript === undefined) return;
+  expect(fixture.shutdownBehavior.typescript).toBe("cancel");
   const queueName = `runtime-${fixture.id}`;
   const id = await queue.enqueue(fixture.taskType, null, {
     queue: queueName,
     maxAttempts: fixture.maxAttempts,
   });
   const started = deferred();
-  const stopped = deferred();
-  let aborted = false;
+  let reason: unknown;
   const worker = new Worker(queue, {
     workerId: `runtime-${fixture.id}`,
     queue: queueName,
     pollMs: 1,
     registryIntervalMs: 0,
-  }).handle(fixture.taskType, async (_payload, context) => {
+  }).handle(fixture.taskType, async (_payload, context): Promise<Json> => {
     started.resolve();
-    await stopped.promise;
-    await sleep(fixture.drainHoldMs);
-    aborted = context.signal.aborted;
-    return null;
+    await new Promise<void>((resolve) => {
+      if (context.signal.aborted) resolve();
+      else context.signal.addEventListener("abort", () => resolve(), { once: true });
+    });
+    reason = context.signal.reason;
+    switch (fixture.handlerResult) {
+      case "error":
+        throw context.signal.reason;
+      case "value":
+        return { finished: true };
+      case "application-error":
+        throw new Error("the cleanup timed out");
+      case "oversized-value":
+        return Array.from({ length: fixture.resultZeros ?? 0 }, () => 0);
+      case "panic":
+        throw new Error("TypeScript has no handler panic");
+      default: {
+        const exhaustive: never = fixture.handlerResult;
+        throw new Error(`unknown handler result ${String(exhaustive)}`);
+      }
+    }
   });
 
   const running = worker.run();
   try {
     await started.promise;
     worker.stop();
-    stopped.resolve();
+    await sleep(fixture.shutdownGraceMs);
+    abortWorkerHandlers(worker);
     await expect(running).resolves.toBeUndefined();
-    expect(aborted).toBe(false);
+    expect(reason).toMatchObject({ name: "WorkerShutdownError" });
     await expect(admin.getTask(id)).resolves.toMatchObject({
-      state: fixture.expectedDrained.state,
-      currentAttempt: fixture.expectedDrained.attempt,
+      state: fixture.expectedCancelled.state,
+      currentAttempt: fixture.expectedCancelled.attempt,
     });
+    const events = await database.query<{ event_type: string }>(
+      `SELECT event_type FROM workhorse.task_event WHERE task_id = $1
+        ORDER BY occurred_at, event_id`,
+      [id],
+    );
+    expect(events.rows.map((row) => row.event_type)).toEqual(fixture.expectedCancelled.events);
   } finally {
     worker.stop();
-    stopped.resolve();
+    abortWorkerHandlers(worker);
     await running.catch(() => undefined);
   }
 }
@@ -1953,7 +1981,7 @@ async function executeRuntimeFixture(
       await executeOversizedResultRuntimeFixture(queue, admin, fixture);
       break;
     case "shutdown-cancellation":
-      await executeShutdownCancellationRuntimeFixture(queue, admin, fixture);
+      await executeShutdownCancellationRuntimeFixture(queue, admin, database, fixture);
       break;
     case "heartbeat-failure":
       await executeHeartbeatFailureRuntimeFixture(queue, admin, database, fixture);

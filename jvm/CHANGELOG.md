@@ -20,6 +20,18 @@ the key of a pending debounced task, so a late request on a paused queue gets
 `window_elapsed_pending`. An enqueue batch reads its timestamp after its locks. The migration does
 not raise the SDK compatibility floor.
 
+### Each failure in the shutdown unwind window releases its task
+
+A JVM worker stops, and at the end of the shutdown grace it cancels a handler with `SHUTDOWN`.
+Before, only a `CancelledException(SHUTDOWN)`, an `InterruptedException`, or an I/O error that the
+drain interrupt caused returned the task to its queue. Each other exception, and each result that
+the task could not store, failed the attempt through `fail_v1`. Now the cancellation decides, not
+the type of the exception. The worker reads the token when the handler region ends, and a batch
+member reads it when the batch handler returns. If the token holds `SHUTDOWN` then, each
+`Exception` releases the task through `release_owned_v1`. A result that cannot be stored also
+releases it (SM-1933, ADR 0117). The worker no longer reads the type or the message of an
+interrupted I/O error. A handler that fails before the cancellation keeps its usual settlement.
+
 ## 0.12.0 — 2026-11-07
 
 The npm packages, Python distribution, Go module, Rust crate, Ruby gem, JVM artifacts, and .NET

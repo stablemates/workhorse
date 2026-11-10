@@ -27,8 +27,26 @@ use a separate workflow tool. You can use it together with Workhorse or in its p
 
 A worker never stops a running handler by force, because that is not safe. A cancellation, a
 deadline, or an execution timeout sends a request to the handler. The handler continues until it
-reads the request or until the worker loses the task. When a process shuts down, it also lets the
-handlers complete. It does not stop them by force.
+reads the request or until the worker loses the task.
+
+A worker process or an SDK worker with a shutdown grace does not wait for each handler to complete.
+It gives the handlers a limited time:
+
+1. The first termination signal of a worker process ends new claims and starts the shutdown grace.
+   A stop of a Go, Rust, Ruby, Java, Kotlin, or C# worker does the same. The default grace is 25
+   seconds.
+2. At the end of the grace, the worker cancels each handler that still runs.
+3. Each handler then gets an unwind window of 250 ms to return.
+4. If a handler returns a value in the window, the worker completes the task. If it fails, or its
+   result cannot be stored, the worker gives the task back to its queue. The task keeps its
+   attempt. A handler panic in Go or Rust fails the attempt.
+5. If a handler does not return in the window, lease recovery settles its task later and charges
+   an attempt.
+
+Thus a handler that runs for 10 minutes does not finish during a deploy. If it does not stop in the
+window, its task loses an attempt. A TypeScript or Python `Worker.stop()` alone has no grace. It
+waits for each handler, and only the worker process runner adds the grace and the cancellation.
+[Worker processes](/docs/worker-processes) documents the shutdown timeout of a worker process.
 
 Each SDK gives the request to the handler in its own way:
 
@@ -37,6 +55,10 @@ Each SDK gives the request to the handler in its own way:
 - Go cancels the standard context of the handler.
 - Rust reports the request through `context.cancellation()`.
 - Ruby reports the request through `context.cancellation`.
+- Java reports the request through `context.cancellation()`.
+- Kotlin reports the request through `ctx.cancellation`, and it cancels the coroutine `Job` of the
+  handler.
+- C# cancels `context.CancellationToken`.
 
 Workaround: give the cancellation signal to each operation that can stop. Check the signal between
 the units of work. If work must stop by force, run it in a process that you can stop. Make its

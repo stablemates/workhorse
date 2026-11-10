@@ -10,7 +10,8 @@ record Outcome(Status status, @Nullable String reason) {
   /**
    * {@code PASSED}; {@code FAILED}: the Java adapter ran and disagreed; {@code UNSUPPORTED}: no
    * Java adapter can express the fixture yet, because an open slice owns the surface; {@code
-   * SKIPPED}: the runner could not reach the database the fixture needs.
+   * SKIPPED}: the runner could not reach the database the fixture needs, or the fixture names no
+   * Java behavior.
    */
   enum Status {
     FAILED,

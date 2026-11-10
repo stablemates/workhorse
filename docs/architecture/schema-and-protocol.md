@@ -1508,7 +1508,9 @@ handler of the main thread.
   the `CancellationToken` of each running handler with `_WorkerShutdownError`. Then the runner waits
   0.25 s, `_HANDLER_UNWIND_SECONDS`, or until the drain ends, and calls `force_exit(1)`. If a handler
   returns a value in that window, the worker completes the task. If it raises, the worker releases
-  the task through `release_owned_v1`, and the task keeps its attempt. If the completion or the
+  the task through `release_owned_v1`, and the task keeps its attempt. The worker reads the token
+  when the handler returns, and a batch member reads it when the batch callback returns. A handler
+  that failed before the cancellation keeps its usual settlement (ADR 0117). If the completion or the
   release fails, the worker logs `workhorse.worker.shutdown_settlement_failed`.
 - The worker sets `_shutdown_aborted` before it cancels the first token. A handler whose token is
   still live, such as a batch member whose callback raised at the token of another member, reads
@@ -1818,16 +1820,22 @@ that the stop does not cancel. The 250 millisecond unwind period bounds that con
   after. A fast-tier completion runs alone, outside the batch of its cohort. Thus it claims no
   replacement task.
 - If a handler returns an error after that cancellation, it charges no attempt. Its task goes to
-  `release_owned_v1`.
-- A value that the task cannot store also goes to `release_owned_v1`. Thus the next attempt gets the
-  same check.
+  `release_owned_v1`. The cancellation decides this, not the type of the error (ADR 0117).
+- A value that the task cannot store also goes to `release_owned_v1`, if the handler returned it
+  after that cancellation. Thus the next attempt gets the same check. If the handler returned the
+  value before its cancellation, `execute` checks it first, and `failAfterShutdown` fails the
+  attempt for a value that the task cannot store (ADR 0117).
+- A handler panic after that cancellation fails the attempt with `HandlerPanicError`. `failAfterShutdown`
+  writes it through `fail_v1` on a context that the same 250 millisecond unwind period bounds.
 
 Both writes are fenced. If PostgreSQL rejects the completion, `reconcileRejectedSettlement`
 acknowledges a cancellation request or settles an expiry within the same window. If a write or that
 reconciliation fails, the worker logs the failure, and lease recovery settles the task. If a task is
-completed or released in this way, its handler span has no error status. A `HandlerPanicError` keeps
-its usual settlement. `execute` reads the cancellation of the handler context when the handler
-returns. A handler that failed before the stop keeps its usual settlement. If a handler was
+completed or released in this way, its handler span has no error status. The span of a panic has
+the error status. `execute` reads the cancellation of the handler context when the handler
+returns, and a batch member records it when the batch handler returns. A handler that failed before
+the stop keeps its usual settlement. If `execute` reads that failure only after the deadline,
+`failAfterShutdown` writes it through `fail_v1` in the unwind period. If a handler was
 cancelled for another cause, such as a cancellation request, it keeps the settlement of that cause.
 `RunOnce` treats the end of the context of its caller in the same way.
 
@@ -2258,11 +2266,13 @@ worker first waits for every stop statement of the previous run
 runs when the budget ends, the run raises `WorkerStartupError` before it changes any state. A stop
 during this wait ends the run at once, without an error, and the old statement keeps running.
 
-If a handler raises the `CancelledError` of its `:shutdown` cancellation, it charges no attempt. The
-error can arrive directly, as `check!` raises it, or as the cause of another error. The worker also
-requires that its own token holds `:shutdown`. Thus an error that the application builds charges
-its attempt. `run_handler` gives the task to `release_owned_v1` instead of `fail_v1`, as it does for
-a task without a handler. Any other error keeps its usual settlement, even after the cancellation.
+If the token of a handler holds `:shutdown` when the handler returns, a failure charges no attempt.
+This applies to each `StandardError`, also one that the application builds, and to a result that
+the task cannot store. `run_handler` reads the token reason when the handler returns, and gives the
+task to `release_owned_v1` instead of `fail_v1`, as it does for a task without a handler (ADR 0117).
+A batch member records the token reason when the batch block returns, before
+`record_batch_failure_v1`. A handler that fails before the cancellation keeps its usual settlement.
+A `CancelledError(:shutdown)` that a handler raises without a stop also charges its attempt.
 
 ### Ruby handler context
 
@@ -2780,8 +2790,11 @@ in flight, the draining `register_worker_v1` refresh, and running handlers all u
 - Tasks from claims that returned in time still run, even when another claim stalls.
 - Handlers that still run when the grace period ends see `CancelReason::Shutdown`. They get 250
   milliseconds to unwind. If a handler returns an error after that cancellation, it charges no
-  attempt. The worker gives its task to `release_owned_v1`. A handler panic still fails the
-  attempt. A handler that returns a value still completes.
+  attempt. The worker gives its task to `release_owned_v1`. A value that the task cannot store,
+  such as a value above `result_max_bytes` or a value that its result contract refuses, also goes
+  to `release_owned_v1` (ADR 0117). The worker reads the reason when the handler returns, and a
+  batch member records it when the batch callback returns. A handler panic still fails the attempt.
+  A handler that returns a value that the task can store still completes.
 - `run` abandons the handlers that still run after that window and returns
   `Error::ShutdownIncomplete`. Their leases expire, and lease recovery reclaims the tasks.
 
@@ -3240,21 +3253,19 @@ The worker installs no JVM shutdown hook and traps no signal.
   The walk examines at most 16 errors, including the outer error, as the Rust walk does. The failure
   name is then the name of the conflict class. The envelope fields `message` and `stack` stay those
   of the outer error.
-- During a shutdown, a `CancelledException` with `SHUTDOWN` or an `InterruptedException` in the
-  cause chain releases the task through `release_owned_v1`, which charges no attempt.
-- After the drain interrupts the handler, an I/O failure that the interrupt caused also releases
-  the task, if the handler call throws it. The interrupt closes the socket of a virtual thread, so
-  the handler's own I/O can fail with an error that holds no `InterruptedException` (SM-1889).
-  `interruptedIo` looks in the cause chain for a `SocketException` whose `getMessage()` is
-  `Closed by interrupt`, a `ClosedByInterruptException`, or an `InterruptedIOException` that is not
-  a `SocketTimeoutException`. Another error of the handler's own still fails the attempt. The rule
-  does not apply to the payload decode. A batch applies it to the thread that runs the batch
-  handler, as "JVM batch handlers" states (SM-1890).
+- If the token holds `SHUTDOWN` when the handler region ends, each `Exception` releases the task
+  through `release_owned_v1`, which charges no attempt. A result that the task cannot store also
+  releases it. The cancellation decides this, not the type of the exception (ADR 0117). Thus an
+  I/O failure that the drain interrupt causes releases the task (SM-1889), also in a batch handler
+  that runs on the thread of another member (SM-1890). A batch member records the token reason
+  when the batch handler returns, before `record_batch_failure_v1`. A handler that fails before the
+  cancellation keeps its usual settlement.
 - A `LeaseLostException` settles nothing, because the fence already refuses the write.
 - Before it completes a task, the worker checks the result. A NUL character fails the attempt with
   `<task type> result contains a NUL character, which PostgreSQL jsonb cannot store`. The codec
   refuses a lone surrogate. A result over the `result_max_bytes` of the task throws
-  `ValueSizeLimitException`. The retry policy applies to each.
+  `ValueSizeLimitException`. The retry policy applies to each, unless the shutdown cancellation
+  came first. Then the task goes to `release_owned_v1`.
 - A `java.lang.Error` from an ordinary handler ends the run. The worker drains, and `run` throws
   that error. The task is not settled, so its lease expires. Ruby treats an error outside
   `StandardError` and Python treats a `BaseException` outside `Exception` the same way.
@@ -3301,10 +3312,10 @@ item, in the same order: `new BatchSucceeded(result)` or `new BatchFailed(except
 - If the worker's telemetry or the caller's logger throws before the handler runs, every task in the
   batch fails with that error in the same way.
 - The batch handler runs on the handler thread of one task in the batch. That task filled the batch,
-  or its linger ended first. The drain can interrupt that thread. Then `interruptedIo` looks
-  in the thrown error for an I/O failure that the interrupt caused. If it finds one, each task in
-  the batch goes back to its queue through `release_owned_v1` (SM-1890). No attempt is charged. A
-  task whose token holds a reason other than `SHUTDOWN` still settles the error as a failure.
+  or its linger ended first. The drain cancels each token with `SHUTDOWN` before it interrupts that
+  thread. If a task's token holds `SHUTDOWN` when the batch handler returns, its failure goes back
+  to its queue through `release_owned_v1`, whatever the error is (SM-1890, ADR 0117). No attempt is
+  charged. A task whose token holds another reason still settles the error as a failure.
 - Every task in the batch still settles under its own lease and fence.
 
 The worker records `record_batch_dispatch_v1` before the call, and `record_batch_failure_v1` after
@@ -4049,16 +4060,18 @@ host for a handler fault.
   of -1. The worker also finds a conflict that a wrapper holds. It follows `InnerException` to a
   depth of 16 exceptions, including the outer exception. The envelope `name` is then the name of the
   conflict, and `message` and `stack` stay those of the outer exception.
-- During a shutdown, an `OperationCanceledException` of the handler's own token, or a
-  `CancelledException` with `CancelReason.Shutdown`, releases the task through `release_owned_v1`.
-  The worker reads the inner exceptions to a depth of 16. An unrelated cancellation fails the
-  attempt.
+- If the handler's `CancelReason` is `CancelReason.Shutdown` when the handler returns, each
+  handler exception releases the task through `release_owned_v1`. A result that the task cannot
+  store also releases it. The cancellation decides this, not the type of the exception (ADR 0117).
+  A batch member records the reason when the batch handler returns, before
+  `record_batch_failure_v1`. A handler that fails before the cancellation keeps its usual
+  settlement.
 - A `LeaseLostException` settles nothing, because the fence already refuses the write.
 - Before it completes a task, the worker checks the result. A NUL character fails the attempt with
   `<task type> result contains a NUL character, which PostgreSQL jsonb cannot store`. A result that
   the result schema of the payload contract refuses throws `ContractValidationException`. A result
   over the `ResultMaxBytes` of the task throws `ValueSizeLimitException`. The retry policy applies to
-  each.
+  each, unless the shutdown cancellation came first. Then the task goes to `release_owned_v1`.
 
 .NET has no exception type that a program must not catch. So no handler exception ends the run,
 and a batch handler exception fails each task in its batch. `RunAsync` throws only for a fault of the worker itself, after the drain:

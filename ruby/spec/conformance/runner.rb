@@ -356,7 +356,15 @@ module Conformance
         each_fixture("failures") { |fixture| runtime.failure(fixture) }
         @catalogue.category("runtime").each do |fixture|
           gap = Runtime::GAPS[fixture["kind"]]
-          record("runtime", fixture, gap ? Outcome.unsupported(gap) : attempt { runtime.run(fixture) })
+          outside = Runtime.outside_ruby(fixture)
+          outcome = if gap
+            Outcome.unsupported(gap)
+          elsif outside
+            Outcome.skipped(outside)
+          else
+            attempt { runtime.run(fixture) }
+          end
+          record("runtime", fixture, outcome)
         end
       end
     end

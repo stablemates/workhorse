@@ -103,6 +103,15 @@ on every other response. `style-src` keeps `'unsafe-inline'` for the styles that
 adds. An embedder that copies the policy from the package README must move to the new policy. The
 old policy still works.
 
+### A stop after the handler returned no longer releases its failed task
+
+`runWorkerProcess` aborts the handlers at the end of its shutdown grace. If the abort came after a
+handler returned, the worker read the abort while it settled the attempt. Thus a failure of the
+handler's own, or a result that the task could not store, returned the task to its queue without
+an attempt. The worker now records the abort state when the handler returns. A batch member
+records it when the batch callback returns. Only a failure after the abort releases the task
+(SM-1933, ADR 0117).
+
 ## 0.12.0 — 2026-11-07
 
 The npm packages, Python distribution, Go module, Rust crate, Ruby gem, JVM artifacts, and .NET

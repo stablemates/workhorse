@@ -191,6 +191,18 @@ final class RuntimeFixtures {
     return GAPS.get(String.valueOf(fixture.get("id")));
   }
 
+  /**
+   * Why the fixture does not apply to Java, or {@code null}. A shutdown-cancellation fixture names
+   * each SDK that runs it, and a handler panic exists only in Go and Rust.
+   */
+  static @Nullable String outsideJava(Map<String, @Nullable Object> fixture) {
+    if ("shutdown-cancellation".equals(fixture.get("kind"))
+        && !object(fixture, "shutdownBehavior").containsKey("java")) {
+      return "the fixture names no Java shutdown behavior";
+    }
+    return null;
+  }
+
   void run(Map<String, @Nullable Object> fixture) throws Exception {
     try {
       dispatch(fixture);
@@ -2124,7 +2136,9 @@ final class RuntimeFixtures {
   /**
    * The handler waits for its cancellation. With an {@code error} handler result it then throws
    * {@code CancelledException(SHUTDOWN)} through {@code throwIfCancelled}; with a {@code value} one
-   * it returns a value. One attempt makes a charged attempt fail the task for good.
+   * it returns a value. With {@code application-error} it throws an exception of its own, and with
+   * {@code oversized-value} it returns a result above the default result limit (ADR 0117). One
+   * attempt makes a charged attempt fail the task for good.
    */
   private void shutdownCancellation(Map<String, @Nullable Object> fixture) throws Exception {
     check(
@@ -2155,8 +2169,14 @@ final class RuntimeFixtures {
                       // interrupts the handler thread, so the wait can end with the interrupt.
                     }
                     reasons.add(ctx.cancellation().reason());
-                    if ("error".equals(fixture.get("handlerResult"))) {
-                      ctx.cancellation().throwIfCancelled();
+                    switch (String.valueOf(fixture.get("handlerResult"))) {
+                      case "error" -> ctx.cancellation().throwIfCancelled();
+                      case "application-error" ->
+                          throw new IllegalStateException("the cleanup timed out");
+                      case "oversized-value" -> {
+                        return Collections.nCopies(Runner.intValue(fixture.get("resultZeros")), 0);
+                      }
+                      default -> {}
                     }
                     return Map.of("finished", true);
                   })

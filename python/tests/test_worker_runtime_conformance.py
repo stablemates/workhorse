@@ -1777,12 +1777,17 @@ def execute_oversized_result_fixture(
 def execute_shutdown_cancellation_fixture(
     connection: psycopg.Connection[Any], fixture: Mapping[str, Any]
 ) -> None:
-    """The Python worker has no shutdown grace: its drain waits for every running handler.
+    """The Python worker has no shutdown grace of its own.
 
-    So the handler outlives the stop, never sees its cancellation, and completes on its only
-    attempt. It returns a value whatever `handlerResult` says, because no cancellation reaches it.
+    `run_worker_process` cancels the handlers at the end of its grace through
+    `_abort_handlers_for_shutdown`, so the runner calls that after `stop()`, as the process runner
+    does. The handler then answers its cancellation as `handlerResult` says, inside the unwind
+    window (ADR 0116, ADR 0117). A fixture that names no Python behavior does not apply.
     """
-    assert fixture["shutdownBehavior"]["python"] == "drain"
+    behavior = fixture["shutdownBehavior"].get("python")
+    if behavior is None:
+        return
+    assert behavior == "cancel"
     queue_name = runtime_queue(fixture)
     task_id = Queue(connection).enqueue(
         fixture["taskType"],
@@ -1790,15 +1795,22 @@ def execute_shutdown_cancellation_fixture(
         EnqueueOptions(queue=queue_name, max_attempts=fixture["maxAttempts"]),
     )
     started = Event()
-    stopped = Event()
-    cancelled: list[bool] = []
+    reasons: list[str] = []
     errors: list[BaseException] = []
 
-    def handler(_payload: object, context: HandlerContext) -> None:
+    def handler(_payload: object, context: HandlerContext) -> object:
         started.set()
-        assert stopped.wait(timeout=5)
-        sleep(fixture["drainHoldMs"] / 1000)
-        cancelled.append(context.cancellation.cancelled)
+        assert context.cancellation.wait(5), "the shutdown never reached the handler"
+        reasons.append(type(context.cancellation.reason).__name__)
+        result = fixture["handlerResult"]
+        if result == "error":
+            context.cancellation.raise_if_cancelled()
+        if result == "application-error":
+            raise RuntimeError("the cleanup timed out")
+        if result == "oversized-value":
+            return [0] * fixture["resultZeros"]
+        assert result == "value", result
+        return {"finished": True}
 
     worker = Worker(
         worker_pool, queue=queue_name, worker_id=f"python-{fixture['id']}", poll_ms=5_000
@@ -1806,13 +1818,23 @@ def execute_shutdown_cancellation_fixture(
     thread = run_in_thread(worker.run, errors)
     assert started.wait(timeout=5), f"{fixture['id']} never started its handler"
     worker.stop()
-    stopped.set()
+    sleep(fixture["shutdownGraceMs"] / 1000)
+    worker._abort_handlers_for_shutdown()
     join(thread)
     assert errors == []
-    assert cancelled == [False]
+    assert reasons == ["_WorkerShutdownError"]
+    expected = fixture["expectedCancelled"]
     state = task_state(connection, task_id)
-    expected = fixture["expectedDrained"]
     assert (state["state"], state["attempt"]) == (expected["state"], expected["attempt"])
+    events = [
+        row[0]
+        for row in connection.execute(
+            "SELECT event_type FROM workhorse.task_event WHERE task_id = %s "
+            "ORDER BY occurred_at, event_id",
+            (task_id,),
+        ).fetchall()
+    ]
+    assert events == expected["events"]
 
 
 def lease_expiry(connection: psycopg.Connection[Any], task_id: str) -> datetime:
@@ -2972,3 +2994,81 @@ def test_replay_conflicts_fail_on_first_occurrence(database_url: str) -> None:
     )
     with psycopg.connect(database_url, autocommit=True) as connection:
         execute_replay_conflict_fixture(connection, fixture)
+
+
+@pytest.mark.parametrize("phase", ["handler-error", "refused-result"])
+def test_a_shutdown_abort_after_the_handler_returned_keeps_its_failure(
+    database_url: str, monkeypatch: pytest.MonkeyPatch, phase: str
+) -> None:
+    """ADR 0117: the abort decides the settlement only if it came before the handler returned."""
+    with psycopg.connect(database_url, autocommit=True) as connection:
+        queue_name = f"python-late-shutdown-{phase}"
+        task_id = Queue(connection).enqueue(
+            "python.late", None, EnqueueOptions(queue=queue_name, max_attempts=1)
+        )
+        cancelled_at_return: list[bool] = []
+        worker = Worker(worker_pool, queue=queue_name, worker_id=f"python-late-{phase}", poll_ms=5)
+
+        def handler(_payload: object, context: HandlerContext) -> object:
+            cancelled_at_return.append(context.cancellation.cancelled)
+            if phase == "handler-error":
+                raise RuntimeError("the work failed before the shutdown")
+            return {"refused": True}
+
+        worker.handle("python.late", handler)
+
+        def stop_after_return() -> None:
+            worker.stop()
+            worker._abort_handlers_for_shutdown()
+
+        if phase == "handler-error":
+            finish = worker._finish_lifecycle_outcome
+
+            def finish_after_stop(task: ClaimedTask, outcome: object) -> bool:
+                stop_after_return()
+                return finish(task, outcome)  # type: ignore[arg-type]
+
+            monkeypatch.setattr(worker, "_finish_lifecycle_outcome", finish_after_stop)
+        else:
+
+            def refuse_after_stop(_task: ClaimedTask, _result: object) -> None:
+                stop_after_return()
+                raise RuntimeError("the result contract refused the result")
+
+            monkeypatch.setattr(worker, "_validate_result_contract", refuse_after_stop)
+        worker.run_once()
+        assert cancelled_at_return == [False]
+        assert task_state(connection, task_id)["state"] == "failed"
+
+
+def test_a_shutdown_abort_during_the_batch_failure_evidence_keeps_the_failure(
+    database_url: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A batch member records the return of the callback before the evidence write (ADR 0117)."""
+    with psycopg.connect(database_url, autocommit=True) as connection:
+        queue_name = "python-late-shutdown-batch"
+        queue = Queue(connection)
+        task_ids = [
+            queue.enqueue("python.batch", None, EnqueueOptions(queue=queue_name, max_attempts=1))
+            for _ in range(2)
+        ]
+        worker = Worker(worker_pool, queue=queue_name, worker_id="python-late-batch", concurrency=2)
+
+        def handle_batch(_items: object) -> list[dict[str, object]]:
+            raise RuntimeError("the batch failed before the shutdown")
+
+        worker.handle_batch("python.batch", handle_batch, max_size=2, linger_ms=1_000)
+        fenced_write_rows = worker_module._fenced_write_rows
+
+        def stop_during_failure_evidence(executor: Any, statement: Any, parameters: Any) -> Any:
+            if statement is worker_module._STATEMENTS.record_batch_failure:
+                worker.stop()
+                worker._abort_handlers_for_shutdown()
+            return fenced_write_rows(executor, statement, parameters)
+
+        monkeypatch.setattr(worker_module, "_fenced_write_rows", stop_during_failure_evidence)
+        assert worker.run_once() is True
+        assert [task_state(connection, task_id)["state"] for task_id in task_ids] == [
+            "failed",
+            "failed",
+        ]

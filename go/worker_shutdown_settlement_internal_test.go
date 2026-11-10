@@ -31,6 +31,7 @@ func TestWorkerLogsTheShutdownSettlementFailedEvent(t *testing.T) {
 		failingRegistryExecutor{},
 		task,
 		nil,
+		nil,
 		errors.New("handler stopped"),
 	)
 

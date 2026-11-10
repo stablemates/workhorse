@@ -172,6 +172,23 @@ type HandlerContext struct {
 	taskGroupRead  bool
 	taskGroupLink  *TaskGroupLink
 	taskGroupQueue *Queue
+	// returned holds the cancellation cause of the handler context when the handler returned. A
+	// batch member records it when the batch handler returns (ADR 0117).
+	returned atomic.Pointer[returnedCause]
+}
+
+// returnedCause is the cancellation cause of a handler context when its handler returned.
+type returnedCause struct{ cause error }
+
+// markReturned records the cancellation cause of the handler context. Only the first call counts.
+func (durability *HandlerContext) markReturned() {
+	durability.returned.CompareAndSwap(nil, &returnedCause{cause: context.Cause(durability.context)})
+}
+
+// causeAtReturn records the return of the handler and gives the first recorded cause.
+func (durability *HandlerContext) causeAtReturn() error {
+	durability.markReturned()
+	return durability.returned.Load().cause
 }
 
 // GetProgress returns the latest progress observed by this handler activation.

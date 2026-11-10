@@ -56,7 +56,9 @@ internal sealed class Runner(Catalogue catalogue, IReadOnlyList<Ledger.Entry> en
                 {
                     Record("runtime", fixture, RuntimeFixtures.Gap(fixture) is { } gap
                         ? Outcome.Unsupported(gap)
-                        : await AttemptAsync(() => adapter.RunAsync(fixture)));
+                        : RuntimeFixtures.OutsideCSharp(fixture) is { } outside
+                            ? Outcome.Skipped(outside)
+                            : await AttemptAsync(() => adapter.RunAsync(fixture)));
                 }
             }
         }

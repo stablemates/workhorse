@@ -41,6 +41,19 @@ module Stablemates
       # The claim order dispatch gave +task+. A task dispatch never saw sorts after every other.
       def claim_order(task) = @state_lock.synchronize { @dispatch_order.fetch(task.id, @dispatch_seq) } # :nodoc:
 
+      # Records whether +cancellation+ held :shutdown when its handler returned. Only the first
+      # record of an attempt counts (ADR 0117).
+      def mark_shutdown_at_return(cancellation) # :nodoc:
+        stopped = cancellation.reason == :shutdown
+        @shutdown_at_return_lock.synchronize { @shutdown_at_return[cancellation] = stopped unless @shutdown_at_return.key?(cancellation) }
+      end
+
+      # Records the return of a handler, and gives the first record of its attempt.
+      def take_shutdown_at_return(cancellation) # :nodoc:
+        mark_shutdown_at_return(cancellation)
+        @shutdown_at_return_lock.synchronize { @shutdown_at_return.delete(cancellation) }
+      end
+
       # Records a batch's dispatch or failure evidence. A write failure only logs, because the
       # evidence must not decide the members' outcomes.
       def record_batch_evidence(sql, phase, batch_id, task_type, batch, full) # :nodoc:
@@ -213,7 +226,14 @@ module Stablemates
           @worker.record_batch_evidence(SqlCatalogue::RECORD_BATCH_DISPATCH_V1, "dispatch", batch_id, @task_type, batch, full)
           items = batch.map { |member| BatchHandlerItem.new(payload: member.payload, context: BatchHandlerContext.new(member.context)) }
           begin
-            outcomes = validate(@handler.call(items), batch.size)
+            begin
+              returned = @handler.call(items)
+            ensure
+              # Each member records the return of the handler before the evidence write, so a stop
+              # during that write cannot turn a failure into a release (ADR 0117).
+              batch.each { |member| @worker.mark_shutdown_at_return(member.context.cancellation) }
+            end
+            outcomes = validate(returned, batch.size)
           rescue Exception => e # rubocop:disable Lint/RescueException
             error = settleable(e, "raised")
             @worker.record_batch_evidence(SqlCatalogue::RECORD_BATCH_FAILURE_V1, "failure", batch_id, @task_type, batch, full)

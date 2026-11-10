@@ -348,22 +348,32 @@ export interface OversizedResultRuntimeFixture extends RuntimeFixtureBase {
 }
 
 /**
- * A worker that stops while a handler runs charges that handler no attempt. A worker with a
- * shutdown grace (`cancel`) cancels the handler once `shutdownGraceMs` elapses. A handler whose
- * `handlerResult` is `error` then raises, and the worker releases its task; one whose
- * `handlerResult` is `value` returns a value, and the worker completes its task. A worker without
- * a grace (`drain`) waits for the handler, which returns after `drainHoldMs` without seeing a
- * cancellation. One attempt makes a charged attempt fail the task for good.
+ * A worker that stops while a handler runs cancels it once `shutdownGraceMs` elapses, and the
+ * handler then settles in the unwind window as `handlerResult` says (ADR 0116, ADR 0117):
+ *
+ * - `error` raises the shutdown cancellation, and the worker releases the task.
+ * - `value` returns a value, and the worker completes the task.
+ * - `application-error` raises an ordinary error of the application, and the worker releases the
+ *   task.
+ * - `oversized-value` returns an array of `resultZeros` zeros, above the default result limit,
+ *   and the worker releases the task.
+ * - `panic` panics, and the worker fails the attempt. Only Go and Rust run it.
+ *
+ * `shutdownBehavior` names each SDK whose runner runs the fixture. A release keeps
+ * `current_attempt`, and one attempt makes a charged attempt fail the task for good.
+ * `expectedCancelled.errorNames` gives the error name of the attempt record for each SDK.
  */
 export interface ShutdownCancellationRuntimeFixture extends RuntimeFixtureBase {
   kind: "shutdown-cancellation";
-  handlerResult: "error" | "value";
+  handlerResult: "error" | "value" | "application-error" | "oversized-value" | "panic";
+  resultZeros?: number;
   maxAttempts: number;
   shutdownGraceMs: number;
-  drainHoldMs: number;
-  shutdownBehavior: Record<string, "cancel" | "drain">;
-  expectedCancelled: ExpectedRuntimeState & { events: string[] };
-  expectedDrained: ExpectedRuntimeState;
+  shutdownBehavior: Partial<Record<string, "cancel">>;
+  expectedCancelled: ExpectedRuntimeState & {
+    events: string[];
+    errorNames?: Partial<Record<string, string>>;
+  };
 }
 
 /**

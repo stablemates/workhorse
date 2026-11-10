@@ -121,6 +121,15 @@ internal sealed class RuntimeFixtures : IAsyncDisposable
     /// <summary>Why no C# adapter can run <paramref name="fixture"/> yet, or <c>null</c> when one can.</summary>
     internal static string? Gap(OrderedDictionary<string, object?> fixture) => Gaps.GetValueOrDefault(Runner.Text(fixture.GetValueOrDefault("id")));
 
+    /// <summary>
+    /// Why the fixture does not apply to C#, or null. A shutdown-cancellation fixture names each SDK
+    /// that runs it, and a handler panic exists only in Go and Rust.
+    /// </summary>
+    internal static string? OutsideCSharp(OrderedDictionary<string, object?> fixture) =>
+        fixture.GetValueOrDefault("kind") is "shutdown-cancellation" && !Get(fixture, "shutdownBehavior").ContainsKey(Language)
+            ? "the fixture names no C# shutdown behavior"
+            : null;
+
     internal async Task RunAsync(OrderedDictionary<string, object?> fixture)
     {
         try
@@ -1798,8 +1807,10 @@ internal sealed class RuntimeFixtures : IAsyncDisposable
 
     /// <summary>
     /// The handler waits for its cancellation. With an <c>error</c> handler result it then throws the
-    /// cancellation of its token; with a <c>value</c> one it returns a value. One attempt makes a
-    /// charged attempt fail the task for good.
+    /// cancellation of its token; with a <c>value</c> one it returns a value. With
+    /// <c>application-error</c> it throws an exception of its own, and with <c>oversized-value</c> it
+    /// returns a result above the default result limit (ADR 0117). One attempt makes a charged
+    /// attempt fail the task for good.
     /// </summary>
     /// <remarks>
     /// The worker cancels the handler at the shutdown deadline. So the settlement always starts then,
@@ -1831,9 +1842,15 @@ internal sealed class RuntimeFixtures : IAsyncDisposable
                 started.TrySetResult();
                 await WaitForCancellationAsync("the shutdown never reached the handler", context.CancellationToken);
                 reasons.Enqueue(context.CancelReason);
-                if (fixture.GetValueOrDefault("handlerResult") is "error")
+                switch (fixture.GetValueOrDefault("handlerResult"))
                 {
-                    context.CancellationToken.ThrowIfCancellationRequested();
+                    case "error":
+                        context.CancellationToken.ThrowIfCancellationRequested();
+                        break;
+                    case "application-error":
+                        throw new InvalidOperationException("the cleanup timed out");
+                    case "oversized-value":
+                        return new int[Runner.Int(fixture.GetValueOrDefault("resultZeros")) ?? 0];
                 }
 
                 return Json.Members(("finished", true));

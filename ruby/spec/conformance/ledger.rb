@@ -5,7 +5,7 @@ require "json"
 module Conformance
   # What one fixture did when the runner tried it. +status+ is :passed, :failed (the Ruby adapter
   # ran and disagreed), :unsupported (no Ruby adapter can express the fixture yet), or :skipped (the
-  # runner could not reach the database the fixture needs).
+  # runner could not reach the database the fixture needs, or the fixture names no Ruby behavior).
   Outcome = Data.define(:status, :reason) do
     def self.passed = new(status: :passed, reason: nil)
     def self.failed(reason) = new(status: :failed, reason: reason)
