@@ -713,6 +713,10 @@ describe("schema installation", () => {
         version: 91,
         description: "scale the dashboard task estimate by the current size of the task table",
       },
+      {
+        version: 92,
+        description: "decide debounce with one clock and keep the keys of pending debounced tasks",
+      },
     ]);
 
     const protocols = await pool.query<{ version: number }>(

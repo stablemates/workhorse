@@ -6603,12 +6603,25 @@ $$;
 -- completion and purge lock them. A value that is not a UUID is left to the per-request
 -- validation, which raises its usual error. Every new task identity is random, so no request can
 -- name a task the batch creates.
+--
+-- A debounce member of enqueue_many_v1 locks the runtime row of its keyed task FOR UPDATE.
+-- enqueue_many_v1 holds every key advisory lock, so the keyed task of each member cannot change.
+-- Thus this function also locks those runtime rows here, in the same identity order as the
+-- prerequisites. A batch with two debounce members, or a debounce member and a prerequisite, then
+-- cannot hold one row that a purge or a resolver waits for while it waits for a row that the other
+-- holds.
+--
+-- Only a key in the debounce mode counts. Its task never has a prerequisite, so no resolver locks
+-- it after another row. A key in another mode can name a blocked dependent. A resolver locks that
+-- dependent after its prerequisite, so an early lock here could make a cycle with the resolver.
 CREATE OR REPLACE FUNCTION workhorse.lock_enqueue_prerequisites_internal_v1(p_requests jsonb)
 RETURNS void
 LANGUAGE plpgsql
 AS $$
 DECLARE
   v_prerequisite_task_ids uuid[];
+  v_debounced_task_ids uuid[];
+  v_lock record;
 BEGIN
   v_prerequisite_task_ids := ARRAY(
     SELECT DISTINCT prerequisite.value::uuid
@@ -6626,10 +6639,47 @@ BEGIN
       ) prerequisite
      WHERE prerequisite.value ~* '^(\{[0-9a-f]{4}(-?[0-9a-f]{4}){7}\}|[0-9a-f]{4}(-?[0-9a-f]{4}){7})$'
   );
-  IF cardinality(v_prerequisite_task_ids) > 0 THEN
+  v_debounced_task_ids := ARRAY(
+    SELECT DISTINCT identity.task_id
+      FROM jsonb_array_elements(p_requests) input(request)
+      JOIN workhorse.enqueue_idempotency identity
+        ON identity.idempotency_scope = COALESCE(input.request->'debounce'->>'scope', 'default')
+       AND identity.idempotency_key_hash = workhorse.idempotency_key_hash_v1(
+             COALESCE(input.request->'debounce'->>'scope', 'default'),
+             input.request->'debounce'->>'key'
+           )
+     WHERE jsonb_typeof(input.request->'debounce') = 'object'
+       AND jsonb_typeof(input.request->'debounce'->'key') = 'string'
+       AND jsonb_typeof(COALESCE(input.request->'debounce'->'scope', '"default"'::jsonb)) = 'string'
+       AND identity.coalescing_mode = 'debounce'
+  );
+  IF cardinality(v_debounced_task_ids) > 0 THEN
+    -- One pass in identity order. A task that is both a prerequisite and a keyed task takes the
+    -- stronger lock.
+    FOR v_lock IN
+      SELECT ids.task_id, bool_or(ids.exclusive) AS exclusive
+        FROM (
+          SELECT task_id, true AS exclusive FROM unnest(v_debounced_task_ids) task_id
+          UNION ALL
+          SELECT task_id, false AS exclusive FROM unnest(v_prerequisite_task_ids) task_id
+        ) ids
+       GROUP BY ids.task_id
+       ORDER BY ids.task_id
+    LOOP
+      IF v_lock.exclusive THEN
+        PERFORM 1 FROM workhorse.task_runtime runtime
+         WHERE runtime.task_id = v_lock.task_id FOR UPDATE;
+      ELSE
+        PERFORM 1 FROM workhorse.task_runtime runtime
+         WHERE runtime.task_id = v_lock.task_id FOR KEY SHARE;
+      END IF;
+    END LOOP;
+  ELSIF cardinality(v_prerequisite_task_ids) > 0 THEN
     PERFORM 1 FROM workhorse.task_runtime runtime
      WHERE runtime.task_id = ANY(v_prerequisite_task_ids)
      ORDER BY runtime.task_id FOR KEY SHARE;
+  END IF;
+  IF cardinality(v_prerequisite_task_ids) > 0 THEN
     PERFORM 1 FROM workhorse.task prerequisite
      WHERE prerequisite.id = ANY(v_prerequisite_task_ids)
      ORDER BY prerequisite.id FOR KEY SHARE;
@@ -6652,7 +6702,7 @@ AS $$
 DECLARE
   v_diagnostic text;
   v_count integer;
-  v_now timestamptz := clock_timestamp();
+  v_now timestamptz;
   v_request jsonb;
   v_lock record;
   v_ordinal integer;
@@ -6785,6 +6835,28 @@ BEGIN
   ));
 
   PERFORM workhorse.lock_enqueue_prerequisites_internal_v1(p_requests);
+
+  -- Lock the stored key rows of the batch before the clock read. A purge deletes key rows without
+  -- the key advisory lock. Without this lock, the key insert below can wait for that delete to
+  -- commit after the clock read, and the new key then expires too early.
+  PERFORM 1
+    FROM workhorse.enqueue_idempotency identity
+   WHERE (identity.idempotency_scope, identity.idempotency_key_hash) IN (
+           SELECT DISTINCT COALESCE(input.request->'idempotency'->>'scope', 'default'),
+                  workhorse.idempotency_key_hash_v1(
+                    COALESCE(input.request->'idempotency'->>'scope', 'default'),
+                    input.request->'idempotency'->>'key'
+                  )
+             FROM jsonb_array_elements(p_requests) input(request)
+            WHERE jsonb_typeof(input.request->'idempotency') = 'object'
+         )
+   ORDER BY identity.idempotency_scope COLLATE "C", identity.idempotency_key_hash
+   FOR UPDATE OF identity;
+
+  -- The batch reads its one timestamp after its last lock and before it writes a row. A lock wait
+  -- above then cannot move run_at, ready_at, or a key expiry into the past, and the expiry test of
+  -- a stored key uses the same instant as the rows that the batch writes.
+  v_now := clock_timestamp();
 
   FOR v_request, v_ordinal IN
     SELECT request, ordinality::integer
@@ -7461,12 +7533,18 @@ $$;
 -- Keyed debounce. Inside the window a same-key request replaces the pending definition. Only a task
 -- that has never started an attempt and holds no durable wait is pending: a scheduled row may be a
 -- suspended wait or a retry backoff, and replacing it would rewrite an attempt already under way.
+--
+-- The function locks the runtime row of the keyed task before the key row, in the order that
+-- run_task_now_v1 and purge_queue_internal_v1 use. It reads the clock after its last lock, so a
+-- lock wait cannot make it test the window with an old instant. Only enqueue_batch_v1 writes a key
+-- row for a new task, and it holds the key advisory lock to do so. Thus, while this function holds
+-- that lock, the key row can only disappear; it cannot name a different task.
 CREATE OR REPLACE FUNCTION workhorse.enqueue_debounce_v1(p_request jsonb)
 RETURNS TABLE (task_id uuid, outcome text)
 LANGUAGE plpgsql
 AS $$
 DECLARE
-  v_now timestamptz := clock_timestamp();
+  v_now timestamptz;
   v_debounce jsonb := p_request->'debounce';
   v_key text;
   v_scope text;
@@ -7480,9 +7558,10 @@ DECLARE
   v_expires_at timestamptz;
   v_normalized jsonb;
   v_existing record;
+  v_existing_task_id uuid;
   v_runtime workhorse.task_runtime%ROWTYPE;
   v_has_identity boolean;
-  v_validation record;
+  v_validation_message text;
   v_row record;
   v_tags text[];
   v_fingerprint_tags text[];
@@ -7547,21 +7626,34 @@ BEGIN
   END;
   PERFORM pg_advisory_xact_lock(hashtextextended(v_scope || chr(31) || v_key, 0));
 
+  -- Find the keyed task with no row lock, lock its runtime row, and then lock the key row again
+  -- for that task. An operator that ran the task now or purged it holds the runtime row first and
+  -- deletes the key row, so the second read then finds no row.
+  SELECT identity.task_id
+    INTO v_existing_task_id
+    FROM workhorse.enqueue_idempotency identity
+   WHERE identity.idempotency_scope = v_scope
+     AND identity.idempotency_key_hash = v_key_hash;
+  IF v_existing_task_id IS NOT NULL THEN
+    SELECT runtime.*
+      INTO v_runtime
+      FROM workhorse.task_runtime runtime
+     WHERE runtime.task_id = v_existing_task_id
+     FOR UPDATE;
+  END IF;
   SELECT identity.task_id, identity.request_fingerprint, identity.expires_at,
          identity.coalescing_mode
     INTO v_existing
     FROM workhorse.enqueue_idempotency identity
    WHERE identity.idempotency_scope = v_scope
      AND identity.idempotency_key_hash = v_key_hash
+     AND identity.task_id = v_existing_task_id
    FOR UPDATE OF identity;
   v_has_identity := FOUND;
-  IF v_has_identity THEN
-    SELECT runtime.*
-      INTO v_runtime
-      FROM workhorse.task_runtime runtime
-     WHERE runtime.task_id = v_existing.task_id
-     FOR UPDATE;
+  IF NOT v_has_identity THEN
+    v_runtime := NULL;
   END IF;
+  v_now := clock_timestamp();
 
   IF v_has_identity AND v_existing.expires_at > v_now THEN
     IF v_existing.coalescing_mode <> 'debounce'
@@ -7595,11 +7687,22 @@ BEGIN
       'idempotency', jsonb_build_object('key', v_key, 'scope', v_scope, 'ttlMs', v_window_ms)
     );
 
+    -- Validate the replacement with the checks of a plain enqueue, and then roll the validation
+    -- back. The batch reads a later clock than this function. If the key expired between the two
+    -- reads, the batch deletes the key row and writes a new task, and the rollback removes both.
+    -- An idempotency conflict (P1001) is the usual end of the validation. Any other error of the
+    -- request propagates unchanged.
     BEGIN
-      SELECT * INTO v_validation
-        FROM workhorse.enqueue_batch_v1(jsonb_build_array(v_normalized));
-    EXCEPTION WHEN SQLSTATE 'P1001' THEN
-      NULL;
+      PERFORM 1 FROM workhorse.enqueue_batch_v1(jsonb_build_array(v_normalized));
+      RAISE EXCEPTION 'workhorse debounce validation complete';
+    EXCEPTION
+      WHEN SQLSTATE 'P1001' THEN
+        NULL;
+      WHEN raise_exception THEN
+        GET STACKED DIAGNOSTICS v_validation_message = MESSAGE_TEXT;
+        IF v_validation_message IS DISTINCT FROM 'workhorse debounce validation complete' THEN
+          RAISE;
+        END IF;
     END;
 
     v_tags := ARRAY(
@@ -7687,7 +7790,8 @@ BEGIN
     UPDATE workhorse.enqueue_idempotency SET
       request_fingerprint = v_fingerprint,
       expires_at = v_expires_at
-    WHERE idempotency_scope = v_scope AND idempotency_key_hash = v_key_hash;
+    WHERE idempotency_scope = v_scope AND idempotency_key_hash = v_key_hash
+      AND enqueue_idempotency.task_id = v_existing.task_id;
 
     INSERT INTO workhorse.task_event(task_id, event_type, details)
     VALUES (v_existing.task_id, 'debounced', jsonb_build_object(
@@ -15443,6 +15547,9 @@ BEGIN
 END;
 $$;
 
+-- Delete expired enqueue keys. A debounce key stays while its task is ready or scheduled, so a
+-- same-key request after the window still finds the pending task and returns non_replaceable with
+-- window_elapsed_pending. A later pass deletes the key when the task is active or terminal.
 CREATE OR REPLACE FUNCTION workhorse.prune_enqueue_idempotency_v1(
   p_before timestamptz, p_limit integer
 ) RETURNS integer
@@ -15459,11 +15566,20 @@ BEGIN
     RAISE EXCEPTION 'idempotency prune limit must be between 1 and 100000';
   END IF;
   WITH candidates AS MATERIALIZED (
-    SELECT idempotency_scope, idempotency_key_hash
-      FROM workhorse.enqueue_idempotency
-     WHERE expires_at <= p_before
-     ORDER BY expires_at, idempotency_scope, idempotency_key_hash
-     FOR UPDATE SKIP LOCKED
+    SELECT idempotency.idempotency_scope, idempotency.idempotency_key_hash
+      FROM workhorse.enqueue_idempotency idempotency
+     WHERE idempotency.expires_at <= p_before
+       AND NOT (
+         idempotency.coalescing_mode = 'debounce'
+         AND EXISTS (
+           SELECT 1 FROM workhorse.task_runtime runtime
+            WHERE runtime.task_id = idempotency.task_id
+              AND runtime.state IN ('ready', 'scheduled')
+         )
+       )
+     ORDER BY idempotency.expires_at, idempotency.idempotency_scope,
+              idempotency.idempotency_key_hash
+     FOR UPDATE OF idempotency SKIP LOCKED
      LIMIT p_limit
   )
   DELETE FROM workhorse.enqueue_idempotency idempotency USING candidates
@@ -22959,10 +23075,11 @@ INSERT INTO workhorse.schema_migration(version, description) VALUES
   (88, 'settle cancel-requested timeouts and bound the dashboard schedule reads'),
   (89, 'settle a fast-tier cancellation at its deadline after its timeout'),
   (90, 'show the task group in the task detail'),
-  (91, 'scale the dashboard task estimate by the current size of the task table')
+  (91, 'scale the dashboard task estimate by the current size of the task table'),
+  (92, 'decide debounce with one clock and keep the keys of pending debounced tasks')
 ON CONFLICT DO NOTHING;
 
-INSERT INTO workhorse.schema_version(version) VALUES (91) ON CONFLICT DO NOTHING;
+INSERT INTO workhorse.schema_version(version) VALUES (92) ON CONFLICT DO NOTHING;
 
 INSERT INTO workhorse.protocol_version(version) VALUES (5) ON CONFLICT DO NOTHING;
 SELECT workhorse.create_history_day_v1(

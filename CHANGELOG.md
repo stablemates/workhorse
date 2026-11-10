@@ -45,6 +45,36 @@ errors that abort the transaction and the errors that the SDK raises itself. The
 TypeORM, Kysely, Knex, and Active Job pages and the JDBC, Spring Boot, and .NET sections link to
 it.
 
+### Debounce and enqueue decide with the clock after their locks
+
+A debounce request waited on the runtime row of its task, for example behind an open transaction
+that enqueued a dependent of that task. If the wait ended after the window, the request returned
+`replaced`, but it also wrote a second task that no caller knew. The key then named the second task
+in the idempotency mode. `enqueue_debounce_v1` now reads the clock after its last lock. The request
+in that case returns `non_replaceable` with `window_elapsed_pending`, and the queue holds one task.
+The validation of a replacement now writes no row.
+
+A same-key debounce request could deadlock with `run_task_now_v1` or with a queue purge of its task
+(`40P01`). `enqueue_debounce_v1` now locks the runtime row before the key row, as those functions
+do. The request waits for the operator action and then continues. If the action deleted the key,
+the request gets `accepted` with a new task.
+In a batch with more than one debounce member, `enqueue_many_v1` locks the runtime rows of their
+tasks in task ID order, the order of a purge.
+
+On a paused or late queue, maintenance deleted the key of a pending debounced task after its window.
+The next same-key request then wrote a second pending task. `prune_enqueue_idempotency_v1` now keeps
+a debounce key while its task is `ready` or `scheduled`.
+
+`enqueue_batch_v1` read its one timestamp before its tier and prerequisite locks. After a lock
+wait, `ready_at` and the key expiry were old, and a same-key request inside the TTL could create a
+second task. The batch now reads its timestamp after those locks.
+
+Migration 0093 (`0093-decide-debounce-with-one-clock-and-keep-pending-debounce-keys.sql`) moves the
+schema to version 92. It replaces the bodies of `enqueue_batch_v1`, `enqueue_debounce_v1`,
+`lock_enqueue_prerequisites_internal_v1`, and `prune_enqueue_idempotency_v1`. It does not raise the
+SDK compatibility floor and changes no rows.
+Run `workhorse schema migrate`.
+
 ## 0.12.0 — 2026-11-07
 
 The npm packages, Python distribution, Go module, Rust crate, Ruby gem, JVM artifacts, and .NET

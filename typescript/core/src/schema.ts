@@ -651,6 +651,13 @@ export const SCHEMA_MIGRATIONS: readonly SchemaMigrationStep[] = [
     description: "scale the dashboard task estimate by the current size of the task table",
     kind: "additive",
   },
+  {
+    fromVersion: 91,
+    toVersion: 92,
+    file: "0093-decide-debounce-with-one-clock-and-keep-pending-debounce-keys.sql",
+    description: "decide debounce with one clock and keep the keys of pending debounced tasks",
+    kind: "additive",
+  },
 ];
 
 /**

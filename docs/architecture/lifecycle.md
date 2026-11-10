@@ -18,7 +18,11 @@ health snapshot.
 #### Batch validation
 
 - A batch holds at most 1,000 requests.
-- `enqueue_batch_v1` parses and validates every request against one timestamp.
+- `enqueue_batch_v1` parses and validates every request against one timestamp. It reads that
+  timestamp after its key, tier, and prerequisite locks, and before it writes a row. Before the
+  read, it also locks the stored key rows of the batch, because a purge deletes a key row without
+  the key advisory lock. Thus a lock wait does not move `run_at`, `ready_at`, or a key expiry
+  before the end of the wait.
 - A request can carry an optional priority, persisted retry policies, and up to 100 dependency
   identities.
 - Priority defaults to 0 and must be an integer from 0 through 100.
@@ -139,6 +143,27 @@ idempotency. It stores `coalescing_mode = 'debounce'` on `enqueue_idempotency`. 
 the raw key. For a new key, it creates one scheduled task through `enqueue_batch_v1` and returns
 `accepted`.
 
+After the advisory lock, `enqueue_debounce_v1` takes its row locks in this order:
+
+1. It reads the key row with no lock.
+2. It locks the `task_runtime` row of that task `FOR UPDATE`.
+3. It locks the key row `FOR UPDATE` again, only if the row still names the same task.
+4. It reads `clock_timestamp()`. Every window test and every new time uses this one value.
+
+`run_task_now_v1` and `purge_queue_internal_v1` lock the runtime row before they delete the key row.
+Thus the same order prevents a deadlock (`40P01`) between them and a same-key request. If one of
+them deletes the key row while the request waits, step 3 finds no row, and the request continues
+as a fresh acceptance. Only `enqueue_batch_v1` inserts a key row, under the same advisory lock. Thus
+the key row cannot name a different task between steps 1 and 3.
+
+A batch can hold more than one debounce member. Before any member runs, `enqueue_many_v1` calls
+`lock_enqueue_prerequisites_internal_v1`. That function locks the runtime row of the keyed task of
+each debounce member `FOR UPDATE`, and each prerequisite runtime row `FOR KEY SHARE`, in one pass in
+identity order. A purge locks its runtime rows in the same order, so the batch and the purge cannot
+deadlock on those rows. The pass takes only a key with `coalescing_mode = 'debounce'`, because its task never has
+a prerequisite. A key in another mode can name a blocked dependent, and a resolver locks a
+dependent after its prerequisite.
+
 ##### Replacement
 
 PostgreSQL replaces a pending definition only if the retained runtime meets all of these
@@ -149,10 +174,15 @@ conditions:
 - It is on `current_attempt = 1`.
 - The key window is still active.
 
-PostgreSQL validates the replacement through `enqueue_batch_v1`. It then updates the accepted task
-definition and runtime atomically. The stable task ID and current attempt do not change.
+PostgreSQL validates the replacement through `enqueue_batch_v1` and then rolls that call back, so the
+validation writes no row. The batch reads a later clock. If the key expires between the two reads,
+the batch deletes the key row and writes a new task, and the rollback removes both. An idempotency
+conflict (`P1001`) is the usual end of the validation. Any other error of the request propagates.
+PostgreSQL then updates the accepted task definition, its runtime, and the key row atomically. The
+key row update matches the `task_id` of the replaced task. The stable task ID and current attempt do
+not change.
 
-- `reset` derives a new run time and key expiry from the statement clock.
+- `reset` derives a new run time and key expiry from the clock value of step 4 above.
 - `preserve` keeps both.
 
 A `debounced` event records the safe key preview and the first 12 hexadecimal key-digest
@@ -189,6 +219,15 @@ definition. It appends `debounce_rejected` with the same bounded reason.
   ([Data model: Queue purge](data-model.md#queue-purge)).
 - `run_task_now_v1` deletes the debounce identity of a released task. Thus Workhorse returns
   `accepted` for the next request with the same key, as a new task.
+- A same-key request that waits on the runtime row while `run_task_now_v1` or a purge runs
+  continues after that transaction commits. If the action deleted the key, the request gets
+  `accepted` with a new task. A task that the purge cancels keeps its key, so the request then
+  decides as after a cancel.
+- `prune_enqueue_idempotency_v1` keeps an expired key with `coalescing_mode = 'debounce'` while its
+  task has a `task_runtime` row in `ready` or `scheduled`. Thus a late request on a paused queue gets
+  `window_elapsed_pending` after any number of maintenance passes. A later pass deletes the key when
+  the task is active or terminal
+  ([Data model: Key exposure and expiry](data-model.md#key-exposure-and-expiry)).
 
 These rules keep one runtime or outcome for each accepted identity. They also prevent promotion lag
 from creating two pending tasks for one elapsed key.
