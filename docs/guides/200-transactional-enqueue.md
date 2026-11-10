@@ -83,6 +83,55 @@ More detail: [Task lifecycle: Batch validation](../architecture/lifecycle.md#bat
 
 </details>
 
+## Catch an enqueue error outside the transaction
+
+**Example.** A signup request for `acc-7` arrives two times, and the second enqueue conflicts.
+
+1. The app server inserts the row for `acc-7` in a transaction.
+2. In the same transaction, it enqueues `account.created` with the idempotency key `signup:acc-7`.
+   An earlier request stored that key with a different payload.
+3. PostgreSQL refuses the enqueue with an idempotency conflict. This aborts the transaction.
+4. The code catches the error in the transaction callback and returns, so the ORM sends `COMMIT`.
+5. PostgreSQL answers with `ROLLBACK`. The row for `acc-7` is not saved, and Knex, Drizzle, Prisma,
+   and TypeORM report no error.
+
+If PostgreSQL refuses a statement, it aborts the full transaction. Each later statement fails, and
+the commit becomes a rollback. Thus do not catch a Workhorse error in the transaction and continue.
+Use one of these patterns:
+
+- Let the error leave the transaction callback. Catch the error outside the transaction.
+- To keep the outer transaction, put the enqueue in a savepoint. A savepoint is a named point in a
+  transaction. If the enqueue fails, roll back to the savepoint, and the outer transaction stays
+  usable.
+
+Some errors come from a check that the SDK makes itself, with no refused statement. Examples are an
+invalid option and a payload that its payload contract rejects. These errors do not abort the
+transaction. The reference block lists them for TypeScript. For another SDK, treat each enqueue
+error as an aborted transaction.
+
+<details>
+<summary>Reference: errors in a caller's transaction</summary>
+
+| TypeScript error                                                                             | Source                                                              | Caller's transaction |
+| -------------------------------------------------------------------------------------------- | ------------------------------------------------------------------- | -------------------- |
+| `EnqueueIdempotencyConflictError`, `DependencyCycleError`, `DependencyLimitExceededError`    | PostgreSQL                                                          | Aborted              |
+| A provider `QueryError`, such as `KyselyQueryError`, for a statement that PostgreSQL refused | PostgreSQL                                                          | Aborted              |
+| `SchemaCompatibilityError` after a failed compatibility query                                | PostgreSQL                                                          | Aborted              |
+| `SchemaCompatibilityError` after a successful or earlier compatibility answer                | `Queue`                                                             | Usable               |
+| `TypeError` or `RangeError` from the option and batch checks                                 | `Queue`, before any statement                                       | Usable               |
+| `TaskContractValidationError`, `TaskValueSizeLimitError`                                     | `Queue`, after read-only statements or a `contract_mismatch` answer | Usable               |
+
+- After an abort, each statement fails with SQLSTATE `25P02`, and PostgreSQL answers `COMMIT` with
+  `ROLLBACK`.
+- Knex, Drizzle, Prisma, TypeORM, and Kysely 0.29.0 to 0.29.7 resolve the transaction call with no
+  error. From Kysely 0.29.8, `transaction().execute()` rejects.
+- A `schema-not-installed` code does not show which case occurred.
+- An empty batch sends no statement.
+
+More detail: [Overview: Errors in a caller's transaction](../architecture/overview.md#errors-in-a-callers-transaction).
+
+</details>
+
 ## Pass a node-postgres transaction client
 
 `Queue.enqueue` accepts your open transaction client as its last argument. Any object with a
@@ -386,6 +435,9 @@ suspend fun createAccount(dataSource: DataSource, queue: Queue, id: String, emai
 }
 ```
 
+If PostgreSQL refuses an enqueue, it aborts your transaction, also when you catch the error. Read
+[Catch an enqueue error outside the transaction](#catch-an-enqueue-error-outside-the-transaction).
+
 <details>
 <summary>Reference: JVM connection sources</summary>
 
@@ -441,6 +493,9 @@ transaction to its thread. Inside that function, a suspend wrapper with no conne
 Do not mark a `suspend` function `@Transactional` when the transaction manager uses JDBC. With a
 `DataSourceTransactionManager`, Spring commits that transaction at the first suspension point. Thus
 the rest of the function runs outside the transaction.
+
+If PostgreSQL refuses an enqueue, it aborts your transaction, also when you catch the error. Read
+[Catch an enqueue error outside the transaction](#catch-an-enqueue-error-outside-the-transaction).
 
 <details>
 <summary>Reference: Spring Boot transactions</summary>
@@ -508,6 +563,9 @@ your transaction.
 An ambient `TransactionScope` does not change a call of the source form. That call always runs in
 autocommit. To enqueue in a transaction, use the caller form.
 
+If PostgreSQL refuses an enqueue, it aborts your transaction, also when you catch the error. Read
+[Catch an enqueue error outside the transaction](#catch-an-enqueue-error-outside-the-transaction).
+
 ## Enqueue in an EF Core transaction with .NET
 
 An application that uses EF Core with the Npgsql provider uses the `Workhorse.EntityFrameworkCore`
@@ -536,6 +594,9 @@ public async Task CreateAccountAsync(
 
 Npgsql runs the enqueue inside the transaction that EF Core began. If the code does not commit, the
 transaction rolls back, and the task disappears with the account row.
+
+If PostgreSQL refuses an enqueue, it aborts your transaction, also when you catch the error. Read
+[Catch an enqueue error outside the transaction](#catch-an-enqueue-error-outside-the-transaction).
 
 <details>
 <summary>Reference: .NET connection forms</summary>

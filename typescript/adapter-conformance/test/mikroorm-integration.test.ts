@@ -73,7 +73,11 @@ describe("MikroORM 7.2.1 through the shipped Kysely adapter", () => {
         const executor = transactionalEm.getKysely();
         expect(executor).toBe(transactionalEm.getTransactionContext());
         expect(executor).not.toBe(pooled);
-        const execute = vi.spyOn(executor, "executeQuery");
+        // The adapter sends each statement through the plugin-free view of the callback executor,
+        // which uses the same connection and transaction.
+        const unplugged = executor.withoutPlugins();
+        const withoutPlugins = vi.spyOn(executor, "withoutPlugins").mockReturnValue(unplugged);
+        const execute = vi.spyOn(unplugged, "executeQuery");
         try {
           const scoped = createKyselyAdapter(executor);
           const throughOrm = await transactionalEm.execute<{ pid: number; xid: string }[]>(
@@ -92,6 +96,7 @@ describe("MikroORM 7.2.1 through the shipped Kysely adapter", () => {
           taskId = await workhorse.forTransaction(executor).enqueue("order.accepted", {
             orderId,
           });
+          expect(withoutPlugins).toHaveBeenCalled();
           expect(
             execute.mock.calls.some(([query]) => "sql" in query && query.sql.includes("enqueue")),
           ).toBe(true);
@@ -103,6 +108,7 @@ describe("MikroORM 7.2.1 through the shipped Kysely adapter", () => {
           if (rollback) throw abort;
         } finally {
           execute.mockRestore();
+          withoutPlugins.mockRestore();
         }
       });
 

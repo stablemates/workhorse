@@ -74,6 +74,36 @@ not see the account or the task before the commit.
 To enqueue a task that is not part of a transaction, use `workhorse.queue`. This queue does not join
 the transaction of the caller.
 
+If PostgreSQL refuses an enqueue, it aborts your transaction, also when you catch the error. Read
+[Catch an enqueue error outside the transaction](/docs/enqueue#catch-an-enqueue-error-outside-the-transaction).
+
+## Keep your Kysely plugins
+
+A Kysely plugin can change each result row. For example, `CamelCasePlugin` renames `task_id` to
+`taskId`, and it renames the keys of a JSON payload. Workhorse reads its rows by their column names.
+Thus the adapter runs each Workhorse statement without the plugins of your database or transaction.
+
+Your database and your transaction keep their plugins, so your own queries still use them. A task
+that Workhorse returns keeps the payload keys that you wrote. For example, `account_id` stays
+`account_id`.
+
+<details>
+<summary>Reference: plugins</summary>
+
+- `kyselyQueryable` calls `withoutPlugins()` on the executor one time. It sends each statement
+  through the result, which uses the same connection and transaction.
+- `Kysely`, `Transaction`, and `ControlledTransaction` have `withoutPlugins()` in each release of the
+  supported peer range, `>=0.29 <0.30`.
+- Before each statement, the adapter reads `isCommitted` and `isRolledBack` of your executor. After
+  a commit or a rollback of a `ControlledTransaction`, it refuses the statement with
+  `KyselyQueryError`.
+- `KyselyExecutor` declares `withoutPlugins()` as optional. A structural executor without it gets
+  each statement directly.
+
+More detail: [Overview: Kysely queryable](https://github.com/stablemates/workhorse/blob/main/docs/architecture/overview.md#kysely-queryable).
+
+</details>
+
 ## Give the worker a pool of at least 3 connections
 
 A worker needs `pool`. The pool must hold the listen connection, the heartbeat connection, and one
@@ -111,7 +141,7 @@ wait conflicts.
 
 - `KyselyQueryError` extends `QueryError`.
 - `kyselyQueryable` builds a `CompiledQuery.raw` from the statement and its values. It then calls
-  `executeQuery` on a `Kysely` database or a `Transaction`.
+  `executeQuery` on a `Kysely` database or a `Transaction`, without its plugins.
 
 More detail: [Overview: Kysely queryable](https://github.com/stablemates/workhorse/blob/main/docs/architecture/overview.md#kysely-queryable).
 

@@ -41,7 +41,9 @@ The adapter never destroys a caller-owned Kysely database unless `close` is conf
 Pass the `pg` pool used by `PostgresDialect` as `pool`, with a maximum size (`max`) of at least 3.
 Workers take their heartbeat and `LISTEN/NOTIFY` connections from it. Without that pool,
 `createWorker()` throws an error that names the step. Database errors become `KyselyQueryError`, with the original error in `cause` and its
-PostgreSQL code copied to `code`.
+PostgreSQL code copied to `code`. The adapter runs each Workhorse statement without the plugins of
+the Kysely executor, so a plugin such as `CamelCasePlugin` cannot change the rows that Workhorse
+reads. Your own queries keep the plugins.
 
 ## Next
 

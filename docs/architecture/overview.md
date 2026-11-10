@@ -139,6 +139,21 @@ statement. `executeDrizzle` returns the rows of the last one.
 calls `executeQuery` on either a `Kysely` database or `Transaction`. It maps `QueryResult.rows` into
 the same synthetic node-postgres metadata as the Prisma and TypeORM queryables.
 
+Kysely applies the `transformResult` hook of each plugin to the result of `executeQuery`. For
+example, `CamelCasePlugin` renames `task_id` to `taskId` and renames each nested key of a JSON
+payload. Thus `kyselyQueryable` calls `withoutPlugins()` on the executor one time, and sends each
+statement through the result. That executor uses the same connection and transaction, with no
+plugin. `Kysely`, `Transaction`, and `ControlledTransaction` have `withoutPlugins()` in each release
+of the supported peer range, `>=0.29 <0.30`. `KyselyExecutor` declares the method as optional, so a
+structural executor without it receives the statements directly. The caller's executor keeps its
+plugins for the caller's own queries.
+
+Kysely 0.29.0 to 0.29.6 give the plugin-free copy of a `ControlledTransaction` its own completion
+state. Thus that copy can run a statement after the caller commits or rolls back. Before each
+statement, `kyselyQueryable` reads `isCommitted` and `isRolledBack` of the caller's executor. If
+either is `true`, it refuses the statement with the error that Kysely raises, wrapped in
+`KyselyQueryError`.
+
 `KyselyQueryError`:
 
 - keeps the statement and the original `cause`
@@ -697,6 +712,45 @@ and the matching Python, Go, Rust, and .NET errors.
 If a payload fails shape validation, Workhorse discards it and uses sanitized placeholder details.
 Workhorse does not propagate that payload. `DETAIL` is diagnostic text that an operator or an ORM
 can also write.
+
+### Errors in a caller's transaction
+
+An enqueue through a caller's transaction runs its statements in that transaction. If PostgreSQL
+raises an error for a statement, PostgreSQL aborts the transaction. Each later statement then fails
+with SQLSTATE `25P02`, and PostgreSQL answers `COMMIT` with `ROLLBACK`. Thus the caller's own rows
+in that transaction are not saved, also when the caller catches the error.
+
+These enqueue errors come from a statement that PostgreSQL refused, so they abort the caller's
+transaction:
+
+- `EnqueueIdempotencyConflictError`, `DependencyCycleError`, `DependencyLimitExceededError`, and
+  each other error of the SQLSTATE registry
+- a `QueryError` of a provider adapter, for example `KyselyQueryError`, when PostgreSQL refused its
+  statement. A driver or an ORM hook can also raise a `QueryError` after a successful statement.
+  Then the transaction stays usable.
+
+A TypeScript `Queue` raises these errors itself, after no statement or after successful statements
+only. They abort nothing:
+
+- `TypeError` and `RangeError` from `validateEnqueueOptions` and `validateEnqueueBatch` in
+  `typescript/core/src/queue/enqueue-contracts.ts`. They check the options and the batch size before
+  the compatibility check, so they send no statement.
+- `TaskContractValidationError` and `TaskValueSizeLimitError`. The client validates the payload
+  before it sends the enqueue statement. Before that, it can run the compatibility check and read
+  the current contract. If `enqueue_many_v1` answers `contract_mismatch`, PostgreSQL wrote nothing.
+  The client then reads the current contract and validates the payload again.
+- `SchemaCompatibilityError`, when the compatibility query succeeded or the queue reuses an earlier
+  answer. If that query failed in PostgreSQL, for example because the schema is not installed, the
+  transaction is aborted. The `code` does not tell the two cases apart: `schema-not-installed` also
+  comes from an empty version table.
+
+An empty batch sends no statement and returns an empty array.
+
+The provider transaction call reports the abort differently. The adapter conformance test
+`loses the business row when the callback catches an enqueue conflict` pins each one at the
+versions that the suite installs. The Knex, Drizzle, Prisma, and TypeORM transaction calls resolve
+with no error. The Kysely `transaction().execute()` call rejects from Kysely 0.29.8, because Kysely
+then checks the answer to `COMMIT`. Kysely 0.29.0 to 0.29.7 resolve it with no error.
 
 ### Missing rows
 

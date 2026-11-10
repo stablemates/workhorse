@@ -161,6 +161,9 @@ ActiveRecord::Base.transaction do
 end
 ```
 
+If PostgreSQL refuses an enqueue, it aborts your transaction, also when you rescue the error. Read
+[Catch an enqueue error outside the transaction](/docs/enqueue#catch-an-enqueue-error-outside-the-transaction).
+
 ## Run the worker from `bin/workhorse`
 
 The web process never runs jobs. Start the worker as its own process from a script, such as

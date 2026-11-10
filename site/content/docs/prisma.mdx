@@ -71,6 +71,9 @@ If the callback throws an error, Prisma rolls back the account and the task.
 
 To enqueue a task without a transaction, use `workhorse.queue.enqueue`.
 
+If PostgreSQL refuses an enqueue, it aborts your transaction, also when you catch the error. Read
+[Catch an enqueue error outside the transaction](/docs/enqueue#catch-an-enqueue-error-outside-the-transaction).
+
 ## Run the worker in its own process
 
 Run workers in their own process, not in your web server. A worker needs a node-postgres pool,

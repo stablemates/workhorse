@@ -360,6 +360,8 @@ later request with the same key must be the same.
 
 The conflict error stops the full enqueue statement. If you enqueue in your own transaction, the
 transaction fails too. The error shows the existing task and the fields that are different.
+Catch the error outside that transaction, as
+[Catch an enqueue error outside the transaction](/docs/enqueue#catch-an-enqueue-error-outside-the-transaction) explains.
 
 <details>
 <summary>Reference: fingerprint and conflict</summary>

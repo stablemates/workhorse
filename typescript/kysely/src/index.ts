@@ -8,10 +8,12 @@ import {
   type WorkhorseAdapter,
 } from "@stablemates/workhorse";
 import type { CompiledQuery, QueryResult } from "kysely";
-import { executeKysely } from "./query.js";
+import { kyselyStatement } from "./query.js";
 
 export interface KyselyExecutor {
   executeQuery<R>(query: CompiledQuery<R>): Promise<QueryResult<R>>;
+  /** If present, the adapter runs its statements on this plugin-free copy of the executor. */
+  withoutPlugins?(): KyselyExecutor;
 }
 
 export interface KyselyAdapterOptions extends ProviderAdapterOptions {}
@@ -28,7 +30,7 @@ export function kyselyQueryable(
   connectionPool?: AdapterConnectionPoolSource,
 ): Queryable {
   return createProviderQueryable({
-    execute: (statement, values) => executeKysely(executor, statement, values),
+    execute: kyselyStatement(executor),
     wrapError: (statement, cause) => new KyselyQueryError(statement, cause),
     connectionPool,
   });
