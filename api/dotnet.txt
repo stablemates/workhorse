@@ -160,6 +160,12 @@ public sealed record Workhorse.CheckpointOptions
 Workhorse.CheckpointOptions: public CheckpointOptions()
 Workhorse.CheckpointOptions: public object? Input { get; init; }
 
+public sealed class Workhorse.CheckpointValueSizeLimitException : Workhorse.WorkhorseException
+Workhorse.CheckpointValueSizeLimitException: public CheckpointValueSizeLimitException(string name, long actualBytes, long maxBytes)
+Workhorse.CheckpointValueSizeLimitException: public long ActualBytes { get; }
+Workhorse.CheckpointValueSizeLimitException: public long MaxBytes { get; }
+Workhorse.CheckpointValueSizeLimitException: public string Name { get; }
+
 public static class Workhorse.Checkpoints
 Workhorse.Checkpoints: public static string InputFingerprint<T>(T input)
 Workhorse.Checkpoints: public static string InputFingerprint<T>(T input, System.Text.Json.JsonSerializerOptions options)

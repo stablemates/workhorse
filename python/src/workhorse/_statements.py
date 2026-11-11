@@ -9,8 +9,8 @@ from typing import Literal
 PROTOCOL_VERSION = 5
 MINIMUM_PROTOCOL_VERSION = 5
 MAXIMUM_PROTOCOL_VERSION = 5
-MINIMUM_SCHEMA_VERSION = 98
-MAXIMUM_SCHEMA_VERSION = 98
+MINIMUM_SCHEMA_VERSION = 99
+MAXIMUM_SCHEMA_VERSION = 99
 DEFAULT_VALUE_MAX_BYTES = 1048576
 MAX_BATCH_SIZE = 1000
 
@@ -98,6 +98,10 @@ SQL_STATEMENTS: dict[str, tuple[str, str]] = {
     "fail_v1": (
         "SELECT workhorse.fail_v1(%s::uuid, %s::text, %s::bigint, %s::jsonb, %s::integer) AS state",
         "SELECT workhorse.fail_v1($1::uuid, $2::text, $3::bigint, $4::jsonb, $5::integer) AS state",
+    ),
+    "fail_v2": (
+        "SELECT workhorse.fail_v2(%s::uuid, %s::text, %s::bigint, %s::jsonb, %s::integer) AS state",
+        "SELECT workhorse.fail_v2($1::uuid, $2::text, $3::bigint, $4::jsonb, $5::integer) AS state",
     ),
     "release_owned_v1": (
         "SELECT workhorse.release_owned_v1(%s::uuid, %s::text, %s::bigint) AS status",
@@ -246,6 +250,10 @@ SQL_STATEMENTS: dict[str, tuple[str, str]] = {
     "save_checkpoint_v2": (
         "SELECT status, checkpoint_value, attempt, fence_token::text, worker_id, created_at, input_fingerprint FROM workhorse.save_checkpoint_v2(%s::uuid, %s::text, %s::bigint, %s::text, %s::jsonb, %s::text)",
         "SELECT status, checkpoint_value, attempt, fence_token::text, worker_id, created_at, input_fingerprint FROM workhorse.save_checkpoint_v2($1::uuid, $2::text, $3::bigint, $4::text, $5::jsonb, $6::text)",
+    ),
+    "save_checkpoint_v3": (
+        "SELECT status, checkpoint_value, attempt, fence_token::text, worker_id, created_at, input_fingerprint, value_bytes, max_bytes FROM workhorse.save_checkpoint_v3(%s::uuid, %s::text, %s::bigint, %s::text, %s::jsonb, %s::text)",
+        "SELECT status, checkpoint_value, attempt, fence_token::text, worker_id, created_at, input_fingerprint, value_bytes, max_bytes FROM workhorse.save_checkpoint_v3($1::uuid, $2::text, $3::bigint, $4::text, $5::jsonb, $6::text)",
     ),
     "schedule_wait_v1": (
         "SELECT status, wait_name, mode, duration_ms::text, requested_wake_at, wake_at, attempt, fence_token::text, worker_id, created_at FROM workhorse.schedule_wait_v1(%s::uuid, %s::text, %s::bigint, %s::text, %s::bigint, %s::timestamptz)",
@@ -777,7 +785,7 @@ STATEMENTS = StatementRegistry(
     deregister_worker=_statement("deregister_worker_v2"),
     enqueue_many=_statement("enqueue_many_v1"),
     expire_owned=_statement("expire_owned_telemetry_v1"),
-    fail=_statement("fail_v1"),
+    fail=_statement("fail_v2"),
     release_owned=_statement("release_owned_v1"),
     fire_due_schedules=_statement("fire_due_schedules_v2"),
     get_contract=_statement("get_contract_definition_v1"),
@@ -792,7 +800,7 @@ STATEMENTS = StatementRegistry(
     record_batch_failure=_statement("record_batch_failure_v1"),
     register_worker=_statement("register_worker_v1"),
     run_maintenance=_statement("run_maintenance_v1"),
-    save_checkpoint=_statement("save_checkpoint_v2"),
+    save_checkpoint=_statement("save_checkpoint_v3"),
     schedule_wait=_statement("schedule_wait_v2"),
     send_signal=_statement("send_signal_v2"),
     sync_concurrency_policies=_statement("sync_concurrency_policies_v1"),

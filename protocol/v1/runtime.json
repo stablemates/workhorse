@@ -723,6 +723,29 @@
     "expectedFitting": { "state": "succeeded", "attempt": 1 }
   },
   {
+    "id": "oversized-checkpoint-value-fails-the-task-without-a-retry",
+    "kind": "oversized-checkpoint",
+    "covers": ["checkpoint-value-size-limit"],
+    "taskType": "protocol.oversized-checkpoint",
+    "checkpointName": "render",
+    "maxAttempts": 3,
+    "oversizedZeros": 349526,
+    "expectedCheckpointOperations": 1,
+    "expectedHandlerRuns": 1,
+    "expectedStoredCheckpoints": 0,
+    "expectedSettled": { "state": "failed", "attempt": 1 },
+    "expectedAttemptOutcomes": ["failed"],
+    "expectedErrorNames": {
+      "typescript": "CheckpointValueSizeLimitError",
+      "python": "CheckpointValueSizeLimitError",
+      "go": "CheckpointValueSizeLimitError",
+      "rust": "CheckpointValueSizeLimitError",
+      "ruby": "Stablemates::Workhorse::CheckpointValueSizeLimitError",
+      "java": "CheckpointValueSizeLimitException",
+      "csharp": "CheckpointValueSizeLimitException"
+    }
+  },
+  {
     "id": "result-contract-failure-fails-through-the-retry-policy",
     "kind": "result-contract-failure",
     "covers": ["result-contract-failure"],

@@ -5,8 +5,8 @@
 pub const CLIENT_PROTOCOL_VERSION: i32 = 5;
 pub const MINIMUM_PROTOCOL_VERSION: i32 = 5;
 pub const MAXIMUM_PROTOCOL_VERSION: i32 = 5;
-pub const MINIMUM_SCHEMA_VERSION: i32 = 98;
-pub const MAXIMUM_SCHEMA_VERSION: i32 = 98;
+pub const MINIMUM_SCHEMA_VERSION: i32 = 99;
+pub const MAXIMUM_SCHEMA_VERSION: i32 = 99;
 /// PostgreSQL's atomic enqueue batch limit.
 pub const MAX_ENQUEUE_BATCH_SIZE: usize = 1000;
 pub const DEFAULT_TASK_VALUE_MAX_BYTES: i64 = 1048576;
@@ -71,6 +71,10 @@ pub const EXPIRE_OWNED_TELEMETRY_V1: &str =
 /// `fail_v1` (protocol)
 pub const FAIL_V1: &str =
     r#"SELECT workhorse.fail_v1($1::uuid, $2::text, $3::bigint, $4::jsonb, $5::integer) AS state"#;
+
+/// `fail_v2` (protocol)
+pub const FAIL_V2: &str =
+    r#"SELECT workhorse.fail_v2($1::uuid, $2::text, $3::bigint, $4::jsonb, $5::integer) AS state"#;
 
 /// `release_owned_v1` (protocol)
 pub const RELEASE_OWNED_V1: &str =
@@ -294,6 +298,9 @@ pub const SAVE_CHECKPOINT_V1: &str = r#"SELECT status, checkpoint_value, attempt
 
 /// `save_checkpoint_v2` (protocol)
 pub const SAVE_CHECKPOINT_V2: &str = r#"SELECT status, checkpoint_value, attempt, fence_token::text, worker_id, created_at, input_fingerprint FROM workhorse.save_checkpoint_v2($1::uuid, $2::text, $3::bigint, $4::text, $5::jsonb, $6::text)"#;
+
+/// `save_checkpoint_v3` (protocol)
+pub const SAVE_CHECKPOINT_V3: &str = r#"SELECT status, checkpoint_value, attempt, fence_token::text, worker_id, created_at, input_fingerprint, value_bytes, max_bytes FROM workhorse.save_checkpoint_v3($1::uuid, $2::text, $3::bigint, $4::text, $5::jsonb, $6::text)"#;
 
 /// `schedule_wait_v1` (protocol)
 pub const SCHEDULE_WAIT_V1: &str = r#"SELECT status, wait_name, mode, duration_ms::text, requested_wake_at, wake_at, attempt, fence_token::text, worker_id, created_at FROM workhorse.schedule_wait_v1($1::uuid, $2::text, $3::bigint, $4::text, $5::bigint, $6::timestamptz)"#;

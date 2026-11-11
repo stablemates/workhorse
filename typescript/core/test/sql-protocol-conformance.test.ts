@@ -56,6 +56,7 @@ import type {
   MaintenancePhaseErrorRuntimeFixture,
   MissingHandlerRuntimeFixture,
   OversizedResultRuntimeFixture,
+  OversizedCheckpointRuntimeFixture,
   ResultContractFailureRuntimeFixture,
   ShutdownCancellationRuntimeFixture,
   PollCadenceRuntimeFixture,
@@ -1592,6 +1593,54 @@ async function executeOversizedResultRuntimeFixture(
   });
 }
 
+async function executeOversizedCheckpointRuntimeFixture(
+  queue: Queue,
+  admin: Admin,
+  database: Queryable,
+  fixture: OversizedCheckpointRuntimeFixture,
+): Promise<void> {
+  const queueName = `runtime-${fixture.id}`;
+  const id = await queue.enqueue(fixture.taskType, fixture.oversizedZeros, {
+    queue: queueName,
+    maxAttempts: fixture.maxAttempts,
+    retryPolicy: { type: "fixed", delayMs: 0 },
+  });
+  let operations = 0;
+  let handlerRuns = 0;
+  const worker = new Worker(queue, {
+    workerId: `runtime-${fixture.id}`,
+    queue: queueName,
+    registryIntervalMs: 0,
+  }).handle(fixture.taskType, async (zeros, context) => {
+    handlerRuns += 1;
+    await context.checkpoint(fixture.checkpointName, () => {
+      operations += 1;
+      return Array.from({ length: zeros as number }, () => 0);
+    });
+    return {};
+  });
+
+  for (let pass = 0; pass < fixture.maxAttempts; pass += 1) {
+    if ((await admin.getTask(id))?.state === fixture.expectedSettled.state) break;
+    await expect(worker.runOnce()).resolves.toBe(true);
+  }
+  expect({ operations, handlerRuns }).toEqual({
+    operations: fixture.expectedCheckpointOperations,
+    handlerRuns: fixture.expectedHandlerRuns,
+  });
+  await expect(admin.getTask(id)).resolves.toMatchObject({
+    state: fixture.expectedSettled.state,
+    currentAttempt: fixture.expectedSettled.attempt,
+    error: { name: fixture.expectedErrorNames.typescript },
+  });
+  const stored = await database.query<{ count: number }>(
+    "SELECT count(*)::int AS count FROM workhorse.task_checkpoint WHERE task_id = $1",
+    [id],
+  );
+  expect(stored.rows).toEqual([{ count: fixture.expectedStoredCheckpoints }]);
+  await expectAttemptOutcome(database, id, fixture.expectedAttemptOutcomes);
+}
+
 async function executeResultContractFailureRuntimeFixture(
   queue: Queue,
   admin: Admin,
@@ -2241,6 +2290,9 @@ async function executeRuntimeFixture(
     case "oversized-result":
       await executeOversizedResultRuntimeFixture(queue, admin, fixture);
       break;
+    case "oversized-checkpoint":
+      await executeOversizedCheckpointRuntimeFixture(queue, admin, database, fixture);
+      break;
     case "result-contract-failure":
       await executeResultContractFailureRuntimeFixture(queue, admin, database, fixture);
       break;
@@ -2355,7 +2407,7 @@ describe("SQL protocol conformance fixtures", () => {
     expect(fixtures.compatibility).toContainEqual(
       expect.objectContaining({ id: "current", compatible: true }),
     );
-    expect(fixtures.compatibility.filter((fixture) => !fixture.compatible)).toHaveLength(20);
+    expect(fixtures.compatibility.filter((fixture) => !fixture.compatible)).toHaveLength(21);
   });
 
   // Recreating the compatibility database mid-test waits on the same cluster-wide checkpoint

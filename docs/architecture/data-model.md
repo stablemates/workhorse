@@ -158,6 +158,24 @@ If either persisted key array is non-empty, `workhorse.redact_error_details_v1` 
 attempt, or event errors. `Worker` applies the same rule before recording a handler exception in
 OpenTelemetry.
 
+#### Failure envelope limits
+
+Each field of a failure envelope that a worker stores in an `error` column has a limit in UTF-8
+bytes (SM-1983):
+
+| Field     | Limit        |
+| --------- | ------------ |
+| `name`    | 1,024 bytes  |
+| `message` | 16,384 bytes |
+| `stack`   | 65,536 bytes |
+
+Each SDK cuts a longer string field before it calls `fail_v2`, and `fail_v2` and `fast_fail_v2`
+cut it again with `bound_error_envelope_v1`. The cut keeps the longest prefix that has at most the
+limit in bytes and ends at a code point boundary. An envelope with a cut field has the key
+`truncated` with the value `true`. `fail_v1` and `fast_fail_v1` store the envelope as it comes, so
+an envelope that a worker of an earlier release sends has no limit. The rules of the cut are in
+[Schema and SQL protocol: Envelope limits](schema-and-protocol.md#envelope-limits).
+
 #### Contract definitions and policy
 
 `QueueOptions.contracts` maps a task type to `currentVersion` and a `versions` record of
@@ -1707,17 +1725,27 @@ This table stores insert-only named JSON results at explicit restart boundaries 
   writer, refuses another format.
 - `save_checkpoint_v1` calls `save_checkpoint_v2` with a NULL fingerprint. Its results do not
   change.
+- `checkpoint_value` holds at most 1,048,576 bytes of PostgreSQL's canonical jsonb text. That text
+  has a space after each `,` and `:`, so a compact JSON value below 1 MiB can be above the limit.
+  Only PostgreSQL measures it.
 
-`save_checkpoint_v2(task_id, worker_id, fence_token, name, value, input_fingerprint)` returns one
-row with a `status` and the stored checkpoint columns:
+`save_checkpoint_v3(task_id, worker_id, fence_token, name, value, input_fingerprint)` returns one
+row with a `status`, the stored checkpoint columns, `value_bytes`, and `max_bytes`. Every SDK calls
+it. It checks in this order:
 
-| Status           | Condition                                                                     |
-| ---------------- | ----------------------------------------------------------------------------- |
-| `stale`          | The caller does not own the active, unexpired lease. Nothing changes.         |
-| `saved`          | The name is new. The row and a `checkpoint_saved` event are inserted.         |
-| `input_conflict` | The name exists, both fingerprints are present, and they differ.              |
-| `conflict`       | The name exists, the fingerprints do not conflict, and the value differs.     |
-| `existing`       | The name exists, the fingerprints do not conflict, and the value is the same. |
+| Status            | Condition                                                                     |
+| ----------------- | ----------------------------------------------------------------------------- |
+| `stale`           | The caller does not own the active, unexpired lease. Nothing changes.         |
+| `input_conflict`  | The name exists, both fingerprints are present, and they differ.              |
+| `conflict`        | The name exists, the fingerprints do not conflict, and the value differs.     |
+| `existing`        | The name exists, the fingerprints do not conflict, and the value is the same. |
+| `value_too_large` | The name is new, and the value is above the limit. Nothing changes.           |
+| `saved`           | The name is new. The row and a `checkpoint_saved` event are inserted.         |
+
+`value_bytes` and `max_bytes` give the measured jsonb text bytes and the limit for
+`value_too_large`, and are NULL for each other status. `save_checkpoint_v2` returns the same
+statuses without `value_too_large` and without those two columns. For a value above the limit, it
+raises the exception `checkpoint_value must be at most 1048576 bytes` before the lease check.
 
 A NULL fingerprint on either side never conflicts. Thus a handler can add an input to code whose
 tasks already stored the name, or remove the input, and still read the stored value.
@@ -1739,6 +1767,17 @@ or a `Set` at any depth, with a `TypeError` before `save_checkpoint_v2`. The ope
 and nothing is stored, so the next attempt runs the operation again. The fixture
 `checkpoint-operation-with-no-value-stores-null-and-runs-once` in `protocol/v1/runtime.json` holds
 each SDK to the "no value" rule.
+
+An oversized checkpoint value fails the task without a retry (SM-1982,
+[ADR 0098](../decisions/0098-check-the-input-of-a-checkpoint-on-replay.md)). The operation ran
+before `save_checkpoint_v3` answered `value_too_large`, and nothing is stored. Thus a retry would
+run the operation again with its effects, and it still could not store the value. The SDK raises
+`CheckpointValueSizeLimitError`, or the name of its language in
+[Schema and SQL protocol: Oversized checkpoint values](schema-and-protocol.md#oversized-checkpoint-values).
+The worker settles it as a durable replay conflict: `fail_v2` with `p_retry_delay_ms = -1`, so the
+task fails and keeps its current attempt. An operator corrects the handler, so that the value is
+smaller, and then redrives the task. The fixture
+`oversized-checkpoint-value-fails-the-task-without-a-retry` holds each SDK to this rule.
 
 Each SDK refuses the same inputs, so no SDK gives a digest for an input that another SDK refuses
 (ADR 0098, SM-1274). An input has no fingerprint if it holds one of these:

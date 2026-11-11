@@ -52,6 +52,21 @@ func (err *CheckpointInputConflictError) Error() string {
 	return fmt.Sprintf(checkpointInputConflictErrorFormat, err.CheckpointName, err.TaskID)
 }
 
+// CheckpointValueSizeLimitError reports a checkpoint value that PostgreSQL cannot store, because
+// its jsonb text is above the checkpoint limit. The operation of the checkpoint already ran, and a
+// retry would run it again with its effects, so the worker fails the task without a retry
+// (SM-1982).
+type CheckpointValueSizeLimitError struct {
+	TaskID         string
+	CheckpointName string
+	ActualBytes    int
+	MaxBytes       int
+}
+
+func (err *CheckpointValueSizeLimitError) Error() string {
+	return fmt.Sprintf(checkpointValueSizeLimitErrorFormat, err.CheckpointName, err.TaskID, err.ActualBytes, err.MaxBytes)
+}
+
 // CheckpointOptions configures one Checkpoint call.
 type CheckpointOptions struct {
 	// Input is the input of the checkpoint operation. If Input is not nil, the checkpoint stores the
@@ -466,6 +481,12 @@ func (handler *HandlerContext) runCheckpoint(
 		return nil, &CheckpointLeaseLostError{TaskID: handler.Task.ID, CheckpointName: name}
 	case durableConflictValue:
 		return nil, &CheckpointConflictError{TaskID: handler.Task.ID, CheckpointName: name}
+	case durableValueTooLargeValue:
+		actualBytes, _ := integer(rows[0][rowValueBytesField])
+		maxBytes, _ := integer(rows[0][rowMaxBytesField])
+		return nil, &CheckpointValueSizeLimitError{
+			TaskID: handler.Task.ID, CheckpointName: name, ActualBytes: actualBytes, MaxBytes: maxBytes,
+		}
 	case durableInputConflictValue:
 		stored, err := storedInputFingerprint(rows[0])
 		if err != nil {

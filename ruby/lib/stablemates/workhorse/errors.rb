@@ -74,6 +74,20 @@ module Stablemates
       end
     end
 
+    # PostgreSQL cannot store a checkpoint value, because its +jsonb+ text is above the limit. The
+    # block already ran, and a retry would run it again with its effects, so the worker fails the
+    # task without a retry (SM-1982).
+    class CheckpointValueSizeLimitError < Error
+      attr_reader :name, :actual_bytes, :max_bytes
+
+      def initialize(name, actual_bytes, max_bytes)
+        @name = name
+        @actual_bytes = actual_bytes
+        @max_bytes = max_bytes
+        super("checkpoint #{name} has #{actual_bytes} bytes of jsonb text, above its limit of #{max_bytes} bytes")
+      end
+    end
+
     # A named primitive exceeded its limit.
     class LimitExceededError < NamedOperationError
       def initialize(operation, name) = super(operation, name, "exceeded its limit")

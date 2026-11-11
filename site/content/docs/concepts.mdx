@@ -354,7 +354,7 @@ checkpoints and durable sleeps.
 | Checkpoint name  | 1 to 200 characters                                          |
 | Checkpoint value | 1,048,576 bytes of PostgreSQL's canonical JSONB text (1 MiB) |
 
-**`save_checkpoint_v2`**
+**`save_checkpoint_v3`**
 
 - The primary key `(task_id, checkpoint_name)` makes each name immutable for the task.
 - The function locks the exact active, unexpired worker and fence before it inserts. It returns
@@ -365,6 +365,7 @@ checkpoints and durable sleeps.
 - If both saves give an input fingerprint and the two fingerprints differ, the function returns
   `input_conflict`. A NULL fingerprint on either side never conflicts.
 - A new save appends a `checkpoint_saved` event.
+- A new name with a value above the limit returns `value_too_large`, and nothing is stored.
 - TypeScript `HandlerContext.checkpoint` reads an existing value before it runs user code.
   Overlapping calls for one name in one handler share the first call's result or error.
 - A checkpoint has no separate retirement path. It is deleted only with its task.
@@ -391,12 +392,57 @@ charges the card only one time, for all attempts.
 <details>
 <summary>Reference: checkpoint window</summary>
 
-- `save_checkpoint_v2` runs after the operation returns.
+- `save_checkpoint_v3` runs after the operation returns.
 - A process can disappear after an external system commits but before the checkpoint transaction
   commits. The next attempt then runs the operation again.
 - A checkpoint does not make external effects exactly once.
 
 More detail: [Data model: Handler behavior](https://github.com/stablemates/workhorse/blob/main/docs/architecture/data-model.md#handler-behavior).
+
+</details>
+
+## Keep a checkpoint value below its limit
+
+Workhorse stores a checkpoint value only if it fits the checkpoint limit. The code of the checkpoint
+runs before Workhorse measures the value. Thus a value that is too large is a problem that a retry
+cannot correct.
+
+**Example.** The `invoice` checkpoint of the invoice handler stores the whole rendered invoice.
+One customer has a very long invoice.
+
+1. In attempt 1, the `invoice` checkpoint calls `renderInvoice`, which returns the long invoice.
+2. Workhorse refuses to store the value, because it is above the limit. It stores nothing.
+3. Workhorse fails the task at once, although attempts remain. Another attempt would call
+   `renderInvoice` again, and Workhorse would refuse the value again.
+
+Workhorse measures the value in the form that PostgreSQL stores. That form is longer than compact
+JSON, so a value that fits as compact JSON can still be too large. Correct the handler, so that the
+checkpoint stores a smaller value, such as the address of a stored file. Then [redrive](/docs/dead-letters) the task. The
+new task has no checkpoints, so its handler runs each operation again.
+
+<details>
+<summary>Reference: oversized checkpoint value</summary>
+
+| SDK        | Error                                                   |
+| ---------- | ------------------------------------------------------- |
+| TypeScript | `CheckpointValueSizeLimitError`                         |
+| Python     | `CheckpointValueSizeLimitError`                         |
+| Go         | `*CheckpointValueSizeLimitError`                        |
+| Rust       | `Error::CheckpointValueSizeLimit`                       |
+| Ruby       | `Stablemates::Workhorse::CheckpointValueSizeLimitError` |
+| JVM        | `CheckpointValueSizeLimitException`                     |
+| .NET       | `CheckpointValueSizeLimitException`                     |
+
+- The limit is 1,048,576 bytes of PostgreSQL's canonical JSONB text. That text has a space after
+  each `,` and `:`.
+- `save_checkpoint_v3` returns `value_too_large` with `value_bytes` and `max_bytes`, and it stores
+  no row and no event. The operation already ran.
+- The worker fails the task through `fail_v2` with `p_retry_delay_ms = -1`. The task keeps its
+  current attempt. A wrapped error is terminal too.
+- No SDK measures the value before the save.
+- A redrive copies no checkpoints.
+
+More detail: [Data model: Key and write rules](https://github.com/stablemates/workhorse/blob/main/docs/architecture/data-model.md#key-and-write-rules), [Data model: Handler behavior](https://github.com/stablemates/workhorse/blob/main/docs/architecture/data-model.md#handler-behavior), and [Schema and SQL protocol: Oversized checkpoint values](https://github.com/stablemates/workhorse/blob/main/docs/architecture/schema-and-protocol.md#oversized-checkpoint-values).
 
 </details>
 

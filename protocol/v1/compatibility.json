@@ -1,14 +1,14 @@
 [
   {
     "id": "current",
-    "installedSchemaVersion": 98,
+    "installedSchemaVersion": 99,
     "clientProtocolVersion": 5,
     "servedProtocolVersions": [5],
     "compatible": true
   },
   {
     "id": "schema-newer-inside-major-line",
-    "installedSchemaVersion": 99,
+    "installedSchemaVersion": 100,
     "clientProtocolVersion": 5,
     "servedProtocolVersions": [5],
     "compatible": true,
@@ -16,11 +16,21 @@
   },
   {
     "id": "served-protocol-undeclared",
-    "installedSchemaVersion": 98,
+    "installedSchemaVersion": 99,
     "clientProtocolVersion": 5,
     "servedProtocolVersions": [],
     "compatible": true,
     "note": "A schema that declares no served protocol has made no statement to enforce."
+  },
+  {
+    "id": "schema-before-the-bounded-failure-envelope",
+    "installedSchemaVersion": 98,
+    "clientProtocolVersion": 5,
+    "servedProtocolVersions": [5],
+    "compatible": false,
+    "refusalCode": "schema-too-old",
+    "refusal": "Refuse every mutation until the schema is migrated: a failure calls fail_v2 and a checkpoint write calls save_checkpoint_v3, which schema 98 does not carry.",
+    "note": "The served protocol matches, so only the schema floor refuses this client."
   },
   {
     "id": "schema-before-millisecond-wait-targets",
@@ -171,7 +181,7 @@
   },
   {
     "id": "schema-serves-only-older-protocols",
-    "installedSchemaVersion": 98,
+    "installedSchemaVersion": 99,
     "clientProtocolVersion": 5,
     "servedProtocolVersions": [4],
     "compatible": false,
@@ -190,7 +200,7 @@
   },
   {
     "id": "schema-no-longer-serves-client",
-    "installedSchemaVersion": 98,
+    "installedSchemaVersion": 99,
     "clientProtocolVersion": 5,
     "servedProtocolVersions": [6],
     "compatible": false,
@@ -199,7 +209,7 @@
   },
   {
     "id": "client-protocol-too-old",
-    "installedSchemaVersion": 98,
+    "installedSchemaVersion": 99,
     "clientProtocolVersion": 4,
     "servedProtocolVersions": [5],
     "compatible": false,
@@ -209,7 +219,7 @@
   },
   {
     "id": "client-protocol-too-new",
-    "installedSchemaVersion": 98,
+    "installedSchemaVersion": 99,
     "clientProtocolVersion": 6,
     "servedProtocolVersions": [5],
     "compatible": false,

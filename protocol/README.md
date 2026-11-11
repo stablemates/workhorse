@@ -106,7 +106,7 @@ the JVM, and .NET run this fixture against `cron_occurrences_v1`. Python and Go 
 read it, because every worker calls `fire_due_schedules_v2`, which delegates occurrence calculation
 to that same function.
 
-`v1/failures.json` pins the JSON error envelope a worker passes to `fail_v1`. It fixes the field
+`v1/failures.json` pins the JSON error envelope a worker passes to `fail_v2`. It fixes the field
 set, the exact values local redaction writes, and the name each language records for an error that
 names nothing. All seven SDKs execute every fixture through their own envelope builders, so an
 operator who groups dead letters by name reads one field rather than seven dialects of it. Each SDK
@@ -116,6 +116,12 @@ does not need a JSON escape that a strict parser refuses.
 The envelope carries `name`, `message`, and a `stack` that is null when the error supplies none. A
 redacted envelope carries only `name` and `message`, which is what `redact_error_details_v1`
 writes, so a worker that redacts locally cannot produce a different shape from PostgreSQL.
+
+`envelope.limits` gives the UTF-8 byte limit of `name`, `message`, and `stack`. After the
+replacement, each SDK cuts a longer field at a code point boundary and adds `truncated: true`, as
+`bound_error_envelope_v1` does in `fail_v2`. A message part `{"repeat": text, "count": n}` is the
+text n times, so a fixture can give a long message, and an expected message can use the same parts.
+The fixtures put a two-byte, a three-byte, and a four-byte character at the limit of the message.
 
 `v1/contracts.json` makes the restricted JSON Schema profile executable. All seven SDKs compile
 every accepted document and reject the same remote references, dynamic applicators, unevaluated

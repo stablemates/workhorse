@@ -354,7 +354,7 @@ describe("OpenTelemetry", () => {
             ] as never[],
           };
         }
-        if (sql.includes("fail_v1")) {
+        if (sql.includes("fail_v2")) {
           persistedError = values?.[3] as string;
           return { rows: [{ state: "failed" }] as never[] };
         }

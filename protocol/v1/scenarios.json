@@ -415,6 +415,29 @@
         }
       },
       {
+        "id": "checkpoint-value-too-large",
+        "sql": "SELECT jsonb_build_object('status', status, 'value', checkpoint_value, 'valueBytes', value_bytes, 'maxBytes', max_bytes) AS value FROM workhorse.save_checkpoint_v3($1::uuid, $2::text, $3::bigint, $4::text, to_jsonb(repeat('x', 1048576)), $5::text)",
+        "parameters": [
+          { "$ref": "successfulTask" },
+          "protocol-success",
+          { "$ref": "successfulFence" },
+          "render-invoice",
+          null
+        ],
+        "expect": {
+          "rows": [
+            {
+              "value": {
+                "maxBytes": 1048576,
+                "status": "value_too_large",
+                "value": null,
+                "valueBytes": 1048578
+              }
+            }
+          ]
+        }
+      },
+      {
         "id": "update-progress",
         "sql": "SELECT jsonb_build_object('status', status, 'value', progress_value, 'revision', revision, 'attempt', attempt, 'fenceToken', fence_token, 'workerId', worker_id) AS value FROM workhorse.update_progress_v1($1::uuid, $2::text, $3::bigint, $4::jsonb)",
         "parameters": [
@@ -548,7 +571,7 @@
       {
         "id": "fail-for-retry",
         "covers": ["failure", "retry"],
-        "sql": "SELECT workhorse.fail_v1($1::uuid, $2, $3::bigint, $4::jsonb, 0) AS state",
+        "sql": "SELECT workhorse.fail_v2($1::uuid, $2, $3::bigint, $4::jsonb, 0) AS state",
         "parameters": [
           {
             "$ref": "retryTask"
@@ -2772,7 +2795,7 @@
             {
               "value": {
                 "promotionLagMs": 10000,
-                "schemaVersion": 98,
+                "schemaVersion": 99,
                 "terminalCleanupBacklogMs": 21600000
               }
             }

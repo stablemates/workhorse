@@ -33,7 +33,7 @@ RSpec.describe W::HandlerContext do
 
   it "saves a new checkpoint under the attempt's fence" do
     executor = FakeExecutor.new do |sql|
-      (sql == W::SqlCatalogue::SAVE_CHECKPOINT_V2) ? [checkpoint_row("saved", {"n" => 1})] : []
+      (sql == W::SqlCatalogue::SAVE_CHECKPOINT_V3) ? [checkpoint_row("saved", {"n" => 1})] : []
     end
     ctx = context(executor)
     expect(ctx.checkpoint("a") { {"n" => 1} }).to eq({"n" => 1})
@@ -56,7 +56,7 @@ RSpec.describe W::HandlerContext do
 
     it "saves the fingerprint of the input with the value" do
       executor = FakeExecutor.new do |sql|
-        (sql == W::SqlCatalogue::SAVE_CHECKPOINT_V2) ? [checkpoint_row("saved", 5).merge("input_fingerprint" => stored)] : []
+        (sql == W::SqlCatalogue::SAVE_CHECKPOINT_V3) ? [checkpoint_row("saved", 5).merge("input_fingerprint" => stored)] : []
       end
       ctx = context(executor)
       expect(ctx.checkpoint("charge", input: {"currency" => "EUR", "amountCents" => 1000}) { 5 }).to eq(5)
@@ -94,7 +94,7 @@ RSpec.describe W::HandlerContext do
 
     it "maps the input_conflict status of the save to CheckpointInputConflictError" do
       executor = FakeExecutor.new do |sql|
-        next [] unless sql == W::SqlCatalogue::SAVE_CHECKPOINT_V2
+        next [] unless sql == W::SqlCatalogue::SAVE_CHECKPOINT_V3
 
         [checkpoint_row("input_conflict", 5).merge("input_fingerprint" => stored)]
       end
@@ -108,7 +108,7 @@ RSpec.describe W::HandlerContext do
       started = Concurrent::Event.new
       release = Concurrent::Event.new
       executor = FakeExecutor.new do |sql|
-        (sql == W::SqlCatalogue::SAVE_CHECKPOINT_V2) ? [checkpoint_row("saved", 5).merge("input_fingerprint" => stored)] : []
+        (sql == W::SqlCatalogue::SAVE_CHECKPOINT_V3) ? [checkpoint_row("saved", 5).merge("input_fingerprint" => stored)] : []
       end
       ctx = context(executor)
       first = Thread.new do
@@ -124,7 +124,7 @@ RSpec.describe W::HandlerContext do
       shared = Thread.new { ctx.checkpoint("charge") { raise "ran" } }
       release.set
       expect([first.value, shared.value]).to eq([5, 5])
-      expect(executor.statements.count { |sql, _| sql == W::SqlCatalogue::SAVE_CHECKPOINT_V2 }).to eq(1)
+      expect(executor.statements.count { |sql, _| sql == W::SqlCatalogue::SAVE_CHECKPOINT_V3 }).to eq(1)
     end
 
     it "rejects an input that is not JSON before it runs the block or any statement" do

@@ -1,6 +1,7 @@
 import {
   CheckpointConflictError,
   CheckpointInputConflictError,
+  CheckpointValueSizeLimitError,
   WaitConflictError,
 } from "./checkpoints-progress-waits.js";
 import { ChildConflictError, isSecondChildSetLimit } from "./child-tasks.js";
@@ -13,7 +14,8 @@ const MAX_CAUSE_DEPTH = 16;
  * The durable replay conflict (ADR 0098), or the limit error of a second child set, in the cause
  * chain of `error`, or undefined. Each one ends the task with no retry. A second child set was a
  * replay conflict before `create_children_v2` named it a limit, so it stays terminal. Each other
- * child limit refusal follows the retry policy (the ADR 0098 amendment of SM-1956).
+ * child limit refusal follows the retry policy (the ADR 0098 amendment of SM-1956). An oversized
+ * checkpoint value is terminal too, because a retry runs its operation again (SM-1982).
  *
  * A handler can wrap such an error in its own error. The error is terminal also then, as in Go and
  * Rust, and the failure envelope records its name.
@@ -28,7 +30,10 @@ export function terminalReplayError(error: unknown): Error | undefined {
         current instanceof WaitConflictError ||
         current instanceof ChildConflictError ||
         isSecondChildSetLimit(current) ||
-        current instanceof HumanWaitConflictError
+        current instanceof HumanWaitConflictError ||
+        // Not a replay conflict, but terminal for the same reason: a retry runs the operation of
+        // the checkpoint again and still cannot store its value (SM-1982).
+        current instanceof CheckpointValueSizeLimitError
       )
         return current;
       current = current.cause;

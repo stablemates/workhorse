@@ -333,6 +333,10 @@
       "arguments": ["uuid", "text", "bigint", "jsonb", "integer?"],
       "returns": "text"
     },
+    "fail_v2": {
+      "arguments": ["uuid", "text", "bigint", "jsonb", "integer?"],
+      "returns": "text"
+    },
     "fire_due_schedules_v2": {
       "arguments": ["text[]", "timestamptz", "integer", "bigint"],
       "returns": "table",
@@ -833,6 +837,21 @@
         "fence_token": "bigint",
         "input_fingerprint": "text",
         "status": "text",
+        "worker_id": "text"
+      }
+    },
+    "save_checkpoint_v3": {
+      "arguments": ["uuid", "text", "bigint", "text", "jsonb", "text"],
+      "returns": "table",
+      "returnsColumns": {
+        "attempt": "integer",
+        "checkpoint_value": "jsonb",
+        "created_at": "timestamptz",
+        "fence_token": "bigint",
+        "input_fingerprint": "text",
+        "max_bytes": "integer",
+        "status": "text",
+        "value_bytes": "integer",
         "worker_id": "text"
       }
     },
@@ -1926,6 +1945,7 @@
       "aggregate_stats_v1",
       "apply_task_group_outcomes_internal_v1",
       "apply_task_group_outcomes_v1",
+      "bound_error_envelope_v1",
       "budget_admission_v1",
       "budget_bucket_v1",
       "cancellation_envelope_v1",
@@ -1969,6 +1989,7 @@
       "fast_complete_v1",
       "fast_expire_owned_v1",
       "fast_fail_v1",
+      "fast_fail_v2",
       "fast_finish_v1",
       "fast_heartbeat_many_v1",
       "fast_records_attempts_v1",
@@ -2058,6 +2079,7 @@
       "terminalize_deadline_v1",
       "timeout_envelope_v1",
       "timeout_owned_v1",
+      "utf8_prefix_v1",
       "uuid_v7_v1",
       "valid_contract_redact_keys_v1",
       "valid_tags_v1",

@@ -27,7 +27,9 @@ type CheckpointRow = {
 };
 
 type SaveCheckpointRow = Omit<CheckpointRow, "task_id" | "checkpoint_name"> & {
-  status: "saved" | "existing" | "conflict" | "input_conflict" | "stale";
+  status: "saved" | "existing" | "conflict" | "input_conflict" | "stale" | "value_too_large";
+  value_bytes: number | null;
+  max_bytes: number | null;
 };
 
 export type ProgressRow = {
@@ -157,6 +159,25 @@ export class CheckpointConflictError extends WorkhorseError {
 }
 
 /**
+ * Raised when PostgreSQL cannot store a checkpoint value, because its jsonb text is longer than the
+ * checkpoint limit. The operation of the checkpoint already ran, and a retry would run it again
+ * with its effects, so the worker fails the task without a retry (SM-1982).
+ */
+export class CheckpointValueSizeLimitError extends WorkhorseError {
+  constructor(
+    readonly taskId: string,
+    readonly checkpointName: string,
+    readonly actualBytes: number,
+    readonly maxBytes: number,
+  ) {
+    super(
+      `Checkpoint ${checkpointName} for task ${taskId} has ${String(actualBytes)} bytes of jsonb text, above its limit of ${String(maxBytes)} bytes`,
+    );
+    this.name = "CheckpointValueSizeLimitError";
+  }
+}
+
+/**
  * Raised when a checkpoint name is stored with the fingerprint of a different input. The stored
  * value is the result of another input, so a retry of the same handler cannot succeed.
  */
@@ -244,11 +265,19 @@ export class CheckpointsProgressWaitsModule extends QueueModule {
     const encodedValue = encodeStoredJson(value, `Checkpoint ${name} of task type ${task.type}`);
     const result = await queryFencedWrite<SaveCheckpointRow>(
       this.context.database,
-      SQL_STATEMENTS["save_checkpoint_v2"],
+      SQL_STATEMENTS["save_checkpoint_v3"],
       [task.id, workerId, task.fenceToken.toString(), name, encodedValue, fingerprint],
     );
-    const row = expectOneRow(result, "workhorse.save_checkpoint_v2");
+    const row = expectOneRow(result, "workhorse.save_checkpoint_v3");
     if (row.status === "stale") throw new CheckpointLeaseLostError(task.id, name);
+    if (row.status === "value_too_large") {
+      throw new CheckpointValueSizeLimitError(
+        task.id,
+        name,
+        row.value_bytes as number,
+        row.max_bytes as number,
+      );
+    }
     if (row.status === "input_conflict") {
       throw new CheckpointInputConflictError(
         task.id,

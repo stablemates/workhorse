@@ -526,6 +526,11 @@ pub workhorse::Error::CheckpointInputConflict::name: alloc::string::String
 pub workhorse::Error::CheckpointInputConflict::requested_fingerprint: alloc::string::String
 pub workhorse::Error::CheckpointInputConflict::stored_fingerprint: alloc::string::String
 pub workhorse::Error::CheckpointInputConflict::task_id: uuid::Uuid
+pub workhorse::Error::CheckpointValueSizeLimit
+pub workhorse::Error::CheckpointValueSizeLimit::actual_bytes: i64
+pub workhorse::Error::CheckpointValueSizeLimit::max_bytes: i64
+pub workhorse::Error::CheckpointValueSizeLimit::name: alloc::string::String
+pub workhorse::Error::CheckpointValueSizeLimit::task_id: uuid::Uuid
 pub workhorse::Error::ChildResultLimitExceeded
 pub workhorse::Error::ChildResultLimitExceeded::limit_bytes: i64
 pub workhorse::Error::ChildResultLimitExceeded::result_bytes: i64

@@ -20,12 +20,12 @@ is a rolling deployment, and a mixed fleet is supported while it runs.
 
 1. If you run cold exporters, stop each one and let it finish its object and manifest uploads. Keep
    cold export enabled, so retention keeps waiting for the export.
-2. Run `workhorse schema migrate`. It applies migrations 0093 through 0099 and leaves the schema at
-   version 98. Do this before the first process of the new release starts, because the floor rises.
+2. Run `workhorse schema migrate`. It applies migrations 0093 through 0100 and leaves the schema at
+   version 99. Do this before the first process of the new release starts, because the floor rises.
 3. Roll out the new processes in any order. Then start the exporters again.
 
 A 0.12.0 database is at schema version 91. The migrations replace function bodies, 0095 adds
-three nullable columns, 0096 adds two nullable columns, 0097 adds one table and one nullable column, and 0099 adds one nullable column to each policy table. Only 0096 changes stored rows: it fences
+three nullable columns, 0096 adds two nullable columns, 0097 adds one table and one nullable column, 0099 adds one nullable column to each policy table, and 0100 adds functions. Only 0096 changes stored rows: it fences
 each `cold_export_segment` row that is exporting.
 
 | Migration                                                                         | Schema version | Changes                                                                                                                                                                                                                                                                                                                                                                                   |
@@ -37,13 +37,16 @@ each `cold_export_segment` row that is exporting.
 | `0097-give-cleanup-and-health-one-retention-rule-in-fixed-hours.sql`              | 96             | The new table `terminal_prune_position` lets `prune_full_terminal_tasks_internal_v1` and `prune_fast_terminal_tasks_internal_v1` examine bounded slices and lock only rows that they can delete, `queue_health_v1` applies the cleanup holds with a capped walk, `evaluate_queue_health_v1` adds `maintenance-failing` and `schedule-failing`, and each retention cutoff uses fixed hours |
 | `0098-compare-wait-targets-in-milliseconds-and-report-second-child-sets.sql`      | 97             | `schedule_wait_v2` compares an absolute target at milliseconds, `send_signal_v2` answers `stale` for a terminal task with no wait, `create_children_v2` answers `limit_exceeded` for a second child set, and `get_task_group_v1` shows a callback that failed to enqueue                                                                                                                  |
 | `0099-keep-the-settings-audit-withhold-error-stacks-and-find-derived-records.sql` | 98             | `override_*_policy_v2` and `revert_*_policy_v2` record the audit of each setting in the new `operator_audit` column of each policy table, the released policy writers keep each entry true, three dashboard reads take `redactErrorStacks`, and `dashboard_event_detail_v1` finds each derived record                                                                                     |
+| `0100-bound-failure-envelopes-and-answer-oversized-checkpoints.sql`               | 99             | `fail_v2` and `fast_fail_v2` cut the fields of a failure envelope, and `save_checkpoint_v3` answers `value_too_large` for a checkpoint value that it cannot store                                                                                                                                                                                                                         |
 
-Migrations 0093 through 0097 keep the floor. With migrations 0098 and 0099, the SDK schema floor rises from 76 to 98.
+Migrations 0093 through 0097 keep the floor. With migrations 0098, 0099, and 0100, the SDK schema floor rises from 76 to 99.
 Each SDK statement catalogue of the new release names `schedule_wait_v2`, `send_signal_v2`, and
 `create_children_v2`, which schema version 97 adds. The dashboard host of each SDK calls
 `override_retention_policy_v2` and the three other audited policy functions, which schema version
-98 adds. A new process refuses every mutation on a schema below version 98. The SQL functions change for every SDK version when each migration
-commits:
+98 adds. Migration 0100 adds `fail_v2` and `save_checkpoint_v3`, which each catalogue also names, so
+the floor rises to 99. A new process refuses every mutation on a schema below version 99. A 0.12
+worker keeps calling `fail_v1` and `save_checkpoint_v2`, which keep their answers. The SQL functions
+change for every SDK version when each migration commits:
 
 - A debounce request reads the clock after its last lock. It no longer writes a second task when a
   lock wait ends after its window.
@@ -143,9 +146,20 @@ Migration 0098 adds function versions, so its answers reach only the processes o
   children still follow the retry policy.
 - The group snapshot shows a callback that failed to enqueue at the finish, with its SQLSTATE, error message, and time. Retention deletes this record with the group.
 
-A 0.12 process keeps working on schema version 98, because a migration inside a major line only
+Migration 0100 also adds function versions. A worker of the new release changes two failure rules:
+
+- It cuts the `name`, the `message`, and the `stack` of a failure envelope to 1,024, 16,384, and 65,536
+  UTF-8 bytes, and it adds `"truncated": true` to an envelope that it cut. A reader that expects
+  the whole `message` of a long handler error gets the first part only
+  ([Schema and SQL protocol: Envelope limits](architecture/schema-and-protocol.md#envelope-limits)).
+- If a checkpoint value has more than 1,048,576 bytes of jsonb text, the worker fails the task
+  without a retry, with `CheckpointValueSizeLimitError` or the name of its SDK. Before, each retry
+  ran the operation of the checkpoint again. Correct the handler, and then redrive the task
+  ([Delivery guarantees](guides/030-delivery-guarantees.md#keep-a-checkpoint-value-below-its-limit)).
+
+A 0.12 process keeps working on schema version 99, because a migration inside a major line only
 adds. Migration 0098 keeps `schedule_wait_v1`, `send_signal_v1`, and `create_children_v1` and their
-answers.
+answers. Migration 0100 keeps `fail_v1`, `fast_fail_v1`, and `save_checkpoint_v2` and their answers.
 
 ## Upgrade from 0.11.x to 0.12.0
 

@@ -51,7 +51,7 @@ RSpec.describe W::BatchHandlerContext do
   it "fences the member's checkpoint and progress writes on its own lease" do
     executor = FakeExecutor.new do |sql|
       case sql
-      when W::SqlCatalogue::SAVE_CHECKPOINT_V2 then [checkpoint_row("charge", 1)]
+      when W::SqlCatalogue::SAVE_CHECKPOINT_V3 then [checkpoint_row("charge", 1)]
       when W::SqlCatalogue::UPDATE_PROGRESS_V1
         [{"status" => "updated", "progress_value" => "3", "revision" => "1", "attempt" => "2", "fence_token" => "7",
           "worker_id" => "w", "created_at" => "2026-09-29 00:00:00+00", "updated_at" => "2026-09-29 00:00:00+00"}]
@@ -64,7 +64,7 @@ RSpec.describe W::BatchHandlerContext do
     expect(context.get_progress.value).to eq(3)
     expect(executor.statements.map { |sql, params| [sql, params.first(3)] }).to eq([
       [W::SqlCatalogue::LIST_CHECKPOINTS, [task.id]],
-      [W::SqlCatalogue::SAVE_CHECKPOINT_V2, [task.id, "w", 7]],
+      [W::SqlCatalogue::SAVE_CHECKPOINT_V3, [task.id, "w", 7]],
       [W::SqlCatalogue::UPDATE_PROGRESS_V1, [task.id, "w", 7]]
     ])
   end

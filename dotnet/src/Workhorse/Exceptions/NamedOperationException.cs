@@ -75,6 +75,32 @@ public sealed class CheckpointInputConflictException : ConflictException
     public string RequestedFingerprint { get; }
 }
 
+/// <summary>
+/// PostgreSQL cannot store a checkpoint value, because its <c>jsonb</c> text is above the limit. The
+/// operation already ran, and a retry would run it again with its effects, so the worker fails the
+/// task without a retry (SM-1982).
+/// </summary>
+public sealed class CheckpointValueSizeLimitException : WorkhorseException
+{
+    /// <summary>An exception for the checkpoint name and the two sizes, in bytes.</summary>
+    public CheckpointValueSizeLimitException(string name, long actualBytes, long maxBytes)
+        : base($"checkpoint {name} has {actualBytes} bytes of jsonb text, above its limit of {maxBytes} bytes")
+    {
+        Name = name;
+        ActualBytes = actualBytes;
+        MaxBytes = maxBytes;
+    }
+
+    /// <summary>The checkpoint name.</summary>
+    public string Name { get; }
+
+    /// <summary>The size of the <c>jsonb</c> text of the value, in bytes.</summary>
+    public long ActualBytes { get; }
+
+    /// <summary>The limit, in bytes.</summary>
+    public long MaxBytes { get; }
+}
+
 /// <summary>A named primitive exceeded its limit.</summary>
 public sealed class LimitExceededException : NamedOperationException
 {

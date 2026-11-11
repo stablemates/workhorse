@@ -112,3 +112,30 @@ rule, and the `child-limit` case of `protocol/v1/runtime.json` holds it in each 
 Open question: a deterministic handler gets the same child limit answer on each attempt, so a retry
 of such a refusal cannot succeed. Whether each child limit refusal and `result_too_large` must end
 the task with no retry is a product decision for a later change.
+
+## Amendment: an oversized checkpoint value is terminal (2026-11-11)
+
+`save_checkpoint_v2` raised a plain exception for a value above 1,048,576 bytes of jsonb text. No
+SDK mapped it to an error class, so the worker retried the task by its policy. The SDK runs the
+operation of a checkpoint before it saves the value. Thus each retry ran the operation again, with
+its effects, and no attempt could store the value (SM-1982).
+
+1. `save_checkpoint_v3` answers the status `value_too_large`, with `value_bytes` and `max_bytes`,
+   and stores nothing. It gives this answer after the lease check and after the check of a stored
+   name. `save_checkpoint_v2` keeps its exception, so a worker of an earlier release sees no change.
+2. Each SDK raises a typed error for that status: `CheckpointValueSizeLimitError` in TypeScript,
+   Python, Go, Rust, and Ruby, and `CheckpointValueSizeLimitException` in the JVM and .NET.
+3. The worker fails the task without a retry and keeps the current attempt, as for the conflict
+   classes of point 6. It finds the error in the cause chain in the same way.
+4. No SDK measures the value. The limit counts the canonical jsonb text, which only PostgreSQL
+   produces.
+
+An oversized handler result is different. It follows the retry policy, because a retry of that
+handler replays its stored checkpoints and repeats no checkpoint operation. An oversized checkpoint
+value is stored by no attempt, so its operation runs on each attempt.
+
+An operator who sees the error corrects the handler, so that the value is smaller, and then redrives
+the task. A redrive starts a new task, so its handler runs the operation again.
+
+[Data model: `task_checkpoint`](../architecture/data-model.md#task_checkpoint) owns the statuses and
+the settlement rule.

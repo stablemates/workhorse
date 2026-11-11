@@ -35,15 +35,69 @@ internal static class FailureEnvelope
             else
             {
                 // A durable replay conflict keeps its type name through a wrapper, as in the JVM and Ruby SDKs.
-                writer.WriteString("name", Name(ReplayConflict(error) ?? error));
-                writer.WriteString("message", Storable(Format(() => error.Message, error)));
-                writer.WriteString("stack", Storable(Format(error.ToString, error)));
+                var name = Name(ReplayConflict(error) ?? error);
+                var message = Storable(Format(() => error.Message, error));
+                var stack = Storable(Format(error.ToString, error));
+                var boundedName = Utf8Prefix(name, NameMaxBytes);
+                var boundedMessage = Utf8Prefix(message, MessageMaxBytes);
+                var boundedStack = Utf8Prefix(stack, StackMaxBytes);
+                writer.WriteString("name", boundedName);
+                writer.WriteString("message", boundedMessage);
+                writer.WriteString("stack", boundedStack);
+                if (boundedName.Length != name.Length || boundedMessage.Length != message.Length || boundedStack.Length != stack.Length)
+                {
+                    writer.WriteBoolean("truncated", true);
+                }
             }
 
             writer.WriteEndObject();
         }
 
         return Encoding.UTF8.GetString(buffer.ToArray());
+    }
+
+    /// <summary>The UTF-8 byte limits of the envelope fields, as <c>protocol/v1/failures.json</c> states them (SM-1983).</summary>
+    internal const int NameMaxBytes = 1024;
+
+    /// <summary>The UTF-8 byte limit of the message.</summary>
+    internal const int MessageMaxBytes = 16384;
+
+    /// <summary>The UTF-8 byte limit of the stack.</summary>
+    internal const int StackMaxBytes = 65536;
+
+    /// <summary>
+    /// The longest prefix of <paramref name="text"/> whose UTF-8 form has at most
+    /// <paramref name="maxBytes"/> bytes. The cut never splits a surrogate pair.
+    /// <see cref="Storable"/> already replaced each lone surrogate with U+FFFD, which has three bytes.
+    /// <c>bound_error_envelope_v1</c> applies the same cut, so <c>fail_v2</c> does not change the envelope.
+    /// </summary>
+    internal static string Utf8Prefix(string text, int maxBytes)
+    {
+        // A UTF-16 code unit is at most three UTF-8 bytes, so a short text needs no count.
+        if ((long)text.Length * 3 <= maxBytes)
+        {
+            return text;
+        }
+
+        var bytes = 0;
+        for (var index = 0; index < text.Length; index++)
+        {
+            var unit = text[index];
+            var pair = char.IsHighSurrogate(unit) && index + 1 < text.Length && char.IsLowSurrogate(text[index + 1]);
+            var size = pair ? 4 : unit < 0x80 ? 1 : unit < 0x800 ? 2 : 3;
+            if (bytes + size > maxBytes)
+            {
+                return text[..index];
+            }
+
+            bytes += size;
+            if (pair)
+            {
+                index++;
+            }
+        }
+
+        return text;
     }
 
     /// <summary>
@@ -57,7 +111,7 @@ internal static class FailureEnvelope
     /// <see cref="AggregateException"/>, as the JVM follows one cause. It reads at most
     /// <see cref="CauseDepth"/> exceptions, so a cycle cannot hold it.
     /// </summary>
-    internal static NamedOperationException? ReplayConflict(Exception error)
+    internal static WorkhorseException? ReplayConflict(Exception error)
     {
         Exception? current = error;
         for (var depth = 0; depth < CauseDepth && current is not null; depth++)
@@ -70,6 +124,13 @@ internal static class FailureEnvelope
             if (current is LimitExceededException { SecondChildSet: true } limit)
             {
                 return limit;
+            }
+
+            // Not a replay conflict, but terminal for the same reason: a retry runs the operation of
+            // the checkpoint again and still cannot store its value (SM-1982).
+            if (current is CheckpointValueSizeLimitException oversized)
+            {
+                return oversized;
             }
 
             current = current.InnerException;

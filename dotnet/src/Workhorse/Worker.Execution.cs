@@ -418,7 +418,8 @@ public sealed partial class Worker
         int? delay = null;
         if (FailureEnvelope.ReplayConflict(error) is not null)
         {
-            // A durable replay conflict is terminal (ADR 0098), also inside a wrapper (SM-1512).
+            // A durable replay conflict is terminal (ADR 0098), also inside a wrapper (SM-1512). An
+            // oversized checkpoint value is terminal too, because a retry runs its operation again (SM-1982).
             delay = -1;
         }
         else if (_retryDelay?.Invoke(task.Attempt, task) is { } chosen)
@@ -429,7 +430,7 @@ public sealed partial class Worker
         Row row;
         using (var span = WorkerTelemetry.StartFailure(task, error))
         {
-            row = await FencedRowAsync(SqlCatalogue.FailV1, task, () => [Parameters.Json(envelope), Parameters.Integer(delay)], cancellationToken).ConfigureAwait(false);
+            row = await FencedRowAsync(SqlCatalogue.FailV2, task, () => [Parameters.Json(envelope), Parameters.Integer(delay)], cancellationToken).ConfigureAwait(false);
             WorkerTelemetry.Failed(span, task, row.Text("state"));
         }
 

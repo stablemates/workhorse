@@ -3,9 +3,9 @@ export const PROTOCOL_VERSION = 5;
 export const MINIMUM_PROTOCOL_VERSION = 5;
 export const MAXIMUM_PROTOCOL_VERSION = 5;
 export const WORKHORSE_SCHEMA_BASELINE_VERSION = 6;
-export const WORKHORSE_SCHEMA_VERSION = 98;
-export const MINIMUM_SCHEMA_VERSION = 98;
-export const MAXIMUM_SCHEMA_VERSION = 98;
+export const WORKHORSE_SCHEMA_VERSION = 99;
+export const MINIMUM_SCHEMA_VERSION = 99;
+export const MAXIMUM_SCHEMA_VERSION = 99;
 export const DEFAULT_TASK_VALUE_MAX_BYTES = 1048576;
 export const MAX_ENQUEUE_BATCH_SIZE = 1000;
 
@@ -43,6 +43,8 @@ export const SQL_STATEMENTS = {
     "SELECT * FROM workhorse.expire_owned_telemetry_v1($1::uuid, $2::text, $3::bigint)",
   fail_v1:
     "SELECT workhorse.fail_v1($1::uuid, $2::text, $3::bigint, $4::jsonb, $5::integer) AS state",
+  fail_v2:
+    "SELECT workhorse.fail_v2($1::uuid, $2::text, $3::bigint, $4::jsonb, $5::integer) AS state",
   release_owned_v1: "SELECT workhorse.release_owned_v1($1::uuid, $2::text, $3::bigint) AS status",
   fire_due_schedules_v2:
     "SELECT namespace, schedule_name, occurrence_at, task_id\n  FROM workhorse.fire_due_schedules_v2($1::text[], $2::timestamptz, $3::integer, $4::bigint)",
@@ -113,6 +115,8 @@ export const SQL_STATEMENTS = {
     "SELECT status, checkpoint_value, attempt, fence_token::text, worker_id, created_at FROM workhorse.save_checkpoint_v1($1::uuid, $2::text, $3::bigint, $4::text, $5::jsonb)",
   save_checkpoint_v2:
     "SELECT status, checkpoint_value, attempt, fence_token::text, worker_id, created_at, input_fingerprint FROM workhorse.save_checkpoint_v2($1::uuid, $2::text, $3::bigint, $4::text, $5::jsonb, $6::text)",
+  save_checkpoint_v3:
+    "SELECT status, checkpoint_value, attempt, fence_token::text, worker_id, created_at, input_fingerprint, value_bytes, max_bytes FROM workhorse.save_checkpoint_v3($1::uuid, $2::text, $3::bigint, $4::text, $5::jsonb, $6::text)",
   schedule_wait_v1:
     "SELECT status, wait_name, mode, duration_ms::text, requested_wake_at, wake_at, attempt, fence_token::text, worker_id, created_at FROM workhorse.schedule_wait_v1($1::uuid, $2::text, $3::bigint, $4::text, $5::bigint, $6::timestamptz)",
   schedule_wait_v2:

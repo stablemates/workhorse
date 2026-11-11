@@ -2050,7 +2050,7 @@ module Stablemates
         envelope = error_envelope(error, task.redact_error_details)
         state = Telemetry.span("workhorse.retry", Telemetry.task_span_attributes(task)) do |span|
           delay = durable_replay_conflict(error) ? -1 : retry_delay_override(task)
-          state = fenced_row(SqlCatalogue::FAIL_V1, task, JSON.generate(envelope), delay&.to_s)["state"]
+          state = fenced_row(SqlCatalogue::FAIL_V2, task, JSON.generate(envelope), delay&.to_s)["state"]
           Telemetry.set_attribute(span, "workhorse.retry.outcome", state.to_s)
           state
         end
@@ -2070,13 +2070,15 @@ module Stablemates
       # The durable replay conflict (ADR 0098), or the limit error of a second child set, that
       # +error+ is or wraps, or nil. Each one ends the task with no retry. A second child set was a
       # replay conflict before create_children_v2 named it a limit, so it stays terminal. Each other
-      # child limit refusal follows the retry policy (the ADR 0098 amendment of SM-1956). A handler
-      # can wrap such an error in its own error. It is terminal also then, as in Go and Rust, and the
-      # failure envelope records its name. The walk stays bounded against a cyclic cause chain.
+      # child limit refusal follows the retry policy (the ADR 0098 amendment of SM-1956). An
+      # oversized checkpoint value is terminal too, because a retry runs the block again and still
+      # cannot store its value (SM-1982). A handler can wrap such an error in its own error. It is
+      # terminal also then, as in Go and Rust, and the failure envelope records its name. The walk
+      # stays bounded against a cyclic cause chain.
       def durable_replay_conflict(error)
         16.times do
           return nil if error.nil?
-          return error if error.is_a?(ConflictError)
+          return error if error.is_a?(ConflictError) || error.is_a?(CheckpointValueSizeLimitError)
           return error if error.is_a?(LimitExceededError) && error.instance_variable_get(:@second_child_set)
 
           error = error.cause
@@ -2091,7 +2093,7 @@ module Stablemates
         retry_delay_milliseconds(delay)
       end
 
-      # fail_v1 takes the delay as a PostgreSQL integer. The delay rounds to the nearest
+      # fail_v2 takes the delay as a PostgreSQL integer. The delay rounds to the nearest
       # millisecond, half up. A negative delay is refused also when it rounds to 0 (ADR 0111).
       # A real value other than a Float converts exactly, so 500.5 ms is 501 ms.
       def retry_delay_milliseconds(delay)
@@ -2117,9 +2119,32 @@ module Stablemates
         return {"name" => REDACTED_NAME, "message" => REDACTED_MESSAGE} if redact
 
         # A wrapped durable replay conflict keeps its name. The message and stack stay the outer ones.
-        {"name" => storable_text(error_name(durable_replay_conflict(error) || error)),
-         "message" => storable_text(error.message.to_s),
-         "stack" => storable_text(error.full_message(highlight: false, order: :top))}
+        bounded_envelope(
+          storable_text(error_name(durable_replay_conflict(error) || error)),
+          storable_text(error.message.to_s),
+          storable_text(error.full_message(highlight: false, order: :top))
+        )
+      end
+
+      # The UTF-8 byte limit of each envelope field, as protocol/v1/failures.json states it
+      # (SM-1983). bound_error_envelope_v1 applies the same cut, so fail_v2 does not change the
+      # envelope that the worker cut.
+      ENVELOPE_MAX_BYTES = {"name" => 1024, "message" => 16_384, "stack" => 65_536}.freeze
+      private_constant :ENVELOPE_MAX_BYTES
+
+      def bounded_envelope(name, message, stack)
+        fields = {"name" => name, "message" => message, "stack" => stack}
+        envelope = fields.to_h { |field, text| [field, utf8_prefix(text, ENVELOPE_MAX_BYTES.fetch(field))] }
+        envelope["truncated"] = true if envelope != fields
+        envelope
+      end
+
+      # The longest prefix of +text+ whose UTF-8 form has at most +max_bytes+ bytes. storable_text
+      # made +text+ valid UTF-8, so scrub removes only the bytes of the character that the cut split.
+      def utf8_prefix(text, max_bytes)
+        return text if text.bytesize <= max_bytes
+
+        text.byteslice(0, max_bytes).scrub("")
       end
 
       # The class name of +error+. An anonymous class has no name, so the worker uses the name of

@@ -236,13 +236,70 @@ export function errorEnvelope(error: unknown, redactDetails = false): Json {
   if (isError(error)) {
     // A wrapped terminal replay error keeps its name. The message and stack stay the outer ones.
     const name = terminalReplayError(error)?.name ?? error.name;
-    return {
+    return boundedEnvelope({
       name: storableText(name),
       message: storableText(error.message),
       stack: storableText(error.stack ?? null),
-    };
+    });
   }
-  return { name: NON_ERROR_NAME, message: storableText(thrownValueText(error)), stack: null };
+  return boundedEnvelope({
+    name: NON_ERROR_NAME,
+    message: storableText(thrownValueText(error)),
+    stack: null,
+  });
+}
+
+/** The UTF-8 byte limit of each envelope field, as `protocol/v1/failures.json` states it. */
+const ENVELOPE_FIELD_MAX_BYTES = { name: 1024, message: 16_384, stack: 65_536 } as const;
+
+/**
+ * `envelope` with each string field cut to its limit, and `truncated: true` if a cut happened.
+ * `bound_error_envelope_v1` applies the same cut, so `fail_v2` does not change this envelope.
+ */
+function boundedEnvelope(envelope: {
+  name: string;
+  message: string;
+  stack: string | null;
+}): Record<string, Json> {
+  let truncated = false;
+  const bounded: Record<string, Json> = {};
+  for (const field of ["name", "message", "stack"] as const) {
+    const value = envelope[field];
+    // An error can set a name that is not a string at run time. Such a value does not change.
+    if (typeof value === "string") {
+      const prefix = utf8Prefix(value, ENVELOPE_FIELD_MAX_BYTES[field]);
+      truncated ||= prefix.length !== value.length;
+      bounded[field] = prefix;
+    } else {
+      bounded[field] = value;
+    }
+  }
+  if (truncated) bounded["truncated"] = true;
+  return bounded;
+}
+
+/**
+ * The longest prefix of `text` whose UTF-8 form has at most `maxBytes` bytes. The cut never splits
+ * a surrogate pair. `storableText` already replaced each lone surrogate with U+FFFD, three bytes.
+ */
+export function utf8Prefix(text: string, maxBytes: number): string {
+  // A UTF-16 code unit is at most three UTF-8 bytes, so a short text needs no count.
+  if (text.length * 3 <= maxBytes) return text;
+  let bytes = 0;
+  for (let index = 0; index < text.length; index++) {
+    const unit = text.charCodeAt(index);
+    const pair =
+      unit >= 0xd800 &&
+      unit <= 0xdbff &&
+      index + 1 < text.length &&
+      text.charCodeAt(index + 1) >= 0xdc00 &&
+      text.charCodeAt(index + 1) <= 0xdfff;
+    const size = pair ? 4 : unit < 0x80 ? 1 : unit < 0x800 ? 2 : 3;
+    if (bytes + size > maxBytes) return text.slice(0, index);
+    bytes += size;
+    if (pair) index++;
+  }
+  return text;
 }
 
 /**
@@ -814,14 +871,14 @@ export class ClaimLeaseFenceModule extends QueueModule {
       // overrides it, including zero for an immediate retry.
       const result = await queryFencedWrite<{ state: FailureStatus }>(
         this.context.database,
-        SQL_STATEMENTS["fail_v1"],
+        SQL_STATEMENTS["fail_v2"],
         [
           ...lease.sqlParameters,
           JSON.stringify(errorEnvelope(error, task.redactErrorDetails)),
           retryDelayMs ?? null,
         ],
       );
-      const state = expectOneRow(result, "workhorse.fail_v1").state;
+      const state = expectOneRow(result, "workhorse.fail_v2").state;
       span.setAttribute("workhorse.retry.outcome", state);
       telemetryMetrics.failed.add(1, {
         ...taskMetricAttributes(task),

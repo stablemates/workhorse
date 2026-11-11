@@ -4,6 +4,7 @@ import { registerOpenTelemetry } from "@stablemates/workhorse-otel";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import {
   CheckpointInputConflictError,
+  CheckpointValueSizeLimitError,
   checkpointInputFingerprint,
   MAX_CHECKPOINT_VALUE_BYTES,
   MAX_PROGRESS_VALUE_BYTES,
@@ -184,11 +185,19 @@ describe("checkpoints progress waits", () => {
     const id = await queue.enqueue("checkpoint-size", {});
     const task = await queue.claim("worker-a");
 
-    await expect(
-      queue.saveCheckpoint(task!, "worker-a", "oversized", {
+    // save_checkpoint_v3 answers value_too_large, so the queue throws the typed error (SM-1982).
+    const refused = await queue
+      .saveCheckpoint(task!, "worker-a", "oversized", {
         data: "x".repeat(MAX_CHECKPOINT_VALUE_BYTES + 1),
-      }),
-    ).rejects.toThrow(/at most 1048576 bytes/);
+      })
+      .catch((error: unknown) => error);
+    expect(refused).toBeInstanceOf(CheckpointValueSizeLimitError);
+    expect(refused).toMatchObject({
+      taskId: id,
+      checkpointName: "oversized",
+      actualBytes: MAX_CHECKPOINT_VALUE_BYTES + 13,
+      maxBytes: MAX_CHECKPOINT_VALUE_BYTES,
+    });
     await expect(
       pool.query(
         `SELECT * FROM workhorse.save_checkpoint_v1(

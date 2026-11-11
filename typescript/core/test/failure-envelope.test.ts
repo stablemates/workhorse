@@ -4,20 +4,29 @@ import {
   errorEnvelope,
   errorForTelemetry,
   UNCONVERTIBLE_THROWN_VALUE_TEXT,
+  utf8Prefix,
 } from "../src/queue/claim-lease-fence.js";
 
 // `protocol/v1/failures.json` owns the shape PostgreSQL stores for a handler failure. Each SDK
 // runs this table, so an operator grouping a dead letter by name reads the same
 // field in every language.
 
-/** A message part: text, or one UTF-16 code unit that no strict JSON parser reads from an escape. */
-type MessagePart = string | { unpairedSurrogate: string };
+/**
+ * A message part: text, one UTF-16 code unit that no strict JSON parser reads from an escape, or a
+ * text repeated a number of times.
+ */
+type MessagePart = string | { unpairedSurrogate: string } | { repeat: string; count: number };
 
 interface Fixture {
   id: string;
   error: { declaresName: boolean; declaresStack: boolean; message: string | MessagePart[] };
   redactErrorDetails: boolean;
-  envelope: Record<string, string | null>;
+  envelope: {
+    name: string;
+    message: string | MessagePart[];
+    stack?: string;
+    truncated?: boolean;
+  };
 }
 
 interface Failures {
@@ -27,6 +36,7 @@ interface Failures {
     redacted: { name: string; message: string };
     genericName: Record<string, string>;
     forbiddenNameCharacters: string[];
+    limits: { name: number; message: number; stack: number; truncatedField: string };
   };
   fixtures: Fixture[];
 }
@@ -45,11 +55,11 @@ class PaymentDeclined extends Error {
 function fixtureMessage(message: string | MessagePart[]): string {
   if (typeof message === "string") return message;
   return message
-    .map((part) =>
-      typeof part === "string"
-        ? part
-        : String.fromCharCode(Number.parseInt(part.unpairedSurrogate, 16)),
-    )
+    .map((part) => {
+      if (typeof part === "string") return part;
+      if ("repeat" in part) return part.repeat.repeat(part.count);
+      return String.fromCharCode(Number.parseInt(part.unpairedSurrogate, 16));
+    })
     .join("");
 }
 
@@ -84,19 +94,49 @@ describe("failure envelope", () => {
       string,
       unknown
     >;
-    const expectedFields = fixture.redactErrorDetails
-      ? failures.envelope.redactedFields
-      : failures.envelope.fields;
+    const expectedFields = [
+      ...(fixture.redactErrorDetails ? failures.envelope.redactedFields : failures.envelope.fields),
+      ...(fixture.envelope.truncated === true ? [failures.envelope.limits.truncatedField] : []),
+    ];
     expect(Object.keys(envelope).toSorted()).toEqual(expectedFields.toSorted());
-    expect(envelope["message"]).toBe(fixture.envelope["message"]);
+    expect(envelope["truncated"]).toBe(fixture.envelope.truncated === true ? true : undefined);
+    expect(envelope["message"]).toBe(fixtureMessage(fixture.envelope.message));
+    // Each field fits its limit in UTF-8 bytes, also the stack that the error builds.
+    const limits = failures.envelope.limits;
+    const oversized = (["name", "message", "stack"] as const).filter((field) => {
+      const value = envelope[field];
+      return typeof value === "string" && Buffer.byteLength(value, "utf8") > limits[field];
+    });
+    expect(oversized).toEqual([]);
     const expectedName =
       fixture.envelope["name"] === "$generic"
         ? failures.envelope.genericName["typescript"]
         : fixture.envelope["name"];
     expect(envelope["name"]).toBe(expectedName);
-    expect(ACCEPTED_STACKS[fixture.envelope["stack"] ?? "absent"]).toContain(
-      describeStack(envelope),
-    );
+    expect(ACCEPTED_STACKS[fixture.envelope.stack ?? "absent"]).toContain(describeStack(envelope));
+  });
+
+  // SM-1983: each field is cut at a code point boundary to at most its limit in UTF-8 bytes.
+  it("cuts each field to its UTF-8 byte limit without splitting a surrogate pair", () => {
+    expect(utf8Prefix("a\u00e9", 2)).toBe("a");
+    expect(utf8Prefix("a\u00e9", 3)).toBe("a\u00e9");
+    expect(utf8Prefix("\u20ac\u20ac", 5)).toBe("\u20ac");
+    expect(utf8Prefix("a\u{1F600}", 4)).toBe("a");
+    expect(utf8Prefix("a\u{1F600}", 5)).toBe("a\u{1F600}");
+    const prefix = utf8Prefix("x".repeat(10) + "\u{1F600}".repeat(1000), 1001);
+    expect(Buffer.byteLength(prefix, "utf8")).toBe(998);
+    expect(Buffer.from(prefix, "utf8").toString("utf8")).toBe(prefix);
+    const error = new Error("m");
+    error.name = `a${"\u20ac".repeat(342)}`;
+    error.stack = `a${"\u{1F600}".repeat(16_384)}`;
+    expect(errorEnvelope(error)).toEqual({
+      name: `a${"\u20ac".repeat(341)}`,
+      message: "m",
+      stack: `a${"\u{1F600}".repeat(16_383)}`,
+      truncated: true,
+    });
+    const thrown = errorEnvelope("x".repeat(16_385)) as Record<string, unknown>;
+    expect(thrown).toMatchObject({ message: "x".repeat(16_384), truncated: true });
   });
 
   it("never records a type-system artifact as the name", () => {

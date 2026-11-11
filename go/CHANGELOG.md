@@ -284,6 +284,27 @@ dashboard functions. It changes no rows. The dashboard host calls the audited fu
 SDK compatibility floor rises from 97 to 98. Run `workhorse schema migrate` before the new
 processes start.
 
+### An oversized checkpoint value fails the task without a retry
+
+A checkpoint value above 1,048,576 bytes of jsonb text made PostgreSQL raise a plain exception, and
+the worker retried the task. The operation of the checkpoint runs before the save. Thus each retry ran
+the operation again, with its effects, and no attempt could store the value. The worker now calls
+`save_checkpoint_v3`, which answers `value_too_large` and stores nothing. The error
+`*CheckpointValueSizeLimitError` gives the checkpoint name, the measured bytes, and the limit. The worker fails the
+task at once, also when the handler wraps the error. Correct the handler, and then redrive the task. The
+limit counts the jsonb text, which has a space after each `,` and `:`, so only PostgreSQL measures it
+(SM-1982).
+
+### A failure envelope has a size limit
+
+A handler error with a very large message, such as a full response body, was stored as it came, and
+a retry wrote it three times. The worker now cuts the `name`, the `message`, and the `stack` of the
+failure envelope to 1,024, 16,384, and 65,536 UTF-8 bytes. Each cut is at a character boundary.
+When the worker cuts a field, it adds `"truncated": true`. It sends the envelope to the new `fail_v2`, which applies
+the same cut. Thus a client that does not cut cannot store a longer field (SM-1983). Migration 0100
+adds these functions, and the schema floor rises to 99. `fail_v1`, `fast_fail_v1`, and
+`save_checkpoint_v2` keep their answers.
+
 ## 0.12.0 — 2026-11-07
 
 The npm packages, Python distribution, Go module, Rust crate, Ruby gem, JVM artifacts, and .NET

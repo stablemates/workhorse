@@ -3901,14 +3901,19 @@ func (worker *Worker) callRetryDelay(task ClaimedTask) (delay *time.Duration, er
 // durableReplayConflictName recognizes typed conflicts and the limit of a second child set through
 // ordinary Go error wrapping. Each one ends the task with no retry. A second child set was a replay
 // conflict before create_children_v2 named it a limit, so it stays terminal (the ADR 0098
-// amendment of SM-1956).
+// amendment of SM-1956). An oversized checkpoint value is terminal for the same reason as a
+// conflict: a retry runs the operation of the checkpoint again and still cannot store its value
+// (SM-1982).
 func durableReplayConflictName(err error) string {
+	var checkpointValue *CheckpointValueSizeLimitError
 	var checkpointInput *CheckpointInputConflictError
 	var checkpoint *CheckpointConflictError
 	var wait *WaitConflictError
 	var child *ChildConflictError
 	var human *HumanWaitConflictError
 	switch {
+	case errors.As(err, &checkpointValue):
+		return checkpointValueSizeLimitErrorName
 	case errors.As(err, &checkpointInput):
 		return checkpointInputConflictErrorName
 	case errors.As(err, &checkpoint):
@@ -4291,11 +4296,52 @@ func handlerErrorEnvelope(err error, redact bool) map[string]any {
 	if redact {
 		return map[string]any{errorNameField: redactedHandlerErrorNameValue, errorMessageField: redactedHandlerErrorTextValue}
 	}
-	return map[string]any{
-		errorNameField:    storableText(handlerErrorName(err)),
-		errorMessageField: storableText(err.Error()),
-		errorStackField:   handlerErrorStack(err),
+	envelope := map[string]any{}
+	truncated := false
+	for _, field := range []struct {
+		key      string
+		value    any
+		maxBytes int
+	}{
+		{errorNameField, storableText(handlerErrorName(err)), errorNameMaxBytes},
+		{errorMessageField, storableText(err.Error()), errorMessageMaxBytes},
+		{errorStackField, handlerErrorStack(err), errorStackMaxBytes},
+	} {
+		text, ok := field.value.(string)
+		if !ok {
+			envelope[field.key] = field.value
+			continue
+		}
+		prefix := utf8Prefix(text, field.maxBytes)
+		truncated = truncated || len(prefix) != len(text)
+		envelope[field.key] = prefix
 	}
+	if truncated {
+		envelope[errorTruncatedField] = true
+	}
+	return envelope
+}
+
+// The UTF-8 byte limit of each envelope field, as protocol/v1/failures.json states it (SM-1983).
+// bound_error_envelope_v1 applies the same cut, so fail_v2 does not change an envelope that the
+// worker cut.
+const (
+	errorNameMaxBytes    = 1024
+	errorMessageMaxBytes = 16384
+	errorStackMaxBytes   = 65536
+)
+
+// utf8Prefix returns the longest prefix of text whose UTF-8 form has at most maxBytes bytes. The
+// cut is at a code point boundary. storableText already made text valid UTF-8.
+func utf8Prefix(text string, maxBytes int) string {
+	if len(text) <= maxBytes {
+		return text
+	}
+	cut := maxBytes
+	for cut > 0 && !utf8.RuneStart(text[cut]) {
+		cut--
+	}
+	return text[:cut]
 }
 
 // workerHostname resolves the process hostname once per worker; registration reports it on

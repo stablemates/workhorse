@@ -228,6 +228,12 @@ run.workhorse.CheckpointOptions: public final int hashCode()
 run.workhorse.CheckpointOptions: public final java.lang.String toString()
 run.workhorse.CheckpointOptions: public static run.workhorse.CheckpointOptions input(@Nullable java.lang.Object)
 
+@NullMarked public final class run.workhorse.CheckpointValueSizeLimitException extends run.workhorse.WorkhorseException
+run.workhorse.CheckpointValueSizeLimitException: public CheckpointValueSizeLimitException(java.lang.String, long, long)
+run.workhorse.CheckpointValueSizeLimitException: public java.lang.String checkpointName()
+run.workhorse.CheckpointValueSizeLimitException: public long actualBytes()
+run.workhorse.CheckpointValueSizeLimitException: public long maxBytes()
+
 @NullMarked public final class run.workhorse.Checkpoints
 run.workhorse.Checkpoints: public static java.lang.String inputFingerprint(@Nullable java.lang.Object)
 

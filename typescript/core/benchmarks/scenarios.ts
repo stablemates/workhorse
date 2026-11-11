@@ -5493,7 +5493,7 @@ class CheckpointStatementProbe implements Queryable {
     const kind: CheckpointStatementKind =
       text === SQL_STATEMENTS.list_checkpoints
         ? "list"
-        : text === SQL_STATEMENTS.save_checkpoint_v2
+        : text === SQL_STATEMENTS.save_checkpoint_v3
           ? "save"
           : "other";
     const pass = this.pass;
