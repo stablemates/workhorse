@@ -39,6 +39,25 @@ bytes now fails, and schedule synchronization refuses such a name. A stored sche
 name no longer fires. A claim computes its lease from a clock sample taken after
 its row locks. The migration does not raise the SDK compatibility floor.
 
+### A timer sleep stops the handler after a stale heartbeat
+
+A handler called `context.sleep` or `context.sleep_until`. PostgreSQL parked the task, but a
+heartbeat round answered `stale` before the worker read the `scheduled` answer. The worker then
+gave the lease loss to its outcome arbiter, and the sleep returned. Thus the code after the sleep
+ran at once, before the wake time. Now each `scheduled` answer stops the handler at the wait,
+whatever outcome won while the request was in flight. A `stale` expiry answer and the end of the
+local lease window have the same result (SM-1929).
+
+### A failed expiry request keeps the handler running
+
+A task reached its deadline or its execution timeout, and the Python worker asked PostgreSQL to
+expire the attempt. If that request failed, for example during a failover, the worker cancelled the
+handler, wrote nothing for the attempt, and ended its run with the error. Now a failed request does
+not confirm the expiry. The worker logs `workhorse.worker.expiration_request_failed` at warning
+level, keeps the handler running, and asks again with the backoff that it uses for `not_due`. A
+request that fails after a heartbeat round reports the expiry no longer cancels the other leases of
+that round. The lease watchdog still ends an attempt that nobody renews (SM-1934).
+
 ## 0.12.0 — 2026-11-07
 
 The npm packages, Python distribution, Go module, Rust crate, Ruby gem, JVM artifacts, and .NET

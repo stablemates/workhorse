@@ -4052,7 +4052,9 @@ public final class Worker implements AutoCloseable {
                       try {
                         if (status.equals("deadline_exceeded")
                             || status.equals("timeout_exceeded")) {
-                          settleExpiration(task, arbiter, cancellation);
+                          // A failed request does not confirm the expiry, so the handler keeps
+                          // running. The next round and the expiry watch ask again (SM-1934).
+                          requestExpiration(task, arbiter, cancellation);
                         } else {
                           deliverStatus(status, arbiter, cancellation);
                         }
@@ -4100,7 +4102,7 @@ public final class Worker implements AutoCloseable {
           () -> {
             ownership.settlement.lock();
             try {
-              return settleExpiration(task, arbiter, cancellation);
+              return requestExpiration(task, arbiter, cancellation);
             } finally {
               ownership.settlement.unlock();
             }
@@ -4201,6 +4203,28 @@ public final class Worker implements AutoCloseable {
       return remaining.toNanos();
     } catch (ArithmeticException overflow) {
       return Long.MAX_VALUE;
+    }
+  }
+
+  /**
+   * Asks PostgreSQL to settle the expiry, as {@link #settleExpiration} does. A failed request
+   * proves nothing about the expiry: the worker logs it and answers {@code not_due}, so the handler
+   * keeps running and the watch asks again after its backoff. The lease watchdog still ends an
+   * attempt that nobody renews (SM-1934).
+   */
+  private @Nullable String requestExpiration(
+      ClaimedTask task, Arbiter arbiter, TaskCancellation cancellation) {
+    try {
+      return settleExpiration(task, arbiter, cancellation);
+    } catch (RuntimeException error) {
+      Map<String, @Nullable Object> attributes = taskAttributes(task);
+      attributes.put("error.type", error.getClass().getName());
+      log(
+          System.Logger.Level.WARNING,
+          "workhorse.worker.expiration_request_failed",
+          "Ownership expiration request failed; the worker asks again",
+          attributes);
+      return "not_due";
     }
   }
 

@@ -62,6 +62,41 @@
     "expectedAttemptsAfterReplay": 1
   },
   {
+    "id": "timer-wait-suspends-after-a-stale-heartbeat-in-flight",
+    "kind": "suspension-race",
+    "covers": ["durable-wait-suspension"],
+    "taskType": "protocol.suspension-race",
+    "waitName": "after-stale-heartbeat",
+    "waitMs": 3600000,
+    "leaseMs": 30000,
+    "heartbeatMs": 100,
+    "cancellationTimeoutMs": 10000,
+    "injection": {
+      "function": "workhorse.schedule_wait_v1(uuid,text,bigint,text,bigint,timestamptz)",
+      "header": "workhorse.schedule_wait_v1(p_task_id uuid, p_worker_id text, p_fence_token bigint, p_wait_name text, p_duration_ms bigint, p_wake_at timestamptz) RETURNS TABLE (status text, wait_name text, mode text, duration_ms bigint, requested_wake_at timestamptz, wake_at timestamptz, attempt integer, fence_token bigint, worker_id text, created_at timestamptz)",
+      "setup": [
+        "CREATE SEQUENCE workhorse.protocol_injected_wait_requested MINVALUE 0 START 0",
+        "CREATE SEQUENCE workhorse.protocol_injected_wait_released MINVALUE 0 START 0",
+        "DO $copy$ BEGIN EXECUTE replace(pg_get_functiondef('workhorse.schedule_wait_v1(uuid,text,bigint,text,bigint,timestamptz)'::regprocedure), 'FUNCTION workhorse.schedule_wait_v1(', 'FUNCTION workhorse.protocol_original_schedule_wait_v1('); END $copy$"
+      ],
+      "body": "DECLARE v_polls integer := 0; BEGIN PERFORM nextval('workhorse.protocol_injected_wait_requested'); WHILE NOT (SELECT is_called FROM workhorse.protocol_injected_wait_released) LOOP IF v_polls >= 2000 THEN RAISE EXCEPTION 'the runner never released the wait request' USING ERRCODE = '55000'; END IF; PERFORM pg_sleep(0.005); v_polls := v_polls + 1; END LOOP; RETURN QUERY SELECT 'scheduled'::text, w.wait_name, w.mode, w.duration_ms, w.requested_wake_at, w.wake_at, w.attempt, w.fence_token, w.worker_id, w.created_at FROM workhorse.task_wait w WHERE w.task_id = p_task_id AND w.wait_name = p_wait_name; END;",
+      "requestedQuery": "SELECT is_called::text AS requested FROM workhorse.protocol_injected_wait_requested",
+      "commit": "SELECT scheduled.status FROM workhorse.task_runtime runtime JOIN workhorse.task task ON task.id = runtime.task_id CROSS JOIN LATERAL workhorse.protocol_original_schedule_wait_v1(runtime.task_id, runtime.worker_id, runtime.fence_token, 'after-stale-heartbeat', 3600000, NULL) AS scheduled WHERE task.task_type = 'protocol.suspension-race' AND runtime.state = 'active'",
+      "release": "SELECT nextval('workhorse.protocol_injected_wait_released')",
+      "teardown": [
+        "DROP FUNCTION IF EXISTS workhorse.protocol_original_schedule_wait_v1(uuid,text,bigint,text,bigint,timestamptz)",
+        "DROP SEQUENCE IF EXISTS workhorse.protocol_injected_wait_released",
+        "DROP SEQUENCE IF EXISTS workhorse.protocol_injected_wait_requested"
+      ]
+    },
+    "expectedRunsAfterWait": 0,
+    "expectedState": {
+      "state": "scheduled",
+      "attempt": 1
+    },
+    "expectedAttempts": 0
+  },
+  {
     "id": "cooperative-cancellation-reaches-handler",
     "kind": "cooperative-cancellation",
     "covers": ["cooperative-cancellation-delivery"],
@@ -156,6 +191,51 @@
     "expectedCancelledAfterDatabaseExpiry": true,
     "expectedAfterRuns": [{ "state": "failed", "attempt": 1, "errorName": "ExecutionTimeout" }],
     "expectedAttemptOutcomes": ["timeout"]
+  },
+  {
+    "id": "deadline-settles-after-a-failed-expiry-request",
+    "kind": "expiration",
+    "covers": ["deadline-settlement", "database-authoritative-expiration"],
+    "taskType": "protocol.deadline-failed-request",
+    "mode": "deadline",
+    "durationMs": 300,
+    "localClockLeadMs": 0,
+    "leaseMs": 15000,
+    "heartbeatMs": 5000,
+    "maxAttempts": 1,
+    "injection": {
+      "function": "workhorse.expire_owned_telemetry_v1(uuid,text,bigint)",
+      "header": "workhorse.expire_owned_telemetry_v1(p_task_id uuid, p_worker_id text, p_fence_token bigint) RETURNS TABLE (status text, retry_state text)",
+      "setup": [
+        "CREATE SEQUENCE workhorse.protocol_injected_expiry_calls MINVALUE 0 START 0",
+        "CREATE SEQUENCE workhorse.protocol_injected_expiry_released MINVALUE 0 START 0",
+        "DO $copy$ BEGIN EXECUTE replace(pg_get_functiondef('workhorse.expire_owned_telemetry_v1(uuid,text,bigint)'::regprocedure), 'FUNCTION workhorse.expire_owned_telemetry_v1(', 'FUNCTION workhorse.protocol_original_expire_owned_telemetry_v1('); END $copy$"
+      ],
+      "body": "DECLARE v_polls integer := 0; BEGIN IF nextval('workhorse.protocol_injected_expiry_calls') = 0 THEN RAISE EXCEPTION 'injected expiry request failure' USING ERRCODE = '55P03'; END IF; WHILE NOT (SELECT is_called FROM workhorse.protocol_injected_expiry_released) LOOP IF v_polls >= 2000 THEN RAISE EXCEPTION 'the runner never released the expiry request' USING ERRCODE = '55000'; END IF; PERFORM pg_sleep(0.005); v_polls := v_polls + 1; END LOOP; RETURN QUERY SELECT * FROM workhorse.protocol_original_expire_owned_telemetry_v1(p_task_id, p_worker_id, p_fence_token); END;",
+      "callsQuery": "SELECT CASE WHEN is_called THEN last_value + 1 ELSE 0 END AS calls FROM workhorse.protocol_injected_expiry_calls",
+      "release": "SELECT nextval('workhorse.protocol_injected_expiry_released')",
+      "teardown": [
+        "DROP FUNCTION IF EXISTS workhorse.protocol_original_expire_owned_telemetry_v1(uuid,text,bigint)",
+        "DROP SEQUENCE IF EXISTS workhorse.protocol_injected_expiry_released",
+        "DROP SEQUENCE IF EXISTS workhorse.protocol_injected_expiry_calls"
+      ]
+    },
+    "expectedMinimumExpiryRequests": 2,
+    "expectedAbortReasons": ["DeadlineExceededError"],
+    "expectedCancelledAfterDatabaseExpiry": true,
+    "expectedAfterRuns": [
+      {
+        "state": "failed",
+        "attempt": 1,
+        "errorName": "DeadlineExceeded"
+      }
+    ],
+    "expectedAttemptOutcomes": ["deadline_exceeded"],
+    "followingTaskType": "protocol.deadline-failed-request-following",
+    "expectedFollowingState": {
+      "state": "succeeded",
+      "attempt": 1
+    }
   },
   {
     "id": "lease-loss-fences-handler-writes",

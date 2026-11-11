@@ -1202,6 +1202,13 @@ Status `scheduled` suspends the attempt:
 4. It skips completion or failure settlement.
 
 If handler code catches that sentinel, the arbiter check after the handler keeps the suspension.
+
+Another outcome can win while the request is in flight: a `stale` heartbeat, a `stale` expiry
+answer, or the end of the local lease window. Status `scheduled` then still raises the sentinel,
+because PostgreSQL parked the task. The arbiter keeps the outcome that won, and the token keeps its
+reason. Thus the code after the sleep never runs before the wake (SM-1929). The TypeScript
+`HandlerContext` applies the same rule.
+
 Status `elapsed` returns normally. The methods raise `WaitLeaseLostError`, `WaitConflictError`, or
 `WaitLimitExceededError` for their matching protocol statuses.
 

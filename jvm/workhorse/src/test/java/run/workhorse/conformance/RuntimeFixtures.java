@@ -53,6 +53,7 @@ import run.workhorse.BudgetDefinition;
 import run.workhorse.CancelResult;
 import run.workhorse.CancelStatus;
 import run.workhorse.CancellationReason;
+import run.workhorse.CancellationToken;
 import run.workhorse.CheckpointOptions;
 import run.workhorse.ChildRequest;
 import run.workhorse.ConflictException;
@@ -233,6 +234,7 @@ final class RuntimeFixtures {
         case "slot-refill" -> slotRefill(fixture);
         case "batch" -> batch(fixture);
         case "suspension-replay" -> suspensionReplay(fixture);
+        case "suspension-race" -> suspensionRace(fixture);
         case "lease-loss" -> leaseLoss(fixture);
         case "refused-completion" -> refusedCompletion(fixture);
         case "replay-conflict" -> replayConflict(fixture);
@@ -471,6 +473,8 @@ final class RuntimeFixtures {
     List<Instant> expiries = new CopyOnWriteArrayList<>();
     List<Instant> cancelledAt = new CopyOnWriteArrayList<>();
     AtomicInteger heartbeats = new AtomicInteger();
+    // The cancellation token of each attempt.
+    List<CancellationToken> tokens = new CopyOnWriteArrayList<>();
     String field = deadline ? "deadline_at" : "attempt_timeout_at";
     AtomicReference<@Nullable Worker> holder = new AtomicReference<>();
     // The local timer reads the claimed row, so shifting it models a clock that runs ahead of or
@@ -494,7 +498,8 @@ final class RuntimeFixtures {
           @Override
           public @Nullable OffsetDateTime timestamp(
               Intercept.Call call, String column, @Nullable OffsetDateTime value) throws Exception {
-            if (!call.is(SqlCatalogue.CLAIM_MANY_V1) || !column.equals(field)) {
+            // A fixture with a following task claims that task too. It has no expiry of its own.
+            if (!call.is(SqlCatalogue.CLAIM_MANY_V1) || !column.equals(field) || value == null) {
               return value;
             }
             Instant anchor;
@@ -514,15 +519,29 @@ final class RuntimeFixtures {
             return anchor.minusMillis(lead).atOffset(java.time.ZoneOffset.UTC);
           }
         };
+    @SuppressWarnings("unchecked")
+    @Nullable Map<String, @Nullable Object> injection =
+        (Map<String, @Nullable Object>) fixture.get("injection");
     try (Intercept pool = new Intercept(opener, hook)) {
+      Worker.Builder builder = worker(pool, fixture);
+      if (injection != null) {
+        builder.handle(
+            (String) fixture.get("followingTaskType"),
+            Object.class,
+            (ctx, payload) -> {
+              java.util.Objects.requireNonNull(holder.get()).pause();
+              return null;
+            });
+      }
       Worker subject =
-          worker(pool, fixture)
+          builder
               .lease(millis(fixture, "leaseMs"))
               .heartbeat(millis(fixture, "heartbeatMs"))
               .handle(
                   taskType(fixture),
                   Object.class,
                   (ctx, payload) -> {
+                    tokens.add(ctx.cancellation());
                     if (Boolean.TRUE.equals(fixture.get("databaseTimesOutFirst"))
                         && !"true".equals(value(timeOutWhenDue(taskId)))) {
                       throw new IllegalStateException(
@@ -543,14 +562,65 @@ final class RuntimeFixtures {
               .build();
       holder.set(subject);
       List<?> runs = (List<?>) fixture.get("expectedAfterRuns");
-      for (int index = 0; index < runs.size(); index++) {
-        // A heartbeat round that began before the last attempt settled holds the task's row
-        // lock, and the claim skips a locked row.
+      Observation attempts =
+          () -> {
+            for (int index = 0; index < runs.size(); index++) {
+              // A heartbeat round that began before the last attempt settled holds the task's row
+              // lock, and the claim skips a locked row.
+              eventually(
+                  "a heartbeat round outlived the previous attempt",
+                  5,
+                  () -> heartbeats.get() == 0);
+              subject.resume();
+              check(subject.runOnce(), "run " + (index + 1) + " did not run the task");
+              expectState(taskId, Runner.object(runs.get(index), "expected"));
+            }
+          };
+      if (injection == null) {
+        attempts.run();
+      } else {
+        // The first expiry request fails. The worker asks again, and the runner holds that
+        // request until it has seen that the handler still runs. The run then ends without an
+        // error.
+        injectedBody(
+            injection,
+            () -> {
+              CompletableFuture<Void> run =
+                  running(
+                      subject,
+                      () -> {
+                        try {
+                          attempts.run();
+                        } catch (Exception error) {
+                          throw new java.util.concurrent.CompletionException(error);
+                        }
+                      });
+              try {
+                eventually(
+                    "the worker did not ask again after the failed expiry request",
+                    10,
+                    () ->
+                        Long.parseLong(
+                                java.util.Objects.requireNonNull(
+                                    value((String) injection.get("callsQuery"))))
+                            >= (Long) fixture.get("expectedMinimumExpiryRequests"));
+                check(
+                    tokens.size() == 1 && !tokens.get(0).isCancelled(),
+                    "a cancellation before PostgreSQL confirms the expiry");
+              } finally {
+                update((String) injection.get("release"));
+              }
+              join(run);
+            });
+        // The same worker claims the next task and completes it.
+        UUID following =
+            enqueue(
+                (String) fixture.get("followingTaskType"), Map.of(), options(queueName(fixture)));
         eventually(
             "a heartbeat round outlived the previous attempt", 5, () -> heartbeats.get() == 0);
         subject.resume();
-        check(subject.runOnce(), "run " + (index + 1) + " did not run the task");
-        expectState(taskId, Runner.object(runs.get(index), "expected"));
+        check(subject.runOnce(), "the worker did not run the following task");
+        expectState(following, object(fixture, "expectedFollowingState"));
       }
     }
     check(reasons.equals(fixture.get("expectedAbortReasons")), "abort reasons " + reasons);
@@ -1078,6 +1148,71 @@ final class RuntimeFixtures {
     check(
         operations.get() == (Long) fixture.get("expectedCheckpointOperations"),
         "the checkpoint operation ran " + operations.get() + " times");
+  }
+
+  /**
+   * The injected {@code schedule_wait_v1} keeps the request of the worker in flight. Meanwhile the
+   * runner parks the task on its own connection, so the next heartbeat answers {@code stale}. Only
+   * then does the runner release the {@code scheduled} answer. The handler must stop at the wait
+   * although another outcome won first.
+   */
+  private void suspensionRace(Map<String, @Nullable Object> fixture) throws Exception {
+    UUID taskId = enqueue(taskType(fixture), Map.of(), options(queueName(fixture)));
+    BlockingQueue<CancellationToken> tokens = new LinkedBlockingQueue<>();
+    AtomicInteger runsAfterWait = new AtomicInteger();
+    Duration timeout = millis(fixture, "cancellationTimeoutMs");
+    Map<String, @Nullable Object> injection = object(fixture, "injection");
+    AtomicReference<@Nullable Worker> holder = new AtomicReference<>();
+    try (Intercept pool = new Intercept(opener, new Intercept.Hook() {})) {
+      Worker subject =
+          worker(pool, fixture)
+              .lease(millis(fixture, "leaseMs"))
+              .heartbeat(millis(fixture, "heartbeatMs"))
+              .handle(
+                  taskType(fixture),
+                  Object.class,
+                  (ctx, payload) -> {
+                    java.util.Objects.requireNonNull(holder.get()).pause();
+                    tokens.add(ctx.cancellation());
+                    ctx.sleep((String) fixture.get("waitName"), millis(fixture, "waitMs"));
+                    runsAfterWait.incrementAndGet();
+                    return null;
+                  })
+              .build();
+      holder.set(subject);
+      injectedBody(
+          injection,
+          () -> {
+            CompletableFuture<Boolean> result = running(subject, subject::runOnce);
+            try {
+              CancellationToken cancellation =
+                  tokens.poll(timeout.toMillis(), TimeUnit.MILLISECONDS);
+              check(cancellation != null, "the handler never started");
+              eventually(
+                  "the wait request never reached PostgreSQL",
+                  timeout.toSeconds(),
+                  () -> "true".equals(value((String) injection.get("requestedQuery"))));
+              String committed = value((String) injection.get("commit"));
+              check(
+                  "scheduled".equals(committed),
+                  "the wait that the runner commits: " + Matcher.render(committed));
+              check(
+                  java.util.Objects.requireNonNull(cancellation).await(timeout),
+                  "no stale heartbeat cancelled the handler");
+            } finally {
+              // The wait answer reaches the worker only after the stale heartbeat won.
+              update((String) injection.get("release"));
+            }
+            join(result);
+          });
+    }
+    check(
+        runsAfterWait.get() == (Long) fixture.get("expectedRunsAfterWait"),
+        "the code after the wait ran " + runsAfterWait.get() + " times");
+    expectState(taskId, object(fixture, "expectedState"));
+    check(
+        attempts(taskId) == (Long) fixture.get("expectedAttempts"),
+        "the task recorded " + attempts(taskId) + " attempts");
   }
 
   /**

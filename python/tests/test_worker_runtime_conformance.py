@@ -8,7 +8,13 @@ import json
 import sys
 import traceback
 from collections.abc import AsyncIterator, Awaitable, Callable, Iterator, Mapping
-from contextlib import AbstractContextManager, asynccontextmanager, contextmanager, suppress
+from contextlib import (
+    AbstractContextManager,
+    asynccontextmanager,
+    contextmanager,
+    nullcontext,
+    suppress,
+)
 from functools import cache
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -32,6 +38,7 @@ from workhorse import (
     AsyncHandlerContext,
     AsyncWorker,
     BudgetDefinition,
+    CancellationToken,
     ChildTaskRequest,
     EnqueueOptions,
     HandlerContext,
@@ -79,6 +86,7 @@ SYNC_ONLY_RUNTIME_FIXTURE_KINDS = frozenset(
         "poll-cadence",
         "refused-completion",
         "slot-refill",
+        "suspension-race",
         "suspension-replay",
         "replay-conflict",
         "shutdown-cancellation",
@@ -132,6 +140,7 @@ def execute_runtime_fixture(
     executors: dict[str, Callable[[psycopg.Connection[Any], Mapping[str, Any]], None]] = {
         "batch": execute_batch_fixture,
         "suspension-replay": execute_suspension_replay_fixture,
+        "suspension-race": execute_suspension_race_fixture,
         "cooperative-cancellation": execute_cancellation_fixture,
         "expiration": execute_expiration_fixture,
         "lease-loss": execute_lease_loss_fixture,
@@ -341,6 +350,58 @@ def execute_suspension_replay_fixture(
     assert checkpoint_operations == fixture["expectedCheckpointOperations"]
 
 
+def execute_suspension_race_fixture(
+    connection: psycopg.Connection[Any], fixture: Mapping[str, Any]
+) -> None:
+    """The injected schedule_wait_v1 keeps the request of the worker in flight. Meanwhile the runner
+    parks the task on its own connection, so the next heartbeat answers stale. Only then does the
+    runner release the scheduled answer. The handler must stop at the wait although another outcome
+    won first."""
+    queue_name = runtime_queue(fixture)
+    task_id = Queue(connection).enqueue(fixture["taskType"], {}, EnqueueOptions(queue=queue_name))
+    tokens: SimpleQueue[Any] = SimpleQueue()
+    runs_after_wait = 0
+    errors: list[BaseException] = []
+    worker: Worker
+
+    def handler(_payload: object, context: HandlerContext) -> None:
+        nonlocal runs_after_wait
+        # run_once drains until an empty sweep, so pause claims after this task.
+        worker.pause()
+        tokens.put(context.cancellation)
+        context.sleep(fixture["waitName"], fixture["waitMs"])
+        runs_after_wait += 1
+
+    worker = Worker(
+        worker_pool,
+        queue=queue_name,
+        worker_id=f"python-{fixture['id']}",
+        lease_ms=fixture["leaseMs"],
+        heartbeat_ms=fixture["heartbeatMs"],
+    ).handle(fixture["taskType"], handler)
+    timeout = fixture["cancellationTimeoutMs"] / 1000
+    with injected_function_body(connection, fixture["injection"]):
+        thread = run_in_thread(worker.run_once, errors)
+        try:
+            cancellation = tokens.get(timeout=timeout)
+            injection = fixture["injection"]
+            wait_until(
+                lambda: connection.execute(injection["requestedQuery"]).fetchone() == ("true",),
+                "the wait request never reached PostgreSQL",
+            )
+            committed = connection.execute(injection["commit"]).fetchall()
+            assert committed == [("scheduled",)], f"the wait that the runner commits: {committed}"
+            assert cancellation.wait(timeout=timeout), "no stale heartbeat cancelled the handler"
+        finally:
+            # The wait answer reaches the worker only after the stale heartbeat won.
+            connection.execute(fixture["injection"]["release"])
+            join(thread)
+    assert errors == []
+    assert runs_after_wait == fixture["expectedRunsAfterWait"], "runs of the code after the wait"
+    assert_task_states(connection, {"task": task_id}, {"task": fixture["expectedState"]})
+    assert_attempt_count(connection, task_id, fixture["expectedAttempts"])
+
+
 def execute_cancellation_fixture(
     connection: psycopg.Connection[Any], fixture: Mapping[str, Any]
 ) -> None:
@@ -434,9 +495,12 @@ def execute_expiration_fixture(
     # Each claim takes a new fence token, so the token names the attempt.
     expiry_answers: list[object] = []
     attempt_answers: dict[object, list[object]] = {}
+    # The cancellation token of each attempt.
+    tokens: list[CancellationToken] = []
     worker: Worker
 
     def handler(_payload: object, context: HandlerContext) -> None:
+        tokens.append(context.cancellation)
         if fixture.get("databaseTimesOutFirst"):
             timed_out = connection.execute(TIME_OUT_WHEN_DUE, (task_id,)).fetchall()
             assert timed_out == [(True,)], "the timeout that PostgreSQL settles first"
@@ -457,7 +521,8 @@ def execute_expiration_fixture(
         if statement is STATEMENTS.expire_owned:
             expiry_answers.extend(row["status"] for row in rows)
             attempt_answers.setdefault(parameters[2], []).extend(row["status"] for row in rows)
-        if statement is STATEMENTS.claim_many and rows:
+        # A fixture with a following task claims that task too. It keeps its own expiry.
+        if statement is STATEMENTS.claim_many and rows and str(rows[0]["task_id"]) == task_id:
             claimed = dict(rows[0])
             if fixture["mode"] == "deadline":
                 field = "deadline_at"
@@ -488,10 +553,52 @@ def execute_expiration_fixture(
         heartbeat_ms=fixture["heartbeatMs"],
         _executor=RowsHook(early_claim),
     ).handle(fixture["taskType"], handler)
-    for expected in fixture["expectedAfterRuns"]:
+    injection = fixture.get("injection")
+    if injection is not None:
+        worker.handle(fixture["followingTaskType"], following_handler(worker))
+
+    def run_attempts() -> None:
+        for expected in fixture["expectedAfterRuns"]:
+            worker.resume()
+            assert worker.run_once() is True
+            assert_task_states(connection, {"task": task_id}, {"task": expected})
+
+    if injection is None:
+        run_attempts()
+    else:
+        # The first expiry request fails. The worker asks again, and the runner holds that request
+        # until it has seen that the handler still runs. The run then ends without an error.
+        errors: list[BaseException] = []
+
+        def expiry_requests() -> int:
+            row = connection.execute(injection["callsQuery"]).fetchone()
+            assert row is not None
+            return int(row[0])
+
+        with injected_function_body(connection, injection):
+            thread = run_in_thread(run_attempts, errors)
+            try:
+                wait_until(
+                    lambda: expiry_requests() >= fixture["expectedMinimumExpiryRequests"],
+                    "the worker did not ask again after the failed expiry request",
+                )
+                assert [token.cancelled for token in tokens] == [False], (
+                    "a cancellation before PostgreSQL confirms the expiry"
+                )
+            finally:
+                connection.execute(injection["release"])
+                join(thread)
+        assert errors == []
+    if injection is not None:
+        # The same worker claims the next task and completes it.
+        following = Queue(connection).enqueue(
+            fixture["followingTaskType"], {}, EnqueueOptions(queue=queue_name)
+        )
         worker.resume()
         assert worker.run_once() is True
-        assert_task_states(connection, {"task": task_id}, {"task": expected})
+        assert_task_states(
+            connection, {"task": following}, {"task": fixture["expectedFollowingState"]}
+        )
     assert abort_reasons == fixture["expectedAbortReasons"]
     # An attempt that PostgreSQL timed out first leaves the late local timer no active attempt.
     if fixture.get("databaseTimesOutFirst"):
@@ -507,6 +614,15 @@ def execute_expiration_fixture(
         fixture["expectedCancelledAfterDatabaseExpiry"]
     ] * len(cancelled_at)
     assert_attempt_outcomes(connection, task_id, fixture["expectedAttemptOutcomes"])
+
+
+def following_handler(worker: Worker) -> Callable[[object, HandlerContext], None]:
+    """A handler that completes its task and pauses claims, so run_once ends after it."""
+
+    def handle(_payload: object, _context: HandlerContext) -> None:
+        worker.pause()
+
+    return handle
 
 
 def execute_lease_loss_fixture(
@@ -3072,3 +3188,101 @@ def test_a_shutdown_abort_during_the_batch_failure_evidence_keeps_the_failure(
             "failed",
             "failed",
         ]
+
+
+def test_a_failed_expiry_request_of_one_lease_leaves_the_other_leases_of_the_round(
+    database_url: str,
+) -> None:
+    """SM-1934: a heartbeat round reports the deadline of one lease, and its expiry request fails.
+
+    The error belongs to that request, not to the round. The other task completes, and the expiring
+    task fails with DeadlineExceeded after PostgreSQL confirms the expiry on a later round.
+    """
+    injection = next(
+        fixture["injection"]
+        for fixture in read_json("protocol/v1/runtime.json")
+        if fixture["id"] == "deadline-settles-after-a-failed-expiry-request"
+    )
+    with psycopg.connect(database_url, autocommit=True) as connection:
+        queue_name = "python-failed-expiry-round"
+        queue = Queue(connection)
+        # The database deadline starts at the claim, inside late_local_deadline. This placeholder
+        # only has to be far enough away that the claim never skips the task.
+        expiring = queue.enqueue(
+            "python.expiring",
+            {},
+            EnqueueOptions(
+                queue=queue_name,
+                deadline=datetime.now(UTC) + timedelta(hours=1),
+                max_attempts=1,
+            ),
+        )
+        other = queue.enqueue("python.other", {}, EnqueueOptions(queue=queue_name))
+        expiring_cancelled = Event()
+        reasons: list[str] = []
+        errors: list[BaseException] = []
+        original_rows = PooledSyncExecutor(worker_pool).rows
+
+        def late_local_deadline(
+            statement: DriverStatement, parameters: Any = ()
+        ) -> list[Mapping[str, object]]:
+            # The local deadline comes long after the database deadline, so a heartbeat round
+            # reports the deadline first, and the heartbeat thread sends the expiry request.
+            rows = original_rows(statement, parameters)
+            if statement is not STATEMENTS.claim_many:
+                return rows
+            claimed: list[Mapping[str, object]] = []
+            for row in rows:
+                if str(row["task_id"]) == expiring:
+                    anchored = connection.execute(
+                        "UPDATE workhorse.task_runtime "
+                        "SET deadline_at = clock_timestamp() + interval '500 milliseconds' "
+                        "WHERE task_id = %s RETURNING deadline_at",
+                        (expiring,),
+                    ).fetchone()
+                    assert anchored is not None
+                    row = {**row, "deadline_at": anchored[0] + timedelta(seconds=30)}
+                claimed.append(row)
+            return claimed
+
+        def handle_expiring(_payload: object, context: HandlerContext) -> None:
+            assert context.cancellation.wait(timeout=GUARD_SECONDS)
+            reasons.append(type(context.cancellation.reason).__name__)
+            expiring_cancelled.set()
+            raise context.cancellation.reason  # type: ignore[misc]
+
+        def handle_other(_payload: object, context: HandlerContext) -> None:
+            assert expiring_cancelled.wait(timeout=GUARD_SECONDS)
+            assert not context.cancellation.cancelled, context.cancellation.reason
+            worker.pause()
+
+        worker = (
+            Worker(
+                worker_pool,
+                queue=queue_name,
+                worker_id="python-failed-expiry-round",
+                concurrency=2,
+                lease_ms=10_000,
+                heartbeat_ms=100,
+                _executor=RowsHook(late_local_deadline),
+            )
+            .handle("python.expiring", handle_expiring)
+            .handle("python.other", handle_other)
+        )
+        with injected_function_body(connection, injection):
+            # Only the first request fails. This test does not hold the later requests.
+            connection.execute(injection["release"])
+            thread = run_in_thread(worker.run_once, errors)
+            join(thread)
+            calls = connection.execute(injection["callsQuery"]).fetchone()
+        assert errors == []
+        assert calls is not None and int(calls[0]) >= 2, f"expiry requests {calls}"
+        assert reasons == ["DeadlineExceededError"]
+        assert_task_states(
+            connection,
+            {"expiring": expiring, "other": other},
+            {
+                "expiring": {"state": "failed", "attempt": 1, "errorName": "DeadlineExceeded"},
+                "other": {"state": "succeeded", "attempt": 1},
+            },
+        )

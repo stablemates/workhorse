@@ -634,8 +634,7 @@ worker maps the `System.Logger` levels to severities in this way:
 The Java SDK does not emit these TypeScript events: the enqueue, debounce, and throttle events, the
 cancellation, run-now, redrive, promotion, recovery, and policy events, the queue administration
 events, `workhorse.schedules.synchronized`, `workhorse.task.heartbeat_accepted`,
-`workhorse.worker.expiration_request_failed`, `workhorse.worker.shutdown_settlement_failed`, and
-`workhorse.worker_registry.pruned`.
+`workhorse.worker.shutdown_settlement_failed`, and `workhorse.worker_registry.pruned`.
 
 #### .NET logs
 
@@ -746,7 +745,9 @@ successful configuration changes at info.
   `error.type`. The TypeScript worker emits it when a handler ends and the `expire_owned_v1`
   request in flight fails or gives no answer within 1,000 ms. For no answer, `error.type` is
   `timeout`. Either result proves nothing about the expiry, so `fail_v1` then settles the attempt
-  ([Local timers](lifecycle.md#local-timers)).
+  ([Local timers](lifecycle.md#local-timers)). The Python, Ruby, and Java workers emit it when an
+  expiry request fails while the handler runs. The worker then asks again, and the handler keeps
+  running. The .NET worker logs the same event name through `ILogger` with the exception.
 
 - `workhorse.worker.reporter_failed` carries `workhorse.worker.id`, `workhorse.worker.reporter`,
   and `error.type`. `workhorse.worker.reporter` names the reporter callback that failed:

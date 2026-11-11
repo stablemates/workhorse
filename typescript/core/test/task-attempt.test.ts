@@ -1,5 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { DeadlineExceededError, ExecutionTimeoutError } from "../src/errors.js";
+import { createHandlerContext } from "../src/handler-context.js";
+import type { ScheduleWaitResult } from "../src/queue/checkpoints-progress-waits.js";
 import { TaskAttempt, type TaskAttemptServices } from "../src/task-attempt.js";
 import {
   registerTelemetryProvider,
@@ -7,6 +9,7 @@ import {
   type WorkhorseTelemetryProvider,
 } from "../src/telemetry.js";
 import type { ClaimedTask, ExpireOwnedStatus, HeartbeatBatchStatus } from "../src/types.js";
+import type { WorkerQueueApi } from "../src/worker.js";
 
 function claimedTask(overrides: Partial<ClaimedTask> = {}): ClaimedTask {
   return {
@@ -253,8 +256,88 @@ describe("TaskAttempt", () => {
     expect(typeof waitSuspension).toBe("symbol");
     expect(waitSuspension).not.toBe(childSuspension);
     expect(attempt.arbiter.is("suspended_for_child")).toBe(true);
-    expect(thrownBy(() => attempt.suspendForScheduledWait())).toBeUndefined();
     expect(thrownBy(() => attempt.requireLease())).toBe(childSuspension);
+  });
+
+  // SM-1929: PostgreSQL parked the task, so the code after the sleep must not run before the wake,
+  // whatever outcome won while the wait request was in flight.
+  it.each([
+    {
+      winner: "a stale heartbeat",
+      task: claimedTask({ leaseExpiresAt: new Date(30_000) }),
+      win: async (attempt: ReturnType<typeof startAttempt>) =>
+        attempt.heartbeat.status!("stale", performance.now()),
+      reason: "Task lease was lost",
+    },
+    {
+      winner: "a stale expiry answer",
+      task: claimedTask({ deadlineAt: new Date(1_000), leaseExpiresAt: new Date(30_000) }),
+      win: async ({ services }: ReturnType<typeof startAttempt>) => {
+        vi.mocked(services.expireOwned).mockResolvedValue("stale");
+        await vi.advanceTimersByTimeAsync(1_001);
+      },
+      reason: "Task lease was lost",
+    },
+    {
+      winner: "the lease watchdog",
+      task: claimedTask({ leaseExpiresAt: new Date(30_000) }),
+      win: async () => {
+        await vi.advanceTimersByTimeAsync(30_000);
+      },
+      reason: "No heartbeat was accepted within the task lease",
+    },
+  ])("stops the handler at a scheduled sleep after $winner", async ({ task, win, reason }) => {
+    vi.useFakeTimers({ now: 0 });
+    const started = startAttempt(task, performance.now());
+    const { attempt } = started;
+    let answer!: (result: ScheduleWaitResult) => void;
+    const scheduleWait = vi.fn<WorkerQueueApi["scheduleWait"]>(
+      () =>
+        new Promise((resolve) => {
+          answer = resolve;
+        }),
+    );
+    const context = createHandlerContext(
+      { scheduleWait } as unknown as WorkerQueueApi,
+      "attempt-worker",
+      task,
+      attempt,
+    );
+    let ranAfterSleep = false;
+    const handler = (async () => {
+      await context.sleep("cooling-off", 60_000);
+      ranAfterSleep = true;
+    })();
+    const outcome = handler.then(
+      () => undefined,
+      (error: unknown) => error,
+    );
+    expect(scheduleWait).toHaveBeenCalledTimes(1);
+
+    await win(started);
+    expect(attempt.arbiter.is("lease_expired")).toBe(true);
+    expect(attempt.signal.reason).toMatchObject({ message: reason });
+    answer({
+      status: "scheduled",
+      wait: {
+        taskId: task.id,
+        name: "cooling-off",
+        mode: "relative",
+        durationMs: 60_000,
+        requestedWakeAt: null,
+        wakeAt: new Date(60_000),
+        attempt: 1,
+        fenceToken: task.fenceToken,
+        workerId: "attempt-worker",
+        createdAt: new Date(0),
+      },
+    });
+
+    expect(typeof (await outcome)).toBe("symbol");
+    expect(ranAfterSleep).toBe(false);
+    // The suspension does not replace the outcome that won first.
+    expect(attempt.arbiter.is("lease_expired")).toBe(true);
+    attempt.stop();
   });
 
   it("fires the local deadline and aborts once PostgreSQL confirms the expiry", async () => {

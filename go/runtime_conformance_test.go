@@ -84,6 +84,7 @@ func TestGoWorkerSatisfiesEverySharedRuntimeFixture(t *testing.T) {
 			executeWorkerBatchFixture(t, loadBatchRuntimeFixture(t, fixture.ID))
 		},
 		"suspension-replay":        executeWorkerSuspensionReplayFixture,
+		"suspension-race":          executeWorkerSuspensionRaceFixture,
 		"replay-conflict":          executeReplayConflictFixture,
 		"cooperative-cancellation": executeWorkerCancellationFixture,
 		"expiration":               executeWorkerExpirationFixture,

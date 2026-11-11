@@ -653,6 +653,13 @@ If the handler catches that signal and returns, the worker applies the recorded 
 It also emits `workhorse.handler.signal_swallowed` at warning severity with
 `workhorse.handler.outcome = suspended`.
 
+A `scheduled` answer always ends the handler at the wait in all seven SDKs. Another outcome can win
+while the wait request is in flight: a `stale` heartbeat, a `stale` expiry answer, or the end of the
+local lease window. The handler still stops, because PostgreSQL parked the task, and the outcome
+that won stays. Thus the code after the wait never runs before the wake. The shared case
+`timer-wait-suspends-after-a-stale-heartbeat-in-flight` checks this rule in the conformance runner
+of every SDK (SM-1929).
+
 Suspension does not call failure or completion and does not increment attempts. Later, normal
 promotion makes the same logical attempt claimable with a new fence. Maintenance cadence and worker
 availability bound wake latency. There is no exact wall-clock guarantee. Queue health reports the
@@ -2799,6 +2806,25 @@ Every SDK cancels the handler for an expiry only after PostgreSQL confirms it. I
 clock that runs ahead cannot end an attempt before the database expiry. The shared expiration cases
 in `protocol/v1/runtime.json` check this. Each one compares the database clock at the cancellation
 with the expiry that PostgreSQL holds.
+
+A failed expiry request does not confirm the expiry either. For example, a connection fails during
+a failover, or the pool gives no connection in time. Every SDK then keeps the handler running and
+asks again after the backoff that it uses for `not_due`. The worker does not cancel the handler, and
+its run does not end with the error. The lease watchdog still ends an attempt that nobody renews.
+In Python, Ruby, the JVM, and .NET, a heartbeat round that reports the expiry also sends the
+request. If that request fails, the next round reports the expiry again. The error has no effect on
+the other leases of the round.
+
+| SDK                             | Record of a failed expiry request while the handler runs                     |
+| ------------------------------- | ---------------------------------------------------------------------------- |
+| TypeScript                      | No record. `TaskAttempt` arms the expiry timer again.                        |
+| Go, Rust                        | A warning: `Ownership expiration request failed; the worker asks again`      |
+| Python, Ruby, the JVM, and .NET | The warning event `workhorse.worker.expiration_request_failed` and the error |
+
+The shared case `deadline-settles-after-a-failed-expiry-request` checks this rule in the conformance
+runner of every SDK (SM-1934). Its first expiry request fails. The handler must see the cancellation
+only after the database deadline, the task must fail with `DeadlineExceeded`, and the same worker
+must then complete a second task.
 
 Another actor can end the attempt before the local timer fires. For example, a maintenance tick
 calls `timeout_owned_v1` for the overdue attempt. Then the expiry request finds no active attempt

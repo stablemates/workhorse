@@ -57,6 +57,7 @@ pub async fn run_runtime(fixture: &Value) -> Outcome {
             #[cfg(feature = "opentelemetry")]
             "trace-propagation" => trace::propagation(database, fixture).await,
             "suspension-replay" => suspension_replay(database, fixture).await,
+            "suspension-race" => suspension_race(database, fixture).await,
             "replay-conflict" => replay_conflict(database, fixture).await,
             "lease-loss" => lease_loss(database, fixture).await,
             "refused-completion" => refused_completion(database, fixture).await,
@@ -629,7 +630,8 @@ async fn expiration(database: &ScratchDatabase, fixture: &Value) -> Checked {
                 "CREATE FUNCTION workhorse.test_anchor_deadline_at_claim() RETURNS trigger
                  LANGUAGE plpgsql AS $$
                  BEGIN
-                   IF OLD.state = 'ready' AND NEW.state = 'active' THEN
+                   -- A fixture with a following task claims that task too. It has no deadline.
+                   IF OLD.state = 'ready' AND NEW.state = 'active' AND OLD.deadline_at IS NOT NULL THEN
                      NEW.deadline_at := clock_timestamp() + ({duration} * interval '1 millisecond');
                      UPDATE workhorse.task SET deadline_at = NEW.deadline_at WHERE id = NEW.task_id;
                    END IF;
@@ -661,6 +663,9 @@ async fn expiration(database: &ScratchDatabase, fixture: &Value) -> Checked {
     // cancellation. Both times come from the database clock.
     let after_expiry = Arc::new(Mutex::new(Vec::new()));
     let compared = Arc::clone(&after_expiry);
+    // The cancellation token of each attempt.
+    let tokens = Arc::new(Mutex::new(Vec::new()));
+    let recorded = Arc::clone(&tokens);
     let url = database.url().to_owned();
     // A maintenance tick could settle the expiry first and turn the next heartbeat into `stale`, so
     // only the worker's own request settles it here.
@@ -669,6 +674,7 @@ async fn expiration(database: &ScratchDatabase, fixture: &Value) -> Checked {
     let worker = worker(database, 4, options)?;
     worker.handle(task_type, move |_: Value, context: HandlerContext| {
         let (url, observed, compared) = (url.clone(), Arc::clone(&observed), Arc::clone(&compared));
+        recorded.lock().unwrap().push(context.cancellation().clone());
         async move {
             let (client, connection) = tokio_postgres::connect(&url, NoTls).await?;
             tokio::spawn(connection);
@@ -693,12 +699,63 @@ async fn expiration(database: &ScratchDatabase, fixture: &Value) -> Checked {
             Ok(Value::Null)
         }
     });
-    for (run, expected) in fixture["expectedAfterRuns"].as_array().into_iter().flatten().enumerate()
-    {
-        run_once(&worker, true).await?;
-        assert_state(&client, task, expected)
+    let failed_request = fixture.get("injection").is_some();
+    if failed_request {
+        worker.handle(text(fixture, "followingTaskType"), |_: Value, _: HandlerContext| async {
+            Ok(Value::Null)
+        });
+    }
+    let attempts = async {
+        for (run, expected) in
+            fixture["expectedAfterRuns"].as_array().into_iter().flatten().enumerate()
+        {
+            run_once(&worker, true).await?;
+            assert_state(&client, task, expected)
+                .await
+                .map_err(|error| format!("run {run}: {error}"))?;
+        }
+        Checked::Ok(())
+    };
+    if failed_request {
+        // The first expiry request fails. The worker asks again, and the runner holds that request
+        // until it has seen that the handler still runs. The run then ends without an error.
+        let injection = &fixture["injection"];
+        let want = number(fixture, "expectedMinimumExpiryRequests");
+        with_injected_body(&client, injection, async {
+            let (attempts, held) = tokio::join!(attempts, async {
+                let message = "the worker did not ask again after the failed expiry request";
+                let asked = eventually(message, || async {
+                    let requests: i64 = client
+                        .query_one(text(injection, "callsQuery"), &[])
+                        .await
+                        .map_err(sql)?
+                        .get(0);
+                    Ok(requests >= want)
+                })
+                .await;
+                let running = asked.and_then(|()| {
+                    let tokens = tokens.lock().unwrap();
+                    check(tokens.len() == 1 && !tokens[0].is_cancelled(), || {
+                        "a cancellation before PostgreSQL confirms the expiry".into()
+                    })
+                });
+                let released = client.batch_execute(text(injection, "release")).await.map_err(sql);
+                running.and(released)
+            });
+            held?;
+            attempts
+        })
+        .await?;
+        // The same worker claims the next task and completes it.
+        let following = queue
+            .enqueue(text(fixture, "followingTaskType"), &json!({}), Default::default())
             .await
-            .map_err(|error| format!("run {run}: {error}"))?;
+            .map_err(driver)?
+            .task_id;
+        run_once(&worker, true).await?;
+        assert_state(&client, following, &fixture["expectedFollowingState"]).await?;
+    } else {
+        attempts.await?;
     }
     let reasons = reasons.lock().unwrap().clone();
     let expected = strings(&fixture["expectedAbortReasons"])
@@ -2457,6 +2514,80 @@ async fn move_run_at(client: &Client, task: Uuid, offset: &str) -> Checked {
          WHERE task_id = $1"
     );
     client.execute(&statement, &[&task]).await.map_err(sql).map(drop)
+}
+
+/// The injected `schedule_wait_v1` keeps the request of the worker in flight. Meanwhile the runner
+/// parks the task on its own connection, so the next heartbeat answers `stale`. Only then does the
+/// runner release the `scheduled` answer. The handler must stop at the wait although another
+/// outcome won first.
+async fn suspension_race(database: &ScratchDatabase, fixture: &Value) -> Checked {
+    let client = database.connect().await;
+    let queue = queue(database, fixture).await?;
+    let task_type = text(fixture, "taskType");
+    let task = queue.enqueue(task_type, &json!({}), Default::default()).await.map_err(driver)?;
+    let task = task.task_id;
+    let worker = worker(database, 4, WorkerOptions { concurrency: 1, ..lease_options(fixture) })?;
+    let (started, mut handler_started) = mpsc::unbounded_channel();
+    let runs_after_wait = Arc::new(AtomicUsize::new(0));
+    let counted = Arc::clone(&runs_after_wait);
+    let wait = text(fixture, "waitName").to_owned();
+    let wait_for = millis(fixture, "waitMs");
+    worker.handle(task_type, move |_: Value, context: HandlerContext| {
+        let (started, counted, wait) = (started.clone(), Arc::clone(&counted), wait.clone());
+        async move {
+            let _ = started.send(context.cancellation().clone());
+            context.sleep(&wait, wait_for).await?;
+            counted.fetch_add(1, Ordering::SeqCst);
+            Ok(Value::Null)
+        }
+    });
+    let injection = &fixture["injection"];
+    let limit = millis(fixture, "cancellationTimeoutMs");
+    with_injected_body(&client, injection, async {
+        let running = {
+            let worker = worker.clone();
+            tokio::spawn(async move { worker.run_once().await })
+        };
+        let observed = async {
+            let cancellation = tokio::time::timeout(limit, handler_started.recv())
+                .await
+                .ok()
+                .flatten()
+                .ok_or("the handler never started")?;
+            eventually_within(limit, "the wait request never reached PostgreSQL", || async {
+                let requested: String = client
+                    .query_one(text(injection, "requestedQuery"), &[])
+                    .await
+                    .map_err(sql)?
+                    .get(0);
+                Ok(requested == "true")
+            })
+            .await?;
+            let committed: String =
+                client.query_one(text(injection, "commit"), &[]).await.map_err(sql)?.get(0);
+            check(committed == "scheduled", || {
+                format!("the wait that the runner commits: {committed}")
+            })?;
+            tokio::time::timeout(limit, cancellation.cancelled())
+                .await
+                .map_err(|_| "no stale heartbeat cancelled the handler".to_owned())
+        }
+        .await;
+        // The wait answer reaches the worker only after the stale heartbeat won.
+        let released = client.batch_execute(text(injection, "release")).await.map_err(sql);
+        observed?;
+        released?;
+        running.await.map_err(|error| error.to_string())?.map_err(driver)?;
+        Ok(())
+    })
+    .await?;
+    let runs = runs_after_wait.load(Ordering::SeqCst) as i64;
+    let want = number(fixture, "expectedRunsAfterWait");
+    check(runs == want, || format!("the code after the wait ran {runs} times, want {want}"))?;
+    assert_state(&client, task, &fixture["expectedState"]).await?;
+    let attempts = attempt_count(&client, task).await?;
+    let want = number(fixture, "expectedAttempts");
+    check(attempts == want, || format!("the task recorded {attempts} attempts, want {want}"))
 }
 
 async fn suspension_replay(database: &ScratchDatabase, fixture: &Value) -> Checked {

@@ -1844,7 +1844,9 @@ module Stablemates
               next if ownership.released?
 
               if %w[deadline_exceeded timeout_exceeded].include?(status)
-                settle_expiration(task, arbiter, cancellation, parent)
+                # A failed request does not confirm the expiry, so the handler keeps running. The
+                # next round and the expiry watch ask again (SM-1934).
+                request_expiration(task, arbiter, cancellation, parent)
               else
                 deliver_status(task, status, arbiter, cancellation)
               end
@@ -1889,7 +1891,7 @@ module Stablemates
           end
           return if ownership.stop.wait([0, delay].max)
 
-          status = ownership.settlement.synchronize { settle_expiration(task, arbiter, cancellation, parent) }
+          status = ownership.settlement.synchronize { request_expiration(task, arbiter, cancellation, parent) }
           return unless status == "not_due"
 
           retry_at = monotonic + retry_delay
@@ -1905,6 +1907,19 @@ module Stablemates
         arbiter.submit(:lease_expired)
         ownership.abandon
         cancellation.cancel(:lease_lost)
+      end
+
+      # Asks PostgreSQL to settle the expiry, as settle_expiration does. A failed request proves
+      # nothing about the expiry: the worker logs it and answers not_due, so the handler keeps
+      # running and the watch asks again after its backoff. The lease watchdog still ends an attempt
+      # that nobody renews (SM-1934).
+      def request_expiration(task, arbiter, cancellation, parent)
+        settle_expiration(task, arbiter, cancellation, parent)
+      rescue => e
+        log(:warn, "workhorse.worker.expiration_request_failed",
+          "Ownership expiration request failed; the worker asks again",
+          Telemetry.task_span_attributes(task).merge("workhorse.queue.name" => task.queue, "error.type" => e.class.name))
+        "not_due"
       end
 
       def settle_expiration(task, arbiter, cancellation, parent)
