@@ -16,7 +16,9 @@ import { unreservedQueue } from "../src/worker-internal.js";
 
 registerOpenTelemetry();
 
-const { pool, queue, admin } = createIntegrationTestContext(import.meta.url);
+const { pool, queue, admin, waitForDatabaseCondition } = createIntegrationTestContext(
+  import.meta.url,
+);
 const records: LogRecord[] = [];
 const provider: LoggerProvider = {
   getLogger: () => ({
@@ -1415,5 +1417,163 @@ describe("checkpoints progress waits", () => {
         second: { operation: 1 },
       },
     });
+  });
+});
+
+// The stored target as UTC text with microseconds, so the session time zone has no effect.
+const absoluteWait = async (
+  version: 1 | 2,
+  task: { id: string; fenceToken: bigint },
+  workerId: string,
+  name: string,
+  wakeAt: string,
+  client: Queryable = pool,
+) => {
+  const { rows } = await client.query<{ status: string; requested: string | null }>(
+    `SELECT status,
+            to_char(requested_wake_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US') AS requested
+       FROM workhorse.schedule_wait_v${version}($1, $2, $3, $4, NULL, $5::timestamptz)`,
+    [task.id, workerId, task.fenceToken.toString(), name, wakeAt],
+  );
+  return rows[0]!;
+};
+
+describe("absolute wait targets at millisecond precision", () => {
+  it("replays a target that v1 stored with microseconds when the replay sends milliseconds", async () => {
+    await queue.enqueue("precision-replay", {}, { queue: "precision-replay" });
+    const task = (await queue.claim("precision-worker", { queue: "precision-replay" }))!;
+    // A past target elapses at once, so the task stays active and each call is a replay.
+    await expect(
+      absoluteWait(1, task, "precision-worker", "follow-up", "2026-01-01T12:00:00.123456Z"),
+    ).resolves.toEqual({ status: "elapsed", requested: "2026-01-01T12:00:00.123456" });
+
+    // schedule_wait_v1 keeps its microsecond comparison.
+    await expect(
+      absoluteWait(1, task, "precision-worker", "follow-up", "2026-01-01T12:00:00.123Z"),
+    ).resolves.toEqual({ status: "conflict", requested: "2026-01-01T12:00:00.123456" });
+    // schedule_wait_v2 compares both values at milliseconds.
+    for (const sent of ["2026-01-01T12:00:00.123Z", "2026-01-01T12:00:00.123999Z"]) {
+      await expect(absoluteWait(2, task, "precision-worker", "follow-up", sent)).resolves.toEqual({
+        status: "elapsed",
+        requested: "2026-01-01T12:00:00.123456",
+      });
+    }
+    // A real change of the target is still a conflict.
+    await expect(
+      absoluteWait(2, task, "precision-worker", "follow-up", "2026-01-01T12:00:00.124Z"),
+    ).resolves.toEqual({ status: "conflict", requested: "2026-01-01T12:00:00.123456" });
+  });
+
+  it("orders two first writes of one lease, so the second write replays the first", async () => {
+    await queue.enqueue("precision-race", {}, { queue: "precision-race" });
+    const task = (await queue.claim("precision-race-worker", { queue: "precision-race" }))!;
+    const first = await pool.connect();
+    const second = await pool.connect();
+    try {
+      const secondPid = (await second.query<{ pid: number }>("SELECT pg_backend_pid() AS pid"))
+        .rows[0]!.pid;
+      await first.query("BEGIN");
+      await expect(
+        absoluteWait(
+          2,
+          task,
+          "precision-race-worker",
+          "race",
+          "2026-01-01T12:00:00.123456Z",
+          first,
+        ),
+      ).resolves.toMatchObject({ status: "elapsed" });
+      const pending = absoluteWait(
+        2,
+        task,
+        "precision-race-worker",
+        "race",
+        "2026-01-01T12:00:00.123Z",
+        second,
+      );
+      await waitForDatabaseCondition(async () => {
+        const { rows } = await pool.query<{ waiting: boolean }>(
+          "SELECT wait_event_type = 'Lock' AS waiting FROM pg_stat_activity WHERE pid = $1",
+          [secondPid],
+        );
+        return rows[0]?.waiting === true;
+      });
+      await first.query("COMMIT");
+      await expect(pending).resolves.toEqual({
+        status: "elapsed",
+        requested: "2026-01-01T12:00:00.123456",
+      });
+    } finally {
+      await first.query("ROLLBACK").catch(() => undefined);
+      first.release();
+      second.release();
+    }
+  });
+
+  it("stores the target as sent and compares each replay at milliseconds", async () => {
+    const id = await queue.enqueue("precision-store", {}, { queue: "precision-store" });
+    const task = (await queue.claim("precision-store-worker", { queue: "precision-store" }))!;
+    const wait = (name: string, sent: string, version: 1 | 2 = 2) =>
+      absoluteWait(version, task, "precision-store-worker", name, sent);
+
+    // A microsecond target replayed with the same instant at milliseconds, and with other
+    // microsecond digits of the same millisecond.
+    await expect(wait("micro", "2026-01-01T12:00:00.123456Z")).resolves.toEqual({
+      status: "elapsed",
+      requested: "2026-01-01T12:00:00.123456",
+    });
+    for (const sent of ["2026-01-01T12:00:00.123Z", "2026-01-01T12:00:00.123999Z"]) {
+      await expect(wait("micro", sent)).resolves.toMatchObject({ status: "elapsed" });
+    }
+    // A worker of an earlier release replays its own value through schedule_wait_v1.
+    await expect(wait("micro", "2026-01-01T12:00:00.123456Z", 1)).resolves.toMatchObject({
+      status: "elapsed",
+    });
+
+    // A millisecond target replayed with microsecond digits of the same millisecond.
+    await expect(wait("milli", "2026-01-01T12:00:00.123Z")).resolves.toEqual({
+      status: "elapsed",
+      requested: "2026-01-01T12:00:00.123000",
+    });
+    await expect(wait("milli", "2026-01-01T12:00:00.123456Z")).resolves.toMatchObject({
+      status: "elapsed",
+    });
+    await expect(wait("milli", "2026-01-01T12:00:00.122999Z")).resolves.toMatchObject({
+      status: "conflict",
+    });
+
+    // Before 1970, the truncation keeps the earlier millisecond, as the text form does.
+    await expect(wait("epoch", "1969-12-31T23:59:59.9995Z")).resolves.toEqual({
+      status: "elapsed",
+      requested: "1969-12-31T23:59:59.999500",
+    });
+    await expect(wait("epoch", "1969-12-31T23:59:59.999Z")).resolves.toMatchObject({
+      status: "elapsed",
+    });
+    await expect(wait("epoch", "1969-12-31T23:59:59.9989Z")).resolves.toMatchObject({
+      status: "conflict",
+    });
+
+    // A future target suspends the task at the value that the SDK sent.
+    const { rows } = await pool.query<{ status: string; exact: boolean }>(
+      `WITH target AS (
+         SELECT date_trunc('second', clock_timestamp()) + interval '1 hour 0.123456 second' AS sent
+       )
+       SELECT wait.status,
+              wait.requested_wake_at = target.sent AND wait.wake_at = target.sent AS exact
+         FROM target
+        CROSS JOIN LATERAL workhorse.schedule_wait_v2($1, $2, $3, 'later', NULL, target.sent) wait`,
+      [task.id, "precision-store-worker", task.fenceToken.toString()],
+    );
+    expect(rows).toEqual([{ status: "scheduled", exact: true }]);
+    await expect(
+      pool.query<{ exact: boolean }>(
+        `SELECT runtime.run_at = wait.requested_wake_at AS exact
+           FROM workhorse.task_runtime runtime
+           JOIN workhorse.task_wait wait ON wait.task_id = runtime.task_id
+          WHERE runtime.task_id = $1 AND wait.wait_name = 'later'`,
+        [id],
+      ),
+    ).resolves.toMatchObject({ rows: [{ exact: true }] });
   });
 });

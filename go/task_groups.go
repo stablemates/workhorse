@@ -84,12 +84,25 @@ type TaskGroupCounts struct {
 	Pending   int
 }
 
+// TaskGroupCallbackFailure tells why a finished group did not enqueue a callback. The enqueue at the
+// finish failed, for example because an operator moved the callback queue to the fast tier and the
+// request has a concurrency key. Workhorse does not try the callback again. Retention deletes this
+// record with the group.
+type TaskGroupCallbackFailure struct {
+	// Code is the SQLSTATE of the enqueue error.
+	Code     string
+	Message  string
+	FailedAt time.Time
+}
+
 // TaskGroupCallback is a requested callback and the task the finished group enqueued for it.
 type TaskGroupCallback struct {
 	Kind TaskGroupCallbackKind
 	// TaskID is nil until the group finishes, and nil for a callback that the result does not
 	// select.
 	TaskID *string
+	// Failure is set only when the finished group failed to enqueue this callback.
+	Failure *TaskGroupCallbackFailure
 }
 
 // TaskGroup is the state, counts, and callbacks of one task group.
@@ -784,6 +797,13 @@ func taskGroupFromRow(row Row, statement string) (TaskGroup, error) {
 			}
 			entry.TaskID = &taskID
 		}
+		if value, present := callback[taskGroupCallbackFailureField]; present && value != nil {
+			failure, ok := taskGroupCallbackFailure(value)
+			if !ok {
+				return TaskGroup{}, invalid
+			}
+			entry.Failure = &failure
+		}
 		group.Callbacks = append(group.Callbacks, entry)
 	}
 	return group, nil
@@ -1017,4 +1037,22 @@ func taskGroupIntegers(row Row, columns ...string) ([]int, bool) {
 		values[index] = value
 	}
 	return values, true
+}
+
+func taskGroupCallbackFailure(value any) (TaskGroupCallbackFailure, bool) {
+	fields, ok := value.(map[string]any)
+	if !ok {
+		return TaskGroupCallbackFailure{}, false
+	}
+	code, codeOK := fields[taskGroupCallbackCodeField].(string)
+	message, messageOK := fields[taskGroupCallbackMessageField].(string)
+	failedAt, failedAtOK := fields[taskGroupCallbackFailedAtField].(string)
+	if !codeOK || !messageOK || !failedAtOK {
+		return TaskGroupCallbackFailure{}, false
+	}
+	at, err := time.Parse(time.RFC3339Nano, failedAt)
+	if err != nil {
+		return TaskGroupCallbackFailure{}, false
+	}
+	return TaskGroupCallbackFailure{Code: code, Message: message, FailedAt: at}, true
 }

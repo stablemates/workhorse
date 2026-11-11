@@ -1059,13 +1059,24 @@ run.workhorse.TaskGroupBuilder: public void add(java.util.List<run.workhorse.Enq
 run.workhorse.TaskGroupBuilder: public void enqueue(java.lang.String, @Nullable java.lang.Object)
 run.workhorse.TaskGroupBuilder: public void enqueue(java.lang.String, @Nullable java.lang.Object, run.workhorse.EnqueueOptions)
 
-@NullMarked public record run.workhorse.TaskGroupCallback(run.workhorse.TaskGroupCallbackKind kind, @Nullable java.util.UUID taskId)
+@NullMarked public record run.workhorse.TaskGroupCallback(run.workhorse.TaskGroupCallbackKind kind, @Nullable java.util.UUID taskId, @Nullable run.workhorse.TaskGroupCallbackFailure failure)
 run.workhorse.TaskGroupCallback: public @Nullable java.util.UUID taskId()
+run.workhorse.TaskGroupCallback: public @Nullable run.workhorse.TaskGroupCallbackFailure failure()
 run.workhorse.TaskGroupCallback: public TaskGroupCallback(run.workhorse.TaskGroupCallbackKind, @Nullable java.util.UUID)
+run.workhorse.TaskGroupCallback: public TaskGroupCallback(run.workhorse.TaskGroupCallbackKind, @Nullable java.util.UUID, @Nullable run.workhorse.TaskGroupCallbackFailure)
 run.workhorse.TaskGroupCallback: public final boolean equals(java.lang.Object)
 run.workhorse.TaskGroupCallback: public final int hashCode()
 run.workhorse.TaskGroupCallback: public final java.lang.String toString()
 run.workhorse.TaskGroupCallback: public run.workhorse.TaskGroupCallbackKind kind()
+
+@NullMarked public record run.workhorse.TaskGroupCallbackFailure(java.lang.String code, java.lang.String message, java.time.Instant failedAt)
+run.workhorse.TaskGroupCallbackFailure: public TaskGroupCallbackFailure(java.lang.String, java.lang.String, java.time.Instant)
+run.workhorse.TaskGroupCallbackFailure: public final boolean equals(java.lang.Object)
+run.workhorse.TaskGroupCallbackFailure: public final int hashCode()
+run.workhorse.TaskGroupCallbackFailure: public final java.lang.String toString()
+run.workhorse.TaskGroupCallbackFailure: public java.lang.String code()
+run.workhorse.TaskGroupCallbackFailure: public java.lang.String message()
+run.workhorse.TaskGroupCallbackFailure: public java.time.Instant failedAt()
 
 @NullMarked public enum run.workhorse.TaskGroupCallbackKind
 run.workhorse.TaskGroupCallbackKind: enum constant ON_FAILURE

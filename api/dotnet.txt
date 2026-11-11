@@ -762,7 +762,14 @@ Workhorse.TaskGroupBuilder: public Workhorse.TaskGroupBuilder Add(string taskTyp
 public sealed record Workhorse.TaskGroupCallback
 Workhorse.TaskGroupCallback: public System.Guid? TaskId { get; init; }
 Workhorse.TaskGroupCallback: public TaskGroupCallback()
+Workhorse.TaskGroupCallback: public Workhorse.TaskGroupCallbackFailure? Failure { get; init; }
 Workhorse.TaskGroupCallback: public required Workhorse.TaskGroupCallbackKind Kind { get; init; }
+
+public sealed record Workhorse.TaskGroupCallbackFailure
+Workhorse.TaskGroupCallbackFailure: public TaskGroupCallbackFailure()
+Workhorse.TaskGroupCallbackFailure: public required System.DateTimeOffset FailedAt { get; init; }
+Workhorse.TaskGroupCallbackFailure: public required string Code { get; init; }
+Workhorse.TaskGroupCallbackFailure: public required string Message { get; init; }
 
 public enum Workhorse.TaskGroupCallbackKind
 Workhorse.TaskGroupCallbackKind: OnFailure = 2

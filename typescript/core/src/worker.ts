@@ -15,7 +15,7 @@ import {
   inspectableThrownValue,
   type FailureStatus,
 } from "./queue/claim-lease-fence.js";
-import { durableReplayConflict } from "./queue/replay-conflicts.js";
+import { terminalReplayError } from "./queue/replay-conflicts.js";
 import { jitterDuration } from "./notifications.js";
 import type { TaskNotificationSubscription } from "./notifications.js";
 import { heartbeatRoundBoundMs } from "./heartbeat-round.js";
@@ -2134,14 +2134,15 @@ export class Worker {
     }
     span.recordException(errorForTelemetry(error, task.redactErrorDetails));
     span.setStatus("error");
-    // A conflict that the handler wrapped in its own error is terminal too.
-    const terminalConflict = durableReplayConflict(error) !== undefined;
+    // A replay conflict or a second child set that the handler wrapped in its own error is
+    // terminal too.
+    const terminalConflict = terminalReplayError(error) !== undefined;
     const delay = terminalConflict
       ? -1
       : typeof this.options.retryDelayMs === "function"
         ? this.options.retryDelayMs(task.attempt, task)
         : this.options.retryDelayMs;
-    // fail_v1 reads -1 as the terminal sentinel, which only a durable replay conflict may send.
+    // fail_v1 reads -1 as the terminal sentinel, which only a terminal replay error may send.
     if (
       !terminalConflict &&
       delay !== undefined &&

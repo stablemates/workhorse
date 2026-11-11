@@ -7,8 +7,8 @@ const (
 	ProtocolVersion        = 5
 	minimumProtocolVersion = 5
 	maximumProtocolVersion = 5
-	minimumSchemaVersion   = 76
-	maximumSchemaVersion   = 96
+	minimumSchemaVersion   = 97
+	maximumSchemaVersion   = 97
 	// MaxEnqueueBatchSize is PostgreSQL's atomic enqueue batch limit.
 	MaxEnqueueBatchSize      = 1000
 	defaultTaskValueMaxBytes = 1048576
@@ -824,6 +824,7 @@ var protocolStatementRegistry = map[string]string{
 	"create_child_v1":              `SELECT status, child_task_id, child_type, created_at, joined_at, result FROM workhorse.create_child_v1($1::uuid, $2::text, $3::bigint, $4::text, $5::jsonb)`,
 	"create_child_v2":              `SELECT status, child_task_id, child_type, created_at, joined_at, result, stored_child_name FROM workhorse.create_child_v2($1::uuid, $2::text, $3::bigint, $4::text, $5::jsonb)`,
 	"create_children_v1":           `SELECT status, children, results, result_bytes, result_limit_bytes FROM workhorse.create_children_v1($1::uuid, $2::text, $3::bigint, $4::jsonb, $5::text)`,
+	"create_children_v2":           `SELECT status, children, results, result_bytes, result_limit_bytes FROM workhorse.create_children_v2($1::uuid, $2::text, $3::bigint, $4::jsonb, $5::text)`,
 	"dashboard_human_wait_v1":      `SELECT task_id, queue_name, task_type, token_name AS wait_name, context, attempt, created_at, deadline_at, created_at::text AS cursor_created_at FROM workhorse.dashboard_human_wait_v1 WHERE ($2::timestamptz IS NULL OR (created_at, task_id, token_name) > ($2::timestamptz, $3::uuid, $4::text)) ORDER BY created_at, task_id, token_name LIMIT $1::integer`,
 	"dashboard_signal_wait_v1":     `SELECT task_id, queue_name, task_type, signal_name AS wait_name, attempt, created_at, deadline_at, created_at::text AS cursor_created_at FROM workhorse.dashboard_signal_wait_v1 WHERE ($2::timestamptz IS NULL OR (created_at, task_id, signal_name) > ($2::timestamptz, $3::uuid, $4::text)) ORDER BY created_at, task_id, signal_name LIMIT $1::integer`,
 	"enqueue_many_v1":              `SELECT ordinal, task_id, outcome, reason FROM workhorse.enqueue_many_v1($1::jsonb) ORDER BY ordinal`,
@@ -843,7 +844,9 @@ var protocolStatementRegistry = map[string]string{
 	"save_checkpoint_v1":           `SELECT status, checkpoint_value, attempt, fence_token::text, worker_id, created_at FROM workhorse.save_checkpoint_v1($1::uuid, $2::text, $3::bigint, $4::text, $5::jsonb)`,
 	"save_checkpoint_v2":           `SELECT status, checkpoint_value, attempt, fence_token::text, worker_id, created_at, input_fingerprint FROM workhorse.save_checkpoint_v2($1::uuid, $2::text, $3::bigint, $4::text, $5::jsonb, $6::text)`,
 	"schedule_wait_v1":             `SELECT status, wait_name, mode, duration_ms::text, requested_wake_at, wake_at, attempt, fence_token::text, worker_id, created_at FROM workhorse.schedule_wait_v1($1::uuid, $2::text, $3::bigint, $4::text, $5::bigint, $6::timestamptz)`,
+	"schedule_wait_v2":             `SELECT status, wait_name, mode, duration_ms::text, requested_wake_at, wake_at, attempt, fence_token::text, worker_id, created_at FROM workhorse.schedule_wait_v2($1::uuid, $2::text, $3::bigint, $4::text, $5::bigint, $6::timestamptz)`,
 	"send_signal_v1":               `SELECT status, payload, delivered_at, delivered_by FROM workhorse.send_signal_v1($1::uuid, $2::text, $3::jsonb, $4::text, $5::text)`,
+	"send_signal_v2":               `SELECT status, payload, delivered_at, delivered_by FROM workhorse.send_signal_v2($1::uuid, $2::text, $3::jsonb, $4::text, $5::text)`,
 	"sync_contract_definitions_v1": `SELECT workhorse.sync_contract_definitions_v1($1::jsonb)`,
 	"update_progress_v1":           `SELECT status, progress_value, revision::text, attempt, fence_token::text, worker_id, created_at, updated_at, retry_after_ms::text FROM workhorse.update_progress_v1($1::uuid, $2::text, $3::bigint, $4::jsonb)`,
 	"wait_for_human_v1":            `SELECT status, result FROM workhorse.wait_for_human_v1($1::uuid, $2::text, $3::bigint, $4::text, $5::jsonb, $6::bigint)`,

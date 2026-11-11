@@ -1023,4 +1023,129 @@ describe("task groups", () => {
       ),
     ).resolves.toMatchObject({ rows: [{ count: 1 }] });
   });
+
+  it("shows a callback that failed to enqueue until retention deletes the group", async () => {
+    // The create accepts the request. An operator then moves its empty queue to the fast tier,
+    // which refuses a concurrency key, so the enqueue at the finish fails (SM-1955).
+    const created = await pool.query<{ gid: string }>(
+      "SELECT DISTINCT group_id AS gid FROM workhorse.create_task_group_v1($1::jsonb, $2::jsonb, true)",
+      [
+        JSON.stringify({
+          onFinish: {
+            queue: "lost-callbacks",
+            type: "done",
+            payload: {},
+            concurrencyKey: "tenant-7",
+          },
+        }),
+        JSON.stringify([{ queue: "lost-callback-members", type: "work", payload: {} }]),
+      ],
+    );
+    const groupId = created.rows[0]!.gid;
+    await admin.setQueueTier("lost-callbacks", "fast", adminAudit("move to the fast tier"));
+    await completeAll("lost-callback-members");
+
+    const snapshot = await pool.query<{ state: string; result: string; callbacks: unknown }>(
+      "SELECT state, result, callbacks FROM workhorse.get_task_group_v1($1)",
+      [groupId],
+    );
+    const event = await pool.query<{ occurred_at: Date }>(
+      `SELECT occurred_at FROM workhorse.task_group_event
+        WHERE group_id = $1 AND event_type = 'callback_failed'`,
+      [groupId],
+    );
+    expect(event.rows).toHaveLength(1);
+    expect(snapshot.rows).toEqual([
+      {
+        state: "finished",
+        result: "succeeded",
+        callbacks: {
+          on_finish: {
+            taskId: null,
+            failure: {
+              code: "P1007",
+              message: "fast-tier queue lost-callbacks does not support concurrency keys",
+              failedAt: expect.any(String),
+            },
+          },
+        },
+      },
+    ]);
+    const failedAt = (
+      snapshot.rows[0]!.callbacks as { on_finish: { failure: { failedAt: string } } }
+    ).on_finish.failure.failedAt;
+    expect(new Date(failedAt).getTime()).toBe(event.rows[0]!.occurred_at.getTime());
+    await expect(queue.getTaskGroup(groupId)).resolves.toMatchObject({
+      callbacks: [
+        {
+          kind: "onFinish",
+          taskId: null,
+          failure: {
+            code: "P1007",
+            message: "fast-tier queue lost-callbacks does not support concurrency keys",
+            failedAt: event.rows[0]!.occurred_at,
+          },
+        },
+      ],
+    });
+    await expect(
+      pool.query("SELECT count(*)::integer AS count FROM workhorse.task WHERE queue_name = $1", [
+        "lost-callbacks",
+      ]),
+    ).resolves.toMatchObject({ rows: [{ count: 0 }] });
+
+    // A maintenance pass before the outcome cutoff keeps the group and its record.
+    await pool.query("SELECT workhorse.maintain_task_groups_v1($1::timestamptz, 100)", [
+      new Date(event.rows[0]!.occurred_at.getTime() - 60_000),
+    ]);
+    await expect(
+      pool.query("SELECT callbacks FROM workhorse.get_task_group_v1($1)", [groupId]),
+    ).resolves.toMatchObject({ rows: [{ callbacks: snapshot.rows[0]!.callbacks }] });
+    // After the cutoff, retention deletes the group, and the record with it.
+    await pool.query("SELECT workhorse.maintain_task_groups_v1($1::timestamptz, 100)", [
+      new Date(event.rows[0]!.occurred_at.getTime() + 60_000),
+    ]);
+    await expect(
+      pool.query(
+        "SELECT count(*)::integer AS count FROM workhorse.task_group_event WHERE group_id = $1",
+        [groupId],
+      ),
+    ).resolves.toMatchObject({ rows: [{ count: 0 }] });
+    await expect(queue.getTaskGroup(groupId)).resolves.toBeNull();
+  });
+
+  it("shows no failure for a callback that the result does not select", async () => {
+    const { group } = await queue.taskGroup(callbacks("selected-callbacks"), (builder) =>
+      builder.add([member("selected-callback-members", 1)]),
+    );
+    await completeAll("selected-callback-members");
+    await expect(
+      pool.query("SELECT callbacks FROM workhorse.get_task_group_v1($1)", [group.id]),
+    ).resolves.toMatchObject({
+      rows: [
+        {
+          callbacks: {
+            on_finish: { taskId: expect.any(String) },
+            on_success: { taskId: expect.any(String) },
+            on_failure: { taskId: null },
+          },
+        },
+      ],
+    });
+    const { rows } = await pool.query<{ callbacks: Record<string, object> }>(
+      "SELECT callbacks FROM workhorse.get_task_group_v1($1)",
+      [group.id],
+    );
+    expect(Object.values(rows[0]!.callbacks).map((value) => Object.keys(value))).toEqual([
+      ["taskId"],
+      ["taskId"],
+      ["taskId"],
+    ]);
+    const decoded = await queue.getTaskGroup(group.id);
+    expect(decoded!.callbacks.map((callback) => "failure" in callback)).toEqual([
+      false,
+      false,
+      false,
+    ]);
+  });
 });

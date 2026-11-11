@@ -3898,7 +3898,10 @@ func (worker *Worker) callRetryDelay(task ClaimedTask) (delay *time.Duration, er
 	return worker.retryDelay(task.Attempt, task), nil
 }
 
-// durableReplayConflictName recognizes typed conflicts through ordinary Go error wrapping.
+// durableReplayConflictName recognizes typed conflicts and the limit of a second child set through
+// ordinary Go error wrapping. Each one ends the task with no retry. A second child set was a replay
+// conflict before create_children_v2 named it a limit, so it stays terminal (the ADR 0098
+// amendment of SM-1956).
 func durableReplayConflictName(err error) string {
 	var checkpointInput *CheckpointInputConflictError
 	var checkpoint *CheckpointConflictError
@@ -3914,11 +3917,34 @@ func durableReplayConflictName(err error) string {
 		return waitConflictErrorName
 	case errors.As(err, &child):
 		return childConflictErrorName
+	case isSecondChildSetLimit(err):
+		return childLimitExceededErrorName
 	case errors.As(err, &human):
 		return humanWaitConflictErrorName
 	default:
 		return emptyString
 	}
+}
+
+// isSecondChildSetLimit reports whether the error tree of err holds the limit error of a second
+// child set. errors.As stops at the first *ChildLimitExceededError, so a joined error with another
+// limit error first would hide the mark. This walk reads each wrapped error.
+func isSecondChildSetLimit(err error) bool {
+	pending := []error{err}
+	for len(pending) > 0 {
+		current := pending[len(pending)-1]
+		pending = pending[:len(pending)-1]
+		if limit, ok := current.(*ChildLimitExceededError); ok && limit.secondSet {
+			return true
+		}
+		switch wrapper := current.(type) {
+		case interface{ Unwrap() []error }:
+			pending = append(pending, wrapper.Unwrap()...)
+		case interface{ Unwrap() error }:
+			pending = append(pending, wrapper.Unwrap())
+		}
+	}
+	return false
 }
 
 // failAttempt settles a failed attempt through fail_v1 and returns the handler outcome of the

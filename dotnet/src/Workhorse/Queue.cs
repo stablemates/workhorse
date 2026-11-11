@@ -477,10 +477,10 @@ public sealed partial class Queue
                 await AssertCompatibleAsync(call, cancellationToken).ConfigureAwait(false);
                 var rows = await Sql.RowsAsync(
                     call.Connection,
-                    SqlCatalogue.SendSignalV1,
+                    SqlCatalogue.SendSignalV2,
                     [Parameters.Uuid(taskId), Parameters.Text(name), Parameters.Json(document), Parameters.Text(idempotencyKey), Parameters.Text(requestedBy)],
                     cancellationToken).ConfigureAwait(false);
-                var row = TaskGroups.ExactlyOne(rows, "send_signal_v1");
+                var row = TaskGroups.ExactlyOne(rows, "send_signal_v2");
                 if (row.Text("status") == "conflict")
                 {
                     throw new SignalIdempotencyConflictException(taskId, name);

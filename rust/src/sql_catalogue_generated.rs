@@ -5,8 +5,8 @@
 pub const CLIENT_PROTOCOL_VERSION: i32 = 5;
 pub const MINIMUM_PROTOCOL_VERSION: i32 = 5;
 pub const MAXIMUM_PROTOCOL_VERSION: i32 = 5;
-pub const MINIMUM_SCHEMA_VERSION: i32 = 76;
-pub const MAXIMUM_SCHEMA_VERSION: i32 = 96;
+pub const MINIMUM_SCHEMA_VERSION: i32 = 97;
+pub const MAXIMUM_SCHEMA_VERSION: i32 = 97;
 /// PostgreSQL's atomic enqueue batch limit.
 pub const MAX_ENQUEUE_BATCH_SIZE: usize = 1000;
 pub const DEFAULT_TASK_VALUE_MAX_BYTES: i64 = 1048576;
@@ -43,6 +43,9 @@ pub const CREATE_CHILD_V2: &str = r#"SELECT status, child_task_id, child_type, c
 
 /// `create_children_v1` (protocol)
 pub const CREATE_CHILDREN_V1: &str = r#"SELECT status, children, results, result_bytes, result_limit_bytes FROM workhorse.create_children_v1($1::uuid, $2::text, $3::bigint, $4::jsonb, $5::text)"#;
+
+/// `create_children_v2` (protocol)
+pub const CREATE_CHILDREN_V2: &str = r#"SELECT status, children, results, result_bytes, result_limit_bytes FROM workhorse.create_children_v2($1::uuid, $2::text, $3::bigint, $4::jsonb, $5::text)"#;
 
 /// `dashboard_human_wait_v1` (protocol)
 pub const DASHBOARD_HUMAN_WAIT_V1: &str = r#"SELECT task_id, queue_name, task_type, token_name AS wait_name, context, attempt, created_at, deadline_at, created_at::text AS cursor_created_at FROM workhorse.dashboard_human_wait_v1 WHERE ($2::timestamptz IS NULL OR (created_at, task_id, token_name) > ($2::timestamptz, $3::uuid, $4::text)) ORDER BY created_at, task_id, token_name LIMIT $1::integer"#;
@@ -295,11 +298,17 @@ pub const SAVE_CHECKPOINT_V2: &str = r#"SELECT status, checkpoint_value, attempt
 /// `schedule_wait_v1` (protocol)
 pub const SCHEDULE_WAIT_V1: &str = r#"SELECT status, wait_name, mode, duration_ms::text, requested_wake_at, wake_at, attempt, fence_token::text, worker_id, created_at FROM workhorse.schedule_wait_v1($1::uuid, $2::text, $3::bigint, $4::text, $5::bigint, $6::timestamptz)"#;
 
+/// `schedule_wait_v2` (protocol)
+pub const SCHEDULE_WAIT_V2: &str = r#"SELECT status, wait_name, mode, duration_ms::text, requested_wake_at, wake_at, attempt, fence_token::text, worker_id, created_at FROM workhorse.schedule_wait_v2($1::uuid, $2::text, $3::bigint, $4::text, $5::bigint, $6::timestamptz)"#;
+
 /// `schema_version` (internal)
 pub const SCHEMA_VERSION: &str = r#"SELECT version FROM workhorse.schema_version ORDER BY version"#;
 
 /// `send_signal_v1` (protocol)
 pub const SEND_SIGNAL_V1: &str = r#"SELECT status, payload, delivered_at, delivered_by FROM workhorse.send_signal_v1($1::uuid, $2::text, $3::jsonb, $4::text, $5::text)"#;
+
+/// `send_signal_v2` (protocol)
+pub const SEND_SIGNAL_V2: &str = r#"SELECT status, payload, delivered_at, delivered_by FROM workhorse.send_signal_v2($1::uuid, $2::text, $3::jsonb, $4::text, $5::text)"#;
 
 /// `set_queue_paused` (admin)
 pub const SET_QUEUE_PAUSED: &str =

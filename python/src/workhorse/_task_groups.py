@@ -16,6 +16,7 @@ from .types import (
     Json,
     TaskGroup,
     TaskGroupCallback,
+    TaskGroupCallbackFailure,
     TaskGroupCallbackKind,
     TaskGroupCounts,
     TaskGroupDrift,
@@ -147,10 +148,23 @@ def task_group(row: Row) -> TaskGroup:
             TaskGroupCallback(
                 kind=kind,
                 task_id=_optional_text(callbacks[kind].get("taskId")),
+                failure=_callback_failure(callbacks[kind].get("failure")),
             )
             for kind, _key in CALLBACK_KEYS
             if kind in callbacks
         ),
+    )
+
+
+def _callback_failure(value: object) -> TaskGroupCallbackFailure | None:
+    """The failure object of a callback that a finished group failed to enqueue, or None."""
+    if value is None:
+        return None
+    failure = cast(Mapping[str, object], value)
+    return TaskGroupCallbackFailure(
+        code=_text(failure["code"]),
+        message=_text(failure["message"]),
+        failed_at=datetime.fromisoformat(_text(failure["failedAt"])),
     )
 
 

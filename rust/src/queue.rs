@@ -325,7 +325,7 @@ impl<E: Executor> Queue<E> {
         let payload = serde_json::to_value(payload)?;
         validate_delivery("signal", "signal payload", name, &payload, &options)?;
         let row = self
-            .deliver(sql::SEND_SIGNAL_V1, "send_signal_v1", task_id, name, &payload, &options)
+            .deliver(sql::SEND_SIGNAL_V2, "send_signal_v2", task_id, name, &payload, &options)
             .await?;
         let status: &str = row.try_get("status")?;
         if status == "conflict" {

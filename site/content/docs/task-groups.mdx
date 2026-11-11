@@ -235,7 +235,8 @@ A group has three callbacks, and each one is optional:
 - `onFailure` runs when the group finishes with the result `failed`.
 
 A callback is an ordinary enqueue request. It can be on any queue, the fast tier included. Workhorse
-tries to enqueue it one time, in the transaction that finishes the group. A callback task is not
+tries to enqueue it one time, in the transaction that finishes the group. If that enqueue fails,
+the group still finishes, and the group snapshot shows the failure on the callback. A callback task is not
 a member task. If a group has no member tasks at the seal, it finishes at once with the result
 `succeeded`.
 
@@ -267,7 +268,9 @@ then `on_success` or `on_failure`, each in a subtransaction:
 - If the enqueue fails with a SQLSTATE that starts with `40` or `57`, the error rolls back the whole
   transaction, the last member outcome included.
 - If the enqueue fails with any other SQLSTATE, Workhorse writes a `callback_failed` event, and the
-  last member outcome still commits.
+  last member outcome still commits. Workhorse does not try the callback again. The group snapshot
+  shows the failure on the callback, with the SQLSTATE, the error message, and the time. Retention
+  deletes this record with the group after the outcome cutoff.
 
 **Limits**
 

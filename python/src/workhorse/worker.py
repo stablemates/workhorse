@@ -1059,6 +1059,9 @@ class _HandlerDurability:
             return pending.result()
         try:
             self._cancellation.raise_if_cancelled()
+            # The driver sends the datetime with its microseconds, for example .123999 for a
+            # target of .1239996 s, which a datetime cannot hold. schedule_wait_v2 compares the
+            # target truncated to milliseconds (.123), and it stores the value as sent.
             row = _require_lifecycle_row(
                 _fenced_write_rows(
                     self._executor,
@@ -1357,7 +1360,9 @@ class _HandlerDurability:
             else:
                 pending_request, pending = current
                 if pending_request != call_key:
-                    raise ChildConflictError(self._task.id, "child set")
+                    # A task holds one child set, so a second set in the same activation is a
+                    # limit. It ends the task, as the replay conflict that it was before did.
+                    raise _second_child_set_limit(self._task.id)
                 owns_call = False
         if not owns_call:
             return pending.result()
@@ -1369,7 +1374,9 @@ class _HandlerDurability:
             if status == "conflict":
                 raise ChildConflictError(self._task.id, "child set")
             if status == "limit_exceeded":
-                raise ChildLimitExceededError(self._task.id)
+                # The set has at most 100 children, which the check above proves, so the limit is
+                # the second child set of this activation.
+                raise _second_child_set_limit(self._task.id)
             if status == "result_too_large":
                 raise ChildResultLimitExceededError(
                     self._task.id,
@@ -4786,6 +4793,24 @@ def _has_unstorable_escape(encoded: str) -> bool:
 _MAX_CAUSE_DEPTH = 16
 
 
+def _second_child_set_limit(task_id: str) -> ChildLimitExceededError:
+    """The limit error of a second child set, which ends the task with no retry.
+
+    A second child set was a terminal replay conflict before create_children_v2 named it a limit,
+    so it stays terminal. Each other child limit refusal follows the retry policy (the ADR 0098
+    amendment of SM-1956).
+    """
+    error = ChildLimitExceededError(task_id)
+    error._workhorse_second_child_set = True  # type: ignore[attr-defined]
+    return error
+
+
+def _is_second_child_set_limit(error: BaseException) -> bool:
+    return isinstance(error, ChildLimitExceededError) and getattr(
+        error, "_workhorse_second_child_set", False
+    )
+
+
 def _durable_replay_conflict(error: BaseException) -> BaseException | None:
     """The durable replay conflict (ADR 0098) in the cause chain of `error`, or None.
 
@@ -4806,7 +4831,7 @@ def _durable_replay_conflict(error: BaseException) -> BaseException | None:
                 ChildConflictError,
                 HumanWaitConflictError,
             ),
-        ):
+        ) or _is_second_child_set_limit(current):
             return current
         current = (
             current.__cause__

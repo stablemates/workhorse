@@ -794,9 +794,16 @@ class TaskGroupBuilder
   @property result -> TaskGroupBlockResult
 
 class TaskGroupCallback
-  def __init__(self, kind: TaskGroupCallbackKind, task_id: str | None) -> None
+  def __init__(self, kind: TaskGroupCallbackKind, task_id: str | None, failure: TaskGroupCallbackFailure | None = None) -> None
+  failure: TaskGroupCallbackFailure | None = None
   kind: TaskGroupCallbackKind
   task_id: str | None
+
+class TaskGroupCallbackFailure
+  def __init__(self, code: str, message: str, failed_at: datetime) -> None
+  code: str
+  failed_at: datetime
+  message: str
 
 type TaskGroupCallbackKind = Literal["on_finish", "on_success", "on_failure"]
 
@@ -6672,9 +6679,16 @@ class TaskGroupBuilder
   @property result -> TaskGroupBlockResult
 
 class TaskGroupCallback
-  def __init__(self, kind: TaskGroupCallbackKind, task_id: str | None) -> None
+  def __init__(self, kind: TaskGroupCallbackKind, task_id: str | None, failure: TaskGroupCallbackFailure | None = None) -> None
+  failure: TaskGroupCallbackFailure | None = None
   kind: TaskGroupCallbackKind
   task_id: str | None
+
+class TaskGroupCallbackFailure
+  def __init__(self, code: str, message: str, failed_at: datetime) -> None
+  code: str
+  failed_at: datetime
+  message: str
 
 type TaskGroupCallbackKind = Literal["on_finish", "on_success", "on_failure"]
 

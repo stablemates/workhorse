@@ -646,6 +646,122 @@ public sealed class DurableContextTests(ScratchDatabase database) : IClassFixtur
     // ---------------------------------------------------------------------------------------------
     // Task groups
 
+    // A second child set was a terminal replay conflict before create_children_v2 named it a limit,
+    // so it stays terminal. Each other child limit refusal follows the retry policy.
+    [Theory]
+    [InlineData("second-set", "failed", 1, "LimitExceededException")]
+    [InlineData("second-single", "scheduled", 2, "LimitExceededException")]
+    [InlineData("large-set", "scheduled", 2, "LimitExceededException")]
+    [InlineData("changed-set", "failed", 1, "ConflictException")]
+    public async Task ChildLimitRefusalsAndAChangedSet(string shape, string state, int attempt, string name)
+    {
+        var parentId = await EnqueueAsync("agent-loop", null, new EnqueueOptions { MaxAttempts = 5 });
+        var tools = UniqueQueue("tools");
+        var options = new EnqueueOptions { Queue = tools };
+        var value = 1;
+        await using var parent = Worker();
+        parent.Handle<object?, object?>("agent-loop", async (context, _) =>
+        {
+            switch (shape)
+            {
+                case "large-set":
+                    await context.RunChildrenAsync([.. Enumerable.Range(0, 101).Select(index => new ChildRequest { Name = $"t{index}", TaskType = "tool", Payload = 1, Options = options })]);
+                    break;
+                case "second-single":
+                    await context.RunChildAsync<int, int>("research", "tool", 1, options);
+                    await context.RunChildAsync<int, int>("calculate", "tool", 2, options);
+                    break;
+                default:
+                    await context.RunChildrenAsync([new ChildRequest { Name = "research", TaskType = "tool", Payload = value, Options = options }]);
+                    if (shape == "second-set")
+                    {
+                        await context.RunChildrenAsync([new ChildRequest { Name = "calculate", TaskType = "tool", Payload = 2, Options = options }]);
+                    }
+
+                    break;
+            }
+
+            return null;
+        });
+        await using var toolWorker = new Worker(DataSource, Options(tools, configure =>
+        {
+            configure.WorkerId = "dotnet-tool-worker";
+            configure.PollingOnly = true;
+            configure.PollInterval = TimeSpan.FromMilliseconds(10);
+            configure.DisableRegistry = true;
+        }));
+        toolWorker.Handle<int, int>("tool", (_, payload) => Task.FromResult(payload));
+
+        Assert.True(await parent.RunOnceAsync(Token));
+        if (shape != "large-set")
+        {
+            Assert.True(await toolWorker.RunOnceAsync(Token));
+            if (shape == "changed-set")
+            {
+                value = 2;
+            }
+
+            Assert.True(await parent.RunOnceAsync(Token));
+        }
+
+        var row = await TaskAsync(DataSource, parentId);
+        Assert.Equal(state, row.Text("state"));
+        Assert.Equal(attempt, row.RequiredInteger("current_attempt"));
+        Assert.Equal(name, row.Json("error")!.Value.GetProperty("name").GetString());
+    }
+
+    // The SDK cuts an absolute target to whole milliseconds by its ticks before it binds it, so a
+    // target of .1239996 s sends .123 on both sides of the year 2000. schedule_wait_v2 compares at
+    // milliseconds, as TypeScript, Ruby, and the JVM send.
+    [Fact]
+    public async Task SleepUntilSendsTheTargetCutToMilliseconds()
+    {
+        var taskId = await EnqueueAsync("precision", null);
+        await using var worker = Worker();
+        worker.Handle<object?, object?>("precision", async (context, _) =>
+        {
+            await context.SleepUntilAsync("after-2000", new DateTimeOffset(2026, 1, 1, 12, 0, 0, TimeSpan.Zero).AddTicks(1_239_996));
+            await context.SleepUntilAsync("before-2000", new DateTimeOffset(1999, 12, 31, 23, 59, 59, TimeSpan.Zero).AddTicks(1_239_996));
+            return null;
+        });
+        Assert.True(await worker.RunOnceAsync(Token));
+        Assert.Equal(
+            "after-2000=00.123000,before-2000=59.123000",
+            await ScalarAsync(
+                DataSource,
+                "SELECT string_agg(wait_name || '=' || to_char(requested_wake_at AT TIME ZONE 'UTC', 'SS.US'), ',' ORDER BY wait_name) FROM workhorse.task_wait WHERE task_id = $1",
+                taskId));
+    }
+
+    [Fact]
+    public async Task ACallbackThatFailedToEnqueueHasAFailure()
+    {
+        var lost = UniqueQueue("lost-callbacks");
+        var members = UniqueQueue("lost-members");
+        var groupId = (Guid)(await ScalarAsync(
+            DataSource,
+            "SELECT DISTINCT group_id FROM workhorse.create_task_group_v1($1::text::jsonb, $2::text::jsonb, true)",
+            JsonSerializer.Serialize(new { onFinish = new { queue = lost, type = "done", payload = new { }, concurrencyKey = "tenant-7" } }),
+            JsonSerializer.Serialize(new[] { new { queue = members, type = "work", payload = new { } } })))!;
+        await ScalarAsync(DataSource, "SELECT workhorse.set_queue_tier_v1($1, 'fast', 'dotnet-test', 'test')", lost);
+        await ScalarAsync(
+            DataSource,
+            "SELECT workhorse.complete_v1(task_id, 'dotnet-member-worker', fence_token, 'null'::jsonb) FROM workhorse.claim_v1($1, 'dotnet-member-worker', 30000)",
+            members);
+        var occurredAt = (DateTime)(await ScalarAsync(
+            DataSource,
+            "SELECT occurred_at FROM workhorse.task_group_event WHERE group_id = $1 AND event_type = 'callback_failed'",
+            groupId))!;
+
+        var group = await new Queue(DataSource).GetTaskGroupAsync(groupId, Token);
+        var callback = Assert.Single(group!.Callbacks);
+        Assert.Null(callback.TaskId);
+        Assert.NotNull(callback.Failure);
+        Assert.Equal("P1007", callback.Failure.Code);
+        Assert.Equal($"fast-tier queue {lost} does not support concurrency keys", callback.Failure.Message);
+        Assert.Equal(new DateTimeOffset(DateTime.SpecifyKind(occurredAt, DateTimeKind.Utc)), callback.Failure.FailedAt);
+    }
+
     [Fact]
     public async Task AMemberTaskReadsItsGroupAndAddsATaskToIt()
     {

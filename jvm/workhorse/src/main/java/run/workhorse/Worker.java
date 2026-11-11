@@ -3246,7 +3246,7 @@ public final class Worker implements AutoCloseable {
     StringWriter stack = new StringWriter();
     error.printStackTrace(new PrintWriter(stack));
     // A durable replay conflict keeps its class name through a wrapper, as in Go and Rust.
-    ConflictException conflict = replayConflict(error);
+    NamedOperationException conflict = replayConflict(error);
     envelope.put("name", failureName(conflict == null ? error : conflict));
     envelope.put("message", storable(error.getMessage() == null ? "" : error.getMessage()));
     envelope.put("stack", storable(stack.toString()));
@@ -3303,15 +3303,21 @@ public final class Worker implements AutoCloseable {
   }
 
   /**
-   * The durable replay conflict of ADR 0098 that {@code error} is or wraps, or {@code null}. A
-   * conflict is terminal also inside a wrapper, such as the {@code CompletionException} of a {@code
-   * join()}, as in Go and Rust (SM-1512). The walk stays bounded against a cyclic chain.
+   * The durable replay conflict of ADR 0098, or the limit error of a second child set, that {@code
+   * error} is or wraps, or {@code null}. Each one ends the task with no retry. A second child set
+   * was a replay conflict before {@code create_children_v2} named it a limit, so it stays terminal.
+   * Each other child limit refusal follows the retry policy (the ADR 0098 amendment of SM-1956).
+   * Such an error is terminal also inside a wrapper, such as the {@code CompletionException} of a
+   * {@code join()}, as in Go and Rust (SM-1512). The walk stays bounded against a cyclic chain.
    */
-  static @Nullable ConflictException replayConflict(Throwable error) {
+  static @Nullable NamedOperationException replayConflict(Throwable error) {
     Throwable current = error;
     for (int depth = 0; depth < CAUSE_DEPTH && current != null; depth++) {
       if (current instanceof ConflictException conflict) {
         return conflict;
+      }
+      if (current instanceof LimitExceededException limit && limit.isSecondChildSet()) {
+        return limit;
       }
       current = current.getCause();
     }

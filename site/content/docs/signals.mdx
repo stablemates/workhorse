@@ -170,6 +170,10 @@ Workhorse does not keep a signal that arrives too early. If the handler did not 
 starts the wait. If another transition closed the wait, the delivery returns `stale`. The stored
 outcome does not change.
 
+A task that ended can never start a wait. If the task is terminal and has no wait with this name,
+the delivery returns `stale`, and Workhorse records no event. Thus a sender that tries again after
+`not_waiting` has an end condition: it stops at any status other than `not_waiting`.
+
 Go applications call `Queue.SendSignal` with `ExternalWaitDelivery`. The returned
 `SignalDeliveryResult` gives the status and the stored payload. If a changed request uses a stored
 key, the call returns a typed conflict error.
@@ -185,29 +189,34 @@ key, the call returns a typed conflict error.
 | `MAX_EXTERNAL_WAIT_IDEMPOTENCY_KEY_BYTES` | Key: 1 to 512 UTF-8 bytes                     |
 | `MAX_EXTERNAL_WAIT_ACTOR_CHARACTERS`      | `requestedBy`: 1 to 200 characters            |
 
-**`send_signal_v1` statuses**
+**`send_signal_v2` statuses**
 
-| Status              | When                                                          | Dispatch state      |
-| ------------------- | ------------------------------------------------------------- | ------------------- |
-| `delivered`         | The wait is pending and owns the parked task.                 | Task becomes ready. |
-| `duplicate`         | Same key, same payload and actor as the stored delivery.      | Unchanged.          |
-| `already_delivered` | Another key, after a delivery was accepted.                   | Unchanged.          |
-| `not_waiting`       | No wait with this name exists yet.                            | Unchanged.          |
-| `stale`             | The wait no longer owns the task, or its deadline has passed. | Unchanged.          |
-| `not_found`         | No task has this identity.                                    | Unchanged.          |
+| Status              | When                                                                                                                  | Dispatch state      |
+| ------------------- | --------------------------------------------------------------------------------------------------------------------- | ------------------- |
+| `delivered`         | The wait is pending and owns the parked task.                                                                         | Task becomes ready. |
+| `duplicate`         | Same key, same payload and actor as the stored delivery.                                                              | Unchanged.          |
+| `already_delivered` | Another key, after a delivery was accepted.                                                                           | Unchanged.          |
+| `not_waiting`       | The task is live, and no wait with this name exists yet.                                                              | Unchanged.          |
+| `stale`             | The wait no longer owns the task, or its deadline has passed. Or the task is terminal and has no wait with this name. | Unchanged.          |
+| `not_found`         | No task has this identity.                                                                                            | Unchanged.          |
 
 A same-key request with a changed payload or actor raises `SignalIdempotencyConflictError` in
 TypeScript and Go.
 
-- `send_signal_v1` takes the same advisory lock as `wait_for_signal_v1`, so delivery serializes
+- `send_signal_v2` takes the same advisory lock as `wait_for_signal_v1`, so delivery serializes
   with declaration and with competing deliveries.
+- If no wait row has the name, `send_signal_v2` locks the runtime row of the task with
+  `FOR KEY SHARE`. A terminal transition that runs at the same time thus gives `not_waiting` before
+  it or `stale` after it.
+- A `stale` answer for a terminal task appends no `task_event` row. `send_signal_v1` returns
+  `not_waiting` there and appends `signal_rejected`.
 - An accepted delivery gives the task a fresh FIFO sequence, restores the accepted task deadline,
   and sends `NOTIFY workhorse_tasks`.
 - PostgreSQL stores only a SHA-256 hash of the key and a request fingerprint.
 - `signal_received` and `signal_rejected` events record the actor and the first 12 hexadecimal
   characters of the key digest, never the raw key or payload. A rejection records its reason.
 
-More detail: [Data model: Delivering a signal](https://github.com/stablemates/workhorse/blob/main/docs/architecture/data-model.md#delivering-a-signal).
+More detail: [Data model: Delivering a signal](https://github.com/stablemates/workhorse/blob/main/docs/architecture/data-model.md#delivering-a-signal) and [Schema and SQL protocol: Answers of the second function versions](https://github.com/stablemates/workhorse/blob/main/docs/architecture/schema-and-protocol.md#answers-of-the-second-function-versions).
 
 </details>
 

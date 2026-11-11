@@ -163,10 +163,10 @@ export class SignalsModule extends QueueModule {
     validateExternalWaitDeliveryRequest(request, "Signal");
     const encodedPayload = encodeExternalWaitValue(payload, "Signal payload", `task ${taskId}`);
     const result = await this.context.database.query<SendSignalRow>(
-      SQL_STATEMENTS["send_signal_v1"],
+      SQL_STATEMENTS["send_signal_v2"],
       [taskId, name, encodedPayload, request.idempotencyKey, request.requestedBy],
     );
-    const row = expectOneRow(result, "workhorse.send_signal_v1");
+    const row = expectOneRow(result, "workhorse.send_signal_v2");
     if (row.status === "conflict") throw new SignalIdempotencyConflictError(taskId, name);
     logInfo("workhorse.task.signal_processed", "Task signal processed", {
       "workhorse.task.id": taskId,

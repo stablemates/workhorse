@@ -366,10 +366,10 @@ export class CheckpointsProgressWaitsModule extends QueueModule {
 
     const result = await queryFencedWrite<ScheduleWaitRow>(
       this.context.database,
-      SQL_STATEMENTS["schedule_wait_v1"],
+      SQL_STATEMENTS["schedule_wait_v2"],
       [task.id, workerId, task.fenceToken.toString(), name, durationWire, wakeAtWire],
     );
-    const row = expectOneRow(result, "workhorse.schedule_wait_v1");
+    const row = expectOneRow(result, "workhorse.schedule_wait_v2");
     if (row.status === "stale") throw new WaitLeaseLostError(task.id, name);
     if (row.status === "conflict") {
       throw new WaitConflictError(task.id, name, waitRecord({ ...row, task_id: task.id }));

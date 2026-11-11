@@ -423,7 +423,12 @@ class Stablemates::Workhorse::TaskGroupBuilder
 
 class Stablemates::Workhorse::TaskGroupCallback
   superclass Data
-  members kind, task_id
+  members kind, task_id, failure
+  def initialize(kind:, task_id:, failure: nil)
+
+class Stablemates::Workhorse::TaskGroupCallbackFailure
+  superclass Data
+  members code, message, failed_at
 
 class Stablemates::Workhorse::TaskGroupClosedError
   superclass Stablemates::Workhorse::DiagnosedError

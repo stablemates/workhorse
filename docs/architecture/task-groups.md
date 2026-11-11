@@ -239,6 +239,14 @@ fails with a SQLSTATE that does not start with `40` or `57`, the function writes
 and the transaction that wrote the last member outcome continues. A callback can be on any queue,
 the fast tier included. Its payload is the payload the caller gave.
 
+No routine tries a failed callback again. The finish acts only on a sealed group, the repair phase of
+`maintain_task_groups_v1` selects only sealed groups, and `repair_task_group_internal_v1` returns at
+once for a finished group. The create already proved that the request can enqueue, so a later
+failure comes from a change by an operator, for example a move of the callback queue to the fast
+tier when the request has a `concurrencyKey`. A retry would try a request that the new
+configuration refuses each time. The snapshot shows the failure instead
+([ADR 0095](../decisions/0095-add-task-groups-with-completion-callbacks.md), amendment of SM-1955).
+
 ## Add
 
 `add_task_group_members_v1(p_group_id uuid, p_requests jsonb, p_member_task_id uuid DEFAULT NULL,
@@ -414,6 +422,13 @@ without a lock. For a finished group, they are the counts on its row. `task_grou
 
 `callbacks` is a JSON object with one key for each requested callback, such as
 `{"on_finish": {"taskId": null}}`. `taskId` is set when the finished group enqueued that callback.
+A finished group with no callback task for a kind and a `callback_failed` event for that kind adds
+`failure` to its object: `{"taskId": null, "failure": {"code", "message", "failedAt"}}`. `code` is
+the SQLSTATE, and `failedAt` is the `occurred_at` of the event. Each released reader reads only
+`taskId` from a callback object, so the function keeps its suffix. Each SDK type of a callback has
+an optional failure field. The record lives as long as the group row: maintenance deletes it with
+the group after the outcome cutoff. The `dashboard/v1` group documents carry only `kind` and
+`taskId`.
 PostgreSQL orders the keys of a `jsonb` object by length, so the key order of `callbacks` is not
 the documented order. Each SDK reads the keys in the order `onFinish`, `onSuccess`, `onFailure`, and
 its `TaskGroup` lists the requested callbacks in that order.

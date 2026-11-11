@@ -84,8 +84,8 @@ impl CancellationToken {
 ///
 /// Any owned (`'static`) `std::error::Error` converts into it, so a handler can use `?`. A
 /// durable replay conflict ([`crate::Error::Conflict`] or
-/// [`crate::Error::CheckpointInputConflict`]) converts into an error that fails the task without a
-/// retry. Only that conversion marks it: an error built with [`HandlerError::named`]
+/// [`crate::Error::CheckpointInputConflict`]) and the limit error of a second child set convert
+/// into an error that fails the task without a retry. Only that conversion marks it: an error built with [`HandlerError::named`]
 /// retries under the policy, whatever its name.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct HandlerError {
@@ -150,6 +150,19 @@ impl<E: std::error::Error + 'static> From<E> for HandlerError {
             if let Some(crate::Error::CheckpointInputConflict { .. }) = error_kind {
                 let name = "CheckpointInputConflictError";
                 return Self { conflict: true, ..Self::named(name, error.to_string()) };
+            }
+            // A second child set was a replay conflict before create_children_v2 named it a limit,
+            // so it stays terminal. Each other child limit refusal follows the retry policy (the
+            // ADR 0098 amendment of SM-1956).
+            if let Some(crate::Error::LimitExceeded {
+                operation: crate::Operation::RunChildren,
+                name,
+            }) = error_kind
+            {
+                if name == crate::context::SECOND_CHILD_SET {
+                    // The envelope keeps the generic name of this error.
+                    return Self { conflict: true, ..Self::new(error.to_string()) };
+                }
             }
             if let Some(crate::Error::Conflict { operation, .. }) = error_kind {
                 let name = match operation {

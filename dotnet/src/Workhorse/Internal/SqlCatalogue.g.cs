@@ -16,8 +16,8 @@ internal static class SqlCatalogue
 
     internal const int MinimumProtocolVersion = 5;
     internal const int MaximumProtocolVersion = 5;
-    internal const int MinimumSchemaVersion = 76;
-    internal const int MaximumSchemaVersion = 96;
+    internal const int MinimumSchemaVersion = 97;
+    internal const int MaximumSchemaVersion = 97;
 
     /// <summary>PostgreSQL's atomic enqueue batch limit.</summary>
     internal const int MaxEnqueueBatchSize = 1000;
@@ -88,6 +88,12 @@ internal static class SqlCatalogue
     internal static readonly Statement CreateChildrenV1 = new(
         "create_children_v1",
         "SELECT status, children, results, result_bytes, result_limit_bytes FROM workhorse.create_children_v1($1::uuid, $2::text, $3::bigint, $4::jsonb, $5::text)",
+        5);
+
+    /// <summary><c>create_children_v2</c> (protocol).</summary>
+    internal static readonly Statement CreateChildrenV2 = new(
+        "create_children_v2",
+        "SELECT status, children, results, result_bytes, result_limit_bytes FROM workhorse.create_children_v2($1::uuid, $2::text, $3::bigint, $4::jsonb, $5::text)",
         5);
 
     /// <summary><c>dashboard_human_wait_v1</c> (protocol).</summary>
@@ -360,6 +366,12 @@ internal static class SqlCatalogue
         "SELECT status, wait_name, mode, duration_ms::text, requested_wake_at, wake_at, attempt, fence_token::text, worker_id, created_at FROM workhorse.schedule_wait_v1($1::uuid, $2::text, $3::bigint, $4::text, $5::bigint, $6::timestamptz)",
         6);
 
+    /// <summary><c>schedule_wait_v2</c> (protocol).</summary>
+    internal static readonly Statement ScheduleWaitV2 = new(
+        "schedule_wait_v2",
+        "SELECT status, wait_name, mode, duration_ms::text, requested_wake_at, wake_at, attempt, fence_token::text, worker_id, created_at FROM workhorse.schedule_wait_v2($1::uuid, $2::text, $3::bigint, $4::text, $5::bigint, $6::timestamptz)",
+        6);
+
     /// <summary><c>schema_version</c> (internal).</summary>
     internal static readonly Statement SchemaVersion = new(
         "schema_version",
@@ -370,6 +382,12 @@ internal static class SqlCatalogue
     internal static readonly Statement SendSignalV1 = new(
         "send_signal_v1",
         "SELECT status, payload, delivered_at, delivered_by FROM workhorse.send_signal_v1($1::uuid, $2::text, $3::jsonb, $4::text, $5::text)",
+        5);
+
+    /// <summary><c>send_signal_v2</c> (protocol).</summary>
+    internal static readonly Statement SendSignalV2 = new(
+        "send_signal_v2",
+        "SELECT status, payload, delivered_at, delivered_by FROM workhorse.send_signal_v2($1::uuid, $2::text, $3::jsonb, $4::text, $5::text)",
         5);
 
     /// <summary><c>set_queue_paused</c> (admin).</summary>
@@ -1027,6 +1045,7 @@ internal static class SqlCatalogue
         CreateChildV1,
         CreateChildV2,
         CreateChildrenV1,
+        CreateChildrenV2,
         DashboardHumanWaitV1,
         DashboardSignalWaitV1,
         DeregisterWorkerV1,
@@ -1072,8 +1091,10 @@ internal static class SqlCatalogue
         SaveCheckpointV1,
         SaveCheckpointV2,
         ScheduleWaitV1,
+        ScheduleWaitV2,
         SchemaVersion,
         SendSignalV1,
+        SendSignalV2,
         SetQueuePaused,
         SetWorkerPaused,
         SyncConcurrencyPoliciesV1,

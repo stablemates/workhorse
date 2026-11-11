@@ -32,7 +32,7 @@ class AsyncpgConnection:
                     "finished_at": None,
                 }
             ]
-        if "send_signal_v1" in sql:
+        if "send_signal_v2" in sql:
             return [
                 {
                     "status": "delivered",

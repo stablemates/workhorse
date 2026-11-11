@@ -234,7 +234,7 @@ public sealed partial class Worker
                 async () =>
                 {
                     Live("sleep");
-                    var row = await FencedAsync(SqlCatalogue.ScheduleWaitV1, Parameters.Text(name), Parameters.Bigint(durationMs), Parameters.Timestamptz(wakeAt)).ConfigureAwait(false);
+                    var row = await FencedAsync(SqlCatalogue.ScheduleWaitV2, Parameters.Text(name), Parameters.Bigint(durationMs), Parameters.Timestamptz(wakeAt)).ConfigureAwait(false);
                     var status = row.Text("status");
                     switch (status)
                     {
@@ -435,8 +435,8 @@ public sealed partial class Worker
                 async () =>
                 {
                     Live("runChildren");
-                    var row = await FencedAsync(SqlCatalogue.CreateChildrenV1, Parameters.Json(encoded), Parameters.Text(mode)).ConfigureAwait(false);
-                    row = await ReplayedAsync(row, encoded, Build, accepted => FencedAsync(SqlCatalogue.CreateChildrenV1, Parameters.Json(accepted), Parameters.Text(mode))).ConfigureAwait(false);
+                    var row = await FencedAsync(SqlCatalogue.CreateChildrenV2, Parameters.Json(encoded), Parameters.Text(mode)).ConfigureAwait(false);
+                    row = await ReplayedAsync(row, encoded, Build, accepted => FencedAsync(SqlCatalogue.CreateChildrenV2, Parameters.Json(accepted), Parameters.Text(mode))).ConfigureAwait(false);
                     var status = row.Text("status");
                     switch (status)
                     {
@@ -445,7 +445,9 @@ public sealed partial class Worker
                         case "conflict":
                             throw new ConflictException("runChildren", "child set");
                         case "limit_exceeded":
-                            throw new LimitExceededException("runChildren", "child set");
+                            // The set has at most 100 children, which the check above proves, so
+                            // the limit is the second child set of this activation.
+                            throw LimitExceededException.SecondChildSetLimit();
                         case "result_too_large":
                             throw new ChildResultLimitExceededException(row.RequiredLong("result_bytes"), row.RequiredLong("result_limit_bytes"));
                         case "created" or "completed":
@@ -734,6 +736,12 @@ public sealed partial class Worker
                 }
                 else if (!Equals(running.Request, request))
                 {
+                    // A task holds one child set, so a second set in the same activation is a limit.
+                    if (kind == "runChildren")
+                    {
+                        throw LimitExceededException.SecondChildSetLimit();
+                    }
+
                     throw new ConflictException(kind, conflictName);
                 }
             }

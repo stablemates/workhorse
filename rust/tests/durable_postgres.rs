@@ -1407,3 +1407,165 @@ async fn single_child_rename_and_second_child() {
         );
     }
 }
+
+/// A second child set was a terminal replay conflict before create_children_v2 named it a limit, so
+/// it stays terminal. Each other child limit refusal follows the retry policy.
+#[tokio::test]
+async fn child_limit_refusals_and_a_changed_set() {
+    for (shape, state, attempt, name) in [
+        ("second-set", "failed", 1, "Error"),
+        ("second-single", "scheduled", 2, "Error"),
+        ("large-set", "scheduled", 2, "Error"),
+        ("changed-set", "failed", 1, "ChildConflictError"),
+    ] {
+        let Some(harness) = harness("durable_child_limits").await else { return };
+        let options = EnqueueOptions { max_attempts: 5, ..EnqueueOptions::default() };
+        let parent =
+            harness.queue.enqueue("agent-loop", &Value::Null, options).await.unwrap().task_id;
+        let value = Arc::new(AtomicUsize::new(1));
+        let seen = Arc::clone(&value);
+        harness.worker.handle("agent-loop", move |_: Value, context: HandlerContext| {
+            let seen = Arc::clone(&seen);
+            async move {
+                match shape {
+                    "large-set" => {
+                        let children =
+                            (0..101).map(|index| child(&format!("t{index}"), "tool", json!(1)));
+                        let _ = context.run_children(children.collect()).await?;
+                    }
+                    "second-single" => {
+                        let _: Value = context
+                            .run_child("research", "tool", &json!(1), children_options())
+                            .await?;
+                        let _: Value = context
+                            .run_child("calculate", "tool", &json!(2), children_options())
+                            .await?;
+                    }
+                    _ => {
+                        let payload = json!(seen.load(Ordering::SeqCst));
+                        let _ =
+                            context.run_children(vec![child("research", "tool", payload)]).await?;
+                        if shape == "second-set" {
+                            let _ = context
+                                .run_children(vec![child("calculate", "tool", json!(2))])
+                                .await?;
+                        }
+                    }
+                }
+                Ok(Value::Null)
+            }
+        });
+        harness.worker.handle("tool", |input: Value, _| async move { Ok(input) });
+        harness.run_once().await;
+        if shape != "large-set" {
+            harness.run_once().await;
+            if shape == "changed-set" {
+                value.store(2, Ordering::SeqCst);
+            }
+            harness.run_once().await;
+        }
+        let row = harness
+            .database
+            .connect()
+            .await
+            .query_one(
+                "SELECT COALESCE(o.state, r.state), COALESCE(o.current_attempt, r.current_attempt), \
+                        COALESCE(o.error, r.error)->>'name' \
+                   FROM workhorse.task t \
+                   LEFT JOIN workhorse.task_runtime r ON r.task_id = t.id \
+                   LEFT JOIN workhorse.task_outcome o ON o.task_id = t.id WHERE t.id = $1",
+                &[&parent],
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            (row.get::<_, String>(0), row.get::<_, i32>(1), row.get::<_, String>(2)),
+            (state.to_owned(), attempt, name.to_owned()),
+            "{shape}"
+        );
+    }
+}
+
+/// tokio-postgres sends a `DateTime<Utc>` as whole microseconds from 2000-01-01, cut toward that
+/// date. After 2000 the cut is a truncation: .1239996 s reaches PostgreSQL as .123999, which
+/// schedule_wait_v2 compares as .123. Before 2000 the cut moves the time up: .1239996 s reaches
+/// PostgreSQL as .124000, so a replay of that instant at .123 from another SDK is a conflict.
+#[tokio::test]
+async fn sleep_until_sends_microseconds_cut_toward_2000() {
+    let Some(harness) = harness("durable_sleep_until_precision").await else { return };
+    let task = harness.enqueue("precision", Value::Null).await;
+    harness.worker.handle("precision", |_: Value, context: HandlerContext| async move {
+        for (name, text) in [
+            ("after-2000", "2026-01-01T12:00:00.1239996Z"),
+            ("before-2000", "1999-12-31T23:59:59.1239996Z"),
+        ] {
+            let target = chrono::DateTime::parse_from_rfc3339(text).unwrap().with_timezone(&Utc);
+            context.sleep_until(name, target).await?;
+        }
+        Ok(Value::Null)
+    });
+    harness.run_once().await;
+    let rows = harness
+        .database
+        .connect()
+        .await
+        .query(
+            "SELECT wait_name, to_char(requested_wake_at AT TIME ZONE 'UTC', 'SS.US') \
+               FROM workhorse.task_wait WHERE task_id = $1 ORDER BY wait_name",
+            &[&task],
+        )
+        .await
+        .unwrap();
+    let stored: Vec<(String, String)> = rows.iter().map(|row| (row.get(0), row.get(1))).collect();
+    assert_eq!(
+        stored,
+        vec![
+            ("after-2000".to_owned(), "00.123999".to_owned()),
+            ("before-2000".to_owned(), "59.124000".to_owned()),
+        ]
+    );
+}
+
+#[tokio::test]
+async fn a_callback_that_failed_to_enqueue_has_a_failure() {
+    let Some(harness) = harness("durable_callback_failure").await else { return };
+    let client = harness.database.connect().await;
+    let group: Uuid = client
+        .query_one(
+            "SELECT DISTINCT group_id FROM workhorse.create_task_group_v1($1::text::jsonb, $2::text::jsonb, true)",
+            &[
+                &r#"{"onFinish": {"queue": "rust-lost-callbacks", "type": "done", "payload": {}, "concurrencyKey": "tenant-7"}}"#,
+                &r#"[{"queue": "rust-lost-members", "type": "work", "payload": {}}]"#,
+            ],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    client
+        .batch_execute(
+            "SELECT workhorse.set_queue_tier_v1('rust-lost-callbacks', 'fast', 'rust-test', 'test'); \
+             SELECT workhorse.complete_v1(task_id, 'rust-member-worker', fence_token, 'null'::jsonb) \
+               FROM workhorse.claim_v1('rust-lost-members', 'rust-member-worker', 30000);",
+        )
+        .await
+        .unwrap();
+    let occurred_at: chrono::DateTime<Utc> = client
+        .query_one(
+            "SELECT occurred_at FROM workhorse.task_group_event \
+              WHERE group_id = $1 AND event_type = 'callback_failed'",
+            &[&group],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    let snapshot = harness.queue.get_task_group(group).await.unwrap().unwrap();
+    assert_eq!(snapshot.callbacks.len(), 1);
+    assert_eq!(snapshot.callbacks[0].task_id, None);
+    let failure = snapshot.callbacks[0].failure.clone().expect("a failure");
+    assert_eq!(failure.code, "P1007");
+    assert_eq!(
+        failure.message,
+        "fast-tier queue rust-lost-callbacks does not support concurrency keys"
+    );
+    assert_eq!(failure.failed_at, occurred_at);
+}

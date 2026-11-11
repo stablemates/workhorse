@@ -57,11 +57,25 @@ export interface TaskGroupCounts {
   pending: number;
 }
 
+/**
+ * Why a finished group did not enqueue a callback. The enqueue at the finish failed, for example
+ * because an operator moved the callback queue to the fast tier and the request has a concurrency
+ * key. Workhorse does not try the callback again. Retention deletes this record with the group.
+ */
+export interface TaskGroupCallbackFailure {
+  /** The SQLSTATE of the enqueue error. */
+  code: string;
+  message: string;
+  failedAt: Date;
+}
+
 /** A requested callback, and the task the finished group enqueued for it. */
 export interface TaskGroupCallback {
   kind: TaskGroupCallbackKind;
   /** Null until the group finishes, and null for the callback that the result does not select. */
   taskId: string | null;
+  /** Present only when the finished group failed to enqueue this callback. */
+  failure?: TaskGroupCallbackFailure;
 }
 
 export interface TaskGroup {
@@ -295,7 +309,13 @@ interface TaskGroupRow {
   canceled_at: Date | string | null;
   canceled_by: string | null;
   cancel_reason: string | null;
-  callbacks: Record<string, { taskId: string | null }>;
+  callbacks: Record<
+    string,
+    {
+      taskId: string | null;
+      failure?: { code: string; message: string; failedAt: string };
+    }
+  >;
 }
 
 // The entries are in the documented callback order. PostgreSQL returns the callbacks as jsonb,
@@ -326,7 +346,16 @@ function taskGroup(row: TaskGroupRow): TaskGroup {
     cancelReason: row.cancel_reason,
     callbacks: Object.entries(callbackKinds).flatMap(([column, kind]) => {
       const callback = row.callbacks[column];
-      return callback === undefined ? [] : [{ kind, taskId: callback.taskId }];
+      if (callback === undefined) return [];
+      const entry: TaskGroupCallback = { kind, taskId: callback.taskId };
+      if (callback.failure !== undefined) {
+        entry.failure = {
+          code: callback.failure.code,
+          message: callback.failure.message,
+          failedAt: rowTimestamp(callback.failure.failedAt, "callbacks.failure.failedAt"),
+        };
+      }
+      return [entry];
     }),
   };
 }

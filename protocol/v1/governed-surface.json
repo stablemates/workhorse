@@ -201,6 +201,17 @@
         "status": "text"
       }
     },
+    "create_children_v2": {
+      "arguments": ["uuid", "text", "bigint", "jsonb", "text"],
+      "returns": "table",
+      "returnsColumns": {
+        "children": "jsonb",
+        "result_bytes": "integer",
+        "result_limit_bytes": "integer",
+        "results": "jsonb",
+        "status": "text"
+      }
+    },
     "create_task_group_v1": {
       "arguments": ["jsonb?", "jsonb?", "boolean?"],
       "returns": "table",
@@ -814,6 +825,22 @@
         "worker_id": "text"
       }
     },
+    "schedule_wait_v2": {
+      "arguments": ["uuid", "text", "bigint", "text", "bigint", "timestamptz"],
+      "returns": "table",
+      "returnsColumns": {
+        "attempt": "integer",
+        "created_at": "timestamptz",
+        "duration_ms": "bigint",
+        "fence_token": "bigint",
+        "mode": "text",
+        "requested_wake_at": "timestamptz",
+        "status": "text",
+        "wait_name": "text",
+        "wake_at": "timestamptz",
+        "worker_id": "text"
+      }
+    },
     "seal_task_group_v1": {
       "arguments": ["uuid"],
       "returns": "table",
@@ -836,6 +863,16 @@
       }
     },
     "send_signal_v1": {
+      "arguments": ["uuid", "text", "jsonb", "text", "text"],
+      "returns": "table",
+      "returnsColumns": {
+        "delivered_at": "timestamptz",
+        "delivered_by": "text",
+        "payload": "jsonb",
+        "status": "text"
+      }
+    },
+    "send_signal_v2": {
       "arguments": ["uuid", "text", "jsonb", "text", "text"],
       "returns": "table",
       "returnsColumns": {

@@ -9,8 +9,8 @@ from typing import Literal
 PROTOCOL_VERSION = 5
 MINIMUM_PROTOCOL_VERSION = 5
 MAXIMUM_PROTOCOL_VERSION = 5
-MINIMUM_SCHEMA_VERSION = 76
-MAXIMUM_SCHEMA_VERSION = 96
+MINIMUM_SCHEMA_VERSION = 97
+MAXIMUM_SCHEMA_VERSION = 97
 DEFAULT_VALUE_MAX_BYTES = 1048576
 MAX_BATCH_SIZE = 1000
 
@@ -66,6 +66,10 @@ SQL_STATEMENTS: dict[str, tuple[str, str]] = {
     "create_children_v1": (
         "SELECT status, children, results, result_bytes, result_limit_bytes FROM workhorse.create_children_v1(%s::uuid, %s::text, %s::bigint, %s::jsonb, %s::text)",
         "SELECT status, children, results, result_bytes, result_limit_bytes FROM workhorse.create_children_v1($1::uuid, $2::text, $3::bigint, $4::jsonb, $5::text)",
+    ),
+    "create_children_v2": (
+        "SELECT status, children, results, result_bytes, result_limit_bytes FROM workhorse.create_children_v2(%s::uuid, %s::text, %s::bigint, %s::jsonb, %s::text)",
+        "SELECT status, children, results, result_bytes, result_limit_bytes FROM workhorse.create_children_v2($1::uuid, $2::text, $3::bigint, $4::jsonb, $5::text)",
     ),
     "dashboard_human_wait_v1": (
         "SELECT task_id, queue_name, task_type, token_name AS wait_name, context, attempt, created_at, deadline_at, created_at::text AS cursor_created_at FROM workhorse.dashboard_human_wait_v1 WHERE (%s::timestamptz IS NULL OR (created_at, task_id, token_name) > (%s::timestamptz, %s::uuid, %s::text)) ORDER BY created_at, task_id, token_name LIMIT %s::integer",
@@ -247,6 +251,10 @@ SQL_STATEMENTS: dict[str, tuple[str, str]] = {
         "SELECT status, wait_name, mode, duration_ms::text, requested_wake_at, wake_at, attempt, fence_token::text, worker_id, created_at FROM workhorse.schedule_wait_v1(%s::uuid, %s::text, %s::bigint, %s::text, %s::bigint, %s::timestamptz)",
         "SELECT status, wait_name, mode, duration_ms::text, requested_wake_at, wake_at, attempt, fence_token::text, worker_id, created_at FROM workhorse.schedule_wait_v1($1::uuid, $2::text, $3::bigint, $4::text, $5::bigint, $6::timestamptz)",
     ),
+    "schedule_wait_v2": (
+        "SELECT status, wait_name, mode, duration_ms::text, requested_wake_at, wake_at, attempt, fence_token::text, worker_id, created_at FROM workhorse.schedule_wait_v2(%s::uuid, %s::text, %s::bigint, %s::text, %s::bigint, %s::timestamptz)",
+        "SELECT status, wait_name, mode, duration_ms::text, requested_wake_at, wake_at, attempt, fence_token::text, worker_id, created_at FROM workhorse.schedule_wait_v2($1::uuid, $2::text, $3::bigint, $4::text, $5::bigint, $6::timestamptz)",
+    ),
     "schema_version": (
         "SELECT version FROM workhorse.schema_version ORDER BY version",
         "SELECT version FROM workhorse.schema_version ORDER BY version",
@@ -254,6 +262,10 @@ SQL_STATEMENTS: dict[str, tuple[str, str]] = {
     "send_signal_v1": (
         "SELECT status, payload, delivered_at, delivered_by FROM workhorse.send_signal_v1(%s::uuid, %s::text, %s::jsonb, %s::text, %s::text)",
         "SELECT status, payload, delivered_at, delivered_by FROM workhorse.send_signal_v1($1::uuid, $2::text, $3::jsonb, $4::text, $5::text)",
+    ),
+    "send_signal_v2": (
+        "SELECT status, payload, delivered_at, delivered_by FROM workhorse.send_signal_v2(%s::uuid, %s::text, %s::jsonb, %s::text, %s::text)",
+        "SELECT status, payload, delivered_at, delivered_by FROM workhorse.send_signal_v2($1::uuid, $2::text, $3::jsonb, $4::text, $5::text)",
     ),
     "set_queue_paused": (
         "SELECT workhorse.set_queue_paused_v1(%s::text,%s::boolean,%s::text,%s::text,%s::text)",
@@ -745,7 +757,7 @@ STATEMENTS = StatementRegistry(
     complete_human_wait=_statement("complete_human_wait_v1"),
     complete=_statement("complete_v1"),
     create_child=_statement("create_child_v2"),
-    create_children=_statement("create_children_v1"),
+    create_children=_statement("create_children_v2"),
     deregister_worker=_statement("deregister_worker_v2"),
     enqueue_many=_statement("enqueue_many_v1"),
     expire_owned=_statement("expire_owned_telemetry_v1"),
@@ -765,8 +777,8 @@ STATEMENTS = StatementRegistry(
     register_worker=_statement("register_worker_v1"),
     run_maintenance=_statement("run_maintenance_v1"),
     save_checkpoint=_statement("save_checkpoint_v2"),
-    schedule_wait=_statement("schedule_wait_v1"),
-    send_signal=_statement("send_signal_v1"),
+    schedule_wait=_statement("schedule_wait_v2"),
+    send_signal=_statement("send_signal_v2"),
     sync_concurrency_policies=_statement("sync_concurrency_policies_v1"),
     sync_contracts=_statement("sync_contract_definitions_v1"),
     sync_rate_limit_policies=_statement("sync_rate_limit_policies_v1"),

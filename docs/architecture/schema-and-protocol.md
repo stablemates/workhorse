@@ -14,7 +14,7 @@ installation from one version to the next.
 
 ### Current version and baseline
 
-The current schema version is 96 (`WORKHORSE_SCHEMA_VERSION`) and the migration baseline is 6
+The current schema version is 97 (`WORKHORSE_SCHEMA_VERSION`) and the migration baseline is 6
 (`WORKHORSE_SCHEMA_BASELINE_VERSION`). `sql/releases/0006.sql` contains the baseline clean-install
 artifact, which is the 0.2.0 schema.
 
@@ -38,10 +38,10 @@ function or give that suffix a different meaning.
 
 The current migration plan has one contract step. `0025-add-a-fast-task-tier.sql` moves schema 24 to
 25 and retires protocols 1 through 4. Thus, on an older installation, `migrateSchema` stops at
-schema 24, and `contractSchema` applies step 25. The additive steps 26 through 96 follow. A second
+schema 24, and `contractSchema` applies step 25. The additive steps 26 through 97 follow. A second
 `migrateSchema` run then completes the plan.
 
-Their files run from `0026` to `0097`. File number `0035` was reserved and never used. Thus, from
+Their files run from `0026` to `0098`. File number `0035` was reserved and never used. Thus, from
 `0036` on, the number of a file is one above the version that it produces.
 
 Step 25 ships without the usual retention window, as
@@ -119,7 +119,7 @@ version. The runner reports `Workhorse migration <file> failed part-way and roll
 
 Each of these fails without running a migration:
 
-- An installed version below the baseline 6 or above the current 96.
+- An installed version below the baseline 6 or above the current 97.
 - A version no step starts from.
 - A `workhorse.schema_version` table without exactly one row.
 
@@ -139,8 +139,10 @@ sure that each language uses the protocol in the same way.
 ### Manifest and compatibility fixture
 
 `protocol/v1/manifest.json` declares fixture format 1 and SQL protocol 5. It accepts installed
-schema versions 76 and newer inside the major line, and client protocol 5 only. Schema version 76
-is the floor because it adds `deregister_worker_v2`, which every SDK catalogue names. Before that,
+schema versions 97 and newer inside the major line, and client protocol 5 only. Schema version 97
+is the floor because it adds `schedule_wait_v2`, `send_signal_v2`, and `create_children_v2`, which
+every SDK catalogue names. Before that, schema version 76 was the floor because it adds
+`deregister_worker_v2`, which every SDK catalogue names. Before that,
 schema version 75 was the floor because it adds `dashboard_retention_preview_v1`, which every SDK
 catalogue also names. Before that, schema version 73 was the floor because it adds `heartbeat_v2`, which every SDK catalogue
 also names. Schema version 74
@@ -283,7 +285,7 @@ obeys these rules:
 All seven SDK workers settle durable replay conflicts through `fail_v1` with `p_retry_delay_ms = -1`.
 Schema version 54 reserves that override for terminal failure, even when
 `current_attempt < max_attempts`. Earlier schemas read the terminal override as an immediate retry.
-Thus workers require schema version 54 or newer. The current floor, 76, includes it.
+Thus workers require schema version 54 or newer. The current floor, 97, includes it.
 
 Both `fail_v1` and `fast_fail_v1` keep the current attempt and write the usual failed outcome and
 history. The ownership, cancellation, deadline, and execution-timeout checks still occur before the
@@ -340,6 +342,72 @@ redaction still records `RedactedTaskError`. The terminal classification occurs 
 Transient failures, lease loss, child-limit refusals, and already-waiting signal refusals keep their
 existing settlement behavior. `protocol/v1/runtime.json` pins terminal conflicts and those retryable
 controls in every SDK.
+
+One child limit refusal is terminal: the limit error of a second child set. A task holds one child
+set. `create_children_v2` answers `limit_exceeded` when the activation that created or joined the
+set asks for another set, and `create_children_v1` answered `conflict`. Thus a second set was
+terminal before under the conflict name, and it stays terminal under the limit name
+([ADR 0098](../decisions/0098-check-the-input-of-a-checkpoint-on-replay.md), amendment of SM-1956).
+Each SDK marks that error internally and adds no public name:
+
+| SDK        | Error that the handler sees | Mark                                           | Envelope name             |
+| ---------- | --------------------------- | ---------------------------------------------- | ------------------------- |
+| TypeScript | `ChildLimitExceededError`   | a module-private `WeakSet`                     | `ChildLimitExceededError` |
+| Python     | `ChildLimitExceededError`   | a private attribute                            | `ChildLimitExceededError` |
+| Go         | `*ChildLimitExceededError`  | an unexported field                            | `ChildLimitExceededError` |
+| Rust       | `Error::LimitExceeded`      | `operation` `RunChildren` and name `child set` | `Error`                   |
+| Ruby       | `LimitExceededError`        | a private instance variable                    | the name of its type      |
+| JVM        | `LimitExceededException`    | a package-private flag                         | `LimitExceededException`  |
+| .NET       | `LimitExceededException`    | an internal property                           | `LimitExceededException`  |
+
+The local guard of each SDK except TypeScript refuses a second, different set call in one
+activation before any statement, with the same marked error. A second single child, a set of more
+than 100 children, and `result_too_large` follow the retry policy.
+
+#### Absolute timer targets
+
+`schedule_wait_v2` compares an absolute target at millisecond precision. If the task has an
+absolute wait of that name and the stored target and the sent target are in the same millisecond
+in UTC, it calls `schedule_wait_v1` with the stored target. Otherwise it calls `schedule_wait_v1`
+with the target as sent, so the first write stores that value. Before it reads the wait row, it locks the runtime row of the active lease, as
+`schedule_wait_v1` does, so two first writes of one lease cannot both store a target. A different millisecond answers
+`conflict`. `date_trunc('milliseconds', …, 'UTC')` keeps a time before 1970 at the earlier
+millisecond, as the protocol text form does. A relative wait is not changed.
+
+Each SDK sends the precision of its language. For a target of `.1239996` s:
+
+| SDK                         | Sends     | Compared as |
+| --------------------------- | --------- | ----------- |
+| TypeScript, Ruby, JVM, .NET | `.123`    | `.123`      |
+| Python, Go                  | `.123999` | `.123`      |
+| Rust, a time after 2000     | `.123999` | `.123`      |
+| Rust, a time before 2000    | `.124000` | `.124`      |
+
+Rust sends a `DateTime<Utc>` as whole microseconds from 2000-01-01, cut toward that date, so a
+time before 2000 with digits below the microsecond moves up and can cross a millisecond. A replay
+of that instant at `.123` from another SDK answers `conflict`. A worker of an earlier release calls
+`schedule_wait_v1`, which compares at microsecond precision. Thus a task that a Python, Go, or Rust
+worker parked with digits below the millisecond can still conflict when a TypeScript, Ruby, JVM,
+or .NET worker of an earlier release replays it.
+
+#### Answers of the second function versions
+
+| Function             | Case                                                                   | `_v1` answer              | `_v2` answer             |
+| -------------------- | ---------------------------------------------------------------------- | ------------------------- | ------------------------ |
+| `schedule_wait_v2`   | Replay of an absolute target in the same millisecond                   | `conflict` for another µs | the first answer         |
+| `send_signal_v2`     | Terminal task, no wait row of that name                                | `not_waiting`, one event  | `stale`, no event        |
+| `send_signal_v2`     | Live task, no wait row of that name                                    | `not_waiting`, one event  | `not_waiting`, one event |
+| `create_children_v2` | A set with other names after this activation created or joined the set | `conflict`                | `limit_exceeded`         |
+| `create_children_v2` | The stored names with a changed request, in the same activation        | `conflict`                | `conflict`               |
+| `create_children_v2` | A changed set from another activation                                  | `conflict`                | `conflict`               |
+
+`send_signal_v2` reads the task state under `FOR KEY SHARE` on the runtime row of the task, in
+`task_runtime` or `fast_task_runtime`. A terminal transition deletes that row, so the send waits for
+it and then reads the committed outcome. A terminal task has a `task_outcome` or a
+`fast_task_outcome` row. A fast-tier task cannot wait for a signal, so a live one answers
+`not_waiting`. `create_children_v2` records the fence of the call that creates or joins the set in
+`task_child.last_seen_fence_token`. A second set names other children than the stored set. The stored names with a changed request
+stay a replay conflict, so an SDK can replay them under the stored contract versions.
 
 #### Replay stored state in a test
 
@@ -723,7 +791,7 @@ Both clients expose these methods:
 | `enqueue`, `enqueue_with_result`, `enqueue_many`, `enqueue_many_with_results` | `enqueue_many_v1`              |
 | `sync_schedules`                                                              | `sync_schedule_definitions_v2` |
 | `cancel`                                                                      | `cancel_v1`                    |
-| `send_signal`                                                                 | `send_signal_v1`               |
+| `send_signal`                                                                 | `send_signal_v2`               |
 | `complete_human_wait`                                                         | `complete_human_wait_v1`       |
 
 #### Row factories
@@ -813,7 +881,7 @@ through a cached check for each queue instead. Thus a warm enqueue sends only `e
 `serialize_request` in `_protocol.py` refuses an option, the call raises `ValueError` and sends no
 statement. PostgreSQL checks the other limits.
 
-`python/src/workhorse/_protocol.py` accepts schema version 76 or newer and client protocol 5. Before
+`python/src/workhorse/_protocol.py` accepts schema version 97 or newer and client protocol 5. Before
 the mutating statement, it refuses an unreadable, missing, older, or newer schema.
 
 `python/src/workhorse/_statements.py` owns each statement in `STATEMENTS`, with explicit Psycopg and
@@ -1212,7 +1280,7 @@ the activation cache. It returns `TaskProgress`.
 
 #### Timers
 
-`HandlerContext.sleep(name, duration_ms)` and `sleep_until(name, wake_at)` call `schedule_wait_v1`.
+`HandlerContext.sleep(name, duration_ms)` and `sleep_until(name, wake_at)` call `schedule_wait_v2`.
 `get_wait(name)` loads `task_wait` lazily, once for each activation.
 
 Status `scheduled` suspends the attempt:
@@ -1281,7 +1349,7 @@ queue](data-model.md#queue-of-a-child-request-with-no-queue) describes.
   `stale`, `conflict`, or `limit_exceeded`.
 
 `HandlerContext.run_children(children)` accepts at most 100 unique `ChildTaskRequest.name` values.
-It calls `create_children_v1` with mode `settled`.
+It calls `create_children_v2` with mode `settled`.
 
 - An empty sequence returns `{}` without suspension.
 - Status `created` sends `suspended_for_child`.
@@ -1381,7 +1449,7 @@ on separate pooled connections. The bridge passes the result rows into the same 
 core.
 
 The asyncpg executor decodes the JSON text of every JSON column that the SDK reads. That includes
-the `children` array that `create_children_v1` returns. Thus both drivers join a child set.
+the `children` array that `create_children_v2` returns. Thus both drivers join a child set.
 
 #### Pool connections
 
@@ -2112,7 +2180,7 @@ the activation cache. It returns `*TaskProgress`.
 
 Go `HandlerContext.Sleep(name, duration)` accepts whole-millisecond `time.Duration` values from 1
 millisecond through 365 days. `SleepUntil(name, wakeAt)` accepts a nonzero `time.Time` no more than
-365 days in the future. Both call `schedule_wait_v1`.
+365 days in the future. Both call `schedule_wait_v2`.
 
 Status `scheduled` records an internal suspension before it returns the private sentinel error.
 `Worker.execute` then releases the slot. It uses that sentinel to cancel the standard context of
@@ -2138,7 +2206,7 @@ optional `EnqueueOptions` value. A child name contains 1 through 200 Unicode cod
 - Concurrent calls with one name share one result only when their canonical requests match.
 
 Go `HandlerContext.RunChildren(children)` accepts at most 100 unique `ChildTaskRequest.Name` values.
-It calls `create_children_v1` with mode `settled`.
+It calls `create_children_v2` with mode `settled`.
 
 - Status `created` uses the same suspension path.
 - Status `completed` reads the ordered `children` array and returns `[]ChildResult` in request
@@ -2361,11 +2429,11 @@ Ruby `HandlerContext` in `ruby/lib/stablemates/workhorse/context.rb` also holds 
 | `checkpoint(name) { ... }`                                                      | Returns the stored value, or runs the block once and saves its result through `save_checkpoint_v2`.                               |
 | `set_progress(value)`                                                           | Calls `update_progress_v1` and returns the stored `TaskProgress`.                                                                 |
 | `get_progress`                                                                  | Returns the latest `TaskProgress`, or `nil` before any report.                                                                    |
-| `sleep(name, seconds)`                                                          | Accepts 1 millisecond through 365 days. Calls `schedule_wait_v1`.                                                                 |
-| `sleep_until(name, time)`                                                       | Accepts a `Time` at most 365 days ahead. Calls `schedule_wait_v1`.                                                                |
+| `sleep(name, seconds)`                                                          | Accepts 1 millisecond through 365 days. Calls `schedule_wait_v2`.                                                                 |
+| `sleep_until(name, time)`                                                       | Accepts a `Time` at most 365 days ahead. Calls `schedule_wait_v2`.                                                                |
 | `wait_for_signal(name, timeout:)` and `wait_for_human(name, context, timeout:)` | Take an optional timeout from 1 millisecond through 7 days.                                                                       |
 | `run_child(name, task_type, payload, **options)`                                | Takes the `Queue#enqueue` keywords less the coalescing and dependency options, and calls `create_child_v2`.                       |
-| `run_children(children)` and `run_children_all(children)`                       | Take at most 100 `ChildTaskRequest` values with unique names, and call `create_children_v1` with mode `settled` or `all_success`. |
+| `run_children(children)` and `run_children_all(children)`                       | Take at most 100 `ChildTaskRequest` values with unique names, and call `create_children_v2` with mode `settled` or `all_success`. |
 
 `run_children` maps each name to a `ChildOutcome`. `run_children_all` maps each name to its result.
 If the child queue is omitted, it is the queue of the parent task. A replay keeps the queue of the
@@ -2401,7 +2469,7 @@ A parent holds one individual child or one child set.
 - `run_child` under a second name, or after a child set, raises `LimitExceededError`.
 - A child set after an individual child raises `ConflictError`.
 - A child set of more than 100 children raises `LimitExceededError` before any write.
-- If a joined result is over the byte limit of the set, `create_children_v1` returns
+- If a joined result is over the byte limit of the set, `create_children_v2` returns
   `result_too_large`. That status raises `ChildResultLimitExceededError`.
 
 #### Errors
@@ -3449,11 +3517,11 @@ Java `run.workhorse.HandlerContext` holds the durable calls. `task()`, `cancella
 | `checkpoint(name, type, operation)` and `checkpoint(name, type, options, operation)`  | Returns the stored value, or runs the `Callable` once and saves its result through `save_checkpoint_v2`. `null` is stored and replayed. |
 | `setProgress(value)`                                                                  | Calls `update_progress_v1` and returns the stored `TaskProgress`.                                                                       |
 | `getProgress()`                                                                       | Returns the latest `TaskProgress`, or an empty `Optional` before any report.                                                            |
-| `sleep(name, duration)`                                                               | Accepts a `Duration` of 1 millisecond through 365 days, rounded to the nearest millisecond. Calls `schedule_wait_v1`.                   |
-| `sleepUntil(name, time)`                                                              | Accepts an `Instant` at most 365 days ahead. Calls `schedule_wait_v1`.                                                                  |
+| `sleep(name, duration)`                                                               | Accepts a `Duration` of 1 millisecond through 365 days, rounded to the nearest millisecond. Calls `schedule_wait_v2`.                   |
+| `sleepUntil(name, time)`                                                              | Accepts an `Instant` at most 365 days ahead. Calls `schedule_wait_v2`.                                                                  |
 | `waitForSignal(name, type, timeout)` and `waitForHuman(name, context, type, timeout)` | Take a `Duration` timeout from 1 millisecond through 7 days. `null` selects 7 days, or an earlier task deadline.                        |
 | `runChild(name, taskType, payload, options, resultType)`                              | Takes `EnqueueOptions` less the coalescing and dependency options, and calls `create_child_v2`.                                         |
-| `runChildren(children)` and `runChildrenAll(children)`                                | Take at most 100 `ChildRequest` values with unique names, and call `create_children_v1` with mode `settled` or `all_success`.           |
+| `runChildren(children)` and `runChildrenAll(children)`                                | Take at most 100 `ChildRequest` values with unique names, and call `create_children_v2` with mode `settled` or `all_success`.           |
 
 `runChildren` maps each name to a `ChildOutcome`, whose `status` is `ChildStatus.SUCCEEDED`,
 `FAILED`, or `CANCELED`. `runChildrenAll` maps each name to its result. If the child queue is
@@ -4438,11 +4506,11 @@ token callback always reads a reason. `CancelReason` is `Requested`, `DeadlineEx
 | `CheckpointAsync<T>(name, operation)` and `CheckpointAsync<T>(name, options, operation)`            | Returns the stored value, or runs the operation and saves its result through `save_checkpoint_v2`. `null` is stored and replayed. |
 | `SetProgressAsync<T>(value)`                                                                        | Calls `update_progress_v1` and returns the stored `TaskProgress`.                                                                 |
 | `GetProgressAsync()`                                                                                | Returns the latest `TaskProgress`, or `null` before any report.                                                                   |
-| `SleepAsync(name, duration)`                                                                        | Accepts a `TimeSpan` of 1 millisecond through 365 days. Calls `schedule_wait_v1`.                                                 |
-| `SleepUntilAsync(name, time)`                                                                       | Accepts a `DateTimeOffset` at most 365 days ahead, truncated to milliseconds. Calls `schedule_wait_v1`.                           |
+| `SleepAsync(name, duration)`                                                                        | Accepts a `TimeSpan` of 1 millisecond through 365 days. Calls `schedule_wait_v2`.                                                 |
+| `SleepUntilAsync(name, time)`                                                                       | Accepts a `DateTimeOffset` at most 365 days ahead, truncated to milliseconds. Calls `schedule_wait_v2`.                           |
 | `WaitForSignalAsync<T>(name, timeout)` and `WaitForHumanAsync<TContext, T>(name, context, timeout)` | Take a `TimeSpan?` timeout from 1 millisecond through 7 days. `null` selects 7 days, or an earlier task deadline.                 |
 | `RunChildAsync<TPayload, T>(name, taskType, payload, options)`                                      | Takes `EnqueueOptions` less idempotency, debounce, throttle, and dependencies, and calls `create_child_v2`.                       |
-| `RunChildrenAsync(children)` and `RunChildrenAllAsync(children)`                                    | Take at most 100 `ChildRequest` values with unique names, and call `create_children_v1` with mode `settled` or `all_success`.     |
+| `RunChildrenAsync(children)` and `RunChildrenAllAsync(children)`                                    | Take at most 100 `ChildRequest` values with unique names, and call `create_children_v2` with mode `settled` or `all_success`.     |
 
 C# converts a `DateTime` to the `time` of `SleepUntilAsync` implicitly. If the `Kind` of the
 `DateTime` is `Local` or `Unspecified`, the conversion uses the offset of the host. The

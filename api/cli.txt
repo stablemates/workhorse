@@ -916,6 +916,15 @@ interface TaskGroupCallback {
   kind: TaskGroupCallbackKind;
   /** Null until the group finishes, and null for the callback that the result does not select. */
   taskId: string | null;
+  /** Present only when the finished group failed to enqueue this callback. */
+  failure?: TaskGroupCallbackFailure;
+}
+
+interface TaskGroupCallbackFailure {
+  /** The SQLSTATE of the enqueue error. */
+  code: string;
+  message: string;
+  failedAt: Date;
 }
 
 type TaskGroupCallbackKind = "onFinish" | "onSuccess" | "onFailure";

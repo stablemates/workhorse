@@ -41,6 +41,27 @@ internal static class TaskGroups
         return new TaskGroupMemberPage { Members = members, NextAfter = more ? members[^1].Position : null };
     }
 
+    /// <summary>The failure object of a callback that a finished group failed to enqueue, or <c>null</c>.</summary>
+    private static TaskGroupCallbackFailure? CallbackFailure(JsonElement entry)
+    {
+        if (entry.ValueKind != JsonValueKind.Object
+            || !entry.TryGetProperty("failure", out var failure)
+            || failure.ValueKind != JsonValueKind.Object
+            || !failure.TryGetProperty("code", out var code) || code.ValueKind != JsonValueKind.String
+            || !failure.TryGetProperty("message", out var message) || message.ValueKind != JsonValueKind.String
+            || !failure.TryGetProperty("failedAt", out var failedAt) || failedAt.ValueKind != JsonValueKind.String)
+        {
+            return null;
+        }
+
+        return new TaskGroupCallbackFailure
+        {
+            Code = code.GetString()!,
+            Message = message.GetString()!,
+            FailedAt = DateTimeOffset.Parse(failedAt.GetString()!, System.Globalization.CultureInfo.InvariantCulture),
+        };
+    }
+
     /// <summary>The group of a row with the columns of <c>get_task_group_v1</c>.</summary>
     internal static TaskGroup Group(Row row)
     {
@@ -60,7 +81,7 @@ internal static class TaskGroups
                     && Guid.TryParse(id.GetString(), System.Globalization.CultureInfo.InvariantCulture, out var parsed)
                         ? parsed
                         : null;
-                callbacks.Add(new TaskGroupCallback { Kind = kind, TaskId = taskId });
+                callbacks.Add(new TaskGroupCallback { Kind = kind, TaskId = taskId, Failure = CallbackFailure(entry) });
             }
         }
 

@@ -211,6 +211,7 @@ export type {
   TaskGroupBlockResult,
   TaskGroupBuilder,
   TaskGroupCallback,
+  TaskGroupCallbackFailure,
   TaskGroupCallbackKind,
   TaskGroupCallbacks,
   TaskGroupClosedDetails,

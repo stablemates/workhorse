@@ -1,14 +1,25 @@
 # frozen_string_literal: true
 
+require "time"
+
 module Stablemates
   module Workhorse
     # The counts of a task group. +pending+ is the number of member tasks that are not finished.
     TaskGroupCounts = Data.define(:total, :succeeded, :failed, :canceled, :pending)
 
+    # Why a finished group did not enqueue a callback. The enqueue at the finish failed, for example
+    # because an operator moved the callback queue to the fast tier and the request has a
+    # concurrency key. Workhorse does not try the callback again. Retention deletes this record with
+    # the group. +code+ is the SQLSTATE of the enqueue error.
+    TaskGroupCallbackFailure = Data.define(:code, :message, :failed_at)
+
     # A requested callback of a task group. +kind+ is :on_finish, :on_success, or :on_failure.
     # +task_id+ is nil until the group finishes, and stays nil for the callback that the result
-    # does not select.
-    TaskGroupCallback = Data.define(:kind, :task_id)
+    # does not select. +failure+ is a TaskGroupCallbackFailure only when the finished group failed
+    # to enqueue this callback, and nil otherwise.
+    TaskGroupCallback = Data.define(:kind, :task_id, :failure) do
+      def initialize(kind:, task_id:, failure: nil) = super
+    end
 
     # A set of full-tier tasks that Workhorse tracks as one unit (ADR 0095). +state+ is :open,
     # :sealed, or :finished. +result+ is :succeeded or :failed when the group is finished, and nil
@@ -158,9 +169,17 @@ module Stablemates
           canceled_by: row.fetch("canceled_by"),
           cancel_reason: row.fetch("cancel_reason"),
           callbacks: CALLBACK_KINDS.filter_map do |name, kind|
-            callbacks.key?(name) && TaskGroupCallback.new(kind: kind, task_id: callbacks.fetch(name)&.fetch("taskId"))
+            callbacks.key?(name) && TaskGroupCallback.new(kind: kind, task_id: callbacks.fetch(name)&.fetch("taskId"),
+              failure: callback_failure(callbacks.fetch(name)&.fetch("failure", nil)))
           end
         )
+      end
+
+      def callback_failure(value)
+        return nil if value.nil?
+
+        TaskGroupCallbackFailure.new(code: value.fetch("code"), message: value.fetch("message"),
+          failed_at: Time.iso8601(value.fetch("failedAt")))
       end
 
       def link(row)

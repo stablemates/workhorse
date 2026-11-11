@@ -181,7 +181,7 @@ RSpec.describe "Worker against PostgreSQL" do
     end
     allow(subject.instance_variable_get(:@executor)).to receive(:fenced_rows).and_wrap_original do |original, sql, *arguments|
       rows = original.call(sql, *arguments)
-      if sql == W::SqlCatalogue::SCHEDULE_WAIT_V1
+      if sql == W::SqlCatalogue::SCHEDULE_WAIT_V2
         deadline = Process.clock_gettime(Process::CLOCK_MONOTONIC) + 5
         sleep 0.01 until context.cancellation.reason == :lease_lost ||
             Process.clock_gettime(Process::CLOCK_MONOTONIC) > deadline
@@ -222,6 +222,61 @@ RSpec.describe "Worker against PostgreSQL" do
       expect(refusal.message).to include('stored child "a", requested child "b"') unless second
       expect(@connection.exec_params("SELECT child_name FROM workhorse.task_child WHERE parent_task_id = $1", [parent]).column_values(0)).to eq(["a"])
     end
+  end
+
+  # A second child set was a terminal replay conflict before create_children_v2 named it a limit, so
+  # it stays terminal. Each other child limit refusal follows the retry policy.
+  {"second-set" => ["failed", 1, "LimitExceededError"], "second-single" => ["scheduled", 2, "LimitExceededError"],
+   "large-set" => ["scheduled", 2, "LimitExceededError"], "changed-set" => ["failed", 1, "ConflictError"]}.each do |shape, expected|
+    it "settles a #{shape} refusal as #{expected[0]} at attempt #{expected[1]}" do
+      parent = queue.enqueue("agent-loop", {}, max_attempts: 5).task_id
+      child_queue = "#{@queue_name}-tools"
+      value = 1
+      subject = worker
+      tools = W::Worker.new(@pool, queues: [child_queue], polling_only: true, disable_registry: true).handle("tool") { |payload| payload }
+      tool = ->(name, payload) { W::ChildTaskRequest.new(name: name, task_type: "tool", payload: payload, options: {queue: child_queue}) }
+      subject.handle("agent-loop") do |_payload, context|
+        case shape
+        when "large-set" then context.run_children(Array.new(101) { |index| tool.call("t#{index}", 1) })
+        when "second-single"
+          context.run_child("research", "tool", 1, queue: child_queue)
+          context.run_child("calculate", "tool", 2, queue: child_queue)
+        else
+          context.run_children([tool.call("research", value)])
+          context.run_children([tool.call("calculate", 2)]) if shape == "second-set"
+        end
+        nil
+      end
+      expect(subject.run_once).to be(true)
+      unless shape == "large-set"
+        expect(tools.run_once).to be(true)
+        value = 2 if shape == "changed-set"
+        expect(subject.run_once).to be(true)
+      end
+      row = status(parent)
+      expect([row["state"], row["attempt"].to_i]).to eq(expected[0, 2])
+      expect(JSON.parse(row["error"])["name"]).to end_with(expected[2])
+    end
+  end
+
+  it "shows a callback that failed to enqueue in the group snapshot" do
+    group_id = @connection.exec_params(
+      "SELECT DISTINCT group_id FROM workhorse.create_task_group_v1($1::jsonb, $2::jsonb, true)",
+      [JSON.generate("onFinish" => {"queue" => "rb-lost-callbacks", "type" => "done", "payload" => {}, "concurrencyKey" => "tenant-7"}),
+        JSON.generate([{"queue" => "rb-lost-members", "type" => "work", "payload" => {}}])]
+    ).getvalue(0, 0)
+    @connection.exec("SELECT workhorse.set_queue_tier_v1('rb-lost-callbacks', 'fast', 'ruby-test', 'test')")
+    @connection.exec("SELECT workhorse.complete_v1(task_id, 'rb-member-worker', fence_token, 'null'::jsonb) " \
+      "FROM workhorse.claim_v1('rb-lost-members', 'rb-member-worker', 30000)")
+    occurred_at = @connection.exec_params("SELECT to_char(occurred_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"') " \
+      "FROM workhorse.task_group_event WHERE group_id = $1 AND event_type = 'callback_failed'", [group_id]).getvalue(0, 0)
+    callbacks = queue.get_task_group(group_id).callbacks
+    expect(callbacks.size).to eq(1)
+    callback = callbacks.first
+    expect(callback.task_id).to be_nil
+    expect(callback.failure.code).to eq("P1007")
+    expect(callback.failure.message).to eq("fast-tier queue rb-lost-callbacks does not support concurrency keys")
+    expect(callback.failure.failed_at).to eq(Time.iso8601(occurred_at))
   end
 
   it "suspends a parent on its children and joins their results on replay" do

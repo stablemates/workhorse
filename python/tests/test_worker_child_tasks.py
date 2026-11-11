@@ -510,3 +510,62 @@ def test_single_child_rename_and_second_child(database_url: str) -> None:
                 "SELECT child_name FROM workhorse.task_child WHERE parent_task_id = %s",
                 (parent_id,),
             ).fetchall() == [("a",)]
+
+
+# A second child set was a terminal replay conflict before create_children_v2 named it a limit, so
+# it stays terminal. Each other child limit refusal follows the retry policy.
+@pytest.mark.parametrize(
+    ("shape", "expected"),
+    [
+        ("second-set", ("failed", 1, "ChildLimitExceededError")),
+        ("second-single", ("scheduled", 2, "ChildLimitExceededError")),
+        ("large-set", ("scheduled", 2, "ChildLimitExceededError")),
+        ("changed-set", ("failed", 1, "ChildConflictError")),
+    ],
+)
+def test_child_limit_refusals_and_a_changed_set(
+    database_url: str, shape: str, expected: tuple[str, int, str]
+) -> None:
+    parent_queue = f"{shape}-parents"
+    child_queue = f"{shape}-children"
+    value = 1
+    with psycopg.connect(database_url, autocommit=True) as connection:
+        parent_id = Queue(connection).enqueue(
+            "agent-loop", None, EnqueueOptions(queue=parent_queue, max_attempts=5)
+        )
+        options = EnqueueOptions(queue=child_queue)
+
+        def handle(_payload: object, context: HandlerContext) -> None:
+            if shape == "large-set":
+                context.run_children(
+                    [ChildTaskRequest(f"t{index}", "tool", 1, options) for index in range(101)]
+                )
+            elif shape == "second-single":
+                context.run_child("research", "tool", 1, options)
+                context.run_child("calculate", "tool", 2, options)
+            else:
+                context.run_children([ChildTaskRequest("research", "tool", value, options)])
+                if shape == "second-set":
+                    context.run_children([ChildTaskRequest("calculate", "tool", 2, options)])
+
+        parent = Worker(worker_pool, queue=parent_queue).handle("agent-loop", handle)
+        child = Worker(worker_pool, queue=child_queue).handle("tool", lambda _payload, _context: 1)
+        assert parent.run_once() is True
+        if shape != "large-set":
+            assert child.run_once() is True
+            if shape == "changed-set":
+                value = 2
+            assert parent.run_once() is True
+        assert (
+            connection.execute(
+                "SELECT COALESCE(outcome.state, runtime.state),"
+                " COALESCE(outcome.current_attempt, runtime.current_attempt),"
+                " COALESCE(outcome.error, runtime.error)->>'name'"
+                " FROM workhorse.task task"
+                " LEFT JOIN workhorse.task_runtime runtime ON runtime.task_id = task.id"
+                " LEFT JOIN workhorse.task_outcome outcome ON outcome.task_id = task.id"
+                " WHERE task.id = %s",
+                (parent_id,),
+            ).fetchone()
+            == expected
+        )

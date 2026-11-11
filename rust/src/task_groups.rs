@@ -113,12 +113,25 @@ pub struct TaskGroupCounts {
     pub pending: u32,
 }
 
+/// Why a finished group did not enqueue a callback. The enqueue at the finish failed, for example
+/// because an operator moved the callback queue to the fast tier and the request has a concurrency
+/// key. Workhorse does not try the callback again. Retention deletes this record with the group.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TaskGroupCallbackFailure {
+    /// The SQLSTATE of the enqueue error.
+    pub code: String,
+    pub message: String,
+    pub failed_at: DateTime<Utc>,
+}
+
 /// A requested callback, and the task the finished group enqueued for it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TaskGroupCallback {
     pub kind: TaskGroupCallbackKind,
     /// `None` until the group finishes, and `None` for the callback the result does not select.
     pub task_id: Option<Uuid>,
+    /// `Some` only when the finished group failed to enqueue this callback.
+    pub failure: Option<TaskGroupCallbackFailure>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -644,6 +657,15 @@ fn enqueue_row(row: &Row) -> Result<EnqueueRow, Error> {
     ]))
 }
 
+fn callback_failure(value: &Value) -> Option<TaskGroupCallbackFailure> {
+    let text = |key: &str| value.get(key).and_then(Value::as_str);
+    Some(TaskGroupCallbackFailure {
+        code: text("code")?.to_owned(),
+        message: text("message")?.to_owned(),
+        failed_at: DateTime::parse_from_rfc3339(text("failedAt")?).ok()?.with_timezone(&Utc),
+    })
+}
+
 fn task_group(row: &Row) -> Result<TaskGroup, Error> {
     let callbacks: Value = row.try_get("callbacks")?;
     let Value::Object(callbacks) = callbacks else {
@@ -665,7 +687,11 @@ fn task_group(row: &Row) -> Result<TaskGroup, Error> {
             }
             Some(_) => return Err(invalid("callbacks")),
         };
-        requested.push(TaskGroupCallback { kind, task_id });
+        let failure = match callback.get("failure") {
+            None | Some(Value::Null) => None,
+            Some(failure) => Some(callback_failure(failure).ok_or_else(|| invalid("callbacks"))?),
+        };
+        requested.push(TaskGroupCallback { kind, task_id, failure });
     }
     if requested.len() != callbacks.len() {
         return Err(invalid("callbacks"));

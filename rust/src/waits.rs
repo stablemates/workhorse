@@ -69,7 +69,7 @@ impl HandlerContext {
     ) -> Result<Value, Error> {
         self.check(Operation::Sleep)?;
         let row = self
-            .call(sql::SCHEDULE_WAIT_V1, "schedule_wait_v1", &[&name, &millis, &wake_at])
+            .call(sql::SCHEDULE_WAIT_V2, "schedule_wait_v2", &[&name, &millis, &wake_at])
             .await?;
         match status(&row)?.as_str() {
             "elapsed" => Ok(Value::Null),

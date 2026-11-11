@@ -134,7 +134,13 @@ func (err *ChildConflictError) Error() string {
 }
 
 // ChildLimitExceededError identifies a parent that exceeds MaxChildTasks.
-type ChildLimitExceededError struct{ ParentTaskID string }
+type ChildLimitExceededError struct {
+	ParentTaskID string
+	// secondSet marks the limit of a second child set. It was a terminal replay conflict before
+	// create_children_v2 named it a limit, so it stays terminal. Each other child limit refusal
+	// follows the retry policy (the ADR 0098 amendment of SM-1956).
+	secondSet bool
+}
 
 func (err *ChildLimitExceededError) Error() string {
 	return fmt.Sprintf(childLimitExceededErrorFormat, err.ParentTaskID)
@@ -345,7 +351,8 @@ func (handler *HandlerContext) createChildSet(children []ChildTaskRequest, mode 
 	if pending := handler.childSetCall; pending != nil {
 		if pending.request != canonical {
 			handler.childSet.Unlock()
-			return nil, &ChildConflictError{ParentTaskID: handler.Task.ID, ChildName: childSetNameValue}
+			// A task holds one child set, so a second set in the same activation is a limit.
+			return nil, &ChildLimitExceededError{ParentTaskID: handler.Task.ID, secondSet: true}
 		}
 		handler.childSet.Unlock()
 		<-pending.done
@@ -411,7 +418,9 @@ func (handler *HandlerContext) createChildren(
 	case durableConflictValue:
 		return nil, &ChildConflictError{ParentTaskID: handler.Task.ID, ChildName: childSetNameValue}
 	case durableLimitExceededValue:
-		return nil, &ChildLimitExceededError{ParentTaskID: handler.Task.ID}
+		// The set has at most MaxChildTasks children, which the check above proves, so the limit
+		// is the second child set of this activation.
+		return nil, &ChildLimitExceededError{ParentTaskID: handler.Task.ID, secondSet: true}
 	case childResultTooLargeValue:
 		resultBytes, _ := integer(rows[0][rowResultBytesField])
 		resultLimitBytes, _ := integer(rows[0][rowResultLimitBytesField])

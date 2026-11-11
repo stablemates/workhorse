@@ -47,13 +47,17 @@ internal static class FailureEnvelope
     }
 
     /// <summary>
-    /// The durable replay conflict of ADR 0098 that <paramref name="error"/> is or wraps, or
-    /// <c>null</c>. A conflict is terminal also inside a wrapper (SM-1512). The walk follows
+    /// The durable replay conflict of ADR 0098, or the limit error of a second child set, that
+    /// <paramref name="error"/> is or wraps, or <c>null</c>. Each one ends the task with no retry.
+    /// A second child set was a replay conflict before <c>create_children_v2</c> named it a limit,
+    /// so it stays terminal. Each other child limit refusal follows the retry policy (the ADR 0098
+    /// amendment of SM-1956). Such an error is terminal also inside a wrapper (SM-1512). The walk
+    /// follows
     /// <see cref="Exception.InnerException"/>, so it reads the first inner exception of an
     /// <see cref="AggregateException"/>, as the JVM follows one cause. It reads at most
     /// <see cref="CauseDepth"/> exceptions, so a cycle cannot hold it.
     /// </summary>
-    internal static ConflictException? ReplayConflict(Exception error)
+    internal static NamedOperationException? ReplayConflict(Exception error)
     {
         Exception? current = error;
         for (var depth = 0; depth < CauseDepth && current is not null; depth++)
@@ -61,6 +65,11 @@ internal static class FailureEnvelope
             if (current is ConflictException conflict)
             {
                 return conflict;
+            }
+
+            if (current is LimitExceededException { SecondChildSet: true } limit)
+            {
+                return limit;
             }
 
             current = current.InnerException;

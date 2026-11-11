@@ -722,6 +722,181 @@ class DurableContextDatabaseTest {
     }
   }
 
+  /**
+   * A second child set was a terminal replay conflict before create_children_v2 named it a limit,
+   * so it stays terminal. Each other child limit refusal follows the retry policy.
+   */
+  @Test
+  void childLimitRefusalsAndAChangedSet() throws SQLException {
+    record Case(String shape, String state, int attempt, String name) {}
+    for (Case entry :
+        List.of(
+            new Case("second-set", "failed", 1, "LimitExceededException"),
+            new Case("second-single", "scheduled", 2, "LimitExceededException"),
+            new Case("large-set", "scheduled", 2, "LimitExceededException"),
+            new Case("changed-set", "failed", 1, "ConflictException"))) {
+      queueName = "jvm-child-limit-" + entry.shape + "-" + UUID.randomUUID();
+      UUID parentId = enqueue("agent-loop", null, EnqueueOptions.builder().maxAttempts(5));
+      AtomicInteger value = new AtomicInteger(1);
+      String tools = queueName + "-tools";
+      EnqueueOptions options = EnqueueOptions.builder().queue(tools).build();
+      Worker worker =
+          worker()
+              .handle(
+                  "agent-loop",
+                  Object.class,
+                  (ctx, payload) -> {
+                    switch (entry.shape) {
+                      case "large-set" -> {
+                        List<ChildRequest> children = new ArrayList<>();
+                        for (int index = 0; index < 101; index++) {
+                          children.add(ChildRequest.of("t" + index, "tool", 1L, options));
+                        }
+                        ctx.runChildren(children);
+                      }
+                      case "second-single" -> {
+                        ctx.runChild("research", "tool", 1L, options, Long.class);
+                        ctx.runChild(
+                            "calculate", "tool", 2L, EnqueueOptions.defaults(), Long.class);
+                      }
+                      default -> {
+                        ctx.runChildren(
+                            List.of(
+                                ChildRequest.of("research", "tool", (long) value.get(), options)));
+                        if (entry.shape.equals("second-set")) {
+                          ctx.runChildren(
+                              List.of(ChildRequest.of("calculate", "tool", 2L, options)));
+                        }
+                      }
+                    }
+                    return null;
+                  })
+              .build();
+      Worker toolWorker =
+          Worker.builder(dataSource)
+              .queues(tools)
+              .workerId("jvm-tool-worker")
+              .pollingOnly(true)
+              .pollInterval(Duration.ofMillis(10))
+              .disableRegistry(true)
+              .handle("tool", Long.class, (ctx, payload) -> payload)
+              .build();
+      assertTrue(worker.runOnce(), entry.shape);
+      if (!entry.shape.equals("large-set")) {
+        assertTrue(toolWorker.runOnce(), entry.shape);
+        if (entry.shape.equals("changed-set")) {
+          value.set(2);
+        }
+        assertTrue(worker.runOnce(), entry.shape);
+      }
+      State after = state(parentId);
+      assertEquals(entry.state, after.state, entry.shape);
+      assertEquals(entry.attempt, after.attempt, entry.shape);
+      assertNotNull(after.error, entry.shape);
+      assertEquals(entry.name, after.error.get("name"), entry.shape);
+    }
+  }
+
+  /**
+   * The protocol text cuts the instant to milliseconds, so a target of .1239996 s sends .123 on
+   * both sides of 1970 and 2000. schedule_wait_v2 compares at milliseconds.
+   */
+  @Test
+  void sleepUntilSendsTheTargetCutToMilliseconds() throws SQLException {
+    UUID taskId = enqueue("precision", null);
+    Worker worker =
+        worker()
+            .handle(
+                "precision",
+                Object.class,
+                (ctx, payload) -> {
+                  ctx.sleepUntil("after-2000", Instant.parse("2026-01-01T12:00:00.1239996Z"));
+                  ctx.sleepUntil("before-2000", Instant.parse("1999-12-31T23:59:59.1239996Z"));
+                  return null;
+                })
+            .build();
+    assertEquals("succeeded", drive(worker, taskId, "succeeded").state);
+    try (Connection connection = ScratchDatabase.connect();
+        PreparedStatement statement =
+            connection.prepareStatement(
+                "SELECT string_agg(wait_name || '=' || to_char(requested_wake_at AT TIME ZONE 'UTC',"
+                    + " 'SS.US'), ',' ORDER BY wait_name) FROM workhorse.task_wait"
+                    + " WHERE task_id = ?::uuid")) {
+      statement.setString(1, taskId.toString());
+      try (ResultSet result = statement.executeQuery()) {
+        assertTrue(result.next());
+        assertEquals("after-2000=00.123000,before-2000=59.123000", result.getString(1));
+      }
+    }
+  }
+
+  @Test
+  void aCallbackThatFailedToEnqueueHasAFailure() throws SQLException {
+    String lost = "jvm-lost-callbacks-" + UUID.randomUUID();
+    String members = "jvm-lost-members-" + UUID.randomUUID();
+    UUID groupId;
+    Instant occurredAt;
+    try (Connection connection = ScratchDatabase.connect()) {
+      try (PreparedStatement statement =
+          connection.prepareStatement(
+              "SELECT DISTINCT group_id FROM workhorse.create_task_group_v1(?::jsonb, ?::jsonb, true)")) {
+        statement.setString(
+            1,
+            Json.write(
+                object(
+                    "onFinish",
+                    object(
+                        "queue",
+                        lost,
+                        "type",
+                        "done",
+                        "payload",
+                        object(),
+                        "concurrencyKey",
+                        "tenant-7"))));
+        statement.setString(
+            2, Json.write(List.of(object("queue", members, "type", "work", "payload", object()))));
+        try (ResultSet result = statement.executeQuery()) {
+          assertTrue(result.next());
+          groupId = UUID.fromString(result.getString(1));
+        }
+      }
+      try (PreparedStatement statement =
+          connection.prepareStatement(
+              "SELECT workhorse.set_queue_tier_v1(?, 'fast', 'jvm-test', 'test')")) {
+        statement.setString(1, lost);
+        statement.execute();
+      }
+      try (PreparedStatement statement =
+          connection.prepareStatement(
+              "SELECT workhorse.complete_v1(task_id, 'jvm-member-worker', fence_token, 'null'::jsonb)"
+                  + " FROM workhorse.claim_v1(?, 'jvm-member-worker', 30000)")) {
+        statement.setString(1, members);
+        statement.execute();
+      }
+      try (PreparedStatement statement =
+          connection.prepareStatement(
+              "SELECT occurred_at FROM workhorse.task_group_event"
+                  + " WHERE group_id = ?::uuid AND event_type = 'callback_failed'")) {
+        statement.setString(1, groupId.toString());
+        try (ResultSet result = statement.executeQuery()) {
+          assertTrue(result.next());
+          occurredAt = result.getObject(1, java.time.OffsetDateTime.class).toInstant();
+        }
+      }
+    }
+    TaskGroup group = queue.getTaskGroup(groupId).orElseThrow();
+    assertEquals(1, group.callbacks().size());
+    TaskGroupCallback callback = group.callbacks().get(0);
+    assertNull(callback.taskId());
+    TaskGroupCallbackFailure failure = callback.failure();
+    assertNotNull(failure);
+    assertEquals("P1007", failure.code());
+    assertEquals(
+        "fast-tier queue " + lost + " does not support concurrency keys", failure.message());
+    assertEquals(occurredAt, failure.failedAt());
+  }
+
   // Task groups.
 
   @Test
