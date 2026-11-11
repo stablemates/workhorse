@@ -102,6 +102,7 @@ func TestGoWorkerSatisfiesEverySharedRuntimeFixture(t *testing.T) {
 		"json-round-trip":          executeWorkerJSONRoundTripFixture,
 		"checkpoint-no-value":      executeWorkerCheckpointNoValueFixture,
 		"oversized-result":         executeWorkerOversizedResultFixture,
+		"result-contract-failure":  executeWorkerResultContractFailureFixture,
 		"shutdown-cancellation":    executeWorkerShutdownCancellationFixture,
 		"heartbeat-failure":        executeWorkerHeartbeatFailureFixture,
 		"heartbeat-busy":           executeWorkerHeartbeatBusyFixture,
@@ -1306,6 +1307,81 @@ func executeWorkerOversizedResultFixture(t *testing.T, fixture workerRuntimeFixt
 		fitting.CurrentAttempt != fixture.ExpectedFitting.Attempt {
 		t.Fatalf("the fitting task is %s/%d with error %v, expected %s/%d",
 			fitting.State, fitting.CurrentAttempt, fitting.Error, fixture.ExpectedFitting.State, fixture.ExpectedFitting.Attempt)
+	}
+}
+
+// executeWorkerResultContractFailureFixture syncs a result contract, and the handler returns its
+// payload. A payload that the result schema refuses fails each attempt through the retry policy.
+func executeWorkerResultContractFailureFixture(t *testing.T, fixture workerRuntimeFixture) {
+	databaseURL := createConformanceDatabase(t, testDatabaseURL(t), "worker-result-contract")
+	ctx := context.Background()
+	pool, err := pgxpool.New(ctx, databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(pool.Close)
+	definitions, err := json.Marshal([]json.RawMessage{fixture.Contract})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, "SELECT workhorse.sync_contract_definitions_v1($1::jsonb)", string(definitions)); err != nil {
+		t.Fatal(err)
+	}
+
+	queueName := "runtime-" + fixture.ID
+	executor := workhorse.NewPGXExecutor(pool)
+	admin := workhorse.NewAdmin(executor)
+	queue := workhorse.NewQueue(executor, queueName)
+	taskID, err := queue.Enqueue(ctx, fixture.TaskType, fixture.RejectedResult, workhorse.EnqueueOptions{
+		MaxAttempts: fixture.MaxAttempts,
+		RetryPolicy: map[string]any{"type": "fixed", "delayMs": 0},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	worker, err := workhorse.NewWorker(pool, workhorse.WorkerOptions{
+		Queue: queueName, WorkerID: "go-" + fixture.ID,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	worker.Handle(fixture.TaskType, func(_ context.Context, payload any, _ *workhorse.HandlerContext) (any, error) {
+		return payload, nil
+	})
+	snapshot := func(id string) *workhorse.TaskSnapshot {
+		task, err := admin.GetTask(ctx, id)
+		if err != nil || task == nil {
+			t.Fatalf("read task %s: task=%v err=%v", id, task, err)
+		}
+		return task
+	}
+	settled := fixture.ExpectedSettled
+	for pass := 0; pass < fixture.MaxAttempts && string(snapshot(taskID).State) != settled.State; pass++ {
+		if processed, err := worker.RunOnce(ctx); err != nil || !processed {
+			t.Fatalf("pass %d did not process the rejected task: processed=%t err=%v", pass, processed, err)
+		}
+	}
+	task := snapshot(taskID)
+	failure, _ := task.Error.(map[string]any)
+	if string(task.State) != settled.State || task.CurrentAttempt != settled.Attempt ||
+		failure["name"] != fixture.ExpectedErrorNames["go"] {
+		t.Fatalf("the rejected task is %s/%d with error %v, expected %s/%d with %s",
+			task.State, task.CurrentAttempt, task.Error, settled.State, settled.Attempt, fixture.ExpectedErrorNames["go"])
+	}
+
+	acceptedID, err := queue.Enqueue(ctx, fixture.TaskType, fixture.AcceptedResult)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if processed, err := worker.RunOnce(ctx); err != nil || !processed {
+		t.Fatalf("the worker did not process the accepted task: processed=%t err=%v", processed, err)
+	}
+	if accepted := snapshot(acceptedID); string(accepted.State) != fixture.ExpectedAccepted.State ||
+		accepted.CurrentAttempt != fixture.ExpectedAccepted.Attempt ||
+		!reflect.DeepEqual(accepted.Result, fixture.AcceptedResult) {
+		t.Fatalf("the accepted task is %s/%d with result %v and error %v, expected %s/%d with %v",
+			accepted.State, accepted.CurrentAttempt, accepted.Result, accepted.Error,
+			fixture.ExpectedAccepted.State, fixture.ExpectedAccepted.Attempt, fixture.AcceptedResult)
 	}
 }
 

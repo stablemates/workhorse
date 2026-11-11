@@ -90,7 +90,66 @@ public sealed class TransactionExamplesTests(ScratchDatabase scratch)
         Assert.Empty(await db.TasksAsync("account.created", "accountId", id));
     }
 
+    // EF Core: a retrying execution strategy accepts BeginTransactionAsync outside the strategy, but
+    // the first SaveChangesAsync in that transaction throws, before any Workhorse call runs.
+    [Fact]
+    public async Task ARetryingStrategyRefusesTheSaveInATransactionBegunOutsideTheStrategy()
+    {
+        await using var db = await AccountDatabaseAsync();
+        var id = $"csharp-{Guid.NewGuid()}";
+        await using (var context = RetryingContext(db))
+        {
+            await using var transaction = await context.Database.BeginTransactionAsync(Token);
+            context.Accounts.Add(new Account { Id = id, Email = $"{id}@example.com" });
+            await Assert.ThrowsAsync<InvalidOperationException>(() => context.SaveChangesAsync(Token));
+        }
+
+        Assert.Equal(0L, await AccountsAsync(db, id));
+        Assert.Empty(await db.TasksAsync("account.created", "accountId", id));
+    }
+
+    [Fact]
+    public async Task TheExecutionStrategyCommitsTheAccountAndTheTaskTogether()
+    {
+        await using var db = await AccountDatabaseAsync();
+        var id = $"csharp-{Guid.NewGuid()}";
+        await using (var context = RetryingContext(db))
+        {
+            await Examples(db).CreateAccountWithRetriesAsync(context, id, $"{id}@example.com", Token);
+        }
+
+        Assert.Equal(1L, await AccountsAsync(db, id));
+        Assert.Single(await db.TasksAsync("account.created", "accountId", id));
+    }
+
+    [Fact]
+    public async Task TheExecutionStrategyRollsBackTheTaskWithTheAccount()
+    {
+        await using var db = await AccountDatabaseAsync();
+        var email = $"csharp-{Guid.NewGuid()}@example.com";
+        await using (var context = RetryingContext(db))
+        {
+            await Examples(db).CreateAccountWithRetriesAsync(context, $"csharp-{Guid.NewGuid()}", email, Token);
+        }
+
+        var id = $"csharp-{Guid.NewGuid()}";
+        await using (var context = RetryingContext(db))
+        {
+            var error = await Assert.ThrowsAsync<PostgresException>(
+                () => Examples(db).CreateAccountWithRetriesAsync(context, id, email, Token));
+            Assert.Equal(PostgresErrorCodes.UniqueViolation, error.SqlState);
+        }
+
+        Assert.Equal(0L, await AccountsAsync(db, id));
+        Assert.Empty(await db.TasksAsync("account.created", "accountId", id));
+    }
+
     private static TransactionExamples Examples(ExampleDatabase db) => new(db.DataSource, db.Queue);
+
+    private static AccountsDbContext RetryingContext(ExampleDatabase db) =>
+        new(new DbContextOptionsBuilder<AccountsDbContext>()
+            .UseNpgsql(db.DataSource, npgsql => npgsql.EnableRetryOnFailure())
+            .Options);
 
     private static AccountsDbContext Context(ExampleDatabase db) =>
         new(new DbContextOptionsBuilder<AccountsDbContext>().UseNpgsql(db.DataSource).Options);

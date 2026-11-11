@@ -81,4 +81,23 @@ public sealed class TransactionExamples(NpgsqlDataSource dataSource, Queue queue
         await transaction.CommitAsync(cancellationToken);
     }
     // docs:end
+
+    // docs:start csharp-enqueue-ef-core-retry
+    public async Task CreateAccountWithRetriesAsync(
+        AccountsDbContext db, string id, string email, CancellationToken cancellationToken)
+    {
+        var strategy = db.Database.CreateExecutionStrategy();
+        await strategy.ExecuteAsync(async () =>
+        {
+            // The strategy can run the block again, so each run starts with no tracked rows.
+            db.ChangeTracker.Clear();
+            await using var transaction = await db.Database.BeginTransactionAsync(cancellationToken);
+            db.Accounts.Add(new Account { Id = id, Email = email });
+            await db.SaveChangesAsync(cancellationToken);
+            await queue.Using(db.Database.GetWorkhorseConnection())
+                .EnqueueAsync("account.created", new { accountId = id }, cancellationToken);
+            await transaction.CommitAsync(cancellationToken);
+        });
+    }
+    // docs:end
 }

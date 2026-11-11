@@ -1823,3 +1823,26 @@ the versions that the SDK runs on do not narrow, and ADR 0058 asks for no notice
 
 1.67.0 deprecates `TextMapGetter.keys` and gives it a default body. The SDK keeps its override of
 `keys`, because the method is abstract in 1.55.0.
+
+## Amendment: the caller form runs in autocommit when the caller's connection has it on (2026-11-11)
+
+The Connection model section says that the SDK sets no autocommit mode on a connection that the
+caller owns. The caller form reads `getAutoCommit()` on that connection and runs the call. If
+autocommit is on, the call runs in autocommit, and each statement commits at once. SM-1971 asked
+whether the caller form must refuse such a connection.
+
+The caller form keeps its rule. It does not refuse a connection with autocommit on, because the
+SDK does not own the session state of the caller's connection, and a refusal would change a
+governed surface. `docs/guides/200-transactional-enqueue.md` and its site page state the
+autocommit result, and the guide tells the reader to turn autocommit off before the first write.
+
+SM-1987 changes two cases of `TransactionAwareConnectionSource` on the path where no transaction
+owns the connection. Both keep this rule:
+
+1. The source counts the open calls for each connection that it turned autocommit on for. Only the
+   release of the outermost call restores the earlier value. Two calls can overlap on one
+   connection under `SUPPORTS`.
+2. The constructor unwraps a `TransactionAwareDataSourceProxy` to its target `DataSource`, as
+   `DataSourceTransactionManager` and `JpaTransactionManager` do. Before, a lookup under the proxy
+   found no transaction, and the source turned autocommit on through the proxy. That committed the
+   open transaction of the caller.

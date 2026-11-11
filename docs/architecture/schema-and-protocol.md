@@ -476,6 +476,26 @@ of each language names itself. TypeScript, Go, and Rust record `Error`, and Pyth
 Thus a Go panic records the same three fields as a TypeScript or Python
 exception.
 
+#### Contract failure names
+
+If a handler result fails its result contract, the worker fails the attempt, and the retry policy
+applies. Each SDK records the name of its own contract error, so the names are not the same in each
+SDK. Thus a filter on one name does not match the failures of every worker. Rust keeps its own
+names (SM-1972). The runtime fixture `result-contract-failure-fails-through-the-retry-policy` in
+`protocol/v1/runtime.json` pins the validation name of each SDK.
+
+| SDK        | The result fails the schema                       | The contract version is not available              |
+| ---------- | ------------------------------------------------- | -------------------------------------------------- |
+| TypeScript | `TaskContractValidationError`                     | `TaskContractUnavailableError`                     |
+| Python     | `TaskContractValidationError`                     | `TaskContractUnavailableError`                     |
+| Go         | `TaskContractValidationError`                     | `TaskContractUnavailableError`                     |
+| Rust       | `ContractValidationError`                         | `ContractUnavailable`                              |
+| Ruby       | `Stablemates::Workhorse::ContractValidationError` | `Stablemates::Workhorse::ContractUnavailableError` |
+| Java       | `ContractValidationException`                     | `ContractUnavailableException`                     |
+| .NET       | `ContractValidationException`                     | `ContractUnavailableException`                     |
+
+The Ruby Active Job adapter checks no result contract, because it stores no result (ADR 0075).
+
 #### Text that jsonb cannot store
 
 A handler error can hold text that PostgreSQL `jsonb` cannot store. If `fail_v1` refuses the
@@ -2972,14 +2992,17 @@ time to read an integer grows with the square of its number of digits.
 
 - **The caller form** takes a `java.sql.Connection` first. The SDK runs on that connection in the
   transaction of the caller. It only reads `getAutoCommit()`. It never begins, commits, rolls back,
-  or closes, and it changes no session state.
+  or closes, and it changes no session state. It does not refuse a connection with autocommit on:
+  the call then runs in autocommit, and each statement commits at once (ADR 0103).
 - **The source form** omits the connection. The SDK calls `acquire()`, runs the call, and calls
   `release(connection, transactional)`, also after a failure. `transactional` is true when the
   connection had autocommit off.
 
 `ConnectionSource.of(DataSource)` runs each call in autocommit. If the pool gives a connection with
 autocommit off, it turns autocommit on for the call. Its `release` restores the earlier value, and
-then closes the connection.
+then closes the connection. If `getAutoCommit()` or `setAutoCommit(true)` throws in `acquire`, also
+an `Error`, the source closes the connection and throws the original failure. A failure of that
+close is a suppressed exception of the original failure.
 
 Each `Queue` and each `Admin` instance caches its compatibility check once for its source, and once
 for each caller `Connection`. It caches a refusal, but not a driver error. The check runs after
@@ -3591,6 +3614,16 @@ the SDK does not commit it. Thus an enqueue inside `@Transactional` commits and 
 transaction. Outside such a transaction, it runs the call in autocommit. If the pool gives a
 connection with autocommit off, the source turns autocommit on for the call, and restores the
 earlier value before it releases the connection.
+
+Under `SUPPORTS`, `DataSourceUtils.getConnection` gives one bound connection to each call on the
+thread, so two calls can overlap on one connection. The source counts the open calls for each
+connection that it turned autocommit on for. Only the release of the outermost call restores the
+earlier value. A call that overlaps does not change autocommit.
+
+The constructor unwraps a `TransactionAwareDataSourceProxy` to its target `DataSource`.
+`DataSourceTransactionManager` and `JpaTransactionManager` do the same, and they bind their
+`ConnectionHolder` under the target. A lookup under the proxy finds no transaction, and a
+`setAutoCommit(true)` through the proxy commits the open transaction of the caller.
 
 The source reads the `ConnectionHolder` that Spring binds for the `DataSource`:
 
@@ -4295,6 +4328,40 @@ The caller passes the connection to `Queue.Using`:
 Npgsql runs the enqueue inside the transaction that EF Core opened. So the task commits and rolls
 back with the rows of the caller. The caller-form cancellation rule of
 [.NET connections](#net-connections) applies.
+
+`GetWorkhorseConnection` does not require `database.CurrentTransaction` (ADR 0107). On a connection
+that the application opened with `Database.OpenConnection()` and no transaction, the enqueue runs in
+autocommit. The task commits at once, and a later rollback does not remove it.
+
+A retrying execution strategy, such as the one that `EnableRetryOnFailure()` sets, refuses a
+transaction that the application begins outside the strategy. `BeginTransactionAsync` succeeds,
+but the first `SaveChangesAsync` in that transaction throws `InvalidOperationException` before any
+Workhorse call. The application puts the whole block in
+`Database.CreateExecutionStrategy().ExecuteAsync(...)`. The strategy runs the block again after a
+transient failure, so each run clears the change tracker first.
+
+```csharp
+public async Task CreateAccountWithRetriesAsync(
+    AccountsDbContext db, string id, string email, CancellationToken cancellationToken)
+{
+    var strategy = db.Database.CreateExecutionStrategy();
+    await strategy.ExecuteAsync(async () =>
+    {
+        // The strategy can run the block again, so each run starts with no tracked rows.
+        db.ChangeTracker.Clear();
+        await using var transaction = await db.Database.BeginTransactionAsync(cancellationToken);
+        db.Accounts.Add(new Account { Id = id, Email = email });
+        await db.SaveChangesAsync(cancellationToken);
+        await queue.Using(db.Database.GetWorkhorseConnection())
+            .EnqueueAsync("account.created", new { accountId = id }, cancellationToken);
+        await transaction.CommitAsync(cancellationToken);
+    });
+}
+```
+
+`TransactionExamplesTests` in `dotnet/examples/Workhorse.Examples.Tests/` runs this block with
+`EnableRetryOnFailure()`. It also checks that `SaveChangesAsync` throws in a transaction that begins
+outside the strategy.
 
 ### .NET telemetry
 

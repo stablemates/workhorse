@@ -78,11 +78,16 @@ module Stablemates
             typed[task_type] = job_class
           end
           admin = Admin.new(worker.executor)
-          worker.handle(TASK_TYPE) { |payload, context| running(worker, context) { run_default(payload, context.task) } }
+          # The adapter stores no result, so no result contract applies to its task types (ADR 0075).
+          default = Worker::UncheckedResultHandler.new do |payload, context|
+            running(worker, context) { run_default(payload, context.task) }
+          end
+          worker.handle(TASK_TYPE, &default)
           typed.each do |task_type, job_class|
-            worker.handle(task_type) do |payload, context|
+            handler = Worker::UncheckedResultHandler.new do |payload, context|
               running(worker, context) { run_typed(job_class, payload, context.task, admin) }
             end
+            worker.handle(task_type, &handler)
           end
           worker
         end

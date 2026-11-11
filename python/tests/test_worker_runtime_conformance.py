@@ -90,6 +90,7 @@ SYNC_ONLY_RUNTIME_FIXTURE_KINDS = frozenset(
         "suspension-race",
         "suspension-replay",
         "replay-conflict",
+        "result-contract-failure",
         "shutdown-cancellation",
         "trace-propagation",
     }
@@ -170,6 +171,7 @@ def execute_runtime_fixture(
         "json-round-trip": execute_json_round_trip_fixture,
         "checkpoint-no-value": execute_checkpoint_no_value_fixture,
         "oversized-result": execute_oversized_result_fixture,
+        "result-contract-failure": execute_result_contract_failure_fixture,
         "shutdown-cancellation": execute_shutdown_cancellation_fixture,
         "heartbeat-failure": execute_heartbeat_failure_fixture,
         "heartbeat-busy": execute_heartbeat_busy_fixture,
@@ -1968,6 +1970,52 @@ def execute_oversized_result_fixture(
     assert (snapshot.state, snapshot.current_attempt) == (
         fixture["expectedFitting"]["state"],
         fixture["expectedFitting"]["attempt"],
+    )
+
+
+def execute_result_contract_failure_fixture(
+    connection: psycopg.Connection[Any], fixture: Mapping[str, Any]
+) -> None:
+    queue_name = runtime_queue(fixture)
+    connection.execute(
+        "SELECT workhorse.sync_contract_definitions_v1(%s::jsonb)",
+        (json.dumps([fixture["contract"]]),),
+    )
+    admin = Admin(connection)
+    queue = Queue(connection)
+    task_id = queue.enqueue(
+        fixture["taskType"],
+        fixture["rejectedResult"],
+        EnqueueOptions(
+            queue=queue_name,
+            max_attempts=fixture["maxAttempts"],
+            retry_policy={"type": "fixed", "delayMs": 0},
+        ),
+    )
+    worker = Worker(worker_pool, queue=queue_name, worker_id=f"python-{fixture['id']}").handle(
+        fixture["taskType"], lambda payload, _context: payload
+    )
+    settled = fixture["expectedSettled"]
+    for _ in range(fixture["maxAttempts"]):
+        snapshot = admin.get_task(task_id)
+        if snapshot is not None and snapshot.state == settled["state"]:
+            break
+        assert worker.run_once() is True
+    snapshot = admin.get_task(task_id)
+    assert snapshot is not None
+    assert (snapshot.state, snapshot.current_attempt) == (settled["state"], settled["attempt"])
+    assert isinstance(snapshot.error, dict)
+    assert snapshot.error["name"] == fixture["expectedErrorNames"]["python"]
+    accepted = queue.enqueue(
+        fixture["taskType"], fixture["acceptedResult"], EnqueueOptions(queue=queue_name)
+    )
+    assert worker.run_once() is True
+    snapshot = admin.get_task(accepted)
+    assert snapshot is not None
+    assert (snapshot.state, snapshot.current_attempt, snapshot.result) == (
+        fixture["expectedAccepted"]["state"],
+        fixture["expectedAccepted"]["attempt"],
+        fixture["acceptedResult"],
     )
 
 

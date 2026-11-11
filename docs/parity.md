@@ -147,6 +147,12 @@ run it. The
 [Batch handlers](architecture/lifecycle.md#batch-handlers) section of the lifecycle page states the
 rule.
 
+All the workers on one pool share one listener and one heartbeat connection (ADR 0071). In Ruby,
+each of the two registries is an `ObjectSpace::WeakMap`. It compares pools by identity and holds
+the pool and its listener or heartbeat weakly. While a worker or the thread of the listener or the
+heartbeat holds that object, each new worker on the pool finds it. Thus a registry entry does not
+keep a pool alive after its last worker stops, as in Python, the JVM, and Rust.
+
 ## Reporter callback failures
 
 A reporter callback is a worker option that observes the worker, such as the registration error
@@ -194,7 +200,10 @@ and carries one JSON `Hash`, so any SDK can enqueue or handle it.
 - **Native only.** Active Job has no vocabulary for the capability. A caller reaches it through the
   native Ruby SDK.
 - **Payload only.** The typed job's payload is the task's payload, so a payload contract applies.
-  A result contract does not, because the adapter stores no result for either format.
+  A result contract does not, because the adapter stores no result for either format. The worker
+  does not check the result of an adapter handler, so a result contract of the task type never
+  fails the task, and `perform` runs one time for each attempt. A native Ruby handler keeps its
+  result check.
 
 <!-- BEGIN GENERATED PARITY ACTIVE JOB -->
 

@@ -1598,3 +1598,22 @@ on the same data source.
   attempt whose handler returned during the grace stopped its renewal then. Its statement can thus
   run at most one grace and one unwind window past its own lease end. Its fence fails, and it keeps
   only its connection for that time.
+
+## Amendment: `GetWorkhorseConnection` does not require a transaction (2026-11-11)
+
+The EF Core section says that `GetWorkhorseConnection` throws only if the provider is not Npgsql or
+if the connection is not open. An application can open the connection with
+`Database.OpenConnection()` and begin no transaction. The enqueue then runs in autocommit, and a
+later rollback does not remove the task. SM-1971 asked whether the accessor must also require
+`database.CurrentTransaction`.
+
+The accessor keeps its rule. A refusal would change a governed surface, and the caller form of
+`Queue` runs on any open connection that the caller gives it. `dotnet/README.md`,
+`docs/guides/200-transactional-enqueue.md`, and its site page state the autocommit result.
+
+SM-1986 adds one limit to the same pattern. A retrying execution strategy, such as the one that
+`EnableRetryOnFailure()` sets, refuses a transaction that the application begins outside the
+strategy. `BeginTransactionAsync` succeeds, but the first `SaveChangesAsync` in that transaction
+throws `InvalidOperationException` before any Workhorse call. The application puts the whole block in `Database.CreateExecutionStrategy().ExecuteAsync`.
+The snippet `csharp-enqueue-ef-core-retry` in `dotnet/examples/Workhorse.Examples/` shows the form,
+and its tests run it with `EnableRetryOnFailure()`.

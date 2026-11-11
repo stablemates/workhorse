@@ -723,6 +723,36 @@
     "expectedFitting": { "state": "succeeded", "attempt": 1 }
   },
   {
+    "id": "result-contract-failure-fails-through-the-retry-policy",
+    "kind": "result-contract-failure",
+    "covers": ["result-contract-failure"],
+    "taskType": "protocol.result-contract",
+    "maxAttempts": 2,
+    "contract": {
+      "taskType": "protocol.result-contract",
+      "currentVersion": "v1",
+      "versions": {
+        "v1": {
+          "payloadSchema": { "type": "object" },
+          "resultSchema": { "type": "object", "required": ["url"] }
+        }
+      }
+    },
+    "rejectedResult": { "id": 7 },
+    "acceptedResult": { "url": "https://example.test/reports/7" },
+    "expectedSettled": { "state": "failed", "attempt": 2 },
+    "expectedErrorNames": {
+      "typescript": "TaskContractValidationError",
+      "python": "TaskContractValidationError",
+      "go": "TaskContractValidationError",
+      "rust": "ContractValidationError",
+      "ruby": "Stablemates::Workhorse::ContractValidationError",
+      "java": "ContractValidationException",
+      "csharp": "ContractValidationException"
+    },
+    "expectedAccepted": { "state": "succeeded", "attempt": 1 }
+  },
+  {
     "id": "shutdown-cancellation-releases-the-task-without-an-attempt",
     "kind": "shutdown-cancellation",
     "covers": ["shutdown-cancellation-release"],

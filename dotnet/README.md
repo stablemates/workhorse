@@ -128,6 +128,29 @@ already do that.
 transaction on the `DbContext`, save your rows, and then call
 `queue.Using(db.Database.GetWorkhorseConnection()).EnqueueAsync(...)`. The task commits and rolls
 back with your rows. The SDK never commits, rolls back, or closes a connection that you give it.
+`GetWorkhorseConnection()` does not require a current transaction. On an open connection with no
+transaction, the enqueue runs in autocommit, and a later rollback does not remove the task.
+
+If the context uses a retrying execution strategy, such as `EnableRetryOnFailure()`, EF Core
+refuses a transaction that your code begins outside the strategy. The first `SaveChangesAsync` in
+that transaction then throws `InvalidOperationException` before any Workhorse call. Put the whole
+block in
+`db.Database.CreateExecutionStrategy().ExecuteAsync(...)`. The strategy can run the block again,
+so each run first clears the change tracker.
+
+```csharp
+var strategy = db.Database.CreateExecutionStrategy();
+await strategy.ExecuteAsync(async () =>
+{
+    db.ChangeTracker.Clear();
+    await using var transaction = await db.Database.BeginTransactionAsync(cancellationToken);
+    db.Accounts.Add(new Account { Id = id, Email = email });
+    await db.SaveChangesAsync(cancellationToken);
+    await queue.Using(db.Database.GetWorkhorseConnection())
+        .EnqueueAsync("account.created", new { accountId = id }, cancellationToken);
+    await transaction.CommitAsync(cancellationToken);
+});
+```
 
 ## Examples
 

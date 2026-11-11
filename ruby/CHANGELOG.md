@@ -100,6 +100,22 @@ moves the schema to version 95. It adds the two nullable columns and
 `retain_history_v1`. It does not raise the SDK compatibility floor and changes only the exporting
 rows of `cold_export_segment`. Run `workhorse schema migrate`.
 
+### The Active Job adapter checks no result contract
+
+A typed Active Job task whose result contract refuses `null` ran its job body, and then the worker
+failed the attempt, because the adapter handler returns `nil`. Each retry ran the job body again.
+Now the worker does not check the result of an adapter handler against a result contract, as ADR
+0075 and `docs/parity.md` say. The task succeeds, and the job body runs one time (SM-1931). This
+also applies to a default job under the `active_job` task type. A native Ruby handler keeps its
+result check.
+
+### A pool that no worker uses can be collected
+
+All the workers on one pool share one listener and one heartbeat connection. Their registries held
+each pool, so a process that built and dropped many pools kept each of them. Now each registry is
+an `ObjectSpace::WeakMap`. Workers on one live pool still share one listener and one heartbeat, and
+a pool can be collected after its last worker stops (SM-1985).
+
 ## 0.12.0 — 2026-11-07
 
 The npm packages, Python distribution, Go module, Rust crate, Ruby gem, JVM artifacts, and .NET

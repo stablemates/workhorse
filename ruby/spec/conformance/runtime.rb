@@ -106,6 +106,7 @@ module Conformance
       when "json-round-trip" then json_round_trip(fixture)
       when "checkpoint-no-value" then checkpoint_no_value(fixture)
       when "oversized-result" then oversized_result(fixture)
+      when "result-contract-failure" then result_contract_failure(fixture)
       when "shutdown-cancellation" then shutdown_cancellation(fixture)
       when "heartbeat-failure" then heartbeat_failure(fixture)
       when "heartbeat-busy" then heartbeat_busy(fixture)
@@ -1087,6 +1088,38 @@ module Conformance
         expected = fixture.fetch("expectedFitting")
         check(fitting.state.to_s == expected["state"] && fitting.current_attempt == expected["attempt"],
           "the fitting task is #{fitting.state}/#{fitting.current_attempt}: #{Matcher.render(fitting.error)}")
+      end
+    end
+
+    # The runner syncs the result contract, and the handler returns its payload. A payload that the
+    # result schema refuses fails each attempt through the retry policy.
+    def result_contract_failure(fixture)
+      name = queue_name(fixture)
+      value("SELECT workhorse.sync_contract_definitions_v1($1::jsonb)::text", JSON.generate([fixture.fetch("contract")]))
+      admin = W::Admin.new(@connection)
+      task_id = queue.enqueue(fixture["taskType"], fixture["rejectedResult"], queue: name,
+        max_attempts: fixture["maxAttempts"], retry_policy: {"type" => "fixed", "delayMs" => 0}).task_id
+      settled = fixture.fetch("expectedSettled")
+      error_name = fixture.dig("expectedErrorNames", "ruby")
+      with_pool do |pool|
+        subject = worker(pool, fixture).handle(fixture["taskType"]) { |payload| payload }
+        fixture["maxAttempts"].times do
+          break if admin.get_task(task_id).state.to_s == settled["state"]
+          check(subject.run_once == true, "the worker did not run the rejected task")
+        end
+        task = admin.get_task(task_id)
+        check(task.state.to_s == settled["state"] && task.current_attempt == settled["attempt"] &&
+          task.error&.fetch("name", nil) == error_name,
+          "the rejected task is #{task.state}/#{task.current_attempt} with error #{Matcher.render(task.error)}, " \
+          "want #{settled["state"]}/#{settled["attempt"]} with #{error_name}")
+        accepted_id = queue.enqueue(fixture["taskType"], fixture["acceptedResult"], queue: name).task_id
+        check(subject.run_once == true, "the worker did not run the accepted task")
+        accepted = admin.get_task(accepted_id)
+        expected = fixture.fetch("expectedAccepted")
+        check(accepted.state.to_s == expected["state"] && accepted.current_attempt == expected["attempt"] &&
+          accepted.result == fixture["acceptedResult"],
+          "the accepted task is #{accepted.state}/#{accepted.current_attempt} with result " \
+          "#{Matcher.render(accepted.result)}: #{Matcher.render(accepted.error)}")
       end
     end
 

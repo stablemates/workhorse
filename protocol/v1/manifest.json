@@ -98,6 +98,7 @@
     "maintenance-phase-resilience",
     "terminal-replay-conflict",
     "result-size-limit",
+    "result-contract-failure",
     "shutdown-cancellation-release",
     "shutdown-cancellation-completion",
     "shutdown-cancellation-panic"

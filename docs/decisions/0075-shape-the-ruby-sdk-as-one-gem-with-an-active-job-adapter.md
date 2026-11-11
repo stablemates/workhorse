@@ -1026,3 +1026,25 @@ those SDKs:
 3. `set_queue_history` takes no audit. A `nil` setting keeps its current value. The method returns
    a `QueueHistory` with both settings after the change.
 4. The public SDK operator table in `docs/parity.md` has the row "Queue tier and history controls".
+
+## Amendment: the worker checks no result contract for the adapter (2026-11-11)
+
+The Active Job section says that result contracts stay native-only, because the adapter stores no
+result. Until this amendment, the worker still checked the `nil` that an adapter handler returns.
+`Queue#sync_contracts` stamps a contract version on a task whose type has a contract. Thus a typed
+job whose result schema refuses `null` ran its job body and then failed the attempt. Each retry ran
+the job body again, until the task failed (SM-1931).
+
+The rule is now explicit:
+
+1. The worker does not check the result of an adapter handler against a result contract. This
+   applies to the `active_job` task type and to each typed task type that
+   `Stablemates::Workhorse::ActiveJob.handle` registers.
+2. A payload contract still applies to a typed job at enqueue.
+3. A native Ruby handler keeps its result check.
+4. The worker still checks that the result can be stored and that it fits the size limit of the
+   task.
+
+`ActiveJob.handle` registers each handler as a `Worker::UncheckedResultHandler`, a private `Proc`
+subclass, and `run_handler` skips `validate_result` for it. No public method changes.
+`docs/parity.md` states the rule in the Active Job reachability section.
