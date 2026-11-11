@@ -1,5 +1,7 @@
 # frozen_string_literal: true
 
+require "monitor"
+
 module Stablemates
   module Workhorse
     # Runs protocol statements on the connection an executor yields. Internal to the SDK.
@@ -19,9 +21,16 @@ module Stablemates
       private_constant :Connection
 
       STRINGS = PG::TypeMapAllStrings.new
+      # One reentrant lock for each connection. A dashboard read holds it for its whole read-only
+      # transaction, and every statement takes it, so a statement of another thread cannot run
+      # inside that transaction when several threads share one connection.
+      LOCKS = ObjectSpace::WeakMap.new
+      LOCKS_GUARD = Mutex.new
       # Times one fenced write is sent at most when PostgreSQL rolls it back as a deadlock victim.
       FENCED_WRITE_DEADLOCK_ATTEMPTS = 3
-      private_constant :STRINGS, :FENCED_WRITE_DEADLOCK_ATTEMPTS
+      private_constant :STRINGS, :FENCED_WRITE_DEADLOCK_ATTEMPTS, :LOCKS, :LOCKS_GUARD
+
+      def self.lock_for(connection) = LOCKS_GUARD.synchronize { LOCKS[connection] ||= Monitor.new }
 
       def self.for(executor)
         case executor
@@ -41,29 +50,46 @@ module Stablemates
         @source = source
       end
 
+      # Yields one PG::Connection of the source, for several statements on the same connection, and
+      # holds the lock of that connection while the block runs. If the block fails and leaves the connection unable to run another statement, the pool discards
+      # it, as +rows+ does.
+      def with_connection
+        @source.with do |connection|
+          Executor.lock_for(connection).synchronize { yield connection }
+        rescue => e
+          discard if Executor.unusable?(connection, e)
+          raise
+        end
+      end
+
       # The rows +sql+ returns, each a Hash of column name to text or nil. Every parameter is a
       # String or nil the caller already encoded. +params+ can also be a callable that returns
       # them. It runs after the checkout, immediately before the statement, so it sees the state
       # at send time. It can raise to send nothing.
       def rows(sql, params = [])
         @source.with do |connection|
-          params = params.call if params.respond_to?(:call)
-          result = begin
-            connection.exec_params(sql, params, 0, STRINGS)
-          rescue PG::Error => e
-            discard if Executor.unusable?(connection, e)
-            raise
-          end
-          begin
-            result.type_map = STRINGS
-            result.to_a
-          ensure
-            result.clear
-          end
+          Executor.lock_for(connection).synchronize { exec_rows(connection, sql, params) }
         end
       rescue PG::Error => e
         raise Executor.translate(e)
       end
+
+      def exec_rows(connection, sql, params)
+        params = params.call if params.respond_to?(:call)
+        result = begin
+          connection.exec_params(sql, params, 0, STRINGS)
+        rescue PG::Error => e
+          discard if Executor.unusable?(connection, e)
+          raise
+        end
+        begin
+          result.type_map = STRINGS
+          result.to_a
+        ensure
+          result.clear
+        end
+      end
+      private :exec_rows
 
       # Marks the checked-out connection for discard, so the pool builds a fresh one. The pool
       # closes it when the outermost checkout ends, never while a caller's block still holds it. A

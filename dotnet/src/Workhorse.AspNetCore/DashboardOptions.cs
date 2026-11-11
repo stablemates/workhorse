@@ -10,7 +10,10 @@ namespace Workhorse.AspNetCore;
 /// </summary>
 public sealed class DashboardOptions
 {
-    /// <summary>The database. Each procedure call uses one connection from it and opens no transaction.</summary>
+    /// <summary>
+    /// The database. Each procedure call uses one connection from it. A control runs in autocommit,
+    /// and a read runs in its own read-only transaction (see <see cref="StatementTimeout"/>).
+    /// </summary>
     public required NpgsqlDataSource DataSource { get; init; }
 
     /// <summary>
@@ -57,6 +60,21 @@ public sealed class DashboardOptions
     /// already checks <c>Host</c>, for example with the host filtering middleware.
     /// </summary>
     public IReadOnlyList<string> AllowedHosts { get; init; } = [];
+
+    /// <summary>
+    /// How long one dashboard read can run. The default is 15 seconds, the
+    /// <c>DASHBOARD_STATEMENT_TIMEOUT_MS</c> default of the TypeScript host.
+    /// </summary>
+    /// <remarks>
+    /// Each read runs in its own read-only transaction, and PostgreSQL cancels a read that runs
+    /// longer. The procedure then answers the <c>TIMEOUT</c> RPC error with status 408. The
+    /// <c>CommandTimeout</c> of the data source still applies to each statement, and Npgsql stops a
+    /// read when that client limit ends first; the procedure then answers 500. Keep the command
+    /// timeout of <see cref="DataSource"/> above this value, or at 0 for no client limit.
+    /// <c>MapWorkhorseDashboard</c> throws <see cref="ArgumentOutOfRangeException"/> for a value
+    /// under 1 millisecond.
+    /// </remarks>
+    public TimeSpan StatementTimeout { get; init; } = TimeSpan.FromSeconds(15);
 
     /// <summary>Procedures that the host adds or replaces, by name.</summary>
     public IReadOnlyDictionary<string, DashboardProcedure> Procedures { get; init; } = new Dictionary<string, DashboardProcedure>();

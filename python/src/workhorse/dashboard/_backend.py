@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import contextlib
 import json
 import threading
 import time
@@ -7,6 +8,8 @@ from collections.abc import Callable, Mapping, Sequence
 from datetime import UTC, datetime
 from decimal import Decimal
 from typing import cast
+
+from psycopg.pq import TransactionStatus
 
 from .._drivers import SyncExecutor
 from .._statements import DriverStatement
@@ -34,6 +37,73 @@ _REFUSED_TIER_STATUS = {
 }
 
 
+# How long one dashboard read can run before PostgreSQL cancels it, in milliseconds. It is the
+# DASHBOARD_STATEMENT_TIMEOUT_MS default of the TypeScript host.
+DASHBOARD_STATEMENT_TIMEOUT_MS = 15_000
+# The SQLSTATE of a statement that PostgreSQL cancels for its statement_timeout.
+_QUERY_CANCELED = "57014"
+_BEGIN_READ_ONLY = DriverStatement(psycopg="BEGIN READ ONLY", asyncpg="BEGIN READ ONLY")
+_SET_STATEMENT_TIMEOUT = DriverStatement(
+    psycopg="SELECT set_config('statement_timeout', %s, true)",
+    asyncpg="SELECT set_config('statement_timeout', $1, true)",
+)
+_COMMIT = DriverStatement(psycopg="COMMIT", asyncpg="COMMIT")
+_ROLLBACK = DriverStatement(psycopg="ROLLBACK", asyncpg="ROLLBACK")
+
+
+def _bounded_rows(
+    executor: SyncExecutor,
+    timeout_ms: int,
+    statement: DriverStatement,
+    parameters: Sequence[object],
+) -> list[Mapping[str, object]]:
+    """Run one read under a transaction-local statement_timeout when the host owns the transaction.
+
+    PostgreSQL arms the statement timer when a statement starts, so the bound must be set before
+    the read and not inside it. The setting ends with the transaction, so the caller's connection
+    keeps no session state.
+
+    If the connection is idle, the host opens its own read-only transaction with the bound and
+    ends it. If the connection is inside a transaction of the caller, the read runs inside that
+    transaction with no bound, and the host commits nothing and rolls nothing back: a nested BEGIN
+    there starts no new transaction, and a local setting would stay in the caller's transaction.
+    The host ends each transaction of its own before the read returns, and it runs one procedure at
+    a time on the connection, so a transaction that is open when a read starts is the caller's.
+    A read that PostgreSQL cancels answers TIMEOUT on both paths.
+    """
+    connection = executor.connection
+    status = getattr(getattr(connection, "info", None), "transaction_status", None)
+    try:
+        # The host owns the transaction only when the driver reports an idle connection. A state
+        # that it cannot read can hide a transaction of the caller.
+        if status != TransactionStatus.IDLE:
+            return executor.rows(statement, parameters)
+        return _owned_read(executor, timeout_ms, statement, parameters)
+    except Exception as error:
+        if getattr(error, "sqlstate", None) == _QUERY_CANCELED:
+            raise DashboardRPCError(408, "TIMEOUT", "This read exceeded its time bound") from error
+        raise
+
+
+def _owned_read(
+    executor: SyncExecutor,
+    timeout_ms: int,
+    statement: DriverStatement,
+    parameters: Sequence[object],
+) -> list[Mapping[str, object]]:
+    executor.command(_BEGIN_READ_ONLY)
+    try:
+        executor.rows(_SET_STATEMENT_TIMEOUT, (str(timeout_ms),))
+        rows = executor.rows(statement, parameters)
+        executor.command(_COMMIT)
+    except BaseException:
+        # If the connection is broken, the error of the read is the one to report.
+        with contextlib.suppress(Exception):
+            executor.command(_ROLLBACK)
+        raise
+    return rows
+
+
 def _statement(sql: str) -> DriverStatement:
     return DriverStatement(psycopg=sql, asyncpg=sql)
 
@@ -59,8 +129,10 @@ class DashboardBackend:
         configured_workers: Sequence[str],
         maintenance_loops: Mapping[str, int],
         read_only: bool,
+        statement_timeout_ms: int = DASHBOARD_STATEMENT_TIMEOUT_MS,
     ) -> None:
         self._executor = executor
+        self._statement_timeout_ms = statement_timeout_ms
         self._admin = Admin._from_executor(executor)
         self._environment = environment
         self._configured_workers = tuple(configured_workers)
@@ -110,9 +182,20 @@ class DashboardBackend:
         }
 
     def _rows(self, sql: str, parameters: Sequence[object] = ()) -> list[Mapping[str, object]]:
+        """Run one mutation statement on the caller's connection, with no read bound."""
         return self._executor.rows(_statement(sql), parameters)
 
+    def _read_rows(self, sql: str, parameters: Sequence[object] = ()) -> list[Mapping[str, object]]:
+        """Run one read statement under the statement timeout (see ``_bounded_rows``)."""
+        return _bounded_rows(
+            self._executor, self._statement_timeout_ms, _statement(sql), parameters
+        )
+
     def _json_result(self, sql: str, parameters: Sequence[object] = ()) -> object:
+        value = self._read_rows(sql, parameters)[0]["result"]
+        return _iso(json.loads(value) if isinstance(value, str | bytes) else value)
+
+    def _mutation_json_result(self, sql: str, parameters: Sequence[object] = ()) -> object:
         value = self._rows(sql, parameters)[0]["result"]
         return _iso(json.loads(value) if isinstance(value, str | bytes) else value)
 
@@ -129,7 +212,7 @@ class DashboardBackend:
             now = time.monotonic()
             if self._health is not None and self._health[0] > now:
                 return self._health[1]
-            value = self._rows("SELECT workhorse.queue_health_v1() AS result")[0]["result"]
+            value = self._read_rows("SELECT workhorse.queue_health_v1() AS result")[0]["result"]
             document = json.loads(value) if isinstance(value, str | bytes) else value
             self._health = (time.monotonic() + QUEUE_HEALTH_TTL, document)
             return document
@@ -170,7 +253,7 @@ class DashboardBackend:
         )
 
     def activity(self, input: object, _actor: str) -> object:
-        value = self._rows(
+        value = self._read_rows(
             "SELECT workhorse.dashboard_activity_v1(%s::jsonb) AS result",
             (json.dumps(input),),
         )[0]["result"]
@@ -199,7 +282,7 @@ class DashboardBackend:
         )
 
     def human_waits(self, _input: object, _actor: str) -> object:
-        value = self._rows(
+        value = self._read_rows(
             "SELECT workhorse.dashboard_human_waits_v1(%s::jsonb) AS result",
             (
                 json.dumps(
@@ -214,14 +297,14 @@ class DashboardBackend:
         return _iso(json.loads(value) if isinstance(value, str | bytes) else value)
 
     def events(self, input: object, _actor: str) -> object:
-        value = self._rows(
+        value = self._read_rows(
             "SELECT workhorse.dashboard_events_v1(%s::jsonb) AS result",
             (json.dumps(input),),
         )[0]["result"]
         return _iso(json.loads(value) if isinstance(value, str | bytes) else value)
 
     def event_detail(self, input: object, _actor: str) -> object:
-        value = self._rows(
+        value = self._read_rows(
             "SELECT workhorse.dashboard_event_detail_v1(%s::jsonb) AS result",
             (json.dumps(input),),
         )[0]["result"]
@@ -231,7 +314,7 @@ class DashboardBackend:
 
     def task_detail(self, input: object, _actor: str) -> object:
         supplied = cast(Mapping[str, object], input)
-        value = self._rows(
+        value = self._read_rows(
             "SELECT workhorse.dashboard_task_detail_v1(%s::jsonb) AS result",
             (
                 json.dumps(
@@ -254,7 +337,7 @@ class DashboardBackend:
         Task detail withholds a value larger than it carries inline and reports its size, so an
         operator opens that one value here.
         """
-        value = self._rows(
+        value = self._read_rows(
             "SELECT workhorse.dashboard_checkpoint_value_v1(%s::jsonb) AS result",
             (json.dumps(input),),
         )[0]["result"]
@@ -268,7 +351,7 @@ class DashboardBackend:
         Task detail withholds either one when it is larger than it carries inline and reports its
         size, so an operator opens that one value here.
         """
-        value = self._rows(
+        value = self._read_rows(
             "SELECT workhorse.dashboard_task_value_v1(%s::jsonb) AS result",
             (json.dumps(input),),
         )[0]["result"]
@@ -277,14 +360,14 @@ class DashboardBackend:
         return _iso(json.loads(value) if isinstance(value, str | bytes) else value)
 
     def settings(self, _input: object, _actor: str) -> object:
-        value = self._rows(
+        value = self._read_rows(
             "SELECT workhorse.dashboard_settings_v1(%s::jsonb) AS result",
             (json.dumps({"writable": not self._read_only, "settingsController": True}),),
         )[0]["result"]
         return _iso(json.loads(value) if isinstance(value, str | bytes) else value)
 
     def system(self, input: object, _actor: str) -> object:
-        value = self._rows(
+        value = self._read_rows(
             "SELECT workhorse.dashboard_system_v1(%s::jsonb) AS result",
             (json.dumps(input),),
         )[0]["result"]
@@ -556,7 +639,7 @@ class DashboardBackend:
             "reason": audit.reason,
             "requestId": audit.request_id,
         }
-        group = self._json_result(_CANCEL_TASK_GROUP_SQL, (json.dumps(request),))
+        group = self._mutation_json_result(_CANCEL_TASK_GROUP_SQL, (json.dumps(request),))
         if group is None:
             raise DashboardRPCError(404, "NOT_FOUND", "Task group not found")
         return group

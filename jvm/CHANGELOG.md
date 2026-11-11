@@ -114,6 +114,18 @@ the source turn autocommit on through the proxy, which committed the open transa
 Now the source unwraps the proxy to its target `DataSource`, as the transaction managers of Spring
 do (SM-1987).
 
+### The embedded dashboard bounds each read and drops undeclared input keys
+
+An operator opened an events page with a wide range, a search string, and an exact count. The read
+ran with no time bound and held one connection of the application pool. Now
+`run.workhorse.dashboard.Dashboard` runs each read in its own read-only transaction with a
+transaction-local `statement_timeout`. The default is 15 seconds, and the new
+`Dashboard.Builder.statementTimeout(Duration)` changes it. A read that PostgreSQL cancels answers
+the `TIMEOUT` RPC error with status 408. The bound applies only when pgjdbc reports an idle
+connection in autocommit. A read on each other connection, such as one inside a caller transaction,
+runs directly with no bound and commits nothing. The filter also drops each input key that the `dashboard/v1` contract
+does not declare, as the TypeScript host does (SM-1966, SM-2000).
+
 ## 0.12.0 — 2026-11-07
 
 The npm packages, Python distribution, Go module, Rust crate, Ruby gem, JVM artifacts, and .NET

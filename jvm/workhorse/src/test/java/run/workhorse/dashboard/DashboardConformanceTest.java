@@ -16,6 +16,7 @@ import java.sql.ResultSet;
 import java.sql.ResultSetMetaData;
 import java.sql.Statement;
 import java.sql.Types;
+import java.time.Duration;
 import java.time.OffsetDateTime;
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -98,7 +99,10 @@ class DashboardConformanceTest {
               .environment((String) Objects.requireNonNull(harness.get("environment")))
               .configuredWorkers(workers)
               .maintenanceLoops(object(harness.get("maintenanceLoops")))
-              .allowedHosts(List.of(hostName));
+              .allowedHosts(List.of(hostName))
+              .statementTimeout(
+                  Duration.ofMillis(
+                      (Long) Objects.requireNonNull(harness.get("statementTimeoutMs"))));
       Queue demo =
           new Queue(source, QueueOptions.builder().defaultQueue("conformance-demo").build());
       Dashboard host =
@@ -139,8 +143,17 @@ class DashboardConformanceTest {
       try (TestServer server = new TestServer("", host);
           TestServer readOnly = new TestServer("", readOnlyHost)) {
         int count = 0;
+        // The scenarios run strictly in order, so a later seed runs after the earlier exchanges.
         for (Object scenario : scenarios.subList(1, scenarios.size())) {
-          for (Object item : (List<?>) Objects.requireNonNull(object(scenario).get("exchanges"))) {
+          if (object(scenario).get("seed") instanceof List<?> steps) {
+            for (Object step : steps) {
+              seed(connection, object(step));
+            }
+          }
+          if (!(object(scenario).get("exchanges") instanceof List<?> items)) {
+            continue;
+          }
+          for (Object item : items) {
             Map<String, @Nullable Object> exchange = object(item);
             exchange(
                 "read-only".equals(exchange.get("mode")) ? readOnly : server, exchange, harness);
@@ -339,6 +352,16 @@ class DashboardConformanceTest {
                     ? Json.write(resolved)
                     : resolved instanceof String text ? text : Json.write(resolved));
       }
+    }
+    if (sql.stripLeading().regionMatches(true, 0, "DO", 0, 2)) {
+      // A DO block returns no rows and takes no parameters.
+      try (var statement = connection.createStatement()) {
+        statement.execute(sql);
+      }
+      Map<String, @Nullable Object> expect = Json.object(step.get("expect"));
+      assertValue(
+          expect == null ? List.of() : expect.get("rows"), List.of(), "seed/" + step.get("id"));
+      return;
     }
     boolean with = sql.stripLeading().regionMatches(true, 0, "WITH", 0, 4);
     String statement =

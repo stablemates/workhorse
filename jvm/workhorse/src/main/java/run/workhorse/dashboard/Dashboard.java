@@ -17,6 +17,7 @@ import java.nio.charset.CharacterCodingException;
 import java.nio.charset.CodingErrorAction;
 import java.nio.charset.StandardCharsets;
 import java.sql.Connection;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
@@ -136,7 +137,8 @@ public final class Dashboard implements Filter {
                 builder.environment,
                 builder.configuredWorkers,
                 builder.maintenanceLoops,
-                builder.readOnly)
+                builder.readOnly,
+                builder.statementTimeout)
             .procedures();
     Map<String, DashboardProcedure> added = new HashMap<>(builder.procedures);
     if (builder.enqueueTest != null) {
@@ -322,6 +324,7 @@ public final class Dashboard implements Filter {
       }
       input = envelope.get("json");
       Validator.validate(procedure, input);
+      input = Validator.declaredOnly(procedure, input);
       Map<String, @Nullable Object> object = Json.object(input);
       if (procedure.equals("enqueueTest")
           && object != null
@@ -713,6 +716,7 @@ public final class Dashboard implements Filter {
     private List<String> allowedHosts = List.of();
     private Map<String, DashboardProcedure> procedures = Map.of();
     private JsonCodec codec = JsonCodec.standard();
+    private Duration statementTimeout = Duration.ofSeconds(15);
 
     private Builder(ConnectionSource connections, DashboardAuthorizer authorize) {
       this.connections = Objects.requireNonNull(connections, "connections");
@@ -798,6 +802,27 @@ public final class Dashboard implements Filter {
     /** Adds or replaces procedures by name. */
     public Builder procedures(Map<String, DashboardProcedure> procedures) {
       this.procedures = Map.copyOf(procedures);
+      return this;
+    }
+
+    /**
+     * How long one dashboard read can run; 15 seconds by default, the {@code
+     * DASHBOARD_STATEMENT_TIMEOUT_MS} default of the TypeScript host.
+     *
+     * <p>A read has the bound only when the host owns its transaction: the source gives a pgjdbc
+     * connection in autocommit, and pgjdbc reports no open transaction. The read then runs in its
+     * own read-only transaction, and PostgreSQL cancels it when it runs longer. The procedure then
+     * answers the {@code TIMEOUT} RPC error with status 408. A read on each other connection, for
+     * example one inside a caller transaction, runs directly with no bound.
+     *
+     * @throws IllegalArgumentException for a timeout under 1 millisecond
+     */
+    public Builder statementTimeout(Duration timeout) {
+      Objects.requireNonNull(timeout, "timeout");
+      if (timeout.compareTo(Duration.ofMillis(1)) < 0) {
+        throw new IllegalArgumentException("statementTimeout must be at least 1 ms: " + timeout);
+      }
+      this.statementTimeout = timeout;
       return this;
     }
 

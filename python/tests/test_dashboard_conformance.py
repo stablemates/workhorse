@@ -9,7 +9,15 @@ from typing import Any, cast
 import psycopg
 import pytest
 from psycopg.rows import dict_row
-from test_protocol_conformance import assert_value, execute_step, read_json, read_pointer, resolve
+from test_protocol_conformance import (
+    assert_value,
+    bind_psycopg,
+    execute_step,
+    normalize,
+    read_json,
+    read_pointer,
+    resolve,
+)
 
 from workhorse.client import Queue
 from workhorse.dashboard import DashboardHost, DashboardPrincipal
@@ -54,6 +62,7 @@ def test_python_dashboard_read_procedures_match_the_shared_contract(database_url
                 configured_workers=tuple(harness["configuredWorkers"]),
                 maintenance_loops=harness["maintenanceLoops"],
                 allowed_hosts=(harness["origin"].removeprefix("http://"),),
+                statement_timeout_ms=harness["statementTimeoutMs"],
                 enqueue_test=lambda input, _actor: {
                     "taskId": Queue(dashboard_connection, default_queue="conformance-demo").enqueue(
                         f"conformance.demo-{cast(dict[str, object], input)['kind']}",
@@ -73,6 +82,7 @@ def test_python_dashboard_read_procedures_match_the_shared_contract(database_url
                 configured_workers=tuple(harness["configuredWorkers"]),
                 maintenance_loops=harness["maintenanceLoops"],
                 allowed_hosts=(harness["origin"].removeprefix("http://"),),
+                statement_timeout_ms=harness["statementTimeoutMs"],
                 read_only=True,
             )
             exchanges = fixture["scenarios"][1]["exchanges"]
@@ -82,8 +92,11 @@ def test_python_dashboard_read_procedures_match_the_shared_contract(database_url
                 assert_value(exchange["expect"]["body"], body, references, exchange["id"])
                 for name, pointer in exchange.get("capture", {}).items():
                     references[name] = read_pointer(body, pointer)
+            # The scenarios run strictly in order, so a later seed runs after the earlier exchanges.
             for scenario in fixture["scenarios"][2:]:
-                for exchange in scenario["exchanges"]:
+                for step in scenario.get("seed", []):
+                    execute_seed_step(connection, scenario["id"], step, references)
+                for exchange in scenario.get("exchanges", []):
                     selected = read_only_host if exchange.get("mode") == "read-only" else host
                     status, body = request(selected, harness["origin"], exchange, references)
                     assert status == exchange["expect"]["status"], (exchange["id"], body)
@@ -177,6 +190,25 @@ def test_python_dashboard_read_procedures_match_the_shared_contract(database_url
             system = system_body["json"]
             assert system["retryStorm"]["buckets"][0]["count"] >= 1
             assert system["retryStorm"]["topTypes"][0]["count"] >= 1
+
+
+def execute_seed_step(
+    connection: psycopg.Connection[dict[str, Any]],
+    scenario: str,
+    step: dict[str, Any],
+    references: dict[str, Any],
+) -> None:
+    """Run one seed step. A statement such as DO returns no result, which counts as no rows."""
+    sql, bound = bind_psycopg(
+        step["sql"], [resolve(value, references) for value in step.get("parameters", [])]
+    )
+    cursor = connection.execute(sql, bound)
+    rows = normalize(cursor.fetchall()) if cursor.description is not None else []
+    assert_value(
+        step.get("expect", {}).get("rows", []), rows, references, f"{scenario}/{step['id']}"
+    )
+    for name, pointer in step.get("capture", {}).items():
+        references[name] = read_pointer(rows, pointer)
 
 
 def request(

@@ -16,7 +16,8 @@ internal delegate Task<string?> BuiltInProcedure(JsonObject input, string actor,
 /// </summary>
 /// <remarks>
 /// Each procedure takes the validated input and the actor. Each statement runs on its own
-/// connection in autocommit, and the backend opens no transaction. Redaction stays in the versioned
+/// connection. A mutation runs in autocommit. A read runs in its own read-only transaction with a
+/// transaction-local <c>statement_timeout</c>. Redaction stays in the versioned
 /// read surface (ADR 0035): the backend reads payloads and results only through the
 /// <c>dashboard_*_v1</c> functions and writes their JSON text unchanged.
 /// </remarks>
@@ -50,10 +51,10 @@ internal sealed class Backend
     private (Task<string> Read, long ExpiresAt)? _health;
 
     internal Backend(NpgsqlDataSource dataSource, string environment, IReadOnlyList<string> configuredWorkers,
-        IReadOnlyDictionary<string, JsonElement> maintenanceLoops, bool readOnly)
+        IReadOnlyDictionary<string, JsonElement> maintenanceLoops, bool readOnly, TimeSpan statementTimeout)
     {
         _dataSource = dataSource;
-        _statements = new Statements(dataSource);
+        _statements = new Statements(dataSource, statementTimeout);
         _queue = new Queue(dataSource);
         _admin = new Admin(dataSource);
         _environment = environment;
@@ -431,21 +432,29 @@ internal sealed class Backend
             ["reason"] = Text(audit, "reason"),
             ["requestId"] = Text(audit, "requestId"),
         };
-        return Found(await SharedAsync("cancelTaskGroup", V1.CancelTaskGroup, request, cancellationToken).ConfigureAwait(false), "Task group not found");
+        return Found(await SharedMutationAsync("cancelTaskGroup", V1.CancelTaskGroup, request, cancellationToken).ConfigureAwait(false), "Task group not found");
     }
 
     // ---------------------------------------------------------------------------------------------
     // Statements
 
+    /// <summary>The <c>result</c> of a catalogue read, under the statement timeout.</summary>
     private Task<string?> ResultAsync(DashboardSqlCatalogue.Statement statement, JsonObject? document, CancellationToken cancellationToken) =>
-        _statements.ResultAsync(
+        _statements.ReadResultAsync(
             statement.Name,
             statement.Sql,
             statement.Arity == 0 ? [] : [Statements.Text(Write(document ?? []))],
             cancellationToken);
 
-    /// <summary>The <c>result</c> of a shared <c>dashboard/v1</c> statement, which takes the input as <c>$1</c>.</summary>
+    /// <summary>
+    /// The <c>result</c> of a shared <c>dashboard/v1</c> read, which takes the input as <c>$1</c>,
+    /// under the statement timeout.
+    /// </summary>
     private Task<string?> SharedAsync(string name, string sql, JsonObject document, CancellationToken cancellationToken) =>
+        _statements.ReadResultAsync(name, sql, [Statements.Text(Write(document))], cancellationToken);
+
+    /// <summary><see cref="SharedAsync"/> for a mutation. It runs in autocommit, with no read bound.</summary>
+    private Task<string?> SharedMutationAsync(string name, string sql, JsonObject document, CancellationToken cancellationToken) =>
         _statements.ResultAsync(name, sql, [Statements.Text(Write(document))], cancellationToken);
 
     /// <summary>The <c>queue_health_v1</c> snapshot, shared for three seconds.</summary>
@@ -477,7 +486,10 @@ internal sealed class Backend
 
     private async Task<string> ReadHealthAsync()
     {
-        var health = await _queue.HealthAsync(CancellationToken.None).ConfigureAwait(false);
+        var queue = _queue;
+        var health = await _statements.ReadAsync(
+            (connection, token) => queue.Using(connection).HealthAsync(token),
+            CancellationToken.None).ConfigureAwait(false);
         return JsonSerializer.Serialize(health.Snapshot);
     }
 

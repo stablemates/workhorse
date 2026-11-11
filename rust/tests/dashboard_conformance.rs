@@ -1,7 +1,8 @@
 //! Execute every `dashboard/v1/conformance.json` exchange through the Rust dashboard service.
 //!
-//! The Go, Python and TypeScript hosts execute the same fixture. The seed steps run first in one
-//! scratch database, then every exchange travels through [`DashboardService`] as an HTTP request.
+//! The Go, Python and TypeScript hosts execute the same fixture. The scenarios run in order in one
+//! scratch database: the seed steps of a scenario run first, then each of its exchanges travels
+//! through [`DashboardService`] as an HTTP request.
 //! A normal host serves the exchanges without a mode; a read-only host serves the `read-only`
 //! ones. Without `DATABASE_URL_TEST` a local run skips and says so on standard error.
 
@@ -58,6 +59,8 @@ fn service(harness: &Value, pool: &Pool, read_only: bool) -> DashboardService<Po
         .collect();
     options.maintenance_loops = Some(harness["maintenanceLoops"].clone());
     options.allowed_hosts = vec![text(harness, "origin").trim_start_matches("http://").to_owned()];
+    options.statement_timeout =
+        std::time::Duration::from_millis(harness["statementTimeoutMs"].as_u64().unwrap());
     if !read_only {
         options.procedures = extensions(pool);
     }
@@ -187,17 +190,16 @@ async fn dashboard_satisfies_every_shared_http_scenario() {
     let harness = &fixture["harness"];
     let scenarios = fixture["scenarios"].as_array().unwrap();
     let mut references = References::new();
-    for scenario in scenarios {
-        for step in scenario.get("seed").and_then(Value::as_array).into_iter().flatten() {
-            seed(&pool, &text(scenario, "id"), step, &mut references).await;
-        }
-    }
-
     let host = service(harness, &pool, false);
     let read_only_host = service(harness, &pool, true);
     let mut failures = Vec::new();
     let mut executed = 0;
+    // The scenarios run strictly in order. A later seed can change state that an earlier
+    // exchange reads, such as the slow read that the read-timeout scenario installs.
     for scenario in scenarios {
+        for step in scenario.get("seed").and_then(Value::as_array).into_iter().flatten() {
+            seed(&pool, &text(scenario, "id"), step, &mut references).await;
+        }
         for item in scenario.get("exchanges").and_then(Value::as_array).into_iter().flatten() {
             executed += 1;
             let location = format!("{}/{}", text(scenario, "id"), text(item, "id"));

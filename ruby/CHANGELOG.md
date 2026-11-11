@@ -116,6 +116,17 @@ each pool, so a process that built and dropped many pools kept each of them. Now
 an `ObjectSpace::WeakMap`. Workers on one live pool still share one listener and one heartbeat, and
 a pool can be collected after its last worker stops (SM-1985).
 
+### The embedded dashboard bounds each read and drops undeclared input keys
+
+An operator opened an events page with a wide range, a search string, and an exact count. The read
+ran with no time bound and held one connection. Now `Stablemates::Workhorse::Dashboard` runs each
+read in its own read-only transaction with a transaction-local `statement_timeout`. The default is
+15,000 ms, and the new `statement_timeout_ms:` keyword changes it. A read that PostgreSQL cancels
+answers the `TIMEOUT` RPC error with status 408. A read on a connection inside a caller transaction
+has no bound. Each statement and each read takes a lock of its connection, so threads that share
+one connection cannot run a statement inside the read transaction of another thread. The dashboard also drops each input key that the `dashboard/v1` contract does not
+declare, as the TypeScript host does (SM-1966, SM-2000).
+
 ## 0.12.0 — 2026-11-07
 
 The npm packages, Python distribution, Go module, Rust crate, Ruby gem, JVM artifacts, and .NET

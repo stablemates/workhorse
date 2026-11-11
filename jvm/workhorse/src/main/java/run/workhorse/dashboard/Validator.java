@@ -2,6 +2,8 @@ package run.workhorse.dashboard;
 
 import java.math.BigDecimal;
 import java.math.BigInteger;
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -52,6 +54,74 @@ final class Validator {
       return;
     }
     check(schema, schema, value, "$");
+  }
+
+  /**
+   * The valid input of one procedure without the object keys that its request schema does not
+   * declare, as the TypeScript host's schema parse drops them.
+   *
+   * <p>Each SQL procedure reads its input document by key. A key that the contract does not
+   * declare, such as a health document in a system read, must not reach SQL. An object schema with
+   * {@code additionalProperties}, such as a signal payload, is free JSON and keeps every key.
+   */
+  static @Nullable Object declaredOnly(String procedure, @Nullable Object value) {
+    Map<String, @Nullable Object> schema = Json.object(SCHEMAS.get(procedure));
+    return schema == null ? value : declared(schema, schema, value);
+  }
+
+  private static @Nullable Object declared(
+      Map<String, @Nullable Object> schema,
+      Map<String, @Nullable Object> root,
+      @Nullable Object value) {
+    if (schema.get("$ref") instanceof String reference) {
+      return declared(definition(root, reference, "$"), root, value);
+    }
+    if (schema.get("anyOf") instanceof List<?> branches) {
+      // The first branch that accepts the value owns it, as in anyOf.
+      for (Object raw : branches) {
+        Map<String, @Nullable Object> branch = Json.object(raw);
+        if (branch == null) {
+          continue;
+        }
+        try {
+          check(branch, root, value, "$");
+        } catch (InputValidationException rejected) {
+          continue;
+        }
+        return declared(branch, root, value);
+      }
+      return value;
+    }
+    Map<String, @Nullable Object> object = Json.object(value);
+    if (object != null) {
+      Map<String, @Nullable Object> kept = new LinkedHashMap<>();
+      Map<String, @Nullable Object> additional = Json.object(schema.get("additionalProperties"));
+      if (additional != null) {
+        object.forEach((name, child) -> kept.put(name, declared(additional, root, child)));
+        return kept;
+      }
+      Map<String, @Nullable Object> properties = Json.object(schema.get("properties"));
+      if (properties == null) {
+        return value;
+      }
+      object.forEach(
+          (name, child) -> {
+            Map<String, @Nullable Object> property = Json.object(properties.get(name));
+            if (property != null) {
+              kept.put(name, declared(property, root, child));
+            }
+          });
+      return kept;
+    }
+    Map<String, @Nullable Object> items = Json.object(schema.get("items"));
+    if (value instanceof List<?> list && items != null) {
+      List<@Nullable Object> kept = new ArrayList<>(list.size());
+      for (Object item : list) {
+        kept.add(declared(items, root, item));
+      }
+      return kept;
+    }
+    return value;
   }
 
   private static void check(

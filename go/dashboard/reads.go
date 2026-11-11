@@ -53,7 +53,7 @@ func (service *backend) events(ctx context.Context, input any, _ string) (any, e
 }
 
 func (service *backend) eventDetail(ctx context.Context, input any, _ string) (any, error) {
-	rows, err := service.executor.Query(
+	rows, err := service.readExecutor().Query(
 		ctx,
 		"SELECT workhorse.dashboard_event_detail_v1($1::jsonb) AS result",
 		string(mustJSON(input)),

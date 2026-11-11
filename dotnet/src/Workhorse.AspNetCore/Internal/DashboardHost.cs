@@ -112,6 +112,7 @@ internal sealed partial class DashboardHost
         ArgumentNullException.ThrowIfNull(options.Authorize);
         ArgumentException.ThrowIfNullOrWhiteSpace(options.AuditActor, nameof(options));
         ArgumentNullException.ThrowIfNull(options.Environment);
+        ArgumentOutOfRangeException.ThrowIfLessThan(options.StatementTimeout, TimeSpan.FromMilliseconds(1), nameof(options));
         _basePath = NormalizePath(pattern);
         _allowedHosts = AllowedHosts(options.AllowedHosts ?? []);
         _authorize = options.Authorize;
@@ -126,7 +127,8 @@ internal sealed partial class DashboardHost
             options.Environment,
             [.. options.ConfiguredWorkers ?? []],
             options.MaintenanceLoops ?? new Dictionary<string, JsonElement>(),
-            options.ReadOnly);
+            options.ReadOnly,
+            options.StatementTimeout);
         var procedures = _backend.Procedures();
         var added = new Dictionary<string, DashboardProcedure>(options.Procedures ?? new Dictionary<string, DashboardProcedure>(), StringComparer.Ordinal);
         if (options.EnqueueTest is { } enqueueTest)
@@ -337,6 +339,7 @@ internal sealed partial class DashboardHost
                 ?? throw new InputValidationException("request envelope must be an object");
             input = envelope["json"];
             Validator.Validate(procedure, input);
+            input = Validator.DeclaredOnly(procedure, input);
             var document = input as JsonObject;
             if (procedure == "enqueueTest" && document is not null
                 && document["kind"]?.GetValueKind() == JsonValueKind.String

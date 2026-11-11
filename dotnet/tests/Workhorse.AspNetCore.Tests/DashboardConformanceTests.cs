@@ -49,6 +49,7 @@ public sealed partial class DashboardConformanceTests(ScratchDatabase database) 
             MaintenanceLoops = harness["maintenanceLoops"]!.AsObject()
                 .ToDictionary(loop => loop.Key, loop => JsonSerializer.SerializeToElement(loop.Value), StringComparer.Ordinal),
             AllowedHosts = [new Uri(origin).Authority],
+            StatementTimeout = TimeSpan.FromMilliseconds(harness["statementTimeoutMs"]!.GetValue<long>()),
             EnqueueTest = async (input, _, token) =>
             {
                 var priority = input.TryGetProperty("priority", out var value) ? value.GetInt32() : 0;
@@ -74,9 +75,15 @@ public sealed partial class DashboardConformanceTests(ScratchDatabase database) 
         // Each exchange that fails is reported, so one run names every difference from the contract.
         var count = 0;
         var failures = new List<string>();
+        // The scenarios run strictly in order, so a later seed runs after the earlier exchanges.
         foreach (var scenario in scenarios.Skip(1))
         {
-            foreach (var item in scenario!["exchanges"]!.AsArray())
+            foreach (var step in scenario!["seed"]?.AsArray() ?? [])
+            {
+                await SeedAsync(dataSource, step!.AsObject(), cancellationToken);
+            }
+
+            foreach (var item in scenario["exchanges"]?.AsArray() ?? [])
             {
                 var exchange = item!.AsObject();
                 try
@@ -234,6 +241,15 @@ public sealed partial class DashboardConformanceTests(ScratchDatabase database) 
     private async Task SeedAsync(NpgsqlDataSource dataSource, JsonObject step, CancellationToken cancellationToken)
     {
         var sql = Text(step["sql"]);
+        if (sql.TrimStart().StartsWith("DO", StringComparison.OrdinalIgnoreCase))
+        {
+            // A DO block returns no rows and takes no parameters.
+            await using var block = dataSource.CreateCommand(sql);
+            await block.ExecuteNonQueryAsync(cancellationToken);
+            AssertValue(step["expect"]?["rows"] ?? new JsonArray(), new JsonArray(), $"seed/{Text(step["id"])}");
+            return;
+        }
+
         var with = sql.TrimStart().StartsWith("WITH", StringComparison.OrdinalIgnoreCase);
         var statement = with ? sql : $"WITH step AS ({sql}) SELECT to_jsonb(step)::text AS row FROM step";
         await using var command = dataSource.CreateCommand(statement);

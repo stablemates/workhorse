@@ -89,6 +89,17 @@ moves the schema to version 95. It adds the two nullable columns and
 `retain_history_v1`. It does not raise the SDK compatibility floor and changes only the exporting
 rows of `cold_export_segment`. Run `workhorse schema migrate`.
 
+### The embedded dashboard bounds each read and drops undeclared input keys
+
+An operator opened an events page with a wide range, a search string, and an exact count. The read
+ran with no time bound and held one connection of the application pool. Now the dashboard service
+runs each read in its own read-only transaction with a transaction-local `statement_timeout`. The
+default is `dashboard::DEFAULT_STATEMENT_TIMEOUT`, 15 seconds, and the new
+`DashboardOptions::statement_timeout` field changes it. A read that PostgreSQL cancels answers the
+`TIMEOUT` RPC error with status 408. The bound applies to a `deadpool_postgres::Pool` executor. A
+read through a client or a caller transaction has no bound. The service also drops each input key
+that the `dashboard/v1` contract does not declare, as the TypeScript host does (SM-1966, SM-2000).
+
 ## 0.12.0 — 2026-11-07
 
 The npm packages, Python distribution, Go module, Rust crate, Ruby gem, JVM artifacts, and .NET

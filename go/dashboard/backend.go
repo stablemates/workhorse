@@ -11,7 +11,9 @@ import (
 )
 
 type backend struct {
-	executor          workhorse.Executor
+	executor workhorse.Executor
+	// reader runs each read procedure under the statement timeout. Mutations use executor.
+	reader            workhorse.Executor
 	admin             *workhorse.Admin
 	environment       string
 	configuredWorkers []string
@@ -77,7 +79,25 @@ func (service *backend) procedures() map[string]Procedure {
 // through dashboard_iso_v1, and payloads, results, checkpoints, progress and event
 // details are application or Workhorse values the dashboard must show unchanged.
 func (service *backend) jsonQuery(ctx context.Context, statement string, arguments ...any) (any, error) {
-	rows, err := service.executor.Query(ctx, statement, arguments...)
+	return jsonProjection(ctx, service.readExecutor(), statement, arguments...)
+}
+
+// readExecutor is the bounded reader. A backend that a test builds without one reads through its
+// executor.
+func (service *backend) readExecutor() workhorse.Executor {
+	if service.reader == nil {
+		return service.executor
+	}
+	return service.reader
+}
+
+// mutationJSON is jsonQuery for a mutation. It runs on the caller's executor with no read bound.
+func (service *backend) mutationJSON(ctx context.Context, statement string, arguments ...any) (any, error) {
+	return jsonProjection(ctx, service.executor, statement, arguments...)
+}
+
+func jsonProjection(ctx context.Context, executor workhorse.Executor, statement string, arguments ...any) (any, error) {
+	rows, err := executor.Query(ctx, statement, arguments...)
 	if err != nil {
 		return nil, err
 	}

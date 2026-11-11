@@ -68,8 +68,18 @@ const QUEUE_HEALTH_TTL: Duration = Duration::from_secs(3);
 /// The window `queue_health_v1` applies when a caller supplies none.
 const QUEUE_HEALTH_WINDOW: chrono::Duration = chrono::Duration::hours(24);
 
+/// The SQLSTATE of a statement that PostgreSQL cancels for its `statement_timeout`.
+const QUERY_CANCELED: &str = "57014";
+
+/// The `result` column of the one row of a dashboard statement.
+fn json_result(rows: &[Row]) -> Result<Option<Value>, ProcedureError> {
+    Ok(exactly_one(rows, "dashboard JSON projection")?.try_get("result").map_err(Error::from)?)
+}
+
 pub(super) struct Backend<E: Executor> {
     pub(super) admin: Admin<E>,
+    /// The read bound in milliseconds, as the text that `set_config` takes.
+    statement_timeout_ms: String,
     pub(super) environment: String,
     pub(super) configured_workers: Vec<String>,
     pub(super) read_only: bool,
@@ -84,9 +94,11 @@ impl<E: Executor> Backend<E> {
         configured_workers: Vec<String>,
         read_only: bool,
         maintenance_loops: Value,
+        statement_timeout: Duration,
     ) -> Self {
         Self {
             admin: Admin::new(executor),
+            statement_timeout_ms: statement_timeout.as_millis().to_string(),
             environment,
             configured_workers,
             read_only,
@@ -202,12 +214,39 @@ impl<E: Executor> Backend<E> {
         })
     }
 
+    /// Runs one mutation statement on the caller's executor, with no read bound.
     async fn rows(
         &self,
         statement: &str,
         params: &[&(dyn ToSql + Sync)],
     ) -> Result<Vec<Row>, Error> {
         self.executor().rows(statement, params).await
+    }
+
+    /// Runs one read statement in its own read-only transaction under the statement timeout. A
+    /// read that PostgreSQL cancels answers the `TIMEOUT` RPC error, as the TypeScript host does.
+    ///
+    /// The transaction needs a connection of its own, which only a pool can lend. A read through a
+    /// client or a caller transaction runs directly and with no bound: a `BEGIN` there starts no new
+    /// transaction, so a `COMMIT` would end the caller's, and a local setting stays in it.
+    async fn read_rows(
+        &self,
+        statement: &str,
+        params: &[&(dyn ToSql + Sync)],
+    ) -> Result<Vec<Row>, ProcedureError> {
+        let result = match self.executor().read_pool() {
+            Some(pool) => {
+                crate::queue::bounded_read(pool, &self.statement_timeout_ms, statement, params)
+                    .await
+            }
+            None => self.executor().rows(statement, params).await,
+        };
+        result.map_err(|error| match error.sqlstate() {
+            Some(QUERY_CANCELED) => {
+                RpcError::new(408, "TIMEOUT", "This read exceeded its time bound").into()
+            }
+            _ => error.into(),
+        })
     }
 
     async fn json_query(&self, statement: &str, input: Option<Value>) -> Procedure {
@@ -223,12 +262,10 @@ impl<E: Executor> Backend<E> {
         input: Option<Value>,
     ) -> Result<Option<Value>, ProcedureError> {
         let rows = match &input {
-            Some(input) => self.rows(statement, &[input]).await?,
-            None => self.rows(statement, &[]).await?,
+            Some(input) => self.read_rows(statement, &[input]).await?,
+            None => self.read_rows(statement, &[]).await?,
         };
-        Ok(exactly_one(&rows, "dashboard JSON projection")?
-            .try_get("result")
-            .map_err(Error::from)?)
+        json_result(&rows)
     }
 
     async fn optional_query(
@@ -244,7 +281,7 @@ impl<E: Executor> Backend<E> {
     /// One dashboard page reads the document from several procedures, and composing it is a pass
     /// over live queue state. The lock also serialises concurrent misses, so a burst shares one
     /// read. A failed read is never cached.
-    async fn queue_health(&self) -> Result<Value, Error> {
+    async fn queue_health(&self) -> Result<Value, ProcedureError> {
         let mut cached = self.health.lock().await;
         if let Some((value, expires_at)) = cached.as_ref() {
             if Instant::now() < *expires_at {
@@ -252,8 +289,9 @@ impl<E: Executor> Backend<E> {
             }
         }
         let since = Utc::now() - QUEUE_HEALTH_WINDOW;
-        let rows = self.rows(sql::QUEUE_HEALTH_V1, &[&since]).await?;
-        let value: Value = exactly_one(&rows, "queue_health_v1")?.try_get("snapshot")?;
+        let rows = self.read_rows(sql::QUEUE_HEALTH_V1, &[&since]).await?;
+        let value: Value =
+            exactly_one(&rows, "queue_health_v1")?.try_get("snapshot").map_err(Error::from)?;
         *cached = Some((value.clone(), Instant::now() + QUEUE_HEALTH_TTL));
         Ok(value)
     }
@@ -304,10 +342,12 @@ impl<E: Executor> Backend<E> {
             "reason": audit.reason,
             "requestId": audit.request_id,
         });
-        found(
-            self.optional_query(statements::CANCEL_TASK_GROUP, request).await,
-            "Task group not found",
-        )
+        // The cancel is a mutation, so it runs on the caller's executor with no read bound.
+        let result = match self.rows(statements::CANCEL_TASK_GROUP, &[&request]).await {
+            Ok(rows) => json_result(&rows),
+            Err(error) => Err(error.into()),
+        };
+        found(result, "Task group not found")
     }
 
     async fn set_queue_paused(&self, input: Value, actor: &str) -> Procedure {

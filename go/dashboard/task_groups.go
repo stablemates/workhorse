@@ -29,7 +29,7 @@ func (service *backend) taskGroupDetail(ctx context.Context, input any, _ string
 func (service *backend) cancelTaskGroup(ctx context.Context, input any, actor string) (any, error) {
 	value, _ := document(input)
 	audit := adminAudit(value, actor)
-	result, err := service.jsonQuery(ctx, cancelTaskGroupStatement, string(mustJSON(map[string]any{
+	result, err := service.mutationJSON(ctx, cancelTaskGroupStatement, string(mustJSON(map[string]any{
 		"id": value["id"], "actor": audit.Actor, "reason": audit.Reason, "requestId": audit.RequestID,
 	})))
 	if err != nil {

@@ -105,6 +105,18 @@ its execution strategy, so the first `SaveChangesAsync` in that transaction thro
 state that `GetWorkhorseConnection()` on an open connection with no transaction runs the enqueue in
 autocommit (SM-1971).
 
+### The embedded dashboard bounds each read and drops undeclared input keys
+
+An operator opened an events page with a wide range, a search string, and an exact count. The read
+ran with no time bound and held one connection of the data source. Now `MapWorkhorseDashboard` runs
+each read in its own read-only transaction with a transaction-local `statement_timeout`. The
+default is 15 seconds, and the new `DashboardOptions.StatementTimeout` changes it. A read that
+PostgreSQL cancels answers the `TIMEOUT` RPC error with status 408. Keep the `CommandTimeout` of
+the data source above the bound, because a shorter client limit stops the read first. The backend
+also drops each
+input key that the `dashboard/v1` contract does not declare, as the TypeScript host does (SM-1966,
+SM-2000).
+
 ## 0.12.0 — 2026-11-07
 
 The npm packages, Python distribution, Go module, Rust crate, Ruby gem, JVM artifacts, and .NET
