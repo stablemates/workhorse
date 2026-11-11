@@ -1,6 +1,10 @@
 import { readFile } from "node:fs/promises";
 import { describe, expect, it } from "vitest";
-import { errorEnvelope } from "../src/queue/claim-lease-fence.js";
+import {
+  errorEnvelope,
+  errorForTelemetry,
+  UNCONVERTIBLE_THROWN_VALUE_TEXT,
+} from "../src/queue/claim-lease-fence.js";
 
 // `protocol/v1/failures.json` owns the shape PostgreSQL stores for a handler failure. Each SDK
 // runs this table, so an operator grouping a dead letter by name reads the same
@@ -127,6 +131,33 @@ describe("failure envelope", () => {
     });
     const envelope = JSON.stringify(errorEnvelope(error));
     expect(envelope).not.toMatch(/\\u(?:0000|d[89a-f])/i);
+  });
+
+  // SM-1940: String() of such a value threw, and the error stopped the worker before fail_v1.
+  it("records a thrown value whose conversion to text throws", () => {
+    const unconvertible = [
+      {
+        toString() {
+          throw new Error("conversion exploded");
+        },
+      },
+      { toString: () => ({}), valueOf: () => ({}) },
+      Object.create(null) as object,
+      (() => {
+        const { proxy, revoke } = Proxy.revocable({}, {});
+        revoke();
+        return proxy;
+      })(),
+    ];
+    for (const value of unconvertible) {
+      expect(errorForTelemetry(value, false)).toBe(UNCONVERTIBLE_THROWN_VALUE_TEXT);
+      expect(errorEnvelope(value)).toEqual({
+        name: "NonErrorThrown",
+        message: UNCONVERTIBLE_THROWN_VALUE_TEXT,
+        stack: null,
+      });
+      expect(errorForTelemetry(value, true)).toBeInstanceOf(Error);
+    }
   });
 
   it("records a thrown non-error with a null stack", () => {

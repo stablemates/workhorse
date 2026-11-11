@@ -8,6 +8,7 @@ import {
   MAX_EXTERNAL_WAIT_VALUE_BYTES,
 } from "../types.js";
 import { jsonbTextBytes } from "./enqueue-contracts.js";
+import { encodeStoredJson } from "./stored-json.js";
 
 export interface ExternalWaitDeliveryRequest {
   idempotencyKey: string;
@@ -133,10 +134,10 @@ export function validateExternalWaitName(name: string, label: string): void {
 
 // PostgreSQL bounds the value with octet_length(value::jsonb::text). That text puts a space after
 // each `:` and `,`, so it can be longer than the compact JSON. The client measures the same text
-// from the JSON it sends, so a JSON.rawJSON number keeps its scale.
-export function encodeExternalWaitValue(value: Json, label: string): string {
-  const encoded = JSON.stringify(value);
-  if (encoded === undefined) throw new TypeError(`${label} must be JSON serializable`);
+// from the JSON it sends, so a JSON.rawJSON number keeps its scale. `owner` names the task or the
+// task type in the message of a value that JSON cannot store as given.
+export function encodeExternalWaitValue(value: Json, label: string, owner?: string): string {
+  const encoded = encodeStoredJson(value, owner === undefined ? label : `${label} of ${owner}`);
   if (jsonbTextBytes(encoded) > MAX_EXTERNAL_WAIT_VALUE_BYTES) {
     throw new RangeError(`${label} must be at most ${MAX_EXTERNAL_WAIT_VALUE_BYTES} bytes`);
   }

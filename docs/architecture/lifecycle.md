@@ -1269,6 +1269,12 @@ Two logs cover batches, without payloads or task IDs:
   the process, and the other five SDKs abandon each handler that still runs.
   [ADR 0116](../decisions/0116-give-back-a-task-at-the-end-of-the-shutdown-grace-in-every-sdk.md)
   records this rule, and [Parity](../parity.md) states the defaults.
+- In TypeScript, a `run()` or `runOnce()` call is active from the call until its promise settles,
+  also while it waits for an earlier call. A `stop()` during an active call ends each active call.
+  A `stop()` when no call is active sets `stopBeforeNextCall`. The next `run()` or `runOnce()` call
+  clears it and settles at once, with no registration, no maintenance offer, and no claim: `run()`
+  resolves, and `runOnce()` resolves `false`. The call after it starts normally
+  ([ADR 0120](../decisions/0120-let-a-stop-before-a-typescript-worker-call-end-the-next-call.md)).
 
 A worker has two pause sources, and either one stops claims:
 

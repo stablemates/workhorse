@@ -19,6 +19,7 @@ import type { EnqueueContractsModule } from "./enqueue-contracts.js";
 import {
   executionTimeoutValue,
   maxAttemptsValue,
+  serializedRequest,
   TaskContractValidationError,
   TaskValueSizeLimitError,
   validateEnqueueOptions,
@@ -183,29 +184,36 @@ export class ChildTasksModule extends QueueModule {
     options: ChildTaskOptions,
     version?: string | null,
     storedQueue?: string,
-  ): Promise<Record<string, unknown>> {
+  ): Promise<string> {
     validateChildOptions(options);
-    const acceptance = await this.enqueueContracts.taskAcceptance(type, payload, version);
-    return {
-      // A request with no queue goes to the queue of the parent task. A replay keeps the queue of
-      // the stored child, so a child created before that rule does not conflict.
-      queue: options.queue ?? storedQueue ?? parent.queue,
+    const { acceptance, serializedPayload } = await this.enqueueContracts.taskAcceptance(
       type,
       payload,
-      priority: validateTaskPriority(options.priority),
-      ...acceptance,
-      ...(parent.traceContext === null ? {} : { traceContext: parent.traceContext }),
-      ...(options.runAt === undefined ? {} : { runAt: options.runAt.toISOString() }),
-      deadline: options.deadline?.toISOString() ?? null,
-      concurrencyKey: options.concurrencyKey ?? null,
-      budget: options.budget ?? null,
-      executionTimeoutMs: executionTimeoutValue(options.executionTimeoutMs),
-      maxAttempts: maxAttemptsValue(options.maxAttempts),
-      retryPolicy: options.retryPolicy ?? null,
-      prerequisiteTaskId: null,
-      dependencies: null,
-      tags: options.tags ?? [],
-    };
+      version,
+    );
+    // The statement carries the payload text that passed the checks, not a second encoding.
+    return serializedRequest(
+      {
+        // A request with no queue goes to the queue of the parent task. A replay keeps the queue of
+        // the stored child, so a child created before that rule does not conflict.
+        queue: options.queue ?? storedQueue ?? parent.queue,
+        type,
+        priority: validateTaskPriority(options.priority),
+        ...acceptance,
+        ...(parent.traceContext === null ? {} : { traceContext: parent.traceContext }),
+        ...(options.runAt === undefined ? {} : { runAt: options.runAt.toISOString() }),
+        deadline: options.deadline?.toISOString() ?? null,
+        concurrencyKey: options.concurrencyKey ?? null,
+        budget: options.budget ?? null,
+        executionTimeoutMs: executionTimeoutValue(options.executionTimeoutMs),
+        maxAttempts: maxAttemptsValue(options.maxAttempts),
+        retryPolicy: options.retryPolicy ?? null,
+        prerequisiteTaskId: null,
+        dependencies: null,
+        tags: options.tags ?? [],
+      },
+      serializedPayload,
+    );
   }
 
   private async acceptedChildVersions(parentTaskId: string): Promise<ChildVersions> {
@@ -311,15 +319,13 @@ export class ChildTasksModule extends QueueModule {
   ): Promise<CreateChildResult<TResult>> {
     this.validateChild(workerId, name, options);
     const build: BuildChildRequest = async (versions) =>
-      JSON.stringify(
-        await this.childRequest(
-          parent,
-          type,
-          payload,
-          options,
-          childVersion(versions, name, type),
-          childQueue(versions, name, type),
-        ),
+      this.childRequest(
+        parent,
+        type,
+        payload,
+        options,
+        childVersion(versions, name, type),
+        childQueue(versions, name, type),
       );
     const request = await this.initialChildRequest(parent.id, build);
     const write = async (encoded: string): Promise<CreateChildRow> => {
@@ -375,22 +381,22 @@ export class ChildTasksModule extends QueueModule {
     mode: "settled" | "all_success",
   ): Promise<CreateChildrenResult<TResult>> {
     this.validateChildren(parent, workerId, children);
-    const build: BuildChildRequest = async (versions) =>
-      JSON.stringify(
-        await Promise.all(
-          children.map(async ({ name, type, payload, options = {} }) => ({
-            name,
-            request: await this.childRequest(
+    const build: BuildChildRequest = async (versions) => {
+      const members = await Promise.all(
+        children.map(
+          async ({ name, type, payload, options = {} }) =>
+            `{"name":${JSON.stringify(name)},"request":${await this.childRequest(
               parent,
               type,
               payload,
               options,
               childVersion(versions, name, type),
               childQueue(versions, name, type),
-            ),
-          })),
+            )}}`,
         ),
       );
+      return `[${members.join(",")}]`;
+    };
     const request = await this.initialChildRequest(parent.id, build);
     const write = async (encoded: string): Promise<CreateChildrenRow> => {
       const result = await queryFencedWrite<CreateChildrenRow>(

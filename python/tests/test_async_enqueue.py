@@ -181,3 +181,16 @@ async def test_refuses_101_prerequisite_task_ids_before_any_statement() -> None:
     with pytest.raises(ValueError, match="dependencies accepts at most 100 prerequisite task IDs"):
         await AsyncQueue.from_asyncpg(connection).enqueue("dependent", {}, options)
     assert connection.calls == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("payload", [{"amount": float("nan")}, {"totals": {1: "a", "1": "b"}}])
+async def test_async_enqueue_refuses_a_payload_that_json_cannot_store_before_any_statement(
+    payload: dict[object, object],
+) -> None:
+    # SM-1989: the check runs before the compatibility query, so no statement goes out.
+    connection = AsyncpgConnection()
+
+    with pytest.raises(ValueError, match=r"Payload of task type invoice\.send must"):
+        await AsyncQueue(connection).enqueue("invoice.send", payload)  # type: ignore[arg-type]
+    assert connection.calls == []

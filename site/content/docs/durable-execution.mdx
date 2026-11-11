@@ -117,13 +117,13 @@ checkpoint makes a repeat rare, and the provider key makes a repeat safe.
 <details>
 <summary>Reference: checkpoints</summary>
 
-| SDK        | Call                                  | Operation                                                    |
-| ---------- | ------------------------------------- | ------------------------------------------------------------ |
-| TypeScript | `ctx.checkpoint(name, operation)`     | A function that returns a JSON value or a promise of one     |
-| Python     | `context.checkpoint(name, operation)` | A regular callable in the synchronous worker                 |
-| Go         | `handler.Checkpoint(name, operation)` | A function that returns a JSON value and an error            |
-| Rust       | `context.checkpoint(name, operation)` | A closure that returns a future of `Result<T, HandlerError>` |
-| Ruby       | `context.checkpoint(name) { … }`      | A block                                                      |
+| SDK        | Call                                  | Operation                                                           |
+| ---------- | ------------------------------------- | ------------------------------------------------------------------- |
+| TypeScript | `ctx.checkpoint(name, operation)`     | A function that returns a JSON value, no value, or a promise of one |
+| Python     | `context.checkpoint(name, operation)` | A regular callable in the synchronous worker                        |
+| Go         | `handler.Checkpoint(name, operation)` | A function that returns a JSON value and an error                   |
+| Rust       | `context.checkpoint(name, operation)` | A closure that returns a future of `Result<T, HandlerError>`        |
+| Ruby       | `context.checkpoint(name) { … }`      | A block                                                             |
 
 - `HandlerContext.checkpoint` reads the stored value before it runs the operation.
 - A replay returns the stored value and does not call the operation again.
@@ -318,6 +318,48 @@ returns or throws, the worker submits the recorded suspension. It ignores the re
 exception of the handler.
 
 More detail: [Task lifecycle: Worker suspension](https://github.com/stablemates/workhorse/blob/main/docs/architecture/lifecycle.md#worker-suspension) and [Schema and SQL protocol: .NET suspension](https://github.com/stablemates/workhorse/blob/main/docs/architecture/schema-and-protocol.md#net-suspension).
+
+</details>
+
+## Return a JSON value or no value from a checkpoint
+
+A checkpoint stores the value that its operation returns. An operation that only causes an effect,
+such as an email, often returns no value.
+
+**Example.** The `welcome` checkpoint calls `mailer.welcome`, which resolves to no value.
+
+1. Worker A runs the operation, and the welcome email goes out.
+2. The operation returns `undefined`, and the checkpoint stores `null`.
+3. The handler fails later in the same attempt, and the retry policy schedules a new attempt.
+4. Worker B reaches the `welcome` checkpoint. The checkpoint returns `null`, and the welcome email
+   does not go out again.
+
+Thus, an operation must return a JSON value or no value. If it returns no value, the checkpoint
+stores `null` and returns `null`. Each SDK does the same with the "no value" of its language. If
+the value holds a number that is not finite, a `Map`, or a `Set`, the checkpoint fails after the
+operation ran. Nothing is stored, so the next attempt runs the operation again.
+
+<details>
+<summary>Reference: checkpoint values</summary>
+
+| SDK              | No value    | Stored value |
+| ---------------- | ----------- | ------------ |
+| TypeScript       | `undefined` | JSON `null`  |
+| Python           | `None`      | JSON `null`  |
+| Go and Ruby      | `nil`       | JSON `null`  |
+| The JVM and .NET | `null`      | JSON `null`  |
+| Rust             | `()`        | JSON `null`  |
+
+- The TypeScript `HandlerContext.checkpoint` has a signature for an operation that returns `void`.
+  That signature returns `Promise<null>`.
+- The TypeScript `Handler` type does not change. A typed handler with no result writes
+  `return null`. A JavaScript handler that returns `undefined` also stores the result `null`.
+- In TypeScript, `encodeStoredJson` throws a `TypeError` for a `NaN` or infinite number, a `Map`,
+  or a `Set` at any depth, before `save_checkpoint_v2`. The error names the task type and the
+  path of the value.
+- An `undefined` property of an object and an `undefined` member of an array keep the JSON rules.
+
+More detail: [Data model: `task_checkpoint`](https://github.com/stablemates/workhorse/blob/main/docs/architecture/data-model.md#task_checkpoint).
 
 </details>
 

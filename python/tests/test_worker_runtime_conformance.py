@@ -79,6 +79,7 @@ SYNC_ONLY_RUNTIME_FIXTURE_KINDS = frozenset(
     {
         "batch",
         "budget-admission-race",
+        "checkpoint-no-value",
         "expiration",
         "heartbeat-cadence",
         "lease-loss",
@@ -167,6 +168,7 @@ def execute_runtime_fixture(
         "release-wait": execute_release_wait_fixture,
         "replay-conflict": execute_replay_conflict_fixture,
         "json-round-trip": execute_json_round_trip_fixture,
+        "checkpoint-no-value": execute_checkpoint_no_value_fixture,
         "oversized-result": execute_oversized_result_fixture,
         "shutdown-cancellation": execute_shutdown_cancellation_fixture,
         "heartbeat-failure": execute_heartbeat_failure_fixture,
@@ -1845,6 +1847,85 @@ def execute_json_round_trip_fixture(
     assert_task_states(connection, {"task": task_id}, {"task": fixture["expectedState"]})
     assert_attempt_outcomes(connection, task_id, [fixture["expectedAttemptOutcome"]])
 
+    # Python has one "no value", None, so both result cases return it.
+    for result_case in fixture["resultCases"]:
+        worker.handle(result_case["taskType"], lambda _payload, _context: None)
+        case_id = Queue(connection).enqueue(
+            result_case["taskType"], {}, EnqueueOptions(queue=queue_name)
+        )
+        assert worker.run_once() is True
+        assert (
+            stored_json_type(connection, "result", case_id)
+            == (result_case["expectedResultJsonType"])
+        )
+        assert_task_states(connection, {"task": case_id}, {"task": fixture["expectedState"]})
+        assert_attempt_outcomes(connection, case_id, [fixture["expectedAttemptOutcome"]])
+
+
+def stored_json_type(connection: psycopg.Connection[Any], value: str, task_id: str) -> str | None:
+    """The jsonb_typeof of a stored value, so that JSON null differs from SQL NULL."""
+    statement = (
+        "SELECT jsonb_typeof(result) FROM workhorse.task_outcome WHERE task_id = %s"
+        if value == "result"
+        else "SELECT jsonb_typeof(checkpoint_value) FROM workhorse.task_checkpoint "
+        "WHERE task_id = %s"
+    )
+    rows = connection.execute(statement, (task_id,)).fetchall()
+    assert len(rows) == 1
+    return rows[0][0]
+
+
+def execute_checkpoint_no_value_fixture(
+    connection: psycopg.Connection[Any], fixture: Mapping[str, Any]
+) -> None:
+    queue_name = runtime_queue(fixture)
+    task_id = Queue(connection).enqueue(
+        fixture["taskType"],
+        {},
+        EnqueueOptions(
+            queue=queue_name,
+            max_attempts=fixture["maxAttempts"],
+            retry_policy={"type": "fixed", "delayMs": 0},
+        ),
+    )
+    operations = 0
+    handler_runs = 0
+    checkpoint_values: list[object] = []
+
+    def operation() -> None:
+        nonlocal operations
+        operations += 1
+
+    def handler(_payload: object, context: HandlerContext) -> dict[str, object]:
+        nonlocal handler_runs
+        handler_runs += 1
+        checkpoint_values.append(context.checkpoint(fixture["checkpointName"], operation))
+        if handler_runs == 1:
+            raise RuntimeError("fail the first attempt after the checkpoint")
+        return {}
+
+    worker = Worker(worker_pool, queue=queue_name, worker_id=f"python-{fixture['id']}").handle(
+        fixture["taskType"], handler
+    )
+    admin = Admin(connection)
+    settled = fixture["expectedSettled"]
+    for _ in range(fixture["maxAttempts"]):
+        snapshot = admin.get_task(task_id)
+        if snapshot is not None and snapshot.state == settled["state"]:
+            break
+        assert worker.run_once() is True
+    assert (operations, handler_runs) == (
+        fixture["expectedCheckpointOperations"],
+        fixture["expectedHandlerRuns"],
+    )
+    assert checkpoint_values == [None] * fixture["expectedHandlerRuns"]
+    assert (
+        stored_json_type(connection, "checkpoint", task_id)
+        == (fixture["expectedCheckpointValueJsonType"])
+    )
+    assert_task_states(connection, {"task": task_id}, {"task": settled})
+    assert_attempt_outcomes(connection, task_id, fixture["expectedAttemptOutcomes"])
+
 
 def execute_oversized_result_fixture(
     connection: psycopg.Connection[Any], fixture: Mapping[str, Any]
@@ -2336,6 +2417,24 @@ async def execute_async_json_round_trip_fixture(
     assert stored[1] == payload
     assert_task_states(connection, {"task": task_id}, {"task": fixture["expectedState"]})
     assert_attempt_outcomes(connection, task_id, [fixture["expectedAttemptOutcome"]])
+
+    # Python has one "no value", None, so both result cases return it.
+    async def no_value(_payload: object, _context: AsyncHandlerContext) -> None:
+        return None
+
+    for result_case in fixture["resultCases"]:
+        case_id = Queue(connection).enqueue(
+            result_case["taskType"], {}, EnqueueOptions(queue=runtime_queue(fixture))
+        )
+        async with async_worker(database_url, fixture) as worker:
+            worker.handle(result_case["taskType"], no_value)
+            assert await returned(worker.run_once()) is True
+        assert (
+            stored_json_type(connection, "result", case_id)
+            == (result_case["expectedResultJsonType"])
+        )
+        assert_task_states(connection, {"task": case_id}, {"task": fixture["expectedState"]})
+        assert_attempt_outcomes(connection, case_id, [fixture["expectedAttemptOutcome"]])
 
 
 async def execute_async_missing_handler_fixture(

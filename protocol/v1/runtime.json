@@ -416,8 +416,33 @@
       "fraction": 1.5,
       "large": 9007199254740991
     },
+    "resultCases": [
+      {
+        "taskType": "protocol.json-round-trip.null-result",
+        "handlerReturns": "null",
+        "expectedResultJsonType": "null"
+      },
+      {
+        "taskType": "protocol.json-round-trip.no-value-result",
+        "handlerReturns": "no-value",
+        "expectedResultJsonType": "null"
+      }
+    ],
     "expectedState": { "state": "succeeded", "attempt": 1 },
     "expectedAttemptOutcome": "succeeded"
+  },
+  {
+    "id": "checkpoint-operation-with-no-value-stores-null-and-runs-once",
+    "kind": "checkpoint-no-value",
+    "covers": ["checkpoint-replay", "json-value-round-trip"],
+    "taskType": "protocol.checkpoint-no-value",
+    "checkpointName": "send-welcome",
+    "maxAttempts": 2,
+    "expectedCheckpointOperations": 1,
+    "expectedHandlerRuns": 2,
+    "expectedCheckpointValueJsonType": "null",
+    "expectedSettled": { "state": "succeeded", "attempt": 2 },
+    "expectedAttemptOutcomes": ["retry", "succeeded"]
   },
   {
     "id": "failed-heartbeat-rounds-keep-the-attempt-running",

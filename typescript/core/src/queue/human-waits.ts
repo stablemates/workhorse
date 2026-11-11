@@ -160,7 +160,7 @@ export class HumanWaitsModule extends QueueModule {
         workerId,
         task.fenceToken.toString(),
         name,
-        encodeExternalWaitValue(context, "Human wait context"),
+        encodeExternalWaitValue(context, "Human wait context", `task type ${task.type}`),
         validateExternalWaitOptions(options),
       ],
     );
@@ -188,7 +188,7 @@ export class HumanWaitsModule extends QueueModule {
       [
         taskId,
         name,
-        encodeExternalWaitValue(result, "Human wait result"),
+        encodeExternalWaitValue(result, "Human wait result", `task ${taskId}`),
         request.idempotencyKey,
         request.requestedBy,
       ],

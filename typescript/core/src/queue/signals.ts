@@ -161,7 +161,7 @@ export class SignalsModule extends QueueModule {
   ): Promise<SignalDeliveryResult<TPayload>> {
     validateExternalWaitName(name, "Signal");
     validateExternalWaitDeliveryRequest(request, "Signal");
-    const encodedPayload = encodeExternalWaitValue(payload, "Signal payload");
+    const encodedPayload = encodeExternalWaitValue(payload, "Signal payload", `task ${taskId}`);
     const result = await this.context.database.query<SendSignalRow>(
       SQL_STATEMENTS["send_signal_v1"],
       [taskId, name, encodedPayload, request.idempotencyKey, request.requestedBy],

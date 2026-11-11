@@ -180,8 +180,48 @@ export function reportHeartbeatStatuses(
   }
 }
 
+/** The text that replaces a thrown value whose conversion to text throws. */
+export const UNCONVERTIBLE_THROWN_VALUE_TEXT = "The thrown value could not be converted to text";
+
+/**
+ * Convert a thrown value to text, and never throw. `String(value)` throws when the `toString` of
+ * the value throws or returns an object, and when the value is a revoked proxy. Then the result is
+ * a fixed text, so the failure of the attempt is still recorded.
+ */
+function thrownValueText(value: unknown): string {
+  try {
+    return String(value);
+  } catch {
+    return UNCONVERTIBLE_THROWN_VALUE_TEXT;
+  }
+}
+
+/**
+ * `value`, or the fixed text of an unconvertible thrown value when `value` is an object whose
+ * prototype cannot be read, such as a revoked proxy. Each instanceof check of such a value throws,
+ * so the settlement of a failure reads it through this function first.
+ */
+export function inspectableThrownValue(value: unknown): unknown {
+  if ((typeof value !== "object" && typeof value !== "function") || value === null) return value;
+  try {
+    Object.getPrototypeOf(value);
+    return value;
+  } catch {
+    return UNCONVERTIBLE_THROWN_VALUE_TEXT;
+  }
+}
+
+// A revoked proxy throws on the instanceof check, so such a value counts as not an Error.
+function isError(value: unknown): value is Error {
+  try {
+    return value instanceof Error;
+  } catch {
+    return false;
+  }
+}
+
 export function errorForTelemetry(error: unknown, redactDetails: boolean): Error | string {
-  if (!redactDetails) return error instanceof Error ? error : String(error);
+  if (!redactDetails) return isError(error) ? error : thrownValueText(error);
   const redacted = new Error(REDACTED_ERROR_MESSAGE);
   redacted.name = REDACTED_ERROR_NAME;
   return redacted;
@@ -193,7 +233,7 @@ export function errorEnvelope(error: unknown, redactDetails = false): Json {
   // produces exactly what PostgreSQL would have produced. Every other envelope carries all three
   // fields, with a null stack when the thrown value supplies none.
   if (redactDetails) return { name: REDACTED_ERROR_NAME, message: REDACTED_ERROR_MESSAGE };
-  if (error instanceof Error) {
+  if (isError(error)) {
     // A wrapped durable replay conflict keeps its name. The message and stack stay the outer ones.
     const name = durableReplayConflict(error)?.name ?? error.name;
     return {
@@ -202,7 +242,7 @@ export function errorEnvelope(error: unknown, redactDetails = false): Json {
       stack: storableText(error.stack ?? null),
     };
   }
-  return { name: NON_ERROR_NAME, message: storableText(String(error)), stack: null };
+  return { name: NON_ERROR_NAME, message: storableText(thrownValueText(error)), stack: null };
 }
 
 /**

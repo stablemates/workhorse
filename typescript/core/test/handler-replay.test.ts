@@ -633,3 +633,48 @@ describe("replayHandler", () => {
     expect(set.problem).toEqual({ reason: "conflict", at: { kind: "child", name: "label" } });
   });
 });
+
+// SM-1969 (ADR 0119): the replay follows the worker for a handler or a checkpoint operation that
+// returns no value.
+// A JavaScript handler can return undefined, although the Handler type requires a value.
+const returnsNoValue: Handler<Order> = async () => undefined as unknown as Json;
+
+describe("a replay of a handler that returns no value", () => {
+  it("reports the result null for a handler that returns undefined", async () => {
+    const report = await replayHandler(returnsNoValue, { orderId: "o-1" }, {});
+    expect(report.outcome).toEqual({ status: "completed", result: null });
+  });
+
+  it("returns a stored null checkpoint and does not run its operation again", async () => {
+    const operation = vi.fn<() => Promise<void>>(async () => {});
+    const seen: unknown[] = [];
+    const handler: Handler<Order> = async (_payload, ctx) => {
+      seen.push(await ctx.checkpoint("welcome", operation));
+      return { sent: true };
+    };
+    const report = await replayHandler(
+      handler,
+      { orderId: "o-1" },
+      {
+        checkpoints: { welcome: { value: null } },
+      },
+    );
+    expect(operation).not.toHaveBeenCalled();
+    expect(seen).toEqual([null]);
+    expect(report.outcome).toEqual({ status: "completed", result: { sent: true } });
+  });
+
+  it("records null for a new checkpoint whose operation returns undefined", async () => {
+    const operation = vi.fn<() => Promise<void>>(async () => {});
+    const seen: unknown[] = [];
+    const handler: Handler<Order> = async (_payload, ctx) => {
+      seen.push(await ctx.checkpoint("welcome", operation));
+      seen.push(await ctx.checkpoint("welcome", operation));
+      return { sent: true };
+    };
+    const report = await replayHandler(handler, { orderId: "o-1" }, {}, { allowNew: ["welcome"] });
+    expect(operation).toHaveBeenCalledTimes(1);
+    expect(seen).toEqual([null, null]);
+    expect(report.outcome).toEqual({ status: "completed", result: { sent: true } });
+  });
+});

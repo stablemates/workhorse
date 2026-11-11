@@ -3572,10 +3572,16 @@ interface HandlerContext<TPayload extends Json = Json> {
   * Return the persisted value when this name already exists. Otherwise run the operation and
   * immutably persist its JSON result under the current fenced lease.
   *
+  * The operation must return a JSON value or no value. If it returns `undefined`, the checkpoint
+  * stores JSON `null` and returns `null`, so a retry does not run the operation again. Each other
+  * value must be JSON: a value that JSON cannot store as given, such as `NaN` or a `Map`, fails
+  * with a `TypeError` after the operation ran, and a retry runs the operation again.
+  *
   * With `options.input`, the checkpoint also stores the fingerprint of the input. A later call
   * whose input has a different fingerprint fails with `CheckpointInputConflictError`.
   */
   checkpoint<TValue extends Json>(name: string, operation: () => Promise<TValue> | TValue, options?: CheckpointOptions): Promise<TValue>;
+  checkpoint(name: string, operation: () => Promise<void> | void, options?: CheckpointOptions): Promise<null>;
   /** Suspend this task without consuming its logical attempt until the relative timer is due. */
   sleep(name: string, durationMs: number): Promise<void>;
   /** Suspend this task without consuming its logical attempt until the absolute target is due. */
@@ -3618,6 +3624,10 @@ interface HandlerReplayReport<TResult extends Json = Json> extends HandlerReplay
   /**
   * `completed` when the handler returned. `suspended` when it reached a stored pending boundary
   * or a new wait or child, where a live task suspends.
+  *
+  * A JavaScript handler that returns `undefined` completes with the result `null`, as on a live
+  * worker (ADR 0119). The `Handler` type requires a value, so a typed handler with no result
+  * returns `null`.
   */
   outcome: {
     status: "completed";
@@ -5550,6 +5560,14 @@ class Worker {
   constructor(queue: WorkerQueueApi | Queue, options?: WorkerOptions);
   handle<TPayload extends Json = Json, TResult extends Json = Json>(type: string, handler: Handler<TPayload, TResult>): this;
   handleBatch<TPayload extends Json = Json, TResult extends Json = Json>(type: string, options: BatchHandlerOptions, handler: BatchHandler<TPayload, TResult>): this;
+  /**
+  * Stops the work of this worker: the worker claims no new task, and the active handlers finish.
+  *
+  * A stop that comes during a `run()` or `runOnce()` call ends only that call, also when the call
+  * still waits to start. The next call starts normally. A stop that comes when no call is active
+  * ends the next `run()` or `runOnce()` call at once, with no claim and no maintenance pass. That
+  * call uses the stop, so the call after it starts normally (ADR 0120).
+  */
   stop(): void;
   /**
   * Effective pause state.
@@ -5570,8 +5588,12 @@ class Worker {
   * Runs maintenance, claims tasks for the free slots once, and waits for those tasks to settle.
   *
   * Returns `true` only if a handler ran. A pass that claimed no task, or that released each task
-  * because no handler is registered for its type, returns `false`. The worker keeps no state
+  * because no handler is registered for its type, returns `false`. The worker keeps no poll wait
   * between calls, so a caller that calls `runOnce()` in a loop must wait after `false`.
+  *
+  * A `stop()` during the call ends the pass before its claim. If a `stop()` came when no call was
+  * active, this call returns `false` at once, with no maintenance pass and no claim, and the next
+  * call starts normally (ADR 0120).
   */
   runOnce(): Promise<boolean>;
   /**
@@ -5582,6 +5604,13 @@ class Worker {
   * reach it keeps claiming and executing exactly as before.
   */
   /** Best-effort removal of this worker's registration once its loop has stopped. */
+  /**
+  * Runs the worker until `stop()` or `signal` ends it, and settles when the stop path ends.
+  *
+  * A `stop()` after this call ends this run, also when the run still waits to start. If a `stop()`
+  * came when no call was active, this call settles at once, with no registration, no maintenance
+  * pass, and no claim. The next call starts normally (ADR 0120).
+  */
   run(signal?: AbortSignal): Promise<void>;
   /**
   * Refresh this worker's registration on its own cadence.

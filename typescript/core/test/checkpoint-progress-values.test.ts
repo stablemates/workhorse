@@ -47,12 +47,30 @@ const nonFinite: Array<[string, unknown]> = [
   ["a nested array element", [1, [2, Number.NaN]]],
 ];
 
+// The end of the message for each value of `nonFinite`: the path and the number that it names.
+function nonFiniteDetail(value: unknown): string {
+  const at = new Map<unknown, string>([
+    [Infinity, "$ is Infinity"],
+    [-Infinity, "$ is -Infinity"],
+  ]);
+  const detail =
+    at.get(value) ??
+    (Number.isNaN(value)
+      ? "$ is NaN"
+      : Array.isArray(value)
+        ? "$[1][1] is NaN"
+        : "$.ratio.value is Infinity");
+  return `must contain only finite numbers, but ${detail}`;
+}
+
 describe("checkpoint and progress values", () => {
   it.each(nonFinite)("rejects a checkpoint holding %s before any statement", async (_, value) => {
     const { queryable, statements } = recordingDatabase();
     await expect(
       new Queue(queryable).saveCheckpoint(task, "worker", "ratio", value as Json),
-    ).rejects.toThrow(new TypeError("Checkpoint value must contain only finite numbers"));
+    ).rejects.toThrow(
+      new TypeError(`Checkpoint ratio of task type noop ${nonFiniteDetail(value)}`),
+    );
     expect(statements).toEqual([]);
   });
 
@@ -60,7 +78,7 @@ describe("checkpoint and progress values", () => {
     const { queryable, statements } = recordingDatabase();
     await expect(
       new Queue(queryable).updateProgress(task, "worker", value as Json),
-    ).rejects.toThrow(new TypeError("Progress value must contain only finite numbers"));
+    ).rejects.toThrow(new TypeError(`Progress of task type noop ${nonFiniteDetail(value)}`));
     expect(statements).toEqual([]);
   });
 });

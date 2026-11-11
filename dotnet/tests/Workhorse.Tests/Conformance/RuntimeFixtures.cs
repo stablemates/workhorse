@@ -164,6 +164,7 @@ internal sealed class RuntimeFixtures : IAsyncDisposable
             "release-wait" => ReleaseWaitAsync(fixture),
             "subscription-recovery" => SubscriptionRecoveryAsync(fixture),
             "json-round-trip" => JsonRoundTripAsync(fixture),
+            "checkpoint-no-value" => CheckpointNoValueAsync(fixture),
             "oversized-result" => OversizedResultAsync(fixture),
             "shutdown-cancellation" => ShutdownCancellationAsync(fixture),
             "heartbeat-failure" => HeartbeatFailureAsync(fixture),
@@ -1793,6 +1794,86 @@ internal sealed class RuntimeFixtures : IAsyncDisposable
         Failure.Check(Exact(result, payload), $"the stored result is {Matcher.Render(result)}");
         await ExpectStateAsync(taskId, Get(fixture, "expectedState"));
         await ExpectOutcomesAsync(taskId, [fixture.GetValueOrDefault("expectedAttemptOutcome")]);
+
+        // C# has two forms: a result of null, and a handler that returns a plain Task.
+        foreach (var item in (List<object?>)fixture["resultCases"]!)
+        {
+            var resultCase = Runner.Object(item, "resultCase");
+            var caseType = Runner.Text(resultCase["taskType"]);
+            var caseId = await EnqueueAsync(caseType, Json.Members(), Options(QueueName(fixture)));
+            await using (var pool = Intercept.Create(_database, Intercept.Hook.None))
+            {
+                await using var subject = NewWorker(pool, fixture);
+                if (Runner.Text(resultCase["handlerReturns"]) == "null")
+                {
+                    subject.Handle<JsonElement, object?>(caseType, (_, _) => Task.FromResult<object?>(null));
+                }
+                else
+                {
+                    subject.Handle<JsonElement>(caseType, (_, _) => Task.CompletedTask);
+                }
+
+                Failure.Check(await subject.RunOnceAsync(), $"the worker did not run the {caseType} task");
+            }
+
+            var resultType = await ValueAsync($"SELECT jsonb_typeof(result) FROM workhorse.task_outcome WHERE task_id = '{caseId}'");
+            Failure.Check(Equals(resultType, resultCase["expectedResultJsonType"]), $"the {caseType} result is stored as JSON type {resultType}");
+            await ExpectStateAsync(caseId, Get(fixture, "expectedState"));
+            await ExpectOutcomesAsync(caseId, [fixture.GetValueOrDefault("expectedAttemptOutcome")]);
+        }
+    }
+
+    /// <summary>
+    /// A checkpoint operation that returns null stores JSON null, so a retry does not run it again.
+    /// One pass can also run the immediate retry, so the runner passes until the task settles.
+    /// </summary>
+    private async Task CheckpointNoValueAsync(OrderedDictionary<string, object?> fixture)
+    {
+        var maxAttempts = checked((int)(long)fixture["maxAttempts"]!);
+        var taskId = await EnqueueAsync(TaskType(fixture), Json.Members(), Options(QueueName(fixture)) with { MaxAttempts = maxAttempts, RetryPolicy = RetryPolicy.Fixed(TimeSpan.Zero) });
+        var settled = Get(fixture, "expectedSettled");
+        var runs = 0;
+        var operations = 0;
+        var values = new ConcurrentQueue<object?>();
+        await using (var pool = Intercept.Create(_database, Intercept.Hook.None))
+        {
+            await using var subject = NewWorker(pool, fixture);
+            subject.Handle<JsonElement, object?>(TaskType(fixture), async (context, _) =>
+            {
+                var run = Interlocked.Increment(ref runs);
+                values.Enqueue(await context.CheckpointAsync<object?>(
+                    (string)fixture["checkpointName"]!,
+                    _ =>
+                    {
+                        Interlocked.Increment(ref operations);
+                        return Task.FromResult<object?>(null);
+                    }));
+                if (run == 1)
+                {
+                    throw new InvalidOperationException("fail the first attempt after the checkpoint");
+                }
+
+                return Json.Members();
+            });
+            for (var attempt = 0; attempt < maxAttempts; attempt++)
+            {
+                if (Matcher.Same((await StateAsync(taskId))["state"], settled["state"]))
+                {
+                    break;
+                }
+
+                Failure.Check(await subject.RunOnceAsync(), "the worker did not run the checkpoint task");
+            }
+        }
+
+        Failure.Check(
+            operations == (long)fixture["expectedCheckpointOperations"]! && runs == (long)fixture["expectedHandlerRuns"]!,
+            $"the operation ran {operations} times and the handler {runs} times");
+        Failure.Check(values.Count == runs && values.All(value => value is null), $"the checkpoint returned {Matcher.Render(values.ToList())}");
+        var stored = await ValueAsync($"SELECT jsonb_typeof(checkpoint_value) FROM workhorse.task_checkpoint WHERE task_id = '{taskId}'");
+        Failure.Check(Equals(stored, fixture["expectedCheckpointValueJsonType"]), $"the checkpoint value is stored as JSON type {stored}");
+        await ExpectStateAsync(taskId, settled);
+        await ExpectOutcomesAsync(taskId, (List<object?>)fixture["expectedAttemptOutcomes"]!);
     }
 
     /// <summary>

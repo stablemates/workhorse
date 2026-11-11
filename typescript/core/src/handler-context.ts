@@ -54,7 +54,7 @@ export function createHandlerContext(
   const guardedHumanWait = guard("human waits", context.waitForHuman);
   // The tier read can query PostgreSQL, so an oversized context fails before it.
   const waitForHuman = (async (name: string, humanContext: Json, options?: ExternalWaitOptions) => {
-    encodeExternalWaitValue(humanContext, "Human wait context");
+    encodeExternalWaitValue(humanContext, "Human wait context", `task type ${task.type}`);
     return guardedHumanWait(name, humanContext, options);
   }) as HandlerContext["waitForHuman"];
   // The tier read can query PostgreSQL, so every child option of a set is checked before it.
@@ -135,9 +135,9 @@ function createDurableHandlerContext(
       throw new CheckpointInputConflictError(task.id, name, stored, requested);
     }
   };
-  const checkpoint: HandlerContext["checkpoint"] = async <TValue extends Json>(
+  const checkpoint = async <TValue extends Json>(
     name: string,
-    operation: () => Promise<TValue> | TValue,
+    operation: () => Promise<TValue | void> | TValue | void,
     options: CheckpointOptions = {},
   ): Promise<TValue> => {
     const fingerprint =
@@ -155,7 +155,8 @@ function createDurableHandlerContext(
         return existing.value;
       }
       attempt.requireLease();
-      const value = await operation();
+      // An operation that returns no value stores JSON null, as the other SDKs do (ADR 0119).
+      const value = ((await operation()) ?? null) as TValue;
       const saved = await queue.saveCheckpoint(
         task,
         workerId,
@@ -356,7 +357,7 @@ function createDurableHandlerContext(
     getWait,
     getProgress,
     setProgress,
-    checkpoint,
+    checkpoint: checkpoint as HandlerContext["checkpoint"],
     sleep: durableSleep,
     sleepUntil,
     waitForSignal,

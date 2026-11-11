@@ -104,6 +104,7 @@ module Conformance
       when "missing-handler" then missing_handler(fixture)
       when "release-wait" then release_wait(fixture)
       when "json-round-trip" then json_round_trip(fixture)
+      when "checkpoint-no-value" then checkpoint_no_value(fixture)
       when "oversized-result" then oversized_result(fixture)
       when "shutdown-cancellation" then shutdown_cancellation(fixture)
       when "heartbeat-failure" then heartbeat_failure(fixture)
@@ -1009,6 +1010,52 @@ module Conformance
       check(result == payload, "the stored result is #{Matcher.render(result)}")
       expect_state(task_id, fixture["expectedState"])
       expect_outcomes(task_id, [fixture["expectedAttemptOutcome"]])
+      # Ruby has one "no value", nil, so both result cases return it.
+      fixture.fetch("resultCases").each do |result_case|
+        case_id = queue.enqueue(result_case["taskType"], {}, queue: queue_name(fixture)).task_id
+        with_pool do |pool|
+          subject = worker(pool, fixture).handle(result_case["taskType"]) { nil }
+          check(subject.run_once == true, "the worker did not run the #{result_case["taskType"]} task")
+        end
+        stored = value("SELECT jsonb_typeof(result) FROM workhorse.task_outcome WHERE task_id = $1", case_id)
+        check(stored == result_case["expectedResultJsonType"],
+          "the #{result_case["taskType"]} result is stored as JSON type #{stored.inspect}")
+        expect_state(case_id, fixture["expectedState"])
+        expect_outcomes(case_id, [fixture["expectedAttemptOutcome"]])
+      end
+    end
+
+    # A checkpoint block that returns nil stores JSON null, so a retry does not run the block again.
+    # One pass may also run the immediate retry, so the runner passes until the task settles.
+    def checkpoint_no_value(fixture)
+      admin = W::Admin.new(@connection)
+      task_id = queue.enqueue(fixture["taskType"], {}, queue: queue_name(fixture),
+        max_attempts: fixture["maxAttempts"], retry_policy: {"type" => "fixed", "delayMs" => 0}).task_id
+      settled = fixture.fetch("expectedSettled")
+      counts = {operations: 0, runs: 0}
+      values = Concurrent::Array.new
+      with_pool do |pool|
+        subject = worker(pool, fixture).handle(fixture["taskType"]) do |_payload, context|
+          counts[:runs] += 1
+          values << context.checkpoint(fixture["checkpointName"]) do
+            counts[:operations] += 1
+            nil
+          end
+          raise "fail the first attempt after the checkpoint" if counts[:runs] == 1
+          {}
+        end
+        fixture["maxAttempts"].times do
+          break if admin.get_task(task_id).state.to_s == settled["state"]
+          check(subject.run_once == true, "the worker did not run the checkpoint task")
+        end
+      end
+      check(counts == {operations: fixture["expectedCheckpointOperations"], runs: fixture["expectedHandlerRuns"]},
+        "the block ran #{counts[:operations]} times and the handler #{counts[:runs]} times")
+      check(values.to_a == [nil] * fixture["expectedHandlerRuns"], "the checkpoint returned #{Matcher.render(values.to_a)}")
+      stored = value("SELECT jsonb_typeof(checkpoint_value) FROM workhorse.task_checkpoint WHERE task_id = $1", task_id)
+      check(stored == fixture["expectedCheckpointValueJsonType"], "the checkpoint value is stored as JSON type #{stored.inspect}")
+      expect_state(task_id, settled)
+      expect_outcomes(task_id, fixture["expectedAttemptOutcomes"])
     end
 
     # The handler returns an array of zeros, whose jsonb text is longer than its compact JSON. One
