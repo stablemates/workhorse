@@ -658,6 +658,14 @@ export const SCHEMA_MIGRATIONS: readonly SchemaMigrationStep[] = [
     description: "decide debounce with one clock and keep the keys of pending debounced tasks",
     kind: "additive",
   },
+  {
+    fromVersion: 92,
+    toVersion: 93,
+    file: "0094-purge-locked-tasks-lock-stale-tiers-and-start-leases-after-locks.sql",
+    description:
+      "purge only locked tasks, lock a stale tier, limit queue names, and start leases after locks",
+    kind: "additive",
+  },
 ];
 
 /**

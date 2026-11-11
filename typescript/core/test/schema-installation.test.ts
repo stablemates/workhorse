@@ -717,6 +717,11 @@ describe("schema installation", () => {
         version: 92,
         description: "decide debounce with one clock and keep the keys of pending debounced tasks",
       },
+      {
+        version: 93,
+        description:
+          "purge only locked tasks, lock a stale tier, limit queue names, and start leases after locks",
+      },
     ]);
 
     const protocols = await pool.query<{ version: number }>(

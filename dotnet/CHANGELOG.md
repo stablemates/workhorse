@@ -32,6 +32,17 @@ handler returns, and a batch member reads it when the batch handler returns. If 
 result that cannot be stored also releases it (SM-1933, ADR 0117). A handler that fails before the
 cancellation keeps its usual settlement.
 
+### Queue purge, tier read, queue name, and claim lease use their locks
+
+Migration 0094 (`0094-purge-locked-tasks-lock-stale-tiers-and-start-leases-after-locks.sql`) moves
+the schema to version 93. A queue purge removes only the tasks that it locked, so a task that a
+producer commits during the purge stays and its worker can complete it. An enqueue at repeatable
+read or serializable fails with SQLSTATE `40001` after a newer tier change, and a tier change
+outside read committed fails with SQLSTATE `0A000`. An enqueue to a queue name above 256 UTF-8
+bytes now fails, and schedule synchronization refuses such a name. A stored schedule with such a
+name no longer fires. A claim computes its lease from a clock sample taken after
+its row locks. The migration does not raise the SDK compatibility floor.
+
 ## 0.12.0 — 2026-11-07
 
 The npm packages, Python distribution, Go module, Rust crate, Ruby gem, JVM artifacts, and .NET

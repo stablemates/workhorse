@@ -1,3 +1,4 @@
+import type { PoolClient } from "pg";
 import { describe, expect, it } from "vitest";
 import { EnqueueIdempotencyConflictError, PurgeIdempotencyConflictError } from "../src/index.js";
 import { createIntegrationTestContext } from "./support/integration.js";
@@ -305,6 +306,215 @@ describe("queue administration", () => {
       await observer.query("ROLLBACK").catch(() => undefined);
       holder.release();
       observer.release();
+    }
+  });
+});
+
+const backendPid = async (client: PoolClient) =>
+  (await client.query<{ pid: number }>("SELECT pg_backend_pid() AS pid")).rows[0]!.pid;
+
+const waitsForLock = async (pid: number) => {
+  const waiting = await pool.query<{ count: number }>(
+    `SELECT count(*)::integer AS count FROM pg_stat_activity
+      WHERE pid = $1 AND wait_event_type = 'Lock'`,
+    [pid],
+  );
+  return waiting.rows[0]!.count > 0;
+};
+
+const startPurge = async (queueName: string, reason: string, holderPid: number) => {
+  const purge = admin
+    .purgeQueue(queueName, adminAudit(reason))
+    .catch((error: unknown) => (error instanceof Error ? error : new Error(String(error))));
+  await waitForDatabaseCondition(() => blockedBy(holderPid));
+  // An object, because an async function that returned the promise would wait for the purge.
+  return { purge };
+};
+
+// A purge removes only the tasks that its first lock statement locked (SM-1926). Each test holds a
+// row lock that one purge statement waits for, and commits a new task during that wait.
+describe("queue purge while producers continue", () => {
+  it("keeps a task that commits while the purge waits for its task-row lock", async () => {
+    const queueName = "purge-producer-task-lock";
+    const purgedId = await queue.enqueue("purge-producer", {}, { queue: queueName });
+    const holder = await pool.connect();
+    try {
+      // The purge locked the runtime row of the purged task and waits for its task row.
+      await holder.query("BEGIN");
+      await holder.query("SELECT 1 FROM workhorse.task WHERE id = $1 FOR KEY SHARE", [purgedId]);
+      const { purge } = await startPurge(
+        queueName,
+        "purge during an enqueue",
+        await backendPid(holder),
+      );
+      const newId = await queue.enqueue("purge-producer", {}, { queue: queueName });
+      await holder.query("ROLLBACK");
+
+      expect(await purge).toBe(1);
+      await expect(admin.getTask(purgedId)).resolves.toBeNull();
+      const claimed = await queue.claim("purge-producer-worker", { queue: queueName });
+      expect(claimed?.id).toBe(newId);
+      expect(await queue.heartbeat(claimed!, "purge-producer-worker", 5_000)).toBe(true);
+      expect(await queue.complete(claimed!, "purge-producer-worker", { done: true })).toBe(true);
+      await expect(admin.getTask(newId)).resolves.toMatchObject({ state: "succeeded" });
+    } finally {
+      await holder.query("ROLLBACK").catch(() => undefined);
+      holder.release();
+    }
+  });
+
+  it("does not deadlock with a claim of a task that commits between its lock statements", async () => {
+    const queueName = "purge-producer-claim";
+    const purgedId = await queue.enqueue("purge-producer", {}, { queue: queueName });
+    const runtimeHolder = await pool.connect();
+    const eventHolder = await pool.connect();
+    const claimer = await pool.connect();
+    try {
+      // The purge waits for the runtime row of the purged task, before its first lock completes.
+      await runtimeHolder.query("BEGIN");
+      await runtimeHolder.query(
+        "SELECT 1 FROM workhorse.task_runtime WHERE task_id = $1 FOR KEY SHARE",
+        [purgedId],
+      );
+      // Later, the purge waits again for the events of the purged task, in its delete phase.
+      await eventHolder.query("BEGIN");
+      await eventHolder.query("SELECT 1 FROM workhorse.task_event WHERE task_id = $1 FOR UPDATE", [
+        purgedId,
+      ]);
+      const eventHolderPid = await backendPid(eventHolder);
+      const { purge } = await startPurge(
+        queueName,
+        "purge during a claim",
+        await backendPid(runtimeHolder),
+      );
+      const newId = await queue.enqueue("purge-producer", {}, { queue: queueName });
+      await runtimeHolder.query("ROLLBACK");
+      await waitForDatabaseCondition(() => blockedBy(eventHolderPid));
+
+      // A worker claims the new task while the purge waits in its delete phase. The purge holds no
+      // lock of the new task, so the claim does not wait.
+      const claimerPid = await backendPid(claimer);
+      let claimSettled = false;
+      const claim = queue
+        .forDatabase(claimer)
+        .claim("purge-claim-worker", { queue: queueName })
+        .finally(() => {
+          claimSettled = true;
+        });
+      await waitForDatabaseCondition(async () => claimSettled || (await waitsForLock(claimerPid)));
+      expect(claimSettled).toBe(true);
+      const claimed = await claim;
+      expect(claimed?.id).toBe(newId);
+      await eventHolder.query("ROLLBACK");
+
+      expect(await purge).toBe(1);
+      expect(await queue.heartbeat(claimed!, "purge-claim-worker", 5_000)).toBe(true);
+      expect(await queue.complete(claimed!, "purge-claim-worker", { done: true })).toBe(true);
+      await expect(admin.getTask(newId)).resolves.toMatchObject({ state: "succeeded" });
+    } finally {
+      await runtimeHolder.query("ROLLBACK").catch(() => undefined);
+      await eventHolder.query("ROLLBACK").catch(() => undefined);
+      runtimeHolder.release();
+      eventHolder.release();
+      claimer.release();
+    }
+  });
+
+  it("does not deadlock with a repeatable read group add that names a purged prerequisite", async () => {
+    const queueName = "purge-producer-group-add";
+    const prerequisiteId = await queue.enqueue("purge-producer", {}, { queue: queueName });
+    const group = await queue.createTaskGroup();
+    const holder = await pool.connect();
+    const adder = await pool.connect();
+    try {
+      // The queue has no queue_control row, so the purge inserts it and then waits for the
+      // prerequisite that the holder locks.
+      await holder.query("BEGIN");
+      await holder.query("SELECT 1 FROM workhorse.task_runtime WHERE task_id = $1 FOR KEY SHARE", [
+        prerequisiteId,
+      ]);
+      const { purge } = await startPurge(
+        queueName,
+        "purge during a group add",
+        await backendPid(holder),
+      );
+      // The add creates the same queue_control row. It waits for the purge before it locks the
+      // prerequisite, so it holds no row that the purge waits for.
+      await adder.query("BEGIN ISOLATION LEVEL REPEATABLE READ");
+      const adderPid = await backendPid(adder);
+      const add = adder
+        .query("SELECT * FROM workhorse.add_task_group_members_v1($1, $2::jsonb)", [
+          group.id,
+          JSON.stringify([
+            {
+              queue: queueName,
+              type: "purge-producer",
+              payload: {},
+              dependencies: {
+                prerequisiteTaskIds: [prerequisiteId],
+                onSuccess: "release",
+                onFailure: "fail",
+                onCancellation: "cancel",
+              },
+            },
+          ]),
+        ])
+        .catch((error: unknown) => error);
+      await waitForDatabaseCondition(() => waitsForLock(adderPid));
+      await holder.query("ROLLBACK");
+
+      expect(await purge).toBe(1);
+      await expect(add).resolves.toMatchObject({ code: "40001" });
+    } finally {
+      await holder.query("ROLLBACK").catch(() => undefined);
+      await adder.query("ROLLBACK").catch(() => undefined);
+      holder.release();
+      adder.release();
+    }
+  });
+
+  it("keeps a keyed fast-tier task that commits between the purge deletes", async () => {
+    const queueName = "purge-producer-fast";
+    await admin.setQueueTier(queueName, "fast", adminAudit("purge a fast-tier queue"));
+    const purgedId = await queue.enqueue("purge-producer", {}, { queue: queueName });
+    await pool.query(
+      `INSERT INTO workhorse.attempt_history(
+           task_id, attempt, fence_token, worker_id, outcome, started_at, claimed_at
+         ) VALUES ($1, 1, 1, 'purge-fast-worker', 'succeeded', clock_timestamp(), clock_timestamp())`,
+      [purgedId],
+    );
+    const holder = await pool.connect();
+    try {
+      // The purge deleted the key rows and waits to delete the attempts of the purged task.
+      await holder.query("BEGIN");
+      await holder.query("SELECT 1 FROM workhorse.attempt_history WHERE task_id = $1 FOR UPDATE", [
+        purgedId,
+      ]);
+      const { purge } = await startPurge(
+        queueName,
+        "purge during a keyed enqueue",
+        await backendPid(holder),
+      );
+      const keyedId = await queue.enqueue(
+        "purge-producer",
+        {},
+        { queue: queueName, idempotency: { key: "purge-fast-key" } },
+      );
+      await holder.query("ROLLBACK");
+
+      expect(await purge).toBe(1);
+      await expect(admin.getTask(purgedId)).resolves.toBeNull();
+      await expect(admin.getTask(keyedId)).resolves.toMatchObject({ state: "ready" });
+      await expect(
+        queue.enqueue(
+          "purge-producer",
+          {},
+          { queue: queueName, idempotency: { key: "purge-fast-key" } },
+        ),
+      ).resolves.toBe(keyedId);
+    } finally {
+      await holder.query("ROLLBACK").catch(() => undefined);
+      holder.release();
     }
   });
 });

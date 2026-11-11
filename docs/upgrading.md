@@ -9,21 +9,24 @@ upgrade keeps. Each changelog states the full changes of its release.
 
 ## Upgrade from 0.12.x to the next release
 
-The next release corrects how debounce and enqueue use the clock and their locks. The upgrade is a
-rolling deployment, and a mixed fleet is supported while it runs.
+The next release corrects how debounce, enqueue, queue purge, and claims use the clock and their
+locks. It also limits the queue name of an enqueue. The upgrade is a rolling deployment, and a
+mixed fleet is supported while it runs.
 
-1. Run `workhorse schema migrate`. It applies migration 0093 and leaves the schema at version 92.
+1. Run `workhorse schema migrate`. It applies migrations 0093 through 0094 and leaves the schema at
+   version 93.
 2. Roll out the new processes in any order.
 
-A 0.12.0 database is at schema version 91. The migration replaces function bodies and changes no
+A 0.12.0 database is at schema version 91. The migrations replace function bodies and change no
 stored rows:
 
-| Migration                                                                | Schema version | Changes                                                                                                                                         |
-| ------------------------------------------------------------------------ | -------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
-| `0093-decide-debounce-with-one-clock-and-keep-pending-debounce-keys.sql` | 92             | `enqueue_debounce_v1`, `enqueue_batch_v1`, `lock_enqueue_prerequisites_internal_v1`, and `prune_enqueue_idempotency_v1` correct enqueue defects |
+| Migration                                                                   | Schema version | Changes                                                                                                                                                                                                                                                                                |
+| --------------------------------------------------------------------------- | -------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `0093-decide-debounce-with-one-clock-and-keep-pending-debounce-keys.sql`    | 92             | `enqueue_debounce_v1`, `enqueue_batch_v1`, `lock_enqueue_prerequisites_internal_v1`, and `prune_enqueue_idempotency_v1` correct enqueue defects                                                                                                                                        |
+| `0094-purge-locked-tasks-lock-stale-tiers-and-start-leases-after-locks.sql` | 93             | `purge_queue_internal_v1`, `lock_queue_tiers_v1`, `set_queue_tier_v1`, `enqueue_batch_v1`, `enqueue_debounce_v1`, `sync_schedule_definitions_internal_v1`, `add_task_group_members_v1`, `claim_policy_batch_v1`, and `claim_one_v1` correct purge, tier, queue name, and lease defects |
 
-Migration 0093 does not raise the floor, so it stays 76. The SQL functions change for every SDK
-version when the migration commits:
+Migration 0094, as 0093, does not raise the floor, so it stays 76. The SQL functions change for
+every SDK version when each migration commits:
 
 - A debounce request reads the clock after its last lock. It no longer writes a second task when a
   lock wait ends after its window.
@@ -34,8 +37,26 @@ version when the migration commits:
 - Maintenance keeps the key of a debounced task while that task is `ready` or `scheduled`. A late
   same-key request then returns `non_replaceable` with `window_elapsed_pending`.
 - An enqueue batch reads its timestamp after its tier and prerequisite locks.
+- A queue purge removes only the tasks that it locked. A task that a producer commits during the
+  purge stays, and a worker can claim and complete it.
+- An enqueue refuses a queue name above 256 UTF-8 bytes. Before, a name of 257 to 7,999 bytes was
+  accepted. Existing tasks with a longer name continue to run at read committed. At repeatable read
+  or serializable, an enqueue, redrive, or group add that names such a queue fails with the same
+  error. A producer that uses such a name
+  fails after the upgrade, so change it to a shorter queue name first.
+- Schedule synchronization refuses a new or changed schedule with such a queue name. A stored
+  schedule with such a name stays, but it no longer fires, because each fire fails in the enqueue.
+  Migration 0095 (SM-1927) runs each schedule in its own subtransaction, so that failure does not
+  stop the other schedules. Both migrations ship in the same release. Find these schedules with
+  `SELECT namespace, schedule_name FROM workhorse.schedule_definition WHERE octet_length(queue_name) > 256;`,
+  and synchronize each one with a shorter queue name, or remove it.
+- An enqueue at repeatable read or serializable locks the `queue_control` row of each queue. If a
+  tier change committed after the snapshot of the transaction, the enqueue fails with SQLSTATE
+  `40001`, and the application retries. `set_queue_tier_v1` refuses isolation levels other than
+  read committed with SQLSTATE `0A000`.
+- A claim computes the lease expiry from a clock sample taken after its row locks.
 
-A 0.12 process keeps working on schema version 92, because a migration inside a major line only
+A 0.12 process keeps working on schema version 93, because a migration inside a major line only
 adds.
 
 ## Upgrade from 0.11.x to 0.12.0
