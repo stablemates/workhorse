@@ -369,3 +369,119 @@ func TestWorkerValidatesScheduleOptions(t *testing.T) {
 		t.Fatalf("expected valid schedule options: %v", err)
 	}
 }
+
+// One schedule definition that fails in each pass must not end the run or stop the other
+// schedules (SM-1927). The bad definition has a concurrency key, and an operator moves its queue to
+// the fast tier after the synchronization, so each fire of it fails in the enqueue.
+func TestWorkerRunContinuesWhenOneScheduleDefinitionFails(t *testing.T) {
+	databaseURL := createConformanceDatabase(t, testDatabaseURL(t), "worker-schedule-isolation")
+	ctx := context.Background()
+	// The test reads through a pool of its own, so its reads never wait for a worker connection.
+	pool, err := pgxpool.New(ctx, databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(pool.Close)
+	workerPool, err := pgxpool.New(ctx, databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(workerPool.Close)
+
+	queue := workhorse.NewQueue(workhorse.NewPGXExecutor(pool), "go-good")
+	if err := queue.SyncSchedules(ctx, "go-isolation", []workhorse.ScheduleDefinition{
+		{
+			Name: "bad", Schedule: "* * * * * *",
+			Task: workhorse.ScheduledTask{
+				Type: "t.bad", Payload: map[string]any{}, Queue: "go-fast", ConcurrencyKey: "k",
+			},
+		},
+		{
+			Name: "good", Schedule: "* * * * * *",
+			Task: workhorse.ScheduledTask{Type: "t.good", Payload: map[string]any{}, Queue: "go-good"},
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, "SELECT workhorse.set_queue_tier_v1('go-fast', 'fast', 'operator', 'proof')"); err != nil {
+		t.Fatal(err)
+	}
+
+	worker, err := workhorse.NewWorker(workerPool, workhorse.WorkerOptions{
+		Queue:               "go-good",
+		WorkerID:            "go-schedule-isolation-worker",
+		ScheduleNamespaces:  []string{"go-isolation"},
+		MaintenanceInterval: 100 * time.Millisecond,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	handled := make(chan struct{}, 1)
+	worker.Handle("t.good", func(context.Context, any, *workhorse.HandlerContext) (any, error) {
+		select {
+		case handled <- struct{}{}:
+		default:
+		}
+		return nil, nil
+	})
+	runContext, stop := context.WithCancel(ctx)
+	defer stop()
+	workerResult := make(chan error, 1)
+	go func() { workerResult <- worker.Run(runContext) }()
+
+	select {
+	case <-handled:
+	case err := <-workerResult:
+		t.Fatalf("worker returned before it ran the good schedule: %v", err)
+	case <-time.After(10 * time.Second):
+		t.Fatal("the good schedule never ran")
+	}
+
+	// The pass that fired the good schedule also recorded the error of the bad one. A later record
+	// shows that a later pass ran in the same worker run.
+	readError := func() (*time.Time, *string) {
+		var at *time.Time
+		var code *string
+		if err := pool.QueryRow(ctx, `
+SELECT last_error_at, last_error_code FROM workhorse.schedule_definition
+ WHERE namespace = 'go-isolation' AND schedule_name = 'bad'`).Scan(&at, &code); err != nil {
+			t.Fatal(err)
+		}
+		return at, code
+	}
+	firstAt, firstCode := readError()
+	if firstAt == nil || firstCode == nil || *firstCode != "P1007" {
+		t.Fatalf("bad schedule error after the first fire: at=%v code=%v", firstAt, firstCode)
+	}
+	deadline := time.After(10 * time.Second)
+	ticker := time.NewTicker(50 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		at, _ := readError()
+		if at != nil && at.After(*firstAt) {
+			break
+		}
+		select {
+		case err := <-workerResult:
+			t.Fatalf("worker returned while the bad schedule failed: %v", err)
+		case <-deadline:
+			t.Fatal("no later schedule pass recorded the error of the bad schedule")
+		case <-ticker.C:
+		}
+	}
+
+	stop()
+	if err := awaitSignal(t, workerResult, "Run to return after the stop"); err != nil && !errors.Is(err, context.Canceled) {
+		t.Fatalf("worker run: %v", err)
+	}
+	var goodEvaluated, badEvaluated time.Time
+	if err := pool.QueryRow(ctx, `
+SELECT max(last_evaluated_at) FILTER (WHERE schedule_name = 'good'),
+       max(last_evaluated_at) FILTER (WHERE schedule_name = 'bad')
+  FROM workhorse.schedule_definition WHERE namespace = 'go-isolation'`).Scan(&goodEvaluated, &badEvaluated); err != nil {
+		t.Fatal(err)
+	}
+	if !goodEvaluated.After(badEvaluated) {
+		t.Fatalf("the good position %v must pass the kept bad position %v", goodEvaluated, badEvaluated)
+	}
+}

@@ -164,6 +164,37 @@ ran at once, before the wake time. Now each `scheduled` answer stops the handler
 whatever outcome won while the request was in flight. A `stale` expiry answer and the end of the
 local lease window have the same result (SM-1929).
 
+### One failed schedule no longer stops the schedule pass
+
+A worker that offered schedule namespaces evaluated all their schedules in one statement. If one
+fire failed in the enqueue, the statement rolled back the fires and the positions of every
+schedule, and the TypeScript and Go workers ended their run. For example, a schedule with a
+`concurrencyKey` on a queue that an operator moved to the fast tier failed each pass. No schedule
+of those namespaces fired, and a `skip` schedule lost the occurrences that became older than the
+supported delay. `fire_due_schedules_v2` now runs each schedule in a subtransaction. A failed
+schedule keeps its position and stores its error in the new `schedule_definition` columns
+`last_error_at`, `last_error_code`, and `last_error_message`. The other schedules fire, and the
+worker continues. A later pass that fires the schedule clears the error. An error of SQLSTATE class
+`40` or `57` still fails the whole pass (SM-1927, ADR 0118).
+
+`syncSchedules` now refuses an enabled schedule with a `concurrencyKey` on a fast-tier queue, with
+the SQLSTATE `P1007` error of the enqueue. The dashboard schedule read returns `lastErrorAt`,
+`lastErrorCode`, and `lastErrorMessage` on each application schedule, and
+`DashboardScheduleRow` adds the three optional fields. The Schedules page does not show them yet.
+
+`0 12 * * ?`, `0 0 12 * * ?`, and `0 12 ? * ?` matched no day, and their synchronization failed at
+the 128-year horizon. If both day fields are wildcards, each day now matches (SM-1947). The schedule
+guide now states that an interval schedule in a local timezone fires nothing in the second pass of a
+repeated hour (SM-1980). It also states that each fired occurrence holds one advisory lock until the
+pass commits, and that 1,000 such locks for one pass is safe with the default lock settings
+(SM-1981).
+
+Migration 0095 (`0095-isolate-each-schedule-in-a-pass-and-match-two-wildcard-day-fields.sql`) moves
+the schema to version 94. It adds the three nullable columns and replaces the bodies of
+`fire_due_schedules_v2`, `sync_schedule_definitions_internal_v1`, `cron_occurrences_v1`,
+`dashboard_schedule_definition_v1`, and `dashboard_cron_v1`. It does not raise the SDK
+compatibility floor and rewrites no rows. Run `workhorse schema migrate`.
+
 ## 0.12.0 — 2026-11-07
 
 The npm packages, Python distribution, Go module, Rust crate, Ruby gem, JVM artifacts, and .NET

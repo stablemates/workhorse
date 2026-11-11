@@ -45,6 +45,20 @@ bytes now fails, and schedule synchronization refuses such a name. A stored sche
 name no longer fires. A claim computes its lease from a clock sample taken after
 its row locks. The migration does not raise the SDK compatibility floor.
 
+### One failed schedule no longer stops the schedule pass
+
+Migration 0095 (`0095-isolate-each-schedule-in-a-pass-and-match-two-wildcard-day-fields.sql`) moves
+the schema to version 94. Before it, one schedule whose fire failed in the enqueue rolled back the
+schedule pass of every offered namespace. Now each schedule runs in a subtransaction. A
+failed schedule keeps its position and stores its error in `last_error_at`, `last_error_code`, and
+`last_error_message` of `schedule_definition`. The other schedules fire, and a later pass that fires
+the schedule clears the error. An error of SQLSTATE class `40` or `57` still fails the whole pass.
+Schedule synchronization refuses an enabled schedule with a concurrency key on a fast-tier queue,
+with SQLSTATE `P1007`. The dashboard schedule read returns `lastErrorAt`, `lastErrorCode`, and
+`lastErrorMessage`. A cron expression with `?` in day-of-week and a wildcard day-of-month now
+matches each day. The migration does not raise the SDK compatibility floor (SM-1927, SM-1947,
+ADR 0118).
+
 ## 0.12.0 — 2026-11-07
 
 The npm packages, Python distribution, Go module, Rust crate, Ruby gem, JVM artifacts, and .NET

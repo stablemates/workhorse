@@ -138,7 +138,10 @@ These failures stop the worker. `run()` rejects, and the process runner starts i
   `heartbeatMs` and 5 seconds.
 - A failed claim statement. [Task lifecycle: Claim errors](lifecycle.md#claim-errors) states this
   rule for each SDK. A Rust worker continues after a claim error.
-- A failed maintenance statement: `tick_v1`, the schedule firing, or a maintenance routine.
+- A failed maintenance statement: `tick_v1`, the schedule firing, or a maintenance routine. Since
+  schema version 94, an error of one schedule definition does not fail the schedule firing. The
+  pass records it on the definition row
+  ([Data model: Failed definitions](data-model.md#failed-definitions)).
 - A failed settlement write of a handler result.
 
 These failures do not stop the worker:
@@ -857,10 +860,10 @@ This section states the limits and defaults that operators must know.
 
 ### Schema and PostgreSQL
 
-- The canonical artifact installs version 93, the whole current schema.
+- The canonical artifact installs version 94, the whole current schema.
 - Version 6 is the migration baseline. Its frozen copy is `sql/releases/0006.sql`.
 - A schema change is an upgrade, not a reinstall. `migrateSchema` applies the ordered steps under
-  `sql/migrations/`, which run from 6 to 93.
+  `sql/migrations/`, which run from 6 to 94.
 - Workhorse does not upgrade a database below 6
   ([ADR 0073](../decisions/0073-prune-the-migration-chain-to-the-0-2-0-baseline.md)).
 - Workhorse requires only plain PostgreSQL 15+. Workhorse installs no extension beyond the default

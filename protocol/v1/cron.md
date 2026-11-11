@@ -7,7 +7,9 @@ instants.
 Expressions have five fields (`minute hour day-of-month month day-of-week`) or six fields with
 seconds first. Fields accept `*`, comma lists, inclusive ranges, and `/step`. Month names are
 `JAN` through `DEC`; weekday names are `SUN` through `SAT`; weekday `7` aliases Sunday. A lone `?`
-is a wildcard in either day field.
+is a wildcard in either day field. If both day fields are wildcards, `*` or `?`, every date matches.
+Thus `0 12 * * ?`, `0 0 12 * * ?`, and `0 12 ? * ?` each match every day at 12:00. Before schema
+version 94, an expression with `?` in day-of-week and a wildcard day-of-month matched no date.
 
 The day fields follow ordinary cron OR semantics. If both are restricted, a date matches when
 either field matches. `L` in day-of-month selects the last date. `<weekday>L` selects the last
@@ -23,7 +25,12 @@ The supported descriptors are `@yearly`, `@annually`, `@monthly`, `@weekly`, `@d
 `@weekends`.
 
 Each definition stores an IANA timezone. PostgreSQL advances a nonexistent wall time across a
-daylight-saving gap and selects the first instant when a wall time repeats. Occurrences have
+daylight-saving gap and selects the first instant when a wall time repeats. Thus an interval
+expression, such as `* * * * *`, `*/5 * * * *`, or `0 * * * *`, fires in the first pass of a
+repeated hour and fires nothing in the second pass. In `America/New_York` on 2027-11-07,
+`0 * * * *` returns `05:00Z` (01:00 EDT) and then `07:00Z` (02:00 EST). The second pass of the
+local hour 01:00, from `06:00Z` to `06:59Z`, gets no instant. Use `UTC` for an interval schedule
+that must not have this gap. Occurrences have
 one-second precision. If several wall-clock fields normalize to the same instant, PostgreSQL emits
 that instant once. A new evaluator can return the latest occurrence at or before `now`; an
 evaluator with a durable position returns occurrences strictly after that position and at or

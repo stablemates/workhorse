@@ -2550,6 +2550,13 @@ CREATE TABLE IF NOT EXISTS workhorse.schedule_definition (
   last_skipped_at timestamptz,
   last_skipped_count integer,
   last_skipped_through timestamptz,
+  -- The last error of this definition in a schedule pass: the evaluation instant of that pass, the
+  -- SQLSTATE, and the message, at most 1,000 characters. The pass writes the three columns
+  -- together. A later pass that moves the position of the definition sets them to null.
+  -- fire_due_schedules_v2 is the only writer.
+  last_error_at timestamptz,
+  last_error_code text,
+  last_error_message text,
   PRIMARY KEY (namespace, schedule_name)
 );
 -- One durable row per supplied occurrence second prevents workers from enqueueing the same cron
@@ -4950,7 +4957,10 @@ BEGIN
           v_day_of_week = v_weekday AND ((v_day_of_month - 1) / 7 + 1) = v_ordinal
         );
       END LOOP;
-      v_day_match := CASE WHEN v_dom_wildcard THEN v_dow_match
+      -- A lone `?` adds no value to its field. Thus, if both day fields are wildcards, each day
+      -- matches without a value test (SM-1947).
+      v_day_match := CASE WHEN v_dom_wildcard AND v_dow_wildcard THEN true
+        WHEN v_dom_wildcard THEN v_dow_match
         WHEN v_dow_wildcard THEN v_dom_match ELSE v_dom_match OR v_dow_match END;
       IF NOT v_day_match THEN CONTINUE; END IF;
       v_day_upper := COALESCE(extract(epoch FROM v_upper_wall - v_date::timestamp), 86400);
@@ -5001,10 +5011,11 @@ BEGIN
         v_day_of_week = v_weekday AND ((v_day_of_month - 1) / 7 + 1) = v_ordinal
       );
     END LOOP;
-    v_day_match := CASE WHEN v_dom_wildcard THEN v_dow_match
+    v_day_match := CASE WHEN v_dom_wildcard AND v_dow_wildcard THEN true
+      WHEN v_dom_wildcard THEN v_dow_match
       WHEN v_dow_wildcard THEN v_dom_match ELSE v_dom_match OR v_dow_match END;
     IF NOT v_day_match THEN CONTINUE; END IF;
-    v_day_lower := COALESCE(extract(epoch FROM v_lower_wall - v_date::timestamp), -1);
+    v_day_lower :=COALESCE(extract(epoch FROM v_lower_wall - v_date::timestamp), -1);
     v_day_upper := COALESCE(extract(epoch FROM v_upper_wall - v_date::timestamp), 86400);
     FOREACH v_hour IN ARRAY v_hours LOOP
       v_hour_second := v_hour * 3600;
@@ -5222,6 +5233,18 @@ BEGIN
   ) THEN
     RAISE EXCEPTION 'schedule queue name must contain at most 256 UTF-8 bytes';
   END IF;
+  -- Each fire enqueues on the current tier of the queue. A concurrency key is the only fast-tier
+  -- feature that a definition can carry, so an enabled definition with a key on a fast-tier queue
+  -- fails each fire. The synchronization refuses it with the error of the enqueue (SM-1927). A tier
+  -- change after the synchronization is possible, and the pass then records the error on the row.
+  PERFORM workhorse.reject_fast_feature_v1(definition.value->>'queue', 'concurrency keys')
+     FROM jsonb_array_elements(p_definitions) WITH ORDINALITY definition(value, ordinal)
+     JOIN workhorse.queue_control control ON control.queue_name = definition.value->>'queue'
+    WHERE control.tier = 'fast'
+      AND definition.value->>'concurrencyKey' IS NOT NULL
+      AND COALESCE((definition.value->>'enabled')::boolean, true)
+    ORDER BY definition.ordinal
+    LIMIT 1;
   IF EXISTS (
     SELECT 1
       FROM jsonb_array_elements(p_definitions) definition
@@ -5459,6 +5482,16 @@ $$;
 -- (SM-1647). Each definition then continues from its durable position. `skip` fires each occurrence
 -- that is not older than the supported delay, GREATEST(60 s, 2 x evaluation window), and records
 -- the older occurrences it skips on the definition row (SM-1644).
+--
+-- Each definition runs in a subtransaction, as each phase of tick_v1 does (SM-1927). If the
+-- evaluation or a fire of one definition raises an error, its fires and its occurrence locks roll
+-- back. The pass then records the error on the definition row, keeps its position, and continues
+-- with the next definition. An error of SQLSTATE class 40 (a serialization failure or a deadlock)
+-- or 57 (a cancel, a statement timeout, or a shutdown) ends the pass, as before. A row that
+-- RETURN NEXT adds stays in the result after a rollback, so the pass collects the rows of a
+-- definition and returns them only after its subtransaction ends without an error. The position
+-- update stays outside the subtransaction, so a definition with no due occurrence writes in the
+-- main transaction and its subtransaction gets no transaction ID.
 CREATE OR REPLACE FUNCTION workhorse.fire_due_schedules_v2(
   p_namespaces text[],
   p_now timestamptz,
@@ -5485,6 +5518,11 @@ DECLARE
   v_skip_before timestamptz;
   v_skipped_count integer;
   v_skipped_through timestamptz;
+  v_fired_occurrences timestamptz[];
+  v_fired_task_ids uuid[];
+  v_fired_index integer;
+  v_error_code text;
+  v_error_message text;
 BEGIN
   IF p_namespaces IS NULL OR array_position(p_namespaces, '') IS NOT NULL THEN
     RAISE EXCEPTION 'schedule namespaces must contain non-empty names';
@@ -5540,83 +5578,113 @@ BEGIN
        AND definition.namespace = ANY(v_locked_namespaces)
      ORDER BY definition.namespace, definition.schedule_name
   LOOP
-    v_evaluation_start := GREATEST(
-      v_definition.last_evaluated_at,
-      v_definition.last_occurrence_at
-    );
     v_skipped_count := 0;
     v_skipped_through := NULL;
-    IF v_definition.catchup_policy = 'skip' AND v_evaluation_start < v_skip_before THEN
-      -- Count the occurrences older than the supported delay, up to 10,000, and find the newest
-      -- of them. The pass fires only the occurrences after it.
-      SELECT count(*)::integer, max(skipped.occurrence_at)
-        INTO v_skipped_count, v_skipped_through
-        FROM workhorse.cron_occurrences_v1(
-          v_definition.cron_expression,
-          v_evaluation_start,
-          v_skip_before - interval '1 microsecond',
-          10000,
-          v_definition.timezone
-        ) skipped;
-      IF v_skipped_count = 10000 THEN
-        SELECT newest.occurrence_at INTO v_skipped_through
-          FROM workhorse.cron_occurrences_v1(
-            v_definition.cron_expression,
-            NULL,
-            v_skip_before - interval '1 microsecond',
-            1,
-            v_definition.timezone
-          ) newest;
-      END IF;
-      IF v_skipped_count > 0 THEN
-        v_evaluation_start := v_skipped_through;
-      END IF;
-    END IF;
     v_evaluated_count := 0;
     v_last_evaluated_at := NULL;
     v_deferred := false;
+    v_fired_occurrences := '{}';
+    v_fired_task_ids := '{}';
+    v_error_code := NULL;
+    v_error_message := NULL;
 
-    FOR v_occurrence IN
-      SELECT evaluated.occurrence_at
-        FROM workhorse.cron_occurrences_v1(
-          v_definition.cron_expression,
-          CASE WHEN v_definition.catchup_policy = 'latest'
-            THEN NULL ELSE v_evaluation_start END,
-          p_now,
-          CASE WHEN v_definition.catchup_policy = 'latest'
-            THEN 1 ELSE p_catchup_limit END,
-          v_definition.timezone
-        ) evaluated
-       WHERE evaluated.occurrence_at > v_evaluation_start
-    LOOP
-      -- Another transaction holds this occurrence. It may still roll back, so this pass neither
-      -- reports the occurrence nor evaluates anything after it, and the durable position below
-      -- stays behind it. `fire_schedule_v1` takes the same lock again, which a transaction that
-      -- already holds it always wins.
-      IF NOT pg_try_advisory_xact_lock(hashtextextended(
-        'workhorse:schedule-occurrence:' || jsonb_build_array(
+    BEGIN
+      v_evaluation_start := GREATEST(
+        v_definition.last_evaluated_at,
+        v_definition.last_occurrence_at
+      );
+      IF v_definition.catchup_policy = 'skip' AND v_evaluation_start < v_skip_before THEN
+        -- Count the occurrences older than the supported delay, up to 10,000, and find the newest
+        -- of them. The pass fires only the occurrences after it.
+        SELECT count(*)::integer, max(skipped.occurrence_at)
+          INTO v_skipped_count, v_skipped_through
+          FROM workhorse.cron_occurrences_v1(
+            v_definition.cron_expression,
+            v_evaluation_start,
+            v_skip_before - interval '1 microsecond',
+            10000,
+            v_definition.timezone
+          ) skipped;
+        IF v_skipped_count = 10000 THEN
+          SELECT newest.occurrence_at INTO v_skipped_through
+            FROM workhorse.cron_occurrences_v1(
+              v_definition.cron_expression,
+              NULL,
+              v_skip_before - interval '1 microsecond',
+              1,
+              v_definition.timezone
+            ) newest;
+        END IF;
+        IF v_skipped_count > 0 THEN
+          v_evaluation_start := v_skipped_through;
+        END IF;
+      END IF;
+
+      FOR v_occurrence IN
+        SELECT evaluated.occurrence_at
+          FROM workhorse.cron_occurrences_v1(
+            v_definition.cron_expression,
+            CASE WHEN v_definition.catchup_policy = 'latest'
+              THEN NULL ELSE v_evaluation_start END,
+            p_now,
+            CASE WHEN v_definition.catchup_policy = 'latest'
+              THEN 1 ELSE p_catchup_limit END,
+            v_definition.timezone
+          ) evaluated
+         WHERE evaluated.occurrence_at > v_evaluation_start
+      LOOP
+        -- Another transaction holds this occurrence. It may still roll back, so this pass neither
+        -- reports the occurrence nor evaluates anything after it, and the durable position below
+        -- stays behind it. `fire_schedule_v1` takes the same lock again, which a transaction that
+        -- already holds it always wins.
+        IF NOT pg_try_advisory_xact_lock(hashtextextended(
+          'workhorse:schedule-occurrence:' || jsonb_build_array(
+            v_definition.namespace,
+            v_definition.schedule_name,
+            extract(epoch FROM date_trunc('second', v_occurrence))::bigint
+          )::text,
+          0
+        )) THEN
+          v_deferred := true;
+          EXIT;
+        END IF;
+        v_evaluated_count := v_evaluated_count + 1;
+        v_last_evaluated_at := v_occurrence;
+        v_fired_occurrences := array_append(v_fired_occurrences, v_occurrence);
+        v_fired_task_ids := array_append(v_fired_task_ids, workhorse.fire_schedule_v1(
           v_definition.namespace,
           v_definition.schedule_name,
-          extract(epoch FROM date_trunc('second', v_occurrence))::bigint
-        )::text,
-        0
-      )) THEN
-        v_deferred := true;
-        EXIT;
+          v_definition.revision,
+          v_occurrence
+        ));
+      END LOOP;
+    EXCEPTION WHEN OTHERS THEN
+      IF left(SQLSTATE, 2) IN ('40', '57') THEN
+        RAISE;
       END IF;
-      v_evaluated_count := v_evaluated_count + 1;
-      v_last_evaluated_at := v_occurrence;
-      namespace := v_definition.namespace;
-      schedule_name := v_definition.schedule_name;
-      occurrence_at := v_occurrence;
-      task_id := workhorse.fire_schedule_v1(
-        v_definition.namespace,
-        v_definition.schedule_name,
-        v_definition.revision,
-        v_occurrence
-      );
-      RETURN NEXT;
-    END LOOP;
+      v_error_code := SQLSTATE;
+      v_error_message := left(SQLERRM, 1000);
+    END;
+
+    IF v_error_code IS NOT NULL THEN
+      -- The position and the skip record stay, so the next pass evaluates the same occurrences.
+      -- The error can be a lock timeout on this row, which another fire holds. This update runs
+      -- outside the subtransaction, so it must not wait: it skips a locked row, and a later pass
+      -- records the error.
+      UPDATE workhorse.schedule_definition definition
+         SET last_error_at = p_now,
+             last_error_code = v_error_code,
+             last_error_message = v_error_message
+       WHERE (definition.namespace, definition.schedule_name) IN (
+         SELECT unlocked.namespace, unlocked.schedule_name
+           FROM workhorse.schedule_definition unlocked
+          WHERE unlocked.namespace = v_definition.namespace
+            AND unlocked.schedule_name = v_definition.schedule_name
+            AND unlocked.revision = v_definition.revision
+            FOR UPDATE SKIP LOCKED
+       );
+      CONTINUE;
+    END IF;
 
     -- A `skip` or `all` pass that reaches the catch-up limit advances only through its last
     -- occurrence, so the next pass fires the rest.
@@ -5628,9 +5696,12 @@ BEGIN
       THEN v_last_evaluated_at
       ELSE p_now
     END;
-    -- A pass deferred before its first occurrence leaves the position and the skip record alone, so
-    -- it never waits on the row lock the transaction holding that occurrence already owns. The next
-    -- pass records the same skip.
+    -- A pass deferred before its first occurrence leaves the position, the skip record, and the
+    -- error record alone, so it never waits on the row lock the transaction holding that
+    -- occurrence already owns. The next pass records the same skip. The update runs outside the
+    -- subtransaction, so it skips a row that another transaction locks. A fire in this pass already
+    -- holds the row lock, so the update skips only a definition that fired nothing, and the next
+    -- pass evaluates the same occurrences.
     IF v_next_evaluated_at IS DISTINCT FROM v_definition.last_evaluated_at
       AND v_next_evaluated_at IS NOT NULL THEN
       UPDATE workhorse.schedule_definition definition
@@ -5644,11 +5715,27 @@ BEGIN
              last_skipped_through = CASE
                WHEN v_skipped_count > 0 THEN v_skipped_through
                ELSE definition.last_skipped_through
-             END
-       WHERE definition.namespace = v_definition.namespace
-         AND definition.schedule_name = v_definition.schedule_name
-         AND definition.revision = v_definition.revision;
+             END,
+             last_error_at = NULL,
+             last_error_code = NULL,
+             last_error_message = NULL
+       WHERE (definition.namespace, definition.schedule_name) IN (
+         SELECT unlocked.namespace, unlocked.schedule_name
+           FROM workhorse.schedule_definition unlocked
+          WHERE unlocked.namespace = v_definition.namespace
+            AND unlocked.schedule_name = v_definition.schedule_name
+            AND unlocked.revision = v_definition.revision
+            FOR UPDATE SKIP LOCKED
+       );
     END IF;
+
+    FOR v_fired_index IN 1..cardinality(v_fired_occurrences) LOOP
+      namespace := v_definition.namespace;
+      schedule_name := v_definition.schedule_name;
+      occurrence_at := v_fired_occurrences[v_fired_index];
+      task_id := v_fired_task_ids[v_fired_index];
+      RETURN NEXT;
+    END LOOP;
   END LOOP;
 END;
 $$;
@@ -19834,7 +19921,8 @@ CREATE OR REPLACE VIEW workhorse.dashboard_schedule_definition_v1 AS
   SELECT namespace, schedule_name, cron_expression, timezone, queue_name, task_type,
          configured_enabled, paused, paused_by, paused_reason, paused_at, revision,
          updated_at, priority, catchup_policy, last_skipped_at, last_skipped_count,
-         last_skipped_through FROM workhorse.schedule_definition;
+         last_skipped_through, last_error_at, last_error_code, last_error_message
+    FROM workhorse.schedule_definition;
 CREATE OR REPLACE VIEW workhorse.dashboard_schedule_occurrence_v1 AS
   SELECT namespace, schedule_name, occurrence_at, fired_at FROM workhorse.schedule_occurrence;
 CREATE OR REPLACE VIEW workhorse.dashboard_worker_registry_v1 AS
@@ -20880,7 +20968,8 @@ AS $$
            definition.paused_reason, definition.paused_at,
            definition.revision, definition.updated_at,
            definition.last_skipped_at, definition.last_skipped_count,
-           definition.last_skipped_through
+           definition.last_skipped_through,
+           definition.last_error_at, definition.last_error_code, definition.last_error_message
       FROM workhorse.dashboard_schedule_definition_v1 definition
      ORDER BY definition.namespace, definition.schedule_name
      LIMIT 50
@@ -20940,6 +21029,9 @@ AS $$
       'lastSkippedAt', workhorse.dashboard_iso_v1(last_skipped_at),
       'lastSkippedCount', last_skipped_count,
       'lastSkippedThrough', workhorse.dashboard_iso_v1(last_skipped_through),
+      'lastErrorAt', workhorse.dashboard_iso_v1(last_error_at),
+      'lastErrorCode', last_error_code,
+      'lastErrorMessage', last_error_message,
       'occurrenceCountCapped', occurrence_count > 1000
     ) ORDER BY namespace, schedule_name), '[]'::jsonb) AS value FROM schedule_rows
   ), policy AS (
@@ -23174,10 +23266,11 @@ INSERT INTO workhorse.schema_migration(version, description) VALUES
   (90, 'show the task group in the task detail'),
   (91, 'scale the dashboard task estimate by the current size of the task table'),
   (92, 'decide debounce with one clock and keep the keys of pending debounced tasks'),
-  (93, 'purge only locked tasks, lock a stale tier, limit queue names, and start leases after locks')
+  (93, 'purge only locked tasks, lock a stale tier, limit queue names, and start leases after locks'),
+  (94, 'isolate each schedule in a pass, refuse fast-tier keys, and match two wildcard day fields')
 ON CONFLICT DO NOTHING;
 
-INSERT INTO workhorse.schema_version(version) VALUES (93) ON CONFLICT DO NOTHING;
+INSERT INTO workhorse.schema_version(version) VALUES (94) ON CONFLICT DO NOTHING;
 
 INSERT INTO workhorse.protocol_version(version) VALUES (5) ON CONFLICT DO NOTHING;
 SELECT workhorse.create_history_day_v1(

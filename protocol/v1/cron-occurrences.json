@@ -235,5 +235,37 @@
     "now": "2026-10-03T17:00:00Z",
     "limit": 10,
     "expected": ["2026-10-03T15:30:00Z", "2026-10-03T15:50:00Z", "2026-10-03T15:40:00Z"]
+  },
+  {
+    "id": "question-mark-day-of-week-with-wildcard-day-of-month",
+    "expression": "0 12 * * ?",
+    "timezone": "UTC",
+    "lastOccurrenceAt": "2026-11-07T00:00:00Z",
+    "now": "2026-11-10T13:00:00Z",
+    "limit": 10,
+    "expected": [
+      "2026-11-07T12:00:00Z",
+      "2026-11-08T12:00:00Z",
+      "2026-11-09T12:00:00Z",
+      "2026-11-10T12:00:00Z"
+    ]
+  },
+  {
+    "id": "question-mark-day-of-week-with-seconds",
+    "expression": "0 0 12 * * ?",
+    "timezone": "UTC",
+    "lastOccurrenceAt": null,
+    "now": "2026-11-10T13:00:00Z",
+    "limit": 1,
+    "expected": ["2026-11-10T12:00:00Z"]
+  },
+  {
+    "id": "question-mark-in-both-day-fields",
+    "expression": "0 12 ? * ?",
+    "timezone": "UTC",
+    "lastOccurrenceAt": "2026-11-08T12:00:00Z",
+    "now": "2026-11-10T13:00:00Z",
+    "limit": 10,
+    "expected": ["2026-11-09T12:00:00Z", "2026-11-10T12:00:00Z"]
   }
 ]

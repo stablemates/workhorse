@@ -547,6 +547,15 @@
             "user"
           ]
         },
+        "schedules[].lastErrorAt": {
+          "type": "null|string"
+        },
+        "schedules[].lastErrorCode": {
+          "type": "null|string"
+        },
+        "schedules[].lastErrorMessage": {
+          "type": "null|string"
+        },
         "schedules[].lastFiredAt": {
           "type": "null|string"
         },
