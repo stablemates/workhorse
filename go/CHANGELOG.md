@@ -116,6 +116,36 @@ HTTP/1 server. go1.26.11 fixes it. The `toolchain` line of `go.mod` now names go
 from go1.26.10. The `go 1.25.0` line does not change, so the module still supports Go 1.25. If you
 build on Go 1.26.x, use go1.26.11 or newer (SM-2009).
 
+### Cold export waits for the transactions that can still write into a day
+
+A history row gets its time when it is written, but other sessions see it only after its
+transaction commits. Cold export gave out a day when the day had ended and the statistics rollup
+had passed it. If a transaction wrote into the day and committed later, its row was in no export
+object, and history retention later deleted it. `claim_cold_export_segment_v1` now waits for a
+snapshot frontier. At least 60 s after the end of the day, the claim records a new transaction ID
+in the new `cold_export_dataset` columns `frontier_day_end` and `frontier_xid`. It gives out the
+day only after each transaction older than that ID has ended. A long write transaction in any
+database of the server delays the export of a day until it ends. An exporter calls the claim in a transaction of its own. It
+reads all pages of a day in one `REPEATABLE READ` transaction that starts after the claim. A re-lease passes the same frontier. The migration fences each segment that is exporting.
+A completion from before the migration then fails, and the day is given out again. `send_signal_v1` and `complete_human_wait_v1`, when no wait exists, and
+`record_batch_event_v1` take their transaction ID before they write their event (SM-1928,
+ADR 0121).
+
+After a stop of the statistics rollup of more than two days, each catch-up pass deleted some
+minute buckets that it had just written. The hour and day tiers lost those counts. Statistics retention now keeps each minute bucket and each hour bucket until no later pass
+rebuilds a coarser tier from it (SM-1978). A history retention pass that the rollup or the
+export held back recorded `succeeded` and waited for the next local date. It now records
+`incomplete` and runs again on the next offer (SM-1979). The statistics guide states that the
+rollup does not count a history row whose transaction commits after the recompute window passed
+its minute (SM-1959).
+
+Migration 0096 (`0096-export-a-day-after-its-snapshot-frontier-and-keep-held-retention-due.sql`)
+moves the schema to version 95. It adds the two nullable columns and
+`cold_export_frontier_margin_ms_v1`, and replaces the bodies of `claim_cold_export_segment_v1`,
+`send_signal_v1`, `complete_human_wait_v1`, `record_batch_event_v1`, `rollup_stats_v1`, and
+`retain_history_v1`. It does not raise the SDK compatibility floor and changes only the exporting
+rows of `cold_export_segment`. Run `workhorse schema migrate`.
+
 ## 0.12.0 — 2026-11-07
 
 The npm packages, Python distribution, Go module, Rust crate, Ruby gem, JVM artifacts, and .NET

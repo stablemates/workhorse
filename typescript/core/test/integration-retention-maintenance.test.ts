@@ -936,6 +936,196 @@ describe("retention maintenance", () => {
     expect(Number(pruned.rows[0]!.count)).toBeLessThan(Number(retained.rows[0]!.count));
   });
 
+  it.each([
+    {
+      end: "at H:17",
+      t0: "date_trunc('hour', clock_timestamp() - interval '3 days') + interval '17 minutes'",
+    },
+    { end: "at H:00", t0: "date_trunc('hour', clock_timestamp() - interval '3 days')" },
+    {
+      end: "at H:01",
+      t0: "date_trunc('hour', clock_timestamp() - interval '3 days') + interval '1 minute'",
+    },
+    {
+      end: "at UTC midnight",
+      t0: "date_trunc('day', (clock_timestamp() - interval '72 hours') AT TIME ZONE 'UTC') AT TIME ZONE 'UTC' + interval '20 hours'",
+    },
+    {
+      end: "one minute after UTC midnight",
+      t0: "date_trunc('day', (clock_timestamp() - interval '72 hours') AT TIME ZONE 'UTC') AT TIME ZONE 'UTC' + interval '20 hours 1 minute'",
+    },
+  ])(
+    "keeps each statistics bucket that a catch-up pass ending $end still needs",
+    async ({ t0: t0Sql }) => {
+      // 300 enqueued events, one for each minute from t0 three days ago, and a rollup that stopped
+      // two minutes after the first one. The first pass of 240 minutes ends four hours after t0.
+      const start = await pool.query<{ t0: Date }>(`SELECT ${t0Sql} AS t0`);
+      const t0 = start.rows[0]!.t0;
+      await pool.query(
+        `SELECT count(*) FROM workhorse.enqueue_many_v1((
+         SELECT jsonb_agg(jsonb_build_object('queue', 'stat-catch-up', 'type', 'stat',
+                                             'payload', '{}'::jsonb))
+           FROM generate_series(1, 300)))`,
+      );
+      await pool.query(
+        `WITH numbered AS (
+         SELECT event.event_id, event.occurred_at AS old_at,
+                row_number() OVER (ORDER BY event.event_id) - 1 AS n
+           FROM workhorse.task_event event
+           JOIN workhorse.task task ON task.id = event.task_id
+          WHERE task.queue_name = 'stat-catch-up' AND event.event_type = 'enqueued')
+       UPDATE workhorse.task_event event
+          SET occurred_at = $1::timestamptz + make_interval(mins => numbered.n::integer)
+         FROM numbered
+        WHERE event.event_id = numbered.event_id AND event.occurred_at = numbered.old_at`,
+        [t0],
+      );
+      await pool.query(
+        `UPDATE workhorse.task_stat_state
+          SET rolled_up_through = $1::timestamptz + interval '2 minutes',
+              hourly_rolled_up_through = date_trunc('hour', $1::timestamptz),
+              daily_rolled_up_through = date_trunc('day', $1::timestamptz AT TIME ZONE 'UTC')
+                AT TIME ZONE 'UTC',
+              last_run_at = $1::timestamptz + interval '2 minutes'`,
+        [t0],
+      );
+      await pool.query(
+        `DELETE FROM workhorse.task_stat_bucket;
+       DELETE FROM workhorse.task_stat_bucket_hour;
+       DELETE FROM workhorse.task_stat_bucket_day;`,
+      );
+
+      // Catch up as run_maintenance_v1 does: passes of 240 minutes at the real clock.
+      for (let pass = 0; pass < 30; pass += 1) {
+        const rows = await pool.query<{ error: unknown }>(
+          "SELECT * FROM workhorse.rollup_stats_v1(true, clock_timestamp(), 240)",
+        );
+        expect(rows.rows.map(({ error }) => error)).toEqual([null, null]);
+        const caughtUp = await pool.query<{ caught_up: boolean }>(
+          `SELECT rolled_up_through >= date_bin('1 minute', clock_timestamp(),
+                  timestamp '2000-01-01' AT TIME ZONE 'UTC') - interval '1 minute' AS caught_up
+           FROM workhorse.task_stat_state WHERE singleton`,
+        );
+        if (caughtUp.rows[0]!.caught_up) break;
+      }
+
+      const hours = await pool.query<{ enqueued: number }>(
+        `SELECT COALESCE(sum(enqueued), 0)::integer AS enqueued
+         FROM workhorse.task_stat_bucket_hour WHERE queue_name = 'stat-catch-up'`,
+      );
+      expect(hours.rows[0]!.enqueued).toBe(300);
+      // Each complete day holds the raw count of that day.
+      const days = await pool.query<{ day: Date; tier: number; raw: number }>(
+        `WITH raw AS (
+         SELECT date_bin('1 day', event.occurred_at, timestamp '2000-01-01' AT TIME ZONE 'UTC') AS day,
+                count(*)::integer AS raw
+           FROM workhorse.task_event event
+           JOIN workhorse.task task ON task.id = event.task_id
+          WHERE task.queue_name = 'stat-catch-up' AND event.event_type = 'enqueued'
+          GROUP BY 1)
+       SELECT raw.day, COALESCE(sum(bucket.enqueued), 0)::integer AS tier, raw.raw
+         FROM raw
+         LEFT JOIN workhorse.task_stat_bucket_day bucket
+           ON bucket.bucket_start = raw.day AND bucket.queue_name = 'stat-catch-up'
+        WHERE raw.day < (SELECT daily_rolled_up_through FROM workhorse.task_stat_state)
+        GROUP BY raw.day, raw.raw
+        ORDER BY raw.day`,
+      );
+      expect(days.rows.length).toBeGreaterThan(0);
+      for (const row of days.rows) expect(row.tier).toBe(row.raw);
+    },
+  );
+
+  it.each([
+    { hold: "the rollup watermark", exportHold: false },
+    { hold: "the cold export watermark", exportHold: true },
+  ])(
+    "records a pass that $hold holds back as incomplete and keeps it due",
+    async ({ exportHold }) => {
+      await queue.syncMaintenancePolicy(
+        { timezone: "UTC", historyRetentionLocalTime: "00:00" },
+        { force: true },
+      );
+      await queue.syncRetentionPolicy(defaultRetentionPolicy);
+      const day = await pool.query<{ partition: string; today: string }>(
+        `SELECT 'task_event_' || to_char(((clock_timestamp() AT TIME ZONE 'UTC')::date - 16)::timestamp,
+                                         'YYYYMMDD') AS partition,
+                ((clock_timestamp() AT TIME ZONE 'UTC')::date)::text AS today`,
+      );
+      const { partition, today } = day.rows[0]!;
+      await pool.query(
+        "SELECT workhorse.create_history_day_v1((clock_timestamp() AT TIME ZONE 'UTC')::date - 16)",
+      );
+      // A fixed 480 hours keeps a UTC midnight in a session TimeZone with daylight saving.
+      const twentyDaysAgo =
+        "date_trunc('day', clock_timestamp() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC' - interval '480 hours'";
+      if (exportHold) {
+        await queue.setColdExportPolicy({ enabled: true });
+        await pool.query(
+          `UPDATE workhorse.cold_export_dataset SET exported_through = ${twentyDaysAgo}`,
+        );
+      } else {
+        await pool.query(
+          `UPDATE workhorse.task_stat_state
+              SET rolled_up_through = ${twentyDaysAgo},
+                  hourly_rolled_up_through = ${twentyDaysAgo},
+                  daily_rolled_up_through = ${twentyDaysAgo}`,
+        );
+      }
+      const lastRun = async () =>
+        (
+          await pool.query<{ outcome: string; last_completed_local_date: string | null }>(
+            `SELECT run.outcome, state.last_completed_local_date::text AS last_completed_local_date
+               FROM workhorse.maintenance_run run
+               CROSS JOIN workhorse.maintenance_state state
+              WHERE run.routine_name = 'history_retention'
+                AND state.routine_name = 'history_retention'
+              ORDER BY run.started_at DESC, run.run_id DESC LIMIT 1`,
+          )
+        ).rows[0];
+      const partitionExists = async () =>
+        (
+          await pool.query<{ present: boolean }>(
+            "SELECT to_regclass('workhorse.' || $1::text) IS NOT NULL AS present",
+            [partition],
+          )
+        ).rows[0]!.present;
+      const before = await pool.query<{ last_completed_local_date: string | null }>(
+        `SELECT last_completed_local_date::text AS last_completed_local_date
+           FROM workhorse.maintenance_state WHERE routine_name = 'history_retention'`,
+      );
+
+      expect(await queue.retainHistory({ force: true })).toHaveLength(3);
+      expect(await lastRun()).toEqual({
+        outcome: "incomplete",
+        last_completed_local_date: before.rows[0]!.last_completed_local_date,
+      });
+      expect(await partitionExists()).toBe(true);
+      // The held pass stays due, so the next offer on the same local date runs it again.
+      expect(await queue.retainHistory()).toHaveLength(3);
+      expect((await lastRun())?.outcome).toBe("incomplete");
+
+      // The hold ends, and the next offer drops the expired partition and completes.
+      if (exportHold) {
+        await pool.query(
+          `UPDATE workhorse.cold_export_dataset
+              SET exported_through = date_trunc('day', clock_timestamp() AT TIME ZONE 'UTC')
+                AT TIME ZONE 'UTC'`,
+        );
+      } else {
+        await pool.query(
+          `UPDATE workhorse.task_stat_state
+              SET rolled_up_through = date_bin('1 minute', clock_timestamp(),
+                    timestamp '2000-01-01' AT TIME ZONE 'UTC')`,
+        );
+      }
+      expect(await queue.retainHistory()).toHaveLength(3);
+      expect(await partitionExists()).toBe(false);
+      expect(await lastRun()).toEqual({ outcome: "succeeded", last_completed_local_date: today });
+      expect(await queue.retainHistory()).toEqual([]);
+    },
+  );
+
   it("round trips retention policy defaults and rejects unsafe or malformed policies in PostgreSQL", async () => {
     await expect(queue.getRetentionPolicy()).resolves.toMatchObject(defaultRetentionPolicy);
 

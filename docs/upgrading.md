@@ -11,23 +11,28 @@ upgrade keeps. Each changelog states the full changes of its release.
 
 The next release corrects how debounce, enqueue, queue purge, and claims use the clock and their
 locks. It also limits the queue name of an enqueue, and it keeps one failed schedule from stopping
-the other schedules. The upgrade is a rolling deployment, and a mixed fleet is supported while it
-runs.
+the other schedules. It makes cold export wait for the transactions that can still write into a
+day. It also corrects the statistics catch-up and the completion of history retention. The upgrade
+is a rolling deployment, and a mixed fleet is supported while it runs.
 
-1. Run `workhorse schema migrate`. It applies migrations 0093 through 0095 and leaves the schema at
-   version 94.
-2. Roll out the new processes in any order.
+1. If you run cold exporters, stop each one and let it finish its object and manifest uploads. Keep
+   cold export enabled, so retention keeps waiting for the export.
+2. Run `workhorse schema migrate`. It applies migrations 0093 through 0096 and leaves the schema at
+   version 95.
+3. Roll out the new processes in any order. Then start the exporters again.
 
-A 0.12.0 database is at schema version 91. The migrations replace function bodies, and 0095 adds
-three nullable columns. They rewrite no stored rows:
+A 0.12.0 database is at schema version 91. The migrations replace function bodies, 0095 adds
+three nullable columns, and 0096 adds two nullable columns. Only 0096 changes stored rows: it fences
+each `cold_export_segment` row that is exporting.
 
-| Migration                                                                    | Schema version | Changes                                                                                                                                                                                                                                                                                        |
-| ---------------------------------------------------------------------------- | -------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `0093-decide-debounce-with-one-clock-and-keep-pending-debounce-keys.sql`     | 92             | `enqueue_debounce_v1`, `enqueue_batch_v1`, `lock_enqueue_prerequisites_internal_v1`, and `prune_enqueue_idempotency_v1` correct enqueue defects                                                                                                                                                |
-| `0094-purge-locked-tasks-lock-stale-tiers-and-start-leases-after-locks.sql`  | 93             | `purge_queue_internal_v1`, `lock_queue_tiers_v1`, `set_queue_tier_v1`, `enqueue_batch_v1`, `enqueue_debounce_v1`, `sync_schedule_definitions_internal_v1`, `add_task_group_members_v1`, `claim_policy_batch_v1`, and `claim_one_v1` correct purge, tier, queue name, and lease defects         |
-| `0095-isolate-each-schedule-in-a-pass-and-match-two-wildcard-day-fields.sql` | 94             | `fire_due_schedules_v2` isolates each schedule and records its error in three new `schedule_definition` columns, `sync_schedule_definitions_internal_v1` refuses a fast-tier concurrency key, `cron_occurrences_v1` matches two wildcard day fields, and `dashboard_cron_v1` returns the error |
+| Migration                                                                       | Schema version | Changes                                                                                                                                                                                                                                                                                                                                |
+| ------------------------------------------------------------------------------- | -------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `0093-decide-debounce-with-one-clock-and-keep-pending-debounce-keys.sql`        | 92             | `enqueue_debounce_v1`, `enqueue_batch_v1`, `lock_enqueue_prerequisites_internal_v1`, and `prune_enqueue_idempotency_v1` correct enqueue defects                                                                                                                                                                                        |
+| `0094-purge-locked-tasks-lock-stale-tiers-and-start-leases-after-locks.sql`     | 93             | `purge_queue_internal_v1`, `lock_queue_tiers_v1`, `set_queue_tier_v1`, `enqueue_batch_v1`, `enqueue_debounce_v1`, `sync_schedule_definitions_internal_v1`, `add_task_group_members_v1`, `claim_policy_batch_v1`, and `claim_one_v1` correct purge, tier, queue name, and lease defects                                                 |
+| `0095-isolate-each-schedule-in-a-pass-and-match-two-wildcard-day-fields.sql`    | 94             | `fire_due_schedules_v2` isolates each schedule and records its error in three new `schedule_definition` columns, `sync_schedule_definitions_internal_v1` refuses a fast-tier concurrency key, `cron_occurrences_v1` matches two wildcard day fields, and `dashboard_cron_v1` returns the error                                         |
+| `0096-export-a-day-after-its-snapshot-frontier-and-keep-held-retention-due.sql` | 95             | `claim_cold_export_segment_v1` waits for a snapshot frontier in two new `cold_export_dataset` columns, `send_signal_v1`, `complete_human_wait_v1`, and `record_batch_event_v1` take a transaction ID before an event, `rollup_stats_v1` keeps statistics rows that a coarser tier needs, and `retain_history_v1` keeps a held pass due |
 
-Migration 0095, as 0093 and 0094, does not raise the floor, so it stays 76. The SQL functions change for
+Migration 0096, as 0093 through 0095, does not raise the floor, so it stays 76. The SQL functions change for
 every SDK version when each migration commits:
 
 - A debounce request reads the clock after its last lock. It no longer writes a second task when a
@@ -66,8 +71,28 @@ every SDK version when each migration commits:
   with SQLSTATE `P1007`. Before the upgrade, remove the key from such a schedule, or disable it.
 - `0 12 * * ?` and the other expressions with `?` in day-of-week and a wildcard day-of-month now
   match each day. The synchronization refused them before, so no stored schedule changes.
+- Cold export gives out a day at the earliest 60 s after the end of the day. It also waits until each
+  transaction that was open at that time has ended. A long write transaction in any database of
+  the server delays the export of a day until it ends. An exporter must call the claim in a
+  transaction of its own. It must read all pages of a day in one `REPEATABLE READ` transaction that
+  starts after the claim. A claim in a transaction that already has a transaction ID records no
+  frontier. Thus it cannot start the wait for a new day
+  ([Cold export](guides/335-cold-export.md)).
+- An exporter that holds a segment when migration 0096 runs cannot complete or fail it. Its
+  completion raises `not held by attempt`. The next claim gives out the day again after its
+  frontier, and the exporter writes the same object key again. The fence cannot stop an upload that is
+  already in flight. That upload can write an earlier read of the day over the newer object. Thus stop the exporters and let their uploads finish before the migration, as step 1
+  says.
+- A day that an exporter completed before migration 0096 used the earlier gate. A late commit into
+  that day is not in its export object.
+- After a stop of the statistics rollup of more than two days, the catch-up keeps each minute
+  bucket until the hour tier uses it. Before, each catch-up pass lost the minutes after its last
+  complete hour.
+- If the rollup or the export holds back a history retention pass, the pass records `incomplete`. It
+  runs again on the next offer until the hold ends. Before, it recorded `succeeded` and waited for the
+  next local date.
 
-A 0.12 process keeps working on schema version 94, because a migration inside a major line only
+A 0.12 process keeps working on schema version 95, because a migration inside a major line only
 adds.
 
 ## Upgrade from 0.11.x to 0.12.0

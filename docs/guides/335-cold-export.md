@@ -79,6 +79,48 @@ More detail: [Data model: Export gate](../architecture/data-model.md#export-gate
 
 </details>
 
+## Expect an open transaction to delay the export of a day
+
+A history row gets its time when it is written. Other sessions see the row only when its
+transaction commits. Thus a transaction can still add rows to a day after the day ends. Workhorse
+does not give out a day until each such transaction has ended.
+
+**Example.** An application enqueues a task inside its own transaction. The transaction is still
+open at midnight UTC.
+
+1. At 23:59 UTC on 14 September, the transaction writes the `enqueued` event of the task. The event
+   belongs to 14 September.
+2. Shortly after midnight, `archiver-1` claims the next day. The claim records the point that each
+   older transaction must pass, and it gives out no day, because the application transaction is
+   still open.
+3. At 00:10, the application transaction commits. The event is now visible.
+4. At its next run, `archiver-1` claims 14 September. Its export includes the event.
+
+A long write transaction delays the export of each day until the transaction ends. This is true for
+a transaction in any database of the PostgreSQL server, and also for a prepared transaction. The
+export of a day also starts only a short margin after the end of the day. Retention waits for the
+export, so it keeps the day for that time.
+
+Call the claim in a transaction of its own. If the claim returns no day, call it again at the next
+run. Read all pages of a day in one `REPEATABLE READ` transaction that starts after the claim.
+
+<details>
+<summary>Reference: snapshot frontier</summary>
+
+1. The claim reads the server clock, then takes its transaction ID.
+2. If the next day has no frontier, the claim records one in `frontier_day_end` and `frontier_xid`
+   of `cold_export_dataset`. It does so only when the server clock is at least
+   `cold_export_frontier_margin_ms_v1()`, 60,000 ms, after the end of the day. Its transaction must also
+   have had no ID before the claim. `p_now` does not decide this.
+3. The claim gives out the day only when `pg_snapshot_xmin(pg_current_snapshot())` is at or after
+   `frontier_xid`.
+
+`exportableThrough` in the status does not include the frontier. The frontier needs no privilege.
+
+More detail: [Data model: Snapshot frontier](../architecture/data-model.md#snapshot-frontier).
+
+</details>
+
 ## Run an exporter
 
 **Example.** An operator turns on cold export just before the first run of `archiver-1`.
@@ -114,8 +156,9 @@ queue health increases until you turn off cold export or run an exporter.
 
 An exporter repeats these calls:
 
-1. Claim the next day.
-2. Read the day in pages, in the order of the row identity.
+1. Claim the next day, in a transaction of its own.
+2. Read the day in pages, in the order of the row identity. Read all pages in one
+   `REPEATABLE READ` transaction.
 3. Write the file and its manifest to the export store.
 4. Complete the segment with the checksum and the counts.
 
@@ -123,8 +166,11 @@ If the write fails, report the failure. The next claim then gets the same day ag
 
 ```sql
 SELECT * FROM workhorse.claim_cold_export_segment_v1('task_event', 'archiver-1', 3600000);
+BEGIN ISOLATION LEVEL REPEATABLE READ;
 SELECT * FROM workhorse.read_cold_export_rows_v1(
   'task_event', '2026-09-14T00:00Z', '2026-09-15T00:00Z', NULL, NULL, 5000);
+-- Read the next pages here, from the last row of each page.
+COMMIT;
 SELECT workhorse.complete_cold_export_segment_v1(
   'task_event', '2026-09-14T00:00Z', 1,
   'workhorse/task_event/2026/09/14/task_event-2026-09-14.ndjson.gz',
@@ -144,8 +190,9 @@ own.
 
 An exporter runs these steps:
 
-1. It claims one day of one dataset.
-2. It reads the day in `read_cold_export_rows_v1` pages of 1 through 100,000 rows.
+1. It claims one day of one dataset, in a transaction of its own.
+2. It reads the day in `read_cold_export_rows_v1` pages of 1 through 100,000 rows, in one
+   `REPEATABLE READ` transaction that starts after the claim.
 3. It writes one gzipped JSON-lines object, named as below.
 4. It writes a `.manifest.json` beside the object, with the row count, byte length, and hex SHA-256
    of the object as stored.
@@ -166,7 +213,7 @@ An exporter runs these steps:
 | `exporting`         | `{ segmentStart, attempts }` of a held or abandoned segment. |
 | `lastError`         | The newest stored error.                                     |
 
-More detail: [Data model: Exporter contract](../architecture/data-model.md#exporter-contract).
+More detail: [Data model: Exporter contract](../architecture/data-model.md#exporter-contract) and [Data model: Segment functions](../architecture/data-model.md#segment-functions).
 
 </details>
 

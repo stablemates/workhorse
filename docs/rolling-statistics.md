@@ -116,9 +116,30 @@ Defaults: `false, clock_timestamp(), 240`. Returns the standard maintenance phas
 6. Rewrite minute rows with `statistics_group_limit`, derive complete affected hours and days, then advance all three watermarks.
 7. `stat_retention` deletes expired buckets, bounded by policy (below).
 
-**Why the pass rewrites minutes it already closed.** A bucket is a pure function of the raw history in its minute. A transaction that commits its history row after its own minute closed would otherwise be lost forever; rewriting the last couple of minutes absorbs it. The same property makes the pass safe to run twice — it converges rather than double counting, which is what the "recompute" integration test asserts.
+**Why the pass rewrites minutes it already closed.** A bucket is a pure function of the raw history in its minute. A transaction that commits its history row after its own minute closed would otherwise be lost forever. Rewriting the last `statistics_recompute_buckets` minutes absorbs it, within the limit that [Late commits](#late-commits) states. The same property makes the pass safe to run twice — it converges rather than double counting, which is what the "recompute" integration test asserts.
 
 `task_outcome` rows can be deleted by terminal pruning, which would make a recompute of a long-past bucket lose counts. This cannot happen: pruning only touches rows days old, far outside a two-minute recompute window.
+
+### Late commits
+
+The recompute window has a limit. Each pass rewrites the `statistics_recompute_buckets` minutes
+(default 2) before `rolled_up_through`. A history row gets its time when it is written, and the
+rollup sees it only after its transaction commits. A transaction can commit after the window of
+every later pass has passed the row's minute. Then no pass reads that minute again, and the
+statistics never count the row. Such a row can be missing from its minute, hour, and day buckets. With the default settings, that
+happens when its transaction commits more than about `statistics_recompute_buckets` minutes after
+its write.
+
+The raw row is not lost. A `task_event` or `attempt_history` row stays until history retention
+deletes it, and a `task_outcome` row stays until terminal cleanup deletes it. Task reads include
+the row. Cold export includes it when it is a `task_event` or `attempt_history` row.
+
+This differs from cold export on purpose
+([ADR 0121](decisions/0121-export-a-cold-day-after-its-snapshot-frontier.md)). A missed export
+row is lost when retention deletes the day, so cold export waits for each open transaction. A
+statistics miss changes only an aggregate, and the raw row stays. A longer window would make every
+pass rewrite more buckets for as long as a long transaction is open. To count later commits, raise
+`statistics_recompute_buckets`. Each pass then rewrites that many minutes.
 
 ### `stat_buckets_v1(p_from, p_to)`
 
@@ -140,7 +161,7 @@ v_event_before   := LEAST(v_event_before, v_rolled_up_through);
 v_attempt_before := LEAST(v_attempt_before, v_rolled_up_through);
 ```
 
-A stalled rollup therefore **holds history** instead of silently deleting the input to a window nobody has computed yet. The pass reports itself incomplete, `history_retained_before` does not advance, and the growing retention lag surfaces on the health page alongside `QueueHealth.statistics.lagMs`.
+A stalled rollup therefore **holds history** instead of silently deleting the input to a window nobody has computed yet. The pass records `incomplete`, `history_retained_before` does not advance, and the growing retention lag surfaces on the health page alongside `QueueHealth.statistics.lagMs`. Since migration 0096 (schema version 95), completion is judged against the policy cutoffs before the clamp. Thus a held pass also stays due and runs again on the next offer until the rollup catches up.
 
 Terminal identity pruning is gated transitively: `prune_terminal_storage_v1` already refuses to delete past `history_retained_before`, so clamping in one place protects both.
 
@@ -158,6 +179,15 @@ Buckets are a sixth retained category, configured exactly like the other five th
 
 Minute rows retain at most two days and hour rows retain at most ninety days. A shorter
 `statisticsRetentionDays` value shortens every tier. Each tier applies the row bound independently.
+
+A coarser tier is built only from the finer rows that remain. The next pass rebuilds the hours from
+a first hour. That hour is the earlier of `hourly_rolled_up_through` and the hour of the start of
+its recompute window. The pass also rebuilds the days from the day of that hour. Retention keeps the
+minute rows from that hour and the hour rows from that day. After a stop of more than two days, a
+catch-up pass writes minute rows older than their retention. The hour tier uses them only up to the
+last complete hour of the pass. The next pass uses the rest. Before migration 0096, retention deleted those rows first, and the
+hour and day tiers lost their counts. In a normal pass these bounds are newer than the retention
+cutoffs, so the same rows are deleted.
 
 It sits **outside** the `task_identity >= dependents` constraint that governs the history categories,
 and that placement is the point. A bucket summarizes tasks; it does not attribute one. Keeping
@@ -297,21 +327,24 @@ Full method and results: [`benchmarks/2026-08-17-statistics-tiers-analysis.md`](
 
 ## Testing
 
-| Test                                                                                                                  | Asserts                                                             |
-| --------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------- |
-| `typescript/core/test/integration-retention-maintenance.test.ts` — "materializes closed minutes"                      | Grain separation, error capture, and convergence on repeated passes |
-| `typescript/core/test/integration-retention-maintenance.test.ts` — "stitches materialized buckets"                    | A window is correct before _and_ after materialization              |
-| `typescript/core/test/integration-retention-maintenance.test.ts` — "derives hourly and daily tiers"                   | Tier derivation and merged wait percentile accuracy                 |
-| `typescript/core/test/integration-retention-maintenance.test.ts` — "folds statistics beyond the group limit"          | Overflow folds into `__other__` and totals are preserved            |
-| `typescript/core/test/integration-retention-maintenance.test.ts` — "reports rollup progress through health"           | `lagMs` and `lastRunAt`                                             |
-| `typescript/core/test/integration-retention-maintenance.test.ts` — "refuses to delete raw history past the watermark" | The retention interlock, held and then released                     |
-| `typescript/core/test/integration-retention-maintenance.test.ts` — "prunes statistics buckets on their own policy"    | Independent window, and that it is not bound by the identity chain  |
-| `typescript/core/test/integration-retention-maintenance.test.ts` — "bounds statistics pruning by the rows per pass"   | Per-pass deletion cap                                               |
-| `typescript/core/test/integration-retention-maintenance.test.ts` — "reports history size with daily partitions"       | Partition trees folded into their parent in health                  |
+| Test                                                                                                                  | Asserts                                                                     |
+| --------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------- |
+| `typescript/core/test/integration-retention-maintenance.test.ts` — "materializes closed minutes"                      | Grain separation, error capture, and convergence on repeated passes         |
+| `typescript/core/test/integration-retention-maintenance.test.ts` — "stitches materialized buckets"                    | A window is correct before _and_ after materialization                      |
+| `typescript/core/test/integration-retention-maintenance.test.ts` — "derives hourly and daily tiers"                   | Tier derivation and merged wait percentile accuracy                         |
+| `typescript/core/test/integration-retention-maintenance.test.ts` — "folds statistics beyond the group limit"          | Overflow folds into `__other__` and totals are preserved                    |
+| `typescript/core/test/integration-retention-maintenance.test.ts` — "reports rollup progress through health"           | `lagMs` and `lastRunAt`                                                     |
+| `typescript/core/test/integration-retention-maintenance.test.ts` — "refuses to delete raw history past the watermark" | The retention interlock, held and then released                             |
+| `typescript/core/test/integration-retention-maintenance.test.ts` — "prunes statistics buckets on their own policy"    | Independent window, and that it is not bound by the identity chain          |
+| `typescript/core/test/integration-retention-maintenance.test.ts` — "bounds statistics pruning by the rows per pass"   | Per-pass deletion cap                                                       |
+| `typescript/core/test/integration-retention-maintenance.test.ts` — "reports history size with daily partitions"       | Partition trees folded into their parent in health                          |
+| `typescript/core/test/integration-retention-maintenance.test.ts` — "keeps each minute bucket of a catch-up pass"      | A catch-up after three days keeps every count in the hour and day tiers     |
+| `typescript/core/test/integration-retention-maintenance.test.ts` — "records a pass that ... holds back as incomplete" | A held retention pass records `incomplete` and runs again on the next offer |
 
 ## Limits
 
 - **Wait percentiles are approximate.** The logarithmic sketch has roughly one percent relative error and returns a bin midpoint rather than an exact retained sample.
 - **No worker or tag dimensions.** Their cardinality is controlled by deployment data, so including them would remove the aggregate row bound. Filtered views keep using bounded live queries.
+- **A late commit can be missing.** A history row whose transaction commits after the recompute window passed its minute is not counted ([Late commits](#late-commits)).
 - **Window edges are minute-granular.** A 15-minute window is 15 whole minutes, not 15 minutes to the microsecond.
 - **Schema baseline.** Rolling statistics are part of the current public beta baseline described in [`schema-lifecycle.md`](schema-lifecycle.md).

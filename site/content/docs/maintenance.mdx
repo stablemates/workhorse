@@ -290,9 +290,14 @@ data waits for deletion.
 rollup stopped on day 0.
 
 1. On day 16 at 03:00, the history pass can delete day 1 by its window. The rollup has not
-   summarized day 1, so the pass keeps it.
-2. While the rollup stays stopped, history increases and retention lag increases.
-3. When the rollup summarizes day 1, the next pass deletes day 1.
+   summarized day 1, so the pass keeps it. The pass records `incomplete`.
+2. The pass stays due. Each later offer runs it again, and it keeps day 1 again.
+3. While the rollup stays stopped, history increases and retention lag increases.
+4. At 03:10, the rollup summarizes day 1. The next offer deletes day 1, and the pass records
+   `succeeded`. The pass is then not due until 03:00 of the next day.
+
+The same rule applies while [cold export](#export-history-before-retention-deletes-it) has not
+exported a day.
 
 [Operations](/docs/operations) explains the rollup watermark.
 
@@ -303,6 +308,9 @@ rollup stopped on day 0.
 - A stalled rollup surfaces as growing retention lag and a rising `QueueHealth.statistics.lagMs`.
 - While cold export is enabled, a second clamp applies per dataset to
   `cold_export_dataset.exported_through`.
+- A pass is complete only when no history before the policy cutoffs remains. A pass that a clamp
+  holds back records `incomplete`, leaves `last_completed_local_date` unchanged, and runs again on
+  the next offer.
 
 More detail: [Data model: Retention interlock](https://github.com/stablemates/workhorse/blob/main/docs/architecture/data-model.md#retention-interlock).
 
@@ -776,6 +784,48 @@ More detail: [Data model: Export gate](https://github.com/stablemates/workhorse/
 
 </details>
 
+### Expect an open transaction to delay the export of a day
+
+A history row gets its time when it is written. Other sessions see the row only when its
+transaction commits. Thus a transaction can still add rows to a day after the day ends. Workhorse
+does not give out a day until each such transaction has ended.
+
+**Example.** An application enqueues a task inside its own transaction. The transaction is still
+open at midnight UTC.
+
+1. At 23:59 UTC on 14 September, the transaction writes the `enqueued` event of the task. The event
+   belongs to 14 September.
+2. Shortly after midnight, `archiver-1` claims the next day. The claim records the point that each
+   older transaction must pass, and it gives out no day, because the application transaction is
+   still open.
+3. At 00:10, the application transaction commits. The event is now visible.
+4. At its next run, `archiver-1` claims 14 September. Its export includes the event.
+
+A long write transaction delays the export of each day until the transaction ends. This is true for
+a transaction in any database of the PostgreSQL server, and also for a prepared transaction. The
+export of a day also starts only a short margin after the end of the day. Retention waits for the
+export, so it keeps the day for that time.
+
+Call the claim in a transaction of its own. If the claim returns no day, call it again at the next
+run. Read all pages of a day in one `REPEATABLE READ` transaction that starts after the claim.
+
+<details>
+<summary>Reference: snapshot frontier</summary>
+
+1. The claim reads the server clock, then takes its transaction ID.
+2. If the next day has no frontier, the claim records one in `frontier_day_end` and `frontier_xid`
+   of `cold_export_dataset`. It does so only when the server clock is at least
+   `cold_export_frontier_margin_ms_v1()`, 60,000 ms, after the end of the day. Its transaction must also
+   have had no ID before the claim. `p_now` does not decide this.
+3. The claim gives out the day only when `pg_snapshot_xmin(pg_current_snapshot())` is at or after
+   `frontier_xid`.
+
+`exportableThrough` in the status does not include the frontier. The frontier needs no privilege.
+
+More detail: [Data model: Snapshot frontier](https://github.com/stablemates/workhorse/blob/main/docs/architecture/data-model.md#snapshot-frontier).
+
+</details>
+
 ### Run an exporter
 
 **Example.** An operator turns on cold export just before the first run of `archiver-1`.
@@ -811,8 +861,9 @@ queue health increases until you turn off cold export or run an exporter.
 
 An exporter repeats these calls:
 
-1. Claim the next day.
-2. Read the day in pages, in the order of the row identity.
+1. Claim the next day, in a transaction of its own.
+2. Read the day in pages, in the order of the row identity. Read all pages in one
+   `REPEATABLE READ` transaction.
 3. Write the file and its manifest to the export store.
 4. Complete the segment with the SHA-256 checksum and the counts.
 
@@ -820,8 +871,11 @@ If the write fails, report the failure. The next claim then gets the same day ag
 
 ```sql
 SELECT * FROM workhorse.claim_cold_export_segment_v1('task_event', 'archiver-1', 3600000);
+BEGIN ISOLATION LEVEL REPEATABLE READ;
 SELECT * FROM workhorse.read_cold_export_rows_v1(
   'task_event', '2026-09-14T00:00Z', '2026-09-15T00:00Z', NULL, NULL, 5000);
+-- Read the next pages here, from the last row of each page.
+COMMIT;
 SELECT workhorse.complete_cold_export_segment_v1(
   'task_event', '2026-09-14T00:00Z', 1,
   'workhorse/task_event/2026/09/14/task_event-2026-09-14.ndjson.gz',
@@ -841,8 +895,9 @@ own.
 
 An exporter runs these steps:
 
-1. It claims one day of one dataset.
-2. It reads the day in `read_cold_export_rows_v1` pages of 1 through 100,000 rows.
+1. It claims one day of one dataset, in a transaction of its own.
+2. It reads the day in `read_cold_export_rows_v1` pages of 1 through 100,000 rows, in one
+   `REPEATABLE READ` transaction that starts after the claim.
 3. It writes one gzipped JSON-lines object, named as below.
 4. It writes a `.manifest.json` beside the object, with the row count, byte length, and hex SHA-256
    of the object as stored.
