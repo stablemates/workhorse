@@ -3827,6 +3827,9 @@ The columns of `schedule_definition`, with their PostgreSQL types and keys:
 | `last_skipped_at`      | `timestamptz` |             |
 | `last_skipped_count`   | `int`         |             |
 | `last_skipped_through` | `timestamptz` |             |
+| `last_error_at`        | `timestamptz` |             |
+| `last_error_code`      | `text`        |             |
+| `last_error_message`   | `text`        |             |
 
 #### Catch-up position
 
@@ -3854,6 +3857,24 @@ writes the three columns together. A later skip replaces them. A pass that skips
 `set_schedule_paused_v1` do not change them. A pass that defers before its first occurrence writes
 no row ([Busy occurrences](#busy-occurrences)), so the next pass records the same skip.
 
+#### Error record
+
+Since schema version 94, a pass records the last error of a definition on its row
+([Failed definitions](#failed-definitions)):
+
+- `last_error_at` is the `now` of the pass that failed.
+- `last_error_code` is the SQLSTATE of the error.
+- `last_error_message` is the error message, cut to its first 1,000 characters.
+
+The three columns are null until the first failure. `fire_due_schedules_v2` is the only writer, and
+it writes the three columns together. Each later failure replaces them. A later pass that moves
+`last_evaluated_at` sets them to null in the same update. A pass that defers before its first
+occurrence leaves them unchanged. The error write runs outside the subtransaction and skips a row
+that another transaction locks, for example a manual `fire_schedule_v1` call. A lock timeout of the
+fire on that row thus does not fail the pass, and a later pass records the error.
+Synchronization and `set_schedule_paused_v1` do not change them,
+so a disabled or paused definition keeps its last error.
+
 #### Synchronization
 
 `sync_schedule_definitions_v2` delegates definition reconciliation to the internal helper
@@ -3863,6 +3884,12 @@ no row ([Busy occurrences](#busy-occurrences)), so the next pass records the sam
 - It validates each task definition. `priority` is an integer from 0 through 100 and defaults to 0.
   `maxAttempts` is 1 through 100 and defaults to 25. `concurrencyKey` is 1 through 256 UTF-8 bytes.
   Each SDK sends 25 for an explicit `maxAttempts` of 0.
+- Since schema version 94, it refuses an enabled definition with a `concurrencyKey` when the
+  `queue_control` row of its queue has the fast tier. The refusal is the SQLSTATE `P1007` error
+  that the enqueue gives, `fast-tier queue <queue> does not support concurrency keys`. A
+  concurrency key is the only fast-tier feature that a definition can carry. A disabled definition
+  never fires, so the synchronization accepts it. A tier change after the synchronization makes
+  each fire fail, and the pass records the error ([Failed definitions](#failed-definitions)).
 - It updates `last_evaluated_at` when an evaluation boundary changes.
 - Any definition change increments the schedule revision once.
 
@@ -3900,8 +3927,15 @@ The columns of `schedule_occurrence`, with their PostgreSQL types and keys:
 
 Time behavior and bounds:
 
+- If both day fields are wildcards, `*` or a lone `?`, each day matches. A lone `?` adds no day
+  value. Thus, before schema version 94, `0 12 * * ?` matched no day, and the synchronization
+  refused it at the 128-year horizon.
 - It advances a nonexistent wall time across a daylight-saving gap.
-- It selects the first instant in a fold.
+- It selects the first instant in a fold. Thus an interval expression, such as `*/5 * * * *` or
+  `0 * * * *`, fires in the first pass of a repeated local hour and fires nothing in the second
+  pass. In `America/New_York` on 2027-11-07, `0 * * * *` fires at `05:00Z` (01:00 EDT) and next at
+  `07:00Z` (02:00 EST). The local hour from 01:00 EST to 01:59 EST gets no occurrence. A
+  definition in `UTC` has no repeated hour.
 - If several wall-clock fields normalize to one instant, it returns that instant once.
 - It searches at most 128 years and accepts limits from 1 through 10,000.
 
@@ -3966,6 +4000,61 @@ reads the same clock that budgets and rate limits read.
 
 `fire_schedule_v1` repeats both state checks under the definition row lock.
 
+#### Failed definitions
+
+Since schema version 94, `fire_due_schedules_v2` evaluates and fires each definition in a
+subtransaction, as `tick_v1` runs each of its phases.
+
+- If the evaluation or a fire of one definition raises an error, its fires and its occurrence locks
+  roll back. The function then writes the error record ([Error record](#error-record)), keeps
+  `last_evaluated_at` and the skip record, and continues with the next definition. It reports no
+  row for the failed definition.
+- An error in the SQLSTATE classes `40` (a serialization failure or a deadlock) and `57` (a cancel,
+  a statement timeout, or a shutdown) ends the function, and the whole pass rolls back.
+- The next pass evaluates the same occurrences again. When a fire works again, the pass fires them
+  and sets the error record to null. A `skip` definition then skips each occurrence that is older
+  than the supported delay.
+- The function adds the rows of a definition to its result only after the subtransaction ends
+  without an error, because PostgreSQL keeps a returned row after a rollback.
+- The update of `last_evaluated_at` runs outside the subtransaction. A definition with no due
+  occurrence then writes in the main transaction, and its subtransaction gets no transaction ID.
+  The update and the error write skip a row that another transaction locks, so neither waits. A fire
+  in the pass already holds the row lock of its definition. Thus only a definition that fired
+  nothing can keep its position this way, and the next pass evaluates the same occurrences.
+
+Before schema version 94, one error rolled back the fires and the positions of every definition in
+the pass. A definition with a `concurrencyKey` on a fast-tier queue, or a stored queue name above
+256 UTF-8 bytes, then stopped every schedule of the offered namespaces (SM-1927). Each SDK worker
+reports a failed pass as its runtime describes, and the TypeScript and Go workers end their run.
+
+#### Occurrence locks
+
+`fire_due_schedules_v2` takes one transaction advisory lock for each occurrence that it fires, and
+`fire_schedule_v1` takes the same lock again. Each enqueue adds one shared tier lock for each queue.
+The pass holds these locks until it commits. Advisory locks use the shared lock table of the server,
+never the fast path of a backend.
+
+| Value                               | Count                                                                                             |
+| ----------------------------------- | ------------------------------------------------------------------------------------------------- |
+| Occurrence locks of one definition  | `skip` and `all`: at most the catch-up limit, 1 through 10,000, default 100. `latest`: at most 1. |
+| Occurrence locks of one pass        | The sum over the definitions that have due occurrences.                                           |
+| Shared lock table of the server     | `max_locks_per_transaction` × the backend slots.                                                  |
+| Default `max_locks_per_transaction` | 64                                                                                                |
+| Safe occurrence locks for one pass  | 1,000 with the default lock settings                                                              |
+
+The backend slots are `max_connections` plus `max_prepared_transactions` and the background
+process slots. A test pass with a catch-up limit of 10 held 10 occurrence locks, and one with 20
+held 20. If the table is full, a lock request fails with `out of shared memory` in any session of
+the server, not only in the pass. In the pass, that error is SQLSTATE `53200`, so the definition
+fails alone and records the error ([Failed definitions](#failed-definitions)). The next pass takes
+the same locks again.
+
+Each policy uses these locks. An `all` definition with a long backlog takes the catch-up limit in
+each pass. A `skip` definition takes each occurrence inside the supported delay, up to the catch-up
+limit. For example, after a gap of one minute, 20 `skip` definitions that fire each second can fire
+1,200 occurrences in one pass. Keep the occurrences that one pass can fire at or below 1,000. For a higher
+value, raise `max_locks_per_transaction`, which needs a server restart.
+
 #### Busy occurrences
 
 `fire_schedule_v1` returns a null task id for an occurrence another transaction holds and for one
@@ -4000,7 +4089,8 @@ the occurrence fires once.
 | Python     | `ScheduleDefinition.catchup_policy` | `schedule_catchup_limit`             |
 | Go         | `ScheduleDefinition.CatchupPolicy`  | `WorkerOptions.ScheduleCatchupLimit` |
 
-The policy defaults to `skip`. The limit accepts 1 through 10,000 and defaults to 100.
+The policy defaults to `skip`. The limit accepts 1 through 10,000 and defaults to 100. Each fired
+occurrence holds one advisory lock until the pass commits ([Occurrence locks](#occurrence-locks)).
 
 #### Namespace locking
 

@@ -2171,12 +2171,15 @@
                             "revision": "1",
                             "namespace": "conformance",
                             "updatedAt": "2026-01-01T00:00:00.000Z",
+                            "lastErrorAt": null,
                             "lastFiredAt": null,
                             "pausedReason": null,
                             "catchupPolicy": "skip",
+                            "lastErrorCode": null,
                             "lastSkippedAt": "2026-09-14T03:10:00.000Z",
                             "evaluatorCount": 1,
                             "occurrenceCount": 0,
+                            "lastErrorMessage": null,
                             "lastSkippedCount": 4,
                             "configuredEnabled": true,
                             "lastSkippedThrough": "2026-09-13T03:00:00.000Z",
@@ -10536,6 +10539,36 @@
             ]
           },
           "lastSkippedThrough": {
+            "anyOf": [
+              {
+                "type": "null"
+              },
+              {
+                "type": "string"
+              }
+            ]
+          },
+          "lastErrorAt": {
+            "anyOf": [
+              {
+                "type": "null"
+              },
+              {
+                "type": "string"
+              }
+            ]
+          },
+          "lastErrorCode": {
+            "anyOf": [
+              {
+                "type": "null"
+              },
+              {
+                "type": "string"
+              }
+            ]
+          },
+          "lastErrorMessage": {
             "anyOf": [
               {
                 "type": "null"

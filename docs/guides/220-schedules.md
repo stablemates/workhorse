@@ -1,6 +1,6 @@
 # How do I run a task on a recurring schedule?
 
-<!-- scenario-names: billing-production, invoice-run, weekly-cleanup, early-sync, billing -->
+<!-- scenario-names: billing-production, invoice-run, weekly-cleanup, early-sync, billing, heartbeat -->
 
 Some work must run at fixed times, for example each night or each hour. A schedule creates a task
 for this work at each of these times. Workhorse stores each schedule definition in PostgreSQL, and
@@ -184,6 +184,10 @@ Set `catchupPolicy` to `latest` if one current task can replace the missed work.
 each occurrence must create a task. The catch-up limit of the worker sets the maximum number of
 tasks in one `all` evaluation. Later evaluations continue until no missed occurrence remains.
 
+Each occurrence that a pass fires holds a lock in PostgreSQL until the pass ends. All sessions of
+the server share the space for these locks. Thus, keep the catch-up limit low, unless you also give
+the server more lock space, as the reference shows.
+
 <details>
 <summary>Reference: catch-up policies</summary>
 
@@ -216,7 +220,14 @@ The count stops at 10,000, so 10,000 means 10,000 or more. A later skip replaces
 
 The policy defaults to `skip`. The limit accepts 1 to 10,000 and defaults to 100.
 
-More detail: [Data model: Firing due schedules](../architecture/data-model.md#firing-due-schedules), [Data model: Skip record](../architecture/data-model.md#skip-record), [Data model: SDK options](../architecture/data-model.md#sdk-options), and [Schema and SQL protocol: .NET worker](../architecture/schema-and-protocol.md#net-worker).
+**Occurrence locks.** Each fired occurrence holds one transaction advisory lock until the pass
+commits. A pass can fire up to the catch-up limit for each `skip` or `all` definition, and one
+occurrence for each `latest` definition. The default `max_locks_per_transaction` is 64. With the
+default, keep the occurrences that one pass can fire at or below 1,000. For a higher value, raise
+`max_locks_per_transaction`.
+A full lock table fails lock requests with `out of shared memory` in every session of the server.
+
+More detail: [Data model: Firing due schedules](../architecture/data-model.md#firing-due-schedules), [Data model: Skip record](../architecture/data-model.md#skip-record), [Data model: SDK options](../architecture/data-model.md#sdk-options), [Data model: Occurrence locks](../architecture/data-model.md#occurrence-locks), and [Schema and SQL protocol: .NET worker](../architecture/schema-and-protocol.md#net-worker).
 
 </details>
 
@@ -226,19 +237,23 @@ A cron expression gives a local time in the timezone of the definition. When loc
 for daylight saving time, some local times do not occur, and some occur two times.
 
 **Example.** `invoice-run` uses `0 2 * * *` in `America/New_York`. `early-sync` uses `30 1 * * *` in
-the same timezone.
+the same timezone, and `heartbeat` uses `*/5 * * * *`.
 
 1. On the spring change, local clocks move from 02:00 to 03:00. Workhorse fires `invoice-run` at
    03:00 local time.
 2. On the autumn change, local clocks move from 02:00 back to 01:00. 02:00 occurs one time, so
    Workhorse fires `invoice-run` normally.
 3. On the same night, 01:30 occurs two times. Workhorse fires `early-sync` only at the first 01:30.
+4. In the first pass of the hour from 01:00 to 01:59, Workhorse fires `heartbeat` every 5 minutes.
+   In the second pass of that hour, it fires nothing. The next `heartbeat` task is at 02:00.
 
 Store the correct IANA timezone on each definition. Use UTC unless the schedule must follow local
-time, because UTC has no clock changes.
+time, because UTC has no clock changes. Use UTC for an interval schedule, such as a heartbeat or a
+poll. In a local timezone, it fires nothing while local clocks repeat a time.
 
 - If local clocks skip a scheduled time, Workhorse fires after the clocks move forward.
-- If local clocks repeat a time, Workhorse fires only at the first occurrence of that time.
+- If local clocks repeat a time, Workhorse fires only at the first occurrence of that time. Thus an
+  interval schedule fires nothing in the second pass of a repeated hour.
 - If several cron fields give the same instant, Workhorse creates one occurrence.
 
 An `H` field gives a schedule a fixed offset, so that schedules do not all fire at the same time.
@@ -255,7 +270,11 @@ expression. It accepts five fields, or six with seconds first, and supports:
 - `@yearly`, `@annually`, `@monthly`, `@weekly`, `@daily`, `@midnight`, and `@hourly`;
 - `H` and `H(lower-upper)`, which hash `${expression}:${fieldIndex}:${tokenIndex}` with SHA-256.
 
-A nonexistent wall time advances across the gap. A repeated wall time selects its first instant.
+A lone `?` adds no day value. If both day fields are wildcards, `*` or `?`, each day matches, so
+`0 12 * * ?` fires each day at 12:00.
+
+A nonexistent wall time advances across the gap. A repeated wall time selects its first instant, so
+an interval expression such as `*/5 * * * *` fires nothing in the second pass of a repeated hour.
 Occurrences have one-second precision. The search horizon is 128 years.
 
 More detail: [Data model: Cron evaluation](../architecture/data-model.md#cron-evaluation).
@@ -389,6 +408,58 @@ transaction rolls back, the next tick creates the task.
 - A pass that defers before its first occurrence writes no row.
 
 More detail: [Data model: Busy occurrences](../architecture/data-model.md#busy-occurrences).
+
+</details>
+
+## Find a schedule that cannot create its task
+
+A schedule can fail to fire, for example because its queue refuses the task. Workhorse then
+records the error on that schedule, and the other schedules continue to fire.
+
+**Example.** `invoice-run` has a concurrency key, and its queue `billing` is on the full tier.
+
+1. An operator moves the queue `billing` to the fast tier. The fast tier refuses a concurrency key.
+2. At 02:00, a worker evaluates `billing-production`. The fire of `invoice-run` fails. Workhorse
+   records the error on `invoice-run` and keeps its position.
+3. In the same evaluation, `weekly-cleanup` fires normally, and the worker continues its work.
+4. The operator moves the queue `billing` back to the full tier.
+5. At the next maintenance tick, Workhorse fires the 02:00 occurrence and clears the error.
+
+A failed schedule keeps its position, so each later tick tries the same occurrences again. When the
+fire works again, the catch-up policy controls the occurrences that the schedule missed. Thus, a
+`skip` schedule skips the occurrences that are older than the supported delay.
+
+The synchronization refuses a definition that its queue cannot accept at that time. For example, it
+refuses an enabled definition with a concurrency key on a fast-tier queue. A queue can change after
+the synchronization, so the stored error is the record that an operator can monitor.
+
+A database error that affects the full evaluation still fails it. Examples are a deadlock, a
+canceled statement, and a server shutdown. The worker then handles the failure as it handles each
+failed maintenance tick.
+
+<details>
+<summary>Reference: failed schedules</summary>
+
+Since schema version 94, `fire_due_schedules_v2` runs each definition in a subtransaction. If one
+definition raises an error, its fires roll back, and the pass writes these columns on
+`schedule_definition`:
+
+| Column               | Value                                        |
+| -------------------- | -------------------------------------------- |
+| `last_error_at`      | The `now` of the pass that failed.           |
+| `last_error_code`    | The SQLSTATE of the error.                   |
+| `last_error_message` | The error message, at most 1,000 characters. |
+
+- The pass keeps `last_evaluated_at` and the skip record of the failed definition.
+- A later pass that moves `last_evaluated_at` sets the three columns to null.
+- An error in the SQLSTATE classes 40 and 57 ends the whole pass, which then rolls back.
+- `dashboard_cron_v1` returns the columns as `lastErrorAt`, `lastErrorCode`, and
+  `lastErrorMessage`. The Schedules page does not show them yet.
+- `sync_schedule_definitions_v2` refuses an enabled definition with a `concurrencyKey` on a
+  fast-tier queue, with the enqueue error `fast-tier queue <queue> does not support concurrency
+  keys`.
+
+More detail: [Data model: Failed definitions](../architecture/data-model.md#failed-definitions), [Data model: Error record](../architecture/data-model.md#error-record), [Data model: Synchronization](../architecture/data-model.md#synchronization-3), and [Dashboard: Schedules page](../architecture/dashboard.md#schedules-page).
 
 </details>
 

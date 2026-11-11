@@ -487,6 +487,16 @@ export interface DashboardScheduleRow {
   /** The newest occurrence that the last skip dropped. Absent with `lastSkippedAt`. */
   lastSkippedThrough?: string | null;
   /**
+   * The evaluation time of the last schedule pass that failed for this schedule. Null when no pass
+   * failed since the last pass that moved its position. Absent when the installed schema predates
+   * version 94, which this dashboard still accepts.
+   */
+  lastErrorAt?: string | null;
+  /** The SQLSTATE of that failure. Absent with `lastErrorAt`. */
+  lastErrorCode?: string | null;
+  /** The message of that failure, at most 1,000 characters. Absent with `lastErrorAt`. */
+  lastErrorMessage?: string | null;
+  /**
    * True when more than 1,000 occurrences are retained. `occurrenceCount` is then 1,000. Absent
    * when the installed schema predates version 88, which this dashboard still accepts.
    */

@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { setTimeout as sleep } from "node:timers/promises";
 import { describe, expect, it } from "vitest";
-import { Queue, Worker, type Queryable } from "../src/index.js";
+import { Queue, Worker, type Queryable, type ScheduleDefinition } from "../src/index.js";
 import { createIntegrationTestContext } from "./support/integration.js";
 import { WORKHORSE_SCHEMA_VERSION } from "../src/index.js";
 
@@ -97,6 +97,17 @@ function orderedScheduleEvaluationQueues(
   return [
     new ScheduleEvaluationQueue(pool, firstEvaluationAt, { after: releaseSecondEvaluation }),
     new ScheduleEvaluationQueue(pool, secondEvaluationAt, { before: () => firstEvaluation }),
+  ];
+}
+
+function keyedFastSchedule(enabled: boolean): ScheduleDefinition[] {
+  return [
+    {
+      name: "keyed",
+      schedule: "* * * * * *",
+      enabled,
+      task: { type: "t.keyed", payload: {}, queue: "fast-keyed", concurrencyKey: "k" },
+    },
   ];
 }
 
@@ -1482,5 +1493,500 @@ describe("cron schedules", () => {
       state: null,
       runAt: null,
     });
+  });
+  it("fires the other schedules when one definition fails, and records its error", async () => {
+    await queue.syncSchedules("billing", [
+      {
+        name: "good",
+        schedule: "* * * * * *",
+        task: { type: "t.good", payload: {}, queue: "qgood" },
+      },
+    ]);
+    await queue.syncSchedules("aaa", [
+      {
+        name: "bad",
+        schedule: "* * * * * *",
+        task: { type: "t.bad", payload: {}, queue: "qfast", concurrencyKey: "k" },
+      },
+    ]);
+    // An operator moves the queue to the fast tier after the synchronization. Each fire of `bad`
+    // then fails in the enqueue.
+    await pool.query("SELECT workhorse.set_queue_tier_v1('qfast', 'fast', 'operator', 'proof')");
+    const positions = await pool.query<{ schedule_name: string; last_evaluated_at: Date }>(
+      "SELECT schedule_name, last_evaluated_at FROM workhorse.schedule_definition ORDER BY 1",
+    );
+    const badPosition = positions.rows.find((row) => row.schedule_name === "bad")!;
+    const evaluationAt = new Date(
+      Math.max(...positions.rows.map((row) => row.last_evaluated_at.getTime())) + 3_000,
+    );
+
+    const fired = await pool.query<{ namespace: string; schedule_name: string }>(
+      `SELECT namespace, schedule_name
+         FROM workhorse.fire_due_schedules_v2(ARRAY['aaa', 'billing'], $1, 100, 1000)`,
+      [evaluationAt],
+    );
+
+    expect(fired.rows.length).toBeGreaterThanOrEqual(3);
+    expect(new Set(fired.rows.map((row) => `${row.namespace}/${row.schedule_name}`))).toEqual(
+      new Set(["billing/good"]),
+    );
+    const definitions = await pool.query<{
+      schedule_name: string;
+      last_evaluated_at: Date;
+      last_error_at: Date | null;
+      last_error_code: string | null;
+      last_error_message: string | null;
+    }>(
+      `SELECT schedule_name, last_evaluated_at, last_error_at, last_error_code, last_error_message
+         FROM workhorse.schedule_definition ORDER BY schedule_name`,
+    );
+    expect(definitions.rows).toEqual([
+      {
+        schedule_name: "bad",
+        last_evaluated_at: badPosition.last_evaluated_at,
+        last_error_at: evaluationAt,
+        last_error_code: "P1007",
+        last_error_message: "fast-tier queue qfast does not support concurrency keys",
+      },
+      {
+        schedule_name: "good",
+        last_evaluated_at: evaluationAt,
+        last_error_at: null,
+        last_error_code: null,
+        last_error_message: null,
+      },
+    ]);
+    expect(
+      (
+        await pool.query(
+          "SELECT count(*)::integer AS count FROM workhorse.schedule_occurrence WHERE schedule_name = 'bad'",
+        )
+      ).rows[0]?.count,
+    ).toBe(0);
+
+    const dashboard = await pool.query<{
+      result: { schedules: Array<Record<string, unknown>> };
+    }>("SELECT workhorse.dashboard_cron_v1('{}'::jsonb) AS result");
+    expect(
+      dashboard.rows[0]!.result.schedules.find((schedule) => schedule["name"] === "bad"),
+    ).toMatchObject({
+      lastErrorAt: evaluationAt.toISOString(),
+      lastErrorCode: "P1007",
+      lastErrorMessage: "fast-tier queue qfast does not support concurrency keys",
+    });
+
+    // The queue goes back to the full tier. The next pass fires the occurrences that `bad` kept,
+    // and it clears the error.
+    await pool.query("SELECT workhorse.set_queue_tier_v1('qfast', 'full', 'operator', 'proof')");
+    const retried = await pool.query<{ schedule_name: string }>(
+      `SELECT schedule_name FROM workhorse.fire_due_schedules_v2(ARRAY['aaa'], $1, 100, 1000)`,
+      [evaluationAt],
+    );
+    expect(retried.rows.length).toBeGreaterThanOrEqual(3);
+    expect(
+      (
+        await pool.query(
+          `SELECT last_evaluated_at, last_error_at, last_error_code, last_error_message
+             FROM workhorse.schedule_definition WHERE schedule_name = 'bad'`,
+        )
+      ).rows,
+    ).toEqual([
+      {
+        last_evaluated_at: evaluationAt,
+        last_error_at: null,
+        last_error_code: null,
+        last_error_message: null,
+      },
+    ]);
+  });
+
+  it("fails only a stored definition whose queue name the enqueue refuses", async () => {
+    await queue.syncSchedules("names", [
+      {
+        name: "short",
+        schedule: "* * * * * *",
+        task: { type: "t.short", payload: {}, queue: "short-queue" },
+      },
+    ]);
+    // An older release stored this definition. The synchronization now refuses its name.
+    const longQueue = "q".repeat(257);
+    await pool.query(
+      `INSERT INTO workhorse.schedule_definition(
+         namespace, schedule_name, cron_expression, queue_name, task_type, payload, max_attempts,
+         last_evaluated_at)
+       SELECT 'names', 'long', '* * * * * *', $1, 't.long', '{}'::jsonb, 25, last_evaluated_at
+         FROM workhorse.schedule_definition WHERE schedule_name = 'short'`,
+      [longQueue],
+    );
+    const position = (
+      await pool.query<{ last_evaluated_at: Date }>(
+        "SELECT last_evaluated_at FROM workhorse.schedule_definition WHERE schedule_name = 'short'",
+      )
+    ).rows[0]!.last_evaluated_at;
+    const evaluationAt = new Date(position.getTime() + 2_000);
+
+    const fired = await pool.query<{ schedule_name: string }>(
+      "SELECT schedule_name FROM workhorse.fire_due_schedules_v2(ARRAY['names'], $1, 100, 1000)",
+      [evaluationAt],
+    );
+
+    expect(fired.rows.map((row) => row.schedule_name)).toEqual(["short", "short"]);
+    expect(
+      (
+        await pool.query(
+          `SELECT schedule_name, last_evaluated_at, last_error_at, last_error_code,
+                  last_error_message
+             FROM workhorse.schedule_definition ORDER BY schedule_name`,
+        )
+      ).rows,
+    ).toEqual([
+      {
+        schedule_name: "long",
+        last_evaluated_at: position,
+        last_error_at: evaluationAt,
+        last_error_code: "P0001",
+        last_error_message: "queue name must contain at most 256 UTF-8 bytes",
+      },
+      {
+        schedule_name: "short",
+        last_evaluated_at: evaluationAt,
+        last_error_at: null,
+        last_error_code: null,
+        last_error_message: null,
+      },
+    ]);
+  });
+
+  it("continues the pass when a lock timeout fails a definition whose row another fire holds", async () => {
+    await queue.syncSchedules("row-held", [
+      {
+        name: "busy",
+        schedule: "* * * * * *",
+        catchupPolicy: "all",
+        task: { type: "t.busy", payload: {}, queue: "row-held-busy" },
+      },
+      {
+        name: "healthy",
+        schedule: "* * * * * *",
+        catchupPolicy: "all",
+        task: { type: "t.healthy", payload: {}, queue: "row-held-healthy" },
+      },
+      {
+        name: "idle",
+        schedule: "0 0 0 1 1 *",
+        catchupPolicy: "all",
+        task: { type: "t.idle", payload: {}, queue: "row-held-idle" },
+      },
+    ]);
+    const occurrenceAt = new Date(
+      (
+        await pool.query<{ occurrence_at: Date }>(
+          `SELECT max(date_trunc('second', last_evaluated_at)) + interval '1 second' AS occurrence_at
+             FROM workhorse.schedule_definition WHERE namespace = 'row-held'`,
+        )
+      ).rows[0]!.occurrence_at,
+    );
+    const revisions = new Map(
+      (
+        await pool.query<{ schedule_name: string; revision: string }>(
+          "SELECT schedule_name, revision::text FROM workhorse.schedule_definition",
+        )
+      ).rows.map((row) => [row.schedule_name, row.revision]),
+    );
+    const holder = await pool.connect();
+    const pass = await pool.connect();
+    try {
+      // Manual fires of later occurrences hold the definition rows of `busy` and `idle` until they
+      // commit. `busy` has a due occurrence, and `idle` has none, so only its position moves.
+      await holder.query("BEGIN");
+      for (const name of ["busy", "idle"]) {
+        await holder.query(
+          "SELECT workhorse.fire_schedule_v1('row-held', $1, $2::bigint, $3::timestamptz)",
+          [name, revisions.get(name), new Date(occurrenceAt.getTime() + 10_000)],
+        );
+      }
+      await pass.query("SET lock_timeout = '100ms'");
+      const fired = await pass.query<{ schedule_name: string }>(
+        "SELECT schedule_name FROM workhorse.fire_due_schedules_v2(ARRAY['row-held'], $1, 100, 1000)",
+        [new Date(occurrenceAt.getTime() + 1_000)],
+      );
+      expect(fired.rows.map((row) => row.schedule_name)).toEqual(["healthy", "healthy"]);
+      // The rows stay locked, so the pass writes neither an error record nor a position for them.
+      expect(
+        (
+          await pass.query(
+            `SELECT schedule_name, last_error_at, last_evaluated_at < $1 AS kept_position
+               FROM workhorse.schedule_definition
+              WHERE schedule_name IN ('busy', 'idle') ORDER BY schedule_name`,
+            [occurrenceAt],
+          )
+        ).rows,
+      ).toEqual([
+        { schedule_name: "busy", last_error_at: null, kept_position: true },
+        { schedule_name: "idle", last_error_at: null, kept_position: true },
+      ]);
+    } finally {
+      await holder.query("ROLLBACK").catch(() => undefined);
+      holder.release();
+      await pass.query("RESET lock_timeout").catch(() => undefined);
+      pass.release();
+    }
+  });
+
+  it("rolls back the earlier fires of a definition when a later fire fails", async () => {
+    await queue.syncSchedules("partial", [
+      {
+        name: "healthy",
+        schedule: "* * * * * *",
+        catchupPolicy: "all",
+        task: { type: "t.healthy", payload: {}, queue: "partial-healthy" },
+      },
+      {
+        name: "partial",
+        schedule: "* * * * * *",
+        catchupPolicy: "all",
+        task: { type: "t.partial", payload: {}, queue: "partial-queue" },
+      },
+    ]);
+    const occurrenceAt = await firstOccurrenceAfterSync("partial");
+    const positions = await pool.query<{ schedule_name: string; last_evaluated_at: Date }>(
+      "SELECT schedule_name, last_evaluated_at FROM workhorse.schedule_definition ORDER BY 1",
+    );
+    const failingAt = new Date(occurrenceAt.getTime() + 1_000);
+    // The first occurrence of `partial` fires. Its second occurrence then fails.
+    await pool.query(
+      `CREATE FUNCTION public.sm1927_raise_on_second_fire() RETURNS trigger LANGUAGE plpgsql AS $$
+       BEGIN
+         IF NEW.schedule_name = 'partial' AND NEW.occurrence_at = '${failingAt.toISOString()}' THEN
+           RAISE EXCEPTION 'injected second fire failure';
+         END IF;
+         RETURN NEW;
+       END;
+       $$`,
+    );
+    let fired: { schedule_name: string; occurrence_at: Date }[];
+    try {
+      await pool.query(
+        `CREATE TRIGGER sm1927_raise_on_second_fire BEFORE INSERT ON workhorse.schedule_occurrence
+           FOR EACH ROW EXECUTE FUNCTION public.sm1927_raise_on_second_fire()`,
+      );
+      fired = (
+        await pool.query<{ schedule_name: string; occurrence_at: Date }>(
+          `SELECT schedule_name, occurrence_at
+             FROM workhorse.fire_due_schedules_v2(ARRAY['partial'], $1, 100, 1000)`,
+          [new Date(occurrenceAt.getTime() + 2_000)],
+        )
+      ).rows;
+    } finally {
+      await pool.query(
+        "DROP TRIGGER IF EXISTS sm1927_raise_on_second_fire ON workhorse.schedule_occurrence",
+      );
+      await pool.query("DROP FUNCTION IF EXISTS public.sm1927_raise_on_second_fire()");
+    }
+
+    // The pass returns only the rows of `healthy`, and `partial` keeps nothing of its first fire.
+    expect(fired.map((row) => row.schedule_name)).toEqual(["healthy", "healthy", "healthy"]);
+    const occurrences = await pool.query<{ schedule_name: string; count: number }>(
+      `SELECT schedule_name, count(*)::integer AS count FROM workhorse.schedule_occurrence
+        GROUP BY schedule_name ORDER BY schedule_name`,
+    );
+    expect(occurrences.rows).toEqual([{ schedule_name: "healthy", count: 3 }]);
+    const tasks = await pool.query<{ task_type: string; count: number }>(
+      "SELECT task_type, count(*)::integer AS count FROM workhorse.task GROUP BY task_type",
+    );
+    expect(tasks.rows).toEqual([{ task_type: "t.healthy", count: 3 }]);
+    const partial = await pool.query<{
+      last_evaluated_at: Date;
+      last_error_code: string | null;
+      last_error_message: string | null;
+    }>(
+      `SELECT last_evaluated_at, last_error_code, last_error_message
+         FROM workhorse.schedule_definition WHERE schedule_name = 'partial'`,
+    );
+    expect(partial.rows).toEqual([
+      {
+        last_evaluated_at: positions.rows.find((row) => row.schedule_name === "partial")!
+          .last_evaluated_at,
+        last_error_code: "P0001",
+        last_error_message: "injected second fire failure",
+      },
+    ]);
+  });
+
+  it.each([
+    ["40001", "a serialization failure"],
+    ["57014", "a canceled statement"],
+  ])("ends the pass on SQLSTATE %s, %s", async (sqlstate) => {
+    await queue.syncSchedules("propagate", [
+      {
+        name: "first",
+        schedule: "* * * * * *",
+        task: { type: "t.first", payload: {}, queue: "propagate-a" },
+      },
+      {
+        name: "second",
+        schedule: "* * * * * *",
+        task: { type: "t.second", payload: {}, queue: "propagate-b" },
+      },
+    ]);
+    const evaluationAt = new Date((await firstOccurrenceAfterSync("propagate")).getTime());
+    await pool.query(
+      `CREATE FUNCTION public.sm1927_raise_on_second() RETURNS trigger LANGUAGE plpgsql AS $$
+       BEGIN
+         IF NEW.schedule_name = 'second' THEN
+           RAISE EXCEPTION 'injected' USING ERRCODE = '${sqlstate}';
+         END IF;
+         RETURN NEW;
+       END;
+       $$`,
+    );
+    try {
+      await pool.query(
+        `CREATE TRIGGER sm1927_raise_on_second BEFORE INSERT ON workhorse.schedule_occurrence
+           FOR EACH ROW EXECUTE FUNCTION public.sm1927_raise_on_second()`,
+      );
+      await expect(
+        pool.query(
+          "SELECT * FROM workhorse.fire_due_schedules_v2(ARRAY['propagate'], $1, 100, 1000)",
+          [evaluationAt],
+        ),
+      ).rejects.toMatchObject({ code: sqlstate });
+    } finally {
+      await pool.query(
+        "DROP TRIGGER IF EXISTS sm1927_raise_on_second ON workhorse.schedule_occurrence",
+      );
+      await pool.query("DROP FUNCTION IF EXISTS public.sm1927_raise_on_second()");
+    }
+    // The pass rolled back, so the first definition also kept its position and fired nothing.
+    expect(
+      (
+        await pool.query(
+          `SELECT count(*)::integer AS count FROM workhorse.schedule_occurrence
+            WHERE namespace = 'propagate'`,
+        )
+      ).rows[0]?.count,
+    ).toBe(0);
+    expect(
+      (
+        await pool.query(
+          `SELECT count(*)::integer AS count FROM workhorse.schedule_definition
+            WHERE namespace = 'propagate' AND last_error_at IS NOT NULL`,
+        )
+      ).rows[0]?.count,
+    ).toBe(0);
+  });
+
+  it("refuses an enabled definition with a concurrency key on a fast-tier queue", async () => {
+    await pool.query(
+      "SELECT workhorse.set_queue_tier_v1('fast-keyed', 'fast', 'operator', 'proof')",
+    );
+
+    await expect(queue.syncSchedules("fast-keys", keyedFastSchedule(true))).rejects.toMatchObject({
+      code: "P1007",
+      message: "fast-tier queue fast-keyed does not support concurrency keys",
+    });
+    expect(
+      (await pool.query("SELECT count(*)::integer AS count FROM workhorse.schedule_definition"))
+        .rows[0]?.count,
+    ).toBe(0);
+
+    // A disabled definition never fires, so a deployment can keep it while the queue is fast.
+    await queue.syncSchedules("fast-keys", keyedFastSchedule(false));
+    // A key on a full-tier queue and a fast-tier queue with no key stay accepted.
+    await queue.syncSchedules("other-keys", [
+      {
+        name: "full-keyed",
+        schedule: "* * * * * *",
+        task: { type: "t.keyed", payload: {}, queue: "full-keyed", concurrencyKey: "k" },
+      },
+      {
+        name: "fast-plain",
+        schedule: "* * * * * *",
+        task: { type: "t.plain", payload: {}, queue: "fast-keyed" },
+      },
+    ]);
+    expect(
+      (await pool.query("SELECT count(*)::integer AS count FROM workhorse.schedule_definition"))
+        .rows[0]?.count,
+    ).toBe(3);
+  });
+
+  it("keeps a worker run going when one schedule definition fails", async () => {
+    await queue.syncSchedules("worker-isolation", [
+      {
+        name: "bad",
+        schedule: "* * * * * *",
+        task: { type: "t.bad", payload: {}, queue: "worker-fast", concurrencyKey: "k" },
+      },
+      {
+        name: "good",
+        schedule: "* * * * * *",
+        task: { type: "t.good", payload: {}, queue: "worker-good" },
+      },
+    ]);
+    await pool.query(
+      "SELECT workhorse.set_queue_tier_v1('worker-fast', 'fast', 'operator', 'proof')",
+    );
+    const occurrenceAt = await firstOccurrenceAfterSync("worker-isolation");
+    const progress = { passes: 0, handled: 0, settled: false };
+    const worker = new Worker(
+      new ScheduleEvaluationQueue(pool, occurrenceAt, { after: () => (progress.passes += 1) }),
+      {
+        workerId: "schedule-isolation",
+        queue: "worker-good",
+        scheduleNamespaces: ["worker-isolation"],
+        maintenanceIntervalMs: 200,
+        maintenanceRoutinePollMs: 200,
+      },
+    ).handle("t.good", () => {
+      progress.handled += 1;
+      return null;
+    });
+    const running = worker.run().finally(() => {
+      progress.settled = true;
+    });
+    try {
+      // A pass after the handled task shows that the run continued past the failing definition.
+      while (!progress.settled && (progress.handled < 1 || progress.passes < 3)) {
+        await sleep(50);
+      }
+    } finally {
+      worker.stop();
+      await running;
+    }
+
+    expect(progress.handled).toBe(1);
+    expect(
+      (
+        await pool.query(
+          `SELECT schedule_name, last_error_code FROM workhorse.schedule_definition
+            ORDER BY schedule_name`,
+        )
+      ).rows,
+    ).toEqual([
+      { schedule_name: "bad", last_error_code: "P1007" },
+      { schedule_name: "good", last_error_code: null },
+    ]);
+  });
+
+  it.each([
+    ["0 12 * * ?", "five fields"],
+    ["0 0 12 * * ?", "six fields"],
+    ["0 12 ? * ?", "two question marks"],
+  ])("synchronizes and evaluates %s with a wildcard day of month (%s)", async (expression) => {
+    await queue.syncSchedules("question-days", [
+      { name: "noon", schedule: expression, task: { type: "t.noon", payload: null } },
+    ]);
+    const occurrences = await pool.query<{ occurrence_at: Date }>(
+      `SELECT occurrence_at FROM workhorse.cron_occurrences_v1(
+         $1, '2026-11-01 00:00+00', '2026-11-10 13:00+00', 100, 'UTC') occurrence_at`,
+      [expression],
+    );
+    expect(occurrences.rows.map((row) => row.occurrence_at.toISOString())).toEqual(
+      Array.from(
+        { length: 10 },
+        (_, index) => `2026-11-${String(index + 1).padStart(2, "0")}T12:00:00.000Z`,
+      ),
+    );
   });
 });

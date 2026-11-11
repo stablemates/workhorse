@@ -10,22 +10,24 @@ upgrade keeps. Each changelog states the full changes of its release.
 ## Upgrade from 0.12.x to the next release
 
 The next release corrects how debounce, enqueue, queue purge, and claims use the clock and their
-locks. It also limits the queue name of an enqueue. The upgrade is a rolling deployment, and a
-mixed fleet is supported while it runs.
+locks. It also limits the queue name of an enqueue, and it keeps one failed schedule from stopping
+the other schedules. The upgrade is a rolling deployment, and a mixed fleet is supported while it
+runs.
 
-1. Run `workhorse schema migrate`. It applies migrations 0093 through 0094 and leaves the schema at
-   version 93.
+1. Run `workhorse schema migrate`. It applies migrations 0093 through 0095 and leaves the schema at
+   version 94.
 2. Roll out the new processes in any order.
 
-A 0.12.0 database is at schema version 91. The migrations replace function bodies and change no
-stored rows:
+A 0.12.0 database is at schema version 91. The migrations replace function bodies, and 0095 adds
+three nullable columns. They rewrite no stored rows:
 
-| Migration                                                                   | Schema version | Changes                                                                                                                                                                                                                                                                                |
-| --------------------------------------------------------------------------- | -------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `0093-decide-debounce-with-one-clock-and-keep-pending-debounce-keys.sql`    | 92             | `enqueue_debounce_v1`, `enqueue_batch_v1`, `lock_enqueue_prerequisites_internal_v1`, and `prune_enqueue_idempotency_v1` correct enqueue defects                                                                                                                                        |
-| `0094-purge-locked-tasks-lock-stale-tiers-and-start-leases-after-locks.sql` | 93             | `purge_queue_internal_v1`, `lock_queue_tiers_v1`, `set_queue_tier_v1`, `enqueue_batch_v1`, `enqueue_debounce_v1`, `sync_schedule_definitions_internal_v1`, `add_task_group_members_v1`, `claim_policy_batch_v1`, and `claim_one_v1` correct purge, tier, queue name, and lease defects |
+| Migration                                                                    | Schema version | Changes                                                                                                                                                                                                                                                                                        |
+| ---------------------------------------------------------------------------- | -------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `0093-decide-debounce-with-one-clock-and-keep-pending-debounce-keys.sql`     | 92             | `enqueue_debounce_v1`, `enqueue_batch_v1`, `lock_enqueue_prerequisites_internal_v1`, and `prune_enqueue_idempotency_v1` correct enqueue defects                                                                                                                                                |
+| `0094-purge-locked-tasks-lock-stale-tiers-and-start-leases-after-locks.sql`  | 93             | `purge_queue_internal_v1`, `lock_queue_tiers_v1`, `set_queue_tier_v1`, `enqueue_batch_v1`, `enqueue_debounce_v1`, `sync_schedule_definitions_internal_v1`, `add_task_group_members_v1`, `claim_policy_batch_v1`, and `claim_one_v1` correct purge, tier, queue name, and lease defects         |
+| `0095-isolate-each-schedule-in-a-pass-and-match-two-wildcard-day-fields.sql` | 94             | `fire_due_schedules_v2` isolates each schedule and records its error in three new `schedule_definition` columns, `sync_schedule_definitions_internal_v1` refuses a fast-tier concurrency key, `cron_occurrences_v1` matches two wildcard day fields, and `dashboard_cron_v1` returns the error |
 
-Migration 0094, as 0093, does not raise the floor, so it stays 76. The SQL functions change for
+Migration 0095, as 0093 and 0094, does not raise the floor, so it stays 76. The SQL functions change for
 every SDK version when each migration commits:
 
 - A debounce request reads the clock after its last lock. It no longer writes a second task when a
@@ -55,8 +57,17 @@ every SDK version when each migration commits:
   `40001`, and the application retries. `set_queue_tier_v1` refuses isolation levels other than
   read committed with SQLSTATE `0A000`.
 - A claim computes the lease expiry from a clock sample taken after its row locks.
+- If one schedule fails in a schedule pass, the other schedules of the pass still fire, and the
+  worker continues. Before, one failure rolled back the whole pass, and the TypeScript and Go
+  workers ended their run. The failed schedule keeps its position and stores the error in
+  `last_error_at`, `last_error_code`, and `last_error_message`. Find these schedules with
+  `SELECT namespace, schedule_name, last_error_code, last_error_message FROM workhorse.schedule_definition WHERE last_error_at IS NOT NULL;`.
+- Schedule synchronization refuses an enabled schedule with a concurrency key on a fast-tier queue,
+  with SQLSTATE `P1007`. Before the upgrade, remove the key from such a schedule, or disable it.
+- `0 12 * * ?` and the other expressions with `?` in day-of-week and a wildcard day-of-month now
+  match each day. The synchronization refused them before, so no stored schedule changes.
 
-A 0.12 process keeps working on schema version 93, because a migration inside a major line only
+A 0.12 process keeps working on schema version 94, because a migration inside a major line only
 adds.
 
 ## Upgrade from 0.11.x to 0.12.0

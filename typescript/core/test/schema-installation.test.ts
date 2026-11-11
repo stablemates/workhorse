@@ -356,6 +356,9 @@ describe("schema installation", () => {
         "last_skipped_at",
         "last_skipped_count",
         "last_skipped_through",
+        "last_error_at",
+        "last_error_code",
+        "last_error_message",
       ],
       dashboard_schedule_occurrence_v1: ["namespace", "schedule_name", "occurrence_at", "fired_at"],
       dashboard_worker_registry_v1: [
@@ -721,6 +724,11 @@ describe("schema installation", () => {
         version: 93,
         description:
           "purge only locked tasks, lock a stale tier, limit queue names, and start leases after locks",
+      },
+      {
+        version: 94,
+        description:
+          "isolate each schedule in a pass, refuse fast-tier keys, and match two wildcard day fields",
       },
     ]);
 

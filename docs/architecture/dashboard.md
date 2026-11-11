@@ -959,6 +959,20 @@ Since schema version 86, each definition also returns the last skip of a `skip` 
 The three keys are null until the first skip. A later skip replaces them. A database below schema
 version 86 returns none of the keys.
 
+Since schema version 94, each definition also returns its last failure in a schedule pass from
+`dashboard_schedule_definition_v1`:
+
+| Key                | Column               | Value                                                                 |
+| ------------------ | -------------------- | --------------------------------------------------------------------- |
+| `lastErrorAt`      | `last_error_at`      | The `now` of the last pass that failed for the schedule, or null.     |
+| `lastErrorCode`    | `last_error_code`    | The SQLSTATE of that failure, or null.                                |
+| `lastErrorMessage` | `last_error_message` | The error message of that failure, at most 1,000 characters, or null. |
+
+The three keys are null until the first failure. A later pass that moves the position of the
+schedule sets them to null
+([Data model: Error record](data-model.md#error-record)). A database below schema version 94
+returns none of the keys. The Schedules page does not show them yet.
+
 On the Schedules page:
 
 - Each application schedule's occurrence count links to `/tasks?queue=<queue>&type=<task type>` in

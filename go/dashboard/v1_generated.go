@@ -511,6 +511,9 @@ type DashboardScheduleRow struct {
 	LastSkippedAt         *string  `json:"lastSkippedAt,omitempty"`
 	LastSkippedCount      *float64 `json:"lastSkippedCount,omitempty"`
 	LastSkippedThrough    *string  `json:"lastSkippedThrough,omitempty"`
+	LastErrorAt           *string  `json:"lastErrorAt,omitempty"`
+	LastErrorCode         *string  `json:"lastErrorCode,omitempty"`
+	LastErrorMessage      *string  `json:"lastErrorMessage,omitempty"`
 	OccurrenceCountCapped *bool    `json:"occurrenceCountCapped,omitempty"`
 }
 

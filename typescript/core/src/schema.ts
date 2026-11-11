@@ -666,6 +666,14 @@ export const SCHEMA_MIGRATIONS: readonly SchemaMigrationStep[] = [
       "purge only locked tasks, lock a stale tier, limit queue names, and start leases after locks",
     kind: "additive",
   },
+  {
+    fromVersion: 93,
+    toVersion: 94,
+    file: "0095-isolate-each-schedule-in-a-pass-and-match-two-wildcard-day-fields.sql",
+    description:
+      "isolate each schedule in a pass, refuse fast-tier keys, and match two wildcard day fields",
+    kind: "additive",
+  },
 ];
 
 /**

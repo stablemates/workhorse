@@ -3240,12 +3240,15 @@
                     "updatedAt": {
                       "$type": "timestamp"
                     },
+                    "lastErrorAt": null,
                     "lastFiredAt": null,
                     "pausedReason": null,
                     "catchupPolicy": "skip",
+                    "lastErrorCode": null,
                     "lastSkippedAt": "2026-09-14T03:10:00.000Z",
                     "evaluatorCount": 1,
                     "occurrenceCount": 0,
+                    "lastErrorMessage": null,
                     "lastSkippedCount": 4,
                     "configuredEnabled": true,
                     "lastSkippedThrough": "2026-09-13T03:00:00.000Z",
