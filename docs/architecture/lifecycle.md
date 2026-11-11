@@ -514,7 +514,10 @@ History retention sets `maintenance_state.last_completed_local_date` only after 
 pass that leaves an expired history partition, an expired row in a default partition, or an
 expired schedule run is `incomplete`. The routine then stays due on that local date, and each later
 `run_maintenance_v1` call runs another pass. Thus "once per local date" is the cadence of complete
-passes.
+passes. Since migration 0096 (schema version 95), this also applies to a pass that the rollup
+watermark or the cold export watermark holds back. Such a pass judges completion against the policy
+cutoffs, so it leaves expired history and records `incomplete`
+([Data model: Retention interlock](data-model.md#retention-interlock)).
 
 Partition creation and partition retirement each stop a DDL lock attempt after 250 ms. They do not
 wait without a limit behind dispatch or behind a long reader, such as `pg_dump`.

@@ -674,6 +674,14 @@ export const SCHEMA_MIGRATIONS: readonly SchemaMigrationStep[] = [
       "isolate each schedule in a pass, refuse fast-tier keys, and match two wildcard day fields",
     kind: "additive",
   },
+  {
+    fromVersion: 94,
+    toVersion: 95,
+    file: "0096-export-a-day-after-its-snapshot-frontier-and-keep-held-retention-due.sql",
+    description:
+      "wait for the cold export frontier, keep stat rows for the next tier, and keep held retention due",
+    kind: "additive",
+  },
 ];
 
 /**

@@ -3224,6 +3224,13 @@ its minute.
   row. The row is not lost.
 - Running the pass twice converges rather than double counting.
 
+The rewrite has a limit. A pass rewrites the `statistics_recompute_buckets` minutes (default 2)
+before `rolled_up_through`. If a transaction commits its history row after the window of every
+later pass has passed the row's minute, no pass reads that minute again. The statistics then never
+count that row. The raw row stays: a task read includes it, and cold export includes a `task_event`
+or `attempt_history` row. [Rolling statistics: Late commits](../rolling-statistics.md#late-commits)
+states the limit for operators.
+
 Cardinality is bounded per bucket. Workhorse folds pairs beyond the group limit into the `__other__`
 task type within their own queue. Generated task types therefore cannot make statistics grow without
 limit.
@@ -3237,6 +3244,14 @@ rebuild a bucket, so `retain_history_v1` clamps its event and attempt cutoffs to
 A stalled rollup holds history. It surfaces as growing retention lag and a rising
 `QueueHealth.statistics.lagMs`. It never silently deletes the input to a window nobody has computed
 yet.
+
+Since migration 0096 (schema version 95), `retain_history_v1` judges completion with
+`history_retention_complete_v1` against the policy cutoffs before the clamps. A pass that a clamp
+holds back therefore records `incomplete` in `maintenance_run`. It does not set
+`last_completed_local_date`, so the routine stays due and runs again on the next offer until the
+hold ends. Health reads the due time of the pass from `last_started_at`, so a held pass that runs
+again adds no due lag. The retention lag of the held rows stays visible.
+`history_retained_before` still advances only after a complete pass, to the earlier clamped cutoff.
 
 While cold export is enabled, `retain_history_v1` applies a second clamp per dataset to
 `cold_export_dataset.exported_through`. The section
@@ -3255,6 +3270,13 @@ Buckets are a sixth retained category with a retention ladder:
 
 - A shorter configured window shortens every tier.
 - Each table deletes at most `statistics_rows_per_pass` rows per pass.
+- Since migration 0096 (schema version 95), retention keeps the rows that the next pass can rebuild a
+  coarser tier from. A minute row is deleted only before the earlier of `hourly_rolled_up_through`
+  and the hour that holds `rolled_up_through` minus `statistics_recompute_buckets` minutes. An hour
+  row is deleted only before the earlier of `daily_rolled_up_through` and the day that holds that
+  hour. These are the `v_hour_from` and `v_day_from` bounds of the next pass. After a stop of more than two days, a catch-up pass writes minute rows older than their retention.
+  The hour tier uses them only up to the last complete hour of the pass. The next pass uses the rest. In a normal
+  pass these bounds are newer than the retention cutoffs, so the same rows are deleted.
 - Statistics stay outside the `task_identity >= dependents` constraint, because a bucket summarizes
   tasks rather than attributing one.
 
@@ -3297,7 +3319,10 @@ each copy so retention can wait for it
 `cold_export_policy` is a singleton with one `enabled` flag, false on a clean install.
 
 `cold_export_dataset` holds one row per exported dataset: `task_event`, `attempt_history`, or
-`fast_task_outcome`. Each row has an exclusive UTC-day-aligned `exported_through` watermark.
+`fast_task_outcome`. Each row has an exclusive UTC-day-aligned `exported_through` watermark. Since
+migration 0096 (schema version 95), it also has two nullable columns for the
+[snapshot frontier](#snapshot-frontier) of the next day: `frontier_day_end` (`timestamptz`) and
+`frontier_xid` (`xid8`).
 
 `cold_export_segment` is the ledger, with one row per `(dataset, segment_start)`:
 
@@ -3414,6 +3439,58 @@ and the minute rollup passed it:
 | --------------------------------------------------------------------------------------- |
 | `LEAST(date_bin('1 day', task_stat_state.rolled_up_through), date_trunc('day', p_now))` |
 
+`exportable_through` in the status rows reports this gate only. A new day also waits for its
+snapshot frontier.
+
+#### Snapshot frontier
+
+A history row gets its time when it is written, but other sessions see it only after its
+transaction commits. A transaction that writes into a day and commits after the day ends adds a row
+to a closed day. Since migration 0096 (schema version 95), `claim_cold_export_segment_v1` waits before it gives
+out a new day. It waits until each transaction that can still write into the day has ended
+([ADR 0121](../decisions/0121-export-a-cold-day-after-its-snapshot-frontier.md)):
+
+1. The claim reads `clock_timestamp()` and then takes its transaction ID with
+   `pg_current_xact_id()`. Each ID that PostgreSQL assigned before that reading is lower.
+2. If no frontier exists for the next day, the claim records one. The reading must be at or after the
+   end of the day plus `cold_export_frontier_margin_ms_v1()`, which is 60,000 ms. The transaction
+   must also have had no ID before the claim. The claim writes the end of the day to
+   `frontier_day_end` and its ID to `frontier_xid`.
+3. The claim gives out the day only when `pg_snapshot_xmin(pg_current_snapshot())` is at or after
+   `frontier_xid`. Each transaction with a lower ID, also a prepared transaction, has then ended.
+
+The server clock decides when a frontier is recorded. `p_now` does not. A frontier stays valid for
+its day, so a later claim, a re-enable, or a ledger repair keeps it. An ID that the transaction had
+before the claim stops only the recording of a new frontier. The claim can still give out a day
+whose frontier exists and has passed.
+A stored frontier above the new ID of the claim cannot come from this server, for example after a
+restore from a dump onto another server. The claim then records a new frontier.
+
+A re-lease of an `exporting` segment whose lease lapsed passes the same frontier. Migration 0096
+fences each segment that is `exporting` when it runs: it increments `attempts` and clears the lease.
+A completion or failure from before the migration then raises `not held by attempt`, and the next
+claim gives out the day again after its frontier. The fence cannot stop an object or manifest upload
+already in flight, which can write an earlier read of the day over the newer object. Therefore,
+before the upgrade, stop every exporter and let its uploads drain, as for migration 0052.
+
+The margin covers the time between a history row's clock reading and its transaction ID. A history
+column default reads the clock before PostgreSQL gives the inserting transaction its ID. In each Workhorse function, the transaction has an ID before it writes a history row. An
+earlier write or row lock gives it one, or the function calls `pg_current_xact_id()` first. `send_signal_v1` and
+`complete_human_wait_v1` do that when no wait row exists, and `record_batch_event_v1` does it before
+its events.
+
+The frontier has these limits:
+
+- The export of a day starts at the earliest 60 s after the end of the day.
+- A transaction in any database of the server that has a transaction ID delays the export of each
+  day until it ends. A long write transaction, or a prepared transaction that nobody commits, holds
+  the export.
+- A history row written outside the Workhorse functions, in a transaction with no earlier write,
+  can still be missed. That needs more than 60 s between the clock reading and the transaction ID. Only an external lock
+  on a history partition or a stalled backend causes that.
+- The frontier needs no privilege. `pg_stat_activity` would show the transaction start of another
+  role only to a member of `pg_read_all_stats`.
+
 #### Segment functions
 
 `claim_cold_export_segment_v1(p_dataset, p_exporter_id, p_lease_ms, p_now)` returns nothing in these
@@ -3422,6 +3499,8 @@ cases:
 - export is off
 - another exporter holds an unexpired lease
 - the next day ends after the gate
+- the day to give out has no [snapshot frontier](#snapshot-frontier) yet, or a transaction older
+  than its frontier is still open. This applies to a new day and to a re-lease.
 
 Otherwise it first re-leases an `exporting` row whose lease lapsed, and increments `attempts`. If no
 such row exists, it opens the day at `exported_through`. The day ends a fixed `interval '24 hours'`
@@ -3469,8 +3548,11 @@ No exporter ships in this release. The four segment functions are the contract a
 ([ADR 0068](../decisions/0068-export-cold-history-behind-the-rollup-watermark.md)). An exporter runs
 these steps:
 
-1. It claims one day of one dataset.
-2. It reads the day in `read_cold_export_rows_v1` pages of 1 through 100,000 rows.
+1. It claims one day of one dataset. It calls the claim in a transaction of its own. If the claim
+   returns nothing, it calls it again later.
+2. It reads the day in `read_cold_export_rows_v1` pages of 1 through 100,000 rows. It reads all pages
+   of the day in one `REPEATABLE READ` transaction that starts after the claim, so each page reads
+   the same snapshot.
 3. It writes one JSON-lines object per day, named as shown below.
 4. It writes a `.manifest.json` beside the object. The manifest carries the row count, byte length,
    and hex SHA-256 of the object as stored.

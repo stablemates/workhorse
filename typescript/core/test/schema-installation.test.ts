@@ -730,6 +730,11 @@ describe("schema installation", () => {
         description:
           "isolate each schedule in a pass, refuse fast-tier keys, and match two wildcard day fields",
       },
+      {
+        version: 95,
+        description:
+          "wait for the cold export frontier, keep stat rows for the next tier, and keep held retention due",
+      },
     ]);
 
     const protocols = await pool.query<{ version: number }>(

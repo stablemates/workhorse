@@ -2,6 +2,8 @@
 
 - **Status:** Accepted
 - **Date:** 2026-09-16
+- **Amended by:** [ADR 0121](0121-export-a-cold-day-after-its-snapshot-frontier.md) (a new day
+  also waits for its snapshot frontier)
 - **Related:** SM-23, [ADR 0011](0011-daily-retention-and-split-maintenance.md),
   [ADR 0019](0019-derived-rolling-statistics.md),
   [ADR 0053](0053-start-migrations-at-0-1-0-and-keep-them-additive.md),

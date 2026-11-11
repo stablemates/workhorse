@@ -228,9 +228,13 @@ data waits for deletion.
 rollup stopped on day 0.
 
 1. On day 16 at 03:00, the history pass can delete day 1 by its window. The rollup has not
-   summarized day 1, so the pass keeps it.
-2. While the rollup stays stopped, history increases and retention lag increases.
-3. When the rollup summarizes day 1, the next pass deletes day 1.
+   summarized day 1, so the pass keeps it. The pass records `incomplete`.
+2. The pass stays due. Each later offer runs it again, and it keeps day 1 again.
+3. While the rollup stays stopped, history increases and retention lag increases.
+4. At 03:10, the rollup summarizes day 1. The next offer deletes day 1, and the pass records
+   `succeeded`. The pass is then not due until 03:00 of the next day.
+
+The same rule applies while [cold export](335-cold-export.md) has not exported a day.
 
 [320-statistics.md](320-statistics.md) explains the rollup watermark.
 
@@ -241,6 +245,9 @@ rollup stopped on day 0.
 - A stalled rollup surfaces as growing retention lag and a rising `QueueHealth.statistics.lagMs`.
 - While cold export is enabled, a second clamp applies per dataset to
   `cold_export_dataset.exported_through`.
+- A pass is complete only when no history before the policy cutoffs remains. A pass that a clamp
+  holds back records `incomplete`, leaves `last_completed_local_date` unchanged, and runs again on
+  the next offer.
 
 More detail: [Data model: Retention interlock](../architecture/data-model.md#retention-interlock).
 

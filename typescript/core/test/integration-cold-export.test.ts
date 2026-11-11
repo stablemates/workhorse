@@ -1,4 +1,5 @@
 import { readFile } from "node:fs/promises";
+import { setTimeout as sleep } from "node:timers/promises";
 import { beforeEach, describe, expect, it } from "vitest";
 import { Worker } from "../src/index.js";
 import { createIntegrationTestContext } from "./support/integration.js";
@@ -65,11 +66,14 @@ function openDaysBetween(before: Date, after: Date): Date[] {
 /**
  * The export limits that an operation can see between two input reads around it. The limit is
  * the earlier of the open UTC day and the UTC day that the statistics rolled up through. Thus a
- * UTC midnight moves the limit only if the statistics also passed it.
+ * UTC midnight moves the limit only if the statistics also passed it. The snapshot frontier of a
+ * day waits for the margin after its end (ADR 0121), so the open day of the time one margin
+ * earlier is also a possible limit.
  */
 function exportLimits(before: ExportInputs, after: ExportInputs): Date[] {
   const limits = new Set<number>();
-  for (const openDay of openDaysBetween(before.now, after.now)) {
+  const marginMs = 60_000;
+  for (const openDay of openDaysBetween(new Date(before.now.getTime() - marginMs), after.now)) {
     for (const inputs of [before, after]) {
       limits.add(Math.min(openDay.getTime(), startOfUtcDay(inputs.rolledUpThrough).getTime()));
     }
@@ -156,8 +160,15 @@ async function countRows(relation: string): Promise<number> {
 
 type Claim = { segment_start: Date; segment_end: Date; attempts: number };
 
-async function claimSegment(dataset: Dataset, exporterId = "test"): Promise<Claim | null> {
-  const result = await pool.query<Claim>(
+type Queryable = Pick<typeof pool, "query">;
+
+/** One call of the claim, in its own transaction. */
+async function claimOnce(
+  dataset: Dataset,
+  exporterId = "test",
+  client: Queryable = pool,
+): Promise<Claim | null> {
+  const result = await client.query<Claim>(
     "SELECT * FROM workhorse.claim_cold_export_segment_v1($1, $2, $3, clock_timestamp())",
     [dataset, exporterId, 60_000],
   );
@@ -165,8 +176,105 @@ async function claimSegment(dataset: Dataset, exporterId = "test"): Promise<Clai
 }
 
 /**
- * The exporter contract from ADR 0068, driven directly: claim a day, read it in keyset pages,
- * complete it. Returns the row identities in export order.
+ * True when the next day of `dataset` has a recorded snapshot frontier that a transaction older
+ * than it still holds back (ADR 0121).
+ */
+async function frontierPending(dataset: Dataset, client: Queryable = pool): Promise<boolean> {
+  const result = await client.query<{ pending: boolean }>(
+    `SELECT exported.frontier_day_end = exported.exported_through + interval '24 hours'
+              AND pg_snapshot_xmin(pg_current_snapshot()) < exported.frontier_xid AS pending
+       FROM workhorse.cold_export_dataset exported
+      WHERE exported.dataset = $1`,
+    [dataset],
+  );
+  return result.rows[0]?.pending === true;
+}
+
+/**
+ * True when the day that the next claim of `dataset` can give out has a recorded frontier. That is
+ * the day of an exporting segment whose lease lapsed, or else the day at the watermark. A claim
+ * that returns no segment in this state waited only for the frontier.
+ */
+async function frontierRecorded(dataset: Dataset, client: Queryable): Promise<boolean> {
+  const result = await client.query<{ recorded: boolean }>(
+    `SELECT exported.frontier_day_end = COALESCE(
+              (SELECT CASE WHEN segment.lease_expires_at > clock_timestamp() THEN NULL
+                           ELSE segment.segment_end END
+                 FROM workhorse.cold_export_segment segment
+                WHERE segment.dataset = exported.dataset AND segment.status = 'exporting'
+                ORDER BY segment.segment_start LIMIT 1),
+              CASE WHEN NOT EXISTS (
+                SELECT 1 FROM workhorse.cold_export_segment segment
+                 WHERE segment.dataset = exported.dataset AND segment.status = 'exporting'
+              ) THEN exported.exported_through + interval '24 hours' END
+            ) AS recorded
+       FROM workhorse.cold_export_dataset exported
+      WHERE exported.dataset = $1`,
+    [dataset],
+  );
+  return result.rows[0]?.recorded === true;
+}
+
+/**
+ * Claim as an exporter does. The server runs other tests in parallel, so a transaction of another
+ * database can hold back the frontier of a day for a short time. The claim then returns no
+ * segment, and an exporter calls it again later. This helper calls it again for at most 10 s, and
+ * only while the frontier is the reason.
+ */
+async function claimSegment(
+  dataset: Dataset,
+  exporterId = "test",
+  client: Queryable = pool,
+): Promise<Claim | null> {
+  const deadline = Date.now() + 10_000;
+  for (;;) {
+    const claim = await claimOnce(dataset, exporterId, client);
+    if (claim !== null) return claim;
+    if (Date.now() > deadline || !(await frontierRecorded(dataset, client))) return null;
+    await sleep(25);
+  }
+}
+
+type PageRow = { row_id: string; record: { occurred_at: string } };
+
+/**
+ * The read rule of the exporter contract (ADR 0121): read every page of a claimed day in one
+ * REPEATABLE READ transaction that starts after the claim. Returns the identities in order.
+ */
+async function readSegment(dataset: Dataset, claim: Claim, pageSize: number): Promise<string[]> {
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN ISOLATION LEVEL REPEATABLE READ");
+    const ids: string[] = [];
+    let cursor: { occurred_at: string; row_id: string } | null = null;
+    for (;;) {
+      const page: { rows: PageRow[] } = await client.query<PageRow>(
+        "SELECT * FROM workhorse.read_cold_export_rows_v1($1, $2, $3, $4, $5, $6)",
+        [
+          dataset,
+          claim.segment_start,
+          claim.segment_end,
+          cursor?.occurred_at ?? null,
+          cursor?.row_id ?? null,
+          pageSize,
+        ],
+      );
+      for (const row of page.rows) ids.push(row.row_id);
+      const last: PageRow | undefined = page.rows[page.rows.length - 1];
+      if (last === undefined || page.rows.length < pageSize) break;
+      cursor = { occurred_at: last.record.occurred_at, row_id: last.row_id };
+    }
+    await client.query("COMMIT");
+    return ids;
+  } finally {
+    await client.query("ROLLBACK").catch(() => undefined);
+    client.release();
+  }
+}
+
+/**
+ * The exporter contract from ADR 0068 and ADR 0121, driven directly: claim a day, read it in
+ * keyset pages, complete it. Returns the row identities in export order.
  */
 async function exportNextDay(
   dataset: Dataset,
@@ -174,26 +282,7 @@ async function exportNextDay(
 ): Promise<{ claim: Claim; ids: string[]; exportedThrough: Date } | null> {
   const claim = await claimSegment(dataset);
   if (claim === null) return null;
-  type PageRow = { row_id: string; record: { occurred_at: string } };
-  const ids: string[] = [];
-  let cursor: { occurred_at: string; row_id: string } | null = null;
-  for (;;) {
-    const page: { rows: PageRow[] } = await pool.query<PageRow>(
-      "SELECT * FROM workhorse.read_cold_export_rows_v1($1, $2, $3, $4, $5, $6)",
-      [
-        dataset,
-        claim.segment_start,
-        claim.segment_end,
-        cursor?.occurred_at ?? null,
-        cursor?.row_id ?? null,
-        pageSize,
-      ],
-    );
-    for (const row of page.rows) ids.push(row.row_id);
-    const last: PageRow | undefined = page.rows[page.rows.length - 1];
-    if (last === undefined || page.rows.length < pageSize) break;
-    cursor = { occurred_at: last.record.occurred_at, row_id: last.row_id };
-  }
+  const ids = await readSegment(dataset, claim, pageSize);
   const key = ids.length === 0 ? null : `workhorse/${dataset}/${claim.segment_start.toISOString()}`;
   const completed = await pool.query<{ exported_through: Date }>(
     `SELECT workhorse.complete_cold_export_segment_v1($1, $2, $3, $4, $5, $6, $7, $8)
@@ -338,54 +427,273 @@ describe("cold history export", () => {
   });
 
   it("re-leases a failed segment, and fences a stale completion or failure", async () => {
-    await seedHistory("cold-export-retry", 2, utcDay(1));
-    await queue.setColdExportPolicy({ enabled: true, from: utcDay(1) });
+    await seedHistory("cold-export-retry", 2, utcDay(2));
+    await queue.setColdExportPolicy({ enabled: true, from: utcDay(2) });
 
     const first = await claimSegment("task_event", "exporter-a");
-    expect(first).toMatchObject({ segment_start: utcDay(1), attempts: 1 });
+    expect(first).toMatchObject({ segment_start: utcDay(2), attempts: 1 });
     // A live lease blocks a second exporter.
     expect(await claimSegment("task_event", "exporter-b")).toBeNull();
 
     await pool.query("SELECT workhorse.fail_cold_export_segment_v1($1, $2, $3, $4::jsonb)", [
       "task_event",
-      utcDay(1),
+      utcDay(2),
       1,
       JSON.stringify({ name: "Error", message: "bucket unavailable" }),
     ]);
     await expect(queue.getColdExportStatus()).resolves.toMatchObject({
       datasets: {
         task_event: {
-          exportedThrough: utcDay(1),
-          exporting: { segmentStart: utcDay(1), attempts: 1 },
+          exportedThrough: utcDay(2),
+          exporting: { segmentStart: utcDay(2), attempts: 1 },
           lastError: { name: "Error", message: "bucket unavailable" },
         },
       },
     });
 
     const second = await claimSegment("task_event", "exporter-b");
-    expect(second).toMatchObject({ segment_start: utcDay(1), attempts: 2 });
+    expect(second).toMatchObject({ segment_start: utcDay(2), attempts: 2 });
 
     await expect(
       pool.query(
         "SELECT workhorse.complete_cold_export_segment_v1($1, $2, $3, NULL, 'stale', NULL, 0, 0)",
-        ["task_event", utcDay(1), 1],
+        ["task_event", utcDay(2), 1],
       ),
     ).rejects.toThrow(/not held by attempt 1/);
     await expect(
       pool.query("SELECT workhorse.fail_cold_export_segment_v1($1, $2, $3, '{}'::jsonb)", [
         "task_event",
-        utcDay(1),
+        utcDay(2),
         1,
       ]),
     ).rejects.toThrow(/not held by attempt 1/);
 
     await pool.query(
       "SELECT workhorse.complete_cold_export_segment_v1($1, $2, $3, 'k', 'k.manifest.json', $4, 1, 1)",
-      ["task_event", utcDay(1), 2, "a".repeat(64)],
+      ["task_event", utcDay(2), 2, "a".repeat(64)],
     );
     await expect(queue.getColdExportStatus()).resolves.toMatchObject({
-      datasets: { task_event: { exportedThrough: utcDay(0), exporting: null, lastError: null } },
+      datasets: { task_event: { exportedThrough: utcDay(1), exporting: null, lastError: null } },
     });
+  });
+
+  it("holds a day while a transaction that wrote into it is open, and exports its row after the commit", async () => {
+    await queue.setColdExportPolicy({ enabled: true, from: utcDay(2) });
+    const frontierDayEnd = async () =>
+      (
+        await pool.query<{ frontier_day_end: Date | null }>(
+          "SELECT frontier_day_end FROM workhorse.cold_export_dataset WHERE dataset = 'task_event'",
+        )
+      ).rows[0]!.frontier_day_end;
+
+    const writer = await pool.connect();
+    let lateEventId = "";
+    try {
+      // An application transaction enqueues a task and stays open. Its event belongs to the
+      // closed day, as a row does that is written just before midnight and commits after it.
+      await writer.query("BEGIN");
+      const enqueued = await writer.query<{ id: string }>(
+        "SELECT workhorse.enqueue_v1('cold-export-late', 'late', '{}'::jsonb) AS id",
+      );
+      const moved = await writer.query<{ event_id: string }>(
+        `UPDATE workhorse.task_event
+            SET occurred_at = $1::timestamptz + interval '23 hours 59 minutes'
+          WHERE task_id = $2
+         RETURNING event_id`,
+        [utcDay(2), enqueued.rows[0]!.id],
+      );
+      lateEventId = moved.rows[0]!.event_id;
+
+      // The claim records the frontier of the day, and the open writer holds it back.
+      expect(await claimOnce("task_event")).toBeNull();
+      expect(await frontierDayEnd()).toEqual(utcDay(1));
+      expect(await frontierPending("task_event")).toBe(true);
+      expect(await claimOnce("task_event")).toBeNull();
+      await writer.query("COMMIT");
+    } finally {
+      await writer.query("ROLLBACK").catch(() => undefined);
+      writer.release();
+    }
+
+    const exported = await exportNextDay("task_event");
+    expect(exported?.claim.segment_start).toEqual(utcDay(2));
+    expect(exported?.ids).toContain(lateEventId);
+    expect(exported?.ids).toEqual(await historyIds("task_event", utcDay(2)));
+  });
+
+  it("does not give out a day before the margin after its end has passed on the server clock", async () => {
+    // p_now says that the next day has started, and the rollup has passed the end of today. The
+    // server clock has not passed the end of today, so the claim records no frontier for it.
+    await queue.setColdExportPolicy({ enabled: true, from: utcDay(0) });
+    const tomorrow = new Date(utcDay(-1).getTime() + 3 * 60_000);
+    const rollup = await pool.query<{ error: unknown }>(
+      "SELECT * FROM workhorse.rollup_stats_v1(true, $1, 100000)",
+      [tomorrow],
+    );
+    expect(rollup.rows.map(({ error }) => error)).toEqual([null, null]);
+    const claim = await pool.query(
+      "SELECT * FROM workhorse.claim_cold_export_segment_v1('task_event', 'early', 60000, $1)",
+      [tomorrow],
+    );
+    expect(claim.rows).toEqual([]);
+    const frontier = await pool.query(
+      "SELECT frontier_day_end, frontier_xid FROM workhorse.cold_export_dataset WHERE dataset = 'task_event'",
+    );
+    expect(frontier.rows).toEqual([{ frontier_day_end: null, frontier_xid: null }]);
+  });
+
+  it.each([
+    {
+      kind: "signal",
+      call: "SELECT status FROM workhorse.send_signal_v1($1, 'never', '{}'::jsonb, 'k', 'test')",
+    },
+    {
+      kind: "human wait completion",
+      call: "SELECT status FROM workhorse.complete_human_wait_v1($1, 'never', '{}'::jsonb, 'k', 'test')",
+    },
+  ])(
+    "gives a rejected $kind its transaction ID before its event reads the time",
+    async ({ call }) => {
+      await queue.setColdExportPolicy({ enabled: true, from: utcDay(2) });
+      const taskId = await queue.enqueue("cold-export-rejected", {});
+      const partition = await pool.query<{ name: string }>(
+        `SELECT 'task_event_' || to_char(clock_timestamp() AT TIME ZONE 'UTC', 'YYYYMMDD') AS name
+          WHERE to_regclass('workhorse.task_event_'
+            || to_char(clock_timestamp() AT TIME ZONE 'UTC', 'YYYYMMDD')) IS NOT NULL`,
+      );
+      expect(partition.rows).toHaveLength(1);
+      const locker = await pool.connect();
+      const sender = await pool.connect();
+      let sent: Promise<{ rows: { status: string }[] }> | undefined;
+      try {
+        // A lock on the day partition makes the event insert wait after it read its time. The
+        // rejected call wrote nothing before the event, so only the early ID holds the frontier.
+        // SHARE mode takes no transaction ID, unlike ACCESS EXCLUSIVE, which PostgreSQL logs for
+        // standbys, so the locker itself cannot hold the frontier.
+        await locker.query("BEGIN");
+        await locker.query(`LOCK TABLE workhorse.${partition.rows[0]!.name} IN SHARE MODE`);
+        expect((await locker.query("SELECT pg_current_xact_id_if_assigned() AS xid")).rows).toEqual(
+          [{ xid: null }],
+        );
+        sent = sender.query<{ status: string }>(call, [taskId]);
+        const waiting = async () =>
+          (
+            await pool.query("SELECT 1 FROM pg_locks WHERE pid = $1 AND NOT granted", [
+              pidOf(sender),
+            ])
+          ).rowCount !== 0;
+        for (let poll = 0; poll < 200 && !(await waiting()); poll += 1) await sleep(25);
+        expect(await waiting()).toBe(true);
+
+        expect(await claimOnce("task_event")).toBeNull();
+        expect(await frontierPending("task_event")).toBe(true);
+        await locker.query("COMMIT");
+        expect((await sent).rows).toEqual([{ status: "not_waiting" }]);
+      } finally {
+        await locker.query("ROLLBACK").catch(() => undefined);
+        await sent?.catch(() => undefined);
+        locker.release();
+        sender.release();
+      }
+      expect(await claimSegment("task_event")).toMatchObject({ segment_start: utcDay(2) });
+    },
+  );
+
+  it("fences a segment that was exporting before migration 0096 and re-leases it after its frontier", async () => {
+    const migration = await readFile(
+      new URL(
+        "../../../sql/migrations/0096-export-a-day-after-its-snapshot-frontier-and-keep-held-retention-due.sql",
+        import.meta.url,
+      ),
+      "utf8",
+    );
+    await queue.setColdExportPolicy({ enabled: true, from: utcDay(2) });
+    // Before the migration, an exporter held the day with no frontier, as the earlier claim did.
+    await pool.query(
+      `INSERT INTO workhorse.cold_export_segment(
+         dataset, segment_start, segment_end, status, attempts, exporter_id, lease_expires_at,
+         started_at)
+       VALUES ('task_event', $1, $1::timestamptz + interval '24 hours', 'exporting', 1,
+               'pre-migration', clock_timestamp() + interval '1 hour', clock_timestamp())`,
+      [utcDay(2)],
+    );
+
+    const writer = await pool.connect();
+    let lateEventId = "";
+    try {
+      await writer.query("BEGIN");
+      const enqueued = await writer.query<{ id: string }>(
+        "SELECT workhorse.enqueue_v1('cold-export-upgrade', 'late', '{}'::jsonb) AS id",
+      );
+      const moved = await writer.query<{ event_id: string }>(
+        `UPDATE workhorse.task_event
+            SET occurred_at = $1::timestamptz + interval '23 hours 59 minutes'
+          WHERE task_id = $2
+         RETURNING event_id`,
+        [utcDay(2), enqueued.rows[0]!.id],
+      );
+      lateEventId = moved.rows[0]!.event_id;
+
+      await pool.query(migration);
+      // The exporter from before the migration can no longer complete or fail the day.
+      await expect(
+        pool.query(
+          `SELECT workhorse.complete_cold_export_segment_v1(
+             'task_event', $1, 1, NULL, 'pre-migration.manifest.json', NULL, 0, 0)`,
+          [utcDay(2)],
+        ),
+      ).rejects.toThrow(/not held by attempt 1/);
+      // The re-lease waits for the frontier, which the open writer holds back.
+      expect(await claimOnce("task_event", "post-migration")).toBeNull();
+      expect(await frontierPending("task_event")).toBe(true);
+      await writer.query("COMMIT");
+    } finally {
+      await writer.query("ROLLBACK").catch(() => undefined);
+      writer.release();
+    }
+
+    const exported = await exportNextDay("task_event");
+    expect(exported?.claim).toMatchObject({ segment_start: utcDay(2), attempts: 3 });
+    expect(exported?.ids).toContain(lateEventId);
+  });
+
+  it("replaces a frontier that is ahead of the transaction counter of the server", async () => {
+    // A restore from a dump onto another server can keep a frontier above every local ID.
+    await queue.setColdExportPolicy({ enabled: true, from: utcDay(2) });
+    await pool.query(
+      `UPDATE workhorse.cold_export_dataset
+          SET frontier_day_end = $1, frontier_xid = (pg_current_xact_id()::text::bigint + 1000000)::text::xid8
+        WHERE dataset = 'task_event'`,
+      [utcDay(1)],
+    );
+    expect(await claimSegment("task_event")).toMatchObject({ segment_start: utcDay(2) });
+    const frontier = await pool.query<{ ahead: boolean }>(
+      `SELECT frontier_xid > pg_current_xact_id() AS ahead
+         FROM workhorse.cold_export_dataset WHERE dataset = 'task_event'`,
+    );
+    expect(frontier.rows).toEqual([{ ahead: false }]);
+  });
+
+  it("records no frontier in a transaction that already has a transaction ID", async () => {
+    await queue.setColdExportPolicy({ enabled: true, from: utcDay(2) });
+    const client = await pool.connect();
+    try {
+      // The ID of this transaction can be older than the end of the day plus the margin.
+      await client.query("BEGIN");
+      await client.query("SELECT pg_current_xact_id()");
+      expect(await claimOnce("task_event", "in-transaction", client)).toBeNull();
+      await client.query("COMMIT");
+    } finally {
+      await client.query("ROLLBACK").catch(() => undefined);
+      client.release();
+    }
+    const frontier = await pool.query(
+      "SELECT frontier_day_end FROM workhorse.cold_export_dataset WHERE dataset = 'task_event'",
+    );
+    expect(frontier.rows).toEqual([{ frontier_day_end: null }]);
+
+    // A claim in its own transaction records the frontier and gives out the day.
+    expect(await claimSegment("task_event")).toMatchObject({ segment_start: utcDay(2) });
   });
 
   it.each([
@@ -406,11 +714,7 @@ describe("cold history export", () => {
 
           const segments: { start: number; end: number }[] = [];
           for (let index = 0; index < 3; index += 1) {
-            const claimed = await client.query<Claim>(
-              "SELECT * FROM workhorse.claim_cold_export_segment_v1($1, 'dst', 60000, clock_timestamp())",
-              ["task_event"],
-            );
-            const claim = claimed.rows[0]!;
+            const claim = (await claimSegment("task_event", "dst", client))!;
             segments.push({
               start: claim.segment_start.getTime(),
               end: claim.segment_end.getTime(),

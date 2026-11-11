@@ -2,7 +2,7 @@
 
 ## Current policy
 
-Schema version 6 is the migration baseline and schema version 94 is current. `sql/schema/current.sql` is the tracked source and
+Schema version 6 is the migration baseline and schema version 95 is current. `sql/schema/current.sql` is the tracked source and
 `sql/schema.sql` is a build artifact for published packages. `sql/releases/` holds the frozen
 clean-install artifact of every supported published release: `0006.sql` is 0.2.0, `0009.sql` is
 0.2.1, `0023.sql` is 0.3.0, `0024.sql` is 0.4.0, `0043.sql` is 0.5.0, `0052.sql` is 0.6.0, `0064.sql` is 0.7.0, `0071.sql` is 0.8.0, `0073.sql` is 0.9.0, `0086.sql` is 0.10.0, `0089.sql` is 0.11.0, and `0091.sql` is 0.12.0.
@@ -35,6 +35,11 @@ enabled, so retention keeps waiting for the export. Restart the exporters once t
 committed. The migration repairs the export ledger, but it cannot stop an upload already in flight;
 see [the cold export guide](guides/335-cold-export.md#a-day-is-a-utc-day). An installation that never
 enabled cold export needs no extra step.
+
+Migration 0096 asks the same step. It fences each segment that is exporting, so the export of that
+day starts again after its snapshot frontier. The fence cannot stop an upload already in flight.
+Such an upload can write an earlier read of the day over the newer object
+([ADR 0121](decisions/0121-export-a-cold-day-after-its-snapshot-frontier.md)).
 
 Every schema change ships as an ordered, immutable step:
 

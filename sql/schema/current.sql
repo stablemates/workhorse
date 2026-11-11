@@ -2393,10 +2393,16 @@ ON CONFLICT (singleton) DO NOTHING;
 
 -- One exclusive, UTC-day-aligned watermark per exported dataset. Every history day below it has a
 -- complete row in cold_export_segment. The row is created when export is first enabled.
+--
+-- frontier_day_end and frontier_xid are the snapshot frontier of the next day (ADR 0121). The claim
+-- writes them once for a day, at least cold_export_frontier_margin_ms_v1() after the day ends, and
+-- gives out the day only after every transaction older than frontier_xid has ended.
 CREATE TABLE IF NOT EXISTS workhorse.cold_export_dataset (
   dataset text PRIMARY KEY CHECK (dataset IN ('task_event', 'attempt_history', 'fast_task_outcome')),
   exported_through timestamptz NOT NULL CHECK (isfinite(exported_through)),
   updated_at timestamptz NOT NULL DEFAULT clock_timestamp(),
+  frontier_day_end timestamptz,
+  frontier_xid xid8,
   CONSTRAINT cold_export_dataset_utc_midnight_check CHECK (
     exported_through = date_trunc('day', exported_through AT TIME ZONE 'UTC') AT TIME ZONE 'UTC'
   )
@@ -11781,6 +11787,9 @@ BEGIN
     RAISE EXCEPTION 'batch members must match retained claims';
   END IF;
 
+  -- The events can be the first write of the transaction. Take the transaction ID before they
+  -- read their time, as the cold export frontier needs (ADR 0121).
+  PERFORM pg_current_xact_id();
   INSERT INTO workhorse.task_event(task_id, attempt, event_type, details)
     SELECT member.task_id, member.attempt, p_event_type,
            jsonb_build_object(
@@ -13068,6 +13077,9 @@ BEGIN
    WHERE stored.task_id = p_task_id AND stored.signal_name = p_signal_name
    FOR UPDATE;
   IF NOT FOUND THEN
+    -- No row lock was taken, so the event can be the first write of the transaction. Take the
+    -- transaction ID before the event reads its time, as the cold export frontier needs (ADR 0121).
+    PERFORM pg_current_xact_id();
     INSERT INTO workhorse.task_event(task_id, event_type, details)
       VALUES (
         p_task_id, 'signal_rejected',
@@ -16438,6 +16450,8 @@ DECLARE v_hour_from timestamptz;
 DECLARE v_hour_to timestamptz;
 DECLARE v_day_from timestamptz;
 DECLARE v_day_to timestamptz;
+DECLARE v_keep_minutes_from timestamptz;
+DECLARE v_keep_hours_from timestamptz;
 DECLARE v_inserted integer; BEGIN
   IF p_now IS NULL OR NOT isfinite(p_now) THEN RAISE EXCEPTION 'maintenance time is required'; END IF;
   IF p_max_buckets IS NULL OR p_max_buckets NOT BETWEEN 1 AND 100000 THEN
@@ -16586,16 +16600,38 @@ DECLARE v_inserted integer; BEGIN
   -- Bucket retention is bounded per pass like every other retained category. Shortening the policy
   -- makes the next pass eligible to delete months of buckets at once, and an unbounded statement
   -- there would hold a long lock on the relation every operator window reads.
+  --
+  -- A coarser tier is built only from the finer rows that remain. After a long stop, a catch-up
+  -- pass writes minute rows older than their retention, and the hour tier uses them only up to the
+  -- last complete hour of the pass. The next pass also rebuilds the hour and the day that hold the
+  -- start of its recompute window. Retention therefore keeps each minute row from the first hour
+  -- that the next pass can rebuild, and each hour row from the first day that it can rebuild
+  -- (SM-1978). In a normal pass those bounds are far newer than the retention cutoffs, so the same
+  -- rows are deleted.
   phase := 'stat_retention';
   rows_affected := 0;
   error := NULL;
   v_started_at := clock_timestamp(); BEGIN
+    SELECT * INTO STRICT v_state FROM workhorse.task_stat_state WHERE singleton;
+    -- The same bounds as v_hour_from and v_day_from of the next pass.
+    v_keep_minutes_from := LEAST(
+      v_state.hourly_rolled_up_through,
+      date_bin('1 hour',
+               v_state.rolled_up_through
+                 - make_interval(mins => v_maintenance.statistics_recompute_buckets),
+               timestamp '2000-01-01' AT TIME ZONE 'UTC')
+    );
+    v_keep_hours_from := LEAST(
+      v_state.daily_rolled_up_through,
+      date_bin('1 day', v_keep_minutes_from, timestamp '2000-01-01' AT TIME ZONE 'UTC')
+    );
     WITH expired AS (
       SELECT bucket.ctid
         FROM workhorse.task_stat_bucket bucket
        WHERE bucket.bucket_start < p_now - make_interval(
          days => LEAST(COALESCE(v_policy.statistics_retention_days, 2), 2)
        )
+         AND bucket.bucket_start < v_keep_minutes_from
        ORDER BY bucket.bucket_start
          FOR UPDATE SKIP LOCKED
        LIMIT v_policy.statistics_rows_per_pass
@@ -16610,6 +16646,7 @@ DECLARE v_inserted integer; BEGIN
        WHERE bucket.bucket_start < p_now - make_interval(
          days => LEAST(COALESCE(v_policy.statistics_retention_days, 90), 90)
        )
+         AND bucket.bucket_start < v_keep_hours_from
        ORDER BY bucket.bucket_start
          FOR UPDATE SKIP LOCKED
        LIMIT v_policy.statistics_rows_per_pass
@@ -16659,6 +16696,8 @@ DECLARE v_state workhorse.maintenance_state%ROWTYPE;
 DECLARE v_local_now timestamp;
 DECLARE v_event_before timestamptz;
 DECLARE v_attempt_before timestamptz;
+DECLARE v_event_target timestamptz;
+DECLARE v_attempt_target timestamptz;
 DECLARE v_occurrence_before timestamptz;
 DECLARE v_safe_before timestamptz;
 DECLARE v_rolled_up_through timestamptz;
@@ -16702,10 +16741,14 @@ BEGIN
     - make_interval(days => COALESCE(v_policy.attempt_history_retention_days, 0));
   v_occurrence_before := p_now
     - make_interval(days => COALESCE(v_policy.schedule_occurrence_retention_days, 0));
+  -- The policy cutoffs before any clamp. A pass is complete only when no history before them
+  -- remains, so a pass that a clamp holds back records incomplete and stays due (SM-1979).
+  v_event_target := v_event_before;
+  v_attempt_target := v_attempt_before;
   -- Raw history is the only input a statistics bucket can be rebuilt from. Deleting past the rollup
   -- watermark would create a permanent hole in long-window operator views, so a stalled rollup
-  -- holds history instead: the cutoff waits, retention reports itself incomplete, and the growing
-  -- retention lag is what surfaces on the health page.
+  -- holds history instead: the cutoff waits, retention reports itself incomplete and runs again on
+  -- the next offer, and the growing retention lag is what surfaces on the health page.
   SELECT state.rolled_up_through INTO v_rolled_up_through
     FROM workhorse.task_stat_state state WHERE state.singleton;
   IF v_rolled_up_through IS NOT NULL THEN
@@ -16815,10 +16858,10 @@ BEGIN
   IF v_success THEN
     v_complete := (
       v_policy.task_event_retention_days IS NULL
-      OR workhorse.history_retention_complete_v1('task_event', v_event_before)
+      OR workhorse.history_retention_complete_v1('task_event', v_event_target)
     ) AND (
       v_policy.attempt_history_retention_days IS NULL
-      OR workhorse.history_retention_complete_v1('attempt_history', v_attempt_before)
+      OR workhorse.history_retention_complete_v1('attempt_history', v_attempt_target)
     ) AND (
       v_policy.schedule_occurrence_retention_days IS NULL
       OR NOT EXISTS (
@@ -17807,6 +17850,9 @@ BEGIN
    WHERE stored.task_id = p_task_id AND stored.token_name = p_token_name
    FOR UPDATE;
   IF NOT FOUND THEN
+    -- No row lock was taken, so the event can be the first write of the transaction. Take the
+    -- transaction ID before the event reads its time, as the cold export frontier needs (ADR 0121).
+    PERFORM pg_current_xact_id();
     INSERT INTO workhorse.task_event(task_id, event_type, details)
       VALUES (
         p_task_id, 'human_wait_rejected',
@@ -22944,9 +22990,30 @@ BEGIN
 END;
 $$;
 
+-- How long after the end of a UTC day the server clock must be before a claim records the snapshot
+-- frontier of that day (ADR 0121). A history row reads its time before its transaction can get a
+-- transaction ID, and the margin covers that gap.
+CREATE OR REPLACE FUNCTION workhorse.cold_export_frontier_margin_ms_v1()
+RETURNS integer
+LANGUAGE sql
+IMMUTABLE
+PARALLEL SAFE
+AS $$
+  SELECT 60000;
+$$;
+
 -- Hand one exporter the next day to export, oldest first. An abandoned segment whose lease has
 -- lapsed is handed out again before a new one is opened, so a crashed export resumes rather than
 -- leaving a hole. Nothing is handed out while export is off or while another exporter holds a lease.
+--
+-- A new day also waits for its snapshot frontier (ADR 0121). A history row gets its time when it is
+-- written, but other sessions see it only after its transaction commits. The first claim that
+-- finds the server clock at least cold_export_frontier_margin_ms_v1() past the end of the day
+-- takes a new transaction ID and stores it as frontier_xid. Every transaction that had an ID
+-- before that moment has a lower ID. The day is given out only when the oldest running
+-- transaction of the server is at or after frontier_xid, so each transaction that could still
+-- write into the day has ended. A claim in a transaction that already has an ID records no
+-- frontier, because its ID is older than the clock reading. The server clock decides, not p_now.
 CREATE OR REPLACE FUNCTION workhorse.claim_cold_export_segment_v1(
   p_dataset text,
   p_exporter_id text,
@@ -22965,6 +23032,13 @@ DECLARE v_enabled boolean;
 DECLARE v_exported_through timestamptz;
 DECLARE v_limit timestamptz;
 DECLARE v_segment workhorse.cold_export_segment%ROWTYPE;
+DECLARE v_fresh boolean;
+DECLARE v_clock timestamptz;
+DECLARE v_xid xid8;
+DECLARE v_day_end timestamptz;
+DECLARE v_frontier_day_end timestamptz;
+DECLARE v_frontier_xid xid8;
+DECLARE v_release boolean;
 BEGIN
   IF p_dataset NOT IN ('task_event', 'attempt_history', 'fast_task_outcome') THEN
     RAISE EXCEPTION 'cold export dataset must be task_event, attempt_history or fast_task_outcome';
@@ -22979,7 +23053,13 @@ BEGIN
   SELECT policy.enabled INTO v_enabled
     FROM workhorse.cold_export_policy policy WHERE policy.singleton;
   IF NOT COALESCE(v_enabled, false) THEN RETURN; END IF;
-  SELECT exported.exported_through INTO v_exported_through
+  -- Read the clock before the transaction gets its ID: the row lock below assigns one anyway, and
+  -- an ID assigned after this reading is greater than each ID assigned before it.
+  v_fresh := pg_current_xact_id_if_assigned() IS NULL;
+  v_clock := clock_timestamp();
+  v_xid := pg_current_xact_id();
+  SELECT exported.exported_through, exported.frontier_day_end, exported.frontier_xid
+    INTO v_exported_through, v_frontier_day_end, v_frontier_xid
     FROM workhorse.cold_export_dataset exported
    WHERE exported.dataset = p_dataset
      FOR UPDATE;
@@ -22992,10 +23072,36 @@ BEGIN
    ORDER BY segment.segment_start
    LIMIT 1
      FOR UPDATE;
-  IF FOUND THEN
+  v_release := FOUND;
+  IF v_release THEN
     IF v_segment.lease_expires_at IS NOT NULL AND v_segment.lease_expires_at > p_now THEN
       RETURN;
     END IF;
+    v_day_end := v_segment.segment_end;
+  ELSE
+    -- A fixed 24 hours, not '1 day': timestamptz plus a day interval steps a calendar day in the
+    -- session TimeZone, which is 23 or 25 hours across a daylight-saving transition.
+    v_day_end := v_exported_through + interval '24 hours';
+    IF v_day_end > v_limit THEN RETURN; END IF;
+  END IF;
+  -- A re-leased day passes the same frontier as a new day. A day given out after its frontier
+  -- passed finds the frontier again, and a segment from before migration 0096 waits for one.
+  -- A stored frontier above the new ID of this claim cannot come from this server, for example
+  -- after a restore from a dump onto another server, so the claim records a new one.
+  IF v_frontier_day_end IS DISTINCT FROM v_day_end OR v_frontier_xid > v_xid THEN
+    IF NOT v_fresh OR v_clock < v_day_end + make_interval(
+      secs => workhorse.cold_export_frontier_margin_ms_v1() / 1000.0
+    ) THEN
+      RETURN;
+    END IF;
+    UPDATE workhorse.cold_export_dataset exported
+       SET frontier_day_end = v_day_end, frontier_xid = v_xid
+     WHERE exported.dataset = p_dataset;
+    v_frontier_xid := v_xid;
+  END IF;
+  -- The update above commits with this call, so a later claim finds the frontier.
+  IF pg_snapshot_xmin(pg_current_snapshot()) < v_frontier_xid THEN RETURN; END IF;
+  IF v_release THEN
     UPDATE workhorse.cold_export_segment segment
        SET attempts = segment.attempts + 1,
            exporter_id = p_exporter_id,
@@ -23006,14 +23112,11 @@ BEGIN
        AND segment.segment_start = v_segment.segment_start
     RETURNING * INTO v_segment;
   ELSE
-    -- A fixed 24 hours, not '1 day': timestamptz plus a day interval steps a calendar day in the
-    -- session TimeZone, which is 23 or 25 hours across a daylight-saving transition.
-    IF v_exported_through + interval '24 hours' > v_limit THEN RETURN; END IF;
     INSERT INTO workhorse.cold_export_segment(
       dataset, segment_start, segment_end, status, attempts, exporter_id, lease_expires_at,
       started_at
     ) VALUES (
-      p_dataset, v_exported_through, v_exported_through + interval '24 hours', 'exporting', 1,
+      p_dataset, v_exported_through, v_day_end, 'exporting', 1,
       p_exporter_id, p_now + make_interval(secs => p_lease_ms / 1000.0), p_now
     )
     RETURNING * INTO v_segment;
@@ -23267,10 +23370,11 @@ INSERT INTO workhorse.schema_migration(version, description) VALUES
   (91, 'scale the dashboard task estimate by the current size of the task table'),
   (92, 'decide debounce with one clock and keep the keys of pending debounced tasks'),
   (93, 'purge only locked tasks, lock a stale tier, limit queue names, and start leases after locks'),
-  (94, 'isolate each schedule in a pass, refuse fast-tier keys, and match two wildcard day fields')
+  (94, 'isolate each schedule in a pass, refuse fast-tier keys, and match two wildcard day fields'),
+  (95, 'wait for the cold export frontier, keep stat rows for the next tier, and keep held retention due')
 ON CONFLICT DO NOTHING;
 
-INSERT INTO workhorse.schema_version(version) VALUES (94) ON CONFLICT DO NOTHING;
+INSERT INTO workhorse.schema_version(version) VALUES (95) ON CONFLICT DO NOTHING;
 
 INSERT INTO workhorse.protocol_version(version) VALUES (5) ON CONFLICT DO NOTHING;
 SELECT workhorse.create_history_day_v1(

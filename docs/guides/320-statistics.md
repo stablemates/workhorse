@@ -146,9 +146,17 @@ A summary must include a row that commits late. It must also not count a row two
 Each pass builds a minute again from the raw history of that minute. It replaces the row. It does
 not add to the row. Thus, if the pass runs two times, the numbers stay the same.
 
+The rewrite has a limit. Each pass writes again only the last few closed minutes. If a transaction
+commits after every later pass has moved past the minute of its row, the summaries do not count that
+row. The raw row stays, so a task read still includes it, and a [cold export](335-cold-export.md) of an event or attempt
+includes it. Cold export waits for each open transaction,
+because a missed export row is lost. A missed summary row changes only a count. To count later
+commits, raise `statistics_recompute_buckets`. Each pass then writes more minutes again.
+
 Workhorse makes hour summaries only from complete minute summaries. It makes day summaries only from
-complete hour summaries. A long window starts on a boundary of its tier and uses complete rows. For
-its newest part, it uses smaller rows and the raw history.
+complete hour summaries. Retention keeps a minute summary until the hour summary uses it, and an hour
+summary until the day summary uses it. A long window starts on a boundary of its tier and uses
+complete rows. For its newest part, it uses smaller rows and the raw history.
 
 <details>
 <summary>Reference: rewrites and cadence</summary>
@@ -162,12 +170,17 @@ its newest part, it uses smaller rows and the raw history.
 
 - Each pass rewrites the last `statistics_recompute_buckets` closed minutes.
 - A bucket is a pure function of the raw history in its minute.
+- A history row whose transaction commits after the recompute window of every later pass passed its
+  minute is not counted. The raw row stays.
+- Bucket retention keeps each minute row from the first hour that the next pass can rebuild. That
+  hour is the earlier of `hourly_rolled_up_through` and the hour of the start of its recompute window. It keeps
+  each hour row from the day of that hour, or from `daily_rolled_up_through` when that is earlier.
 - Workers offer `run_maintenance_v1` on their slow maintenance cadence. It runs `rollup_stats_v1`
   before retention.
 - `rollup_stats_v1` returns without work until the interval has elapsed.
 - Passes serialize on a transaction-scoped advisory lock, so every worker can offer it.
 
-More detail: [Data model: Rewrites and cardinality](../architecture/data-model.md#rewrites-and-cardinality) and [Data model: Policy columns](../architecture/data-model.md#policy-columns-1).
+More detail: [Data model: Rewrites and cardinality](../architecture/data-model.md#rewrites-and-cardinality), [Data model: Bucket retention](../architecture/data-model.md#bucket-retention), and [Data model: Policy columns](../architecture/data-model.md#policy-columns-1).
 
 </details>
 
@@ -263,6 +276,7 @@ gap. Repair the rollup, and retention continues.
 - `task_event_retention_days` and `attempt_history_retention_days` default to 14 days.
 - `retain_history_v1` clamps its event and attempt cutoffs to `rolled_up_through`.
 - A stalled rollup shows as growing retention lag and a rising `QueueHealth.statistics.lagMs`.
+- A pass that the clamp holds back records `incomplete` and runs again on the next offer.
 - While cold export is enabled, `retain_history_v1` also clamps each dataset to
   `cold_export_dataset.exported_through`.
 
