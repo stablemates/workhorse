@@ -33,6 +33,90 @@ public sealed class WorkerBatchTests(ScratchDatabase database) : IClassFixture<S
         }
     }
 
+    /// <summary>
+    /// ADR 0117: each member records the return of the batch handler before the failure evidence
+    /// write. A stop during that write cannot turn the failure into a release.
+    /// </summary>
+    [Fact]
+    public async Task AStopDuringTheFailureEvidenceKeepsTheBatchFailure()
+    {
+        var queue = UniqueQueue("late-batch");
+        await using (var setup = database.DataSource.CreateCommand("""
+            CREATE FUNCTION public.hold_batch_failure() RETURNS trigger LANGUAGE plpgsql AS $$
+            BEGIN PERFORM pg_advisory_xact_lock(921933); RETURN NEW; END $$;
+            CREATE TRIGGER hold_batch_failure BEFORE INSERT ON workhorse.task_event
+            FOR EACH ROW WHEN (NEW.event_type = 'batch_failed') EXECUTE FUNCTION public.hold_batch_failure();
+            """))
+        {
+            await setup.ExecuteNonQueryAsync(TestContext.Current.CancellationToken);
+        }
+
+        try
+        {
+            await using var hold = await database.DataSource.OpenConnectionAsync(TestContext.Current.CancellationToken);
+            await using (var command = new Npgsql.NpgsqlCommand("SELECT pg_advisory_lock(921933)", hold))
+            {
+                await command.ExecuteNonQueryAsync(TestContext.Current.CancellationToken);
+            }
+
+            await using var worker = new Worker(database.DataSource, Options(queue, options =>
+            {
+                options.Concurrency = 2;
+                options.ShutdownGrace = TimeSpan.Zero;
+            }));
+            IReadOnlyList<BatchHandlerItem<Order>>? seen = null;
+            var cancelledAtReturn = new ConcurrentQueue<bool>();
+            worker.HandleBatch<Order>("late", Bounds(2, LongLinger), (items, _) =>
+            {
+                seen = items;
+                foreach (var item in items)
+                {
+                    cancelledAtReturn.Enqueue(item.Context.CancellationToken.IsCancellationRequested);
+                }
+
+                throw new DeclinedException("the batch failed before the shutdown");
+            });
+            var first = await EnqueueAsync(database.DataSource, queue, "late", new { orderId = 1 }, new { maxAttempts = 1 });
+            var second = await EnqueueAsync(database.DataSource, queue, "late", new { orderId = 2 }, new { maxAttempts = 1 });
+            await using var running = new RunningWorker(worker);
+            Task? stopping = null;
+            try
+            {
+                await EventuallyAsync(
+                    async () => (long)(await ScalarAsync(
+                        database.DataSource,
+                        "SELECT count(*) FROM pg_stat_activity WHERE datname = current_database() AND wait_event = 'advisory' AND query LIKE '%record_batch_failure_v1%'") ?? 0L) > 0,
+                    "the failure evidence waits after the handler returned");
+                stopping = running.StopAsync();
+                await EventuallyAsync(
+                    () => seen is not null && seen.All(item => item.Context.CancelReason == CancelReason.Shutdown),
+                    "each member sees the shutdown");
+            }
+            finally
+            {
+                await using var unlock = new Npgsql.NpgsqlCommand("SELECT pg_advisory_unlock(921933)", hold);
+                await unlock.ExecuteNonQueryAsync(TestContext.Current.CancellationToken);
+            }
+
+            if (stopping is not null)
+            {
+                await stopping;
+            }
+
+            Assert.Equal([false, false], cancelledAtReturn);
+            foreach (var id in new[] { first, second })
+            {
+                Assert.Equal("failed", (await TaskAsync(database.DataSource, id)).Text("state"));
+            }
+        }
+        finally
+        {
+            await using var teardown = database.DataSource.CreateCommand(
+                "DROP TRIGGER IF EXISTS hold_batch_failure ON workhorse.task_event; DROP FUNCTION IF EXISTS public.hold_batch_failure();");
+            await teardown.ExecuteNonQueryAsync(TestContext.Current.CancellationToken);
+        }
+    }
+
     [Fact]
     public async Task ABatchRunsInPriorityOrderAndEachMemberSettlesOnItsOwn()
     {

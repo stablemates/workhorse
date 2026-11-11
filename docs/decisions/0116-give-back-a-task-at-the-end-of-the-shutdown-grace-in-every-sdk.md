@@ -4,6 +4,8 @@
 - **Date:** 2026-11-05
 - **Amends:** [ADR 0072](0072-converge-the-worker-runtime-defaults.md) (the action after the
   shutdown deadline)
+- **Amended by:** [ADR 0117](0117-let-the-shutdown-cancellation-decide-the-settlement-in-the-unwind-window.md)
+  (the shutdown cancellation, not the type of the error, decides rule 4; a panic fails the attempt)
 - **Issue:** SM-1919
 
 ## Context

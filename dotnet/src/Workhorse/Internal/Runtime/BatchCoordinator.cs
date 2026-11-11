@@ -364,7 +364,22 @@ internal sealed class BatchCoordinator
         IReadOnlyList<BatchHandlerOutcome> outcomes;
         try
         {
-            outcomes = Validate(await _handler(batch, cancellation.Token).ConfigureAwait(false), batch.Count);
+            IReadOnlyList<BatchHandlerOutcome>? returned;
+            try
+            {
+                returned = await _handler(batch, cancellation.Token).ConfigureAwait(false);
+            }
+            finally
+            {
+                // Each member records the return of the handler before the evidence write, so a stop
+                // during that write cannot turn a failure into a release (ADR 0117).
+                foreach (var member in batch)
+                {
+                    member.HandlerContext.MarkHandlerReturned();
+                }
+            }
+
+            outcomes = Validate(returned, batch.Count);
         }
         catch (Exception error)
         {

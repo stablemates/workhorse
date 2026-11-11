@@ -81,6 +81,15 @@ module Conformance
       @envelope = JSON.parse(File.read(File.join(PROTOCOL, "failures.json"))).fetch("envelope")
     end
 
+    # Why the fixture does not apply to Ruby, or nil. A shutdown-cancellation fixture names each SDK
+    # that runs it, and a handler panic exists only in Go and Rust.
+    def self.outside_ruby(fixture)
+      return unless fixture["kind"] == "shutdown-cancellation"
+      return if fixture.fetch("shutdownBehavior").key?("ruby")
+
+      "the fixture names no Ruby shutdown behavior"
+    end
+
     def run(fixture)
       case fixture["kind"]
       when "trace-propagation" then trace(fixture)
@@ -1005,8 +1014,13 @@ module Conformance
             raise "the shutdown never reached the handler" unless context.cancellation.wait(5)
 
             reasons << context.cancellation.reason
-            context.cancellation.check! if fixture["handlerResult"] == "error"
-            {"finished" => true}
+            # The handler answers its shutdown cancellation as handlerResult says (ADR 0117).
+            case fixture["handlerResult"]
+            when "error" then context.cancellation.check!
+            when "application-error" then raise "the cleanup timed out"
+            when "oversized-value" then Array.new(fixture.fetch("resultZeros"), 0)
+            else {"finished" => true}
+            end
           end
         thread = Thread.new { subject.run }
         check(started.wait(5), "the handler never started")

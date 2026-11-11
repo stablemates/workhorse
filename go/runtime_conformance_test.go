@@ -1308,12 +1308,16 @@ func executeWorkerOversizedResultFixture(t *testing.T, fixture workerRuntimeFixt
 }
 
 // executeWorkerShutdownCancellationFixture stops the worker while its handler runs. Once the
-// shutdown grace cancels its context, the handler returns an error or a value, as HandlerResult
-// says. One attempt makes a charged attempt fail the task, either at once or when lease recovery
-// settles an abandoned lease.
+// shutdown grace cancels its context, the handler returns the cancellation, a value, an error of
+// its own, a value the task cannot store, or panics, as HandlerResult says. One attempt makes a
+// charged attempt fail the task, either at once or when lease recovery settles an abandoned lease.
 func executeWorkerShutdownCancellationFixture(t *testing.T, fixture workerRuntimeFixture) {
-	if fixture.ShutdownBehavior["go"] != "cancel" {
-		t.Fatalf("the fixture expects Go shutdown behavior %q, want cancel", fixture.ShutdownBehavior["go"])
+	behavior, ok := fixture.ShutdownBehavior["go"]
+	if !ok {
+		t.Skipf("the fixture %s names no Go shutdown behavior", fixture.ID)
+	}
+	if behavior != "cancel" {
+		t.Fatalf("the fixture expects Go shutdown behavior %q, want cancel", behavior)
 	}
 	databaseURL := createConformanceDatabase(t, testDatabaseURL(t), "worker-shutdown-cancellation")
 	ctx := context.Background()
@@ -1346,10 +1350,20 @@ func executeWorkerShutdownCancellationFixture(t *testing.T, fixture workerRuntim
 	) (any, error) {
 		close(started)
 		<-handlerContext.Done()
-		if fixture.HandlerResult == "value" {
+		switch fixture.HandlerResult {
+		case "value":
 			return map[string]bool{"finished": true}, nil
+		case "application-error":
+			return nil, errors.New("the cleanup timed out")
+		case "oversized-value":
+			return make([]int, fixture.ResultZeros), nil
+		case "panic":
+			panic("the unwind failed")
+		case "error":
+			return nil, context.Cause(handlerContext)
+		default:
+			return nil, fmt.Errorf("unknown handler result %q", fixture.HandlerResult)
 		}
-		return nil, context.Cause(handlerContext)
 	})
 	runContext, stop := context.WithCancel(ctx)
 	runResult := make(chan error, 1)
@@ -1366,7 +1380,9 @@ func executeWorkerShutdownCancellationFixture(t *testing.T, fixture workerRuntim
 	}
 
 	expected := fixture.ExpectedCancelled
-	assertWorkerFixtureTaskState(t, ctx, pool, taskID, expected.workerFixtureTaskState)
+	expectedState := expected.workerFixtureTaskState
+	expectedState.ErrorName = expected.ErrorNames["go"]
+	assertWorkerFixtureTaskState(t, ctx, pool, taskID, expectedState)
 	rows, err := pool.Query(ctx, `SELECT event_type FROM workhorse.task_event WHERE task_id = $1
 		ORDER BY occurred_at, event_id`, taskID)
 	if err != nil {

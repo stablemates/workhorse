@@ -108,7 +108,9 @@ worker settles each handler that returns, as Go `settleAfterShutdown` does:
 
 1. If the handler returns a value, the worker completes the task.
 2. If the handler throws, or the result cannot be stored, the worker releases the task through
-   `release_owned_v1`. The task keeps its `current_attempt`.
+   `release_owned_v1`. The task keeps its `current_attempt`. This applies only if the abort came
+   before the handler returned. `TaskAttempt.markHandlerReturned` records that state, and a batch
+   member records it when the batch callback returns (ADR 0117).
 3. If the completion or the release fails, the worker logs `workhorse.worker.shutdown_settlement_failed`. Lease
    recovery then settles the task.
 

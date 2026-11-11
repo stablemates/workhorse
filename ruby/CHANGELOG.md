@@ -5,6 +5,17 @@ other SDKs carry, because every tag names one release of all of them.
 
 ## Unreleased
 
+### Each failure in the shutdown unwind window releases its task
+
+A Ruby worker stops, and at the end of the shutdown grace it cancels a handler with `:shutdown`.
+Before, only a `CancelledError(:shutdown)` returned the task to its queue. Each other error, and
+each result that the task could not store, failed the attempt through `fail_v1`. Thus a task on its
+last attempt failed because its worker stopped. Now the cancellation decides, not the class of the
+error. The worker reads the token when the handler returns, and a batch member reads it when the
+batch handler returns. If the token holds `:shutdown` then, each `StandardError` releases the task
+through `release_owned_v1`. A result that cannot be stored also releases it (SM-1933, ADR 0117). A
+handler that fails before the cancellation keeps its usual settlement.
+
 ### The Active Job adapter requires Active Job 8.1
 
 Rails 8.0 reached the end of its security support on 2026-11-07, so the adapter now requires Active

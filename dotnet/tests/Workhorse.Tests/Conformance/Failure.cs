@@ -24,7 +24,7 @@ internal sealed class Failure : Exception
 /// <remarks>
 /// <c>Failed</c>: the C# adapter ran and disagreed. <c>Unsupported</c>: no C# adapter can express
 /// the fixture yet, because an open slice owns the surface. <c>Skipped</c>: the runner could not
-/// reach the database the fixture needs.
+/// reach the database the fixture needs, or the fixture names no C# behavior.
 /// </remarks>
 internal sealed record Outcome(OutcomeStatus Status, string? Reason)
 {

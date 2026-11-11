@@ -228,7 +228,7 @@ impl Inner {
         let settled = if context.suspended() {
             Ok("suspended")
         } else {
-            self.settle(&task, result, expired, rejected, token.reason(), slot)
+            self.settle(&task, result, expired, rejected, token.reason_at_return(), slot)
                 .instrument(span.clone())
                 .await
         };
@@ -298,17 +298,33 @@ impl Inner {
                 return self.settle_expiration(task).await
             }
             (Some(CancelReason::LeaseLost), _) => return Ok("lease_lost"),
-            // A handler that stopped for shutdown returns the task to the queue without an attempt.
-            // A panic still fails the attempt.
+            // A handler that stopped for shutdown returns the task to the queue without an attempt
+            // (ADR 0117). A panic still fails the attempt.
             (Some(CancelReason::Shutdown), Err(error)) if !error.is_panic() => {
                 return self.release(task, false).await
             }
             _ => {}
         }
+        let after_shutdown = reason == Some(CancelReason::Shutdown);
         match result {
-            Ok(value) => self.complete(task, value, slot).await,
+            Ok(value) => self.complete(task, value, slot, after_shutdown).await,
             Err(error) => self.fail_with_state(task, error).await,
         }
+    }
+
+    /// Settles a result that the task cannot store. After the shutdown cancellation, the worker
+    /// returns the task to its queue without an attempt, so the next attempt meets the same check
+    /// (ADR 0117). Otherwise the retry policy applies.
+    async fn refuse_result(
+        &self,
+        task: &ClaimedTask,
+        error: HandlerError,
+        after_shutdown: bool,
+    ) -> Result<Outcome, Error> {
+        if after_shutdown {
+            return self.release(task, false).await;
+        }
+        self.fail_with_state(task, error).await
     }
 
     /// Asks PostgreSQL once to expire the task's ownership under its fence. If the expiry starts
@@ -416,10 +432,11 @@ impl Inner {
         task: &ClaimedTask,
         result: Value,
         slot: Option<&ActiveSlot>,
+        after_shutdown: bool,
     ) -> Result<Outcome, Error> {
         if let Some(version) = &task.contract_version {
             if let Err(error) = self.validate_result(task, version, &result).await {
-                return self.fail_with_state(task, error).await;
+                return self.refuse_result(task, error, after_shutdown).await;
             }
         }
         if holds_nul(&result) {
@@ -428,7 +445,7 @@ impl Inner {
                  jsonb cannot store",
                 task.task_type
             );
-            return self.fail_with_state(task, HandlerError::new(message)).await;
+            return self.refuse_result(task, HandlerError::new(message), after_shutdown).await;
         }
         if let Some(limit) = task.result_max_bytes {
             // PostgreSQL would refuse the completion, which ends the settlement rather than the
@@ -437,7 +454,7 @@ impl Inner {
                 let message =
                     format!("{} result exceeds its configured size limit", task.task_type);
                 let error = HandlerError::named("TaskValueSizeLimitError", message);
-                return self.fail_with_state(task, error).await;
+                return self.refuse_result(task, error, after_shutdown).await;
             }
         }
         let accepted = if task.fast_tier {

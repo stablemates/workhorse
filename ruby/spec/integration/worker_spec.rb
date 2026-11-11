@@ -553,7 +553,10 @@ RSpec.describe "Worker against PostgreSQL" do
     expect(events).to eq(%w[enqueued claimed released])
   end
 
-  it "still charges the attempt when a handler raises its own error after the shutdown" do
+  # SM-1933, ADR 0117: after the shutdown cancellation, the cancellation decides the settlement, not
+  # the class of the error. An error of the handler's own and a result that fails its result
+  # contract return the task to its queue, and the task keeps its attempt.
+  it "releases a task whose handler raises its own error after the shutdown" do
     task_id = queue.enqueue("failing", {}, max_attempts: 1).task_id
     started = Queue.new
     subject = worker(shutdown_grace: 0.05).handle("failing") do |_payload, context|
@@ -567,9 +570,85 @@ RSpec.describe "Worker against PostgreSQL" do
     subject.stop
     runner.value
 
+    expect(status(task_id).values_at("state", "attempt")).to eq(["ready", "1"])
+    events = @connection.exec_params("SELECT event_type FROM workhorse.task_event WHERE task_id = $1 ORDER BY occurred_at, event_id",
+      [task_id]).column_values(0)
+    expect(events).to eq(%w[enqueued claimed released])
+  end
+
+  it "releases a task whose result fails its result contract after the shutdown" do
+    version = W::TaskContractVersion.new(result_schema: {"type" => "string"})
+    queue.sync_contracts("contracted" => W::TaskTypeContracts.new(current_version: "v1", versions: {"v1" => version}))
+    task_id = queue.enqueue("contracted", {}, max_attempts: 1).task_id
+    started = Queue.new
+    subject = worker(shutdown_grace: 0.05).handle("contracted") do |_payload, context|
+      started << true
+      raise "the shutdown never reached the handler" unless context.cancellation.wait(5)
+
+      1
+    end
+    runner = Thread.new { subject.run }
+    started.pop
+    subject.stop
+    runner.value
+
+    expect(status(task_id).values_at("state", "attempt")).to eq(["ready", "1"])
+  end
+
+  # The limit of ADR 0117: a handler that fails during the grace, before the cancellation, keeps
+  # its usual settlement.
+  it "charges the attempt of a handler that fails before its shutdown cancellation" do
+    task_id = queue.enqueue("early", {}, max_attempts: 1).task_id
+    started = Queue.new
+    stopped = Concurrent::Event.new
+    cancelled = Queue.new
+    subject = worker(shutdown_grace: 5).handle("early") do |_payload, context|
+      started << true
+      stopped.wait(5)
+      cancelled << context.cancellation.cancelled?
+      raise ArgumentError, "the upstream call failed"
+    end
+    runner = Thread.new { subject.run }
+    started.pop
+    subject.stop
+    stopped.set
+    runner.value
+
+    expect(cancelled.pop).to be(false)
     row = status(task_id)
     expect(row.values_at("state", "attempt")).to eq(["failed", "1"])
     expect(JSON.parse(row["error"])["name"]).to eq("ArgumentError")
+  end
+
+  # A batch member records the return of the batch handler before the evidence write. A stop during
+  # that write cannot turn the failure into a release (ADR 0117).
+  it "charges each batch member whose handler failed before a stop during the evidence write" do
+    ids = 2.times.map { queue.enqueue("late-batch", {}, max_attempts: 1).task_id }
+    evidence_started = Concurrent::Event.new
+    cancelled_at_return = Concurrent::Array.new
+    subject = worker(concurrency: 2, shutdown_grace: 0).handle_batch("late-batch", max_size: 2, linger: 5) do |items|
+      cancelled_at_return.concat(items.map { |item| item.context.cancellation.cancelled? })
+      raise "the batch failed before the shutdown"
+    end
+    evidence = subject.method(:record_batch_evidence)
+    subject.define_singleton_method(:record_batch_evidence) do |sql, phase, batch_id, task_type, batch, full|
+      if phase == "failure"
+        evidence_started.set
+        batch.each { |member| raise "the shutdown never arrived" unless member.context.cancellation.wait(5) }
+      end
+      evidence.call(sql, phase, batch_id, task_type, batch, full)
+    end
+    runner = Thread.new { subject.run }
+    expect(evidence_started.wait(5)).to be(true)
+    subject.stop
+    expect(runner.join(5)).not_to be_nil
+    runner.value
+
+    expect(cancelled_at_return.to_a).to eq([false, false])
+    expect(ids.map { |id| status(id)["state"] }).to eq(%w[failed failed])
+  ensure
+    subject&.stop
+    runner&.join(5)
   end
 
   it "charges the attempt of a handler that raises a shutdown CancelledError without a stop" do

@@ -1734,6 +1734,9 @@ class Worker:
             tuple[str, int], tuple[CancellationToken, _AttemptOutcomeArbiter]
         ] = {}
         self._shutdown_aborted = False
+        # Whether the shutdown abort came before each running handler returned, keyed by the id of
+        # its cancellation token. A batch member records it when the batch callback returns.
+        self._shutdown_at_return: dict[int, bool] = {}
         # The end of the stop budget, fixed by the first stop of a run (ADR 0071, rule 8).
         self._stop_deadline: float | None = None
         self._heartbeat_lock = Lock()
@@ -2175,7 +2178,13 @@ class Worker:
             )
             record_batch(_STATEMENTS.record_batch_dispatch, batch_id, batch)
             try:
-                outcomes = handler(tuple(member.item for member in batch))
+                try:
+                    outcomes = handler(tuple(member.item for member in batch))
+                finally:
+                    # Each member records the return of the callback before the evidence write, so a
+                    # stop during that write cannot turn a failure into a release (ADR 0117).
+                    for member in batch:
+                        self._mark_shutdown_at_return(member.item.context.cancellation)
                 validated = _validate_batch_outcomes(type, outcomes, len(batch))
             except BaseException as cause:
                 error = (
@@ -4125,8 +4134,12 @@ class Worker:
                 raise heartbeat_error[0] from cause
             return False
 
+        stopped_at_return = False
         try:
-            result = handler(task.payload, durability.context())
+            try:
+                result = handler(task.payload, durability.context())
+            finally:
+                stopped_at_return = self._take_shutdown_at_return(cancellation)
             self._validate_result_contract(task, result)
             encoded_result = _encode_result(task.type, result, task.result_max_bytes)
         except _DurableWaitSuspension:
@@ -4136,9 +4149,11 @@ class Worker:
         except Exception as error:
             if finish_ownership_lifecycle(error):
                 return
-            if self._stopped_for_shutdown(cancellation):
+            if stopped_at_return:
                 # The process runner stopped the handler at the end of its shutdown grace. The stop
                 # is not a failure of the task, so the worker gives it back and its attempt stays.
+                # The abort decides this, not the error, but only if it came before the handler
+                # returned (ADR 0117).
                 self._release_after_shutdown(task, arbiter, span_outcome)
                 return
             try:
@@ -4321,6 +4336,21 @@ class Worker:
             return
         span_outcome["value"] = status
         arbiter.submit(outcome)
+
+    def _mark_shutdown_at_return(self, cancellation: CancellationToken) -> None:
+        """Record whether the shutdown abort came before the handler returned.
+
+        Only the first record of an attempt counts.
+        """
+        stopped = self._stopped_for_shutdown(cancellation)
+        with self._state_lock:
+            self._shutdown_at_return.setdefault(id(cancellation), stopped)
+
+    def _take_shutdown_at_return(self, cancellation: CancellationToken) -> bool:
+        """Record the return of the handler, and give the first record of its attempt."""
+        self._mark_shutdown_at_return(cancellation)
+        with self._state_lock:
+            return self._shutdown_at_return.pop(id(cancellation), False)
 
     def _stopped_for_shutdown(self, cancellation: CancellationToken) -> bool:
         """Whether the shutdown abort of the process runner ended this handler.

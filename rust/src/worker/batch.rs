@@ -15,7 +15,7 @@ use tokio::sync::oneshot;
 use tokio::time::Instant;
 use uuid::Uuid;
 
-use super::handler::{self, ErasedHandler};
+use super::handler::{self, CancellationToken, ErasedHandler};
 use super::{lock, sql, Inner, Worker};
 use crate::fenced_write::fenced_rows;
 use crate::telemetry::{Attribute, Histogram};
@@ -33,7 +33,32 @@ struct Member<P, R> {
     arrival: u64,
     arrived: Instant,
     item: BatchItem<P>,
-    result: oneshot::Sender<Result<R, HandlerError>>,
+    /// Dropped once the outcome of the member is in `returned`, which wakes the member.
+    result: oneshot::Sender<()>,
+    /// The outcome of the callback for this member. The dispatch saves it, with the cancellation
+    /// reason when the callback returned, under this lock and before the failure evidence write.
+    /// Only the dispatch and this member take the lock (ADR 0117).
+    returned: Returned<R>,
+}
+
+type Returned<R> = Arc<Mutex<Option<Result<R, HandlerError>>>>;
+
+/// The outcome of a member that the dispatch woke: the saved outcome of its callback, or the
+/// abandoned error if the dispatch ended without one.
+fn delivered<R>(returned: &Returned<R>) -> Result<R, HandlerError> {
+    lock(returned).take().unwrap_or_else(|| Err(abandoned()))
+}
+
+/// The outcome of a member that its cancellation woke. If the callback returned first, the member
+/// settles with its saved outcome. Otherwise the member records the cancellation as the reason at
+/// its return, under the same lock, and settles with the cancellation.
+fn woken<R>(returned: &Returned<R>, token: &CancellationToken) -> Result<R, HandlerError> {
+    let mut saved = lock(returned);
+    if let Some(outcome) = saved.take() {
+        return outcome;
+    }
+    token.mark_returned();
+    Err(cancelled())
 }
 
 struct Pending<P, R> {
@@ -146,7 +171,8 @@ impl<P: Send + 'static, R: Send + 'static> Coordinator<P, R> {
     async fn join(self: Arc<Self>, payload: P, context: HandlerContext) -> Result<R, HandlerError> {
         let queue = context.task().queue.clone();
         let cancellation = context.cancellation().clone();
-        let (sender, mut receiver) = oneshot::channel();
+        let (sender, mut receiver) = oneshot::channel::<()>();
+        let returned: Returned<R> = Arc::new(Mutex::new(None));
         // The arrival that fills the batch takes it under the same lock that added it. A separate
         // take would let a concurrent arrival take this member's batch and leave its own behind.
         let (arrival, first_arrival, batch) = {
@@ -159,6 +185,7 @@ impl<P: Send + 'static, R: Send + 'static> Coordinator<P, R> {
                 arrived: Instant::now(),
                 item: BatchItem { payload, context: BatchHandlerContext::new(context) },
                 result: sender,
+                returned: Arc::clone(&returned),
             });
             let first_arrival = members[0].arrived;
             let ready = members.len() >= self.options.max_size || self.options.linger.is_zero();
@@ -179,20 +206,20 @@ impl<P: Send + 'static, R: Send + 'static> Coordinator<P, R> {
         } else {
             let linger = tokio::time::sleep_until(first_arrival + self.options.linger);
             tokio::select! {
-                result = &mut receiver => return result.unwrap_or_else(|_| Err(abandoned())),
+                _ = &mut receiver => return delivered(&returned),
                 () = linger => {
                     let batch = self.take(&mut lock(&self.pending), &queue, arrival);
                     if let Some(batch) = batch {
                         self.dispatch(batch).await;
                     }
                 }
-                () = cancellation.cancelled() => return Err(cancelled()),
+                () = cancellation.cancelled() => return woken(&returned, &cancellation),
             }
         }
         tokio::select! {
             biased;
-            result = &mut receiver => result.unwrap_or_else(|_| Err(abandoned())),
-            () = cancellation.cancelled() => Err(cancelled()),
+            _ = &mut receiver => delivered(&returned),
+            () = cancellation.cancelled() => woken(&returned, &cancellation),
         }
     }
 
@@ -226,9 +253,8 @@ impl<P: Send + 'static, R: Send + 'static> Coordinator<P, R> {
 
     async fn dispatch(&self, batch: Vec<Member<P, R>>) {
         let Some(worker) = self.worker.upgrade() else {
-            for member in batch {
-                let _ = member.result.send(Err(abandoned()));
-            }
+            // Each member finds no saved outcome and settles as abandoned.
+            drop(batch);
             return;
         };
         let queue = batch[0].item.context.task().queue.clone();
@@ -256,8 +282,10 @@ impl<P: Send + 'static, R: Send + 'static> Coordinator<P, R> {
         let batch_id = Uuid::new_v4();
         let mut items = Vec::with_capacity(batch.len());
         let mut senders = Vec::with_capacity(batch.len());
+        let mut returns = Vec::with_capacity(batch.len());
         for member in batch {
             let task = member.item_task();
+            returns.push((member.item.context.cancellation().clone(), member.returned));
             senders.push((member.result, task));
             items.push(member.item);
         }
@@ -280,20 +308,29 @@ impl<P: Send + 'static, R: Send + 'static> Coordinator<P, R> {
                     outcomes.len()
                 )))
             });
+        // Each member records the reason at the return of the callback and saves its outcome under
+        // its own lock, before the failure evidence write. A stop during that write then cannot turn
+        // a failure into a release, or replace its error with the cancellation (ADR 0117).
         match outcomes {
             Ok(outcomes) => {
-                for ((sender, _), outcome) in senders.into_iter().zip(outcomes) {
-                    let _ = sender.send(match outcome {
+                for ((token, returned), outcome) in returns.iter().zip(outcomes) {
+                    let mut saved = lock(returned);
+                    token.mark_returned();
+                    *saved = Some(match outcome {
                         BatchResult::Succeeded(value) => Ok(value),
                         BatchResult::Failed(error) => Err(error),
                     });
                 }
+                drop(senders);
             }
             Err(error) => {
-                record(&worker, sql::RECORD_BATCH_FAILURE_V1, batch_id, &tasks).await;
-                for (sender, _) in senders {
-                    let _ = sender.send(Err(error.clone()));
+                for (token, returned) in &returns {
+                    let mut saved = lock(returned);
+                    token.mark_returned();
+                    *saved = Some(Err(error.clone()));
                 }
+                record(&worker, sql::RECORD_BATCH_FAILURE_V1, batch_id, &tasks).await;
+                drop(senders);
             }
         }
     }
@@ -340,6 +377,7 @@ mod tests {
 
     use super::*;
     use crate::worker::handler::CancellationToken;
+    use crate::CancelReason;
     use crate::{ClaimedTask, WorkerOptions};
 
     const LINGER: Duration = Duration::from_secs(1);
@@ -388,6 +426,15 @@ mod tests {
     }
 
     fn join(coordinator: &Arc<Coordinator<i64, i64>>, payload: i64) -> JoinHandle<i64> {
+        let joined = joined(coordinator, payload, CancellationToken::default());
+        tokio::spawn(async move { joined.await.unwrap() })
+    }
+
+    fn joined(
+        coordinator: &Arc<Coordinator<i64, i64>>,
+        payload: i64,
+        token: CancellationToken,
+    ) -> impl Future<Output = Result<i64, HandlerError>> {
         let task = ClaimedTask {
             id: Uuid::new_v4(),
             task_type: "batch".into(),
@@ -409,7 +456,6 @@ mod tests {
             claim_sent_at: Instant::now(),
             fast_tier: false,
         };
-        let token = CancellationToken::default();
         let context = HandlerContext::new(
             Arc::new(task),
             token,
@@ -417,8 +463,45 @@ mod tests {
             Duration::from_secs(5),
             "worker".into(),
         );
-        let joined = Arc::clone(coordinator).join(payload, context);
-        tokio::spawn(async move { joined.await.unwrap() })
+        Arc::clone(coordinator).join(payload, context)
+    }
+
+    // ADR 0117: the callback returned before the shutdown cancellation of a waiting member. The
+    // member then settles with its own outcome, also when the cancellation reaches it first, and the
+    // reason at its return holds no cancellation. The first wait of a member is not biased, so the
+    // run repeats the order.
+    #[tokio::test(start_paused = true)]
+    async fn a_waiting_member_keeps_its_outcome_when_the_cancellation_follows_the_callback() {
+        for _ in 0..20 {
+            let gate = Arc::new(Semaphore::new(0));
+            let held = Arc::clone(&gate);
+            let coordinator = coordinator(move |items: Vec<BatchItem<i64>>| {
+                let results = times_ten(&items);
+                let gate = Arc::clone(&held);
+                async move {
+                    let _permit = gate.acquire().await.unwrap();
+                    results
+                }
+            });
+            let token = CancellationToken::default();
+            let waiting = tokio::spawn(joined(&coordinator, 1, token.clone()));
+            tokio::task::yield_now().await;
+            // The member that fills the batch runs the callback and delivers each outcome. Its task
+            // then cancels the waiting member at once, before that member runs again.
+            let fill = joined(&coordinator, 2, CancellationToken::default());
+            let stop = token.clone();
+            let filling = tokio::spawn(async move {
+                let outcome = fill.await;
+                stop.cancel(CancelReason::Shutdown);
+                outcome
+            });
+            tokio::task::yield_now().await;
+            gate.add_permits(1);
+            assert_eq!(filling.await.unwrap().map_err(|error| error.to_string()), Ok(20));
+            let outcome = waiting.await.unwrap();
+            assert_eq!(outcome.map_err(|error| error.to_string()), Ok(10));
+            assert_eq!(token.reason_at_return(), None);
+        }
     }
 
     fn pending(coordinator: &Coordinator<i64, i64>) -> usize {

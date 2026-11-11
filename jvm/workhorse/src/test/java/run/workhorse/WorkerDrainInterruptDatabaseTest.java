@@ -281,9 +281,13 @@ class WorkerDrainInterruptDatabaseTest {
     drainDuringWrite(worker, held);
     waitForCount(
         "each member has its failure evidence row", 2, () -> events("batch_failed", taskIds));
+    // ADR 0117: the batch failed before the stop, so the stop during the evidence write does not
+    // turn the failure into a release.
+    waitForCount("each member fails", 2, () -> events("failed", taskIds));
 
     assertEquals(List.of(false), held.interruptedDuringWrite, "the write ran without an interrupt");
     assertEquals(List.of(true), held.deferredDuringWrite, "the drain interrupted during the write");
+    assertEquals(0, events("released", taskIds), "no member goes back to its queue");
   }
 
   @Test
@@ -594,9 +598,12 @@ class WorkerDrainInterruptDatabaseTest {
     }
   }
 
-  /** A batch handler error of its own after the drain's interrupt still fails each member. */
+  /**
+   * ADR 0117: a batch handler error of its own after the drain's interrupt returns each member to
+   * its queue without an attempt. The cancellation decides this, not the type of the error.
+   */
   @Test
-  void stillFailsEachBatchMemberWhenTheBatchHandlerFailsOnItsOwnAfterTheStop() throws Exception {
+  void releasesEachBatchMemberWhenTheBatchHandlerFailsOnItsOwnAfterTheStop() throws Exception {
     List<UUID> taskIds = List.of(enqueue("batch-own"), enqueue("batch-own"));
     CountDownLatch started = new CountDownLatch(1);
     Worker worker =
@@ -614,16 +621,15 @@ class WorkerDrainInterruptDatabaseTest {
             .build();
 
     drainWhileRunning(worker, started);
-    waitForCount(
-        "each member fails",
-        2,
-        () ->
-            count(
-                "SELECT count(*) FROM workhorse.task_outcome WHERE state = 'failed'"
-                    + " AND task_id = ANY(?::uuid[])",
-                taskIds));
+    waitForCount("each member goes back to its queue", 2, () -> events("released", taskIds));
 
-    assertEquals(0, events("released", taskIds), "no member goes back to its queue");
+    assertEquals(
+        2,
+        count(
+            "SELECT count(*) FROM workhorse.task_runtime WHERE state = 'ready' AND current_attempt = 1"
+                + " AND task_id = ANY(?::uuid[])",
+            taskIds),
+        "each member waits in its queue and did not use its attempt");
   }
 
   // SM-1525 (m2): a child request reads its payload contract through the drain's interrupt. Without

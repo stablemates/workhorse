@@ -14,7 +14,6 @@ namespace Workhorse;
 
 public sealed partial class Worker
 {
-    private const int CauseDepth = 16;
     private static readonly long ExpirationRetryNanos = Monotonic.Millis(5);
     private static readonly long ExpirationRetryMaxNanos = Monotonic.Millis(1000);
     private static readonly TimeSpan MaxDelaySlice = TimeSpan.FromDays(1);
@@ -131,10 +130,24 @@ public sealed partial class Worker
         }
 
         string encoded;
+        // Whether the shutdown cancellation came before the handler returned. It is read when the
+        // handler returns, so a stop that lands later cannot turn a failure of the handler's own
+        // into a shutdown (ADR 0117).
+        var stopped = false;
         try
         {
             var context = new DurableContext(this, task, arbiter, TierRead(task));
-            var result = await registration.Invoke(context, task.Claimed.Payload).ConfigureAwait(false);
+            object? result;
+            try
+            {
+                result = await registration.Invoke(context, task.Claimed.Payload).ConfigureAwait(false);
+            }
+            finally
+            {
+                cancellation.MarkHandlerReturned();
+                stopped = cancellation.ShutdownAtReturn;
+            }
+
             // A suspended attempt ignores its result, so the worker neither encodes nor checks it.
             encoded = arbiter.Suspended ? "null" : await EncodeResultAsync(claimed, result, token).ConfigureAwait(false);
         }
@@ -152,8 +165,11 @@ public sealed partial class Worker
                 return;
             }
 
-            // A handler that stopped for the shutdown returns the task without charging the attempt.
-            if (cancellation.Reason == CancelReason.Shutdown && ShutdownCancellation(error, cancellation.Token))
+            // After the shutdown cancellation, each handler exception and each result that cannot be
+            // stored returns the task without charging the attempt (ADR 0117). The cancellation
+            // decides this, not the type of the exception. A handler that failed before the
+            // cancellation keeps its usual settlement.
+            if (stopped)
             {
                 await ReleaseOwnedAsync(claimed, arbiter, ownership, token).ConfigureAwait(false);
                 return;
@@ -516,34 +532,6 @@ public sealed partial class Worker
         if (ownership.Errors.TryPeek(out var error))
         {
             ExceptionDispatchInfo.Throw(error);
-        }
-
-        return false;
-    }
-
-    /// <summary>
-    /// Whether <paramref name="error"/>, or an error that it wraps, shows that the handler saw the
-    /// shutdown: an <see cref="OperationCanceledException"/> that carries the handler's own token
-    /// (ADR 0107), or a <see cref="CancelledException"/> with <see cref="CancelReason.Shutdown"/>. An
-    /// unrelated cancellation, such as a timeout of the handler's own, fails the attempt. The walk
-    /// stays bounded against a cyclic chain.
-    /// </summary>
-    private static bool ShutdownCancellation(Exception error, CancellationToken token)
-    {
-        var current = error;
-        for (var depth = 0; depth < CauseDepth && current is not null; depth++)
-        {
-            if (current is OperationCanceledException cancelled && cancelled.CancellationToken == token)
-            {
-                return true;
-            }
-
-            if (current is CancelledException { Reason: CancelReason.Shutdown })
-            {
-                return true;
-            }
-
-            current = current is AggregateException { InnerExceptions.Count: 1 } aggregate ? aggregate.InnerExceptions[0] : current.InnerException;
         }
 
         return false;

@@ -2065,17 +2065,18 @@ class WorkerDatabaseTest {
   }
 
   /**
-   * The handler fails with its own error after the drain cancels it. The worker then charges the
-   * attempt, and does not release the task.
+   * SM-1933, ADR 0117: the handler fails with its own error after the drain cancels it. The
+   * cancellation decides the settlement, not the type of the error, so the worker releases the
+   * task, and the task keeps its attempt. Before, the worker charged the attempt.
    *
-   * <p>The handler throws only after the cancellation at the end of the grace. Its failure write
-   * thus runs in the unwind window of 250 ms. On a loaded host, the write can take longer, and
-   * {@code close} throws {@link ShutdownIncompleteException} while the write still ends (SM-1686,
-   * as SM-1543). The drain stops only the lease renewal of an attempt that it abandons. The
-   * duration of the drain is not what this test checks, so it waits for the outcome of the task.
+   * <p>The handler throws only after the cancellation at the end of the grace. Its release thus
+   * runs in the unwind window of 250 ms. On a loaded host, the write can take longer, and {@code
+   * close} throws {@link ShutdownIncompleteException} while the write still ends (SM-1686, as
+   * SM-1543). The duration of the drain is not what this test checks, so it waits for the outcome
+   * of the task.
    */
   @Test
-  void stillChargesTheAttemptWhenAHandlerFailsOnItsOwnAfterTheStop() throws Exception {
+  void releasesTheTaskWhenAHandlerFailsOnItsOwnAfterTheStop() throws Exception {
     UUID taskId = enqueue("own", Map.of(), EnqueueOptions.builder().maxAttempts(1));
     CountDownLatch started = new CountDownLatch(1);
     AtomicReference<@Nullable CancellationReason> reason = new AtomicReference<>();
@@ -2107,21 +2108,45 @@ class WorkerDatabaseTest {
       assertEquals(1, slow.abandoned(), "only the failing attempt was still in flight");
     }
 
-    // The handler records the reason before it throws, and the task leaves the active state only
-    // after the throw. Even if the handler starts late, it records the reason before this wait
-    // ends.
-    waitUntil(
-        taskId + " left the active state",
-        () -> {
-          try {
-            return !status(taskId).state().equals("active");
-          } catch (SQLException error) {
-            throw new IllegalStateException(error);
-          }
-        });
+    waitForState(taskId, "ready");
     assertEquals(CancellationReason.SHUTDOWN, reason.get(), "the handler failed after the stop");
+    Status released = status(taskId);
+    assertEquals(1, released.attempt());
+    assertNull(released.error(), "the release charges no attempt");
+  }
+
+  /**
+   * The limit of ADR 0117: a handler that fails during the shutdown grace, before the drain cancels
+   * it, keeps its usual settlement. The worker charges the attempt.
+   */
+  @Test
+  void chargesTheAttemptWhenAHandlerFailsBeforeItsShutdownCancellation() throws Exception {
+    UUID taskId = enqueue("early", Map.of(), EnqueueOptions.builder().maxAttempts(1));
+    CountDownLatch started = new CountDownLatch(1);
+    CountDownLatch stopped = new CountDownLatch(1);
+    AtomicBoolean cancelled = new AtomicBoolean(true);
+    Worker worker =
+        worker()
+            .shutdownGrace(Duration.ofSeconds(5))
+            .handle(
+                "early",
+                Object.class,
+                (ctx, payload) -> {
+                  started.countDown();
+                  stopped.await(WAIT.toMillis(), TimeUnit.MILLISECONDS);
+                  cancelled.set(ctx.isCancelled());
+                  throw new IllegalStateException("own failure");
+                })
+            .build();
+    worker.start();
+    await(started, "the handler");
+    worker.stop();
+    stopped.countDown();
+    worker.close();
+
+    assertFalse(cancelled.get(), "the handler failed before the cancellation");
     Status charged = status(taskId);
-    assertEquals("failed", charged.state(), "the own failure charged the only attempt");
+    assertEquals("failed", charged.state(), "the failure charged the only attempt");
     assertEquals(1, charged.attempt());
     assertTrue(
         String.valueOf(charged.error()).contains("own failure"),

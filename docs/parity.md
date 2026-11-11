@@ -338,7 +338,13 @@ TypeScript, Python, or Go task stays in the round until that write ends. A Rust 
 its handler returns. A Ruby, JVM, or .NET task leaves it after the worker checks the result.
 
 If a handler returns a value in the window, the worker completes the task. If it fails, the worker
-releases the task through `release_owned_v1`, and the task keeps its `current_attempt`. A handler
+releases the task through `release_owned_v1`, and the task keeps its `current_attempt`. A result
+that the task cannot store, such as a result above `result_max_bytes` or a result that its result
+contract refuses, also releases the task. In all seven SDKs, the shutdown cancellation decides this,
+not the type of the error, as
+[ADR 0117](decisions/0117-let-the-shutdown-cancellation-decide-the-settlement-in-the-unwind-window.md)
+records. A failure that a handler returns before the cancellation keeps its usual settlement. A
+handler panic in Go or Rust fails the attempt, so the attempt record keeps the panic. A handler
 that does not return in the window holds a lease that nobody renews.
 `recover_expired_telemetry_v1` then recovers its task and charges the attempt.
 

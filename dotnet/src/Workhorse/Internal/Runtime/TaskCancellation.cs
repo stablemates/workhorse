@@ -10,6 +10,7 @@ internal sealed class TaskCancellation : IDisposable
 
     private readonly CancellationTokenSource _source = new();
     private int _reason = NoReason;
+    private int _shutdownAtReturn = NoReason;
 
     /// <summary>The token that the handler receives.</summary>
     internal CancellationToken Token => _source.Token;
@@ -23,6 +24,16 @@ internal sealed class TaskCancellation : IDisposable
             return reason == NoReason ? null : (CancelReason)reason;
         }
     }
+
+    /// <summary>
+    /// Records whether the reason was <see cref="CancelReason.Shutdown"/> when the handler returned.
+    /// A batch member records it when the batch handler returns. Only the first call counts (ADR 0117).
+    /// </summary>
+    internal void MarkHandlerReturned() =>
+        Interlocked.CompareExchange(ref _shutdownAtReturn, Reason == CancelReason.Shutdown ? 1 : 0, NoReason);
+
+    /// <summary>Whether the shutdown cancellation came before the handler returned.</summary>
+    internal bool ShutdownAtReturn => Volatile.Read(ref _shutdownAtReturn) == 1;
 
     /// <summary>
     /// Sets <paramref name="reason"/> and then cancels the token. Returns whether this call set the

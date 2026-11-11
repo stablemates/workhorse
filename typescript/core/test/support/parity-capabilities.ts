@@ -1267,6 +1267,8 @@ export const PARITY_WORKER_ROWS: readonly ParityRow[] = [
         "runtime/oversized-fast-tier-result-fails-through-the-retry-policy",
         "runtime/shutdown-cancellation-releases-the-task-without-an-attempt",
         "runtime/shutdown-cancellation-completes-a-task-whose-handler-returns-a-value",
+        "runtime/shutdown-cancellation-releases-a-task-whose-handler-fails-in-the-window",
+        "runtime/shutdown-cancellation-releases-a-task-whose-result-is-too-large",
       ],
     },
     jvm: {
@@ -1278,6 +1280,8 @@ export const PARITY_WORKER_ROWS: readonly ParityRow[] = [
         "runtime/json-values-survive-the-payload-and-result-round-trip",
         "runtime/shutdown-cancellation-releases-the-task-without-an-attempt",
         "runtime/shutdown-cancellation-completes-a-task-whose-handler-returns-a-value",
+        "runtime/shutdown-cancellation-releases-a-task-whose-handler-fails-in-the-window",
+        "runtime/shutdown-cancellation-releases-a-task-whose-result-is-too-large",
         "runtime/oversized-full-tier-result-fails-through-the-retry-policy",
         "runtime/busy-worker-refills-slots-with-overlapping-batched-claims",
         "runtime/durable-replay-conflicts-are-terminal",

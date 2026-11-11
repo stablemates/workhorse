@@ -300,6 +300,10 @@ module Stablemates
         @heartbeat = Heartbeat.dedicated(pool)
         @handlers = Concurrent::Map.new
         @batch_coordinators = Concurrent::Map.new
+        # Whether the token of each running handler held :shutdown when the handler returned, keyed
+        # by the token. A batch member records it when the batch handler returns (ADR 0117).
+        @shutdown_at_return = {}.compare_by_identity
+        @shutdown_at_return_lock = Mutex.new
         @contracts = Concurrent::Map.new
         @run_lock = Mutex.new
         @wake = Concurrent::Event.new
@@ -1677,8 +1681,15 @@ module Stablemates
         active.ownership.set(ownership)
         context = HandlerContext.new(executor: @executor, queue: @queue, task: task, worker_id: @worker_id,
           cancellation: cancellation, arbiter: arbiter, logger: @logger, fast_tier: context_tier(task))
+        stopped = false
         begin
-          result = invoke(handler, task.payload, context)
+          begin
+            result = invoke(handler, task.payload, context)
+          ensure
+            # Read when the handler returns, so a stop that lands later cannot turn a failure of
+            # the handler's own into a shutdown.
+            stopped = take_shutdown_at_return(cancellation)
+          end
           validate_result(task, result)
           encoded = Values.json(result, "task result")
           check_result_storable(task, encoded)
@@ -1690,8 +1701,11 @@ module Stablemates
         rescue => e
           return if finish_suspended(task, ownership, arbiter)
 
-          # A handler that stopped for shutdown returns the task to the queue without an attempt.
-          if cancellation.reason == :shutdown && shutdown_cancellation?(e)
+          # After the shutdown cancellation, each failure and each result that cannot be stored
+          # returns the task to the queue without an attempt (ADR 0117). The cancellation decides
+          # this, not the class of the error. A handler that failed before the cancellation keeps
+          # its usual settlement.
+          if stopped
             state[:span_outcome] = release_owned(task, arbiter, Telemetry.task_span_attributes(task), ownership)
             return
           end
@@ -2030,19 +2044,6 @@ module Stablemates
           return state
         end
         settle_status(task, state, arbiter, "fail", %w[failed], :failed, ownership)
-      end
-
-      # Whether +error+, or an error it wraps, is a +:shutdown+ CancelledError. With the token's own
-      # reason, it proves the handler saw the stop, so a failure of its own that races the grace
-      # still charges its attempt. The walk stays bounded against a cyclic cause chain.
-      def shutdown_cancellation?(error)
-        16.times do
-          return false if error.nil?
-          return true if error.is_a?(CancelledError) && error.reason == :shutdown
-
-          error = error.cause
-        end
-        false
       end
 
       # The durable replay conflict (ADR 0098) that +error+ is or wraps, or nil. A handler can wrap a

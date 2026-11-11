@@ -1037,6 +1037,193 @@ async fn a_panic_after_the_shutdown_fails_its_attempt() {
     assert_eq!(harness.state(task).await, TaskState::Failed);
 }
 
+/// ADR 0117: a result that fails its result contract after the shutdown cancellation returns the
+/// task to its queue, and the task keeps its attempt. Before, the worker failed the attempt.
+#[tokio::test]
+async fn a_result_that_fails_its_contract_after_the_shutdown_releases_its_task() {
+    let Some(harness) = harness("durable_shutdown_contract").await else { return };
+    let contracts = BTreeMap::from([(
+        "contracted".to_string(),
+        TaskTypeContracts {
+            current_version: "v1".into(),
+            versions: BTreeMap::from([(
+                "v1".to_string(),
+                TaskContractVersion {
+                    result_schema: json!({"type": "string"}),
+                    ..TaskContractVersion::default()
+                },
+            )]),
+        },
+    )]);
+    harness.queue.sync_contracts(&contracts).await.unwrap();
+    let options = EnqueueOptions { max_attempts: 1, ..EnqueueOptions::default() };
+    let task = harness.queue.enqueue("contracted", &json!({}), options).await.unwrap().task_id;
+    let worker = Worker::new(
+        harness.pool.clone(),
+        WorkerOptions {
+            queues: vec![QUEUE.into()],
+            worker_id: Some(format!("rust-shutdown-contract-{}", Uuid::new_v4())),
+            polling_only: true,
+            poll_interval: Some(Duration::from_millis(20)),
+            shutdown_grace_period: Duration::from_millis(50),
+            ..WorkerOptions::default()
+        },
+    )
+    .unwrap();
+    let (started, mut handler_started) = tokio::sync::watch::channel(false);
+    worker.handle("contracted", move |_: Value, context: HandlerContext| {
+        let started = started.clone();
+        async move {
+            let _ = started.send(true);
+            context.cancellation().cancelled().await;
+            Ok(json!(1))
+        }
+    });
+    let (stop, stopped) = oneshot::channel::<()>();
+    let running = tokio::spawn({
+        let worker = worker.clone();
+        async move {
+            worker
+                .run(async move {
+                    let _ = stopped.await;
+                })
+                .await
+        }
+    });
+    handler_started.wait_for(|started| *started).await.unwrap();
+    stop.send(()).unwrap();
+    running.await.unwrap().unwrap();
+    let snapshot = harness.admin.get_task(task).await.unwrap().unwrap();
+    assert_eq!(snapshot.state, TaskState::Ready);
+    assert_eq!(snapshot.current_attempt, 1);
+}
+
+/// ADR 0117: each batch member records the return of the batch callback and its failure before
+/// the failure evidence write. A stop during that write cannot turn the failure into a release, and
+/// the task keeps the error of the callback, not the cancellation.
+#[tokio::test]
+async fn a_stop_during_the_batch_failure_evidence_keeps_the_failure() {
+    stop_during_batch_failure_evidence(
+        "durable_shutdown_batch_evidence",
+        false,
+        "Error",
+        "batch handler for late-batch returned 0 outcomes for 2 tasks",
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn a_stop_during_the_batch_failure_evidence_keeps_a_batch_panic() {
+    stop_during_batch_failure_evidence(
+        "durable_shutdown_batch_panic",
+        true,
+        "HandlerPanic",
+        "batch handler for late-batch panicked: the batch failed",
+    )
+    .await;
+}
+
+async fn stop_during_batch_failure_evidence(
+    name: &str,
+    panics: bool,
+    error_name: &str,
+    message: &str,
+) {
+    let Some(harness) = harness(name).await else { return };
+    let setup = harness.database.connect().await;
+    setup
+        .batch_execute(
+            "CREATE FUNCTION public.hold_batch_failure() RETURNS trigger LANGUAGE plpgsql AS $$
+             BEGIN PERFORM pg_advisory_xact_lock(921933); RETURN NEW; END $$;
+             CREATE TRIGGER hold_batch_failure BEFORE INSERT ON workhorse.task_event
+             FOR EACH ROW WHEN (NEW.event_type = 'batch_failed')
+             EXECUTE FUNCTION public.hold_batch_failure();
+             SELECT pg_advisory_lock(921933);",
+        )
+        .await
+        .unwrap();
+    let options = EnqueueOptions { max_attempts: 1, ..EnqueueOptions::default() };
+    let mut tasks = Vec::new();
+    for _ in 0..2 {
+        tasks.push(
+            harness
+                .queue
+                .enqueue("late-batch", &Value::Null, options.clone())
+                .await
+                .unwrap()
+                .task_id,
+        );
+    }
+    let worker = Worker::new(
+        harness.pool.clone(),
+        WorkerOptions {
+            queues: vec![QUEUE.into()],
+            worker_id: Some(format!("rust-shutdown-batch-{}", Uuid::new_v4())),
+            polling_only: true,
+            poll_interval: Some(Duration::from_millis(20)),
+            concurrency: 2,
+            shutdown_grace_period: Duration::from_millis(1),
+            ..WorkerOptions::default()
+        },
+    )
+    .unwrap();
+    let cancelled_at_return = Arc::new(AtomicUsize::new(0));
+    let seen = Arc::clone(&cancelled_at_return);
+    let batch = BatchOptions { max_size: 2, linger: Duration::from_secs(60) };
+    worker.handle_batch("late-batch", batch, move |items: Vec<BatchItem<Value>>| {
+        let seen = Arc::clone(&seen);
+        async move {
+            let cancelled =
+                items.iter().filter(|item| item.context.cancellation().is_cancelled()).count();
+            seen.fetch_add(cancelled, Ordering::SeqCst);
+            assert!(!panics, "the batch failed");
+            // No outcome for two members fails the whole batch.
+            Vec::<BatchResult<Value>>::new()
+        }
+    });
+    let (stop, stopped) = oneshot::channel::<()>();
+    let running = tokio::spawn({
+        let worker = worker.clone();
+        async move {
+            worker
+                .run(async move {
+                    let _ = stopped.await;
+                })
+                .await
+        }
+    });
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    loop {
+        let waiting: i64 = setup
+            .query_one(
+                "SELECT count(*) FROM pg_stat_activity WHERE datname = current_database()
+                   AND wait_event = 'advisory' AND query LIKE '%record_batch_failure_v1%'",
+                &[],
+            )
+            .await
+            .unwrap()
+            .get(0);
+        if waiting > 0 {
+            break;
+        }
+        assert!(tokio::time::Instant::now() < deadline, "the failure evidence never waited");
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+    stop.send(()).unwrap();
+    // The grace ends and the worker cancels both members while the evidence write still waits.
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    setup.batch_execute("SELECT pg_advisory_unlock(921933)").await.unwrap();
+    let _ = running.await.unwrap();
+    assert_eq!(cancelled_at_return.load(Ordering::SeqCst), 0);
+    for task in tasks {
+        let snapshot = harness.admin.get_task(task).await.unwrap().unwrap();
+        assert_eq!(snapshot.state, TaskState::Failed);
+        let error = snapshot.error.expect("the failed task records its error");
+        assert_eq!(error["name"], error_name, "{error}");
+        assert_eq!(error["message"], message, "{error}");
+    }
+}
+
 #[tokio::test]
 async fn concurrent_calls_under_one_name_share_one_durable_write() {
     let Some(harness) = harness("durable_in_flight").await else { return };

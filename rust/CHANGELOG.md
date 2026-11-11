@@ -20,6 +20,20 @@ the key of a pending debounced task, so a late request on a paused queue gets
 `window_elapsed_pending`. An enqueue batch reads its timestamp after its locks. The migration does
 not raise the SDK compatibility floor.
 
+### A result that cannot be stored in the shutdown unwind window releases its task
+
+A Rust worker stops, and at the end of the shutdown grace it cancels a handler. The handler then
+returns a value that the task cannot store. For example, the value is above `result_max_bytes`, its
+result contract refuses it, or it holds a NUL character. Before, the worker failed the attempt
+through `fail_v1`, so a task on its last attempt failed because its worker stopped. Now the worker
+returns the task to its queue through `release_owned_v1`. The task keeps its attempt, as it does
+for a handler error (SM-1933, ADR 0117). A handler panic still fails the attempt.
+
+A batch member now records the cancellation reason when the batch callback returns. Before, it
+read the reason only after the batch failure evidence write. A stop during that write released a
+failure that the callback returned before the stop. The member also keeps the error of the
+callback, so the attempt record does not show the cancellation.
+
 ## 0.12.0 — 2026-11-07
 
 The npm packages, Python distribution, Go module, Rust crate, Ruby gem, JVM artifacts, and .NET

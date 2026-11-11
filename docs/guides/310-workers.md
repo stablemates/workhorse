@@ -389,6 +389,11 @@ If the third handler stops at its abort signal and throws, the worker releases t
 queue before the process exits. The task keeps its attempt, so the deploy does not use one of its
 retries. If the handler returns a value in the window, the worker completes the task.
 
+The abort decides this, not the error. In all seven SDKs, any error that the handler throws after
+the abort releases the task. A result that the task cannot store, such as a result above its size
+limit, also releases it. Only a handler panic in Go or Rust fails the attempt. A handler that fails
+before the abort keeps the usual retry of a failure.
+
 If all three tasks finish before the deadline, the process closes its connections after the last
 final write. A second signal makes the process exit at once, without the drain.
 
@@ -509,6 +514,7 @@ Recovery takes that task after the lease expires.
 A handler that the deadline cancels does not make a clean shutdown an error:
 
 - If the handler returns an error, the worker returns its task to the queue and charges no attempt.
+- If the handler returns a value that the task cannot store, the worker also returns its task.
 - If the handler returns a value, the worker completes its task.
 - If the handler panics, the panic fails that attempt. The worker continues to serve later tasks.
 
@@ -534,10 +540,12 @@ When `ShutdownGracePeriod` expires, `Run` acts in this order:
 - `deregister_worker_v2` then gets at most 1,000 ms.
 - After the deadline, the drain does not report an execution error that matches `context.Canceled`.
 - A handler that returns an error after its cancellation charges no attempt. `release_owned_v1`
-  returns its task to the queue, and a failed release leaves the task to lease recovery.
+  returns its task to the queue, and a failed release leaves the task to lease recovery. A value
+  that the task cannot store also goes to `release_owned_v1`.
 - A handler that returns a value after its cancellation completes its task through `complete_v1`,
   and a failed completion leaves the task to lease recovery.
-- A handler panic becomes a `HandlerPanicError` and fails that attempt.
+- A handler panic becomes a `HandlerPanicError` and fails that attempt. `failAfterShutdown` writes
+  that failure in the same unwind period.
 
 More detail: [Schema and SQL protocol: Shutdown grace period](../architecture/schema-and-protocol.md#shutdown-grace-period).
 
@@ -552,7 +560,8 @@ More detail: [Schema and SQL protocol: Shutdown grace period](../architecture/sc
   recovery.
 - Handlers that still run when grace ends see `CancelReason::Shutdown` and get 250 ms to unwind.
 - A handler that returns an error after that cancellation charges no attempt. `release_owned_v1`
-  returns its task to the queue. A panic still fails the attempt.
+  returns its task to the queue. A value that the task cannot store, such as a value above
+  `result_max_bytes`, also goes to `release_owned_v1`. A panic still fails the attempt.
 - `run` abandons the handlers that outlive that window and returns `Error::ShutdownIncomplete`.
 - The cleanup window covers the stop of the registry loop and the listener, `deregister_worker_v2`,
   and the release of the heartbeat connection. It ends 1 s after the later of the deadline and the
@@ -584,8 +593,9 @@ Thus, the stop takes at most the grace period plus the unwind window. With the d
 fits inside the shutdown timeout of the host. The worker cannot stop a handler that ignores its
 token, because .NET has no safe way to abort a thread. The worker abandons that handler.
 
-A handler that stops for the shutdown does not use an attempt. If it throws the cancellation of its
-own token, the worker returns its task to the queue. In a host, a `ShutdownIncompleteException` makes
+A handler that stops for the shutdown does not use an attempt. If it throws any exception after the
+cancellation, or returns a result that the task cannot store, the worker returns its task to the
+queue. In a host, a `ShutdownIncompleteException` makes
 the hosted worker set a failure exit code for the process.
 
 <details>
@@ -601,8 +611,9 @@ When the stopping token of `Worker.RunAsync` is cancelled, the worker acts in th
 5. It stops renewing the leases of the handlers that still run. `RunAsync` throws
    `ShutdownIncompleteException`, and `Abandoned` holds the number of those handlers.
 
-- A handler that throws an `OperationCanceledException` of its own token after
-  `CancelReason.Shutdown` charges no attempt. `release_owned_v1` returns its task to the queue.
+- A handler that throws any exception after `CancelReason.Shutdown` charges no attempt.
+  `release_owned_v1` returns its task to the queue. A result that the task cannot store goes there
+  too.
 - The total stop time is `ShutdownGrace` plus 250 ms. With the defaults, it fits inside the
   `HostOptions.ShutdownTimeout` default of 30 s.
 - `Worker` installs no signal handler. The `ConsoleLifetime` of the Generic Host handles `SIGINT`,

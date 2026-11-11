@@ -109,10 +109,16 @@ final class Runner {
       eachFixture("failures", adapter::failure);
       for (Map<String, @Nullable Object> fixture : catalogue.category("runtime")) {
         String gap = RuntimeFixtures.gap(fixture);
-        record(
-            "runtime",
-            fixture,
-            gap != null ? Outcome.unsupported(gap) : attempt(() -> adapter.run(fixture)));
+        String outside = RuntimeFixtures.outsideJava(fixture);
+        Outcome outcome;
+        if (gap != null) {
+          outcome = Outcome.unsupported(gap);
+        } else if (outside != null) {
+          outcome = Outcome.skipped(outside);
+        } else {
+          outcome = attempt(() -> adapter.run(fixture));
+        }
+        record("runtime", fixture, outcome);
       }
     }
     problems.addAll(Ledger.reconcile(catalogue.declared(), outcomes, entries));

@@ -1,14 +1,10 @@
 package run.workhorse;
 
-import java.io.InterruptedIOException;
 import java.io.PrintWriter;
 import java.io.StringWriter;
 import java.lang.reflect.Type;
 import java.net.InetAddress;
-import java.net.SocketException;
-import java.net.SocketTimeoutException;
 import java.net.UnknownHostException;
-import java.nio.channels.ClosedByInterruptException;
 import java.nio.charset.StandardCharsets;
 import java.sql.Connection;
 import java.sql.SQLException;
@@ -82,9 +78,10 @@ import run.workhorse.internal.telemetry.WorkerTelemetry;
  * {@code shutdownGrace} for running handlers. It then cancels the rest with {@link
  * CancellationReason#SHUTDOWN}, interrupts their threads, and gives them one short unwind window.
  * If a handler still runs after that window, {@code run} throws {@link
- * ShutdownIncompleteException}. A handler that stops for the shutdown, by a {@link
- * CancelledException} with that reason or by an {@link InterruptedException}, returns its task to
- * the queue without charging the attempt.
+ * ShutdownIncompleteException}. After that cancellation, a handler that throws, or returns a result
+ * that the task cannot store, returns its task to the queue without charging the attempt. The
+ * cancellation decides this, not the type of the exception. A handler that returns a value that the
+ * task can store completes its task.
  *
  * <p>The worker installs no JVM shutdown hook and traps no signal. The process owner calls {@link
  * #stop} or {@link #close}, or calls {@link WorkerProcess#runWorkerProcess}.
@@ -2700,16 +2697,10 @@ public final class Worker implements AutoCloseable {
     private boolean interruptDeferred;
 
     /**
-     * Whether the drain interrupted the handler region. A deferred interrupt also counts, because
-     * the thread gets it before control returns to handler code.
+     * Whether the token held {@code SHUTDOWN} when the handler returned, or {@code null} before it
+     * returns. A batch member records it when the batch handler returns (ADR 0117).
      */
-    private boolean drainInterrupted;
-
-    /**
-     * Whether the drain's interrupt stopped the batch of this attempt. An attempt joins one batch
-     * only, and the batch coordinator sets this before it settles the attempt (SM-1890).
-     */
-    private volatile boolean drainStoppedBatch;
+    private @Nullable Boolean shutdownAtReturn;
 
     private static final int QUEUED = 0;
     private static final int STARTED = 1;
@@ -2815,42 +2806,22 @@ public final class Worker implements AutoCloseable {
       }
     }
 
-    /**
-     * Whether the drain interrupted the handler region. The interrupt closes a virtual thread's
-     * socket, so the handler's own I/O can then fail with an error that wraps no {@link
-     * InterruptedException} (SM-1889).
-     */
-    boolean drainInterrupted() {
-      lock.lock();
-      try {
-        return drainInterrupted;
-      } finally {
-        lock.unlock();
+    /** Records that the handler returned. Only the first call counts. */
+    synchronized void markHandlerReturned() {
+      if (shutdownAtReturn == null) {
+        shutdownAtReturn = cancellation.reason() == CancellationReason.SHUTDOWN;
       }
     }
 
-    /**
-     * Records that the drain's interrupt stopped the batch of this member. The batch handler can
-     * run on the thread of another member. Thus the coordinator decides from the attempt whose
-     * thread ran the handler. Then it records the result on each member (SM-1890).
-     */
-    void recordDrainStoppedBatch() {
-      drainStoppedBatch = true;
-    }
-
-    /**
-     * Whether the drain's interrupt stopped the batch of this member. Then the error that the
-     * member throws is the error of that batch, or the cause that the coordinator unwraps from it.
-     */
-    boolean drainStoppedBatch() {
-      return drainStoppedBatch;
+    /** Whether the shutdown cancellation came before the handler returned. */
+    synchronized boolean shutdownAtReturn() {
+      return Boolean.TRUE.equals(shutdownAtReturn);
     }
 
     void interrupt() {
       lock.lock();
       try {
         if (handlerThread != null) {
-          drainInterrupted = true;
           if (deferrals > 0) {
             interruptDeferred = true;
           } else {
@@ -3048,8 +3019,10 @@ public final class Worker implements AutoCloseable {
       return;
     }
     String encoded;
-    // Whether the error comes from the handler call itself, and not from the decode or a batch.
-    boolean handlerThrew = false;
+    // Whether the shutdown cancellation came before the handler returned. It is read when the
+    // handler region ends, so a stop that lands later cannot turn a failure of the handler's own
+    // into a shutdown (ADR 0117).
+    boolean stopped = false;
     try {
       Object result;
       task.enterHandler();
@@ -3064,11 +3037,11 @@ public final class Worker implements AutoCloseable {
           @SuppressWarnings("unchecked")
           Handler<@Nullable Object> handler =
               (Handler<@Nullable Object>) Objects.requireNonNull(registration.handler);
-          handlerThrew = true;
           result = handler.handle(context, payload);
-          handlerThrew = false;
         }
       } finally {
+        task.markHandlerReturned();
+        stopped = task.shutdownAtReturn();
         task.leaveHandler();
       }
       encoded = codec.encode(result);
@@ -3085,16 +3058,12 @@ public final class Worker implements AutoCloseable {
       if (finishSuspended(claimed, ownership, arbiter)) {
         return;
       }
-      // A handler that stopped for shutdown returns the task to the queue without an attempt. The
-      // drain's interrupt closes a virtual thread's socket, so after it, an I/O failure that the
-      // interrupt caused in the handler call also counts as that stop (SM-1889). A batch handler
-      // can run on another member's thread, so this member's interrupt does not show what caused
-      // the shared error. The coordinator decides from the thread that ran the handler (SM-1890).
-      boolean interruptedIo =
-          (handlerThrew && task.drainInterrupted() && interruptedIo(error))
-              || task.drainStoppedBatch();
-      if (cancellation.reason() == CancellationReason.SHUTDOWN
-          && (interruptedIo || shutdownCancellation(error))) {
+      // After the shutdown cancellation, each failure and each result that cannot be stored
+      // returns the task to the queue without an attempt (ADR 0117). The cancellation decides
+      // this, not the type of the error. Thus an I/O failure that the drain's interrupt causes
+      // releases the task (SM-1889), also in a batch that runs on another member's thread
+      // (SM-1890). A handler that failed before the cancellation keeps its usual settlement.
+      if (stopped) {
         releaseOwned(claimed, arbiter, ownership);
         return;
       }
@@ -3347,52 +3316,6 @@ public final class Worker implements AutoCloseable {
       current = current.getCause();
     }
     return null;
-  }
-
-  /**
-   * Whether {@code error}, or an error it wraps, shows that the handler saw the shutdown: a {@link
-   * CancelledException} with {@link CancellationReason#SHUTDOWN}, or the {@link
-   * InterruptedException} of the drain's interrupt. The walk stays bounded against a cyclic chain.
-   */
-  private static boolean shutdownCancellation(Throwable error) {
-    Throwable current = error;
-    for (int depth = 0; depth < CAUSE_DEPTH && current != null; depth++) {
-      if (current instanceof CancelledException cancelled
-          && cancelled.reason() == CancellationReason.SHUTDOWN) {
-        return true;
-      }
-      if (current instanceof InterruptedException) {
-        return true;
-      }
-      current = current.getCause();
-    }
-    return false;
-  }
-
-  /** The message of the {@link SocketException} that an interrupt gives a virtual thread. */
-  private static final String CLOSED_BY_INTERRUPT = "Closed by interrupt";
-
-  /**
-   * Whether {@code error}, or an error it wraps, is an I/O failure that an interrupt caused: a
-   * {@link ClosedByInterruptException}, an {@link InterruptedIOException} that is not a timeout, or
-   * the {@code SocketException: Closed by interrupt} of a virtual thread's socket. A JDBC driver
-   * wraps the last one in its {@link SQLException} (SM-1889). Another I/O error does not count. The
-   * walk stays bounded against a cyclic chain.
-   */
-  // Package-private for InterruptedIoTest.
-  static boolean interruptedIo(Throwable error) {
-    Throwable current = error;
-    for (int depth = 0; depth < CAUSE_DEPTH && current != null; depth++) {
-      if (current instanceof ClosedByInterruptException
-          || (current instanceof InterruptedIOException
-              && !(current instanceof SocketTimeoutException))
-          || (current instanceof SocketException
-              && CLOSED_BY_INTERRUPT.equals(current.getMessage()))) {
-        return true;
-      }
-      current = current.getCause();
-    }
-    return false;
   }
 
   // ---------------------------------------------------------------------------------------------

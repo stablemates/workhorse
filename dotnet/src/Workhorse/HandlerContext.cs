@@ -57,6 +57,9 @@ public abstract class HandlerContext
     /// <summary>Why the worker cancelled <see cref="CancellationToken"/>, or <c>null</c> before that.</summary>
     public CancelReason? CancelReason => _cancellation.Reason;
 
+    /// <summary>Records that the handler returned, before the worker settles the attempt.</summary>
+    internal void MarkHandlerReturned() => _cancellation.MarkHandlerReturned();
+
     /// <summary>The task group operations of this activation.</summary>
     public abstract TaskGroupContext TaskGroup { get; }
 

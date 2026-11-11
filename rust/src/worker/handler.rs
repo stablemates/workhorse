@@ -43,6 +43,9 @@ pub struct ClaimedTask {
 pub struct CancellationToken {
     token: tokio_util::sync::CancellationToken,
     reason: Arc<OnceLock<CancelReason>>,
+    /// The reason when the handler returned. A batch member records it when the batch callback
+    /// returns, before the worker writes the batch evidence (ADR 0117).
+    returned: Arc<OnceLock<Option<CancelReason>>>,
 }
 
 impl CancellationToken {
@@ -63,6 +66,17 @@ impl CancellationToken {
     pub(crate) fn cancel(&self, reason: CancelReason) {
         let _ = self.reason.set(reason);
         self.token.cancel();
+    }
+
+    /// Records the reason when the handler returns. Only the first call counts.
+    pub(crate) fn mark_returned(&self) {
+        let _ = self.returned.set(self.reason());
+    }
+
+    /// Records the return of the handler, and gives the reason that the first record holds.
+    pub(crate) fn reason_at_return(&self) -> Option<CancelReason> {
+        self.mark_returned();
+        self.returned.get().copied().flatten()
     }
 }
 

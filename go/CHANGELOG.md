@@ -10,6 +10,25 @@ adds.
 
 ## Unreleased
 
+### A handler panic in the shutdown unwind window fails its attempt
+
+A Go worker stops, and at the end of the shutdown grace it cancels a handler. If that handler
+panicked in the unwind window, the worker wrote no settlement. The task stayed `active` until its
+lease expired, so lease recovery charged the attempt as `LeaseExpired`, and no attempt record held
+the panic. The worker now fails the attempt with `HandlerPanicError` through `fail_v1`, on the
+same unwind window, as the Rust worker does (SM-1943, ADR 0117). Each other failure in the window
+still returns the task to its queue without an attempt.
+
+A failure that a handler returned before its cancellation now keeps its usual settlement in each
+case. Before, a batch member read the cancellation only after the batch evidence write. A stop
+during that write released the failure. A failure that the worker read after the deadline also
+got no settlement, so lease recovery charged the attempt later. The worker now records the
+cancellation when the handler or the batch handler returns. A batch member also keeps the error of
+the batch handler, so the attempt record does not show the cancellation. The worker writes such a
+failure through `fail_v1` in the unwind window. A value that the handler returned before its
+cancellation and that the task cannot store also fails the attempt. Before, the worker released
+it.
+
 ### The Go module requires pgx 5.12.0
 
 pgx 5.12.0 fixes two high-severity advisories. GHSA-95fj-3fxw-g62g affects pgx 5.9.0 through

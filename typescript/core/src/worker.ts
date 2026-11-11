@@ -117,6 +117,9 @@ export function dispatchRefillBatch(concurrency: number): number {
  * change reaches a running worker within this interval.
  */
 const TIER_PROBE_INTERVAL_MS = 30_000;
+// The hook that records the return of a handler, for each handler context. A batch member records
+// its return when the batch callback returns, because its own handler returns only later.
+const handlerReturns = new WeakMap<object, () => void>();
 // A reporter callback that always fails writes at most one report in this interval.
 const REPORTER_FAILURE_REPORT_INTERVAL_MS = 60_000;
 // The longest base delay before a busy retry. The retry waits base × (1 + random), with
@@ -1301,8 +1304,14 @@ export class Worker {
         () => undefined,
         () => undefined,
       );
+      // Each member records its return when the callback returns, before the evidence write, so a
+      // stop during that write cannot turn a failure of the callback into a release (ADR 0117).
+      const markReturned = (): void => {
+        for (const member of batch) handlerReturns.get(member.item.context)?.();
+      };
       void execution
         .then((outcomes) => {
+          markReturned();
           if (!Array.isArray(outcomes) || outcomes.length !== batch.length) {
             throw new Error(
               `Batch handler for ${type} returned ${Array.isArray(outcomes) ? outcomes.length : "a non-array value"} outcomes for ${batch.length} tasks`,
@@ -1326,6 +1335,7 @@ export class Worker {
           }
         })
         .catch(async (error: unknown) => {
+          markReturned();
           await recordEvidence(
             "failure",
             this.queue.recordBatchFailure === undefined
@@ -1790,10 +1800,20 @@ export class Worker {
         // A claim answer can arrive after its lease window has run out. The handler must not start
         // then, because its first synchronous effects would run under a claim another worker may hold.
         attempt.requireLease();
-        const result = await handler(
-          task.payload,
-          createHandlerContext(this.queue, this.workerId, task, attempt, this.contextTier(task)),
+        const context = createHandlerContext(
+          this.queue,
+          this.workerId,
+          task,
+          attempt,
+          this.contextTier(task),
         );
+        handlerReturns.set(context, () => attempt.markHandlerReturned());
+        let result: Json;
+        try {
+          result = await handler(task.payload, context);
+        } finally {
+          attempt.markHandlerReturned();
+        }
         await this.inject("afterHandler", task);
         if (attempt.arbiter.isSuspended()) {
           logWarn("workhorse.handler.signal_swallowed", "Task handler swallowed its abort signal", {
@@ -2040,8 +2060,9 @@ export class Worker {
       return;
     }
     // The process runner aborted the handler at the end of its shutdown grace. The stop is not a
-    // failure of the task, so the worker gives the task back and its attempt stays (SM-1919).
-    if (attempt.stoppedForShutdown) {
+    // failure of the task, so the worker gives the task back and its attempt stays (SM-1919). The
+    // abort decides this, not the error, but only if it came before the handler returned (ADR 0117).
+    if (attempt.failedAfterShutdown) {
       await this.releaseAfterShutdown(task, span, attempt);
       return;
     }

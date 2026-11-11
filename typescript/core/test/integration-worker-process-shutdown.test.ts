@@ -10,6 +10,7 @@ import {
   defineWorkerProcess,
   runWorkerProcess,
 } from "../src/index.js";
+import { abortWorkerHandlers } from "../src/worker-failure.js";
 import { createIntegrationTestContext } from "./support/integration.js";
 
 const { admin, pool, queue } = createIntegrationTestContext(import.meta.url);
@@ -162,5 +163,35 @@ describe("runWorkerProcess at the end of its shutdown grace", () => {
     expect(code).toBe(1);
     expect(batches).toBe(0);
     expect(await taskState(taskId)).toEqual({ state: "ready", currentAttempt: 1 });
+  });
+});
+
+// ADR 0117: the abort decides the settlement only if it came before the handler returned. A stop
+// that comes later cannot turn a failure of the handler's own into a release.
+describe("a shutdown abort after the handler returned", () => {
+  it("fails a result that the task cannot store under the retry policy", async () => {
+    const queueName = `shutdown-late-${randomUUID()}`;
+    const taskId = await queue.enqueue("late", null, { queue: queueName, maxAttempts: 1 });
+    let abortedAtReturn: boolean | undefined;
+    const worker: Worker = new Worker(queue, {
+      workerId: `shutdown-late-${randomUUID()}`,
+      queue: queueName,
+      registryIntervalMs: 0,
+      failpoint: (point) => {
+        if (point === "afterHandler") {
+          worker.stop();
+          abortWorkerHandlers(worker);
+        }
+        return false;
+      },
+    }).handle("late", async (_payload: Json, context: HandlerContext) => {
+      abortedAtReturn = context.signal.aborted;
+      return Array.from({ length: 349_526 }, () => 0);
+    });
+
+    await worker.runOnce();
+
+    expect(abortedAtReturn).toBe(false);
+    expect(await taskState(taskId)).toEqual({ state: "failed", currentAttempt: 1 });
   });
 });

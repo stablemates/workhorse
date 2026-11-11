@@ -243,6 +243,73 @@ public sealed class WorkerTests(ScratchDatabase database) : IClassFixture<Scratc
         return true;
     }
 
+    /// <summary>
+    /// SM-1933, ADR 0117: after the shutdown cancellation, an exception of the handler's own returns
+    /// the task to its queue, and the task keeps its attempt. The cancellation decides this, not the
+    /// type of the exception.
+    /// </summary>
+    [Fact]
+    public async Task AHandlerThatFailsOnItsOwnAfterTheShutdownReturnsItsTask()
+    {
+        var queue = UniqueQueue("own-failure");
+        var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        await using var worker = new Worker(database.DataSource, Options(queue, options => options.ShutdownGrace = TimeSpan.FromMilliseconds(50)));
+        worker.Handle<Order>("own", async (context, _) =>
+        {
+            started.SetResult();
+            try
+            {
+                await Task.Delay(Timeout.Infinite, context.CancellationToken);
+            }
+            catch (OperationCanceledException)
+            {
+                throw new InvalidOperationException("the cleanup timed out");
+            }
+        });
+        var taskId = await EnqueueAsync(database.DataSource, queue, "own", new { orderId = 1 }, new { maxAttempts = 1 });
+
+        var running = new RunningWorker(worker);
+        await started.Task.WaitAsync(Patience, TestContext.Current.CancellationToken);
+        await running.StopAsync();
+
+        var row = await TaskAsync(database.DataSource, taskId);
+        Assert.Equal("ready", row.Text("state"));
+        Assert.Equal(1, row.RequiredInteger("current_attempt"));
+    }
+
+    /// <summary>
+    /// The limit of ADR 0117: a handler that fails during the shutdown grace, before the
+    /// cancellation, keeps its usual settlement. The worker charges the attempt.
+    /// </summary>
+    [Fact]
+    public async Task AHandlerThatFailsBeforeItsShutdownCancellationChargesItsAttempt()
+    {
+        var queue = UniqueQueue("early-failure");
+        var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var stopped = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var cancelled = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        await using var worker = new Worker(database.DataSource, Options(queue, options => options.ShutdownGrace = TimeSpan.FromSeconds(5)));
+        worker.Handle<Order>("early", async (context, _) =>
+        {
+            started.SetResult();
+            await stopped.Task;
+            cancelled.SetResult(context.CancellationToken.IsCancellationRequested);
+            throw new InvalidOperationException("the work failed");
+        });
+        var taskId = await EnqueueAsync(database.DataSource, queue, "early", new { orderId = 1 }, new { maxAttempts = 1 });
+
+        var running = new RunningWorker(worker);
+        await started.Task.WaitAsync(Patience, TestContext.Current.CancellationToken);
+        var stop = running.StopAsync();
+        stopped.SetResult();
+        await stop;
+
+        Assert.False(await cancelled.Task.WaitAsync(Patience, TestContext.Current.CancellationToken));
+        var row = await TaskAsync(database.DataSource, taskId);
+        Assert.Equal("failed", row.Text("state"));
+        Assert.Equal(1, row.RequiredInteger("current_attempt"));
+    }
+
     [Fact]
     public async Task AHandlerThatIgnoresTheShutdownEndsTheRunWithShutdownIncomplete()
     {

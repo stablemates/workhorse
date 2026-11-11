@@ -1925,20 +1925,28 @@ async fn shutdown_cancellation(database: &ScratchDatabase, fixture: &Value) -> C
             ..options(fixture)
         },
     )?;
-    let returns_value = text(fixture, "handlerResult") == "value";
+    // The handler answers its shutdown cancellation as `handlerResult` says (ADR 0117).
+    let handler_result = text(fixture, "handlerResult").to_owned();
+    let zeros = usize::try_from(fixture["resultZeros"].as_u64().unwrap_or(0)).unwrap_or(0);
     let (started, mut handler_started) = watch::channel(false);
     let reasons = Arc::new(Mutex::new(Vec::new()));
     let seen = Arc::clone(&reasons);
     worker.handle(task_type, move |_: Value, context: HandlerContext| {
         let (started, seen) = (started.clone(), Arc::clone(&seen));
+        let handler_result = handler_result.clone();
         async move {
             let _ = started.send(true);
             context.cancellation().cancelled().await;
             seen.lock().unwrap().push(context.cancellation().reason());
-            if returns_value {
-                return Ok(json!({ "finished": true }));
+            match handler_result.as_str() {
+                "value" => Ok(json!({ "finished": true })),
+                "application-error" => {
+                    Err(HandlerError::named("CleanupTimeout", "the cleanup timed out"))
+                }
+                "oversized-value" => Ok(Value::Array(vec![json!(0); zeros])),
+                "panic" => panic!("the unwind failed"),
+                _ => Err(HandlerError::named("Cancelled", "the worker is shutting down")),
             }
-            Err(HandlerError::named("Cancelled", "the worker is shutting down"))
         }
     });
     let (stop, running) = run(&worker);
@@ -1950,11 +1958,14 @@ async fn shutdown_cancellation(database: &ScratchDatabase, fixture: &Value) -> C
         format!("the handler saw cancellation reasons {reasons:?}")
     })?;
     let expected = &fixture["expectedCancelled"];
-    let (state, attempt, _) = task_state(&client, task).await?;
+    let (state, attempt, error) = task_state(&client, task).await?;
     let (want_state, want_attempt) = (text(expected, "state"), number(expected, "attempt"));
     check(state == want_state && i64::from(attempt) == want_attempt, || {
         format!("the stopped task is {state}/{attempt}, want {want_state}/{want_attempt}")
     })?;
+    if let Some(name) = expected["errorNames"]["rust"].as_str() {
+        check(error == name, || format!("the stopped task failed with {error:?}, want {name:?}"))?;
+    }
     let events: Vec<String> = client
         .query(
             "SELECT event_type FROM workhorse.task_event WHERE task_id = $1
