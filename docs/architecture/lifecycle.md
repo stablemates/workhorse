@@ -669,8 +669,11 @@ Suspension aborts the cooperative signal of the handler. It exits through privat
 flow. The heartbeat stops, and the worker slot becomes free for another claim.
 
 If the handler catches that signal and returns, the worker applies the recorded suspension again.
-It also emits `workhorse.handler.signal_swallowed` at warning severity with
-`workhorse.handler.outcome = suspended`.
+The TypeScript, Python, Ruby, JVM, and .NET workers also emit `workhorse.handler.signal_swallowed`
+at warning severity with `workhorse.handler.outcome = suspended`. The Go and Rust workers do not
+emit it yet. The shared case
+`durable-suspension-that-the-handler-catches-still-suspends` checks in every SDK that the task stays
+`scheduled` with no attempt row, and that the replay completes the same attempt (SM-1950).
 
 A `scheduled` answer always ends the handler at the wait in all seven SDKs. Another outcome can win
 while the wait request is in flight: a `stale` heartbeat, a `stale` expiry answer, or the end of the
@@ -696,7 +699,10 @@ milliseconds)`. It inserts `task_signal_wait`, clears ownership, and parks runti
 ready and active indexes.
 
 The worker uses the same private suspension control path as a timer wait. Thus the worker writes no
-failure, completion, or attempt-history row.
+failure, completion, or attempt-history row. The shared cases
+`durable-signal-wait-replays-the-delivered-payload` and
+`durable-human-wait-replays-the-completed-decision` check a signal wait and a human wait, and their
+replays, in every SDK (SM-1950).
 
 #### Signal delivery
 

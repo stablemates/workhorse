@@ -101,6 +101,7 @@ func TestGoWorkerSatisfiesEverySharedRuntimeFixture(t *testing.T) {
 		"release-wait":             executeWorkerReleaseWaitFixture,
 		"json-round-trip":          executeWorkerJSONRoundTripFixture,
 		"checkpoint-no-value":      executeWorkerCheckpointNoValueFixture,
+		"durable-script":           executeWorkerDurableScriptFixture,
 		"oversized-result":         executeWorkerOversizedResultFixture,
 		"result-contract-failure":  executeWorkerResultContractFailureFixture,
 		"shutdown-cancellation":    executeWorkerShutdownCancellationFixture,

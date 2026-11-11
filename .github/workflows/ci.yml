@@ -513,6 +513,9 @@ jobs:
         if: github.event.schedule == '17 4 * * 0'
       - run: pnpm go:package-check
         if: github.event.schedule == '17 4 * * 0'
+      # SDK A runs a task to its first suspension, and SDK B replays it to the end (SM-1950). This
+      # job has the toolchains of the TypeScript and Go pair, so the pair costs no other job.
+      - run: pnpm test:cross-sdk
 
   runtime-smoke:
     name: runtime smoke (${{ matrix.runtime }})

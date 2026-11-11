@@ -866,5 +866,1103 @@
         "rust": "HandlerPanic"
       }
     }
+  },
+  {
+    "id": "durable-signal-wait-replays-the-delivered-payload",
+    "kind": "durable-script",
+    "covers": ["signal-wait-replay"],
+    "taskType": "protocol.durable-script.signal",
+    "script": [{ "op": "waitForSignal", "key": "signal", "name": "approval" }],
+    "observe": "SELECT jsonb_build_object('state', COALESCE(r.state, o.state), 'attempt', COALESCE(r.current_attempt, o.current_attempt), 'result', o.result, 'attempts', (SELECT COALESCE(jsonb_agg(h.outcome ORDER BY h.attempt, h.occurred_at), '[]'::jsonb) FROM workhorse.attempt_history h WHERE h.task_id = t.id), 'signals', (SELECT COALESCE(jsonb_agg(jsonb_build_object('name', s.signal_name, 'attempt', s.attempt, 'payload', s.payload, 'delivered', s.delivered_at IS NOT NULL) ORDER BY s.signal_name), '[]'::jsonb) FROM workhorse.task_signal_wait s WHERE s.task_id = t.id))::text AS observed FROM workhorse.task t LEFT JOIN workhorse.task_runtime r ON r.task_id = t.id LEFT JOIN workhorse.task_outcome o ON o.task_id = t.id WHERE t.id = $1::uuid",
+    "steps": [
+      { "action": "run" },
+      {
+        "action": "expect",
+        "handlerRuns": 1,
+        "completedScripts": 0,
+        "returnedSuspendingCalls": 0,
+        "observed": {
+          "state": "scheduled",
+          "attempt": 1,
+          "result": null,
+          "attempts": [],
+          "signals": [{ "name": "approval", "attempt": 1, "payload": null, "delivered": false }]
+        }
+      },
+      {
+        "action": "sql",
+        "sql": "SELECT status FROM workhorse.send_signal_v1($1::uuid, 'approval', '{\"approved\": true, \"note\": \"Grüße 👋\"}'::jsonb, 'fixture-delivery', 'fixture-actor')"
+      },
+      { "action": "run" },
+      {
+        "action": "expect",
+        "handlerRuns": 2,
+        "completedScripts": 1,
+        "returnedSuspendingCalls": 1,
+        "observed": {
+          "state": "succeeded",
+          "attempt": 1,
+          "result": { "signal": { "approved": true, "note": "Grüße 👋" } },
+          "attempts": ["succeeded"],
+          "signals": [
+            {
+              "name": "approval",
+              "attempt": 1,
+              "payload": { "approved": true, "note": "Grüße 👋" },
+              "delivered": true
+            }
+          ]
+        }
+      }
+    ]
+  },
+  {
+    "id": "durable-human-wait-replays-the-completed-decision",
+    "kind": "durable-script",
+    "covers": ["human-wait-replay"],
+    "taskType": "protocol.durable-script.human",
+    "script": [
+      {
+        "op": "waitForHuman",
+        "key": "decision",
+        "name": "manager-review",
+        "context": { "order": "ord-9", "amount": 125.5, "lines": [{ "sku": "A-1", "qty": 2 }] }
+      }
+    ],
+    "observe": "SELECT jsonb_build_object('state', COALESCE(r.state, o.state), 'attempt', COALESCE(r.current_attempt, o.current_attempt), 'result', o.result, 'attempts', (SELECT COALESCE(jsonb_agg(h.outcome ORDER BY h.attempt, h.occurred_at), '[]'::jsonb) FROM workhorse.attempt_history h WHERE h.task_id = t.id), 'humanWaits', (SELECT COALESCE(jsonb_agg(jsonb_build_object('name', w.token_name, 'attempt', w.attempt, 'context', w.context, 'result', w.result, 'completed', w.completed_at IS NOT NULL) ORDER BY w.token_name), '[]'::jsonb) FROM workhorse.task_human_wait w WHERE w.task_id = t.id))::text AS observed FROM workhorse.task t LEFT JOIN workhorse.task_runtime r ON r.task_id = t.id LEFT JOIN workhorse.task_outcome o ON o.task_id = t.id WHERE t.id = $1::uuid",
+    "steps": [
+      { "action": "run" },
+      {
+        "action": "expect",
+        "handlerRuns": 1,
+        "completedScripts": 0,
+        "returnedSuspendingCalls": 0,
+        "observed": {
+          "state": "scheduled",
+          "attempt": 1,
+          "result": null,
+          "attempts": [],
+          "humanWaits": [
+            {
+              "name": "manager-review",
+              "attempt": 1,
+              "context": {
+                "order": "ord-9",
+                "amount": 125.5,
+                "lines": [{ "sku": "A-1", "qty": 2 }]
+              },
+              "result": null,
+              "completed": false
+            }
+          ]
+        }
+      },
+      {
+        "action": "sql",
+        "sql": "SELECT status FROM workhorse.complete_human_wait_v1($1::uuid, 'manager-review', '{\"approved\": false, \"reason\": \"über Limit\"}'::jsonb, 'fixture-completion', 'fixture-actor')"
+      },
+      { "action": "run" },
+      {
+        "action": "expect",
+        "handlerRuns": 2,
+        "completedScripts": 1,
+        "returnedSuspendingCalls": 1,
+        "observed": {
+          "state": "succeeded",
+          "attempt": 1,
+          "result": { "decision": { "approved": false, "reason": "über Limit" } },
+          "attempts": ["succeeded"],
+          "humanWaits": [
+            {
+              "name": "manager-review",
+              "attempt": 1,
+              "context": {
+                "order": "ord-9",
+                "amount": 125.5,
+                "lines": [{ "sku": "A-1", "qty": 2 }]
+              },
+              "result": { "approved": false, "reason": "über Limit" },
+              "completed": true
+            }
+          ]
+        }
+      }
+    ]
+  },
+  {
+    "id": "durable-run-child-joins-the-child-result",
+    "kind": "durable-script",
+    "covers": ["child-join-replay"],
+    "taskType": "protocol.durable-script.run-child",
+    "childTaskType": "protocol.durable-script.child",
+    "childQueue": "runtime-durable-script-children",
+    "script": [
+      { "op": "runChild", "key": "child", "name": "invoice", "payload": { "invoice": 42 } }
+    ],
+    "observe": "SELECT jsonb_build_object('state', COALESCE(r.state, o.state), 'attempt', COALESCE(r.current_attempt, o.current_attempt), 'result', o.result, 'attempts', (SELECT COALESCE(jsonb_agg(h.outcome ORDER BY h.attempt, h.occurred_at), '[]'::jsonb) FROM workhorse.attempt_history h WHERE h.task_id = t.id), 'children', (SELECT COALESCE(jsonb_agg(jsonb_build_object('name', c.child_name, 'type', child.task_type, 'payload', child.payload, 'state', COALESCE(child_runtime.state, child_outcome.state), 'result', child_outcome.result, 'joined', c.joined_at IS NOT NULL, 'edge', (SELECT jsonb_build_object('onSuccess', d.on_success, 'onFailure', d.on_failure, 'onCancellation', d.on_cancellation) FROM workhorse.task_dependency d WHERE d.dependent_task_id = c.parent_task_id AND d.prerequisite_task_id = c.child_task_id), 'set', c.created_as_set) ORDER BY c.child_name), '[]'::jsonb) FROM workhorse.task_child c JOIN workhorse.task child ON child.id = c.child_task_id LEFT JOIN workhorse.task_runtime child_runtime ON child_runtime.task_id = child.id LEFT JOIN workhorse.task_outcome child_outcome ON child_outcome.task_id = child.id WHERE c.parent_task_id = t.id))::text AS observed FROM workhorse.task t LEFT JOIN workhorse.task_runtime r ON r.task_id = t.id LEFT JOIN workhorse.task_outcome o ON o.task_id = t.id WHERE t.id = $1::uuid",
+    "steps": [
+      { "action": "run" },
+      {
+        "action": "expect",
+        "handlerRuns": 1,
+        "completedScripts": 0,
+        "returnedSuspendingCalls": 0,
+        "observed": {
+          "state": "blocked",
+          "attempt": 1,
+          "result": null,
+          "attempts": [],
+          "children": [
+            {
+              "name": "invoice",
+              "type": "protocol.durable-script.child",
+              "payload": { "invoice": 42 },
+              "state": "ready",
+              "result": null,
+              "joined": false,
+              "edge": { "onSuccess": "release", "onFailure": "fail", "onCancellation": "cancel" },
+              "set": false
+            }
+          ]
+        }
+      },
+      { "action": "run", "worker": "child" },
+      {
+        "action": "expect",
+        "handlerRuns": 1,
+        "completedScripts": 0,
+        "returnedSuspendingCalls": 0,
+        "observed": {
+          "state": "ready",
+          "attempt": 1,
+          "result": null,
+          "attempts": [],
+          "children": [
+            {
+              "name": "invoice",
+              "type": "protocol.durable-script.child",
+              "payload": { "invoice": 42 },
+              "state": "succeeded",
+              "result": { "echo": { "invoice": 42 } },
+              "joined": false,
+              "edge": { "onSuccess": "release", "onFailure": "fail", "onCancellation": "cancel" },
+              "set": false
+            }
+          ]
+        }
+      },
+      { "action": "run" },
+      {
+        "action": "expect",
+        "handlerRuns": 2,
+        "completedScripts": 1,
+        "returnedSuspendingCalls": 1,
+        "observed": {
+          "state": "succeeded",
+          "attempt": 1,
+          "result": { "child": { "echo": { "invoice": 42 } } },
+          "attempts": ["succeeded"],
+          "children": [
+            {
+              "name": "invoice",
+              "type": "protocol.durable-script.child",
+              "payload": { "invoice": 42 },
+              "state": "succeeded",
+              "result": { "echo": { "invoice": 42 } },
+              "joined": true,
+              "edge": { "onSuccess": "release", "onFailure": "fail", "onCancellation": "cancel" },
+              "set": false
+            }
+          ]
+        }
+      }
+    ]
+  },
+  {
+    "id": "durable-run-children-joins-every-outcome",
+    "kind": "durable-script",
+    "covers": ["child-set-join-replay"],
+    "taskType": "protocol.durable-script.run-children",
+    "childTaskType": "protocol.durable-script.child",
+    "childQueue": "runtime-durable-script-children",
+    "script": [
+      {
+        "op": "runChildren",
+        "key": "children",
+        "children": [
+          { "name": "fraud", "payload": { "check": "fraud" } },
+          { "name": "inventory", "payload": { "check": "inventory", "skus": ["A-1", "B-2"] } }
+        ]
+      }
+    ],
+    "observe": "SELECT jsonb_build_object('state', COALESCE(r.state, o.state), 'attempt', COALESCE(r.current_attempt, o.current_attempt), 'result', o.result, 'attempts', (SELECT COALESCE(jsonb_agg(h.outcome ORDER BY h.attempt, h.occurred_at), '[]'::jsonb) FROM workhorse.attempt_history h WHERE h.task_id = t.id), 'children', (SELECT COALESCE(jsonb_agg(jsonb_build_object('name', c.child_name, 'type', child.task_type, 'payload', child.payload, 'state', COALESCE(child_runtime.state, child_outcome.state), 'result', child_outcome.result, 'joined', c.joined_at IS NOT NULL, 'edge', (SELECT jsonb_build_object('onSuccess', d.on_success, 'onFailure', d.on_failure, 'onCancellation', d.on_cancellation) FROM workhorse.task_dependency d WHERE d.dependent_task_id = c.parent_task_id AND d.prerequisite_task_id = c.child_task_id), 'set', c.created_as_set) ORDER BY c.child_name), '[]'::jsonb) FROM workhorse.task_child c JOIN workhorse.task child ON child.id = c.child_task_id LEFT JOIN workhorse.task_runtime child_runtime ON child_runtime.task_id = child.id LEFT JOIN workhorse.task_outcome child_outcome ON child_outcome.task_id = child.id WHERE c.parent_task_id = t.id))::text AS observed FROM workhorse.task t LEFT JOIN workhorse.task_runtime r ON r.task_id = t.id LEFT JOIN workhorse.task_outcome o ON o.task_id = t.id WHERE t.id = $1::uuid",
+    "steps": [
+      { "action": "run" },
+      {
+        "action": "expect",
+        "handlerRuns": 1,
+        "completedScripts": 0,
+        "returnedSuspendingCalls": 0,
+        "observed": {
+          "state": "blocked",
+          "attempt": 1,
+          "result": null,
+          "attempts": [],
+          "children": [
+            {
+              "name": "fraud",
+              "type": "protocol.durable-script.child",
+              "payload": { "check": "fraud" },
+              "state": "ready",
+              "result": null,
+              "joined": false,
+              "edge": {
+                "onSuccess": "release",
+                "onFailure": "release",
+                "onCancellation": "release"
+              },
+              "set": true
+            },
+            {
+              "name": "inventory",
+              "type": "protocol.durable-script.child",
+              "payload": { "check": "inventory", "skus": ["A-1", "B-2"] },
+              "state": "ready",
+              "result": null,
+              "joined": false,
+              "edge": {
+                "onSuccess": "release",
+                "onFailure": "release",
+                "onCancellation": "release"
+              },
+              "set": true
+            }
+          ]
+        }
+      },
+      { "action": "run", "worker": "child" },
+      {
+        "action": "expect",
+        "handlerRuns": 1,
+        "completedScripts": 0,
+        "returnedSuspendingCalls": 0,
+        "observed": {
+          "state": "ready",
+          "attempt": 1,
+          "result": null,
+          "attempts": [],
+          "children": [
+            {
+              "name": "fraud",
+              "type": "protocol.durable-script.child",
+              "payload": { "check": "fraud" },
+              "state": "succeeded",
+              "result": { "echo": { "check": "fraud" } },
+              "joined": false,
+              "edge": {
+                "onSuccess": "release",
+                "onFailure": "release",
+                "onCancellation": "release"
+              },
+              "set": true
+            },
+            {
+              "name": "inventory",
+              "type": "protocol.durable-script.child",
+              "payload": { "check": "inventory", "skus": ["A-1", "B-2"] },
+              "state": "succeeded",
+              "result": { "echo": { "check": "inventory", "skus": ["A-1", "B-2"] } },
+              "joined": false,
+              "edge": {
+                "onSuccess": "release",
+                "onFailure": "release",
+                "onCancellation": "release"
+              },
+              "set": true
+            }
+          ]
+        }
+      },
+      { "action": "run" },
+      {
+        "action": "expect",
+        "handlerRuns": 2,
+        "completedScripts": 1,
+        "returnedSuspendingCalls": 1,
+        "observed": {
+          "state": "succeeded",
+          "attempt": 1,
+          "result": {
+            "children": {
+              "fraud": { "status": "succeeded", "result": { "echo": { "check": "fraud" } } },
+              "inventory": {
+                "status": "succeeded",
+                "result": { "echo": { "check": "inventory", "skus": ["A-1", "B-2"] } }
+              }
+            }
+          },
+          "attempts": ["succeeded"],
+          "children": [
+            {
+              "name": "fraud",
+              "type": "protocol.durable-script.child",
+              "payload": { "check": "fraud" },
+              "state": "succeeded",
+              "result": { "echo": { "check": "fraud" } },
+              "joined": true,
+              "edge": {
+                "onSuccess": "release",
+                "onFailure": "release",
+                "onCancellation": "release"
+              },
+              "set": true
+            },
+            {
+              "name": "inventory",
+              "type": "protocol.durable-script.child",
+              "payload": { "check": "inventory", "skus": ["A-1", "B-2"] },
+              "state": "succeeded",
+              "result": { "echo": { "check": "inventory", "skus": ["A-1", "B-2"] } },
+              "joined": true,
+              "edge": {
+                "onSuccess": "release",
+                "onFailure": "release",
+                "onCancellation": "release"
+              },
+              "set": true
+            }
+          ]
+        }
+      }
+    ]
+  },
+  {
+    "id": "durable-suspension-that-the-handler-catches-still-suspends",
+    "kind": "durable-script",
+    "covers": ["caught-suspension"],
+    "taskType": "protocol.durable-script.caught-suspension",
+    "script": [
+      {
+        "op": "catchSuspension",
+        "key": "caught",
+        "step": { "op": "sleep", "name": "cool-down", "durationMs": 3600000 }
+      }
+    ],
+    "observe": "SELECT jsonb_build_object('state', COALESCE(r.state, o.state), 'attempt', COALESCE(r.current_attempt, o.current_attempt), 'result', o.result, 'attempts', (SELECT COALESCE(jsonb_agg(h.outcome ORDER BY h.attempt, h.occurred_at), '[]'::jsonb) FROM workhorse.attempt_history h WHERE h.task_id = t.id), 'waits', (SELECT COALESCE(jsonb_agg(jsonb_build_object('name', w.wait_name, 'mode', w.mode, 'attempt', w.attempt) ORDER BY w.wait_name), '[]'::jsonb) FROM workhorse.task_wait w WHERE w.task_id = t.id))::text AS observed FROM workhorse.task t LEFT JOIN workhorse.task_runtime r ON r.task_id = t.id LEFT JOIN workhorse.task_outcome o ON o.task_id = t.id WHERE t.id = $1::uuid",
+    "steps": [
+      { "action": "run" },
+      {
+        "action": "expect",
+        "handlerRuns": 1,
+        "caughtSuspensions": 1,
+        "completedScripts": 0,
+        "returnedSuspendingCalls": 0,
+        "observed": {
+          "state": "scheduled",
+          "attempt": 1,
+          "result": null,
+          "attempts": [],
+          "waits": [{ "name": "cool-down", "mode": "relative", "attempt": 1 }]
+        }
+      },
+      {
+        "action": "sql",
+        "sql": "UPDATE workhorse.task_runtime SET run_at = clock_timestamp() - interval '1 millisecond' WHERE task_id = $1::uuid AND state = 'scheduled'"
+      },
+      {
+        "action": "sql",
+        "sql": "SELECT count(*) FROM workhorse.tick_v1(100, 100) WHERE $1::uuid IS NOT NULL"
+      },
+      { "action": "run" },
+      {
+        "action": "expect",
+        "handlerRuns": 2,
+        "caughtSuspensions": 1,
+        "completedScripts": 1,
+        "returnedSuspendingCalls": 1,
+        "observed": {
+          "state": "succeeded",
+          "attempt": 1,
+          "result": { "caught": false },
+          "attempts": ["succeeded"],
+          "waits": [{ "name": "cool-down", "mode": "relative", "attempt": 1 }]
+        }
+      }
+    ]
+  },
+  {
+    "id": "durable-overlapping-checkpoint-calls-with-one-name-run-the-operation-once",
+    "kind": "durable-script",
+    "covers": ["overlapping-durable-calls"],
+    "taskType": "protocol.durable-script.overlapping-checkpoint",
+    "script": [
+      { "op": "overlappingCheckpoints", "key": "calls", "name": "reserve", "overlapWindowMs": 1000 }
+    ],
+    "observe": "SELECT jsonb_build_object('state', COALESCE(r.state, o.state), 'attempt', COALESCE(r.current_attempt, o.current_attempt), 'result', o.result, 'attempts', (SELECT COALESCE(jsonb_agg(h.outcome ORDER BY h.attempt, h.occurred_at), '[]'::jsonb) FROM workhorse.attempt_history h WHERE h.task_id = t.id), 'checkpoints', (SELECT COALESCE(jsonb_agg(jsonb_build_object('name', c.checkpoint_name, 'value', c.checkpoint_value, 'attempt', c.attempt) ORDER BY c.checkpoint_name), '[]'::jsonb) FROM workhorse.task_checkpoint c WHERE c.task_id = t.id))::text AS observed FROM workhorse.task t LEFT JOIN workhorse.task_runtime r ON r.task_id = t.id LEFT JOIN workhorse.task_outcome o ON o.task_id = t.id WHERE t.id = $1::uuid",
+    "steps": [
+      { "action": "run" },
+      {
+        "action": "expect",
+        "handlerRuns": 1,
+        "checkpointOperations": 1,
+        "completedScripts": 1,
+        "returnedSuspendingCalls": 0,
+        "observed": {
+          "state": "succeeded",
+          "attempt": 1,
+          "result": { "calls": [{ "operation": 1 }, { "operation": 1 }] },
+          "attempts": ["succeeded"],
+          "checkpoints": [{ "name": "reserve", "value": { "operation": 1 }, "attempt": 1 }]
+        }
+      }
+    ]
+  },
+  {
+    "id": "durable-script-replays-in-another-sdk",
+    "kind": "durable-script",
+    "covers": ["cross-sdk-replay"],
+    "taskType": "protocol.durable-script.cross-sdk",
+    "childTaskType": "protocol.durable-script.child",
+    "childQueue": "runtime-durable-script-children",
+    "payloadSql": "WITH setting AS (SELECT 'milliseconds'::text AS timer_precision), instants AS (SELECT date_trunc('second', clock_timestamp() + interval '30 days') + interval '0.123456 seconds' AS wake_at, date_trunc('second', clock_timestamp() + interval '60 days') + interval '0.987654 seconds' AS deadline, date_trunc('second', clock_timestamp() - interval '1 hour') + interval '0.250001 seconds' AS run_at) SELECT jsonb_build_object('wakeAt', to_char(instants.wake_at AT TIME ZONE 'Asia/Kolkata', CASE setting.timer_precision WHEN 'microseconds' THEN 'YYYY-MM-DD\"T\"HH24:MI:SS.US' ELSE 'YYYY-MM-DD\"T\"HH24:MI:SS.MS' END) || '+05:30', 'childDeadline', to_char(instants.deadline AT TIME ZONE 'Etc/GMT+3', 'YYYY-MM-DD\"T\"HH24:MI:SS.US') || '-03:00', 'childRunAt', to_char(instants.run_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS.US') || 'Z')::text AS payload FROM setting, instants",
+    "script": [
+      {
+        "op": "checkpoint",
+        "key": "prepared",
+        "name": "prepare",
+        "input": {
+          "z": 1,
+          "a": [0.1, 1e-7, -0.0, 100.0, 12345678901234],
+          "é": "ü",
+          "😀": "line break",
+          "A": { "b": null, "a": true }
+        },
+        "value": { "prepared": true, "total": 125.5, "label": "Grüße 😀" }
+      },
+      { "op": "sleepUntil", "name": "follow-up", "wakeAtField": "wakeAt" },
+      {
+        "op": "runChild",
+        "key": "child",
+        "name": "ship",
+        "payload": { "shipment": "S-1", "weight": 2.5, "notes": "à la carte" },
+        "deadlineField": "childDeadline",
+        "runAtField": "childRunAt"
+      },
+      {
+        "op": "waitForHuman",
+        "key": "decision",
+        "name": "approve",
+        "context": {
+          "order": "ord-9",
+          "amounts": [1.5, 1e21, 0.1],
+          "b": "second",
+          "a": "first",
+          "who": "Zoë"
+        }
+      }
+    ],
+    "observe": "SELECT jsonb_build_object('state', COALESCE(r.state, o.state), 'attempt', COALESCE(r.current_attempt, o.current_attempt), 'result', o.result, 'attempts', (SELECT COALESCE(jsonb_agg(h.outcome ORDER BY h.attempt, h.occurred_at), '[]'::jsonb) FROM workhorse.attempt_history h WHERE h.task_id = t.id), 'checkpoints', (SELECT COALESCE(jsonb_agg(jsonb_build_object('name', c.checkpoint_name, 'value', c.checkpoint_value, 'inputFingerprint', c.input_fingerprint) ORDER BY c.checkpoint_name), '[]'::jsonb) FROM workhorse.task_checkpoint c WHERE c.task_id = t.id), 'waits', (SELECT COALESCE(jsonb_agg(jsonb_build_object('name', w.wait_name, 'mode', w.mode, 'matchesPayload', abs(extract(epoch FROM w.requested_wake_at - (t.payload->>'wakeAt')::timestamptz)) < 0.001) ORDER BY w.wait_name), '[]'::jsonb) FROM workhorse.task_wait w WHERE w.task_id = t.id), 'children', (SELECT COALESCE(jsonb_agg(jsonb_build_object('name', c.child_name, 'payload', child.payload, 'state', COALESCE(child_runtime.state, child_outcome.state), 'joined', c.joined_at IS NOT NULL, 'edge', (SELECT jsonb_build_object('onSuccess', d.on_success, 'onFailure', d.on_failure, 'onCancellation', d.on_cancellation) FROM workhorse.task_dependency d WHERE d.dependent_task_id = c.parent_task_id AND d.prerequisite_task_id = c.child_task_id), 'deadlineMatches', abs(extract(epoch FROM child.deadline_at - (t.payload->>'childDeadline')::timestamptz)) < 0.001, 'runAtMatches', CASE WHEN child_runtime.task_id IS NOT NULL THEN abs(extract(epoch FROM child_runtime.run_at - (t.payload->>'childRunAt')::timestamptz)) < 0.001 END) ORDER BY c.child_name), '[]'::jsonb) FROM workhorse.task_child c JOIN workhorse.task child ON child.id = c.child_task_id LEFT JOIN workhorse.task_runtime child_runtime ON child_runtime.task_id = child.id LEFT JOIN workhorse.task_outcome child_outcome ON child_outcome.task_id = child.id WHERE c.parent_task_id = t.id), 'humanWaits', (SELECT COALESCE(jsonb_agg(jsonb_build_object('name', w.token_name, 'context', w.context, 'completed', w.completed_at IS NOT NULL) ORDER BY w.token_name), '[]'::jsonb) FROM workhorse.task_human_wait w WHERE w.task_id = t.id))::text AS observed FROM workhorse.task t LEFT JOIN workhorse.task_runtime r ON r.task_id = t.id LEFT JOIN workhorse.task_outcome o ON o.task_id = t.id WHERE t.id = $1::uuid",
+    "steps": [
+      { "action": "run" },
+      {
+        "action": "expect",
+        "handlerRuns": 1,
+        "checkpointOperations": 1,
+        "completedScripts": 0,
+        "returnedSuspendingCalls": 0,
+        "observed": {
+          "state": "scheduled",
+          "attempt": 1,
+          "result": null,
+          "attempts": [],
+          "checkpoints": [
+            {
+              "name": "prepare",
+              "value": { "prepared": true, "total": 125.5, "label": "Grüße 😀" },
+              "inputFingerprint": "8f12fd0f50427fa6383c6d449db66b8605c5f5a35b29ebb8b10b6005b443e8ec"
+            }
+          ],
+          "waits": [{ "name": "follow-up", "mode": "absolute", "matchesPayload": true }],
+          "children": [],
+          "humanWaits": []
+        }
+      },
+      { "action": "handOff" },
+      {
+        "action": "sql",
+        "sql": "UPDATE workhorse.task_runtime SET run_at = clock_timestamp() - interval '1 millisecond' WHERE task_id = $1::uuid AND state = 'scheduled'"
+      },
+      {
+        "action": "sql",
+        "sql": "SELECT count(*) FROM workhorse.tick_v1(100, 100) WHERE $1::uuid IS NOT NULL"
+      },
+      { "action": "run" },
+      {
+        "action": "expect",
+        "handlerRuns": 1,
+        "checkpointOperations": 0,
+        "completedScripts": 0,
+        "returnedSuspendingCalls": 1,
+        "observed": {
+          "state": "blocked",
+          "attempt": 1,
+          "result": null,
+          "attempts": [],
+          "checkpoints": [
+            {
+              "name": "prepare",
+              "value": { "prepared": true, "total": 125.5, "label": "Grüße 😀" },
+              "inputFingerprint": "8f12fd0f50427fa6383c6d449db66b8605c5f5a35b29ebb8b10b6005b443e8ec"
+            }
+          ],
+          "waits": [{ "name": "follow-up", "mode": "absolute", "matchesPayload": true }],
+          "children": [
+            {
+              "name": "ship",
+              "payload": { "shipment": "S-1", "weight": 2.5, "notes": "à la carte" },
+              "state": "ready",
+              "joined": false,
+              "edge": { "onSuccess": "release", "onFailure": "fail", "onCancellation": "cancel" },
+              "deadlineMatches": true,
+              "runAtMatches": true
+            }
+          ],
+          "humanWaits": []
+        }
+      },
+      { "action": "run", "worker": "child" },
+      { "action": "run" },
+      {
+        "action": "expect",
+        "handlerRuns": 2,
+        "checkpointOperations": 0,
+        "completedScripts": 0,
+        "returnedSuspendingCalls": 3,
+        "observed": {
+          "state": "scheduled",
+          "attempt": 1,
+          "result": null,
+          "attempts": [],
+          "checkpoints": [
+            {
+              "name": "prepare",
+              "value": { "prepared": true, "total": 125.5, "label": "Grüße 😀" },
+              "inputFingerprint": "8f12fd0f50427fa6383c6d449db66b8605c5f5a35b29ebb8b10b6005b443e8ec"
+            }
+          ],
+          "waits": [{ "name": "follow-up", "mode": "absolute", "matchesPayload": true }],
+          "children": [
+            {
+              "name": "ship",
+              "payload": { "shipment": "S-1", "weight": 2.5, "notes": "à la carte" },
+              "state": "succeeded",
+              "joined": true,
+              "edge": { "onSuccess": "release", "onFailure": "fail", "onCancellation": "cancel" },
+              "deadlineMatches": true,
+              "runAtMatches": null
+            }
+          ],
+          "humanWaits": [
+            {
+              "name": "approve",
+              "context": {
+                "order": "ord-9",
+                "amounts": [1.5, 1e21, 0.1],
+                "b": "second",
+                "a": "first",
+                "who": "Zoë"
+              },
+              "completed": false
+            }
+          ]
+        }
+      },
+      {
+        "action": "sql",
+        "sql": "SELECT status FROM workhorse.complete_human_wait_v1($1::uuid, 'approve', '{\"approved\": true, \"by\": \"José\"}'::jsonb, 'fixture-completion', 'fixture-actor')"
+      },
+      { "action": "run" },
+      {
+        "action": "expect",
+        "handlerRuns": 3,
+        "checkpointOperations": 0,
+        "completedScripts": 1,
+        "returnedSuspendingCalls": 6,
+        "observed": {
+          "state": "succeeded",
+          "attempt": 1,
+          "result": {
+            "prepared": { "prepared": true, "total": 125.5, "label": "Grüße 😀" },
+            "child": { "echo": { "shipment": "S-1", "weight": 2.5, "notes": "à la carte" } },
+            "decision": { "approved": true, "by": "José" }
+          },
+          "attempts": ["succeeded"],
+          "checkpoints": [
+            {
+              "name": "prepare",
+              "value": { "prepared": true, "total": 125.5, "label": "Grüße 😀" },
+              "inputFingerprint": "8f12fd0f50427fa6383c6d449db66b8605c5f5a35b29ebb8b10b6005b443e8ec"
+            }
+          ],
+          "waits": [{ "name": "follow-up", "mode": "absolute", "matchesPayload": true }],
+          "children": [
+            {
+              "name": "ship",
+              "payload": { "shipment": "S-1", "weight": 2.5, "notes": "à la carte" },
+              "state": "succeeded",
+              "joined": true,
+              "edge": { "onSuccess": "release", "onFailure": "fail", "onCancellation": "cancel" },
+              "deadlineMatches": true,
+              "runAtMatches": null
+            }
+          ],
+          "humanWaits": [
+            {
+              "name": "approve",
+              "context": {
+                "order": "ord-9",
+                "amounts": [1.5, 1e21, 0.1],
+                "b": "second",
+                "a": "first",
+                "who": "Zoë"
+              },
+              "completed": true
+            }
+          ]
+        }
+      }
+    ]
+  },
+  {
+    "id": "durable-script-replays-a-pending-child-request-in-another-sdk",
+    "kind": "durable-script",
+    "covers": ["cross-sdk-replay"],
+    "taskType": "protocol.durable-script.cross-sdk-pending-child",
+    "childTaskType": "protocol.durable-script.child",
+    "childQueue": "runtime-durable-script-children",
+    "payloadSql": "WITH setting AS (SELECT 'milliseconds'::text AS timer_precision), instants AS (SELECT date_trunc('second', clock_timestamp() + interval '30 days') + interval '0.123456 seconds' AS wake_at, date_trunc('second', clock_timestamp() + interval '60 days') + interval '0.987654 seconds' AS deadline, date_trunc('second', clock_timestamp() - interval '1 hour') + interval '0.250001 seconds' AS run_at) SELECT jsonb_build_object('wakeAt', to_char(instants.wake_at AT TIME ZONE 'Asia/Kolkata', CASE setting.timer_precision WHEN 'microseconds' THEN 'YYYY-MM-DD\"T\"HH24:MI:SS.US' ELSE 'YYYY-MM-DD\"T\"HH24:MI:SS.MS' END) || '+05:30', 'childDeadline', to_char(instants.deadline AT TIME ZONE 'Etc/GMT+3', 'YYYY-MM-DD\"T\"HH24:MI:SS.US') || '-03:00', 'childRunAt', to_char(instants.run_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS.US') || 'Z')::text AS payload FROM setting, instants",
+    "script": [
+      {
+        "op": "checkpoint",
+        "key": "prepared",
+        "name": "prepare",
+        "input": {
+          "z": 1,
+          "a": [0.1, 1e-7, -0.0, 100.0, 12345678901234],
+          "é": "ü",
+          "😀": "line break",
+          "A": { "b": null, "a": true }
+        },
+        "value": { "prepared": true, "total": 125.5, "label": "Grüße 😀" }
+      },
+      { "op": "sleepUntil", "name": "follow-up", "wakeAtField": "wakeAt" },
+      {
+        "op": "runChild",
+        "key": "child",
+        "name": "ship",
+        "payload": { "shipment": "S-1", "weight": 2.5, "notes": "à la carte" },
+        "deadlineField": "childDeadline",
+        "runAtField": "childRunAt"
+      },
+      {
+        "op": "waitForHuman",
+        "key": "decision",
+        "name": "approve",
+        "context": {
+          "order": "ord-9",
+          "amounts": [1.5, 1e21, 0.1],
+          "b": "second",
+          "a": "first",
+          "who": "Zoë"
+        }
+      }
+    ],
+    "observe": "SELECT jsonb_build_object('state', COALESCE(r.state, o.state), 'attempt', COALESCE(r.current_attempt, o.current_attempt), 'result', o.result, 'attempts', (SELECT COALESCE(jsonb_agg(h.outcome ORDER BY h.attempt, h.occurred_at), '[]'::jsonb) FROM workhorse.attempt_history h WHERE h.task_id = t.id), 'checkpoints', (SELECT COALESCE(jsonb_agg(jsonb_build_object('name', c.checkpoint_name, 'value', c.checkpoint_value, 'inputFingerprint', c.input_fingerprint) ORDER BY c.checkpoint_name), '[]'::jsonb) FROM workhorse.task_checkpoint c WHERE c.task_id = t.id), 'waits', (SELECT COALESCE(jsonb_agg(jsonb_build_object('name', w.wait_name, 'mode', w.mode, 'matchesPayload', abs(extract(epoch FROM w.requested_wake_at - (t.payload->>'wakeAt')::timestamptz)) < 0.001) ORDER BY w.wait_name), '[]'::jsonb) FROM workhorse.task_wait w WHERE w.task_id = t.id), 'children', (SELECT COALESCE(jsonb_agg(jsonb_build_object('name', c.child_name, 'payload', child.payload, 'state', COALESCE(child_runtime.state, child_outcome.state), 'joined', c.joined_at IS NOT NULL, 'edge', (SELECT jsonb_build_object('onSuccess', d.on_success, 'onFailure', d.on_failure, 'onCancellation', d.on_cancellation) FROM workhorse.task_dependency d WHERE d.dependent_task_id = c.parent_task_id AND d.prerequisite_task_id = c.child_task_id), 'deadlineMatches', abs(extract(epoch FROM child.deadline_at - (t.payload->>'childDeadline')::timestamptz)) < 0.001, 'runAtMatches', CASE WHEN child_runtime.task_id IS NOT NULL THEN abs(extract(epoch FROM child_runtime.run_at - (t.payload->>'childRunAt')::timestamptz)) < 0.001 END) ORDER BY c.child_name), '[]'::jsonb) FROM workhorse.task_child c JOIN workhorse.task child ON child.id = c.child_task_id LEFT JOIN workhorse.task_runtime child_runtime ON child_runtime.task_id = child.id LEFT JOIN workhorse.task_outcome child_outcome ON child_outcome.task_id = child.id WHERE c.parent_task_id = t.id), 'humanWaits', (SELECT COALESCE(jsonb_agg(jsonb_build_object('name', w.token_name, 'context', w.context, 'completed', w.completed_at IS NOT NULL) ORDER BY w.token_name), '[]'::jsonb) FROM workhorse.task_human_wait w WHERE w.task_id = t.id))::text AS observed FROM workhorse.task t LEFT JOIN workhorse.task_runtime r ON r.task_id = t.id LEFT JOIN workhorse.task_outcome o ON o.task_id = t.id WHERE t.id = $1::uuid",
+    "steps": [
+      { "action": "run" },
+      {
+        "action": "expect",
+        "handlerRuns": 1,
+        "checkpointOperations": 1,
+        "completedScripts": 0,
+        "returnedSuspendingCalls": 0,
+        "observed": {
+          "state": "scheduled",
+          "attempt": 1,
+          "result": null,
+          "attempts": [],
+          "checkpoints": [
+            {
+              "name": "prepare",
+              "value": { "prepared": true, "total": 125.5, "label": "Grüße 😀" },
+              "inputFingerprint": "8f12fd0f50427fa6383c6d449db66b8605c5f5a35b29ebb8b10b6005b443e8ec"
+            }
+          ],
+          "waits": [{ "name": "follow-up", "mode": "absolute", "matchesPayload": true }],
+          "children": [],
+          "humanWaits": []
+        }
+      },
+      {
+        "action": "sql",
+        "sql": "UPDATE workhorse.task_runtime SET run_at = clock_timestamp() - interval '1 millisecond' WHERE task_id = $1::uuid AND state = 'scheduled'"
+      },
+      {
+        "action": "sql",
+        "sql": "SELECT count(*) FROM workhorse.tick_v1(100, 100) WHERE $1::uuid IS NOT NULL"
+      },
+      { "action": "run" },
+      {
+        "action": "expect",
+        "handlerRuns": 2,
+        "checkpointOperations": 1,
+        "completedScripts": 0,
+        "returnedSuspendingCalls": 1,
+        "observed": {
+          "state": "blocked",
+          "attempt": 1,
+          "result": null,
+          "attempts": [],
+          "checkpoints": [
+            {
+              "name": "prepare",
+              "value": { "prepared": true, "total": 125.5, "label": "Grüße 😀" },
+              "inputFingerprint": "8f12fd0f50427fa6383c6d449db66b8605c5f5a35b29ebb8b10b6005b443e8ec"
+            }
+          ],
+          "waits": [{ "name": "follow-up", "mode": "absolute", "matchesPayload": true }],
+          "children": [
+            {
+              "name": "ship",
+              "payload": { "shipment": "S-1", "weight": 2.5, "notes": "à la carte" },
+              "state": "ready",
+              "joined": false,
+              "edge": { "onSuccess": "release", "onFailure": "fail", "onCancellation": "cancel" },
+              "deadlineMatches": true,
+              "runAtMatches": true
+            }
+          ],
+          "humanWaits": []
+        }
+      },
+      { "action": "handOff" },
+      { "action": "run", "worker": "child" },
+      { "action": "run" },
+      {
+        "action": "expect",
+        "handlerRuns": 1,
+        "checkpointOperations": 0,
+        "completedScripts": 0,
+        "returnedSuspendingCalls": 2,
+        "observed": {
+          "state": "scheduled",
+          "attempt": 1,
+          "result": null,
+          "attempts": [],
+          "checkpoints": [
+            {
+              "name": "prepare",
+              "value": { "prepared": true, "total": 125.5, "label": "Grüße 😀" },
+              "inputFingerprint": "8f12fd0f50427fa6383c6d449db66b8605c5f5a35b29ebb8b10b6005b443e8ec"
+            }
+          ],
+          "waits": [{ "name": "follow-up", "mode": "absolute", "matchesPayload": true }],
+          "children": [
+            {
+              "name": "ship",
+              "payload": { "shipment": "S-1", "weight": 2.5, "notes": "à la carte" },
+              "state": "succeeded",
+              "joined": true,
+              "edge": { "onSuccess": "release", "onFailure": "fail", "onCancellation": "cancel" },
+              "deadlineMatches": true,
+              "runAtMatches": null
+            }
+          ],
+          "humanWaits": [
+            {
+              "name": "approve",
+              "context": {
+                "order": "ord-9",
+                "amounts": [1.5, 1e21, 0.1],
+                "b": "second",
+                "a": "first",
+                "who": "Zoë"
+              },
+              "completed": false
+            }
+          ]
+        }
+      },
+      {
+        "action": "sql",
+        "sql": "SELECT status FROM workhorse.complete_human_wait_v1($1::uuid, 'approve', '{\"approved\": true, \"by\": \"José\"}'::jsonb, 'fixture-completion', 'fixture-actor')"
+      },
+      { "action": "run" },
+      {
+        "action": "expect",
+        "handlerRuns": 2,
+        "checkpointOperations": 0,
+        "completedScripts": 1,
+        "returnedSuspendingCalls": 5,
+        "observed": {
+          "state": "succeeded",
+          "attempt": 1,
+          "result": {
+            "prepared": { "prepared": true, "total": 125.5, "label": "Grüße 😀" },
+            "child": { "echo": { "shipment": "S-1", "weight": 2.5, "notes": "à la carte" } },
+            "decision": { "approved": true, "by": "José" }
+          },
+          "attempts": ["succeeded"],
+          "checkpoints": [
+            {
+              "name": "prepare",
+              "value": { "prepared": true, "total": 125.5, "label": "Grüße 😀" },
+              "inputFingerprint": "8f12fd0f50427fa6383c6d449db66b8605c5f5a35b29ebb8b10b6005b443e8ec"
+            }
+          ],
+          "waits": [{ "name": "follow-up", "mode": "absolute", "matchesPayload": true }],
+          "children": [
+            {
+              "name": "ship",
+              "payload": { "shipment": "S-1", "weight": 2.5, "notes": "à la carte" },
+              "state": "succeeded",
+              "joined": true,
+              "edge": { "onSuccess": "release", "onFailure": "fail", "onCancellation": "cancel" },
+              "deadlineMatches": true,
+              "runAtMatches": null
+            }
+          ],
+          "humanWaits": [
+            {
+              "name": "approve",
+              "context": {
+                "order": "ord-9",
+                "amounts": [1.5, 1e21, 0.1],
+                "b": "second",
+                "a": "first",
+                "who": "Zoë"
+              },
+              "completed": true
+            }
+          ]
+        }
+      }
+    ]
+  },
+  {
+    "id": "durable-script-replays-a-pending-human-wait-in-another-sdk",
+    "kind": "durable-script",
+    "covers": ["cross-sdk-replay"],
+    "taskType": "protocol.durable-script.cross-sdk-pending-human",
+    "childTaskType": "protocol.durable-script.child",
+    "childQueue": "runtime-durable-script-children",
+    "payloadSql": "WITH setting AS (SELECT 'milliseconds'::text AS timer_precision), instants AS (SELECT date_trunc('second', clock_timestamp() + interval '30 days') + interval '0.123456 seconds' AS wake_at, date_trunc('second', clock_timestamp() + interval '60 days') + interval '0.987654 seconds' AS deadline, date_trunc('second', clock_timestamp() - interval '1 hour') + interval '0.250001 seconds' AS run_at) SELECT jsonb_build_object('wakeAt', to_char(instants.wake_at AT TIME ZONE 'Asia/Kolkata', CASE setting.timer_precision WHEN 'microseconds' THEN 'YYYY-MM-DD\"T\"HH24:MI:SS.US' ELSE 'YYYY-MM-DD\"T\"HH24:MI:SS.MS' END) || '+05:30', 'childDeadline', to_char(instants.deadline AT TIME ZONE 'Etc/GMT+3', 'YYYY-MM-DD\"T\"HH24:MI:SS.US') || '-03:00', 'childRunAt', to_char(instants.run_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS.US') || 'Z')::text AS payload FROM setting, instants",
+    "script": [
+      {
+        "op": "checkpoint",
+        "key": "prepared",
+        "name": "prepare",
+        "input": {
+          "z": 1,
+          "a": [0.1, 1e-7, -0.0, 100.0, 12345678901234],
+          "é": "ü",
+          "😀": "line break",
+          "A": { "b": null, "a": true }
+        },
+        "value": { "prepared": true, "total": 125.5, "label": "Grüße 😀" }
+      },
+      { "op": "sleepUntil", "name": "follow-up", "wakeAtField": "wakeAt" },
+      {
+        "op": "runChild",
+        "key": "child",
+        "name": "ship",
+        "payload": { "shipment": "S-1", "weight": 2.5, "notes": "à la carte" },
+        "deadlineField": "childDeadline",
+        "runAtField": "childRunAt"
+      },
+      {
+        "op": "waitForHuman",
+        "key": "decision",
+        "name": "approve",
+        "context": {
+          "order": "ord-9",
+          "amounts": [1.5, 1e21, 0.1],
+          "b": "second",
+          "a": "first",
+          "who": "Zoë"
+        }
+      }
+    ],
+    "observe": "SELECT jsonb_build_object('state', COALESCE(r.state, o.state), 'attempt', COALESCE(r.current_attempt, o.current_attempt), 'result', o.result, 'attempts', (SELECT COALESCE(jsonb_agg(h.outcome ORDER BY h.attempt, h.occurred_at), '[]'::jsonb) FROM workhorse.attempt_history h WHERE h.task_id = t.id), 'checkpoints', (SELECT COALESCE(jsonb_agg(jsonb_build_object('name', c.checkpoint_name, 'value', c.checkpoint_value, 'inputFingerprint', c.input_fingerprint) ORDER BY c.checkpoint_name), '[]'::jsonb) FROM workhorse.task_checkpoint c WHERE c.task_id = t.id), 'waits', (SELECT COALESCE(jsonb_agg(jsonb_build_object('name', w.wait_name, 'mode', w.mode, 'matchesPayload', abs(extract(epoch FROM w.requested_wake_at - (t.payload->>'wakeAt')::timestamptz)) < 0.001) ORDER BY w.wait_name), '[]'::jsonb) FROM workhorse.task_wait w WHERE w.task_id = t.id), 'children', (SELECT COALESCE(jsonb_agg(jsonb_build_object('name', c.child_name, 'payload', child.payload, 'state', COALESCE(child_runtime.state, child_outcome.state), 'joined', c.joined_at IS NOT NULL, 'edge', (SELECT jsonb_build_object('onSuccess', d.on_success, 'onFailure', d.on_failure, 'onCancellation', d.on_cancellation) FROM workhorse.task_dependency d WHERE d.dependent_task_id = c.parent_task_id AND d.prerequisite_task_id = c.child_task_id), 'deadlineMatches', abs(extract(epoch FROM child.deadline_at - (t.payload->>'childDeadline')::timestamptz)) < 0.001, 'runAtMatches', CASE WHEN child_runtime.task_id IS NOT NULL THEN abs(extract(epoch FROM child_runtime.run_at - (t.payload->>'childRunAt')::timestamptz)) < 0.001 END) ORDER BY c.child_name), '[]'::jsonb) FROM workhorse.task_child c JOIN workhorse.task child ON child.id = c.child_task_id LEFT JOIN workhorse.task_runtime child_runtime ON child_runtime.task_id = child.id LEFT JOIN workhorse.task_outcome child_outcome ON child_outcome.task_id = child.id WHERE c.parent_task_id = t.id), 'humanWaits', (SELECT COALESCE(jsonb_agg(jsonb_build_object('name', w.token_name, 'context', w.context, 'completed', w.completed_at IS NOT NULL) ORDER BY w.token_name), '[]'::jsonb) FROM workhorse.task_human_wait w WHERE w.task_id = t.id))::text AS observed FROM workhorse.task t LEFT JOIN workhorse.task_runtime r ON r.task_id = t.id LEFT JOIN workhorse.task_outcome o ON o.task_id = t.id WHERE t.id = $1::uuid",
+    "steps": [
+      { "action": "run" },
+      {
+        "action": "expect",
+        "handlerRuns": 1,
+        "checkpointOperations": 1,
+        "completedScripts": 0,
+        "returnedSuspendingCalls": 0,
+        "observed": {
+          "state": "scheduled",
+          "attempt": 1,
+          "result": null,
+          "attempts": [],
+          "checkpoints": [
+            {
+              "name": "prepare",
+              "value": { "prepared": true, "total": 125.5, "label": "Grüße 😀" },
+              "inputFingerprint": "8f12fd0f50427fa6383c6d449db66b8605c5f5a35b29ebb8b10b6005b443e8ec"
+            }
+          ],
+          "waits": [{ "name": "follow-up", "mode": "absolute", "matchesPayload": true }],
+          "children": [],
+          "humanWaits": []
+        }
+      },
+      {
+        "action": "sql",
+        "sql": "UPDATE workhorse.task_runtime SET run_at = clock_timestamp() - interval '1 millisecond' WHERE task_id = $1::uuid AND state = 'scheduled'"
+      },
+      {
+        "action": "sql",
+        "sql": "SELECT count(*) FROM workhorse.tick_v1(100, 100) WHERE $1::uuid IS NOT NULL"
+      },
+      { "action": "run" },
+      {
+        "action": "expect",
+        "handlerRuns": 2,
+        "checkpointOperations": 1,
+        "completedScripts": 0,
+        "returnedSuspendingCalls": 1,
+        "observed": {
+          "state": "blocked",
+          "attempt": 1,
+          "result": null,
+          "attempts": [],
+          "checkpoints": [
+            {
+              "name": "prepare",
+              "value": { "prepared": true, "total": 125.5, "label": "Grüße 😀" },
+              "inputFingerprint": "8f12fd0f50427fa6383c6d449db66b8605c5f5a35b29ebb8b10b6005b443e8ec"
+            }
+          ],
+          "waits": [{ "name": "follow-up", "mode": "absolute", "matchesPayload": true }],
+          "children": [
+            {
+              "name": "ship",
+              "payload": { "shipment": "S-1", "weight": 2.5, "notes": "à la carte" },
+              "state": "ready",
+              "joined": false,
+              "edge": { "onSuccess": "release", "onFailure": "fail", "onCancellation": "cancel" },
+              "deadlineMatches": true,
+              "runAtMatches": true
+            }
+          ],
+          "humanWaits": []
+        }
+      },
+      { "action": "run", "worker": "child" },
+      { "action": "run" },
+      {
+        "action": "expect",
+        "handlerRuns": 3,
+        "checkpointOperations": 1,
+        "completedScripts": 0,
+        "returnedSuspendingCalls": 3,
+        "observed": {
+          "state": "scheduled",
+          "attempt": 1,
+          "result": null,
+          "attempts": [],
+          "checkpoints": [
+            {
+              "name": "prepare",
+              "value": { "prepared": true, "total": 125.5, "label": "Grüße 😀" },
+              "inputFingerprint": "8f12fd0f50427fa6383c6d449db66b8605c5f5a35b29ebb8b10b6005b443e8ec"
+            }
+          ],
+          "waits": [{ "name": "follow-up", "mode": "absolute", "matchesPayload": true }],
+          "children": [
+            {
+              "name": "ship",
+              "payload": { "shipment": "S-1", "weight": 2.5, "notes": "à la carte" },
+              "state": "succeeded",
+              "joined": true,
+              "edge": { "onSuccess": "release", "onFailure": "fail", "onCancellation": "cancel" },
+              "deadlineMatches": true,
+              "runAtMatches": null
+            }
+          ],
+          "humanWaits": [
+            {
+              "name": "approve",
+              "context": {
+                "order": "ord-9",
+                "amounts": [1.5, 1e21, 0.1],
+                "b": "second",
+                "a": "first",
+                "who": "Zoë"
+              },
+              "completed": false
+            }
+          ]
+        }
+      },
+      { "action": "handOff" },
+      {
+        "action": "sql",
+        "sql": "SELECT status FROM workhorse.complete_human_wait_v1($1::uuid, 'approve', '{\"approved\": true, \"by\": \"José\"}'::jsonb, 'fixture-completion', 'fixture-actor')"
+      },
+      { "action": "run" },
+      {
+        "action": "expect",
+        "handlerRuns": 1,
+        "checkpointOperations": 0,
+        "completedScripts": 1,
+        "returnedSuspendingCalls": 3,
+        "observed": {
+          "state": "succeeded",
+          "attempt": 1,
+          "result": {
+            "prepared": { "prepared": true, "total": 125.5, "label": "Grüße 😀" },
+            "child": { "echo": { "shipment": "S-1", "weight": 2.5, "notes": "à la carte" } },
+            "decision": { "approved": true, "by": "José" }
+          },
+          "attempts": ["succeeded"],
+          "checkpoints": [
+            {
+              "name": "prepare",
+              "value": { "prepared": true, "total": 125.5, "label": "Grüße 😀" },
+              "inputFingerprint": "8f12fd0f50427fa6383c6d449db66b8605c5f5a35b29ebb8b10b6005b443e8ec"
+            }
+          ],
+          "waits": [{ "name": "follow-up", "mode": "absolute", "matchesPayload": true }],
+          "children": [
+            {
+              "name": "ship",
+              "payload": { "shipment": "S-1", "weight": 2.5, "notes": "à la carte" },
+              "state": "succeeded",
+              "joined": true,
+              "edge": { "onSuccess": "release", "onFailure": "fail", "onCancellation": "cancel" },
+              "deadlineMatches": true,
+              "runAtMatches": null
+            }
+          ],
+          "humanWaits": [
+            {
+              "name": "approve",
+              "context": {
+                "order": "ord-9",
+                "amounts": [1.5, 1e21, 0.1],
+                "b": "second",
+                "a": "first",
+                "who": "Zoë"
+              },
+              "completed": true
+            }
+          ]
+        }
+      }
+    ]
   }
 ]

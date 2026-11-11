@@ -567,6 +567,60 @@ export interface MaintenancePhaseErrorRuntimeFixture extends RuntimeFixtureBase 
   expectedState: ExpectedRuntimeState;
 }
 
+/** One durable call of a `durable-script` handler. */
+export type DurableScriptOperation =
+  | { op: "checkpoint"; key: string; name: string; value: JsonValue; input?: JsonValue }
+  | { op: "sleep"; name: string; durationMs: number }
+  | { op: "sleepUntil"; name: string; wakeAtField: string }
+  | { op: "waitForSignal"; key: string; name: string }
+  | { op: "waitForHuman"; key: string; name: string; context: JsonValue }
+  | {
+      op: "runChild";
+      key: string;
+      name: string;
+      payload: JsonValue;
+      deadlineField?: string;
+      runAtField?: string;
+    }
+  | { op: "runChildren"; key: string; children: { name: string; payload: JsonValue }[] }
+  | { op: "catchSuspension"; key: string; step: DurableScriptOperation }
+  | { op: "overlappingCheckpoints"; key: string; name: string; overlapWindowMs: number };
+
+/** One step of the runner of a `durable-script` fixture. */
+export type DurableScriptStep =
+  | { action: "run"; worker?: "task" | "child" }
+  | { action: "sql"; sql: string }
+  | { action: "handOff" }
+  | {
+      action: "expect";
+      observed: JsonValue;
+      handlerRuns?: number;
+      checkpointOperations?: number;
+      caughtSuspensions?: number;
+      completedScripts?: number;
+      returnedSuspendingCalls?: number;
+    };
+
+/**
+ * A handler runs `script` through its handler context, and the runner drives the task through
+ * `steps` to a terminal state. protocol/README.md describes the operations and the steps.
+ *
+ * Before `handOff`, SDK A runs the steps. After it, SDK B runs them on the same database. A runner
+ * that runs both phases resets its counters at `handOff`.
+ */
+export interface DurableScriptRuntimeFixture extends RuntimeFixtureBase {
+  kind: "durable-script";
+  childTaskType?: string;
+  /** The queue of each child request. A second worker claims it, so a parent run ends. */
+  childQueue?: string;
+  /** A query that returns the JSON object text of the task payload, in the column `payload`. */
+  payloadSql?: string;
+  script: DurableScriptOperation[];
+  /** A query of the task `$1` that returns JSON text in the column `observed`. */
+  observe: string;
+  steps: DurableScriptStep[];
+}
+
 export interface ReplayConflictRuntimeFixture extends RuntimeFixtureBase {
   kind: "replay-conflict";
   maxAttempts: number;
@@ -599,6 +653,7 @@ export type RuntimeFixture =
   | ReleaseWaitRuntimeFixture
   | JsonRoundTripRuntimeFixture
   | CheckpointNoValueRuntimeFixture
+  | DurableScriptRuntimeFixture
   | OversizedResultRuntimeFixture
   | ResultContractFailureRuntimeFixture
   | ShutdownCancellationRuntimeFixture

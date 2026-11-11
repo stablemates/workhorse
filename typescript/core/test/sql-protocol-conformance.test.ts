@@ -80,6 +80,7 @@ import {
 import { Pool } from "pg";
 import { raceBudgetAdmission } from "./support/budget-race.js";
 import { createDatabaseTestHarness } from "./support/db.js";
+import { runDurableScriptPhase } from "./support/durable-script.js";
 import { answerSchemaCheck } from "./support/schema-check.js";
 import { workerHeartbeatReservation, type WorkerHeartbeatChannel } from "../src/worker-internal.js";
 import { unreservedQueue } from "../src/worker-internal.js";
@@ -2233,6 +2234,9 @@ async function executeRuntimeFixture(
       break;
     case "checkpoint-no-value":
       await executeCheckpointNoValueRuntimeFixture(queue, admin, database, fixture);
+      break;
+    case "durable-script":
+      await runDurableScriptPhase({ pool: database, fixture, phase: "all" });
       break;
     case "oversized-result":
       await executeOversizedResultRuntimeFixture(queue, admin, fixture);

@@ -75,6 +75,9 @@ pub async fn run_runtime(fixture: &Value) -> Outcome {
             "release-wait" => release_wait(database, fixture).await,
             "json-round-trip" => json_round_trip(database, fixture).await,
             "checkpoint-no-value" => checkpoint_no_value(database, fixture).await,
+            "durable-script" => {
+                super::durable_script::run_phase(database.url(), fixture, "all").await
+            }
             "oversized-result" => oversized_result(database, fixture).await,
             "result-contract-failure" => result_contract_failure(database, fixture).await,
             "shutdown-cancellation" => shutdown_cancellation(database, fixture).await,
