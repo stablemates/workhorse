@@ -101,10 +101,19 @@ func (service *backend) setWorkerPaused(ctx context.Context, input any, actor st
 	return map[string]any{"paused": result.Paused}, nil
 }
 
-func (service *backend) overrideMaintenancePolicy(ctx context.Context, input any, _ string) (any, error) {
+// policyAudit is the audit that a settings mutation records in operator_audit. The actor is the
+// authenticated actor of the request, as for queue control. The reason and the request ID come
+// from the audit of the request.
+func policyAudit(value map[string]any, actor string) (string, string, string) {
+	audit := adminAudit(value, actor)
+	return audit.Actor, audit.Reason, audit.RequestID
+}
+
+func (service *backend) overrideMaintenancePolicy(ctx context.Context, input any, actor string) (any, error) {
 	value, _ := document(input)
 	definition, _ := value["definition"].(map[string]any)
-	_, err := service.executor.Query(ctx, `SELECT (policy).* FROM workhorse.override_maintenance_policy_v1($1::text,$2::integer,$3::integer,$4::time,$5::integer,$6::integer,$7::integer) policy`, definition["timezone"], definition["partitionPreparationIntervalMs"], definition["terminalCleanupIntervalMs"], definition["historyRetentionLocalTime"], definition["statisticsRollupIntervalMs"], definition["statisticsGroupLimit"], definition["statisticsRecomputeBuckets"])
+	auditActor, reason, requestID := policyAudit(value, actor)
+	_, err := service.executor.Query(ctx, `SELECT (policy).* FROM workhorse.override_maintenance_policy_v2($1::text,$2::integer,$3::integer,$4::time,$5::integer,$6::integer,$7::integer,$8::text,$9::text,$10::text) policy`, definition["timezone"], definition["partitionPreparationIntervalMs"], definition["terminalCleanupIntervalMs"], definition["historyRetentionLocalTime"], definition["statisticsRollupIntervalMs"], definition["statisticsGroupLimit"], definition["statisticsRecomputeBuckets"], auditActor, reason, requestID)
 	return nil, err
 }
 
@@ -129,13 +138,14 @@ func stringSlice(value any) []string {
 	return result
 }
 
-func (service *backend) revertMaintenancePolicy(ctx context.Context, input any, _ string) (any, error) {
+func (service *backend) revertMaintenancePolicy(ctx context.Context, input any, actor string) (any, error) {
 	value, _ := document(input)
-	_, err := service.executor.Query(ctx, "SELECT (policy).* FROM workhorse.revert_maintenance_policy_v1($1::text[]) policy", stringSlice(value["settings"]))
+	auditActor, reason, requestID := policyAudit(value, actor)
+	_, err := service.executor.Query(ctx, "SELECT (policy).* FROM workhorse.revert_maintenance_policy_v2($1::text[],$2::text,$3::text,$4::text) policy", stringSlice(value["settings"]), auditActor, reason, requestID)
 	return nil, err
 }
 
-func (service *backend) overrideRetentionPolicy(ctx context.Context, input any, _ string) (any, error) {
+func (service *backend) overrideRetentionPolicy(ctx context.Context, input any, actor string) (any, error) {
 	value, _ := document(input)
 	definition := value["definition"].(map[string]any)
 	converted := make(map[string]any, len(definition))
@@ -143,13 +153,15 @@ func (service *backend) overrideRetentionPolicy(ctx context.Context, input any, 
 		converted[snake(key)] = item
 	}
 	payload, _ := json.Marshal(converted)
-	_, err := service.executor.Query(ctx, "SELECT (policy).* FROM workhorse.override_retention_policy_v1($1::jsonb) policy", payload)
+	auditActor, reason, requestID := policyAudit(value, actor)
+	_, err := service.executor.Query(ctx, "SELECT (policy).* FROM workhorse.override_retention_policy_v2($1::jsonb,$2::text,$3::text,$4::text) policy", payload, auditActor, reason, requestID)
 	return nil, err
 }
 
-func (service *backend) revertRetentionPolicy(ctx context.Context, input any, _ string) (any, error) {
+func (service *backend) revertRetentionPolicy(ctx context.Context, input any, actor string) (any, error) {
 	value, _ := document(input)
-	_, err := service.executor.Query(ctx, "SELECT (policy).* FROM workhorse.revert_retention_policy_v1($1::text[]) policy", stringSlice(value["settings"]))
+	auditActor, reason, requestID := policyAudit(value, actor)
+	_, err := service.executor.Query(ctx, "SELECT (policy).* FROM workhorse.revert_retention_policy_v2($1::text[],$2::text,$3::text,$4::text) policy", stringSlice(value["settings"]), auditActor, reason, requestID)
 	return nil, err
 }
 

@@ -84,6 +84,7 @@ pub(super) struct Backend<E: Executor> {
     pub(super) configured_workers: Vec<String>,
     pub(super) read_only: bool,
     pub(super) maintenance_loops: Value,
+    redact_error_stacks: bool,
     health: Mutex<Option<(Value, Instant)>>,
 }
 
@@ -95,6 +96,7 @@ impl<E: Executor> Backend<E> {
         read_only: bool,
         maintenance_loops: Value,
         statement_timeout: Duration,
+        redact_error_stacks: bool,
     ) -> Self {
         Self {
             admin: Admin::new(executor),
@@ -103,6 +105,7 @@ impl<E: Executor> Backend<E> {
             configured_workers,
             read_only,
             maintenance_loops,
+            redact_error_stacks,
             health: Mutex::new(None),
         }
     }
@@ -143,8 +146,12 @@ impl<E: Executor> Backend<E> {
                 self.json_query(sql::DASHBOARD_WORKERS_V1, Some(input)).await
             }
             "humanWaits" => self.human_waits().await,
-            "events" => self.json_query(sql::DASHBOARD_EVENTS_V1, Some(input)).await,
+            "events" => {
+                let input = self.with_stack_redaction(input);
+                self.json_query(sql::DASHBOARD_EVENTS_V1, Some(input)).await
+            }
             "eventDetail" => {
+                let input = self.with_stack_redaction(input);
                 let result = self.raw_json_query(sql::DASHBOARD_EVENT_DETAIL_V1, Some(input)).await;
                 found(result, "Event not found")
             }
@@ -179,21 +186,26 @@ impl<E: Executor> Backend<E> {
             "setQueueTier" => self.set_queue_tier(input, actor).await,
             "setQueueHistory" => self.set_queue_history(input).await,
             "setWorkerPaused" => self.set_worker_paused(input, actor).await,
-            "overrideMaintenancePolicy" => self.override_maintenance_policy(input).await,
+            "overrideMaintenancePolicy" => self.override_maintenance_policy(input, actor).await,
             "revertMaintenancePolicy" => {
-                self.revert(sql::REVERT_MAINTENANCE_POLICY_V1, input).await
+                self.revert(sql::REVERT_MAINTENANCE_POLICY_V2, input, actor).await
             }
             "overrideRetentionPolicy" => {
                 let value = document(input);
+                let audit = audit(&value, actor);
                 let definition: Map<String, Value> = object(&value, "definition")
                     .into_iter()
                     .map(|(key, item)| (snake(&key), item))
                     .collect();
                 let definition = Value::Object(definition);
-                let rows = self.rows(sql::OVERRIDE_RETENTION_POLICY_V1, &[&definition]).await;
+                let params: [&(dyn ToSql + Sync); 4] =
+                    [&definition, &audit.actor, &audit.reason, &audit.request_id];
+                let rows = self.rows(sql::OVERRIDE_RETENTION_POLICY_V2, &params).await;
                 rows.map(|_| Value::Null).map_err(Into::into)
             }
-            "revertRetentionPolicy" => self.revert(sql::REVERT_RETENTION_POLICY_V1, input).await,
+            "revertRetentionPolicy" => {
+                self.revert(sql::REVERT_RETENTION_POLICY_V2, input, actor).await
+            }
             "runTaskNow" => self.run_task_now(input, actor).await,
             "cancelTask" => self.cancel_task(input, actor).await,
             "signalTask" => self.deliver(input, actor, Delivery::Signal).await,
@@ -319,8 +331,17 @@ impl<E: Executor> Backend<E> {
         self.json_query(sql::DASHBOARD_HUMAN_WAITS_V1, Some(input)).await
     }
 
-    async fn task_detail(&self, input: Value) -> Procedure {
+    /// Sets the `redactErrorStacks` key of a history read from the host option. The host has
+    /// already dropped each input key that the request schema does not declare, so a request
+    /// cannot set it.
+    fn with_stack_redaction(&self, input: Value) -> Value {
         let mut value = document(input);
+        value.insert("redactErrorStacks".into(), self.redact_error_stacks.into());
+        value.into()
+    }
+
+    async fn task_detail(&self, input: Value) -> Procedure {
+        let mut value = document(self.with_stack_redaction(input));
         let health = self.queue_health().await?;
         value.insert("canSignal".into(), (!self.read_only).into());
         value.insert("canCompleteHumanWait".into(), (!self.read_only).into());
@@ -401,8 +422,12 @@ impl<E: Executor> Backend<E> {
         }
     }
 
-    async fn override_maintenance_policy(&self, input: Value) -> Procedure {
-        let definition = object(&document(input), "definition");
+    /// The actor of a settings change is the authenticated actor, as for queue control. The
+    /// reason and the request ID come from the audit of the request.
+    async fn override_maintenance_policy(&self, input: Value, actor: &str) -> Procedure {
+        let value = document(input);
+        let audit = audit(&value, actor);
+        let definition = object(&value, "definition");
         let number = |name: &str| -> Result<Option<i32>, Error> {
             definition
                 .get(name)
@@ -424,21 +449,32 @@ impl<E: Executor> Backend<E> {
         let rollup = number("statisticsRollupIntervalMs")?;
         let groups = number("statisticsGroupLimit")?;
         let buckets = number("statisticsRecomputeBuckets")?;
-        let params: [&(dyn ToSql + Sync); 7] =
-            [&timezone, &partition, &cleanup, &local_time, &rollup, &groups, &buckets];
-        self.rows(sql::OVERRIDE_MAINTENANCE_POLICY_V1, &params).await?;
+        let params: [&(dyn ToSql + Sync); 10] = [
+            &timezone,
+            &partition,
+            &cleanup,
+            &local_time,
+            &rollup,
+            &groups,
+            &buckets,
+            &audit.actor,
+            &audit.reason,
+            &audit.request_id,
+        ];
+        self.rows(sql::OVERRIDE_MAINTENANCE_POLICY_V2, &params).await?;
         Ok(Value::Null)
     }
 
-    async fn revert(&self, statement: &str, input: Value) -> Procedure {
+    async fn revert(&self, statement: &str, input: Value, actor: &str) -> Procedure {
         let value = document(input);
+        let audit = audit(&value, actor);
         let settings: Vec<String> = match value.get("settings") {
             Some(Value::Array(items)) => {
                 items.iter().filter_map(Value::as_str).map(snake).collect()
             }
             _ => Vec::new(),
         };
-        self.rows(statement, &[&settings]).await?;
+        self.rows(statement, &[&settings, &audit.actor, &audit.reason, &audit.request_id]).await?;
         Ok(Value::Null)
     }
 

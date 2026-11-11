@@ -566,8 +566,27 @@
       "arguments": ["text?", "integer?", "integer?", "time?", "integer?", "integer?", "integer?"],
       "returns": "workhorse.maintenance_policy"
     },
+    "override_maintenance_policy_v2": {
+      "arguments": [
+        "text",
+        "integer",
+        "integer",
+        "time",
+        "integer",
+        "integer",
+        "integer",
+        "text",
+        "text",
+        "text"
+      ],
+      "returns": "workhorse.maintenance_policy"
+    },
     "override_retention_policy_v1": {
       "arguments": ["jsonb"],
+      "returns": "workhorse.retention_policy"
+    },
+    "override_retention_policy_v2": {
+      "arguments": ["jsonb", "text", "text", "text"],
       "returns": "workhorse.retention_policy"
     },
     "prepare_history_partitions_v1": {
@@ -749,8 +768,16 @@
       "arguments": ["text[]"],
       "returns": "workhorse.maintenance_policy"
     },
+    "revert_maintenance_policy_v2": {
+      "arguments": ["text[]", "text", "text", "text"],
+      "returns": "workhorse.maintenance_policy"
+    },
     "revert_retention_policy_v1": {
       "arguments": ["text[]"],
+      "returns": "workhorse.retention_policy"
+    },
+    "revert_retention_policy_v2": {
+      "arguments": ["text[]", "text", "text", "text"],
       "returns": "workhorse.retention_policy"
     },
     "rollup_stats_v1": {
@@ -1915,6 +1942,8 @@
       "cron_field_values_v1",
       "cron_occurrences_v1",
       "dashboard_budgets_v1",
+      "dashboard_details_without_stack_v1",
+      "dashboard_error_without_stack_v1",
       "dashboard_human_wait_quick_action_v1",
       "dashboard_inline_value_bytes_v1",
       "dashboard_iso_v1",
@@ -1965,6 +1994,7 @@
       "notify_concurrency_capacity_v1",
       "override_contract_version_v1",
       "override_queue_health_policy_v1",
+      "policy_audit_entry_internal_v1",
       "project_task_query_v1",
       "prune_default_history_v1",
       "prune_enqueue_idempotency_v1",

@@ -1165,6 +1165,7 @@ Workhorse.AspNetCore.DashboardOptions: public System.TimeSpan StatementTimeout {
 Workhorse.AspNetCore.DashboardOptions: public Workhorse.AspNetCore.DashboardProcedure? EnqueueTest { get; init; }
 Workhorse.AspNetCore.DashboardOptions: public Workhorse.AspNetCore.DashboardProcedure? SetSchedulePaused { get; init; }
 Workhorse.AspNetCore.DashboardOptions: public bool ReadOnly { get; init; }
+Workhorse.AspNetCore.DashboardOptions: public bool RedactErrorStacks { get; init; }
 Workhorse.AspNetCore.DashboardOptions: public required Npgsql.NpgsqlDataSource DataSource { get; init; }
 Workhorse.AspNetCore.DashboardOptions: public required System.Func<Microsoft.AspNetCore.Http.HttpContext, System.Threading.Tasks.ValueTask<Workhorse.AspNetCore.DashboardAuthorization>> Authorize { get; init; }
 Workhorse.AspNetCore.DashboardOptions: public string AuditActor { get; init; }

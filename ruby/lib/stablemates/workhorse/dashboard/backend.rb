@@ -26,7 +26,7 @@ module Stablemates
           :SET_STATEMENT_TIMEOUT
 
         def initialize(executor, environment:, configured_workers:, maintenance_loops:, read_only:,
-          statement_timeout_ms:)
+          statement_timeout_ms:, redact_error_stacks: false)
           @executor = executor
           @statement_timeout_ms = statement_timeout_ms.to_s
           @admin = Admin.new(executor)
@@ -34,6 +34,7 @@ module Stablemates
           @configured_workers = configured_workers.dup.freeze
           @maintenance_loops = maintenance_loops.dup.freeze
           @read_only = read_only
+          @redact_error_stacks = redact_error_stacks
           @health_lock = Mutex.new
           @health = nil
         end
@@ -99,15 +100,15 @@ module Stablemates
             {"canComplete" => !@read_only, "canSignal" => !@read_only, "health" => queue_health})
         end
 
-        def events(input, _actor) = result(SqlCatalogue::DASHBOARD_EVENTS_V1, input)
+        def events(input, _actor) = result(SqlCatalogue::DASHBOARD_EVENTS_V1, with_stack_redaction(input))
 
         def event_detail(input, _actor)
-          found(result(SqlCatalogue::DASHBOARD_EVENT_DETAIL_V1, input), "Event not found")
+          found(result(SqlCatalogue::DASHBOARD_EVENT_DETAIL_V1, with_stack_redaction(input)), "Event not found")
         end
 
         def task_detail(input, _actor)
-          query = input.merge("canSignal" => !@read_only, "canCompleteHumanWait" => !@read_only,
-            "health" => queue_health)
+          query = with_stack_redaction(input).merge("canSignal" => !@read_only,
+            "canCompleteHumanWait" => !@read_only, "health" => queue_health)
           found(result(SqlCatalogue::DASHBOARD_TASK_DETAIL_V1, query), "Task not found")
         end
 
@@ -179,25 +180,28 @@ module Stablemates
           {"paused" => result.paused}
         end
 
-        def override_maintenance_policy(input, _actor)
+        # A settings change records its audit. The actor is the authenticated actor, as for queue
+        # control. The reason and the request ID come from the audit of the request.
+        def override_maintenance_policy(input, actor)
           definition = input.fetch("definition")
-          @executor.rows(SqlCatalogue::OVERRIDE_MAINTENANCE_POLICY_V1,
-            MAINTENANCE_SETTINGS.map { |name| definition[name]&.to_s })
+          @executor.rows(SqlCatalogue::OVERRIDE_MAINTENANCE_POLICY_V2,
+            MAINTENANCE_SETTINGS.map { |name| definition[name]&.to_s } + policy_audit(input, actor))
           nil
         end
 
-        def revert_maintenance_policy(input, _actor)
-          revert(SqlCatalogue::REVERT_MAINTENANCE_POLICY_V1, input)
+        def revert_maintenance_policy(input, actor)
+          revert(SqlCatalogue::REVERT_MAINTENANCE_POLICY_V2, input, actor)
         end
 
-        def override_retention_policy(input, _actor)
+        def override_retention_policy(input, actor)
           overrides = input.fetch("definition").transform_keys { |name| snake(name) }
-          @executor.rows(SqlCatalogue::OVERRIDE_RETENTION_POLICY_V1, [Values.json(overrides, "definition")])
+          @executor.rows(SqlCatalogue::OVERRIDE_RETENTION_POLICY_V2,
+            [Values.json(overrides, "definition"), *policy_audit(input, actor)])
           nil
         end
 
-        def revert_retention_policy(input, _actor)
-          revert(SqlCatalogue::REVERT_RETENTION_POLICY_V1, input)
+        def revert_retention_policy(input, actor)
+          revert(SqlCatalogue::REVERT_RETENTION_POLICY_V2, input, actor)
         end
 
         def run_task_now(input, actor)
@@ -356,11 +360,21 @@ module Stablemates
           row
         end
 
-        def revert(sql, input)
+        def revert(sql, input, actor)
           settings = input.fetch("settings").map { |name| snake(name) }
-          @executor.rows(sql, [Values.text_array(settings, "settings")])
+          @executor.rows(sql, [Values.text_array(settings, "settings"), *policy_audit(input, actor)])
           nil
         end
+
+        def policy_audit(input, actor)
+          audit = audit(input, actor)
+          [audit.actor, audit.reason, audit.request_id]
+        end
+
+        # Sets the redactErrorStacks key of a history read from the host option. The host has
+        # already dropped each input key that the request schema does not declare, so a request
+        # cannot set it.
+        def with_stack_redaction(input) = input.merge("redactErrorStacks" => @redact_error_stacks)
 
         def one(rows, label)
           raise DatabaseError.new("#{label} returned #{rows.length} rows; expected one", nil) unless rows.one?

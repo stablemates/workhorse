@@ -441,6 +441,8 @@ type DashboardMaintenancePolicy
 interface DashboardMaintenanceRun
 interface DashboardManagedQueueRow
 interface DashboardMetricBucket
+interface DashboardPolicyChange
+type DashboardPolicyChanges
 interface DashboardQueueRow
 type DashboardQueueTier
 interface DashboardQueuesPage
@@ -646,6 +648,8 @@ type DashboardMaintenancePolicy
 interface DashboardMaintenanceRun
 interface DashboardManagedQueueRow
 interface DashboardMetricBucket
+interface DashboardPolicyChange
+type DashboardPolicyChanges
 interface DashboardQueueRow
 type DashboardQueueTier
 interface DashboardQueuesPage
@@ -1874,6 +1878,7 @@ interface DashboardMaintenanceLoopCadences {
 }
 
 type DashboardMaintenancePolicy = Omit<MaintenancePolicy, "updatedAt"> & {
+  lastChanges: DashboardPolicyChanges<MaintenancePolicySetting>;
   updatedAt: string;
 };
 
@@ -2057,6 +2062,18 @@ interface DashboardOperatorControllers {
   workerController: DashboardWorkerController;
 }
 
+interface DashboardPolicyChange {
+  action: "override" | "revert";
+  actor: string;
+  reason: string;
+  requestIdPreview: string;
+  requestIdDigest: string;
+  requestIdLength: number;
+  changedAt: string;
+}
+
+type DashboardPolicyChanges<TSetting extends string> = Partial<Record<TSetting, DashboardPolicyChange>>;
+
 interface DashboardPrincipal {
   actor: string;
 }
@@ -2219,6 +2236,7 @@ interface DashboardRetentionCategoryRow {
 }
 
 type DashboardRetentionPolicy = Omit<RetentionPolicy, "updatedAt"> & {
+  lastChanges: DashboardPolicyChanges<RetentionPolicySetting>;
   updatedAt: string;
 };
 
@@ -3752,7 +3770,7 @@ interface LiveProtocolWorker {
 
 const MAXIMUM_PROTOCOL_VERSION = 5;
 
-const MAXIMUM_SCHEMA_VERSION = 97;
+const MAXIMUM_SCHEMA_VERSION = 98;
 
 const MAX_CANCELLATION_REASON_CHARACTERS = 2000;
 
@@ -3830,7 +3848,7 @@ const MINIMUM_POSTGRES_MAJOR = 15;
 
 const MINIMUM_PROTOCOL_VERSION = 5;
 
-const MINIMUM_SCHEMA_VERSION = 97;
+const MINIMUM_SCHEMA_VERSION = 98;
 
 const MIN_PROGRESS_UPDATE_INTERVAL_MS = 100;
 
@@ -5519,7 +5537,7 @@ class TypeOrmQueryError extends QueryError {
 
 const WORKHORSE_SCHEMA_BASELINE_VERSION = 6;
 
-const WORKHORSE_SCHEMA_VERSION = 97;
+const WORKHORSE_SCHEMA_VERSION = 98;
 
 const WORKHORSE_VERSION = "0.12.0";
 

@@ -10,8 +10,8 @@ module Stablemates
       CLIENT_PROTOCOL_VERSION = 5
       MINIMUM_PROTOCOL_VERSION = 5
       MAXIMUM_PROTOCOL_VERSION = 5
-      MINIMUM_SCHEMA_VERSION = 97
-      MAXIMUM_SCHEMA_VERSION = 97
+      MINIMUM_SCHEMA_VERSION = 98
+      MAXIMUM_SCHEMA_VERSION = 98
       # PostgreSQL's atomic enqueue batch limit.
       MAX_ENQUEUE_BATCH_SIZE = 1000
       DEFAULT_TASK_VALUE_MAX_BYTES = 1048576
@@ -729,8 +729,18 @@ module Stablemates
       # `override_retention_policy_v1` (internal)
       OVERRIDE_RETENTION_POLICY_V1 = 'SELECT (policy).* FROM workhorse.override_retention_policy_v1($1::jsonb) policy'
 
+      # `override_retention_policy_v2` (internal)
+      OVERRIDE_RETENTION_POLICY_V2 = 'SELECT (policy).* FROM workhorse.override_retention_policy_v2(
+         $1::jsonb, $2::text, $3::text, $4::text
+       ) policy'
+
       # `revert_retention_policy_v1` (internal)
       REVERT_RETENTION_POLICY_V1 = 'SELECT (policy).* FROM workhorse.revert_retention_policy_v1($1::text[]) policy'
+
+      # `revert_retention_policy_v2` (internal)
+      REVERT_RETENTION_POLICY_V2 = 'SELECT (policy).* FROM workhorse.revert_retention_policy_v2(
+         $1::text[], $2::text, $3::text, $4::text
+       ) policy'
 
       # `dashboard_retention_preview_v1` (internal)
       DASHBOARD_RETENTION_PREVIEW_V1 = 'SELECT workhorse.dashboard_retention_preview_v1($1::jsonb) AS result'
@@ -797,8 +807,19 @@ module Stablemates
          $1::text, $2::integer, $3::integer, $4::time, $5::integer, $6::integer, $7::integer
        ) policy'
 
+      # `override_maintenance_policy_v2` (internal)
+      OVERRIDE_MAINTENANCE_POLICY_V2 = 'SELECT (policy).* FROM workhorse.override_maintenance_policy_v2(
+         $1::text, $2::integer, $3::integer, $4::time, $5::integer, $6::integer, $7::integer,
+         $8::text, $9::text, $10::text
+       ) policy'
+
       # `revert_maintenance_policy_v1` (internal)
       REVERT_MAINTENANCE_POLICY_V1 = 'SELECT (policy).* FROM workhorse.revert_maintenance_policy_v1($1::text[]) policy'
+
+      # `revert_maintenance_policy_v2` (internal)
+      REVERT_MAINTENANCE_POLICY_V2 = 'SELECT (policy).* FROM workhorse.revert_maintenance_policy_v2(
+         $1::text[], $2::text, $3::text, $4::text
+       ) policy'
 
       # `get_maintenance_policy_v1` (internal)
       GET_MAINTENANCE_POLICY_V1 = 'SELECT (policy).* FROM workhorse.get_maintenance_policy_v1() policy'

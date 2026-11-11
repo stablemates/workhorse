@@ -641,7 +641,7 @@
         "properties": {
           "id": {
             "type": "string",
-            "pattern": "^(event|attempt):[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+            "pattern": "^(event|attempt):[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
           }
         },
         "required": [
@@ -3722,6 +3722,32 @@
             "statisticsRecomputeBuckets"
           ]
         },
+        "lastChanges": {
+          "type": "object",
+          "properties": {
+            "historyRetentionLocalTime": {
+              "$ref": "#/$defs/DashboardPolicyChange"
+            },
+            "partitionPreparationIntervalMs": {
+              "$ref": "#/$defs/DashboardPolicyChange"
+            },
+            "statisticsGroupLimit": {
+              "$ref": "#/$defs/DashboardPolicyChange"
+            },
+            "statisticsRecomputeBuckets": {
+              "$ref": "#/$defs/DashboardPolicyChange"
+            },
+            "statisticsRollupIntervalMs": {
+              "$ref": "#/$defs/DashboardPolicyChange"
+            },
+            "terminalCleanupIntervalMs": {
+              "$ref": "#/$defs/DashboardPolicyChange"
+            },
+            "timezone": {
+              "$ref": "#/$defs/DashboardPolicyChange"
+            }
+          }
+        },
         "updatedAt": {
           "type": "string"
         }
@@ -3735,6 +3761,7 @@
         "statisticsGroupLimit",
         "statisticsRecomputeBuckets",
         "provenance",
+        "lastChanges",
         "updatedAt"
       ]
     },
@@ -3900,6 +3927,44 @@
         "terminalCountsApproximate",
         "concurrencyPolicy",
         "rateLimitPolicy"
+      ]
+    },
+    "DashboardPolicyChange": {
+      "type": "object",
+      "properties": {
+        "action": {
+          "enum": [
+            "override",
+            "revert"
+          ]
+        },
+        "actor": {
+          "type": "string"
+        },
+        "reason": {
+          "type": "string"
+        },
+        "requestIdPreview": {
+          "type": "string"
+        },
+        "requestIdDigest": {
+          "type": "string"
+        },
+        "requestIdLength": {
+          "type": "number"
+        },
+        "changedAt": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "action",
+        "actor",
+        "reason",
+        "requestIdPreview",
+        "requestIdDigest",
+        "requestIdLength",
+        "changedAt"
       ]
     },
     "DashboardQueueHealthReason": {
@@ -4638,6 +4703,44 @@
             "statisticsRowsPerPass"
           ]
         },
+        "lastChanges": {
+          "type": "object",
+          "properties": {
+            "attemptHistoryRetentionDays": {
+              "$ref": "#/$defs/DashboardPolicyChange"
+            },
+            "defaultPartitionRowsPerPass": {
+              "$ref": "#/$defs/DashboardPolicyChange"
+            },
+            "historyPartitionsPerPass": {
+              "$ref": "#/$defs/DashboardPolicyChange"
+            },
+            "occurrenceRowsPerPass": {
+              "$ref": "#/$defs/DashboardPolicyChange"
+            },
+            "scheduleOccurrenceRetentionDays": {
+              "$ref": "#/$defs/DashboardPolicyChange"
+            },
+            "statisticsRetentionDays": {
+              "$ref": "#/$defs/DashboardPolicyChange"
+            },
+            "statisticsRowsPerPass": {
+              "$ref": "#/$defs/DashboardPolicyChange"
+            },
+            "taskEventRetentionDays": {
+              "$ref": "#/$defs/DashboardPolicyChange"
+            },
+            "taskIdentityRetentionDays": {
+              "$ref": "#/$defs/DashboardPolicyChange"
+            },
+            "terminalOutcomeRetentionDays": {
+              "$ref": "#/$defs/DashboardPolicyChange"
+            },
+            "terminalTaskPruneLimit": {
+              "$ref": "#/$defs/DashboardPolicyChange"
+            }
+          }
+        },
         "updatedAt": {
           "type": "string"
         }
@@ -4655,6 +4758,7 @@
         "occurrenceRowsPerPass",
         "statisticsRowsPerPass",
         "provenance",
+        "lastChanges",
         "updatedAt"
       ]
     },

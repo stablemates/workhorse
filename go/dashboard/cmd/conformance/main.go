@@ -41,7 +41,10 @@ func main() {
 		panic(err)
 	}
 	defer sqlDatabase.Close()
-	harness := func(executor workhorse.Executor, readOnly bool) http.Handler {
+	// mode is "writable", "read-only", or "redact-error-stacks", the writable deployment with
+	// RedactErrorStacks on.
+	harness := func(executor workhorse.Executor, mode string) http.Handler {
+		readOnly := mode == "read-only"
 		procedures := map[string]dashboard.Procedure{}
 		if !readOnly {
 			queue := workhorse.NewQueue(executor, "conformance-demo")
@@ -68,7 +71,7 @@ func main() {
 			Authorize: func(*http.Request) dashboard.Authorization {
 				return dashboard.Authorization{Principal: &dashboard.Principal{Actor: "conformance"}}
 			},
-			Path: "/workhorse", Environment: "conformance", ConfiguredWorkers: []string{"conformance-worker"}, MaintenanceLoops: map[string]int{"tickIntervalMs": 1000}, ReadOnly: readOnly, Procedures: procedures, AllowedHosts: []string{"dashboard.conformance.test"},
+			Path: "/workhorse", Environment: "conformance", ConfiguredWorkers: []string{"conformance-worker"}, MaintenanceLoops: map[string]int{"tickIntervalMs": 1000}, ReadOnly: readOnly, RedactErrorStacks: mode == "redact-error-stacks", Procedures: procedures, AllowedHosts: []string{"dashboard.conformance.test"},
 			// The statementTimeoutMs of the conformance harness.
 			StatementTimeout: 5 * time.Second})
 		if err != nil {
@@ -76,23 +79,29 @@ func main() {
 		}
 		return handler
 	}
-	pgxWritable, pgxReadOnly := harness(workhorse.NewPGXExecutor(pool), false), harness(workhorse.NewPGXExecutor(pool), true)
-	sqlWritable, sqlReadOnly := harness(workhorse.NewSQLExecutor(sqlDatabase), false), harness(workhorse.NewSQLExecutor(sqlDatabase), true)
+	deployments := func(executor workhorse.Executor) map[string]http.Handler {
+		return map[string]http.Handler{
+			"writable":            harness(executor, "writable"),
+			"read-only":           harness(executor, "read-only"),
+			"redact-error-stacks": harness(executor, "redact-error-stacks"),
+		}
+	}
+	pgxHosts, sqlHosts := deployments(workhorse.NewPGXExecutor(pool)), deployments(workhorse.NewSQLExecutor(sqlDatabase))
 	server := &http.Server{
 		// Requests inherit the shutdown context so a handler blocked in a query cannot hold shutdown open.
 		BaseContext: func(net.Listener) context.Context { return ctx },
 		Handler: http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
 			// The fixture runner cannot set Host through fetch, so it names the request host here.
 			request.Host = request.Header.Get("X-Workhorse-Conformance-Host")
-			writable, readOnly := pgxWritable, pgxReadOnly
+			hosts := pgxHosts
 			if request.Header.Get("X-Workhorse-Executor") == "database-sql" {
-				writable, readOnly = sqlWritable, sqlReadOnly
+				hosts = sqlHosts
 			}
-			if request.Header.Get("X-Workhorse-Conformance-Mode") == "read-only" {
-				readOnly.ServeHTTP(response, request)
-			} else {
-				writable.ServeHTTP(response, request)
+			selected, ok := hosts[request.Header.Get("X-Workhorse-Conformance-Mode")]
+			if !ok {
+				selected = hosts["writable"]
 			}
+			selected.ServeHTTP(response, request)
 		})}
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {

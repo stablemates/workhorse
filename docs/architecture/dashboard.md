@@ -212,6 +212,7 @@ caller-owned Psycopg connection plus these arguments:
 - `authorize`, `path`, `environment`, `audit_actor`, `read_only`;
 - `browser_modules`, `configured_workers`, `maintenance_loops`, `allowed_hosts`;
 - `statement_timeout_ms`, the read bound (see [Read timeouts](#read-timeouts));
+- `redact_error_stacks` (see [Error-stack redaction](#error-stack-redaction));
 - the optional `enqueue_test` extension.
 
 The connection must have `autocommit=True`. The host rejects transactional connections. Thus a WSGI
@@ -296,6 +297,7 @@ durability summary after `dashboard_tasks_v1` or `dashboard_task_detail_v1` retu
 - `Authorize`, `Path`, `Environment`, `ReadOnly`;
 - `BrowserModules`, `ConfiguredWorkers`, `MaintenanceLoops`, `AllowedHosts`;
 - `StatementTimeout`, the read bound (see [Read timeouts](#read-timeouts));
+- `RedactErrorStacks` (see [Error-stack redaction](#error-stack-redaction));
 - optional `Procedures` extensions.
 
 A non-empty `AllowedHosts` refuses any other `Request.Host` with 421 before `Authorize` runs.
@@ -330,6 +332,7 @@ authorize)` returns a `Dashboard.Builder` with these options and defaults:
 | `setSchedulePaused` | unset, so the procedure 403 |
 | `codec`             | `JsonCodec.standard()`      |
 | `statementTimeout`  | `Duration.ofSeconds(15)`    |
+| `redactErrorStacks` | `false`                     |
 
 The Kotlin module adds no dashboard API. A Kotlin application uses the Java API.
 
@@ -422,6 +425,7 @@ backend reads `HttpRequest.PathBase`, so an application under a path base still 
 | `SetSchedulePaused` | unset, so the procedure 403                        |
 | `Json`              | `null`, which selects `JsonSerializerDefaults.Web` |
 | `StatementTimeout`  | `TimeSpan.FromSeconds(15)`                         |
+| `RedactErrorStacks` | `false`                                            |
 
 `Authorize` is a `Func<HttpContext, ValueTask<DashboardAuthorization>>`. `DashboardAuthorization` is
 a closed result family with four factory methods: `Principal(actor, claims)`, `Allow()`, `Deny()`,
@@ -699,6 +703,15 @@ reach before the runtime and outcome joins read a row. It selects the first scop
    `task_query_type_created_idx`.
 3. Otherwise, the function adds no scope, and `task_rows` reads `dashboard_task_v1` directly.
 
+The statement names the `filtered` CTE two times: in `candidate_ids` and in the exact-count branch
+of `total`. The branch stays in the statement also when the request asks for no count. Thus
+PostgreSQL materializes `filtered` for each request, and the `LIMIT` of `candidate_ids` cannot reach
+the filter. A request with no tag, queue, or task type therefore reads each task, also for its first
+page. The SPA does not use this path: it reads the task list through `dashboard_tasks_cursor_v1`
+(see [Cursor task listing](#cursor-task-listing)). The read time bound of each host ends a read that
+takes too long (see [Read timeouts](#read-timeouts)). A script that calls `tasks` should name a
+scope or use `tasksCursor`.
+
 The function composes only fixed SQL fragments. The request stays in the bound JSON parameter, so the
 planner sees each filter as a value it can seek. The filter list below the scope still applies
 every predicate. A request that names both a tag and a queue therefore seeks the tag index and
@@ -905,12 +918,24 @@ invoice.send`. Keyboard and screen-reader users open the event through that butt
 
 ### Event detail
 
-`dashboard_event_detail_v1(p_input jsonb)` accepts the stable `event:<UUIDv7 event_id>` or
-`attempt:<UUIDv7 attempt_id>` identity. It returns the complete version 1 event-detail JSON
-document, which includes attempt timing and error fields.
+`dashboard_event_detail_v1(p_input jsonb)` accepts each identity that the event feed lists:
+`event:<uuid>` or `attempt:<uuid>`, with the UUID in canonical hexadecimal form. It returns the
+complete version 1 event-detail JSON document, which includes attempt timing and error fields.
 
-A malformed or missing identity returns SQL `NULL`. Backends map SQL `NULL` to the version 1
-`NOT_FOUND` error.
+- A recorded event or attempt has a version 7 UUID, its `event_id` or `attempt_id`.
+- A record that `dashboard_task_event_v1` or `dashboard_attempt_history_v1` derives for a fast-tier
+  task has `md5(task_id || ':' || attempt || ':' || kind)::uuid` as its identity. An MD5 value can
+  have any version and variant digits, so the input schema, each host, the SPA, and the SQL check
+  accept any UUID in canonical form.
+
+A malformed or missing identity, or one that names no record, returns SQL `NULL`. Backends map SQL
+`NULL` to the version 1 `NOT_FOUND` error. An input that the request schema refuses returns
+`BAD_REQUEST` before the function runs.
+
+The lookup of a derived identity reads each row of `fast_task_runtime` and `fast_task_outcome`, and
+computes the identity of each row, because no index holds a derived identity. The lookup of a
+version 7 identity reads the same rows, because the planner applies the identity filter to each
+branch of the two views. This was true before derived identities were accepted.
 
 Event details use the same attempt-linked worker resolution as the event listing.
 
@@ -1603,6 +1628,80 @@ complete version 1 settings-page JSON document.
 - It includes registry rows whose heartbeat is within the greater of 30 seconds or three registry
   intervals.
 - Policy values include application defaults, operator provenance, and `updatedAt`.
+- `maintenance.lastChanges` and `retention.lastChanges` hold the last audited operator change of
+  each setting that has one. The provenance entries keep their released shape.
+
+#### Audit of each settings change
+
+An operator change of the retention or the maintenance policy keeps its actor, reason, and request
+ID, so the Settings page can show who owns the current value and why. The audit is kept for each
+setting, because each policy table holds one row and settings change at different times.
+
+**Example.** An operator overrides `taskEventRetentionDays` and gives the reason "shrink history".
+The Settings page then shows "Overridden by" that operator, the time, and the reason, beside the
+operator value. A later revert of that setting shows "Reverted by" the operator who reverted it.
+
+The four mutations `overrideMaintenancePolicy`, `revertMaintenancePolicy`,
+`overrideRetentionPolicy`, and `revertRetentionPolicy` take a `definition` or `settings` and an
+`audit`. Each embedded host calls `override_maintenance_policy_v2`, `revert_maintenance_policy_v2`,
+`override_retention_policy_v2`, or `revert_retention_policy_v2`. The actor is the authenticated actor
+of the request, as for queue control (see [Mutations and attribution](#mutations-and-attribution)).
+The reason and the request ID come from the `audit` of the request. Each mutation is one statement
+on the executor of the host. It opens no transaction, so it cannot commit or roll back work of the
+caller. The TypeScript host passes the audit to the `DashboardSettingsController` of the
+application, which owns the write. The controller of the demo calls the four audited functions in
+its operator transaction. The `settings-audit` scenario of `dashboard/v1/conformance.json`
+fixes `lastChanges` after an override and after a revert for each backend.
+
+<details>
+<summary>Reference: the operator audit of a policy setting</summary>
+
+`retention_policy.operator_audit` and `maintenance_policy.operator_audit` are nullable `jsonb`
+columns. Each maps a column name to the entry of the last operator change of that setting.
+`policy_audit_entry_internal_v1` checks the audit and builds the entry with the rules of
+`set_queue_paused_v1`:
+
+| Key                | Value                                                                    |
+| ------------------ | ------------------------------------------------------------------------ |
+| `action`           | `override` or `revert`                                                   |
+| `actor`            | 1 to 200 characters                                                      |
+| `reason`           | 1 to 2000 characters                                                     |
+| `requestIdPreview` | a masked preview; the raw request ID is never stored                     |
+| `requestIdDigest`  | the first 12 hex digits of the SHA-256 of the request ID                 |
+| `requestIdLength`  | the length of the request ID, which has 1 to 512 UTF-8 bytes             |
+| `changedAt`        | the `updated_at` of the row after the change, in UTC, to the microsecond |
+
+The `_v2` function checks the audit before it changes a value. It then calls its `_v1` function,
+which takes the row lock and changes the values, and it writes the entries under that lock.
+
+Each statement that writes a policy value keeps each entry true for the value that it describes:
+
+| Statement                                                  | Effect on the entries                                                                                                        |
+| ---------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
+| `override_*_policy_v2`, `revert_*_policy_v2`               | writes the entry of each setting that it changes                                                                             |
+| `override_*_policy_v1`, `revert_*_policy_v1`               | removes the entry of each setting that it changes                                                                            |
+| `sync_*_policy_v1` with `p_force`                          | removes every entry                                                                                                          |
+| `sync_*_policy_v1` without `p_force`                       | removes the entry of each setting whose effective value it changes; it changes no operator value, so an override entry stays |
+| the seed `INSERT ... ON CONFLICT DO NOTHING` of the schema | writes no entry                                                                                                              |
+
+An entry stays until the next change of its setting replaces it: an audited override or revert
+writes a new entry, and a v1 change, a forced sync, or a sync that changes its effective value
+removes it. Thus the entry of a revert stays
+after the revert, so the Settings page can show who removed an override and why.
+
+`dashboard_settings_v1` shows an entry as `lastChanges.<setting>` of its policy only when its action
+matches the source of the setting: `override` for an operator value, `revert` for an application
+value. Otherwise the setting has no key in `lastChanges`. `changedAt` is shown to the millisecond.
+`lastChanges` is a sibling of `provenance`, not a key inside each provenance entry, because a new
+key there changes a type of the generated Go binding in a way that the Go API check reports as a
+break.
+
+The column is ordinary table data. An entry names no OID, backend ID, or transaction ID, so a
+restore onto another server keeps it true.
+
+More detail: [Schema lifecycle](../schema-lifecycle.md#when-a-function-body-change-keeps-its-suffix)
+
+</details>
 
 ### Read-surface benchmark
 
@@ -1798,7 +1897,45 @@ suites import the module by relative path, as they already do for `readDashboard
 
 #### Error-stack redaction
 
-Three readers take a `redactErrorStacks` argument and default it to false:
+A failed attempt stores the worker error with its stack. A stack can show container paths, package
+versions, and source lines, so a host can withhold it from people who read the dashboard. Each host
+has an option for this, and each option is off by default:
+
+| Host       | Option                                  |
+| ---------- | --------------------------------------- |
+| TypeScript | `redactErrorStacks`                     |
+| Python     | `redact_error_stacks`                   |
+| Go         | `HandlerOptions.RedactErrorStacks`      |
+| Rust       | `DashboardOptions::redact_error_stacks` |
+| Ruby       | `redact_error_stacks:`                  |
+| JVM        | `Dashboard.Builder.redactErrorStacks`   |
+| .NET       | `DashboardOptions.RedactErrorStacks`    |
+
+PostgreSQL does the redaction. `dashboard_task_detail_v1`, `dashboard_events_v1`, and
+`dashboard_event_detail_v1` read the `redactErrorStacks` input key. If it is true, they remove `stack`
+from each error envelope of their document through `dashboard_error_without_stack_v1` and
+`dashboard_details_without_stack_v1`:
+
+- task detail: `current.runtime.error`, `current.outcome.error`, `current.error`, each
+  `childLineage.records[].error`, each `batchExecutions[].members[].error`, each `attempts[].error`,
+  and `details.error` of each `events[]` entry;
+- the event feed: `details.error` of each event;
+- event detail: `error`, and `details.error`.
+
+Each other key stays as stored. A stored error keeps `stack` at its top level only. The event search
+of `dashboard_events_v1` then matches the details without the stack, so a search cannot find the text
+of a withheld stack. An input without the key gets the same document as before.
+
+The key is a setting of the host, not of the request. Each host drops each input key that the
+request schema does not declare (see [Undeclared input keys](#undeclared-input-keys)). Then it sets
+`redactErrorStacks` from its own option. A request that sends `redactErrorStacks: false` therefore
+cannot turn the redaction off, and a request that sends `true` cannot turn it on. The
+`error-stacks` scenario of `dashboard/v1/conformance.json` proves both for each backend. Its
+`redact-error-stacks` exchanges run against the writable deployment with the option on.
+
+The TypeScript host sends the key only when its option is on. It also removes the stacks from the
+returned document itself, as it did before the procedures took the key. Three readers take a
+`redactErrorStacks` argument and default it to false:
 
 - `readDashboardTaskDetail`, called directly, returns persisted worker stacks that the mounted
   dashboard never shows.

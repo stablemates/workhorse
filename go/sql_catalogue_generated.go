@@ -7,8 +7,8 @@ const (
 	ProtocolVersion        = 5
 	minimumProtocolVersion = 5
 	maximumProtocolVersion = 5
-	minimumSchemaVersion   = 97
-	maximumSchemaVersion   = 97
+	minimumSchemaVersion   = 98
+	maximumSchemaVersion   = 98
 	// MaxEnqueueBatchSize is PostgreSQL's atomic enqueue batch limit.
 	MaxEnqueueBatchSize      = 1000
 	defaultTaskValueMaxBytes = 1048576
@@ -337,8 +337,14 @@ var internalStatementRegistry = map[string]string{
          $6::integer, $7::integer, $8::integer, $9::integer, $10::integer,
          $11::integer, $12::boolean
        ) policy`,
-	"override_retention_policy_v1":   `SELECT (policy).* FROM workhorse.override_retention_policy_v1($1::jsonb) policy`,
-	"revert_retention_policy_v1":     `SELECT (policy).* FROM workhorse.revert_retention_policy_v1($1::text[]) policy`,
+	"override_retention_policy_v1": `SELECT (policy).* FROM workhorse.override_retention_policy_v1($1::jsonb) policy`,
+	"override_retention_policy_v2": `SELECT (policy).* FROM workhorse.override_retention_policy_v2(
+         $1::jsonb, $2::text, $3::text, $4::text
+       ) policy`,
+	"revert_retention_policy_v1": `SELECT (policy).* FROM workhorse.revert_retention_policy_v1($1::text[]) policy`,
+	"revert_retention_policy_v2": `SELECT (policy).* FROM workhorse.revert_retention_policy_v2(
+         $1::text[], $2::text, $3::text, $4::text
+       ) policy`,
 	"dashboard_retention_preview_v1": `SELECT workhorse.dashboard_retention_preview_v1($1::jsonb) AS result`,
 	"dashboard_task_counts_v1":       `SELECT workhorse.dashboard_task_counts_v1('{}'::jsonb) AS result`,
 	"dashboard_task_facets_v1":       `SELECT workhorse.dashboard_task_facets_v1($1::jsonb) AS result`,
@@ -364,9 +370,16 @@ var internalStatementRegistry = map[string]string{
 	"override_maintenance_policy_v1": `SELECT (policy).* FROM workhorse.override_maintenance_policy_v1(
          $1::text, $2::integer, $3::integer, $4::time, $5::integer, $6::integer, $7::integer
        ) policy`,
+	"override_maintenance_policy_v2": `SELECT (policy).* FROM workhorse.override_maintenance_policy_v2(
+         $1::text, $2::integer, $3::integer, $4::time, $5::integer, $6::integer, $7::integer,
+         $8::text, $9::text, $10::text
+       ) policy`,
 	"revert_maintenance_policy_v1": `SELECT (policy).* FROM workhorse.revert_maintenance_policy_v1($1::text[]) policy`,
-	"get_maintenance_policy_v1":    `SELECT (policy).* FROM workhorse.get_maintenance_policy_v1() policy`,
-	"set_worker_paused_v1":         `SELECT * FROM workhorse.set_worker_paused_v1($1::text, $2::boolean, $3::text, $4::text, $5::text)`,
+	"revert_maintenance_policy_v2": `SELECT (policy).* FROM workhorse.revert_maintenance_policy_v2(
+         $1::text[], $2::text, $3::text, $4::text
+       ) policy`,
+	"get_maintenance_policy_v1": `SELECT (policy).* FROM workhorse.get_maintenance_policy_v1() policy`,
+	"set_worker_paused_v1":      `SELECT * FROM workhorse.set_worker_paused_v1($1::text, $2::boolean, $3::text, $4::text, $5::text)`,
 	"worker_registry__worker_registry": `SELECT worker_id, instance_id, hostname, pid, queue_names, schedule_namespaces, queue_name, concurrency, active_slots, draining, paused, paused_by,
               paused_reason, paused_at, started_at, last_heartbeat_at
          FROM workhorse.worker_registry

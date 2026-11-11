@@ -165,7 +165,7 @@ class Stablemates::Workhorse::ContractValidationError
 
 class Stablemates::Workhorse::Dashboard
   DEFAULT_STATEMENT_TIMEOUT_MS = 15000
-  def initialize(executor, authorize:, path: "/workhorse", environment: "development", audit_actor: nil, read_only: false, browser_modules: [], configured_workers: [], maintenance_loops: nil, enqueue_test: nil, set_schedule_paused: nil, allowed_hosts: [], procedures: {}, statement_timeout_ms: DEFAULT_STATEMENT_TIMEOUT_MS)
+  def initialize(executor, authorize:, path: "/workhorse", environment: "development", audit_actor: nil, read_only: false, browser_modules: [], configured_workers: [], maintenance_loops: nil, enqueue_test: nil, set_schedule_paused: nil, allowed_hosts: [], procedures: {}, statement_timeout_ms: DEFAULT_STATEMENT_TIMEOUT_MS, redact_error_stacks: false)
   def base_path
   def call(env)
   def owns?(path)

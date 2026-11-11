@@ -96,6 +96,7 @@ final class Backend {
   private final List<String> configuredWorkers;
   private final Map<String, @Nullable Object> maintenanceLoops;
   private final boolean readOnly;
+  private final boolean redactErrorStacks;
   private final ReentrantLock healthLock = new ReentrantLock();
   private long healthExpiresAt;
   private @Nullable Map<String, @Nullable Object> health;
@@ -106,7 +107,8 @@ final class Backend {
       List<String> configuredWorkers,
       Map<String, @Nullable Object> maintenanceLoops,
       boolean readOnly,
-      Duration statementTimeout) {
+      Duration statementTimeout,
+      boolean redactErrorStacks) {
     this.connections = connections;
     this.statementTimeoutMs = Long.toString(statementTimeout.toMillis());
     this.admin = new Admin(connections);
@@ -115,6 +117,7 @@ final class Backend {
     this.configuredWorkers = List.copyOf(configuredWorkers);
     this.maintenanceLoops = maintenanceLoops;
     this.readOnly = readOnly;
+    this.redactErrorStacks = redactErrorStacks;
   }
 
   /** Procedure name to its built-in answer. */
@@ -155,11 +158,15 @@ final class Backend {
                 SqlCatalogue.DASHBOARD_HUMAN_WAITS_V1,
                 orderedMap(
                     "canComplete", !readOnly, "canSignal", !readOnly, "health", queueHealth())));
-    procedures.put("events", (input, actor) -> result(SqlCatalogue.DASHBOARD_EVENTS_V1, input));
+    procedures.put(
+        "events",
+        (input, actor) -> result(SqlCatalogue.DASHBOARD_EVENTS_V1, withStackRedaction(input)));
     procedures.put(
         "eventDetail",
         (input, actor) ->
-            found(result(SqlCatalogue.DASHBOARD_EVENT_DETAIL_V1, input), "Event not found"));
+            found(
+                result(SqlCatalogue.DASHBOARD_EVENT_DETAIL_V1, withStackRedaction(input)),
+                "Event not found"));
     procedures.put("taskDetail", (input, actor) -> taskDetail(input));
     // Task detail withholds a large checkpoint value, payload, or result and reports its size, so
     // an operator opens that one value with these two procedures.
@@ -192,14 +199,14 @@ final class Backend {
     procedures.put("setQueueTier", this::setQueueTier);
     procedures.put("setQueueHistory", (input, actor) -> setQueueHistory(input));
     procedures.put("setWorkerPaused", this::setWorkerPaused);
-    procedures.put("overrideMaintenancePolicy", (input, actor) -> overrideMaintenance(input));
+    procedures.put("overrideMaintenancePolicy", this::overrideMaintenance);
     procedures.put(
         "revertMaintenancePolicy",
-        (input, actor) -> revert(SqlCatalogue.REVERT_MAINTENANCE_POLICY_V1, input));
-    procedures.put("overrideRetentionPolicy", (input, actor) -> overrideRetention(input));
+        (input, actor) -> revert(SqlCatalogue.REVERT_MAINTENANCE_POLICY_V2, input, actor));
+    procedures.put("overrideRetentionPolicy", this::overrideRetention);
     procedures.put(
         "revertRetentionPolicy",
-        (input, actor) -> revert(SqlCatalogue.REVERT_RETENTION_POLICY_V1, input));
+        (input, actor) -> revert(SqlCatalogue.REVERT_RETENTION_POLICY_V2, input, actor));
     procedures.put("runTaskNow", this::runTaskNow);
     procedures.put("cancelTask", this::cancelTask);
     procedures.put("signalTask", this::signalTask);
@@ -237,8 +244,18 @@ final class Backend {
     return result(SqlCatalogue.DASHBOARD_TASKS_V1, query);
   }
 
+  /**
+   * Sets the {@code redactErrorStacks} key of a history read from the host option. The host has
+   * already dropped each input key that the request schema does not declare, so a request cannot
+   * set it.
+   */
+  private Map<String, @Nullable Object> withStackRedaction(
+      Map<String, ? extends @Nullable Object> input) {
+    return with(input, "redactErrorStacks", redactErrorStacks);
+  }
+
   private Object taskDetail(Map<String, ? extends @Nullable Object> input) {
-    Map<String, @Nullable Object> query = new LinkedHashMap<>(input);
+    Map<String, @Nullable Object> query = withStackRedaction(input);
     query.put("canSignal", !readOnly);
     query.put("canCompleteHumanWait", !readOnly);
     query.put("health", queueHealth());
@@ -296,30 +313,50 @@ final class Backend {
         result.orElseThrow(() -> DashboardRpcException.notFound("Worker not found")).paused());
   }
 
-  private @Nullable Object overrideMaintenance(Map<String, ? extends @Nullable Object> input) {
+  /**
+   * Overrides maintenance settings with their audit. The actor is the authenticated actor, as for
+   * queue control, and the reason and the request ID come from the audit of the request.
+   */
+  private @Nullable Object overrideMaintenance(
+      Map<String, ? extends @Nullable Object> input, String actor) {
     Map<String, @Nullable Object> definition = object(input, "definition");
-    @Nullable Object[] settings = new @Nullable Object[MAINTENANCE_SETTINGS.size()];
-    for (int index = 0; index < settings.length; index++) {
-      settings[index] = textOf(definition.get(MAINTENANCE_SETTINGS.get(index)));
+    AdminAudit audit = audit(input, actor);
+    int count = MAINTENANCE_SETTINGS.size();
+    @Nullable Object[] parameters = new @Nullable Object[count + 3];
+    for (int index = 0; index < count; index++) {
+      parameters[index] = textOf(definition.get(MAINTENANCE_SETTINGS.get(index)));
     }
-    run(SqlCatalogue.OVERRIDE_MAINTENANCE_POLICY_V1, settings);
+    parameters[count] = audit.actor();
+    parameters[count + 1] = audit.reason();
+    parameters[count + 2] = audit.requestId();
+    run(SqlCatalogue.OVERRIDE_MAINTENANCE_POLICY_V2, parameters);
     return null;
   }
 
-  private @Nullable Object overrideRetention(Map<String, ? extends @Nullable Object> input) {
+  private @Nullable Object overrideRetention(
+      Map<String, ? extends @Nullable Object> input, String actor) {
     Map<String, @Nullable Object> overrides = new LinkedHashMap<>();
     object(input, "definition").forEach((name, value) -> overrides.put(snake(name), value));
-    run(SqlCatalogue.OVERRIDE_RETENTION_POLICY_V1, Json.write(overrides));
+    AdminAudit audit = audit(input, actor);
+    run(
+        SqlCatalogue.OVERRIDE_RETENTION_POLICY_V2,
+        Json.write(overrides),
+        audit.actor(),
+        audit.reason(),
+        audit.requestId());
     return null;
   }
 
   private @Nullable Object revert(
-      SqlCatalogue.Statement statement, Map<String, ? extends @Nullable Object> input) {
+      SqlCatalogue.Statement statement,
+      Map<String, ? extends @Nullable Object> input,
+      String actor) {
     List<String> settings = new ArrayList<>();
     for (Object name : list(input, "settings")) {
       settings.add(snake((String) name));
     }
-    run(statement, (Object) Sql.textArray(settings));
+    AdminAudit audit = audit(input, actor);
+    run(statement, Sql.textArray(settings), audit.actor(), audit.reason(), audit.requestId());
     return null;
   }
 

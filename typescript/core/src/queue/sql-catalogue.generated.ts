@@ -3,9 +3,9 @@ export const PROTOCOL_VERSION = 5;
 export const MINIMUM_PROTOCOL_VERSION = 5;
 export const MAXIMUM_PROTOCOL_VERSION = 5;
 export const WORKHORSE_SCHEMA_BASELINE_VERSION = 6;
-export const WORKHORSE_SCHEMA_VERSION = 97;
-export const MINIMUM_SCHEMA_VERSION = 97;
-export const MAXIMUM_SCHEMA_VERSION = 97;
+export const WORKHORSE_SCHEMA_VERSION = 98;
+export const MINIMUM_SCHEMA_VERSION = 98;
+export const MAXIMUM_SCHEMA_VERSION = 98;
 export const DEFAULT_TASK_VALUE_MAX_BYTES = 1048576;
 export const MAX_ENQUEUE_BATCH_SIZE = 1000;
 
@@ -227,8 +227,12 @@ export const SQL_STATEMENTS = {
     "SELECT (policy).* FROM workhorse.sync_retention_policy_v1(\n         $1::integer, $2::integer, $3::integer, $4::integer, $5::integer,\n         $6::integer, $7::integer, $8::integer, $9::integer, $10::integer,\n         $11::integer, $12::boolean\n       ) policy",
   override_retention_policy_v1:
     "SELECT (policy).* FROM workhorse.override_retention_policy_v1($1::jsonb) policy",
+  override_retention_policy_v2:
+    "SELECT (policy).* FROM workhorse.override_retention_policy_v2(\n         $1::jsonb, $2::text, $3::text, $4::text\n       ) policy",
   revert_retention_policy_v1:
     "SELECT (policy).* FROM workhorse.revert_retention_policy_v1($1::text[]) policy",
+  revert_retention_policy_v2:
+    "SELECT (policy).* FROM workhorse.revert_retention_policy_v2(\n         $1::text[], $2::text, $3::text, $4::text\n       ) policy",
   dashboard_retention_preview_v1:
     "SELECT workhorse.dashboard_retention_preview_v1($1::jsonb) AS result",
   dashboard_task_counts_v1: "SELECT workhorse.dashboard_task_counts_v1('{}'::jsonb) AS result",
@@ -253,8 +257,12 @@ export const SQL_STATEMENTS = {
     "SELECT (policy).* FROM workhorse.sync_maintenance_policy_v1(\n         $1::text, $2::integer, $3::integer, $4::time, $5::integer, $6::integer, $7::integer,\n         $8::boolean\n       ) policy",
   override_maintenance_policy_v1:
     "SELECT (policy).* FROM workhorse.override_maintenance_policy_v1(\n         $1::text, $2::integer, $3::integer, $4::time, $5::integer, $6::integer, $7::integer\n       ) policy",
+  override_maintenance_policy_v2:
+    "SELECT (policy).* FROM workhorse.override_maintenance_policy_v2(\n         $1::text, $2::integer, $3::integer, $4::time, $5::integer, $6::integer, $7::integer,\n         $8::text, $9::text, $10::text\n       ) policy",
   revert_maintenance_policy_v1:
     "SELECT (policy).* FROM workhorse.revert_maintenance_policy_v1($1::text[]) policy",
+  revert_maintenance_policy_v2:
+    "SELECT (policy).* FROM workhorse.revert_maintenance_policy_v2(\n         $1::text[], $2::text, $3::text, $4::text\n       ) policy",
   get_maintenance_policy_v1: "SELECT (policy).* FROM workhorse.get_maintenance_policy_v1() policy",
   set_worker_paused_v1:
     "SELECT * FROM workhorse.set_worker_paused_v1($1::text, $2::boolean, $3::text, $4::text, $5::text)",

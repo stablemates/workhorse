@@ -47,11 +47,13 @@ internal sealed class Backend
     private readonly JsonArray _configuredWorkers;
     private readonly JsonObject _maintenanceLoops;
     private readonly bool _readOnly;
+    private readonly bool _redactErrorStacks;
     private readonly Lock _healthGate = new();
     private (Task<string> Read, long ExpiresAt)? _health;
 
     internal Backend(NpgsqlDataSource dataSource, string environment, IReadOnlyList<string> configuredWorkers,
-        IReadOnlyDictionary<string, JsonElement> maintenanceLoops, bool readOnly, TimeSpan statementTimeout)
+        IReadOnlyDictionary<string, JsonElement> maintenanceLoops, bool readOnly, TimeSpan statementTimeout,
+        bool redactErrorStacks)
     {
         _dataSource = dataSource;
         _statements = new Statements(dataSource, statementTimeout);
@@ -62,6 +64,7 @@ internal sealed class Backend
         _maintenanceLoops = new JsonObject(maintenanceLoops.Select(loop =>
             KeyValuePair.Create(loop.Key, JsonSerializer.SerializeToNode(loop.Value))));
         _readOnly = readOnly;
+        _redactErrorStacks = redactErrorStacks;
     }
 
     /// <summary>
@@ -93,9 +96,12 @@ internal sealed class Backend
             new JsonObject { ["configuredWorkers"] = _configuredWorkers.DeepClone(), ["canManageWorkers"] = !_readOnly },
             token),
         ["humanWaits"] = HumanWaitsAsync,
-        ["events"] = (input, _, token) => ResultAsync(DashboardSqlCatalogue.DashboardEventsV1, input, token),
-        ["eventDetail"] = async (input, _, token) =>
-            Found(await ResultAsync(DashboardSqlCatalogue.DashboardEventDetailV1, input, token).ConfigureAwait(false), "Event not found"),
+        ["events"] = (input, _, token) =>
+            ResultAsync(DashboardSqlCatalogue.DashboardEventsV1, With(input, ("redactErrorStacks", _redactErrorStacks)), token),
+        ["eventDetail"] = async (input, _, token) => Found(
+            await ResultAsync(
+                DashboardSqlCatalogue.DashboardEventDetailV1, With(input, ("redactErrorStacks", _redactErrorStacks)), token).ConfigureAwait(false),
+            "Event not found"),
         ["taskDetail"] = TaskDetailAsync,
 
         // Task detail withholds a large checkpoint value, payload, or result and reports its size,
@@ -121,9 +127,9 @@ internal sealed class Backend
         ["setQueueHistory"] = SetQueueHistoryAsync,
         ["setWorkerPaused"] = SetWorkerPausedAsync,
         ["overrideMaintenancePolicy"] = OverrideMaintenanceAsync,
-        ["revertMaintenancePolicy"] = (input, _, token) => RevertAsync(DashboardSqlCatalogue.RevertMaintenancePolicyV1, input, token),
+        ["revertMaintenancePolicy"] = (input, actor, token) => RevertAsync(DashboardSqlCatalogue.RevertMaintenancePolicyV2, input, actor, token),
         ["overrideRetentionPolicy"] = OverrideRetentionAsync,
-        ["revertRetentionPolicy"] = (input, _, token) => RevertAsync(DashboardSqlCatalogue.RevertRetentionPolicyV1, input, token),
+        ["revertRetentionPolicy"] = (input, actor, token) => RevertAsync(DashboardSqlCatalogue.RevertRetentionPolicyV2, input, actor, token),
         ["runTaskNow"] = RunTaskNowAsync,
         ["cancelTask"] = CancelTaskAsync,
         ["signalTask"] = SignalTaskAsync,
@@ -177,7 +183,10 @@ internal sealed class Backend
     private async Task<string?> TaskDetailAsync(JsonObject input, string actor, CancellationToken cancellationToken)
     {
         var health = await QueueHealthAsync(cancellationToken).ConfigureAwait(false);
-        var query = With(input, ("canSignal", !_readOnly), ("canCompleteHumanWait", !_readOnly));
+        // The host has already dropped each input key that the request schema does not declare, so
+        // only the host option sets redactErrorStacks.
+        var query = With(
+            input, ("canSignal", !_readOnly), ("canCompleteHumanWait", !_readOnly), ("redactErrorStacks", _redactErrorStacks));
         query["health"] = health;
         return Found(await ResultAsync(DashboardSqlCatalogue.DashboardTaskDetailV1, query, cancellationToken).ConfigureAwait(false), "Task not found");
     }
@@ -288,7 +297,7 @@ internal sealed class Backend
     private async Task<string?> OverrideMaintenanceAsync(JsonObject input, string actor, CancellationToken cancellationToken)
     {
         var definition = ObjectOf(input, "definition");
-        var parameters = new NpgsqlParameter[MaintenanceSettings.Length];
+        var parameters = new NpgsqlParameter[MaintenanceSettings.Length + 3];
         for (var index = 0; index < MaintenanceSettings.Length; index++)
         {
             var value = definition[MaintenanceSettings[index]];
@@ -302,7 +311,13 @@ internal sealed class Backend
             };
         }
 
-        await _statements.RowsAsync(DashboardSqlCatalogue.OverrideMaintenancePolicyV1.Sql, parameters, cancellationToken).ConfigureAwait(false);
+        // The actor is the authenticated actor, as for queue control. The reason and the request
+        // ID come from the audit of the request.
+        var audit = Audit(input, actor);
+        parameters[MaintenanceSettings.Length] = Statements.Text(audit.Actor);
+        parameters[MaintenanceSettings.Length + 1] = Statements.Text(audit.Reason);
+        parameters[MaintenanceSettings.Length + 2] = Statements.Text(audit.RequestId);
+        await _statements.RowsAsync(DashboardSqlCatalogue.OverrideMaintenancePolicyV2.Sql, parameters, cancellationToken).ConfigureAwait(false);
         return null;
     }
 
@@ -314,12 +329,16 @@ internal sealed class Backend
             overrides[Snake(name)] = value?.DeepClone();
         }
 
+        var audit = Audit(input, actor);
         await _statements.RowsAsync(
-            DashboardSqlCatalogue.OverrideRetentionPolicyV1.Sql, [Statements.Text(Write(overrides))], cancellationToken).ConfigureAwait(false);
+            DashboardSqlCatalogue.OverrideRetentionPolicyV2.Sql,
+            [Statements.Text(Write(overrides)), Statements.Text(audit.Actor), Statements.Text(audit.Reason), Statements.Text(audit.RequestId)],
+            cancellationToken).ConfigureAwait(false);
         return null;
     }
 
-    private async Task<string?> RevertAsync(DashboardSqlCatalogue.Statement statement, JsonObject input, CancellationToken cancellationToken)
+    private async Task<string?> RevertAsync(
+        DashboardSqlCatalogue.Statement statement, JsonObject input, string actor, CancellationToken cancellationToken)
     {
         if (input["settings"] is not JsonArray settings)
         {
@@ -327,7 +346,11 @@ internal sealed class Backend
         }
 
         var names = settings.Select(setting => Snake(TextOf(setting))).ToArray();
-        await _statements.RowsAsync(statement.Sql, [Statements.TextArray(names)], cancellationToken).ConfigureAwait(false);
+        var audit = Audit(input, actor);
+        await _statements.RowsAsync(
+            statement.Sql,
+            [Statements.TextArray(names), Statements.Text(audit.Actor), Statements.Text(audit.Reason), Statements.Text(audit.RequestId)],
+            cancellationToken).ConfigureAwait(false);
         return null;
     }
 

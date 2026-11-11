@@ -23,17 +23,17 @@ internal static class DashboardSqlCatalogue
         "SELECT status, state, run_at FROM workhorse.run_task_now_v1($1::uuid, $2::text, $3::text, $4::text)",
         4);
 
-    /// <summary><c>override_retention_policy_v1</c> (internal).</summary>
-    internal static readonly Statement OverrideRetentionPolicyV1 = new(
-        "override_retention_policy_v1",
-        "SELECT (policy).* FROM workhorse.override_retention_policy_v1($1::jsonb) policy",
-        1);
+    /// <summary><c>override_retention_policy_v2</c> (internal).</summary>
+    internal static readonly Statement OverrideRetentionPolicyV2 = new(
+        "override_retention_policy_v2",
+        "SELECT (policy).* FROM workhorse.override_retention_policy_v2(\n         $1::jsonb, $2::text, $3::text, $4::text\n       ) policy",
+        4);
 
-    /// <summary><c>revert_retention_policy_v1</c> (internal).</summary>
-    internal static readonly Statement RevertRetentionPolicyV1 = new(
-        "revert_retention_policy_v1",
-        "SELECT (policy).* FROM workhorse.revert_retention_policy_v1($1::text[]) policy",
-        1);
+    /// <summary><c>revert_retention_policy_v2</c> (internal).</summary>
+    internal static readonly Statement RevertRetentionPolicyV2 = new(
+        "revert_retention_policy_v2",
+        "SELECT (policy).* FROM workhorse.revert_retention_policy_v2(\n         $1::text[], $2::text, $3::text, $4::text\n       ) policy",
+        4);
 
     /// <summary><c>dashboard_retention_preview_v1</c> (internal).</summary>
     internal static readonly Statement DashboardRetentionPreviewV1 = new(
@@ -137,24 +137,24 @@ internal static class DashboardSqlCatalogue
         "SELECT workhorse.dashboard_system_v1($1::jsonb) AS result",
         1);
 
-    /// <summary><c>override_maintenance_policy_v1</c> (internal).</summary>
-    internal static readonly Statement OverrideMaintenancePolicyV1 = new(
-        "override_maintenance_policy_v1",
-        "SELECT (policy).* FROM workhorse.override_maintenance_policy_v1(\n         $1::text, $2::integer, $3::integer, $4::time, $5::integer, $6::integer, $7::integer\n       ) policy",
-        7);
+    /// <summary><c>override_maintenance_policy_v2</c> (internal).</summary>
+    internal static readonly Statement OverrideMaintenancePolicyV2 = new(
+        "override_maintenance_policy_v2",
+        "SELECT (policy).* FROM workhorse.override_maintenance_policy_v2(\n         $1::text, $2::integer, $3::integer, $4::time, $5::integer, $6::integer, $7::integer,\n         $8::text, $9::text, $10::text\n       ) policy",
+        10);
 
-    /// <summary><c>revert_maintenance_policy_v1</c> (internal).</summary>
-    internal static readonly Statement RevertMaintenancePolicyV1 = new(
-        "revert_maintenance_policy_v1",
-        "SELECT (policy).* FROM workhorse.revert_maintenance_policy_v1($1::text[]) policy",
-        1);
+    /// <summary><c>revert_maintenance_policy_v2</c> (internal).</summary>
+    internal static readonly Statement RevertMaintenancePolicyV2 = new(
+        "revert_maintenance_policy_v2",
+        "SELECT (policy).* FROM workhorse.revert_maintenance_policy_v2(\n         $1::text[], $2::text, $3::text, $4::text\n       ) policy",
+        4);
 
     /// <summary>Every statement, in manifest order.</summary>
     internal static readonly IReadOnlyList<Statement> All =
     [
         RunTaskNowV1,
-        OverrideRetentionPolicyV1,
-        RevertRetentionPolicyV1,
+        OverrideRetentionPolicyV2,
+        RevertRetentionPolicyV2,
         DashboardRetentionPreviewV1,
         DashboardTaskCountsV1,
         DashboardTaskFacetsV1,
@@ -172,7 +172,7 @@ internal static class DashboardSqlCatalogue
         DashboardTaskValueV1,
         DashboardSettingsV1,
         DashboardSystemV1,
-        OverrideMaintenancePolicyV1,
-        RevertMaintenancePolicyV1,
+        OverrideMaintenancePolicyV2,
+        RevertMaintenancePolicyV2,
     ];
 }

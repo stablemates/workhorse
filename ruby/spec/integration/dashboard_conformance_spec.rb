@@ -145,12 +145,15 @@ RSpec.describe "Dashboard against the dashboard/v1 conformance fixtures" do
           {"paused" => row.fetch("paused") == "t"}
         })
       read_only_host = W::Dashboard.new(connection, **options, read_only: true)
+      # The writable deployment with the stack redaction option on.
+      redacting_host = W::Dashboard.new(connection, **options, redact_error_stacks: true)
+      hosts = {"writable" => host, "read-only" => read_only_host, "redact-error-stacks" => redacting_host}
 
       # The scenarios run strictly in order, so a later seed runs after the earlier exchanges.
       fixture.fetch("scenarios").drop(1).each do |scenario|
         scenario.fetch("seed", []).each { |step| execute_step(connection, step, references) }
         scenario.fetch("exchanges", []).each do |exchange|
-          exchange!((exchange["mode"] == "read-only") ? read_only_host : host, exchange, references)
+          exchange!(hosts.fetch(exchange.fetch("mode", "writable")), exchange, references)
         end
       end
 

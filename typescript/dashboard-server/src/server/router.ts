@@ -172,12 +172,12 @@ const cancellationAuditSchema = z.object({
 const taskDetailInput = z.object({ id: z.uuid() });
 const checkpointValueInput = z.object({ id: z.uuid(), name: z.string().trim().min(1).max(200) });
 const taskValueInput = z.object({ id: z.uuid(), kind: z.enum(dashboardTaskValueKinds) });
+// A recorded event or attempt has a version 7 UUID. A record that the dashboard views derive for a
+// fast-tier task has an MD5 value cast to uuid, with any version and variant digits.
 const eventDetailInput = z.object({
   id: z
     .string()
-    .regex(
-      /^(event|attempt):[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i,
-    ),
+    .regex(/^(event|attempt):[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i),
 });
 const taskFilter = z.enum(dashboardTaskFilters);
 const taskSort = z.enum(dashboardTaskSorts);

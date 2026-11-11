@@ -40,7 +40,11 @@ export interface DashboardConformanceSeedStep {
   capture?: Record<string, string>;
 }
 
-export type DashboardConformanceMode = "writable" | "read-only";
+/**
+ * The backend deployment that answers an exchange. "redact-error-stacks" is the writable
+ * deployment with the stack redaction option of the host on.
+ */
+export type DashboardConformanceMode = "writable" | "read-only" | "redact-error-stacks";
 export type DashboardConformanceOrigin = "same" | "cross" | "none";
 export type DashboardConformanceHost = "same" | "foreign";
 

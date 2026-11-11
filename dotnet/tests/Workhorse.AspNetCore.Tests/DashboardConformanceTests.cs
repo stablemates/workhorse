@@ -39,12 +39,13 @@ public sealed partial class DashboardConformanceTests(ScratchDatabase database) 
         }
 
         var demo = new Queue(dataSource, new QueueOptions { DefaultQueue = "conformance-demo" });
-        DashboardOptions Options(bool readOnly) => new()
+        DashboardOptions Options(bool readOnly, bool redactErrorStacks = false) => new()
         {
             DataSource = dataSource,
             Authorize = _ => ValueTask.FromResult(DashboardAuthorization.Principal(Text(harness["authenticatedActor"]), null)),
             Environment = Text(harness["environment"]),
             ReadOnly = readOnly,
+            RedactErrorStacks = redactErrorStacks,
             ConfiguredWorkers = [.. harness["configuredWorkers"]!.AsArray().Select(Text)],
             MaintenanceLoops = harness["maintenanceLoops"]!.AsObject()
                 .ToDictionary(loop => loop.Key, loop => JsonSerializer.SerializeToElement(loop.Value), StringComparer.Ordinal),
@@ -72,6 +73,9 @@ public sealed partial class DashboardConformanceTests(ScratchDatabase database) 
 
         await using var writable = await DashboardServer.StartAsync(app => app.MapWorkhorseDashboard(Text(harness["basePath"]), Options(readOnly: false)));
         await using var readOnly = await DashboardServer.StartAsync(app => app.MapWorkhorseDashboard(Text(harness["basePath"]), Options(readOnly: true)));
+        // The writable deployment with the stack redaction option on.
+        await using var redacting = await DashboardServer.StartAsync(
+            app => app.MapWorkhorseDashboard(Text(harness["basePath"]), Options(readOnly: false, redactErrorStacks: true)));
         // Each exchange that fails is reported, so one run names every difference from the contract.
         var count = 0;
         var failures = new List<string>();
@@ -88,7 +92,13 @@ public sealed partial class DashboardConformanceTests(ScratchDatabase database) 
                 var exchange = item!.AsObject();
                 try
                 {
-                    await ExchangeAsync(exchange["mode"]?.GetValue<string>() == "read-only" ? readOnly : writable, exchange, harness);
+                    var server = (exchange["mode"]?.GetValue<string>() ?? "writable") switch
+                    {
+                        "read-only" => readOnly,
+                        "redact-error-stacks" => redacting,
+                        _ => writable,
+                    };
+                    await ExchangeAsync(server, exchange, harness);
                 }
                 catch (Exception error) when (error is Xunit.Sdk.IAssertionException or KeyNotFoundException or InvalidOperationException)
                 {

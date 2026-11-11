@@ -1,20 +1,51 @@
 import type {
   CancelStatus,
   MaintenancePolicy,
+  MaintenancePolicySetting,
   RedriveStatus,
   Queue,
   QueueHealth,
   QueueHealthReason,
   RetentionPolicy,
+  RetentionPolicySetting,
   RetryPolicy,
   TaskState,
 } from "@stablemates/workhorse";
 
+/**
+ * The last operator change of one policy setting, from `operator_audit` of its policy table.
+ *
+ * An override describes an operator value, and a revert describes the return to the application
+ * value. The raw request ID is never stored: the change carries its preview, digest, and length.
+ */
+export interface DashboardPolicyChange {
+  action: "override" | "revert";
+  actor: string;
+  reason: string;
+  requestIdPreview: string;
+  requestIdDigest: string;
+  requestIdLength: number;
+  changedAt: string;
+}
+
+/**
+ * The last audited operator change of each setting of a policy, keyed by setting.
+ *
+ * A setting appears only when an audited change describes its current source: an override of an
+ * operator value, or a revert to the application value. The provenance of the setting keeps its
+ * shape, so this is a separate key.
+ */
+export type DashboardPolicyChanges<TSetting extends string> = Partial<
+  Record<TSetting, DashboardPolicyChange>
+>;
+
 export type DashboardMaintenancePolicy = Omit<MaintenancePolicy, "updatedAt"> & {
+  lastChanges: DashboardPolicyChanges<MaintenancePolicySetting>;
   updatedAt: string;
 };
 
 export type DashboardRetentionPolicy = Omit<RetentionPolicy, "updatedAt"> & {
+  lastChanges: DashboardPolicyChanges<RetentionPolicySetting>;
   updatedAt: string;
 };
 

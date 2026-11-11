@@ -138,7 +138,8 @@ public final class Dashboard implements Filter {
                 builder.configuredWorkers,
                 builder.maintenanceLoops,
                 builder.readOnly,
-                builder.statementTimeout)
+                builder.statementTimeout,
+                builder.redactErrorStacks)
             .procedures();
     Map<String, DashboardProcedure> added = new HashMap<>(builder.procedures);
     if (builder.enqueueTest != null) {
@@ -717,6 +718,7 @@ public final class Dashboard implements Filter {
     private Map<String, DashboardProcedure> procedures = Map.of();
     private JsonCodec codec = JsonCodec.standard();
     private Duration statementTimeout = Duration.ofSeconds(15);
+    private boolean redactErrorStacks;
 
     private Builder(ConnectionSource connections, DashboardAuthorizer authorize) {
       this.connections = Objects.requireNonNull(connections, "connections");
@@ -823,6 +825,17 @@ public final class Dashboard implements Filter {
         throw new IllegalArgumentException("statementTimeout must be at least 1 ms: " + timeout);
       }
       this.statementTimeout = timeout;
+      return this;
+    }
+
+    /**
+     * Removes the stack of each worker error from task detail, the event feed, and event detail,
+     * also from {@code details.error} of a {@code failed} or {@code retry_scheduled} event. The
+     * event search then does not match a withheld stack. A request cannot change it. Default {@code
+     * false}, which returns each error as stored.
+     */
+    public Builder redactErrorStacks(boolean redactErrorStacks) {
+      this.redactErrorStacks = redactErrorStacks;
       return this;
     }
 

@@ -16,8 +16,8 @@ internal static class SqlCatalogue
 
     internal const int MinimumProtocolVersion = 5;
     internal const int MaximumProtocolVersion = 5;
-    internal const int MinimumSchemaVersion = 97;
-    internal const int MaximumSchemaVersion = 97;
+    internal const int MinimumSchemaVersion = 98;
+    internal const int MaximumSchemaVersion = 98;
 
     /// <summary>PostgreSQL's atomic enqueue batch limit.</summary>
     internal const int MaxEnqueueBatchSize = 1000;
@@ -738,11 +738,23 @@ internal static class SqlCatalogue
         "SELECT (policy).* FROM workhorse.override_retention_policy_v1($1::jsonb) policy",
         1);
 
+    /// <summary><c>override_retention_policy_v2</c> (internal).</summary>
+    internal static readonly Statement OverrideRetentionPolicyV2 = new(
+        "override_retention_policy_v2",
+        "SELECT (policy).* FROM workhorse.override_retention_policy_v2(\n         $1::jsonb, $2::text, $3::text, $4::text\n       ) policy",
+        4);
+
     /// <summary><c>revert_retention_policy_v1</c> (internal).</summary>
     internal static readonly Statement RevertRetentionPolicyV1 = new(
         "revert_retention_policy_v1",
         "SELECT (policy).* FROM workhorse.revert_retention_policy_v1($1::text[]) policy",
         1);
+
+    /// <summary><c>revert_retention_policy_v2</c> (internal).</summary>
+    internal static readonly Statement RevertRetentionPolicyV2 = new(
+        "revert_retention_policy_v2",
+        "SELECT (policy).* FROM workhorse.revert_retention_policy_v2(\n         $1::text[], $2::text, $3::text, $4::text\n       ) policy",
+        4);
 
     /// <summary><c>dashboard_retention_preview_v1</c> (internal).</summary>
     internal static readonly Statement DashboardRetentionPreviewV1 = new(
@@ -864,11 +876,23 @@ internal static class SqlCatalogue
         "SELECT (policy).* FROM workhorse.override_maintenance_policy_v1(\n         $1::text, $2::integer, $3::integer, $4::time, $5::integer, $6::integer, $7::integer\n       ) policy",
         7);
 
+    /// <summary><c>override_maintenance_policy_v2</c> (internal).</summary>
+    internal static readonly Statement OverrideMaintenancePolicyV2 = new(
+        "override_maintenance_policy_v2",
+        "SELECT (policy).* FROM workhorse.override_maintenance_policy_v2(\n         $1::text, $2::integer, $3::integer, $4::time, $5::integer, $6::integer, $7::integer,\n         $8::text, $9::text, $10::text\n       ) policy",
+        10);
+
     /// <summary><c>revert_maintenance_policy_v1</c> (internal).</summary>
     internal static readonly Statement RevertMaintenancePolicyV1 = new(
         "revert_maintenance_policy_v1",
         "SELECT (policy).* FROM workhorse.revert_maintenance_policy_v1($1::text[]) policy",
         1);
+
+    /// <summary><c>revert_maintenance_policy_v2</c> (internal).</summary>
+    internal static readonly Statement RevertMaintenancePolicyV2 = new(
+        "revert_maintenance_policy_v2",
+        "SELECT (policy).* FROM workhorse.revert_maintenance_policy_v2(\n         $1::text[], $2::text, $3::text, $4::text\n       ) policy",
+        4);
 
     /// <summary><c>get_maintenance_policy_v1</c> (internal).</summary>
     internal static readonly Statement GetMaintenancePolicyV1 = new(
@@ -1153,7 +1177,9 @@ internal static class SqlCatalogue
         FailColdExportSegmentV1,
         SyncRetentionPolicyV1,
         OverrideRetentionPolicyV1,
+        OverrideRetentionPolicyV2,
         RevertRetentionPolicyV1,
+        RevertRetentionPolicyV2,
         DashboardRetentionPreviewV1,
         DashboardTaskCountsV1,
         DashboardTaskFacetsV1,
@@ -1174,7 +1200,9 @@ internal static class SqlCatalogue
         GetRetentionPolicyV1,
         SyncMaintenancePolicyV1,
         OverrideMaintenancePolicyV1,
+        OverrideMaintenancePolicyV2,
         RevertMaintenancePolicyV1,
+        RevertMaintenancePolicyV2,
         GetMaintenancePolicyV1,
         SetWorkerPausedV1,
         WorkerRegistryWorkerRegistry,

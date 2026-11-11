@@ -52,8 +52,10 @@ export const defaultEventsLocation: EventsLocationState = {
 const windows = new Set<DashboardEventsWindow>(["15m", "1h", "6h", "24h"]);
 const kinds = new Set<EventsKindFilter>(["all", "event", "attempt"]);
 const eventTypes = new Set<string>([...dashboardTaskEventTypes, ...dashboardAttemptOutcomes]);
+// A recorded event or attempt has a version 7 UUID. A record that the dashboard views derive for a
+// fast-tier task has an MD5 value cast to uuid, with any version and variant digits.
 const historyIdentity =
-  /^(event|attempt):[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+  /^(event|attempt):[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const taskIdentity = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 /**

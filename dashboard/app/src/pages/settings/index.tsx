@@ -1,4 +1,7 @@
-import type { DashboardSettingsPage } from "@stablemates/workhorse-dashboard-server/wire";
+import type {
+  DashboardPolicyChange,
+  DashboardSettingsPage,
+} from "@stablemates/workhorse-dashboard-server/wire";
 import type {
   MaintenancePolicyDefinition,
   MaintenancePolicySetting,
@@ -118,6 +121,22 @@ function OperatorOverride({
     </Group>
   );
 }
+/**
+ * Who made the last operator change of a setting, and why.
+ *
+ * The host records the audit of each override and revert, so an operator can see who owns the
+ * current value. A setting with no recorded change shows nothing.
+ */
+function PolicyChangeNote({ change }: { change: DashboardPolicyChange | undefined }) {
+  if (!change) return null;
+  const verb = change.action === "override" ? "Overridden" : "Reverted";
+  return (
+    <Text c="dimmed" size="xs" data-testid="policy-change">
+      {verb} by {change.actor} at {formatExact(change.changedAt)}: {change.reason}
+    </Text>
+  );
+}
+
 export type RetentionField = {
   key: RetentionPolicySetting;
   label: string;
@@ -258,11 +277,15 @@ export function SettingsPage({
               <Badge color="violet" variant="light">
                 Operator override
               </Badge>
+              <PolicyChangeNote change={data.retention.lastChanges[key]} />
             </Stack>
           ) : (
-            <Text c="dimmed" size="xs">
-              Application default
-            </Text>
+            <Stack gap={4} align="flex-start">
+              <Text c="dimmed" size="xs">
+                Application default
+              </Text>
+              <PolicyChangeNote change={data.retention.lastChanges[key]} />
+            </Stack>
           )}
         </Table.Td>
       </Table.Tr>
@@ -366,6 +389,7 @@ export function SettingsPage({
                     />
                   </Box>
                 ) : null}
+                <PolicyChangeNote change={data.maintenance.lastChanges.timezone} />
               </Stack>
             </Grid.Col>
             <Grid.Col span={{ base: 12, md: 6 }}>
@@ -395,6 +419,7 @@ export function SettingsPage({
                 }
                 rightSectionWidth={190}
               />
+              <PolicyChangeNote change={data.maintenance.lastChanges.historyRetentionLocalTime} />
             </Grid.Col>
           </Grid>
           {/* Mantine 9 hides a collapsed panel with React `Activity`, which renders nothing on the
@@ -420,6 +445,7 @@ export function SettingsPage({
                         "How often Workhorse checks that upcoming history partitions exist.",
                       effective: data.maintenance.partitionPreparationIntervalMs,
                       provenance: data.maintenance.provenance.partitionPreparationIntervalMs,
+                      change: data.maintenance.lastChanges.partitionPreparationIntervalMs,
                       format: formatMaintenanceInterval,
                     },
                     {
@@ -428,6 +454,7 @@ export function SettingsPage({
                         "How often Workhorse removes finished tasks after their retention windows elapse.",
                       effective: data.maintenance.terminalCleanupIntervalMs,
                       provenance: data.maintenance.provenance.terminalCleanupIntervalMs,
+                      change: data.maintenance.lastChanges.terminalCleanupIntervalMs,
                       format: formatMaintenanceInterval,
                     },
                     {
@@ -436,6 +463,7 @@ export function SettingsPage({
                         "How often Workhorse summarizes finished work into per-minute statistics.",
                       effective: data.maintenance.statisticsRollupIntervalMs,
                       provenance: data.maintenance.provenance.statisticsRollupIntervalMs,
+                      change: data.maintenance.lastChanges.statisticsRollupIntervalMs,
                       format: formatStatisticsRollupInterval,
                     },
                     {
@@ -444,6 +472,7 @@ export function SettingsPage({
                         "Distinct queue and task-type pairs kept per statistics minute before overflow.",
                       effective: data.maintenance.statisticsGroupLimit,
                       provenance: data.maintenance.provenance.statisticsGroupLimit,
+                      change: data.maintenance.lastChanges.statisticsGroupLimit,
                       format: (value: number) => `${formatCount(value)} groups`,
                     },
                     {
@@ -452,6 +481,7 @@ export function SettingsPage({
                         "Closed minutes rewritten behind the rollup watermark to absorb late history.",
                       effective: data.maintenance.statisticsRecomputeBuckets,
                       provenance: data.maintenance.provenance.statisticsRecomputeBuckets,
+                      change: data.maintenance.lastChanges.statisticsRecomputeBuckets,
                       format: (value: number) => `${formatCount(value)} minutes`,
                     },
                   ].map((setting) => (
@@ -480,6 +510,7 @@ export function SettingsPage({
                             Application default
                           </Text>
                         )}
+                        <PolicyChangeNote change={setting.change} />
                       </Stack>
                     </Grid.Col>
                   ))}

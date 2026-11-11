@@ -1598,6 +1598,7 @@ run.workhorse.dashboard.Dashboard.Builder: public run.workhorse.dashboard.Dashbo
 run.workhorse.dashboard.Dashboard.Builder: public run.workhorse.dashboard.Dashboard.Builder path(java.lang.String)
 run.workhorse.dashboard.Dashboard.Builder: public run.workhorse.dashboard.Dashboard.Builder procedures(java.util.Map<java.lang.String, run.workhorse.dashboard.DashboardProcedure>)
 run.workhorse.dashboard.Dashboard.Builder: public run.workhorse.dashboard.Dashboard.Builder readOnly(boolean)
+run.workhorse.dashboard.Dashboard.Builder: public run.workhorse.dashboard.Dashboard.Builder redactErrorStacks(boolean)
 run.workhorse.dashboard.Dashboard.Builder: public run.workhorse.dashboard.Dashboard.Builder setSchedulePaused(run.workhorse.dashboard.DashboardProcedure)
 run.workhorse.dashboard.Dashboard.Builder: public run.workhorse.dashboard.Dashboard.Builder statementTimeout(java.time.Duration)
 

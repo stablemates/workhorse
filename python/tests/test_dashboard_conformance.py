@@ -85,6 +85,23 @@ def test_python_dashboard_read_procedures_match_the_shared_contract(database_url
                 statement_timeout_ms=harness["statementTimeoutMs"],
                 read_only=True,
             )
+            # The writable deployment with the stack redaction option on.
+            redacting_host = DashboardHost(
+                dashboard_connection,
+                authorize=lambda _: DashboardPrincipal(harness["authenticatedActor"]),
+                path=harness["basePath"],
+                environment=harness["environment"],
+                configured_workers=tuple(harness["configuredWorkers"]),
+                maintenance_loops=harness["maintenanceLoops"],
+                allowed_hosts=(harness["origin"].removeprefix("http://"),),
+                statement_timeout_ms=harness["statementTimeoutMs"],
+                redact_error_stacks=True,
+            )
+            hosts = {
+                "writable": host,
+                "read-only": read_only_host,
+                "redact-error-stacks": redacting_host,
+            }
             exchanges = fixture["scenarios"][1]["exchanges"]
             for exchange in exchanges:
                 status, body = request(host, harness["origin"], exchange, references)
@@ -97,7 +114,7 @@ def test_python_dashboard_read_procedures_match_the_shared_contract(database_url
                 for step in scenario.get("seed", []):
                     execute_seed_step(connection, scenario["id"], step, references)
                 for exchange in scenario.get("exchanges", []):
-                    selected = read_only_host if exchange.get("mode") == "read-only" else host
+                    selected = hosts[exchange.get("mode", "writable")]
                     status, body = request(selected, harness["origin"], exchange, references)
                     assert status == exchange["expect"]["status"], (exchange["id"], body)
                     assert_value(exchange["expect"]["body"], body, references, exchange["id"])

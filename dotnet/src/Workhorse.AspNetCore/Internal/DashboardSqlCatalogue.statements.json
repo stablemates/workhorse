@@ -17,10 +17,10 @@
     "dashboard_settings_v1",
     "dashboard_system_v1",
     "dashboard_retention_preview_v1",
-    "override_maintenance_policy_v1",
-    "revert_maintenance_policy_v1",
-    "override_retention_policy_v1",
-    "revert_retention_policy_v1",
+    "override_maintenance_policy_v2",
+    "revert_maintenance_policy_v2",
+    "override_retention_policy_v2",
+    "revert_retention_policy_v2",
     "run_task_now_v1"
   ]
 }

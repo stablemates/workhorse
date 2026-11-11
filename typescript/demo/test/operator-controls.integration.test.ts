@@ -32,6 +32,11 @@ import { createDemoIntegrationSuite } from "./support/demo-integration.js";
 const { createTestApplication, dashboardClient, database, pool, waitForRegisteredWorker } =
   createDemoIntegrationSuite(import.meta.url);
 
+/** The audit of a settings request. The demo records its own actor instead of `operator`. */
+function settingsAudit(reason: string, requestId: string) {
+  return { actor: "operator", reason, requestId };
+}
+
 describe("Workhorse demo", () => {
   it("keeps default dashboard operator read-only", async () => {
     const { app } = createTestApplication();
@@ -409,6 +414,63 @@ describe("Workhorse demo", () => {
         after: { paused: true },
         status: "succeeded",
       },
+    ]);
+  });
+
+  it("records the audit of each settings change for the Settings page", async () => {
+    const { app } = createTestApplication({ operator: createLocalOperator(database) });
+    const client = dashboardClient(app);
+
+    await client.dashboard.overrideRetentionPolicy({
+      definition: { taskEventRetentionDays: 7 },
+      audit: settingsAudit("shorter event history", "audit-retention-override"),
+    });
+    await client.dashboard.overrideMaintenancePolicy({
+      definition: { historyRetentionLocalTime: "02:15" },
+      audit: settingsAudit("move the retention pass", "audit-maintenance-override"),
+    });
+    let settings = await client.dashboard.settings();
+    expect(settings.retention.lastChanges).toEqual({
+      taskEventRetentionDays: expect.objectContaining({
+        action: "override",
+        actor: "local-demo",
+        reason: "shorter event history",
+      }),
+    });
+    expect(settings.maintenance.lastChanges).toEqual({
+      historyRetentionLocalTime: expect.objectContaining({
+        action: "override",
+        actor: "local-demo",
+        reason: "move the retention pass",
+      }),
+    });
+
+    await client.dashboard.revertRetentionPolicy({
+      settings: ["taskEventRetentionDays"],
+      audit: settingsAudit("back to the default", "audit-retention-revert"),
+    });
+    await client.dashboard.revertMaintenancePolicy({
+      settings: ["historyRetentionLocalTime"],
+      audit: settingsAudit("back to the default time", "audit-maintenance-revert"),
+    });
+    settings = await client.dashboard.settings();
+    expect(settings.retention.lastChanges.taskEventRetentionDays).toMatchObject({
+      action: "revert",
+      actor: "local-demo",
+      reason: "back to the default",
+    });
+    expect(settings.maintenance.lastChanges.historyRetentionLocalTime).toMatchObject({
+      action: "revert",
+      reason: "back to the default time",
+    });
+    // The demo keeps its own audit row of each change too.
+    expect(
+      (await pool.query(`SELECT action FROM public.workhorse_demo_audit ORDER BY id`)).rows,
+    ).toEqual([
+      { action: "overrideRetentionPolicy" },
+      { action: "overrideMaintenancePolicy" },
+      { action: "revertRetentionPolicy" },
+      { action: "revertMaintenancePolicy" },
     ]);
   });
 

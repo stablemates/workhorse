@@ -130,6 +130,7 @@ class DashboardBackend:
         maintenance_loops: Mapping[str, int],
         read_only: bool,
         statement_timeout_ms: int = DASHBOARD_STATEMENT_TIMEOUT_MS,
+        redact_error_stacks: bool = False,
     ) -> None:
         self._executor = executor
         self._statement_timeout_ms = statement_timeout_ms
@@ -138,6 +139,7 @@ class DashboardBackend:
         self._configured_workers = tuple(configured_workers)
         self._maintenance_loops = dict(maintenance_loops)
         self._read_only = read_only
+        self._redact_error_stacks = redact_error_stacks
         self._health_lock = threading.Lock()
         self._health: tuple[float, object] | None = None
 
@@ -296,24 +298,32 @@ class DashboardBackend:
         )[0]["result"]
         return _iso(json.loads(value) if isinstance(value, str | bytes) else value)
 
+    def _with_stack_redaction(self, input: object) -> dict[str, object]:
+        # The host has already dropped each input key that the request schema does not declare,
+        # so only the host option sets this key.
+        return {
+            **cast(Mapping[str, object], input),
+            "redactErrorStacks": self._redact_error_stacks,
+        }
+
     def events(self, input: object, _actor: str) -> object:
         value = self._read_rows(
             "SELECT workhorse.dashboard_events_v1(%s::jsonb) AS result",
-            (json.dumps(input),),
+            (json.dumps(self._with_stack_redaction(input)),),
         )[0]["result"]
         return _iso(json.loads(value) if isinstance(value, str | bytes) else value)
 
     def event_detail(self, input: object, _actor: str) -> object:
         value = self._read_rows(
             "SELECT workhorse.dashboard_event_detail_v1(%s::jsonb) AS result",
-            (json.dumps(input),),
+            (json.dumps(self._with_stack_redaction(input)),),
         )[0]["result"]
         if value is None:
             raise DashboardRPCError(404, "NOT_FOUND", "Event not found")
         return _iso(json.loads(value) if isinstance(value, str | bytes) else value)
 
     def task_detail(self, input: object, _actor: str) -> object:
-        supplied = cast(Mapping[str, object], input)
+        supplied = self._with_stack_redaction(input)
         value = self._read_rows(
             "SELECT workhorse.dashboard_task_detail_v1(%s::jsonb) AS result",
             (
@@ -437,8 +447,9 @@ class DashboardBackend:
             raise DashboardRPCError(404, "NOT_FOUND", "Worker not found")
         return {"paused": result.paused}
 
-    def override_maintenance_policy(self, input: object, _actor: str) -> None:
-        definition = cast(Mapping[str, object], cast(Mapping[str, object], input)["definition"])
+    def override_maintenance_policy(self, input: object, actor: str) -> None:
+        value = cast(Mapping[str, object], input)
+        definition = cast(Mapping[str, object], value["definition"])
         names = (
             "timezone",
             "partitionPreparationIntervalMs",
@@ -450,33 +461,45 @@ class DashboardBackend:
         )
         self._rows(
             """
-            SELECT (policy).* FROM workhorse.override_maintenance_policy_v1(
+            SELECT (policy).* FROM workhorse.override_maintenance_policy_v2(
               %s::text, %s::integer, %s::integer, %s::time,
-              %s::integer, %s::integer, %s::integer) policy
+              %s::integer, %s::integer, %s::integer, %s::text, %s::text, %s::text) policy
             """,
-            tuple(definition.get(name) for name in names),
+            (*(definition.get(name) for name in names), *_policy_audit(value, actor)),
         )
 
-    def revert_maintenance_policy(self, input: object, _actor: str) -> None:
-        settings = cast(Sequence[str], cast(Mapping[str, object], input)["settings"])
+    def revert_maintenance_policy(self, input: object, actor: str) -> None:
+        value = cast(Mapping[str, object], input)
+        settings = cast(Sequence[str], value["settings"])
         self._rows(
-            "SELECT (policy).* FROM workhorse.revert_maintenance_policy_v1(%s::text[]) policy",
-            ([_camel_to_snake(name) for name in settings],),
+            """
+            SELECT (policy).* FROM workhorse.revert_maintenance_policy_v2(
+              %s::text[], %s::text, %s::text, %s::text) policy
+            """,
+            ([_camel_to_snake(name) for name in settings], *_policy_audit(value, actor)),
         )
 
-    def override_retention_policy(self, input: object, _actor: str) -> None:
-        definition = cast(Mapping[str, object], cast(Mapping[str, object], input)["definition"])
-        overrides = {_camel_to_snake(name): value for name, value in definition.items()}
+    def override_retention_policy(self, input: object, actor: str) -> None:
+        value = cast(Mapping[str, object], input)
+        definition = cast(Mapping[str, object], value["definition"])
+        overrides = {_camel_to_snake(name): item for name, item in definition.items()}
         self._rows(
-            "SELECT (policy).* FROM workhorse.override_retention_policy_v1(%s::jsonb) policy",
-            (json.dumps(overrides),),
+            """
+            SELECT (policy).* FROM workhorse.override_retention_policy_v2(
+              %s::jsonb, %s::text, %s::text, %s::text) policy
+            """,
+            (json.dumps(overrides), *_policy_audit(value, actor)),
         )
 
-    def revert_retention_policy(self, input: object, _actor: str) -> None:
-        settings = cast(Sequence[str], cast(Mapping[str, object], input)["settings"])
+    def revert_retention_policy(self, input: object, actor: str) -> None:
+        value = cast(Mapping[str, object], input)
+        settings = cast(Sequence[str], value["settings"])
         self._rows(
-            "SELECT (policy).* FROM workhorse.revert_retention_policy_v1(%s::text[]) policy",
-            ([_camel_to_snake(name) for name in settings],),
+            """
+            SELECT (policy).* FROM workhorse.revert_retention_policy_v2(
+              %s::text[], %s::text, %s::text, %s::text) policy
+            """,
+            ([_camel_to_snake(name) for name in settings], *_policy_audit(value, actor)),
         )
 
     def run_task_now(self, input: object, actor: str) -> object:
@@ -660,6 +683,16 @@ def _redrive_result(result: RedriveResult) -> dict[str, object]:
         "targetState": result.target_state,
         "requestedAt": _iso(result.requested_at),
     }
+
+
+def _policy_audit(input: Mapping[str, object], actor: str) -> tuple[str, str, str]:
+    """Return the actor, reason, and request ID that a settings mutation records.
+
+    The actor is the actor of the request, as for queue control. The reason and the request ID
+    come from the audit of the request.
+    """
+    audit = _admin_audit(input, actor)
+    return audit.actor, audit.reason, audit.request_id
 
 
 def _admin_audit(input: Mapping[str, object], actor: str) -> AdminAudit:
