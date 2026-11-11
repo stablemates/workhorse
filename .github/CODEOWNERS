@@ -25,3 +25,24 @@
 /pnpm-lock.yaml @skyeagle @leoisadev1
 /python/uv.lock @skyeagle @leoisadev1
 /go/go.sum @skyeagle @leoisadev1
+
+# The CI plan. These files decide which lanes a change runs, the test matrix, the check before each
+# publish step, and the scripts that a workflow runs by path. A change to one of them can make CI
+# skip a suite, and every test still passes. scripts/codeowners-coverage.test.ts requires an owner
+# for each script that a workflow names.
+/scripts/ci-lanes.ts @skyeagle @leoisadev1
+/scripts/ci-matrix.ts @skyeagle @leoisadev1
+/scripts/check-main-ci-plan.ts @skyeagle @leoisadev1
+/scripts/check-attestation-upload.ts @skyeagle @leoisadev1
+/scripts/check-registry-version.ts @skyeagle @leoisadev1
+/scripts/check-release-line.ts @skyeagle @leoisadev1
+/scripts/upload-maven-central.ts @skyeagle @leoisadev1
+/scripts/with-env.ts @skyeagle @leoisadev1
+
+# The pinned toolchain and the runtimes of the weekly matrix.
+/mise.toml @skyeagle @leoisadev1
+/support.json @skyeagle @leoisadev1
+
+# The schema, the released SQL digests, and the protocol fixtures that every SDK runs against.
+/sql/ @skyeagle @leoisadev1
+/protocol/ @skyeagle @leoisadev1

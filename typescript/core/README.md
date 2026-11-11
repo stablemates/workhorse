@@ -14,6 +14,8 @@ queue for PostgreSQL.
 > release may change behaviour, so read the changelog before you upgrade. It will not ask you to
 > recreate your database: migrations are ordered, and inside a major line a migration only adds, so
 > a running deployment upgrades in place.
+> Migration 0025 is the one exception. If your database is from a release before 0.5.0, upgrade it
+> offline with [these steps](https://workhorse.run/docs/installation#upgrade-a-04x-database-offline).
 
 An AI agent should read [the Workhorse documentation index](https://workhorse.run/llms.txt) first.
 

@@ -16,6 +16,8 @@ Host integration, EF Core transactions, and an ASP.NET Core dashboard backend.
 > [changelog](https://github.com/stablemates/workhorse/blob/main/dotnet/CHANGELOG.md) before you upgrade.
 > It does not ask you to recreate your database. Migrations are ordered, and inside a major line a
 > migration only adds. Thus a running deployment upgrades in place.
+> Migration 0025 is the one exception. If your database is from a release before 0.5.0, upgrade it
+> offline with [these steps](https://workhorse.run/docs/installation#upgrade-a-04x-database-offline).
 
 An AI agent should read [the Workhorse documentation index](https://workhorse.run/llms.txt) first.
 

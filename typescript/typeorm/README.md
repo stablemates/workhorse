@@ -6,6 +6,8 @@ The TypeORM provider for enqueuing Workhorse tasks through TypeORM transactions.
 > release may change behaviour, so read the changelog before you upgrade. It will not ask you to
 > recreate your database: migrations are ordered, and inside a major line a migration only adds, so
 > a running deployment upgrades in place.
+> Migration 0025 is the one exception. If your database is from a release before 0.5.0, upgrade it
+> offline with [these steps](https://workhorse.run/docs/installation#upgrade-a-04x-database-offline).
 
 ## Install
 
