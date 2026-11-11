@@ -10,8 +10,8 @@ module Stablemates
       CLIENT_PROTOCOL_VERSION = 5
       MINIMUM_PROTOCOL_VERSION = 5
       MAXIMUM_PROTOCOL_VERSION = 5
-      MINIMUM_SCHEMA_VERSION = 76
-      MAXIMUM_SCHEMA_VERSION = 96
+      MINIMUM_SCHEMA_VERSION = 97
+      MAXIMUM_SCHEMA_VERSION = 97
       # PostgreSQL's atomic enqueue batch limit.
       MAX_ENQUEUE_BATCH_SIZE = 1000
       DEFAULT_TASK_VALUE_MAX_BYTES = 1048576
@@ -45,6 +45,9 @@ module Stablemates
 
       # `create_children_v1` (protocol)
       CREATE_CHILDREN_V1 = 'SELECT status, children, results, result_bytes, result_limit_bytes FROM workhorse.create_children_v1($1::uuid, $2::text, $3::bigint, $4::jsonb, $5::text)'
+
+      # `create_children_v2` (protocol)
+      CREATE_CHILDREN_V2 = 'SELECT status, children, results, result_bytes, result_limit_bytes FROM workhorse.create_children_v2($1::uuid, $2::text, $3::bigint, $4::jsonb, $5::text)'
 
       # `dashboard_human_wait_v1` (protocol)
       DASHBOARD_HUMAN_WAIT_V1 = 'SELECT task_id, queue_name, task_type, token_name AS wait_name, context, attempt, created_at, deadline_at, created_at::text AS cursor_created_at FROM workhorse.dashboard_human_wait_v1 WHERE ($2::timestamptz IS NULL OR (created_at, task_id, token_name) > ($2::timestamptz, $3::uuid, $4::text)) ORDER BY created_at, task_id, token_name LIMIT $1::integer'
@@ -286,11 +289,17 @@ module Stablemates
       # `schedule_wait_v1` (protocol)
       SCHEDULE_WAIT_V1 = 'SELECT status, wait_name, mode, duration_ms::text, requested_wake_at, wake_at, attempt, fence_token::text, worker_id, created_at FROM workhorse.schedule_wait_v1($1::uuid, $2::text, $3::bigint, $4::text, $5::bigint, $6::timestamptz)'
 
+      # `schedule_wait_v2` (protocol)
+      SCHEDULE_WAIT_V2 = 'SELECT status, wait_name, mode, duration_ms::text, requested_wake_at, wake_at, attempt, fence_token::text, worker_id, created_at FROM workhorse.schedule_wait_v2($1::uuid, $2::text, $3::bigint, $4::text, $5::bigint, $6::timestamptz)'
+
       # `schema_version` (internal)
       SCHEMA_VERSION = 'SELECT version FROM workhorse.schema_version ORDER BY version'
 
       # `send_signal_v1` (protocol)
       SEND_SIGNAL_V1 = 'SELECT status, payload, delivered_at, delivered_by FROM workhorse.send_signal_v1($1::uuid, $2::text, $3::jsonb, $4::text, $5::text)'
+
+      # `send_signal_v2` (protocol)
+      SEND_SIGNAL_V2 = 'SELECT status, payload, delivered_at, delivered_by FROM workhorse.send_signal_v2($1::uuid, $2::text, $3::jsonb, $4::text, $5::text)'
 
       # `set_queue_paused` (admin)
       SET_QUEUE_PAUSED = 'SELECT workhorse.set_queue_paused_v1($1::text,$2::boolean,$3::text,$4::text,$5::text)'

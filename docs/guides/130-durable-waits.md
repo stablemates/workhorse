@@ -375,8 +375,10 @@ Workhorse records the type of conflict, so an operator can see it. If redaction 
 still hides the error details.
 
 Other errors keep their usual rules. A transient error follows the retry policy of the task. A
-refusal at the child limit also follows the retry policy. A lost lease keeps its usual rules. A
-signal wait that is already pending keeps its usual rules.
+refusal at the child limit also follows the retry policy. A second child set is the exception:
+Workhorse fails the task with the child limit error and does not retry it, as it did when it
+reported a second set as a replay conflict. A lost lease keeps its usual rules. A signal wait that
+is already pending keeps its usual rules.
 
 <details>
 <summary>Reference: conflict classes</summary>

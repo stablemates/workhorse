@@ -950,6 +950,160 @@
             }
           ]
         }
+      },
+      {
+        "id": "enqueue-and-claim-absolute",
+        "sql": "WITH enqueued AS (SELECT workhorse.enqueue_v1($1, $2, '{}'::jsonb) AS task_id), claimed AS (SELECT claim.* FROM enqueued CROSS JOIN LATERAL workhorse.claim_v1($1, $3, 30000) claim) SELECT jsonb_build_object('taskId', task_id, 'fenceToken', fence_token) AS value FROM claimed",
+        "parameters": ["protocol-timer-absolute", "protocol.timer", "protocol-timer-worker"],
+        "expect": {
+          "rows": [
+            {
+              "value": {
+                "fenceToken": {
+                  "$type": "integer"
+                },
+                "taskId": {
+                  "$type": "uuid"
+                }
+              }
+            }
+          ]
+        },
+        "capture": {
+          "absoluteTask": "0.value.taskId",
+          "absoluteFence": "0.value.fenceToken"
+        }
+      },
+      {
+        "id": "schedule-absolute-with-microseconds",
+        "sql": "SELECT jsonb_build_object('status', status, 'mode', mode, 'storedMicroseconds', requested_wake_at = '2026-01-01T12:00:00.123456Z'::timestamptz) AS value FROM workhorse.schedule_wait_v1($1::uuid, $2, $3::bigint, $4, NULL, $5::timestamptz)",
+        "parameters": [
+          {
+            "$ref": "absoluteTask"
+          },
+          "protocol-timer-worker",
+          {
+            "$ref": "absoluteFence"
+          },
+          "follow-up",
+          "2026-01-01T12:00:00.123456Z"
+        ],
+        "expect": {
+          "rows": [
+            {
+              "value": {
+                "mode": "absolute",
+                "status": "elapsed",
+                "storedMicroseconds": true
+              }
+            }
+          ]
+        }
+      },
+      {
+        "id": "replay-absolute-with-milliseconds",
+        "covers": ["timer-wait"],
+        "sql": "SELECT jsonb_build_object('status', status, 'mode', mode, 'storedMicroseconds', requested_wake_at = '2026-01-01T12:00:00.123456Z'::timestamptz) AS value FROM workhorse.schedule_wait_v2($1::uuid, $2, $3::bigint, $4, NULL, $5::timestamptz)",
+        "parameters": [
+          {
+            "$ref": "absoluteTask"
+          },
+          "protocol-timer-worker",
+          {
+            "$ref": "absoluteFence"
+          },
+          "follow-up",
+          "2026-01-01T12:00:00.123Z"
+        ],
+        "expect": {
+          "rows": [
+            {
+              "value": {
+                "mode": "absolute",
+                "status": "elapsed",
+                "storedMicroseconds": true
+              }
+            }
+          ]
+        }
+      },
+      {
+        "id": "replay-changed-absolute-target",
+        "sql": "SELECT jsonb_build_object('status', status, 'mode', mode, 'storedMicroseconds', requested_wake_at = '2026-01-01T12:00:00.123456Z'::timestamptz) AS value FROM workhorse.schedule_wait_v2($1::uuid, $2, $3::bigint, $4, NULL, $5::timestamptz)",
+        "parameters": [
+          {
+            "$ref": "absoluteTask"
+          },
+          "protocol-timer-worker",
+          {
+            "$ref": "absoluteFence"
+          },
+          "follow-up",
+          "2026-01-01T12:00:00.124Z"
+        ],
+        "expect": {
+          "rows": [
+            {
+              "value": {
+                "mode": "absolute",
+                "status": "conflict",
+                "storedMicroseconds": true
+              }
+            }
+          ]
+        }
+      },
+      {
+        "id": "schedule-absolute-with-milliseconds",
+        "sql": "SELECT jsonb_build_object('status', status, 'mode', mode, 'storedMilliseconds', requested_wake_at = '2026-01-01T12:00:00.123Z'::timestamptz) AS value FROM workhorse.schedule_wait_v2($1::uuid, $2, $3::bigint, $4, NULL, $5::timestamptz)",
+        "parameters": [
+          {
+            "$ref": "absoluteTask"
+          },
+          "protocol-timer-worker",
+          {
+            "$ref": "absoluteFence"
+          },
+          "follow-up-milliseconds",
+          "2026-01-01T12:00:00.123Z"
+        ],
+        "expect": {
+          "rows": [
+            {
+              "value": {
+                "mode": "absolute",
+                "status": "elapsed",
+                "storedMilliseconds": true
+              }
+            }
+          ]
+        }
+      },
+      {
+        "id": "replay-absolute-with-microseconds",
+        "sql": "SELECT jsonb_build_object('status', status, 'mode', mode, 'storedMilliseconds', requested_wake_at = '2026-01-01T12:00:00.123Z'::timestamptz) AS value FROM workhorse.schedule_wait_v2($1::uuid, $2, $3::bigint, $4, NULL, $5::timestamptz)",
+        "parameters": [
+          {
+            "$ref": "absoluteTask"
+          },
+          "protocol-timer-worker",
+          {
+            "$ref": "absoluteFence"
+          },
+          "follow-up-milliseconds",
+          "2026-01-01T12:00:00.123456Z"
+        ],
+        "expect": {
+          "rows": [
+            {
+              "value": {
+                "mode": "absolute",
+                "status": "elapsed",
+                "storedMilliseconds": true
+              }
+            }
+          ]
+        }
       }
     ]
   },
@@ -1686,6 +1840,168 @@
         }
       },
       {
+        "id": "rejoin-settled-set",
+        "sql": "SELECT jsonb_build_object('status', status) AS value FROM workhorse.create_children_v2($1::uuid, $2, $3::bigint, $4::jsonb, $5::text)",
+        "parameters": [
+          {
+            "$ref": "parentTask"
+          },
+          "protocol-parent-worker",
+          {
+            "$ref": "resumedParentFence"
+          },
+          [
+            {
+              "name": "accepted",
+              "request": {
+                "queue": "protocol-child-success",
+                "type": "protocol.child",
+                "payload": {
+                  "value": 7
+                }
+              }
+            },
+            {
+              "name": "rejected",
+              "request": {
+                "queue": "protocol-child-failure",
+                "type": "protocol.child",
+                "payload": null,
+                "maxAttempts": 1
+              }
+            },
+            {
+              "name": "skipped",
+              "request": {
+                "queue": "protocol-child-canceled",
+                "type": "protocol.child",
+                "payload": null
+              }
+            }
+          ],
+          "settled"
+        ],
+        "expect": {
+          "rows": [
+            {
+              "value": {
+                "status": "completed"
+              }
+            }
+          ]
+        }
+      },
+      {
+        "id": "second-set-after-joining",
+        "covers": ["children"],
+        "sql": "SELECT jsonb_build_object('status', status) AS value FROM workhorse.create_children_v2($1::uuid, $2, $3::bigint, $4::jsonb, $5::text)",
+        "parameters": [
+          {
+            "$ref": "parentTask"
+          },
+          "protocol-parent-worker",
+          {
+            "$ref": "resumedParentFence"
+          },
+          [
+            {
+              "name": "calculate",
+              "request": {
+                "queue": "protocol-child-success",
+                "type": "protocol.child",
+                "payload": {
+                  "value": 9
+                }
+              }
+            }
+          ],
+          "settled"
+        ],
+        "expect": {
+          "rows": [
+            {
+              "value": {
+                "status": "limit_exceeded"
+              }
+            }
+          ]
+        }
+      },
+      {
+        "id": "release-set-parent-for-another-run",
+        "sql": "SELECT workhorse.release_owned_v1($1::uuid, $2::text, $3::bigint) AS status",
+        "parameters": [
+          {
+            "$ref": "parentTask"
+          },
+          "protocol-parent-worker",
+          {
+            "$ref": "resumedParentFence"
+          }
+        ],
+        "expect": {
+          "rows": [
+            {
+              "status": "released"
+            }
+          ]
+        }
+      },
+      {
+        "id": "reclaim-set-parent",
+        "sql": "SELECT jsonb_build_object('fence', fence_token) AS value FROM workhorse.claim_v1($1, $2, 30000)",
+        "parameters": ["protocol-parent", "protocol-parent-worker"],
+        "expect": {
+          "rows": [
+            {
+              "value": {
+                "fence": {
+                  "$type": "integer"
+                }
+              }
+            }
+          ]
+        },
+        "capture": {
+          "laterParentFence": "0.value.fence"
+        }
+      },
+      {
+        "id": "changed-set-in-another-run",
+        "sql": "SELECT jsonb_build_object('status', status) AS value FROM workhorse.create_children_v2($1::uuid, $2, $3::bigint, $4::jsonb, $5::text)",
+        "parameters": [
+          {
+            "$ref": "parentTask"
+          },
+          "protocol-parent-worker",
+          {
+            "$ref": "laterParentFence"
+          },
+          [
+            {
+              "name": "calculate",
+              "request": {
+                "queue": "protocol-child-success",
+                "type": "protocol.child",
+                "payload": {
+                  "value": 9
+                }
+              }
+            }
+          ],
+          "settled"
+        ],
+        "expect": {
+          "rows": [
+            {
+              "value": {
+                "status": "conflict"
+              }
+            }
+          ]
+        }
+      },
+      {
         "id": "enqueue-empty-parent",
         "sql": "WITH enqueued AS (SELECT workhorse.enqueue_v1($1, $2, '{}'::jsonb) AS task_id), claimed AS (SELECT claim.* FROM enqueued CROSS JOIN LATERAL workhorse.claim_v1($1, $3, 30000) claim) SELECT jsonb_build_object('taskId', task_id, 'fenceToken', fence_token) AS value FROM claimed",
         "parameters": ["protocol-empty-parent", "protocol.empty-parent", "protocol-empty-worker"],
@@ -2325,6 +2641,122 @@
             }
           ]
         }
+      },
+      {
+        "id": "enqueue-and-claim-early",
+        "sql": "WITH enqueued AS (SELECT workhorse.enqueue_v1($1, $2, '{}'::jsonb) AS task_id), claimed AS (SELECT claim.* FROM enqueued CROSS JOIN LATERAL workhorse.claim_v1($1, $3, 30000) claim) SELECT jsonb_build_object('taskId', task_id, 'fenceToken', fence_token) AS value FROM claimed",
+        "parameters": ["protocol-signal-early", "protocol.signal", "protocol-signal-worker"],
+        "expect": {
+          "rows": [
+            {
+              "value": {
+                "fenceToken": {
+                  "$type": "integer"
+                },
+                "taskId": {
+                  "$type": "uuid"
+                }
+              }
+            }
+          ]
+        },
+        "capture": {
+          "earlyTask": "0.value.taskId",
+          "earlyFence": "0.value.fenceToken"
+        }
+      },
+      {
+        "id": "send-before-wait",
+        "sql": "SELECT jsonb_build_object('status', status, 'payload', payload) AS value FROM workhorse.send_signal_v2($1::uuid, $2, $3::jsonb, $4, $5)",
+        "parameters": [
+          {
+            "$ref": "earlyTask"
+          },
+          "approval",
+          {
+            "approved": true
+          },
+          "early-request",
+          "protocol-service"
+        ],
+        "expect": {
+          "rows": [
+            {
+              "value": {
+                "payload": null,
+                "status": "not_waiting"
+              }
+            }
+          ]
+        }
+      },
+      {
+        "id": "fail-early-task",
+        "sql": "SELECT workhorse.fail_v1($1::uuid, $2, $3::bigint, $4::jsonb, -1) AS state",
+        "parameters": [
+          {
+            "$ref": "earlyTask"
+          },
+          "protocol-signal-worker",
+          {
+            "$ref": "earlyFence"
+          },
+          {
+            "name": "Error",
+            "message": "boom"
+          }
+        ],
+        "expect": {
+          "rows": [
+            {
+              "state": "failed"
+            }
+          ]
+        }
+      },
+      {
+        "id": "send-to-terminal-task",
+        "covers": ["signals"],
+        "sql": "SELECT jsonb_build_object('status', status, 'payload', payload) AS value FROM workhorse.send_signal_v2($1::uuid, $2, $3::jsonb, $4, $5)",
+        "parameters": [
+          {
+            "$ref": "earlyTask"
+          },
+          "approval",
+          {
+            "approved": true
+          },
+          "early-request",
+          "protocol-service"
+        ],
+        "expect": {
+          "rows": [
+            {
+              "value": {
+                "payload": null,
+                "status": "stale"
+              }
+            }
+          ]
+        }
+      },
+      {
+        "id": "terminal-send-writes-no-event",
+        "sql": "SELECT jsonb_build_object('rejected', count(*)) AS value FROM workhorse.task_event WHERE task_id = $1::uuid AND event_type = 'signal_rejected'",
+        "parameters": [
+          {
+            "$ref": "earlyTask"
+          }
+        ],
+        "expect": {
+          "rows": [
+            {
+              "value": {
+                "rejected": 1
+              }
+            }
+          ]
+        }
       }
     ]
   },
@@ -2340,7 +2772,7 @@
             {
               "value": {
                 "promotionLagMs": 10000,
-                "schemaVersion": 96,
+                "schemaVersion": 97,
                 "terminalCleanupBacklogMs": 21600000
               }
             }

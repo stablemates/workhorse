@@ -269,11 +269,14 @@ outside the Basic Multilingual Plane, time zone offsets, and fractional seconds.
 input has a fixed fingerprint, so both SDKs must compute the same digest. Its child `deadline` and
 `runAt` have microsecond digits.
 
-The absolute timer of the script has millisecond digits. TypeScript, Ruby, and the JVM send a timer
-target with milliseconds, and Python, Go, Rust, and .NET send microseconds. Thus a pair of a
-millisecond SDK and a microsecond SDK fails a target with microsecond digits with
-`WaitConflictError` (SM-1945). The `payloadSql` of each of the three fixtures holds the setting
-`'milliseconds'`. Change it to `'microseconds'` when SM-1945 is fixed.
+The absolute timer of the script has microsecond digits. TypeScript, Ruby, the JVM, and .NET send
+a timer target with milliseconds, and Python, Go, and Rust send microseconds. Each SDK calls
+`schedule_wait_v2`, which compares the stored target and the sent target at millisecond precision
+and stores the target as sent. Thus a pair of a millisecond SDK and a microsecond SDK replays the
+target with no conflict, and a different millisecond is still a `WaitConflictError` (SM-1945). The
+`payloadSql` of each of the three fixtures holds the setting `'microseconds'`. Rust sends a time
+before the year 2000 with digits below the microsecond as the next microsecond. The script does not
+use such a time.
 
 ## Supported host load
 

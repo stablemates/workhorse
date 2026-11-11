@@ -6,11 +6,14 @@ import {
   SignalIdempotencyConflictError,
   SignalWaitConflictError,
   SignalWaitLeaseLostError,
+  type Queryable,
   Worker,
 } from "../src/index.js";
 import { createIntegrationTestContext } from "./support/integration.js";
 
-const { pool, queue, admin } = createIntegrationTestContext(import.meta.url);
+const { pool, queue, admin, adminAudit, waitForDatabaseCondition } = createIntegrationTestContext(
+  import.meta.url,
+);
 
 describe("signals", () => {
   it("rejects names the dashboard would normalize to another identity", async () => {
@@ -566,5 +569,138 @@ describe("signals", () => {
     expect(cancellation.status).toBe("canceled");
     expect(["delivered", "stale"]).toContain(delivery.status);
     await expect(admin.getTask(id)).resolves.toMatchObject({ state: "canceled" });
+  });
+});
+
+const send = (version: 1 | 2, taskId: string, key: string, client: Queryable = pool) =>
+  client
+    .query<{ status: string }>(
+      `SELECT status FROM workhorse.send_signal_v${version}($1, 'approval', $2::jsonb, $3, 'review-service')`,
+      [taskId, JSON.stringify({ approved: true }), key],
+    )
+    .then(({ rows }) => rows[0]!.status);
+const rejections = async (taskId: string) =>
+  (
+    await pool.query<{ count: number }>(
+      `SELECT count(*)::integer AS count FROM workhorse.task_event
+        WHERE task_id = $1 AND event_type = 'signal_rejected'`,
+      [taskId],
+    )
+  ).rows[0]!.count;
+const failTerminally = async (queueName: string, workerId: string) => {
+  const task = (await queue.claim(workerId, { queue: queueName }))!;
+  await pool.query(`SELECT workhorse.fail_v1($1, $2, $3, $4::jsonb, -1)`, [
+    task.id,
+    workerId,
+    task.fenceToken.toString(),
+    JSON.stringify({ name: "Error", message: "boom" }),
+  ]);
+};
+// Wait until the backend is blocked on a lock that another session holds.
+const waitForLock = (pid: number) =>
+  waitForDatabaseCondition(async () => {
+    const { rows } = await pool.query<{ waiting: boolean }>(
+      "SELECT wait_event_type = 'Lock' AS waiting FROM pg_stat_activity WHERE pid = $1",
+      [pid],
+    );
+    return rows[0]?.waiting === true;
+  });
+
+describe("a signal to a terminal task that has no wait", () => {
+  it("answers stale and writes no event, while v1 keeps not_waiting", async () => {
+    const id = await queue.enqueue("order.publish", {}, { queue: "signal-terminal" });
+    await failTerminally("signal-terminal", "signal-terminal-worker");
+    await expect(admin.getTask(id)).resolves.toMatchObject({ state: "failed" });
+
+    await expect(send(2, id, "review-77")).resolves.toBe("stale");
+    await expect(send(2, id, "review-77")).resolves.toBe("stale");
+    expect(await rejections(id)).toBe(0);
+    await expect(send(1, id, "review-77")).resolves.toBe("not_waiting");
+    expect(await rejections(id)).toBe(1);
+  });
+
+  it("answers for a task with no runtime row in each tier", async () => {
+    // A full-tier task leaves task_runtime at its terminal transition and keeps its task row.
+    const full = await queue.enqueue("order.publish", {}, { queue: "signal-full-terminal" });
+    const claimed = (await queue.claim("full-terminal-worker", { queue: "signal-full-terminal" }))!;
+    expect(await queue.complete(claimed, "full-terminal-worker", null)).toBe(true);
+    await expect(send(2, full, "full")).resolves.toBe("stale");
+    // A fast-tier task keeps its live state in fast_task_runtime. It cannot wait for a signal, so
+    // a live one answers not_waiting, and a terminal one answers stale with no event.
+    await admin.setQueueTier("signal-fast", "fast", adminAudit("fast tier"));
+    const fast = await queue.enqueue("order.publish", {}, { queue: "signal-fast" });
+    await expect(send(2, fast, "fast-live")).resolves.toBe("not_waiting");
+    const [fastTask] = await queue.claimFast("fast-worker", 1, { queue: "signal-fast" });
+    expect(fastTask?.id).toBe(fast);
+    expect(await queue.complete(fastTask!, "fast-worker", null)).toBe(true);
+    await expect(send(2, fast, "fast-terminal")).resolves.toBe("stale");
+    expect(await rejections(fast)).toBe(1);
+    // An unknown task identity also has no task row.
+    await expect(send(2, "00000000-0000-7000-8000-000000000000", "unknown")).resolves.toBe(
+      "not_found",
+    );
+    expect(await rejections(full)).toBe(0);
+  });
+
+  it("still answers not_waiting for a live task that has not reached the wait", async () => {
+    const id = await queue.enqueue("order.publish", {}, { queue: "signal-early" });
+    await expect(send(2, id, "early")).resolves.toBe("not_waiting");
+    const claimed = await queue.claim("signal-early-worker", { queue: "signal-early" });
+    expect(claimed?.id).toBe(id);
+    await expect(send(2, id, "early")).resolves.toBe("not_waiting");
+    expect(await rejections(id)).toBe(2);
+  });
+
+  it("waits for a terminal transition that holds the runtime row, then answers stale", async () => {
+    const id = await queue.enqueue("order.publish", {}, { queue: "signal-terminal-race" });
+    const task = (await queue.claim("race-worker", { queue: "signal-terminal-race" }))!;
+    const finisher = await pool.connect();
+    const sender = await pool.connect();
+    try {
+      const senderPid = (await sender.query<{ pid: number }>("SELECT pg_backend_pid() AS pid"))
+        .rows[0]!.pid;
+      await finisher.query("BEGIN");
+      await finisher.query("SELECT workhorse.complete_v1($1, $2, $3, 'null'::jsonb)", [
+        id,
+        "race-worker",
+        task.fenceToken.toString(),
+      ]);
+      const pending = send(2, id, "race", sender);
+      await waitForLock(senderPid);
+      await finisher.query("COMMIT");
+      await expect(pending).resolves.toBe("stale");
+    } finally {
+      await finisher.query("ROLLBACK").catch(() => undefined);
+      finisher.release();
+      sender.release();
+    }
+    await expect(admin.getTask(id)).resolves.toMatchObject({ state: "succeeded" });
+    expect(await rejections(id)).toBe(0);
+  });
+
+  it("orders a terminal transition after a send that answered not_waiting", async () => {
+    const id = await queue.enqueue("order.publish", {}, { queue: "signal-live-race" });
+    const task = (await queue.claim("live-race-worker", { queue: "signal-live-race" }))!;
+    const finisher = await pool.connect();
+    const sender = await pool.connect();
+    try {
+      const finisherPid = (await finisher.query<{ pid: number }>("SELECT pg_backend_pid() AS pid"))
+        .rows[0]!.pid;
+      await sender.query("BEGIN");
+      await expect(send(2, id, "live-race", sender)).resolves.toBe("not_waiting");
+      const completion = finisher.query<{ accepted: boolean }>(
+        "SELECT workhorse.complete_v1($1, $2, $3, 'null'::jsonb) AS accepted",
+        [id, "live-race-worker", task.fenceToken.toString()],
+      );
+      await waitForLock(finisherPid);
+      await sender.query("COMMIT");
+      await expect(completion).resolves.toMatchObject({ rows: [{ accepted: true }] });
+    } finally {
+      await sender.query("ROLLBACK").catch(() => undefined);
+      finisher.release();
+      sender.release();
+    }
+    expect(await rejections(id)).toBe(1);
+    await expect(send(2, id, "live-race")).resolves.toBe("stale");
   });
 });

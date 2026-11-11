@@ -199,6 +199,8 @@ module Stablemates
         raise ArgumentError, "wait time must be no more than 365 days in the future" if
           (time - Time.now) * 1000 > MAX_WAIT_MS
 
+        # The protocol text cuts the time to milliseconds with %L, so a target of .1239996 s sends
+        # .123, also before 1970. schedule_wait_v2 compares at milliseconds.
         schedule_wait(name, nil, Values.timestamp(time, "wait time"))
       end
 
@@ -330,7 +332,7 @@ module Stablemates
       def schedule_wait(name, duration_ms, wake_at)
         once(:sleep, name, wake_at.nil? ? :relative : "absolute:#{wake_at}") do
           live!(:sleep)
-          row = write(SqlCatalogue::SCHEDULE_WAIT_V1, name, duration_ms, wake_at)
+          row = write(SqlCatalogue::SCHEDULE_WAIT_V2, name, duration_ms, wake_at)
           status = row.fetch("status")
           case status
           when "stale" then raise LeaseLostError.new(@task.id, :sleep)
@@ -372,13 +374,15 @@ module Stablemates
         encoded = initial(build)
         once(:run_children, :set, "#{mode}:#{encoded}", "child set") do
           live!(:run_children)
-          row = write(SqlCatalogue::CREATE_CHILDREN_V1, encoded, mode)
-          row = replayed(row, encoded, build) { |accepted| write(SqlCatalogue::CREATE_CHILDREN_V1, accepted, mode) }
+          row = write(SqlCatalogue::CREATE_CHILDREN_V2, encoded, mode)
+          row = replayed(row, encoded, build) { |accepted| write(SqlCatalogue::CREATE_CHILDREN_V2, accepted, mode) }
           status = row.fetch("status")
           case status
           when "stale" then raise LeaseLostError.new(@task.id, :run_children)
           when "conflict" then raise ConflictError.new(:run_children, "child set")
-          when "limit_exceeded" then raise LimitExceededError.new(:run_children, "child set")
+          # The set has at most MAX_CHILDREN children, which the check above proves, so the limit
+          # is the second child set of this activation.
+          when "limit_exceeded" then raise second_child_set_limit
           when "result_too_large"
             raise ChildResultLimitExceededError.new(Values.parse_integer(row["result_bytes"]).to_i,
               Values.parse_integer(row["result_limit_bytes"]).to_i)
@@ -460,6 +464,15 @@ module Stablemates
       # +request+ receives the running call's result or error; a different request conflicts.
       # +overlap+, when given, receives the running call's request and raises in place of that
       # comparison.
+      # The limit error of a second child set. It was a terminal replay conflict before
+      # create_children_v2 named it a limit, so the worker ends the task with no retry. Each other
+      # child limit refusal follows the retry policy (the ADR 0098 amendment of SM-1956).
+      def second_child_set_limit
+        LimitExceededError.new(:run_children, "child set").tap do |error|
+          error.instance_variable_set(:@second_child_set, true)
+        end
+      end
+
       def once(kind, name, request = nil, conflict_name = name, overlap: nil)
         future = nil
         running = @lock.synchronize do
@@ -472,6 +485,9 @@ module Stablemates
             if overlap
               overlap.call(current[0])
             elsif current[0] != request
+              # A task holds one child set, so a second set in the same activation is a limit.
+              raise second_child_set_limit if kind == :run_children
+
               raise ConflictError.new(kind, conflict_name)
             end
 

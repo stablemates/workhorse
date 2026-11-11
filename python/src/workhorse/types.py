@@ -417,12 +417,29 @@ class TaskGroupCounts:
 
 
 @dataclass(frozen=True)
+class TaskGroupCallbackFailure:
+    """Why a finished group did not enqueue a callback.
+
+    The enqueue at the finish failed, for example because an operator moved the callback queue to
+    the fast tier and the request has a concurrency key. Workhorse does not try the callback again.
+    Retention deletes this record with the group.
+    """
+
+    # The SQLSTATE of the enqueue error.
+    code: str
+    message: str
+    failed_at: datetime
+
+
+@dataclass(frozen=True)
 class TaskGroupCallback:
     """A requested callback, and the task the finished group enqueued for it."""
 
     kind: TaskGroupCallbackKind
     # None until the group finishes, and None for the callback that the result does not select.
     task_id: str | None
+    # Set only when the finished group failed to enqueue this callback.
+    failure: TaskGroupCallbackFailure | None = None
 
 
 @dataclass(frozen=True)
@@ -996,6 +1013,7 @@ __all__ = [
     "TaskGroupBlockResult",
     "TaskGroupBuilder",
     "TaskGroupCallback",
+    "TaskGroupCallbackFailure",
     "TaskGroupCallbackKind",
     "TaskGroupContext",
     "TaskGroupCounts",

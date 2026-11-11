@@ -88,6 +88,33 @@ async function completeChildren(count: number) {
 }
 
 describe("child contract replay", () => {
+  it("joins the same set twice in one activation after the contract advances", async () => {
+    const initial = contractedQueue("v1", v1);
+    await initial.syncContracts();
+    const parentId = await initial.enqueue("contract-parent", null, {
+      queue: "parents",
+      maxAttempts: 1,
+    });
+    expect(await parentWorker(initial, "runChildren").runOnce()).toBe(true);
+    const advanced = contractedQueue("v2", { ...v1, maxPayloadBytes: 1024, maxResultBytes: 1024 });
+    await advanced.syncContracts();
+    await completeChildren(2);
+
+    // The handler asks for the stored set two times. Each call is built under v2, so each one
+    // first gets a replay conflict and then joins under the stored v1 request.
+    const worker = new Worker(advanced, { queue: "parents", workerId: "parent-worker" });
+    worker.handle("contract-parent", async (_payload, context) => {
+      await context.runChildren(childrenFor("runChildren"));
+      await context.runChildren(childrenFor("runChildren"));
+      return null;
+    });
+    expect(await worker.runOnce()).toBe(true);
+    await expect(admin.getTask(parentId)).resolves.toMatchObject({
+      state: "succeeded",
+      currentAttempt: 1,
+    });
+  });
+
   it.each(
     childApis.flatMap((api) =>
       ["accepts", "rejects", "limits"].map((validation) => ({ api, validation })),
@@ -130,7 +157,7 @@ describe("child contract replay", () => {
       const writes = queries.mock.calls.filter(
         ([statement]) =>
           statement ===
-          SQL_STATEMENTS[api === "runChild" ? "create_child_v2" : "create_children_v1"],
+          SQL_STATEMENTS[api === "runChild" ? "create_child_v2" : "create_children_v2"],
       );
       expect(writes).toHaveLength(validation === "accepts" ? 2 : 1);
       await expect(admin.getTask(parentId)).resolves.toMatchObject({
@@ -220,7 +247,7 @@ describe("child contract replay", () => {
         queries.mock.calls.filter(
           ([statement]) =>
             statement ===
-            SQL_STATEMENTS[api === "runChild" ? "create_child_v2" : "create_children_v1"],
+            SQL_STATEMENTS[api === "runChild" ? "create_child_v2" : "create_children_v2"],
         ),
       ).toHaveLength(api === "runChild" && changedField === "type" ? 1 : 2);
       expect(await storedChildren(parentId)).toEqual(stored);

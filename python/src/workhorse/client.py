@@ -359,7 +359,7 @@ class Queue:
         _assert_sync_compatible(self._executor)
         row = _one_row(
             self._executor.rows(_STATEMENTS.send_signal, parameters),
-            "workhorse.send_signal_v1",
+            "workhorse.send_signal_v2",
         )
         return _signal_result(row, task_id, name)
 
@@ -773,7 +773,7 @@ class AsyncQueue:
         await _assert_async_compatible(self._executor)
         row = _one_row(
             await self._executor.rows(_STATEMENTS.send_signal, parameters),
-            "workhorse.send_signal_v1",
+            "workhorse.send_signal_v2",
         )
         return _signal_result(row, task_id, name)
 

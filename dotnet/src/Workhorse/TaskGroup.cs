@@ -60,6 +60,29 @@ public sealed record TaskGroupCallback
     /// callback that the result does not select.
     /// </summary>
     public Guid? TaskId { get; init; }
+
+    /// <summary>
+    /// Why the finished group did not enqueue this callback. It is <c>null</c> unless the enqueue
+    /// at the finish failed.
+    /// </summary>
+    public TaskGroupCallbackFailure? Failure { get; init; }
+}
+
+/// <summary>
+/// Why a finished group did not enqueue a callback. The enqueue at the finish failed, for example
+/// because an operator moved the callback queue to the fast tier and the request has a concurrency
+/// key. Workhorse does not try the callback again. Retention deletes this record with the group.
+/// </summary>
+public sealed record TaskGroupCallbackFailure
+{
+    /// <summary>The SQLSTATE of the enqueue error.</summary>
+    public required string Code { get; init; }
+
+    /// <summary>The message of the enqueue error.</summary>
+    public required string Message { get; init; }
+
+    /// <summary>The time of the failure.</summary>
+    public required DateTimeOffset FailedAt { get; init; }
 }
 
 /// <summary>The counts of a task group.</summary>

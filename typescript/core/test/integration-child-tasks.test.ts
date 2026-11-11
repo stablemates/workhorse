@@ -1498,3 +1498,182 @@ describe("child tasks", () => {
     );
   });
 });
+
+const set = (name: string, payload: number) =>
+  JSON.stringify([
+    { name, request: { queue: "agent-tools", type: "tool", payload: { q: payload } } },
+  ]);
+const createChildren = async (
+  version: 1 | 2,
+  parent: ClaimedTask,
+  children: string,
+): Promise<string> => {
+  const { rows } = await pool.query<{ status: string }>(
+    `SELECT status FROM workhorse.create_children_v${version}($1, $2, $3, $4::jsonb, 'settled')`,
+    [parent.id, "agent-worker", parent.fenceToken.toString(), children],
+  );
+  return rows[0]!.status;
+};
+const completeTool = async () => {
+  const child = (await queue.claim("tool-worker", { queue: "agent-tools" }))!;
+  expect(await queue.complete(child, "tool-worker", { answer: 42 })).toBe(true);
+};
+
+// A second child set was a terminal replay conflict before create_children_v2 named it a limit,
+// so it stays terminal. Each other child limit refusal follows the retry policy.
+const runParent = async (
+  shape: "second-set" | "second-single" | "large-set" | "changed-set",
+): Promise<{ state: string; attempt: number; name: unknown }> => {
+  const queueName = `${shape}-parents`;
+  const parentId = await queue.enqueue("agent.loop", null, { queue: queueName, maxAttempts: 5 });
+  let payload = 1;
+  const worker = new Worker(queue, { queue: queueName, workerId: `${shape}-worker` });
+  worker.handle("agent.loop", async (_payload, context) => {
+    const options = { queue: "agent-tools" };
+    const tool = (name: string, value: number) => ({ name, type: "tool", payload: value, options });
+    if (shape === "large-set") {
+      await context.runChildren(Array.from({ length: 101 }, (_, index) => tool(`t${index}`, 1)));
+    } else if (shape === "second-single") {
+      await context.runChild("research", "tool", 1, options);
+      await context.runChild("calculate", "tool", 2, options);
+    } else {
+      await context.runChildren([tool("research", payload)]);
+      if (shape === "second-set") await context.runChildren([tool("calculate", 2)]);
+    }
+    return null;
+  });
+  expect(await worker.runOnce()).toBe(true);
+  if (shape !== "large-set") {
+    await completeTool();
+    if (shape === "changed-set") payload = 2;
+    expect(await worker.runOnce()).toBe(true);
+  }
+  const task = (await admin.getTask(parentId))!;
+  return {
+    state: task.state,
+    attempt: task.currentAttempt,
+    name: (task.error as { name?: unknown } | null)?.name,
+  };
+};
+
+describe("a second child set in one activation", () => {
+  it("ends the parent at attempt 1 with the limit error for a second child set", async () => {
+    await expect(runParent("second-set")).resolves.toEqual({
+      state: "failed",
+      attempt: 1,
+      name: "ChildLimitExceededError",
+    });
+  });
+
+  it("retries a second single child and a set with too many children", async () => {
+    for (const shape of ["second-single", "large-set"] as const) {
+      await expect(runParent(shape)).resolves.toEqual({
+        state: "scheduled",
+        attempt: 2,
+        name: "ChildLimitExceededError",
+      });
+    }
+  });
+
+  it("ends the parent at attempt 1 with the conflict error for a changed set", async () => {
+    await expect(runParent("changed-set")).resolves.toEqual({
+      state: "failed",
+      attempt: 1,
+      name: "ChildConflictError",
+    });
+  });
+
+  it("answers limit_exceeded after the activation joins the first set", async () => {
+    await queue.enqueue("agent.loop", null, { queue: "agent-loops" });
+    const first = (await queue.claim("agent-worker", { queue: "agent-loops" }))!;
+    await expect(createChildren(2, first, set("research", 1))).resolves.toBe("created");
+    await completeTool();
+
+    const joined = (await queue.claim("agent-worker", { queue: "agent-loops" }))!;
+    await expect(createChildren(2, joined, set("research", 1))).resolves.toBe("completed");
+    await expect(createChildren(2, joined, set("calculate", 2))).resolves.toBe("limit_exceeded");
+    await expect(createChildren(2, joined, "[]")).resolves.toBe("limit_exceeded");
+    // The stored names with a changed request are a replay conflict, so an SDK can replay the set
+    // under the stored contract versions.
+    await expect(createChildren(2, joined, set("research", 2))).resolves.toBe("conflict");
+    // create_children_v1 keeps its answer.
+    await expect(createChildren(1, joined, set("calculate", 2))).resolves.toBe("conflict");
+    // The same set in the same activation still joins.
+    await expect(createChildren(2, joined, set("research", 1))).resolves.toBe("completed");
+  });
+
+  it("answers limit_exceeded for a set after a single child in the same activation", async () => {
+    await queue.enqueue("agent.loop", null, { queue: "agent-loops" });
+    const first = (await queue.claim("agent-worker", { queue: "agent-loops" }))!;
+    await pool.query("SELECT * FROM workhorse.create_child_v2($1, $2, $3, 'research', $4::jsonb)", [
+      first.id,
+      "agent-worker",
+      first.fenceToken.toString(),
+      JSON.stringify({ queue: "agent-tools", type: "tool", payload: { q: 1 } }),
+    ]);
+    await completeTool();
+    const joined = (await queue.claim("agent-worker", { queue: "agent-loops" }))!;
+    await pool.query("SELECT * FROM workhorse.create_child_v2($1, $2, $3, 'research', $4::jsonb)", [
+      joined.id,
+      "agent-worker",
+      joined.fenceToken.toString(),
+      JSON.stringify({ queue: "agent-tools", type: "tool", payload: { q: 1 } }),
+    ]);
+    await expect(createChildren(2, joined, set("calculate", 2))).resolves.toBe("limit_exceeded");
+    await expect(createChildren(1, joined, set("calculate", 2))).resolves.toBe("conflict");
+  });
+
+  it("joins the same set in a later activation and starts a redrive with no edges", async () => {
+    const parentId = await queue.enqueue("agent.loop", null, {
+      queue: "agent-loops",
+      maxAttempts: 1,
+    });
+    const first = (await queue.claim("agent-worker", { queue: "agent-loops" }))!;
+    await expect(createChildren(2, first, set("research", 1))).resolves.toBe("created");
+    await completeTool();
+    // The parent joins in a later activation, then the activation after it joins again.
+    const joined = (await queue.claim("agent-worker", { queue: "agent-loops" }))!;
+    await expect(createChildren(2, joined, set("research", 1))).resolves.toBe("completed");
+    await pool.query("SELECT workhorse.release_owned_v1($1, $2, $3)", [
+      joined.id,
+      "agent-worker",
+      joined.fenceToken.toString(),
+    ]);
+    const later = (await queue.claim("agent-worker", { queue: "agent-loops" }))!;
+    expect(later.fenceToken).not.toBe(joined.fenceToken);
+    await expect(createChildren(2, later, set("research", 1))).resolves.toBe("completed");
+    await expect(createChildren(2, later, set("calculate", 2))).resolves.toBe("limit_exceeded");
+    await pool.query("SELECT workhorse.fail_v1($1, $2, $3, $4::jsonb, -1)", [
+      later.id,
+      "agent-worker",
+      later.fenceToken.toString(),
+      JSON.stringify({ name: "ChildLimitExceededError", message: "second set" }),
+    ]);
+
+    // A redrive is a new task, so it has no child edge and no fence of the old activations.
+    const redrive = await admin.redrive(parentId, {
+      actor: "integration-test",
+      reason: "redrive the loop",
+      requestId: `child-set-redrive-${parentId}`,
+    });
+    expect(redrive.status).toBe("redriven");
+    const target = (await queue.claim("agent-worker", { queue: "agent-loops" }))!;
+    expect(target.id).toBe(redrive.targetTaskId);
+    await expect(createChildren(2, target, set("calculate", 2))).resolves.toBe("created");
+  });
+
+  it("still answers conflict for a changed set in another activation", async () => {
+    await queue.enqueue("agent.loop", null, { queue: "agent-loops" });
+    const first = (await queue.claim("agent-worker", { queue: "agent-loops" }))!;
+    // A set that v1 created has no recorded fence, as on a database before this release.
+    await expect(createChildren(1, first, set("research", 1))).resolves.toBe("created");
+    await completeTool();
+    const joined = (await queue.claim("agent-worker", { queue: "agent-loops" }))!;
+    // The handler code changed before this activation, so it never asked for the first set.
+    await expect(createChildren(2, joined, set("research", 2))).resolves.toBe("conflict");
+    await expect(createChildren(2, joined, set("calculate", 2))).resolves.toBe("conflict");
+    // A join through v2 records this activation.
+    await expect(createChildren(2, joined, set("research", 1))).resolves.toBe("completed");
+    await expect(createChildren(2, joined, set("calculate", 2))).resolves.toBe("limit_exceeded");
+  });
+});

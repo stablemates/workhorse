@@ -130,6 +130,11 @@ Thus, a failed or canceled child stays in the returned set, and the parent decid
 Workhorse releases the parent only after every child in the set ends. A set blocks the parent one
 time. If the set is empty, `runChildren` returns at once and does not block the parent.
 
+A parent holds one child set. If the handler asks for a second set after it joined the first set,
+Workhorse fails the parent with the child limit error of the SDK. Workhorse does not retry the
+parent, because each attempt asks for the same second set. For more than one round of children,
+see [How do I build a durable agent loop?](180-agentic-flow.md).
+
 Each outcome has one of three statuses: `succeeded` with a result, `failed` with an error, or
 `canceled` with an error. Each SDK gives the outcomes its own types.
 
@@ -162,7 +167,7 @@ Each outcome has one of three statuses: `succeeded` with a result, `failed` with
 
 Every set method keeps the declared names.
 
-**`create_children_v1(parent_task_id, worker_id, fence_token, children, mode)`**
+**`create_children_v2(parent_task_id, worker_id, fence_token, children, mode)`**
 
 - Accepts 0 to 100 requests with unique names. Each name holds 1 to 200 characters.
 - Zero children return `{}` without suspension, in either mode.
@@ -170,6 +175,23 @@ Every set method keeps the declared names.
 - Replay requires the exact names, normalized requests, and mode. It returns only after every child
   reaches a terminal state.
 - A parent uses either one `runChild` child or one child set, not both.
+- A set with other names in the activation that created or joined the set returns
+  `limit_exceeded`. A changed set from another activation returns `conflict`. The stored names with
+  a changed request also return `conflict` in the same activation, so the SDK can replay them under
+  the stored contract versions. `create_children_v1` returns `conflict` in each case.
+
+**Second child set.** The SDK raises its limit error, and the worker fails the parent with no
+retry. A second single child and a set of more than 100 children follow the retry policy.
+
+| SDK          | Error                      |
+| ------------ | -------------------------- |
+| TypeScript   | `ChildLimitExceededError`  |
+| Python       | `ChildLimitExceededError`  |
+| Go           | `*ChildLimitExceededError` |
+| Rust         | `Error::LimitExceeded`     |
+| Ruby         | `LimitExceededError`       |
+| Java, Kotlin | `LimitExceededException`   |
+| C#           | `LimitExceededException`   |
 
 **Join modes**
 
@@ -192,7 +214,7 @@ to 1,048,576 bytes. An oversized join returns `result_too_large` and raises
 
 **Events.** `children_created` and `children_joined` each append once per set.
 
-More detail: [Data model: Join modes](../architecture/data-model.md#join-modes), [Data model: Creating a child set](../architecture/data-model.md#creating-a-child-set), [Data model: Columns and constraints](../architecture/data-model.md#columns-and-constraints), [Schema and SQL protocol: JVM handler context](../architecture/schema-and-protocol.md#jvm-handler-context), and [Schema and SQL protocol: .NET handler context](../architecture/schema-and-protocol.md#net-handler-context).
+More detail: [Data model: Join modes](../architecture/data-model.md#join-modes), [Data model: Creating a child set](../architecture/data-model.md#creating-a-child-set), [Data model: Columns and constraints](../architecture/data-model.md#columns-and-constraints), [Schema and SQL protocol: Durable replay conflicts](../architecture/schema-and-protocol.md#durable-replay-conflicts), [Schema and SQL protocol: JVM handler context](../architecture/schema-and-protocol.md#jvm-handler-context), and [Schema and SQL protocol: .NET handler context](../architecture/schema-and-protocol.md#net-handler-context).
 
 </details>
 

@@ -59,7 +59,7 @@ describe("Workhorse SQLSTATE registry", () => {
     const raises = [...schema.matchAll(/ERRCODE\s*=\s*'(P\d{4})'[^;]*;/g)];
     const leaseLost = raises.filter(([, code]) => code === "P1004").map(([statement]) => statement);
     const diagnosed = raises.filter(([, code]) => code !== "P1004").map(([statement]) => statement);
-    expect(leaseLost).toHaveLength(3);
+    expect(leaseLost).toHaveLength(4);
     expect(diagnosed).toHaveLength(19);
     expect(leaseLost.filter((statement) => /DETAIL|HINT/.test(statement))).toEqual([]);
     expect(

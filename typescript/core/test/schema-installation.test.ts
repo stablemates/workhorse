@@ -442,12 +442,15 @@ describe("schema installation", () => {
     );
     expect(versioned.rows).toEqual([
       { name: "create_child_v2" },
+      { name: "create_children_v2" },
       { name: "create_single_child_v2" },
       { name: "deregister_worker_v2" },
       { name: "fire_due_schedules_v2" },
       { name: "heartbeat_many_v2" },
       { name: "heartbeat_v2" },
       { name: "save_checkpoint_v2" },
+      { name: "schedule_wait_v2" },
+      { name: "send_signal_v2" },
       { name: "sync_queue_health_policy_v2" },
       { name: "sync_schedule_definitions_v2" },
     ]);
@@ -739,6 +742,11 @@ describe("schema installation", () => {
         version: 96,
         description:
           "give cleanup and health one retention rule, use fixed-hour windows, and bound health walks",
+      },
+      {
+        version: 97,
+        description:
+          "compare wait targets in milliseconds, end signals to terminal tasks, limit a second child set, and show failed callbacks",
       },
     ]);
 

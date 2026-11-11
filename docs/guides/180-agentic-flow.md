@@ -43,6 +43,25 @@ const approval = await context.waitForSignal<{ approved: boolean }>("approval");
 gets the failure. If the model must see the result of each tool, also of a failed tool, use
 `runChildren`.
 
+## Run more than one round of tools
+
+A task holds one child set. Thus one `agent.loop` task can run one round of tools. Plan the rounds
+before you write the loop.
+
+**Example.** After the `research` result, the plan for `conv-12` needs a second round of tools.
+
+1. Worker B runs the handler again. `runChildrenAll` returns the stored results of the first round.
+2. The handler calls `runChildrenAll` again with a new set that holds `calculate`.
+3. Workhorse refuses the second set. The SDK raises its child limit error.
+4. Workhorse fails the task and does not retry it, because each attempt asks for the same second
+   set.
+
+To run more than one round, use one of these:
+
+- Continue the loop in a new task. At the end of a round, enqueue the next `agent.loop` task with
+  the state of the conversation in its payload. Then complete the current task.
+- Run each round in a child task. The child task runs the tools of its round as its own child set.
+
 ## Wait for a timer and an approval
 
 A loop can wait for time to pass, or for a person to approve the answer. Workhorse stores each wait
@@ -81,14 +100,14 @@ same result when the handler runs again:
 <details>
 <summary>Reference: boundaries in the example</summary>
 
-| Call                                               | SQL function                        | On replay                                                          |
-| -------------------------------------------------- | ----------------------------------- | ------------------------------------------------------------------ |
-| `HandlerContext.checkpoint(name, fn)`              | `save_checkpoint_v2`                | Returns the stored value without running `fn`.                     |
-| `HandlerContext.runChildrenAll(set)`               | `create_children_v1`, `all_success` | Returns the stored results. A changed set conflicts.               |
-| `HandlerContext.runChildren(set)`                  | `create_children_v1`, `settled`     | Returns one outcome per child.                                     |
-| `HandlerContext.sleep(name, ms)`                   | `schedule_wait_v1`                  | Returns the first stored wake target, even if `ms` changed.        |
-| `HandlerContext.waitForSignal(name)`               | `wait_for_signal_v1`                | Returns the retained signal payload.                               |
-| `Queue.sendSignal(taskId, name, payload, request)` | `send_signal_v1`                    | An equal retry with the same `idempotencyKey` returns `duplicate`. |
+| Call                                               | SQL function                        | On replay                                                                                                         |
+| -------------------------------------------------- | ----------------------------------- | ----------------------------------------------------------------------------------------------------------------- |
+| `HandlerContext.checkpoint(name, fn)`              | `save_checkpoint_v2`                | Returns the stored value without running `fn`.                                                                    |
+| `HandlerContext.runChildrenAll(set)`               | `create_children_v2`, `all_success` | Returns the stored results. A changed set conflicts. A second set raises the child limit error and ends the task. |
+| `HandlerContext.runChildren(set)`                  | `create_children_v2`, `settled`     | Returns one outcome per child.                                                                                    |
+| `HandlerContext.sleep(name, ms)`                   | `schedule_wait_v2`                  | Returns the first stored wake target, even if `ms` changed.                                                       |
+| `HandlerContext.waitForSignal(name)`               | `wait_for_signal_v1`                | Returns the retained signal payload.                                                                              |
+| `Queue.sendSignal(taskId, name, payload, request)` | `send_signal_v2`                    | An equal retry with the same `idempotencyKey` returns `duplicate`.                                                |
 
 - Each suspension clears ownership without closing the logical attempt.
 - Each wake makes the same attempt claimable under a new fence token.

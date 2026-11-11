@@ -23,6 +23,16 @@ Workaround: write the workflow in ordinary handler code, with checkpoints, waits
 task dependencies. If you must define and deploy a workflow separately from the application code,
 use a separate workflow tool. You can use it together with Workhorse or in its place.
 
+## Run one child set in each task
+
+A task holds one child set, the group of child tasks that one `runChildren` or `runChildrenAll`
+call creates. A task can also hold one child of `runChild` in place of a set. If a handler asks for
+a second child set after it joined the first one, Workhorse fails the task with the child limit
+error of the SDK and does not retry it. Thus one task of an agent loop can run one round of tools.
+
+Workaround: continue the loop in a new task, or run each round in a child task that owns its own
+set, as [How do I build a durable agent loop?](/docs/agentic-flow) describes.
+
 ## Make handlers stop when a cancellation arrives
 
 A worker never stops a running handler by force, because that is not safe. A cancellation, a

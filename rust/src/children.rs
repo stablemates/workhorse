@@ -204,13 +204,13 @@ impl HandlerContext {
             .shared(Operation::RunChildren, "children", identity, || async {
                 self.check(Operation::RunChildren)?;
                 let mut row = self
-                    .call(sql::CREATE_CHILDREN_V1, "create_children_v1", &[&requests, &mode])
+                    .call(sql::CREATE_CHILDREN_V2, "create_children_v2", &[&requests, &mode])
                     .await?;
                 if let Some(accepted) =
                     self.replayed(&row, &requests, &children, Shape::Set).await?
                 {
                     row = self
-                        .call(sql::CREATE_CHILDREN_V1, "create_children_v1", &[&accepted, &mode])
+                        .call(sql::CREATE_CHILDREN_V2, "create_children_v2", &[&accepted, &mode])
                         .await?;
                 }
                 match status(&row)?.as_str() {
@@ -228,6 +228,9 @@ impl HandlerContext {
                             .unwrap_or(0)
                             .into(),
                     }),
+                    // The set has at most MAX_CHILDREN children, which the check above proves, so
+                    // the limit is the second child set of this activation.
+                    "limit_exceeded" => Err(crate::context::second_child_set_limit()),
                     other => Err(self.refusal(Operation::RunChildren, "children", other)),
                 }
             })

@@ -265,6 +265,8 @@ final class TaskContext implements HandlerContext {
     if (time.isAfter(Instant.now().plusMillis(MAX_WAIT_MS))) {
       throw new IllegalArgumentException("wait time must be no more than 365 days in the future");
     }
+    // The protocol text cuts the instant to milliseconds, so a target of .1239996 s sends .123,
+    // also before 1970. schedule_wait_v2 compares at milliseconds.
     scheduleWait(name, null, Values.timestamp(time));
   }
 
@@ -283,7 +285,7 @@ final class TaskContext implements HandlerContext {
           live("sleep");
           Row row =
               worker.fencedRow(
-                  SqlCatalogue.SCHEDULE_WAIT_V1,
+                  SqlCatalogue.SCHEDULE_WAIT_V2,
                   task,
                   name,
                   durationMs == null ? null : Long.toString(durationMs),
@@ -549,20 +551,21 @@ final class TaskContext implements HandlerContext {
             null,
             () -> {
               live("runChildren");
-              Row row = worker.fencedRow(SqlCatalogue.CREATE_CHILDREN_V1, task, encoded, mode);
+              Row row = worker.fencedRow(SqlCatalogue.CREATE_CHILDREN_V2, task, encoded, mode);
               row =
                   replayed(
                       row,
                       encoded,
                       build,
                       accepted ->
-                          worker.fencedRow(SqlCatalogue.CREATE_CHILDREN_V1, task, accepted, mode));
+                          worker.fencedRow(SqlCatalogue.CREATE_CHILDREN_V2, task, accepted, mode));
               String status = row.text("status");
               switch (status == null ? "" : status) {
                 case "stale" -> throw new LeaseLostException(task.id(), "runChildren");
                 case "conflict" -> throw new ConflictException("runChildren", "child set");
-                case "limit_exceeded" ->
-                    throw new LimitExceededException("runChildren", "child set");
+                // The set has at most 100 children, which the check above proves, so the limit is
+                // the second child set of this activation.
+                case "limit_exceeded" -> throw LimitExceededException.secondChildSet();
                 case "result_too_large" ->
                     throw new ChildResultLimitExceededException(
                         row.requiredLong("result_bytes"), row.requiredLong("result_limit_bytes"));
@@ -775,6 +778,10 @@ final class TaskContext implements HandlerContext {
         if (overlap != null) {
           overlap.accept(running.request);
         } else if (!Objects.equals(running.request, request)) {
+          // A task holds one child set, so a second set in the same activation is a limit.
+          if ("runChildren".equals(kind)) {
+            throw LimitExceededException.secondChildSet();
+          }
           throw new ConflictException(kind, conflictName);
         }
       }

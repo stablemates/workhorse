@@ -690,6 +690,14 @@ export const SCHEMA_MIGRATIONS: readonly SchemaMigrationStep[] = [
       "give cleanup and health one retention rule, use fixed-hour windows, and bound health walks",
     kind: "additive",
   },
+  {
+    fromVersion: 96,
+    toVersion: 97,
+    file: "0098-compare-wait-targets-in-milliseconds-and-report-second-child-sets.sql",
+    description:
+      "compare wait targets in milliseconds, end signals to terminal tasks, limit a second child set, and show failed callbacks",
+    kind: "additive",
+  },
 ];
 
 /**

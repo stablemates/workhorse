@@ -2228,6 +2228,7 @@ impl core::marker::Unpin for workhorse::TaskGroupBlockResult
 impl core::panic::unwind_safe::RefUnwindSafe for workhorse::TaskGroupBlockResult
 impl core::panic::unwind_safe::UnwindSafe for workhorse::TaskGroupBlockResult
 pub struct workhorse::TaskGroupCallback
+pub workhorse::TaskGroupCallback::failure: core::option::Option<workhorse::TaskGroupCallbackFailure>
 pub workhorse::TaskGroupCallback::kind: workhorse::TaskGroupCallbackKind
 pub workhorse::TaskGroupCallback::task_id: core::option::Option<uuid::Uuid>
 impl core::clone::Clone for workhorse::TaskGroupCallback
@@ -2244,6 +2245,24 @@ impl core::marker::Sync for workhorse::TaskGroupCallback
 impl core::marker::Unpin for workhorse::TaskGroupCallback
 impl core::panic::unwind_safe::RefUnwindSafe for workhorse::TaskGroupCallback
 impl core::panic::unwind_safe::UnwindSafe for workhorse::TaskGroupCallback
+pub struct workhorse::TaskGroupCallbackFailure
+pub workhorse::TaskGroupCallbackFailure::code: alloc::string::String
+pub workhorse::TaskGroupCallbackFailure::failed_at: chrono::datetime::DateTime<chrono::offset::utc::Utc>
+pub workhorse::TaskGroupCallbackFailure::message: alloc::string::String
+impl core::clone::Clone for workhorse::TaskGroupCallbackFailure
+pub fn workhorse::TaskGroupCallbackFailure::clone(&self) -> workhorse::TaskGroupCallbackFailure
+impl core::cmp::Eq for workhorse::TaskGroupCallbackFailure
+impl core::cmp::PartialEq for workhorse::TaskGroupCallbackFailure
+pub fn workhorse::TaskGroupCallbackFailure::eq(&self, other: &workhorse::TaskGroupCallbackFailure) -> bool
+impl core::fmt::Debug for workhorse::TaskGroupCallbackFailure
+pub fn workhorse::TaskGroupCallbackFailure::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for workhorse::TaskGroupCallbackFailure
+impl core::marker::Freeze for workhorse::TaskGroupCallbackFailure
+impl core::marker::Send for workhorse::TaskGroupCallbackFailure
+impl core::marker::Sync for workhorse::TaskGroupCallbackFailure
+impl core::marker::Unpin for workhorse::TaskGroupCallbackFailure
+impl core::panic::unwind_safe::RefUnwindSafe for workhorse::TaskGroupCallbackFailure
+impl core::panic::unwind_safe::UnwindSafe for workhorse::TaskGroupCallbackFailure
 pub struct workhorse::TaskGroupCallbacks
 pub workhorse::TaskGroupCallbacks::on_failure: core::option::Option<workhorse::EnqueueRequest>
 pub workhorse::TaskGroupCallbacks::on_finish: core::option::Option<workhorse::EnqueueRequest>

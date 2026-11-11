@@ -2,9 +2,9 @@
   "formatVersion": 1,
   "protocolVersion": 5,
   "schema": {
-    "installedVersion": 96,
-    "minimumVersion": 76,
-    "maximumVersion": 96,
+    "installedVersion": 97,
+    "minimumVersion": 97,
+    "maximumVersion": 97,
     "baselineVersion": 6
   },
   "supportedClientProtocol": {
@@ -232,9 +232,19 @@
       "contract": "SELECT status, wait_name, mode, duration_ms::text, requested_wake_at, wake_at, attempt, fence_token::text, worker_id, created_at FROM workhorse.schedule_wait_v1($1::uuid, $2::text, $3::bigint, $4::text, $5::bigint, $6::timestamptz)"
     },
     {
+      "name": "schedule_wait_v2",
+      "arity": 6,
+      "contract": "SELECT status, wait_name, mode, duration_ms::text, requested_wake_at, wake_at, attempt, fence_token::text, worker_id, created_at FROM workhorse.schedule_wait_v2($1::uuid, $2::text, $3::bigint, $4::text, $5::bigint, $6::timestamptz)"
+    },
+    {
       "name": "create_children_v1",
       "arity": 5,
       "contract": "SELECT status, children, results, result_bytes, result_limit_bytes FROM workhorse.create_children_v1($1::uuid, $2::text, $3::bigint, $4::jsonb, $5::text)"
+    },
+    {
+      "name": "create_children_v2",
+      "arity": 5,
+      "contract": "SELECT status, children, results, result_bytes, result_limit_bytes FROM workhorse.create_children_v2($1::uuid, $2::text, $3::bigint, $4::jsonb, $5::text)"
     },
     {
       "name": "create_child_v1",
@@ -255,6 +265,11 @@
       "name": "send_signal_v1",
       "arity": 5,
       "contract": "SELECT status, payload, delivered_at, delivered_by FROM workhorse.send_signal_v1($1::uuid, $2::text, $3::jsonb, $4::text, $5::text)"
+    },
+    {
+      "name": "send_signal_v2",
+      "arity": 5,
+      "contract": "SELECT status, payload, delivered_at, delivered_by FROM workhorse.send_signal_v2($1::uuid, $2::text, $3::jsonb, $4::text, $5::text)"
     },
     {
       "name": "wait_for_human_v1",
@@ -342,9 +357,15 @@
     },
     {
       "name": "create_children_v1",
-      "pythonBinding": "create_children",
       "arity": 5,
       "contract": "SELECT status, children, results, result_bytes, result_limit_bytes FROM workhorse.create_children_v1($1::uuid, $2::text, $3::bigint, $4::jsonb, $5::text)",
+      "catalogues": ["protocol"]
+    },
+    {
+      "name": "create_children_v2",
+      "pythonBinding": "create_children",
+      "arity": 5,
+      "contract": "SELECT status, children, results, result_bytes, result_limit_bytes FROM workhorse.create_children_v2($1::uuid, $2::text, $3::bigint, $4::jsonb, $5::text)",
       "catalogues": ["protocol"]
     },
     {
@@ -632,9 +653,15 @@
     },
     {
       "name": "schedule_wait_v1",
-      "pythonBinding": "schedule_wait",
       "arity": 6,
       "contract": "SELECT status, wait_name, mode, duration_ms::text, requested_wake_at, wake_at, attempt, fence_token::text, worker_id, created_at FROM workhorse.schedule_wait_v1($1::uuid, $2::text, $3::bigint, $4::text, $5::bigint, $6::timestamptz)",
+      "catalogues": ["protocol"]
+    },
+    {
+      "name": "schedule_wait_v2",
+      "pythonBinding": "schedule_wait",
+      "arity": 6,
+      "contract": "SELECT status, wait_name, mode, duration_ms::text, requested_wake_at, wake_at, attempt, fence_token::text, worker_id, created_at FROM workhorse.schedule_wait_v2($1::uuid, $2::text, $3::bigint, $4::text, $5::bigint, $6::timestamptz)",
       "catalogues": ["protocol"]
     },
     {
@@ -645,9 +672,15 @@
     },
     {
       "name": "send_signal_v1",
-      "pythonBinding": "send_signal",
       "arity": 5,
       "contract": "SELECT status, payload, delivered_at, delivered_by FROM workhorse.send_signal_v1($1::uuid, $2::text, $3::jsonb, $4::text, $5::text)",
+      "catalogues": ["protocol"]
+    },
+    {
+      "name": "send_signal_v2",
+      "pythonBinding": "send_signal",
+      "arity": 5,
+      "contract": "SELECT status, payload, delivered_at, delivered_by FROM workhorse.send_signal_v2($1::uuid, $2::text, $3::jsonb, $4::text, $5::text)",
       "catalogues": ["protocol"]
     },
     {

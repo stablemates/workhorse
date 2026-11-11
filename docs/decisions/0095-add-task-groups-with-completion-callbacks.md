@@ -228,3 +228,30 @@ very large row. The callback can read each member task through `listTaskGroupMem
 
 A column that no feature uses is a promise that Workhorse must keep after 1.0.0. A later migration
 can add a nullable column at no cost.
+
+## Amendment: a callback that fails to enqueue stays visible (2026-11-11)
+
+A group finishes when its last member outcome commits. `finish_task_group_internal_v1` enqueues
+each selected callback in a subtransaction. If that enqueue fails with a SQLSTATE that does not
+start with `40` or `57`, it writes a `callback_failed` event, and the outcome commits. No routine
+tries the callback again (SM-1955).
+
+Three options were considered:
+
+1. Record the callback as pending and let maintenance try it again.
+2. Raise each callback enqueue error, so the last member outcome fails and its caller tries again.
+3. Keep the behavior, and make the failure durable and visible.
+
+Workhorse keeps option 3. `create_task_group_v1` already enqueues each callback request one time
+and rolls it back, so a request that cannot enqueue fails the create. A later failure thus comes
+from a change by an operator, for example a move of the callback queue to the fast tier when the
+request has a concurrency key. A retry loop would try a request that the new configuration
+refuses each time. Option 2 would block the outcome of a member task on a callback that cannot
+enqueue.
+
+The snapshot of `get_task_group_v1` adds `failure`, with `code`, `message`, and `failedAt`, to the
+object of a callback that a finished group has no callback task for and a `callback_failed` event
+for. The function reads the event, so the change adds no column. Each released reader reads only
+`taskId` from a callback object, so the function keeps its suffix under ADR 0109. The event lives as
+long as the group row, so maintenance deletes the record with the group after the outcome cutoff.
+The `dashboard/v1` group documents do not show the failure yet.

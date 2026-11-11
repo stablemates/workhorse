@@ -56,8 +56,8 @@ describe("schema floor", () => {
     const floor = await floorFor(catalogues);
 
     expect({ required: floor.version, introducedBy: floor.introducedBy }).toEqual({
-      required: 76,
-      introducedBy: ["deregister_worker_v2"],
+      required: 97,
+      introducedBy: ["create_children_v2", "schedule_wait_v2", "send_signal_v2"],
     });
     expect(manifest.schema.minimumVersion).toBeGreaterThanOrEqual(floor.version);
   });

@@ -873,3 +873,44 @@ def test_task_group_sqlstates_translate_with_a_fallback_for_unreadable_details()
         0,
         None,
     )
+
+
+def test_a_callback_that_failed_to_enqueue_has_a_failure(database_url: str) -> None:
+    with clients(database_url) as (connection, queue, _admin):
+        row = connection.execute(
+            "SELECT DISTINCT group_id FROM workhorse.create_task_group_v1(%s::jsonb, %s::jsonb, true)",
+            (
+                '{"onFinish": {"queue": "py-lost-callbacks", "type": "done", "payload": {},'
+                ' "concurrencyKey": "tenant-7"}}',
+                '[{"queue": "py-lost-members", "type": "work", "payload": {}}]',
+            ),
+        ).fetchone()
+        assert row is not None
+        group_id = str(row[0])
+        connection.execute(
+            "SELECT workhorse.set_queue_tier_v1('py-lost-callbacks', 'fast', 'python-test', 'test')"
+        )
+        complete_all(connection, "py-lost-members")
+        occurred_at = connection.execute(
+            "SELECT occurred_at FROM workhorse.task_group_event"
+            " WHERE group_id = %s AND event_type = 'callback_failed'",
+            (group_id,),
+        ).fetchone()
+        assert occurred_at is not None
+        group = queue.get_task_group(group_id)
+        assert group is not None
+        [callback] = group.callbacks
+        assert (callback.kind, callback.task_id) == ("on_finish", None)
+        assert callback.failure is not None
+        assert callback.failure.code == "P1007"
+        assert callback.failure.message == (
+            "fast-tier queue py-lost-callbacks does not support concurrency keys"
+        )
+        assert callback.failure.failed_at == occurred_at[0]
+
+        with queue.task_group(**callbacks("py-selected-callbacks")) as builder:
+            builder.add([member("py-selected-members", 1)])
+        complete_all(connection, "py-selected-members")
+        finished = queue.get_task_group(builder.result.group.id)
+        assert finished is not None
+        assert [callback.failure for callback in finished.callbacks] == [None, None, None]

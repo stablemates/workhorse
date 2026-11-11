@@ -742,13 +742,13 @@ public final class Queue {
         Rows.exactlyOne(
             Sql.rows(
                 call.connection,
-                SqlCatalogue.SEND_SIGNAL_V1,
+                SqlCatalogue.SEND_SIGNAL_V2,
                 taskId.toString(),
                 name,
                 document,
                 idempotencyKey,
                 requestedBy),
-            "send_signal_v1");
+            "send_signal_v2");
     if ("conflict".equals(row.text("status"))) {
       throw new SignalIdempotencyConflictException(taskId, name);
     }

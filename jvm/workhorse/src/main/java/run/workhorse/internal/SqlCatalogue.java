@@ -13,8 +13,8 @@ public final class SqlCatalogue {
 
   public static final int MINIMUM_PROTOCOL_VERSION = 5;
   public static final int MAXIMUM_PROTOCOL_VERSION = 5;
-  public static final int MINIMUM_SCHEMA_VERSION = 76;
-  public static final int MAXIMUM_SCHEMA_VERSION = 96;
+  public static final int MINIMUM_SCHEMA_VERSION = 97;
+  public static final int MAXIMUM_SCHEMA_VERSION = 97;
 
   /** PostgreSQL's atomic enqueue batch limit. */
   public static final int MAX_ENQUEUE_BATCH_SIZE = 1000;
@@ -154,6 +154,14 @@ public final class SqlCatalogue {
       new Statement(
           "create_children_v1",
           "SELECT status, children, results, result_bytes, result_limit_bytes FROM workhorse.create_children_v1(?::uuid, ?::text, ?::bigint, ?::jsonb, ?::text)",
+          5,
+          new int[] {1, 2, 3, 4, 5});
+
+  /** {@code create_children_v2} (protocol). */
+  public static final Statement CREATE_CHILDREN_V2 =
+      new Statement(
+          "create_children_v2",
+          "SELECT status, children, results, result_bytes, result_limit_bytes FROM workhorse.create_children_v2(?::uuid, ?::text, ?::bigint, ?::jsonb, ?::text)",
           5,
           new int[] {1, 2, 3, 4, 5});
 
@@ -517,6 +525,14 @@ public final class SqlCatalogue {
           6,
           new int[] {1, 2, 3, 4, 5, 6});
 
+  /** {@code schedule_wait_v2} (protocol). */
+  public static final Statement SCHEDULE_WAIT_V2 =
+      new Statement(
+          "schedule_wait_v2",
+          "SELECT status, wait_name, mode, duration_ms::text, requested_wake_at, wake_at, attempt, fence_token::text, worker_id, created_at FROM workhorse.schedule_wait_v2(?::uuid, ?::text, ?::bigint, ?::text, ?::bigint, ?::timestamptz)",
+          6,
+          new int[] {1, 2, 3, 4, 5, 6});
+
   /** {@code schema_version} (internal). */
   public static final Statement SCHEMA_VERSION =
       new Statement(
@@ -530,6 +546,14 @@ public final class SqlCatalogue {
       new Statement(
           "send_signal_v1",
           "SELECT status, payload, delivered_at, delivered_by FROM workhorse.send_signal_v1(?::uuid, ?::text, ?::jsonb, ?::text, ?::text)",
+          5,
+          new int[] {1, 2, 3, 4, 5});
+
+  /** {@code send_signal_v2} (protocol). */
+  public static final Statement SEND_SIGNAL_V2 =
+      new Statement(
+          "send_signal_v2",
+          "SELECT status, payload, delivered_at, delivered_by FROM workhorse.send_signal_v2(?::uuid, ?::text, ?::jsonb, ?::text, ?::text)",
           5,
           new int[] {1, 2, 3, 4, 5});
 
@@ -1402,6 +1426,7 @@ public final class SqlCatalogue {
           CREATE_CHILD_V1,
           CREATE_CHILD_V2,
           CREATE_CHILDREN_V1,
+          CREATE_CHILDREN_V2,
           DASHBOARD_HUMAN_WAIT_V1,
           DASHBOARD_SIGNAL_WAIT_V1,
           DEREGISTER_WORKER_V1,
@@ -1447,8 +1472,10 @@ public final class SqlCatalogue {
           SAVE_CHECKPOINT_V1,
           SAVE_CHECKPOINT_V2,
           SCHEDULE_WAIT_V1,
+          SCHEDULE_WAIT_V2,
           SCHEMA_VERSION,
           SEND_SIGNAL_V1,
+          SEND_SIGNAL_V2,
           SET_QUEUE_PAUSED,
           SET_WORKER_PAUSED,
           SYNC_CONCURRENCY_POLICIES_V1,

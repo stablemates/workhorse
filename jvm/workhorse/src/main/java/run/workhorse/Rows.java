@@ -61,6 +61,18 @@ final class Rows {
         members, more ? members.get(members.size() - 1).position() : null);
   }
 
+  static @Nullable TaskGroupCallbackFailure callbackFailure(
+      @Nullable Map<String, @Nullable Object> failure) {
+    if (failure == null
+        || !(failure.get("code") instanceof String code)
+        || !(failure.get("message") instanceof String message)
+        || !(failure.get("failedAt") instanceof String failedAt)) {
+      return null;
+    }
+    return new TaskGroupCallbackFailure(
+        code, message, java.time.OffsetDateTime.parse(failedAt).toInstant());
+  }
+
   static TaskGroup group(Row row) {
     Map<String, @Nullable Object> callbacks = Json.object(row.json("callbacks"));
     List<TaskGroupCallback> list = new ArrayList<>();
@@ -72,7 +84,9 @@ final class Rows {
           Object taskId = entry == null ? null : entry.get("taskId");
           list.add(
               new TaskGroupCallback(
-                  kind, taskId instanceof String text ? UUID.fromString(text) : null));
+                  kind,
+                  taskId instanceof String text ? UUID.fromString(text) : null,
+                  entry == null ? null : callbackFailure(Json.object(entry.get("failure")))));
         }
       }
     }

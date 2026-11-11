@@ -89,3 +89,26 @@ TypeScript and Go cannot. One SDK would then give a digest for an input that ano
 
 A required input would fail every task that stored a checkpoint before the deploy that adds the
 input. An optional check lets code add the input safely.
+
+## Amendment: a second child set ends the task as a child limit (2026-11-11)
+
+A task holds one child set. `create_children_v1` answers `conflict` when a handler asks for a
+second set, and each SDK raised its replay conflict error. That error says that the handler code
+changed, which is not true. `create_children_v2` answers `limit_exceeded` when the activation that
+created or joined the set asks for another set, as migration 0054 does for a second single child
+(SM-1956). Each SDK raises its child limit error for that answer. A second set names other children than the stored set. The stored names with a changed request stay a
+replay conflict, also in the same activation, so an SDK can replay them under the stored contract
+versions.
+
+A second child set stays terminal: the worker settles it with the terminal retry delay, as it
+settled the conflict before. Each SDK marks that limit error internally, and the replay conflict
+check accepts only the marked error. Thus the result of each released case does not change, and
+only the diagnosis changes.
+
+Each other child limit refusal follows the retry policy, as before: the second single child, a set
+of more than 100 children, and `result_too_large`. `docs/guides/130-durable-waits.md` states that
+rule, and the `child-limit` case of `protocol/v1/runtime.json` holds it in each SDK.
+
+Open question: a deterministic handler gets the same child limit answer on each attempt, so a retry
+of such a refusal cannot succeed. Whether each child limit refusal and `result_too_large` must end
+the task with no retry is a product decision for a later change.

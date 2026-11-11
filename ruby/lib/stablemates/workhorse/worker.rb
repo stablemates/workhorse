@@ -2067,14 +2067,17 @@ module Stablemates
         settle_status(task, state, arbiter, "fail", %w[failed], :failed, ownership)
       end
 
-      # The durable replay conflict (ADR 0098) that +error+ is or wraps, or nil. A handler can wrap a
-      # conflict in its own error. The conflict is terminal also then, as in Go and Rust, and the
-      # failure envelope records the name of the conflict. The walk stays bounded against a cyclic
-      # cause chain.
+      # The durable replay conflict (ADR 0098), or the limit error of a second child set, that
+      # +error+ is or wraps, or nil. Each one ends the task with no retry. A second child set was a
+      # replay conflict before create_children_v2 named it a limit, so it stays terminal. Each other
+      # child limit refusal follows the retry policy (the ADR 0098 amendment of SM-1956). A handler
+      # can wrap such an error in its own error. It is terminal also then, as in Go and Rust, and the
+      # failure envelope records its name. The walk stays bounded against a cyclic cause chain.
       def durable_replay_conflict(error)
         16.times do
           return nil if error.nil?
           return error if error.is_a?(ConflictError)
+          return error if error.is_a?(LimitExceededError) && error.instance_variable_get(:@second_child_set)
 
           error = error.cause
         end

@@ -325,6 +325,38 @@ replaces the bodies of `queue_health_v1`, `evaluate_queue_health_v1`,
 `maintain_task_groups_v1`. It rewrites no row and does not raise the
 SDK compatibility floor. Run `workhorse schema migrate`.
 
+### Three replay answers move to new function versions, and the floor rises to 97
+
+A Python, Go, or Rust worker parked a task until an absolute time with digits below the
+millisecond. A TypeScript, Ruby, JVM, or .NET worker replayed the same instant at milliseconds, and
+`schedule_wait_v1` answered `conflict`, so the task failed with no retry. The worker now calls
+`schedule_wait_v2`, which compares the stored target and the sent target at millisecond precision
+and stores the target as sent. A different millisecond still answers `conflict`. The TypeScript
+SDK sends a `Date` in milliseconds (SM-1945).
+
+A signal to a task that failed, completed, or was canceled before it declared the wait answered
+`not_waiting` and recorded a `signal_rejected` event each time. A sender that tried again had no
+end condition, and the events kept the task out of terminal cleanup. The SDK now calls
+`send_signal_v2`. For a terminal task with no wait of that name, it answers `stale` and records no
+event. A live task that has not reached the wait still answers `not_waiting` (SM-1946).
+
+A task holds one child set. A handler that asked for a second set got `ChildConflictError`, which says
+that the handler code changed. The SDK now calls `create_children_v2`, which answers
+`limit_exceeded` for a second set in the activation that created or joined the first set. The SDK
+raises `ChildLimitExceededError`, and the worker still fails the task with no retry. A changed set
+from another activation still raises the conflict error. A second single child and a set of more
+than 100 children still follow the retry policy (SM-1956).
+
+A group callback that failed to enqueue at the finish left only a `callback_failed` event. The
+group snapshot now shows the failure on that callback. `TaskGroupCallback` gains the optional `failure`, a `TaskGroupCallbackFailure` with `code`, `message`, and `failedAt`. Retention deletes this
+record with the group (SM-1955, ADR 0095).
+
+Migration 0098 (`0098-compare-wait-targets-in-milliseconds-and-report-second-child-sets.sql`)
+moves the schema to version 97. It adds `schedule_wait_v2`, `send_signal_v2`, and
+`create_children_v2`, and replaces the body of `get_task_group_v1`. The `_v1` functions keep their
+answers. The SDK floor rises from 76 to 97, so run `workhorse schema migrate` before the first
+process of this release starts.
+
 ## 0.12.0 — 2026-11-07
 
 The npm packages, Python distribution, Go module, Rust crate, Ruby gem, JVM artifacts, and .NET

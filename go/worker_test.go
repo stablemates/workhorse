@@ -643,7 +643,7 @@ func (tracer *scheduleWaitQueryTracer) TraceQueryStart(
 	_ *pgx.Conn,
 	data pgx.TraceQueryStartData,
 ) context.Context {
-	if !strings.Contains(data.SQL, "schedule_wait_v1") {
+	if !strings.Contains(data.SQL, "schedule_wait_v2") {
 		return ctx
 	}
 	tracer.once.Do(func() { close(tracer.started) })

@@ -193,7 +193,7 @@ module Stablemates
       def send_signal(task_id, name, payload, idempotency_key:, requested_by:)
         task_id = Values.task_id(task_id)
         document = validate_delivery("signal", "signal payload", name, payload, idempotency_key, requested_by)
-        row = deliver(SqlCatalogue::SEND_SIGNAL_V1, "send_signal_v1", task_id, name, document, idempotency_key,
+        row = deliver(SqlCatalogue::SEND_SIGNAL_V2, "send_signal_v2", task_id, name, document, idempotency_key,
           requested_by)
         raise SignalIdempotencyConflictError.new(task_id, name) if row.fetch("status") == "conflict"
 

@@ -18,8 +18,8 @@ is a rolling deployment, and a mixed fleet is supported while it runs.
 
 1. If you run cold exporters, stop each one and let it finish its object and manifest uploads. Keep
    cold export enabled, so retention keeps waiting for the export.
-2. Run `workhorse schema migrate`. It applies migrations 0093 through 0097 and leaves the schema at
-   version 96.
+2. Run `workhorse schema migrate`. It applies migrations 0093 through 0098 and leaves the schema at
+   version 97. Do this before the first process of the new release starts, because the floor rises.
 3. Roll out the new processes in any order. Then start the exporters again.
 
 A 0.12.0 database is at schema version 91. The migrations replace function bodies, 0095 adds
@@ -33,9 +33,13 @@ each `cold_export_segment` row that is exporting.
 | `0095-isolate-each-schedule-in-a-pass-and-match-two-wildcard-day-fields.sql`    | 94             | `fire_due_schedules_v2` isolates each schedule and records its error in three new `schedule_definition` columns, `sync_schedule_definitions_internal_v1` refuses a fast-tier concurrency key, `cron_occurrences_v1` matches two wildcard day fields, and `dashboard_cron_v1` returns the error                                                                                            |
 | `0096-export-a-day-after-its-snapshot-frontier-and-keep-held-retention-due.sql` | 95             | `claim_cold_export_segment_v1` waits for a snapshot frontier in two new `cold_export_dataset` columns, `send_signal_v1`, `complete_human_wait_v1`, and `record_batch_event_v1` take a transaction ID before an event, `rollup_stats_v1` keeps statistics rows that a coarser tier needs, and `retain_history_v1` keeps a held pass due                                                    |
 | `0097-give-cleanup-and-health-one-retention-rule-in-fixed-hours.sql`            | 96             | The new table `terminal_prune_position` lets `prune_full_terminal_tasks_internal_v1` and `prune_fast_terminal_tasks_internal_v1` examine bounded slices and lock only rows that they can delete, `queue_health_v1` applies the cleanup holds with a capped walk, `evaluate_queue_health_v1` adds `maintenance-failing` and `schedule-failing`, and each retention cutoff uses fixed hours |
+| `0098-compare-wait-targets-in-milliseconds-and-report-second-child-sets.sql`    | 97             | `schedule_wait_v2` compares an absolute target at milliseconds, `send_signal_v2` answers `stale` for a terminal task with no wait, `create_children_v2` answers `limit_exceeded` for a second child set, and `get_task_group_v1` shows a callback that failed to enqueue                                                                                                                  |
 
-Migration 0097, as 0093 through 0096, does not raise the floor, so it stays 76. The SQL functions change for
-every SDK version when each migration commits:
+Migrations 0093 through 0097 keep the floor. With migration 0098, the SDK schema floor rises from 76 to 97.
+Each SDK statement catalogue of the new release names `schedule_wait_v2`, `send_signal_v2`, and
+`create_children_v2`, which schema version 97 adds. A new process refuses every mutation on a
+schema below version 97. The SQL functions change for every SDK version when each migration
+commits:
 
 - A debounce request reads the clock after its last lock. It no longer writes a second task when a
   lock wait ends after its window.
@@ -110,8 +114,25 @@ every SDK version when each migration commits:
   runs again on the next offer until the hold ends. Before, it recorded `succeeded` and waited for the
   next local date.
 
-A 0.12 process keeps working on schema version 96, because a migration inside a major line only
-adds.
+Migration 0098 adds function versions, so its answers reach only the processes of the new release:
+
+- A replay of an absolute timer compares the target at millisecond precision. Before, a task that a
+  Python, Go, or Rust worker parked with digits below the millisecond failed with a wait conflict
+  when a TypeScript, Ruby, JVM, or .NET worker replayed it. A worker of an earlier release still
+  calls `schedule_wait_v1`. Thus during the rollout, such a task can still conflict when a
+  TypeScript, Ruby, JVM, or .NET worker of the earlier release replays it. Each SDK keeps the
+  precision that it sends, so a rollout inside one language is safe.
+- A signal to a terminal task that has no wait of that name returns `stale` and records no event.
+  Before, it returned `not_waiting` and recorded `signal_rejected` each time. A sender that tries
+  again after `not_waiting` can stop at `stale`.
+- A second child set in one activation raises the child limit error of the SDK, not its conflict
+  error. The task still fails with no retry. A second single child and a set of more than 100
+  children still follow the retry policy.
+- The group snapshot shows a callback that failed to enqueue at the finish, with its SQLSTATE, error message, and time. Retention deletes this record with the group.
+
+A 0.12 process keeps working on schema version 97, because a migration inside a major line only
+adds. Migration 0098 keeps `schedule_wait_v1`, `send_signal_v1`, and `create_children_v1` and their
+answers.
 
 ## Upgrade from 0.11.x to 0.12.0
 

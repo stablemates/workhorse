@@ -34,7 +34,7 @@ import {
   type WatchedCompletionClaim,
   type WorkerStatementWatch,
 } from "../worker-internal.js";
-import { durableReplayConflict } from "./replay-conflicts.js";
+import { terminalReplayError } from "./replay-conflicts.js";
 import { nullableRowTimestamp, rowTimestamp } from "./row-mapping.js";
 
 type ClaimRow = {
@@ -234,8 +234,8 @@ export function errorEnvelope(error: unknown, redactDetails = false): Json {
   // fields, with a null stack when the thrown value supplies none.
   if (redactDetails) return { name: REDACTED_ERROR_NAME, message: REDACTED_ERROR_MESSAGE };
   if (isError(error)) {
-    // A wrapped durable replay conflict keeps its name. The message and stack stay the outer ones.
-    const name = durableReplayConflict(error)?.name ?? error.name;
+    // A wrapped terminal replay error keeps its name. The message and stack stay the outer ones.
+    const name = terminalReplayError(error)?.name ?? error.name;
     return {
       name: storableText(name),
       message: storableText(error.message),
