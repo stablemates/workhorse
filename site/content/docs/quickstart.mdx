@@ -462,6 +462,9 @@ SURVIVED=1 node crash-demo.ts  # finishes the task
    so `charging card…` does not print.
 5. The handler prints the label and finishes the task.
 
+The second run does not exit after the task finishes, because `worker.run()` continues to poll for
+new tasks. Press Ctrl+C to stop the process.
+
 <Diagram
   name="quickstart-crash"
   alt="The worker stops after the charge, and the next run does not charge again"

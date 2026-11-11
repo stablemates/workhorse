@@ -260,10 +260,14 @@ Every production statement is self-contained. No code path changes a session set
 cursor, or takes a session-level advisory lock. Two code paths set transaction-local values only:
 a migration step takes its lock behind `SET LOCAL lock_timeout`, and a heartbeat round sets its
 timeouts with `set_config(..., true)`. Those values end with the transaction. Thus
-`pool_mode = transaction` serves every queue operation.
+`pool_mode = transaction` serves every queue operation, if one condition is true. The driver must
+send no named prepared statement, or the pooler must keep the prepared statements of each client
+across its transactions. [Prepared statements](#prepared-statements) gives the condition for each
+SDK.
 
-Two kinds of session state are the exceptions. `integration-pooling.test.ts` runs each pooler and
-pool mode as a separate lane to prove the boundary.
+Two kinds of session state are the other exceptions. `integration-pooling.test.ts` runs each pooler
+and pool mode as a separate lane to prove the boundary. Only the TypeScript CI lanes run a pooler.
+No CI lane runs a pooler with the other six SDKs.
 
 #### `LISTEN` notifications
 
@@ -289,6 +293,30 @@ leak onto pooled backends.
 Every Workhorse advisory lock is transaction-scoped (`pg_advisory_xact_lock`,
 `pg_try_advisory_xact_lock`, `pg_advisory_xact_lock_shared`). This includes the schema-migration
 lock. No production path is affected. The session forms exist only in test harnesses.
+
+#### Prepared statements
+
+A named prepared statement is a statement that a server session parses one time and keeps under a
+name. It stays on that server session. In transaction mode, the next transaction of the client can
+run on another server session, which does not have the name. PostgreSQL then refuses the statement,
+for example with SQLSTATE `26000`, and the transaction fails. Thus a named statement works in
+transaction mode only if the pooler keeps the prepared statements of a client across its
+transactions. [ADR 0077](../decisions/0077-add-a-fast-task-tier-that-records-one-outcome-row-per-task.md)
+records that PgCat, and PgBouncer without prepared-statement support, do not.
+
+| SDK             | Driver                                                                                  | Named statements that the SDK sends                                                                                                                                                                                                                      | Condition for transaction mode                                                                                                                         |
+| --------------- | --------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| TypeScript      | node-postgres (`pg`)                                                                    | None. The SDK gives no statement `name`, so node-postgres sends the unnamed statement.                                                                                                                                                                   | None. The CI lanes run this case.                                                                                                                      |
+| Python, psycopg | psycopg 3                                                                               | Queue statements keep the `prepare_threshold` of the connection. With the psycopg default of 5, psycopg prepares a statement under a name after five executions. A heartbeat round sends its statements with `prepare=False`.                            | Set `prepare_threshold=None` on each connection of the pool, or use a pooler that keeps prepared statements.                                           |
+| Python, asyncpg | asyncpg                                                                                 | While `statement_cache_size` is above 0 (the asyncpg default is 100), asyncpg names each statement that it caches. It also names the heartbeat statements that `AsyncpgExecutor.prepare` prepares.                                                       | Set `statement_cache_size=0` on the pool, or use a pooler that keeps prepared statements. With 0, asyncpg sends only the unnamed statement.            |
+| Go              | pgx v5                                                                                  | The pgx default `default_query_exec_mode`, `cache_statement`, names each statement. The heartbeat connection also prepares `heartbeat_pool_v1` and the settings statement under names, in every exec mode.                                               | The pooler must keep prepared statements. A different exec mode does not change the heartbeat statements.                                              |
+| Rust            | tokio-postgres, through deadpool-postgres. SQLx 0.8.6 for the `sqlx` enqueue transport. | tokio-postgres prepares each statement under a name before it runs it, and the heartbeat keeps `heartbeat_pool_v1` through `prepare_cached`. SQLx names each query of the transport, because the transport keeps the SQLx default of a persistent query. | The pooler must keep prepared statements. The SDK uses no driver call that sends the unnamed statement, so no setting of the application changes this. |
+| Ruby            | pg                                                                                      | None. `exec_params` and `send_query_params` send the unnamed statement.                                                                                                                                                                                  | None.                                                                                                                                                  |
+| JVM             | PgJDBC                                                                                  | After `prepareThreshold` executions of one statement (the PgJDBC default is 5), PgJDBC uses a named server-side statement.                                                                                                                               | Set `prepareThreshold=0` on the connection, or use a pooler that keeps prepared statements. With 0, PgJDBC sends each statement as unnamed.            |
+| .NET            | Npgsql                                                                                  | None by default. The SDK prepares no statement. Npgsql prepares statements automatically only when `Max Auto Prepare` is above 0, and its default is 0.                                                                                                  | Keep `Max Auto Prepare` at 0, or use a pooler that keeps prepared statements.                                                                          |
+
+The conditions come from the SDK source and the driver documentation. No CI lane runs a pooler
+with an SDK other than TypeScript, so no test proves them.
 
 #### Heartbeat connection
 

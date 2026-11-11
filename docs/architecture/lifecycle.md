@@ -343,6 +343,16 @@ scan when another tick ran it within half the shortest live maintenance interval
    migration 0084 (schema version 83), such a scan records nothing, so the next tick scans again.
 4. If no row is live, as for a direct `tick_v1` caller, every tick runs the scan.
 
+Thus the shortest live `maintenance_interval_ms` sets the scan rate for the whole fleet, not for
+one worker. `worker_registry` accepts a `maintenance_interval_ms` of 100 or more. If one live worker
+registers 100, the gate is 50 ms for every worker. Then a tick that gets the `workhorse:tick` lock
+reads every active full-tier lease, if no tick recorded a scan in the last 50 ms and earlier
+recovery work did not fill the limit. While that tick holds the lock, the ticks
+of the other workers skip. The fast tier finds its overdue leases through the index
+`fast_task_runtime_active_due_idx`, so this full scan does not apply to it. No measurement of the
+scan at a large number of active leases is recorded
+([SM-1960](https://linear.app/stablemates/issue/SM-1960)).
+
 A row that another transaction locks does not count, because the scan skips it with
 `SKIP LOCKED`. Thus a scan that returns fewer rows because of a locked row is complete, and the
 transaction that holds the lock decides that row. A later scan recovers it if it is still expired.
@@ -499,6 +509,12 @@ default cadence:
 | Partition preparation    | Every six hours.                                                                                                    |
 | Terminal storage cleanup | Every five minutes. Five seconds after a pass that ended with a full batch.                                         |
 | History retention        | Once per local date at or after `maintenance_policy.history_retention_local_time` in `maintenance_policy.timezone`. |
+
+History retention sets `maintenance_state.last_completed_local_date` only after a complete pass. A
+pass that leaves an expired history partition, an expired row in a default partition, or an
+expired schedule run is `incomplete`. The routine then stays due on that local date, and each later
+`run_maintenance_v1` call runs another pass. Thus "once per local date" is the cadence of complete
+passes.
 
 Partition creation and partition retirement each stop a DDL lock attempt after 250 ms. They do not
 wait without a limit behind dispatch or behind a long reader, such as `pg_dump`.
@@ -859,6 +875,24 @@ those locks, which can block.
 | No concurrency policy | Selects the strict-priority head through `task_runtime_ready_idx`.                                                            |
 | Concurrency policy    | Counts only unexpired active rows through `task_runtime_active_queue_key_expiry_idx` and stops when its held shards are full. |
 | Rate policy           | Refills the held shards from PostgreSQL time and returns null when they hold no whole token.                                  |
+
+The concurrency count limits dispatch. It is not a mutual exclusion lock, also while every lease is
+live. The count reads the active rows with no row lock, and it compares `expires_at` with the claim
+clock. A renewal through `heartbeat_many_v2` or `heartbeat_v2` locks its row, reads the clock, and
+extends `expires_at` if the lease is still live. Until the renewal commits, a claim reads the old
+`expires_at`.
+
+1. A renewal reads the clock just before the lease ends.
+2. A claim reads its clock after the lease ends, before the renewal commits.
+3. The claim counts the lease as expired and can start one more task.
+4. The renewal commits, and both leases are live.
+
+Thus the queue can go above `max_active`, and a key above `max_active_per_key`, by one task for each
+such overlap. The window lasts from the old `expires_at` of the lease to the commit of the
+renewal. A longer commit, for example on a synchronous replica, makes the window longer. A queue
+with `max_active` of 1 therefore does not give one handler exclusive access. Lease recovery is safe in the same window,
+because `recover_expired_v1` locks the row with `FOR UPDATE SKIP LOCKED` and tests `expires_at`
+again.
 
 Priority dispatch has no aging or fair-share control. A sustained stream of higher-priority ready
 work can starve lower-priority rows in the same queue.
@@ -1517,6 +1551,24 @@ claim can have filled the shard with leases that the count cannot see.
 The count includes active rows whose lease has expired, although claim admission excludes them.
 Thus, if a lease expires after a claim finds a shard full, the lease cannot hide the cap from a
 later release.
+
+##### Count cost
+
+A release that gets the shard lock can run up to three counts over the active `task_runtime` rows
+of its queue. Each count stops at a policy limit:
+
+1. The rows of its shard, up to the share of that shard. No index holds `admission_shard`, so the
+   count tests `COALESCE(admission_shard, 0) % shards` on each active row of the queue that it
+   reads. If the shard is not full, it reads every active row of the queue.
+2. The rows of the queue, up to `max_active`.
+3. The rows of its `concurrency_key`, up to `max_active_per_key`. This count runs only if the policy
+   sets `max_active_per_key` and the row has a key.
+
+The shard share is at most `max_active`, and `max_active_per_key` is at most `max_active`. Thus
+the cost of one release can grow with `max_active`, which accepts up to 1,000,000. The trigger runs
+on every release of an active row on a governed queue. If a claim holds the shard lock, the release
+publishes without the counts. No measurement at a large `max_active` is recorded
+([SM-1991](https://linear.app/stablemates/issue/SM-1991)).
 
 ##### Lease expiry
 

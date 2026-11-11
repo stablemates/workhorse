@@ -287,6 +287,13 @@ W3 was only frozen, its old handler can run at the same time as the new attempt.
 tokens](020-leases-and-fences.md) still prevent the old attempt from recording a result. Handlers
 must still accept at-least-once delivery.
 
+The policy does not give exclusive access while every lease is valid either. A worker renews its
+lease before the lease ends. Suppose that a renewal starts just before the lease ends, and has not
+committed when the lease ends. A claim that runs after the lease ends, but before the commit, counts
+that lease as expired. It can start one more task, and then both leases are valid. Thus the queue
+can have one task above its limit for each such overlap. A `maxActive` of 1 is not a mutual
+exclusion lock. Do not use it as one.
+
 If a task leaves a full queue, a full key, or a full
 [admission shard](#run-many-workers-against-one-limit), PostgreSQL wakes the workers that listen for
 that queue. Other releases wake no worker, because no claim waits for them. If a notification is
@@ -301,7 +308,9 @@ workers.
 <summary>Reference: capacity and release notifications</summary>
 
 **Counting.** Admission counts only active rows whose `expires_at` is later than now, through
-`task_runtime_active_queue_key_expiry_idx`.
+`task_runtime_active_queue_key_expiry_idx`. The count takes no row lock. A renewal through
+`heartbeat_many_v2` that commits after a claim reads the clock can put the queue one task above
+`max_active`, or a key one task above `max_active_per_key`, for each such overlap.
 
 **Notification.** `notify_concurrency_capacity_v1` runs when a governed runtime leaves `active` or
 is deleted. Completion, failure, retry release, cancellation, durable wait, and recovery all count.
@@ -318,7 +327,7 @@ the lock of its shard at once publishes without counting.
 a lease expires. Recovery, `recover_expired_v1`, releases the expired row on a later maintenance
 tick, and that release publishes the queue.
 
-More detail: [Task lifecycle: Capacity release notifications](../architecture/lifecycle.md#capacity-release-notifications).
+More detail: [Task lifecycle: Admission policies](../architecture/lifecycle.md#admission-policies) and [Task lifecycle: Capacity release notifications](../architecture/lifecycle.md#capacity-release-notifications).
 
 </details>
 

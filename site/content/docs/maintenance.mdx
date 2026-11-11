@@ -622,6 +622,31 @@ More detail: [Task lifecycle: Schedule run retention lag](https://github.com/sta
 
 </details>
 
+### Clear past-day rows from the default partitions
+
+A default partition catches history rows when no daily partition exists for them. Partition
+preparation creates the current UTC day and the days after it. It never creates a past day. Thus,
+after a gap in preparation, the rows of the past days stay in the default partitions.
+
+**Example.** No worker runs maintenance for ten days. Before the gap, preparation created the
+partitions of the next few days only.
+
+1. After those days, the events and attempts of each day go to the default partitions.
+2. The workers start again. Preparation creates the current day and the days after it. The rows of
+   the past days stay in the default partitions, and queue health reports them.
+3. When the window of those rows ends, the history pass deletes a limited number of them. Expired
+   rows remain, so the pass is incomplete, and the next maintenance pass deletes more.
+4. When no expired row remains, the history pass completes.
+
+Usually, you can let retention delete these rows. Each pass deletes a limited number of them, and
+the pass repeats until no expired row remains. For a shorter drain, raise the row limit of the
+default partitions.
+
+You can also move the rows of one past day into a daily partition now. Do this only in a maintenance
+window. While the move copies the rows, it holds an exclusive lock on both history tables. Each
+claim, completion, and enqueue that writes history waits until the move commits. Thus the queue
+stops for the time of the copy, and a day with many rows stops it for longer.
+
 ### Send queue metrics to OpenTelemetry
 
 Workhorse can send its metrics to OpenTelemetry without a poll from your code. One metrics observer

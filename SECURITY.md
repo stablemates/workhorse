@@ -87,13 +87,13 @@ CI runs `pnpm jvm:verification-metadata:check`. It fails if a file is not curren
 nowhere else.** There are no maintenance branches, no backports, and no long-term-support
 designation. An older minor does not receive a fix; upgrade to the current line to receive one.
 
-The affected lines are the ones that contain the vulnerable code. Every release publishes all six
+The affected lines are the ones that contain the vulnerable code. Every release publishes all seven
 lines at one version, as one release train. If the defect is in one SDK, the fix ships in a release
 train like any other release. Each other line publishes the same version with no change, a
 version-only release
 ([ADR 0106](docs/decisions/0106-keep-the-release-lines-in-lockstep-after-1-0-0.md)).
 
-The six lines are these:
+The seven lines are these:
 
 - The ten `@stablemates/workhorse*` npm packages, released in lockstep.
 - The `stablemates-workhorse` Python distribution.
@@ -102,6 +102,8 @@ The six lines are these:
 - The `stablemates-workhorse` Ruby gem.
 - The three `run.workhorse` JVM artifacts for Java, Kotlin, and Spring Boot. Maven Central serves
   them with one version.
+- The four .NET packages `Workhorse`, `Workhorse.Hosting`, `Workhorse.EntityFrameworkCore`, and
+  `Workhorse.AspNetCore`. nuget.org serves them with one version.
 
 [`docs/compatibility.md`](docs/compatibility.md) defines the supported runtimes.
 [`docs/releasing.md`](docs/releasing.md) defines the release process.

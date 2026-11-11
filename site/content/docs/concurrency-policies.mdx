@@ -519,6 +519,13 @@ W3 was only frozen, its old handler can run at the same time as the new attempt.
 tokens](/docs/workers) still prevent the old attempt from recording a result. Handlers
 must still accept at-least-once delivery.
 
+The policy does not give exclusive access while every lease is valid either. A worker renews its
+lease before the lease ends. Suppose that a renewal starts just before the lease ends, and has not
+committed when the lease ends. A claim that runs after the lease ends, but before the commit, counts
+that lease as expired. It can start one more task, and then both leases are valid. Thus the queue
+can have one task above its limit for each such overlap. A `maxActive` of 1 is not a mutual
+exclusion lock. Do not use it as one.
+
 If a task leaves a full queue, a full key, or a full
 [admission shard](#run-many-workers-against-one-limit), PostgreSQL wakes the workers that listen for
 that queue. Other releases wake no worker, because no claim waits for them. If a notification is

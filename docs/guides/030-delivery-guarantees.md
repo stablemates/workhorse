@@ -138,7 +138,7 @@ does not call the operation.
 | Checkpoint name  | 1 to 200 characters                                          |
 | Checkpoint value | 1,048,576 bytes of PostgreSQL's canonical JSONB text (1 MiB) |
 
-**`save_checkpoint_v1`**
+**`save_checkpoint_v2`**
 
 - The primary key `(task_id, checkpoint_name)` makes each name immutable for the task.
 - The function locks the exact active, unexpired worker and fence before it inserts. It returns
@@ -146,6 +146,8 @@ does not call the operation.
   passed.
 - An equal repeated save returns `existing`. A different value returns `conflict`. The worker
   then fails the task without a retry, whatever attempts remain.
+- If both saves give an input fingerprint and the two fingerprints differ, the function returns
+  `input_conflict`. A NULL fingerprint on either side never conflicts.
 - A new save appends a `checkpoint_saved` event.
 - TypeScript `HandlerContext.checkpoint` reads an existing value before it runs user code.
   Overlapping calls for one name in one handler share the first call's result or error.
@@ -173,7 +175,7 @@ charges the card only one time, for all attempts.
 <details>
 <summary>Reference: checkpoint window</summary>
 
-- `save_checkpoint_v1` runs after the operation returns.
+- `save_checkpoint_v2` runs after the operation returns.
 - A process can disappear after an external system commits but before the checkpoint transaction
   commits. The next attempt then runs the operation again.
 - A checkpoint does not make external effects exactly once.

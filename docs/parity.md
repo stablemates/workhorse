@@ -493,6 +493,21 @@ round-trips an integer exactly, and `typescript/core/test/json-integers.test.ts`
 `dotnet/tests/Workhorse.Tests/Internal/Json/JsonIntegersTests.cs` holds the .NET codec to the bound,
 to an exact `JsonElement` and `long` beyond it, and to `JsonException` above the `long` range.
 
+## Integral float text
+
+The SDKs do not write an integral float, such as one point zero, in the same form. Python
+encodes a payload or a result with `json.dumps`, which writes `1.0`. Go (`json.Marshal`) and
+TypeScript (`JSON.stringify`) write `1`. PostgreSQL keeps the text of a `jsonb` number, so the
+stored text is different. Thus a Python handler that reads a value that Go wrote gets the `int` 1,
+not the `float` 1.0.
+
+The two values are equal in `jsonb`, so a comparison in PostgreSQL treats them as one value. The
+checkpoint input fingerprint writes each number in the ECMAScript form, so `1.0` and `1` give the
+same fingerprint in each SDK. The vector `one-with-a-fraction` in
+`protocol/v1/checkpoint-fingerprints.json` holds the SDKs to that. Thus a replay sees no input
+conflict. Only a handler that tests the type of a number, or that compares JSON text, can see the
+difference.
+
 Linear owns the SDK roadmap, sequencing, blockers, and completion state in the `stablemates`
 workspace, `SM` team, and `workhorse` project. This document changes only
 when repository tests prove a capability has shipped or been withdrawn.
