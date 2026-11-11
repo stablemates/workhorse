@@ -1430,6 +1430,22 @@ in each observation:
 `pnpm soak:report` derives the per-index growth across the series. If an operator sees that series
 climb rather than settle, the operator can use the statement above.
 
+#### Queue name
+
+`queue_name` is a UTF-8 string of 1 through 256 bytes, the limit that the policy functions use.
+Since migration 0094 (schema version 93), `enqueue_batch_v1` raises `queue name must contain at most
+256 UTF-8 bytes` before any lock or write. Every enqueue entry point calls it, so the limit applies
+to plain, keyed, debounced, and throttled requests. `enqueue_debounce_v1` raises the same error
+before its first lock, because a debounce request can return before it calls `enqueue_batch_v1`.
+Outside read committed, `lock_queue_tiers_v1` raises the same error for any call with a longer name,
+for example a redrive of a task that an earlier release accepted. `sync_schedule_definitions_internal_v1` raises
+`schedule queue name must contain at most 256 UTF-8 bytes`, because each fire enqueues its task.
+No table constraint holds the limit, so a task or `queue_control` row that an earlier release
+accepted with a longer name stays. A stored schedule with a longer name also stays, but each fire
+of it fails in the enqueue. Before migration 0095 (SM-1927), that failure also fails the pass of
+`fire_due_schedules_v2` for the other schedules. Before migration 0094, a name of 257 to 7,999 bytes was accepted, and a longer name failed
+in `pg_notify` with `payload string too long` (SM-1939).
+
 #### Concurrency key
 
 `concurrency_key` is null or a UTF-8 string of 1 through 256 bytes. `task` retains the accepted
@@ -2962,6 +2978,24 @@ Before its first delete, `purge_queue_internal_v1` locks its full-tier rows in t
 After the full-tier deletes and cancels, it locks the `ready` rows of the queue in
 `fast_task_runtime`, in identity order, then their `task` rows, in identity order. It then deletes
 those tasks.
+
+Producers and workers can continue to use the queue during a purge. Since migration 0094 (schema
+version 93), the purge removes only the tasks that step 1 locks, and the fast-tier lock of the
+`ready` rows does the same for that tier:
+
+1. Step 1 returns the identity array of the rows that it locks. Step 2, step 3, every delete, and
+   every cancel use only that array. The fast-tier part keeps a second array in the same way.
+2. A task that commits while the purge waits for a lock is not in the array. It stays, and a worker
+   can claim, renew, and complete it, as after the purge.
+3. Step 2 locks only the tasks of the array. A task that commits between step 1 and step 2 holds
+   no lock of the purge, so the purge does not deadlock with a claim of that task.
+4. A task that a worker claims before step 1 locks its row is `active`, so step 1 does not lock it.
+
+Before migration 0094, step 2 and the deletes read the queue again with later snapshots. A task that
+committed during the purge could be deleted after a worker claimed it, and its heartbeat returned
+`stale` and its completion returned `false`. It could also make the purge deadlock with a claim
+(`40P01`). A keyed fast-tier task that committed between two deletes made the purge fail with a
+foreign key error on `enqueue_idempotency` (SM-1926).
 
 `lock_enqueue_prerequisites_internal_v1` locks the prerequisites of an enqueue in the same order:
 every `task_runtime` row, then every `task` row, each in identity order, `FOR KEY SHARE`. Thus a

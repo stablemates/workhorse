@@ -454,6 +454,47 @@ More detail: [Overview: Errors in a caller's transaction](https://github.com/sta
 
 </details>
 
+### Retry an enqueue at repeatable read or serializable
+
+**Example.** A signup request for `acc-7` runs at the repeatable read isolation level. During the
+request, an operator moves the queue of `account.created` to the fast tier.
+
+1. The app server starts a repeatable read transaction and inserts the row for `acc-7`. PostgreSQL
+   takes the snapshot of the transaction at this first statement.
+2. The operator changes the tier of the queue, and the change commits.
+3. The app server enqueues `account.created`. The snapshot is older than the tier change, so
+   PostgreSQL refuses the enqueue with a serialization failure.
+4. The app server rolls back the transaction and runs the request again. The new transaction sees
+   the fast tier, and the enqueue succeeds.
+
+The tier of a queue decides which table holds its tasks. At the read committed level, which is the
+PostgreSQL default, each enqueue reads the current tier. At repeatable read or serializable, the
+enqueue reads the tier from the snapshot of the transaction. Thus Workhorse locks the queue
+settings of each queue in the request. If the tier changed after the snapshot, the enqueue fails
+and aborts the transaction.
+
+At these two levels, retry the whole transaction after a serialization failure. This is the same
+retry that PostgreSQL requires for any other serialization failure. The first enqueue to a new
+queue also writes its queue settings. Thus two such enqueues to one new queue can make one of them
+fail, and its retry succeeds. Claims and tier changes do not accept these levels.
+
+<details>
+<summary>Reference: isolation levels</summary>
+
+| Isolation level                  | Enqueue                                                                    |
+| -------------------------------- | -------------------------------------------------------------------------- |
+| Read committed, read uncommitted | Reads `queue_control.tier` after the shared tier lock. Takes no row lock.  |
+| Repeatable read, serializable    | Inserts each missing `queue_control` row, then locks each row `FOR SHARE`. |
+
+- At repeatable read or serializable, the enqueue fails with SQLSTATE `40001` if a tier change
+  updated the `queue_control` row after the snapshot, or if another transaction inserted the row
+  after it.
+- Every claim entry point and `set_queue_tier_v1` raise SQLSTATE `0A000` outside read committed.
+
+More detail: [Task lifecycle: Isolation requirement](https://github.com/stablemates/workhorse/blob/main/docs/architecture/lifecycle.md#isolation-requirement).
+
+</details>
+
 ### Pass a node-postgres transaction client
 
 `Queue.enqueue` accepts your open transaction client as its last argument. Any object with a

@@ -2879,3 +2879,132 @@ async function lockedReadyRows(queueName: string): Promise<number> {
   );
   return Number(result.rows[0]!.locked);
 }
+
+// A claim computes its lease from a clock sample taken after its row lock (SM-1963). A wait on the
+// update chain of a ready row happens inside one statement, so a test cannot time it. The holder
+// here takes a table lock on workhorse.task instead. A claim reads that table first in the
+// statement that locks its row, so the claim waits at the same point as on an update chain.
+describe("claim lease after a lock wait", () => {
+  const leaseMs = 200;
+  const holdMs = 4 * leaseMs;
+
+  const entries = [
+    ["claim_one_v1", "SELECT * FROM workhorse.claim_one_v1($1, 'lease-wait-worker', $2, true)"],
+    ["claim_many_v1", "SELECT * FROM workhorse.claim_many_v1($1, 'lease-wait-worker', 1, $2)"],
+  ] as const;
+  // The table lock makes the claim wait before it locks its runtime row. The row lock makes the
+  // claim wait after that, for the key-share lock on the task row that the claim event takes.
+  const holds = [
+    ["a table lock", () => "LOCK TABLE workhorse.task IN ACCESS EXCLUSIVE MODE"],
+    [
+      "a task row lock",
+      (taskId: string) => `SELECT 1 FROM workhorse.task WHERE id = '${taskId}' FOR UPDATE`,
+    ],
+  ] as const;
+  const cases = entries.flatMap(([entry, statement]) =>
+    holds.map(([hold, lock]) => ({ entry, statement, hold, lock })),
+  );
+
+  it.each(cases)(
+    "starts the lease of $entry after a wait for $hold",
+    async ({ statement, lock }) => {
+      const queueName = `lease-wait-${randomUUID()}`;
+      const taskId = await queue.enqueue("lease-wait", {}, { queue: queueName });
+      const holder = await pool.connect();
+      const claimer = await pool.connect();
+      try {
+        const claimerPid = (await claimer.query<{ pid: number }>("SELECT pg_backend_pid() AS pid"))
+          .rows[0]!.pid;
+        await holder.query("BEGIN");
+        await holder.query(lock(taskId));
+        const claim = claimer.query<{ task_id: string; lease_expires_at: Date }>(statement, [
+          queueName,
+          leaseMs,
+        ]);
+        await waitForDatabaseCondition(async () => {
+          const waiting = await pool.query<{ blocked: boolean }>(
+            "SELECT cardinality(pg_blocking_pids($1)) > 0 AS blocked",
+            [claimerPid],
+          );
+          return waiting.rows[0]!.blocked;
+        });
+        await sleep(holdMs);
+        const released = (await holder.query<{ at: Date }>("SELECT clock_timestamp() AS at"))
+          .rows[0]!.at;
+        await holder.query("ROLLBACK");
+
+        const claimed = (await claim).rows;
+        expect(claimed.map((row) => row.task_id)).toEqual([taskId]);
+        expect(claimed[0]!.lease_expires_at.getTime()).toBeGreaterThan(released.getTime());
+        const runtime = await pool.query<{ acquired_at: Date; heartbeat_at: Date }>(
+          "SELECT acquired_at, heartbeat_at FROM workhorse.task_runtime WHERE task_id = $1",
+          [taskId],
+        );
+        expect(runtime.rows[0]!.acquired_at.getTime()).toBeGreaterThanOrEqual(released.getTime());
+        expect(runtime.rows[0]!.heartbeat_at.getTime()).toBeGreaterThanOrEqual(released.getTime());
+      } finally {
+        await holder.query("ROLLBACK").catch(() => undefined);
+        holder.release();
+        claimer.release();
+      }
+    },
+  );
+
+  // The activating update tests the deadline with the first clock sample, as before SM-1963. A
+  // picked task whose deadline passes during the wait is still activated, so the claim locks no
+  // other task row than its claim event locks.
+  it.each(entries)(
+    "activates the picked task of %s when its deadline passes during the wait",
+    async (_entry, statement) => {
+      const queueName = `lease-deadline-${randomUUID()}`;
+      // The margin covers the setup before the claim. The holder then keeps its lock until the
+      // deadline has passed.
+      const deadline = new Date(Date.now() + 3_000);
+      const picked = await queue.enqueue("lease-deadline", {}, { queue: queueName, deadline });
+      const later = await queue.enqueue("lease-deadline", {}, { queue: queueName });
+      const holder = await pool.connect();
+      const claimer = await pool.connect();
+      try {
+        const claimerPid = (await claimer.query<{ pid: number }>("SELECT pg_backend_pid() AS pid"))
+          .rows[0]!.pid;
+        await holder.query("BEGIN");
+        await holder.query("SELECT 1 FROM workhorse.task WHERE id = $1 FOR UPDATE", [picked]);
+        const claim = claimer.query<{ task_id: string; lease_expires_at: Date }>(statement, [
+          queueName,
+          leaseMs,
+        ]);
+        await waitForDatabaseCondition(async () => {
+          const waiting = await pool.query<{ blocked: boolean }>(
+            "SELECT cardinality(pg_blocking_pids($1)) > 0 AS blocked",
+            [claimerPid],
+          );
+          return waiting.rows[0]!.blocked;
+        });
+        await sleep(Math.max(holdMs, deadline.getTime() - Date.now() + 100));
+        const released = (await holder.query<{ at: Date }>("SELECT clock_timestamp() AS at"))
+          .rows[0]!.at;
+        await holder.query("ROLLBACK");
+
+        const claimed = (await claim).rows;
+        expect(claimed.map((row) => row.task_id)).toEqual([picked]);
+        expect(claimed[0]!.lease_expires_at.getTime()).toBeGreaterThan(released.getTime());
+        const states = await pool.query<{ task_id: string; state: string; claims: number }>(
+          `SELECT runtime.task_id::text, runtime.state,
+                  (SELECT count(*)::integer FROM workhorse.task_event event
+                    WHERE event.task_id = runtime.task_id AND event.event_type = 'claimed') AS claims
+             FROM workhorse.task_runtime runtime WHERE runtime.task_id = ANY($1::uuid[])
+            ORDER BY runtime.task_id = $2 DESC`,
+          [[picked, later], picked],
+        );
+        expect(states.rows).toEqual([
+          { task_id: picked, state: "active", claims: 1 },
+          { task_id: later, state: "ready", claims: 0 },
+        ]);
+      } finally {
+        await holder.query("ROLLBACK").catch(() => undefined);
+        holder.release();
+        claimer.release();
+      }
+    },
+  );
+});

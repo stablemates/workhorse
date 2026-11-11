@@ -757,6 +757,42 @@ returns these values:
 
 No transaction stays open while user code runs.
 
+#### Claim clock
+
+`claim_policy_batch_v1` and `claim_one_v1` read `clock_timestamp()` two times in each claim round:
+
+1. Admission reads the clock after its advisory locks. The active-lease count, the deadline filter of
+   the ready window, the deadline test of the activating update, the token room, and the charge of
+   the admission shards use this first sample.
+2. After the row locks of the picked rows, the claim locks their `task` rows `FOR KEY SHARE`, in
+   identity order. The lock can wait for a transaction that holds a task row. The activating update
+   tests the deadline with the first sample, so it activates every picked row. Thus the foreign key
+   check of the claim event takes the same lock on each of these rows and finds it held. The claim
+   takes no row lock and writes no WAL record that the claim before migration 0094 did not take.
+3. Then the claim reads the clock again. `acquired_at`, `heartbeat_at`, `expires_at`, the first
+   `attempt_started_at`, `attempt_timeout_at`, `updated_at`, the `expires_at` of the claim event,
+   and the charge of the key and budget buckets use this second sample.
+
+A deadline that passes during the wait in step 2 does not stop the activation, as before migration 0094. The claim returns that task with its `deadline_at`.
+
+A key or budget bucket refills from its stored row, so its charge at the later sample never takes
+more tokens than admission counted. The shard charge stores the token count that admission read, so
+it keeps the first sample.
+
+These waits can still come after the second sample, so a long one still shortens the lease:
+
+- the insert and the update of a key bucket in `rate_limit_bucket`, which wait for a concurrent
+  transaction that holds the same row;
+- the update of a budget bucket in `budget_bucket`, which waits only for a transaction outside the
+  budget advisory lock;
+- the insert of the claim event in a `task_event` partition.
+
+`SKIP LOCKED` passes over a locked row, but a row lock can still wait for the update chain of a
+concurrent transaction. The full-tier claim sets no `lock_timeout`. Before migration 0094 (schema
+version 93), the lease came from the first sample, so after a long wait the returned
+`lease_expires_at` could already be in the past (SM-1963). `fast_claim_v1` limits its wait with a
+`lock_timeout` ([Fast claim](fast-tier.md#fast-claim)).
+
 #### Isolation requirement
 
 Every claim entry point, `claim_v1`, `claim_many_v1`, and `complete_many_and_claim_v1`, requires
@@ -770,6 +806,39 @@ the `maxActive` of a shared budget.
 Since migration 0048, each entry point raises SQLSTATE `0A000` before any lock unless
 `transaction_isolation` is `read committed` or `read uncommitted`. PostgreSQL runs
 `read uncommitted` as read committed.
+
+An enqueue accepts every isolation level, because an application can enqueue inside its own
+transaction. The tier of the queue decides which table gets the task, and the tier is valid only
+under the shared tier lock of `lock_queue_tiers_v1`. At read committed, the tier read after that
+lock takes a new snapshot. A repeatable read or serializable transaction reads its first snapshot,
+which can be older than a tier change. Since migration 0094 (schema version 93), such a transaction
+first inserts each missing `queue_control` row with `ON CONFLICT DO NOTHING`, then locks each row
+`FOR SHARE`:
+
+| Event after the snapshot of the enqueue transaction                                     | Result of the enqueue                   |
+| --------------------------------------------------------------------------------------- | --------------------------------------- |
+| No tier change                                                                          | The enqueue continues.                  |
+| A tier change updated the `queue_control` row                                           | The lock fails with SQLSTATE `40001`.   |
+| Another transaction inserted the `queue_control` row: a tier change or a second enqueue | The insert fails with SQLSTATE `40001`. |
+
+Outside read committed, `lock_queue_tiers_v1` also raises `queue name must contain at most 256
+UTF-8 bytes` for a longer queue name that an earlier release accepted, before any write. No
+`queue_control` row can protect the tier read of such a queue, so a redrive of its task at these
+levels fails instead of writing it to a tier that the queue no longer has.
+`add_task_group_members_v1` takes the tier locks before its row locks. A purge inserts the
+`queue_control` row of its queue before it locks the tasks of that queue, so the add waits for the
+purge before it locks a prerequisite. If the purge commits first, the add fails with SQLSTATE
+`40001`.
+
+`FOR KEY SHARE` does not detect the update, because `tier` is not a key column. A read committed
+enqueue takes no row lock, so producers on one queue do not share a row lock. Before migration
+0094, a repeatable read enqueue could write a full-tier task to a fast-tier queue, and no claim
+found it (SM-1942).
+
+`set_queue_tier_v1` checks for live tasks after its exclusive tier lock. Since migration 0094, it
+raises SQLSTATE `0A000` with `Workhorse tier changes require read committed isolation, not
+<level>` unless the isolation is read committed or read uncommitted. Otherwise its checks could
+read a snapshot from before the lock.
 
 #### Admission policies
 

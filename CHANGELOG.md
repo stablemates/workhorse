@@ -112,6 +112,49 @@ an attempt. The worker now records the abort state when the handler returns. A b
 records it when the batch callback returns. Only a failure after the abort releases the task
 (SM-1933, ADR 0117).
 
+### Queue purge, tier read, queue name, and claim lease use their locks
+
+A queue purge locked the runtime rows of its queue, and then read the queue again for the task-row
+locks and the deletes. A task that a producer committed during the purge could be deleted after a
+worker claimed it. Then the heartbeat returned `stale`, the completion returned `false`, and no row
+of the task stayed. Such a task could also make the purge deadlock with a claim (`40P01`). On the
+fast tier, a keyed enqueue during the purge could make the purge fail with a foreign key error.
+`purge_queue_internal_v1` now deletes and cancels only the tasks that its first lock statement
+locked. A task that commits during the purge stays, as a task that commits after the purge does.
+
+An enqueue at repeatable read or serializable read the tier of a queue from the snapshot of its
+transaction. After a tier change to the fast tier, it wrote a full-tier task that no claim found.
+At these two levels, `lock_queue_tiers_v1` now creates the `queue_control` row of each queue and
+locks it `FOR SHARE`. If a tier change committed after the snapshot, the enqueue fails with SQLSTATE
+`40001`, and the application retries the transaction. Two first enqueues to one new queue at these
+levels can also make one of them fail with `40001`. A read committed enqueue takes no row lock.
+`set_queue_tier_v1` now refuses an isolation level other than read committed with SQLSTATE `0A000`.
+At these two levels, a task group add waits for a concurrent purge of the same new queue before it
+locks a prerequisite, so the two no longer deadlock.
+
+An enqueue now refuses a queue name above 256 UTF-8 bytes with `queue name must contain at most 256
+UTF-8 bytes`, before it writes a row. Before, a name of 257 to 7,999 bytes was accepted, and a longer
+name failed in `pg_notify` with an error that named no input. An enqueue to a queue name above the
+limit now fails, also for a debounce request. Schedule synchronization refuses a new or changed
+schedule with such a name. A stored schedule with such a name no longer fires, because each fire
+fails in the enqueue. Migration 0095 (SM-1927) keeps that failure from stopping the other
+schedules. Change such a schedule as the upgrade notes show. Existing tasks with a longer name
+continue to run.
+
+`claim_policy_batch_v1` and `claim_one_v1` computed the lease from a clock sample taken before their
+row locks. After a long lock wait, a claim could return a lease that was already over. A claim now
+takes the `FOR KEY SHARE` lock on its task rows, which the foreign key check of its claim event
+took before, ahead of a second clock sample. The lease, the heartbeat, the attempt timeout, and
+the key and budget bucket charges use that sample.
+
+Migration 0094 (`0094-purge-locked-tasks-lock-stale-tiers-and-start-leases-after-locks.sql`) moves
+the schema to version 93. It replaces the bodies of `purge_queue_internal_v1`,
+`lock_queue_tiers_v1`, `set_queue_tier_v1`, `enqueue_batch_v1`, `enqueue_debounce_v1`,
+`sync_schedule_definitions_internal_v1`, `add_task_group_members_v1`, `claim_policy_batch_v1`, and
+`claim_one_v1`. It does not
+raise the SDK compatibility floor and changes no rows.
+Run `workhorse schema migrate`.
+
 ## 0.12.0 — 2026-11-07
 
 The npm packages, Python distribution, Go module, Rust crate, Ruby gem, JVM artifacts, and .NET

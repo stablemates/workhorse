@@ -235,6 +235,76 @@ describe("fast task tier", () => {
     );
   });
 
+  // A transaction above read committed reads the tier from its first snapshot (SM-1942). The
+  // enqueue locks the queue_control row, so a tier change after that snapshot fails the enqueue.
+  it.each([
+    { isolation: "repeatable read", controlRow: false },
+    { isolation: "repeatable read", controlRow: true },
+    { isolation: "serializable", controlRow: false },
+    { isolation: "serializable", controlRow: true },
+  ] as const)(
+    "fails a $isolation enqueue after a newer tier change (control row before: $controlRow)",
+    async ({ isolation, controlRow }) => {
+      const queueName = `stale-tier-${randomUUID()}`;
+      if (controlRow) {
+        await makeFast(queueName);
+        await admin.setQueueTier(queueName, "full", adminAudit("move back to the full tier"));
+      }
+      const request = JSON.stringify([{ queue: queueName, type: "stale-tier", payload: {} }]);
+      const producer = await pool.connect();
+      try {
+        await producer.query(`BEGIN ISOLATION LEVEL ${isolation.toUpperCase()}`);
+        await producer.query("SELECT count(*) FROM workhorse.queue_control");
+        await makeFast(queueName);
+        await expect(
+          producer.query("SELECT outcome FROM workhorse.enqueue_many_v1($1::jsonb)", [request]),
+        ).rejects.toMatchObject({ code: "40001" });
+        await producer.query("ROLLBACK");
+
+        // The retry in a new transaction reads the fast tier.
+        await producer.query(`BEGIN ISOLATION LEVEL ${isolation.toUpperCase()}`);
+        await expect(
+          producer.query("SELECT outcome FROM workhorse.enqueue_many_v1($1::jsonb)", [request]),
+        ).resolves.toMatchObject({ rows: [{ outcome: "accepted" }] });
+        await producer.query("COMMIT");
+      } finally {
+        await producer.query("ROLLBACK").catch(() => undefined);
+        producer.release();
+      }
+      const rows = await pool.query<{ full_tier: number; fast_tier: number }>(
+        `SELECT (SELECT count(*)::integer FROM workhorse.task_runtime WHERE queue_name = $1)
+                  AS full_tier,
+                (SELECT count(*)::integer FROM workhorse.fast_task_runtime WHERE queue_name = $1)
+                  AS fast_tier`,
+        [queueName],
+      );
+      expect(rows.rows[0]).toEqual({ full_tier: 0, fast_tier: 1 });
+    },
+  );
+
+  it("refuses a tier change outside read committed isolation", async () => {
+    const queueName = `tier-isolation-${randomUUID()}`;
+    const client = await pool.connect();
+    try {
+      for (const isolation of ["repeatable read", "serializable"]) {
+        await client.query(`BEGIN ISOLATION LEVEL ${isolation.toUpperCase()}`);
+        await expect(
+          client.query("SELECT workhorse.set_queue_tier_v1($1, 'fast', 'operator', 'too late')", [
+            queueName,
+          ]),
+        ).rejects.toMatchObject({
+          code: "0A000",
+          message: `Workhorse tier changes require read committed isolation, not ${isolation}`,
+        });
+        await client.query("ROLLBACK");
+      }
+    } finally {
+      await client.query("ROLLBACK").catch(() => undefined);
+      client.release();
+    }
+    await makeFast(queueName);
+  });
+
   it("runs fast tasks through batched completion without exceeding the concurrency", async () => {
     await makeFast("fast-run");
     const taskIds = await queue.enqueueMany(

@@ -5214,6 +5214,14 @@ BEGIN
   ) THEN
     RAISE EXCEPTION 'each schedule requires non-empty name/schedule/queue/type and maxAttempts between 1 and 100';
   END IF;
+  -- Each fire enqueues through enqueue_batch_v1, which refuses a longer queue name. A pass of
+  -- fire_due_schedules_v2 then fails for every schedule, so the deployment refuses the name here.
+  IF EXISTS (
+    SELECT 1 FROM jsonb_array_elements(p_definitions) definition
+     WHERE octet_length(definition->>'queue') > 256
+  ) THEN
+    RAISE EXCEPTION 'schedule queue name must contain at most 256 UTF-8 bytes';
+  END IF;
   IF EXISTS (
     SELECT 1
       FROM jsonb_array_elements(p_definitions) definition
@@ -6514,6 +6522,17 @@ $$;
 -- Take the shared tier lock of every named queue, in a fixed order, and return the fast-tier ones.
 -- A caller that writes a task or a policy for these queues holds the lock until it commits, which
 -- is what lets set_queue_tier_v1 prove a queue empty before it changes the tier.
+--
+-- At read committed, the tier read below takes a new snapshot after the lock, so it sees every
+-- committed tier change. A transaction at repeatable read or serializable reads the snapshot of its
+-- first statement, which can be older than a tier change. Such a transaction therefore creates each
+-- missing queue_control row and locks each row FOR SHARE. If a tier change committed after the
+-- snapshot, the insert or the lock fails with SQLSTATE 40001, and the application retries. A key
+-- share lock does not detect a change of the tier, because the tier is not a key column. Read
+-- committed takes no row lock, so producers on one queue add no lock to the hot path. A queue name
+-- above 256 UTF-8 bytes, which an earlier release accepted, cannot get a protected tier read here,
+-- so the function refuses it outside read committed before any write. A redrive of such a task then
+-- fails instead of writing it to a tier that the queue no longer has.
 CREATE OR REPLACE FUNCTION workhorse.lock_queue_tiers_v1(p_queue_names text[])
 RETURNS text[]
 LANGUAGE plpgsql
@@ -6530,6 +6549,22 @@ BEGIN
       hashtextextended('workhorse:queue-tier:' || v_queue_name, 0)
     );
   END LOOP;
+  IF current_setting('transaction_isolation') NOT IN ('read committed', 'read uncommitted') THEN
+    IF EXISTS (
+      SELECT 1 FROM unnest(p_queue_names) queue_name WHERE octet_length(queue_name) > 256
+    ) THEN
+      RAISE EXCEPTION 'queue name must contain at most 256 UTF-8 bytes';
+    END IF;
+    INSERT INTO workhorse.queue_control(queue_name)
+    SELECT DISTINCT queue_name COLLATE "C" FROM unnest(p_queue_names) queue_name
+     WHERE queue_name <> ''
+     ORDER BY 1
+    ON CONFLICT (queue_name) DO NOTHING;
+    PERFORM 1 FROM workhorse.queue_control control
+     WHERE control.queue_name = ANY(p_queue_names)
+     ORDER BY control.queue_name COLLATE "C"
+     FOR SHARE;
+  END IF;
   RETURN ARRAY(
     SELECT control.queue_name FROM workhorse.queue_control control
      WHERE control.queue_name = ANY(p_queue_names) AND control.tier = 'fast'
@@ -6781,6 +6816,14 @@ BEGIN
   v_count := jsonb_array_length(p_requests);
   IF v_count > 1000 THEN
     RAISE EXCEPTION 'enqueue batch exceeds maximum size of 1000';
+  END IF;
+  -- A queue name has the limit of the policy functions. The check runs before any lock or write,
+  -- so a longer name never reaches a queue_control row or a wake-up notification.
+  IF EXISTS (
+    SELECT 1 FROM jsonb_array_elements(p_requests) input(request)
+     WHERE octet_length(input.request->>'queue') > 256
+  ) THEN
+    RAISE EXCEPTION 'queue name must contain at most 256 UTF-8 bytes';
   END IF;
 
   -- Validate key identities before locking so malformed requests fail predictably, then acquire every
@@ -7574,6 +7617,11 @@ DECLARE
   v_state text;
   v_sequence bigint;
 BEGIN
+  -- A request can return before its validation call to enqueue_batch_v1, so the queue name limit
+  -- of that function is also checked here, before any lock or write.
+  IF octet_length(p_request->>'queue') > 256 THEN
+    RAISE EXCEPTION 'queue name must contain at most 256 UTF-8 bytes';
+  END IF;
   IF cardinality(workhorse.lock_queue_tiers_v1(ARRAY[p_request->>'queue'])) > 0 THEN
     PERFORM workhorse.reject_fast_feature_v1(p_request->>'queue', 'debounce');
   END IF;
@@ -8751,6 +8799,17 @@ BEGIN
   IF p_reason IS NULL OR p_reason = '' OR char_length(p_reason) > 2000 THEN
     RAISE EXCEPTION 'reason must contain between 1 and 2000 characters';
   END IF;
+  -- The live-task checks below must see every task that committed before the tier lock. Only a
+  -- statement snapshot taken after that lock does. PostgreSQL runs read uncommitted as read
+  -- committed.
+  IF current_setting('transaction_isolation') NOT IN ('read committed', 'read uncommitted') THEN
+    RAISE EXCEPTION USING
+      ERRCODE = '0A000',
+      MESSAGE = format(
+        'Workhorse tier changes require read committed isolation, not %s',
+        current_setting('transaction_isolation')
+      );
+  END IF;
   PERFORM pg_advisory_xact_lock(hashtextextended('workhorse:queue-tier:' || p_queue_name, 0));
   IF p_tier = COALESCE(
     (SELECT control.tier FROM workhorse.queue_control control
@@ -9269,6 +9328,7 @@ DECLARE
   v_count integer;
   v_fast_count integer;
   v_purged_task_ids uuid[];
+  v_fast_task_ids uuid[];
   v_canceled_task_ids uuid[];
   v_deleted_task_ids uuid[];
   v_member_task_ids uuid[];
@@ -9289,17 +9349,30 @@ BEGIN
   -- deletes become visible or fails after the parent disappears; it cannot commit an orphan.
   -- Lock every runtime row in identity order, then every task row in identity order. An enqueue
   -- locks its prerequisites in the same order, so the two cannot deadlock.
+  --
+  -- The purge removes exactly the tasks that its first lock statement locks, and every later
+  -- statement uses that identity array. A task that commits while the purge waits for a lock is
+  -- not in the array, so it stays and a worker can claim and complete it. A later read of the
+  -- queue could find that task after a worker claimed it, and the delete of its task row would
+  -- remove its active runtime row. The task-row lock also takes only these identities, so a task
+  -- that commits between the two lock statements cannot hold a lock that a claim waits for.
+  v_purged_task_ids := ARRAY(
+    SELECT locked.task_id
+      FROM (
+        SELECT runtime.task_id
+          FROM workhorse.task_runtime runtime
+         WHERE runtime.queue_name = p_queue_name
+           AND runtime.state IN ('blocked', 'ready', 'scheduled')
+         ORDER BY runtime.task_id
+         FOR UPDATE
+      ) locked
+     ORDER BY locked.task_id
+  );
   PERFORM 1
-    FROM workhorse.task_runtime runtime
-   WHERE runtime.queue_name = p_queue_name AND runtime.state IN ('blocked', 'ready', 'scheduled')
-   ORDER BY runtime.task_id
-   FOR UPDATE;
-  PERFORM 1
-    FROM workhorse.task_runtime runtime
-    JOIN workhorse.task task ON task.id = runtime.task_id
-   WHERE runtime.queue_name = p_queue_name AND runtime.state IN ('blocked', 'ready', 'scheduled')
+    FROM workhorse.task task
+   WHERE task.id = ANY(v_purged_task_ids)
    ORDER BY task.id
-   FOR UPDATE OF task;
+   FOR UPDATE;
   -- A cancel below settles the blocked dependents in other queues. Lock them as a cancel does:
   -- after the prerequisites, in identity order, FOR NO KEY UPDATE. A terminal transition of a
   -- purged task also locks it before its dependents, so the two cannot deadlock. The lock does not
@@ -9308,23 +9381,14 @@ BEGIN
     FROM workhorse.task_runtime runtime
    WHERE runtime.task_id IN (
            SELECT dependency.dependent_task_id
-             FROM workhorse.task_runtime purged
-             JOIN workhorse.task_dependency dependency
-               ON dependency.prerequisite_task_id = purged.task_id
-            WHERE purged.queue_name = p_queue_name
-              AND purged.state IN ('blocked', 'ready', 'scheduled')
+             FROM workhorse.task_dependency dependency
+            WHERE dependency.prerequisite_task_id = ANY(v_purged_task_ids)
               AND dependency.released_at IS NULL
          )
      AND runtime.state = 'blocked'
      AND runtime.queue_name <> p_queue_name
    ORDER BY runtime.task_id
    FOR NO KEY UPDATE;
-  v_purged_task_ids := ARRAY(
-    SELECT runtime.task_id
-      FROM workhorse.task_runtime runtime
-     WHERE runtime.queue_name = p_queue_name AND runtime.state IN ('blocked', 'ready', 'scheduled')
-     ORDER BY runtime.task_id
-  );
 
   -- A purged task stays, and the purge cancels it, when an edge leads to a dependent that stays.
   -- That is a dependent outside the purge, unless the edge is released and the dependent is
@@ -9406,30 +9470,31 @@ BEGIN
 
   -- Fast-tier ready rows carry no events, and deleting the task cascades to the runtime row.
   -- The same order applies: every runtime row, then every task row, each in identity order.
-  -- A fast-tier task is never a prerequisite.
+  -- A fast-tier task is never a prerequisite. As above, every delete uses the identities that the
+  -- first lock statement locked. A keyed task that commits between two deletes then keeps both its
+  -- task row and its key row.
+  v_fast_task_ids := ARRAY(
+    SELECT locked.task_id
+      FROM (
+        SELECT fast.task_id
+          FROM workhorse.fast_task_runtime fast
+         WHERE fast.queue_name = p_queue_name AND fast.state = 'ready'
+         ORDER BY fast.task_id
+         FOR UPDATE
+      ) locked
+     ORDER BY locked.task_id
+  );
   PERFORM 1
-    FROM workhorse.fast_task_runtime fast
-   WHERE fast.queue_name = p_queue_name AND fast.state = 'ready'
-   ORDER BY fast.task_id
-   FOR UPDATE;
-  PERFORM 1
-    FROM workhorse.fast_task_runtime fast
-    JOIN workhorse.task task ON task.id = fast.task_id
-   WHERE fast.queue_name = p_queue_name AND fast.state = 'ready'
+    FROM workhorse.task task
+   WHERE task.id = ANY(v_fast_task_ids)
    ORDER BY task.id
-   FOR UPDATE OF task;
+   FOR UPDATE;
   DELETE FROM workhorse.enqueue_idempotency idempotency
-   USING workhorse.fast_task_runtime fast
-   WHERE fast.queue_name = p_queue_name AND fast.state = 'ready'
-     AND idempotency.task_id = fast.task_id;
+   WHERE idempotency.task_id = ANY(v_fast_task_ids);
   DELETE FROM workhorse.attempt_history attempt
-   USING workhorse.fast_task_runtime fast
-   WHERE fast.queue_name = p_queue_name AND fast.state = 'ready'
-     AND attempt.task_id = fast.task_id;
+   WHERE attempt.task_id = ANY(v_fast_task_ids);
   DELETE FROM workhorse.task task
-   USING workhorse.fast_task_runtime fast
-   WHERE fast.queue_name = p_queue_name AND fast.state = 'ready'
-     AND task.id = fast.task_id;
+   WHERE task.id = ANY(v_fast_task_ids);
   GET DIAGNOSTICS v_fast_count = ROW_COUNT;
   RETURN v_count + v_fast_count;
 END;
@@ -10636,6 +10701,7 @@ DECLARE
   v_first_round boolean := true;
   v_now timestamptz;
   v_expires timestamptz;
+  v_lease_at timestamptz;
   v_room integer;
   v_take integer;
   v_queue_capped boolean;
@@ -10781,7 +10847,6 @@ BEGIN
       END IF;
     END IF;
     v_now := clock_timestamp();
-    v_expires := v_now + make_interval(secs => p_lease_ms::double precision / 1000.0);
 
     IF v_first_round THEN
       WITH oldest_key_buckets AS MATERIALIZED (
@@ -11067,19 +11132,34 @@ BEGIN
         SELECT nextval('workhorse.fence_token_seq') AS fence
           FROM generate_series(1, v_claimed)
       ) allocated;
+    -- The lease starts from a clock sample taken after the row locks of this round. A locked row
+    -- can make the pick wait for the update chain of a concurrent transaction, and a lease from
+    -- the sample before that wait could already be over when the worker gets the task. Admission
+    -- and the shard charge keep v_now, because the shard tokens were counted at that instant. The
+    -- key and budget buckets refill from their stored rows, so they charge at the lease instant.
+    -- The foreign key check of the claim event takes a key-share lock on each task row, and that
+    -- lock can wait. The claim takes the same lock before the sample, in identity order, so the
+    -- check later finds it held and writes nothing more. The key bucket charge below can still
+    -- wait after the sample.
+    PERFORM 1 FROM workhorse.task task
+     WHERE task.id = ANY(v_picked)
+     ORDER BY task.id
+     FOR KEY SHARE;
+    v_lease_at := clock_timestamp();
+    v_expires := v_lease_at + make_interval(secs => p_lease_ms::double precision / 1000.0);
     WITH activated AS (
       UPDATE workhorse.task_runtime runtime
          SET state = 'active', fence_token = v_fences[array_position(v_picked, runtime.task_id)],
              worker_id = p_worker_id,
-             acquired_at = v_now, heartbeat_at = v_now, expires_at = v_expires,
+             acquired_at = v_lease_at, heartbeat_at = v_lease_at, expires_at = v_expires,
              ready_at = NULL, sequence = NULL, wait_name = NULL,
-             attempt_started_at = COALESCE(runtime.attempt_started_at, v_now),
+             attempt_started_at = COALESCE(runtime.attempt_started_at, v_lease_at),
              attempt_timeout_at = CASE
                WHEN task.execution_timeout_ms IS NULL THEN NULL
-               ELSE v_now + make_interval(secs =>
+               ELSE v_lease_at + make_interval(secs =>
                  (task.execution_timeout_ms - runtime.execution_used_ms)::double precision / 1000.0)
              END,
-             error = NULL, updated_at = v_now,
+             error = NULL, updated_at = v_lease_at,
              admission_shard = v_slots[array_position(v_picked, runtime.task_id)]
         FROM workhorse.task task
        WHERE runtime.task_id = ANY(v_picked) AND runtime.state = 'ready'
@@ -11131,7 +11211,7 @@ BEGIN
       INSERT INTO workhorse.rate_limit_bucket(
         queue_name, bucket_scope, bucket_key, tokens, refilled_at
       )
-      SELECT DISTINCT p_queue_name, 'key', claimed.bucket_key, v_rate_policy.per_key_burst, v_now
+      SELECT DISTINCT p_queue_name, 'key', claimed.bucket_key, v_rate_policy.per_key_burst, v_lease_at
         FROM unnest(v_keys) AS claimed(bucket_key)
        WHERE claimed.bucket_key IS NOT NULL
       ON CONFLICT DO NOTHING;
@@ -11140,10 +11220,10 @@ BEGIN
                v_rate_policy.per_key_burst::numeric,
                bucket.tokens + GREATEST(
                  0::numeric,
-                 extract(epoch FROM v_now - bucket.refilled_at) * 1000
+                 extract(epoch FROM v_lease_at - bucket.refilled_at) * 1000
                ) * v_rate_policy.per_key_limit::numeric / v_rate_policy.per_key_interval_ms::numeric
              ) - started.starts,
-             refilled_at = GREATEST(v_now, bucket.refilled_at)
+             refilled_at = GREATEST(v_lease_at, bucket.refilled_at)
         FROM (
           SELECT claimed.bucket_key, count(*)::integer AS starts
             FROM unnest(v_keys) AS claimed(bucket_key)
@@ -11157,7 +11237,7 @@ BEGIN
       SELECT 1 FROM unnest(v_budgets) AS claimed(budget_name) WHERE claimed.budget_name IS NOT NULL
     ) THEN
       INSERT INTO workhorse.budget_bucket(budget_name, tokens, refilled_at)
-      SELECT budget.budget_name, budget.rate_burst, v_now
+      SELECT budget.budget_name, budget.rate_burst, v_lease_at
         FROM workhorse.budget budget
        WHERE budget.rate_limit IS NOT NULL AND budget.budget_name = ANY(v_budgets)
       ON CONFLICT DO NOTHING;
@@ -11166,10 +11246,10 @@ BEGIN
                budget.rate_burst::numeric,
                bucket.tokens + GREATEST(
                  0::numeric,
-                 extract(epoch FROM v_now - bucket.refilled_at) * 1000
+                 extract(epoch FROM v_lease_at - bucket.refilled_at) * 1000
                ) * budget.rate_limit::numeric / budget.rate_interval_ms::numeric
              ) - started.starts,
-             refilled_at = GREATEST(v_now, bucket.refilled_at)
+             refilled_at = GREATEST(v_lease_at, bucket.refilled_at)
         FROM workhorse.budget budget, (
           SELECT claimed.budget_name, count(*)::integer AS starts
             FROM unnest(v_budgets) AS claimed(budget_name)
@@ -11250,6 +11330,7 @@ DECLARE
   v_fence bigint;
   v_now timestamptz;
   v_expires timestamptz;
+  v_lease_at timestamptz;
   v_control workhorse.queue_control%ROWTYPE;
 BEGIN
   IF p_worker_id IS NULL OR p_worker_id = '' THEN RAISE EXCEPTION 'worker_id must not be empty'; END IF;
@@ -11320,7 +11401,6 @@ BEGIN
     v_budget_names := v_budget_names || v_budget_name;
   END LOOP;
   v_now := clock_timestamp();
-  v_expires := v_now + make_interval(secs => p_lease_ms::double precision / 1000.0);
   v_fence := nextval('workhorse.fence_token_seq');
   IF cardinality(v_budget_names) = 0 THEN
     -- No admission rule passes over a row here, so the first ready row this claim can lock is the
@@ -11380,17 +11460,26 @@ BEGIN
   END IF;
   IF v_task_id IS NULL THEN RETURN; END IF;
 
+  -- The lease starts from a clock sample taken after the row lock. The lock can wait for the update
+  -- chain of a concurrent transaction, and a lease from the sample before that wait could already
+  -- be over when the worker gets the task. The budget bucket refills from its stored row, so it
+  -- charges at the same instant.
+  -- The foreign key check of the claim event takes a key-share lock on the task row, and that lock
+  -- can wait. The claim takes the same lock before the sample, so the check later finds it held.
+  PERFORM 1 FROM workhorse.task task WHERE task.id = v_task_id FOR KEY SHARE;
+  v_lease_at := clock_timestamp();
+  v_expires := v_lease_at + make_interval(secs => p_lease_ms::double precision / 1000.0);
   UPDATE workhorse.task_runtime runtime
      SET state = 'active', fence_token = v_fence, worker_id = p_worker_id,
-         acquired_at = v_now, heartbeat_at = v_now, expires_at = v_expires,
+         acquired_at = v_lease_at, heartbeat_at = v_lease_at, expires_at = v_expires,
          ready_at = NULL, sequence = NULL, wait_name = NULL,
-         attempt_started_at = COALESCE(runtime.attempt_started_at, v_now),
+         attempt_started_at = COALESCE(runtime.attempt_started_at, v_lease_at),
          attempt_timeout_at = CASE
            WHEN task.execution_timeout_ms IS NULL THEN NULL
-           ELSE v_now + make_interval(secs =>
+           ELSE v_lease_at + make_interval(secs =>
              (task.execution_timeout_ms - runtime.execution_used_ms)::double precision / 1000.0)
          END,
-         error = NULL, updated_at = v_now
+         error = NULL, updated_at = v_lease_at
     FROM workhorse.task task
    WHERE runtime.task_id = v_task_id AND runtime.state = 'ready' AND task.id = runtime.task_id
      AND (runtime.deadline_at IS NULL OR runtime.deadline_at > v_now)
@@ -11398,7 +11487,7 @@ BEGIN
   IF NOT FOUND THEN RETURN; END IF;
 
   IF v_runtime.budget_name IS NOT NULL THEN
-    PERFORM * FROM workhorse.budget_bucket_v1(v_runtime.budget_name, v_now, true);
+    PERFORM * FROM workhorse.budget_bucket_v1(v_runtime.budget_name, v_lease_at, true);
   END IF;
 
   INSERT INTO workhorse.task_event(task_id, attempt, event_type, details)
@@ -18599,6 +18688,14 @@ BEGIN
     RAISE EXCEPTION 'a task group add cannot use debounce or throttle';
   END IF;
 
+  -- Outside read committed, lock_queue_tiers_v1 creates and locks the queue_control row of each
+  -- queue. A purge creates the row of its queue before it locks the tasks of that queue, so the add
+  -- takes the tier locks before any row lock. Otherwise it could hold a prerequisite that the purge
+  -- waits for while it waits for the uncommitted row of the purge.
+  PERFORM workhorse.lock_queue_tiers_v1(ARRAY(
+    SELECT DISTINCT candidate->>'queue' FROM jsonb_array_elements(p_requests) candidate
+  ));
+
   -- Completion, cancellation, and purge lock a runtime row before the shard and group rows. Lock
   -- the prerequisites of the requests first, so an add that names a member as a prerequisite takes
   -- the same order and cannot deadlock with that member's completion. A member add also locks the
@@ -23076,10 +23173,11 @@ INSERT INTO workhorse.schema_migration(version, description) VALUES
   (89, 'settle a fast-tier cancellation at its deadline after its timeout'),
   (90, 'show the task group in the task detail'),
   (91, 'scale the dashboard task estimate by the current size of the task table'),
-  (92, 'decide debounce with one clock and keep the keys of pending debounced tasks')
+  (92, 'decide debounce with one clock and keep the keys of pending debounced tasks'),
+  (93, 'purge only locked tasks, lock a stale tier, limit queue names, and start leases after locks')
 ON CONFLICT DO NOTHING;
 
-INSERT INTO workhorse.schema_version(version) VALUES (92) ON CONFLICT DO NOTHING;
+INSERT INTO workhorse.schema_version(version) VALUES (93) ON CONFLICT DO NOTHING;
 
 INSERT INTO workhorse.protocol_version(version) VALUES (5) ON CONFLICT DO NOTHING;
 SELECT workhorse.create_history_day_v1(
