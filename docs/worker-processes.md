@@ -62,10 +62,11 @@ cannot affect dispatch cost. Every worker registers by default, and each SDK can
 
 An unregistered worker writes no `worker_registry` row, which has two costs. Operator surfaces
 cannot see the worker. Its maintenance interval also never shortens the spacing of the expired-lease
-scan. While registered workers keep ticking, an expired lease can therefore wait up to one interval
-of the fastest registered worker for recovery, however often the unregistered workers tick. That
-bound holds only while recovery reaches the scan. When other recovery work fills the limit, the scan
-waits for a later tick.
+scan. While registered workers keep ticking, an expired lease can therefore wait up to half the gate
+interval plus one interval of the fastest registered worker for recovery, however often the
+unregistered workers tick. The gate interval is the shortest live registered interval, but at least
+1,000 ms. The bound holds only while recovery reaches the scan. When other
+recovery work fills the limit, the scan waits for a later tick.
 [Maintenance cadence](architecture/lifecycle.md#maintenance-cadence) states the bound and how to
 restore a shorter one.
 

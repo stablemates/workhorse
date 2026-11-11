@@ -1536,6 +1536,11 @@ CREATE INDEX IF NOT EXISTS task_runtime_expired_active_idx
 CREATE INDEX IF NOT EXISTS task_runtime_active_queue_key_expiry_idx
   ON workhorse.task_runtime (queue_name, concurrency_key, task_id)
   WHERE state = 'active';
+-- The capacity release trigger counts the active leases of one admission shard through this index
+-- (SM-1991). A heartbeat changes no column of it, so a heartbeat stays a HOT update.
+CREATE INDEX IF NOT EXISTS task_runtime_active_queue_shard_idx
+  ON workhorse.task_runtime (queue_name, admission_shard)
+  WHERE state = 'active';
 CREATE INDEX IF NOT EXISTS task_runtime_active_budget_expiry_idx
   ON workhorse.task_runtime (budget_name, task_id)
   WHERE state = 'active' AND budget_name IS NOT NULL;
@@ -1564,6 +1569,7 @@ DECLARE
   v_shards integer;
   v_shard integer;
   v_share integer;
+  v_members smallint[];
 BEGIN
   IF OLD.state <> 'active' OR (TG_OP <> 'DELETE' AND NEW.state = 'active') THEN
     RETURN CASE WHEN TG_OP = 'DELETE' THEN OLD ELSE NEW END;
@@ -1611,11 +1617,61 @@ BEGIN
   -- A claim counts only unexpired leases, but this count includes expired ones. It therefore counts
   -- every lease a claim may have counted when it found the shard full: a lease that expired after
   -- that claim must not hide the cap from this release.
+  --
+  -- A lease counts in the shard COALESCE(admission_shard, 0) % v_shards. A claim stores a shard
+  -- below 8, because a queue has at most 8 shards, but a stored value can be from an earlier shard
+  -- count. The shard count therefore reads disjoint parts, each an equality or a range on
+  -- task_runtime_active_queue_shard_idx (SM-1991), and the LIMIT on the whole union stops the read
+  -- at the share. With one shard, every active lease of the queue counts. With more shards, the
+  -- parts are the stored values 0 to 7 that map to this shard (at most 4, in v_members), a null
+  -- value for shard 0, and any value below 0 or above 7 that maps to this shard. Each row thus
+  -- matches the same shard as the modulo above. A missing member is null and matches no row. In a
+  -- database that only Workhorse writes, the last two parts each cost one index probe. Each part
+  -- compares with a scalar, so a generic plan also uses the index. Without the index, the parts
+  -- give the same answer, only more slowly.
+  v_members := ARRAY(
+    SELECT member::smallint FROM generate_series(0, 7) member WHERE member % v_shards = v_shard
+  );
   IF (SELECT count(*) FROM (
         SELECT 1 FROM workhorse.task_runtime active
-         WHERE active.queue_name = OLD.queue_name AND active.state = 'active'
-           AND COALESCE(active.admission_shard, 0) % v_shards = v_shard
-         LIMIT v_share
+         WHERE v_shards = 1
+           AND active.queue_name = OLD.queue_name AND active.state = 'active'
+        UNION ALL
+        SELECT 1 FROM workhorse.task_runtime active
+         WHERE v_shards > 1
+           AND active.queue_name = OLD.queue_name AND active.state = 'active'
+           AND active.admission_shard = v_members[1]
+        UNION ALL
+        SELECT 1 FROM workhorse.task_runtime active
+         WHERE v_shards > 1
+           AND active.queue_name = OLD.queue_name AND active.state = 'active'
+           AND active.admission_shard = v_members[2]
+        UNION ALL
+        SELECT 1 FROM workhorse.task_runtime active
+         WHERE v_shards > 1
+           AND active.queue_name = OLD.queue_name AND active.state = 'active'
+           AND active.admission_shard = v_members[3]
+        UNION ALL
+        SELECT 1 FROM workhorse.task_runtime active
+         WHERE v_shards > 1
+           AND active.queue_name = OLD.queue_name AND active.state = 'active'
+           AND active.admission_shard = v_members[4]
+        UNION ALL
+        SELECT 1 FROM workhorse.task_runtime active
+         WHERE v_shards > 1 AND v_shard = 0
+           AND active.queue_name = OLD.queue_name AND active.state = 'active'
+           AND active.admission_shard IS NULL
+        UNION ALL
+        SELECT 1 FROM workhorse.task_runtime active
+         WHERE v_shards > 1
+           AND active.queue_name = OLD.queue_name AND active.state = 'active'
+           AND active.admission_shard < 0 AND active.admission_shard % v_shards = v_shard
+        UNION ALL
+        SELECT 1 FROM workhorse.task_runtime active
+         WHERE v_shards > 1
+           AND active.queue_name = OLD.queue_name AND active.state = 'active'
+           AND active.admission_shard > 7 AND active.admission_shard % v_shards = v_shard
+        LIMIT v_share
       ) capped) = v_share
      OR (SELECT count(*) FROM (
            SELECT 1 FROM workhorse.task_runtime active
@@ -16768,14 +16824,23 @@ BEGIN
   -- the deadline and timeout scans seek indexes, so a tick that finds nothing due costs little. The
   -- expired-lease scan reads every active lease, because an index on expires_at would cost every
   -- heartbeat its HOT update. That scan therefore runs only when no tick ran it within half the
-  -- shortest maintenance interval of the live registered workers. The scan still runs at least
-  -- once per interval of the worker that ticks most often. A worker is live while its last
-  -- heartbeat is within its own lease, as in worker_client_protocols_v1. With no live
-  -- registration, as for a direct caller, every tick runs the scan.
+  -- gate interval. The gate interval is the shortest maintenance interval of the live registered
+  -- workers, but never less than 1,000 ms, the default maintenance interval of each SDK (SM-1960).
+  -- Thus one worker with a short interval cannot make the scan run more often than once in 500 ms,
+  -- and a fleet whose shortest interval is longer scans as before. A tick of any caller records
+  -- its scan, also a tick of an unregistered worker, so it can reset the spacing. Thus a lease
+  -- waits at most half the gate interval plus one interval of the fastest registered worker,
+  -- not one gate interval. A worker is live while its last heartbeat is within its own lease, as
+  -- in worker_client_protocols_v1. With no live registration, as for a direct caller, every tick
+  -- runs the scan.
   SELECT min(registry.maintenance_interval_ms) INTO v_gate_ms
     FROM workhorse.worker_registry registry
    WHERE registry.last_heartbeat_at
          >= clock_timestamp() - make_interval(secs => registry.lease_ms / 1000.0);
+  -- GREATEST ignores a null, so the floor applies only when a live worker sets a gate.
+  IF v_gate_ms IS NOT NULL THEN
+    v_gate_ms := GREATEST(v_gate_ms, 1000);
+  END IF;
   SELECT state.lease_recovery_started_at INTO v_lease_recovery_started_at
     FROM workhorse.maintenance_state state
    WHERE state.routine_name = 'tick';
@@ -25588,10 +25653,12 @@ INSERT INTO workhorse.schema_migration(version, description) VALUES
   (96, 'give cleanup and health one retention rule, use fixed-hour windows, and bound health walks'),
   (97, 'compare wait targets in milliseconds, end signals to terminal tasks, limit a second child set, and show failed callbacks'),
   (98, 'keep the settings audit, withhold error stacks, and find derived history records'),
-  (99, 'bound failure envelopes and answer an oversized checkpoint value with a status')
+  (99, 'bound failure envelopes and answer an oversized checkpoint value with a status'),
+  (100, 'floor the expired-lease scan gate and count one admission shard'),
+  (101, 'index the active leases of each admission shard')
 ON CONFLICT DO NOTHING;
 
-INSERT INTO workhorse.schema_version(version) VALUES (99) ON CONFLICT DO NOTHING;
+INSERT INTO workhorse.schema_version(version) VALUES (101) ON CONFLICT DO NOTHING;
 
 INSERT INTO workhorse.protocol_version(version) VALUES (5) ON CONFLICT DO NOTHING;
 SELECT workhorse.create_history_day_v1(

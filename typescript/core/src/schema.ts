@@ -712,6 +712,21 @@ export const SCHEMA_MIGRATIONS: readonly SchemaMigrationStep[] = [
     description: "bound failure envelopes and answer an oversized checkpoint value with a status",
     kind: "additive",
   },
+  {
+    fromVersion: 99,
+    toVersion: 100,
+    file: "0101-floor-the-lease-scan-gate-and-count-one-admission-shard.sql",
+    description: "floor the expired-lease scan gate and count one admission shard",
+    kind: "additive",
+  },
+  {
+    fromVersion: 100,
+    toVersion: 101,
+    file: "0102-index-the-active-leases-of-each-admission-shard.sql",
+    description: "index the active leases of each admission shard",
+    kind: "additive",
+    execution: "nontransactional",
+  },
 ];
 
 /**

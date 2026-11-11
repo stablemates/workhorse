@@ -266,6 +266,33 @@ the pass. `Error::ShutdownIncomplete` still comes first if the run abandoned a t
 that `tick_v1` reports in a row does not fail the pass. `run_once` returns the error of its pass, as
 before. A supervisor must start the worker again after `run` returns an error (SM-2008).
 
+### The expired-lease scan runs at most once in 500 ms
+
+`tick_v1` ran the expired-lease scan of the full tier when no tick ran it within half the shortest
+maintenance interval of the live registered workers. The scan reads every active lease. Thus one
+worker with a `WorkerOptions::maintenance_interval` of 100 ms made the fleet scan every 50 ms. Its
+ticks held the tick lock for almost all the time, and the ticks of the other workers skipped
+(SM-1960). The gate interval now has a floor of 1,000 ms, the default interval, so the scan runs at
+most once in 500 ms while a live worker is registered. If you set an interval below 1,000 ms to find
+expired leases sooner, the full tier now finds an expired lease up to 500 ms plus that interval
+after it expires. A short interval still makes that worker tick, promote, and recover deadlines,
+attempt timeouts, and fast-tier leases at its own rate. A fleet at the default interval or above
+scans as before.
+
+### A capacity release counts one admission shard through an index
+
+When an active task left a queue with a concurrency policy, the release trigger counted the active
+leases of its admission shard with a filter that no index served. It thus read almost every active
+lease of the queue (SM-1991). The count now reads only the leases of that shard through the new
+index `task_runtime_active_queue_shard_idx`, and it gives the same answers. Migration 0101 changes
+the two function bodies, and migration 0102 builds the index with `CREATE INDEX CONCURRENTLY`,
+outside a transaction. The build does not block writes, but its time grows with the size of
+`task_runtime`. Each claim on the full tier writes one more index entry, also on a queue with no
+concurrency policy. In return, a release on a queue with a policy reads the leases of one shard, not
+of the whole queue. A heartbeat stays a HOT update. The schema moves to version 101, and the floor
+stays 99. If the build fails, drop the invalid index with `DROP INDEX CONCURRENTLY IF EXISTS
+workhorse.task_runtime_active_queue_shard_idx` and run `workhorse schema migrate` again.
+
 ## 0.12.0 — 2026-11-07
 
 The npm packages, Python distribution, Go module, Rust crate, Ruby gem, JVM artifacts, and .NET

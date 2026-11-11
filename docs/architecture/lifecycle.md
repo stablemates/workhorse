@@ -329,37 +329,47 @@ The lock prevents only overlapping ticks. Thus every worker runs one tick per in
 and the deadline and timeout scans seek indexes. Thus a tick that finds nothing due has a low cost.
 The expired-lease scan reads every active row instead. An `expires_at` index would make every
 heartbeat lose its HOT update. Since migration 0061 (schema version 60), `tick_v1` skips that one
-scan when another tick ran it within half the shortest live maintenance interval:
+scan when another tick ran it within half the gate interval:
 
 1. It takes the shortest `maintenance_interval_ms` among live `worker_registry` rows. A row is live
    while its `last_heartbeat_at` is within its own `lease_ms`. `worker_client_protocols_v1` uses
-   the same rule.
-2. It skips the scan if `maintenance_state.lease_recovery_started_at` is within half that interval.
-   Otherwise it runs the scan. If other recovery work fills its limit, recovery returns before
-   the scan.
+   the same rule. Since migration 0101 (schema version 100), the gate interval is that value, but
+   never less than 1,000 ms, the default maintenance interval of each SDK.
+2. It skips the scan if `maintenance_state.lease_recovery_started_at` is within half the gate
+   interval. Otherwise it runs the scan. If other recovery work fills its limit, recovery returns
+   before the scan.
 3. The scan gets the part of the limit that earlier recovery work left. If the scan returns fewer
    rows than that share and the phase succeeds, the tick records its start time in
    `lease_recovery_started_at`. A scan that fills its share leaves expired leases behind. Since
    migration 0084 (schema version 83), such a scan records nothing, so the next tick scans again.
-4. If no row is live, as for a direct `tick_v1` caller, every tick runs the scan.
+4. If no row is live, as for a direct `tick_v1` caller, every tick runs the scan. The floor does
+   not apply, because no live worker sets a gate.
 
 Thus the shortest live `maintenance_interval_ms` sets the scan rate for the whole fleet, not for
-one worker. `worker_registry` accepts a `maintenance_interval_ms` of 100 or more. If one live worker
-registers 100, the gate is 50 ms for every worker. Then a tick that gets the `workhorse:tick` lock
-reads every active full-tier lease, if no tick recorded a scan in the last 50 ms and earlier
-recovery work did not fill the limit. While that tick holds the lock, the ticks
-of the other workers skip. The fast tier finds its overdue leases through the index
-`fast_task_runtime_active_due_idx`, so this full scan does not apply to it. No measurement of the
-scan at a large number of active leases is recorded
-([SM-1960](https://linear.app/stablemates/issue/SM-1960)).
+one worker, down to the floor. While a worker is live, the scan runs at most once in 500 ms. A
+fleet whose shortest live interval is 1,000 ms or more scans as it did before migration 0101, at
+most once in half that interval.
+
+`worker_registry` accepts a `maintenance_interval_ms` of 100 or more. Before migration 0101, one
+live worker at 100 ms set a 50 ms gate for every worker. Then almost every tick that got the
+`workhorse:tick` lock read every active full-tier lease, and the ticks of the other workers skipped
+while it held the lock ([SM-1960](https://linear.app/stablemates/issue/SM-1960)). The fast tier
+finds its overdue leases through the index `fast_task_runtime_active_due_idx`, so this full scan
+does not apply to it.
+
+A short interval still has its other effects. A worker at 100 ms ticks every 100 ms. Each of its
+ticks takes the `workhorse:tick` lock, promotes, and recovers deadlines, attempt timeouts, and
+fast-tier leases. The interval also drives the schedule evaluation of that worker. A short interval
+does not make the full tier find an expired lease sooner than the floor permits: the scan still
+runs at most once in 500 ms.
 
 A row that another transaction locks does not count, because the scan skips it with
 `SKIP LOCKED`. Thus a scan that returns fewer rows because of a locked row is complete, and the
 transaction that holds the lock decides that row. A later scan recovers it if it is still expired.
 
 A spaced tick still promotes, recovers deadlines and timeouts, and reports `skipped_lock = false`.
-While registered workers keep ticking, the registered worker that ticks most often reaches the scan
-within one of its intervals, unless other recovery work fills the limit first. A direct call to
+While registered workers keep ticking, a tick reaches the scan within the bound that the end of
+this section states, unless other recovery work fills the limit first. A direct call to
 `recover_expired_v1` always runs the scan.
 
 Recovery clamps the `p_recover_limit` of `tick_v1` (default 1,000) to 1 through 10,000. One scan
@@ -400,10 +410,27 @@ tick every 1 s. The shortest live registered interval is 60 s. Thus the spacing 
 4. At 30 s the next tick runs the scan and recovers the lease.
 
 Before migration 0061, the tick at 2 s would have recovered the lease. In general, the scan runs at
-the first tick from any worker after the spacing has passed. Thus, while registered workers are
-live, the first scan after an expiry waits up to the spacing plus one interval of the fastest
-unregistered worker. It never waits longer than one interval of the fastest registered worker. The
-ticks of that worker still reach the scan.
+the first tick from any worker after the spacing has passed. The spacing is half the gate interval,
+so it is at least 500 ms.
+
+A tick of an unregistered worker also records its scan time. Thus it can reset the spacing between
+two ticks of the fastest registered worker, and that worker does not always reach the scan within
+one of its own intervals. For example, a registered worker ticks every 1,000 ms, and an
+unregistered worker also ticks. The spacing is 500 ms.
+
+1. At -600 ms the registered worker runs the scan.
+2. At 0 ms the unregistered worker runs the scan, because the last scan is 600 ms old. Just after
+   0 ms a lease expires.
+3. At 400 ms the registered worker skips the scan, because the last scan is 400 ms old.
+4. At 1,400 ms the registered worker runs the scan and recovers the lease, if no other tick ran it
+   before.
+
+Thus, while registered workers are live, the first scan after an expiry waits at most the spacing
+plus one interval of the fastest registered worker. That is at most 1.5 times that interval if it
+is 1,000 ms or more, and at most 500 ms plus that interval if it is shorter. A tick of an
+unregistered worker after the expiry runs the scan as soon as the spacing has passed, so it can
+only make the wait shorter. The bound does not depend on how often the unregistered workers tick.
+Before migration 0101, the same reset applied, with a spacing of half the shortest live interval.
 
 A fleet with no live registration runs the scan on every tick. Thus a fleet of only unregistered
 workers keeps the one-interval bound for its first scan. Each bound holds only while recovery
@@ -412,7 +439,8 @@ backlog larger than S needs more scans, as the share rule above states.
 
 `tick_v1(p_promote_limit, p_recover_limit)` receives no interval from its caller. Thus Workhorse
 does not count unregistered workers. To restore the shorter bound, register the fast workers or
-decrease the maintenance interval of the registered workers.
+decrease the maintenance interval of the registered workers. An interval below 1,000 ms does not
+decrease the spacing below 500 ms.
 
 Concurrent callers return immediately with `skipped_lock = true` and do not change the state.
 
@@ -934,11 +962,11 @@ matching policy rows without locking them. On a governed queue, it then holds at
 [admission shard](data-model.md#admission_shard). It computes acquisition and lease timestamps after
 those locks, which can block.
 
-| Policy                | Selection                                                                                                                     |
-| --------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
-| No concurrency policy | Selects the strict-priority head through `task_runtime_ready_idx`.                                                            |
-| Concurrency policy    | Counts only unexpired active rows through `task_runtime_active_queue_key_expiry_idx` and stops when its held shards are full. |
-| Rate policy           | Refills the held shards from PostgreSQL time and returns null when they hold no whole token.                                  |
+| Policy                | Selection                                                                                                                                                                                                                                                                                        |
+| --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| No concurrency policy | Selects the strict-priority head through `task_runtime_ready_idx`.                                                                                                                                                                                                                               |
+| Concurrency policy    | Counts only unexpired active rows through a partial index of the active rows of the queue and stops when its held shards are full. A per-key count uses `task_runtime_active_queue_key_expiry_idx`. The queue count can use it or `task_runtime_active_queue_shard_idx`, as the planner chooses. |
+| Rate policy           | Refills the held shards from PostgreSQL time and returns null when they hold no whole token.                                                                                                                                                                                                     |
 
 The concurrency count limits dispatch. It is not a mutual exclusion lock, also while every lease is
 live. The count reads the active rows with no row lock, and it compares `expires_at` with the claim
@@ -1627,18 +1655,45 @@ later release.
 A release that gets the shard lock can run up to three counts over the active `task_runtime` rows
 of its queue. Each count stops at a policy limit:
 
-1. The rows of its shard, up to the share of that shard. No index holds `admission_shard`, so the
-   count tests `COALESCE(admission_shard, 0) % shards` on each active row of the queue that it
-   reads. If the shard is not full, it reads every active row of the queue.
-2. The rows of the queue, up to `max_active`.
+1. The rows of its shard, up to the share of that shard. Since migration 0101 (schema version 100),
+   the count reads the shard through `task_runtime_active_queue_shard_idx`, which migration 0102
+   (schema version 101) builds. See [The shard count](#the-shard-count).
+2. The rows of the queue, up to `max_active`. If the queue is below its limit, this count reads up
+   to `max_active` active rows of the queue.
 3. The rows of its `concurrency_key`, up to `max_active_per_key`. This count runs only if the policy
    sets `max_active_per_key` and the row has a key.
 
-The shard share is at most `max_active`, and `max_active_per_key` is at most `max_active`. Thus
-the cost of one release can grow with `max_active`, which accepts up to 1,000,000. The trigger runs
-on every release of an active row on a governed queue. If a claim holds the shard lock, the release
-publishes without the counts. No measurement at a large `max_active` is recorded
+The trigger writes the counts in this order. In practice, PostgreSQL stops at the first count that
+reaches its limit. Thus a release from a full shard reads only the share of that shard. A release
+below every limit runs each count. The queue count then still reads up to `max_active` index
+entries, so the cost of such a release grows with `max_active`, which accepts up to 1,000,000. The
+trigger runs on every release of an active row on a governed queue. If a claim holds the shard lock,
+the release publishes without the counts.
+
+##### The shard count
+
+A lease counts in the shard `COALESCE(admission_shard, 0) % shards`. A claim stores a shard number
+below 8, because a queue has at most 8 shards. A stored number can come from an earlier shard count,
+and a null value counts in shard 0. Thus the count reads parts that give the same rows as that
+modulo:
+
+1. With one shard, every active row of the queue.
+2. With more shards, the rows whose stored number is one of the numbers 0 to 7 that map to the
+   shard. There are at most 4 such numbers, and each part compares with one number.
+3. For shard 0, the rows whose stored number is null.
+4. The rows whose stored number is below 0 or above 7 and maps to the shard. Workhorse does not
+   write such a number, so in practice each of these two parts reads one index page path and finds
+   nothing.
+
+Each part is an equality or a range on `(queue_name, admission_shard)`, so the index serves it with
+a custom plan and with a generic plan. A `LIMIT` on all the parts together stops the read at the
+share. Before migration 0101, the count tested the modulo on each active row of the queue that it
+read, and no index held `admission_shard`. Thus a release read almost every active row of the queue
 ([SM-1991](https://linear.app/stablemates/issue/SM-1991)).
+
+If the index does not exist, for example because the build of migration 0102 failed, the parts give
+the same answer, only more slowly. A heartbeat changes no column of the index, so it stays a HOT
+update. A claim writes one more index entry for each lease that it starts.
 
 ##### Lease expiry
 
@@ -1651,12 +1706,12 @@ the first of two events: its next fallback poll, or the release of the expired r
 That release still counts the expired row toward `max_active`. Thus it publishes the queue. The
 budget trigger wakes every queue that waits on the budget.
 
-Every worker offers `tick_v1` once per maintenance interval, one second by default. While
-registered workers keep ticking, a tick reaches the expired-lease scan at least once per shortest
-maintenance interval among live registered workers. Each run recovers a bounded batch of expired
-rows. Unregistered workers do not shorten that interval, as
-[Maintenance cadence](#maintenance-cadence) explains. Thus the wake occurs at most that interval
-after expiry, unless more expired leases wait than one tick recovers.
+Every worker offers `tick_v1` once per maintenance interval, one second by default. While registered
+workers keep ticking, a tick reaches the expired-lease scan within half the gate interval plus one
+interval of the fastest registered worker after the expiry, as
+[Maintenance cadence](#maintenance-cadence) explains. The scan runs at most once in 500 ms. Each run
+recovers a bounded batch of expired rows. Unregistered workers do not shorten that bound. Thus the
+wake occurs within that bound, unless more expired leases wait than one tick recovers.
 
 PostgreSQL has no event that fires at a stored timestamp. Thus Workhorse leaves this wake to
 recovery and does not add such an event.

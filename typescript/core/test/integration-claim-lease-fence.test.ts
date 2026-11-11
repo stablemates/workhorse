@@ -2687,7 +2687,11 @@ describe("claim lease fence", () => {
       ).rows
         .map((row) => row["QUERY PLAN"])
         .join("\n");
-      expect(activePlan).toContain("task_runtime_active_queue_key_expiry_idx");
+      // Both partial indexes of the active leases of a queue serve this count. Since SM-1991,
+      // task_runtime_active_queue_shard_idx is the smaller one, so the planner can choose it.
+      expect(activePlan).toMatch(
+        /task_runtime_active_queue_key_expiry_idx|task_runtime_active_queue_shard_idx/,
+      );
 
       const readyPlan = (
         await client.query<{ "QUERY PLAN": string }>(`EXPLAIN (COSTS OFF)

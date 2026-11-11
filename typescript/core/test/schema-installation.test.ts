@@ -765,6 +765,14 @@ describe("schema installation", () => {
         description:
           "bound failure envelopes and answer an oversized checkpoint value with a status",
       },
+      {
+        version: 100,
+        description: "floor the expired-lease scan gate and count one admission shard",
+      },
+      {
+        version: 101,
+        description: "index the active leases of each admission shard",
+      },
     ]);
 
     const protocols = await pool.query<{ version: number }>(

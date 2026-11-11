@@ -1,14 +1,14 @@
 [
   {
     "id": "current",
-    "installedSchemaVersion": 99,
+    "installedSchemaVersion": 101,
     "clientProtocolVersion": 5,
     "servedProtocolVersions": [5],
     "compatible": true
   },
   {
     "id": "schema-newer-inside-major-line",
-    "installedSchemaVersion": 100,
+    "installedSchemaVersion": 102,
     "clientProtocolVersion": 5,
     "servedProtocolVersions": [5],
     "compatible": true,
@@ -16,11 +16,19 @@
   },
   {
     "id": "served-protocol-undeclared",
-    "installedSchemaVersion": 99,
+    "installedSchemaVersion": 101,
     "clientProtocolVersion": 5,
     "servedProtocolVersions": [],
     "compatible": true,
     "note": "A schema that declares no served protocol has made no statement to enforce."
+  },
+  {
+    "id": "schema-before-the-admission-shard-index",
+    "installedSchemaVersion": 100,
+    "clientProtocolVersion": 5,
+    "servedProtocolVersions": [5],
+    "compatible": true,
+    "note": "Migration 0102 builds an index outside a transaction. A database where that build failed or did not run yet stays at schema 100, and this client still works, because the floor is 99."
   },
   {
     "id": "schema-before-the-bounded-failure-envelope",
@@ -181,7 +189,7 @@
   },
   {
     "id": "schema-serves-only-older-protocols",
-    "installedSchemaVersion": 99,
+    "installedSchemaVersion": 101,
     "clientProtocolVersion": 5,
     "servedProtocolVersions": [4],
     "compatible": false,
@@ -200,7 +208,7 @@
   },
   {
     "id": "schema-no-longer-serves-client",
-    "installedSchemaVersion": 99,
+    "installedSchemaVersion": 101,
     "clientProtocolVersion": 5,
     "servedProtocolVersions": [6],
     "compatible": false,
@@ -209,7 +217,7 @@
   },
   {
     "id": "client-protocol-too-old",
-    "installedSchemaVersion": 99,
+    "installedSchemaVersion": 101,
     "clientProtocolVersion": 4,
     "servedProtocolVersions": [5],
     "compatible": false,
@@ -219,7 +227,7 @@
   },
   {
     "id": "client-protocol-too-new",
-    "installedSchemaVersion": 99,
+    "installedSchemaVersion": 101,
     "clientProtocolVersion": 6,
     "servedProtocolVersions": [5],
     "compatible": false,

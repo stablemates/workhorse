@@ -156,6 +156,39 @@ async function insertFastRuntime(
   );
 }
 
+// A tick decides from the age of the last recorded scan, so each test below sets that age and
+// then ticks in the same transaction. The test thus does not depend on the speed of the host:
+// the age that the tick sees exceeds the set age only by the time of one round trip.
+async function scansAfter(ageMs: number): Promise<boolean> {
+  const client = await database.pool.connect();
+  try {
+    await client.query("BEGIN");
+    await client.query(
+      `UPDATE workhorse.maintenance_state
+          SET lease_recovery_started_at = clock_timestamp() - $1 * interval '1 millisecond'
+        WHERE routine_name = 'tick'`,
+      [ageMs],
+    );
+    await client.query("SELECT count(*) FROM workhorse.tick_v1()");
+    const scanned = await client.query<{ scanned: string | null }>(
+      "SELECT current_setting('workhorse.recovery_scanned_expired_leases', true) AS scanned",
+    );
+    await client.query("COMMIT");
+    return scanned.rows[0]!.scanned === "true";
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+/** The clock of the database, in milliseconds since the epoch. */
+async function databaseClock(): Promise<number> {
+  const result = await database.pool.query<{ at: Date }>("SELECT clock_timestamp() AS at");
+  return result.rows[0]!.at.getTime();
+}
+
 describe("scan cost bounds", () => {
   beforeAll(async () => database.setup());
   // The reset also clears lease_recovery_started_at, so a lease scan of an earlier test does not
@@ -371,6 +404,52 @@ describe("scan cost bounds", () => {
       }
       // The scan is spaced, so the skipped lease waits for a later scan.
       expect(await recoverWithLimit(2)).toBe(0);
+    });
+
+    it("spaces the scans by at least 500 ms when a live worker sets a 100 ms interval", async () => {
+      // One worker at the smallest interval the registry accepts set a 50 ms gate for the fleet
+      // (SM-1960). The gate interval now has a floor of 1,000 ms, the default interval of each SDK.
+      await registerWorker("scan-cost-fast", { maintenanceIntervalMs: 100 });
+      await registerWorker("scan-cost-default", { maintenanceIntervalMs: 1_000 });
+
+      // 250 ms is five times the old gate and half the floor.
+      expect(await scansAfter(250)).toBe(false);
+      expect(await scansAfter(600)).toBe(true);
+    });
+
+    it("keeps the gate of a fleet whose shortest interval is longer than the floor", async () => {
+      // A floor never makes the scan run more often than the shortest live interval allows.
+      await registerWorker("scan-cost-slow", { maintenanceIntervalMs: 4_000 });
+
+      expect(await scansAfter(1_500)).toBe(false);
+      expect(await scansAfter(2_500)).toBe(true);
+    });
+
+    it("runs the scan at most once in 500 ms over many ticks of a 100 ms worker", async () => {
+      // Each tick is its own transaction, 20 ms after the one before, five times as often as the
+      // worker ticks. The database clock records each scan, so the test asserts on those times and
+      // not on its own timing.
+      await registerWorker("scan-cost-fast", { maintenanceIntervalMs: 100 });
+      const scans = new Set<number>();
+      const startedAt = await databaseClock();
+      while ((await databaseClock()) - startedAt < 1_200) {
+        await database.pool.query("SELECT count(*) FROM workhorse.tick_v1(), pg_sleep(0.02)");
+        const scanned = await leaseScanAt();
+        if (scanned !== null) scans.add(scanned.getTime());
+      }
+
+      // oxlint-disable-next-line unicorn/no-array-sort -- ES2022 lacks Array.prototype.toSorted.
+      const times = [...scans].sort((left, right) => left - right);
+      expect(times.length).toBeGreaterThanOrEqual(2);
+      for (let index = 1; index < times.length; index += 1) {
+        expect(times[index]! - times[index - 1]!).toBeGreaterThanOrEqual(500);
+      }
+    });
+
+    it("runs the scan on each back-to-back tick when no live worker is registered", async () => {
+      // The floor applies only to a gate that a live worker sets. A direct caller scans each time.
+      expect(await scansAfter(0)).toBe(true);
+      expect(await scansAfter(0)).toBe(true);
     });
 
     it("ignores a registration whose heartbeat is older than its own lease", async () => {
