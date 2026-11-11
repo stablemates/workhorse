@@ -33,4 +33,27 @@ describe("demo content security policy", () => {
     expect(production).toContain("default-src 'self'");
     expect(production).toContain("frame-ancestors 'none'");
   });
+
+  it("allows form submissions only to the demo origin", () => {
+    for (const mode of ["development", "production"] as const) {
+      expect(demoContentSecurityPolicy(mode).split("; ")).toContain("form-action 'self'");
+    }
+  });
+
+  it("allows no inline script and names the nonce of a page", () => {
+    expect(demoContentSecurityPolicy("production").split("; ")).toContain(
+      "script-src 'self' https://www.googletagmanager.com",
+    );
+    expect(demoContentSecurityPolicy("production", "bm9uY2U=").split("; ")).toContain(
+      "script-src 'self' 'nonce-bm9uY2U=' https://www.googletagmanager.com",
+    );
+    for (const mode of ["development", "production"] as const) {
+      const script = demoContentSecurityPolicy(mode, "bm9uY2U=")
+        .split("; ")
+        .find((entry) => entry.startsWith("script-src "));
+      expect(script).not.toContain("'unsafe-inline'");
+    }
+    // Only style-src keeps inline elements, for the styles the application injects.
+    expect(demoContentSecurityPolicy("production")).toContain("style-src 'self' 'unsafe-inline'");
+  });
 });

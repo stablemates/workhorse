@@ -1796,8 +1796,25 @@ interface DashboardHostOptions {
   * Request` before authorization runs. Letter case and a default port do not matter. Leave it
   * unset when the embedding application already validates `Host`, or when a configured public
   * origin replaces the inbound host.
+  *
+  * Without this list and without a public origin, the request URL takes its host from the `Host`
+  * header. A foreign host name that resolves to this listener (DNS rebinding) then passes the
+  * same-origin check, because its `Origin` and `Host` agree. This matters only when `authorize`
+  * accepts such a request, for example by its network address. A session cookie for the
+  * dashboard host name does not reach the foreign name, so cookie authorization refuses it.
   */
   allowedHosts?: readonly string[];
+  /**
+  * Build the Content-Security-Policy of each dashboard page.
+  *
+  * The host makes a new nonce for each page it writes and puts it on each inline script element.
+  * It then calls this function with that nonce and sends the result as the page's
+  * `Content-Security-Policy` header. Other responses get no header from the host. Without this
+  * option, the host sends no policy, and the embedding application owns the header.
+  */
+  contentSecurityPolicy?: (page: {
+    nonce: string;
+  }) => string;
   /**
   * Git commit of the Workhorse source this host was built from, shown beside the version.
   *
@@ -4588,6 +4605,12 @@ interface RenderDashboardHtmlOptions {
   runtime: DashboardRuntimeConfig;
   /** Trusted host-owned ES modules loaded before the dashboard browser entry. */
   browserModules?: readonly string[];
+  /**
+  * The Content-Security-Policy nonce of this response. When it is set, each inline script element
+  * of the document gets a `nonce` attribute with this value, so a policy can allow those scripts
+  * without `'unsafe-inline'`. It must contain only base64 or base64url characters.
+  */
+  scriptNonce?: string;
 }
 
 interface ReplayHandlerOptions {

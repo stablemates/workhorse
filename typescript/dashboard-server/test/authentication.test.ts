@@ -12,6 +12,7 @@ import { isDashboardMutation, type DashboardRouter } from "../src/server/router.
 import type { DashboardAuditContext } from "../src/server/types.js";
 import { PROTOCOL_VERSION, WORKHORSE_SCHEMA_VERSION } from "@stablemates/workhorse";
 
+const DASHBOARD_ORIGIN = "https://dashboard.test";
 const salt = Buffer.from("workhorse-auth-test-salt");
 const passwordHash = `scrypt-v1$${salt.toString("base64url")}$${scryptSync("correct horse", salt, 32).toString("base64url")}`;
 
@@ -39,7 +40,7 @@ async function login(
   const response = await host.handle(
     new Request("https://dashboard.test/login", {
       method: "POST",
-      headers: { "content-type": "application/x-www-form-urlencoded" },
+      headers: { "content-type": "application/x-www-form-urlencoded", origin: DASHBOARD_ORIGIN },
       body: new URLSearchParams({ username: "operator", password }),
     }),
     clientAddress === undefined ? undefined : { clientAddress },
@@ -145,7 +146,7 @@ dashboardAuthenticationSuite(dashboardAuthenticationSuiteName, () => {
     const response = await host.handle(
       new Request("https://dashboard.test/login", {
         method: "POST",
-        headers: { "content-type": "application/x-www-form-urlencoded" },
+        headers: { "content-type": "application/x-www-form-urlencoded", origin: DASHBOARD_ORIGIN },
         body: new URLSearchParams({ username: "operator", password: "wrong password" }),
       }),
     );
@@ -164,7 +165,7 @@ dashboardAuthenticationSuite(dashboardAuthenticationSuiteName, () => {
     const response = await host.handle(
       new Request("https://dashboard.test/login", {
         method: "POST",
-        headers: { "content-type": "application/x-www-form-urlencoded" },
+        headers: { "content-type": "application/x-www-form-urlencoded", origin: DASHBOARD_ORIGIN },
         body: new ReadableStream({
           start(controller) {
             controller.enqueue(new TextEncoder().encode("x".repeat(4_097)));
@@ -190,6 +191,7 @@ dashboardAuthenticationSuite(dashboardAuthenticationSuiteName, () => {
         headers: {
           "content-type": "application/x-www-form-urlencoded",
           "content-length": "not-a-number",
+          origin: DASHBOARD_ORIGIN,
         },
         body: "username=operator&password=correct+horse",
       }),
@@ -231,7 +233,7 @@ dashboardAuthenticationSuite(dashboardAuthenticationSuiteName, () => {
     const response = await host.handle(
       new Request("https://dashboard.test/workhorse/login", {
         method: "POST",
-        headers: { "content-type": "application/x-www-form-urlencoded" },
+        headers: { "content-type": "application/x-www-form-urlencoded", origin: DASHBOARD_ORIGIN },
         body: new URLSearchParams({ username: "operator", password: "correct horse" }),
       }),
     );
@@ -296,6 +298,88 @@ dashboardAuthenticationSuite(dashboardAuthenticationSuiteName, () => {
     );
     expect(application?.status).toBe(302);
     expect(application?.headers.get("location")).toBe("/tasks");
+  });
+
+  it("refuses a cross-origin login before it reads the body or sets a cookie", async () => {
+    const host = createDashboardHost({
+      database,
+      path: "/",
+      singleAdmin: { username: "operator", passwordHash },
+    });
+
+    for (const origin of ["https://attacker.test", "null", "not a url"]) {
+      const request = new Request("https://dashboard.test/login", {
+        method: "POST",
+        headers: { "content-type": "application/x-www-form-urlencoded", origin },
+        body: new URLSearchParams({ username: "operator", password: "correct horse" }),
+      });
+      const response = await host.handle(request, { clientAddress: "203.0.113.7" });
+
+      expect(response?.status).toBe(403);
+      expect(response?.headers.get("set-cookie")).toBeNull();
+      await expect(response?.json()).resolves.toEqual({
+        error: "A same-origin mutation request is required",
+      });
+      expect(request.bodyUsed).toBe(false);
+    }
+  });
+
+  it("answers a login without Origin as it answers a logout without Origin", async () => {
+    const host = createDashboardHost({
+      database,
+      path: "/",
+      singleAdmin: { username: "operator", passwordHash },
+    });
+
+    const loginResponse = await host.handle(
+      new Request("https://dashboard.test/login", {
+        method: "POST",
+        headers: { "content-type": "application/x-www-form-urlencoded" },
+        body: new URLSearchParams({ username: "operator", password: "correct horse" }),
+      }),
+    );
+    const logoutResponse = await host.handle(
+      new Request("https://dashboard.test/logout", { method: "POST" }),
+    );
+
+    expect(loginResponse?.status).toBe(403);
+    expect(loginResponse?.status).toBe(logoutResponse?.status);
+    expect(loginResponse?.headers.get("set-cookie")).toBeNull();
+    expect(await loginResponse?.json()).toEqual(await logoutResponse?.json());
+  });
+
+  it("keeps the login window of an address that a cross-origin page targets", async () => {
+    const now = vi.spyOn(Date, "now").mockReturnValue(1_000_000);
+    try {
+      const host = createDashboardHost({
+        database,
+        path: "/",
+        singleAdmin: { username: "operator", passwordHash },
+      });
+
+      for (let attempt = 0; attempt < 5; attempt += 1) {
+        const refused = await host.handle(
+          new Request("https://dashboard.test/login", {
+            method: "POST",
+            headers: {
+              "content-type": "application/x-www-form-urlencoded",
+              origin: "https://attacker.test",
+            },
+            body: new URLSearchParams({ username: "operator", password: "wrong password" }),
+          }),
+          { clientAddress: "203.0.113.7" },
+        );
+        expect(refused?.status).toBe(403);
+      }
+
+      // No refusal reserved a slot, so the full budget of five failures is still available.
+      for (let attempt = 0; attempt < 4; attempt += 1) {
+        expect((await login(host, "wrong password", "203.0.113.7")).status).toBe(401);
+      }
+      expect((await login(host, "correct horse", "203.0.113.7")).status).toBe(303);
+    } finally {
+      now.mockRestore();
+    }
   });
 
   it("rejects an expired session even when the browser still presents its cookie", async () => {
@@ -408,6 +492,7 @@ dashboardAuthenticationSuite(dashboardAuthenticationSuiteName, () => {
           method: "POST",
           headers: {
             "content-type": "application/x-www-form-urlencoded",
+            origin: DASHBOARD_ORIGIN,
             "x-forwarded-for": "198.51.100.4",
             forwarded: "for=198.51.100.4",
           },

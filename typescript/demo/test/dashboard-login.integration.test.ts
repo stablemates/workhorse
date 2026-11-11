@@ -71,6 +71,8 @@ function failLogin(port: number, forwardedFor: string): Promise<number> {
       headers: {
         "content-type": "application/x-www-form-urlencoded",
         "content-length": Buffer.byteLength(body),
+        // The login refuses a POST that does not come from the dashboard's own origin.
+        origin: `http://127.0.0.1:${port}`,
         "x-forwarded-for": forwardedFor,
       },
     });

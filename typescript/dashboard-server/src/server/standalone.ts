@@ -21,25 +21,29 @@ import { trustedProxyCheck } from "./trusted-proxy.js";
  * dashboard's responses would intersect with the application's own. An embedder therefore owns
  * these headers, and `typescript/dashboard-server/README.md` states the policy to copy.
  *
- * `unsafe-inline` covers the two inline boot scripts in the packaged document, the runtime
- * configuration this host writes into it, and the style elements the application injects while it
- * renders. No response references a remote origin.
+ * Every response gets the policy without a nonce. A dashboard page replaces it with the policy that
+ * names the nonce of that page, so its two inline boot scripts run: the color scheme script and the
+ * runtime configuration this host writes. No other inline script runs. `style-src` keeps
+ * `'unsafe-inline'` for the style elements the application injects while it renders. No response
+ * references a remote origin.
  */
-const STANDALONE_CONTENT_SECURITY_POLICY = [
-  "default-src 'self'",
-  "base-uri 'self'",
-  "form-action 'self'",
-  "frame-ancestors 'none'",
-  "object-src 'none'",
-  "script-src 'self' 'unsafe-inline'",
-  "style-src 'self' 'unsafe-inline'",
-  "img-src 'self' data:",
-  "font-src 'self'",
-  "connect-src 'self'",
-].join("; ");
+function standaloneContentSecurityPolicy(nonce?: string): string {
+  return [
+    "default-src 'self'",
+    "base-uri 'self'",
+    "form-action 'self'",
+    "frame-ancestors 'none'",
+    "object-src 'none'",
+    nonce === undefined ? "script-src 'self'" : `script-src 'self' 'nonce-${nonce}'`,
+    "style-src 'self' 'unsafe-inline'",
+    "img-src 'self' data:",
+    "font-src 'self'",
+    "connect-src 'self'",
+  ].join("; ");
+}
 
 const STANDALONE_SECURITY_HEADERS: Readonly<Record<string, string>> = {
-  "content-security-policy": STANDALONE_CONTENT_SECURITY_POLICY,
+  "content-security-policy": standaloneContentSecurityPolicy(),
   "x-content-type-options": "nosniff",
   "referrer-policy": "strict-origin-when-cross-origin",
   "x-frame-options": "DENY",
@@ -146,6 +150,7 @@ export const startDashboardServer: DashboardStandaloneModule<Queryable>["startDa
         path: "/",
         environment: "standalone",
         auditActor: options.actor,
+        contentSecurityPolicy: ({ nonce }) => standaloneContentSecurityPolicy(nonce),
         // A Unix socket has no host name, and a public origin replaces the inbound one.
         ...(tcpListener && !publicOrigin
           ? { allowedHosts: loopbackHosts(options.hostname, port) }

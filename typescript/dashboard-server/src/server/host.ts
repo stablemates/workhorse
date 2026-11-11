@@ -1,3 +1,4 @@
+import { randomBytes } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { readFile as readFileAsync } from "node:fs/promises";
 import { join } from "node:path";
@@ -17,7 +18,7 @@ import { WORKHORSE_VERSION } from "@stablemates/workhorse/version";
 import type { DashboardMaintenanceLoopCadences } from "../wire.js";
 import { dashboardAssetsDirectory } from "./assets.js";
 import { createSingleAdminAuthentication } from "./authentication.js";
-import { renderDashboardHtml } from "./html.js";
+import { addInlineScriptNonce, renderDashboardHtml } from "./html.js";
 import { rejectCrossOriginMutation, rejectCrossOriginRead } from "./same-origin.js";
 import { dashboardRouter, isDashboardMutation } from "./router.js";
 import { createDashboardQueueHealthReader, type DashboardQueueHealthReader } from "./read-model.js";
@@ -122,8 +123,23 @@ export interface DashboardHostOptions {
    * Request` before authorization runs. Letter case and a default port do not matter. Leave it
    * unset when the embedding application already validates `Host`, or when a configured public
    * origin replaces the inbound host.
+   *
+   * Without this list and without a public origin, the request URL takes its host from the `Host`
+   * header. A foreign host name that resolves to this listener (DNS rebinding) then passes the
+   * same-origin check, because its `Origin` and `Host` agree. This matters only when `authorize`
+   * accepts such a request, for example by its network address. A session cookie for the
+   * dashboard host name does not reach the foreign name, so cookie authorization refuses it.
    */
   allowedHosts?: readonly string[];
+  /**
+   * Build the Content-Security-Policy of each dashboard page.
+   *
+   * The host makes a new nonce for each page it writes and puts it on each inline script element.
+   * It then calls this function with that nonce and sends the result as the page's
+   * `Content-Security-Policy` header. Other responses get no header from the host. Without this
+   * option, the host sends no policy, and the embedding application owns the header.
+   */
+  contentSecurityPolicy?: (page: { nonce: string }) => string;
   /**
    * Git commit of the Workhorse source this host was built from, shown beside the version.
    *
@@ -561,7 +577,9 @@ export function createDashboardHost(options: DashboardHostOptions): DashboardHos
     workspace: HostWorkspace,
   ): Promise<Response> {
     const template = options.dev ? await options.dev.readTemplate() : await readPackagedTemplate();
+    const nonce = randomBytes(16).toString("base64");
     const rendered = renderDashboardHtml(template, {
+      scriptNonce: nonce,
       runtime: {
         basePath: workspace.basePath,
         rpcUrl: `${workspace.basePath}/rpc`,
@@ -577,10 +595,18 @@ export function createDashboardHost(options: DashboardHostOptions): DashboardHos
       },
       browserModules: options.browserModules,
     });
-    const html = options.dev ? await options.dev.transformHtml(url.pathname, rendered) : rendered;
-    return new Response(html, {
-      headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" },
+    // The development transform adds inline scripts of its own, so they get the nonce too.
+    const html = options.dev
+      ? addInlineScriptNonce(await options.dev.transformHtml(url.pathname, rendered), nonce)
+      : rendered;
+    const headers = new Headers({
+      "content-type": "text/html; charset=utf-8",
+      "cache-control": "no-store",
     });
+    if (options.contentSecurityPolicy) {
+      headers.set("content-security-policy", options.contentSecurityPolicy({ nonce }));
+    }
+    return new Response(html, { headers });
   }
 
   return {

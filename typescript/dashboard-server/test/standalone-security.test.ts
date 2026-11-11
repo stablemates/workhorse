@@ -103,6 +103,8 @@ describe("standalone dashboard listener security", () => {
       expect(headers["content-security-policy"]).toContain("frame-ancestors 'none'");
       expect(headers["content-security-policy"]).toContain("default-src 'self'");
       expect(headers["content-security-policy"]).not.toContain("http:");
+      expect(headers["content-security-policy"]).toContain("script-src 'self'; ");
+      expect(headers["content-security-policy"]).not.toMatch(/script-src[^;]*'unsafe-inline'/);
       expect(headers["x-content-type-options"]).toBe("nosniff");
       expect(headers["referrer-policy"]).toBe("strict-origin-when-cross-origin");
       expect(headers["x-frame-options"]).toBe("DENY");
@@ -111,6 +113,40 @@ describe("standalone dashboard listener security", () => {
       await running.close();
     }
   });
+
+  dashboardBrowserTest(
+    "sends each page a policy whose nonce is on every inline script of the page (requires the built dashboard browser bundle)",
+    async () => {
+      const running = await startDashboardServer(database, {
+        hostname: "127.0.0.1",
+        port: 0,
+        allowMutations: false,
+        actor: "test",
+      });
+      try {
+        const response = await fetch(`${running.url}/tasks`);
+        const html = await response.text();
+        const policy = response.headers.get("content-security-policy") ?? "";
+        const nonce = /script-src 'self' 'nonce-([A-Za-z0-9+/]+={0,2})';/.exec(policy)?.[1];
+        const inline = [...html.matchAll(/<script\b[^>]*>/gi)]
+          .map(([tag]) => tag)
+          .filter((tag) => !/\ssrc\s*=/i.test(tag));
+
+        // oxlint-disable-next-line vitest/no-standalone-expect -- the assertion is inside this test's server lifecycle.
+        expect(response.status).toBe(200);
+        // oxlint-disable-next-line vitest/no-standalone-expect -- the assertion is inside this test's server lifecycle.
+        expect(nonce).toBeDefined();
+        // oxlint-disable-next-line vitest/no-standalone-expect -- the assertion is inside this test's server lifecycle.
+        expect(policy).not.toMatch(/script-src[^;]*'unsafe-inline'/);
+        // oxlint-disable-next-line vitest/no-standalone-expect -- the assertion is inside this test's server lifecycle.
+        expect(policy).toContain("form-action 'self'");
+        // oxlint-disable-next-line vitest/no-standalone-expect -- the assertion is inside this test's server lifecycle.
+        expect(inline).toEqual([`<script nonce="${nonce}">`, `<script nonce="${nonce}">`]);
+      } finally {
+        await running.close();
+      }
+    },
+  );
 
   it("answers 421 on a loopback listener to a host that is not its own address", async () => {
     const running = await startDashboardServer(database, {

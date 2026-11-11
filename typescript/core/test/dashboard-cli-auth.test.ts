@@ -258,6 +258,7 @@ async function loginStatuses(
       redirect: "manual",
       headers: {
         "content-type": "application/x-www-form-urlencoded",
+        origin: `http://127.0.0.1:${port}`,
         "x-forwarded-for": client,
       },
       body: new URLSearchParams({ username: "operator", password }),

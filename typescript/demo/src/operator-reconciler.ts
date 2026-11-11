@@ -1,11 +1,22 @@
+import { randomUUID } from "node:crypto";
 import {
   Admin,
+  FastTierUnsupportedError,
   Queue,
   type MaintenancePolicySetting,
+  type QueueHistorySettings,
+  type QueueTier,
   type RetentionPolicySetting,
 } from "@stablemates/workhorse";
 import type { Pool } from "pg";
-import { DEMO_QUEUE } from "./constants.js";
+import {
+  DEMO_DOTNET_FAST_TIER_QUEUE,
+  DEMO_FAST_TIER_QUEUES,
+  DEMO_JVM_FAST_TIER_QUEUE,
+  DEMO_QUEUE,
+  DEMO_RUBY_FAST_TIER_QUEUE,
+  DEMO_RUST_FAST_TIER_QUEUE,
+} from "./constants.js";
 
 /**
  * How long a public operator mutation stays in effect before the demo restores its default.
@@ -27,7 +38,35 @@ export interface DemoOperatorReconciliation {
   resumedSchedules: string[];
   revertedRetentionSettings: RetentionPolicySetting[];
   revertedMaintenanceSettings: MaintenancePolicySetting[];
+  /** Queues whose history settings the pass set back to the seeded values. */
+  restoredQueueHistory: string[];
+  /** Queues whose tier the pass set back to the seeded tier. */
+  restoredQueueTiers: string[];
+  /** Queues whose tier change Workhorse refused, for example for an active task. The next pass tries again. */
+  deferredQueueTiers: string[];
 }
+
+interface DemoQueueIntent extends QueueHistorySettings {
+  tier: QueueTier;
+}
+
+/** The seed steps put these queues on the fast tier, each with its own history settings. */
+const DEMO_FAST_TIER_INTENTS: ReadonlyMap<string, DemoQueueIntent> = new Map(
+  [
+    ...DEMO_FAST_TIER_QUEUES,
+    DEMO_RUST_FAST_TIER_QUEUE,
+    DEMO_RUBY_FAST_TIER_QUEUE,
+    DEMO_JVM_FAST_TIER_QUEUE,
+    DEMO_DOTNET_FAST_TIER_QUEUE,
+  ].map(({ queue, history }) => [queue, { tier: "fast", ...history }]),
+);
+
+/** Every other demo queue stays on the full tier with the default history settings. */
+const DEMO_FULL_TIER_INTENT: DemoQueueIntent = {
+  tier: "full",
+  recordAttempts: false,
+  recordClaims: false,
+};
 
 function audit(requestId: string) {
   return { actor: RECONCILE_ACTOR, reason: RECONCILE_REASON, requestId };
@@ -96,6 +135,8 @@ export async function reconcileDemoOperatorDefaults(
     await queue.revertRetentionPolicy(revertedRetentionSettings);
   }
 
+  const queueSettings = await restoreDemoQueueSettings(pool, admin);
+
   const maintenance = await queue.getMaintenancePolicy();
   const revertedMaintenanceSettings = (
     Object.keys(maintenance.provenance) as MaintenancePolicySetting[]
@@ -110,10 +151,94 @@ export async function reconcileDemoOperatorDefaults(
     resumedSchedules,
     revertedRetentionSettings,
     revertedMaintenanceSettings,
+    ...queueSettings,
   };
 }
 
-/** Report whether a pass changed anything, so a quiet demo logs nothing. */
+/**
+ * Set the tier and the history settings of each demo queue back to the values the seed steps set.
+ *
+ * Only a queue with a `queue_control` row can differ from its seeded values, because a visitor's
+ * change writes that row. A fast-tier queue without a row is a queue whose seed step did not run
+ * yet, so the pass leaves it to that step.
+ *
+ * Workhorse refuses a tier change while the queue holds a live task. The pass then purges the
+ * blocked, ready, and scheduled tasks of the queue, which are demo data, and tries again. If an
+ * active or waiting task still blocks the change, the queue is in `deferredQueueTiers` and the next
+ * pass tries again.
+ */
+async function restoreDemoQueueSettings(
+  pool: Pool,
+  admin: Admin,
+): Promise<
+  Pick<
+    DemoOperatorReconciliation,
+    "restoredQueueHistory" | "restoredQueueTiers" | "deferredQueueTiers"
+  >
+> {
+  const rows = await pool.query<{
+    queue_name: string;
+    tier: QueueTier;
+    record_attempts: boolean;
+    record_claims: boolean;
+  }>(
+    `SELECT queue_name, tier, record_attempts, record_claims
+       FROM workhorse.queue_control
+      ORDER BY queue_name`,
+  );
+  const restoredQueueHistory: string[] = [];
+  const restoredQueueTiers: string[] = [];
+  const deferredQueueTiers: string[] = [];
+  for (const row of rows.rows) {
+    const intent = DEMO_FAST_TIER_INTENTS.get(row.queue_name) ?? DEMO_FULL_TIER_INTENT;
+    if (row.tier !== intent.tier) {
+      const restored = await restoreQueueTier(admin, row.queue_name, intent.tier);
+      (restored ? restoredQueueTiers : deferredQueueTiers).push(row.queue_name);
+    }
+    if (
+      row.record_attempts !== intent.recordAttempts ||
+      row.record_claims !== intent.recordClaims
+    ) {
+      await admin.setQueueHistory(row.queue_name, {
+        recordAttempts: intent.recordAttempts,
+        recordClaims: intent.recordClaims,
+      });
+      restoredQueueHistory.push(row.queue_name);
+    }
+  }
+  return { restoredQueueHistory, restoredQueueTiers, deferredQueueTiers };
+}
+
+/** Move one queue to its seeded tier, and report whether Workhorse accepted the change. */
+async function restoreQueueTier(
+  admin: Admin,
+  queueName: string,
+  tier: QueueTier,
+): Promise<boolean> {
+  const tierAudit = audit(`reconcile-tier-${queueName}-${randomUUID()}`);
+  try {
+    await admin.setQueueTier(queueName, tier, tierAudit);
+    return true;
+  } catch (error) {
+    if (!(error instanceof FastTierUnsupportedError)) throw error;
+    // A concurrency or a rate-limit policy blocks a move to the fast tier, and a purge cannot help.
+    if (error.feature !== "tier change") return false;
+  }
+  // Each purge has its own request ID, so Workhorse does not replay an earlier purge.
+  await admin.purgeQueue(queueName, audit(`reconcile-purge-${queueName}-${randomUUID()}`));
+  try {
+    await admin.setQueueTier(queueName, tier, tierAudit);
+    return true;
+  } catch (error) {
+    if (error instanceof FastTierUnsupportedError) return false;
+    throw error;
+  }
+}
+
+/**
+ * Report whether a pass changed anything or left a tier to the next pass, so a quiet demo logs
+ * nothing.
+ */
 export function reconciliationRestoredAnything(
   reconciliation: DemoOperatorReconciliation,
 ): boolean {
@@ -122,6 +247,9 @@ export function reconciliationRestoredAnything(
     reconciliation.resumedQueues.length > 0 ||
     reconciliation.resumedSchedules.length > 0 ||
     reconciliation.revertedRetentionSettings.length > 0 ||
-    reconciliation.revertedMaintenanceSettings.length > 0
+    reconciliation.revertedMaintenanceSettings.length > 0 ||
+    reconciliation.restoredQueueHistory.length > 0 ||
+    reconciliation.restoredQueueTiers.length > 0 ||
+    reconciliation.deferredQueueTiers.length > 0
   );
 }

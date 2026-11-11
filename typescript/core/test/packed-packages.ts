@@ -716,7 +716,7 @@ const realNow = Date.now;
 Date.now = () => 1_000_000;
 const login = await host.handle(new Request("https://dashboard.test/login", {
   method: "POST",
-  headers: { "content-type": "application/x-www-form-urlencoded" },
+  headers: { "content-type": "application/x-www-form-urlencoded", origin: "https://dashboard.test" },
   body: new URLSearchParams({ username: "operator", password: "correct horse" }),
 }));
 assert.equal(login.status, 303);
@@ -747,7 +747,7 @@ assert.equal(expired.status, 302);
 Date.now = realNow;
 const secondLogin = await host.handle(new Request("https://dashboard.test/login", {
   method: "POST",
-  headers: { "content-type": "application/x-www-form-urlencoded" },
+  headers: { "content-type": "application/x-www-form-urlencoded", origin: "https://dashboard.test" },
   body: new URLSearchParams({ username: "operator", password: "correct horse" }),
 }));
 const secondCookie = secondLogin.headers.get("set-cookie").split(";", 1)[0];
