@@ -385,7 +385,7 @@ module Stablemates
           when "conflict" then raise ConflictError.new(:run_children, "child set")
           # The set has at most MAX_CHILDREN children, which the check above proves, so the limit
           # is the second child set of this activation.
-          when "limit_exceeded" then raise second_child_set_limit
+          when "limit_exceeded" then raise LimitExceededError.new(:run_children, "child set")
           when "result_too_large"
             raise ChildResultLimitExceededError.new(Values.parse_integer(row["result_bytes"]).to_i,
               Values.parse_integer(row["result_limit_bytes"]).to_i)
@@ -467,15 +467,6 @@ module Stablemates
       # +request+ receives the running call's result or error; a different request conflicts.
       # +overlap+, when given, receives the running call's request and raises in place of that
       # comparison.
-      # The limit error of a second child set. It was a terminal replay conflict before
-      # create_children_v2 named it a limit, so the worker ends the task with no retry. Each other
-      # child limit refusal follows the retry policy (the ADR 0098 amendment of SM-1956).
-      def second_child_set_limit
-        LimitExceededError.new(:run_children, "child set").tap do |error|
-          error.instance_variable_set(:@second_child_set, true)
-        end
-      end
-
       def once(kind, name, request = nil, conflict_name = name, overlap: nil)
         future = nil
         running = @lock.synchronize do
@@ -489,7 +480,7 @@ module Stablemates
               overlap.call(current[0])
             elsif current[0] != request
               # A task holds one child set, so a second set in the same activation is a limit.
-              raise second_child_set_limit if kind == :run_children
+              raise LimitExceededError.new(:run_children, "child set") if kind == :run_children
 
               raise ConflictError.new(kind, conflict_name)
             end

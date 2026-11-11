@@ -115,8 +115,10 @@ Thus, `runChild` gives the parent only the result of a successful child. If the 
 Workhorse fails the parent. If the child is canceled, Workhorse cancels the parent. The wait does
 not use an attempt of the parent.
 
-A parent can own only one child that `runChild` creates. If a handler must give more than one piece
-of work to children, use a child set. The next section describes child sets.
+A parent can own only one child that `runChild` creates. If the handler asks for a second child,
+Workhorse fails the parent with the child limit error of the SDK and does not retry it. If a handler
+must give more than one piece of work to children, use a child set. The next section describes
+child sets.
 
 <details>
 <summary>Reference: one child</summary>
@@ -147,7 +149,8 @@ A rollback removes the child, the link, the dependency, the events, and the susp
 **Rules**
 
 - A child name holds 1 to 200 characters.
-- A parent identity owns at most one child created by `runChild`.
+- A parent identity owns at most one child created by `runChild`. A second child raises the child
+  limit error, and the worker fails the parent with no retry.
 - A child request cannot use `idempotency`, `debounce`, `throttle`, `prerequisiteTaskId`, or
   `dependencies`.
 - A handler on a fast-tier queue cannot run children. A child request cannot name a fast-tier
@@ -159,7 +162,7 @@ A rollback removes the child, the link, the dependency, the events, and the susp
 **Events.** `child_created` on the parent, `parent_linked` on the child, and the first
 `child_joined` on the parent.
 
-More detail: [Data model: runChild lifecycle](https://github.com/stablemates/workhorse/blob/main/docs/architecture/data-model.md#runchild-lifecycle), [Data model: Columns and constraints](https://github.com/stablemates/workhorse/blob/main/docs/architecture/data-model.md#columns-and-constraints), [Data model: Queue of a child request with no queue](https://github.com/stablemates/workhorse/blob/main/docs/architecture/data-model.md#queue-of-a-child-request-with-no-queue), [Schema and SQL protocol: JVM handler context](https://github.com/stablemates/workhorse/blob/main/docs/architecture/schema-and-protocol.md#jvm-handler-context), [Schema and SQL protocol: Kotlin handler context](https://github.com/stablemates/workhorse/blob/main/docs/architecture/schema-and-protocol.md#kotlin-handler-context), and [Schema and SQL protocol: .NET handler context](https://github.com/stablemates/workhorse/blob/main/docs/architecture/schema-and-protocol.md#net-handler-context).
+More detail: [Data model: runChild lifecycle](https://github.com/stablemates/workhorse/blob/main/docs/architecture/data-model.md#runchild-lifecycle), [Data model: Columns and constraints](https://github.com/stablemates/workhorse/blob/main/docs/architecture/data-model.md#columns-and-constraints), [Data model: Queue of a child request with no queue](https://github.com/stablemates/workhorse/blob/main/docs/architecture/data-model.md#queue-of-a-child-request-with-no-queue), [Schema and SQL protocol: Durable replay conflicts](https://github.com/stablemates/workhorse/blob/main/docs/architecture/schema-and-protocol.md#durable-replay-conflicts), [Schema and SQL protocol: JVM handler context](https://github.com/stablemates/workhorse/blob/main/docs/architecture/schema-and-protocol.md#jvm-handler-context), [Schema and SQL protocol: Kotlin handler context](https://github.com/stablemates/workhorse/blob/main/docs/architecture/schema-and-protocol.md#kotlin-handler-context), and [Schema and SQL protocol: .NET handler context](https://github.com/stablemates/workhorse/blob/main/docs/architecture/schema-and-protocol.md#net-handler-context).
 
 </details>
 
@@ -356,8 +359,9 @@ Every set method keeps the declared names.
   a changed request also return `conflict` in the same activation, so the SDK can replay them under
   the stored contract versions. `create_children_v1` returns `conflict` in each case.
 
-**Second child set.** The SDK raises its limit error, and the worker fails the parent with no
-retry. A second single child and a set of more than 100 children follow the retry policy.
+**Child limits.** A second child set, a second single child, and a set of more than 100 children
+raise the limit error of the SDK. The worker fails the parent with no retry and keeps the current
+attempt.
 
 | SDK          | Error                      |
 | ------------ | -------------------------- |
@@ -386,7 +390,8 @@ The error is the bounded terminal evidence from `task_outcome.error`.
 
 **Result size.** The joined object may not exceed the parent's `result_max_bytes`, which defaults
 to 1,048,576 bytes. An oversized join returns `result_too_large` and raises
-`ChildResultLimitExceededError`.
+`ChildResultLimitExceededError`. The worker fails the parent with no retry and keeps the current
+attempt.
 
 **Events.** `children_created` and `children_joined` each append once per set.
 
@@ -460,7 +465,9 @@ wait for their results.
 A different case gives a different error. If one handler run joins `charge` and then asks for a
 second name, Workhorse raises a limit error. Workhorse also raises a limit error for a set with too
 many children. If a joined object is larger than the result limit of the parent, Workhorse raises
-an error. Thus, a child tree or a stored result cannot grow without a limit.
+an error. Thus, a child tree or a stored result cannot grow without a limit. Workhorse fails the
+parent at each of these errors and does not retry it, because a replay makes the same calls and
+gets the same error.
 
 <details>
 <summary>Reference: replay errors</summary>
@@ -484,10 +491,11 @@ names the stored and the requested child.
 | Joined result too large | `ChildResultLimitExceededError` | `Error::ChildResultLimitExceeded` | `ChildResultLimitExceededError` | `ChildResultLimitExceededException` |
 | Stale parent ownership  | `ChildLeaseLostError`           | `Error::LeaseLost`                | `LeaseLostError`                | `LeaseLostException`                |
 
-`ChildConflictError` is a terminal replay conflict. The worker fails the parent through `fail_v1`
-and keeps the current attempt. A child-limit refusal follows the parent's retry policy.
+`ChildConflictError` is a terminal replay conflict. The worker fails the parent through `fail_v2`
+and keeps the current attempt. The worker settles a child limit refusal and an oversized join in
+the same way.
 
-More detail: [Data model: Renamed replay of a single child](https://github.com/stablemates/workhorse/blob/main/docs/architecture/data-model.md#renamed-replay-of-a-single-child), [Data model: Cancellation and errors](https://github.com/stablemates/workhorse/blob/main/docs/architecture/data-model.md#cancellation-and-errors), [Schema and SQL protocol: JVM errors](https://github.com/stablemates/workhorse/blob/main/docs/architecture/schema-and-protocol.md#jvm-errors), and [Schema and SQL protocol: .NET errors](https://github.com/stablemates/workhorse/blob/main/docs/architecture/schema-and-protocol.md#net-errors).
+More detail: [Data model: Renamed replay of a single child](https://github.com/stablemates/workhorse/blob/main/docs/architecture/data-model.md#renamed-replay-of-a-single-child), [Data model: Cancellation and errors](https://github.com/stablemates/workhorse/blob/main/docs/architecture/data-model.md#cancellation-and-errors), [Schema and SQL protocol: Durable replay conflicts](https://github.com/stablemates/workhorse/blob/main/docs/architecture/schema-and-protocol.md#durable-replay-conflicts), [Schema and SQL protocol: JVM errors](https://github.com/stablemates/workhorse/blob/main/docs/architecture/schema-and-protocol.md#jvm-errors), and [Schema and SQL protocol: .NET errors](https://github.com/stablemates/workhorse/blob/main/docs/architecture/schema-and-protocol.md#net-errors).
 
 </details>
 

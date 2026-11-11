@@ -3838,3 +3838,88 @@ async fn renewals_continue_while_a_returned_handler_waits_for_its_expiry_answer(
     assert!(ran.expect("run_once did not return after the expiry answer").unwrap().unwrap());
     assert_eq!(harness.state(task).await, TaskState::Succeeded);
 }
+
+/// Replaces `workhorse.tick_v1` with a function that raises `message`, so each maintenance pass
+/// fails at its first statement.
+async fn fail_each_tick(observer: &Client, message: &str) {
+    observer
+        .batch_execute(&format!(
+            "CREATE OR REPLACE FUNCTION workhorse.tick_v1(
+               p_promote_limit integer DEFAULT 1000, p_recover_limit integer DEFAULT 1000
+             ) RETURNS TABLE (
+               phase text, rows_affected integer, duration_ms integer, skipped_lock boolean,
+               error jsonb, expired_leases integer, retried integer, retry_dimensions jsonb
+             ) LANGUAGE plpgsql AS $$
+             BEGIN
+               RAISE EXCEPTION '{message}';
+             END $$;"
+        ))
+        .await
+        .unwrap();
+}
+
+/// SM-2008: a startup maintenance pass that fails ends the run with its error, as ADR 0078 rule 4
+/// says and as the other six SDKs do. Before, the worker logged the error and continued.
+#[tokio::test]
+async fn a_failed_startup_maintenance_pass_ends_the_run() {
+    let Some(harness) = harness("worker_failed_startup_pass").await else { return };
+    let observer = harness.database.connect().await;
+    fail_each_tick(&observer, "startup pass refused").await;
+    let worker = harness.worker(options());
+    let (_stop, running) = run(&worker);
+    let outcome = tokio::time::timeout(WAIT, running)
+        .await
+        .expect("the run continued after the failed pass")
+        .unwrap();
+    let error = outcome.expect_err("the run ended without the error of the pass");
+    assert!(format!("{error:?}").contains("startup pass refused"), "{error:?}");
+}
+
+/// SM-2008: a pass that fails while a handler runs stops the claims, and the run drains that
+/// handler before it returns the error of the pass. The handler completes its task.
+#[tokio::test]
+async fn a_failed_maintenance_pass_drains_the_tasks_in_flight_and_ends_the_run() {
+    let Some(harness) = harness("worker_failed_pass_drains").await else { return };
+    let observer = harness.database.connect().await;
+    let held = harness.enqueue("rust.held", json!({}), EnqueueOptions::default()).await;
+    let worker_id = format!("rust-worker-{}", Uuid::new_v4());
+    let worker = harness.worker(WorkerOptions {
+        worker_id: Some(worker_id.clone()),
+        maintenance_interval: Duration::from_millis(100),
+        shutdown_grace_period: WAIT,
+        ..options()
+    });
+    let (handler_started, mut running_handlers) = mpsc::unbounded_channel();
+    let (release, released) = oneshot::channel::<()>();
+    let released = Arc::new(Mutex::new(Some(released)));
+    worker.handle("rust.held", move |_: Value, _| {
+        let _ = handler_started.send(());
+        let released = released.lock().unwrap().take();
+        async move {
+            if let Some(released) = released {
+                let _ = released.await;
+            }
+            Ok::<_, HandlerError>(json!({ "held": true }))
+        }
+    });
+    let (_stop, mut running) = run(&worker);
+    started(&mut running_handlers, &mut running).await;
+    fail_each_tick(&observer, "pass refused during work").await;
+    // The run drains when its registry row reports `draining`. The handler still holds its task.
+    tokio::time::timeout(WAIT, async {
+        while registry_draining(&observer, &worker_id).await != [true] {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("the failed pass did not start the drain");
+    let late = harness.enqueue("rust.held", json!({}), EnqueueOptions::default()).await;
+    assert!(!running.is_finished(), "the run ended before its handler finished");
+    release.send(()).unwrap();
+    let outcome = tokio::time::timeout(WAIT, running).await.expect("the run did not end").unwrap();
+    let error = outcome.expect_err("the run ended without the error of the pass");
+    assert!(format!("{error:?}").contains("pass refused during work"), "{error:?}");
+    assert_eq!(harness.state(held).await, TaskState::Succeeded);
+    // The draining run claims no more work.
+    assert_eq!(harness.state(late).await, TaskState::Ready);
+}

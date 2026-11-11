@@ -2350,6 +2350,8 @@ func executeReplayConflictFixture(t *testing.T, fixture workerRuntimeFixture) {
 					failure = &workhorse.HumanWaitConflictError{TaskID: id, WaitName: "saved"}
 				case "child-limit":
 					failure = &workhorse.ChildLimitExceededError{ParentTaskID: id}
+				case "child-result-limit":
+					failure = &workhorse.ChildResultLimitExceededError{ParentTaskID: id, ResultBytes: 2048, ResultLimitBytes: 1024}
 				case "signal-wait":
 					failure = &workhorse.SignalWaitConflictError{TaskID: id, WaitName: "saved"}
 				default:

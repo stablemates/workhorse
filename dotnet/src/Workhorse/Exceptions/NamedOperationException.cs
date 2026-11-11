@@ -110,16 +110,8 @@ public sealed class LimitExceededException : NamedOperationException
     {
     }
 
-    /// <summary>
-    /// Marks the limit of a second child set. It was a terminal replay conflict before
-    /// <c>create_children_v2</c> named it a limit, so it stays terminal. Each other child limit
-    /// refusal follows the retry policy (the ADR 0098 amendment of SM-1956).
-    /// </summary>
-    internal bool SecondChildSet { get; init; }
-
-    /// <summary>The limit error of a second child set, which ends the task with no retry.</summary>
-    internal static LimitExceededException SecondChildSetLimit() =>
-        new("runChildren", "child set") { SecondChildSet = true };
+    /// <summary>The limit error of a second child set.</summary>
+    internal static LimitExceededException SecondChildSetLimit() => new("runChildren", "child set");
 }
 
 /// <summary>A wait with the same name is already open.</summary>

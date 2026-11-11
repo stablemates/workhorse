@@ -917,6 +917,7 @@ module Conformance
                 context.checkpoint("saved", input: {"version" => 2}) { {"saved" => true} }
                 raise "the second checkpoint did not conflict"
               when "child-limit" then raise W::LimitExceededError.new(:run_child, "saved")
+              when "child-result-limit" then raise W::ChildResultLimitExceededError.new(2_048, 1_024)
               when "signal-wait" then raise W::AlreadyWaitingError.new(:wait_for_signal, "saved")
               when "transient" then raise StandardError, "transient"
               when "wrapped-checkpoint"

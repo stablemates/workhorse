@@ -3274,6 +3274,10 @@ async fn replay_conflict(database: &ScratchDatabase, fixture: &Value) -> Checked
                     "child-limit" => {
                         Error::LimitExceeded { operation, name: "saved".into() }.into()
                     }
+                    "child-result-limit" => {
+                        Error::ChildResultLimitExceeded { result_bytes: 2048, limit_bytes: 1024 }
+                            .into()
+                    }
                     "signal-wait" => {
                         Error::AlreadyWaiting { operation, name: "saved".into() }.into()
                     }

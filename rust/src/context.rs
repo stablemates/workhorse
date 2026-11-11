@@ -779,15 +779,9 @@ fn share<E: Shared>(result: &Result<Value, E>) -> Result<Value, E> {
     }
 }
 
-/// The name of the limit error of a second child set. A set with too many children uses
-/// `"children"`.
-pub(crate) const SECOND_CHILD_SET: &str = "child set";
-
-/// The limit error of a second child set. It was a terminal replay conflict before
-/// `create_children_v2` named it a limit, so it stays terminal. Each other child limit refusal
-/// follows the retry policy (the ADR 0098 amendment of SM-1956).
+/// The limit error of a second child set. A set with too many children names `"children"`.
 pub(crate) fn second_child_set_limit() -> Error {
-    Error::LimitExceeded { operation: Operation::RunChildren, name: SECOND_CHILD_SET.to_owned() }
+    Error::LimitExceeded { operation: Operation::RunChildren, name: "child set".to_owned() }
 }
 
 #[cfg(test)]

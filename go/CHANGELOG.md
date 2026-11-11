@@ -235,9 +235,9 @@ event. A live task that has not reached the wait still answers `not_waiting` (SM
 A task holds one child set. A handler that asked for a second set got `*ChildConflictError`, which says
 that the handler code changed. The SDK now calls `create_children_v2`, which answers
 `limit_exceeded` for a second set in the activation that created or joined the first set. The SDK
-raises `*ChildLimitExceededError`, and the worker still fails the task with no retry. A second, different `RunChildren` call in one activation returned `*ChildConflictError` before any statement. It now returns the same limit error. `ChildLimitExceededError` gains an unexported field, so a struct literal of it must name `ParentTaskID`. A changed set
-from another activation still raises the conflict error. A second single child and a set of more
-than 100 children still follow the retry policy (SM-1956).
+raises `*ChildLimitExceededError`, and the worker still fails the task with no retry. A second, different `RunChildren` call in one activation returned `*ChildConflictError` before any statement. It now returns the same limit error. A changed set
+from another activation still raises the conflict error. The other child limit refusals now end the task too, as
+a later entry states (SM-1956).
 
 A group callback that failed to enqueue at the finish left only a `callback_failed` event. The
 group snapshot now shows the failure on that callback. `TaskGroupCallback` gains `Failure`, a `*TaskGroupCallbackFailure` with `Code`, `Message`, and `FailedAt`. Retention deletes this
@@ -304,6 +304,18 @@ When the worker cuts a field, it adds `"truncated": true`. It sends the envelope
 the same cut. Thus a client that does not cut cannot store a longer field (SM-1983). Migration 0100
 adds these functions, and the schema floor rises to 99. `fail_v1`, `fast_fail_v1`, and
 `save_checkpoint_v2` keep their answers.
+
+### Each child limit refusal ends the task
+
+A handler replays the same child calls on each attempt, so a child limit refusal came again on each
+retry. Each retry also ran again the work that no checkpoint holds, until `maxAttempts`. The worker
+now fails the task at the first attempt with no retry, and keeps the current attempt. This applies
+to a second single child, a single child after a child set, a set of more than 100 children, and a
+child join whose results are larger than the result limit of the task. A second child set already
+ended the task. The error is `*ChildLimitExceededError`, or `*ChildResultLimitExceededError` for a join that is too large, and the failure
+envelope records the name of the type. The worker finds the error also when the handler wraps it. If a
+handler relied on a retry after such a refusal, correct its calls, and then redrive the task
+(SM-2025).
 
 ## 0.12.0 — 2026-11-07
 

@@ -680,6 +680,7 @@ const (
 	waitConflictErrorName             = "WaitConflictError"
 	childConflictErrorName            = "ChildConflictError"
 	childLimitExceededErrorName       = "ChildLimitExceededError"
+	childResultLimitExceededErrorName = "ChildResultLimitExceededError"
 	humanWaitConflictErrorName        = "HumanWaitConflictError"
 )
 

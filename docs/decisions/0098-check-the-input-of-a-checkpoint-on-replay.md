@@ -139,3 +139,35 @@ the task. A redrive starts a new task, so its handler runs the operation again.
 
 [Data model: `task_checkpoint`](../architecture/data-model.md#task_checkpoint) owns the statuses and
 the settlement rule.
+
+## Amendment: each child limit refusal ends the task (2026-11-11)
+
+The SM-1956 amendment made only a second child set terminal, and it left an open question for the
+other child limit refusals. A maintainer decided it (SM-2025). This amendment replaces the last two
+paragraphs of that amendment and its mark.
+
+A handler replays the same child calls on each attempt, so each attempt gets the same refusal. A
+retry cannot succeed. Each retry also runs again the work of the handler that no checkpoint holds,
+for example a model call, until `maxAttempts`.
+
+1. Each child limit refusal is terminal: a second single child (migration 0054), a second child
+   set, a single child after a child set, and a set of more than 100 children.
+2. A child join that answers `result_too_large` is terminal. The answer depends only on the stored
+   child outcomes and on `task.result_max_bytes`, and no statement changes that column after an
+   attempt starts.
+3. The worker settles each such error as a replay conflict of point 6: it fails the task with the
+   terminal retry delay, keeps the current attempt, and finds the error in the cause chain.
+4. No SDK marks the error of a second child set. TypeScript, Python, and Go classify
+   `ChildLimitExceededError` and `ChildResultLimitExceededError` by type. Rust, Ruby, the JVM, and
+   .NET classify their generic limit error by its operation, `runChild` or `runChildren`, and their
+   child result limit error by type. A limit error of another operation keeps the retry policy.
+
+One child refusal is not terminal. If the payload contract of the child type refuses the child
+payload, the SDK raises the error of the payload contract, as a plain enqueue does, and the worker
+follows the retry policy. A deploy of the child contract can change that answer, so a retry can
+succeed.
+
+The envelope names do not change. Rust still records `Error`.
+
+A handler that raises a child limit error of its own now ends the task too. Code that relied on a
+retry after a child limit refusal must change the calls of the handler, and then redrive the task.

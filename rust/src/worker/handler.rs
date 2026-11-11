@@ -152,18 +152,17 @@ impl<E: std::error::Error + 'static> From<E> for HandlerError {
                 let name = "CheckpointInputConflictError";
                 return Self { conflict: true, ..Self::named(name, error.to_string()) };
             }
-            // A second child set was a replay conflict before create_children_v2 named it a limit,
-            // so it stays terminal. Each other child limit refusal follows the retry policy (the
-            // ADR 0098 amendment of SM-1956).
-            if let Some(crate::Error::LimitExceeded {
-                operation: crate::Operation::RunChildren,
-                name,
-            }) = error_kind
-            {
-                if name == crate::context::SECOND_CHILD_SET {
-                    // The envelope keeps the generic name of this error.
-                    return Self { conflict: true, ..Self::new(error.to_string()) };
+            // Not replay conflicts, but terminal: a retry replays the same child calls and gets
+            // the same refusal (SM-2025). The envelope keeps the generic name of these errors.
+            if let Some(
+                crate::Error::LimitExceeded {
+                    operation: crate::Operation::RunChild | crate::Operation::RunChildren,
+                    ..
                 }
+                | crate::Error::ChildResultLimitExceeded { .. },
+            ) = error_kind
+            {
+                return Self { conflict: true, ..Self::new(error.to_string()) };
             }
             // Not a replay conflict, but terminal for the same reason: a retry runs the operation
             // of the checkpoint again and still cannot store its value (SM-1982).

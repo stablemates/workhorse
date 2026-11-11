@@ -621,8 +621,8 @@
       {
         "errorKind": "child-limit",
         "redactErrorDetails": false,
-        "expectedState": "scheduled",
-        "expectedAttempt": 2,
+        "expectedState": "failed",
+        "expectedAttempt": 1,
         "expectedErrorNames": {
           "typescript": "ChildLimitExceededError",
           "python": "ChildLimitExceededError",
@@ -631,6 +631,21 @@
           "ruby": "Stablemates::Workhorse::LimitExceededError",
           "java": "LimitExceededException",
           "csharp": "LimitExceededException"
+        }
+      },
+      {
+        "errorKind": "child-result-limit",
+        "redactErrorDetails": false,
+        "expectedState": "failed",
+        "expectedAttempt": 1,
+        "expectedErrorNames": {
+          "typescript": "ChildResultLimitExceededError",
+          "python": "ChildResultLimitExceededError",
+          "go": "ChildResultLimitExceededError",
+          "rust": "Error",
+          "ruby": "Stablemates::Workhorse::ChildResultLimitExceededError",
+          "java": "ChildResultLimitExceededException",
+          "csharp": "ChildResultLimitExceededException"
         }
       },
       {
@@ -1336,6 +1351,382 @@
           "result": { "calls": [{ "operation": 1 }, { "operation": 1 }] },
           "attempts": ["succeeded"],
           "checkpoints": [{ "name": "reserve", "value": { "operation": 1 }, "attempt": 1 }]
+        }
+      }
+    ]
+  },
+  {
+    "id": "durable-second-child-set-ends-the-task",
+    "kind": "durable-script",
+    "covers": ["terminal-replay-conflict"],
+    "taskType": "protocol.durable-script.second-child-set",
+    "childTaskType": "protocol.durable-script.child",
+    "childQueue": "runtime-durable-script-children",
+    "script": [
+      {
+        "op": "runChildren",
+        "key": "first",
+        "children": [{ "name": "fraud", "payload": { "check": "fraud" } }]
+      },
+      {
+        "op": "runChildren",
+        "key": "second",
+        "children": [{ "name": "inventory", "payload": { "check": "inventory" } }]
+      }
+    ],
+    "observe": "SELECT jsonb_build_object('state', COALESCE(r.state, o.state), 'attempt', COALESCE(r.current_attempt, o.current_attempt), 'result', o.result, 'errorName', o.error->>'name', 'attempts', (SELECT COALESCE(jsonb_agg(h.outcome ORDER BY h.attempt, h.occurred_at), '[]'::jsonb) FROM workhorse.attempt_history h WHERE h.task_id = t.id), 'children', (SELECT COALESCE(jsonb_agg(jsonb_build_object('name', c.child_name, 'state', COALESCE(child_runtime.state, child_outcome.state), 'joined', c.joined_at IS NOT NULL, 'set', c.created_as_set) ORDER BY c.child_name), '[]'::jsonb) FROM workhorse.task_child c LEFT JOIN workhorse.task_runtime child_runtime ON child_runtime.task_id = c.child_task_id LEFT JOIN workhorse.task_outcome child_outcome ON child_outcome.task_id = c.child_task_id WHERE c.parent_task_id = t.id))::text AS observed FROM workhorse.task t LEFT JOIN workhorse.task_runtime r ON r.task_id = t.id LEFT JOIN workhorse.task_outcome o ON o.task_id = t.id WHERE t.id = $1::uuid",
+    "steps": [
+      { "action": "run" },
+      {
+        "action": "expect",
+        "handlerRuns": 1,
+        "completedScripts": 0,
+        "observed": {
+          "state": "blocked",
+          "attempt": 1,
+          "result": null,
+          "errorName": null,
+          "attempts": [],
+          "children": [{ "name": "fraud", "state": "ready", "joined": false, "set": true }]
+        }
+      },
+      { "action": "run", "worker": "child" },
+      { "action": "run" },
+      {
+        "action": "expect",
+        "handlerRuns": 2,
+        "completedScripts": 0,
+        "errorNames": {
+          "typescript": "ChildLimitExceededError",
+          "python": "ChildLimitExceededError",
+          "go": "ChildLimitExceededError",
+          "rust": "Error",
+          "ruby": "Stablemates::Workhorse::LimitExceededError",
+          "java": "LimitExceededException",
+          "csharp": "LimitExceededException"
+        },
+        "observed": {
+          "state": "failed",
+          "attempt": 1,
+          "result": null,
+          "errorName": null,
+          "attempts": ["failed"],
+          "children": [{ "name": "fraud", "state": "succeeded", "joined": true, "set": true }]
+        }
+      }
+    ]
+  },
+  {
+    "id": "durable-same-child-set-twice-joins-it-twice",
+    "kind": "durable-script",
+    "covers": ["terminal-replay-conflict"],
+    "taskType": "protocol.durable-script.same-child-set",
+    "childTaskType": "protocol.durable-script.child",
+    "childQueue": "runtime-durable-script-children",
+    "script": [
+      {
+        "op": "runChildren",
+        "key": "first",
+        "children": [{ "name": "fraud", "payload": { "check": "fraud" } }]
+      },
+      {
+        "op": "runChildren",
+        "key": "again",
+        "children": [{ "name": "fraud", "payload": { "check": "fraud" } }]
+      }
+    ],
+    "observe": "SELECT jsonb_build_object('state', COALESCE(r.state, o.state), 'attempt', COALESCE(r.current_attempt, o.current_attempt), 'result', o.result, 'errorName', o.error->>'name', 'attempts', (SELECT COALESCE(jsonb_agg(h.outcome ORDER BY h.attempt, h.occurred_at), '[]'::jsonb) FROM workhorse.attempt_history h WHERE h.task_id = t.id), 'children', (SELECT COALESCE(jsonb_agg(jsonb_build_object('name', c.child_name, 'state', COALESCE(child_runtime.state, child_outcome.state), 'joined', c.joined_at IS NOT NULL, 'set', c.created_as_set) ORDER BY c.child_name), '[]'::jsonb) FROM workhorse.task_child c LEFT JOIN workhorse.task_runtime child_runtime ON child_runtime.task_id = c.child_task_id LEFT JOIN workhorse.task_outcome child_outcome ON child_outcome.task_id = c.child_task_id WHERE c.parent_task_id = t.id))::text AS observed FROM workhorse.task t LEFT JOIN workhorse.task_runtime r ON r.task_id = t.id LEFT JOIN workhorse.task_outcome o ON o.task_id = t.id WHERE t.id = $1::uuid",
+    "steps": [
+      { "action": "run" },
+      {
+        "action": "expect",
+        "handlerRuns": 1,
+        "completedScripts": 0,
+        "observed": {
+          "state": "blocked",
+          "attempt": 1,
+          "result": null,
+          "errorName": null,
+          "attempts": [],
+          "children": [{ "name": "fraud", "state": "ready", "joined": false, "set": true }]
+        }
+      },
+      { "action": "run", "worker": "child" },
+      { "action": "run" },
+      {
+        "action": "expect",
+        "handlerRuns": 2,
+        "completedScripts": 1,
+        "observed": {
+          "state": "succeeded",
+          "attempt": 1,
+          "result": {
+            "first": {
+              "fraud": { "status": "succeeded", "result": { "echo": { "check": "fraud" } } }
+            },
+            "again": {
+              "fraud": { "status": "succeeded", "result": { "echo": { "check": "fraud" } } }
+            }
+          },
+          "errorName": null,
+          "attempts": ["succeeded"],
+          "children": [{ "name": "fraud", "state": "succeeded", "joined": true, "set": true }]
+        }
+      }
+    ]
+  },
+  {
+    "id": "durable-second-single-child-ends-the-task",
+    "kind": "durable-script",
+    "covers": ["terminal-replay-conflict"],
+    "taskType": "protocol.durable-script.second-single-child",
+    "childTaskType": "protocol.durable-script.child",
+    "childQueue": "runtime-durable-script-children",
+    "script": [
+      { "op": "runChild", "key": "invoice", "name": "invoice", "payload": { "invoice": 42 } },
+      { "op": "runChild", "key": "refund", "name": "refund", "payload": { "refund": 42 } }
+    ],
+    "observe": "SELECT jsonb_build_object('state', COALESCE(r.state, o.state), 'attempt', COALESCE(r.current_attempt, o.current_attempt), 'result', o.result, 'errorName', o.error->>'name', 'attempts', (SELECT COALESCE(jsonb_agg(h.outcome ORDER BY h.attempt, h.occurred_at), '[]'::jsonb) FROM workhorse.attempt_history h WHERE h.task_id = t.id), 'children', (SELECT COALESCE(jsonb_agg(jsonb_build_object('name', c.child_name, 'state', COALESCE(child_runtime.state, child_outcome.state), 'joined', c.joined_at IS NOT NULL, 'set', c.created_as_set) ORDER BY c.child_name), '[]'::jsonb) FROM workhorse.task_child c LEFT JOIN workhorse.task_runtime child_runtime ON child_runtime.task_id = c.child_task_id LEFT JOIN workhorse.task_outcome child_outcome ON child_outcome.task_id = c.child_task_id WHERE c.parent_task_id = t.id))::text AS observed FROM workhorse.task t LEFT JOIN workhorse.task_runtime r ON r.task_id = t.id LEFT JOIN workhorse.task_outcome o ON o.task_id = t.id WHERE t.id = $1::uuid",
+    "steps": [
+      { "action": "run" },
+      {
+        "action": "expect",
+        "handlerRuns": 1,
+        "completedScripts": 0,
+        "observed": {
+          "state": "blocked",
+          "attempt": 1,
+          "result": null,
+          "errorName": null,
+          "attempts": [],
+          "children": [{ "name": "invoice", "state": "ready", "joined": false, "set": false }]
+        }
+      },
+      { "action": "run", "worker": "child" },
+      { "action": "run" },
+      {
+        "action": "expect",
+        "handlerRuns": 2,
+        "completedScripts": 0,
+        "errorNames": {
+          "typescript": "ChildLimitExceededError",
+          "python": "ChildLimitExceededError",
+          "go": "ChildLimitExceededError",
+          "rust": "Error",
+          "ruby": "Stablemates::Workhorse::LimitExceededError",
+          "java": "LimitExceededException",
+          "csharp": "LimitExceededException"
+        },
+        "observed": {
+          "state": "failed",
+          "attempt": 1,
+          "result": null,
+          "errorName": null,
+          "attempts": ["failed"],
+          "children": [{ "name": "invoice", "state": "succeeded", "joined": true, "set": false }]
+        }
+      }
+    ]
+  },
+  {
+    "id": "durable-child-set-of-more-than-100-children-ends-the-task",
+    "kind": "durable-script",
+    "covers": ["terminal-replay-conflict"],
+    "taskType": "protocol.durable-script.too-many-children",
+    "childTaskType": "protocol.durable-script.child",
+    "childQueue": "runtime-durable-script-children",
+    "script": [
+      {
+        "op": "runChildren",
+        "key": "children",
+        "children": [
+          { "name": "c000", "payload": {} },
+          { "name": "c001", "payload": {} },
+          { "name": "c002", "payload": {} },
+          { "name": "c003", "payload": {} },
+          { "name": "c004", "payload": {} },
+          { "name": "c005", "payload": {} },
+          { "name": "c006", "payload": {} },
+          { "name": "c007", "payload": {} },
+          { "name": "c008", "payload": {} },
+          { "name": "c009", "payload": {} },
+          { "name": "c010", "payload": {} },
+          { "name": "c011", "payload": {} },
+          { "name": "c012", "payload": {} },
+          { "name": "c013", "payload": {} },
+          { "name": "c014", "payload": {} },
+          { "name": "c015", "payload": {} },
+          { "name": "c016", "payload": {} },
+          { "name": "c017", "payload": {} },
+          { "name": "c018", "payload": {} },
+          { "name": "c019", "payload": {} },
+          { "name": "c020", "payload": {} },
+          { "name": "c021", "payload": {} },
+          { "name": "c022", "payload": {} },
+          { "name": "c023", "payload": {} },
+          { "name": "c024", "payload": {} },
+          { "name": "c025", "payload": {} },
+          { "name": "c026", "payload": {} },
+          { "name": "c027", "payload": {} },
+          { "name": "c028", "payload": {} },
+          { "name": "c029", "payload": {} },
+          { "name": "c030", "payload": {} },
+          { "name": "c031", "payload": {} },
+          { "name": "c032", "payload": {} },
+          { "name": "c033", "payload": {} },
+          { "name": "c034", "payload": {} },
+          { "name": "c035", "payload": {} },
+          { "name": "c036", "payload": {} },
+          { "name": "c037", "payload": {} },
+          { "name": "c038", "payload": {} },
+          { "name": "c039", "payload": {} },
+          { "name": "c040", "payload": {} },
+          { "name": "c041", "payload": {} },
+          { "name": "c042", "payload": {} },
+          { "name": "c043", "payload": {} },
+          { "name": "c044", "payload": {} },
+          { "name": "c045", "payload": {} },
+          { "name": "c046", "payload": {} },
+          { "name": "c047", "payload": {} },
+          { "name": "c048", "payload": {} },
+          { "name": "c049", "payload": {} },
+          { "name": "c050", "payload": {} },
+          { "name": "c051", "payload": {} },
+          { "name": "c052", "payload": {} },
+          { "name": "c053", "payload": {} },
+          { "name": "c054", "payload": {} },
+          { "name": "c055", "payload": {} },
+          { "name": "c056", "payload": {} },
+          { "name": "c057", "payload": {} },
+          { "name": "c058", "payload": {} },
+          { "name": "c059", "payload": {} },
+          { "name": "c060", "payload": {} },
+          { "name": "c061", "payload": {} },
+          { "name": "c062", "payload": {} },
+          { "name": "c063", "payload": {} },
+          { "name": "c064", "payload": {} },
+          { "name": "c065", "payload": {} },
+          { "name": "c066", "payload": {} },
+          { "name": "c067", "payload": {} },
+          { "name": "c068", "payload": {} },
+          { "name": "c069", "payload": {} },
+          { "name": "c070", "payload": {} },
+          { "name": "c071", "payload": {} },
+          { "name": "c072", "payload": {} },
+          { "name": "c073", "payload": {} },
+          { "name": "c074", "payload": {} },
+          { "name": "c075", "payload": {} },
+          { "name": "c076", "payload": {} },
+          { "name": "c077", "payload": {} },
+          { "name": "c078", "payload": {} },
+          { "name": "c079", "payload": {} },
+          { "name": "c080", "payload": {} },
+          { "name": "c081", "payload": {} },
+          { "name": "c082", "payload": {} },
+          { "name": "c083", "payload": {} },
+          { "name": "c084", "payload": {} },
+          { "name": "c085", "payload": {} },
+          { "name": "c086", "payload": {} },
+          { "name": "c087", "payload": {} },
+          { "name": "c088", "payload": {} },
+          { "name": "c089", "payload": {} },
+          { "name": "c090", "payload": {} },
+          { "name": "c091", "payload": {} },
+          { "name": "c092", "payload": {} },
+          { "name": "c093", "payload": {} },
+          { "name": "c094", "payload": {} },
+          { "name": "c095", "payload": {} },
+          { "name": "c096", "payload": {} },
+          { "name": "c097", "payload": {} },
+          { "name": "c098", "payload": {} },
+          { "name": "c099", "payload": {} },
+          { "name": "c100", "payload": {} }
+        ]
+      }
+    ],
+    "observe": "SELECT jsonb_build_object('state', COALESCE(r.state, o.state), 'attempt', COALESCE(r.current_attempt, o.current_attempt), 'result', o.result, 'errorName', o.error->>'name', 'attempts', (SELECT COALESCE(jsonb_agg(h.outcome ORDER BY h.attempt, h.occurred_at), '[]'::jsonb) FROM workhorse.attempt_history h WHERE h.task_id = t.id), 'children', (SELECT COALESCE(jsonb_agg(jsonb_build_object('name', c.child_name, 'state', COALESCE(child_runtime.state, child_outcome.state), 'joined', c.joined_at IS NOT NULL, 'set', c.created_as_set) ORDER BY c.child_name), '[]'::jsonb) FROM workhorse.task_child c LEFT JOIN workhorse.task_runtime child_runtime ON child_runtime.task_id = c.child_task_id LEFT JOIN workhorse.task_outcome child_outcome ON child_outcome.task_id = c.child_task_id WHERE c.parent_task_id = t.id))::text AS observed FROM workhorse.task t LEFT JOIN workhorse.task_runtime r ON r.task_id = t.id LEFT JOIN workhorse.task_outcome o ON o.task_id = t.id WHERE t.id = $1::uuid",
+    "steps": [
+      { "action": "run" },
+      {
+        "action": "expect",
+        "handlerRuns": 1,
+        "completedScripts": 0,
+        "errorNames": {
+          "typescript": "ChildLimitExceededError",
+          "python": "ChildLimitExceededError",
+          "go": "ChildLimitExceededError",
+          "rust": "Error",
+          "ruby": "Stablemates::Workhorse::LimitExceededError",
+          "java": "LimitExceededException",
+          "csharp": "LimitExceededException"
+        },
+        "observed": {
+          "state": "failed",
+          "attempt": 1,
+          "result": null,
+          "errorName": null,
+          "attempts": ["failed"],
+          "children": []
+        }
+      }
+    ]
+  },
+  {
+    "id": "durable-child-join-larger-than-the-result-limit-ends-the-task",
+    "kind": "durable-script",
+    "covers": ["terminal-replay-conflict"],
+    "taskType": "protocol.durable-script.child-join-too-large",
+    "childTaskType": "protocol.durable-script.child",
+    "childQueue": "runtime-durable-script-children",
+    "script": [
+      {
+        "op": "runChildren",
+        "key": "children",
+        "children": [{ "name": "fraud", "payload": { "check": "fraud" } }]
+      }
+    ],
+    "observe": "SELECT jsonb_build_object('state', COALESCE(r.state, o.state), 'attempt', COALESCE(r.current_attempt, o.current_attempt), 'result', o.result, 'errorName', o.error->>'name', 'attempts', (SELECT COALESCE(jsonb_agg(h.outcome ORDER BY h.attempt, h.occurred_at), '[]'::jsonb) FROM workhorse.attempt_history h WHERE h.task_id = t.id), 'children', (SELECT COALESCE(jsonb_agg(jsonb_build_object('name', c.child_name, 'state', COALESCE(child_runtime.state, child_outcome.state), 'joined', c.joined_at IS NOT NULL, 'set', c.created_as_set) ORDER BY c.child_name), '[]'::jsonb) FROM workhorse.task_child c LEFT JOIN workhorse.task_runtime child_runtime ON child_runtime.task_id = c.child_task_id LEFT JOIN workhorse.task_outcome child_outcome ON child_outcome.task_id = c.child_task_id WHERE c.parent_task_id = t.id))::text AS observed FROM workhorse.task t LEFT JOIN workhorse.task_runtime r ON r.task_id = t.id LEFT JOIN workhorse.task_outcome o ON o.task_id = t.id WHERE t.id = $1::uuid",
+    "steps": [
+      {
+        "action": "sql",
+        "sql": "UPDATE workhorse.task SET result_max_bytes = 16 WHERE id = $1::uuid"
+      },
+      { "action": "run" },
+      {
+        "action": "expect",
+        "handlerRuns": 1,
+        "completedScripts": 0,
+        "observed": {
+          "state": "blocked",
+          "attempt": 1,
+          "result": null,
+          "errorName": null,
+          "attempts": [],
+          "children": [{ "name": "fraud", "state": "ready", "joined": false, "set": true }]
+        }
+      },
+      { "action": "run", "worker": "child" },
+      { "action": "run" },
+      {
+        "action": "expect",
+        "handlerRuns": 2,
+        "completedScripts": 0,
+        "errorNames": {
+          "typescript": "ChildResultLimitExceededError",
+          "python": "ChildResultLimitExceededError",
+          "go": "ChildResultLimitExceededError",
+          "rust": "Error",
+          "ruby": "Stablemates::Workhorse::ChildResultLimitExceededError",
+          "java": "ChildResultLimitExceededException",
+          "csharp": "ChildResultLimitExceededException"
+        },
+        "observed": {
+          "state": "failed",
+          "attempt": 1,
+          "result": null,
+          "errorName": null,
+          "attempts": ["failed"],
+          "children": [{ "name": "fraud", "state": "succeeded", "joined": false, "set": true }]
         }
       }
     ]

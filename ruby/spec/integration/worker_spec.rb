@@ -224,10 +224,10 @@ RSpec.describe "Worker against PostgreSQL" do
     end
   end
 
-  # A second child set was a terminal replay conflict before create_children_v2 named it a limit, so
-  # it stays terminal. Each other child limit refusal follows the retry policy.
-  {"second-set" => ["failed", 1, "LimitExceededError"], "second-single" => ["scheduled", 2, "LimitExceededError"],
-   "large-set" => ["scheduled", 2, "LimitExceededError"], "changed-set" => ["failed", 1, "ConflictError"]}.each do |shape, expected|
+  # A handler replays the same child calls on each attempt, so each child limit refusal ends the task
+  # with no retry (SM-2025).
+  {"second-set" => ["failed", 1, "LimitExceededError"], "second-single" => ["failed", 1, "LimitExceededError"],
+   "large-set" => ["failed", 1, "LimitExceededError"], "changed-set" => ["failed", 1, "ConflictError"]}.each do |shape, expected|
     it "settles a #{shape} refusal as #{expected[0]} at attempt #{expected[1]}" do
       parent = queue.enqueue("agent-loop", {}, max_attempts: 5).task_id
       child_queue = "#{@queue_name}-tools"

@@ -1408,14 +1408,14 @@ async fn single_child_rename_and_second_child() {
     }
 }
 
-/// A second child set was a terminal replay conflict before create_children_v2 named it a limit, so
-/// it stays terminal. Each other child limit refusal follows the retry policy.
+/// A handler replays the same child calls on each attempt, so each child limit refusal ends the task
+/// with no retry (SM-2025).
 #[tokio::test]
 async fn child_limit_refusals_and_a_changed_set() {
     for (shape, state, attempt, name) in [
         ("second-set", "failed", 1, "Error"),
-        ("second-single", "scheduled", 2, "Error"),
-        ("large-set", "scheduled", 2, "Error"),
+        ("second-single", "failed", 1, "Error"),
+        ("large-set", "failed", 1, "Error"),
         ("changed-set", "failed", 1, "ChildConflictError"),
     ] {
         let Some(harness) = harness("durable_child_limits").await else { return };

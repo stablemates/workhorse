@@ -10,8 +10,8 @@ import (
 	workhorse "github.com/stablemates/workhorse/go"
 )
 
-// A second child set was a terminal replay conflict before create_children_v2 named it a limit, so
-// it stays terminal. Each other child limit refusal follows the retry policy.
+// A handler replays the same child calls on each attempt, so each child limit refusal ends the task
+// with no retry (SM-2025).
 func TestChildLimitRefusalsAndAChangedSet(t *testing.T) {
 	cases := []struct {
 		shape, state string
@@ -19,8 +19,8 @@ func TestChildLimitRefusalsAndAChangedSet(t *testing.T) {
 		name         string
 	}{
 		{"second-set", "failed", 1, "ChildLimitExceededError"},
-		{"second-single", "scheduled", 2, "ChildLimitExceededError"},
-		{"large-set", "scheduled", 2, "ChildLimitExceededError"},
+		{"second-single", "failed", 1, "ChildLimitExceededError"},
+		{"large-set", "failed", 1, "ChildLimitExceededError"},
 		{"changed-set", "failed", 1, "ChildConflictError"},
 	}
 	for _, entry := range cases {

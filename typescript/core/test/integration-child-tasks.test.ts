@@ -1565,11 +1565,13 @@ describe("a second child set in one activation", () => {
     });
   });
 
-  it("retries a second single child and a set with too many children", async () => {
+  // A handler replays the same child calls on each attempt, so a retry gets the same refusal
+  // (SM-2025).
+  it("ends the parent at attempt 1 for a second single child and a set with too many children", async () => {
     for (const shape of ["second-single", "large-set"] as const) {
       await expect(runParent(shape)).resolves.toEqual({
-        state: "scheduled",
-        attempt: 2,
+        state: "failed",
+        attempt: 1,
         name: "ChildLimitExceededError",
       });
     }

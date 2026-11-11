@@ -61,6 +61,9 @@ type durableScriptStep struct {
 	CaughtSuspensions    *int64          `json:"caughtSuspensions"`
 	CompletedScripts     *int64          `json:"completedScripts"`
 	ReturnedSuspending   *int64          `json:"returnedSuspendingCalls"`
+	// ErrorNames gives the error name of each SDK. It replaces observed.errorName before the
+	// comparison.
+	ErrorNames map[string]string `json:"errorNames"`
 }
 
 type durableScriptCounters struct {
@@ -262,8 +265,16 @@ func expectDurableScriptObserved(
 	if err := json.Unmarshal(step.Observed, &expected); err != nil {
 		t.Fatal(err)
 	}
+	if step.ErrorNames != nil {
+		object, ok := expected.(map[string]any)
+		name, named := step.ErrorNames["go"]
+		if !ok || !named {
+			t.Fatalf("%s: errorNames needs an observed object and a name for go", where)
+		}
+		object["errorName"] = name
+	}
 	if !reflect.DeepEqual(observed, expected) {
-		t.Fatalf("%s: observed %s, expected %s", where, text, step.Observed)
+		t.Fatalf("%s: observed %s, expected %v", where, text, expected)
 	}
 	for _, counter := range []struct {
 		name     string

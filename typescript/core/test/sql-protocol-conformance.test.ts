@@ -2,7 +2,11 @@ import {
   CheckpointConflictError,
   WaitConflictError,
 } from "../src/queue/checkpoints-progress-waits.js";
-import { ChildConflictError, ChildLimitExceededError } from "../src/queue/child-tasks.js";
+import {
+  ChildConflictError,
+  ChildLimitExceededError,
+  ChildResultLimitExceededError,
+} from "../src/queue/child-tasks.js";
 import { HumanWaitConflictError } from "../src/queue/human-waits.js";
 import { SignalWaitConflictError } from "../src/queue/signals.js";
 import { readFile } from "node:fs/promises";
@@ -3077,6 +3081,8 @@ async function executeReplayConflictRuntimeFixture(
           throw new HumanWaitConflictError(id, "saved");
         case "child-limit":
           throw new ChildLimitExceededError(id);
+        case "child-result-limit":
+          throw new ChildResultLimitExceededError(id, 2_048, 1_024);
         case "signal-wait":
           throw new SignalWaitConflictError(id, "saved");
         default:

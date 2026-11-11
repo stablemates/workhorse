@@ -375,9 +375,10 @@ Workhorse records the type of conflict, so an operator can see it. If redaction 
 still hides the error details.
 
 Other errors keep their usual rules. A transient error follows the retry policy of the task. A
-refusal at the child limit also follows the retry policy. A second child set is the exception:
-Workhorse fails the task with the child limit error and does not retry it, as it did when it
-reported a second set as a replay conflict. A checkpoint value that is too large to store is an
+refusal at a child limit is an exception: Workhorse fails the task with the limit error and does
+not retry it. The replay makes the same child calls, so another attempt gets the same refusal. The
+rule applies to a second single child, a second child set, a set with too many children, and a
+child join with results that are too large. A checkpoint value that is too large to store is an
 exception too: Workhorse fails the task and does not retry it, because another attempt would run the
 operation of the checkpoint again ([checkpoint value limit](030-delivery-guarantees.md#keep-a-checkpoint-value-below-its-limit)). A lost lease keeps its usual
 rules. A signal wait that is already pending keeps its usual rules.
@@ -402,10 +403,18 @@ includes a changed child set. A checkpoint call raises
 The worker settles the conflict through `fail_v2` with `p_retry_delay_ms = -1`. The failure keeps
 the current attempt. The worker settles an oversized checkpoint value in the same way:
 `CheckpointValueSizeLimitError` in TypeScript, Python, Go, and Ruby, `Error::CheckpointValueSizeLimit`
-in Rust, and `CheckpointValueSizeLimitException` in the JVM and .NET. Operator reads show the conflict class. Redaction records `RedactedTaskError`.
+in Rust, and `CheckpointValueSizeLimitException` in the JVM and .NET. The worker also settles each
+child limit error and each child result limit error in the same way:
 
-Transient failures, lease loss, child-limit refusals, and already-waiting signal refusals keep
-their existing settlement behavior.
+| Refusal                                                              | Error                                                                                                      |
+| -------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------- |
+| A second single child, a second child set, or more than 100 children | `ChildLimitExceededError`, `Error::LimitExceeded`, `LimitExceededError`, or `LimitExceededException`       |
+| Joined child results above the result limit of the task              | `ChildResultLimitExceededError`, `Error::ChildResultLimitExceeded`, or `ChildResultLimitExceededException` |
+
+Operator reads show the conflict class. Redaction records `RedactedTaskError`.
+
+Transient failures, lease loss, and already-waiting signal refusals keep their existing settlement
+behavior.
 
 More detail: [Task lifecycle: Durable timer suspension](../architecture/lifecycle.md#durable-timer-suspension), [Schema and protocol: Durable replay conflicts](../architecture/schema-and-protocol.md#durable-replay-conflicts), and [Schema and protocol: Oversized checkpoint values](../architecture/schema-and-protocol.md#oversized-checkpoint-values).
 

@@ -1616,6 +1616,22 @@ mod tests {
         let first = enqueue(&queue).await;
         let running = run(&worker);
         succeeded(&operator, first, "the first task never ran").await;
+        // The startup maintenance pass runs beside the first claim. If it still waited for a
+        // connection when the database refuses connections, it would fail and end the run (ADR 0078
+        // rule 4). Its last statement, `run_maintenance_v1`, completes `terminal_storage`, and the
+        // next pass comes after 60 s.
+        let observer = database.connect().await;
+        timeout(WAIT, async {
+            let completed = "SELECT count(*) FROM workhorse.maintenance_state
+                              WHERE routine_name = 'terminal_storage'
+                                AND last_completed_at IS NOT NULL";
+            while observer.query_one(completed, &[]).await.unwrap().get::<_, i64>(0) == 0 {
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .expect("the startup maintenance pass never ended");
+        drop(observer);
         let allow = |allowed: bool| {
             format!("ALTER DATABASE \"{}\" ALLOW_CONNECTIONS {allowed}", database.name())
         };

@@ -6,25 +6,26 @@ import (
 	"testing"
 )
 
-// The limit error of a second child set ends the task also when another child limit error comes
-// first in a joined error or a wrapped chain.
-func TestSecondChildSetLimitIsFoundBehindAnotherLimit(t *testing.T) {
-	plain := &ChildLimitExceededError{ParentTaskID: "parent"}
-	second := &ChildLimitExceededError{ParentTaskID: "parent", secondSet: true}
-	for name, err := range map[string]error{
-		"joined":  errors.Join(plain, second),
-		"wrapped": fmt.Errorf("round: %w", errors.Join(plain, fmt.Errorf("set: %w", second))),
+// A child limit error and a child result limit error end the task also when the handler wraps them
+// or joins them behind another error (SM-2025).
+func TestChildLimitErrorsAreFoundInAWrappedOrJoinedError(t *testing.T) {
+	other := errors.New("other")
+	for want, limit := range map[string]error{
+		childLimitExceededErrorName:       &ChildLimitExceededError{ParentTaskID: "parent"},
+		childResultLimitExceededErrorName: &ChildResultLimitExceededError{ParentTaskID: "parent"},
 	} {
-		if got := durableReplayConflictName(err); got != childLimitExceededErrorName {
-			t.Fatalf("%s: name = %q", name, got)
+		for shape, err := range map[string]error{
+			"plain":   limit,
+			"wrapped": fmt.Errorf("round: %w", limit),
+			"joined":  errors.Join(other, limit),
+			"nested":  fmt.Errorf("round: %w", errors.Join(other, fmt.Errorf("set: %w", limit))),
+		} {
+			if got := durableReplayConflictName(err); got != want {
+				t.Fatalf("%s %s: name = %q, want %q", want, shape, got, want)
+			}
 		}
 	}
-	for name, err := range map[string]error{
-		"plain":        plain,
-		"joined plain": errors.Join(plain, errors.New("other")),
-	} {
-		if got := durableReplayConflictName(err); got != emptyString {
-			t.Fatalf("%s: name = %q, want no terminal name", name, got)
-		}
+	if got := durableReplayConflictName(errors.Join(other, errors.New("transient"))); got != emptyString {
+		t.Fatalf("a joined error with no terminal error: name = %q", got)
 	}
 }
