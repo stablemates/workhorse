@@ -682,6 +682,14 @@ export const SCHEMA_MIGRATIONS: readonly SchemaMigrationStep[] = [
       "wait for the cold export frontier, keep stat rows for the next tier, and keep held retention due",
     kind: "additive",
   },
+  {
+    fromVersion: 95,
+    toVersion: 96,
+    file: "0097-give-cleanup-and-health-one-retention-rule-in-fixed-hours.sql",
+    description:
+      "give cleanup and health one retention rule, use fixed-hour windows, and bound health walks",
+    kind: "additive",
+  },
 ];
 
 /**

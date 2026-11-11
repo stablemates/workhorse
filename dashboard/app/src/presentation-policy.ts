@@ -206,6 +206,18 @@ function scopedHealthMessage(
   };
 }
 
+const routineLabels: Record<string, string> = {
+  tick: "tick",
+  history_partitions: "history partitions",
+  history_retention: "history retention",
+  terminal_storage: "terminal cleanup",
+};
+
+function routineLabel(routine: string | undefined): string {
+  if (routine === undefined) return "(unknown)";
+  return routineLabels[routine] ?? routine;
+}
+
 export function healthCheckMessages(reasons: readonly QueueHealthReason[]): {
   criticalChecks: HealthCheckMessage[];
   degradedChecks: HealthCheckMessage[];
@@ -326,6 +338,28 @@ export function healthCheckMessages(reasons: readonly QueueHealthReason[]): {
           helpHref: docs("maintenance"),
         });
         break;
+      case "maintenance-failing":
+        degradedChecks.push({
+          code: reason.code,
+          message: `Maintenance routine ${routineLabel(reason.routine)} failed its last ${formatCount(reason.observed)} runs`,
+          advice:
+            "Each run records the failed phase and its error. Open the Schedules page, read the " +
+            "error of the routine, and correct its cause. The reason clears when the routine " +
+            "completes again.",
+          helpHref: docs("maintenance"),
+        });
+        break;
+      case "schedule-failing":
+        degradedChecks.push({
+          code: reason.code,
+          message: `${formatCount(reason.observed)} ${reason.observed === 1 ? "schedule" : "schedules"} failed in the last schedule pass`,
+          advice:
+            "A failed schedule keeps its position and stores its error, and the other schedules " +
+            "still fire. Open the Schedules page to read the error. The reason clears when a " +
+            "pass fires the schedule.",
+          helpHref: docs("schedules"),
+        });
+        break;
       case "concurrency-blocked":
         expectedChecks.push({
           code: reason.code,
@@ -427,6 +461,14 @@ const healthCheckDefinitions = {
   "default-history-rows": {
     label: "Fallback history storage",
     summary: "No history rows use fallback storage.",
+  },
+  "maintenance-failing": {
+    label: "Maintenance routines",
+    summary: "No maintenance routine failed its last three runs.",
+  },
+  "schedule-failing": {
+    label: "Schedule passes",
+    summary: "No enabled schedule failed in its last schedule pass.",
   },
   "concurrency-blocked": {
     label: "Concurrency limits",

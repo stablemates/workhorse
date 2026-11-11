@@ -156,6 +156,36 @@ describe("dashboard presentation policy", () => {
     ]);
   });
 
+  it("names the failing routine and the failing schedules with their next step", () => {
+    const { degradedChecks } = healthCheckMessages([
+      {
+        code: "maintenance-failing",
+        severity: "degraded",
+        observed: 4,
+        budget: 2,
+        routine: "tick",
+      },
+      {
+        code: "maintenance-failing",
+        severity: "degraded",
+        observed: 3,
+        budget: 2,
+        routine: "new_routine",
+      },
+      { code: "schedule-failing", severity: "degraded", observed: 2, budget: 0 },
+    ]);
+    expect(degradedChecks.map(({ message }) => message)).toEqual([
+      "Maintenance routine tick failed its last 4 runs",
+      "Maintenance routine new_routine failed its last 3 runs",
+      "2 schedules failed in the last schedule pass",
+    ]);
+    expect(degradedChecks.map(({ helpHref }) => helpHref)).toEqual([
+      "https://workhorse.run/docs/maintenance",
+      "https://workhorse.run/docs/maintenance",
+      "https://workhorse.run/docs/schedules",
+    ]);
+  });
+
   it("points late schedule runs at the daily history-retention pass", () => {
     const scheduleOnly = healthCheckMessages([retentionLag("scheduleOccurrences")])
       .degradedChecks[0]!;

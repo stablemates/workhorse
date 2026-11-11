@@ -108,6 +108,15 @@ few hundred live tasks.
 The count of statistics buckets has the same limit. Thus the cost of the snapshot follows the live
 work, not the full history.
 
+The snapshot also finds the oldest finished task that cleanup can delete, so that it can report
+retention lag. It walks the finished tasks from the oldest, and it stops at the first task that is
+inside its windows. It also stops at the tasks whose history daily retention has not passed. Thus a
+history pass that stops does not make each poll read the tasks behind it. The walk also reads the
+tasks that cleanup keeps on purpose past their windows, for example a task with an enqueue key that
+lives longer than the task window, but it stops after 1,000 tasks. If more kept tasks come first, the
+walk reports no lag, also when a task behind them is overdue. A terminal cleanup backlog then shows
+a late cleanup.
+
 Rejected signal deliveries and rejected human decisions use a recent time window, not the full
 retained history. The window keeps the value relevant to current operation. It also lets a partial
 index skip unrelated task events during each health poll.
@@ -115,13 +124,14 @@ index skip unrelated task events during each health poll.
 <details>
 <summary>Reference: scan caps and windows</summary>
 
-| Value                                  | Bound                                                                        |
-| -------------------------------------- | ---------------------------------------------------------------------------- |
-| Live-state counts and depths           | Exact. Read from `task_runtime`.                                             |
-| Terminal state counts (`task_outcome`) | Exact up to `HEALTH_HISTORY_SCAN_LIMIT` (100,000). `terminalCountsCapped`.   |
-| `task_stat_bucket` count               | Exact up to 100,000. `statistics.bucketsCapped`.                             |
-| `externalWaits` pending and rejected   | Exact up to 10,000 each. `externalWaits.capped`.                             |
-| Default history partition rows         | Exact through 10,000. `defaultHistoryRowsCapped` marks 10,001 a lower bound. |
+| Value                                  | Bound                                                                                                                                                                                                                                                                                                                                             |
+| -------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Live-state counts and depths           | Exact. Read from `task_runtime`.                                                                                                                                                                                                                                                                                                                  |
+| Terminal state counts (`task_outcome`) | Exact up to `HEALTH_HISTORY_SCAN_LIMIT` (100,000). `terminalCountsCapped`.                                                                                                                                                                                                                                                                        |
+| `task_stat_bucket` count               | Exact up to 100,000. `statistics.bucketsCapped`.                                                                                                                                                                                                                                                                                                  |
+| `externalWaits` pending and rejected   | Exact up to 10,000 each. `externalWaits.capped`.                                                                                                                                                                                                                                                                                                  |
+| Default history partition rows         | Exact through 10,000. `defaultHistoryRowsCapped` marks 10,001 a lower bound.                                                                                                                                                                                                                                                                      |
+| Terminal retention boundaries          | Walk `task_created_retention_idx` and the outcome retention indexes. Each walk stops at its cutoff, at `history_retained_before`, at the first row that cannot be due before the earliest due instant, and after `terminal_retention_walk_rows_internal_v1()` (1,000) rows. A walk that reaches the cap with no eligible row reports no boundary. |
 
 A capped value is a lower bound that is exact until the cap.
 
@@ -163,8 +173,8 @@ have two severities:
   is missing.
 - **Degraded** means that the queue runs, but a problem costs storage or throughput. For example,
   the statistics rollup stopped, retention cleanup is late, or terminal cleanup is too slow.
-  Other examples are history rows in fallback storage, or ready tasks that a concurrency or
-  rate-limit policy holds back.
+  Other examples are history rows in fallback storage, a maintenance routine or a schedule that
+  fails on each pass, or ready tasks that a concurrency or rate-limit policy holds back.
 
 The codes are stable strings. Thus your automation can use the code and does not have to parse
 text. If the queue exceeds a budget, `workhorse health --json` exits with a non-zero code.
@@ -188,24 +198,33 @@ Each client returns the same reason codes and the same `capped` lower-bound mark
 - `level` is `critical` if any reason is critical, `degraded` if any reason exists, else `healthy`.
 - Each reason is `{ code, severity, observed, budget }`.
 - Queue admission codes add `queue`. `budget-blocked` adds `budgetName`. `retention-lag` adds
-  `category`.
+  `category`. `maintenance-failing` adds `routine`.
+- `maintenance-failing` has the budget 2: its `observed` value counts the newest runs of the
+  routine that failed one after another after its last completion, so one or two failed runs do not
+  change the verdict.
+- `schedule-failing` has the budget 0: its `observed` value counts the enabled schedules with a
+  stored error. The next schedule pass that fires a schedule clears its error.
+- No reason reads `observations.oldestTransactionAgeMs`, the age of the oldest open transaction in
+  the database. Read it there, or in `pg_stat_activity`.
 
-| Code                          | Severity | Raised when                                                                   |
-| ----------------------------- | -------- | ----------------------------------------------------------------------------- |
-| `expired-leases`              | critical | Any lease has expired.                                                        |
-| `overdue-deadlines`           | critical | Any deadline is overdue.                                                      |
-| `overdue-execution-timeouts`  | critical | Any execution timeout is overdue.                                             |
-| `overdue-external-waits`      | critical | Any signal or human wait is past its deadline.                                |
-| `stalled-promotion`           | critical | The oldest due scheduled runtime exceeds `promotionLagMs`.                    |
-| `missing-history-partitions`  | critical | A partition side is absent for the current day or the three days after.       |
-| `rollup-stalled`              | degraded | Rollup lag exceeds `rollupStalledLagMs`.                                      |
-| `retention-lag`               | degraded | A retention category's cleanup lag exceeds its budget.                        |
-| `terminal-cleanup-backlog`    | degraded | A terminal cleanup backlog has lasted longer than `terminalCleanupBacklogMs`. |
-| `eligible-history-partitions` | degraded | Fully eligible event and attempt partitions exceed the budget.                |
-| `default-history-rows`        | degraded | Any row sits in a default history partition.                                  |
-| `concurrency-blocked`         | degraded | A concurrency policy holds ready tasks back.                                  |
-| `rate-limit-throttled`        | degraded | A rate limit holds ready tasks back.                                          |
-| `budget-blocked`              | degraded | A shared budget holds ready tasks back.                                       |
+| Code                          | Severity | Raised when                                                                          |
+| ----------------------------- | -------- | ------------------------------------------------------------------------------------ |
+| `expired-leases`              | critical | Any lease has expired.                                                               |
+| `overdue-deadlines`           | critical | Any deadline is overdue.                                                             |
+| `overdue-execution-timeouts`  | critical | Any execution timeout is overdue.                                                    |
+| `overdue-external-waits`      | critical | Any signal or human wait is past its deadline.                                       |
+| `stalled-promotion`           | critical | The oldest due scheduled runtime exceeds `promotionLagMs`.                           |
+| `missing-history-partitions`  | critical | A partition side is absent for the current day or the three days after.              |
+| `rollup-stalled`              | degraded | Rollup lag exceeds `rollupStalledLagMs`.                                             |
+| `retention-lag`               | degraded | A retention category's cleanup lag exceeds its budget.                               |
+| `terminal-cleanup-backlog`    | degraded | A terminal cleanup backlog has lasted longer than `terminalCleanupBacklogMs`.        |
+| `eligible-history-partitions` | degraded | Fully eligible event and attempt partitions exceed the budget.                       |
+| `default-history-rows`        | degraded | Any row sits in a default history partition.                                         |
+| `maintenance-failing`         | degraded | Three recorded runs of a routine failed one after another after its last completion. |
+| `schedule-failing`            | degraded | An enabled schedule stored an error in its last schedule pass.                       |
+| `concurrency-blocked`         | degraded | A concurrency policy holds ready tasks back.                                         |
+| `rate-limit-throttled`        | degraded | A rate limit holds ready tasks back.                                                 |
+| `budget-blocked`              | degraded | A shared budget holds ready tasks back.                                              |
 
 Promotion and expired-lease recovery are the two phases of the worker tick, `tick_v1`.
 

@@ -1116,6 +1116,8 @@ export type QueueHealthReasonCode =
   | "terminal-cleanup-backlog"
   | "eligible-history-partitions"
   | "default-history-rows"
+  | "maintenance-failing"
+  | "schedule-failing"
   | "concurrency-blocked"
   | "rate-limit-throttled"
   | "budget-blocked";
@@ -1125,7 +1127,8 @@ export type QueueHealthReasonCode =
  *
  * `observed` and `budget` share one unit per code: milliseconds for `stalled-promotion`,
  * `rollup-stalled`, `retention-lag`, and `terminal-cleanup-backlog`; plain counts for every other
- * code.
+ * code. For `maintenance-failing`, the count is the newest recorded runs of the routine that failed
+ * one after another.
  */
 export interface QueueHealthReason {
   code: QueueHealthReasonCode;
@@ -1137,6 +1140,8 @@ export interface QueueHealthReason {
   queue?: string;
   /** Present on `budget-blocked`, naming the saturated budget. */
   budgetName?: string;
+  /** Present on `maintenance-failing`, naming the routine. */
+  routine?: string;
   /** Present on `retention-lag`, naming the late retention category. */
   category?: keyof RetentionCategoryValues<unknown>;
 }

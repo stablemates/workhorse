@@ -735,6 +735,11 @@ describe("schema installation", () => {
         description:
           "wait for the cold export frontier, keep stat rows for the next tier, and keep held retention due",
       },
+      {
+        version: 96,
+        description:
+          "give cleanup and health one retention rule, use fixed-hour windows, and bound health walks",
+      },
     ]);
 
     const protocols = await pool.query<{ version: number }>(

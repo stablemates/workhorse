@@ -328,6 +328,7 @@ type DashboardQueueHealthReason struct {
 	Budget     float64                        `json:"budget"`
 	Queue      *string                        `json:"queue,omitempty"`
 	BudgetName *string                        `json:"budgetName,omitempty"`
+	Routine    *string                        `json:"routine,omitempty"`
 	Category   *string                        `json:"category,omitempty"`
 }
 

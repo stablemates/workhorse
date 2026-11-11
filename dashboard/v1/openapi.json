@@ -9571,6 +9571,9 @@
           "budgetName": {
             "type": "string"
           },
+          "routine": {
+            "type": "string"
+          },
           "category": {
             "enum": [
               "attemptHistory",
@@ -9596,6 +9599,7 @@
           "default-history-rows",
           "eligible-history-partitions",
           "expired-leases",
+          "maintenance-failing",
           "missing-history-partitions",
           "overdue-deadlines",
           "overdue-execution-timeouts",
@@ -9603,6 +9607,7 @@
           "rate-limit-throttled",
           "retention-lag",
           "rollup-stalled",
+          "schedule-failing",
           "stalled-promotion",
           "terminal-cleanup-backlog"
         ]

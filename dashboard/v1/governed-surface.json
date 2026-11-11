@@ -2186,6 +2186,7 @@
             "default-history-rows",
             "eligible-history-partitions",
             "expired-leases",
+            "maintenance-failing",
             "missing-history-partitions",
             "overdue-deadlines",
             "overdue-execution-timeouts",
@@ -2193,6 +2194,7 @@
             "rate-limit-throttled",
             "retention-lag",
             "rollup-stalled",
+            "schedule-failing",
             "stalled-promotion",
             "terminal-cleanup-backlog"
           ]
@@ -2201,6 +2203,9 @@
           "type": "number"
         },
         "recommendationInputs.reasons[].queue": {
+          "type": "string"
+        },
+        "recommendationInputs.reasons[].routine": {
           "type": "string"
         },
         "recommendationInputs.reasons[].severity": {
@@ -3168,6 +3173,7 @@
             "default-history-rows",
             "eligible-history-partitions",
             "expired-leases",
+            "maintenance-failing",
             "missing-history-partitions",
             "overdue-deadlines",
             "overdue-execution-timeouts",
@@ -3175,6 +3181,7 @@
             "rate-limit-throttled",
             "retention-lag",
             "rollup-stalled",
+            "schedule-failing",
             "stalled-promotion",
             "terminal-cleanup-backlog"
           ]
@@ -3183,6 +3190,9 @@
           "type": "number"
         },
         "status.reasons[].queue": {
+          "type": "string"
+        },
+        "status.reasons[].routine": {
           "type": "string"
         },
         "status.reasons[].severity": {

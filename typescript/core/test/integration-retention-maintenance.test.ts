@@ -1,5 +1,7 @@
 import { randomUUID } from "node:crypto";
+import { readFile } from "node:fs/promises";
 import { setTimeout as sleep } from "node:timers/promises";
+import type { PoolClient } from "pg";
 import { describe, expect, it, vi } from "vitest";
 import { installSchema, Queue, type RetentionPolicyDefinition, Worker } from "../src/index.js";
 import { createIntegrationTestContext } from "./support/integration.js";
@@ -44,10 +46,12 @@ const addScheduleRun = async (hoursPastWindow: number, firedHoursAgo: number) =>
                '{}'::jsonb, 3)
      ON CONFLICT DO NOTHING`,
   );
+  // A retention window of 14 days is 336 hours. A '14 days' interval steps calendar days in the
+  // session TimeZone, so it is one hour longer or shorter across a daylight-saving change.
   await pool.query(
     `INSERT INTO workhorse.schedule_occurrence(namespace, schedule_name, occurrence_at, fired_at)
      VALUES ('integration', 'health-cadence',
-             clock_timestamp() - interval '14 days' - make_interval(secs => $1::float8 * 3600),
+             clock_timestamp() - interval '336 hours' - make_interval(secs => $1::float8 * 3600),
              clock_timestamp() - make_interval(secs => $2::float8 * 3600))`,
     [hoursPastWindow, firedHoursAgo],
   );
@@ -88,6 +92,612 @@ const sinceUtcMidnightMs = async () =>
       )
     ).rows[0]!.ms,
   );
+
+const hourMs = 3_600_000;
+const dayMs = 86_400_000;
+
+// Writes a terminal full-tier task with no history rows, as a retired history partition leaves it.
+// It was created and finished ageHours ago, and its history ends historyAgeHours ago.
+const insertTerminalTask = async (type: string, ageHours: number, historyAgeHours = ageHours) =>
+  (
+    await pool.query<{ id: string }>(
+      `WITH task AS (
+         INSERT INTO workhorse.task(queue_name, task_type, payload, max_attempts, created_at)
+         VALUES ('retention-holds', $1, '{}'::jsonb, 1,
+                 clock_timestamp() - make_interval(secs => $2::float8 * 3600))
+         RETURNING id, created_at
+       )
+       INSERT INTO workhorse.task_outcome(
+         task_id, state, current_attempt, fence_token, run_at, result, finished_at,
+         history_through_at
+       )
+       SELECT id, 'succeeded', 1, 1, created_at, '{}'::jsonb, created_at,
+              clock_timestamp() - make_interval(secs => $3::float8 * 3600)
+         FROM task
+       RETURNING task_id AS id`,
+      [type, ageHours, historyAgeHours],
+    )
+  ).rows[0]!.id;
+
+// Row windows of one day, a UTC pass at 00:00, and a watermark one day back. A row whose history
+// ends before the watermark is then released, and its scheduled history pass is long past.
+const useOneDayRowWindows = async (terminalTaskPruneLimit = 1000) => {
+  await queue.syncMaintenancePolicy(
+    { timezone: "UTC", historyRetentionLocalTime: "00:00" },
+    { force: true },
+  );
+  await queue.syncRetentionPolicy({
+    ...defaultRetentionPolicy,
+    taskIdentityRetentionDays: 1,
+    terminalOutcomeRetentionDays: 1,
+    taskEventRetentionDays: 1,
+    attemptHistoryRetentionDays: 1,
+    scheduleOccurrenceRetentionDays: 1,
+    statisticsRetentionDays: 1,
+    terminalTaskPruneLimit,
+  });
+  await pool.query(
+    `UPDATE workhorse.maintenance_state
+        SET history_retained_before = clock_timestamp() - interval '24 hours'
+      WHERE routine_name = 'history_retention'`,
+  );
+};
+
+const addHealthSchedule = async () => {
+  await pool.query(
+    `INSERT INTO workhorse.schedule_definition(
+       namespace, schedule_name, cron_expression, queue_name, task_type, payload, max_attempts
+     ) VALUES ('integration', 'retention-holds', '0 * * * *', 'default', 'retention-holds',
+               '{}'::jsonb, 3)
+     ON CONFLICT DO NOTHING`,
+  );
+};
+
+// The references that keep a terminal row. Each one returns after it gives taskId its reference.
+const holdReferences = {
+  "a schedule occurrence": async (taskId: string) => {
+    await addHealthSchedule();
+    await pool.query(
+      `INSERT INTO workhorse.schedule_occurrence(namespace, schedule_name, occurrence_at, task_id)
+       VALUES ('integration', 'retention-holds', clock_timestamp() - interval '1 hour', $1)`,
+      [taskId],
+    );
+  },
+  "an enqueue key": async (taskId: string) => {
+    await pool.query(
+      `INSERT INTO workhorse.enqueue_idempotency(
+         idempotency_scope, idempotency_key_hash, request_fingerprint, task_id, expires_at
+       ) VALUES ('retention-holds', sha256(convert_to($1::text, 'UTF8')), '{}'::jsonb, $1::uuid,
+                 clock_timestamp() + interval '30 days')`,
+      [taskId],
+    );
+  },
+  "a dependency edge to a live dependent": async (taskId: string) => {
+    const dependent = await queue.enqueue("retention-hold-dependent", {});
+    await pool.query(
+      `INSERT INTO workhorse.task_dependency(
+         dependent_task_id, prerequisite_task_id, on_failure, on_cancellation, on_success
+       ) VALUES ($1, $2, 'fail', 'cancel', 'release')`,
+      [dependent, taskId],
+    );
+  },
+  "a young child": async (taskId: string) => {
+    const child = await insertTerminalTask("retention-hold-child", 1);
+    await pool.query(
+      `INSERT INTO workhorse.task_child(parent_task_id, child_task_id, child_name, request_fingerprint)
+       VALUES ($1, $2, 'child', '{}'::jsonb)`,
+      [taskId, child],
+    );
+  },
+} satisfies Record<string, (taskId: string) => Promise<void>>;
+
+// A redrive needs a failed task with its own history, so this subject is written through the
+// public operations and then aged.
+const redriveSource = async () => {
+  const taskId = await createFailedTask({ type: "retention-hold-source" });
+  await admin.redrive(taskId, adminAudit("hold"));
+  await pool.query("DELETE FROM workhorse.task_event WHERE task_id = $1", [taskId]);
+  await pool.query("DELETE FROM workhorse.attempt_history WHERE task_id = $1", [taskId]);
+  await pool.query(
+    `UPDATE workhorse.task SET created_at = clock_timestamp() - interval '20 days'
+      WHERE id = $1`,
+    [taskId],
+  );
+  await pool.query(
+    `UPDATE workhorse.task_outcome
+        SET finished_at = clock_timestamp() - interval '20 days',
+            history_through_at = clock_timestamp() - interval '20 days'
+      WHERE task_id = $1`,
+    [taskId],
+  );
+  return taskId;
+};
+
+const rowLag = async () => {
+  const health = await queue.health();
+  return [health.retentionLagMs.taskIdentity, health.retentionLagMs.terminalOutcome] as const;
+};
+
+// A null expectation means that health skips the row, so neither lag has a value.
+const expectRowLag = (lag: readonly (number | null)[], expectedMs: number | null) => {
+  const near = (value: number | null) =>
+    expectedMs === null ? value === null : value !== null && Math.abs(value - expectedMs) < 60_000;
+  expect(lag.map((value) => (near(value) ? "expected" : value))).toEqual(["expected", "expected"]);
+};
+
+const expectRowLagNear = (lag: readonly (number | null)[], expectedMs: number) => {
+  for (const value of lag) {
+    expect(value).not.toBeNull();
+    expect(value!).toBeGreaterThan(expectedMs - 60_000);
+    expect(value!).toBeLessThan(expectedMs + 60_000);
+  }
+};
+
+// The lag of a row whose history ends historyAgeHours ago and whose row windows ended earlier. With
+// one-day history windows and a UTC pass at 00:00, the pass that releases it is the start of the UTC
+// day after its history plus 24 hours.
+const releasedRowLagMs = async (historyAgeHours: number) =>
+  Number(
+    (
+      await pool.query<{ ms: string }>(
+        `SELECT extract(epoch FROM clock_timestamp() - (
+                  date_trunc('day', (clock_timestamp() - make_interval(secs => $1::float8 * 3600)
+                    + interval '24 hours') AT TIME ZONE 'UTC') + interval '1 day'
+                ) AT TIME ZONE 'UTC') * 1000 AS ms`,
+        [historyAgeHours],
+      )
+    ).rows[0]!.ms,
+  );
+
+// Reads of one prune_terminal_tasks_v1 call under a generic plan, behind kept tasks only.
+const firstPruneCallReads = async (kept: number) => {
+  // TRUNCATE leaves no dead index entries, which an index scan would also count.
+  await pool.query(
+    "TRUNCATE workhorse.task, workhorse.terminal_prune_position RESTART IDENTITY CASCADE",
+  );
+  await pool.query(
+    `WITH task AS (
+       INSERT INTO workhorse.task(queue_name, task_type, payload, max_attempts, created_at)
+       SELECT 'retention-generic', 'kept', '{}'::jsonb, 1,
+              clock_timestamp() - interval '30 days' + make_interval(secs => position)
+         FROM generate_series(1, $1::integer) position
+       RETURNING id, created_at
+     ), outcome AS (
+       INSERT INTO workhorse.task_outcome(
+         task_id, state, current_attempt, fence_token, run_at, result, finished_at,
+         history_through_at
+       )
+       SELECT id, 'succeeded', 1, 1, created_at, '{}'::jsonb, created_at, created_at FROM task
+     )
+     INSERT INTO workhorse.enqueue_idempotency(
+       idempotency_scope, idempotency_key_hash, request_fingerprint, task_id, expires_at
+     )
+     SELECT 'retention-generic', sha256(convert_to(id::text, 'UTF8')), '{}'::jsonb, id,
+            clock_timestamp() + interval '30 days'
+       FROM task`,
+    [kept],
+  );
+  await pool.query("ANALYZE workhorse.task, workhorse.task_outcome, workhorse.enqueue_idempotency");
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    await client.query("SET LOCAL plan_cache_mode = force_generic_plan");
+    const reads = async () =>
+      Number(
+        (
+          await client.query<{ tuples: string }>(
+            `SELECT pg_stat_get_xact_tuples_returned(
+                      'workhorse.task_outcome_retention_idx'::regclass)
+                    + pg_stat_get_xact_tuples_returned('workhorse.task_outcome'::regclass)
+                    + pg_stat_get_xact_tuples_returned('workhorse.task'::regclass)
+                      AS tuples`,
+          )
+        ).rows[0]!.tuples,
+      );
+    const before = await reads();
+    await client.query(
+      `SELECT workhorse.prune_terminal_tasks_v1(
+              clock_timestamp() - interval '24 hours', clock_timestamp() - interval '24 hours',
+              clock_timestamp() - interval '24 hours', 2)`,
+    );
+    const read = (await reads()) - before;
+    await client.query("ROLLBACK");
+    return read;
+  } finally {
+    client.release();
+  }
+};
+
+// Reads of one key phase and one released-edge phase, behind members of an open task group that
+// each have an expired key and a released edge. "references" counts the index rows of the two
+// reference walks, and "tables" counts the rows that each scan returns and each index scan fetches
+// from task and task_outcome.
+const referencePhaseReads = async (
+  kept: number,
+  counted: "references" | "tables" = "references",
+  plan: "force_generic_plan" | "force_custom_plan" = "force_generic_plan",
+) => {
+  await pool.query(
+    "TRUNCATE workhorse.task, workhorse.task_group, workhorse.terminal_prune_position CASCADE",
+  );
+  await pool.query(
+    `WITH member_group AS (
+       INSERT INTO workhorse.task_group(shard_count) VALUES (1) RETURNING id
+     ), task AS (
+       INSERT INTO workhorse.task(queue_name, task_type, payload, max_attempts, created_at)
+       SELECT 'retention-phases', 'kept', '{}'::jsonb, 1,
+              clock_timestamp() - interval '30 days' + make_interval(secs => position)
+         FROM generate_series(1, $1::integer) position
+       RETURNING id, created_at
+     ), dependent AS (
+       INSERT INTO workhorse.task(queue_name, task_type, payload, max_attempts, created_at)
+       SELECT 'retention-phases', 'dependent', '{}'::jsonb, 1, clock_timestamp()
+       RETURNING id, created_at
+     ), outcome AS (
+       INSERT INTO workhorse.task_outcome(
+         task_id, state, current_attempt, fence_token, run_at, result, finished_at,
+         history_through_at
+       )
+       SELECT id, 'succeeded', 1, 1, created_at, '{}'::jsonb, created_at, created_at FROM task
+       UNION ALL
+       SELECT id, 'succeeded', 1, 1, created_at, '{}'::jsonb, created_at, created_at
+         FROM dependent
+     ), member AS (
+       INSERT INTO workhorse.task_group_member(task_id, group_id, position)
+       SELECT task.id, member_group.id, row_number() OVER (ORDER BY task.id)
+         FROM task CROSS JOIN member_group
+     ), edge AS (
+       INSERT INTO workhorse.task_dependency(
+         dependent_task_id, prerequisite_task_id, on_failure, on_cancellation, on_success,
+         created_at, released_at, resolution
+       )
+       SELECT dependent.id, task.id, 'fail', 'cancel', 'release',
+              clock_timestamp() - interval '1 hour', clock_timestamp() - interval '1 hour',
+              'release'
+         FROM task CROSS JOIN dependent
+     )
+     INSERT INTO workhorse.enqueue_idempotency(
+       idempotency_scope, idempotency_key_hash, request_fingerprint, task_id, expires_at
+     )
+     SELECT 'retention-phases', sha256(convert_to(id::text, 'UTF8')), '{}'::jsonb, id,
+            clock_timestamp() - interval '1 hour'
+       FROM task`,
+    [kept],
+  );
+  await pool.query(
+    "ANALYZE workhorse.task, workhorse.task_outcome, workhorse.enqueue_idempotency, workhorse.task_dependency",
+  );
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    await client.query(`SET LOCAL plan_cache_mode = ${plan}`);
+    const reads = async () =>
+      Number(
+        (
+          await client.query<{ tuples: string }>(
+            counted === "references"
+              ? `SELECT pg_stat_get_xact_tuples_returned(
+                          'workhorse.enqueue_idempotency_expiry_idx'::regclass)
+                        + pg_stat_get_xact_tuples_returned(
+                          'workhorse.task_dependency_released_retention_idx'::regclass)
+                          AS tuples`
+              : `SELECT pg_stat_get_xact_tuples_returned('workhorse.task'::regclass)
+                        + pg_stat_get_xact_tuples_fetched('workhorse.task'::regclass)
+                        + pg_stat_get_xact_tuples_returned('workhorse.task_outcome'::regclass)
+                        + pg_stat_get_xact_tuples_fetched('workhorse.task_outcome'::regclass)
+                          AS tuples`,
+          )
+        ).rows[0]!.tuples,
+      );
+    const before = await reads();
+    await client.query("SELECT workhorse.prune_enqueue_idempotency_v1(clock_timestamp(), 1)");
+    await client.query("SELECT workhorse.prune_released_dependencies_v1(1)");
+    const read = (await reads()) - before;
+    await client.query("ROLLBACK");
+    return read;
+  } finally {
+    client.release();
+  }
+};
+
+const taskExists = async (id: string) =>
+  (await pool.query("SELECT 1 FROM workhorse.task WHERE id = $1", [id])).rowCount === 1;
+
+const pruneOneCall = async () =>
+  (
+    await pool.query<{ pruned: number }>(
+      `SELECT workhorse.prune_terminal_tasks_v1(
+              clock_timestamp() - interval '24 hours', clock_timestamp() - interval '24 hours',
+              clock_timestamp() - interval '24 hours', 1) AS pruned`,
+    )
+  ).rows[0]!.pruned;
+
+const keyedFailedTask = async (expiredHoursAgo: number) => {
+  const taskId = await createFailedTask({ type: "retention-held-key" });
+  await pool.query("DELETE FROM workhorse.task_event WHERE task_id = $1", [taskId]);
+  await pool.query("DELETE FROM workhorse.attempt_history WHERE task_id = $1", [taskId]);
+  await pool.query(
+    `UPDATE workhorse.task SET created_at = clock_timestamp() - interval '30 days'
+      WHERE id = $1`,
+    [taskId],
+  );
+  await pool.query(
+    `UPDATE workhorse.task_outcome
+        SET finished_at = clock_timestamp() - interval '30 days',
+            history_through_at = clock_timestamp() - interval '30 days'
+      WHERE task_id = $1`,
+    [taskId],
+  );
+  await pool.query(
+    `INSERT INTO workhorse.enqueue_idempotency(
+       idempotency_scope, idempotency_key_hash, request_fingerprint, task_id, expires_at
+     ) VALUES ('retention-held-key', sha256(convert_to($1::text, 'UTF8')), '{}'::jsonb,
+               $1::uuid, clock_timestamp() - make_interval(secs => $2::float8 * 3600))`,
+    [taskId, expiredHoursAgo],
+  );
+  return taskId;
+};
+
+const heldUntil = async (taskId: string) =>
+  (
+    await pool.query<{ held_until: Date | null }>(
+      "SELECT held_until FROM workhorse.task_outcome WHERE task_id = $1",
+      [taskId],
+    )
+  ).rows[0]!.held_until;
+
+const pruneKeys = (client: PoolClient) =>
+  client.query("SELECT workhorse.prune_enqueue_idempotency_v1(clock_timestamp(), 10)");
+
+// Writes count old tasks that an enqueue key keeps, lets the main walk pass them, and then deletes
+// their keys. The old tasks are then eligible but behind the main position.
+const passOldTasks = async (count: number) => {
+  await useOneDayRowWindows(1);
+  const oldTasks: string[] = [];
+  for (let index = 0; index < count; index += 1) {
+    const oldTask = await insertTerminalTask("retention-sweep-old", 40 * 24 + count - index);
+    await pool.query(
+      `INSERT INTO workhorse.enqueue_idempotency(
+         idempotency_scope, idempotency_key_hash, request_fingerprint, task_id, expires_at
+       ) VALUES ('retention-sweep', sha256(convert_to($1::text, 'UTF8')), '{}'::jsonb,
+                 $1::uuid, clock_timestamp() + interval '1 day')`,
+      [oldTask],
+    );
+    oldTasks.push(oldTask);
+  }
+  await pool.query(
+    `WITH task AS (
+       INSERT INTO workhorse.task(queue_name, task_type, payload, max_attempts, created_at)
+       SELECT 'retention-sweep', 'eligible', '{}'::jsonb, 1,
+              clock_timestamp() - interval '30 days' + make_interval(secs => position)
+         FROM generate_series(1, 1100) position
+       RETURNING id, created_at
+     )
+     INSERT INTO workhorse.task_outcome(
+       task_id, state, current_attempt, fence_token, run_at, result, finished_at,
+       history_through_at
+     )
+     SELECT id, 'succeeded', 1, 1, created_at, '{}'::jsonb, created_at, created_at FROM task`,
+  );
+  for (let call = 0; call < 3; call += 1) await pruneOneCall();
+  const position = await pool.query<{ main: Date | null }>(
+    "SELECT finished_at AS main FROM workhorse.terminal_prune_position WHERE tier = 'full'",
+  );
+  expect(position.rows[0]!.main).not.toBeNull();
+  for (const oldTask of oldTasks) expect(await taskExists(oldTask)).toBe(true);
+  await pool.query("DELETE FROM workhorse.enqueue_idempotency WHERE task_id = ANY($1::uuid[])", [
+    oldTasks,
+  ]);
+  return oldTasks;
+};
+
+const passOldTask = async () => (await passOldTasks(1))[0]!;
+
+// With limit 1, each call runs one full-tier batch. The sweep examines R rows before it reaches
+// a row, a slice has S rows, a batch locks at most L rows, and sweep batches lock E rows before
+// that row. A main batch that deleted rows is followed by a sweep batch. The row therefore goes
+// within 2 * (ceil(R / S) + ceil(E / L) + 2) batches (ADR 0122).
+const sweepBound = (rows: number, locked: number) =>
+  2 * (Math.ceil(rows / 1000) + Math.ceil(locked / 1) + 2);
+
+// Runs work while another connection holds a lock that lockSql takes, and then ends that holder.
+const whileLocked = async <T>(lockSql: string, params: unknown[], work: () => Promise<T>) => {
+  const holder = await pool.connect();
+  try {
+    await holder.query("BEGIN");
+    await holder.query(lockSql, params);
+    return await work();
+  } finally {
+    await holder.query("ROLLBACK").catch(() => undefined);
+    holder.release();
+  }
+};
+
+const lockOutcomeForShare = "SELECT 1 FROM workhorse.task_outcome WHERE task_id = $1 FOR SHARE";
+const lockTaskForUpdate = "SELECT 1 FROM workhorse.task WHERE id = $1 FOR UPDATE";
+
+const pruneTerminalBatch = async (limit = 10) =>
+  (
+    await pool.query<{ pruned: number }>(
+      `SELECT workhorse.prune_terminal_tasks_v1(
+              clock_timestamp() - interval '24 hours', clock_timestamp() - interval '24 hours',
+              clock_timestamp() - interval '24 hours', $1) AS pruned`,
+      [limit],
+    )
+  ).rows[0]!.pruned;
+
+// Each lag stays within one minute of its value before the reference went.
+const expectSameRowLag = (
+  before: readonly (number | null)[],
+  after: readonly (number | null)[],
+) => {
+  for (const [index, value] of before.entries()) {
+    expect(value).not.toBeNull();
+    expect(after[index]).not.toBeNull();
+    expect(Math.abs(after[index]! - value!)).toBeLessThan(60_000);
+  }
+};
+
+// A task that finished 30 days ago with an enqueue key that expired 2 hours ago.
+const agedKeyedTask = async (key: string) => {
+  const id = await queue.enqueue("retention-reuse", {}, { idempotency: { key, ttlMs: 3_600_000 } });
+  const task = await queue.claim("retention-reuse-worker");
+  expect(task?.id).toBe(id);
+  expect(await queue.complete(task!, "retention-reuse-worker", { done: true })).toBe(true);
+  await pool.query("DELETE FROM workhorse.task_event WHERE task_id = $1", [id]);
+  await pool.query("DELETE FROM workhorse.attempt_history WHERE task_id = $1", [id]);
+  await pool.query(
+    "UPDATE workhorse.task SET created_at = clock_timestamp() - interval '720 hours' WHERE id = $1",
+    [id],
+  );
+  await pool.query(
+    `UPDATE workhorse.task_outcome
+        SET finished_at = clock_timestamp() - interval '720 hours',
+            history_through_at = clock_timestamp() - interval '720 hours'
+      WHERE task_id = $1`,
+    [id],
+  );
+  await pool.query(
+    `UPDATE workhorse.enqueue_idempotency SET expires_at = clock_timestamp() - interval '2 hours'
+      WHERE task_id = $1`,
+    [id],
+  );
+  return id;
+};
+
+// The scans of task_outcome in the current transaction of client: its table scans and the scans of
+// each of its indexes.
+const outcomeReads = async (client: PoolClient) =>
+  Number(
+    (
+      await client.query<{ scans: string }>(
+        `SELECT pg_stat_get_xact_numscans('workhorse.task_outcome'::regclass)
+                + (SELECT COALESCE(sum(pg_stat_get_xact_numscans(index.indexrelid)), 0)
+                     FROM pg_index index
+                    WHERE index.indrelid = 'workhorse.task_outcome'::regclass) AS scans`,
+      )
+    ).rows[0]!.scans,
+  );
+
+// A finished task group of one member that finished 26 hours ago, with its shard row.
+const finishedGroupOf = async (member: string) => {
+  const group = (
+    await pool.query<{ id: string }>(
+      `INSERT INTO workhorse.task_group(
+         state, result, total_count, succeeded_count, sealed_at, finished_at, shard_count
+       ) VALUES ('finished', 'succeeded', 1, 1, clock_timestamp() - interval '26 hours',
+                 clock_timestamp() - interval '26 hours', 1)
+       RETURNING id`,
+    )
+  ).rows[0]!.id;
+  await pool.query(
+    `INSERT INTO workhorse.task_group_shard(group_id, shard, total_count, succeeded_count)
+     VALUES ($1, 0, 1, 1)`,
+    [group],
+  );
+  await pool.query(
+    `INSERT INTO workhorse.task_group_member(task_id, group_id, position, outcome, counted_at)
+     VALUES ($1, $2, 1, 'succeeded', clock_timestamp())`,
+    [member, group],
+  );
+  return group;
+};
+
+const groupExists = async (id: string) =>
+  (await pool.query("SELECT 1 FROM workhorse.task_group WHERE id = $1", [id])).rowCount === 1;
+
+// A parent that finished 30 days ago with a child that became eligible about 3 hours ago.
+const parentWithEligibleChild = async () => {
+  const parent = await insertTerminalTask("retention-held-parent", 30 * 24);
+  const child = await insertTerminalTask("retention-held-child", 27, 50);
+  await pool.query(
+    `INSERT INTO workhorse.task_child(parent_task_id, child_task_id, child_name, request_fingerprint)
+     VALUES ($1, $2, 'child', '{}'::jsonb)`,
+    [parent, child],
+  );
+  return { parent, child };
+};
+
+const prerequisiteWithFinishedDependent = async () => {
+  const prerequisite = await insertTerminalTask("retention-held-prerequisite", 30 * 24);
+  const dependent = await insertTerminalTask("retention-held-dependent", 26);
+  await pool.query(
+    `INSERT INTO workhorse.task_dependency(
+       dependent_task_id, prerequisite_task_id, on_failure, on_cancellation, on_success,
+       created_at, released_at, resolution
+     ) VALUES ($1, $2, 'fail', 'cancel', 'release', clock_timestamp() - interval '27 hours',
+               clock_timestamp() - interval '27 hours', 'release')`,
+    [dependent, prerequisite],
+  );
+  return { prerequisite, dependent };
+};
+
+// A failed source that finished 30 days ago, with a target that it redrove. finishTarget completes
+// the target and ages it past its windows, and otherwise the target stays ready.
+const agedRedriveSource = async (finishTarget: boolean) => {
+  const source = await createFailedTask({ type: "retention-held-source" });
+  const target = (await admin.redrive(source, adminAudit("held source"))).targetTaskId!;
+  if (finishTarget) {
+    const task = await queue.claim("retention-held-source-worker");
+    expect(task?.id).toBe(target);
+    expect(await queue.complete(task!, "retention-held-source-worker", {})).toBe(true);
+  }
+  const aged = finishTarget ? [source, target] : [source];
+  await pool.query("DELETE FROM workhorse.task_event WHERE task_id = ANY($1::uuid[])", [aged]);
+  await pool.query("DELETE FROM workhorse.attempt_history WHERE task_id = ANY($1::uuid[])", [aged]);
+  await pool.query(
+    `UPDATE workhorse.task SET created_at = clock_timestamp() - interval '720 hours'
+      WHERE id = ANY($1::uuid[])`,
+    [aged],
+  );
+  await pool.query(
+    `UPDATE workhorse.task_outcome
+        SET finished_at = clock_timestamp() - interval '720 hours',
+            history_through_at = clock_timestamp() - interval '720 hours'
+      WHERE task_id = ANY($1::uuid[])`,
+    [aged],
+  );
+  return { source, target };
+};
+
+// A task that finished 30 days ago with a schedule occurrence whose window ended 25 hours ago.
+const taskWithExpiredOccurrence = async () => {
+  const taskId = await insertTerminalTask("retention-held-occurrence", 30 * 24);
+  await addHealthSchedule();
+  await pool.query(
+    `INSERT INTO workhorse.schedule_occurrence(namespace, schedule_name, occurrence_at, task_id)
+     VALUES ('integration', 'retention-holds',
+             date_trunc('second', clock_timestamp() - interval '49 hours'), $1)`,
+    [taskId],
+  );
+  return taskId;
+};
+
+const occurrenceCount = async (taskId: string) =>
+  (await pool.query("SELECT 1 FROM workhorse.schedule_occurrence WHERE task_id = $1", [taskId]))
+    .rowCount;
+
+const pruneOccurrences = () =>
+  pool.query(
+    "SELECT workhorse.prune_schedule_occurrences_v1(clock_timestamp() - interval '24 hours', 1000)",
+  );
+
+// Moves a terminal task 30 days back and removes its history rows.
+const ageTerminalTask = async (id: string) => {
+  await pool.query("DELETE FROM workhorse.task_event WHERE task_id = $1", [id]);
+  await pool.query("DELETE FROM workhorse.attempt_history WHERE task_id = $1", [id]);
+  await pool.query(
+    "UPDATE workhorse.task SET created_at = clock_timestamp() - interval '720 hours' WHERE id = $1",
+    [id],
+  );
+  await pool.query(
+    `UPDATE workhorse.task_outcome
+        SET finished_at = clock_timestamp() - interval '720 hours',
+            history_through_at = clock_timestamp() - interval '720 hours'
+      WHERE task_id = $1`,
+    [id],
+  );
+};
 
 describe("retention maintenance", () => {
   it("keeps an operator maintenance-time override until it is reverted", async () => {
@@ -1832,11 +2442,9 @@ describe("retention maintenance", () => {
           ).rows.map(({ id }) => id),
         );
 
-      // Each pass deletes a full batch, and a source goes only after its own target. If the fast tier
-      // goes first, the full tier gets the whole batch in one statement. Then a source goes in a
-      // later pass than its target, and the unrelated tasks go after every redriven task. If the full
-      // tier goes first, it gets half the batch and then the share the empty fast tier leaves. That
-      // second statement can delete a source that the first statement released.
+      // Each pass deletes a full batch, and a source goes only after its own target. A batch walks
+      // its slice in circular order from the stored position of its tier (ADR 0122), so a source
+      // that its target released can go after younger unrelated tasks.
       const tracked = [...sources, ...targets, ...unrelated];
       const deletedInPass = new Map<string, number>();
       for (let pass = 1; pass <= tracked.length / limit; pass += 1) {
@@ -1847,23 +2455,10 @@ describe("retention maintenance", () => {
       }
       expect(deletedInPass.size).toBe(tracked.length);
       sources.forEach((source, index) => {
-        const targetPass = deletedInPass.get(targets[index]!)!;
-        expect(deletedInPass.get(source)).toBeGreaterThanOrEqual(targetPass + (fastFirst ? 1 : 0));
+        expect(deletedInPass.get(source)).toBeGreaterThanOrEqual(
+          deletedInPass.get(targets[index]!)!,
+        );
       });
-      // The full-first run must reach the case that the fast-first run cannot reach.
-      expect(
-        sources.some(
-          (source, index) => deletedInPass.get(source) === deletedInPass.get(targets[index]!),
-        ),
-      ).toBe(!fastFirst);
-      // An unrelated task is younger than every redriven task. If the full tier goes first, the last
-      // source is still pinned when the last target goes, so an unrelated task can join that pass.
-      const lastPass = (ids: string[]) => Math.max(...ids.map((id) => deletedInPass.get(id)!));
-      const lastRedriven = lastPass([...sources, ...targets]);
-      const lastTarget = lastPass(targets);
-      const firstUnrelatedPass = fastFirst ? lastRedriven + 1 : lastTarget;
-      for (const id of unrelated)
-        expect(deletedInPass.get(id)).toBeGreaterThanOrEqual(firstUnrelatedPass);
 
       expect(await prune()).toBe(0);
       expect(await remaining([liveSource, liveTarget])).toEqual(new Set([liveSource, liveTarget]));
@@ -2471,6 +3066,1576 @@ describe("retention maintenance", () => {
       expect(lag).toBeGreaterThan(86_400_000 - 60_000);
       expect(lag).toBeLessThan(86_400_000 + 60_000);
     }
+  });
+
+  it("deletes the tasks with no key when the keyed tasks fill the lock window", async () => {
+    // With a limit of 1, cleanup once locked the four oldest terminal tasks. Each of them had an
+    // enqueue key, so each pass deleted nothing and locked the same rows again (SM-1935).
+    await queue.syncRetentionPolicy({ ...defaultRetentionPolicy, terminalTaskPruneLimit: 1 });
+    const ttlMs = 30 * dayMs;
+    const ids = await queue.enqueueMany([
+      ...["k1", "k2", "k3", "k4"].map((key) => ({
+        type: "keyed",
+        payload: {},
+        options: { queue: "ret", idempotency: { key, ttlMs } },
+      })),
+      ...[1, 2, 3].map(() => ({ type: "plain", payload: {}, options: { queue: "ret" } })),
+    ]);
+    for (const id of ids) await queue.cancel(id, { requestedBy: "f2", reason: "proof" });
+    await pool.query(
+      `UPDATE workhorse.task SET created_at = clock_timestamp() - interval '21 days'
+        WHERE queue_name = 'ret'`,
+    );
+    await pool.query(
+      `UPDATE workhorse.task_outcome outcome
+          SET finished_at = clock_timestamp() - CASE WHEN task.task_type = 'keyed'
+                THEN interval '20 days' ELSE interval '19 days' END,
+              history_through_at = clock_timestamp() - CASE WHEN task.task_type = 'keyed'
+                THEN interval '20 days' ELSE interval '19 days' END
+         FROM workhorse.task task
+        WHERE task.id = outcome.task_id AND task.queue_name = 'ret'`,
+    );
+    await pool.query(
+      `DELETE FROM workhorse.task_event event USING workhorse.task task
+        WHERE task.id = event.task_id AND task.queue_name = 'ret'`,
+    );
+    await pool.query(
+      `DELETE FROM workhorse.attempt_history attempt USING workhorse.task task
+        WHERE task.id = attempt.task_id AND task.queue_name = 'ret'`,
+    );
+
+    const phases = await queue.pruneTerminalStorage({ force: true });
+    expect(phases.find(({ phase }) => phase === "terminal_tasks")).toMatchObject({
+      rowsAffected: 3,
+      error: null,
+    });
+    const left = await pool.query<{ task_type: string; count: number }>(
+      `SELECT task_type, count(*)::integer AS count FROM workhorse.task
+        WHERE queue_name = 'ret' GROUP BY task_type ORDER BY task_type`,
+    );
+    expect(left.rows).toEqual([{ task_type: "keyed", count: 4 }]);
+  });
+
+  it.each(Object.keys(holdReferences) as (keyof typeof holdReferences)[])(
+    "deletes eligible tasks behind a window of tasks that %s keeps",
+    async (reference) => {
+      // Four kept tasks are older than three eligible tasks. With a limit of 1, the lock window once
+      // held the four kept tasks, so no pass reached the eligible ones (SM-1935).
+      await useOneDayRowWindows(1);
+      const kept: string[] = [];
+      for (let index = 0; index < 4; index += 1) {
+        const id = await insertTerminalTask("retention-kept", 30 * 24 + index);
+        await holdReferences[reference](id);
+        kept.push(id);
+      }
+      const eligible: string[] = [];
+      for (let index = 0; index < 3; index += 1) {
+        eligible.push(await insertTerminalTask("retention-eligible", 20 * 24 + index));
+      }
+
+      const phases = await queue.pruneTerminalStorage({ force: true });
+      expect(phases.find(({ phase }) => phase === "terminal_tasks")).toMatchObject({
+        rowsAffected: 3,
+        error: null,
+      });
+      for (const id of eligible) expect(await taskExists(id)).toBe(false);
+      for (const id of kept) expect(await taskExists(id)).toBe(true);
+
+      // A later pass deletes nothing. It reports a dependency edge that keeps a prerequisite, and
+      // only that reference.
+      const later = await queue.pruneTerminalStorage({ force: true });
+      expect(later.find(({ phase }) => phase === "terminal_tasks")).toMatchObject({
+        rowsAffected: 0,
+      });
+      expect((await queue.health()).dependencies.retentionPruneStarved).toBe(
+        reference === "a dependency edge to a live dependent",
+      );
+    },
+  );
+
+  it("deletes eligible tasks behind more kept tasks than one batch examines", async () => {
+    // One batch examines a slice of at least 1,000 rows past the cutoffs. 3,100 kept tasks come
+    // first, more than three slices, so a scan of the whole table breaks the bound of one call. Each batch continues after the slice of the batch before it, so a bounded number of
+    // batches reaches the eligible tasks, and one batch never reads more than its slice.
+    await useOneDayRowWindows(2);
+    await pool.query(
+      `WITH task AS (
+         INSERT INTO workhorse.task(queue_name, task_type, payload, max_attempts, created_at)
+         SELECT 'retention-slices', CASE WHEN position <= 3100 THEN 'kept' ELSE 'eligible' END,
+                '{}'::jsonb, 1, clock_timestamp() - interval '30 days' + make_interval(secs => position)
+           FROM generate_series(1, 3103) position
+         RETURNING id, task_type, created_at
+       ), outcome AS (
+         INSERT INTO workhorse.task_outcome(
+           task_id, state, current_attempt, fence_token, run_at, result, finished_at,
+           history_through_at
+         )
+         SELECT id, 'succeeded', 1, 1, created_at, '{}'::jsonb, created_at, created_at FROM task
+       )
+       INSERT INTO workhorse.enqueue_idempotency(
+         idempotency_scope, idempotency_key_hash, request_fingerprint, task_id, expires_at
+       )
+       SELECT 'retention-slices', sha256(convert_to(id::text, 'UTF8')), '{}'::jsonb, id,
+              clock_timestamp() + interval '30 days'
+         FROM task WHERE task_type = 'kept'`,
+    );
+    // With statistics, a generic plan can prefer a scan of the whole table to one lookup per row.
+    await pool.query(
+      "ANALYZE workhorse.task, workhorse.task_outcome, workhorse.enqueue_idempotency",
+    );
+    const eligibleLeft = async () =>
+      Number(
+        (
+          await pool.query<{ count: number }>(
+            `SELECT count(*)::integer AS count FROM workhorse.task
+              WHERE queue_name = 'retention-slices' AND task_type = 'eligible'`,
+          )
+        ).rows[0]!.count,
+      );
+    const batch = async () => {
+      const client = await pool.connect();
+      try {
+        await client.query("BEGIN");
+        // The counter can hold earlier reads of this connection, so the test reads its difference.
+        // A generic plan must keep the bound too, so the batch plans each statement as one.
+        await client.query("SET LOCAL plan_cache_mode = force_generic_plan");
+        // The index rows and the sequential rows of task_outcome that the transaction read.
+        const readTuples = async () =>
+          Number(
+            (
+              await client.query<{ tuples: string }>(
+                `SELECT pg_stat_get_xact_tuples_returned(
+                          'workhorse.task_outcome_retention_idx'::regclass)
+                        + pg_stat_get_xact_tuples_returned('workhorse.task_outcome'::regclass)
+                          AS tuples`,
+              )
+            ).rows[0]!.tuples,
+          );
+        const before = await readTuples();
+        const pruned = await client.query<{ pruned: number }>(
+          `SELECT workhorse.prune_terminal_tasks_v1(
+                  clock_timestamp() - interval '24 hours', clock_timestamp() - interval '24 hours',
+                  clock_timestamp() - interval '24 hours', 2) AS pruned`,
+        );
+        const read = (await readTuples()) - before;
+        await client.query("COMMIT");
+        return { pruned: pruned.rows[0]!.pruned, read };
+      } finally {
+        client.release();
+      }
+    };
+
+    // One call runs at most three tier batches, and each batch reads at most one slice. The index
+    // can still return the entries of the three rows that earlier batches deleted.
+    const first = await batch();
+    expect(first.pruned).toBe(0);
+    expect(first.read).toBeLessThanOrEqual(3 * 1000 + 3);
+    let calls = 1;
+    while ((await eligibleLeft()) > 0 && calls < 20) {
+      const next = await batch();
+      expect(next.read).toBeLessThanOrEqual(3 * 1000 + 3);
+      calls += 1;
+    }
+    // Every second batch of the tier is a sweep batch, so the main walk moves by one slice in two
+    // calls. 3,103 rows then take at most eight calls, and two more calls delete what the last
+    // slice found.
+    expect(await eligibleLeft()).toBe(0);
+    expect(calls).toBeLessThanOrEqual(10);
+  });
+
+  it("reads the same rows in one batch call behind 1,100 or 1,400 kept tasks", async () => {
+    // Under a generic plan, the lock statement once read the whole outcome table, so the work of a
+    // batch grew with the kept tasks. Each call now reads its slices of 1,000 rows, whatever follows.
+    await useOneDayRowWindows(2);
+    expect(await firstPruneCallReads(1400)).toBe(await firstPruneCallReads(1100));
+  });
+
+  it("records no backlog and stops when kept tasks alone remain past the cutoffs", async () => {
+    // More kept tasks than one slice examines and no eligible task. The walk comes round to where
+    // its run of empty batches began, removes its position, and ends the pass with no backlog.
+    await useOneDayRowWindows(1);
+    await pool.query(
+      `WITH task AS (
+         INSERT INTO workhorse.task(queue_name, task_type, payload, max_attempts, created_at)
+         SELECT 'retention-quiet', 'kept', '{}'::jsonb, 1,
+                clock_timestamp() - interval '30 days' + make_interval(secs => position)
+           FROM generate_series(1, 1500) position
+         RETURNING id, created_at
+       ), outcome AS (
+         INSERT INTO workhorse.task_outcome(
+           task_id, state, current_attempt, fence_token, run_at, result, finished_at,
+           history_through_at
+         )
+         SELECT id, 'succeeded', 1, 1, created_at, '{}'::jsonb, created_at, created_at FROM task
+       )
+       INSERT INTO workhorse.enqueue_idempotency(
+         idempotency_scope, idempotency_key_hash, request_fingerprint, task_id, expires_at
+       )
+       SELECT 'retention-quiet', sha256(convert_to(id::text, 'UTF8')), '{}'::jsonb, id,
+              clock_timestamp() + interval '30 days'
+         FROM task`,
+    );
+
+    const phases = await queue.pruneTerminalStorage({ force: true });
+    expect(phases.find(({ phase }) => phase === "terminal_tasks")).toMatchObject({
+      rowsAffected: 0,
+      error: null,
+    });
+    const state = await pool.query<{ since: Date | null; positions: number }>(
+      `SELECT terminal_cleanup_backlog_since AS since,
+              (SELECT count(*)::integer FROM workhorse.terminal_prune_position
+                WHERE finished_at IS NOT NULL) AS positions
+         FROM workhorse.maintenance_state WHERE routine_name = 'terminal_storage'`,
+    );
+    expect(state.rows).toEqual([{ since: null, positions: 0 }]);
+  });
+
+  it("keeps the expiry of a key while another transaction locks its task", async () => {
+    // The key expired one hour ago, so the task is due one hour ago. Another transaction locks the
+    // task, so this pass cannot delete it. The key stays with the task, and health still counts
+    // the lag from the expiry, not from the end of the task window.
+    await useOneDayRowWindows();
+    const taskId = await insertTerminalTask("retention-locked-key", 30 * 24);
+    await pool.query(
+      `INSERT INTO workhorse.enqueue_idempotency(
+         idempotency_scope, idempotency_key_hash, request_fingerprint, task_id, expires_at
+       ) VALUES ('retention-locked-key', sha256(convert_to($1::text, 'UTF8')), '{}'::jsonb,
+                 $1::uuid, clock_timestamp() - interval '1 hour')`,
+      [taskId],
+    );
+    expectRowLagNear(await rowLag(), hourMs);
+    const locker = await pool.connect();
+    try {
+      await locker.query("BEGIN");
+      await locker.query("SELECT 1 FROM workhorse.task WHERE id = $1 FOR UPDATE", [taskId]);
+      await queue.pruneTerminalStorage({ force: true });
+      await locker.query("COMMIT");
+    } finally {
+      await locker.query("ROLLBACK").catch(() => undefined);
+      locker.release();
+    }
+    expect(await taskExists(taskId)).toBe(true);
+    expectRowLagNear(await rowLag(), hourMs);
+
+    await queue.pruneTerminalStorage({ force: true });
+    expect(await taskExists(taskId)).toBe(false);
+    expect(
+      (await pool.query("SELECT 1 FROM workhorse.enqueue_idempotency WHERE task_id = $1", [taskId]))
+        .rowCount,
+    ).toBe(0);
+  });
+
+  it("does not wait for an enqueue that holds the expired key of a task", async () => {
+    // An enqueue locks keys in key order. If cleanup waited for a key, it could deadlock with such
+    // an enqueue, so cleanup takes the key with SKIP LOCKED and leaves its task for a later batch.
+    await useOneDayRowWindows();
+    const taskId = await insertTerminalTask("retention-key-lock", 30 * 24);
+    await pool.query(
+      `INSERT INTO workhorse.enqueue_idempotency(
+         idempotency_scope, idempotency_key_hash, request_fingerprint, task_id, expires_at
+       ) VALUES ('retention-key-lock', sha256(convert_to($1::text, 'UTF8')), '{}'::jsonb,
+                 $1::uuid, clock_timestamp() - interval '1 hour')`,
+      [taskId],
+    );
+    const holder = await pool.connect();
+    const cleaner = await pool.connect();
+    try {
+      await holder.query("BEGIN");
+      await holder.query(
+        "SELECT 1 FROM workhorse.enqueue_idempotency WHERE task_id = $1 FOR UPDATE",
+        [taskId],
+      );
+      await cleaner.query("BEGIN");
+      // A wait for the key would fail this statement after one second.
+      await cleaner.query("SET LOCAL lock_timeout = '1s'");
+      const pruned = await cleaner.query<{ pruned: number }>(
+        `SELECT workhorse.prune_terminal_tasks_v1(
+                clock_timestamp() - interval '24 hours', clock_timestamp() - interval '24 hours',
+                clock_timestamp() - interval '24 hours', 10) AS pruned`,
+      );
+      expect(pruned.rows[0]!.pruned).toBe(0);
+      await cleaner.query("COMMIT");
+      await holder.query("COMMIT");
+    } finally {
+      await cleaner.query("ROLLBACK").catch(() => undefined);
+      await holder.query("ROLLBACK").catch(() => undefined);
+      cleaner.release();
+      holder.release();
+    }
+    expect(await taskExists(taskId)).toBe(true);
+    await queue.pruneTerminalStorage({ force: true });
+    expect(await taskExists(taskId)).toBe(false);
+  });
+
+  it("holds no lock on the key of a task that it leaves for another held reference", async () => {
+    // The task has an expired key and a released edge to a finished dependent. Another transaction
+    // holds the edge, so the batch leaves the task. It must not keep the lock on the key, or an
+    // enqueue with that key waits until the pass commits.
+    await useOneDayRowWindows();
+    const taskId = await insertTerminalTask("retention-two-references", 30 * 24);
+    const dependent = await insertTerminalTask("retention-two-references-dependent", 4);
+    await pool.query(
+      `INSERT INTO workhorse.enqueue_idempotency(
+         idempotency_scope, idempotency_key_hash, request_fingerprint, task_id, expires_at
+       ) VALUES ('retention-two-references', sha256(convert_to($1::text, 'UTF8')), '{}'::jsonb,
+                 $1::uuid, clock_timestamp() - interval '1 hour')`,
+      [taskId],
+    );
+    await pool.query(
+      `INSERT INTO workhorse.task_dependency(
+         dependent_task_id, prerequisite_task_id, on_failure, on_cancellation, on_success,
+         created_at, released_at, resolution
+       ) VALUES ($1, $2, 'fail', 'cancel', 'release', clock_timestamp() - interval '5 hours',
+                 clock_timestamp() - interval '5 hours', 'release')`,
+      [dependent, taskId],
+    );
+    const holder = await pool.connect();
+    const cleaner = await pool.connect();
+    const enqueuer = await pool.connect();
+    try {
+      await holder.query("BEGIN");
+      await holder.query(
+        "SELECT 1 FROM workhorse.task_dependency WHERE prerequisite_task_id = $1 FOR UPDATE",
+        [taskId],
+      );
+      await cleaner.query("BEGIN");
+      const pruned = await cleaner.query<{ pruned: number }>(
+        `SELECT workhorse.prune_terminal_tasks_v1(
+                clock_timestamp() - interval '24 hours', clock_timestamp() - interval '24 hours',
+                clock_timestamp() - interval '24 hours', 10) AS pruned`,
+      );
+      expect(pruned.rows[0]!.pruned).toBe(0);
+      await expect(
+        enqueuer.query(
+          "SELECT 1 FROM workhorse.enqueue_idempotency WHERE task_id = $1 FOR UPDATE NOWAIT",
+          [taskId],
+        ),
+      ).resolves.toMatchObject({ rowCount: 1 });
+      await cleaner.query("COMMIT");
+      await holder.query("COMMIT");
+    } finally {
+      await cleaner.query("ROLLBACK").catch(() => undefined);
+      await holder.query("ROLLBACK").catch(() => undefined);
+      enqueuer.release();
+      cleaner.release();
+      holder.release();
+    }
+    expect(await taskExists(taskId)).toBe(true);
+  });
+
+  it("reads the same key and edge rows in one pass behind 1,100 or 1,400 kept tasks", async () => {
+    // Members of an open task group stay, and each has an expired key and a released edge to a
+    // finished dependent. The key and edge phases delete those references, so with a limit of 1
+    // each phase walk reads a few index rows, whatever the kept tasks. On tables this small, a
+    // generic plan of these phases can also read each whole table, as it did before this change.
+    await useOneDayRowWindows(1);
+    const small = await referencePhaseReads(1100);
+    expect(await referencePhaseReads(1400)).toBe(small);
+    expect(small).toBeLessThan(10);
+  });
+
+  it.each(["force_generic_plan", "force_custom_plan"] as const)(
+    "reads the same task and outcome rows in the key and edge phases behind 1,100 or 1,400 kept tasks (%s)",
+    async (plan) => {
+      // Each phase looks up the task and the outcome of each reference that it deletes by primary
+      // key, so with a limit of 1 the reads do not grow with the kept tasks (ADR 0122).
+      await useOneDayRowWindows(1);
+      const small = await referencePhaseReads(1100, "tables", plan);
+      expect(await referencePhaseReads(1400, "tables", plan)).toBe(small);
+      expect(small).toBeLessThan(20);
+    },
+  );
+
+  it("reports a dependency pin that one slice of a pass saw", async () => {
+    // Enqueue keys keep 1,499 old tasks, and a live dependent keeps the 750th. The pass deletes
+    // nothing, and the slice that holds the pin is not its last slice.
+    await useOneDayRowWindows(1);
+    const dependent = await queue.enqueue("retention-pin-dependent", {});
+    await pool.query(
+      `WITH task AS (
+         INSERT INTO workhorse.task(queue_name, task_type, payload, max_attempts, created_at)
+         SELECT 'retention-pin', CASE WHEN position = 750 THEN 'pinned' ELSE 'kept' END,
+                '{}'::jsonb, 1,
+                clock_timestamp() - interval '30 days' + make_interval(secs => position)
+           FROM generate_series(1, 1500) position
+         RETURNING id, task_type, created_at
+       ), outcome AS (
+         INSERT INTO workhorse.task_outcome(
+           task_id, state, current_attempt, fence_token, run_at, result, finished_at,
+           history_through_at
+         )
+         SELECT id, 'succeeded', 1, 1, created_at, '{}'::jsonb, created_at, created_at FROM task
+       ), edge AS (
+         INSERT INTO workhorse.task_dependency(
+           dependent_task_id, prerequisite_task_id, on_failure, on_cancellation, on_success
+         )
+         SELECT $1::uuid, id, 'fail', 'cancel', 'release' FROM task WHERE task_type = 'pinned'
+       )
+       INSERT INTO workhorse.enqueue_idempotency(
+         idempotency_scope, idempotency_key_hash, request_fingerprint, task_id, expires_at
+       )
+       SELECT 'retention-pin', sha256(convert_to(id::text, 'UTF8')), '{}'::jsonb, id,
+              clock_timestamp() + interval '30 days'
+         FROM task WHERE task_type = 'kept'`,
+      [dependent],
+    );
+    const phases = await queue.pruneTerminalStorage({ force: true });
+    expect(phases.find(({ phase }) => phase === "terminal_tasks")).toMatchObject({
+      rowsAffected: 0,
+    });
+    expect((await queue.health()).dependencies.retentionPruneStarved).toBe(true);
+  });
+
+  it("reports no dependency pin for a row that waits for its identity window", async () => {
+    // The identity window is 30 days, and the outcome and history windows are 1 day. A task that
+    // finished 10 days ago is in the slice of the batch, but it waits for its identity window. Its
+    // live dependent therefore does not show a pass that a dependency edge stops.
+    await queue.syncMaintenancePolicy(
+      { timezone: "UTC", historyRetentionLocalTime: "00:00" },
+      { force: true },
+    );
+    await queue.syncRetentionPolicy({
+      ...defaultRetentionPolicy,
+      taskIdentityRetentionDays: 30,
+      terminalOutcomeRetentionDays: 1,
+      taskEventRetentionDays: 1,
+      attemptHistoryRetentionDays: 1,
+    });
+    await pool.query(
+      `UPDATE workhorse.maintenance_state
+          SET history_retained_before = clock_timestamp() - interval '24 hours'
+        WHERE routine_name = 'history_retention'`,
+    );
+    const prerequisite = await insertTerminalTask("retention-pin-waiting", 10 * 24);
+    await holdReferences["a dependency edge to a live dependent"](prerequisite);
+    const phases = await queue.pruneTerminalStorage({ force: true });
+    expect(phases.find(({ phase }) => phase === "terminal_tasks")).toMatchObject({
+      rowsAffected: 0,
+    });
+    expect(await taskExists(prerequisite)).toBe(true);
+    expect((await queue.health()).dependencies.retentionPruneStarved).toBe(false);
+  });
+
+  it("does not lock a released redrive source that another target still keeps", async () => {
+    const source = await createFailedTask({ type: "redrive-two-targets" });
+    const oldTarget = (await admin.redrive(source, adminAudit("first"))).targetTaskId!;
+    const first = await queue.claim("redrive-two-targets-worker");
+    expect(first?.id).toBe(oldTarget);
+    expect(await queue.complete(first!, "redrive-two-targets-worker", {})).toBe(true);
+    await pool.query(
+      `UPDATE workhorse.task_outcome SET state = 'failed', error = '{"name":"Error"}'::jsonb,
+              result = NULL
+        WHERE task_id = $1`,
+      [oldTarget],
+    );
+    const youngTarget = (
+      await pool.query<{ target_task_id: string }>(
+        "SELECT target_task_id FROM workhorse.redrive_v1($1, 'operator', 'second', 'second-request')",
+        [source],
+      )
+    ).rows[0]!.target_task_id;
+    expect(youngTarget).not.toBe(oldTarget);
+    await pool.query("DELETE FROM workhorse.task_event WHERE task_id = ANY($1::uuid[])", [
+      [source, oldTarget],
+    ]);
+    await pool.query("DELETE FROM workhorse.attempt_history WHERE task_id = ANY($1::uuid[])", [
+      [source, oldTarget],
+    ]);
+    await pool.query(
+      `UPDATE workhorse.task SET created_at = clock_timestamp() - interval '41 days'
+        WHERE id = ANY($1::uuid[])`,
+      [[source, oldTarget]],
+    );
+    await pool.query(
+      `UPDATE workhorse.task_outcome
+          SET finished_at = clock_timestamp() - interval '40 days',
+              history_through_at = clock_timestamp() - interval '40 days'
+        WHERE task_id = ANY($1::uuid[])`,
+      [[source, oldTarget]],
+    );
+    const cleaner = await pool.connect();
+    const other = await pool.connect();
+    try {
+      await cleaner.query("BEGIN");
+      await cleaner.query(
+        `SELECT workhorse.prune_terminal_tasks_v1(
+                clock_timestamp() - interval '30 days', clock_timestamp() - interval '30 days',
+                clock_timestamp() - interval '30 days', 10)`,
+      );
+      // The batch deleted the old target. The young target still keeps the source, so the batch
+      // must not hold a lock on it.
+      await expect(
+        other.query("SELECT 1 FROM workhorse.task WHERE id = $1 FOR UPDATE NOWAIT", [source]),
+      ).resolves.toMatchObject({ rowCount: 1 });
+      await cleaner.query("COMMIT");
+    } finally {
+      await cleaner.query("ROLLBACK").catch(() => undefined);
+      cleaner.release();
+      other.release();
+    }
+    expect(await taskExists(oldTarget)).toBe(false);
+    expect(await taskExists(source)).toBe(true);
+  });
+
+  describe("the sweep walk", () => {
+    // Task A is the oldest terminal task, and an enqueue key keeps it. The main walk passes it.
+    // Then the key goes, so A can go, but A is behind the position of the main walk. Each call
+    // gets one new eligible task, so each main batch fills and the main walk never wraps. The sweep
+    // walk takes every second batch and reaches A (ADR 0122).
+
+    it("deletes a row behind the main walk within the bound while each call fills", async () => {
+      const oldTask = await passOldTask();
+      // The sweep starts at the oldest row, and A is that row: R is 1 and E is 0.
+      let calls = 0;
+      while ((await taskExists(oldTask)) && calls < 10) {
+        await insertTerminalTask("retention-sweep-new", 25 * 24);
+        expect(await pruneOneCall()).toBe(1);
+        calls += 1;
+      }
+      expect(await taskExists(oldTask)).toBe(false);
+      expect(calls).toBeLessThanOrEqual(sweepBound(1, 0));
+    });
+
+    it("deletes six rows behind the main walk within the bound while each call fills", async () => {
+      // The schedule of the review: limit 1, six old rows, and one new eligible row for each call.
+      // The sweep examines the six old rows from the oldest, so for the last one R is 6 and E is 5.
+      const oldTasks = await passOldTasks(6);
+      const bound = sweepBound(6, 5);
+      let calls = 0;
+      const remaining = async () => {
+        let count = 0;
+        for (const oldTask of oldTasks) if (await taskExists(oldTask)) count += 1;
+        return count;
+      };
+      while ((await remaining()) > 0 && calls < bound + 5) {
+        await insertTerminalTask("retention-sweep-new", 25 * 24);
+        expect(await pruneOneCall()).toBe(1);
+        calls += 1;
+      }
+      expect(await remaining()).toBe(0);
+      expect(calls).toBeLessThanOrEqual(bound);
+    });
+
+    it("deletes a row behind the main walk in one full pass", async () => {
+      const oldTask = await passOldTask();
+      await queue.pruneTerminalStorage({ force: true });
+      expect(await taskExists(oldTask)).toBe(false);
+    });
+  });
+
+  it("counts a prerequisite from the finish of its dependent after the edge went", async () => {
+    // The released edge goes in the released-edge phase. Another transaction locks the
+    // prerequisite, so the terminal phase leaves it. Health still counts it from the finish of its
+    // dependent, which task_outcome.held_until keeps.
+    await useOneDayRowWindows();
+    const prerequisite = await insertTerminalTask("retention-held-edge", 30 * 24);
+    const dependent = await insertTerminalTask("retention-held-edge-dependent", 4);
+    await pool.query(
+      `INSERT INTO workhorse.task_dependency(
+         dependent_task_id, prerequisite_task_id, on_failure, on_cancellation, on_success,
+         created_at, released_at, resolution
+       ) VALUES ($1, $2, 'fail', 'cancel', 'release', clock_timestamp() - interval '5 hours',
+                 clock_timestamp() - interval '5 hours', 'release')`,
+      [dependent, prerequisite],
+    );
+    expectRowLagNear(await rowLag(), 4 * hourMs);
+    const locker = await pool.connect();
+    try {
+      await locker.query("BEGIN");
+      await locker.query("SELECT 1 FROM workhorse.task WHERE id = $1 FOR UPDATE", [prerequisite]);
+      await queue.pruneTerminalStorage({ force: true });
+      await locker.query("COMMIT");
+    } finally {
+      await locker.query("ROLLBACK").catch(() => undefined);
+      locker.release();
+    }
+    expect(
+      (
+        await pool.query(
+          "SELECT 1 FROM workhorse.task_dependency WHERE prerequisite_task_id = $1",
+          [prerequisite],
+        )
+      ).rowCount,
+    ).toBe(0);
+    expect(await taskExists(prerequisite)).toBe(true);
+    expectRowLagNear(await rowLag(), 4 * hourMs);
+  });
+
+  describe("the held_until write", () => {
+    // The key phase and the released-edge phase take keys, edges, and outcomes with SKIP LOCKED,
+    // so they never wait. An application write that needs a row that the pass wrote waits until
+    // the pass commits, as it does for a row that cleanup deletes (ADR 0122).
+
+    it("keeps a key for a later pass while another transaction holds its outcome", async () => {
+      await useOneDayRowWindows();
+      const heldKey = await keyedFailedTask(2);
+      const heldOutcome = await keyedFailedTask(2);
+      const holder = await pool.connect();
+      const cleaner = await pool.connect();
+      try {
+        await holder.query("BEGIN");
+        await holder.query(
+          "SELECT 1 FROM workhorse.enqueue_idempotency WHERE task_id = $1 FOR UPDATE",
+          [heldKey],
+        );
+        // A redrive takes the outcome of its source FOR SHARE.
+        await holder.query("SELECT 1 FROM workhorse.task_outcome WHERE task_id = $1 FOR SHARE", [
+          heldOutcome,
+        ]);
+        await cleaner.query("BEGIN");
+        await cleaner.query("SET LOCAL lock_timeout = '1s'");
+        await pruneKeys(cleaner);
+        await cleaner.query("COMMIT");
+        await holder.query("COMMIT");
+      } finally {
+        await cleaner.query("ROLLBACK").catch(() => undefined);
+        await holder.query("ROLLBACK").catch(() => undefined);
+        cleaner.release();
+        holder.release();
+      }
+      const keys = async () =>
+        (
+          await pool.query<{ task_id: string }>(
+            `SELECT task_id FROM workhorse.enqueue_idempotency WHERE task_id = ANY($1::uuid[])
+              ORDER BY task_id`,
+            [[heldKey, heldOutcome]],
+          )
+        ).rows.map((row) => row.task_id);
+      // The pass skipped the held key. It needed to write the outcome of the other task to delete
+      // its key, and it skipped that outcome, so that key stays too. Health counts both tasks from
+      // the expiry of their keys.
+      expect(await keys()).toEqual([heldKey, heldOutcome].toSorted());
+      expect(await heldUntil(heldOutcome)).toBeNull();
+      expectRowLagNear(await rowLag(), 2 * hourMs);
+      // After the other transaction ends, the next pass deletes both keys and records the expiry.
+      const cleaner2 = await pool.connect();
+      try {
+        await pruneKeys(cleaner2);
+      } finally {
+        cleaner2.release();
+      }
+      expect(await keys()).toEqual([]);
+      expect(await heldUntil(heldOutcome)).not.toBeNull();
+      expectRowLagNear(await rowLag(), 2 * hourMs);
+    });
+
+    it("keeps an edge for a later pass while another transaction holds its outcome", async () => {
+      await useOneDayRowWindows();
+      const edges: string[] = [];
+      for (let index = 0; index < 2; index += 1) {
+        const prerequisite = await insertTerminalTask("retention-held-edge-wait", 30 * 24);
+        const dependent = await insertTerminalTask("retention-held-edge-wait-dependent", 4);
+        await pool.query(
+          `INSERT INTO workhorse.task_dependency(
+             dependent_task_id, prerequisite_task_id, on_failure, on_cancellation, on_success,
+             created_at, released_at, resolution
+           ) VALUES ($1, $2, 'fail', 'cancel', 'release', clock_timestamp() - interval '5 hours',
+                     clock_timestamp() - interval '5 hours', 'release')`,
+          [dependent, prerequisite],
+        );
+        edges.push(prerequisite);
+      }
+      const [heldEdge, heldOutcome] = edges as [string, string];
+      const holder = await pool.connect();
+      const cleaner = await pool.connect();
+      try {
+        await holder.query("BEGIN");
+        await holder.query(
+          "SELECT 1 FROM workhorse.task_dependency WHERE prerequisite_task_id = $1 FOR UPDATE",
+          [heldEdge],
+        );
+        await holder.query("SELECT 1 FROM workhorse.task_outcome WHERE task_id = $1 FOR SHARE", [
+          heldOutcome,
+        ]);
+        await cleaner.query("BEGIN");
+        await cleaner.query("SET LOCAL lock_timeout = '1s'");
+        await cleaner.query("SELECT workhorse.prune_released_dependencies_v1(10)");
+        await cleaner.query("COMMIT");
+        await holder.query("COMMIT");
+      } finally {
+        await cleaner.query("ROLLBACK").catch(() => undefined);
+        await holder.query("ROLLBACK").catch(() => undefined);
+        cleaner.release();
+        holder.release();
+      }
+      const left = await pool.query<{ prerequisite_task_id: string }>(
+        `SELECT prerequisite_task_id FROM workhorse.task_dependency
+          WHERE prerequisite_task_id = ANY($1::uuid[])`,
+        [edges],
+      );
+      // The held outcome keeps its edge, so health counts its prerequisite from the finish of the
+      // dependent.
+      expect(left.rows.map((row) => row.prerequisite_task_id).toSorted()).toEqual(
+        [heldEdge, heldOutcome].toSorted(),
+      );
+      expect(await heldUntil(heldOutcome)).toBeNull();
+      expectRowLagNear(await rowLag(), 4 * hourMs);
+      await pool.query("SELECT workhorse.prune_released_dependencies_v1(10)");
+      expect(
+        (
+          await pool.query(
+            "SELECT 1 FROM workhorse.task_dependency WHERE prerequisite_task_id = ANY($1::uuid[])",
+            [edges],
+          )
+        ).rowCount,
+      ).toBe(0);
+      expect(await heldUntil(heldOutcome)).not.toBeNull();
+      expectRowLagNear(await rowLag(), 4 * hourMs);
+    });
+
+    it.each([
+      {
+        lag: "outcome",
+        outcomeDays: 1,
+        createdDays: 40,
+        finishedDays: 40,
+        identityLagDays: 10,
+        outcomeLagDays: 20,
+      },
+      {
+        lag: "identity",
+        outcomeDays: 30,
+        createdDays: 70,
+        finishedDays: 35,
+        identityLagDays: 20,
+        outcomeLagDays: 5,
+      },
+    ])(
+      "records a key expiry that ends after the $lag window only",
+      async ({ outcomeDays, createdDays, finishedDays, identityLagDays, outcomeLagDays }) => {
+        // The identity window is 30 days, and the key expired 20 days ago. The expiry is inside one
+        // row window and after the other, so it moves the due instant of one lag only. The phase
+        // must still record it, and health must still count that lag from it.
+        const identityDays = 30;
+        await queue.syncMaintenancePolicy(
+          { timezone: "UTC", historyRetentionLocalTime: "00:00" },
+          { force: true },
+        );
+        await queue.syncRetentionPolicy({
+          ...defaultRetentionPolicy,
+          taskIdentityRetentionDays: identityDays,
+          terminalOutcomeRetentionDays: outcomeDays,
+          taskEventRetentionDays: 1,
+          attemptHistoryRetentionDays: 1,
+        });
+        await pool.query(
+          `UPDATE workhorse.maintenance_state
+              SET history_retained_before = clock_timestamp() - interval '24 hours'
+            WHERE routine_name = 'history_retention'`,
+        );
+        const taskId = await insertTerminalTask("retention-held-window", finishedDays * 24);
+        await pool.query(
+          `UPDATE workhorse.task SET created_at = clock_timestamp() - make_interval(hours => $2)
+            WHERE id = $1`,
+          [taskId, createdDays * 24],
+        );
+        await pool.query(
+          `INSERT INTO workhorse.enqueue_idempotency(
+             idempotency_scope, idempotency_key_hash, request_fingerprint, task_id, expires_at
+           ) VALUES ('retention-held-window', sha256(convert_to($1::text, 'UTF8')), '{}'::jsonb,
+                     $1::uuid, clock_timestamp() - interval '480 hours')`,
+          [taskId],
+        );
+        const expectLags = async () => {
+          const [identity, outcome] = await rowLag();
+          expectRowLagNear([identity], identityLagDays * dayMs);
+          expectRowLagNear([outcome], outcomeLagDays * dayMs);
+        };
+        await expectLags();
+        await pool.query("SELECT workhorse.prune_enqueue_idempotency_v1(clock_timestamp(), 10)");
+        expect(await heldUntil(taskId)).not.toBeNull();
+        await expectLags();
+      },
+    );
+
+    it("makes a redrive, an enqueue, and a completion wait at most until the pass commits", async () => {
+      await useOneDayRowWindows();
+      const source = await keyedFailedTask(2);
+      const live = await queue.enqueue("retention-held-live", {});
+      const cleaner = await pool.connect();
+      const other = await pool.connect();
+      try {
+        await cleaner.query("BEGIN");
+        await pruneKeys(cleaner);
+        expect(
+          (
+            await cleaner.query<{ held_until: Date | null }>(
+              "SELECT held_until FROM workhorse.task_outcome WHERE task_id = $1",
+              [source],
+            )
+          ).rows[0]!.held_until,
+        ).not.toBeNull();
+        await other.query("SET lock_timeout = '300ms'");
+        // A redrive takes the outcome that the pass wrote, so it waits for the pass.
+        await expect(
+          other.query("SELECT * FROM workhorse.redrive_v1($1, 'operator', 'wait', 'wait-1')", [
+            source,
+          ]),
+        ).rejects.toMatchObject({ code: "55P03" });
+        // An enqueue that writes the key that the pass deleted waits for the pass, as it does on
+        // main, because the delete holds the key row until the commit.
+        await expect(
+          other.query(
+            `INSERT INTO workhorse.enqueue_idempotency(
+               idempotency_scope, idempotency_key_hash, request_fingerprint, task_id, expires_at
+             ) VALUES ('retention-held-key', sha256(convert_to($1::text, 'UTF8')), '{}'::jsonb,
+                       $2::uuid, clock_timestamp() + interval '1 hour')`,
+            [source, live],
+          ),
+        ).rejects.toMatchObject({ code: "55P03" });
+        // A claim and a completion of another task touch no row of the pass.
+        const otherQueue = new Queue(other);
+        const claimed = await otherQueue.claim("retention-held-worker");
+        expect(claimed?.id).toBe(live);
+        expect(await otherQueue.complete(claimed!, "retention-held-worker", {})).toBe(true);
+        await cleaner.query("COMMIT");
+        await other.query("RESET lock_timeout");
+        const redriven = await other.query(
+          "SELECT * FROM workhorse.redrive_v1($1, 'operator', 'after', 'after-1')",
+          [source],
+        );
+        expect(redriven.rowCount).toBe(1);
+      } finally {
+        await cleaner.query("ROLLBACK").catch(() => undefined);
+        await other.query("RESET lock_timeout").catch(() => undefined);
+        cleaner.release();
+        other.release();
+      }
+    });
+  });
+
+  it("records a backlog when a pass ends before it examined every row past the cutoffs", async () => {
+    // More kept tasks than one health walk examines come first, so queue health reports no row lag.
+    // With a limit of 1, the pass cannot delete all eligible tasks in its one second. It records a
+    // backlog, and terminal-cleanup-backlog reports the late cleanup when that backlog outlasts its
+    // budget.
+    await useOneDayRowWindows(1);
+    await pool.query(
+      `WITH task AS (
+         INSERT INTO workhorse.task(queue_name, task_type, payload, max_attempts, created_at)
+         SELECT 'retention-late', CASE WHEN position <= 1100 THEN 'kept' ELSE 'eligible' END,
+                '{}'::jsonb, 1, clock_timestamp() - interval '30 days' + make_interval(secs => position)
+           FROM generate_series(1, 4100) position
+         RETURNING id, task_type, created_at
+       ), outcome AS (
+         INSERT INTO workhorse.task_outcome(
+           task_id, state, current_attempt, fence_token, run_at, result, finished_at,
+           history_through_at
+         )
+         SELECT id, 'succeeded', 1, 1, created_at, '{}'::jsonb, created_at, created_at FROM task
+       )
+       INSERT INTO workhorse.enqueue_idempotency(
+         idempotency_scope, idempotency_key_hash, request_fingerprint, task_id, expires_at
+       )
+       SELECT 'retention-late', sha256(convert_to(id::text, 'UTF8')), '{}'::jsonb, id,
+              clock_timestamp() + interval '30 days'
+         FROM task WHERE task_type = 'kept'`,
+    );
+    await pool.query(
+      "ANALYZE workhorse.task, workhorse.task_outcome, workhorse.enqueue_idempotency",
+    );
+    expect(await rowLag()).toEqual([null, null]);
+
+    const phases = await queue.pruneTerminalStorage({ force: true });
+    expect(phases.find(({ phase }) => phase === "terminal_tasks")?.rowsAffected).toBeLessThan(3000);
+    const state = await pool.query<{ since: Date | null }>(
+      `SELECT terminal_cleanup_backlog_since AS since FROM workhorse.maintenance_state
+        WHERE routine_name = 'terminal_storage'`,
+    );
+    expect(state.rows[0]!.since).not.toBeNull();
+
+    // The passes stay behind for seven hours, longer than the default budget of six hours.
+    await pool.query(
+      `UPDATE workhorse.maintenance_state
+          SET terminal_cleanup_backlog_since = clock_timestamp() - interval '7 hours'
+        WHERE routine_name = 'terminal_storage'`,
+    );
+    expect((await queue.health()).status.reasons).toContainEqual(
+      expect.objectContaining({ code: "terminal-cleanup-backlog", severity: "degraded" }),
+    );
+  });
+
+  describe("a removed reference keeps the end of its hold", () => {
+    // Each statement that removes a reference that a health gate skips saves the end of that hold
+    // on the task that it held, so health still counts that task from the end (ADR 0122).
+
+    it("an enqueue that reuses an expired key saves the expiry on the old task", async () => {
+      await useOneDayRowWindows();
+      const old = await agedKeyedTask("retention-reuse-saved");
+      const before = await rowLag();
+      expectRowLagNear(before, 2 * hourMs);
+      await queue.enqueue("retention-reuse", {}, { idempotency: { key: "retention-reuse-saved" } });
+      expect(await heldUntil(old)).not.toBeNull();
+      expectSameRowLag(before, await rowLag());
+    });
+
+    it("an enqueue that reuses an expired key does not wait for a held outcome", async () => {
+      await useOneDayRowWindows();
+      const old = await agedKeyedTask("retention-reuse-held");
+      const enqueued = await whileLocked(lockOutcomeForShare, [old], async () => {
+        const client = await pool.connect();
+        try {
+          await client.query("SET lock_timeout = '300ms'");
+          return await new Queue(client).enqueue(
+            "retention-reuse",
+            {},
+            { idempotency: { key: "retention-reuse-held" } },
+          );
+        } finally {
+          await client.query("RESET lock_timeout").catch(() => undefined);
+          client.release();
+        }
+      });
+      expect(enqueued).not.toBe(old);
+      // The enqueue continued without the write, so this task counts from its windows until the
+      // next cleanup pass deletes it.
+      expect(await heldUntil(old)).toBeNull();
+    });
+
+    it("an enqueue with a new key or no key reads no outcome row", async () => {
+      await useOneDayRowWindows();
+      const old = await agedKeyedTask("retention-reuse-reads");
+      const client = await pool.connect();
+      try {
+        await client.query("BEGIN");
+        // Each call runs in this one transaction, so its counters add up.
+        const enqueue = (request: Record<string, unknown>) =>
+          client.query("SELECT * FROM workhorse.enqueue_many_v1($1::jsonb)", [
+            JSON.stringify([
+              { queue: "default", type: "retention-reuse", payload: {}, ...request },
+            ]),
+          ]);
+        const start = await outcomeReads(client);
+        await enqueue({});
+        await enqueue({ idempotency: { key: "fresh", ttlMs: 3_600_000 } });
+        expect((await outcomeReads(client)) - start).toBe(0);
+        // The reuse of an expired key reads the outcome of the old task, so the count works.
+        await enqueue({ idempotency: { key: "retention-reuse-reads", ttlMs: 3_600_000 } });
+        expect((await outcomeReads(client)) - start).toBeGreaterThan(0);
+        await client.query("ROLLBACK");
+      } finally {
+        await client.query("ROLLBACK").catch(() => undefined);
+        client.release();
+      }
+      expect(await heldUntil(old)).toBeNull();
+    });
+
+    it("a cleanup batch that deletes a child saves its eligibility on the parent", async () => {
+      await useOneDayRowWindows();
+      const { parent, child } = await parentWithEligibleChild();
+      const before = await rowLag();
+      // Another transaction locks the parent, so the batch deletes only the child.
+      await whileLocked(lockTaskForUpdate, [parent], () => pruneTerminalBatch());
+      expect(await taskExists(child)).toBe(false);
+      expect(await taskExists(parent)).toBe(true);
+      expect(await heldUntil(parent)).not.toBeNull();
+      expectSameRowLag(before, await rowLag());
+    });
+
+    it("a cleanup batch keeps a child while another transaction holds the parent outcome", async () => {
+      await useOneDayRowWindows();
+      const { parent, child } = await parentWithEligibleChild();
+      // One holder locks the task of the parent, so only the child is a candidate, and the
+      // outcome of the parent, as a redrive does.
+      await whileLocked(
+        `SELECT 1 FROM workhorse.task task
+           JOIN workhorse.task_outcome outcome ON outcome.task_id = task.id
+          WHERE task.id = $1
+            FOR UPDATE OF task FOR SHARE OF outcome`,
+        [parent],
+        () => pruneTerminalBatch(),
+      );
+      expect(await taskExists(child)).toBe(true);
+      expect(await heldUntil(parent)).toBeNull();
+    });
+
+    it("a cleanup batch that deletes a dependent saves its finish on the prerequisite", async () => {
+      await useOneDayRowWindows();
+      const { prerequisite, dependent } = await prerequisiteWithFinishedDependent();
+      const before = await rowLag();
+      expectRowLagNear(before, 26 * hourMs);
+      // The batch runs alone, so the released-edge phase did not delete the edge first.
+      await pruneTerminalBatch();
+      expect(await taskExists(dependent)).toBe(false);
+      expect(await taskExists(prerequisite)).toBe(true);
+      expect(await heldUntil(prerequisite)).not.toBeNull();
+      expectSameRowLag(before, await rowLag());
+    });
+
+    it("a cleanup batch that deletes a target saves the end on the redrive source", async () => {
+      await useOneDayRowWindows();
+      const { source, target } = await agedRedriveSource(true);
+      // Another transaction locks the source, so the batch deletes only the target.
+      await whileLocked(lockTaskForUpdate, [source], () => pruneTerminalBatch());
+      expect(await taskExists(target)).toBe(false);
+      expect(await taskExists(source)).toBe(true);
+      expect(await heldUntil(source)).not.toBeNull();
+      // The hold ended when the target went, so the source is late from that instant.
+      expectRowLagNear(await rowLag(), 0);
+    });
+
+    it("the occurrence cleanup saves the end of the occurrence hold", async () => {
+      await useOneDayRowWindows();
+      const taskId = await taskWithExpiredOccurrence();
+      const before = await rowLag();
+      await pruneOccurrences();
+      expect(await occurrenceCount(taskId)).toBe(0);
+      expect(await heldUntil(taskId)).not.toBeNull();
+      expectSameRowLag(before, await rowLag());
+    });
+
+    it("the occurrence cleanup keeps an occurrence while another transaction holds the outcome", async () => {
+      await useOneDayRowWindows();
+      const taskId = await taskWithExpiredOccurrence();
+      await whileLocked(lockOutcomeForShare, [taskId], () => pruneOccurrences());
+      expect(await occurrenceCount(taskId)).toBe(1);
+      expect(await heldUntil(taskId)).toBeNull();
+    });
+
+    it("the deletion of a finished group saves its finish on the member that stays", async () => {
+      await useOneDayRowWindows();
+      const member = await insertTerminalTask("retention-held-member", 30 * 24);
+      const group = await finishedGroupOf(member);
+      const before = await rowLag();
+      expectRowLagNear(before, 26 * hourMs);
+      await pool.query(
+        "SELECT workhorse.maintain_task_groups_v1(clock_timestamp() - interval '24 hours', 10)",
+      );
+      expect(await groupExists(group)).toBe(false);
+      expect(await heldUntil(member)).not.toBeNull();
+      expectSameRowLag(before, await rowLag());
+    });
+
+    it("keeps a finished group while another transaction holds a member outcome", async () => {
+      await useOneDayRowWindows();
+      const member = await insertTerminalTask("retention-held-member", 30 * 24);
+      const group = await finishedGroupOf(member);
+      await whileLocked(lockOutcomeForShare, [member], () =>
+        pool.query(
+          "SELECT workhorse.maintain_task_groups_v1(clock_timestamp() - interval '24 hours', 10)",
+        ),
+      );
+      expect(await groupExists(group)).toBe(true);
+      expect(await heldUntil(member)).toBeNull();
+    });
+
+    it("a queue purge that deletes a pending target saves the end on the redrive source", async () => {
+      await useOneDayRowWindows();
+      const { source, target } = await agedRedriveSource(false);
+      const queueName = (
+        await pool.query<{ queue_name: string }>(
+          "SELECT queue_name FROM workhorse.task WHERE id = $1",
+          [target],
+        )
+      ).rows[0]!.queue_name;
+      await admin.purgeQueue(queueName, adminAudit("purge held target"));
+      expect(await taskExists(target)).toBe(false);
+      expect(await taskExists(source)).toBe(true);
+      expect(await heldUntil(source)).not.toBeNull();
+      expectRowLagNear(await rowLag(), 0);
+    });
+
+    it("a queue purge that deletes a pending dependent saves the end on the prerequisite", async () => {
+      await useOneDayRowWindows();
+      const prerequisite = await queue.enqueue("retention-purge-prerequisite", {});
+      const dependent = await queue.enqueue(
+        "retention-purge-dependent",
+        {},
+        { queue: "retention-purge-dependents", prerequisiteTaskId: prerequisite },
+      );
+      const task = await queue.claim("retention-purge-worker");
+      expect(task?.id).toBe(prerequisite);
+      expect(await queue.complete(task!, "retention-purge-worker", {})).toBe(true);
+      await ageTerminalTask(prerequisite);
+      await admin.purgeQueue("retention-purge-dependents", adminAudit("purge held dependent"));
+      expect(await taskExists(dependent)).toBe(false);
+      expect(await heldUntil(prerequisite)).not.toBeNull();
+      expectRowLagNear(await rowLag(), 0);
+    });
+
+    it("a queue purge that deletes a pending child saves the end on the parent", async () => {
+      await useOneDayRowWindows();
+      const parentId = await queue.enqueue("retention-purge-parent", {});
+      const parent = await queue.claim("retention-purge-worker");
+      expect(parent?.id).toBe(parentId);
+      await queue.createChild(
+        parent!,
+        "retention-purge-worker",
+        "child",
+        "retention-purge-child",
+        {},
+        {
+          queue: "retention-purge-children",
+        },
+      );
+      // A parent cannot complete while it has a pending child, so an operator cancels it.
+      await pool.query("SELECT workhorse.cancel_v1($1, NULL, 'retention test')", [parentId]);
+      expect(
+        (await pool.query("SELECT 1 FROM workhorse.task_outcome WHERE task_id = $1", [parentId]))
+          .rowCount,
+      ).toBe(1);
+      await ageTerminalTask(parentId);
+      await admin.purgeQueue("retention-purge-children", adminAudit("purge held child"));
+      expect(await heldUntil(parentId)).not.toBeNull();
+      expectRowLagNear(await rowLag(), 0);
+    });
+
+    it("a cleanup batch saves the end on a parent that it keeps for a locked grandparent", async () => {
+      // G is kept by its key and holds P, and P holds C. Another transaction locks the outcome of G,
+      // so the batch keeps P. It then deletes C and saves the end of that hold on P.
+      await useOneDayRowWindows();
+      const grandparent = await insertTerminalTask("retention-held-grandparent", 30 * 24);
+      await holdReferences["an enqueue key"](grandparent);
+      const parent = await insertTerminalTask("retention-held-parent", 30 * 24);
+      const child = await insertTerminalTask("retention-held-child", 27, 50);
+      for (const [from, to] of [
+        [grandparent, parent],
+        [parent, child],
+      ] as const) {
+        await pool.query(
+          `INSERT INTO workhorse.task_child(
+             parent_task_id, child_task_id, child_name, request_fingerprint
+           ) VALUES ($1, $2, $3, '{}'::jsonb)`,
+          [from, to, `child-${to}`],
+        );
+      }
+      const before = await rowLag();
+      await whileLocked(lockOutcomeForShare, [grandparent], () => pruneTerminalBatch());
+      expect(await taskExists(child)).toBe(false);
+      expect(await taskExists(parent)).toBe(true);
+      expect(await heldUntil(parent)).not.toBeNull();
+      expectSameRowLag(before, await rowLag());
+    });
+
+    it("a cleanup batch and a purge that each delete one target both keep the source end", async () => {
+      // The source has a finished target and a pending target. The batch deletes the first one
+      // and has not committed when a purge deletes the second one.
+      await useOneDayRowWindows();
+      const { source, target: finished } = await agedRedriveSource(true);
+      const pending = (await admin.redrive(source, adminAudit("second target"))).targetTaskId!;
+      const queueName = (
+        await pool.query<{ queue_name: string }>(
+          "SELECT queue_name FROM workhorse.task WHERE id = $1",
+          [pending],
+        )
+      ).rows[0]!.queue_name;
+      const cleaner = await pool.connect();
+      try {
+        await cleaner.query("BEGIN");
+        await cleaner.query(
+          `SELECT workhorse.prune_terminal_tasks_v1(
+                  clock_timestamp() - interval '24 hours', clock_timestamp() - interval '24 hours',
+                  clock_timestamp() - interval '24 hours', 10)`,
+        );
+        await admin.purgeQueue(queueName, adminAudit("purge second target"));
+        await cleaner.query("COMMIT");
+      } finally {
+        await cleaner.query("ROLLBACK").catch(() => undefined);
+        cleaner.release();
+      }
+      expect(await taskExists(finished)).toBe(false);
+      expect(await taskExists(pending)).toBe(false);
+      expect(await taskExists(source)).toBe(true);
+      expect(await heldUntil(source)).not.toBeNull();
+    });
+
+    it("a queue purge that deletes a pending fast-tier target saves the end on the source", async () => {
+      // The queue of a full-tier source moved to the fast tier, so its redrive target is fast.
+      await useOneDayRowWindows();
+      const source = await createFailedTask({
+        type: "retention-fast-source",
+        queueName: "retention-fast",
+      });
+      await pool.query(
+        "SELECT workhorse.set_queue_tier_v1('retention-fast', 'fast', 'operator', 'retention test')",
+      );
+      const target = (await admin.redrive(source, adminAudit("fast target"))).targetTaskId!;
+      expect(
+        (await pool.query("SELECT 1 FROM workhorse.fast_task_runtime WHERE task_id = $1", [target]))
+          .rowCount,
+      ).toBe(1);
+      await ageTerminalTask(source);
+      await admin.purgeQueue("retention-fast", adminAudit("purge fast target"));
+      expect(await taskExists(target)).toBe(false);
+      expect(await heldUntil(source)).not.toBeNull();
+      expectRowLagNear(await rowLag(), 0);
+    });
+  });
+
+  it("keeps the sweep position when a sweep batch fills its limit in a short slice", async () => {
+    // Three old tasks are eligible behind the main position. The next batch is a sweep batch, and
+    // its slice from the oldest row to the main position is short. It fills its limit of 1, so the
+    // sweep continues after the task that it deleted, not from the oldest row again.
+    const oldTasks = await passOldTasks(3);
+    await pool.query(
+      `UPDATE workhorse.terminal_prune_position
+          SET sweep_next = true, sweep_finished_at = NULL, sweep_task_id = NULL
+        WHERE tier = 'full'`,
+    );
+    expect(await pruneOneCall()).toBe(1);
+    expect(await taskExists(oldTasks[0]!)).toBe(false);
+    const position = await pool.query<{ sweep_task_id: string | null }>(
+      "SELECT sweep_task_id FROM workhorse.terminal_prune_position WHERE tier = 'full'",
+    );
+    expect(position.rows[0]!.sweep_task_id).toBe(oldTasks[0]);
+  });
+
+  it("deletes a redrive source in the batch that deletes its last target", async () => {
+    // A source stays while its target exists. When one call deleted the target and had room left,
+    // the source waited for a later pass, and health counted it as lag from its own windows then.
+    const source = await createFailedTask({ type: "redrive-same-batch-source" });
+    const target = (await admin.redrive(source, adminAudit("same batch"))).targetTaskId!;
+    const task = await queue.claim("redrive-same-batch-worker");
+    expect(task?.id).toBe(target);
+    expect(await queue.complete(task!, "redrive-same-batch-worker", { done: true })).toBe(true);
+    await pool.query("DELETE FROM workhorse.task_event WHERE task_id = ANY($1::uuid[])", [
+      [source, target],
+    ]);
+    await pool.query("DELETE FROM workhorse.attempt_history WHERE task_id = ANY($1::uuid[])", [
+      [source, target],
+    ]);
+    await pool.query(
+      `UPDATE workhorse.task SET created_at = clock_timestamp() - interval '41 days'
+        WHERE id = ANY($1::uuid[])`,
+      [[source, target]],
+    );
+    await pool.query(
+      `UPDATE workhorse.task_outcome
+          SET finished_at = clock_timestamp() - interval '40 days',
+              history_through_at = clock_timestamp() - interval '40 days'
+        WHERE task_id = ANY($1::uuid[])`,
+      [[source, target]],
+    );
+    // The fast tier goes first, so the full tier gets the whole limit in one call.
+    await pool.query(
+      `UPDATE workhorse.maintenance_state SET terminal_prune_fast_first = true
+        WHERE routine_name = 'terminal_storage'`,
+    );
+    const pruned = await pool.query<{ pruned: number }>(
+      `SELECT workhorse.prune_terminal_tasks_v1(
+              clock_timestamp() - interval '30 days', clock_timestamp() - interval '30 days',
+              clock_timestamp() - interval '30 days', 2) AS pruned`,
+    );
+    expect(pruned.rows[0]!.pruned).toBe(2);
+    expect(await taskExists(source)).toBe(false);
+    expect(await taskExists(target)).toBe(false);
+  });
+
+  it("deletes a redrive chain in one batch while the batch has room", async () => {
+    // A failed, an operator redrove it as B, B failed, and the operator redrove B as C. C
+    // succeeded. One batch with room deletes C, then B, then A.
+    const first = await createFailedTask({ type: "redrive-chain" });
+    const second = (await admin.redrive(first, adminAudit("chain 1"))).targetTaskId!;
+    const failing = await queue.claim("redrive-chain-worker");
+    expect(failing?.id).toBe(second);
+    expect(await queue.fail(failing!, "redrive-chain-worker", new Error("again"))).toBe("failed");
+    const third = (await admin.redrive(second, adminAudit("chain 2"))).targetTaskId!;
+    const last = await queue.claim("redrive-chain-worker");
+    expect(last?.id).toBe(third);
+    expect(await queue.complete(last!, "redrive-chain-worker", { done: true })).toBe(true);
+    const chain = [first, second, third];
+    await pool.query("DELETE FROM workhorse.task_event WHERE task_id = ANY($1::uuid[])", [chain]);
+    await pool.query("DELETE FROM workhorse.attempt_history WHERE task_id = ANY($1::uuid[])", [
+      chain,
+    ]);
+    await pool.query(
+      `UPDATE workhorse.task SET created_at = clock_timestamp() - interval '41 days'
+        WHERE id = ANY($1::uuid[])`,
+      [chain],
+    );
+    await pool.query(
+      `UPDATE workhorse.task_outcome
+          SET finished_at = clock_timestamp() - interval '40 days',
+              history_through_at = clock_timestamp() - interval '40 days'
+        WHERE task_id = ANY($1::uuid[])`,
+      [chain],
+    );
+    await pool.query(
+      `UPDATE workhorse.maintenance_state SET terminal_prune_fast_first = true
+        WHERE routine_name = 'terminal_storage'`,
+    );
+    const pruned = await pool.query<{ pruned: number }>(
+      `SELECT workhorse.prune_terminal_tasks_v1(
+              clock_timestamp() - interval '30 days', clock_timestamp() - interval '30 days',
+              clock_timestamp() - interval '30 days', 10) AS pruned`,
+    );
+    expect(pruned.rows[0]!.pruned).toBe(3);
+    for (const id of chain) expect(await taskExists(id)).toBe(false);
+  });
+
+  describe("row retention holds", () => {
+    // Health counts a row as lag only when cleanup can delete it, or when cleanup or history
+    // retention is late to remove the reference that keeps it (ADR 0122). Each case writes one
+    // row that passed its windows 19 days ago, gives it one reference, and then checks the row lag
+    // of health and the result of one cleanup pass. The lag counts from the end of a hold.
+    type Hold = (taskId: string) => Promise<void>;
+    const withHold = (hold: Hold) => async () => {
+      const taskId = await insertTerminalTask("retention-hold-subject", 20 * 24);
+      await hold(taskId);
+      return taskId;
+    };
+    // "released" is the lag from the history pass that released the row, which is later than the end
+    // of its row windows.
+    const cases: Array<[string, () => Promise<string>, number | "released" | null, boolean]> = [
+      ["no reference", withHold(async () => undefined), "released", true],
+      ["a redrive target that is live", redriveSource, null, false],
+      [
+        "a dependency edge to a live dependent",
+        withHold(holdReferences["a dependency edge to a live dependent"]),
+        null,
+        false,
+      ],
+      [
+        "a released dependency edge to a dependent that finished 4 hours ago",
+        withHold(async (taskId) => {
+          const dependent = await insertTerminalTask("retention-hold-dependent", 4);
+          await pool.query(
+            `INSERT INTO workhorse.task_dependency(
+               dependent_task_id, prerequisite_task_id, on_failure, on_cancellation, on_success,
+               created_at, released_at, resolution
+             ) VALUES ($1, $2, 'fail', 'cancel', 'release', clock_timestamp() - interval '5 hours',
+                       clock_timestamp() - interval '5 hours', 'release')`,
+            [dependent, taskId],
+          );
+        }),
+        4 * hourMs,
+        true,
+      ],
+      [
+        "a live child",
+        withHold(async (taskId) => {
+          const child = await queue.enqueue("retention-hold-child", {});
+          await pool.query(
+            `INSERT INTO workhorse.task_child(
+               parent_task_id, child_task_id, child_name, request_fingerprint
+             ) VALUES ($1, $2, 'child', '{}'::jsonb)`,
+            [taskId, child],
+          );
+        }),
+        null,
+        false,
+      ],
+      ["a child inside its windows", withHold(holdReferences["a young child"]), null, false],
+      [
+        "a child that passed its windows 5 hours ago",
+        withHold(async (taskId) => {
+          const child = await insertTerminalTask("retention-hold-child", 29, 72);
+          await pool.query(
+            `INSERT INTO workhorse.task_child(
+               parent_task_id, child_task_id, child_name, request_fingerprint
+             ) VALUES ($1, $2, 'child', '{}'::jsonb)`,
+            [taskId, child],
+          );
+        }),
+        5 * hourMs,
+        true,
+      ],
+      [
+        "a schedule occurrence inside its window",
+        withHold(holdReferences["a schedule occurrence"]),
+        null,
+        false,
+      ],
+      [
+        "a schedule occurrence that expired 3 hours ago",
+        withHold(async (taskId) => {
+          // The pass runs at the instant of the expiry, so the hold ends at the expiry.
+          await pool.query(
+            `UPDATE workhorse.maintenance_policy
+                SET history_retention_local_time =
+                      (date_trunc('second', clock_timestamp() - interval '3 hours')
+                        AT TIME ZONE 'UTC')::time`,
+          );
+          await addHealthSchedule();
+          await pool.query(
+            `INSERT INTO workhorse.schedule_occurrence(
+               namespace, schedule_name, occurrence_at, task_id
+             ) VALUES ('integration', 'retention-holds',
+                       date_trunc('second', clock_timestamp() - interval '3 hours')
+                         - interval '24 hours', $1)`,
+            [taskId],
+          );
+        }),
+        3 * hourMs,
+        false,
+      ],
+      [
+        "an enqueue key that has not expired",
+        withHold(holdReferences["an enqueue key"]),
+        null,
+        false,
+      ],
+      [
+        "an enqueue key that expired 2 hours ago",
+        withHold(async (taskId) => {
+          await pool.query(
+            `INSERT INTO workhorse.enqueue_idempotency(
+               idempotency_scope, idempotency_key_hash, request_fingerprint, task_id, expires_at
+             ) VALUES ('retention-holds', sha256(convert_to($1::text, 'UTF8')), '{}'::jsonb,
+                       $1::uuid, clock_timestamp() - interval '2 hours')`,
+            [taskId],
+          );
+        }),
+        2 * hourMs,
+        true,
+      ],
+      [
+        "a history row",
+        withHold(async (taskId) => {
+          await pool.query(
+            `INSERT INTO workhorse.task_event(task_id, event_type) VALUES ($1, 'retention-hold')`,
+            [taskId],
+          );
+        }),
+        "released",
+        false,
+      ],
+    ];
+
+    it.each(cases)("measures a row with %s", async (_name, subject, expectedLagMs, deleted) => {
+      await useOneDayRowWindows();
+      const taskId = await subject();
+
+      const lag = await rowLag();
+      const expected =
+        expectedLagMs === "released" ? await releasedRowLagMs(20 * 24) : expectedLagMs;
+      expectRowLag(lag, expected);
+      await queue.pruneTerminalStorage({ force: true });
+      expect(await taskExists(taskId)).toBe(!deleted);
+    });
+
+    it("counts a terminal row that still has a runtime row", async () => {
+      // A runtime row with an outcome breaks the state model, so health does not hide it.
+      await useOneDayRowWindows();
+      const taskId = await queue.enqueue("retention-hold-runtime", {});
+      await pool.query(
+        `UPDATE workhorse.task SET created_at = clock_timestamp() - interval '20 days'
+          WHERE id = $1`,
+        [taskId],
+      );
+      await pool.query(
+        `INSERT INTO workhorse.task_outcome(
+           task_id, state, current_attempt, fence_token, run_at, result, finished_at,
+           history_through_at
+         ) VALUES ($1, 'succeeded', 1, 1, clock_timestamp(), '{}'::jsonb,
+                   clock_timestamp() - interval '20 days', clock_timestamp() - interval '20 days')`,
+        [taskId],
+      );
+      await pool.query("DELETE FROM workhorse.task_event WHERE task_id = $1", [taskId]);
+
+      expectRowLagNear(await rowLag(), await releasedRowLagMs(20 * 24));
+      await queue.pruneTerminalStorage({ force: true });
+      expect(await taskExists(taskId)).toBe(true);
+    });
+  });
+
+  it("does not let a member that is not due hide an overdue member behind it", async () => {
+    // Member A is older, but its group finished one minute ago, so it is due one minute ago.
+    // Member B is younger, and its group finished five days ago. A walk that stops at the first
+    // member in age order reports one minute; the overdue member is B (SM-1990).
+    const workerId = "retention-health-worker";
+    const callback = {
+      type: "row-lag-behind-callback",
+      payload: {},
+      options: { queue: "callbacks" },
+    };
+    const oneMemberGroup = async (payload: number) => {
+      const { group, tasks } = await queue.taskGroup(
+        { onFinish: callback, onSuccess: callback, onFailure: callback },
+        (builder) =>
+          builder.add([
+            { type: "row-lag-behind-member", payload, options: { queue: "row-lag-behind" } },
+          ]),
+      );
+      return { groupId: group.id, taskId: tasks[0]!.taskId };
+    };
+    const memberA = await oneMemberGroup(1);
+    const memberB = await oneMemberGroup(2);
+    for (const task of await queue.claimMany(workerId, 10, { queue: "row-lag-behind" })) {
+      expect(await queue.complete(task, workerId, { done: true })).toBe(true);
+    }
+    await useOneDayRowWindows();
+    for (const [member, rowAge, groupAge] of [
+      [memberA, "30 days", "1 minute"],
+      [memberB, "20 days", "5 days"],
+    ] as const) {
+      await pool.query(
+        `UPDATE workhorse.task SET created_at = clock_timestamp() - $2::interval WHERE id = $1`,
+        [member.taskId, rowAge],
+      );
+      await pool.query(
+        `UPDATE workhorse.task_outcome
+            SET finished_at = clock_timestamp() - $2::interval,
+                history_through_at = clock_timestamp() - $2::interval
+          WHERE task_id = $1`,
+        [member.taskId, rowAge],
+      );
+      await pool.query(
+        `UPDATE workhorse.task_group SET finished_at = clock_timestamp() - $2::interval
+          WHERE id = $1 AND state = 'finished'`,
+        [member.groupId, groupAge],
+      );
+    }
+
+    expectRowLagNear(await rowLag(), 5 * dayMs);
+  });
+
+  it("measures a retention window as a fixed number of hours in every session TimeZone", async () => {
+    // A window of N days is N times 24 hours (ADR 0122). Choose N so that the window crosses one
+    // daylight-saving change in New York. A calendar step of N days in a New York session is then
+    // one hour longer or shorter than in a UTC session.
+    const { rows } = await pool.query<{ days: number }>(
+      `WITH clock AS (SELECT clock_timestamp() AS now)
+       SELECT min(days)::integer AS days
+         FROM clock CROSS JOIN generate_series(1, 400) days
+        WHERE (clock.now AT TIME ZONE 'America/New_York')
+              - ((clock.now - make_interval(hours => 24 * days)) AT TIME ZONE 'America/New_York')
+              <> make_interval(hours => 24 * days)`,
+    );
+    const days = rows[0]!.days;
+    await queue.syncRetentionPolicy({
+      ...defaultRetentionPolicy,
+      taskIdentityRetentionDays: days,
+      terminalOutcomeRetentionDays: days,
+      // Short history windows put the history pass that releases the row long before its window.
+      taskEventRetentionDays: 1,
+      attemptHistoryRetentionDays: 1,
+      scheduleOccurrenceRetentionDays: 1,
+    });
+    await pool.query(
+      `UPDATE workhorse.maintenance_state
+          SET history_retained_before = clock_timestamp()
+        WHERE routine_name = 'history_retention'`,
+    );
+    await insertTerminalTask("fixed-window", (days + 3) * 24);
+    const health = async (timeZone: string) => {
+      const client = await pool.connect();
+      try {
+        await client.query(`SET TIME ZONE '${timeZone}'`);
+        return await new Queue(client).health();
+      } finally {
+        await client.query("RESET TIME ZONE");
+        client.release();
+      }
+    };
+    const utc = await health("UTC");
+    const newYork = await health("America/New_York");
+    expect(utc.retentionLagMs.taskIdentity).toBeGreaterThan(0);
+    expect(newYork.retentionLagMs.taskIdentity).toBeCloseTo(utc.retentionLagMs.taskIdentity!, -4);
+    expect(newYork.retentionLagMs.terminalOutcome).toBeCloseTo(
+      utc.retentionLagMs.terminalOutcome!,
+      -4,
+    );
+  });
+
+  it("writes no retention window as a calendar step of days in the tracked schema", async () => {
+    // make_interval(days => n) steps calendar days in the session TimeZone. Each retention window
+    // in the schema is a fixed number of hours instead (ADR 0122).
+    const schema = await readFile(
+      new URL("../../../sql/schema/current.sql", import.meta.url),
+      "utf8",
+    );
+    expect(schema).not.toMatch(/make_interval\(\s*days\s*=>/);
   });
 
   describe("schedule-run retention health", () => {

@@ -485,7 +485,13 @@ and `prerequisite_task_id`. It then locks them with `FOR UPDATE SKIP LOCKED`.
 `task_dependency_released_retention_idx` supports that bounded selection.
 
 Removing the edge lets the prerequisite and dependent follow their own identity windows. Retained
-dependency lineage is not a separate retention category.
+dependency lineage is not a separate retention category. In the statement that deletes the edges,
+the function writes the latest finish of their dependents to `task_outcome.held_until` of each
+prerequisite, when `terminal_hold_end_internal_v1` gives that finish for one lag of the
+prerequisite. It takes the outcome with `FOR NO KEY UPDATE SKIP LOCKED`, so it never waits. If
+another transaction holds the outcome, the edges of that prerequisite stay for a later pass. Queue
+health then counts the prerequisite from that instant after the edge is gone
+([ADR 0122](../decisions/0122-give-cleanup-and-health-one-retention-rule.md)).
 
 #### Declaring dependencies at enqueue
 
@@ -951,9 +957,10 @@ existing task instead of a new one.
 - retained `DependencyFailed` outcomes
 - `retentionPruneStarved`
 
-`retentionPruneStarved` records that the latest terminal prune deleted no identities while its
-bounded candidate window contained a prerequisite protected by a dependency edge. A later successful
-prune or a zero-deletion pass without dependency pins clears it.
+`retentionPruneStarved` records that the latest terminal prune deleted no identities while a
+dependency edge kept a prerequisite among the identities past each cutoff that its batch examined.
+An identity inside a window does not count. A later
+successful prune or a zero-deletion pass without dependency pins clears it.
 
 The three counts scan at most 10,001 matching rows and return at most 10,000. They set `capped` when
 any value is a lower bound.
@@ -1518,6 +1525,12 @@ cancellation deletes runtime and inserts the outcome in one transaction.
   outcome.
 - Never-started cancellation uses fence zero and has no attempt row. Started cancellation retains
   ownership provenance.
+- The retention-only `held_until` column is null until a statement removes a reference that held
+  the task after the row window of one lag: an enqueue key, a schedule occurrence, a dependency edge,
+  a child edge, a redrive edge, or a task group membership. That statement writes the end of the
+  hold through `save_terminal_hold_ends_internal_v1`, and queue health counts that lag as due from
+  it. `terminal_hold_end_internal_v1` states the rule for both. ADR 0122 lists each such statement. A reference that went before migration 0097 left no value. `fast_task_outcome` has no such
+  column ([ADR 0122](../decisions/0122-give-cleanup-and-health-one-retention-rule.md)).
 
 #### Dispatch and retention
 
@@ -1644,8 +1657,18 @@ The source foreign key protects lineage. Terminal identity pruning skips any sou
 descendant edge. It skips the source before it bounds the candidate window. Retained sources
 therefore never prevent a pass from reaching younger eligible tasks.
 
-Target deletion cascades its inbound edge. Ancestors can then become eligible later under the normal
-retention windows.
+Target deletion cascades its inbound edge. When a batch deletes the last target of a source and has
+room left, it locks the source, checks it again, and deletes it in the same batch. It continues
+down a redrive chain in the same way until the room ends or no source is left. Otherwise the next
+batch or pass deletes it under the normal retention windows.
+
+Terminal identity pruning skips each other kept identity in the same way: a member of an unfinished
+task group, an identity that a `schedule_occurrence`, an `enqueue_idempotency` row, or a
+`task_dependency` edge as prerequisite references, and a parent of a child that is not yet
+eligible.
+A kept identity therefore never stops the deletion of other identities. Queue health skips the
+identities that a hold keeps on purpose, and it counts the others as late cleanup
+([ADR 0122](../decisions/0122-give-cleanup-and-health-one-retention-rule.md)).
 
 `Admin.getRedriveLineage` traverses the retained connected graph with an explicit bound and
 truncation flag. The bound is 1 through 1,000 records and defaults to 1,000.
@@ -2251,7 +2274,10 @@ Its effective typed columns contain explicit nullable minimum windows for these 
 - schedule occurrences
 - statistics
 
-Each window is null or an integer from 1 through 36,500 days.
+Each window is null or an integer from 1 through 36,500 days. A window of N days is N times 24
+hours. No cutoff uses `make_interval(days => N)`, which steps calendar days in the session
+TimeZone, so a cutoff does not depend on the session
+([ADR 0122](../decisions/0122-give-cleanup-and-health-one-retention-rule.md)).
 
 The row also holds five bounded work limits:
 
@@ -3819,9 +3845,28 @@ Maintenance state stores `last_started_at` and `last_completed_at` for `tick`, `
 `history_retention`, and `terminal_storage`. It also stores the history-retention watermark.
 
 `maintenance_state.terminal_prune_dependency_starved` records whether the last
-`prune_terminal_tasks_v1` call deleted nothing from its exact locked candidate window while that
-window contained a prerequisite protected by a dependency edge. A call that gave the full tier no
-share leaves the flag unchanged.
+`prune_terminal_tasks_v1` call deleted nothing while a dependency edge kept a prerequisite among the
+identities past each cutoff that its full-tier batch examined. The probe skips identities that
+another transaction locks. A call that gave the full tier no share leaves the flag unchanged.
+
+`terminal_prune_position` holds one row for each terminal cleanup tier, `full` or `fast`. Its
+`finished_at` and `task_id` are the main position: the next batch of the main walk continues after
+it. `quiet_finished_at` and `quiet_task_id` mark where the current run of batches that deleted
+nothing began. When such a batch comes round to that point again, it removes the main position. A
+null main position means the oldest row past the cutoffs. `sweep_finished_at` and `sweep_task_id`
+are the position of the sweep walk, and `sweep_next` makes the next batch of the tier use it.
+
+A batch reads one slice of `task_outcome_retention_idx` or `fast_task_outcome_retention_idx`:
+`terminal_prune_slice_rows_internal_v1(p_limit)` rows, four times the limit, at least 1,000 and at
+most 100,000. The main walk reads after the main position. If fewer rows follow, the slice continues
+from the oldest row up to the position. A batch of the main walk that locks its limit stores its
+last locked row, and one that examines a whole slice stores the end of the slice. One whose slice
+held every row past the cutoffs removes both positions. While a main position exists, every second
+batch of the tier uses the sweep walk instead. The sweep walk reads after the sweep position and
+stops at the main position. When it reaches the main position, it starts again from the oldest
+row. `prune_terminal_tasks_v1` holds the `terminal_storage` row of `maintenance_state` for
+update, so one batch at a time writes the table. A test reset truncates it, which restores the
+start ([ADR 0122](../decisions/0122-give-cleanup-and-health-one-retention-rule.md)).
 
 Two more columns belong to `terminal_storage` alone:
 
