@@ -113,19 +113,29 @@ describes.
    `@stablemates/workhorse-dashboard-contract` precedes `@stablemates/workhorse`, and the dashboard
    server precedes the dashboard facade.
    [ADR 0085](decisions/0085-publish-npm-packages-in-dependency-order.md) records this order. Every
-   package's provenance is verified. The same run then publishes the Rust crate and the Ruby gem,
-   and uploads the three JVM artifacts to Maven Central. Each of these versions is verified on its
-   registry before the train continues. The same run also pushes the four .NET packages to
-   nuget.org. The run creates the public GitHub release last, after the `crates-io`, `rubygems`,
-   `maven-central`, and `nuget` jobs succeed. The release attaches `sql/schema.sql`, the
+   package's provenance is verified. When the npm `publish` job ends, the `crates-io`, `rubygems`,
+   `maven-central`, and `nuget` jobs of the same run start in parallel. `crates-io` publishes the
+   Rust crate, and `rubygems` publishes the Ruby gem. `maven-central` uploads the three JVM
+   artifacts, and `nuget` pushes the four .NET packages to nuget.org. Each of the four needs only
+   `publish`, so a failure in one of them does not stop the other three. Each of these versions is verified on its registry before the train continues.
+   The run creates the public GitHub release last. The `github-release` job waits for the `crates-io`,
+   `rubygems`, `maven-central`, and `nuget` jobs, and it runs only if each of them succeeds. The release attaches `sql/schema.sql`, the
    clean-install schema of the version.
 4. Publish Go last. The `go/vX.Y.Z` tag is pushed after the gate passes, and the version is
    verified through the public module proxy.
 
 Each verification checks registry visibility, provenance or the module checksum, and installation
 of the exact public version in a clean environment. It then runs a minimal enqueue-and-worker smoke
-test against a fresh PostgreSQL database. Any failure stops the release train: the defect is filed,
-the remaining stages stay blocked, and the fix ships as a new candidate.
+test against a fresh PostgreSQL database. Any failure stops the release train before its next stage:
+the defect is filed, the remaining stages stay blocked, and the fix ships as a new candidate.
+
+Inside stage 3, a failure does not stop a registry upload that already started. The checks of the
+`build` job are the last gate that the `crates-io`, `rubygems`, `maven-central`, and `nuget` jobs
+share. The `maven-central` and `nuget` jobs also check their own packages before the upload. But
+after `publish` ends, a failure in one of the four does not stop the other three. Thus one
+version can reach some of the four registries and not the others. Maven Central and nuget.org never
+delete a published version, so that version stays on them. The GitHub release and the Go stage do
+not run.
 
 The release check stops a candidate that leaves one line behind. In `release.yml`, if the version
 of the crate, the gem, the JVM artifacts, or the .NET packages differs from the tag, they skip

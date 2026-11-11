@@ -375,6 +375,25 @@ that reaches a session-pooled PgBouncer or PostgreSQL directly to restore hints.
 session grant or `SET` lands on a pooled backend that outlives the client that created it, so a
 transaction-mode pool must never serve a code path that leaves session state behind.
 
+The table above is the result of the TypeScript CI lanes only. No CI lane runs a pooler with another
+SDK. In transaction mode, each other SDK works on one condition: its driver sends no named prepared
+statement, or the pooler keeps the prepared statements of each client across its transactions. The
+SDK source and the driver documentation give the condition for each SDK:
+
+| SDK             | Condition for transaction mode                                                                                   |
+| --------------- | ---------------------------------------------------------------------------------------------------------------- |
+| TypeScript      | None. node-postgres sends the unnamed statement. The CI lanes run this case.                                     |
+| Python, psycopg | Set `prepare_threshold=None` on each connection of the pool, or the pooler keeps prepared statements.            |
+| Python, asyncpg | Set `statement_cache_size=0` on the pool, or the pooler keeps prepared statements.                               |
+| Go              | The pooler keeps prepared statements. The heartbeat connection prepares named statements in every pgx exec mode. |
+| Rust            | The pooler keeps prepared statements. tokio-postgres and the SQLx transport send named statements.               |
+| Ruby            | None. The pg calls of the SDK send the unnamed statement.                                                        |
+| JVM             | Set the PgJDBC property `prepareThreshold=0`, or the pooler keeps prepared statements.                           |
+| .NET            | Keep the Npgsql setting `Max Auto Prepare` at its default of 0, or the pooler keeps prepared statements.         |
+
+[Overview: Prepared statements](architecture/overview.md#prepared-statements) gives the driver
+behavior behind each condition.
+
 Connection budget: the workers on one pool share one listener connection and one heartbeat
 connection, for any number of `Queue` or `Worker` objects. A worker pool thus needs at least 3
 connections: the listener, the heartbeat, and one claim. Behind a pooler that cannot deliver

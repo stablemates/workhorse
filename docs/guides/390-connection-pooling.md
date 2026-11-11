@@ -6,9 +6,10 @@ A connection pooler is a proxy between your app and PostgreSQL. It lets many cli
 number of server sessions. A server session is one PostgreSQL connection with its own state.
 PgBouncer and PgCat are connection poolers.
 
-You can run Workhorse behind a connection pooler. Every queue operation works in session mode and
-in transaction mode. In session mode, the pooler gives a client one server session until the client
-disconnects. In transaction mode, the pooler gives a client a server session for one transaction
+You can run Workhorse behind a connection pooler. Every queue operation works in session mode. It
+also works in transaction mode, if the database driver of your SDK permits it, as the
+[driver check](#check-the-driver-of-your-sdk-for-transaction-mode) explains. In session mode, the
+pooler gives a client one server session until the client disconnects. In transaction mode, the pooler gives a client a server session for one transaction
 only. Only the wake-hint listener needs a dedicated session. If the listener gets no notifications,
 tasks start later, but they still run, because the worker also polls.
 
@@ -35,17 +36,19 @@ A transaction that your app owns commits or rolls back the queue writes as usual
 
 Session state is state that stays on a server session after a transaction. Examples are a `LISTEN`,
 a session-level advisory lock, and a `SET`. In transaction mode, session state stops working, or
-the next client of that server session gets it. Workhorse needs no session state for correct
-results.
+the next client of that server session gets it. Workhorse sets no session state of its own. A
+named prepared statement of a driver is also session state, and the
+[driver check](#check-the-driver-of-your-sdk-for-transaction-mode) explains when one is sent.
 
-The conformance suite runs each pooler and pool mode as a separate lane in CI. The reference table
-shows the result of these runs.
+The conformance suite runs each pooler and pool mode as a separate lane in CI, with the TypeScript
+SDK. The reference table shows the result of these runs.
 
 <details>
 <summary>Reference: operations under each pooler</summary>
 
 `typescript/core/test/integration-pooling.test.ts` runs each case as a separate lane: direct, then
-PgBouncer and PgCat, each with `pool_mode = session` and `pool_mode = transaction`.
+PgBouncer and PgCat, each with `pool_mode = session` and `pool_mode = transaction`. These CI lanes
+run the TypeScript SDK only.
 
 | Operation                                              | Direct | PgBouncer session | PgBouncer transaction         | PgCat session                 | PgCat transaction             |
 | ------------------------------------------------------ | ------ | ----------------- | ----------------------------- | ----------------------------- | ----------------------------- |
@@ -71,6 +74,47 @@ or `pg_advisory_xact_lock_shared`. That includes the schema-migration lock.
   `SET LOCAL lock_timeout`.
 
 More detail: [Overview: Connection poolers](../architecture/overview.md#connection-poolers).
+
+</details>
+
+## Check the driver of your SDK for transaction mode
+
+A database driver can keep a parsed statement on a server session under a name. This is a named
+prepared statement. In transaction mode, the next transaction of a client can run on another server
+session, which does not have that name. The statement then fails, and its transaction rolls back.
+
+**Example.** A Go worker `w1` reaches PostgreSQL through PgCat in transaction mode.
+
+1. The heartbeat connection of `w1` prepares the heartbeat statement under a name, on server
+   session A.
+2. The next heartbeat round runs on server session B.
+3. Session B does not have the name, so PostgreSQL refuses the statement, and the round fails.
+
+In transaction mode, the driver must send no named prepared statement, or the pooler must keep the
+prepared statements of each client across its transactions. The TypeScript and Ruby SDKs send no
+named statement. For Python, the JVM, and .NET, a driver setting stops the named statements. For Go
+and Rust, the pooler must keep prepared statements. Only the TypeScript CI lanes run a pooler. Thus
+the conditions for the other SDKs come from their source and the driver documentation, not from a
+test.
+
+<details>
+<summary>Reference: driver conditions in transaction mode</summary>
+
+| SDK             | Driver                              | Condition for transaction mode                                                                               |
+| --------------- | ----------------------------------- | ------------------------------------------------------------------------------------------------------------ |
+| TypeScript      | node-postgres                       | None. node-postgres sends the unnamed statement. The CI lanes run this case.                                 |
+| Python, psycopg | psycopg 3                           | Set `prepare_threshold=None` on each connection of the pool, or the pooler keeps prepared statements.        |
+| Python, asyncpg | asyncpg                             | Set `statement_cache_size=0` on the pool, or the pooler keeps prepared statements.                           |
+| Go              | pgx v5                              | The pooler keeps prepared statements. The heartbeat connection prepares named statements in every exec mode. |
+| Rust            | tokio-postgres, and SQLx for `sqlx` | The pooler keeps prepared statements. No setting of the application stops the named statements.              |
+| Ruby            | pg                                  | None. `exec_params` and `send_query_params` send the unnamed statement.                                      |
+| JVM             | PgJDBC                              | Set `prepareThreshold=0` on the connection, or the pooler keeps prepared statements.                         |
+| .NET            | Npgsql                              | Keep `Max Auto Prepare` at its default of 0, or the pooler keeps prepared statements.                        |
+
+If a statement name does not exist on the server session, PostgreSQL refuses the statement, for
+example with SQLSTATE `26000`.
+
+More detail: [Overview: Prepared statements](../architecture/overview.md#prepared-statements).
 
 </details>
 
@@ -293,7 +337,9 @@ While the heartbeat has no connection, no worker on the pool claims a new task. 
 continue. A fast-tier completion settles its task and claims nothing. The heartbeat asks the pool
 for a new connection at once. When the new connection is ready, the workers claim again at once.
 
-The heartbeat connection runs only self-contained statements, so it works in every pool mode.
+The heartbeat connection sets no lock or setting that continues after its transaction. In
+transaction mode, it has the same
+[driver condition](#check-the-driver-of-your-sdk-for-transaction-mode) as the other statements.
 
 On the JVM, the worker trusts the declared `poolMaxSize`. If you make the pool smaller than the
 declared size, the startup check can still pass, and claims can then wait for a free connection.

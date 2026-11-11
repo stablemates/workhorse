@@ -80,7 +80,7 @@ operator resumes it. Deployment synchronization does not clear it.
 _Avoid_: Schedule disable, operator disable
 
 **Protocol**:
-The versioned schema and SQL functions inside PostgreSQL that every Workhorse SDK calls, so seven
+The versioned schema and SQL functions inside PostgreSQL that every Workhorse SDK calls, so eight
 languages share one behaviour.
 _Avoid_: Durable execution protocol, wire protocol
 

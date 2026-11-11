@@ -467,6 +467,74 @@ More detail: [Task lifecycle: Schedule run retention lag](../architecture/lifecy
 
 </details>
 
+## Clear past-day rows from the default partitions
+
+A default partition catches history rows when no daily partition exists for them. Partition
+preparation creates the current UTC day and the days after it. It never creates a past day. Thus,
+after a gap in preparation, the rows of the past days stay in the default partitions.
+
+**Example.** No worker runs maintenance for ten days. Before the gap, preparation created the
+partitions of the next few days only.
+
+1. After those days, the events and attempts of each day go to the default partitions.
+2. The workers start again. Preparation creates the current day and the days after it. The rows of
+   the past days stay in the default partitions, and queue health reports them.
+3. When the window of those rows ends, the history pass deletes a limited number of them. Expired
+   rows remain, so the pass is incomplete, and the next maintenance pass deletes more.
+4. When no expired row remains, the history pass completes.
+
+Usually, you can let retention delete these rows. Each pass deletes a limited number of them, and
+the pass repeats until no expired row remains. For a shorter drain, raise the row limit of the
+default partitions.
+
+You can also move the rows of one past day into a daily partition now. Do this only in a maintenance
+window. While the move copies the rows, it holds an exclusive lock on both history tables. Each
+claim, completion, and enqueue that writes history waits until the move commits. Thus the queue
+stops for the time of the copy, and a day with many rows stops it for longer.
+
+<details>
+<summary>Reference: past-day rows in the default partitions</summary>
+
+**What stays.** `prepare_history_partitions_v1` creates days from the current UTC day to the end of
+its horizon, and never a past day. A row of a past day stays in `task_event_default` or
+`attempt_history_default`. Queue health reports the degraded reason `default-history-rows`.
+
+**Drain by retention.**
+
+- `retain_history_v1` deletes expired rows through `prune_default_history_v1`, at most
+  `default_partition_rows_per_pass` rows of each parent in each pass. The default is 10,000, and
+  the accepted values are 1 to 1,000,000.
+- A pass that leaves an expired row in a default partition is `incomplete`. It does not set
+  `maintenance_state.last_completed_local_date`, so the routine stays due on that local date.
+- Thus each later `run_maintenance_v1` call after `history_retention_local_time` deletes up to
+  `default_partition_rows_per_pass` more rows of each parent. Each worker offers that call at its
+  maintenance routine interval.
+- The rollup and cold export interlocks also hold the cutoff of these rows.
+
+**Move by partition creation.** `create_history_day_v1(p_day date)` moves the rows of one UTC day:
+
+- It takes `ACCESS EXCLUSIVE` on the `attempt_history` and `task_event` parents and on both default
+  partitions. It holds the locks for the full copy, until the transaction commits.
+- It copies the rows of the day to a temporary table, deletes them from the default partition,
+  creates the day partition, and inserts the rows. The time grows with the rows of the day.
+- If both partitions of the day exist, it changes nothing.
+- Workhorse sets no `lock_timeout` for a direct call. With the default `lock_timeout` of 0, the
+  call waits for each lock without a limit. While it waits, the history writes that arrive after it
+  wait behind it.
+- `create_history_day_v1` is an internal helper in `protocol/v1/governed-surface.json`, not a
+  governed function. A release can change it.
+
+**Procedure.** In a maintenance window, for each past day:
+
+1. Start a transaction.
+2. Run `SET LOCAL lock_timeout = '250ms'`.
+3. Run `SELECT workhorse.create_history_day_v1(date 'YYYY-MM-DD')`.
+4. Commit. If the call fails with `55P03` or `40P01`, run the transaction again.
+
+More detail: [Task lifecycle: Background routines](../architecture/lifecycle.md#background-routines), [Data model: Partition DDL locks](../architecture/data-model.md#partition-ddl-locks), [Data model: Partition DDL lock order](../architecture/data-model.md#partition-ddl-lock-order), [Data model: Retention](../architecture/data-model.md#retention-2), and [Data model: `retention_policy`](../architecture/data-model.md#retention_policy).
+
+</details>
+
 ## Do not delete tasks yourself
 
 The cleanup routines apply the rules on this page. Raw SQL ignores these rules.

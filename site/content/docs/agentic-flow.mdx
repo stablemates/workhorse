@@ -149,7 +149,7 @@ handler runs again:
 
 | Call                                               | SQL function                        | On replay                                                          |
 | -------------------------------------------------- | ----------------------------------- | ------------------------------------------------------------------ |
-| `HandlerContext.checkpoint(name, fn)`              | `save_checkpoint_v1`                | Returns the stored value without running `fn`.                     |
+| `HandlerContext.checkpoint(name, fn)`              | `save_checkpoint_v2`                | Returns the stored value without running `fn`.                     |
 | `HandlerContext.runChildrenAll(set)`               | `create_children_v1`, `all_success` | Returns the stored results. A changed set conflicts.               |
 | `HandlerContext.runChildren(set)`                  | `create_children_v1`, `settled`     | Returns one outcome per child.                                     |
 | `HandlerContext.sleep(name, ms)`                   | `schedule_wait_v1`                  | Returns the first stored wake target, even if `ms` changed.        |

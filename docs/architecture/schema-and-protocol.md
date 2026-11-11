@@ -2071,7 +2071,7 @@ The handler context gives a Go handler its checkpoint, progress, timer, and chil
 #### Checkpoints
 
 `HandlerContext.Checkpoint(name, operation)` reads the exact `task_checkpoint` row before it runs
-`operation`. It coalesces same-name calls within one activation. It calls `save_checkpoint_v1` under
+`operation`. It coalesces same-name calls within one activation. It calls `save_checkpoint_v2` under
 the active worker and fence.
 
 - Names contain 1 through 200 Unicode code points.
@@ -2338,7 +2338,7 @@ Ruby `HandlerContext` in `ruby/lib/stablemates/workhorse/context.rb` also holds 
 | Call                                                                            | Behavior                                                                                                                          |
 | ------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
 | `get_checkpoint(name)`                                                          | Returns the stored `TaskCheckpoint`, or `nil` when none exists.                                                                   |
-| `checkpoint(name) { ... }`                                                      | Returns the stored value, or runs the block once and saves its result through `save_checkpoint_v1`.                               |
+| `checkpoint(name) { ... }`                                                      | Returns the stored value, or runs the block once and saves its result through `save_checkpoint_v2`.                               |
 | `set_progress(value)`                                                           | Calls `update_progress_v1` and returns the stored `TaskProgress`.                                                                 |
 | `get_progress`                                                                  | Returns the latest `TaskProgress`, or `nil` before any report.                                                                    |
 | `sleep(name, seconds)`                                                          | Accepts 1 millisecond through 365 days. Calls `schedule_wait_v1`.                                                                 |
