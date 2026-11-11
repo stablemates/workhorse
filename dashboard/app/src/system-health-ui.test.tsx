@@ -114,8 +114,8 @@ function renderChecks(reasons: QueueHealthReason[]): string {
 describe("individual system health checks", () => {
   it("shows every check when none needs attention", () => {
     const html = renderChecks([]);
-    expect(html.match(/<li\b/g)).toHaveLength(14);
-    expect(html.match(/>Passing<\/span>/g)).toHaveLength(14);
+    expect(html.match(/<li\b/g)).toHaveLength(16);
+    expect(html.match(/>Passing<\/span>/g)).toHaveLength(16);
     expect(html).toContain("Worker leases");
     expect(html).toContain("Retention cleanup");
     expect(html).toContain("Rate limits");
@@ -132,10 +132,36 @@ describe("individual system health checks", () => {
         budget: 21_600_000,
       },
     ]);
-    expect(html.match(/<li\b/g)).toHaveLength(14);
+    expect(html.match(/<li\b/g)).toHaveLength(16);
     expect(html.match(/>Degraded<\/span>/g)).toHaveLength(1);
     expect(html).toContain("Terminal cleanup pace");
     expect(html).toContain("Terminal cleanup is not keeping pace");
+  });
+
+  it("shows a maintenance routine that fails on each run as a degraded check", () => {
+    const html = renderChecks([
+      {
+        code: "maintenance-failing",
+        severity: "degraded",
+        observed: 3,
+        budget: 2,
+        routine: "terminal_storage",
+      },
+    ]);
+    expect(html.match(/<li\b/g)).toHaveLength(16);
+    expect(html.match(/>Degraded<\/span>/g)).toHaveLength(1);
+    expect(html).toContain("Maintenance routines");
+    expect(html).toContain("Maintenance routine terminal cleanup failed its last 3 runs");
+  });
+
+  it("shows a schedule that failed in the last schedule pass as a degraded check", () => {
+    const html = renderChecks([
+      { code: "schedule-failing", severity: "degraded", observed: 1, budget: 0 },
+    ]);
+    expect(html.match(/>Degraded<\/span>/g)).toHaveLength(1);
+    expect(html).toContain("Schedule passes");
+    expect(html).toContain("1 schedule failed in the last schedule pass");
+    expect(html).toContain("https://workhorse.run/docs/schedules");
   });
 
   it("shows all failures first with separate severities and resolution links", () => {
@@ -152,7 +178,7 @@ describe("individual system health checks", () => {
       { code: "overdue-execution-timeouts", severity: "critical", observed: 3, budget: 0 },
       { code: "missing-history-partitions", severity: "critical", observed: 4, budget: 0 },
     ]);
-    expect(html.match(/<li\b/g)).toHaveLength(14);
+    expect(html.match(/<li\b/g)).toHaveLength(16);
     expect(html.match(/>Critical<\/span>/g)).toHaveLength(4);
     expect(html.match(/>Degraded<\/span>/g)).toHaveLength(1);
     expect(html).toContain("Tasks are past their deadlines");

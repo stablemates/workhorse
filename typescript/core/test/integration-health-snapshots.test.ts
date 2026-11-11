@@ -8,6 +8,7 @@ import {
   MeterProvider,
   PeriodicExportingMetricReader,
 } from "@opentelemetry/sdk-metrics";
+import type { PoolClient } from "pg";
 import { describe, expect, it } from "vitest";
 import { WorkhorseMetricsObserver } from "../src/index.js";
 import { EXTERNAL_WAIT_REJECTION_WINDOW_MS } from "../src/types.js";
@@ -20,7 +21,291 @@ const { defaultRetentionPolicy, pool, queue, admin, adminAudit } = createIntegra
   import.meta.url,
 );
 
+const retentionIndexes = [
+  "task_created_retention_idx",
+  "task_outcome_retention_idx",
+  "fast_task_outcome_retention_idx",
+];
+
+interface PlanNode {
+  "Node Type": string;
+  "Index Name"?: string;
+  "Index Cond"?: string;
+  Filter?: string;
+  "Actual Rows"?: number;
+  "Actual Loops"?: number;
+  "Rows Removed by Filter"?: number;
+  Plans?: PlanNode[];
+}
+const planNodes = (node: PlanNode): PlanNode[] => [
+  node,
+  ...(node.Plans ?? []).flatMap((child) => planNodes(child)),
+];
+
+// Writes count terminal tasks of each shape that a retention walk must not read: rows inside
+// their windows, rows past their windows whose history a held watermark keeps, and members of
+// a finished task group inside their windows. With released, it also writes count eligible
+// rows that one history pass releases together. The walk reads the first of them and stops,
+// because no later row can be due earlier.
+const seed = async (count: number, released = false) => {
+  await pool.query(
+    `WITH task AS (
+       INSERT INTO workhorse.task(queue_name, task_type, payload, max_attempts, created_at)
+       SELECT 'retention-plan', shape, '{}'::jsonb, 1,
+              clock_timestamp() - CASE shape WHEN 'behind' THEN interval '20 days'
+                                             WHEN 'released' THEN interval '40 days'
+                                             ELSE interval '2 days' END
+                - make_interval(secs => position)
+         FROM generate_series(1, $1::integer) position
+         CROSS JOIN unnest(
+           CASE WHEN $2::boolean THEN ARRAY['released']
+                ELSE ARRAY['young', 'behind', 'member'] END
+         ) shape
+       RETURNING id, task_type, created_at
+     ), outcome AS (
+       INSERT INTO workhorse.task_outcome(
+         task_id, state, current_attempt, fence_token, run_at, result, finished_at,
+         history_through_at
+       )
+       SELECT id, 'succeeded', 1, 1, created_at, '{}'::jsonb, created_at, created_at
+         FROM task
+     ), member_group AS (
+       INSERT INTO workhorse.task_group(
+         state, result, total_count, succeeded_count, sealed_at, finished_at, shard_count
+       ) VALUES ('finished', 'succeeded', $1::integer, $1::integer,
+                 clock_timestamp() - interval '1 day', clock_timestamp() - interval '1 day', 1)
+       RETURNING id
+     )
+     INSERT INTO workhorse.task_group_member(task_id, group_id, position, outcome, counted_at)
+     SELECT task.id, member_group.id, row_number() OVER (ORDER BY task.id), 'succeeded',
+            clock_timestamp()
+       FROM task CROSS JOIN member_group
+      WHERE task.task_type = 'member'`,
+    [count, released],
+  );
+  // The watermark stopped 30 days back, so the rows past their windows keep their history.
+  await pool.query(
+    `UPDATE workhorse.maintenance_state
+        SET history_retained_before = clock_timestamp() - interval '30 days'
+      WHERE routine_name = 'history_retention'`,
+  );
+  await pool.query("ANALYZE workhorse.task, workhorse.task_outcome, workhorse.task_group_member");
+};
+
+const boundaryBody = async () => {
+  const source = await pool.query<{ prosrc: string }>(
+    `SELECT routine.prosrc
+       FROM pg_proc routine
+       JOIN pg_namespace namespace ON namespace.oid = routine.pronamespace
+      WHERE namespace.nspname = 'workhorse'
+        AND routine.proname = 'terminal_retention_boundaries_internal_v1'`,
+  );
+  expect(source.rows).toHaveLength(1);
+  return source.rows[0]!.prosrc.replaceAll(/\bp_now\b/g, "statement_timestamp()");
+};
+
+// Each read runs in its own transaction, whose counters show the index rows that it reads.
+const inPlannedTransaction = async <T>(read: (client: PoolClient) => Promise<T>) => {
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    await client.query("SET LOCAL enable_seqscan = off");
+    await client.query("SET LOCAL enable_bitmapscan = off");
+    return await read(client);
+  } finally {
+    await client.query("ROLLBACK");
+    client.release();
+  }
+};
+
+// The counters can also hold earlier reads of the same connection, so this reads their difference.
+const snapshotReads = () =>
+  inPlannedTransaction(async (client) => {
+    const counters = async () =>
+      (
+        await client.query<{ tuples: string }>(
+          `SELECT pg_stat_get_xact_tuples_returned(
+                    format('workhorse.%I', index_name)::regclass) AS tuples
+             FROM unnest($1::text[]) WITH ORDINALITY AS indexes(index_name, position)
+            ORDER BY position`,
+          [retentionIndexes],
+        )
+      ).rows.map(({ tuples }) => Number(tuples));
+    const before = await counters();
+    await client.query("SELECT workhorse.queue_health_v1()");
+    return (await counters()).map((tuples, index) => tuples - before[index]!);
+  });
+const walkReads = () =>
+  inPlannedTransaction(async (client) => {
+    const plan = await client.query<{ "QUERY PLAN": Array<{ Plan: PlanNode }> }>(
+      `EXPLAIN (ANALYZE, FORMAT JSON) ${await boundaryBody()}`,
+    );
+    return planNodes(plan.rows[0]!["QUERY PLAN"][0]!.Plan)
+      .filter((node) => retentionIndexes.includes(node["Index Name"] ?? ""))
+      .reduce(
+        (sum, node) =>
+          sum +
+          (node["Actual Rows"] ?? 0) * (node["Actual Loops"] ?? 1) +
+          (node["Rows Removed by Filter"] ?? 0),
+        0,
+      );
+  });
+
+// Writes count terminal tasks past their windows that an unexpired enqueue key keeps, older than
+// three eligible tasks. The watermark is 15 days back, so the history of each row is released.
+const seedHeldBeforeEligible = async (count: number) => {
+  await pool.query(
+    `WITH task AS (
+       INSERT INTO workhorse.task(queue_name, task_type, payload, max_attempts, created_at)
+       SELECT 'retention-cap', CASE WHEN position <= $1 THEN 'held' ELSE 'eligible' END,
+              '{}'::jsonb, 1,
+              clock_timestamp() - interval '30 days' + make_interval(secs => position)
+         FROM generate_series(1, $1::integer + 3) position
+       RETURNING id, task_type, created_at
+     ), outcome AS (
+       INSERT INTO workhorse.task_outcome(
+         task_id, state, current_attempt, fence_token, run_at, result, finished_at,
+         history_through_at
+       )
+       SELECT id, 'succeeded', 1, 1, created_at, '{}'::jsonb, created_at, created_at FROM task
+     )
+     INSERT INTO workhorse.enqueue_idempotency(
+       idempotency_scope, idempotency_key_hash, request_fingerprint, task_id, expires_at
+     )
+     SELECT 'retention-cap', sha256(convert_to(id::text, 'UTF8')), '{}'::jsonb, id,
+            clock_timestamp() + interval '30 days'
+       FROM task WHERE task_type = 'held'`,
+    [count],
+  );
+  await pool.query(
+    `UPDATE workhorse.maintenance_state
+        SET history_retained_before = clock_timestamp() - interval '15 days'
+      WHERE routine_name = 'history_retention'`,
+  );
+  await pool.query("ANALYZE workhorse.task, workhorse.task_outcome, workhorse.enqueue_idempotency");
+};
+
+const reasonsOf = async (code: string) =>
+  (await queue.health()).status.reasons.filter((reason) => reason.code === code);
+
+// A failed tick that started and ended secondsAgo.
+const failedTick = (secondsAgo: number) =>
+  pool.query(
+    `INSERT INTO workhorse.maintenance_run(
+       routine_name, started_at, completed_at, outcome, rows_affected, phases
+     ) VALUES ('tick', clock_timestamp() - make_interval(secs => $1),
+               clock_timestamp() - make_interval(secs => $1), 'failed', 0, '[]'::jsonb)`,
+    [secondsAgo],
+  );
+// The completion instant of an idle tick, which records no run.
+const idleSuccess = (secondsAgo: number) =>
+  pool.query(
+    `UPDATE workhorse.maintenance_state
+        SET last_completed_at = clock_timestamp() - make_interval(secs => $1)
+      WHERE routine_name = 'tick'`,
+    [secondsAgo],
+  );
+
 describe("health snapshots", () => {
+  describe("maintenance and schedule failures", () => {
+    it("reports a routine whose newest three runs failed until it completes again", async () => {
+      // The released-dependency phase cannot find its function, so each terminal cleanup pass
+      // records a failed run. Two failed runs in a row do not change the verdict.
+      await pool.query(
+        `ALTER FUNCTION workhorse.prune_released_dependencies_v1(integer)
+           RENAME TO prune_released_dependencies_v1_hidden`,
+      );
+      try {
+        for (let run = 1; run <= 2; run += 1) {
+          const phases = await queue.pruneTerminalStorage({ force: true });
+          expect(
+            phases.find(({ phase }) => phase === "released_dependencies")?.error,
+          ).not.toBeNull();
+        }
+        expect(await reasonsOf("maintenance-failing")).toEqual([]);
+
+        await queue.pruneTerminalStorage({ force: true });
+        expect(await reasonsOf("maintenance-failing")).toEqual([
+          {
+            code: "maintenance-failing",
+            severity: "degraded",
+            observed: 3,
+            budget: 2,
+            routine: "terminal_storage",
+          },
+        ]);
+      } finally {
+        await pool.query(
+          `ALTER FUNCTION workhorse.prune_released_dependencies_v1_hidden(integer)
+             RENAME TO prune_released_dependencies_v1`,
+        );
+      }
+
+      // The next pass succeeds, so the routine completed after its failed runs.
+      await queue.pruneTerminalStorage({ force: true });
+      expect(await reasonsOf("maintenance-failing")).toEqual([]);
+    });
+
+    it("counts only the failed runs after the last completion of a routine", async () => {
+      // The tick records no run when an idle tick succeeds, but it sets its completion instant.
+      // Three failed ticks with an idle success after each of the first two are not three failures
+      // in a row.
+      await failedTick(50);
+      await idleSuccess(40);
+      await failedTick(30);
+      await idleSuccess(20);
+      await failedTick(10);
+      expect(await reasonsOf("maintenance-failing")).toEqual([]);
+
+      // Two more failed ticks make three after the last completion.
+      await failedTick(5);
+      await failedTick(1);
+      expect(await reasonsOf("maintenance-failing")).toEqual([
+        {
+          code: "maintenance-failing",
+          severity: "degraded",
+          observed: 3,
+          budget: 2,
+          routine: "tick",
+        },
+      ]);
+    });
+
+    it("reports a schedule whose last schedule pass failed until a pass fires it", async () => {
+      await queue.syncSchedules("health", [
+        {
+          name: "bad",
+          schedule: "* * * * * *",
+          task: { type: "t.bad", payload: {}, queue: "health-fast", concurrencyKey: "k" },
+        },
+      ]);
+      // A fast-tier queue refuses a concurrency key, so each fire of the schedule fails.
+      await pool.query(
+        "SELECT workhorse.set_queue_tier_v1('health-fast', 'fast', 'operator', 'proof')",
+      );
+      const fire = async (seconds: number) =>
+        pool.query(
+          `SELECT 1 FROM workhorse.fire_due_schedules_v2(
+             ARRAY['health'],
+             (SELECT last_evaluated_at FROM workhorse.schedule_definition
+               WHERE schedule_name = 'bad') + make_interval(secs => $1),
+             100, 1000)`,
+          [seconds],
+        );
+      await fire(3);
+      expect(await reasonsOf("schedule-failing")).toEqual([
+        { code: "schedule-failing", severity: "degraded", observed: 1, budget: 0 },
+      ]);
+
+      // The queue returns to the full tier, and the next pass fires the schedule.
+      await pool.query(
+        "SELECT workhorse.set_queue_tier_v1('health-fast', 'full', 'operator', 'proof')",
+      );
+      await fire(3);
+      expect(await reasonsOf("schedule-failing")).toEqual([]);
+    });
+  });
+
   it("counts only recent external-wait rejections through the partial event index", async () => {
     const taskId = await queue.enqueue("rejection-health", {});
     const oldDay = "2016-01-04";
@@ -535,5 +820,90 @@ describe("health snapshots", () => {
     expect(expired!.observed).toBe(critical.expiredLeases);
     expect(critical.expiredLeases).toBeGreaterThanOrEqual(1);
     await queue.recoverExpired();
+  });
+
+  describe("terminal retention boundaries", () => {
+    it("plans each retention walk with its cutoff as an index condition", async () => {
+      // A cutoff from clock_timestamp() is volatile, so PostgreSQL tested it as a filter on each
+      // index row. With nothing eligible, each health poll then read every task and every terminal
+      // outcome (SM-1936).
+      await queue.syncRetentionPolicy(defaultRetentionPolicy);
+      await seed(20);
+      const client = await pool.connect();
+      try {
+        await client.query("BEGIN");
+        // The tables are small, so a scan of the whole table is cheaper here. A long history makes
+        // the planner walk the indexes in order, and this test checks their conditions.
+        await client.query("SET LOCAL enable_seqscan = off");
+        await client.query("SET LOCAL enable_bitmapscan = off");
+        const plan = await client.query<{ "QUERY PLAN": Array<{ Plan: PlanNode }> }>(
+          `EXPLAIN (FORMAT JSON) ${await boundaryBody()}`,
+        );
+        const scans = planNodes(plan.rows[0]!["QUERY PLAN"][0]!.Plan).filter((node) =>
+          retentionIndexes.includes(node["Index Name"] ?? ""),
+        );
+        expect(new Set(scans.map((node) => node["Index Name"]))).toEqual(new Set(retentionIndexes));
+        for (const scan of scans) {
+          const column =
+            scan["Index Name"] === "task_created_retention_idx" ? "created_at" : "finished_at";
+          expect(scan["Index Cond"]).toMatch(new RegExp(`\\b${column} < `));
+          expect(scan.Filter ?? "").not.toMatch(new RegExp(`\\b${column}\\b`));
+        }
+      } finally {
+        await client.query("ROLLBACK");
+        client.release();
+      }
+    });
+
+    it("stops each walk at its cap behind more held rows than the cap", async () => {
+      // An enqueue key that lives longer than the task window keeps each of these tasks on purpose.
+      // Each walk examines at most terminal_retention_walk_rows_internal_v1() rows, so a poll does
+      // not read every kept row. Behind more kept rows than the cap, the walk finds no eligible row
+      // and reports no boundary. The terminal cleanup backlog shows a late cleanup instead.
+      await queue.syncRetentionPolicy(defaultRetentionPolicy);
+      const cap = Number(
+        (
+          await pool.query<{ cap: number }>(
+            "SELECT workhorse.terminal_retention_walk_rows_internal_v1() AS cap",
+          )
+        ).rows[0]!.cap,
+      );
+      const walked: number[] = [];
+      for (const held of [cap + 100, cap + 400]) {
+        await pool.query("DELETE FROM workhorse.enqueue_idempotency");
+        await pool.query("DELETE FROM workhorse.task");
+        await seedHeldBeforeEligible(held);
+        const health = await queue.health();
+        expect(health.retentionLagMs.taskIdentity).toBeNull();
+        expect(health.retentionLagMs.terminalOutcome).toBeNull();
+        walked.push(await walkReads());
+      }
+      expect(walked[1]).toBe(walked[0]);
+      expect(walked[0]).toBeLessThanOrEqual(4 * (cap + 2));
+    });
+
+    it("reads a bounded number of retention index rows at two data sizes", async () => {
+      // A held watermark once made each walk read every aged row behind it, and the member read
+      // joined every member of every finished group (SM-1990). Each walk now stops at its cutoff
+      // and at the watermark, so the rows that one snapshot reads do not grow with these rows.
+      await queue.syncRetentionPolicy(defaultRetentionPolicy);
+      // The counters also count index entries that earlier tests left dead, so the test compares
+      // each size with the reads before the seed. The snapshot also reads the oldest row of each
+      // index once, so the difference stays at a few rows.
+      const baseline = await snapshotReads();
+      for (const count of [40, 120]) {
+        await seed(count);
+        const reads = await snapshotReads();
+        reads.forEach((tuples, index) => expect(tuples - baseline[index]!).toBeLessThan(10));
+        expect(await walkReads()).toBe(0);
+      }
+      const walked: number[] = [];
+      for (const count of [40, 120]) {
+        await seed(count, true);
+        walked.push(await walkReads());
+      }
+      expect(walked[1]).toBe(walked[0]);
+      expect(walked[0]).toBeLessThan(10);
+    });
   });
 });

@@ -685,8 +685,8 @@ therefore makes this release one offline cutover. For this release only, deploy 
    applies 0025 and leaves the database at version 25. Without `--yes`, the command applies nothing
    and names any old worker that still heartbeated inside its lease.
 4. From the same image, run `workhorse schema migrate` again against each database. It applies the
-   additive steps after 0025 and leaves the database at version 95.
-5. Deploy the new release as usual. Its pre-deploy hook finds version 95, installs the demo's own
+   additive steps after 0025 and leaves the database at version 96.
+5. Deploy the new release as usual. Its pre-deploy hook finds version 96, installs the demo's own
    tables, and verifies both workspaces before any container starts.
 
 The CLI reads the database from `--database-url`, `WORKHORSE_DATABASE_URL`, or `DATABASE_URL`. Pass
@@ -775,13 +775,25 @@ stage, so a new commit invalidates none of the cached layers.
 
 ### Dashboard schema
 
-The current build ships Workhorse schema version 95; its packaged migrations carry a version 6
+The current build ships Workhorse schema version 96; its packaged migrations carry a version 6
 baseline forward to it. Version 25 is a contract step, which the
 [fast-tier cutover](#the-fast-tier-release-needs-one-offline-cutover) applies. Versions 26 through
-95 are additive, so the ordinary schema step applies them to a database at version 25. Every client in
+96 are additive, so the ordinary schema step applies them to a database at version 25. Every client in
 this build refuses mutations against a schema below 76, because every statement catalogue of this
 build names `deregister_worker_v2`, which version 76 adds. Run
-`workhorse schema migrate` before any process from this build starts. Migration 0096 produces
+`workhorse schema migrate` before any process from this build starts. Migration 0097 produces
+version 96. It adds the table `terminal_prune_position`, the nullable column
+`task_outcome.held_until`, and thirteen internal functions, and replaces
+the bodies of `queue_health_v1`, `evaluate_queue_health_v1`, `prune_full_terminal_tasks_internal_v1`,
+`prune_fast_terminal_tasks_internal_v1`, `prune_terminal_storage_v1`,
+`prune_released_dependencies_v1`, `retain_history_v1`,
+`sync_retention_policy_v1`, `override_retention_policy_v1`, `prune_enqueue_idempotency_v1`,
+`rollup_stats_v1`, `dashboard_retention_preview_v1`,
+`enqueue_batch_v1`, `purge_queue_internal_v1`, `prune_schedule_occurrences_v1`, and
+`maintain_task_groups_v1`. After it, terminal cleanup locks only rows
+that it can delete, in bounded slices, and queue health counts only rows that cleanup can delete or
+is late to release. Each retention window is a fixed number of hours. Health reports
+`maintenance-failing` and `schedule-failing`. It rewrites no row and does not raise the floor. Migration 0096 produces
 version 95. It adds two nullable columns to `cold_export_dataset` and
 `cold_export_frontier_margin_ms_v1`. It replaces the bodies of `claim_cold_export_segment_v1`,
 `send_signal_v1`, `complete_human_wait_v1`, `record_batch_event_v1`, `rollup_stats_v1`, and

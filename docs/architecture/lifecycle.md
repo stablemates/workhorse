@@ -557,22 +557,74 @@ repeat for up to one second.
 
 #### Terminal-task pruning
 
-Terminal-task pruning selects a bounded candidate window of identities that meet all of these
-conditions:
+Terminal-task pruning deletes a full-tier identity when all of these conditions hold:
 
-- they have outcomes;
+- it has an outcome;
 - both minimum windows have elapsed;
-- they have no live runtime;
-- they have no retained schedule occurrence;
-- their history boundaries are behind the global retained-through watermark.
+- its history boundary is behind the global retained-through watermark;
+- it has no live runtime, no `task_event` row, and no `attempt_history` row;
+- no `task_redrive` row names it as a source;
+- it is not a member of a task group that is not `finished`;
+- no `schedule_occurrence` row and no `enqueue_idempotency` row references it;
+- no `task_dependency` edge names it as a prerequisite;
+- each child is terminal, past both windows, and behind the watermark.
 
-`prune_terminal_tasks_v1` then:
+`prune_full_terminal_tasks_internal_v1` then:
 
-1. Locks at most `LEAST(p_limit * 4, 100000)` such identities, oldest `finished_at` first, with
-   `FOR UPDATE OF task SKIP LOCKED`.
-2. In a second statement, checks the window conditions of the locked identities again. It drops
-   candidates that a retained enqueue key, a dependency edge, or an unprunable child pins.
-3. Deletes at most `p_limit`. The bounded delete cascades outcome, checkpoints, and waits.
+1. Reads one slice of `task_outcome_retention_idx` past the cutoffs:
+   `terminal_prune_slice_rows_internal_v1(p_limit)` rows. The slice comes from the main walk or the
+   sweep walk of the tier, as described below.
+2. Locks at most `p_limit` identities of the slice that meet all of these conditions, in the order
+   of the slice, with `FOR UPDATE OF task SKIP LOCKED`. A kept identity therefore never takes the
+   place of an identity that the batch can delete, and many kept identities do not stop the walk
+   (SM-1935).
+3. Stores the next position of the walk that it used.
+4. In a later statement, checks every condition of the locked identities again. Before the delete,
+   it saves the end of each hold that the delete ends on an identity that stays: a parent of a
+   deleted child, a prerequisite of a deleted dependent, or a source of a deleted target. It
+   keeps a candidate whose held identity has an outcome that another transaction locks. Then it
+   deletes the identities. The delete cascades outcome, checkpoints, and waits.
+5. If the delete removed the last target of a redrive source and the batch has room, locks that
+   source and runs step 4 for it, and so on down the chain until the room ends or no source is
+   left. Each round deletes at least one row, so a batch runs at most `p_limit` rounds. The
+   fast-tier batch does the same.
+6. If the batch deleted nothing, reports `dependency_starved` when a dependency edge keeps a
+   prerequisite of its slice that passes each cutoff. An identity inside a window only waits for it,
+   so it does not count. That probe skips identities that another transaction locks.
+
+`terminal_row_kept_internal_v1` tests the references for each row of the slice, one call for each
+row. The batch deletes no key and no edge. The `enqueue_idempotency` phase and the
+`released_dependencies` phase of `prune_terminal_storage_v1` delete them and run before the
+`terminal_tasks` phase, as before migration 0097. In the statement that deletes the reference, each
+of these phases writes the end of the hold to `task_outcome.held_until`: the latest expiry of the
+deleted keys, or the latest finish of the dependents of the deleted edges. A phase writes the value
+only when `terminal_hold_end_internal_v1` gives it for one lag: when the hold ends after `created_at`
+plus the identity window or after `finished_at` plus the outcome window. Queue health uses the same
+function for the due instant of each lag. A phase finds the outcome and the task of each candidate
+by primary key and takes the outcome with `FOR NO KEY UPDATE SKIP LOCKED`. It deletes the reference
+of an identity that needs the write only in the statement that holds that lock. If another
+transaction holds the outcome, the reference stays for a later pass, and health counts the identity
+from that reference. A reference whose identity needs no write, or has no `task_outcome` row, goes
+with no outcome lock. A redrive takes the outcome of its source `FOR SHARE`, so it waits until the
+pass commits. A pass reports `dependency_starved` when it deleted nothing and any of its
+batches saw a pin.
+
+`terminal_prune_position` stores two walks for each tier. The main walk starts after its position.
+If fewer rows follow, it continues from the oldest row up to its position. It stores the position
+after the last locked identity of a full batch or after the end of a whole slice. It removes the
+position when the slice held every row past the cutoffs, or when a run of batches that deleted
+nothing came round to where it began. While the main walk has a position, the batch of the tier that
+follows a main batch that deleted rows uses the sweep walk. The sweep walk starts after its own
+position and stops at the main position. A sweep batch that fills its limit stores its last locked
+row. A sweep batch that does not fill and reaches the main position starts the sweep again from the
+oldest row. An identity
+whose hold ended behind the main position therefore goes within `2 * (ceil(R / S) + ceil(E / L) + 2)`
+batches of its tier. In that bound, R is the number of rows that the sweep examines before the
+identity, S the slice size, E the number of rows that sweep batches lock before it, and L the batch
+limit. When main batches delete nothing, the main walk goes round and reaches the identity itself.
+Cleanup does not delete in strict age order.
+Queue health applies the same rule
+([ADR 0122](../decisions/0122-give-cleanup-and-health-one-retention-rule.md)).
 
 An enqueue can add a reference to a terminal identity while a batch runs, for example a dependency
 edge or a redrive. The insert of that reference takes `FOR KEY SHARE` on the task row through its
@@ -582,7 +634,7 @@ identity, and no new reference commits after step 1 locks it.
 Since migration 0084 (schema version 83), step 2 runs as its own statement. At read committed, its snapshot comes after the
 locks of step 1, so it sees a reference that committed between the first snapshot and the lock.
 The identity stays, the rest of the batch is deleted, and a later pass checks the identity again.
-After its dependent finishes and the released edge goes, a later pass deletes a prerequisite.
+After its dependent finishes and the released edge goes, a later batch deletes a prerequisite.
 
 Before migration 0084, one statement chose and locked the window with one snapshot. If an enqueue
 committed a dependency between that snapshot and the lock, the delete failed the `ON DELETE
@@ -612,6 +664,9 @@ than the retention period.
 Since migration 0049, the window itself excludes a redrive source through
 `task_redrive_source_time_idx`. A source waits for its younger target. Without this exclusion, a
 window of sources would hide the targets that release them. Then every pass would delete nothing.
+Since migration 0097, the window excludes each other reference too. Before, the window held up to
+four times the limit and the second statement removed the identities that a key, an occurrence, an
+edge, or a child kept, so a window of such identities deleted nothing.
 
 History insert triggers serialize with parent deletion. They move the watermark backward when old
 history arrives late. Queue purge explicitly removes history before identity.
@@ -3270,6 +3325,17 @@ The cost of the snapshot depends on live work, not on lifetime history.
 - `terminalCountsCapped` and `statistics.bucketsCapped` mark capped values as lower bounds that are
   exact until the cap.
 
+- The terminal retention boundaries come from `terminal_retention_boundaries_internal_v1`.
+  `queue_health_v1` reads the clock one time and gives it as a parameter, so each walk compares with
+  a constant in its index condition. Each step reads one index row in order. Each walk stops at
+  `history_retained_before` and at the first row that cannot be due before the earliest due instant
+  that it found. It reads the held rows past their windows and the eligible rows that can be due
+  before that instant, at most `terminal_retention_walk_rows_internal_v1()` rows (1,000) in each
+  walk. It does not read the rows inside their windows, the rows behind a held watermark, or the
+  members of finished task groups inside their windows. A walk that reaches the cap with no eligible
+  row reports no boundary
+  ([ADR 0122](../decisions/0122-give-cleanup-and-health-one-retention-rule.md)).
+
 The rate-limit block uses the same SQL as `Queue.rateLimitStatuses()`. Thus the two surfaces cannot
 disagree about throttle semantics.
 
@@ -3311,7 +3377,8 @@ until the statistics collector flushes.
 
 - `queue` on queue admission codes;
 - `budgetName` on `budget-blocked`;
-- `category` on retention lag.
+- `category` on retention lag;
+- `routine` on `maintenance-failing`.
 
 A critical code means that work is stopping or is lost:
 
@@ -3325,7 +3392,30 @@ A critical code means that work is stopping or is lost:
 
 A degraded code costs storage or throughput: `rollup-stalled`, `retention-lag`,
 `terminal-cleanup-backlog`, `eligible-history-partitions`, `default-history-rows`,
-`concurrency-blocked`, `rate-limit-throttled`, and `budget-blocked`.
+`maintenance-failing`, `schedule-failing`, `concurrency-blocked`, `rate-limit-throttled`, and
+`budget-blocked`.
+
+`maintenance-failing` fires once for each routine (`tick`, `history_partitions`,
+`history_retention`, or `terminal_storage`) whose newest three recorded runs in `maintenance_run`
+have the outcome `failed` and started after `maintenance_state.last_completed_at` of the routine.
+Its `observed` value is the count of newest runs that failed one after another after that
+completion, at most 50, and its `budget` is 2. Thus one or two failed runs do not change the
+verdict. A run with the outcome `succeeded` or `incomplete` ends the count, and a completion of the
+routine clears the reason. The tick records a successful run only when it changes a task, so the
+count reads only the runs after its last completion: a failure before an idle success does not
+count again. The snapshot reports the routines in
+`failing_maintenance_routines`, each with `routine_name`, `failed_runs`, and `last_failed_at`.
+
+`schedule-failing` fires when an enabled schedule definition that is not paused has a stored
+`last_error_at`. A schedule pass stores the error of a definition that fails, and the next pass that
+fires the definition clears it (migration 0095). Thus one failed pass raises the reason at once. Its
+`observed` value is the count of such definitions, at most 10,000, and its `budget` is 0. The
+snapshot reports the count in `failing_schedule_definitions`, and
+`failing_schedule_definitions_capped` marks a lower bound.
+
+No reason reads `observations.oldestTransactionAgeMs`. A transaction of any application in the
+database changes that value, so it does not show a Workhorse fault
+([ADR 0122](../decisions/0122-give-cleanup-and-health-one-retention-rule.md)).
 
 `terminal-cleanup-backlog` fires if `terminal_cleanup_backlog_since` is older than
 `terminal_cleanup_backlog_ms`. Its `observed` value is the milliseconds from that start to
@@ -3428,49 +3518,66 @@ Retention health includes:
 Fallback counts are exact through 10,000 rows. `defaultHistoryRowsCapped` marks 10,001 as a lower
 bound.
 
-Terminal identity lag excludes live tasks. Terminal identity and terminal outcome lag count only
-rows that pass both row windows and two gates of `prune_terminal_tasks_v1`:
+Terminal identity and terminal outcome lag count only rows that pass both row windows and whose
+`history_through_at` is earlier than the `history_retained_before` of the `history_retention`
+routine. That cutoff moves forward once a day. Thus a row that only this cutoff holds is not lag. A
+stalled history pass appears as task event and attempt history lag instead.
 
-- The row's `history_through_at` is earlier than the `history_retained_before` of the
-  `history_retention` routine. That cutoff moves forward once a day. Thus a row that only this
-  cutoff holds is not lag. A stalled history pass appears as task event and attempt history lag
-  instead.
-- The task is not a member of a task group whose `state` is not `finished`. The prune keeps such a
-  member, because the group needs its member outcomes when it finishes. An open or sealed group can
-  stay unfinished for any length of time, so its members are not lag.
+`terminal_retention_boundaries_internal_v1` also skips each row that a hold keeps on purpose. Terminal
+cleanup keeps these rows too
+([ADR 0122](../decisions/0122-give-cleanup-and-health-one-retention-rule.md)):
 
-The prune also keeps a row for its other references, such as a redrive source, a prerequisite
-dependency, or a child. Row lag does not apply those gates, so a row that only they hold still
-counts as lag.
+1. A redrive source that has a `task_redrive` row. Cleanup deletes the source in the batch that
+   deletes its last target, when the batch has room.
+2. A member of a task group whose `state` is not `finished`. The group needs its member outcomes when
+   it finishes. An open or sealed group can stay unfinished for any length of time.
+3. A prerequisite of a `task_dependency` edge whose dependent has no `task_outcome`.
+4. A parent with a child that has no outcome, that is inside a row window, or whose history is at or
+   after the watermark. `prune_full_terminal_tasks_internal_v1` tests the child in the same way.
+5. A task of a `schedule_occurrence` whose `occurrence_at` is inside
+   `schedule_occurrence_retention_days`, or of any occurrence when that window is null.
+6. A task of an `enqueue_idempotency` row whose `expires_at` is after the snapshot clock.
 
-One history pass releases a whole day of rows at once, and a group that finishes releases all its
-members at once. The bounded prune then needs several runs to delete them. Thus row lag counts from
-the latest of three instants:
+Health counts a row that cleanup keeps for another reference: a runtime row, a `task_event` or
+`attempt_history` row, or an expired occurrence. Cleanup or history retention is then late to remove
+that reference. The key phase and the released-edge phase remove an expired key and an edge to a
+terminal dependent before the terminal phase. Each statement that removes a reference that a hold
+needs saves the end of that hold in `task_outcome.held_until`, so health still counts the row from
+that end (ADR 0122).
+
+One history pass releases a whole day of rows at once, and a hold that ends releases its row at
+once. The bounded prune then needs several runs to delete them. Thus a row is due at the latest of
+these instants:
 
 - the time when the row passes its row window;
 - the first scheduled pass due to release the row;
-- the `finished_at` of the task group of the row, if the row is a member of a group.
+- the `finished_at` of its task group, if the row is a member of a finished group;
+- the latest `expires_at` of its expired enqueue keys;
+- the first scheduled pass at or after the expiry of each of its schedule occurrences;
+- the latest `finished_at` of its terminal dependents;
+- the latest instant when one of its children became eligible: the later of the child row windows and
+  the pass that releases the history of the child.
 
-A pass at time t sets the cutoff to the start of the current UTC day, minus the longer of
-`task_event_retention_days` and `attempt_history_retention_days`. Thus history through h is
-releasable from the start of the UTC day after h plus that window. The due pass is the first
-`history_retention_local_time` in `maintenance_policy.timezone` at or after that instant. The
-instant is fixed for each row. Thus, if a prune stops, the lag still grows.
+Each window of N days is N times 24 hours, so a due instant does not depend on the session
+TimeZone. A pass at time t sets the cutoff to the start of the current UTC day, minus the longer of
+`task_event_retention_days` and `attempt_history_retention_days`, times 24 hours. Thus history
+through h is releasable from the start of the UTC day after h plus that window. The due pass is the
+first `history_retention_local_time` in `maintenance_policy.timezone` at or after that instant. The
+instant is fixed for each row. Thus, if a prune stops, the lag still grows. If a pass runs late, its
+rows also count as late.
 
-If a pass runs late, its rows also count as late. Health measures two boundaries for each
-category, and lag counts from the earlier due instant of them. The anchor is `created_at` for
-identity lag and `finished_at` for outcome lag.
-
-- The ungrouped boundary is the oldest eligible row that is not a member of a task group, by its
-  anchor. It is due at the later of its row window and its history pass.
-- The member boundary is the earliest due instant over all eligible members of finished groups. A
-  member is due at the latest of its row window, its history pass, and the group `finished_at`.
-
-The three instants of a member do not follow its age in one order. Thus an ordered walk could pick
-a member that is not due yet and hide an overdue one. The member boundary reads only members that
-the prune can delete, and the prune removes them. The public document reports the earlier anchor
-of the two boundaries as `eligible_task_identity_at` or `eligible_terminal_outcome_at`.
-`queue_health_v1` removes the other values of the boundaries from the public document.
+Row lag counts from the earliest due instant of an eligible row. The anchor is `created_at` for
+identity lag and `finished_at` for outcome lag. The due instants do not follow the order of the
+anchors, so each walk keeps the earliest due instant that it finds. A later row is due at or after
+the end of its own window and at or after the history pass that releases its anchor, because its
+history is not earlier than its anchor. The walk stops at the first row for which that bound is not
+earlier than the earliest due instant, because a later row cannot be due earlier. Thus a row that is
+not due cannot hide an overdue row behind it. Each walk examines at most
+`terminal_retention_walk_rows_internal_v1()` rows (1,000). If more held rows come first, the walk
+reports no boundary, and `terminal-cleanup-backlog` reports a cleanup that falls behind. The public
+document reports the oldest eligible anchor as
+`eligible_task_identity_at` or `eligible_terminal_outcome_at`. `queue_health_v1` removes the due
+instants from the public document.
 
 History lag is based only on fully droppable partitions or expired default rows. It excludes the
 intentionally retained partial boundary day.

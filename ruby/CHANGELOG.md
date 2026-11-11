@@ -127,6 +127,62 @@ has no bound. Each statement and each read takes a lock of its connection, so th
 one connection cannot run a statement inside the read transaction of another thread. The dashboard also drops each input key that the `dashboard/v1` contract does not
 declare, as the TypeScript host does (SM-1966, SM-2000).
 
+### Terminal cleanup and queue health use one retention rule
+
+Terminal cleanup locked the oldest finished tasks, up to four times its limit, and only then removed
+each task that a schedule occurrence, an enqueue key, a dependency edge, or a young child keeps.
+When such tasks filled that window, each pass deleted nothing. Cleanup now locks only the tasks that
+it can delete, so a kept task no longer stops the deletion of other tasks (SM-1935). Each batch
+examines one slice of four times its share of the limit, at least 1,000 and at most 100,000 rows,
+after a position that the new table `terminal_prune_position` stores. A second walk takes the batch after each batch that deleted tasks, and it
+reaches the tasks behind that position. Thus many kept tasks do not make a batch
+read more, and cleanup no longer deletes in strict age order. When a batch deletes the
+last target of a redrive source and has room left, it deletes that source in the same batch,
+and it continues down a redrive chain while it has room.
+`retentionPruneStarved` still reports a pass that a dependency edge stops.
+
+Queue health counted a task as `retention-lag` although cleanup keeps it on purpose. Such a task is
+a redrive source with a target, a prerequisite of a live dependent, or a parent of a child that is
+not yet eligible. It can also be a task of an unexpired schedule occurrence or enqueue key. Health
+now skips these tasks, and the lag of such a task counts from the end of its hold. Health still
+counts a task that a runtime row, a history row, or an expired occurrence keeps, because cleanup is
+then late (SM-1852). When cleanup deletes an expired key or an edge to a finished dependent, it records the end of
+that hold in the new column `task_outcome.held_until`, so health counts the task from it. If
+another transaction holds the outcome of the task, the key or edge stays for a later pass. An
+enqueue that reuses an expired key, the occurrence cleanup, a cleanup batch that deletes a
+child, a dependent, or a redrive target, a queue purge, and the deletion of a finished task group
+save the end of the hold in the same way. Health adds no reason for an old unfinished task group.
+
+Each health poll read every task and every terminal outcome when no row was past its windows,
+because the cutoffs read a volatile clock. A held history watermark and the members of finished task
+groups also made the read grow. Health now reads the clock one time for its retention cutoffs. Each
+retention walk stops at its cutoff, at the watermark, at the first row that cannot be due earlier,
+and after 1,000 rows. Behind more kept rows than that, row lag is null, and
+`terminal-cleanup-backlog` reports a late cleanup (SM-1936, SM-1990).
+
+Each retention window of N days is now N times 24 hours. Before, PostgreSQL stepped calendar days in
+the session TimeZone, so across a daylight-saving change cleanup and the lag moved by one hour. In a
+UTC session nothing changes (ADR 0122).
+
+**Accept the new `maintenance-failing` and `schedule-failing` health reasons.** Queue health reports
+`maintenance-failing`, with a `routine` field, when three recorded runs of a maintenance routine
+failed one after another after its last completion. It reports `schedule-failing` when an
+enabled schedule stored an error in its last schedule pass. Both are degraded. Code that switches on
+reason codes should accept them. A dashboard package older than this schema does not show the two
+new reasons on its System page (SM-1992).
+
+Migration 0097 (`0097-give-cleanup-and-health-one-retention-rule-in-fixed-hours.sql`) moves the
+schema to version 96. It adds the table `terminal_prune_position`, the nullable column
+`task_outcome.held_until`, and thirteen internal functions, and it
+replaces the bodies of `queue_health_v1`, `evaluate_queue_health_v1`,
+`prune_full_terminal_tasks_internal_v1`, `prune_fast_terminal_tasks_internal_v1`,
+`prune_terminal_storage_v1`, `prune_released_dependencies_v1`, `retain_history_v1`,
+`sync_retention_policy_v1`, `override_retention_policy_v1`, `prune_enqueue_idempotency_v1`,
+`rollup_stats_v1`, `dashboard_retention_preview_v1`,
+`enqueue_batch_v1`, `purge_queue_internal_v1`, `prune_schedule_occurrences_v1`, and
+`maintain_task_groups_v1`. It rewrites no row and does not raise the
+SDK compatibility floor. Run `workhorse schema migrate`.
+
 ## 0.12.0 — 2026-11-07
 
 The npm packages, Python distribution, Go module, Rust crate, Ruby gem, JVM artifacts, and .NET

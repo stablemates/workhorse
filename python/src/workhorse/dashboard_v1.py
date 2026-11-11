@@ -375,10 +375,11 @@ class DashboardQueueHealthReason(TypedDict, total=False):
     budget: Required[float]
     queue: NotRequired[str]
     budgetName: NotRequired[str]
+    routine: NotRequired[str]
     category: NotRequired[Literal["attemptHistory", "scheduleOccurrences", "statistics", "taskEvents", "taskIdentity", "terminalOutcome"]]
 
 
-type DashboardQueueHealthReasonCode = Literal["budget-blocked", "concurrency-blocked", "default-history-rows", "eligible-history-partitions", "expired-leases", "missing-history-partitions", "overdue-deadlines", "overdue-execution-timeouts", "overdue-external-waits", "rate-limit-throttled", "retention-lag", "rollup-stalled", "stalled-promotion", "terminal-cleanup-backlog"]
+type DashboardQueueHealthReasonCode = Literal["budget-blocked", "concurrency-blocked", "default-history-rows", "eligible-history-partitions", "expired-leases", "maintenance-failing", "missing-history-partitions", "overdue-deadlines", "overdue-execution-timeouts", "overdue-external-waits", "rate-limit-throttled", "retention-lag", "rollup-stalled", "schedule-failing", "stalled-promotion", "terminal-cleanup-backlog"]
 
 
 class DashboardQueueHistoryResult(TypedDict, total=False):

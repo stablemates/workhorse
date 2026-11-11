@@ -829,33 +829,26 @@ describe("operator reads", () => {
     ).rejects.toMatchObject({
       code: "23503",
     });
-    const first = await pool.query<{ pruned: number }>(
+    // The batch deletes the target first. That releases the source, and the batch has room, so it
+    // deletes the source too (ADR 0122).
+    const pruned = await pool.query<{ pruned: number }>(
       `SELECT workhorse.prune_terminal_tasks_v1(
          clock_timestamp() - interval '30 days', clock_timestamp() - interval '30 days',
          date_trunc('day', clock_timestamp() - interval '30 days'), 10
        ) AS pruned`,
     );
-    expect(first.rows[0]!.pruned).toBe(1);
+    expect(pruned.rows[0]!.pruned).toBe(2);
     expect(
-      (await pool.query("SELECT id FROM workhorse.task WHERE id = $1", [source])).rows,
-    ).toHaveLength(1);
-    expect(
-      (await pool.query("SELECT id FROM workhorse.task WHERE id = $1", [target])).rows,
+      (
+        await pool.query("SELECT id FROM workhorse.task WHERE id = ANY($1::uuid[])", [
+          [source, target],
+        ])
+      ).rows,
     ).toHaveLength(0);
     expect(
       (await pool.query("SELECT count(*)::integer AS count FROM workhorse.task_redrive")).rows[0]!
         .count,
     ).toBe(0);
-    const second = await pool.query<{ pruned: number }>(
-      `SELECT workhorse.prune_terminal_tasks_v1(
-         clock_timestamp() - interval '30 days', clock_timestamp() - interval '30 days',
-         date_trunc('day', clock_timestamp() - interval '30 days'), 10
-       ) AS pruned`,
-    );
-    expect(second.rows[0]!.pruned).toBe(1);
-    expect(
-      (await pool.query("SELECT id FROM workhorse.task WHERE id = $1", [source])).rows,
-    ).toHaveLength(0);
   });
 
   it("installs the routing projection, indexes, functions, and identity triggers", async () => {

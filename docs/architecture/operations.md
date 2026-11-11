@@ -860,10 +860,10 @@ This section states the limits and defaults that operators must know.
 
 ### Schema and PostgreSQL
 
-- The canonical artifact installs version 95, the whole current schema.
+- The canonical artifact installs version 96, the whole current schema.
 - Version 6 is the migration baseline. Its frozen copy is `sql/releases/0006.sql`.
 - A schema change is an upgrade, not a reinstall. `migrateSchema` applies the ordered steps under
-  `sql/migrations/`, which run from 6 to 95.
+  `sql/migrations/`, which run from 6 to 96.
 - Workhorse does not upgrade a database below 6
   ([ADR 0073](../decisions/0073-prune-the-migration-chain-to-the-0-2-0-baseline.md)).
 - Workhorse requires only plain PostgreSQL 15+. Workhorse installs no extension beyond the default
@@ -928,6 +928,23 @@ The default work bounds are:
 When a health snapshot counts, it scans at most 100,001 terminal outcomes and 100,001 statistic
 buckets. The snapshot flags a capped count. A capped count is exact until the cap, and it is a
 lower bound.
+
+Each of the two terminal retention walks of the snapshot examines at most
+`terminal_retention_walk_rows_internal_v1()` index rows, 1,000. A walk that reaches the cap with no
+eligible row reports no boundary, so its row lag is null. A walk that found an eligible row reports
+the earliest due instant among the rows that it examined, so the lag is then a lower bound. When
+cleanup falls behind, `terminal-cleanup-backlog` reports it: a terminal cleanup pass that ends with a
+full batch, or that deleted rows and ends with a main position after its time budget, records
+`terminal_cleanup_backlog_since`. A pass that deletes nothing records no backlog. No health reason
+reports a terminal cleanup that does not run at all. For that case, an operator reads the
+`terminal_storage` row of the dashboard Schedules page, or `maintenance_state.last_completed_at`.
+
+One terminal cleanup batch examines at most `terminal_prune_slice_rows_internal_v1(p_limit)` outcome
+rows for each tier batch that it runs: four times its share of the limit, at least 1,000 and at most
+100,000. One `prune_terminal_tasks_v1` call runs at most three tier batches. It deletes at most
+`terminal_task_prune_limit` tasks. The `terminal_tasks` phase of one pass repeats batches while a
+batch fills or a main position remains, and it starts no batch after one second. Thus one pass
+runs for about one second plus one batch.
 
 The health snapshot and the dashboard reads that embed it disable JIT for themselves. The reason
 is that compiling their plan costs much more than executing them. Their remaining cost follows the

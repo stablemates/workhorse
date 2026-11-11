@@ -2596,12 +2596,13 @@ class DashboardQueueHealthReason(dict)
   def pop(...)
   def popitem(self)
   queue: ForwardRef('NotRequired[str]', module='dashboard_v1')
+  routine: ForwardRef('NotRequired[str]', module='dashboard_v1')
   def setdefault(self, key, default=None)
   severity: ForwardRef("Required[Literal['critical', 'degraded']]", module='dashboard_v1')
   def update(...)
   def values(...)
 
-type DashboardQueueHealthReasonCode = Literal["budget-blocked", "concurrency-blocked", "default-history-rows", "eligible-history-partitions", "expired-leases", "missing-history-partitions", "overdue-deadlines", "overdue-execution-timeouts", "overdue-external-waits", "rate-limit-throttled", "retention-lag", "rollup-stalled", "stalled-promotion", "terminal-cleanup-backlog"]
+type DashboardQueueHealthReasonCode = Literal["budget-blocked", "concurrency-blocked", "default-history-rows", "eligible-history-partitions", "expired-leases", "maintenance-failing", "missing-history-partitions", "overdue-deadlines", "overdue-execution-timeouts", "overdue-external-waits", "rate-limit-throttled", "retention-lag", "rollup-stalled", "schedule-failing", "stalled-promotion", "terminal-cleanup-backlog"]
 
 class DashboardQueueHistoryResult(dict)
   def __init__(self, *args, **kwargs)

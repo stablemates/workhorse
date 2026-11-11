@@ -1,6 +1,6 @@
 # How does Workhorse delete old data without losing the audit trail?
 
-<!-- scenario-names: emails, invoice.send, invoice-7, invoice-7b, welcome-17 -->
+<!-- scenario-names: emails, invoice.send, invoice-7, invoice-7b, welcome-17, report-3 -->
 
 A busy queue writes a large quantity of history. Each state change writes an event, and each
 finished attempt writes a row. If nothing deletes these rows, they can fill most of your database.
@@ -124,11 +124,12 @@ One singleton row, `retention_policy`, holds the policy.
 | `schedule_occurrence_retention_days` | Schedule occurrences | 14      |
 | `statistics_retention_days`          | Statistics           | 14      |
 
-Each window is an integer from 1 to 36,500 days. Null disables automatic deletion for that category.
+Each window is an integer from 1 to 36,500 days. A window of N days is N times 24 hours in every
+session TimeZone. Null disables automatic deletion for that category.
 
 **History cutoffs.** A pass computes one cutoff per category. The event cutoff is the start of the
-current UTC day minus `task_event_retention_days`. The attempt cutoff is the same day start minus
-`attempt_history_retention_days`. Each cutoff is then clamped to the statistics rollup watermark,
+current UTC day minus `task_event_retention_days` times 24 hours. The attempt cutoff is the same day
+start minus `attempt_history_retention_days` times 24 hours. Each cutoff is then clamped to the statistics rollup watermark,
 and, while cold export is enabled, to that category's export watermark. The pass runs once a day at
 `history_retention_local_time` in `maintenance_policy.timezone`.
 
@@ -266,9 +267,10 @@ the new task `invoice-7b`, a descendant of `invoice-7`.
    cleanup keeps `invoice-7`.
 2. In the same pass, cleanup skips `invoice-7` and deletes the younger expired tasks as usual.
 3. On day 25, `invoice-7b` is past its windows, and cleanup deletes it.
-4. On a later pass, `invoice-7` has no descendant, and cleanup deletes it.
+4. In the same batch, `invoice-7` has no descendant, and cleanup deletes it too.
 
-A kept task does not stop the deletion of other tasks.
+A kept task does not stop the deletion of other tasks. Queue health does not count a kept source as
+retention lag.
 
 <details>
 <summary>Reference: lineage retention</summary>
@@ -276,11 +278,65 @@ A kept task does not stop the deletion of other tasks.
 - Terminal identity pruning skips any redrive source with a retained descendant edge.
 - It skips the source before it bounds the candidate window, so a retained source never keeps a pass
   from reaching younger eligible tasks.
-- Deleting the target cascades its inbound edge. The source can then become eligible under the
-  normal windows.
+- Deleting the target cascades its inbound edge. If the batch has room, it then deletes the source
+  in the same batch, and it continues down a redrive chain while it has room. Otherwise the next
+  batch or pass deletes it.
 - `terminal_task_prune_limit` bounds each terminal batch: 1 to 100,000 tasks, default 1,000.
 
 More detail: [Data model: Lineage retention](../architecture/data-model.md#lineage-retention) and [Data model: `retention_policy`](../architecture/data-model.md#retention_policy).
+
+</details>
+
+## Expect a task that other rows use to stay longer
+
+Other rows can need a finished task after its windows end. Cleanup keeps such a task, and it
+continues to delete the other tasks.
+
+**Example.** Task `report-3` is enqueued with an enqueue key that expires after 30 days. Each
+window is 14 days.
+
+1. On day 16, `report-3` is past its windows. Its key has not expired, so cleanup keeps it.
+2. In the same pass, cleanup deletes the younger expired tasks that no row needs.
+3. Queue health does not count `report-3` as retention lag, because the key keeps it on purpose.
+4. On day 31, the key expires. In the next cleanup pass, the key phase deletes the key, and then
+   the terminal phase deletes `report-3`.
+
+A kept task does not stop the deletion of other tasks. Queue health counts a kept task as lag only
+when cleanup or history retention is late to remove the row that keeps it.
+
+<details>
+<summary>Reference: rows that keep a finished task</summary>
+
+| Row that references the task                           | Cleanup | Queue health                              |
+| ------------------------------------------------------ | ------- | ----------------------------------------- |
+| `task_redrive` row with the task as source             | Keeps   | Not lag                                   |
+| Membership of a task group that is not `finished`      | Keeps   | Not lag                                   |
+| `task_dependency` edge to a dependent that is live     | Keeps   | Not lag                                   |
+| `task_dependency` edge to a dependent that finished    | Keeps   | Lag from the finish of the dependent      |
+| `task_child` edge to a child that is not yet eligible  | Keeps   | Not lag                                   |
+| `schedule_occurrence` row inside its window            | Keeps   | Not lag                                   |
+| `schedule_occurrence` row past its window              | Keeps   | Lag from the history pass after expiry    |
+| `enqueue_idempotency` row that has not expired         | Keeps   | Not lag                                   |
+| `enqueue_idempotency` row that expired                 | Keeps   | Lag from `expires_at`                     |
+| `task_runtime`, `task_event`, or `attempt_history` row | Keeps   | Lag, as for a task that no row references |
+
+- A child is eligible when it is terminal, past both row windows, and behind the history watermark.
+- The key phase deletes an expired key, and the released-edge phase deletes an edge to a finished
+  dependent. Both run before the terminal phase of the same pass. When the hold ends after the row
+  window of one lag, each phase records its end in `task_outcome.held_until`, so queue health still
+  counts that lag from it. If another transaction holds the outcome of the task, the key or edge
+  stays for a later pass. The daily history pass deletes expired schedule occurrences.
+- Each other statement that removes a reference that held a task saves the end of the hold in the
+  same way. These are an enqueue that reuses an expired key, the occurrence cleanup, a cleanup batch
+  that deletes a child, a dependent, or a redrive target, a queue purge, and the deletion of a
+  finished task group. A maintenance statement keeps the reference while another transaction holds
+  the outcome. An enqueue or a purge continues without the write, and the task then counts from its
+  windows until cleanup deletes it.
+- A reference that cleanup deleted before migration 0097 left no `held_until` value. Queue health
+  counts such a task from its windows. A fast-tier outcome has no `held_until` column.
+- The lock window of a batch holds only tasks that the batch can delete.
+
+More detail: [Task lifecycle: Terminal-task pruning](../architecture/lifecycle.md#terminal-task-pruning), [Task lifecycle: Retention health](../architecture/lifecycle.md#retention-health), and [Data model: Lineage retention](../architecture/data-model.md#lineage-retention).
 
 </details>
 
@@ -403,9 +459,11 @@ bound.
 
 Lag differs by category:
 
-- **Task identity and terminal outcome lag** count from the latest of three instants. These are
-  the end of the row window, the history pass that released the row, and the finish of its task
-  group. A member of an unfinished task group is not lag. Cleanup keeps it until the group finishes.
+- **Task identity and terminal outcome lag** count from the earliest due instant of a task that
+  cleanup can delete. A task is due at the latest of the end of its row window, the history pass
+  that released the row, and the end of each hold that ended, such as the finish of its task group.
+  A task that a hold keeps on purpose is not lag. A member of an unfinished task group is an
+  example.
 - **Event and attempt lag** count from the configured window alone. A partitioned row counts past
   the start of the UTC day its window reaches, and a default-partition row past the window itself.
   The rollup and export clamps are not applied. So a stalled rollup or exporter shows as growing
@@ -418,10 +476,18 @@ Lag differs by category:
 
 **Terminal cleanup pace**
 
-- `terminal_task_prune_limit` bounds each batch. The `terminal_tasks` phase repeats batches while
-  each one fills, for at most one second per pass.
-- A pass whose last batch filled sets `maintenance_state.terminal_cleanup_backlog_since`, or keeps
-  its earlier value. The next pass is then due after the follow-up delay of five seconds, or after
+- `terminal_task_prune_limit` bounds each batch. Each tier batch examines one slice of four times
+  its share of the limit, at least 1,000 and at most 100,000 rows. `terminal_prune_position` stores
+  the position of the main walk and of the sweep walk for each tier. The `terminal_tasks` phase
+  repeats batches while each one fills or a main position remains, for at most one second per pass.
+- While a main position remains, the batch after each batch that deleted tasks uses the sweep
+  walk. The sweep walk stops at the main position, so a task behind it goes within a bounded number
+  of batches.
+- Queue health examines at most 1,000 rows in each retention walk. Behind more kept rows than that,
+  row lag is null, and `terminal-cleanup-backlog` reports a late cleanup.
+- A pass whose last batch filled, or that deleted tasks and ended with a main position, sets
+  `maintenance_state.terminal_cleanup_backlog_since`, or keeps its earlier value. A pass that deletes
+  nothing sets no backlog. The next pass is then due after the follow-up delay of five seconds, or after
   `terminal_cleanup_interval_ms` when that is shorter. The dashboard's `due` flag for the routine
   uses the same delay.
 - A successful pass that ends without a full batch clears the column.
@@ -432,7 +498,7 @@ Lag differs by category:
   `terminal-cleanup-backlog`. Its `observed` value is the backlog's age in milliseconds.
 - Each `terminal_storage` row in `maintenance_run` records the rows its pass deleted.
 
-More detail: [Task lifecycle: Retention health](../architecture/lifecycle.md#retention-health), [Task lifecycle: Health policy](../architecture/lifecycle.md#health-policy), and [Task lifecycle: Background routines](../architecture/lifecycle.md#background-routines).
+More detail: [Task lifecycle: Retention health](../architecture/lifecycle.md#retention-health), [Task lifecycle: Health policy](../architecture/lifecycle.md#health-policy), [Task lifecycle: Background routines](../architecture/lifecycle.md#background-routines), and [Operations: Maintenance and health bounds](../architecture/operations.md#maintenance-and-health-bounds).
 
 </details>
 
