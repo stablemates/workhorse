@@ -91,6 +91,10 @@ func main() {
 }
 ```
 
+You can call `Worker.Handle` and `Worker.HandleBatch` before `Run` or from any goroutine while the
+worker runs. If the worker claims a task before its handler exists, it returns the task to its
+queue and charges no attempt.
+
 Handlers receive at-least-once delivery. Use stable provider idempotency keys around external
 effects; named checkpoints prevent completed application stages from running after a later restart.
 

@@ -2,6 +2,7 @@ package workhorse
 
 import (
 	"context"
+	"log/slog"
 	"testing"
 
 	"go.opentelemetry.io/otel"
@@ -43,4 +44,30 @@ func TestExtractTraceContextDropsTheCallerSpanAndKeepsItsValuesAndCancellation(t
 	}
 	cancel()
 	<-parent.Done()
+}
+
+// everyMethodPanics is a slog.Handler whose every method panics.
+type everyMethodPanics struct{}
+
+func (everyMethodPanics) Enabled(context.Context, slog.Level) bool  { panic("enabled") }
+func (everyMethodPanics) Handle(context.Context, slog.Record) error { panic("handle") }
+func (everyMethodPanics) WithAttrs([]slog.Attr) slog.Handler        { panic("with attrs") }
+func (everyMethodPanics) WithGroup(string) slog.Handler             { panic("with group") }
+
+// SM-1938: the worker logs on its own goroutines, so a panic in the slog.Handler of the caller
+// must not leave the logger. The recovering handler drops the record instead.
+func TestRecoveringLoggerDropsARecordWhenItsHandlerPanics(t *testing.T) {
+	logger := newRecoveringLogger(slog.New(everyMethodPanics{}))
+	if newRecoveringLogger(logger) != logger {
+		t.Fatal("a recovering logger was wrapped again")
+	}
+	derived := logger.With("attempt", 1).WithGroup("task")
+	derived.Info("dropped")
+	if derived.Enabled(context.Background(), slog.LevelError) {
+		t.Fatal("a handler whose Enabled panics reported the level as enabled")
+	}
+	err := recoveringLogHandler{handler: everyMethodPanics{}}.Handle(context.Background(), slog.Record{})
+	if err == nil || err.Error() != "the slog.Handler panicked: handle" {
+		t.Fatalf("Handle returned %v", err)
+	}
 }

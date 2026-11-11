@@ -74,6 +74,48 @@ with SQLSTATE `P1007`. The dashboard schedule read returns `lastErrorAt`, `lastE
 matches each day. The migration does not raise the SDK compatibility floor (SM-1927, SM-1947,
 ADR 0118).
 
+### A handler registration while the worker runs is safe
+
+A program can register a handler after `Run` starts, for example from a plugin registry. Before,
+`Handle` and `HandleBatch` wrote the handler map while the dispatch loop read it. That was a data
+race, and the Go runtime could end the process with a concurrent map error. A lock now guards the
+map, so `Handle` and `HandleBatch` are safe from any goroutine while `Run` or `RunOnce` runs. A
+registration applies to each task that the worker claims after the call returns (SM-1937).
+
+### A panic outside the handler no longer ends the worker process
+
+A handler can return a result whose `MarshalJSON` method panics. The `RetryDelay` callback or the
+`slog.Handler` of the worker can also panic. Before, such a panic left the execution goroutine and
+the Go runtime ended the process, with every other running handler. Now the worker settles the
+attempt and continues to claim, and the slot of the attempt returns on each path (SM-1938):
+
+- A panic in the result encoding fails the attempt with `HandlerPanicError`, as a result that the
+  task cannot store fails it. In the shutdown unwind window, the rules of ADR 0117 for such a
+  result apply.
+- A panic in `RetryDelay` fails the attempt with `HandlerPanicError`. Its message holds the panic
+  and the error of the attempt, and the persisted retry policy chooses the delay.
+- If the `slog.Handler` panics, the worker drops that log record. A logger panic does not change
+  the settlement of an attempt.
+- If the meter, the tracer, or the propagator of the OpenTelemetry providers panics, the worker
+  drops that measurement or span operation. A telemetry panic does not change a settlement.
+- If the pgx tracer of the pool panics inside a query on the execution goroutine, the attempt
+  fails with `HandlerPanicError`, and the query returns its connection to the pool.
+- A panic in other code on the execution goroutine, such as the `Error` method of a handler
+  error, fails the attempt with `HandlerPanicError`. If the attempt was already settled,
+  PostgreSQL refuses that write and the attempt keeps its settlement.
+
+If the stop cancels the attempt while `RetryDelay` or the result encoding runs, the worker writes
+the failure in the shutdown unwind window. It also acknowledges a cancellation request that won
+the fence in that window. Before, that write failed, and lease recovery charged the attempt later
+as `LeaseExpired`.
+
+### The repository builds the module with go1.26.11
+
+Advisory GO-2026-6859 affects `net/http` in go1.26.10: a race in `MaxBytesReader` can crash an
+HTTP/1 server. go1.26.11 fixes it. The `toolchain` line of `go.mod` now names go1.26.11, raised
+from go1.26.10. The `go 1.25.0` line does not change, so the module still supports Go 1.25. If you
+build on Go 1.26.x, use go1.26.11 or newer (SM-2009).
+
 ## 0.12.0 — 2026-11-07
 
 The npm packages, Python distribution, Go module, Rust crate, Ruby gem, JVM artifacts, and .NET

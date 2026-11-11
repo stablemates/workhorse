@@ -118,7 +118,9 @@ type batchCoordinator struct {
 	pending  map[string][]*batchMember
 }
 
-// HandleBatch registers a process-local batch coordinator for one task type.
+// HandleBatch registers a process-local batch coordinator for one task type. It follows the rule
+// of Handle: it is safe to call from any goroutine, also while Run or RunOnce runs, and it applies
+// to each task that the worker claims after HandleBatch returns.
 func (worker *Worker) HandleBatch(
 	taskType string,
 	options BatchHandlerOptions,
@@ -143,7 +145,7 @@ func (worker *Worker) HandleBatch(
 		worker: worker, taskType: taskType, options: options, handler: handler,
 		pending: make(map[string][]*batchMember),
 	}
-	worker.handlers[taskType] = coordinator.handle
+	worker.registerHandler(taskType, coordinator.handle)
 	return worker
 }
 
@@ -271,6 +273,30 @@ func (coordinator *batchCoordinator) remove(queue string, target *batchMember) {
 }
 
 func (coordinator *batchCoordinator) dispatch(batch []*batchMember) {
+	// answered marks each member that got its result. If code outside the batch handler panics
+	// before every member has one, each other member gets the result that the batch handler
+	// returned for it, or the panic as a HandlerPanicError. Thus no member waits until the stop.
+	answered := make([]bool, len(batch))
+	defer func() {
+		recovered := recover()
+		if recovered == nil {
+			return
+		}
+		panicked := newHandlerPanicError(batchDispatchPanicFormat, coordinator.taskType, recovered)
+		for index, member := range batch {
+			if answered[index] {
+				continue
+			}
+			member.returnLock.Lock()
+			if member.returned == nil {
+				member.item.Context.handler.markReturned()
+				member.returned = &batchMemberResult{err: panicked}
+			}
+			result := *member.returned
+			member.returnLock.Unlock()
+			member.result <- result
+		}
+	}()
 	queue := batch[0].item.Context.Task.Queue
 	full := len(batch) == coordinator.options.MaxSize
 	linger := time.Since(batch[0].arrived)
@@ -339,13 +365,15 @@ func (coordinator *batchCoordinator) dispatch(batch []*batchMember) {
 		if hasBatchID {
 			coordinator.record(batch[0].item.Context.Context, recordBatchFailureStatementName, batchID, batch)
 		}
-		for _, member := range batch {
+		for index, member := range batch {
 			member.result <- batchMemberResult{err: err}
+			answered[index] = true
 		}
 		return
 	}
 	for index, member := range batch {
 		member.result <- results[index]
+		answered[index] = true
 	}
 }
 
