@@ -96,6 +96,15 @@ moves the schema to version 95. It adds the two nullable columns and
 `retain_history_v1`. It does not raise the SDK compatibility floor and changes only the exporting
 rows of `cold_export_segment`. Run `workhorse schema migrate`.
 
+### The EF Core documents show the execution strategy form
+
+A context with `EnableRetryOnFailure()` refuses a transaction that the application begins outside
+its execution strategy, so the first `SaveChangesAsync` in that transaction throws
+`InvalidOperationException` before any Workhorse call. `dotnet/README.md` and the transactional enqueue guide now show the
+`CreateExecutionStrategy().ExecuteAsync(...)` form, and an example test runs it (SM-1986). They also
+state that `GetWorkhorseConnection()` on an open connection with no transaction runs the enqueue in
+autocommit (SM-1971).
+
 ## 0.12.0 — 2026-11-07
 
 The npm packages, Python distribution, Go module, Rust crate, Ruby gem, JVM artifacts, and .NET

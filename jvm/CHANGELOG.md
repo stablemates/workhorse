@@ -96,6 +96,24 @@ moves the schema to version 95. It adds the two nullable columns and
 `retain_history_v1`. It does not raise the SDK compatibility floor and changes only the exporting
 rows of `cold_export_segment`. Run `workhorse schema migrate`.
 
+### A dashboard read and `ConnectionSource.of` close the connection after an `Error`
+
+A dashboard read that threw an `Error`, such as `OutOfMemoryError`, did not give its connection back,
+and the `ConnectionSource.of` `acquire` did not close its connection when `getAutoCommit()` or
+`setAutoCommit(true)` threw an `Error`. Each such `Error` took one connection out of the pool that
+the worker can share. Now both close or give back the connection on each path, and the original
+`Error` reaches the caller (SM-1948).
+
+### The Spring connection source keeps autocommit for nested calls and a proxy
+
+Under `SUPPORTS`, two calls of the source form can overlap on one connection. The inner release of
+`TransactionAwareConnectionSource` turned autocommit off while the outer call still ran, so the rest
+of the outer call did not commit. Now the source counts the calls for each connection and restores
+autocommit only when the outermost call releases it. A `TransactionAwareDataSourceProxy` bean made
+the source turn autocommit on through the proxy, which committed the open transaction of the caller.
+Now the source unwraps the proxy to its target `DataSource`, as the transaction managers of Spring
+do (SM-1987).
+
 ## 0.12.0 — 2026-11-07
 
 The npm packages, Python distribution, Go module, Rust crate, Ruby gem, JVM artifacts, and .NET

@@ -34,7 +34,10 @@ module Stablemates
           def close(timeout = nil) = @listener.unsubscribe(@subscriber, timeout)
         end
 
-        @shared = {}.compare_by_identity
+        # The registry holds each pool and its listener weakly and compares pools by identity. While
+        # a worker or the listener thread holds the listener, every worker on the pool finds it. Once
+        # nothing holds it, the registry no longer keeps the pool alive (ADR 0071).
+        @shared = ObjectSpace::WeakMap.new
         @shared_lock = Mutex.new
 
         # The listener every worker on +pool+ shares.

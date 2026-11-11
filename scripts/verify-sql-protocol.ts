@@ -401,6 +401,27 @@ export interface OversizedResultRuntimeFixture extends RuntimeFixtureBase {
 }
 
 /**
+ * A handler result that fails its result contract fails each attempt through the retry policy. The
+ * runner syncs `contract` through `sync_contract_definitions_v1`, enqueues `rejectedResult` as the
+ * payload, and registers a handler that returns its payload. The settled task records the contract
+ * failure name of each SDK. A task whose payload is `acceptedResult` then succeeds.
+ */
+export interface ResultContractFailureRuntimeFixture extends RuntimeFixtureBase {
+  kind: "result-contract-failure";
+  maxAttempts: number;
+  contract: {
+    taskType: string;
+    currentVersion: string;
+    versions: Record<string, { payloadSchema: JsonValue; resultSchema: JsonValue }>;
+  };
+  rejectedResult: JsonValue;
+  acceptedResult: JsonValue;
+  expectedSettled: ExpectedRuntimeState;
+  expectedErrorNames: Record<string, string>;
+  expectedAccepted: ExpectedRuntimeState;
+}
+
+/**
  * A worker that stops while a handler runs cancels it once `shutdownGraceMs` elapses, and the
  * handler then settles in the unwind window as `handlerResult` says (ADR 0116, ADR 0117):
  *
@@ -579,6 +600,7 @@ export type RuntimeFixture =
   | JsonRoundTripRuntimeFixture
   | CheckpointNoValueRuntimeFixture
   | OversizedResultRuntimeFixture
+  | ResultContractFailureRuntimeFixture
   | ShutdownCancellationRuntimeFixture
   | HeartbeatFailureRuntimeFixture
   | HeartbeatBusyRuntimeFixture

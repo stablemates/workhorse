@@ -508,8 +508,13 @@ final class Backend {
     } catch (SQLException error) {
       release(connection);
       throw Sql.translate(error);
-    } catch (RuntimeException error) {
-      release(connection);
+    } catch (RuntimeException | Error error) {
+      // An Error, such as OutOfMemoryError, gives the connection back too (SM-1948).
+      try {
+        release(connection);
+      } catch (RuntimeException | Error releaseError) {
+        error.addSuppressed(releaseError);
+      }
       throw error;
     }
     release(connection);

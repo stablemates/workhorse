@@ -56,6 +56,7 @@ import type {
   MaintenancePhaseErrorRuntimeFixture,
   MissingHandlerRuntimeFixture,
   OversizedResultRuntimeFixture,
+  ResultContractFailureRuntimeFixture,
   ShutdownCancellationRuntimeFixture,
   PollCadenceRuntimeFixture,
   ReleaseWaitRuntimeFixture,
@@ -1590,6 +1591,47 @@ async function executeOversizedResultRuntimeFixture(
   });
 }
 
+async function executeResultContractFailureRuntimeFixture(
+  queue: Queue,
+  admin: Admin,
+  database: Pool,
+  fixture: ResultContractFailureRuntimeFixture,
+): Promise<void> {
+  const queueName = `runtime-${fixture.id}`;
+  await database.query("SELECT workhorse.sync_contract_definitions_v1($1::jsonb)", [
+    JSON.stringify([fixture.contract]),
+  ]);
+  const id = await queue.enqueue(fixture.taskType, fixture.rejectedResult, {
+    queue: queueName,
+    maxAttempts: fixture.maxAttempts,
+    retryPolicy: { type: "fixed", delayMs: 0 },
+  });
+  const worker = new Worker(queue, {
+    workerId: `runtime-${fixture.id}`,
+    queue: queueName,
+    registryIntervalMs: 0,
+  }).handle(fixture.taskType, async (payload) => payload);
+
+  for (let pass = 0; pass < fixture.maxAttempts; pass += 1) {
+    if ((await admin.getTask(id))?.state === fixture.expectedSettled.state) break;
+    await expect(worker.runOnce()).resolves.toBe(true);
+  }
+  await expect(admin.getTask(id)).resolves.toMatchObject({
+    state: fixture.expectedSettled.state,
+    currentAttempt: fixture.expectedSettled.attempt,
+    error: { name: fixture.expectedErrorNames.typescript },
+  });
+  const accepted = await queue.enqueue(fixture.taskType, fixture.acceptedResult, {
+    queue: queueName,
+  });
+  await expect(worker.runOnce()).resolves.toBe(true);
+  await expect(admin.getTask(accepted)).resolves.toMatchObject({
+    state: fixture.expectedAccepted.state,
+    currentAttempt: fixture.expectedAccepted.attempt,
+    result: fixture.acceptedResult,
+  });
+}
+
 /**
  * The TypeScript worker has no shutdown grace of its own. `runWorkerProcess` aborts the handlers
  * at the end of its grace through `abortWorkerHandlers`, so the runner calls that after `stop()`,
@@ -2194,6 +2236,9 @@ async function executeRuntimeFixture(
       break;
     case "oversized-result":
       await executeOversizedResultRuntimeFixture(queue, admin, fixture);
+      break;
+    case "result-contract-failure":
+      await executeResultContractFailureRuntimeFixture(queue, admin, database, fixture);
       break;
     case "shutdown-cancellation":
       await executeShutdownCancellationRuntimeFixture(queue, admin, database, fixture);

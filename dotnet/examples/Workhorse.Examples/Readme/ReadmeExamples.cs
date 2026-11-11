@@ -1,7 +1,10 @@
 using System.Text.Json;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Npgsql;
+using Workhorse.EntityFrameworkCore;
+using Workhorse.Examples.Enqueue;
 using Workhorse.Hosting;
 
 namespace Workhorse.Examples.Readme;
@@ -40,6 +43,25 @@ public static class ReadmeExamples
             "readme.echo",
             (HandlerContext context, JsonElement payload) => Task.FromResult(new { echo = payload })));
         await builder.Build().RunAsync(stoppingToken);
+        // docs:end
+    }
+
+    public static async Task CreateAccountWithRetriesAsync(
+        Queue queue, AccountsDbContext db, string id, string email, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(db);
+        // docs:start csharp-readme-ef-core-retry
+        var strategy = db.Database.CreateExecutionStrategy();
+        await strategy.ExecuteAsync(async () =>
+        {
+            db.ChangeTracker.Clear();
+            await using var transaction = await db.Database.BeginTransactionAsync(cancellationToken);
+            db.Accounts.Add(new Account { Id = id, Email = email });
+            await db.SaveChangesAsync(cancellationToken);
+            await queue.Using(db.Database.GetWorkhorseConnection())
+                .EnqueueAsync("account.created", new { accountId = id }, cancellationToken);
+            await transaction.CommitAsync(cancellationToken);
+        });
         // docs:end
     }
 }

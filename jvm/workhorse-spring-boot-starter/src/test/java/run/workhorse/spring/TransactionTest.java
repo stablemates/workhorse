@@ -23,7 +23,9 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.jdbc.datasource.ConnectionHolder;
 import org.springframework.jdbc.datasource.DataSourceTransactionManager;
+import org.springframework.jdbc.datasource.TransactionAwareDataSourceProxy;
 import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.TransactionDefinition;
 import org.springframework.transaction.annotation.EnableTransactionManagement;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
@@ -47,6 +49,38 @@ class TransactionTest {
       statement.setObject(1, taskId);
       try (ResultSet result = statement.executeQuery()) {
         return result.next();
+      }
+    }
+  }
+
+  /** A business table with one column, for the rows that the application writes. */
+  private static void createBusinessTable() throws SQLException {
+    try (Connection connection = ScratchDatabase.connect();
+        PreparedStatement statement =
+            connection.prepareStatement(
+                "CREATE TABLE IF NOT EXISTS public.business_row (queue_name text NOT NULL)")) {
+      statement.execute();
+    }
+  }
+
+  private static void writeBusinessRow(Connection connection, String queueName)
+      throws SQLException {
+    try (PreparedStatement statement =
+        connection.prepareStatement("INSERT INTO public.business_row (queue_name) VALUES (?)")) {
+      statement.setString(1, queueName);
+      statement.executeUpdate();
+    }
+  }
+
+  private static long businessRowsIn(String queueName) throws SQLException {
+    try (Connection connection = ScratchDatabase.connect();
+        PreparedStatement statement =
+            connection.prepareStatement(
+                "SELECT count(*) FROM public.business_row WHERE queue_name = ?")) {
+      statement.setString(1, queueName);
+      try (ResultSet result = statement.executeQuery()) {
+        result.next();
+        return result.getLong(1);
       }
     }
   }
@@ -153,6 +187,83 @@ class TransactionTest {
             context -> {
               UUID taskId = context.getBean(Orders.class).placeWithNotSupported(queueName);
               assertThat(stored(taskId)).as("committed in autocommit").isTrue();
+            });
+  }
+
+  // SM-1987: under SUPPORTS, Spring gives one bound connection to each call on the thread. The
+  // inner call must not restore autocommit while the outer call still runs.
+  @Test
+  void twoOverlappingCallsInASupportsScopeBothCommit() throws SQLException {
+    createBusinessTable();
+    String queueName = Contexts.unique("nested");
+    ScratchDataSource manual = new ScratchDataSource(false);
+    Contexts.runner()
+        .withBean(DataSource.class, () -> manual)
+        .withUserConfiguration(Transactions.class)
+        .run(
+            context -> {
+              ConnectionSource source = context.getBean(ConnectionSource.class);
+              Queue queue = context.getBean(Queue.class);
+              TransactionTemplate supports =
+                  new TransactionTemplate(context.getBean(PlatformTransactionManager.class));
+              supports.setPropagationBehavior(TransactionDefinition.PROPAGATION_SUPPORTS);
+              AtomicReference<@Nullable UUID> inner = new AtomicReference<>();
+              supports.executeWithoutResult(
+                  status -> {
+                    try {
+                      Connection outer = source.acquire();
+                      try {
+                        inner.set(
+                            queue
+                                .enqueue(
+                                    "order.ship",
+                                    Map.of(),
+                                    EnqueueOptions.builder().queue(queueName).build())
+                                .taskId());
+                        assertThat(outer.getAutoCommit())
+                            .as("the inner call leaves autocommit on for the outer call")
+                            .isTrue();
+                        writeBusinessRow(outer, queueName);
+                      } finally {
+                        source.release(outer, false);
+                      }
+                    } catch (SQLException error) {
+                      throw new IllegalStateException(error);
+                    }
+                  });
+              UUID taskId = inner.get();
+              assertThat(taskId).isNotNull();
+              assertThat(stored(taskId)).as("the inner write committed").isTrue();
+              assertThat(businessRowsIn(queueName)).as("the outer write committed").isEqualTo(1);
+              assertThat(manual.autoCommitAtClose())
+                  .as("the pool's value comes back")
+                  .containsOnly(false);
+            });
+  }
+
+  // SM-1987: with a TransactionAwareDataSourceProxy bean, the transaction manager binds its
+  // connection under the target DataSource. A source that looked under the proxy would turn
+  // autocommit on and commit the caller's rows at once.
+  @Test
+  void anEnqueueJoinsTheTransactionBehindATransactionAwareDataSourceProxy() throws SQLException {
+    createBusinessTable();
+    String queueName = Contexts.unique("proxy");
+    Contexts.runner()
+        .withBean(
+            DataSource.class,
+            () -> new TransactionAwareDataSourceProxy(new ScratchDataSource(true)))
+        .withUserConfiguration(ProxiedTransactions.class)
+        .run(
+            context -> {
+              ProxiedOrders orders = context.getBean(ProxiedOrders.class);
+              assertThatThrownBy(() -> orders.placeThenFail(queueName))
+                  .isInstanceOf(IllegalStateException.class)
+                  .hasMessage("the order fails after the enqueue");
+              assertThat(orders.seenInside()).as("the enqueue ran").isNotNull();
+              assertThat(businessRowsIn(queueName))
+                  .as("no business row after the rollback")
+                  .isZero();
+              assertThat(tasksIn(queueName)).as("no task after the rollback").isZero();
             });
   }
 
@@ -357,6 +468,54 @@ class TransactionTest {
 
     public boolean visibleInside() {
       return visibleInside;
+    }
+  }
+
+  /** The transaction manager and the service of the proxy test. */
+  @Configuration(proxyBeanMethods = false)
+  @EnableTransactionManagement
+  static class ProxiedTransactions {
+    @Bean
+    PlatformTransactionManager transactionManager(DataSource dataSource) {
+      return new DataSourceTransactionManager(dataSource);
+    }
+
+    @Bean
+    ProxiedOrders proxiedOrders(DataSource dataSource, Queue queue) {
+      return new ProxiedOrders(dataSource, queue);
+    }
+  }
+
+  /**
+   * An application service that writes a business row through the proxy {@code DataSource}, as an
+   * application with a {@code TransactionAwareDataSourceProxy} does, and then enqueues.
+   */
+  static class ProxiedOrders {
+    private final DataSource dataSource;
+    private final Queue queue;
+    private final AtomicReference<@Nullable UUID> seenInside = new AtomicReference<>();
+
+    ProxiedOrders(DataSource dataSource, Queue queue) {
+      this.dataSource = dataSource;
+      this.queue = queue;
+    }
+
+    @Transactional
+    public void placeThenFail(String queueName) {
+      try (Connection connection = dataSource.getConnection()) {
+        writeBusinessRow(connection, queueName);
+      } catch (SQLException error) {
+        throw new IllegalStateException(error);
+      }
+      seenInside.set(
+          queue
+              .enqueue("order.ship", Map.of(), EnqueueOptions.builder().queue(queueName).build())
+              .taskId());
+      throw new IllegalStateException("the order fails after the enqueue");
+    }
+
+    public @Nullable UUID seenInside() {
+      return seenInside.get();
     }
   }
 

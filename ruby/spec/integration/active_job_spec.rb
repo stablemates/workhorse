@@ -99,6 +99,20 @@ class AjContractJob < AjSpecJob
   def perform(_payload) = nil
 end
 
+# A typed job whose task type has a result contract that refuses null.
+class AjResultContractJob < AjSpecJob
+  workhorse_options task_type: "spec.active_job.result_contract", max_attempts: 2
+
+  def perform(payload) = ActiveJobSpec.seen << payload
+end
+
+# A default job that runs under the active_job task type.
+class AjDefaultContractJob < AjSpecJob
+  workhorse_options max_attempts: 2
+
+  def perform(payload) = ActiveJobSpec.seen << payload
+end
+
 class AjCountingJob < AjSpecJob
   def perform(_payload = nil)
     now = ActiveJobSpec.running.increment
@@ -434,6 +448,36 @@ RSpec.describe "Active Job adapter against PostgreSQL" do
     accepted = AjContractJob.perform_later({"to" => "a@b.c"})
     expect(task_row(accepted.provider_job_id)["contract_version"]).to eq("v1")
     expect(task_count).to eq(1)
+  end
+
+  # ADR 0075: no result contract applies to the adapter, so the worker does not check the nil that
+  # the adapter handler returns. Each job body runs once.
+  it "completes a typed job whose result contract refuses null and runs its body once" do
+    refuses_null = W::TaskContractVersion.new(result_schema: {"type" => "object", "required" => ["url"]})
+    queue.sync_contracts("spec.active_job.result_contract" => W::TaskTypeContracts.new(current_version: "v1",
+      versions: {"v1" => refuses_null}))
+    job = AjResultContractJob.perform_later({"id" => 7})
+    expect(task_row(job.provider_job_id)["contract_version"]).to eq("v1")
+
+    subject = worker(jobs: [AjResultContractJob])
+    2.times { subject.run_once }
+
+    expect(status(job.provider_job_id)).to include("state" => "succeeded", "attempt" => "1", "error" => nil)
+    expect(ActiveJobSpec.seen).to eq([{"id" => 7}])
+  end
+
+  it "completes a default job when the active_job task type has a result contract that refuses null" do
+    refuses_null = W::TaskContractVersion.new(result_schema: {"type" => "object", "required" => ["url"]})
+    queue.sync_contracts(W::ActiveJob::TASK_TYPE => W::TaskTypeContracts.new(current_version: "v1",
+      versions: {"v1" => refuses_null}))
+    job = AjDefaultContractJob.perform_later({"id" => 8})
+    expect(task_row(job.provider_job_id)["contract_version"]).to eq("v1")
+
+    subject = worker(jobs: [])
+    2.times { subject.run_once }
+
+    expect(status(job.provider_job_id)).to include("state" => "succeeded", "attempt" => "1", "error" => nil)
+    expect(ActiveJobSpec.seen).to eq([{"id" => 8}])
   end
 
   it "refuses to handle a listed class without a task type or two classes with one task type" do

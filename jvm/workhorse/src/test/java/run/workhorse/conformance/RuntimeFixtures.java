@@ -12,6 +12,7 @@ import java.lang.reflect.Proxy;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.sql.Connection;
+import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Statement;
@@ -228,6 +229,7 @@ final class RuntimeFixtures {
         case "json-round-trip" -> jsonRoundTrip(fixture);
         case "checkpoint-no-value" -> checkpointNoValue(fixture);
         case "oversized-result" -> oversizedResult(fixture);
+        case "result-contract-failure" -> resultContractFailure(fixture);
         case "shutdown-cancellation" -> shutdownCancellation(fixture);
         case "heartbeat-failure" -> heartbeatFailure(fixture);
         case "heartbeat-busy" -> heartbeatBusy(fixture);
@@ -2274,6 +2276,74 @@ final class RuntimeFixtures {
   }
 
   /**
+   * The runner syncs the result contract, and the handler returns its payload. A payload that the
+   * result schema refuses fails each attempt through the retry policy.
+   */
+  private void resultContractFailure(Map<String, @Nullable Object> fixture) throws Exception {
+    String name = queueName(fixture);
+    value(
+        "SELECT workhorse.sync_contract_definitions_v1(?::jsonb)::text",
+        Json.write(List.of(object(fixture, "contract"))));
+    int maxAttempts = Math.toIntExact((Long) fixture.get("maxAttempts"));
+    UUID taskId =
+        enqueue(
+            taskType(fixture),
+            fixture.get("rejectedResult"),
+            options(name)
+                .maxAttempts(maxAttempts)
+                .retryPolicy(Map.of("type", "fixed", "delayMs", 0)));
+    Map<String, @Nullable Object> settled = object(fixture, "expectedSettled");
+    Object errorName = object(fixture, "expectedErrorNames").get("java");
+    try (Intercept pool = new Intercept(opener, new Intercept.Hook() {})) {
+      Handler<Object> echo = (ctx, payload) -> payload;
+      Worker subject = worker(pool, fixture).handle(taskType(fixture), Object.class, echo).build();
+      for (int attempt = 0; attempt < maxAttempts; attempt++) {
+        if (Matcher.same(state(taskId).get("state"), settled.get("state"))) {
+          break;
+        }
+        check(subject.runOnce(), "the worker did not run the rejected task");
+      }
+      Map<String, @Nullable Object> task = state(taskId);
+      check(
+          Matcher.same(task.get("state"), settled.get("state"))
+              && Matcher.same(task.get("attempt"), settled.get("attempt"))
+              && Matcher.same(task.get("errorName"), errorName),
+          "the rejected task is "
+              + task.get("state")
+              + "/"
+              + task.get("attempt")
+              + " with error "
+              + task.get("errorName")
+              + ", want "
+              + settled.get("state")
+              + "/"
+              + settled.get("attempt")
+              + " with "
+              + errorName);
+      Object acceptedResult = fixture.get("acceptedResult");
+      UUID acceptedId = enqueue(taskType(fixture), acceptedResult, options(name));
+      check(subject.runOnce(), "the worker did not run the accepted task");
+      Map<String, @Nullable Object> accepted = state(acceptedId);
+      Map<String, @Nullable Object> expected = object(fixture, "expectedAccepted");
+      String same =
+          value(
+              "SELECT (result = ?::jsonb)::text FROM workhorse.task_outcome WHERE task_id = ?::uuid",
+              Json.write(acceptedResult),
+              acceptedId.toString());
+      check(
+          Matcher.same(accepted.get("state"), expected.get("state"))
+              && Matcher.same(accepted.get("attempt"), expected.get("attempt"))
+              && "true".equals(same),
+          "the accepted task is "
+              + accepted.get("state")
+              + "/"
+              + accepted.get("attempt")
+              + ": "
+              + accepted.get("errorName"));
+    }
+  }
+
+  /**
    * One batch handler receives every task, highest priority first. Each member settles on its own:
    * one succeeds, one retries, and one fails. The handler pauses the worker, so the first pass ends
    * after one batch, and the second pass runs the retry.
@@ -2916,6 +2986,20 @@ final class RuntimeFixtures {
       try (Statement statement = connection.createStatement();
           ResultSet rows = statement.executeQuery(sql)) {
         return rows.next() ? rows.getString(1) : null;
+      }
+    }
+  }
+
+  /** The first column of the one row {@code sql} returns as text, with text parameters. */
+  private @Nullable String value(String sql, String... parameters) throws SQLException {
+    synchronized (connection) {
+      try (PreparedStatement statement = connection.prepareStatement(sql)) {
+        for (int index = 0; index < parameters.length; index++) {
+          statement.setString(index + 1, parameters[index]);
+        }
+        try (ResultSet rows = statement.executeQuery()) {
+          return rows.next() ? rows.getString(1) : null;
+        }
       }
     }
   }

@@ -5,8 +5,8 @@ import java.lang.invoke.MethodHandles;
 import java.lang.invoke.MethodType;
 import java.sql.Connection;
 import java.sql.SQLException;
+import java.util.Map;
 import java.util.Objects;
-import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import javax.sql.DataSource;
 import org.apache.commons.logging.Log;
@@ -15,6 +15,7 @@ import org.jspecify.annotations.Nullable;
 import org.springframework.jdbc.CannotGetJdbcConnectionException;
 import org.springframework.jdbc.datasource.ConnectionHolder;
 import org.springframework.jdbc.datasource.DataSourceUtils;
+import org.springframework.jdbc.datasource.TransactionAwareDataSourceProxy;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
 import run.workhorse.ConnectionSource;
 
@@ -30,6 +31,15 @@ import run.workhorse.ConnectionSource;
  * call and restores the earlier value before it releases the connection. That includes a {@code
  * SUPPORTS} or {@code NOT_SUPPORTED} scope, and a transaction of another transaction manager, for
  * example one of a second {@code DataSource}.
+ *
+ * <p>Under {@code SUPPORTS}, Spring gives one bound connection to each call on the thread, so two
+ * calls can overlap on one connection. The source counts the calls for each connection that it
+ * turned autocommit on for, and it restores the earlier value only when the outermost call releases
+ * the connection.
+ *
+ * <p>A {@code TransactionAwareDataSourceProxy} is unwrapped to its target {@code DataSource}, as
+ * {@code DataSourceTransactionManager} and {@code JpaTransactionManager} do, because the
+ * transaction manager binds its connection under the target.
  *
  * <p>A {@code JtaTransactionManager} binds no holder of its own. The container enlists the
  * connection that {@code DataSourceUtils} binds for synchronization. So when the starter finds a
@@ -53,10 +63,13 @@ public final class TransactionAwareConnectionSource implements ConnectionSource 
   private final DataSource dataSource;
   private final boolean jta;
   private final @Nullable MethodHandle transactionActive;
-  private final Set<Connection> restore = ConcurrentHashMap.newKeySet();
+
+  /** The open calls on each connection that this source turned autocommit on for. */
+  private final Map<Connection, Integer> restore = new ConcurrentHashMap<>();
 
   /**
-   * A source over {@code dataSource}, the same {@code DataSource} the transaction manager uses.
+   * A source over {@code dataSource}, the same {@code DataSource} the transaction manager uses. A
+   * {@code TransactionAwareDataSourceProxy} is unwrapped to its target {@code DataSource}.
    *
    * <p>A source built with this constructor does not join a JTA transaction: under a {@code
    * JtaTransactionManager}, it runs the call in autocommit. A JTA application uses the {@code
@@ -78,7 +91,13 @@ public final class TransactionAwareConnectionSource implements ConnectionSource 
   /** The seam of a test: a {@code null} {@code transactionActive} acts as a failed lookup. */
   TransactionAwareConnectionSource(
       DataSource dataSource, boolean jta, @Nullable MethodHandle transactionActive) {
-    this.dataSource = Objects.requireNonNull(dataSource, "dataSource");
+    Objects.requireNonNull(dataSource, "dataSource");
+    // The transaction managers of Spring bind their connection under the target of this proxy, so
+    // a lookup under the proxy finds no transaction (SM-1987).
+    this.dataSource =
+        dataSource instanceof TransactionAwareDataSourceProxy proxy
+            ? Objects.requireNonNull(proxy.getTargetDataSource(), "targetDataSource")
+            : dataSource;
     this.jta = jta;
     this.transactionActive = transactionActive;
   }
@@ -110,12 +129,11 @@ public final class TransactionAwareConnectionSource implements ConnectionSource 
                   || ownedByTransaction(
                       (ConnectionHolder)
                           TransactionSynchronizationManager.getResource(dataSource)));
-      if (!owned && !connection.getAutoCommit()) {
-        connection.setAutoCommit(true);
-        restore.add(connection);
+      if (!owned) {
+        enterAutocommit(connection);
       }
       return connection;
-    } catch (SQLException | RuntimeException error) {
+    } catch (SQLException | RuntimeException | Error error) {
       DataSourceUtils.releaseConnection(connection, dataSource);
       throw error;
     }
@@ -124,13 +142,43 @@ public final class TransactionAwareConnectionSource implements ConnectionSource 
   @Override
   public void release(Connection connection, boolean transactional) throws SQLException {
     try {
-      if (restore.remove(connection)) {
+      if (leaveAutocommit(connection)) {
         connection.setAutoCommit(false);
       }
     } finally {
       // DataSourceUtils closes the connection only when no Spring transaction holds it.
       DataSourceUtils.releaseConnection(connection, dataSource);
     }
+  }
+
+  /**
+   * Turns autocommit on for one call on a connection that no transaction owns. A call that overlaps
+   * an earlier call on the same connection only counts itself, because the earlier call already
+   * turned autocommit on.
+   */
+  private void enterAutocommit(Connection connection) throws SQLException {
+    if (restore.computeIfPresent(connection, (key, calls) -> calls + 1) != null) {
+      return;
+    }
+    if (!connection.getAutoCommit()) {
+      connection.setAutoCommit(true);
+      restore.put(connection, 1);
+    }
+  }
+
+  /** Ends one call, and returns whether it was the last call that must restore autocommit off. */
+  private boolean leaveAutocommit(Connection connection) {
+    boolean[] last = {false};
+    restore.computeIfPresent(
+        connection,
+        (key, calls) -> {
+          if (calls > 1) {
+            return calls - 1;
+          }
+          last[0] = true;
+          return null;
+        });
+    return last[0];
   }
 
   /**

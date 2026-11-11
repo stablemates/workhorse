@@ -453,6 +453,10 @@ The queue in this example is `new Queue(ConnectionSource.of(dataSource))`. The `
 catches the unchecked Workhorse exceptions. If the code rolls back, the
 account row and the task disappear together.
 
+The caller form does not refuse a connection with autocommit on. If autocommit is on, the caller
+form runs the enqueue in autocommit. The task then commits at once, and a later rollback does not
+remove it. Thus turn off autocommit before the first write of the transaction.
+
 Kotlin uses the same caller form through the `workhorse-kotlin` module. Give the connection to the
 suspend wrapper as the named `connection` argument.
 
@@ -491,6 +495,8 @@ If PostgreSQL refuses an enqueue, it aborts your transaction, also when you catc
 - Each Workhorse exception extends the unchecked `WorkhorseException`, a `RuntimeException`.
 - The caller form only reads `getAutoCommit()`. It never begins, commits, rolls back, or closes,
   and it changes no session state.
+- If autocommit is on, the caller form runs the call in autocommit. It does not refuse the
+  connection.
 - `ConnectionSource.of(DataSource)` runs each call in autocommit. If the pool gives a connection
   with autocommit off, it turns autocommit on for the call and then restores it.
 - `Admin` has the same two forms.
@@ -548,6 +554,10 @@ If PostgreSQL refuses an enqueue, it aborts your transaction, also when you catc
   and `HibernateTransactionManager` begin such a transaction.
 - Outside such a transaction, it runs the call in autocommit. This includes a transaction of
   another transaction manager, such as one of a second `DataSource`.
+- Two calls can overlap on one connection under `SUPPORTS`. The source restores the autocommit value
+  of the pool only when the outermost call releases the connection.
+- The source unwraps a `TransactionAwareDataSourceProxy` to its target `DataSource`, as the
+  transaction managers of Spring do.
 - The starter uses the `DataSource` bean that `workhorse.data-source` names. Without that property,
   it uses the only `DataSource` candidate or the `@Primary` one. With several candidates and no
   selection, it builds no bean and logs a warning.
@@ -636,6 +646,37 @@ public async Task CreateAccountAsync(
 Npgsql runs the enqueue inside the transaction that EF Core began. If the code does not commit, the
 transaction rolls back, and the task disappears with the account row.
 
+`GetWorkhorseConnection` does not refuse an open connection with no transaction. For example, the
+application can open the connection with `Database.OpenConnection()` and begin no transaction. Then
+the enqueue runs in autocommit. The task commits at once, and a later rollback does not remove it.
+Thus begin the transaction before the enqueue.
+
+If the context uses a retrying execution strategy, such as `EnableRetryOnFailure()`, EF Core
+refuses a transaction that your code begins outside the strategy. The first `SaveChangesAsync` in
+that transaction then throws `InvalidOperationException` before any Workhorse call. Put the whole
+block in
+`db.Database.CreateExecutionStrategy().ExecuteAsync(...)`. The strategy can run the block again
+after a transient failure, so each run must start with no tracked rows.
+
+```csharp
+public async Task CreateAccountWithRetriesAsync(
+    AccountsDbContext db, string id, string email, CancellationToken cancellationToken)
+{
+    var strategy = db.Database.CreateExecutionStrategy();
+    await strategy.ExecuteAsync(async () =>
+    {
+        // The strategy can run the block again, so each run starts with no tracked rows.
+        db.ChangeTracker.Clear();
+        await using var transaction = await db.Database.BeginTransactionAsync(cancellationToken);
+        db.Accounts.Add(new Account { Id = id, Email = email });
+        await db.SaveChangesAsync(cancellationToken);
+        await queue.Using(db.Database.GetWorkhorseConnection())
+            .EnqueueAsync("account.created", new { accountId = id }, cancellationToken);
+        await transaction.CommitAsync(cancellationToken);
+    });
+}
+```
+
 If PostgreSQL refuses an enqueue, it aborts your transaction, also when you catch the error. Read
 [Catch an enqueue error outside the transaction](#catch-an-enqueue-error-outside-the-transaction).
 
@@ -653,6 +694,11 @@ If PostgreSQL refuses an enqueue, it aborts your transaction, also when you catc
 - If the connection of the caller form is closed, the first call throws `InvalidOperationException`.
 - `GetWorkhorseConnection` throws `InvalidOperationException` if the provider is not Npgsql or if
   the connection is not open.
+- `GetWorkhorseConnection` does not require a current transaction. On an open connection with no
+  transaction, the enqueue runs in autocommit.
+- Under a retrying execution strategy, a transaction that begins outside
+  `CreateExecutionStrategy().ExecuteAsync` makes `SaveChangesAsync` throw
+  `InvalidOperationException`.
 - The source form opens each connection inside a suppressed `TransactionScope`, so an ambient scope
   never changes its autocommit call.
 - The caller form passes the `CancellationToken` of the caller to Npgsql. A cancellation fails the

@@ -166,6 +166,7 @@ internal sealed class RuntimeFixtures : IAsyncDisposable
             "json-round-trip" => JsonRoundTripAsync(fixture),
             "checkpoint-no-value" => CheckpointNoValueAsync(fixture),
             "oversized-result" => OversizedResultAsync(fixture),
+            "result-contract-failure" => ResultContractFailureAsync(fixture),
             "shutdown-cancellation" => ShutdownCancellationAsync(fixture),
             "heartbeat-failure" => HeartbeatFailureAsync(fixture),
             "heartbeat-busy" => HeartbeatBusyAsync(fixture),
@@ -1923,6 +1924,54 @@ internal sealed class RuntimeFixtures : IAsyncDisposable
         Failure.Check(
             Matcher.Same(fitting["state"], expected["state"]) && Matcher.Same(fitting["attempt"], expected["attempt"]),
             $"the fitting task is {fitting["state"]}/{fitting["attempt"]}: {fitting["errorName"]}");
+    }
+
+    /// <summary>
+    /// The runner syncs the result contract, and the handler returns its payload. A payload that the
+    /// result schema refuses fails each attempt through the retry policy.
+    /// </summary>
+    private async Task ResultContractFailureAsync(OrderedDictionary<string, object?> fixture)
+    {
+        var name = QueueName(fixture);
+        await using (var connection = await _database.DataSource.OpenConnectionAsync())
+        {
+            await using var sync = new NpgsqlCommand("SELECT workhorse.sync_contract_definitions_v1($1::text::jsonb)::text", connection);
+            sync.Parameters.Add(new NpgsqlParameter { Value = Json.Write(new List<object?> { Get(fixture, "contract") }) });
+            await sync.ExecuteNonQueryAsync();
+        }
+
+        var maxAttempts = checked((int)(long)fixture["maxAttempts"]!);
+        var taskId = await EnqueueAsync(TaskType(fixture), fixture.GetValueOrDefault("rejectedResult"), Options(name) with { MaxAttempts = maxAttempts, RetryPolicy = RetryPolicy.Fixed(TimeSpan.Zero) });
+        var settled = Get(fixture, "expectedSettled");
+        var names = Get(fixture, "expectedErrorNames");
+        Failure.Check(names.ContainsKey(Language), $"expectedErrorNames has no {Language} entry");
+        var errorName = names[Language];
+        await using var pool = Intercept.Create(_database, Intercept.Hook.None);
+        await using var subject = NewWorker(pool, fixture);
+        subject.Handle<JsonElement, JsonElement>(TaskType(fixture), (_, payload) => Task.FromResult(payload));
+        for (var attempt = 0; attempt < maxAttempts; attempt++)
+        {
+            if (Matcher.Same((await StateAsync(taskId))["state"], settled["state"]))
+            {
+                break;
+            }
+
+            Failure.Check(await subject.RunOnceAsync(), "the worker did not run the rejected task");
+        }
+
+        var task = await StateAsync(taskId);
+        Failure.Check(
+            Matcher.Same(task["state"], settled["state"]) && Matcher.Same(task["attempt"], settled["attempt"]) && Matcher.Same(task["errorName"], errorName),
+            $"the rejected task is {task["state"]}/{task["attempt"]} with error {task["errorName"]}, want {settled["state"]}/{settled["attempt"]} with {errorName}");
+        var acceptedResult = fixture.GetValueOrDefault("acceptedResult");
+        var acceptedId = await EnqueueAsync(TaskType(fixture), acceptedResult, Options(name));
+        Failure.Check(await subject.RunOnceAsync(), "the worker did not run the accepted task");
+        var accepted = await StateAsync(acceptedId);
+        var expected = Get(fixture, "expectedAccepted");
+        var stored = Json.Parse((await ValueAsync($"SELECT result::text FROM workhorse.task_outcome WHERE task_id = '{acceptedId}'")) ?? "null");
+        Failure.Check(
+            Matcher.Same(accepted["state"], expected["state"]) && Matcher.Same(accepted["attempt"], expected["attempt"]) && Exact(stored, acceptedResult),
+            $"the accepted task is {accepted["state"]}/{accepted["attempt"]} with result {Matcher.Render(stored)}: {accepted["errorName"]}");
     }
 
     /// <summary>

@@ -46,8 +46,13 @@ public interface ConnectionSource {
             restore.add(connection);
           }
           return connection;
-        } catch (SQLException | RuntimeException error) {
-          connection.close();
+        } catch (SQLException | RuntimeException | Error error) {
+          // The original failure reaches the caller, also when the close fails too (SM-1948).
+          try {
+            connection.close();
+          } catch (SQLException | RuntimeException | Error closeError) {
+            error.addSuppressed(closeError);
+          }
           throw error;
         }
       }

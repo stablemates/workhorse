@@ -126,6 +126,10 @@ type workerRuntimeFixture struct {
 	ExpectedSettled                      workerFixtureTaskState            `json:"expectedSettled"`
 	ExpectedErrorNames                   map[string]string                 `json:"expectedErrorNames"`
 	ExpectedFitting                      workerFixtureTaskState            `json:"expectedFitting"`
+	Contract                             json.RawMessage                   `json:"contract"`
+	RejectedResult                       any                               `json:"rejectedResult"`
+	AcceptedResult                       any                               `json:"acceptedResult"`
+	ExpectedAccepted                     workerFixtureTaskState            `json:"expectedAccepted"`
 	ShutdownGraceMS                      int                               `json:"shutdownGraceMs"`
 	ShutdownBehavior                     map[string]string                 `json:"shutdownBehavior"`
 	HandlerResult                        string                            `json:"handlerResult"`

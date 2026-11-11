@@ -2,6 +2,7 @@
 
 require "spec_helper"
 require "connection_pool"
+require "weakref"
 
 # A pool budgets one listener connection however many workers it serves (ADR 0071). Workers on one
 # pool share that listener, each woken only for its own queues.
@@ -134,6 +135,39 @@ RSpec.describe W::Worker::Listener do
   ensure
     first.stop
     second.stop
+  end
+
+  # The registries hold their listener and heartbeat weakly, so they do not keep a pool alive after
+  # its last worker stops (ADR 0071). The pool and its workers live only on a thread that ends, so
+  # no stack frame of this example still holds them.
+  it "lets a pool go after its workers stop, and shares one listener and one heartbeat until then" do
+    built_here = []
+    shared = Thread.new do
+      dropped = ConnectionPool.new(size: 3, timeout: 2) do
+        fake.new(built_here.size + 1, false, Thread::Queue.new, false).tap { |connection| built_here << connection }
+      end
+      workers = %w[a b].map do |queue|
+        W::Worker.new(dropped, queues: [queue], disable_registry: true, maintenance_interval: 3600,
+          maintenance_routine_interval: 3600, shutdown_grace: 1)
+      end
+      # Not +start+: a stub would keep each worker alive until the example ends.
+      runners = workers.map do |subject|
+        Thread.new { subject.run }.tap { eventually { subscription(subject)&.listening? } }
+      end
+      listeners = workers.map { |subject| subscription(subject).instance_variable_get(:@listener) }
+      heartbeats = workers.map { |subject| subject.instance_variable_get(:@heartbeat) }
+      one_each = listeners.uniq(&:__id__).size == 1 && heartbeats.uniq(&:__id__).size == 1 &&
+        built_here.count(&:listening) == 1
+      workers.zip(runners).each { |subject, runner| stop(subject, runner) }
+      [one_each, WeakRef.new(dropped)]
+    end.value
+    one_each, reference = shared
+
+    expect(one_each).to be(true)
+    eventually do
+      GC.start(full_mark: true, immediate_sweep: true)
+      !reference.weakref_alive?
+    end
   end
 
   it "keeps waking other subscribers when one callback raises" do

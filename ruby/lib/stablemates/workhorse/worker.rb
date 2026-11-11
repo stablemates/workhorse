@@ -25,6 +25,12 @@ module Stablemates
     # unwind window. A handler that raises the CancelledError of that cancellation, as +check!+
     # does, returns its task to the queue without charging the attempt.
     class Worker
+      # The block of a handler whose result no result contract checks. The Active Job adapter
+      # registers its handlers with it, because the adapter stores no result (ADR 0075). The worker
+      # still checks that the result can be stored and that it fits its size limit.
+      class UncheckedResultHandler < Proc # :nodoc:
+      end
+
       MAX_EMPTY_POLL_MS = 5_000
       NOTIFICATION_POLL_MS = 5_000
       NOTIFICATION_CLAIM_DELAY = 0.05
@@ -1690,7 +1696,7 @@ module Stablemates
             # the handler's own into a shutdown.
             stopped = take_shutdown_at_return(cancellation)
           end
-          validate_result(task, result)
+          validate_result(task, result) unless handler.is_a?(UncheckedResultHandler)
           encoded = Values.json(result, "task result")
           check_result_storable(task, encoded)
           check_result_size(task, encoded)

@@ -203,7 +203,10 @@ module Stablemates
           [[REACQUIRE_BASE, interval].min * (2**[failures - 1, 16].min) * random, interval].min
         end
 
-        @dedicated = {}.compare_by_identity
+        # The registry holds each pool and its heartbeat weakly and compares pools by identity. While
+        # a worker or the heartbeat thread holds the heartbeat, every worker on the pool finds it. Once
+        # nothing holds it, the registry no longer keeps the pool alive (ADR 0071).
+        @dedicated = ObjectSpace::WeakMap.new
         @dedicated_lock = Mutex.new
 
         # The heartbeat every worker on +pool+ shares.
