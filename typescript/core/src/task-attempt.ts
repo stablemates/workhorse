@@ -227,19 +227,17 @@ export class TaskAttempt {
     return (this.shutdownAtReturn ?? this.shutdownRequested) && this.arbiter.outcome === undefined;
   }
 
-  /** Suspend on a durable wait or child, even if another outcome already won. */
+  /**
+   * Suspend on a durable wait or child, even if another outcome already won. PostgreSQL parked the
+   * task, so the code after the wait must not run before the wake. A stale heartbeat, a stale
+   * expiry answer, or the lease watchdog can win while the wait request is in flight. The handler
+   * then still stops here, and the outcome that won stays (SM-1929).
+   */
   suspend(outcome: "suspended_for_wait" | "suspended_for_child"): never {
     const reason =
       outcome === "suspended_for_wait" ? DURABLE_WAIT_SUSPENSION : CHILD_TASK_SUSPENSION;
     if (this.arbiter.submit(outcome)) this.controller.abort(reason);
     throw reason;
-  }
-
-  /** Suspend on a scheduled sleep only when no other outcome has won yet. */
-  suspendForScheduledWait(): void {
-    if (!this.arbiter.submit("suspended_for_wait")) return;
-    this.controller.abort(DURABLE_WAIT_SUSPENSION);
-    throw DURABLE_WAIT_SUSPENSION;
   }
 
   /** Stop renewing the lease and cancel the local expiration timer. */

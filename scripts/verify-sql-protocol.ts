@@ -128,7 +128,7 @@ export interface CooperativeCancellationRuntimeFixture extends RuntimeFixtureBas
   expectedAttemptOutcome: TaskAttemptOutcome;
 }
 
-export interface ExpirationRuntimeFixture extends RuntimeFixtureBase {
+interface ExpirationRuntimeFixtureBase extends RuntimeFixtureBase {
   kind: "expiration";
   mode: "deadline" | "execution-timeout";
   durationMs: number;
@@ -146,6 +146,24 @@ export interface ExpirationRuntimeFixture extends RuntimeFixtureBase {
   expectedAfterRuns: ExpectedRuntimeState[];
   expectedAttemptOutcomes: TaskAttemptOutcome[];
 }
+
+/**
+ * The first expiry request of the attempt fails. A failed request does not confirm the expiry, so
+ * the handler keeps running, and the worker asks again. The runner holds that request until it has
+ * checked that the handler is not cancelled. `expectedMinimumExpiryRequests` counts the failed
+ * request and the held one. After the expiry settles, the same worker claims and completes a task
+ * of `followingTaskType`.
+ */
+export interface FailedExpiryRequestRuntimeFixture extends ExpirationRuntimeFixtureBase {
+  injection: RuntimeExpiryInjection;
+  expectedMinimumExpiryRequests: number;
+  followingTaskType: string;
+  expectedFollowingState: ExpectedRuntimeState;
+}
+
+export type ExpirationRuntimeFixture =
+  | ExpirationRuntimeFixtureBase
+  | FailedExpiryRequestRuntimeFixture;
 
 export interface LeaseLossRuntimeFixture extends RuntimeFixtureBase {
   kind: "lease-loss";
@@ -408,16 +426,63 @@ export interface HeartbeatFailureRuntimeFixture extends RuntimeFixtureBase {
 
 /**
  * Replaces one installed function with `body` while the fixture runs. `setup` runs before the
- * replacement and `teardown` after the runner restores `function` from its own definition.
- * `roundsQuery` returns one row for each injected busy round, as `round_at_ms` and `lease_count`.
+ * replacement and `teardown` after the runner restores `function` from its own definition. A
+ * `setup` statement can copy the installed function under another name, so that `body` can call
+ * the real behavior.
  */
-export interface RuntimeBusyInjection {
+export interface RuntimeBodyInjection {
   function: string;
   header: string;
   setup: string[];
   body: string;
-  roundsQuery: string;
   teardown: string[];
+}
+
+/** `roundsQuery` returns one row for each injected busy round, as `round_at_ms` and `lease_count`. */
+export interface RuntimeBusyInjection extends RuntimeBodyInjection {
+  roundsQuery: string;
+}
+
+/**
+ * The injected expiry function fails its first call and holds each later call until a runner
+ * sends `release`. `callsQuery` returns one row with `calls`: how many expiry requests reached
+ * PostgreSQL. While a call is held, PostgreSQL has not confirmed the expiry.
+ */
+interface RuntimeExpiryInjection extends RuntimeBodyInjection {
+  callsQuery: string;
+  release: string;
+}
+
+/**
+ * The injected `schedule_wait_v1` keeps the request of the worker in flight until a runner sends
+ * `release`, and then answers `scheduled` with the stored wait. `requestedQuery` returns one row
+ * with `requested`, the text `true` once the request is in flight. `commit` parks the task through
+ * the copy of the real function in a transaction of its own and returns its `status`. After that
+ * commit, each heartbeat of the worker answers `stale`.
+ */
+interface RuntimeSuspensionRaceInjection extends RuntimeBodyInjection {
+  requestedQuery: string;
+  commit: string;
+  release: string;
+}
+
+/**
+ * PostgreSQL commits a timer wait, and a heartbeat answers `stale` before the worker reads the
+ * `scheduled` answer. The handler must still stop at the wait: the runner counts the runs of the
+ * code after it.
+ */
+export interface SuspensionRaceRuntimeFixture extends RuntimeFixtureBase {
+  kind: "suspension-race";
+  waitName: string;
+  waitMs: number;
+  leaseMs: number;
+  heartbeatMs: number;
+  /** How long the runner waits for the handler cancellation that the stale heartbeat causes. */
+  cancellationTimeoutMs: number;
+  injection: RuntimeSuspensionRaceInjection;
+  expectedRunsAfterWait: number;
+  expectedState: ExpectedRuntimeState;
+  expectedAttempts: number;
 }
 
 /**
@@ -462,6 +527,7 @@ export type RuntimeFixture =
   | ReplayConflictRuntimeFixture
   | BatchRuntimeFixture
   | SuspensionReplayRuntimeFixture
+  | SuspensionRaceRuntimeFixture
   | CooperativeCancellationRuntimeFixture
   | ExpirationRuntimeFixture
   | LeaseLossRuntimeFixture

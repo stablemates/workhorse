@@ -1097,8 +1097,12 @@ class _HandlerDurability:
             with self._lock:
                 if self._waits is not None:
                     self._waits[name] = wait
-            if status == "scheduled" and self._arbiter.submit("suspended_for_wait"):
-                raise self._suspension(cancel=True)
+            if status == "scheduled":
+                # PostgreSQL parked the task, so the code after the wait must not run before the
+                # wake. A stale heartbeat, a stale expiry answer, or the lease watchdog can win
+                # while the request is in flight. The handler then still stops here, and the
+                # outcome that won stays (SM-1929).
+                raise self._suspension(cancel=self._arbiter.submit("suspended_for_wait"))
             pending.set_result(None)
         except BaseException as error:
             pending.set_exception(error)
@@ -4007,7 +4011,13 @@ class Worker:
                         unregister_heartbeat()
                     return
                 if status in {"deadline_exceeded", "timeout_exceeded"}:
-                    settle_expiration()
+                    try:
+                        settle_expiration()
+                    except Exception as error:
+                        # A failed request does not confirm the expiry, and it is not an error of
+                        # the other leases of the round. The handler keeps running. The next round
+                        # and the expiry watch ask again (SM-1934).
+                        self._log_expiration_request_failure(task, error)
                     return
                 deliver_status(status)
 
@@ -4048,7 +4058,14 @@ class Worker:
                         if not handler_running:
                             unregister_heartbeat()
                             return
-                        status = settle_expiration()
+                        try:
+                            status = settle_expiration()
+                        except Exception as error:
+                            # A failed request does not confirm the expiry. The handler keeps
+                            # running, and the watch asks again with the not_due backoff. The lease
+                            # watchdog still ends an attempt that nobody renews (SM-1934).
+                            self._log_expiration_request_failure(task, error)
+                            status = "not_due"
                     if status == "not_due":
                         expiration_retry_at = monotonic() + expiration_retry
                         expiration_retry = min(expiration_retry * 2, _EXPIRATION_RETRY_MAX_SECONDS)
@@ -4363,6 +4380,20 @@ class Worker:
             return isinstance(cancellation.reason, _WorkerShutdownError)
         with self._state_lock:
             return self._shutdown_aborted
+
+    def _log_expiration_request_failure(self, task: ClaimedTask, error: Exception) -> None:
+        """An expiry request failed while the handler runs. The worker asks again."""
+        _emit_log(
+            "WARN",
+            "workhorse.worker.expiration_request_failed",
+            "Ownership expiration request failed; the worker asks again",
+            {
+                **_task_span_attributes(task),
+                "workhorse.queue.name": task.queue,
+                "workhorse.worker.id": self.worker_id,
+                "error.type": type(error).__name__,
+            },
+        )
 
     def _log_shutdown_settlement_failure(self, task: ClaimedTask, error: Exception) -> None:
         """A completion or a release after the shutdown abort failed. Lease recovery settles it."""

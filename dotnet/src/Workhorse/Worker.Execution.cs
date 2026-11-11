@@ -621,7 +621,7 @@ public sealed partial class Worker
                     await ownership.Settlement.WaitAsync(ownership.Stopped).ConfigureAwait(false);
                     try
                     {
-                        return await SettleExpirationAsync(task, arbiter).ConfigureAwait(false);
+                        return await RequestExpirationAsync(task, arbiter).ConfigureAwait(false);
                     }
                     finally
                     {
@@ -715,6 +715,25 @@ public sealed partial class Worker
     {
         ownership.Errors.Enqueue(error);
         cancellation.Cancel(CancelReason.LeaseLost);
+    }
+
+    /// <summary>
+    /// Asks PostgreSQL to settle the expiry, as <see cref="SettleExpirationAsync"/> does. A failed
+    /// request proves nothing about the expiry: the worker logs it and answers <c>not_due</c>, so the
+    /// handler keeps running and the watch asks again after its backoff. The lease watchdog still
+    /// ends an attempt that nobody renews (SM-1934). A stop of the run still ends the watch.
+    /// </summary>
+    private async Task<string?> RequestExpirationAsync(Active task, Arbiter arbiter)
+    {
+        try
+        {
+            return await SettleExpirationAsync(task, arbiter).ConfigureAwait(false);
+        }
+        catch (Exception error) when (!task.Run.StopPath.Token.IsCancellationRequested)
+        {
+            WorkerLog.ExpirationRequestFailed(_logger, task.Task.Id, error);
+            return "not_due";
+        }
     }
 
     private async Task<string?> SettleExpirationAsync(Active task, Arbiter arbiter)
@@ -816,7 +835,9 @@ public sealed partial class Worker
                 {
                     if (status is "deadline_exceeded" or "timeout_exceeded")
                     {
-                        await worker.SettleExpirationAsync(task, arbiter).ConfigureAwait(false);
+                        // A failed request does not confirm the expiry, so the handler keeps running.
+                        // The next round and the expiry watch ask again (SM-1934).
+                        await worker.RequestExpirationAsync(task, arbiter).ConfigureAwait(false);
                     }
                     else
                     {

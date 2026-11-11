@@ -60,8 +60,10 @@ import type {
   ReleaseWaitRuntimeFixture,
   SlotRefillRuntimeFixture,
   SubscriptionRecoveryRuntimeFixture,
+  RuntimeBodyInjection,
   RuntimeFunctionInjection,
   RuntimeWriteOperation,
+  SuspensionRaceRuntimeFixture,
   SuspensionReplayRuntimeFixture,
   TracePropagationRuntimeFixture,
 } from "../../../scripts/verify-sql-protocol.js";
@@ -318,6 +320,79 @@ async function executeSuspensionReplayRuntimeFixture(
   expect(checkpointOperations).toBe(fixture.expectedCheckpointOperations);
 }
 
+/**
+ * The injected `schedule_wait_v1` keeps the request of the worker in flight. Meanwhile the runner
+ * parks the task on a connection of its own, so the next heartbeat answers `stale` and the handler
+ * signal aborts. Only then does the runner release the `scheduled` answer. The handler must stop at
+ * the wait although another outcome won first.
+ */
+async function executeSuspensionRaceRuntimeFixture(
+  queue: Queue,
+  admin: Admin,
+  database: Pool,
+  fixture: SuspensionRaceRuntimeFixture,
+): Promise<void> {
+  const queueName = `runtime-${fixture.id}`;
+  const id = await queue.enqueue(fixture.taskType, {}, { queue: queueName });
+  const handlerSignal = deferred<AbortSignal>();
+  let runsAfterWait = 0;
+  const worker = new Worker(queue, {
+    workerId: `runtime-${fixture.id}`,
+    queue: queueName,
+    leaseMs: fixture.leaseMs,
+    heartbeatMs: fixture.heartbeatMs,
+    registryIntervalMs: 0,
+  }).handle(fixture.taskType, async (_payload, context) => {
+    handlerSignal.resolve(context.signal);
+    await context.sleep(fixture.waitName, fixture.waitMs);
+    runsAfterWait += 1;
+    return null;
+  });
+
+  const control = await database.connect();
+  let runError: unknown;
+  try {
+    await withInjectedFunctionBody(control, fixture.injection, async () => {
+      const execution = worker.runOnce().then(
+        () => undefined,
+        (error: unknown) => error,
+      );
+      try {
+        const signal = await handlerSignal.promise;
+        await waitUntil(async () => {
+          const requested = await control.query<{ requested: string }>(
+            fixture.injection.requestedQuery,
+          );
+          return requested.rows[0]?.requested === "true";
+        }, `${fixture.id}: the wait request never reached PostgreSQL`);
+        const committed = await control.query<{ status: string }>(fixture.injection.commit);
+        expect(committed.rows, "the wait that the runner commits").toEqual([
+          { status: "scheduled" },
+        ]);
+        const abort = waitForAbort(signal);
+        const timeout = sleep(fixture.cancellationTimeoutMs, "timeout" as const);
+        if ((await Promise.race([abort, timeout])) === "timeout") {
+          throw new Error(`${fixture.id}: no stale heartbeat cancelled the handler`);
+        }
+      } finally {
+        // The wait answer reaches the worker only after the stale heartbeat won.
+        await control.query(fixture.injection.release);
+        runError = await execution;
+      }
+    });
+  } finally {
+    control.release();
+  }
+
+  expect(runError, "the error of the worker run").toBeUndefined();
+  expect(runsAfterWait, "runs of the code after the wait").toBe(fixture.expectedRunsAfterWait);
+  await expect(admin.getTask(id)).resolves.toMatchObject({
+    state: fixture.expectedState.state,
+    currentAttempt: fixture.expectedState.attempt,
+  });
+  await expectAttemptCount(database, id, fixture.expectedAttempts);
+}
+
 async function executeCooperativeCancellationRuntimeFixture(
   queue: Queue,
   admin: Admin,
@@ -374,7 +449,7 @@ function abortReasonName(reason: unknown): string | undefined {
 async function executeExpirationRuntimeFixture(
   queue: Queue,
   admin: Admin,
-  database: Queryable,
+  database: Pool,
   fixture: ExpirationRuntimeFixture,
 ): Promise<void> {
   const queueName = `runtime-${fixture.id}`;
@@ -438,12 +513,14 @@ async function executeExpirationRuntimeFixture(
   // PostgreSQL's clock when each handler observed its cancellation.
   const cancelledAt: Date[] = [];
   const handled: { id: string; attempt: number }[] = [];
+  const handlerSignals: AbortSignal[] = [];
   const worker = new Worker(earlyTimerQueue, {
     workerId: `runtime-${fixture.id}`,
     queue: queueName,
     leaseMs: fixture.leaseMs,
     heartbeatMs: fixture.heartbeatMs,
   }).handle(fixture.taskType, async (_payload, context) => {
+    handlerSignals.push(context.signal);
     handled.push({ id: context.task.id, attempt: context.task.attempt });
     const expiry = await database.query<{ expiry: Date }>(
       `UPDATE workhorse.task_runtime
@@ -468,14 +545,59 @@ async function executeExpirationRuntimeFixture(
     throw reason;
   });
 
-  for (const expected of fixture.expectedAfterRuns) {
-    // Each pass claims the task at once: no heartbeat holds the row of the settled attempt.
+  if ("injection" in fixture) worker.handle(fixture.followingTaskType, () => null);
+  const runAll = async (): Promise<void> => {
+    for (const expected of fixture.expectedAfterRuns) {
+      // Each pass claims the task at once: no heartbeat holds the row of the settled attempt.
+      await expect(worker.runOnce()).resolves.toBe(true);
+      await expect(admin.getTask(id)).resolves.toMatchObject({
+        state: expected.state,
+        currentAttempt: expected.attempt,
+        ...(expected.errorName === undefined ? {} : { error: { name: expected.errorName } }),
+      });
+    }
+  };
+  if ("injection" in fixture) {
+    // The first expiry request fails. The worker asks again, and the runner holds that request on
+    // a connection of its own until it has seen that the handler still runs. The run then ends
+    // without an error.
+    const { injection } = fixture;
+    const control = await database.connect();
+    const calls = async () =>
+      Number((await control.query<{ calls: string }>(injection.callsQuery)).rows[0]!.calls);
+    const requests = await withInjectedFunctionBody(control, injection, async () => {
+      const runs = runAll().then(
+        () => undefined,
+        (error: unknown) => error,
+      );
+      try {
+        await waitUntil(
+          async () => (await calls()) >= fixture.expectedMinimumExpiryRequests,
+          `${fixture.id}: the worker did not ask again after the failed expiry request`,
+        );
+        expect(
+          handlerSignals.map((signal) => signal.aborted),
+          "a cancellation before PostgreSQL confirms the expiry",
+        ).toEqual([false]);
+      } finally {
+        await control.query(injection.release);
+      }
+      const runError = await runs;
+      if (runError !== undefined) throw runError;
+      return calls();
+    }).finally(() => control.release());
+    expect(requests, "the expiry requests that reached PostgreSQL").toBeGreaterThanOrEqual(
+      fixture.expectedMinimumExpiryRequests,
+    );
+    // The same worker claims the next task and completes it.
+    const following = await queue.enqueue(fixture.followingTaskType, {}, { queue: queueName });
     await expect(worker.runOnce()).resolves.toBe(true);
-    await expect(admin.getTask(id)).resolves.toMatchObject({
-      state: expected.state,
-      currentAttempt: expected.attempt,
-      ...(expected.errorName === undefined ? {} : { error: { name: expected.errorName } }),
+    await expect(admin.getTask(following)).resolves.toMatchObject({
+      state: fixture.expectedFollowingState.state,
+      currentAttempt: fixture.expectedFollowingState.attempt,
     });
+  } else {
+    await runAll();
   }
   // A local timer that leads the database asks before the expiry, so PostgreSQL first answers
   // not_due. Without that answer, the fixture does not prove that the worker asks again.
@@ -1504,7 +1626,7 @@ async function withInjectedFunctionFailure<T>(
  */
 async function withInjectedFunctionBody<T>(
   database: Queryable,
-  injection: HeartbeatBusyRuntimeFixture["injection"],
+  injection: RuntimeBodyInjection,
   observe: () => Promise<T>,
 ): Promise<T> {
   const definition = await database.query<{ source: string }>(
@@ -1916,6 +2038,9 @@ async function executeRuntimeFixture(
       break;
     case "suspension-replay":
       await executeSuspensionReplayRuntimeFixture(queue, admin, database, fixture);
+      break;
+    case "suspension-race":
+      await executeSuspensionRaceRuntimeFixture(queue, admin, database, fixture);
       break;
     case "cooperative-cancellation":
       await executeCooperativeCancellationRuntimeFixture(queue, admin, database, fixture);

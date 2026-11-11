@@ -43,6 +43,15 @@ bytes now fails, and schedule synchronization refuses such a name. A stored sche
 name no longer fires. A claim computes its lease from a clock sample taken after
 its row locks. The migration does not raise the SDK compatibility floor.
 
+### A failed expiry request keeps the handler running
+
+A task reached its deadline or its execution timeout, and the .NET worker asked PostgreSQL to
+expire the attempt. If that request failed, for example during a failover, the worker cancelled the
+handler, wrote nothing for the attempt, and ended its run with the error. Now a failed request does
+not confirm the expiry. The worker logs `workhorse.worker.expiration_request_failed` at warning
+level, keeps the handler running, and asks again with the backoff that it uses for `not_due`. The
+lease watchdog still ends an attempt that nobody renews (SM-1934).
+
 ## 0.12.0 — 2026-11-07
 
 The npm packages, Python distribution, Go module, Rust crate, Ruby gem, JVM artifacts, and .NET

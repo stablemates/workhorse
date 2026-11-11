@@ -2,7 +2,7 @@ module github.com/stablemates/workhorse/go
 
 go 1.25.0
 
-toolchain go1.26.10
+toolchain go1.26.11
 
 require github.com/jackc/pgx/v5 v5.12.0
 

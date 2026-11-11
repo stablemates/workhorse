@@ -131,6 +131,10 @@ type workerRuntimeFixture struct {
 	HandlerResult                        string                            `json:"handlerResult"`
 	ExpectedCancelled                    workerFixtureReleasedState        `json:"expectedCancelled"`
 	ResultZeros                          int                               `json:"resultZeros"`
+	CancellationTimeoutMS                int                               `json:"cancellationTimeoutMs"`
+	ExpectedRunsAfterWait                int                               `json:"expectedRunsAfterWait"`
+	ExpectedMinimumExpiryRequests        int                               `json:"expectedMinimumExpiryRequests"`
+	ExpectedFollowingState               workerFixtureTaskState            `json:"expectedFollowingState"`
 }
 
 // workerFixtureReleasedState is the state of a task a worker settled at its stop, with the events
@@ -152,6 +156,10 @@ type workerFixtureInjection struct {
 	Setup           []string `json:"setup"`
 	Body            string   `json:"body"`
 	RoundsQuery     string   `json:"roundsQuery"`
+	CallsQuery      string   `json:"callsQuery"`
+	RequestedQuery  string   `json:"requestedQuery"`
+	Commit          string   `json:"commit"`
+	Release         string   `json:"release"`
 	Teardown        []string `json:"teardown"`
 }
 
@@ -169,6 +177,115 @@ func decodeWorkerFixtureCases[T any](t *testing.T, fixture workerRuntimeFixture)
 		t.Fatalf("decode the cases of runtime fixture %s: %v", fixture.ID, err)
 	}
 	return cases
+}
+
+// executeWorkerSuspensionRaceFixture injects a schedule_wait_v1 that keeps the request of the worker
+// in flight. Meanwhile the runner parks the task on a connection of its own, so the next heartbeat
+// answers stale. Only then does the runner release the scheduled answer. The handler must stop at
+// the wait although another outcome won first.
+func executeWorkerSuspensionRaceFixture(t *testing.T, fixture workerRuntimeFixture) {
+	databaseURL := createConformanceDatabase(t, testDatabaseURL(t), "worker-suspension-race")
+	ctx := context.Background()
+	pool, err := pgxpool.New(ctx, databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(pool.Close)
+	control, err := pgx.Connect(ctx, databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = control.Close(context.WithoutCancel(ctx)) })
+
+	queueName := "go-worker-suspension-race"
+	queue := workhorse.NewQueue(workhorse.NewPGXExecutor(pool), queueName)
+	taskID, err := queue.Enqueue(ctx, fixture.TaskType, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	worker, err := workhorse.NewWorker(pool, workhorse.WorkerOptions{
+		Queue: queueName, WorkerID: "go-suspension-race", Concurrency: 1,
+		LeaseDuration:     time.Duration(fixture.LeaseMS) * time.Millisecond,
+		HeartbeatInterval: time.Duration(fixture.HeartbeatMS) * time.Millisecond,
+		PollInterval:      5 * time.Millisecond,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	started := make(chan context.Context, 1)
+	var runsAfterWait atomic.Int32
+	worker.Handle(fixture.TaskType, func(
+		handlerContext context.Context,
+		_ any,
+		durable *workhorse.HandlerContext,
+	) (any, error) {
+		started <- handlerContext
+		if err := durable.Sleep(fixture.WaitName, time.Duration(fixture.WaitMS)*time.Millisecond); err != nil {
+			return nil, err
+		}
+		runsAfterWait.Add(1)
+		return nil, nil
+	})
+
+	timeout := time.Duration(fixture.CancellationTimeoutMS) * time.Millisecond
+	withInjectedFunctionBody(t, ctx, pool, fixture.Injection, func() {
+		result := make(chan error, 1)
+		go func() {
+			_, err := worker.RunOnce(ctx)
+			result <- err
+		}()
+		func() {
+			// The wait answer reaches the worker only after the stale heartbeat won.
+			defer func() {
+				if _, err := control.Exec(context.WithoutCancel(ctx), fixture.Injection.Release); err != nil {
+					t.Error(err)
+				}
+			}()
+			var handlerContext context.Context
+			select {
+			case handlerContext = <-started:
+			case <-time.After(timeout):
+				t.Fatal("the handler never started")
+			}
+			requestedBy := time.Now().Add(timeout)
+			for {
+				var requested string
+				if err := control.QueryRow(ctx, fixture.Injection.RequestedQuery).Scan(&requested); err != nil {
+					t.Fatal(err)
+				}
+				if requested == "true" {
+					break
+				}
+				if time.Now().After(requestedBy) {
+					t.Fatal("the wait request never reached PostgreSQL")
+				}
+				time.Sleep(5 * time.Millisecond)
+			}
+			var committed string
+			if err := control.QueryRow(ctx, fixture.Injection.Commit).Scan(&committed); err != nil || committed != "scheduled" {
+				t.Fatalf("the wait that the runner commits: %q, %v", committed, err)
+			}
+			select {
+			case <-handlerContext.Done():
+			case <-time.After(timeout):
+				t.Fatal("no stale heartbeat cancelled the handler")
+			}
+		}()
+		if err := awaitSignal(t, result, "RunOnce to return from the suspended attempt"); err != nil {
+			t.Fatalf("suspended attempt: %v", err)
+		}
+	})
+	if runs := int(runsAfterWait.Load()); runs != fixture.ExpectedRunsAfterWait {
+		t.Fatalf("the code after the wait ran %d times, want %d", runs, fixture.ExpectedRunsAfterWait)
+	}
+	assertWorkerFixtureTaskState(t, ctx, pool, taskID, fixture.ExpectedState)
+	var attempts int
+	if err := pool.QueryRow(ctx, "SELECT count(*) FROM workhorse.attempt_history WHERE task_id = $1", taskID).Scan(&attempts); err != nil {
+		t.Fatal(err)
+	}
+	if attempts != fixture.ExpectedAttempts {
+		t.Fatalf("the task recorded %d attempts, want %d", attempts, fixture.ExpectedAttempts)
+	}
 }
 
 func executeWorkerSuspensionReplayFixture(t *testing.T, fixture workerRuntimeFixture) {
@@ -1614,7 +1731,8 @@ func anchorDeadlineAtClaim(t *testing.T, ctx context.Context, pool *pgxpool.Pool
 CREATE FUNCTION workhorse.test_anchor_deadline_at_claim() RETURNS trigger
 LANGUAGE plpgsql AS $$
 BEGIN
-  IF OLD.state = 'ready' AND NEW.state = 'active' THEN
+  -- A fixture with a following task claims that task too. It has no deadline of its own.
+  IF OLD.state = 'ready' AND NEW.state = 'active' AND OLD.deadline_at IS NOT NULL THEN
     NEW.deadline_at := clock_timestamp() + (%d * interval '1 millisecond');
     UPDATE workhorse.task SET deadline_at = NEW.deadline_at WHERE id = NEW.task_id;
   END IF;
@@ -1711,7 +1829,13 @@ func executeWorkerExpirationFixture(t *testing.T, fixture workerRuntimeFixture) 
 	// Each attempt reports whether PostgreSQL's clock had reached the expiry it held when the
 	// handler observed cancellation. Both times come from the database clock.
 	afterExpiry := make(chan bool, len(fixture.ExpectedAbortReasons))
+	// The context of each attempt.
+	var handlerContextsMutex sync.Mutex
+	var handlerContexts []context.Context
 	worker.Handle(fixture.TaskType, func(handlerContext context.Context, _ any, _ *workhorse.HandlerContext) (any, error) {
+		handlerContextsMutex.Lock()
+		handlerContexts = append(handlerContexts, handlerContext)
+		handlerContextsMutex.Unlock()
 		field := "attempt_timeout_at"
 		if fixture.Mode == "deadline" {
 			field = "deadline_at"
@@ -1745,7 +1869,13 @@ func executeWorkerExpirationFixture(t *testing.T, fixture workerRuntimeFixture) 
 		afterExpiry <- after
 		return nil, nil
 	})
-	for _, expected := range fixture.ExpectedAfterRuns {
+	failedRequest := fixture.ExpectedMinimumExpiryRequests > 0
+	if failedRequest {
+		worker.Handle(fixture.FollowingTaskType, func(context.Context, any, *workhorse.HandlerContext) (any, error) {
+			return nil, nil
+		})
+	}
+	runOnce := func(waitingFor string) {
 		result := make(chan struct {
 			processed bool
 			err       error
@@ -1757,12 +1887,79 @@ func executeWorkerExpirationFixture(t *testing.T, fixture workerRuntimeFixture) 
 				err       error
 			}{processed: processed, err: err}
 		}()
-		run := awaitSignal(t, result, "RunOnce to return from the expiration attempt")
-		processed, err := run.processed, run.err
-		if err != nil || !processed {
-			t.Fatalf("expiration attempt: processed=%t err=%v", processed, err)
+		run := awaitSignal(t, result, "RunOnce to return from "+waitingFor)
+		if run.err != nil || !run.processed {
+			t.Fatalf("%s: processed=%t err=%v", waitingFor, run.processed, run.err)
 		}
-		assertWorkerFixtureTaskState(t, ctx, pool, taskID, expected)
+	}
+	runAttempts := func() {
+		for _, expected := range fixture.ExpectedAfterRuns {
+			runOnce("the expiration attempt")
+			assertWorkerFixtureTaskState(t, ctx, pool, taskID, expected)
+		}
+	}
+	if failedRequest {
+		// The first expiry request fails. The worker asks again, and the runner holds that request
+		// on a connection of its own until it has seen that the handler still runs. The run then
+		// ends without an error.
+		control, err := pgx.Connect(ctx, databaseURL)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _ = control.Close(context.WithoutCancel(ctx)) }()
+		withInjectedFunctionBody(t, ctx, pool, fixture.Injection, func() {
+			result := make(chan struct {
+				processed bool
+				err       error
+			}, 1)
+			go func() {
+				processed, err := worker.RunOnce(ctx)
+				result <- struct {
+					processed bool
+					err       error
+				}{processed: processed, err: err}
+			}()
+			func() {
+				defer func() {
+					if _, err := control.Exec(context.WithoutCancel(ctx), fixture.Injection.Release); err != nil {
+						t.Error(err)
+					}
+				}()
+				askedBy := time.Now().Add(10 * time.Second)
+				for {
+					var requests int
+					if err := control.QueryRow(ctx, fixture.Injection.CallsQuery).Scan(&requests); err != nil {
+						t.Fatal(err)
+					}
+					if requests >= fixture.ExpectedMinimumExpiryRequests {
+						break
+					}
+					if time.Now().After(askedBy) {
+						t.Fatal("the worker did not ask again after the failed expiry request")
+					}
+					time.Sleep(5 * time.Millisecond)
+				}
+				handlerContextsMutex.Lock()
+				defer handlerContextsMutex.Unlock()
+				if len(handlerContexts) != 1 || handlerContexts[0].Err() != nil {
+					t.Fatalf("a cancellation before PostgreSQL confirms the expiry: %d attempts", len(handlerContexts))
+				}
+			}()
+			run := awaitSignal(t, result, "RunOnce to return from the expiration attempt")
+			if run.err != nil || !run.processed {
+				t.Fatalf("expiration attempt: processed=%t err=%v", run.processed, run.err)
+			}
+			assertWorkerFixtureTaskState(t, ctx, pool, taskID, fixture.ExpectedAfterRuns[0])
+		})
+		// The same worker claims the next task and completes it.
+		followingID, err := queue.Enqueue(ctx, fixture.FollowingTaskType, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		runOnce("the following task")
+		assertWorkerFixtureTaskState(t, ctx, pool, followingID, fixture.ExpectedFollowingState)
+	} else {
+		runAttempts()
 	}
 	observedCauses := make([]string, 0, len(fixture.ExpectedAbortReasons))
 	for range fixture.ExpectedAbortReasons {

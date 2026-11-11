@@ -172,6 +172,7 @@ internal sealed class RuntimeFixtures : IAsyncDisposable
             "slot-refill" => SlotRefillAsync(fixture),
             "batch" => BatchAsync(fixture),
             "suspension-replay" => SuspensionReplayAsync(fixture),
+            "suspension-race" => SuspensionRaceAsync(fixture),
             "lease-loss" => LeaseLossAsync(fixture),
             "refused-completion" => RefusedCompletionAsync(fixture),
             "replay-conflict" => ReplayConflictAsync(fixture),
@@ -413,6 +414,8 @@ internal sealed class RuntimeFixtures : IAsyncDisposable
         // The expiry PostgreSQL holds for each attempt, and its clock when the handler saw cancellation.
         var expiries = new ConcurrentQueue<string?>();
         var cancelledAt = new ConcurrentQueue<string?>();
+        // The cancellation token of each attempt.
+        var tokens = new ConcurrentQueue<CancellationToken>();
         var heartbeats = 0;
         Worker? holder = null;
         var hook = new Intercept.Callbacks(
@@ -445,6 +448,7 @@ internal sealed class RuntimeFixtures : IAsyncDisposable
         var timesOutFirst = fixture.GetValueOrDefault("databaseTimesOutFirst") is true;
         subject.Handle<JsonElement>(TaskType(fixture), async (context, _) =>
         {
+            tokens.Enqueue(context.CancellationToken);
             expiries.Enqueue(await ValueAsync($"SELECT {column}::text FROM workhorse.task_runtime WHERE task_id = '{taskId}'"));
             if (timesOutFirst)
             {
@@ -458,16 +462,63 @@ internal sealed class RuntimeFixtures : IAsyncDisposable
             holder!.Pause();
             context.CancellationToken.ThrowIfCancellationRequested();
         });
+        var injection = fixture.GetValueOrDefault("injection") is null ? null : Get(fixture, "injection");
+        if (injection is not null)
+        {
+            subject.Handle<JsonElement>((string)fixture["followingTaskType"]!, (_, _) =>
+            {
+                holder!.Pause();
+                return Task.CompletedTask;
+            });
+        }
+
         holder = subject;
         var runs = (List<object?>)fixture["expectedAfterRuns"]!;
-        for (var index = 0; index < runs.Count; index++)
+        async Task RunAttemptsAsync()
         {
-            // A heartbeat round that began before the last attempt settled holds the task's row
-            // lock, and the claim skips a locked row.
+            for (var index = 0; index < runs.Count; index++)
+            {
+                // A heartbeat round that began before the last attempt settled holds the task's row
+                // lock, and the claim skips a locked row.
+                await EventuallyAsync("a heartbeat round outlived the previous attempt", 5, () => Volatile.Read(ref heartbeats) == 0);
+                subject.Resume();
+                Failure.Check(await subject.RunOnceAsync(), $"run {index + 1} did not run the task");
+                await ExpectStateAsync(taskId, Runner.Object(runs[index], "expected"));
+            }
+        }
+
+        if (injection is null)
+        {
+            await RunAttemptsAsync();
+        }
+        else
+        {
+            // The first expiry request fails. The worker asks again, and the runner holds that request
+            // until it has seen that the handler still runs. The run then ends without an error.
+            await InjectedBodyAsync(injection, async () =>
+            {
+                var run = Task.Run(RunAttemptsAsync);
+                try
+                {
+                    var minimum = (long)fixture["expectedMinimumExpiryRequests"]!;
+                    await EventuallyAsync("the worker did not ask again after the failed expiry request", 10, async () =>
+                        long.Parse(await ValueAsync((string)injection["callsQuery"]!) ?? "0", CultureInfo.InvariantCulture) >= minimum);
+                    Failure.Check(tokens.Count == 1 && tokens.All(token => !token.IsCancellationRequested), "a cancellation before PostgreSQL confirms the expiry");
+                }
+                finally
+                {
+                    await UpdateAsync((string)injection["release"]!);
+                }
+
+                await JoinAsync(run);
+            });
+
+            // The same worker claims the next task and completes it.
+            var following = await EnqueueAsync((string)fixture["followingTaskType"]!, Json.Members(), Options(QueueName(fixture)));
             await EventuallyAsync("a heartbeat round outlived the previous attempt", 5, () => Volatile.Read(ref heartbeats) == 0);
             subject.Resume();
-            Failure.Check(await subject.RunOnceAsync(), $"run {index + 1} did not run the task");
-            await ExpectStateAsync(taskId, Runner.Object(runs[index], "expected"));
+            Failure.Check(await subject.RunOnceAsync(), "the worker did not run the following task");
+            await ExpectStateAsync(following, Get(fixture, "expectedFollowingState"));
         }
 
         Failure.Check(Matcher.Same(reasons.Cast<object?>().ToList(), fixture.GetValueOrDefault("expectedAbortReasons")), $"abort reasons [{string.Join(", ", reasons)}]");
@@ -939,6 +990,63 @@ internal sealed class RuntimeFixtures : IAsyncDisposable
             subject.Stop();
             await StoppedAsync(run, grace);
         }
+    }
+
+    /// <summary>
+    /// The injected <c>schedule_wait_v1</c> keeps the request of the worker in flight. Meanwhile the
+    /// runner parks the task on its own connection, so the next heartbeat answers <c>stale</c>. Only
+    /// then does the runner release the <c>scheduled</c> answer. The handler must stop at the wait
+    /// although another outcome won first.
+    /// </summary>
+    private async Task SuspensionRaceAsync(OrderedDictionary<string, object?> fixture)
+    {
+        var taskId = await EnqueueAsync(TaskType(fixture), Json.Members(), Options(QueueName(fixture)));
+        var token = new TaskCompletionSource<CancellationToken>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var runsAfterWait = 0;
+        var timeout = Millis(fixture, "cancellationTimeoutMs");
+        var injection = Get(fixture, "injection");
+        Worker? holder = null;
+        await using (var pool = Intercept.Create(_database, Intercept.Hook.None))
+        {
+            await using var subject = NewWorker(pool, fixture, worker =>
+            {
+                worker.Lease = Millis(fixture, "leaseMs");
+                worker.Heartbeat = Millis(fixture, "heartbeatMs");
+            });
+            subject.Handle<JsonElement>(TaskType(fixture), async (context, _) =>
+            {
+                holder!.Pause();
+                token.TrySetResult(context.CancellationToken);
+                await context.SleepAsync((string)fixture["waitName"]!, Millis(fixture, "waitMs"));
+                Interlocked.Increment(ref runsAfterWait);
+            });
+            holder = subject;
+            await InjectedBodyAsync(injection, async () =>
+            {
+                var result = Running(subject, () => subject.RunOnceAsync());
+                try
+                {
+                    var cancellation = await token.Task.WaitAsync(timeout);
+                    await EventuallyAsync("the wait request never reached PostgreSQL", (long)timeout.TotalSeconds, async () =>
+                        await ValueAsync((string)injection["requestedQuery"]!) == "true");
+                    var committed = await ValueAsync((string)injection["commit"]!);
+                    Failure.Check(committed == "scheduled", $"the wait that the runner commits: {Matcher.Render(committed)}");
+                    await WaitForCancellationAsync("no stale heartbeat cancelled the handler", cancellation);
+                }
+                finally
+                {
+                    // The wait answer reaches the worker only after the stale heartbeat won.
+                    await UpdateAsync((string)injection["release"]!);
+                }
+
+                await JoinAsync(result);
+            });
+        }
+
+        Failure.Check(runsAfterWait == (long)fixture["expectedRunsAfterWait"]!, $"the code after the wait ran {runsAfterWait} times");
+        await ExpectStateAsync(taskId, Get(fixture, "expectedState"));
+        var attempts = await AttemptsAsync(taskId);
+        Failure.Check(attempts == (long)fixture["expectedAttempts"]!, $"the task recorded {attempts} attempts");
     }
 
     /// <summary>

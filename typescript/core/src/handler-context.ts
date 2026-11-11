@@ -184,7 +184,7 @@ function createDurableHandlerContext(
       attempt.requireLease();
       const scheduled = await queue.scheduleWait(task, workerId, name, request);
       waits?.set(name, scheduled.wait);
-      if (scheduled.status === "scheduled") attempt.suspendForScheduledWait();
+      if (scheduled.status === "scheduled") attempt.suspend("suspended_for_wait");
     })();
     inFlightWaits.set(name, execution);
     void execution

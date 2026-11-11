@@ -110,6 +110,7 @@ module Conformance
       when "heartbeat-busy" then heartbeat_busy(fixture)
       when "maintenance-phase-error" then maintenance_phase_error(fixture)
       when "suspension-replay" then suspension_replay(fixture)
+      when "suspension-race" then suspension_race(fixture)
       when "lease-loss" then lease_loss(fixture)
       when "refused-completion" then refused_completion(fixture)
       when "batch" then batch(fixture)
@@ -258,9 +259,12 @@ module Conformance
       # Each claim takes a new fence token, so the token names the attempt.
       expiry_answers = Concurrent::Array.new
       attempt_answers = Concurrent::Hash.new
+      # The cancellation token of each attempt.
+      tokens = Concurrent::Array.new
       with_pool do |pool|
         subject = worker(pool, fixture, lease: fixture["leaseMs"] / 1000.0, heartbeat: fixture["heartbeatMs"] / 1000.0)
         subject.handle(fixture["taskType"]) do |_payload, context|
+          tokens << context.cancellation
           if fixture["databaseTimesOutFirst"] && value(TIME_OUT_WHEN_DUE, task_id) != "true"
             raise "PostgreSQL did not time out the attempt first"
           end
@@ -279,7 +283,8 @@ module Conformance
             rows.each { |row| expiry_answers << row["status"] }
             (attempt_answers[params[2]] ||= []).concat(rows.map { |row| row["status"] })
           end
-          next rows unless sql == W::SqlCatalogue::CLAIM_MANY_V1 && rows.any?
+          # A fixture with a following task claims that task too. It keeps its own expiry.
+          next rows unless sql == W::SqlCatalogue::CLAIM_MANY_V1 && rows.any? && rows.first["task_id"] == task_id
 
           field = deadline ? "deadline_at" : "attempt_timeout_at"
           anchor = if deadline
@@ -293,11 +298,51 @@ module Conformance
             fixture["localClockLeadMs"])
           [rows.first.merge(field => shifted)]
         end
-        fixture["expectedAfterRuns"].each_with_index do |expected, index|
+        injection = fixture["injection"]
+        if injection
+          subject.handle(fixture["followingTaskType"]) do |_payload, _context|
+            subject.pause
+            nil
+          end
+        end
+        runs = lambda do
+          fixture["expectedAfterRuns"].each_with_index do |expected, index|
+            await_heartbeat_idle(subject)
+            subject.resume
+            check(subject.run_once == true, "run #{index + 1} did not run the task")
+            expect_state(task_id, expected)
+          end
+        end
+        if injection
+          # The first expiry request fails. The worker asks again, and the runner holds that request
+          # until it has seen that the handler still runs. The run then ends without an error. The
+          # claim hook uses @connection while the run is in flight, so the runner polls and
+          # releases on a connection of its own.
+          control = PG.connect(@url, connect_timeout: ScratchDatabase::CONNECT_TIMEOUT)
+          begin
+            injected_body(injection) do
+              running(runs) do |result|
+                eventually("the worker did not ask again after the failed expiry request") do
+                  calls = control.exec(injection["callsQuery"]).getvalue(0, 0)
+                  Integer(calls, 10) >= fixture["expectedMinimumExpiryRequests"]
+                end
+                check(tokens.map(&:cancelled?) == [false], "a cancellation before PostgreSQL confirms the expiry")
+              ensure
+                control.exec(injection["release"])
+                result.call
+              end
+            end
+          ensure
+            control.close
+          end
+          # The same worker claims the next task and completes it.
+          following = queue.enqueue(fixture["followingTaskType"], {}, queue: queue_name(fixture)).task_id
           await_heartbeat_idle(subject)
           subject.resume
-          check(subject.run_once == true, "run #{index + 1} did not run the task")
-          expect_state(task_id, expected)
+          check(subject.run_once == true, "the worker did not run the following task")
+          expect_state(following, fixture["expectedFollowingState"])
+        else
+          runs.call
         end
       end
       check(reasons.to_a == fixture["expectedAbortReasons"], "abort reasons #{reasons.to_a}")
@@ -1200,6 +1245,47 @@ module Conformance
       check(counts[:runs] == fixture["expectedHandlerRuns"], "the handler ran #{counts[:runs]} times")
       check(counts[:operations] == fixture["expectedCheckpointOperations"],
         "the checkpoint operation ran #{counts[:operations]} times")
+    end
+
+    # The injected schedule_wait_v1 keeps the request of the worker in flight. Meanwhile the runner
+    # parks the task on its own connection, so the next heartbeat answers stale. Only then does the
+    # runner release the scheduled answer. The handler must stop at the wait although another
+    # outcome won first.
+    def suspension_race(fixture)
+      task_id = queue.enqueue(fixture["taskType"], {}, queue: queue_name(fixture)).task_id
+      tokens = Thread::Queue.new
+      runs_after_wait = Concurrent::AtomicFixnum.new
+      timeout = fixture["cancellationTimeoutMs"] / 1000.0
+      injection = fixture.fetch("injection")
+      with_pool do |pool|
+        subject = worker(pool, fixture, lease: fixture["leaseMs"] / 1000.0, heartbeat: fixture["heartbeatMs"] / 1000.0)
+        subject.handle(fixture["taskType"]) do |_payload, context|
+          subject.pause
+          tokens << context.cancellation
+          context.sleep(fixture["waitName"], fixture["waitMs"] / 1000.0)
+          runs_after_wait.increment
+          nil
+        end
+        injected_body(injection) do
+          running(-> { subject.run_once }) do |result|
+            cancellation = tokens.pop(timeout: timeout)
+            check(cancellation, "the handler never started")
+            eventually("the wait request never reached PostgreSQL", timeout) do
+              value(injection["requestedQuery"]) == "true"
+            end
+            committed = value(injection["commit"])
+            check(committed == "scheduled", "the wait that the runner commits: #{Matcher.render(committed)}")
+            check(cancellation.wait(timeout), "no stale heartbeat cancelled the handler")
+          ensure
+            # The wait answer reaches the worker only after the stale heartbeat won.
+            @connection.exec(injection["release"])
+            result.call
+          end
+        end
+      end
+      check(runs_after_wait.value == fixture["expectedRunsAfterWait"], "the code after the wait ran #{runs_after_wait.value} times")
+      expect_state(task_id, fixture["expectedState"])
+      expect_attempts(task_id, fixture["expectedAttempts"])
     end
 
     def lease_loss(fixture)

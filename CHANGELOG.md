@@ -155,6 +155,15 @@ the schema to version 93. It replaces the bodies of `purge_queue_internal_v1`,
 raise the SDK compatibility floor and changes no rows.
 Run `workhorse schema migrate`.
 
+### A timer sleep stops the handler after a stale heartbeat
+
+A handler called `context.sleep` or `context.sleepUntil`. PostgreSQL parked the task, but a
+heartbeat round answered `stale` before the worker read the `scheduled` answer. The worker then
+gave the lease loss to its outcome arbiter, and the sleep returned. Thus the code after the sleep
+ran at once, before the wake time. Now each `scheduled` answer stops the handler at the wait,
+whatever outcome won while the request was in flight. A `stale` expiry answer and the end of the
+local lease window have the same result (SM-1929).
+
 ## 0.12.0 — 2026-11-07
 
 The npm packages, Python distribution, Go module, Rust crate, Ruby gem, JVM artifacts, and .NET
