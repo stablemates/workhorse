@@ -3898,18 +3898,20 @@ func (worker *Worker) callRetryDelay(task ClaimedTask) (delay *time.Duration, er
 	return worker.retryDelay(task.Attempt, task), nil
 }
 
-// durableReplayConflictName recognizes typed conflicts and the limit of a second child set through
-// ordinary Go error wrapping. Each one ends the task with no retry. A second child set was a replay
-// conflict before create_children_v2 named it a limit, so it stays terminal (the ADR 0098
-// amendment of SM-1956). An oversized checkpoint value is terminal for the same reason as a
-// conflict: a retry runs the operation of the checkpoint again and still cannot store its value
-// (SM-1982).
+// durableReplayConflictName recognizes typed conflicts and the other terminal durable errors through
+// ordinary Go error wrapping. errors.As walks each wrapped error, also each error of a joined error.
+// Each one ends the task with no retry. An oversized checkpoint value is terminal for the same
+// reason as a conflict: a retry runs the operation of the checkpoint again and still cannot store
+// its value (SM-1982). A child limit or child result limit error is terminal because a retry
+// replays the same child calls and gets the same refusal (SM-2025).
 func durableReplayConflictName(err error) string {
 	var checkpointValue *CheckpointValueSizeLimitError
 	var checkpointInput *CheckpointInputConflictError
 	var checkpoint *CheckpointConflictError
 	var wait *WaitConflictError
 	var child *ChildConflictError
+	var childLimit *ChildLimitExceededError
+	var childResultLimit *ChildResultLimitExceededError
 	var human *HumanWaitConflictError
 	switch {
 	case errors.As(err, &checkpointValue):
@@ -3922,34 +3924,15 @@ func durableReplayConflictName(err error) string {
 		return waitConflictErrorName
 	case errors.As(err, &child):
 		return childConflictErrorName
-	case isSecondChildSetLimit(err):
+	case errors.As(err, &childLimit):
 		return childLimitExceededErrorName
+	case errors.As(err, &childResultLimit):
+		return childResultLimitExceededErrorName
 	case errors.As(err, &human):
 		return humanWaitConflictErrorName
 	default:
 		return emptyString
 	}
-}
-
-// isSecondChildSetLimit reports whether the error tree of err holds the limit error of a second
-// child set. errors.As stops at the first *ChildLimitExceededError, so a joined error with another
-// limit error first would hide the mark. This walk reads each wrapped error.
-func isSecondChildSetLimit(err error) bool {
-	pending := []error{err}
-	for len(pending) > 0 {
-		current := pending[len(pending)-1]
-		pending = pending[:len(pending)-1]
-		if limit, ok := current.(*ChildLimitExceededError); ok && limit.secondSet {
-			return true
-		}
-		switch wrapper := current.(type) {
-		case interface{ Unwrap() []error }:
-			pending = append(pending, wrapper.Unwrap()...)
-		case interface{ Unwrap() error }:
-			pending = append(pending, wrapper.Unwrap())
-		}
-	}
-	return false
 }
 
 // failAttempt settles a failed attempt through fail_v1 and returns the handler outcome of the

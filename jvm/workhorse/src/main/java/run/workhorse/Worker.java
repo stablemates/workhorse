@@ -87,6 +87,8 @@ import run.workhorse.internal.telemetry.WorkerTelemetry;
  * #stop} or {@link #close}, or calls {@link WorkerProcess#runWorkerProcess}.
  */
 public final class Worker implements AutoCloseable {
+  // The operations of a child limit error. Each one ends the task with no retry (SM-2025).
+  private static final Set<String> CHILD_OPERATIONS = Set.of("runChild", "runChildren");
   private static final long MAX_EMPTY_POLL_MS = 5_000;
   private static final long NOTIFICATION_POLL_MS = 5_000;
   private static final long DEFAULT_POLL_MS = 250;
@@ -3341,14 +3343,13 @@ public final class Worker implements AutoCloseable {
   }
 
   /**
-   * The durable replay conflict of ADR 0098, or the limit error of a second child set, that {@code
-   * error} is or wraps, or {@code null}. Each one ends the task with no retry. A second child set
-   * was a replay conflict before {@code create_children_v2} named it a limit, so it stays terminal.
-   * Each other child limit refusal follows the retry policy (the ADR 0098 amendment of SM-1956). An
-   * oversized checkpoint value is terminal too, because a retry runs the operation again and still
-   * cannot store its value (SM-1982). Such an error is terminal also inside a wrapper, such as the
-   * {@code CompletionException} of a {@code join()}, as in Go and Rust (SM-1512). The walk stays
-   * bounded against a cyclic chain.
+   * The durable replay conflict of ADR 0098, or another terminal durable error, that {@code error}
+   * is or wraps, or {@code null}. Each one ends the task with no retry. An oversized checkpoint
+   * value is terminal because a retry runs the operation again and still cannot store its value
+   * (SM-1982). A child limit or child result limit error is terminal because a retry replays the
+   * same child calls and gets the same refusal (SM-2025). Such an error is terminal also inside a
+   * wrapper, such as the {@code CompletionException} of a {@code join()}, as in Go and Rust
+   * (SM-1512). The walk stays bounded against a cyclic chain.
    */
   static @Nullable WorkhorseException replayConflict(Throwable error) {
     Throwable current = error;
@@ -3356,8 +3357,12 @@ public final class Worker implements AutoCloseable {
       if (current instanceof ConflictException conflict) {
         return conflict;
       }
-      if (current instanceof LimitExceededException limit && limit.isSecondChildSet()) {
+      if (current instanceof LimitExceededException limit
+          && CHILD_OPERATIONS.contains(limit.operation())) {
         return limit;
+      }
+      if (current instanceof ChildResultLimitExceededException childResult) {
+        return childResult;
       }
       if (current instanceof CheckpointValueSizeLimitException oversized) {
         return oversized;

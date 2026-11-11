@@ -549,6 +549,13 @@ impl Drop for ActiveSlot {
     }
 }
 
+/// The error of a failed maintenance pass and the token that stops the dispatch of the run.
+#[derive(Clone, Default)]
+struct MaintenanceFailure {
+    error: Arc<Mutex<Option<Error>>>,
+    failed: StopToken,
+}
+
 /// What one `run` or `run_once` owns beyond its own future: the run permit, the background loops,
 /// the heartbeat loop, the registry row and the subscription to the shared connections.
 ///
@@ -824,6 +831,10 @@ impl Worker {
     /// returns [`Error::ShutdownIncomplete`]. Stopping the background loops and deregistering wait
     /// at most a short cleanup window past the grace period.
     ///
+    /// A failed maintenance pass, also the first pass at startup, ends the run (ADR 0078 rule 4).
+    /// The worker stops its claims and drains as for a shutdown, and `run` then returns the error
+    /// of the pass, unless it abandoned a task. A supervisor must start the worker again.
+    ///
     /// Dropping the future instead abandons every task it owns at once: renewals stop and the
     /// leases expire. The worker deregisters after the run, and its next run waits for that within
     /// its startup budget. If a registry statement of the dropped run still runs at the end of that
@@ -855,10 +866,14 @@ impl Worker {
         scope.registry = Some(tokio::spawn(
             Arc::clone(inner).registry_loop(Arc::clone(&registry_wake), scope.background.clone()),
         ));
+        // A failed maintenance pass ends the run (ADR 0078 rule 4). The loop keeps the error of the
+        // pass and cancels `maintenance_failed`, and the run stops its dispatch as for a shutdown.
+        let maintenance_failure = MaintenanceFailure::default();
         // Maintenance goes last, so the drain below can stop it before the other loops.
-        scope
-            .loops
-            .push(tokio::spawn(Arc::clone(inner).maintenance_loop(maintenance_stop.clone())));
+        scope.loops.push(tokio::spawn(
+            Arc::clone(inner)
+                .maintenance_loop(maintenance_stop.clone(), maintenance_failure.clone()),
+        ));
 
         let shutdown_token = StopToken::new();
         let mut executions: JoinSet<Result<(), Error>> = JoinSet::new();
@@ -872,10 +887,17 @@ impl Worker {
                 .expect("a started run holds the heartbeat connection")
                 .readiness(),
         });
+        let stop = async {
+            tokio::select! {
+                () = shutdown.as_mut() => {}
+                () = maintenance_failure.failed.cancelled() => {}
+            }
+        };
+        tokio::pin!(stop);
         let deadline = dispatch::dispatch(
             &dispatcher,
             &mut executions,
-            shutdown.as_mut(),
+            stop.as_mut(),
             &wake,
             &registry_wake,
             &mut first_error,
@@ -915,7 +937,11 @@ impl Worker {
             while executions.join_next().await.is_some() {}
         }
         scope.close(Some(deadline.max(Instant::now()) + CLEANUP_WINDOW)).await;
+        let maintenance_error = lock(&maintenance_failure.error).take();
         if abandoned > 0 {
+            if let Some(error) = maintenance_error {
+                tracing::error!(error = %error, workhorse.worker.id = %inner.worker_id, "maintenance failed");
+            }
             if let Some(error) = first_error {
                 tracing::error!(error = %error, workhorse.worker.id = %inner.worker_id, "task execution failed");
             }
@@ -925,6 +951,14 @@ impl Worker {
                 "Shutdown grace elapsed; abandoned tasks will be recovered after their leases expire"
             );
             return Err(Error::ShutdownIncomplete { abandoned });
+        }
+        // The error of a failed maintenance pass ended the run, so it comes before the first
+        // execution error, as in the JVM and .NET workers.
+        if let Some(error) = maintenance_error {
+            if let Some(execution) = first_error {
+                tracing::error!(error = %execution, workhorse.worker.id = %inner.worker_id, "task execution failed");
+            }
+            return Err(error);
         }
         first_error.map_or(Ok(()), Err)
     }
@@ -1475,7 +1509,10 @@ impl Inner {
         row.try_get::<_, Option<bool>>("paused").ok().flatten().ok_or_else(invalid)
     }
 
-    async fn maintenance_loop(self: Arc<Self>, stop: StopToken) {
+    /// Offers maintenance on the cadence until `stop`. The first tick is at once, so the first pass
+    /// is the startup pass. A failed pass ends the loop and records its error in `failure`, so the
+    /// run ends (ADR 0078 rule 4). A phase error that `tick_v1` reports in a row does not fail the pass.
+    async fn maintenance_loop(self: Arc<Self>, stop: StopToken, failure: MaintenanceFailure) {
         let mut interval = tokio::time::interval(self.options.maintenance_interval);
         interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         loop {
@@ -1486,7 +1523,10 @@ impl Inner {
             tokio::select! {
                 () = stop.cancelled() => return,
                 result = self.run_maintenance() => if let Err(error) = result {
-                    tracing::warn!(error = %error, workhorse.worker.id = %self.worker_id, "maintenance failed");
+                    tracing::error!(error = %error, workhorse.worker.id = %self.worker_id, "maintenance failed; the worker stops");
+                    *lock(&failure.error) = Some(error);
+                    failure.failed.cancel();
+                    return;
                 },
             }
         }

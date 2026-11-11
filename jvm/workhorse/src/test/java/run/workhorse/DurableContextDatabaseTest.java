@@ -670,7 +670,8 @@ class DurableContextDatabaseTest {
             new Case("child", "failed", 1, "ConflictException"),
             new Case("child-set", "failed", 1, "ConflictException"),
             new Case("human", "failed", 1, "ConflictException"),
-            new Case("child-limit", "scheduled", 2, "LimitExceededException"),
+            new Case("child-limit", "failed", 1, "LimitExceededException"),
+            new Case("child-result-limit", "failed", 1, "ChildResultLimitExceededException"),
             new Case("signal-wait", "scheduled", 2, "AlreadyWaitingException"),
             new Case("transient", "scheduled", 2, "Exception"),
             new Case("redacted-child", "failed", 1, "RedactedTaskError"));
@@ -705,6 +706,8 @@ class DurableContextDatabaseTest {
                   (ctx, payload) -> {
                     switch (entry.kind) {
                       case "child-limit" -> throw new LimitExceededException("runChild", "saved");
+                      case "child-result-limit" ->
+                          throw new ChildResultLimitExceededException(2_048, 1_024);
                       case "signal-wait" ->
                           throw new AlreadyWaitingException("waitForSignal", "saved");
                       case "transient" -> throw new Exception("transient");
@@ -723,8 +726,8 @@ class DurableContextDatabaseTest {
   }
 
   /**
-   * A second child set was a terminal replay conflict before create_children_v2 named it a limit,
-   * so it stays terminal. Each other child limit refusal follows the retry policy.
+   * A handler replays the same child calls on each attempt, so each child limit refusal ends the
+   * task with no retry (SM-2025).
    */
   @Test
   void childLimitRefusalsAndAChangedSet() throws SQLException {
@@ -732,8 +735,8 @@ class DurableContextDatabaseTest {
     for (Case entry :
         List.of(
             new Case("second-set", "failed", 1, "LimitExceededException"),
-            new Case("second-single", "scheduled", 2, "LimitExceededException"),
-            new Case("large-set", "scheduled", 2, "LimitExceededException"),
+            new Case("second-single", "failed", 1, "LimitExceededException"),
+            new Case("large-set", "failed", 1, "LimitExceededException"),
             new Case("changed-set", "failed", 1, "ConflictException"))) {
       queueName = "jvm-child-limit-" + entry.shape + "-" + UUID.randomUUID();
       UUID parentId = enqueue("agent-loop", null, EnqueueOptions.builder().maxAttempts(5));

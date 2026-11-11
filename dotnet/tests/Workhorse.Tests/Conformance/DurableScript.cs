@@ -184,7 +184,21 @@ internal sealed class DurableScript(Func<NpgsqlDataSourceBuilder> builder, Npgsq
         await using var command = dataSource.CreateCommand(Runner.Text(fixture["observe"]));
         command.Parameters.Add(new NpgsqlParameter { Value = taskId });
         var observed = Json.Parse((string)(await command.ExecuteScalarAsync())!);
-        Failure.Check(Matcher.Same(observed, step["observed"]), $"{where}: observed {Matcher.Render(observed)}, expected {Matcher.Render(step["observed"])}");
+        var expectedObserved = step["observed"];
+
+        // The runner puts the error name of its SDK into the observed value it expects.
+        if (step.TryGetValue("errorNames", out var names))
+        {
+            Failure.Check(
+                expectedObserved is OrderedDictionary<string, object?> && names is OrderedDictionary<string, object?> named && named.ContainsKey("csharp"),
+                $"{where}: errorNames needs an observed object and a name for csharp");
+            expectedObserved = new OrderedDictionary<string, object?>((OrderedDictionary<string, object?>)expectedObserved!)
+            {
+                ["errorName"] = ((OrderedDictionary<string, object?>)names!)["csharp"],
+            };
+        }
+
+        Failure.Check(Matcher.Same(observed, expectedObserved), $"{where}: observed {Matcher.Render(observed)}, expected {Matcher.Render(expectedObserved)}");
         foreach (var (name, actual) in new[]
         {
             ("handlerRuns", _handlerRuns),

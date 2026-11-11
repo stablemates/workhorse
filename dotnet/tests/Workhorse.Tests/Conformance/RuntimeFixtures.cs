@@ -1333,8 +1333,8 @@ internal sealed class RuntimeFixtures : IAsyncDisposable
     ];
 
     /// <summary>
-    /// Each case throws the error that a durable replay raises. A conflict is terminal, so the retry
-    /// callback never runs; a limit, an occupied wait, and a plain error retry once.
+    /// Each case throws the error that a durable replay raises. A conflict and a child limit are
+    /// terminal, so the retry callback never runs; an occupied wait and a plain error retry once.
     /// </summary>
     private async Task ReplayConflictAsync(OrderedDictionary<string, object?> fixture)
     {
@@ -1382,6 +1382,7 @@ internal sealed class RuntimeFixtures : IAsyncDisposable
                         "child-set" => new ConflictException("runChildren", "saved"),
                         "human" => new ConflictException("waitForHuman", "saved"),
                         "child-limit" => new LimitExceededException("runChild", "saved"),
+                        "child-result-limit" => new ChildResultLimitExceededException(2_048, 1_024),
                         "signal-wait" => new AlreadyWaitingException("waitForSignal", "saved"),
 
                         // The C# counterpart of the Ruby lane's StandardError, as the JVM lane throws Exception.

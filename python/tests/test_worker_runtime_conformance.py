@@ -3265,6 +3265,7 @@ def execute_replay_conflict_fixture(
         ChildConflictError,
         HumanWaitConflictError,
         ChildLimitExceededError,
+        ChildResultLimitExceededError,
         SignalWaitConflictError,
     )
 
@@ -3302,6 +3303,8 @@ def execute_replay_conflict_fixture(
             kind = entry["errorKind"]
             if kind == "child-limit":
                 raise ChildLimitExceededError(task_id)
+            if kind == "child-result-limit":
+                raise ChildResultLimitExceededError(task_id, 2_048, 1_024)
             if kind == "transient":
                 raise Exception("transient")
             if kind == "wrapped-checkpoint":

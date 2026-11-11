@@ -101,11 +101,12 @@ internal static class FailureEnvelope
     }
 
     /// <summary>
-    /// The durable replay conflict of ADR 0098, or the limit error of a second child set, that
+    /// The durable replay conflict of ADR 0098, or another terminal durable error, that
     /// <paramref name="error"/> is or wraps, or <c>null</c>. Each one ends the task with no retry.
-    /// A second child set was a replay conflict before <c>create_children_v2</c> named it a limit,
-    /// so it stays terminal. Each other child limit refusal follows the retry policy (the ADR 0098
-    /// amendment of SM-1956). Such an error is terminal also inside a wrapper (SM-1512). The walk
+    /// An oversized checkpoint value is terminal because a retry runs the operation again and
+    /// still cannot store its value (SM-1982). A child limit or child result limit error is
+    /// terminal because a retry replays the same child calls and gets the same refusal (SM-2025).
+    /// Such an error is terminal also inside a wrapper (SM-1512). The walk
     /// follows
     /// <see cref="Exception.InnerException"/>, so it reads the first inner exception of an
     /// <see cref="AggregateException"/>, as the JVM follows one cause. It reads at most
@@ -121,9 +122,16 @@ internal static class FailureEnvelope
                 return conflict;
             }
 
-            if (current is LimitExceededException { SecondChildSet: true } limit)
+            // Not replay conflicts, but terminal: a retry replays the same child calls and gets the
+            // same refusal (SM-2025).
+            if (current is LimitExceededException { Operation: "runChild" or "runChildren" } limit)
             {
                 return limit;
+            }
+
+            if (current is ChildResultLimitExceededException childResult)
+            {
+                return childResult;
             }
 
             // Not a replay conflict, but terminal for the same reason: a retry runs the operation of

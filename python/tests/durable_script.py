@@ -122,7 +122,11 @@ def run_step(
         row = connection.execute(fixture["observe"].replace("$1", "%s"), (task_id,)).fetchone()
         assert row is not None
         observed = json.loads(row[0])
-        assert json_equal(observed, step["observed"]), f"{where}: observed {observed}"
+        expected = step["observed"]
+        if "errorNames" in step:
+            # The runner puts the error name of its SDK into the observed value it expects.
+            expected = {**expected, "errorName": step["errorNames"]["python"]}
+        assert json_equal(observed, expected), f"{where}: observed {observed}"
         for name, actual in (
             ("handlerRuns", counters.handler_runs),
             ("checkpointOperations", counters.checkpoint_operations),

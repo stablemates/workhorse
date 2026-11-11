@@ -40,6 +40,9 @@ module Stablemates
       EXPIRATION_RETRY_MAX = 1.0
       REDACTED_NAME = "RedactedTaskError"
       REDACTED_MESSAGE = "Task handler failed; details redacted"
+      # The operations of a child limit error. Each one ends the task with no retry (SM-2025).
+      CHILD_OPERATIONS = %i[run_child run_children].freeze
+      private_constant :CHILD_OPERATIONS
       PROTOCOL = "5"
       LANGUAGE = "ruby"
       MIN_POOL_SIZE = 3
@@ -2067,19 +2070,19 @@ module Stablemates
         settle_status(task, state, arbiter, "fail", %w[failed], :failed, ownership)
       end
 
-      # The durable replay conflict (ADR 0098), or the limit error of a second child set, that
-      # +error+ is or wraps, or nil. Each one ends the task with no retry. A second child set was a
-      # replay conflict before create_children_v2 named it a limit, so it stays terminal. Each other
-      # child limit refusal follows the retry policy (the ADR 0098 amendment of SM-1956). An
-      # oversized checkpoint value is terminal too, because a retry runs the block again and still
-      # cannot store its value (SM-1982). A handler can wrap such an error in its own error. It is
-      # terminal also then, as in Go and Rust, and the failure envelope records its name. The walk
-      # stays bounded against a cyclic cause chain.
+      # The durable replay conflict (ADR 0098), or another terminal durable error, that +error+ is
+      # or wraps, or nil. Each one ends the task with no retry. An oversized checkpoint value is
+      # terminal because a retry runs the block again and still cannot store its value (SM-1982).
+      # A child limit or child result limit error is terminal because a retry replays the same
+      # child calls and gets the same refusal (SM-2025). A handler can wrap such an error in its own
+      # error. It is terminal also then, as in Go and Rust, and the failure envelope records its
+      # name. The walk stays bounded against a cyclic cause chain.
       def durable_replay_conflict(error)
         16.times do
           return nil if error.nil?
           return error if error.is_a?(ConflictError) || error.is_a?(CheckpointValueSizeLimitError)
-          return error if error.is_a?(LimitExceededError) && error.instance_variable_get(:@second_child_set)
+          return error if error.is_a?(ChildResultLimitExceededError)
+          return error if error.is_a?(LimitExceededError) && CHILD_OPERATIONS.include?(error.operation)
 
           error = error.cause
         end

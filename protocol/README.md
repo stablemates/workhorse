@@ -223,6 +223,21 @@ The worker tests of TypeScript and Python check the `workhorse.handler.signal_sw
 of that case. Ruby, the JVM, and .NET emit the warning, but their tests do not check it. The Go and
 Rust workers do not emit it.
 
+An `expect` step can give `errorNames`, the error name of each SDK. Before the comparison, the
+runner puts the name of its SDK into `errorName` of the expected value. Thus one fixture can check
+the failure envelope of each SDK.
+
+Five fixtures run the child limit refusals through real child calls (SM-2025, SM-2028). Each
+refusal ends the task at attempt 1 with the limit error of the SDK:
+
+| Fixture                                                         | The handler                                                  |
+| --------------------------------------------------------------- | ------------------------------------------------------------ |
+| `durable-second-child-set-ends-the-task`                        | Joins a child set, then asks for a set with another name     |
+| `durable-same-child-set-twice-joins-it-twice`                   | Joins a child set, then asks for the same set, and completes |
+| `durable-second-single-child-ends-the-task`                     | Joins a child, then asks for a child with another name       |
+| `durable-child-set-of-more-than-100-children-ends-the-task`     | Asks for a set of 101 children                               |
+| `durable-child-join-larger-than-the-result-limit-ends-the-task` | Joins a set whose results are larger than `result_max_bytes` |
+
 Each expected result is the rule that the architecture pages state:
 
 - A signal wait and a human wait suspend the attempt, and the replay returns the stored value
@@ -234,6 +249,8 @@ Each expected result is the rule that the architecture pages state:
   ([Worker suspension](../docs/architecture/lifecycle.md#worker-suspension)).
 - Overlapping checkpoint calls with one name run the operation one time and share its value
   ([`task_checkpoint`](../docs/architecture/data-model.md#handler-behavior)).
+- A child limit refusal and a child join that is too large end the task with no retry
+  ([Durable replay conflicts](../docs/architecture/schema-and-protocol.md#durable-replay-conflicts)).
 
 ### Cross-SDK replay
 
@@ -309,6 +326,7 @@ pinned-toolchain, crate-package, and clean-project consumer checks.
 It preserves the current attempt even when retry budget remains. NULL, zero, and every other
 value retain their retry semantics. Ownership, cancellation, and expiration checks still run first.
 The replay-conflict runtime fixture checks that all SDKs select this override for deterministic
-conflicts, preserve conflict names, and leave transient and capacity refusals retryable.
+conflicts and for child limit and child result limit errors (SM-2025). It also checks that they
+keep the error names, and that a transient error and an occupied signal wait stay retryable.
 In its `checkpoint-input` case, the handler saves a checkpoint with one input and then calls the
 same checkpoint with another input. Thus each SDK raises its own typed checkpoint input conflict.

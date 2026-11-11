@@ -175,8 +175,8 @@ A task holds one child set. A handler that asked for a second set got `Error::Co
 that the handler code changed. The SDK now calls `create_children_v2`, which answers
 `limit_exceeded` for a second set in the activation that created or joined the first set. The SDK
 raises `Error::LimitExceeded` with the name `child set`, and the worker still fails the task with no retry. A second, different `run_children` call in one activation returned `Error::Conflict` before any statement. It now returns the same limit error. A changed set
-from another activation still raises the conflict error. A second single child and a set of more
-than 100 children still follow the retry policy (SM-1956).
+from another activation still raises the conflict error. The other child limit refusals now end the task too, as
+a later entry states (SM-1956).
 
 A group callback that failed to enqueue at the finish left only a `callback_failed` event. The
 group snapshot now shows the failure on that callback. `TaskGroupCallback` gains the public field `failure`, an `Option<TaskGroupCallbackFailure>` with `code`, `message`, and `failed_at`. A struct literal of `TaskGroupCallback` must name the new field. Retention deletes this
@@ -243,6 +243,28 @@ When the worker cuts a field, it adds `"truncated": true`. It sends the envelope
 the same cut. Thus a client that does not cut cannot store a longer field (SM-1983). Migration 0100
 adds these functions, and the schema floor rises to 99. `fail_v1`, `fast_fail_v1`, and
 `save_checkpoint_v2` keep their answers.
+
+### Each child limit refusal ends the task
+
+A handler replays the same child calls on each attempt, so a child limit refusal came again on each
+retry. Each retry also ran again the work that no checkpoint holds, until `maxAttempts`. The worker
+now fails the task at the first attempt with no retry, and keeps the current attempt. This applies
+to a second single child, a single child after a child set, a set of more than 100 children, and a
+child join whose results are larger than the result limit of the task. A second child set already
+ended the task. The error is `Error::LimitExceeded` with the operation `RunChild` or `RunChildren`, or `Error::ChildResultLimitExceeded` for a join that is too large, and the failure
+envelope records `Error`. The worker finds the error also when the handler wraps it. If a
+handler relied on a retry after such a refusal, correct its calls, and then redrive the task
+(SM-2025).
+
+### A failed maintenance pass ends `Worker::run`
+
+ADR 0078 rule 4 says that a failed maintenance pass ends the run, and the workers of the other six
+SDKs follow it. The Rust worker logged `maintenance failed` and continued. Now a pass that fails,
+also the first pass at startup and a failed schedule pass, stops the claims. The run drains the
+tasks in flight within the grace period, as for a shutdown, and `Worker::run` returns the error of
+the pass. `Error::ShutdownIncomplete` still comes first if the run abandoned a task. A phase error
+that `tick_v1` reports in a row does not fail the pass. `run_once` returns the error of its pass, as
+before. A supervisor must start the worker again after `run` returns an error (SM-2008).
 
 ## 0.12.0 — 2026-11-07
 

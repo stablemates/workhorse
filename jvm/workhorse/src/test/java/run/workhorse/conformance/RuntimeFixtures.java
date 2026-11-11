@@ -57,6 +57,7 @@ import run.workhorse.CancellationReason;
 import run.workhorse.CancellationToken;
 import run.workhorse.CheckpointOptions;
 import run.workhorse.ChildRequest;
+import run.workhorse.ChildResultLimitExceededException;
 import run.workhorse.ConflictException;
 import run.workhorse.EmptyWaitsForTest;
 import run.workhorse.EnqueueOptions;
@@ -1440,8 +1441,8 @@ final class RuntimeFixtures {
   }
 
   /**
-   * Each case throws the error a durable replay raises. A conflict is terminal, so the retry
-   * callback never runs; a limit, an occupied wait, and a plain error retry once.
+   * Each case throws the error a durable replay raises. A conflict and a child limit are terminal,
+   * so the retry callback never runs; an occupied wait and a plain error retry once.
    */
   private void replayConflict(Map<String, @Nullable Object> fixture) throws Exception {
     for (Object item : (List<?>) fixture.get("cases")) {
@@ -1504,6 +1505,8 @@ final class RuntimeFixtures {
                         case "child-set" -> new ConflictException("runChildren", "saved");
                         case "human" -> new ConflictException("waitForHuman", "saved");
                         case "child-limit" -> new LimitExceededException("runChild", "saved");
+                        case "child-result-limit" ->
+                            new ChildResultLimitExceededException(2_048, 1_024);
                         case "signal-wait" -> new AlreadyWaitingException("waitForSignal", "saved");
                         // The Java counterpart of the Ruby lane's StandardError.
                         case "transient" -> new Exception("transient");

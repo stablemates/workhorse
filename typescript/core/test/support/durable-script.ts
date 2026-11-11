@@ -161,9 +161,10 @@ async function expectObserved(options: {
   const { pool, fixture, taskId, step, counters, where } = options;
   const rows = await pool.query<{ observed: string }>(fixture.observe, [taskId]);
   const observed: JsonValue = JSON.parse(rows.rows[0]?.observed ?? "null");
-  if (!isDeepStrictEqual(observed, step.observed)) {
+  const wanted = expectedObserved(step, where);
+  if (!isDeepStrictEqual(observed, wanted)) {
     throw new Error(
-      `${where}: observed ${JSON.stringify(observed)}, expected ${JSON.stringify(step.observed)}`,
+      `${where}: observed ${JSON.stringify(observed)}, expected ${JSON.stringify(wanted)}`,
     );
   }
   for (const name of [
@@ -178,6 +179,25 @@ async function expectObserved(options: {
       throw new Error(`${where}: ${name} is ${counters[name]}, expected ${expected}`);
     }
   }
+}
+
+/** The observed value of `step`, with the error name of this SDK when the step names one. */
+function expectedObserved(
+  step: Extract<DurableScriptStep, { action: "expect" }>,
+  where: string,
+): JsonValue {
+  if (step.errorNames === undefined) return step.observed;
+  const errorName = step.errorNames[SDK];
+  const observed = step.observed;
+  if (
+    errorName === undefined ||
+    observed === null ||
+    typeof observed !== "object" ||
+    Array.isArray(observed)
+  ) {
+    throw new TypeError(`${where}: errorNames needs an observed object and a name for ${SDK}`);
+  }
+  return { ...observed, errorName };
 }
 
 async function runScript(options: {

@@ -142,8 +142,7 @@ Migration 0098 adds function versions, so its answers reach only the processes o
   Before, it returned `not_waiting` and recorded `signal_rejected` each time. A sender that tries
   again after `not_waiting` can stop at `stale`.
 - A second child set in one activation raises the child limit error of the SDK, not its conflict
-  error. The task still fails with no retry. A second single child and a set of more than 100
-  children still follow the retry policy.
+  error. The task still fails with no retry.
 - The group snapshot shows a callback that failed to enqueue at the finish, with its SQLSTATE, error message, and time. Retention deletes this record with the group.
 
 Migration 0100 also adds function versions. A worker of the new release changes two failure rules:
@@ -156,6 +155,19 @@ Migration 0100 also adds function versions. A worker of the new release changes 
   without a retry, with `CheckpointValueSizeLimitError` or the name of its SDK. Before, each retry
   ran the operation of the checkpoint again. Correct the handler, and then redrive the task
   ([Delivery guarantees](guides/030-delivery-guarantees.md#keep-a-checkpoint-value-below-its-limit)).
+
+A worker of the new release also changes two rules that need no migration:
+
+- A child limit refusal now fails the task at the first attempt and not after `maxAttempts`. This
+  applies to a second single child, a set of more than 100 children, and a child join whose
+  results are larger than the result limit of the task. A second child set already failed at the
+  first attempt. A handler replays the same child calls, so a retry got the same refusal and ran
+  again the work that no checkpoint holds. Correct the handler, and then redrive the task
+  ([Schema and SQL protocol: Durable replay conflicts](architecture/schema-and-protocol.md#durable-replay-conflicts)).
+- A Rust worker that continued after a failed maintenance pass now ends its run, as the workers of
+  the other six SDKs do. `Worker::run` drains the tasks in flight and returns the error of the pass.
+  This also applies to the first pass at startup. Its supervisor must start it again
+  ([Schema and SQL protocol: Failed maintenance pass](architecture/schema-and-protocol.md#failed-maintenance-pass)).
 
 A 0.12 process keeps working on schema version 99, because a migration inside a major line only
 adds. Migration 0098 keeps `schedule_wait_v1`, `send_signal_v1`, and `create_children_v1` and their

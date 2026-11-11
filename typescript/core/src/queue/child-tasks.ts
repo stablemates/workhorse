@@ -100,23 +100,6 @@ export class ChildLimitExceededError extends WorkhorseError {
   }
 }
 
-// The limit errors that a second child set raised. A task holds one child set, and a second set
-// was a terminal replay conflict before create_children_v2 named it a limit, so it stays terminal.
-// Each other child limit refusal follows the retry policy (the ADR 0098 amendment of SM-1956).
-const secondChildSetErrors = new WeakSet<ChildLimitExceededError>();
-
-/** The limit error of a second child set, which ends the task with no retry. */
-function secondChildSetLimit(parentTaskId: string): ChildLimitExceededError {
-  const error = new ChildLimitExceededError(parentTaskId);
-  secondChildSetErrors.add(error);
-  return error;
-}
-
-/** Whether `error` is the limit error of a second child set. */
-export function isSecondChildSetLimit(error: Error): boolean {
-  return error instanceof ChildLimitExceededError && secondChildSetErrors.has(error);
-}
-
 export class ChildResultLimitExceededError extends WorkhorseError {
   constructor(
     readonly parentTaskId: string,
@@ -428,7 +411,7 @@ export class ChildTasksModule extends QueueModule {
     if (row.status === "conflict") throw new ChildConflictError(parent.id, "child set");
     // The set has at most 100 children, which the check above proves, so the limit is the second
     // child set of this activation.
-    if (row.status === "limit_exceeded") throw secondChildSetLimit(parent.id);
+    if (row.status === "limit_exceeded") throw new ChildLimitExceededError(parent.id);
     if (row.status === "result_too_large") {
       throw new ChildResultLimitExceededError(
         parent.id,

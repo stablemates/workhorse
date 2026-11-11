@@ -368,30 +368,44 @@ the failure envelope. Only the conflict settlement sends `-1`. No retry delay ov
 value included ([ADR 0111](../decisions/0111-define-one-retry-delay-override-range.md)). Configured
 redaction still records `RedactedTaskError`. The terminal classification occurs before redaction.
 
-Transient failures, lease loss, child-limit refusals, and already-waiting signal refusals keep their
-existing settlement behavior. `protocol/v1/runtime.json` pins terminal conflicts and those retryable
-controls in every SDK.
+Transient failures, lease loss, and already-waiting signal refusals keep their existing settlement
+behavior. `protocol/v1/runtime.json` pins terminal conflicts and those retryable controls in every
+SDK.
 
-One child limit refusal is terminal: the limit error of a second child set. A task holds one child
-set. `create_children_v2` answers `limit_exceeded` when the activation that created or joined the
-set asks for another set, and `create_children_v1` answered `conflict`. Thus a second set was
-terminal before under the conflict name, and it stays terminal under the limit name
-([ADR 0098](../decisions/0098-check-the-input-of-a-checkpoint-on-replay.md), amendment of SM-1956).
-Each SDK marks that error internally and adds no public name:
+Each child limit refusal and each child result limit refusal is terminal too
+([ADR 0098](../decisions/0098-check-the-input-of-a-checkpoint-on-replay.md), amendment of SM-2025).
+A handler replays the same child calls on each attempt, so a retry gets the same refusal. A retry
+also runs again the work of the handler that no checkpoint holds. The worker settles these errors
+as it settles a conflict, through `fail_v2` with `p_retry_delay_ms = -1`. These causes give a
+refusal:
 
-| SDK        | Error that the handler sees | Mark                                           | Envelope name             |
-| ---------- | --------------------------- | ---------------------------------------------- | ------------------------- |
-| TypeScript | `ChildLimitExceededError`   | a module-private `WeakSet`                     | `ChildLimitExceededError` |
-| Python     | `ChildLimitExceededError`   | a private attribute                            | `ChildLimitExceededError` |
-| Go         | `*ChildLimitExceededError`  | an unexported field                            | `ChildLimitExceededError` |
-| Rust       | `Error::LimitExceeded`      | `operation` `RunChildren` and name `child set` | `Error`                   |
-| Ruby       | `LimitExceededError`        | a private instance variable                    | the name of its type      |
-| JVM        | `LimitExceededException`    | a package-private flag                         | `LimitExceededException`  |
-| .NET       | `LimitExceededException`    | an internal property                           | `LimitExceededException`  |
+| Cause                                                                                                 | Refusal                                                     |
+| ----------------------------------------------------------------------------------------------------- | ----------------------------------------------------------- |
+| A single child after a child set of the task                                                          | `create_child_v2` answers `limit_exceeded`                  |
+| A single child with another name in the activation that created or joined the first one               | `create_child_v2` answers `limit_exceeded` (migration 0054) |
+| A set with other names, or an empty set, in the activation that created or joined the stored children | `create_children_v2` answers `limit_exceeded`               |
+| A set of more than 100 children                                                                       | The SDK refuses it before any statement                     |
+| Joined results larger than `task.result_max_bytes` of the parent                                      | `create_children_v2` answers `result_too_large`             |
 
-The local guard of each SDK except TypeScript refuses a second, different set call in one
-activation before any statement, with the same marked error. A second single child, a set of more
-than 100 children, and `result_too_large` follow the retry policy.
+Each cause depends only on stored rows and on `task.result_max_bytes`. No statement changes that
+column after an attempt starts. The local guard of each SDK except TypeScript refuses a second,
+different set call in one activation before any statement, with the same limit error.
+
+| SDK        | Child limit error                                                   | Child result limit error            | Envelope name             |
+| ---------- | ------------------------------------------------------------------- | ----------------------------------- | ------------------------- |
+| TypeScript | `ChildLimitExceededError`                                           | `ChildResultLimitExceededError`     | the name of the error     |
+| Python     | `ChildLimitExceededError`                                           | `ChildResultLimitExceededError`     | the name of the error     |
+| Go         | `*ChildLimitExceededError`                                          | `*ChildResultLimitExceededError`    | the name of the type      |
+| Rust       | `Error::LimitExceeded` with operation `RunChild` or `RunChildren`   | `Error::ChildResultLimitExceeded`   | `Error`                   |
+| Ruby       | `LimitExceededError` with operation `:run_child` or `:run_children` | `ChildResultLimitExceededError`     | the name of its type      |
+| JVM        | `LimitExceededException` with operation `runChild` or `runChildren` | `ChildResultLimitExceededException` | the name of the exception |
+| .NET       | `LimitExceededException` with operation `runChild` or `runChildren` | `ChildResultLimitExceededException` | the name of the exception |
+
+The worker finds such an error also when the handler wraps it, as it finds a conflict. A limit
+error of another operation, such as a signal wait, keeps the retry policy. If the payload contract of the
+child type refuses a child payload, the SDK raises the error of the payload contract, as a plain
+enqueue does. That error keeps the retry policy, because a deploy of the child contract can change
+the answer.
 
 #### Absolute timer targets
 
@@ -2917,6 +2931,27 @@ The worker expects a listener only when all of these conditions are true:
 
 `Worker::new` rejects a pool whose maximum size is below 3. The reason is that heartbeats reserve
 one connection in addition to one claim and one settlement. No option disables this reservation.
+
+#### Failed maintenance pass
+
+A maintenance pass of `Worker::run` fails when `tick_v1`, the schedule pass, or
+`run_maintenance_v1` returns an error. A phase error that a row of `tick_v1` reports does not fail
+the pass. A failed pass ends the run, also the first pass at startup
+([ADR 0078](../decisions/0078-start-a-long-running-workers-first-claim-beside-its-startup-maintenance-pass.md),
+rule 4). Before SM-2008, the Rust worker logged `maintenance failed` and continued.
+
+1. The maintenance loop logs `maintenance failed; the worker stops` at the error level, keeps the
+   error, and makes no more passes.
+2. The run stops its claims, as for a shutdown. The grace period starts.
+3. The run drains the tasks in flight. A handler that ends within the grace period settles its
+   task. A handler that is still running when grace ends sees `CancelReason::Shutdown`, as in a
+   shutdown.
+4. `run` returns `Error::ShutdownIncomplete` if it abandoned a task. Otherwise it returns the error
+   of the pass. That error comes before the first error of a task execution, which the run then
+   logs.
+
+`run_once` returns the error of its pass, as before. A supervisor must start a worker again after
+`run` returns an error.
 
 #### Heartbeat fencing
 

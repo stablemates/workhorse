@@ -646,12 +646,12 @@ public sealed class DurableContextTests(ScratchDatabase database) : IClassFixtur
     // ---------------------------------------------------------------------------------------------
     // Task groups
 
-    // A second child set was a terminal replay conflict before create_children_v2 named it a limit,
-    // so it stays terminal. Each other child limit refusal follows the retry policy.
+    // A handler replays the same child calls on each attempt, so each child limit refusal ends the
+    // task with no retry (SM-2025).
     [Theory]
     [InlineData("second-set", "failed", 1, "LimitExceededException")]
-    [InlineData("second-single", "scheduled", 2, "LimitExceededException")]
-    [InlineData("large-set", "scheduled", 2, "LimitExceededException")]
+    [InlineData("second-single", "failed", 1, "LimitExceededException")]
+    [InlineData("large-set", "failed", 1, "LimitExceededException")]
     [InlineData("changed-set", "failed", 1, "ConflictException")]
     public async Task ChildLimitRefusalsAndAChangedSet(string shape, string state, int attempt, string name)
     {

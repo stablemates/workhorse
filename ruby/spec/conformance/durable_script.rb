@@ -128,8 +128,11 @@ module Conformance
 
     def expect_observed(connection, task_id, step, where)
       observed = JSON.parse(connection.exec_params(@fixture["observe"], [task_id]).getvalue(0, 0))
-      unless observed == step["observed"]
-        raise Failure, "#{where}: observed #{JSON.generate(observed)}, expected #{JSON.generate(step["observed"])}"
+      expected = step["observed"]
+      # The runner puts the error name of its SDK into the observed value it expects.
+      expected = expected.merge("errorName" => step["errorNames"].fetch("ruby")) if step.key?("errorNames")
+      unless observed == expected
+        raise Failure, "#{where}: observed #{JSON.generate(observed)}, expected #{JSON.generate(expected)}"
       end
 
       Counters::NAMES.each do |name, counter|

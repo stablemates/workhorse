@@ -1188,14 +1188,19 @@ resolution selected the parent outcome, regardless of settlement order.
 Canceling a blocked parent does not cancel the child. A later child outcome cannot resurrect that
 terminal parent.
 
-| Error                     | Meaning                |
-| ------------------------- | ---------------------- |
-| `ChildLeaseLostError`     | Stale ownership        |
-| `ChildConflictError`      | A changed replay       |
-| `ChildLimitExceededError` | An oversized child set |
+| Error                     | Meaning                                                                |
+| ------------------------- | ---------------------------------------------------------------------- |
+| `ChildLeaseLostError`     | Stale ownership                                                        |
+| `ChildConflictError`      | A changed replay                                                       |
+| `ChildLimitExceededError` | A second child, a second child set, or a set of more than 100 children |
 
 The single-child function returns `limit_exceeded` when any set-created edge exists. Callers
 therefore cannot mix the two replay contracts.
+
+The worker fails the parent with no retry at `ChildConflictError`, `ChildLimitExceededError`, and
+`ChildResultLimitExceededError`, and keeps the current attempt. A replay makes the same child calls,
+so a retry gets the same refusal
+([Schema and protocol: Durable replay conflicts](schema-and-protocol.md#durable-replay-conflicts)).
 
 #### Lineage reads
 
@@ -4209,8 +4214,10 @@ subtransaction, as `tick_v1` runs each of its phases.
 
 Before schema version 94, one error rolled back the fires and the positions of every definition in
 the pass. A definition with a `concurrencyKey` on a fast-tier queue, or a stored queue name above
-256 UTF-8 bytes, then stopped every schedule of the offered namespaces (SM-1927). Each SDK worker
-reports a failed pass as its runtime describes, and the TypeScript and Go workers end their run.
+256 UTF-8 bytes, then stopped every schedule of the offered namespaces (SM-1927). A pass still
+fails for an error of the whole statement. Then each long-running worker of the seven SDKs ends its
+run, as [ADR 0078](../decisions/0078-start-a-long-running-workers-first-claim-beside-its-startup-maintenance-pass.md)
+rule 4 says. The Rust worker follows the rule since SM-2008.
 
 #### Occurrence locks
 

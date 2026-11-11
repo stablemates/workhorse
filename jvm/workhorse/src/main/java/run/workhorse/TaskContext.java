@@ -573,7 +573,8 @@ final class TaskContext implements HandlerContext {
                 case "conflict" -> throw new ConflictException("runChildren", "child set");
                 // The set has at most 100 children, which the check above proves, so the limit is
                 // the second child set of this activation.
-                case "limit_exceeded" -> throw LimitExceededException.secondChildSet();
+                case "limit_exceeded" ->
+                    throw new LimitExceededException("runChildren", "child set");
                 case "result_too_large" ->
                     throw new ChildResultLimitExceededException(
                         row.requiredLong("result_bytes"), row.requiredLong("result_limit_bytes"));
@@ -788,7 +789,7 @@ final class TaskContext implements HandlerContext {
         } else if (!Objects.equals(running.request, request)) {
           // A task holds one child set, so a second set in the same activation is a limit.
           if ("runChildren".equals(kind)) {
-            throw LimitExceededException.secondChildSet();
+            throw new LimitExceededException("runChildren", "child set");
           }
           throw new ConflictException(kind, conflictName);
         }

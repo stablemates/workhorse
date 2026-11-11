@@ -222,13 +222,23 @@ final class DurableScript {
       }
     }
     Object observed = Json.parse(text);
+    Object expectedObserved = step.get("observed");
+    // The runner puts the error name of its SDK into the observed value it expects.
+    if (step.get("errorNames") instanceof Map<?, ?> names) {
+      check(
+          expectedObserved instanceof Map<?, ?> && names.get("java") instanceof String,
+          where + ": errorNames needs an observed object and a name for java");
+      Map<Object, Object> named = new LinkedHashMap<>((Map<?, ?>) expectedObserved);
+      named.put("errorName", names.get("java"));
+      expectedObserved = named;
+    }
     check(
-        Matcher.same(observed, step.get("observed")),
+        Matcher.same(observed, expectedObserved),
         where
             + ": observed "
             + Matcher.render(observed)
             + ", expected "
-            + Matcher.render(step.get("observed")));
+            + Matcher.render(expectedObserved));
     for (Map.Entry<String, AtomicInteger> counter :
         Map.of(
                 "handlerRuns", handlerRuns,

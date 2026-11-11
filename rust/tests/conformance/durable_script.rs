@@ -160,11 +160,19 @@ pub async fn run_phase(url: &str, fixture: &Value, phase: &str) -> Checked {
                     .map_err(|error| format!("{place}: {error}"))?;
                 let observed: Value = serde_json::from_str(&row.get::<_, String>(0))
                     .map_err(|error| error.to_string())?;
-                if observed != step["observed"] {
-                    return Err(format!(
-                        "{place}: observed {observed}, expected {}",
-                        step["observed"]
-                    ));
+                let mut expected = step["observed"].clone();
+                // The runner puts the error name of its SDK into the observed value it expects.
+                if let Some(names) = step.get("errorNames") {
+                    let name = names["rust"].clone();
+                    let Some(object) = expected.as_object_mut().filter(|_| name.is_string()) else {
+                        return Err(format!(
+                            "{place}: errorNames needs an observed object and a name for rust"
+                        ));
+                    };
+                    object.insert("errorName".to_owned(), name);
+                }
+                if observed != expected {
+                    return Err(format!("{place}: observed {observed}, expected {expected}"));
                 }
                 for (name, counter) in [
                     ("handlerRuns", &counters.handler_runs),

@@ -621,6 +621,11 @@ export type DurableScriptStep =
       caughtSuspensions?: number;
       completedScripts?: number;
       returnedSuspendingCalls?: number;
+      /**
+       * The error name that each SDK records. Before the comparison, a runner replaces
+       * `observed.errorName` with the name of its SDK.
+       */
+      errorNames?: Record<string, string>;
     };
 
 /**

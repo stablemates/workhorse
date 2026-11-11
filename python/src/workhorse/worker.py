@@ -1369,8 +1369,8 @@ class _HandlerDurability:
                 pending_request, pending = current
                 if pending_request != call_key:
                     # A task holds one child set, so a second set in the same activation is a
-                    # limit. It ends the task, as the replay conflict that it was before did.
-                    raise _second_child_set_limit(self._task.id)
+                    # limit.
+                    raise ChildLimitExceededError(self._task.id)
                 owns_call = False
         if not owns_call:
             return pending.result()
@@ -1384,7 +1384,7 @@ class _HandlerDurability:
             if status == "limit_exceeded":
                 # The set has at most 100 children, which the check above proves, so the limit is
                 # the second child set of this activation.
-                raise _second_child_set_limit(self._task.id)
+                raise ChildLimitExceededError(self._task.id)
             if status == "result_too_large":
                 raise ChildResultLimitExceededError(
                     self._task.id,
@@ -4801,26 +4801,11 @@ def _has_unstorable_escape(encoded: str) -> bool:
 _MAX_CAUSE_DEPTH = 16
 
 
-def _second_child_set_limit(task_id: str) -> ChildLimitExceededError:
-    """The limit error of a second child set, which ends the task with no retry.
-
-    A second child set was a terminal replay conflict before create_children_v2 named it a limit,
-    so it stays terminal. Each other child limit refusal follows the retry policy (the ADR 0098
-    amendment of SM-1956).
-    """
-    error = ChildLimitExceededError(task_id)
-    error._workhorse_second_child_set = True  # type: ignore[attr-defined]
-    return error
-
-
-def _is_second_child_set_limit(error: BaseException) -> bool:
-    return isinstance(error, ChildLimitExceededError) and getattr(
-        error, "_workhorse_second_child_set", False
-    )
-
-
 def _durable_replay_conflict(error: BaseException) -> BaseException | None:
-    """The durable replay conflict (ADR 0098) or oversized checkpoint value in the chain, or None.
+    """The durable replay conflict (ADR 0098) or other terminal durable error in the chain, or None.
+
+    The other terminal errors are an oversized checkpoint value (SM-1982) and each child limit and
+    child result limit error (SM-2025).
 
     A handler can wrap a conflict in its own exception, explicitly with `raise ... from` or
     implicitly inside an `except` block. The conflict is terminal also then, as in Go and Rust, and
@@ -4841,8 +4826,12 @@ def _durable_replay_conflict(error: BaseException) -> BaseException | None:
                 # Not a replay conflict, but terminal for the same reason: a retry runs the
                 # operation of the checkpoint again and still cannot store its value (SM-1982).
                 CheckpointValueSizeLimitError,
+                # Terminal too: a retry replays the same child calls and gets the same refusal
+                # (SM-2025).
+                ChildLimitExceededError,
+                ChildResultLimitExceededError,
             ),
-        ) or _is_second_child_set_limit(current):
+        ):
             return current
         current = (
             current.__cause__
