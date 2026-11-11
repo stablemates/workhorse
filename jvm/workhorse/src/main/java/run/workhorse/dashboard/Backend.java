@@ -4,6 +4,7 @@ import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
+import java.time.Duration;
 import java.time.Instant;
 import java.time.ZoneOffset;
 import java.time.format.DateTimeFormatter;
@@ -18,6 +19,8 @@ import java.util.UUID;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.locks.ReentrantLock;
 import org.jspecify.annotations.Nullable;
+import org.postgresql.core.BaseConnection;
+import org.postgresql.core.TransactionState;
 import run.workhorse.Admin;
 import run.workhorse.AdminAudit;
 import run.workhorse.BulkRedrivePage;
@@ -71,7 +74,22 @@ final class Backend {
     @Nullable Object call(Map<String, ? extends @Nullable Object> input, String actor);
   }
 
+  /** The SQLSTATE of a statement that PostgreSQL cancels for its {@code statement_timeout}. */
+  private static final String QUERY_CANCELED = "57014";
+
+  /**
+   * Makes the transaction of one read read-only. It must be the first statement of the transaction.
+   */
+  private static final String READ_ONLY = "SET TRANSACTION READ ONLY";
+
+  /**
+   * Sets the read bound for the current transaction only. {@code SET LOCAL} cannot take a bind
+   * parameter, and {@code set_config(..., true)} has the same scope.
+   */
+  private static final String STATEMENT_TIMEOUT = "SELECT set_config('statement_timeout', ?, true)";
+
   private final ConnectionSource connections;
+  private final String statementTimeoutMs;
   private final Admin admin;
   private final Queue queue;
   private final String environment;
@@ -87,8 +105,10 @@ final class Backend {
       String environment,
       List<String> configuredWorkers,
       Map<String, @Nullable Object> maintenanceLoops,
-      boolean readOnly) {
+      boolean readOnly,
+      Duration statementTimeout) {
     this.connections = connections;
+    this.statementTimeoutMs = Long.toString(statementTimeout.toMillis());
     this.admin = new Admin(connections);
     this.queue = new Queue(connections);
     this.environment = environment;
@@ -423,7 +443,7 @@ final class Backend {
     request.put("actor", audit.actor());
     request.put("reason", audit.reason());
     request.put("requestId", audit.requestId());
-    return found(shared(V1.CANCEL_TASK_GROUP, request), "Task group not found");
+    return found(sharedMutation(V1.CANCEL_TASK_GROUP, request), "Task group not found");
   }
 
   // ---------------------------------------------------------------------------------------------
@@ -437,35 +457,53 @@ final class Backend {
    * no {@code BigInteger} parse (SM-1531).
    */
   private @Nullable Object result(SqlCatalogue.Statement statement) {
-    return one(statement).jsonForWrite("result");
+    return readOne(statement).jsonForWrite("result");
   }
 
   private @Nullable Object result(
       SqlCatalogue.Statement statement, Map<String, ? extends @Nullable Object> document) {
-    return one(statement, Json.write(document)).jsonForWrite("result");
+    return readOne(statement, Json.write(document)).jsonForWrite("result");
+  }
+
+  private Row readOne(SqlCatalogue.Statement statement, @Nullable Object... parameters) {
+    List<Row> rows = withReadConnection(connection -> Sql.rows(connection, statement, parameters));
+    if (rows.size() != 1) {
+      throw new WorkhorseException(
+          statement.name() + " returned " + rows.size() + " rows; expected one");
+    }
+    return rows.get(0);
   }
 
   /**
-   * The parsed {@code result} column of a shared {@code dashboard/v1} statement. The statement
-   * comes from the contract, not the catalogue, so it runs on a prepared statement here.
+   * The parsed {@code result} column of a shared {@code dashboard/v1} read. The statement comes
+   * from the contract, not the catalogue, so it runs on a prepared statement here.
    */
   private @Nullable Object shared(String sql, Map<String, ? extends @Nullable Object> document) {
-    return withConnection(
-        connection -> {
-          try (PreparedStatement prepared = connection.prepareStatement(sql)) {
-            prepared.setString(1, Json.write(document));
-            try (ResultSet resultSet = prepared.executeQuery()) {
-              if (!resultSet.next()) {
-                throw new WorkhorseException("a dashboard/v1 statement returned no row");
-              }
-              String result = resultSet.getString("result");
-              if (resultSet.next()) {
-                throw new WorkhorseException("a dashboard/v1 statement returned many rows");
-              }
-              return result == null ? null : Json.parseForWrite(result);
-            }
-          }
-        });
+    return withReadConnection(connection -> sharedResult(connection, sql, document));
+  }
+
+  /** {@link #shared} for a mutation. It runs in autocommit, with no read bound. */
+  private @Nullable Object sharedMutation(
+      String sql, Map<String, ? extends @Nullable Object> document) {
+    return withConnection(connection -> sharedResult(connection, sql, document));
+  }
+
+  private static @Nullable Object sharedResult(
+      Connection connection, String sql, Map<String, ? extends @Nullable Object> document)
+      throws SQLException {
+    try (PreparedStatement prepared = connection.prepareStatement(sql)) {
+      prepared.setString(1, Json.write(document));
+      try (ResultSet resultSet = prepared.executeQuery()) {
+        if (!resultSet.next()) {
+          throw new WorkhorseException("a dashboard/v1 statement returned no row");
+        }
+        String result = resultSet.getString("result");
+        if (resultSet.next()) {
+          throw new WorkhorseException("a dashboard/v1 statement returned many rows");
+        }
+        return result == null ? null : Json.parseForWrite(result);
+      }
+    }
   }
 
   private Row one(SqlCatalogue.Statement statement, @Nullable Object... parameters) {
@@ -521,6 +559,109 @@ final class Backend {
     return result;
   }
 
+  /**
+   * Work on one connection inside a read-only transaction with a transaction-local {@code
+   * statement_timeout}.
+   *
+   * <p>PostgreSQL arms the statement timer when a statement starts, so the bound must be set before
+   * the read and not inside it. The transaction always rolls back, which ends the setting, and the
+   * connection goes back in autocommit. A read that PostgreSQL cancels answers the {@code TIMEOUT}
+   * RPC error, as the TypeScript host does.
+   *
+   * <p>The host owns the transaction only when pgjdbc reports an idle connection in autocommit (see
+   * {@link #ownable}). On each other connection a {@code BEGIN} can start no new transaction, and a
+   * local setting would stay in the caller's transaction, so the read runs directly with no bound.
+   */
+  private <T extends @Nullable Object> T withReadConnection(ConnectionWork<T> work) {
+    try {
+      return withConnection(
+          connection -> {
+            if (!ownable(connection)) {
+              return work.apply(connection);
+            }
+            connection.setAutoCommit(false);
+            Throwable failure = null;
+            try {
+              try (var statement = connection.createStatement()) {
+                statement.execute(READ_ONLY);
+              }
+              try (PreparedStatement bound = connection.prepareStatement(STATEMENT_TIMEOUT)) {
+                bound.setString(1, statementTimeoutMs);
+                bound.execute();
+              }
+              return work.apply(connection);
+            } catch (SQLException | RuntimeException | Error error) {
+              failure = error;
+              throw error;
+            } finally {
+              // The original failure reaches the caller. A cleanup failure is suppressed into it
+              // (SM-1948), and the connection still goes back through withConnection.
+              try {
+                cleanUp(failure, connection::rollback);
+              } finally {
+                cleanUp(failure, () -> connection.setAutoCommit(true));
+              }
+            }
+          });
+    } catch (RuntimeException error) {
+      // A caller transaction can carry a statement_timeout of its own, so its cancel answers
+      // TIMEOUT too.
+      if (canceled(error)) {
+        throw readTimeout(error);
+      }
+      throw error;
+    }
+  }
+
+  /**
+   * Whether the host can own the transaction of a read on {@code connection}: the connection is in
+   * autocommit, and pgjdbc reports no open transaction. A raw {@code BEGIN} opens a transaction in
+   * autocommit too, and a connection that pgjdbc does not wrap cannot report its state, so each
+   * other connection reads directly.
+   */
+  private static boolean ownable(Connection connection) throws SQLException {
+    return connection.getAutoCommit()
+        && connection.isWrapperFor(BaseConnection.class)
+        && connection.unwrap(BaseConnection.class).getTransactionState() == TransactionState.IDLE;
+  }
+
+  /** One cleanup step of an owned read. */
+  @FunctionalInterface
+  private interface Cleanup {
+    void run() throws SQLException;
+  }
+
+  /**
+   * Runs {@code step}. After a {@code failure}, a failure of the step is suppressed into it, so the
+   * original failure reaches the caller. Without one, the failure of the step is thrown.
+   */
+  private static void cleanUp(@Nullable Throwable failure, Cleanup step) throws SQLException {
+    try {
+      step.run();
+    } catch (SQLException | RuntimeException | Error cleanup) {
+      if (failure == null) {
+        throw cleanup;
+      }
+      failure.addSuppressed(cleanup);
+    }
+  }
+
+  private static boolean canceled(Throwable error) {
+    for (Throwable cause = error; cause != null; cause = cause.getCause()) {
+      if (cause instanceof SQLException sql && QUERY_CANCELED.equals(sql.getSQLState())) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  private static DashboardRpcException readTimeout(Throwable cause) {
+    DashboardRpcException timeout =
+        new DashboardRpcException(408, "TIMEOUT", "This read exceeded its time bound");
+    timeout.initCause(cause);
+    return timeout;
+  }
+
   private void release(Connection connection) {
     try {
       connections.release(connection, false);
@@ -543,7 +684,8 @@ final class Backend {
       if (cached != null && healthExpiresAt - System.nanoTime() > 0) {
         return cached;
       }
-      Map<String, @Nullable Object> snapshot = queue.health().snapshot();
+      Map<String, @Nullable Object> snapshot =
+          withReadConnection(connection -> queue.health(connection).snapshot());
       health = snapshot;
       healthExpiresAt = System.nanoTime() + QUEUE_HEALTH_TTL_NANOS;
       return snapshot;

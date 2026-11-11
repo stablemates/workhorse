@@ -12,7 +12,8 @@
     ],
     "maintenanceLoops": {
       "tickIntervalMs": 1000
-    }
+    },
+    "statementTimeoutMs": 5000
   },
   "scenarios": [
     {
@@ -5633,6 +5634,2147 @@
           }
         },
         {
+          "id": "system-drops-undeclared-input-key",
+          "procedure": "system",
+          "request": {
+            "json": {
+              "window": "1h",
+              "health": {}
+            }
+          },
+          "expect": {
+            "status": 200,
+            "body": {
+              "json": {
+                "kpis": {
+                  "drain": {
+                    "netPerMinute": -0.15,
+                    "enqueuedPerMinute": 0.25,
+                    "completedPerMinute": 0.1
+                  },
+                  "lease": {
+                    "active": 0,
+                    "expired": 0,
+                    "recovered": 0,
+                    "expiringSoon": 0
+                  },
+                  "retry": {
+                    "backoff": 0,
+                    "buckets": [
+                      {
+                        "count": 0,
+                        "upperBoundMs": 60000
+                      },
+                      {
+                        "count": 0,
+                        "upperBoundMs": 300000
+                      },
+                      {
+                        "count": 0,
+                        "upperBoundMs": 900000
+                      },
+                      {
+                        "count": 0,
+                        "upperBoundMs": 3600000
+                      },
+                      {
+                        "count": 0,
+                        "upperBoundMs": null
+                      }
+                    ],
+                    "dueSoon": 0
+                  },
+                  "backlog": {
+                    "ready": 6,
+                    "oldestReadyMs": {
+                      "$type": "string"
+                    }
+                  },
+                  "children": {
+                    "capped": false,
+                    "failedParents": 0,
+                    "waitingParents": 0,
+                    "canceledParents": 0,
+                    "pendingChildren": 0,
+                    "unjoinedResults": 0
+                  },
+                  "deadline": {
+                    "overdue": 0,
+                    "pending": 2,
+                    "earliestAt": {
+                      "$type": "timestamp"
+                    },
+                    "activeTimeouts": 0,
+                    "dueWithinMinute": 0,
+                    "overdueTimeouts": 0
+                  },
+                  "errorRate": {
+                    "delta": 0.5,
+                    "current": 0.5,
+                    "previous": 0
+                  },
+                  "queueWait": {
+                    "p50Ms": {
+                      "$type": "number"
+                    },
+                    "p95Ms": {
+                      "$type": "number"
+                    },
+                    "p99Ms": {
+                      "$type": "number"
+                    }
+                  },
+                  "dependencies": {
+                    "capped": false,
+                    "blockedTasks": 0,
+                    "pendingEdges": 0,
+                    "failedResolutions": 0,
+                    "retentionPruneStarved": false
+                  },
+                  "externalWaits": {
+                    "capped": false,
+                    "overdue": 0,
+                    "pendingSignals": 1,
+                    "oldestPendingAgeMs": {
+                      "$type": "number"
+                    },
+                    "rejectedDeliveries": 0,
+                    "pendingHumanDecisions": 1
+                  }
+                },
+                "queues": [
+                  {
+                    "queue": "conformance",
+                    "ready": 2,
+                    "active": 0,
+                    "paused": false,
+                    "dueSoon": 0,
+                    "retrying": 0,
+                    "oldestReadyMs": {
+                      "$type": "string"
+                    },
+                    "priorityBacklog": [
+                      {
+                        "ready": 1,
+                        "priority": 5,
+                        "oldestReadyMs": {
+                          "$type": "string"
+                        }
+                      },
+                      {
+                        "ready": 1,
+                        "priority": 0,
+                        "oldestReadyMs": {
+                          "$type": "string"
+                        }
+                      }
+                    ],
+                    "rateLimitPolicy": null,
+                    "concurrencyPolicy": null,
+                    "enqueuedPerMinute": 0.11666666666666667,
+                    "completedPerMinute": 0.03333333333333333
+                  },
+                  {
+                    "queue": "conformance-fast",
+                    "ready": 0,
+                    "active": 0,
+                    "paused": false,
+                    "dueSoon": 0,
+                    "retrying": 0,
+                    "oldestReadyMs": null,
+                    "priorityBacklog": [],
+                    "rateLimitPolicy": null,
+                    "concurrencyPolicy": null,
+                    "enqueuedPerMinute": 0,
+                    "completedPerMinute": 0
+                  },
+                  {
+                    "queue": "conformance-groups",
+                    "ready": 3,
+                    "active": 0,
+                    "paused": false,
+                    "dueSoon": 0,
+                    "retrying": 0,
+                    "oldestReadyMs": {
+                      "$type": "string"
+                    },
+                    "priorityBacklog": [
+                      {
+                        "ready": 3,
+                        "priority": 0,
+                        "oldestReadyMs": {
+                          "$type": "string"
+                        }
+                      }
+                    ],
+                    "rateLimitPolicy": null,
+                    "concurrencyPolicy": null,
+                    "enqueuedPerMinute": 0.06666666666666667,
+                    "completedPerMinute": 0.016666666666666666
+                  },
+                  {
+                    "queue": "conformance-policy",
+                    "ready": 0,
+                    "active": 0,
+                    "paused": false,
+                    "dueSoon": 0,
+                    "retrying": 0,
+                    "oldestReadyMs": null,
+                    "priorityBacklog": [],
+                    "rateLimitPolicy": null,
+                    "concurrencyPolicy": {
+                      "active": 0,
+                      "available": 2,
+                      "maxActive": 2,
+                      "namespace": "conformance-policy",
+                      "blockedReady": 0,
+                      "saturatedKeys": 0,
+                      "maxActivePerKey": null,
+                      "highestKeyActive": 0,
+                      "utilizationKnown": true
+                    },
+                    "enqueuedPerMinute": 0,
+                    "completedPerMinute": 0
+                  },
+                  {
+                    "queue": "conformance-preserved",
+                    "ready": 0,
+                    "active": 0,
+                    "paused": false,
+                    "dueSoon": 0,
+                    "retrying": 0,
+                    "oldestReadyMs": null,
+                    "priorityBacklog": [],
+                    "rateLimitPolicy": null,
+                    "concurrencyPolicy": null,
+                    "enqueuedPerMinute": 0.016666666666666666,
+                    "completedPerMinute": 0.016666666666666666
+                  },
+                  {
+                    "queue": "conformance-purge",
+                    "ready": 1,
+                    "active": 0,
+                    "paused": false,
+                    "dueSoon": 0,
+                    "retrying": 0,
+                    "oldestReadyMs": {
+                      "$type": "string"
+                    },
+                    "priorityBacklog": [
+                      {
+                        "ready": 1,
+                        "priority": 0,
+                        "oldestReadyMs": {
+                          "$type": "string"
+                        }
+                      }
+                    ],
+                    "rateLimitPolicy": null,
+                    "concurrencyPolicy": null,
+                    "enqueuedPerMinute": 0.016666666666666666,
+                    "completedPerMinute": 0
+                  },
+                  {
+                    "queue": "conformance-rate-policy",
+                    "ready": 0,
+                    "active": 0,
+                    "paused": false,
+                    "dueSoon": 0,
+                    "retrying": 0,
+                    "oldestReadyMs": null,
+                    "priorityBacklog": [],
+                    "rateLimitPolicy": {
+                      "rate": {
+                        "burst": 1,
+                        "limit": 1,
+                        "intervalMs": 60000
+                      },
+                      "perKey": null,
+                      "namespace": "conformance-rate-policy",
+                      "throttledKeys": 0,
+                      "nextEligibleAt": null,
+                      "throttledReady": 0,
+                      "availableTokens": 1
+                    },
+                    "concurrencyPolicy": null,
+                    "enqueuedPerMinute": 0,
+                    "completedPerMinute": 0
+                  },
+                  {
+                    "queue": "conformance-redrive",
+                    "ready": 0,
+                    "active": 0,
+                    "paused": false,
+                    "dueSoon": 0,
+                    "retrying": 0,
+                    "oldestReadyMs": null,
+                    "priorityBacklog": [],
+                    "rateLimitPolicy": null,
+                    "concurrencyPolicy": null,
+                    "enqueuedPerMinute": 0.03333333333333333,
+                    "completedPerMinute": 0.03333333333333333
+                  }
+                ],
+                "status": {
+                  "level": "degraded",
+                  "reasons": [
+                    {
+                      "code": "rollup-stalled",
+                      "budget": 1800000,
+                      "observed": {
+                        "$type": "number"
+                      },
+                      "severity": "degraded"
+                    },
+                    {
+                      "code": "retention-lag",
+                      "budget": 21600000,
+                      "category": "taskIdentity",
+                      "observed": {
+                        "$type": "number"
+                      },
+                      "severity": "degraded"
+                    },
+                    {
+                      "code": "retention-lag",
+                      "budget": 21600000,
+                      "category": "terminalOutcome",
+                      "observed": {
+                        "$type": "number"
+                      },
+                      "severity": "degraded"
+                    }
+                  ]
+                },
+                "window": "1h",
+                "budgets": [],
+                "outcomes": [
+                  {
+                    "retry": {
+                      "$type": "integer"
+                    },
+                    "failed": {
+                      "$type": "integer"
+                    },
+                    "canceled": {
+                      "$type": "integer"
+                    },
+                    "enqueued": {
+                      "$type": "integer"
+                    },
+                    "succeeded": {
+                      "$type": "integer"
+                    },
+                    "bucketStart": {
+                      "$type": "timestamp"
+                    },
+                    "leaseExpired": {
+                      "$type": "integer"
+                    }
+                  },
+                  {
+                    "retry": {
+                      "$type": "integer"
+                    },
+                    "failed": {
+                      "$type": "integer"
+                    },
+                    "canceled": {
+                      "$type": "integer"
+                    },
+                    "enqueued": {
+                      "$type": "integer"
+                    },
+                    "succeeded": {
+                      "$type": "integer"
+                    },
+                    "bucketStart": {
+                      "$type": "timestamp"
+                    },
+                    "leaseExpired": {
+                      "$type": "integer"
+                    }
+                  },
+                  {
+                    "retry": {
+                      "$type": "integer"
+                    },
+                    "failed": {
+                      "$type": "integer"
+                    },
+                    "canceled": {
+                      "$type": "integer"
+                    },
+                    "enqueued": {
+                      "$type": "integer"
+                    },
+                    "succeeded": {
+                      "$type": "integer"
+                    },
+                    "bucketStart": {
+                      "$type": "timestamp"
+                    },
+                    "leaseExpired": {
+                      "$type": "integer"
+                    }
+                  },
+                  {
+                    "retry": {
+                      "$type": "integer"
+                    },
+                    "failed": {
+                      "$type": "integer"
+                    },
+                    "canceled": {
+                      "$type": "integer"
+                    },
+                    "enqueued": {
+                      "$type": "integer"
+                    },
+                    "succeeded": {
+                      "$type": "integer"
+                    },
+                    "bucketStart": {
+                      "$type": "timestamp"
+                    },
+                    "leaseExpired": {
+                      "$type": "integer"
+                    }
+                  },
+                  {
+                    "retry": {
+                      "$type": "integer"
+                    },
+                    "failed": {
+                      "$type": "integer"
+                    },
+                    "canceled": {
+                      "$type": "integer"
+                    },
+                    "enqueued": {
+                      "$type": "integer"
+                    },
+                    "succeeded": {
+                      "$type": "integer"
+                    },
+                    "bucketStart": {
+                      "$type": "timestamp"
+                    },
+                    "leaseExpired": {
+                      "$type": "integer"
+                    }
+                  },
+                  {
+                    "retry": {
+                      "$type": "integer"
+                    },
+                    "failed": {
+                      "$type": "integer"
+                    },
+                    "canceled": {
+                      "$type": "integer"
+                    },
+                    "enqueued": {
+                      "$type": "integer"
+                    },
+                    "succeeded": {
+                      "$type": "integer"
+                    },
+                    "bucketStart": {
+                      "$type": "timestamp"
+                    },
+                    "leaseExpired": {
+                      "$type": "integer"
+                    }
+                  },
+                  {
+                    "retry": {
+                      "$type": "integer"
+                    },
+                    "failed": {
+                      "$type": "integer"
+                    },
+                    "canceled": {
+                      "$type": "integer"
+                    },
+                    "enqueued": {
+                      "$type": "integer"
+                    },
+                    "succeeded": {
+                      "$type": "integer"
+                    },
+                    "bucketStart": {
+                      "$type": "timestamp"
+                    },
+                    "leaseExpired": {
+                      "$type": "integer"
+                    }
+                  },
+                  {
+                    "retry": {
+                      "$type": "integer"
+                    },
+                    "failed": {
+                      "$type": "integer"
+                    },
+                    "canceled": {
+                      "$type": "integer"
+                    },
+                    "enqueued": {
+                      "$type": "integer"
+                    },
+                    "succeeded": {
+                      "$type": "integer"
+                    },
+                    "bucketStart": {
+                      "$type": "timestamp"
+                    },
+                    "leaseExpired": {
+                      "$type": "integer"
+                    }
+                  },
+                  {
+                    "retry": {
+                      "$type": "integer"
+                    },
+                    "failed": {
+                      "$type": "integer"
+                    },
+                    "canceled": {
+                      "$type": "integer"
+                    },
+                    "enqueued": {
+                      "$type": "integer"
+                    },
+                    "succeeded": {
+                      "$type": "integer"
+                    },
+                    "bucketStart": {
+                      "$type": "timestamp"
+                    },
+                    "leaseExpired": {
+                      "$type": "integer"
+                    }
+                  },
+                  {
+                    "retry": {
+                      "$type": "integer"
+                    },
+                    "failed": {
+                      "$type": "integer"
+                    },
+                    "canceled": {
+                      "$type": "integer"
+                    },
+                    "enqueued": {
+                      "$type": "integer"
+                    },
+                    "succeeded": {
+                      "$type": "integer"
+                    },
+                    "bucketStart": {
+                      "$type": "timestamp"
+                    },
+                    "leaseExpired": {
+                      "$type": "integer"
+                    }
+                  },
+                  {
+                    "retry": {
+                      "$type": "integer"
+                    },
+                    "failed": {
+                      "$type": "integer"
+                    },
+                    "canceled": {
+                      "$type": "integer"
+                    },
+                    "enqueued": {
+                      "$type": "integer"
+                    },
+                    "succeeded": {
+                      "$type": "integer"
+                    },
+                    "bucketStart": {
+                      "$type": "timestamp"
+                    },
+                    "leaseExpired": {
+                      "$type": "integer"
+                    }
+                  },
+                  {
+                    "retry": {
+                      "$type": "integer"
+                    },
+                    "failed": {
+                      "$type": "integer"
+                    },
+                    "canceled": {
+                      "$type": "integer"
+                    },
+                    "enqueued": {
+                      "$type": "integer"
+                    },
+                    "succeeded": {
+                      "$type": "integer"
+                    },
+                    "bucketStart": {
+                      "$type": "timestamp"
+                    },
+                    "leaseExpired": {
+                      "$type": "integer"
+                    }
+                  },
+                  {
+                    "retry": {
+                      "$type": "integer"
+                    },
+                    "failed": {
+                      "$type": "integer"
+                    },
+                    "canceled": {
+                      "$type": "integer"
+                    },
+                    "enqueued": {
+                      "$type": "integer"
+                    },
+                    "succeeded": {
+                      "$type": "integer"
+                    },
+                    "bucketStart": {
+                      "$type": "timestamp"
+                    },
+                    "leaseExpired": {
+                      "$type": "integer"
+                    }
+                  },
+                  {
+                    "retry": {
+                      "$type": "integer"
+                    },
+                    "failed": {
+                      "$type": "integer"
+                    },
+                    "canceled": {
+                      "$type": "integer"
+                    },
+                    "enqueued": {
+                      "$type": "integer"
+                    },
+                    "succeeded": {
+                      "$type": "integer"
+                    },
+                    "bucketStart": {
+                      "$type": "timestamp"
+                    },
+                    "leaseExpired": {
+                      "$type": "integer"
+                    }
+                  },
+                  {
+                    "retry": {
+                      "$type": "integer"
+                    },
+                    "failed": {
+                      "$type": "integer"
+                    },
+                    "canceled": {
+                      "$type": "integer"
+                    },
+                    "enqueued": {
+                      "$type": "integer"
+                    },
+                    "succeeded": {
+                      "$type": "integer"
+                    },
+                    "bucketStart": {
+                      "$type": "timestamp"
+                    },
+                    "leaseExpired": {
+                      "$type": "integer"
+                    }
+                  },
+                  {
+                    "retry": {
+                      "$type": "integer"
+                    },
+                    "failed": {
+                      "$type": "integer"
+                    },
+                    "canceled": {
+                      "$type": "integer"
+                    },
+                    "enqueued": {
+                      "$type": "integer"
+                    },
+                    "succeeded": {
+                      "$type": "integer"
+                    },
+                    "bucketStart": {
+                      "$type": "timestamp"
+                    },
+                    "leaseExpired": {
+                      "$type": "integer"
+                    }
+                  },
+                  {
+                    "retry": {
+                      "$type": "integer"
+                    },
+                    "failed": {
+                      "$type": "integer"
+                    },
+                    "canceled": {
+                      "$type": "integer"
+                    },
+                    "enqueued": {
+                      "$type": "integer"
+                    },
+                    "succeeded": {
+                      "$type": "integer"
+                    },
+                    "bucketStart": {
+                      "$type": "timestamp"
+                    },
+                    "leaseExpired": {
+                      "$type": "integer"
+                    }
+                  },
+                  {
+                    "retry": {
+                      "$type": "integer"
+                    },
+                    "failed": {
+                      "$type": "integer"
+                    },
+                    "canceled": {
+                      "$type": "integer"
+                    },
+                    "enqueued": {
+                      "$type": "integer"
+                    },
+                    "succeeded": {
+                      "$type": "integer"
+                    },
+                    "bucketStart": {
+                      "$type": "timestamp"
+                    },
+                    "leaseExpired": {
+                      "$type": "integer"
+                    }
+                  },
+                  {
+                    "retry": {
+                      "$type": "integer"
+                    },
+                    "failed": {
+                      "$type": "integer"
+                    },
+                    "canceled": {
+                      "$type": "integer"
+                    },
+                    "enqueued": {
+                      "$type": "integer"
+                    },
+                    "succeeded": {
+                      "$type": "integer"
+                    },
+                    "bucketStart": {
+                      "$type": "timestamp"
+                    },
+                    "leaseExpired": {
+                      "$type": "integer"
+                    }
+                  },
+                  {
+                    "retry": {
+                      "$type": "integer"
+                    },
+                    "failed": {
+                      "$type": "integer"
+                    },
+                    "canceled": {
+                      "$type": "integer"
+                    },
+                    "enqueued": {
+                      "$type": "integer"
+                    },
+                    "succeeded": {
+                      "$type": "integer"
+                    },
+                    "bucketStart": {
+                      "$type": "timestamp"
+                    },
+                    "leaseExpired": {
+                      "$type": "integer"
+                    }
+                  },
+                  {
+                    "retry": {
+                      "$type": "integer"
+                    },
+                    "failed": {
+                      "$type": "integer"
+                    },
+                    "canceled": {
+                      "$type": "integer"
+                    },
+                    "enqueued": {
+                      "$type": "integer"
+                    },
+                    "succeeded": {
+                      "$type": "integer"
+                    },
+                    "bucketStart": {
+                      "$type": "timestamp"
+                    },
+                    "leaseExpired": {
+                      "$type": "integer"
+                    }
+                  },
+                  {
+                    "retry": {
+                      "$type": "integer"
+                    },
+                    "failed": {
+                      "$type": "integer"
+                    },
+                    "canceled": {
+                      "$type": "integer"
+                    },
+                    "enqueued": {
+                      "$type": "integer"
+                    },
+                    "succeeded": {
+                      "$type": "integer"
+                    },
+                    "bucketStart": {
+                      "$type": "timestamp"
+                    },
+                    "leaseExpired": {
+                      "$type": "integer"
+                    }
+                  },
+                  {
+                    "retry": {
+                      "$type": "integer"
+                    },
+                    "failed": {
+                      "$type": "integer"
+                    },
+                    "canceled": {
+                      "$type": "integer"
+                    },
+                    "enqueued": {
+                      "$type": "integer"
+                    },
+                    "succeeded": {
+                      "$type": "integer"
+                    },
+                    "bucketStart": {
+                      "$type": "timestamp"
+                    },
+                    "leaseExpired": {
+                      "$type": "integer"
+                    }
+                  },
+                  {
+                    "retry": {
+                      "$type": "integer"
+                    },
+                    "failed": {
+                      "$type": "integer"
+                    },
+                    "canceled": {
+                      "$type": "integer"
+                    },
+                    "enqueued": {
+                      "$type": "integer"
+                    },
+                    "succeeded": {
+                      "$type": "integer"
+                    },
+                    "bucketStart": {
+                      "$type": "timestamp"
+                    },
+                    "leaseExpired": {
+                      "$type": "integer"
+                    }
+                  },
+                  {
+                    "retry": {
+                      "$type": "integer"
+                    },
+                    "failed": {
+                      "$type": "integer"
+                    },
+                    "canceled": {
+                      "$type": "integer"
+                    },
+                    "enqueued": {
+                      "$type": "integer"
+                    },
+                    "succeeded": {
+                      "$type": "integer"
+                    },
+                    "bucketStart": {
+                      "$type": "timestamp"
+                    },
+                    "leaseExpired": {
+                      "$type": "integer"
+                    }
+                  },
+                  {
+                    "retry": {
+                      "$type": "integer"
+                    },
+                    "failed": {
+                      "$type": "integer"
+                    },
+                    "canceled": {
+                      "$type": "integer"
+                    },
+                    "enqueued": {
+                      "$type": "integer"
+                    },
+                    "succeeded": {
+                      "$type": "integer"
+                    },
+                    "bucketStart": {
+                      "$type": "timestamp"
+                    },
+                    "leaseExpired": {
+                      "$type": "integer"
+                    }
+                  },
+                  {
+                    "retry": {
+                      "$type": "integer"
+                    },
+                    "failed": {
+                      "$type": "integer"
+                    },
+                    "canceled": {
+                      "$type": "integer"
+                    },
+                    "enqueued": {
+                      "$type": "integer"
+                    },
+                    "succeeded": {
+                      "$type": "integer"
+                    },
+                    "bucketStart": {
+                      "$type": "timestamp"
+                    },
+                    "leaseExpired": {
+                      "$type": "integer"
+                    }
+                  },
+                  {
+                    "retry": {
+                      "$type": "integer"
+                    },
+                    "failed": {
+                      "$type": "integer"
+                    },
+                    "canceled": {
+                      "$type": "integer"
+                    },
+                    "enqueued": {
+                      "$type": "integer"
+                    },
+                    "succeeded": {
+                      "$type": "integer"
+                    },
+                    "bucketStart": {
+                      "$type": "timestamp"
+                    },
+                    "leaseExpired": {
+                      "$type": "integer"
+                    }
+                  },
+                  {
+                    "retry": {
+                      "$type": "integer"
+                    },
+                    "failed": {
+                      "$type": "integer"
+                    },
+                    "canceled": {
+                      "$type": "integer"
+                    },
+                    "enqueued": {
+                      "$type": "integer"
+                    },
+                    "succeeded": {
+                      "$type": "integer"
+                    },
+                    "bucketStart": {
+                      "$type": "timestamp"
+                    },
+                    "leaseExpired": {
+                      "$type": "integer"
+                    }
+                  },
+                  {
+                    "retry": {
+                      "$type": "integer"
+                    },
+                    "failed": {
+                      "$type": "integer"
+                    },
+                    "canceled": {
+                      "$type": "integer"
+                    },
+                    "enqueued": {
+                      "$type": "integer"
+                    },
+                    "succeeded": {
+                      "$type": "integer"
+                    },
+                    "bucketStart": {
+                      "$type": "timestamp"
+                    },
+                    "leaseExpired": {
+                      "$type": "integer"
+                    }
+                  },
+                  {
+                    "retry": {
+                      "$type": "integer"
+                    },
+                    "failed": {
+                      "$type": "integer"
+                    },
+                    "canceled": {
+                      "$type": "integer"
+                    },
+                    "enqueued": {
+                      "$type": "integer"
+                    },
+                    "succeeded": {
+                      "$type": "integer"
+                    },
+                    "bucketStart": {
+                      "$type": "timestamp"
+                    },
+                    "leaseExpired": {
+                      "$type": "integer"
+                    }
+                  },
+                  {
+                    "retry": {
+                      "$type": "integer"
+                    },
+                    "failed": {
+                      "$type": "integer"
+                    },
+                    "canceled": {
+                      "$type": "integer"
+                    },
+                    "enqueued": {
+                      "$type": "integer"
+                    },
+                    "succeeded": {
+                      "$type": "integer"
+                    },
+                    "bucketStart": {
+                      "$type": "timestamp"
+                    },
+                    "leaseExpired": {
+                      "$type": "integer"
+                    }
+                  },
+                  {
+                    "retry": {
+                      "$type": "integer"
+                    },
+                    "failed": {
+                      "$type": "integer"
+                    },
+                    "canceled": {
+                      "$type": "integer"
+                    },
+                    "enqueued": {
+                      "$type": "integer"
+                    },
+                    "succeeded": {
+                      "$type": "integer"
+                    },
+                    "bucketStart": {
+                      "$type": "timestamp"
+                    },
+                    "leaseExpired": {
+                      "$type": "integer"
+                    }
+                  },
+                  {
+                    "retry": {
+                      "$type": "integer"
+                    },
+                    "failed": {
+                      "$type": "integer"
+                    },
+                    "canceled": {
+                      "$type": "integer"
+                    },
+                    "enqueued": {
+                      "$type": "integer"
+                    },
+                    "succeeded": {
+                      "$type": "integer"
+                    },
+                    "bucketStart": {
+                      "$type": "timestamp"
+                    },
+                    "leaseExpired": {
+                      "$type": "integer"
+                    }
+                  },
+                  {
+                    "retry": {
+                      "$type": "integer"
+                    },
+                    "failed": {
+                      "$type": "integer"
+                    },
+                    "canceled": {
+                      "$type": "integer"
+                    },
+                    "enqueued": {
+                      "$type": "integer"
+                    },
+                    "succeeded": {
+                      "$type": "integer"
+                    },
+                    "bucketStart": {
+                      "$type": "timestamp"
+                    },
+                    "leaseExpired": {
+                      "$type": "integer"
+                    }
+                  },
+                  {
+                    "retry": {
+                      "$type": "integer"
+                    },
+                    "failed": {
+                      "$type": "integer"
+                    },
+                    "canceled": {
+                      "$type": "integer"
+                    },
+                    "enqueued": {
+                      "$type": "integer"
+                    },
+                    "succeeded": {
+                      "$type": "integer"
+                    },
+                    "bucketStart": {
+                      "$type": "timestamp"
+                    },
+                    "leaseExpired": {
+                      "$type": "integer"
+                    }
+                  },
+                  {
+                    "retry": {
+                      "$type": "integer"
+                    },
+                    "failed": {
+                      "$type": "integer"
+                    },
+                    "canceled": {
+                      "$type": "integer"
+                    },
+                    "enqueued": {
+                      "$type": "integer"
+                    },
+                    "succeeded": {
+                      "$type": "integer"
+                    },
+                    "bucketStart": {
+                      "$type": "timestamp"
+                    },
+                    "leaseExpired": {
+                      "$type": "integer"
+                    }
+                  },
+                  {
+                    "retry": {
+                      "$type": "integer"
+                    },
+                    "failed": {
+                      "$type": "integer"
+                    },
+                    "canceled": {
+                      "$type": "integer"
+                    },
+                    "enqueued": {
+                      "$type": "integer"
+                    },
+                    "succeeded": {
+                      "$type": "integer"
+                    },
+                    "bucketStart": {
+                      "$type": "timestamp"
+                    },
+                    "leaseExpired": {
+                      "$type": "integer"
+                    }
+                  },
+                  {
+                    "retry": {
+                      "$type": "integer"
+                    },
+                    "failed": {
+                      "$type": "integer"
+                    },
+                    "canceled": {
+                      "$type": "integer"
+                    },
+                    "enqueued": {
+                      "$type": "integer"
+                    },
+                    "succeeded": {
+                      "$type": "integer"
+                    },
+                    "bucketStart": {
+                      "$type": "timestamp"
+                    },
+                    "leaseExpired": {
+                      "$type": "integer"
+                    }
+                  },
+                  {
+                    "retry": {
+                      "$type": "integer"
+                    },
+                    "failed": {
+                      "$type": "integer"
+                    },
+                    "canceled": {
+                      "$type": "integer"
+                    },
+                    "enqueued": {
+                      "$type": "integer"
+                    },
+                    "succeeded": {
+                      "$type": "integer"
+                    },
+                    "bucketStart": {
+                      "$type": "timestamp"
+                    },
+                    "leaseExpired": {
+                      "$type": "integer"
+                    }
+                  },
+                  {
+                    "retry": {
+                      "$type": "integer"
+                    },
+                    "failed": {
+                      "$type": "integer"
+                    },
+                    "canceled": {
+                      "$type": "integer"
+                    },
+                    "enqueued": {
+                      "$type": "integer"
+                    },
+                    "succeeded": {
+                      "$type": "integer"
+                    },
+                    "bucketStart": {
+                      "$type": "timestamp"
+                    },
+                    "leaseExpired": {
+                      "$type": "integer"
+                    }
+                  },
+                  {
+                    "retry": {
+                      "$type": "integer"
+                    },
+                    "failed": {
+                      "$type": "integer"
+                    },
+                    "canceled": {
+                      "$type": "integer"
+                    },
+                    "enqueued": {
+                      "$type": "integer"
+                    },
+                    "succeeded": {
+                      "$type": "integer"
+                    },
+                    "bucketStart": {
+                      "$type": "timestamp"
+                    },
+                    "leaseExpired": {
+                      "$type": "integer"
+                    }
+                  },
+                  {
+                    "retry": {
+                      "$type": "integer"
+                    },
+                    "failed": {
+                      "$type": "integer"
+                    },
+                    "canceled": {
+                      "$type": "integer"
+                    },
+                    "enqueued": {
+                      "$type": "integer"
+                    },
+                    "succeeded": {
+                      "$type": "integer"
+                    },
+                    "bucketStart": {
+                      "$type": "timestamp"
+                    },
+                    "leaseExpired": {
+                      "$type": "integer"
+                    }
+                  },
+                  {
+                    "retry": {
+                      "$type": "integer"
+                    },
+                    "failed": {
+                      "$type": "integer"
+                    },
+                    "canceled": {
+                      "$type": "integer"
+                    },
+                    "enqueued": {
+                      "$type": "integer"
+                    },
+                    "succeeded": {
+                      "$type": "integer"
+                    },
+                    "bucketStart": {
+                      "$type": "timestamp"
+                    },
+                    "leaseExpired": {
+                      "$type": "integer"
+                    }
+                  },
+                  {
+                    "retry": {
+                      "$type": "integer"
+                    },
+                    "failed": {
+                      "$type": "integer"
+                    },
+                    "canceled": {
+                      "$type": "integer"
+                    },
+                    "enqueued": {
+                      "$type": "integer"
+                    },
+                    "succeeded": {
+                      "$type": "integer"
+                    },
+                    "bucketStart": {
+                      "$type": "timestamp"
+                    },
+                    "leaseExpired": {
+                      "$type": "integer"
+                    }
+                  },
+                  {
+                    "retry": {
+                      "$type": "integer"
+                    },
+                    "failed": {
+                      "$type": "integer"
+                    },
+                    "canceled": {
+                      "$type": "integer"
+                    },
+                    "enqueued": {
+                      "$type": "integer"
+                    },
+                    "succeeded": {
+                      "$type": "integer"
+                    },
+                    "bucketStart": {
+                      "$type": "timestamp"
+                    },
+                    "leaseExpired": {
+                      "$type": "integer"
+                    }
+                  },
+                  {
+                    "retry": {
+                      "$type": "integer"
+                    },
+                    "failed": {
+                      "$type": "integer"
+                    },
+                    "canceled": {
+                      "$type": "integer"
+                    },
+                    "enqueued": {
+                      "$type": "integer"
+                    },
+                    "succeeded": {
+                      "$type": "integer"
+                    },
+                    "bucketStart": {
+                      "$type": "timestamp"
+                    },
+                    "leaseExpired": {
+                      "$type": "integer"
+                    }
+                  },
+                  {
+                    "retry": {
+                      "$type": "integer"
+                    },
+                    "failed": {
+                      "$type": "integer"
+                    },
+                    "canceled": {
+                      "$type": "integer"
+                    },
+                    "enqueued": {
+                      "$type": "integer"
+                    },
+                    "succeeded": {
+                      "$type": "integer"
+                    },
+                    "bucketStart": {
+                      "$type": "timestamp"
+                    },
+                    "leaseExpired": {
+                      "$type": "integer"
+                    }
+                  },
+                  {
+                    "retry": {
+                      "$type": "integer"
+                    },
+                    "failed": {
+                      "$type": "integer"
+                    },
+                    "canceled": {
+                      "$type": "integer"
+                    },
+                    "enqueued": {
+                      "$type": "integer"
+                    },
+                    "succeeded": {
+                      "$type": "integer"
+                    },
+                    "bucketStart": {
+                      "$type": "timestamp"
+                    },
+                    "leaseExpired": {
+                      "$type": "integer"
+                    }
+                  },
+                  {
+                    "retry": {
+                      "$type": "integer"
+                    },
+                    "failed": {
+                      "$type": "integer"
+                    },
+                    "canceled": {
+                      "$type": "integer"
+                    },
+                    "enqueued": {
+                      "$type": "integer"
+                    },
+                    "succeeded": {
+                      "$type": "integer"
+                    },
+                    "bucketStart": {
+                      "$type": "timestamp"
+                    },
+                    "leaseExpired": {
+                      "$type": "integer"
+                    }
+                  },
+                  {
+                    "retry": {
+                      "$type": "integer"
+                    },
+                    "failed": {
+                      "$type": "integer"
+                    },
+                    "canceled": {
+                      "$type": "integer"
+                    },
+                    "enqueued": {
+                      "$type": "integer"
+                    },
+                    "succeeded": {
+                      "$type": "integer"
+                    },
+                    "bucketStart": {
+                      "$type": "timestamp"
+                    },
+                    "leaseExpired": {
+                      "$type": "integer"
+                    }
+                  },
+                  {
+                    "retry": {
+                      "$type": "integer"
+                    },
+                    "failed": {
+                      "$type": "integer"
+                    },
+                    "canceled": {
+                      "$type": "integer"
+                    },
+                    "enqueued": {
+                      "$type": "integer"
+                    },
+                    "succeeded": {
+                      "$type": "integer"
+                    },
+                    "bucketStart": {
+                      "$type": "timestamp"
+                    },
+                    "leaseExpired": {
+                      "$type": "integer"
+                    }
+                  },
+                  {
+                    "retry": {
+                      "$type": "integer"
+                    },
+                    "failed": {
+                      "$type": "integer"
+                    },
+                    "canceled": {
+                      "$type": "integer"
+                    },
+                    "enqueued": {
+                      "$type": "integer"
+                    },
+                    "succeeded": {
+                      "$type": "integer"
+                    },
+                    "bucketStart": {
+                      "$type": "timestamp"
+                    },
+                    "leaseExpired": {
+                      "$type": "integer"
+                    }
+                  },
+                  {
+                    "retry": {
+                      "$type": "integer"
+                    },
+                    "failed": {
+                      "$type": "integer"
+                    },
+                    "canceled": {
+                      "$type": "integer"
+                    },
+                    "enqueued": {
+                      "$type": "integer"
+                    },
+                    "succeeded": {
+                      "$type": "integer"
+                    },
+                    "bucketStart": {
+                      "$type": "timestamp"
+                    },
+                    "leaseExpired": {
+                      "$type": "integer"
+                    }
+                  },
+                  {
+                    "retry": {
+                      "$type": "integer"
+                    },
+                    "failed": {
+                      "$type": "integer"
+                    },
+                    "canceled": {
+                      "$type": "integer"
+                    },
+                    "enqueued": {
+                      "$type": "integer"
+                    },
+                    "succeeded": {
+                      "$type": "integer"
+                    },
+                    "bucketStart": {
+                      "$type": "timestamp"
+                    },
+                    "leaseExpired": {
+                      "$type": "integer"
+                    }
+                  },
+                  {
+                    "retry": {
+                      "$type": "integer"
+                    },
+                    "failed": {
+                      "$type": "integer"
+                    },
+                    "canceled": {
+                      "$type": "integer"
+                    },
+                    "enqueued": {
+                      "$type": "integer"
+                    },
+                    "succeeded": {
+                      "$type": "integer"
+                    },
+                    "bucketStart": {
+                      "$type": "timestamp"
+                    },
+                    "leaseExpired": {
+                      "$type": "integer"
+                    }
+                  },
+                  {
+                    "retry": {
+                      "$type": "integer"
+                    },
+                    "failed": {
+                      "$type": "integer"
+                    },
+                    "canceled": {
+                      "$type": "integer"
+                    },
+                    "enqueued": {
+                      "$type": "integer"
+                    },
+                    "succeeded": {
+                      "$type": "integer"
+                    },
+                    "bucketStart": {
+                      "$type": "timestamp"
+                    },
+                    "leaseExpired": {
+                      "$type": "integer"
+                    }
+                  },
+                  {
+                    "retry": {
+                      "$type": "integer"
+                    },
+                    "failed": {
+                      "$type": "integer"
+                    },
+                    "canceled": {
+                      "$type": "integer"
+                    },
+                    "enqueued": {
+                      "$type": "integer"
+                    },
+                    "succeeded": {
+                      "$type": "integer"
+                    },
+                    "bucketStart": {
+                      "$type": "timestamp"
+                    },
+                    "leaseExpired": {
+                      "$type": "integer"
+                    }
+                  },
+                  {
+                    "retry": {
+                      "$type": "integer"
+                    },
+                    "failed": {
+                      "$type": "integer"
+                    },
+                    "canceled": {
+                      "$type": "integer"
+                    },
+                    "enqueued": {
+                      "$type": "integer"
+                    },
+                    "succeeded": {
+                      "$type": "integer"
+                    },
+                    "bucketStart": {
+                      "$type": "timestamp"
+                    },
+                    "leaseExpired": {
+                      "$type": "integer"
+                    }
+                  },
+                  {
+                    "retry": {
+                      "$type": "integer"
+                    },
+                    "failed": {
+                      "$type": "integer"
+                    },
+                    "canceled": {
+                      "$type": "integer"
+                    },
+                    "enqueued": {
+                      "$type": "integer"
+                    },
+                    "succeeded": {
+                      "$type": "integer"
+                    },
+                    "bucketStart": {
+                      "$type": "timestamp"
+                    },
+                    "leaseExpired": {
+                      "$type": "integer"
+                    }
+                  }
+                ],
+                "integrity": {
+                  "storage": {
+                    "rollup": {
+                      "lagMs": {
+                        "$type": "number"
+                      },
+                      "buckets": 0,
+                      "stalled": true,
+                      "lastRunAt": null,
+                      "newestBucketAt": null,
+                      "oldestBucketAt": null,
+                      "rolledUpThrough": {
+                        "$type": "timestamp"
+                      }
+                    },
+                    "relations": [
+                      {
+                        "rows": {
+                          "$type": "integer"
+                        },
+                        "deadRows": {
+                          "$type": "integer"
+                        },
+                        "relation": "attempt_history",
+                        "indexBytes": {
+                          "$type": "integer"
+                        },
+                        "partitions": 7,
+                        "tableBytes": {
+                          "$type": "integer"
+                        },
+                        "totalBytes": {
+                          "$type": "integer"
+                        },
+                        "lastVacuumAt": null
+                      },
+                      {
+                        "rows": {
+                          "$type": "integer"
+                        },
+                        "deadRows": {
+                          "$type": "integer"
+                        },
+                        "relation": "task_event",
+                        "indexBytes": {
+                          "$type": "integer"
+                        },
+                        "partitions": 7,
+                        "tableBytes": {
+                          "$type": "integer"
+                        },
+                        "totalBytes": {
+                          "$type": "integer"
+                        },
+                        "lastVacuumAt": null
+                      },
+                      {
+                        "rows": {
+                          "$type": "integer"
+                        },
+                        "deadRows": {
+                          "$type": "integer"
+                        },
+                        "relation": "task_runtime",
+                        "indexBytes": {
+                          "$type": "integer"
+                        },
+                        "partitions": 0,
+                        "tableBytes": {
+                          "$type": "integer"
+                        },
+                        "totalBytes": {
+                          "$type": "integer"
+                        },
+                        "lastVacuumAt": null
+                      },
+                      {
+                        "rows": {
+                          "$type": "integer"
+                        },
+                        "deadRows": {
+                          "$type": "integer"
+                        },
+                        "relation": "task_outcome",
+                        "indexBytes": {
+                          "$type": "integer"
+                        },
+                        "partitions": 0,
+                        "tableBytes": {
+                          "$type": "integer"
+                        },
+                        "totalBytes": {
+                          "$type": "integer"
+                        },
+                        "lastVacuumAt": null
+                      },
+                      {
+                        "rows": {
+                          "$type": "integer"
+                        },
+                        "deadRows": {
+                          "$type": "integer"
+                        },
+                        "relation": "task_query",
+                        "indexBytes": {
+                          "$type": "integer"
+                        },
+                        "partitions": 0,
+                        "tableBytes": {
+                          "$type": "integer"
+                        },
+                        "totalBytes": {
+                          "$type": "integer"
+                        },
+                        "lastVacuumAt": null
+                      },
+                      {
+                        "rows": {
+                          "$type": "integer"
+                        },
+                        "deadRows": {
+                          "$type": "integer"
+                        },
+                        "relation": "task",
+                        "indexBytes": {
+                          "$type": "integer"
+                        },
+                        "partitions": 0,
+                        "tableBytes": {
+                          "$type": "integer"
+                        },
+                        "totalBytes": {
+                          "$type": "integer"
+                        },
+                        "lastVacuumAt": null
+                      },
+                      {
+                        "rows": {
+                          "$type": "integer"
+                        },
+                        "deadRows": {
+                          "$type": "integer"
+                        },
+                        "relation": "schedule_occurrence",
+                        "indexBytes": {
+                          "$type": "integer"
+                        },
+                        "partitions": 0,
+                        "tableBytes": {
+                          "$type": "integer"
+                        },
+                        "totalBytes": {
+                          "$type": "integer"
+                        },
+                        "lastVacuumAt": null
+                      },
+                      {
+                        "rows": {
+                          "$type": "integer"
+                        },
+                        "deadRows": {
+                          "$type": "integer"
+                        },
+                        "relation": "task_stat_bucket",
+                        "indexBytes": {
+                          "$type": "integer"
+                        },
+                        "partitions": 0,
+                        "tableBytes": {
+                          "$type": "integer"
+                        },
+                        "totalBytes": {
+                          "$type": "integer"
+                        },
+                        "lastVacuumAt": null
+                      },
+                      {
+                        "rows": {
+                          "$type": "integer"
+                        },
+                        "deadRows": {
+                          "$type": "integer"
+                        },
+                        "relation": "task_stat_bucket_hour",
+                        "indexBytes": {
+                          "$type": "integer"
+                        },
+                        "partitions": 0,
+                        "tableBytes": {
+                          "$type": "integer"
+                        },
+                        "totalBytes": {
+                          "$type": "integer"
+                        },
+                        "lastVacuumAt": null
+                      },
+                      {
+                        "rows": {
+                          "$type": "integer"
+                        },
+                        "deadRows": {
+                          "$type": "integer"
+                        },
+                        "relation": "task_stat_bucket_day",
+                        "indexBytes": {
+                          "$type": "integer"
+                        },
+                        "partitions": 0,
+                        "tableBytes": {
+                          "$type": "integer"
+                        },
+                        "totalBytes": {
+                          "$type": "integer"
+                        },
+                        "lastVacuumAt": null
+                      }
+                    ],
+                    "totalBytes": {
+                      "$type": "integer"
+                    }
+                  },
+                  "retention": {
+                    "maxLagMs": {
+                      "$type": "number"
+                    },
+                    "categories": [
+                      {
+                        "lagMs": {
+                          "$type": "number"
+                        },
+                        "category": "taskIdentity",
+                        "retentionDays": 14,
+                        "oldestRetainedAt": {
+                          "$type": "timestamp"
+                        },
+                        "prunedByPartition": false
+                      },
+                      {
+                        "lagMs": {
+                          "$type": "number"
+                        },
+                        "category": "terminalOutcome",
+                        "retentionDays": 14,
+                        "oldestRetainedAt": {
+                          "$type": "timestamp"
+                        },
+                        "prunedByPartition": false
+                      },
+                      {
+                        "lagMs": 0,
+                        "category": "taskEvents",
+                        "retentionDays": 14,
+                        "oldestRetainedAt": {
+                          "$type": "timestamp"
+                        },
+                        "prunedByPartition": true
+                      },
+                      {
+                        "lagMs": 0,
+                        "category": "attemptHistory",
+                        "retentionDays": 14,
+                        "oldestRetainedAt": {
+                          "$type": "timestamp"
+                        },
+                        "prunedByPartition": true
+                      },
+                      {
+                        "lagMs": null,
+                        "category": "scheduleOccurrences",
+                        "retentionDays": 14,
+                        "oldestRetainedAt": null,
+                        "prunedByPartition": false
+                      },
+                      {
+                        "lagMs": null,
+                        "category": "statistics",
+                        "retentionDays": 14,
+                        "oldestRetainedAt": null,
+                        "prunedByPartition": false
+                      }
+                    ],
+                    "maxLagCategory": {
+                      "$type": "string"
+                    },
+                    "policyUpdatedAt": {
+                      "$type": "timestamp"
+                    },
+                    "oldestRetainedAt": {
+                      "$type": "timestamp"
+                    },
+                    "defaultHistoryRows": {
+                      "taskEvents": 0,
+                      "attemptHistory": 0
+                    },
+                    "oldestRetainedCategory": "taskIdentity",
+                    "defaultHistoryRowsCapped": {
+                      "taskEvents": false,
+                      "attemptHistory": false
+                    },
+                    "eligibleHistoryPartitions": {
+                      "taskEvents": 0,
+                      "attemptHistory": 0
+                    }
+                  },
+                  "partitions": [
+                    {
+                      "day": {
+                        "$type": "string"
+                      },
+                      "startsAt": {
+                        "$type": "timestamp"
+                      },
+                      "eventExists": true,
+                      "attemptExists": true
+                    },
+                    {
+                      "day": {
+                        "$type": "string"
+                      },
+                      "startsAt": {
+                        "$type": "timestamp"
+                      },
+                      "eventExists": true,
+                      "attemptExists": true
+                    },
+                    {
+                      "day": {
+                        "$type": "string"
+                      },
+                      "startsAt": {
+                        "$type": "timestamp"
+                      },
+                      "eventExists": true,
+                      "attemptExists": true
+                    },
+                    {
+                      "day": {
+                        "$type": "string"
+                      },
+                      "startsAt": {
+                        "$type": "timestamp"
+                      },
+                      "eventExists": true,
+                      "attemptExists": true
+                    }
+                  ],
+                  "defaultEventRows": 0,
+                  "dueButUnpromoted": 0,
+                  "defaultAttemptRows": 0
+                },
+                "capturedAt": {
+                  "$type": "timestamp"
+                },
+                "retryStorm": {
+                  "buckets": [
+                    {
+                      "count": 0,
+                      "upperBoundMs": 60000
+                    },
+                    {
+                      "count": 0,
+                      "upperBoundMs": 300000
+                    },
+                    {
+                      "count": 0,
+                      "upperBoundMs": 900000
+                    },
+                    {
+                      "count": 0,
+                      "upperBoundMs": 3600000
+                    },
+                    {
+                      "count": 0,
+                      "upperBoundMs": null
+                    }
+                  ],
+                  "topTypes": []
+                },
+                "failingTypes": [
+                  {
+                    "type": "conformance.redrive.batch",
+                    "queue": "conformance-redrive",
+                    "attempts": 1,
+                    "errorRate": 1,
+                    "lastError": "conformance.redrive.batch failed",
+                    "lastSeenAt": {
+                      "$type": "timestamp"
+                    },
+                    "terminalFailures": 1
+                  },
+                  {
+                    "type": "conformance.redrive.one",
+                    "queue": "conformance-redrive",
+                    "attempts": 1,
+                    "errorRate": 1,
+                    "lastError": "conformance.redrive.one failed",
+                    "lastSeenAt": {
+                      "$type": "timestamp"
+                    },
+                    "terminalFailures": 1
+                  },
+                  {
+                    "type": "conformance.fail",
+                    "queue": "conformance",
+                    "attempts": 1,
+                    "errorRate": 1,
+                    "lastError": "conformance.fail failed",
+                    "lastSeenAt": {
+                      "$type": "timestamp"
+                    },
+                    "terminalFailures": 1
+                  }
+                ],
+                "pausedQueues": [],
+                "budgetsCapped": false,
+                "windowSeconds": 3600,
+                "rateLimitPoliciesCapped": false,
+                "concurrencyPoliciesCapped": false
+              }
+            }
+          },
+          "coerce": {
+            "body.json.kpis.queueWait.p50Ms": "number",
+            "body.json.kpis.queueWait.p95Ms": "number",
+            "body.json.kpis.queueWait.p99Ms": "number",
+            "body.json.outcomes.*.bucketStart": "timestamp",
+            "body.json.outcomes.*.enqueued": "integer",
+            "body.json.outcomes.*.succeeded": "integer",
+            "body.json.outcomes.*.failed": "integer",
+            "body.json.outcomes.*.retry": "integer",
+            "body.json.outcomes.*.leaseExpired": "integer",
+            "body.json.outcomes.*.canceled": "integer",
+            "body.json.integrity.partitions.*.day": "string",
+            "body.json.integrity.partitions.*.startsAt": "timestamp",
+            "body.json.integrity.storage.rollup.rolledUpThrough": "timestamp",
+            "body.json.integrity.storage.relations.*.totalBytes": "integer",
+            "body.json.integrity.storage.relations.*.tableBytes": "integer",
+            "body.json.integrity.storage.relations.*.indexBytes": "integer",
+            "body.json.integrity.storage.relations.*.rows": "integer",
+            "body.json.integrity.storage.relations.*.deadRows": "integer",
+            "body.json.integrity.storage.totalBytes": "integer",
+            "body.json.integrity.retention.maxLagCategory": "string"
+          }
+        },
+        {
           "id": "workers",
           "procedure": "workers",
           "request": {},
@@ -8840,6 +10982,26 @@
                 "message": "Task not found"
               }
             }
+          }
+        },
+        {
+          "id": "task-detail-id-final-line-feed",
+          "procedure": "taskDetail",
+          "request": {
+            "json": {
+              "id": "00000000-0000-4000-8000-00000000dead\n"
+            }
+          },
+          "expect": {
+            "status": 400,
+            "body": {
+              "json": {
+                "$type": "any"
+              }
+            }
+          },
+          "coerce": {
+            "body.json": "any"
           }
         },
         {
@@ -13564,6 +15726,203 @@
                 "valueBytes": 126
               }
             }
+          }
+        }
+      ]
+    },
+    {
+      "id": "redaction-scope",
+      "seed": [
+        {
+          "id": "enqueue-redacted-checkpoint",
+          "sql": "SELECT jsonb_build_object('taskId', task_id, 'outcome', outcome) AS value FROM workhorse.enqueue_many_v1($1::jsonb)",
+          "parameters": [
+            [
+              {
+                "queue": "conformance-redaction",
+                "type": "conformance.redaction",
+                "payload": {
+                  "step": 1,
+                  "apiKey": "payload-secret"
+                },
+                "sensitivePayloadKeys": [
+                  "apiKey"
+                ]
+              }
+            ]
+          ],
+          "expect": {
+            "rows": [
+              {
+                "value": {
+                  "taskId": {
+                    "$type": "uuid"
+                  },
+                  "outcome": "accepted"
+                }
+              }
+            ]
+          },
+          "capture": {
+            "redactionTask": "0.value.taskId"
+          }
+        },
+        {
+          "id": "claim-redacted-checkpoint",
+          "sql": "SELECT jsonb_build_object('taskId', task_id, 'fenceToken', fence_token) AS value FROM workhorse.claim_v1($1::text, $2::text, $3::integer)",
+          "parameters": [
+            "conformance-redaction",
+            "conformance-worker",
+            30000
+          ],
+          "expect": {
+            "rows": [
+              {
+                "value": {
+                  "taskId": {
+                    "$ref": "redactionTask"
+                  },
+                  "fenceToken": {
+                    "$type": "integer"
+                  }
+                }
+              }
+            ]
+          },
+          "capture": {
+            "redactionFence": "0.value.fenceToken"
+          }
+        },
+        {
+          "id": "save-checkpoint-with-redacted-key",
+          "sql": "SELECT status FROM workhorse.save_checkpoint_v1($1::uuid, $2::text, $3::bigint, $4::text, $5::jsonb)",
+          "parameters": [
+            {
+              "$ref": "redactionTask"
+            },
+            "conformance-worker",
+            {
+              "$ref": "redactionFence"
+            },
+            "redaction-step",
+            {
+              "stage": "copied",
+              "apiKey": "checkpoint-secret"
+            }
+          ],
+          "expect": {
+            "rows": [
+              {
+                "status": "saved"
+              }
+            ]
+          }
+        }
+      ],
+      "exchanges": [
+        {
+          "id": "payload-redacts-key",
+          "procedure": "taskValue",
+          "request": {
+            "json": {
+              "id": {
+                "$ref": "redactionTask"
+              },
+              "kind": "payload"
+            }
+          },
+          "expect": {
+            "status": 200,
+            "body": {
+              "json": {
+                "id": {
+                  "$ref": "redactionTask"
+                },
+                "kind": "payload",
+                "value": {
+                  "step": 1
+                },
+                "valueBytes": 11
+              }
+            }
+          }
+        },
+        {
+          "id": "checkpoint-keeps-payload-redaction-key",
+          "procedure": "checkpointValue",
+          "request": {
+            "json": {
+              "id": {
+                "$ref": "redactionTask"
+              },
+              "name": "redaction-step"
+            }
+          },
+          "expect": {
+            "status": 200,
+            "body": {
+              "json": {
+                "name": "redaction-step",
+                "value": {
+                  "stage": "copied",
+                  "apiKey": "checkpoint-secret"
+                },
+                "attempt": 1,
+                "workerId": "conformance-worker",
+                "createdAt": {
+                  "$type": "timestamp"
+                },
+                "fenceToken": "10",
+                "valueBytes": 50
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": "read-timeout",
+      "seed": [
+        {
+          "id": "install-slow-event-read",
+          "sql": "DO $do$\nBEGIN\n  ALTER FUNCTION workhorse.dashboard_events_v1(jsonb) RENAME TO dashboard_events_v1_before_slow_read;\n  CREATE FUNCTION workhorse.dashboard_events_v1(p_input jsonb) RETURNS jsonb LANGUAGE plpgsql AS $fn$\n  BEGIN\n    IF p_input->>'search' = 'conformance slow read' THEN\n      PERFORM pg_sleep(30);\n    END IF;\n    RETURN workhorse.dashboard_events_v1_before_slow_read(p_input);\n  END\n  $fn$;\nEND\n$do$",
+          "expect": {
+            "rows": []
+          }
+        }
+      ],
+      "exchanges": [
+        {
+          "id": "events-slow-read",
+          "procedure": "events",
+          "request": {
+            "json": {
+              "window": "1h",
+              "search": "conformance slow read"
+            }
+          },
+          "expect": {
+            "status": 408,
+            "body": {
+              "json": {
+                "defined": false,
+                "code": "TIMEOUT",
+                "status": 408,
+                "message": "This read exceeded its time bound"
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": "read-timeout-cleanup",
+      "seed": [
+        {
+          "id": "restore-event-read",
+          "sql": "DO $do$\nBEGIN\n  DROP FUNCTION workhorse.dashboard_events_v1(jsonb);\n  ALTER FUNCTION workhorse.dashboard_events_v1_before_slow_read(jsonb) RENAME TO dashboard_events_v1;\nEND\n$do$",
+          "expect": {
+            "rows": []
           }
         }
       ]

@@ -46,6 +46,63 @@ internal static class Validator
         Check(root, root, value, "$");
     }
 
+    /// <summary>
+    /// The valid input of one procedure without the object keys that its request schema does not
+    /// declare, as the TypeScript host's schema parse drops them.
+    /// </summary>
+    /// <remarks>
+    /// Each SQL procedure reads its input document by key. A key that the contract does not
+    /// declare, such as a health document in a system read, must not reach SQL. An object schema
+    /// with <c>additionalProperties</c>, such as a signal payload, is free JSON and keeps every key.
+    /// </remarks>
+    internal static JsonNode? DeclaredOnly(string procedure, JsonNode? value) =>
+        Schemas[procedure] is JsonObject root ? Declared(root, root, value) : value;
+
+    private static JsonNode? Declared(JsonObject schema, JsonObject root, JsonNode? value)
+    {
+        if (schema["$ref"] is JsonValue reference && reference.TryGetValue<string>(out var name))
+        {
+            return Declared(Definition(root, name, "$"), root, value);
+        }
+
+        if (schema["anyOf"] is JsonArray branches)
+        {
+            // The first branch that accepts the value owns it, as in AnyOf.
+            foreach (var branch in branches.OfType<JsonObject>())
+            {
+                try
+                {
+                    Check(branch, root, value, "$");
+                }
+                catch (InputValidationException)
+                {
+                    continue;
+                }
+
+                return Declared(branch, root, value);
+            }
+
+            return value;
+        }
+
+        switch (value)
+        {
+            case JsonObject document when schema["additionalProperties"] is JsonObject additional:
+                return new JsonObject(document.Select(property =>
+                    KeyValuePair.Create(property.Key, Declared(additional, root, property.Value?.DeepClone()))));
+            case JsonObject document when schema["properties"] is JsonObject properties:
+                return new JsonObject(document
+                    .Where(property => properties[property.Key] is JsonObject)
+                    .Select(property => KeyValuePair.Create(
+                        property.Key,
+                        Declared((JsonObject)properties[property.Key]!, root, property.Value?.DeepClone()))));
+            case JsonArray items when schema["items"] is JsonObject item:
+                return new JsonArray([.. items.Select(element => Declared(item, root, element?.DeepClone()))]);
+            default:
+                return value;
+        }
+    }
+
     private static void Check(JsonObject schema, JsonObject root, JsonNode? value, string path)
     {
         if (schema["$ref"] is JsonValue reference && reference.TryGetValue<string>(out var name))

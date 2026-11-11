@@ -16,6 +16,7 @@ import (
 	"path"
 	"strings"
 	"sync"
+	"time"
 
 	workhorse "github.com/stablemates/workhorse/go"
 )
@@ -65,6 +66,16 @@ type HandlerOptions struct {
 	// Letter case and a default port do not matter. Leave it empty when the embedding application
 	// already validates Host.
 	AllowedHosts []string
+	// StatementTimeout bounds each dashboard read when the handler owns its transaction. The read
+	// then runs in its own read-only transaction, and PostgreSQL cancels it when it runs longer. The
+	// procedure then answers the TIMEOUT RPC error with status 408. Zero selects
+	// DefaultStatementTimeout. The handler owns the transaction only for an Executor of
+	// NewPGXExecutor or NewSQLExecutor over a *pgxpool.Pool or a *sql.DB, over a *pgx.Conn or a
+	// *pgxpool.Conn that pgx reports idle, or over a *sql.Conn of the pgx driver that it reports
+	// idle. A read through each other source, such as a caller transaction, a connection inside one,
+	// an *sql.Conn of another driver, a caller type that wraps a connection, or another Executor,
+	// runs directly with no bound.
+	StatementTimeout time.Duration
 }
 
 type handler struct {
@@ -77,6 +88,10 @@ type handler struct {
 	assets                 map[string][]byte
 	assetsErr              error
 	assetsOnce             sync.Once
+	// procedureMu runs one procedure at a time when the executor wraps one connection. A read
+	// uses several statements in one transaction there, and a statement of another request must
+	// not run inside it. It is nil for a pool or a database/sql database.
+	procedureMu *sync.Mutex
 }
 
 var mutations = map[string]bool{
@@ -134,7 +149,13 @@ func newHandler(options HandlerOptions, skipCompatibilityCheck bool) (http.Handl
 	if options.MaintenanceLoops == nil {
 		options.MaintenanceLoops = map[string]int{"tickIntervalMs": 1000}
 	}
-	builtins := (&backend{executor: options.Executor, admin: workhorse.NewAdmin(options.Executor), environment: options.Environment, configuredWorkers: options.ConfiguredWorkers, readOnly: options.ReadOnly, maintenanceLoops: options.MaintenanceLoops}).procedures()
+	if options.StatementTimeout < 0 || options.StatementTimeout > 0 && options.StatementTimeout < time.Millisecond {
+		return nil, fmt.Errorf("dashboard statement timeout must be zero or at least 1ms: %s", options.StatementTimeout)
+	}
+	if options.StatementTimeout == 0 {
+		options.StatementTimeout = DefaultStatementTimeout
+	}
+	builtins := (&backend{executor: options.Executor, reader: newBoundedReader(options.Executor, options.StatementTimeout), admin: workhorse.NewAdmin(options.Executor), environment: options.Environment, configuredWorkers: options.ConfiguredWorkers, readOnly: options.ReadOnly, maintenanceLoops: options.MaintenanceLoops}).procedures()
 	for name, procedure := range options.Procedures {
 		builtins[name] = procedure
 	}
@@ -151,7 +172,11 @@ func newHandler(options HandlerOptions, skipCompatibilityCheck bool) (http.Handl
 			allowedHosts[canonicalHost(entry, "https")] = true
 		}
 	}
-	return &handler{options: options, basePath: normalizePath(options.Path), allowedHosts: allowedHosts, skipCompatibilityCheck: skipCompatibilityCheck}, nil
+	var procedureMu *sync.Mutex
+	if singleConnection(options.Executor) {
+		procedureMu = &sync.Mutex{}
+	}
+	return &handler{options: options, basePath: normalizePath(options.Path), allowedHosts: allowedHosts, skipCompatibilityCheck: skipCompatibilityCheck, procedureMu: procedureMu}, nil
 }
 
 // canonicalHost lowercases a host[:port] and drops the scheme's default port, so one address has
@@ -305,6 +330,7 @@ func (host *handler) serveRPC(response http.ResponseWriter, request *http.Reques
 		writeRPCError(response, http.StatusBadRequest, "BAD_REQUEST", err.Error())
 		return
 	}
+	envelope.JSON = dropUndeclaredKeys(name, envelope.JSON)
 	if name == "enqueueTest" {
 		if input, ok := envelope.JSON.(map[string]any); ok && input["kind"] == "feature" && input["feature"] == nil {
 			writeRPCErrorData(response, http.StatusBadRequest, "BAD_REQUEST", "Input validation failed", map[string]any{"issues": []any{map[string]any{"code": "custom", "path": []any{"feature"}, "message": "The feature demo kind requires a feature family"}}})
@@ -316,6 +342,10 @@ func (host *handler) serveRPC(response http.ResponseWriter, request *http.Reques
 		return
 	}
 	assignActor(envelope.JSON, actor)
+	if host.procedureMu != nil {
+		host.procedureMu.Lock()
+		defer host.procedureMu.Unlock()
+	}
 	result, err := procedure(request.Context(), envelope.JSON, actor)
 	if err != nil {
 		var rpcError *RPCError

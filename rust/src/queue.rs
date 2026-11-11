@@ -27,8 +27,15 @@ const MAX_ATTEMPTS_LIMIT: i32 = 100;
 const MAX_TASK_DEPENDENCIES: usize = 100;
 const MAX_EXTERNAL_VALUE_BYTES: usize = 65_536;
 
-mod private {
-    pub trait Sealed {}
+pub(crate) mod private {
+    pub trait Sealed {
+        /// The pool that a dashboard read takes one connection from, to run the read in a
+        /// bounded transaction of its own. A client or a caller transaction has none.
+        #[cfg(feature = "dashboard")]
+        fn read_pool(&self) -> Option<&deadpool_postgres::Pool> {
+            None
+        }
+    }
 }
 
 /// A PostgreSQL connection, pool or transaction the client can issue protocol calls through.
@@ -63,7 +70,12 @@ client_executor!(
     deadpool_postgres::Transaction<'_>
 );
 
-impl private::Sealed for deadpool_postgres::Pool {}
+impl private::Sealed for deadpool_postgres::Pool {
+    #[cfg(feature = "dashboard")]
+    fn read_pool(&self) -> Option<&deadpool_postgres::Pool> {
+        Some(self)
+    }
+}
 impl Executor for deadpool_postgres::Pool {
     async fn rows(
         &self,
@@ -147,6 +159,45 @@ impl Executor for BoundedPool<'_> {
     }
 }
 
+/// Runs one dashboard read in its own read-only transaction with a transaction-local
+/// `statement_timeout` of `timeout_ms`.
+///
+/// PostgreSQL arms the statement timer when a statement starts, so the bound must be set before
+/// the read and not inside it. The setting ends with the transaction. After a failed read the
+/// transaction rolls back and the connection goes back to the pool; if the rollback fails, or the
+/// future is dropped, the connection leaves the pool.
+#[cfg(feature = "dashboard")]
+pub(crate) async fn bounded_read(
+    pool: &deadpool_postgres::Pool,
+    timeout_ms: &str,
+    statement: &str,
+    params: &[&(dyn ToSql + Sync)],
+) -> Result<Vec<Row>, Error> {
+    let mut held = Discarded(Some(pool.get().await?));
+    let client = held.0.as_mut().expect("held above");
+    let transaction = client.build_transaction().read_only(true).start().await?;
+    let result = async {
+        transaction
+            .query("SELECT set_config('statement_timeout', $1, true)", &[&timeout_ms])
+            .await?;
+        transaction.query(statement, params).await
+    }
+    .await;
+    match result {
+        Ok(rows) => {
+            transaction.commit().await?;
+            drop(held.0.take());
+            Ok(rows)
+        }
+        Err(error) => {
+            if transaction.rollback().await.is_ok() {
+                drop(held.0.take());
+            }
+            Err(error.into())
+        }
+    }
+}
+
 /// Holds a pooled connection and removes it from the pool if dropped while still held.
 ///
 /// Dropping a statement's future does not stop the statement. Returned to the pool, its connection
@@ -161,7 +212,12 @@ impl Drop for Discarded {
     }
 }
 
-impl<T: Executor + ?Sized> private::Sealed for &T {}
+impl<T: Executor + ?Sized> private::Sealed for &T {
+    #[cfg(feature = "dashboard")]
+    fn read_pool(&self) -> Option<&deadpool_postgres::Pool> {
+        (**self).read_pool()
+    }
+}
 impl<T: Executor + ?Sized> Executor for &T {
     fn rows(
         &self,

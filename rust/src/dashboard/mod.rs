@@ -165,7 +165,17 @@ pub struct DashboardOptions<E> {
     /// Host-supplied procedures, such as `enqueueTest` and `setSchedulePaused`. An entry replaces
     /// the built-in procedure of the same name.
     pub procedures: HashMap<String, Procedure>,
+    /// Bounds each dashboard read; [`DEFAULT_STATEMENT_TIMEOUT`] by default. Each read runs in its
+    /// own read-only transaction, and PostgreSQL cancels a read that runs longer. The procedure
+    /// then answers the `TIMEOUT` RPC error with status 408. The bound needs a
+    /// `deadpool_postgres::Pool` executor. A read through a client or a caller transaction runs
+    /// with no bound. [`handler`] refuses a bound under 1 ms.
+    pub statement_timeout: std::time::Duration,
 }
+
+/// How long one dashboard read can run before PostgreSQL cancels it: 15 seconds, the
+/// `DASHBOARD_STATEMENT_TIMEOUT_MS` default of the TypeScript host.
+pub const DEFAULT_STATEMENT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15);
 
 impl<E> DashboardOptions<E> {
     pub fn new(executor: E, authorize: Authorize) -> Self {
@@ -181,6 +191,7 @@ impl<E> DashboardOptions<E> {
             allowed_hosts: Vec::new(),
             https: false,
             procedures: HashMap::new(),
+            statement_timeout: DEFAULT_STATEMENT_TIMEOUT,
         }
     }
 }
@@ -211,12 +222,16 @@ pub fn handler<E: Executor>(options: DashboardOptions<E>) -> Result<DashboardSer
         allowed_hosts.insert(canonical_host(entry, "http"));
         allowed_hosts.insert(canonical_host(entry, "https"));
     }
+    if options.statement_timeout < std::time::Duration::from_millis(1) {
+        return Err(Error::invalid("dashboard statement timeout must be at least 1 ms"));
+    }
     let backend = Backend::new(
         options.executor,
         options.environment,
         options.configured_workers,
         options.read_only,
         options.maintenance_loops.unwrap_or_else(|| json!({ "tickIntervalMs": 1000 })),
+        options.statement_timeout,
     );
     let host = Host {
         backend,
@@ -525,6 +540,7 @@ where
         }
         return Err(RpcError::bad_request(message));
     }
+    let input = declared_only(name, input);
     let feature = input.get("feature").unwrap_or(&Value::Null);
     if name == "enqueueTest" && input.get("kind") == Some(&json!("feature")) && feature.is_null() {
         let issue = json!({
@@ -547,6 +563,92 @@ where
         return Err(error.with_data(json!({ "issues": [issue] })));
     }
     Ok(input)
+}
+
+/// Returns a valid input without the object keys that its request schema does not declare, as
+/// the TypeScript host's schema parse does.
+///
+/// Each SQL procedure reads its input document by key. A key that the contract does not declare,
+/// such as a health document in a system read, must not reach SQL. An object schema with
+/// `additionalProperties`, such as a signal payload, is free JSON and keeps every key.
+fn declared_only(name: &str, input: Value) -> Value {
+    static SCHEMAS: OnceLock<Map<String, Value>> = OnceLock::new();
+    let schemas = SCHEMAS.get_or_init(|| {
+        serde_json::from_str(v1_generated::INPUT_SCHEMAS).expect("generated input schemas")
+    });
+    match schemas.get(name) {
+        Some(schema) if schema.is_object() => declared(schema, schema, input),
+        _ => input,
+    }
+}
+
+fn declared(schema: &Value, root: &Value, value: Value) -> Value {
+    if let Some(reference) = schema.get("$ref").and_then(Value::as_str) {
+        let name = reference.trim_start_matches("#/$defs/");
+        return match root.get("$defs").and_then(|definitions| definitions.get(name)) {
+            Some(resolved) => declared(resolved, root, value),
+            None => value,
+        };
+    }
+    if let Some(branches) = schema.get("anyOf").and_then(Value::as_array) {
+        // The input is valid, so the first branch of the value's JSON type owns it. Each union of
+        // the contract has at most one branch for each JSON type.
+        return match branches.iter().find(|branch| accepts_kind(branch, root, &value)) {
+            Some(branch) => declared(branch, root, value),
+            None => value,
+        };
+    }
+    match value {
+        Value::Object(object) => {
+            if let Some(additional) = schema.get("additionalProperties").filter(|a| a.is_object()) {
+                let kept = object.into_iter().map(|(key, item)| {
+                    let item = declared(additional, root, item);
+                    (key, item)
+                });
+                return Value::Object(kept.collect());
+            }
+            let Some(properties) = schema.get("properties").and_then(Value::as_object) else {
+                return Value::Object(object);
+            };
+            let kept = object.into_iter().filter_map(|(key, item)| {
+                let child = properties.get(&key)?;
+                let item = declared(child, root, item);
+                Some((key, item))
+            });
+            Value::Object(kept.collect())
+        }
+        Value::Array(items) => match schema.get("items").filter(|items| items.is_object()) {
+            Some(child) => {
+                Value::Array(items.into_iter().map(|item| declared(child, root, item)).collect())
+            }
+            None => Value::Array(items),
+        },
+        other => other,
+    }
+}
+
+/// Whether a union branch is for the JSON type of `value`.
+fn accepts_kind(branch: &Value, root: &Value, value: &Value) -> bool {
+    if let Some(reference) = branch.get("$ref").and_then(Value::as_str) {
+        let name = reference.trim_start_matches("#/$defs/");
+        return root
+            .get("$defs")
+            .and_then(|definitions| definitions.get(name))
+            .is_some_and(|resolved| accepts_kind(resolved, root, value));
+    }
+    if let Some(branches) = branch.get("anyOf").and_then(Value::as_array) {
+        return branches.iter().any(|inner| accepts_kind(inner, root, value));
+    }
+    match branch.get("type").and_then(Value::as_str) {
+        Some("object") => value.is_object(),
+        Some("array") => value.is_array(),
+        Some("string") => value.is_string(),
+        Some("integer") => value.is_i64() || value.is_u64(),
+        Some("number") => value.is_number(),
+        Some("boolean") => value.is_boolean(),
+        Some("null") => value.is_null(),
+        _ => true,
+    }
 }
 
 /// Validates one procedure's input. A procedure without a schema accepts no input.

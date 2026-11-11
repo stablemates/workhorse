@@ -29,6 +29,48 @@ module Stablemates
           check(schema, schema, value, "$")
         end
 
+        # +value+, a valid input of +procedure+, without the object keys that its request schema does
+        # not declare, as the TypeScript host's schema parse drops them. Each SQL procedure reads its
+        # input document by key, so an undeclared key, such as a health document in a system read,
+        # must not reach SQL. An object schema with additionalProperties, such as a signal payload,
+        # is free JSON and keeps every key.
+        def declared_only(procedure, value)
+          schema = SCHEMAS[procedure]
+          schema.is_a?(Hash) ? declared(schema, schema, value) : value
+        end
+
+        def declared(schema, root, value)
+          reference = schema["$ref"]
+          return declared(definition(root, reference, "$"), root, value) if reference.is_a?(String)
+
+          branches = schema["anyOf"]
+          if branches.is_a?(Array)
+            # The first branch that accepts the value owns it, as in any_of.
+            branch = branches.find do |candidate|
+              check(candidate, root, value, "$")
+              true
+            rescue InputValidationError
+              false
+            end
+            return branch ? declared(branch, root, value) : value
+          end
+
+          case value
+          when Hash
+            additional = schema["additionalProperties"]
+            return value.to_h { |name, child| [name, declared(additional, root, child)] } if additional.is_a?(Hash)
+
+            properties = schema["properties"]
+            return value unless properties.is_a?(Hash)
+
+            value.filter_map { |name, child| [name, declared(properties[name], root, child)] if properties[name].is_a?(Hash) }.to_h
+          when Array
+            items = schema["items"]
+            items.is_a?(Hash) ? value.map { |item| declared(items, root, item) } : value
+          else value
+          end
+        end
+
         def check(schema, root, value, path)
           reference = schema["$ref"]
           return check(definition(root, reference, path), root, value, path) if reference.is_a?(String)

@@ -1154,6 +1154,7 @@ Workhorse.AspNetCore.DashboardOptions: public System.Collections.Generic.IReadOn
 Workhorse.AspNetCore.DashboardOptions: public System.Collections.Generic.IReadOnlyList<string> BrowserModules { get; init; }
 Workhorse.AspNetCore.DashboardOptions: public System.Collections.Generic.IReadOnlyList<string> ConfiguredWorkers { get; init; }
 Workhorse.AspNetCore.DashboardOptions: public System.Text.Json.JsonSerializerOptions? Json { get; init; }
+Workhorse.AspNetCore.DashboardOptions: public System.TimeSpan StatementTimeout { get; init; }
 Workhorse.AspNetCore.DashboardOptions: public Workhorse.AspNetCore.DashboardProcedure? EnqueueTest { get; init; }
 Workhorse.AspNetCore.DashboardOptions: public Workhorse.AspNetCore.DashboardProcedure? SetSchedulePaused { get; init; }
 Workhorse.AspNetCore.DashboardOptions: public bool ReadOnly { get; init; }

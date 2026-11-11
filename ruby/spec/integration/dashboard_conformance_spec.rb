@@ -73,7 +73,11 @@ RSpec.describe "Dashboard against the dashboard/v1 conformance fixtures" do
       end
     end
     sql = step.fetch("sql")
-    rows = if sql.match?(/\A\s*WITH\b/i)
+    rows = if sql.match?(/\A\s*DO\b/i)
+      # A DO block returns no rows and takes no parameters.
+      connection.exec(sql)
+      []
+    elsif sql.match?(/\A\s*WITH\b/i)
       # PostgreSQL accepts a data-modifying WITH only at the top level, so a WITH step runs as
       # written, and the type map decodes its columns.
       connection.exec_params(sql, parameters).map_types!(PG::BasicTypeMapForResults.new(connection)).to_a
@@ -125,7 +129,8 @@ RSpec.describe "Dashboard against the dashboard/v1 conformance fixtures" do
         environment: harness.fetch("environment"),
         configured_workers: harness.fetch("configuredWorkers"),
         maintenance_loops: harness.fetch("maintenanceLoops"),
-        allowed_hosts: [host_name]
+        allowed_hosts: [host_name],
+        statement_timeout_ms: harness.fetch("statementTimeoutMs")
       }
       host = W::Dashboard.new(connection, **options,
         enqueue_test: lambda { |input, _actor|
@@ -141,8 +146,10 @@ RSpec.describe "Dashboard against the dashboard/v1 conformance fixtures" do
         })
       read_only_host = W::Dashboard.new(connection, **options, read_only: true)
 
+      # The scenarios run strictly in order, so a later seed runs after the earlier exchanges.
       fixture.fetch("scenarios").drop(1).each do |scenario|
-        scenario.fetch("exchanges").each do |exchange|
+        scenario.fetch("seed", []).each { |step| execute_step(connection, step, references) }
+        scenario.fetch("exchanges", []).each do |exchange|
           exchange!((exchange["mode"] == "read-only") ? read_only_host : host, exchange, references)
         end
       end

@@ -42,6 +42,7 @@ type dashboardHarness struct {
 	Environment        string         `json:"environment"`
 	ConfiguredWorkers  []string       `json:"configuredWorkers"`
 	MaintenanceLoops   map[string]int `json:"maintenanceLoops"`
+	StatementTimeoutMs int            `json:"statementTimeoutMs"`
 }
 
 type dashboardScenario struct {
@@ -111,15 +112,14 @@ func runDashboardConformance(t *testing.T, open func(*testing.T, string, *pgxpoo
 	executor := open(t, databaseURL, pool)
 	fixture := readDashboardFixture(t)
 	references := make(map[string]any)
+	host := newDashboardConformanceHandler(t, fixture.Harness, executor, false)
+	readOnlyHost := newDashboardConformanceHandler(t, fixture.Harness, executor, true)
+	// The scenarios run strictly in order. A later seed can change state that an earlier
+	// exchange reads, such as the slow read that the read-timeout scenario installs.
 	for _, scenario := range fixture.Scenarios {
 		for _, step := range scenario.Seed {
 			executeDashboardSeedStep(t, ctx, executor, scenario.ID, step, references)
 		}
-	}
-
-	host := newDashboardConformanceHandler(t, fixture.Harness, executor, false)
-	readOnlyHost := newDashboardConformanceHandler(t, fixture.Harness, executor, true)
-	for _, scenario := range fixture.Scenarios {
 		for _, exchange := range scenario.Exchanges {
 			t.Run(scenario.ID+"/"+exchange.ID, func(t *testing.T) {
 				selected := host
@@ -180,6 +180,7 @@ $1::text, $2::text, $3::boolean, $4::text, $5::text) AS paused`, value["namespac
 		Path: harness.BasePath, Environment: harness.Environment, ReadOnly: readOnly,
 		ConfiguredWorkers: harness.ConfiguredWorkers, MaintenanceLoops: harness.MaintenanceLoops,
 		Procedures: procedures, AllowedHosts: []string{strings.TrimPrefix(harness.Origin, "http://")},
+		StatementTimeout: time.Duration(harness.StatementTimeoutMs) * time.Millisecond,
 	})
 	if err != nil {
 		t.Fatal(err)

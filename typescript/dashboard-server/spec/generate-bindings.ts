@@ -531,6 +531,39 @@ def validate_input(procedure: str, value: object) -> None:
 ${wrappers}
 
 
+_PATTERNS: dict[str, re.Pattern[str]] = {}
+
+
+def _ecma_pattern(source: str) -> re.Pattern[str]:
+    """Compile one ECMA-262 pattern of the contract so that it matches as the TypeScript host does.
+
+    Outside a bracket expression, a dollar sign becomes an end-of-string anchor, because the Python
+    dollar sign also matches before a final line feed. The ASCII flag limits the digit class to the
+    ten ASCII digits, as in JavaScript.
+    """
+    compiled = _PATTERNS.get(source)
+    if compiled is None:
+        translated: list[str] = []
+        escaped = False
+        bracket = False
+        for character in source:
+            if escaped:
+                escaped = False
+            elif character == "\\\\":
+                escaped = True
+            elif bracket:
+                bracket = character != "]"
+            elif character == "[":
+                bracket = True
+            elif character == "$":
+                translated.append(r"\\Z")
+                continue
+            translated.append(character)
+        compiled = re.compile("".join(translated), re.ASCII)
+        _PATTERNS[source] = compiled
+    return compiled
+
+
 def _validate_schema(schema: object, root: object, value: object, path: str) -> None:
     assert isinstance(schema, dict) and isinstance(root, dict)
     reference = schema.get("$ref")
@@ -566,7 +599,7 @@ def _validate_schema(schema: object, root: object, value: object, path: str) -> 
             raise DashboardInputValidationError(f"{path}: string is too short")
         if isinstance(schema.get("maxLength"), int) and len(value) > schema["maxLength"]:
             raise DashboardInputValidationError(f"{path}: string is too long")
-        if isinstance(schema.get("pattern"), str) and re.search(schema["pattern"], value) is None:
+        if isinstance(schema.get("pattern"), str) and _ecma_pattern(schema["pattern"]).search(value) is None:
             raise DashboardInputValidationError(f"{path}: string does not match {schema['pattern']}")
     if kind in ("integer", "number"):
         if isinstance(value, bool) or not isinstance(value, int | float):

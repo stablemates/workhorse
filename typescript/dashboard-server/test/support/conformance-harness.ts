@@ -64,6 +64,7 @@ export function createDashboardConformanceTransport(
     environment: harness.environment,
     configuredWorkers: harness.configuredWorkers,
     maintenanceLoops: harness.maintenanceLoops,
+    statementTimeoutMs: harness.statementTimeoutMs,
     authorize: () => ({ actor: harness.authenticatedActor }),
     allowedHosts: [new URL(harness.origin).host],
   };

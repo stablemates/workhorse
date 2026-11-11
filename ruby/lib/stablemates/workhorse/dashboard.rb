@@ -93,12 +93,24 @@ module Stablemates
 
       attr_reader :base_path
 
+      # How long one dashboard read can run, in milliseconds: the DASHBOARD_STATEMENT_TIMEOUT_MS
+      # default of the TypeScript host.
+      DEFAULT_STATEMENT_TIMEOUT_MS = 15_000
+
       # +executor+ is a PG::Connection, a ConnectionPool of them, or any object whose +with+
-      # yields one. Each call runs on its own; the dashboard opens no transaction.
+      # yields one. A control runs on its own in autocommit. A read runs in its own read-only
+      # transaction, and PostgreSQL cancels a read that runs longer than +statement_timeout_ms+.
+      # The procedure then answers the TIMEOUT RPC error with status 408. A connection inside a
+      # caller transaction runs the read in that transaction with no bound. On one PG::Connection,
+      # the dashboard runs one procedure at a time.
       def initialize(executor, authorize:, path: "/workhorse", environment: "development", audit_actor: nil,
         read_only: false, browser_modules: [], configured_workers: [], maintenance_loops: nil,
-        enqueue_test: nil, set_schedule_paused: nil, allowed_hosts: [], procedures: {})
+        enqueue_test: nil, set_schedule_paused: nil, allowed_hosts: [], procedures: {},
+        statement_timeout_ms: DEFAULT_STATEMENT_TIMEOUT_MS)
         raise ArgumentError, "authorize must respond to call" unless authorize.respond_to?(:call)
+        unless statement_timeout_ms.is_a?(Integer) && statement_timeout_ms.positive?
+          raise ArgumentError, "statement_timeout_ms must be a positive Integer"
+        end
 
         @executor = Executor.for(executor)
         @base_path = Dashboard.normalize_path(path)
@@ -108,12 +120,17 @@ module Stablemates
         @read_only = read_only
         @browser_modules = browser_modules.dup.freeze
         backend = Backend.new(@executor, environment: environment, configured_workers: configured_workers,
-          maintenance_loops: maintenance_loops || {"tickIntervalMs" => 1_000}, read_only: read_only)
+          maintenance_loops: maintenance_loops || {"tickIntervalMs" => 1_000}, read_only: read_only,
+          statement_timeout_ms: statement_timeout_ms)
         extensions = procedures.to_h { |name, handler| [name.to_s, handler] }
         extensions["enqueueTest"] = enqueue_test if enqueue_test
         extensions["setSchedulePaused"] = set_schedule_paused if set_schedule_paused
         @procedures = backend.procedures.merge(extensions).freeze
         @lock = Mutex.new
+        # A read runs as several statements in one transaction. On one caller-owned PG::Connection,
+        # the dashboard runs one procedure at a time, so a statement of another request cannot run
+        # inside that transaction. A pool lends each request a connection of its own.
+        @connection_lock = executor.is_a?(PG::Connection) ? Mutex.new : nil
         @compatible = false
         @assets = nil
       end
@@ -195,6 +212,8 @@ module Stablemates
 
       private
 
+      def on_connection(&) = @connection_lock ? @connection_lock.synchronize(&) : yield
+
       # A refusal is not cached, so the dashboard recovers once an operator migrates the schema.
       def assert_compatible
         return if @compatible
@@ -202,7 +221,7 @@ module Stablemates
         @lock.synchronize do
           next if @compatible
 
-          code = Compatibility.evaluate(@executor)
+          code = on_connection { Compatibility.evaluate(@executor) }
           raise CompatibilityError, code if code
 
           @compatible = true
@@ -238,6 +257,7 @@ module Stablemates
 
           input = envelope["json"]
           Validator.validate(procedure, input)
+          input = Validator.declared_only(procedure, input)
           if procedure == "enqueueTest" && input.is_a?(Hash) && input["kind"] == "feature" && !input.key?("feature")
             raise RpcError.new(400, "BAD_REQUEST", "Input validation failed", MISSING_FEATURE)
           end
@@ -246,7 +266,7 @@ module Stablemates
           end
 
           input = input.merge("audit" => input["audit"].merge("actor" => actor)) if input.is_a?(Hash) && input["audit"].is_a?(Hash)
-          result = handler.call(input, actor)
+          result = on_connection { handler.call(input, actor) }
         rescue InputValidationError => e
           if procedure == "tasks" && input.is_a?(Hash) && input["page"].is_a?(Integer) && input["page"] < 1
             return rpc_error(400, "BAD_REQUEST", "Input validation failed", TOO_SMALL_PAGE)

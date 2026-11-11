@@ -19,9 +19,17 @@ from urllib.parse import urlsplit
 from .._compatibility import assert_sync_compatible as _assert_sync_compatible
 from .._drivers import PsycopgConnection as _PsycopgConnection, SyncExecutor as _SyncExecutor
 from .._version import WORKHORSE_VERSION as _WORKHORSE_VERSION
-from ..dashboard_v1 import DashboardInputValidationError, validate_input
+from ..dashboard_v1 import (
+    _INPUT_SCHEMAS,
+    DashboardInputValidationError,
+    _validate_schema,
+    validate_input,
+)
 from ..errors import ProtocolCompatibilityError as _ProtocolCompatibilityError
-from ._backend import DashboardBackend as _DashboardBackend
+from ._backend import (
+    DASHBOARD_STATEMENT_TIMEOUT_MS as _DASHBOARD_STATEMENT_TIMEOUT_MS,
+    DashboardBackend as _DashboardBackend,
+)
 from ._errors import DashboardRPCError as _DashboardRPCError
 
 _MUTATIONS = frozenset(
@@ -90,6 +98,51 @@ class DashboardProcedure(Protocol):
 Authorize = Callable[[dict[str, object]], DashboardPrincipal | bool | DashboardResponse]
 
 
+def _declared_only(procedure: str, value: object) -> object:
+    """Return a valid input without the object keys that its request schema does not declare.
+
+    The TypeScript host's schema parse drops these keys. Each SQL procedure reads its input
+    document by key, so an undeclared key, such as a health document in a system read, must not
+    reach SQL. An object schema with ``additionalProperties``, such as a signal payload, is free
+    JSON and keeps every key.
+    """
+    schema = _INPUT_SCHEMAS.get(procedure)
+    return value if not isinstance(schema, dict) else _declared(schema, schema, value)
+
+
+def _declared(schema: dict[str, Any], root: dict[str, Any], value: object) -> object:
+    reference = schema.get("$ref")
+    if isinstance(reference, str):
+        resolved = root.get("$defs", {}).get(reference.removeprefix("#/$defs/"))
+        return _declared(resolved, root, value) if isinstance(resolved, dict) else value
+    branches = schema.get("anyOf")
+    if isinstance(branches, list):
+        # The first branch that accepts the value owns it, as in the validator.
+        for branch in branches:
+            try:
+                _validate_schema(branch, root, value, "$")
+            except DashboardInputValidationError:
+                continue
+            return _declared(branch, root, value)
+        return value
+    if isinstance(value, dict):
+        additional = schema.get("additionalProperties")
+        if isinstance(additional, dict):
+            return {name: _declared(additional, root, child) for name, child in value.items()}
+        properties = schema.get("properties")
+        if not isinstance(properties, dict):
+            return value
+        return {
+            name: _declared(properties[name], root, child)
+            for name, child in value.items()
+            if isinstance(properties.get(name), dict)
+        }
+    items = schema.get("items")
+    if isinstance(value, list) and isinstance(items, dict):
+        return [_declared(items, root, item) for item in value]
+    return value
+
+
 def _oversized_request_id(input_value: object) -> bool:
     if not isinstance(input_value, dict):
         return False
@@ -135,6 +188,15 @@ class DashboardHost:
     request under ``path`` whose ``Host`` is not listed receives 421 Misdirected Request before
     ``authorize`` runs. Letter case and a default port do not matter. Leave it empty when the
     embedding application already validates ``Host``.
+
+    ``statement_timeout_ms`` bounds each dashboard read. The host runs each read in its own
+    read-only transaction, and PostgreSQL cancels a read that runs longer. The procedure then
+    answers the ``TIMEOUT`` RPC error with status 408. The default is 15,000 ms. The bound applies
+    only when the host owns the transaction, which is when psycopg reports the connection idle.
+    If the connection is inside a transaction of the caller when a read starts, or its state is not
+    reported, the read runs directly with no bound, and the host commits nothing and rolls nothing
+    back. The host runs one procedure at a time on the
+    connection, and no other code may use the connection while a request runs.
     """
 
     def __init__(
@@ -152,11 +214,18 @@ class DashboardHost:
         enqueue_test: DashboardProcedure | None = None,
         set_schedule_paused: DashboardProcedure | None = None,
         allowed_hosts: tuple[str, ...] = (),
+        statement_timeout_ms: int = _DASHBOARD_STATEMENT_TIMEOUT_MS,
         _procedures: Mapping[str, DashboardProcedure] | None = None,
         _skip_compatibility_check: bool = False,
     ) -> None:
         if getattr(connection, "autocommit", None) is not True:
             raise ValueError("dashboard connection must use autocommit=True")
+        if (
+            isinstance(statement_timeout_ms, bool)
+            or not isinstance(statement_timeout_ms, int)
+            or statement_timeout_ms < 1
+        ):
+            raise ValueError("dashboard statement_timeout_ms must be a positive integer")
         self.base_path = _normalize_dashboard_path(path)
         self._allowed_hosts = _allowed_hosts(allowed_hosts)
         self._authorize = authorize
@@ -171,7 +240,12 @@ class DashboardHost:
             configured_workers=configured_workers,
             maintenance_loops=maintenance_loops or {"tickIntervalMs": 1_000},
             read_only=read_only,
+            statement_timeout_ms=statement_timeout_ms,
         )
+        # A read runs as several statements in one transaction on the shared connection. The
+        # host runs one procedure at a time, so a statement of another request cannot run inside
+        # that transaction.
+        self._connection_lock = Lock()
         extensions = dict(_procedures or {})
         if enqueue_test is not None:
             extensions["enqueueTest"] = enqueue_test
@@ -250,7 +324,8 @@ class DashboardHost:
             return
         with self._compatibility_lock:
             if not self._compatible:
-                _assert_sync_compatible(self._executor)
+                with self._connection_lock:
+                    _assert_sync_compatible(self._executor)
                 self._compatible = True
 
     def _rpc(self, environ: dict[str, object], procedure: str, actor: str) -> DashboardResponse:
@@ -279,6 +354,7 @@ class DashboardHost:
                 raise DashboardInputValidationError("request envelope must be an object")
             input_value = envelope.get("json")
             validate_input(procedure, input_value)
+            input_value = _declared_only(procedure, input_value)
             if (
                 procedure == "enqueueTest"
                 and isinstance(input_value, dict)
@@ -317,7 +393,8 @@ class DashboardHost:
             if isinstance(input_value, dict) and isinstance(input_value.get("audit"), dict):
                 input_value = dict(input_value)
                 input_value["audit"] = {**input_value["audit"], "actor": actor}
-            result = handler(input_value, actor)
+            with self._connection_lock:
+                result = handler(input_value, actor)
         except DashboardInputValidationError as error:
             if (
                 procedure == "tasks"

@@ -28,6 +28,8 @@ export interface DashboardConformanceHarness {
   environment: string;
   configuredWorkers: string[];
   maintenanceLoops: { tickIntervalMs: number };
+  /** The read bound, in milliseconds, that every backend under test runs each dashboard read under. */
+  statementTimeoutMs: number;
 }
 
 export interface DashboardConformanceSeedStep {

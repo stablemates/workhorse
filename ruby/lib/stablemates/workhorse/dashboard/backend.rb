@@ -19,10 +19,16 @@ module Stablemates
           "concurrency policies" => "concurrency_policy",
           "rate-limit policies" => "rate_limit_policy"
         }.freeze
-        private_constant :QUEUE_HEALTH_TTL, :MAINTENANCE_SETTINGS, :REFUSED_TIER_STATUSES
+        # The SQLSTATE of a statement that PostgreSQL cancels for its statement_timeout.
+        QUERY_CANCELED = "57014"
+        SET_STATEMENT_TIMEOUT = "SELECT set_config('statement_timeout', $1, true)"
+        private_constant :QUEUE_HEALTH_TTL, :MAINTENANCE_SETTINGS, :REFUSED_TIER_STATUSES, :QUERY_CANCELED,
+          :SET_STATEMENT_TIMEOUT
 
-        def initialize(executor, environment:, configured_workers:, maintenance_loops:, read_only:)
+        def initialize(executor, environment:, configured_workers:, maintenance_loops:, read_only:,
+          statement_timeout_ms:)
           @executor = executor
+          @statement_timeout_ms = statement_timeout_ms.to_s
           @admin = Admin.new(executor)
           @environment = environment
           @configured_workers = configured_workers.dup.freeze
@@ -272,7 +278,8 @@ module Stablemates
           audit = audit(input, actor)
           request = {"id" => input.fetch("id"), "actor" => audit.actor, "reason" => audit.reason,
                      "requestId" => audit.request_id}
-          found(result(V1::CANCEL_TASK_GROUP, request), "Task group not found")
+          rows = @executor.rows(V1::CANCEL_TASK_GROUP, [Values.json(request, "dashboard input")])
+          found(Values.parse_json(one(rows, "cancel_task_group").fetch("result")), "Task group not found")
         end
 
         private
@@ -280,7 +287,49 @@ module Stablemates
         # The parsed +result+ column of a dashboard function, or nil when PostgreSQL returned null.
         def result(sql, document = nil)
           params = document.nil? ? [] : [Values.json(document, "dashboard input")]
-          Values.parse_json(one(@executor.rows(sql, params), sql[/workhorse\.(\w+)/, 1]).fetch("result"))
+          Values.parse_json(one(read_rows(sql, params), sql[/workhorse\.(\w+)/, 1]).fetch("result"))
+        end
+
+        # The rows of one read, run in its own read-only transaction with a transaction-local
+        # statement_timeout. A read that PostgreSQL cancels answers the TIMEOUT RPC error, as the
+        # TypeScript host does.
+        #
+        # PostgreSQL arms the statement timer when a statement starts, so the bound must be set
+        # before the read and not inside it. A connection inside a caller transaction runs the read in
+        # that transaction with no bound: a BEGIN there starts no new transaction, and a local setting
+        # would stay in the caller's transaction.
+        def read_rows(sql, params = [])
+          @executor.with_connection do |connection|
+            reader = Executor.for(connection)
+            next reader.rows(sql, params) unless connection.transaction_status == PG::PQTRANS_IDLE
+
+            bounded_rows(connection, reader, sql, params)
+          end
+        rescue DatabaseError => e
+          raise RpcError.new(408, "TIMEOUT", "This read exceeded its time bound") if e.sqlstate == QUERY_CANCELED
+
+          raise
+        end
+
+        def bounded_rows(connection, reader, sql, params)
+          committed = false
+          connection.exec("BEGIN READ ONLY")
+          begin
+            reader.rows(SET_STATEMENT_TIMEOUT, [@statement_timeout_ms])
+            rows = reader.rows(sql, params)
+            connection.exec("COMMIT")
+            committed = true
+            rows
+          ensure
+            unless committed
+              begin
+                connection.exec("ROLLBACK")
+              rescue PG::Error
+                # The connection is broken; the error of the read is the one to report.
+                nil
+              end
+            end
+          end
         end
 
         # The raw queue_health_v1() document, shared for QUEUE_HEALTH_TTL.
@@ -293,7 +342,7 @@ module Stablemates
             now = Process.clock_gettime(Process::CLOCK_MONOTONIC)
             return @health.last if @health && @health.first > now
 
-            document = Values.parse_json(one(@executor.rows("SELECT workhorse.queue_health_v1() AS result"),
+            document = Values.parse_json(one(read_rows("SELECT workhorse.queue_health_v1() AS result"),
               "queue_health_v1").fetch("result"))
             @health = [Process.clock_gettime(Process::CLOCK_MONOTONIC) + QUEUE_HEALTH_TTL, document]
             document

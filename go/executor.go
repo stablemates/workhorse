@@ -6,7 +6,22 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/stablemates/workhorse/go/internal/executorqueryer"
 )
+
+func init() { executorqueryer.Of = driverQueryer }
+
+// driverQueryer returns the driver value of an Executor that NewPGXExecutor or NewSQLExecutor made.
+func driverQueryer(executor any) (any, bool) {
+	switch executor := executor.(type) {
+	case *pgxExecutor:
+		return executor.queryer, true
+	case *sqlExecutor:
+		return executor.queryer, true
+	default:
+		return nil, false
+	}
+}
 
 // Row is one result row keyed by its PostgreSQL column name.
 type Row map[string]any

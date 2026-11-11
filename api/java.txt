@@ -1588,6 +1588,7 @@ run.workhorse.dashboard.Dashboard.Builder: public run.workhorse.dashboard.Dashbo
 run.workhorse.dashboard.Dashboard.Builder: public run.workhorse.dashboard.Dashboard.Builder procedures(java.util.Map<java.lang.String, run.workhorse.dashboard.DashboardProcedure>)
 run.workhorse.dashboard.Dashboard.Builder: public run.workhorse.dashboard.Dashboard.Builder readOnly(boolean)
 run.workhorse.dashboard.Dashboard.Builder: public run.workhorse.dashboard.Dashboard.Builder setSchedulePaused(run.workhorse.dashboard.DashboardProcedure)
+run.workhorse.dashboard.Dashboard.Builder: public run.workhorse.dashboard.Dashboard.Builder statementTimeout(java.time.Duration)
 
 @NullMarked public sealed interface run.workhorse.dashboard.DashboardAuthorization permits run.workhorse.dashboard.DashboardAuthorization.Allow, run.workhorse.dashboard.DashboardAuthorization.Deny, run.workhorse.dashboard.DashboardAuthorization.Principal, run.workhorse.dashboard.DashboardAuthorization.Response
 run.workhorse.dashboard.DashboardAuthorization: public static run.workhorse.dashboard.DashboardAuthorization allow()

@@ -3024,6 +3024,7 @@ pub type workhorse::RetryPolicy = serde_json::map::Map<alloc::string::String, se
 #[cfg(feature = "dashboard")] pub workhorse::dashboard::DashboardOptions::path: alloc::string::String
 #[cfg(feature = "dashboard")] pub workhorse::dashboard::DashboardOptions::procedures: std::collections::hash::map::HashMap<alloc::string::String, workhorse::dashboard::Procedure>
 #[cfg(feature = "dashboard")] pub workhorse::dashboard::DashboardOptions::read_only: bool
+#[cfg(feature = "dashboard")] pub workhorse::dashboard::DashboardOptions::statement_timeout: core::time::Duration
 #[cfg(feature = "dashboard")] impl<E> workhorse::dashboard::DashboardOptions<E>
 #[cfg(feature = "dashboard")] pub fn workhorse::dashboard::DashboardOptions<E>::new(executor: E, authorize: workhorse::dashboard::Authorize) -> Self
 #[cfg(feature = "dashboard")] impl<E> core::marker::Freeze for workhorse::dashboard::DashboardOptions<E> where E: core::marker::Freeze
@@ -3087,6 +3088,7 @@ pub type workhorse::RetryPolicy = serde_json::map::Map<alloc::string::String, se
 #[cfg(feature = "dashboard")] impl core::marker::Unpin for workhorse::dashboard::RpcError
 #[cfg(feature = "dashboard")] impl core::panic::unwind_safe::RefUnwindSafe for workhorse::dashboard::RpcError
 #[cfg(feature = "dashboard")] impl core::panic::unwind_safe::UnwindSafe for workhorse::dashboard::RpcError
+#[cfg(feature = "dashboard")] pub const workhorse::dashboard::DEFAULT_STATEMENT_TIMEOUT: core::time::Duration
 #[cfg(feature = "dashboard")] pub const workhorse::dashboard::PROCEDURES: &[&str]
 #[cfg(feature = "dashboard")] pub fn workhorse::dashboard::authorize<F, Fut>(callback: F) -> workhorse::dashboard::Authorize where F: core::ops::function::Fn(&http::request::Parts) -> Fut + core::marker::Send + core::marker::Sync + 'static, Fut: core::future::future::Future<Output = workhorse::dashboard::Authorization> + core::marker::Send + 'static
 #[cfg(feature = "dashboard")] pub fn workhorse::dashboard::handler<E: workhorse::Executor>(options: workhorse::dashboard::DashboardOptions<E>) -> core::result::Result<workhorse::dashboard::DashboardService<E>, workhorse::Error>

@@ -146,6 +146,21 @@ moves the schema to version 95. It adds the two nullable columns and
 `retain_history_v1`. It does not raise the SDK compatibility floor and changes only the exporting
 rows of `cold_export_segment`. Run `workhorse schema migrate`.
 
+### The embedded dashboard bounds each read and drops undeclared input keys
+
+An operator opened an events page with a wide range, a search string, and an exact count. The read
+ran with no time bound and held one connection of the application pool. Now `dashboard.NewHandler`
+runs each read in its own read-only transaction with a transaction-local `statement_timeout`. The
+default is `dashboard.DefaultStatementTimeout`, 15 seconds, and the new
+`HandlerOptions.StatementTimeout` changes it. A read that PostgreSQL cancels answers the `TIMEOUT`
+RPC error with status 408. The bound applies only when the handler owns the transaction: for an
+executor of `NewPGXExecutor` or `NewSQLExecutor` over a pool or a database, or over a connection that
+the pgx driver reports idle. A read through each other source, such as a caller transaction, a
+connection inside one, a type that wraps a connection, or another `Executor`, runs directly with no
+bound and commits nothing. On an executor of one connection, the
+handler runs one procedure at a time. The handler also drops each input key that the `dashboard/v1`
+contract does not declare, as the TypeScript host does (SM-1966, SM-2000).
+
 ## 0.12.0 — 2026-11-07
 
 The npm packages, Python distribution, Go module, Rust crate, Ruby gem, JVM artifacts, and .NET

@@ -211,10 +211,13 @@ caller-owned Psycopg connection plus these arguments:
 
 - `authorize`, `path`, `environment`, `audit_actor`, `read_only`;
 - `browser_modules`, `configured_workers`, `maintenance_loops`, `allowed_hosts`;
+- `statement_timeout_ms`, the read bound (see [Read timeouts](#read-timeouts));
 - the optional `enqueue_test` extension.
 
 The connection must have `autocommit=True`. The host rejects transactional connections. Thus a WSGI
-request cannot leave locks or an idle transaction open.
+request cannot leave locks or an idle transaction open. The host runs one procedure at a time on
+the connection, because one read uses several statements in one transaction. No other code may use
+the connection while a request runs.
 
 `DashboardPrincipal.actor` is the authenticated identity. `DashboardResponse` lets the authorization
 hook return a complete denial or redirect response. `audit_actor` names the actor only when
@@ -227,7 +230,8 @@ The host handles a request in this order:
 3. `assert_sync_compatible` runs.
 4. The host refuses a cross-origin read (see [Cross-origin reads](#cross-origin-reads)). It rejects
    a cross-origin mutation, before decoding input.
-5. It validates through `dashboard_v1.validate_input`.
+5. It validates through `dashboard_v1.validate_input`, and it drops each input key that the schema
+   does not declare (see [Undeclared input keys](#undeclared-input-keys)).
 6. It overwrites `audit.actor`.
 7. It calls the private `workhorse.dashboard._backend.DashboardBackend`.
 
@@ -237,6 +241,14 @@ dashboard views and lifecycle functions. `previewRetentionPolicy` calls
 `setSchedulePaused`. The behavior of these two procedures belongs to the embedding runtime.
 `python/tests/test_dashboard_conformance.py` executes every scenario and every exchange against
 both writable and read-only hosts.
+
+The `dashboard/v1` input schemas use ECMA-262 `pattern`. `dashboard_v1.py` compiles each pattern
+through `_ecma_pattern` before `re` reads it:
+
+- Outside a bracket expression, `$` becomes `\Z`. Thus a final line feed does not match.
+- It compiles the result with `re.ASCII`. Thus `\d` matches only the ten ASCII digits.
+
+`typescript/dashboard-server/spec/generate-bindings.ts` writes this function with the validator.
 
 ### Procedure document functions
 
@@ -263,7 +275,16 @@ Two functions return one document or SQL `NULL`:
   It returns SQL `NULL` when the stable event identity does not exist.
 
 TypeScript, Python, Go, Rust, Ruby, JVM, and .NET hosts validate the wire input. They call the matching
-function and decode its single `jsonb` result. The TypeScript host can add its application-owned
+function and decode its single `jsonb` result.
+
+#### Undeclared input keys
+
+Each host drops each input key that the request schema of the procedure does not declare, before
+the procedure runs. The TypeScript host does it with its schema parse. The other hosts walk the
+generated schema: the first `anyOf` branch that accepts a value owns it, and an object schema with
+`additionalProperties`, such as `signalTask.payload`, keeps every key. Each SQL function reads its
+input document by key, so an undeclared key, such as `health` in a `system` read, does not reach
+SQL. The `reads/system-drops-undeclared-input-key` conformance exchange fixes this behavior. The TypeScript host can add its application-owned
 durability summary after `dashboard_tasks_v1` or `dashboard_task_detail_v1` returns.
 `DashboardDurabilityProjector` is an in-process callback, not database state.
 
@@ -274,6 +295,7 @@ durability summary after `dashboard_tasks_v1` or `dashboard_task_detail_v1` retu
 
 - `Authorize`, `Path`, `Environment`, `ReadOnly`;
 - `BrowserModules`, `ConfiguredWorkers`, `MaintenanceLoops`, `AllowedHosts`;
+- `StatementTimeout`, the read bound (see [Read timeouts](#read-timeouts));
 - optional `Procedures` extensions.
 
 A non-empty `AllowedHosts` refuses any other `Request.Host` with 421 before `Authorize` runs.
@@ -307,6 +329,7 @@ authorize)` returns a `Dashboard.Builder` with these options and defaults:
 | `enqueueTest`       | unset, so the procedure 403 |
 | `setSchedulePaused` | unset, so the procedure 403 |
 | `codec`             | `JsonCodec.standard()`      |
+| `statementTimeout`  | `Duration.ofSeconds(15)`    |
 
 The Kotlin module adds no dashboard API. A Kotlin application uses the Java API.
 
@@ -350,7 +373,8 @@ hosts in lowercase, without the default port of the request scheme. The same-ori
 the `Origin` scheme and host with `getScheme()` and the `Host` header as exact strings.
 
 Reads and controls go through `Admin`, `Queue`, and the generated `SqlCatalogue` statements. Each
-call uses its own connection, and the filter opens no transaction. The jar carries the browser
+call uses its own connection. A control runs in autocommit, and a read runs in its own read-only
+transaction (see [Read timeouts](#read-timeouts)). The jar carries the browser
 bundle as resources, and the filter unpacks it once. It serves each asset with `Cache-Control:
 public, max-age=31536000, immutable`.
 
@@ -397,6 +421,7 @@ backend reads `HttpRequest.PathBase`, so an application under a path base still 
 | `EnqueueTest`       | unset, so the procedure 403                        |
 | `SetSchedulePaused` | unset, so the procedure 403                        |
 | `Json`              | `null`, which selects `JsonSerializerDefaults.Web` |
+| `StatementTimeout`  | `TimeSpan.FromSeconds(15)`                         |
 
 `Authorize` is a `Func<HttpContext, ValueTask<DashboardAuthorization>>`. `DashboardAuthorization` is
 a closed result family with four factory methods: `Principal(actor, claims)`, `Allow()`, `Deny()`,
@@ -431,8 +456,8 @@ behind a proxy that ends TLS must apply the forwarded headers middleware first.
 
 Reads and controls go through `Admin`, `Queue`, and the generated `DashboardSqlCatalogue`
 statements. `typescript/dashboard-server/spec/generate-bindings.ts` writes the procedure bindings
-into `V1.g.cs`. Each call uses its own connection in autocommit, and the backend opens no
-transaction. The assembly embeds the browser bundle as resources, and the backend unpacks it once.
+into `V1.g.cs`. Each call uses its own connection. A control runs in autocommit, and a read runs in
+its own read-only transaction (see [Read timeouts](#read-timeouts)). The assembly embeds the browser bundle as resources, and the backend unpacks it once.
 It serves each asset with `Cache-Control: public, max-age=31536000, immutable`. The backend is
 asynchronous throughout, so it needs no synchronous I/O from Kestrel.
 
@@ -592,7 +617,23 @@ dashboard read surface returns these other handler-written values as the handler
 
 No dashboard function applies `redact_top_level_keys_v1` to these values. If a handler copies a secret into
 one of them, every dashboard operator can read that secret. The handler must remove each secret
-before it saves a checkpoint, sets a progress value, or starts a human wait.
+before it saves a checkpoint, sets a progress value, or starts a human wait. The
+`redaction-scope/checkpoint-keeps-payload-redaction-key` conformance exchange fixes this behavior: a
+checkpoint key that the payload redacts stays in `checkpointValue`.
+
+Two mutations also return a stored value without redaction:
+
+| Value                 | Stored in                  | Dashboard responses                                                                              |
+| --------------------- | -------------------------- | ------------------------------------------------------------------------------------------------ |
+| Signal payload        | `task_signal_wait.payload` | `signalTask` (`payload`) for `delivered`, `duplicate`, `already_delivered`, and `conflict`       |
+| Human decision result | `task_human_wait.result`   | `completeHumanWait` (`result`) for `completed`, `duplicate`, `already_completed`, and `conflict` |
+
+For `already_delivered`, `already_completed`, and `conflict`, the value is the one of the first
+delivery, which another operator or a worker can have sent. Thus an operator with write access can
+read that value with a new idempotency key. These responses are part of the released `dashboard/v1`
+contract. Each refused try writes a `signal_rejected` or `human_wait_rejected` event with the name of
+the operator, so the read is recorded. No dashboard read returns either value: the events record
+only `payload_bytes` and `result_bytes`.
 
 The task listing reads human-wait context only through `dashboard_human_wait_quick_action_v1`. That
 function returns the `dashboard.quickAction.label` string, trimmed and cut to 200 characters. It
@@ -1787,32 +1828,82 @@ stacks.
 
 ### Read timeouts
 
-Workhorse bounds every dashboard read. `dashboardDatabase(database, timeoutMs)` handles each read in
-these steps:
+A dashboard read can be expensive, for example an `events` read with a wide range, a `search`
+string, and `count: "exact"`. Each host bounds each read in time, so that a slow read cannot hold a
+connection without limit. The host runs the read in its own read-only transaction after
+`set_config('statement_timeout', timeoutMs, true)`. PostgreSQL arms the statement timer when a
+statement starts, so the bound is set before the read and not inside it. The setting ends with the
+transaction, so the connection keeps no session state.
+
+If PostgreSQL cancels a read with SQLSTATE `57014`, the procedure answers the `TIMEOUT` RPC error
+with status 408 and the text `This read exceeded its time bound`. The
+`read-timeout/events-slow-read` conformance exchange fixes this answer for each backend. Its
+scenario installs a slow `dashboard_events_v1` under a 5,000 ms `statementTimeoutMs` that the
+harness sets, and the `read-timeout-cleanup` scenario restores the function.
+
+The bound defaults to 15,000 ms in each host. A mutation runs with no read bound. A client limit
+of the driver still applies to each statement. For example, the `CommandTimeout` of an Npgsql data
+source stops a .NET read before PostgreSQL does when it is shorter, and the procedure answers 500,
+not `TIMEOUT`. Keep such a client limit above the read bound.
+
+| Host       | Option                                | The host owns the transaction of a read on                                                                                            |
+| ---------- | ------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
+| TypeScript | `statementTimeoutMs`                  | a connection that it borrows from a queryable with `connect()` or from an attached pool                                               |
+| Python     | `statement_timeout_ms`                | the caller's connection, when psycopg reports it idle                                                                                 |
+| Go         | `HandlerOptions.StatementTimeout`     | a `pgxpool.Pool` or an `sql.DB`; a `pgx.Conn` or `pgxpool.Conn` that pgx reports idle; an `sql.Conn` that the pgx driver reports idle |
+| Rust       | `DashboardOptions::statement_timeout` | a connection that it takes from a `deadpool_postgres::Pool`                                                                           |
+| Ruby       | `statement_timeout_ms:`               | a connection that libpq reports idle when the read starts                                                                             |
+| JVM        | `Dashboard.Builder.statementTimeout`  | a pgjdbc connection in autocommit that pgjdbc reports idle                                                                            |
+| .NET       | `DashboardOptions.StatementTimeout`   | a connection that it opens from `DataSource`                                                                                          |
+
+A read has the bound only when the host owns its transaction. A read through each other source runs
+directly with no bound, and the host sends no `BEGIN` and no `COMMIT` there. Examples are a caller
+transaction, a connection inside one, a TypeScript queryable with no pool, a Rust client, a Go
+`sql.Conn` of a driver other than pgx, a caller type that wraps or embeds a connection, a JVM
+connection that pgjdbc does not wrap, and a connection whose state the driver does not report.
+
+The bound applies only when the host owns the transaction. A host reads with no bound where it
+cannot open a transaction of its own. A raw `BEGIN` inside a caller transaction starts no new
+transaction: PostgreSQL only warns. A `COMMIT` would then commit the caller's work, and a local
+setting would stay in the caller's transaction. So a read
+through a caller transaction runs inside it with no bound, and the host commits nothing and rolls
+nothing back. A read that fails there leaves the caller's transaction in the state that PostgreSQL
+gives it. If the caller's own `statement_timeout` cancels the read, the procedure answers `TIMEOUT`.
+
+The Python host reads on one connection that the caller owns. It reads
+`connection.info.transaction_status` when a read starts. If the connection is idle, the host opens
+its own read-only transaction with the bound and ends it. Otherwise the transaction is the
+caller's, because the host ends each transaction of its own before the read returns. The Python
+host also runs one procedure at a time on the connection, so a statement of another request cannot
+run inside the read transaction. The Go host does the same when its executor wraps one connection:
+a `pgx.Conn`, a `pgxpool.Conn`, or an `sql.Conn`. The Ruby host does the same when its executor is
+one `PG::Connection`, and each Ruby statement and read takes a lock of its connection, so a `with`
+source that yields one shared connection is safe too.
+If a Ruby read leaves a pooled connection broken, the pool discards that connection. The JVM host answers
+`TIMEOUT` also when a caller transaction cancels a read with its own `statement_timeout`.
+
+The TypeScript host handles each read in these steps in `dashboardDatabase(database, timeoutMs)`:
 
 1. It resolves the pool with `connectionPoolOf`.
 2. It borrows one connection.
-3. It runs the read inside `BEGIN READ
-   ONLY` after `set_config('statement_timeout', timeoutMs, true)`, so the bound ends with the
-   transaction.
+3. It runs the read inside `BEGIN READ ONLY` after `set_config`.
 
-If PostgreSQL cancels a read with SQLSTATE `57014`, the read throws `DashboardReadTimeoutError`.
-That error carries `timeoutMs`. The connection is already released.
-
-The bound defaults to `DASHBOARD_STATEMENT_TIMEOUT_MS`, 15,000 ms. `createDashboardHost` takes the
-first value set from this order:
+On a cancel, the read throws `DashboardReadTimeoutError`, which carries `timeoutMs`, and the
+router answers `TIMEOUT`. The connection is already released. `createDashboardHost` takes the first
+value set from this order:
 
 1. `DashboardWorkspaceOptions.statementTimeoutMs`;
 2. `DashboardHostOptions.statementTimeoutMs`;
-3. that default.
+3. `DASHBOARD_STATEMENT_TIMEOUT_MS`, 15,000 ms.
 
 Each workspace's `Admin` reads through `boundedQueryable` over the same `DashboardDatabase`, so the
 retention preview runs under the bound too.
 
-A `Queryable` with no pool has neither `connect()` nor an attached pool. The dashboard reads it
-directly and with no bound. Sending `BEGIN` and the read separately through a shared entry point could leave another
-caller's connection inside a transaction. Drizzle over a node-postgres pool and TypeORM attach a
-pool. The Prisma and Kysely adapters attach one only through their `pool` option.
+A TypeScript `Queryable` with no pool has neither `connect()` nor an attached pool. The dashboard
+reads it directly and with no bound. Sending `BEGIN` and the read separately through a shared entry
+point could leave another caller's connection inside a transaction. Drizzle over a node-postgres
+pool and TypeORM attach a pool. The Prisma and Kysely adapters attach one only through their `pool`
+option.
 
 ### Wire name prefix
 

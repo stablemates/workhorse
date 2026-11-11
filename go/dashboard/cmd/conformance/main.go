@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -67,7 +68,9 @@ func main() {
 			Authorize: func(*http.Request) dashboard.Authorization {
 				return dashboard.Authorization{Principal: &dashboard.Principal{Actor: "conformance"}}
 			},
-			Path: "/workhorse", Environment: "conformance", ConfiguredWorkers: []string{"conformance-worker"}, MaintenanceLoops: map[string]int{"tickIntervalMs": 1000}, ReadOnly: readOnly, Procedures: procedures, AllowedHosts: []string{"dashboard.conformance.test"}})
+			Path: "/workhorse", Environment: "conformance", ConfiguredWorkers: []string{"conformance-worker"}, MaintenanceLoops: map[string]int{"tickIntervalMs": 1000}, ReadOnly: readOnly, Procedures: procedures, AllowedHosts: []string{"dashboard.conformance.test"},
+			// The statementTimeoutMs of the conformance harness.
+			StatementTimeout: 5 * time.Second})
 		if err != nil {
 			panic(err)
 		}
