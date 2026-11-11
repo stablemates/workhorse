@@ -322,7 +322,10 @@ type WorkerOptions struct {
 	// through Concurrency. Zero selects the default: one cohort below concurrency 8, otherwise one
 	// per 8 slots between 2 and 8, and never more than the pool connections the worker leaves spare.
 	Cohorts int
-	Logger  *slog.Logger
+	// Logger receives the log records of the worker. Nil selects slog.Default(). If its handler
+	// panics, the worker drops that record and continues. A logger panic never changes the
+	// settlement of an attempt.
+	Logger *slog.Logger
 	// OnRegistrationError receives a failed registry write. The worker keeps running. If the
 	// callback panics, the worker recovers, logs the failure through Logger, and continues. It logs
 	// at most one such failure in each minute.
@@ -331,7 +334,9 @@ type WorkerOptions struct {
 	// attempt. It returns nil to leave the choice to the policy, which is what a worker without
 	// this option always does. Otherwise it returns a duration from 0 through 2147483647 ms. The
 	// worker rounds the duration to the nearest millisecond, half up. A negative duration, or one
-	// that rounds above the limit, makes the failure settlement return an error before fail_v1.
+	// that rounds above the limit, makes the failure settlement return an error before fail_v1. If
+	// the callback panics, the attempt fails with a HandlerPanicError, and the persisted retry policy
+	// chooses the delay.
 	RetryDelay func(attempt int, task ClaimedTask) *time.Duration
 }
 
@@ -383,6 +388,8 @@ type Worker struct {
 	logger               *slog.Logger
 	metrics              *workerMetrics
 	runPermit            chan struct{}
+	// handlersMu guards handlers. Handle and HandleBatch can run while Run or RunOnce reads the map.
+	handlersMu           sync.RWMutex
 	handlers             map[string]Handler
 	compatibility        *CachedCompatibilityCheck
 	onRegistrationError  func(error)
@@ -611,6 +618,7 @@ func NewWorker(pool *pgxpool.Pool, options WorkerOptions) (*Worker, error) {
 	if logger == nil {
 		logger = slog.Default()
 	}
+	logger = newRecoveringLogger(logger)
 	runPermit := make(chan struct{}, 1)
 	runPermit <- struct{}{}
 	metrics, err := newWorkerMetrics()
@@ -657,7 +665,13 @@ func NewWorker(pool *pgxpool.Pool, options WorkerOptions) (*Worker, error) {
 	return worker, nil
 }
 
-// Handle registers the handler for a task type and returns the worker for chaining.
+// Handle registers the handler for a task type and returns the worker for chaining. A later
+// registration for the same task type replaces the earlier one.
+//
+// Handle is safe to call from any goroutine, also while Run or RunOnce runs. A registration
+// applies to each task that the worker claims after Handle returns. If the worker claims a task
+// before its task type has a handler, it releases the task to its queue and charges no attempt.
+// HandleBatch follows the same rule.
 func (worker *Worker) Handle(taskType string, handler Handler) *Worker {
 	if taskType == emptyString {
 		panic(emptyWorkerTaskTypeMessage)
@@ -665,8 +679,21 @@ func (worker *Worker) Handle(taskType string, handler Handler) *Worker {
 	if handler == nil {
 		panic(nilWorkerHandlerMessage)
 	}
-	worker.handlers[taskType] = handler
+	worker.registerHandler(taskType, handler)
 	return worker
+}
+
+func (worker *Worker) registerHandler(taskType string, handler Handler) {
+	worker.handlersMu.Lock()
+	defer worker.handlersMu.Unlock()
+	worker.handlers[taskType] = handler
+}
+
+// handlerFor returns the handler registered for taskType, or nil.
+func (worker *Worker) handlerFor(taskType string) Handler {
+	worker.handlersMu.RLock()
+	defer worker.handlersMu.RUnlock()
+	return worker.handlers[taskType]
 }
 
 // Run listens and polls until the context is cancelled or an operational lifecycle error occurs, then drains.
@@ -787,7 +814,7 @@ func (worker *Worker) Run(ctx context.Context) error {
 			return worker.claimNextMany(drainContext, executor, limit, fastLimit)
 		},
 		execute: func(claimed ClaimedTask) error {
-			handler := worker.handlers[claimed.Type]
+			handler := worker.handlerFor(claimed.Type)
 			if handler == nil {
 				return worker.release(executionContext, executor, claimed)
 			}
@@ -1185,7 +1212,7 @@ func (worker *Worker) dispatch(ctx context.Context, environment dispatchEnvironm
 	}
 	runnable := func(tasks []ClaimedTask) bool {
 		for _, task := range tasks {
-			if worker.handlers[task.Type] != nil {
+			if worker.handlerFor(task.Type) != nil {
 				return true
 			}
 		}
@@ -1204,9 +1231,18 @@ func (worker *Worker) dispatch(ctx context.Context, environment dispatchEnvironm
 		active++
 		cohortActive[cohort]++
 		go func() {
-			err := environment.execute(task)
-			slot.release(worker)
-			environment.executionResults <- executionResult{slot: slot, err: err}
+			// The slot returns and the result reaches the loop on each path. A panic that execute
+			// does not settle becomes the error of this execution, so Run stops and the process
+			// continues.
+			var err error
+			defer func() {
+				if recovered := recover(); recovered != nil {
+					err = newHandlerPanicError(executionPanicFormat, task.Type, recovered)
+				}
+				slot.release(worker)
+				environment.executionResults <- executionResult{slot: slot, err: err}
+			}()
+			err = environment.execute(task)
 		}()
 	}
 	observe := func(result executionResult) {
@@ -1838,7 +1874,7 @@ func (worker *Worker) runOnce(ctx context.Context, executor Executor) (bool, err
 	if task == nil {
 		return false, claimErr
 	}
-	handler := worker.handlers[task.Type]
+	handler := worker.handlerFor(task.Type)
 	var err error
 	if handler == nil {
 		err = worker.release(ctx, executor, *task)
@@ -1927,6 +1963,22 @@ func (worker *Worker) claimNextMany(
 }
 
 // appendClaimedTasks decodes claimed rows into tasks that carry when their claim was sent.
+// decodeClaimedRows decodes claimed rows as appendClaimedTasks does, without telemetry. It stops at
+// the first row that does not decode.
+func decodeClaimedRows(rows []Row, queue string, sentAt time.Time, fast bool) []ClaimedTask {
+	tasks := make([]ClaimedTask, 0, len(rows))
+	for _, row := range rows {
+		task, err := claimedTask(row, queue)
+		if err != nil {
+			break
+		}
+		task.claimSentAt = sentAt
+		task.fastTier = fast
+		tasks = append(tasks, task)
+	}
+	return tasks
+}
+
 func (worker *Worker) appendClaimedTasks(
 	ctx context.Context,
 	tasks []ClaimedTask,
@@ -2021,9 +2073,24 @@ func (worker *Worker) writeFastCompletion(
 		reservation.settle(nil, false)
 		return false, answer.err
 	}
+	// The completion and its claim committed. If code after this point panics, the loop still
+	// gets each claimed task that decodes, so the tasks run and Run can return at a stop. The
+	// panic then continues to the recover of execute.
+	settled := false
+	defer func() {
+		if settled {
+			return
+		}
+		if recovered := recover(); recovered != nil {
+			claimed := decodeClaimedRows(answer.rows, task.Queue, answer.sentAt, true)
+			reservation.settle(claimed, entry.limit > 0)
+			panic(recovered)
+		}
+	}()
 	tasks, err := worker.appendClaimedTasks(ctx, nil, answer.rows, task.Queue, answer.sentAt, true)
 	// Every decoded task holds a lease, so it runs even when a later row failed to decode. A
 	// statement that the closed gate held to a claim limit of 0 says nothing about the backlog.
+	settled = true
 	reservation.settle(tasks, entry.limit > 0)
 	if err != nil {
 		return false, err
@@ -2389,6 +2456,15 @@ func (worker *Worker) execute(
 	task ClaimedTask,
 	handler Handler,
 ) (resultError error) {
+	// The handler, its result encoding, RetryDelay, and the logger each recover their own panic.
+	// This defer runs last. It recovers a panic of other code on the execution goroutine that comes
+	// before the ownership supervision starts or in a later defer, such as a telemetry provider, so
+	// that panic fails the attempt.
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			resultError = worker.failPanickedExecution(ctx, executor, task, recovered)
+		}
+	}()
 	handlerParent, span := startHandlerSpan(ctx, task)
 	// Every settlement of this attempt runs under the handler span, so its workhorse.retry span is
 	// a child of it. handlerParent keeps the cancellation and the values of ctx.
@@ -2457,6 +2533,13 @@ func (worker *Worker) execute(
 	// Renewal outlives the handler: result validation and the fenced final write can wait on the
 	// pool past a whole lease, and a lapsed lease would hand the finished task to recovery.
 	defer releaseOwnership()
+	// This defer runs before releaseOwnership. A panic in the body, such as in the Error method of
+	// a handler error, fails the attempt while the lease still renews, as a usual settlement does.
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			resultError = worker.failPanickedExecution(ctx, executor, task, recovered)
+		}
+	}()
 	durability := &HandlerContext{
 		Task: task, context: handlerContext, cancel: cancelHandler, executor: executor,
 		contracts: &worker.contracts, compatibility: worker.compatibility, workerID: worker.workerID,
@@ -2598,6 +2681,34 @@ func (worker *Worker) execute(
 	} else {
 		return err
 	}
+}
+
+// failPanickedExecution settles an attempt whose execution panicked outside the handler. The
+// panic fails the attempt as a handler panic does, with a HandlerPanicError. Each settlement write
+// is fenced, so if the attempt settled before the panic, PostgreSQL refuses this write and the
+// attempt keeps its settlement. After the stop, the write uses the unwind window of
+// failAfterShutdown. If the settlement panics again, the error ends Run.
+func (worker *Worker) failPanickedExecution(
+	ctx context.Context,
+	executor Executor,
+	task ClaimedTask,
+	recovered any,
+) (resultError error) {
+	defer func() {
+		if again := recover(); again != nil {
+			resultError = newHandlerPanicError(executionPanicFormat, task.Type, again)
+		}
+	}()
+	panicked := newHandlerPanicError(executionPanicFormat, task.Type, recovered)
+	if ctx.Err() != nil {
+		worker.failAfterShutdown(ctx, executor, task, panicked)
+		return ctx.Err()
+	}
+	_, err := worker.failAttempt(ctx, executor, task, panicked)
+	if errors.Is(err, ErrStaleLease) || errors.Is(err, errExpirationNotDue) {
+		return nil
+	}
+	return err
 }
 
 func callHandler(
@@ -3446,7 +3557,7 @@ func (worker *Worker) cancellationAccepted(
 // jsonb can store, the result schema of its contract version, and its result_max_bytes. An error
 // here is a failure of the attempt, never of the worker.
 func (worker *Worker) encodeResult(ctx context.Context, executor Executor, task ClaimedTask, result any) ([]byte, error) {
-	encoded, err := json.Marshal(result)
+	encoded, err := marshalResult(task.Type, result)
 	if err != nil {
 		return nil, err
 	}
@@ -3464,6 +3575,18 @@ func (worker *Worker) encodeResult(ctx context.Context, executor Executor, task 
 		return nil, err
 	}
 	return encoded, nil
+}
+
+// marshalResult runs json.Marshal on a handler result. A MarshalJSON or MarshalText method of the
+// result is code of the caller. If it panics, the panic becomes a HandlerPanicError, so the result
+// is one that the task cannot store and the usual result rules settle the attempt.
+func marshalResult(taskType string, result any) (encoded []byte, err error) {
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			encoded, err = nil, newHandlerPanicError(resultEncodingPanicFormat, taskType, recovered)
+		}
+	}()
+	return json.Marshal(result)
 }
 
 func (worker *Worker) complete(ctx context.Context, executor Executor, task ClaimedTask, encoded []byte) error {
@@ -3728,12 +3851,16 @@ const maxRetryDelay = 2147483647 * time.Millisecond
 // retryDelayOverride reports the delay this attempt sends to fail_v1, in milliseconds. A worker
 // without the option, or a callback that declines, sends nil and PostgreSQL applies the persisted
 // retry policy. The delay rounds to the nearest millisecond, half up. A negative delay, or one that
-// rounds above maxRetryDelay, is an error before fail_v1 (ADR 0111).
+// rounds above maxRetryDelay, is an error before fail_v1 (ADR 0111). If the callback panics, the
+// error is a *retryDelayPanic, and writeFailure fails the attempt with that panic.
 func (worker *Worker) retryDelayOverride(task ClaimedTask) (any, error) {
 	if worker.retryDelay == nil {
 		return nil, nil
 	}
-	delay := worker.retryDelay(task.Attempt, task)
+	delay, err := worker.callRetryDelay(task)
+	if err != nil {
+		return nil, err
+	}
 	if delay == nil {
 		return nil, nil
 	}
@@ -3741,6 +3868,34 @@ func (worker *Worker) retryDelayOverride(task ClaimedTask) (any, error) {
 		return nil, fmt.Errorf(retryDelayRangeMessage, *delay, maxRetryDelay)
 	}
 	return int64((*delay + time.Millisecond/2) / time.Millisecond), nil
+}
+
+// retryDelayPanic reports a RetryDelay callback that panicked.
+type retryDelayPanic struct {
+	value any
+	stack string
+}
+
+func (err *retryDelayPanic) Error() string { return fmt.Sprint(err.value) }
+
+// attemptError is the failure that the attempt records in place of handlerError. It has the name
+// of a handler panic and the stack of the callback, and its message also keeps handlerError.
+func (err *retryDelayPanic) attemptError(taskType string, handlerError error) *HandlerPanicError {
+	return &HandlerPanicError{
+		TaskType: taskType,
+		Value:    err.value,
+		Stack:    err.stack,
+		message:  fmt.Sprintf(retryDelayPanicFormat, taskType, err.value, handlerError),
+	}
+}
+
+func (worker *Worker) callRetryDelay(task ClaimedTask) (delay *time.Duration, err error) {
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			delay, err = nil, &retryDelayPanic{value: recovered, stack: string(debug.Stack())}
+		}
+	}()
+	return worker.retryDelay(task.Attempt, task), nil
 }
 
 // durableReplayConflictName recognizes typed conflicts through ordinary Go error wrapping.
@@ -3775,7 +3930,20 @@ func (worker *Worker) failAttempt(
 	task ClaimedTask,
 	handlerError error,
 ) (handlerOutcome, error) {
-	state, err := worker.writeFailure(ctx, executor, task, handlerError)
+	delay, handlerError, err := worker.failureDelay(task, handlerError)
+	if err != nil {
+		return handlerOutcomeUnknown, err
+	}
+	// The stop can cancel ctx after the handler returned, while RetryDelay or the result check ran.
+	// The write and the statements that follow it then use the unwind window, as failAfterShutdown
+	// does (ADR 0117). Thus the attempt record keeps the failure, a cancellation request that won
+	// the fence is acknowledged, and lease recovery does not charge the attempt later.
+	if ctx.Err() != nil {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(context.WithoutCancel(ctx), handlerUnwindPeriod)
+		defer cancel()
+	}
+	state, err := worker.writeFailure(ctx, executor, task, handlerError, delay)
 	if err != nil {
 		return handlerOutcomeUnknown, err
 	}
@@ -3802,23 +3970,36 @@ func (worker *Worker) failAttempt(
 	}
 }
 
-// writeFailure sends one failure to fail_v1 and returns the state that PostgreSQL settled. The
-// workhorse.retry span covers the write, its metrics, and its log record, as in the TypeScript
-// worker. A cancellation acknowledgement or a reconciliation that follows is outside the span.
+// failureDelay returns the delay that fail_v1 receives for handlerError, and the error that the
+// attempt records. A delay out of range is an error before the retry span starts, as in the
+// TypeScript worker. A RetryDelay that panics fails the attempt with that panic, and the persisted
+// retry policy chooses the delay, so the worker continues to claim.
+func (worker *Worker) failureDelay(task ClaimedTask, handlerError error) (any, error, error) {
+	if durableReplayConflictName(handlerError) != emptyString {
+		return int64(-1), handlerError, nil
+	}
+	delay, err := worker.retryDelayOverride(task)
+	var panicked *retryDelayPanic
+	if errors.As(err, &panicked) {
+		return nil, panicked.attemptError(task.Type, handlerError), nil
+	}
+	if err != nil {
+		return nil, handlerError, err
+	}
+	return delay, handlerError, nil
+}
+
+// writeFailure sends one failure to fail_v1 with delay and returns the state that PostgreSQL
+// settled. The workhorse.retry span covers the write, its metrics, and its log record, as in the
+// TypeScript worker. A cancellation acknowledgement or a reconciliation that follows is outside
+// the span.
 func (worker *Worker) writeFailure(
 	ctx context.Context,
 	executor Executor,
 	task ClaimedTask,
 	handlerError error,
+	delay any,
 ) (state string, resultError error) {
-	// A delay out of range fails before the span starts, as in the TypeScript worker.
-	var delay any
-	var err error
-	if durableReplayConflictName(handlerError) != emptyString {
-		delay = int64(-1)
-	} else if delay, err = worker.retryDelayOverride(task); err != nil {
-		return emptyString, err
-	}
 	// The write, its metrics, and its log record run with the retry span active.
 	ctx, span := startRetrySpan(ctx, task)
 	defer func() {
@@ -3974,7 +4155,9 @@ type ErrorStacker interface {
 	ErrorStack() string
 }
 
-// HandlerPanicError reports a handler or batch handler that panicked.
+// HandlerPanicError reports a handler or batch handler that panicked. It also reports a panic in
+// other code of the caller on the execution goroutine: the result encoding, the RetryDelay
+// callback, or, for example, the Error method of a handler error. Its message names the source.
 //
 // It carries the stack captured where the panic was recovered, so the envelope of a Go panic holds
 // the same three fields as the envelope of a TypeScript or Python exception.

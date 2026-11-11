@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"time"
 
@@ -21,6 +22,55 @@ func (discardLogHandler) Enabled(context.Context, slog.Level) bool   { return fa
 func (discardLogHandler) Handle(context.Context, slog.Record) error  { return nil }
 func (handler discardLogHandler) WithAttrs([]slog.Attr) slog.Handler { return handler }
 func (handler discardLogHandler) WithGroup(string) slog.Handler      { return handler }
+
+// recoveringLogHandler runs the slog.Handler of the caller and drops a record if that handler
+// panics. The worker logs on its execution, heartbeat, and maintenance goroutines, so a panic in
+// the logger would otherwise end the process. It also must not change the settlement of an
+// attempt, because the worker logs some records after PostgreSQL settled the attempt.
+type recoveringLogHandler struct{ handler slog.Handler }
+
+func newRecoveringLogger(logger *slog.Logger) *slog.Logger {
+	if _, ok := logger.Handler().(recoveringLogHandler); ok {
+		return logger
+	}
+	return slog.New(recoveringLogHandler{handler: logger.Handler()})
+}
+
+func (handler recoveringLogHandler) Enabled(ctx context.Context, level slog.Level) (enabled bool) {
+	defer func() {
+		if recover() != nil {
+			enabled = false
+		}
+	}()
+	return handler.handler.Enabled(ctx, level)
+}
+
+func (handler recoveringLogHandler) Handle(ctx context.Context, record slog.Record) (err error) {
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			err = fmt.Errorf(logHandlerPanicFormat, recovered)
+		}
+	}()
+	return handler.handler.Handle(ctx, record)
+}
+
+func (handler recoveringLogHandler) WithAttrs(attributes []slog.Attr) (derived slog.Handler) {
+	defer func() {
+		if recover() != nil {
+			derived = handler
+		}
+	}()
+	return recoveringLogHandler{handler: handler.handler.WithAttrs(attributes)}
+}
+
+func (handler recoveringLogHandler) WithGroup(name string) (derived slog.Handler) {
+	defer func() {
+		if recover() != nil {
+			derived = handler
+		}
+	}()
+	return recoveringLogHandler{handler: handler.handler.WithGroup(name)}
+}
 
 type workerMetrics struct {
 	enabled           bool
@@ -170,13 +220,107 @@ func newWorkerMetrics() (*workerMetrics, error) {
 		return nil, err
 	}
 	return &workerMetrics{
-		enabled: true, claimed: claimed, completed: completed, failed: failed, retried: retried,
-		expiredLeases: expiredLeases, claimDuration: claimDuration,
-		handlerDuration: handlerDuration, handlerRuntime: handlerRuntime,
-		handlerExecutions: handlerExecutions, batchSize: batchSize,
-		batchLinger: batchLinger, heartbeatFailures: heartbeatFailures,
-		heartbeatRoundFailures: heartbeatRoundFailures,
+		enabled: true, claimed: recoveringInt64Counter{claimed}, completed: recoveringInt64Counter{completed},
+		failed: recoveringInt64Counter{failed}, retried: recoveringInt64Counter{retried},
+		expiredLeases: recoveringInt64Counter{expiredLeases}, claimDuration: recoveringFloat64Histogram{claimDuration},
+		handlerDuration:   recoveringFloat64Histogram{handlerDuration},
+		handlerRuntime:    recoveringFloat64Counter{handlerRuntime},
+		handlerExecutions: recoveringInt64Counter{handlerExecutions}, batchSize: recoveringInt64Histogram{batchSize},
+		batchLinger: recoveringFloat64Histogram{batchLinger}, heartbeatFailures: recoveringInt64Counter{heartbeatFailures},
+		heartbeatRoundFailures: recoveringInt64Counter{heartbeatRoundFailures},
 	}, nil
+}
+
+// The meter and tracer providers belong to the caller. The worker records metrics and spans on its
+// execution, dispatch, heartbeat, and maintenance goroutines, so a panic in a provider would end the
+// process or leave a resource of the worker held. The recovering types below drop the measurement
+// or the span operation instead, as recoveringLogHandler drops a log record.
+
+// discardTelemetryPanic is deferred directly, so its recover stops a panic of the provider.
+func discardTelemetryPanic() { _ = recover() }
+
+type recoveringInt64Counter struct{ otelmetric.Int64Counter }
+
+func (counter recoveringInt64Counter) Add(ctx context.Context, value int64, options ...otelmetric.AddOption) {
+	defer discardTelemetryPanic()
+	counter.Int64Counter.Add(ctx, value, options...)
+}
+
+type recoveringFloat64Counter struct{ otelmetric.Float64Counter }
+
+func (counter recoveringFloat64Counter) Add(
+	ctx context.Context,
+	value float64,
+	options ...otelmetric.AddOption,
+) {
+	defer discardTelemetryPanic()
+	counter.Float64Counter.Add(ctx, value, options...)
+}
+
+type recoveringInt64Histogram struct{ otelmetric.Int64Histogram }
+
+func (histogram recoveringInt64Histogram) Record(
+	ctx context.Context,
+	value int64,
+	options ...otelmetric.RecordOption,
+) {
+	defer discardTelemetryPanic()
+	histogram.Int64Histogram.Record(ctx, value, options...)
+}
+
+type recoveringFloat64Histogram struct{ otelmetric.Float64Histogram }
+
+func (histogram recoveringFloat64Histogram) Record(
+	ctx context.Context,
+	value float64,
+	options ...otelmetric.RecordOption,
+) {
+	defer discardTelemetryPanic()
+	histogram.Float64Histogram.Record(ctx, value, options...)
+}
+
+// recoveringSpan drops a span operation whose provider panics.
+type recoveringSpan struct{ trace.Span }
+
+func (span recoveringSpan) End(options ...trace.SpanEndOption) {
+	defer discardTelemetryPanic()
+	span.Span.End(options...)
+}
+
+func (span recoveringSpan) AddEvent(name string, options ...trace.EventOption) {
+	defer discardTelemetryPanic()
+	span.Span.AddEvent(name, options...)
+}
+
+func (span recoveringSpan) RecordError(err error, options ...trace.EventOption) {
+	defer discardTelemetryPanic()
+	span.Span.RecordError(err, options...)
+}
+
+func (span recoveringSpan) SetStatus(code codes.Code, description string) {
+	defer discardTelemetryPanic()
+	span.Span.SetStatus(code, description)
+}
+
+func (span recoveringSpan) SetAttributes(attributes ...attribute.KeyValue) {
+	defer discardTelemetryPanic()
+	span.Span.SetAttributes(attributes...)
+}
+
+// startWorkerSpan starts a span of the worker. If the provider panics, it returns ctx and a span
+// that records nothing, so the caller's span is not ended.
+func startWorkerSpan(
+	ctx context.Context,
+	name string,
+	options ...trace.SpanStartOption,
+) (started context.Context, span trace.Span) {
+	defer func() {
+		if recover() != nil {
+			started, span = ctx, trace.SpanFromContext(context.Background())
+		}
+	}()
+	started, span = otel.Tracer(telemetryInstrumentationName).Start(ctx, name, options...)
+	return started, recoveringSpan{span}
 }
 
 func taskMetricOptions(task ClaimedTask) otelmetric.MeasurementOption {
@@ -226,7 +370,7 @@ func startHandlerSpan(ctx context.Context, task ClaimedTask) (context.Context, t
 		return ctx, trace.SpanFromContext(ctx)
 	}
 	parent := extractTraceContext(ctx, task.TraceContext)
-	return otel.Tracer(telemetryInstrumentationName).Start(
+	return startWorkerSpan(
 		parent,
 		handlerSpanName,
 		trace.WithSpanKind(trace.SpanKindConsumer),
@@ -247,7 +391,7 @@ func startRetrySpan(ctx context.Context, task ClaimedTask) (context.Context, tra
 		// A span that records nothing, so End cannot end the caller's span.
 		return ctx, trace.SpanFromContext(context.Background())
 	}
-	return otel.Tracer(telemetryInstrumentationName).Start(
+	return startWorkerSpan(
 		ctx,
 		retrySpanName,
 		trace.WithAttributes(
@@ -286,6 +430,16 @@ func extractTraceContext(ctx context.Context, stored any) context.Context {
 	if carrier[traceParentField] == emptyString {
 		return ctx
 	}
+	return extractWithPropagator(ctx, carrier)
+}
+
+// extractWithPropagator runs the propagator of the caller. If it panics, the task starts a new trace.
+func extractWithPropagator(ctx context.Context, carrier propagation.MapCarrier) (extracted context.Context) {
+	defer func() {
+		if recover() != nil {
+			extracted = ctx
+		}
+	}()
 	return otel.GetTextMapPropagator().Extract(ctx, carrier)
 }
 

@@ -5,6 +5,7 @@ import (
 	"database/sql"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 // Row is one result row keyed by its PostgreSQL column name.
@@ -39,7 +40,19 @@ func (executor *pgxExecutor) Query(
 	statement string,
 	arguments ...any,
 ) ([]Row, error) {
-	rows, err := executor.queryer.Query(ctx, statement, arguments...)
+	queryer := executor.queryer
+	if pool, ok := queryer.(*pgxpool.Pool); ok {
+		// The query takes its pool connection here, so the connection returns on each path. A
+		// tracer of the caller can panic inside the query, before pgx returns rows to close, and
+		// the worker recovers that panic.
+		conn, err := pool.Acquire(ctx)
+		if err != nil {
+			return nil, err
+		}
+		defer conn.Release()
+		queryer = conn
+	}
+	rows, err := queryer.Query(ctx, statement, arguments...)
 	if err != nil {
 		return nil, err
 	}

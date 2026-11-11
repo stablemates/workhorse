@@ -471,8 +471,9 @@ An error that names nothing is the one value that the languages cannot share. Th
 of each language names itself. TypeScript, Go, and Rust record `Error`, and Python records
 `Exception`. `failures.json` pins that value for each language, so that it cannot drift.
 
-`HandlerPanicError` holds the stack that was captured where `callHandler` or `callBatchHandler`
-recovered the panic. Thus a Go panic records the same three fields as a TypeScript or Python
+`HandlerPanicError` holds the stack that was captured where the worker recovered the panic:
+`callHandler`, `callBatchHandler`, `marshalResult`, `callRetryDelay`, or the recover of `execute`.
+Thus a Go panic records the same three fields as a TypeScript or Python
 exception.
 
 #### Text that jsonb cannot store
@@ -1735,6 +1736,12 @@ A type with a current contract serializes its `contractVersion`, `payloadMaxByte
 `go/worker.go` defines `Handler` as `func(context.Context, any, *HandlerContext) (any, error)`.
 `HandlerContext.Task` keeps the `ClaimedTask`.
 
+`Worker.Handle` and `Worker.HandleBatch` take the write lock of `handlersMu`. `Run`, the dispatch
+loop, and `RunOnce` read the handler through `handlerFor`, under the read lock. Thus a registration
+is safe from any goroutine while the worker runs. It applies to each task that the worker claims
+after the call returns. A task that the worker claims before its handler exists goes to
+`release_owned_v1` and keeps its `current_attempt`.
+
 `Typed[P](handler)` adapts a handler that takes its payload as `P` to a `Handler`. Register the
 result with `Worker.Handle`. The adapter encodes the decoded payload as JSON and decodes it into `P`
 with `encoding/json`, which ignores unknown fields. A field that the payload omits keeps its zero
@@ -1801,7 +1808,15 @@ Option behavior:
 - `RetryDelay` reports the delay of one failed attempt. It returns nil to leave the delay to the
   persisted retry policy. The worker rounds a duration to the nearest millisecond, half up. A
   negative duration, or one that rounds above 2,147,483,647 ms, is an error before `fail_v1`,
-  and `Run` returns it (ADR 0111).
+  and `Run` returns it (ADR 0111). If the callback panics, `writeFailure` sends a nil delay, so the
+  persisted retry policy applies. The attempt then fails with a `HandlerPanicError`. Its error
+  message is `RetryDelay for <type> panicked: <value>; the attempt failed with: <error>`.
+- `NewWorker` wraps the handler of `Logger` in `recoveringLogHandler`. If that handler panics, the
+  worker drops the record. A logger panic never changes the settlement of an attempt.
+- `newWorkerMetrics` wraps each metric instrument of the global meter provider, and
+  `startWorkerSpan` wraps each span of the global tracer provider. `extractWithPropagator` recovers
+  a panic of the global propagator. If the provider panics, the worker drops that measurement or
+  span operation, and a task whose trace context does not extract starts a new trace.
 - `WorkerOptions.DisableRegistry` prevents registration and remote pause delivery.
 - `WorkerOptions.OnRegistrationError` observes a failed refresh. It does not stop dispatch.
 - An empty `ScheduleNamespaces` list disables schedule evaluation.
@@ -2013,6 +2028,41 @@ These end that attempt with the `lease_lost` handler outcome:
 `handler for <type> panicked: <value>`. Its `ErrorStack()` returns the stack captured at recovery.
 The worker passes that error through the same `fail_v1` path and waits for the ownership supervisor.
 The dispatch loop continues to run.
+
+Other code of the caller runs on the execution goroutine, outside `callHandler`. A panic there also
+becomes a `HandlerPanicError`, and the slot of the attempt returns on each path:
+
+| Source of the panic                                  | Error text                                                          | Settlement                                                                      |
+| ---------------------------------------------------- | ------------------------------------------------------------------- | ------------------------------------------------------------------------------- |
+| `MarshalJSON` or `MarshalText` of the handler result | `result encoding for <type> panicked: <value>`                      | A result that the task cannot store: `fail_v1`, or the unwind rules of ADR 0117 |
+| `WorkerOptions.RetryDelay`                           | `RetryDelay for <type> panicked: <value>; ...`                      | `fail_v1` with a nil delay                                                      |
+| Other code, such as the `Error` method of an error   | `worker execution for <type> panicked outside the handler: <value>` | `failPanickedExecution` sends `fail_v1`, on the unwind window after the stop    |
+
+`execute` recovers a panic of its body before `releaseOwnership`, so the lease still renews while
+`failPanickedExecution` writes the failure. Each settlement write is fenced. If the attempt was
+settled before the panic, PostgreSQL refuses the write of `failPanickedExecution`, and the attempt
+keeps its settlement. If that write panics
+again, the execution goroutine recovers the panic, and `Run` returns it as an execution error.
+
+The stop can cancel the execution context after the handler returns, while `RetryDelay` or the
+result check runs. `failAttempt` then sends `fail_v1` on the unwind window of `failAfterShutdown`,
+so the attempt record keeps the failure. The acknowledgement of a cancellation request that won
+the fence, and the reconciliation of a `stale` answer, use the same window.
+
+A panic can come while the execution holds a resource of the dispatch loop. Each recovery path
+returns it:
+
+- `writeFastCompletion` reserved slots, and its statement committed the completion and claimed the
+  next tasks. If code after the statement panics, a defer settles the reservation with each claimed
+  row that `decodeClaimedRows` decodes, so the loop runs those tasks and `Run` returns at a stop.
+  The panic then reaches the recover of `execute`.
+- The batch `dispatch` took the members out of the pending list. If code outside the batch handler
+  panics before each member has its result, a defer gives each other member the result that the
+  batch handler returned for it, or the panic as a `HandlerPanicError` with the error message
+  `batch dispatch for <type> panicked outside the batch handler: <value>`.
+- A query through a pool held a pooled connection. `pgxExecutor.Query` takes the connection from a
+  `*pgxpool.Pool` itself and releases it in a defer. Thus a panic in the pgx tracer of the caller,
+  which runs inside the query, does not keep the connection out of the pool.
 
 ### Go handler context
 
