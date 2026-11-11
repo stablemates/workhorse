@@ -163,6 +163,24 @@ tag do not start the `maven-central` and `nuget` jobs. `pnpm release:check
 The Python files and `python/CHANGELOG.md` use the PEP 440 spelling of a prerelease, and the other
 files use the SemVer spelling. The check changes no publication step of a workflow.
 
+A released migration or release artifact must not change. `sql/released-digests.json` records the
+SHA-256 digest of each released file in `sql/migrations/` and `sql/releases/`. A migration is
+released when the schema version that it produces is not above the newest file in `sql/releases/`.
+`scripts/sql-released-digests.test.ts` runs in `pnpm test` and in the `npm-release-scope` CI lane,
+which runs on each pull request and each push. It fails if a
+recorded file changes, is deleted, or gets a new name. It also fails if a released file has no
+digest.
+
+Record the digests in the release candidate commit, in the same commit that adds
+`sql/releases/<NNNN>.sql`:
+
+1. Add the frozen artifact of the release to `sql/releases/`.
+2. Run `pnpm --silent exec tsx scripts/sql-released-digests.ts --record`.
+3. Commit `sql/released-digests.json` with the artifact.
+
+The command adds a digest for each new released file. It refuses to change a digest that is
+already recorded. A release that adds no artifact adds no digest.
+
 `pnpm release:verify <python|npm|crate|go|maven|nuget> X.Y.Z` holds the version checks as exact commands and
 the output each must print. After each stage publishes, the handoff runs that stage's target
 instead of restating commands. Each target installs the public version into a fresh scratch

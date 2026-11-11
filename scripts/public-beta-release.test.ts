@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -5,6 +6,8 @@ import { publishedPackages, repositoryRoot } from "./packages.js";
 import {
   compatibilityNotice,
   hasCutoverException,
+  hasReadmeCutoverNotice,
+  offlineUpgradeSteps,
   prose,
   publicBetaLabel,
 } from "./public-beta-notice.js";
@@ -172,6 +175,8 @@ describe("the public beta line", () => {
       "go/README.md",
       "rust/README.md",
       "ruby/README.md",
+      "jvm/README.md",
+      "dotnet/README.md",
     ];
 
     for (const relativePath of readmes) {
@@ -179,6 +184,46 @@ describe("the public beta line", () => {
       expect(contents.toLowerCase()).toContain(publicBetaLabel);
       expect(prose(contents)).toContain(compatibilityNotice);
     }
+  });
+
+  /**
+   * Migration 0025 is a contract step that 0.5.0 ships, so a database from before 0.5.0 upgrades
+   * offline. A README that states the additive promise without that exception lets a team plan a
+   * rolling deployment that each old worker fails after. SM-1012 added the exception, and later
+   * rewrites of the notice lost it from 16 READMEs (SM-1975), so every tracked README is read.
+   */
+  it("names the migration 0025 exception in every README that states the promise", async () => {
+    const readmes = execFileSync("git", ["ls-files", "-z", "README.md", "**/README.md"], {
+      cwd: repositoryRoot,
+      encoding: "utf8",
+    })
+      .split("\0")
+      .filter((relativePath) => relativePath !== "");
+    const promising: string[] = [];
+    const missing: string[] = [];
+    for (const relativePath of readmes) {
+      const contents = await read(relativePath);
+      if (!prose(contents).includes(compatibilityNotice)) continue;
+      promising.push(relativePath);
+      if (!hasReadmeCutoverNotice(contents)) missing.push(relativePath);
+    }
+
+    expect(promising).toEqual(
+      expect.arrayContaining(["README.md", "jvm/README.md", "dotnet/README.md"]),
+    );
+    expect(missing).toEqual([]);
+  });
+
+  it("refuses a README notice that drops the exception or its offline steps", () => {
+    const promise = `> Migrations are ordered, and ${compatibilityNotice}.`;
+    const exception = `> Migration 0025 is the one exception. Upgrade it offline with [these steps](${offlineUpgradeSteps}).`;
+
+    expect(hasReadmeCutoverNotice(`${promise}\n${exception}\n`)).toBe(true);
+    expect(hasReadmeCutoverNotice(`${promise}\n`)).toBe(false);
+    expect(hasReadmeCutoverNotice(`${promise}\n> Migration 0025 is the one exception.\n`)).toBe(
+      false,
+    );
+    expect(hasReadmeCutoverNotice("A README with no additive promise.\n")).toBe(true);
   });
 
   /**

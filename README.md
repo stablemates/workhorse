@@ -11,6 +11,8 @@ PostgreSQL.
 > release can change behavior, so read the changelog before you upgrade. A minor release does not
 > make you create your database again. Migrations are ordered, and inside a major line a migration
 > only adds. Thus, a running deployment upgrades in place.
+> Migration 0025 is the one exception. If your database is from a release before 0.5.0, upgrade it
+> offline with [these steps](https://workhorse.run/docs/installation#upgrade-a-04x-database-offline).
 
 [![Build status](https://github.com/stablemates/workhorse/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/stablemates/workhorse/actions/workflows/ci.yml?query=branch%3Amain)
 

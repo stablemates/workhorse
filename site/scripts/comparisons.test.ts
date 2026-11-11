@@ -67,6 +67,100 @@ type CompetitorCell = ComparisonProduct["cells"][string];
 const duplicates = (values: readonly string[]) =>
   values.filter((value, index) => values.indexOf(value) !== index);
 
+/** The text of `text` as a literal part of a regular expression. */
+const escapeRegExp = (text: string) => text.replace(/[.*+?^${}()|[\]\\#]/g, "\\$&");
+
+/** The number words a page can use to count languages. */
+const countWords = ["zero", "one", "two", "three", "four", "five", "six", "seven", "eight"].concat([
+  "nine",
+  "ten",
+  "eleven",
+  "twelve",
+]);
+
+/** Language names that a comparison page can list, for Workhorse or for another product. */
+const knownLanguages = [
+  "TypeScript",
+  "JavaScript",
+  "Node.js",
+  "Python",
+  "Go",
+  "Rust",
+  "Ruby",
+].concat(["Java", "Kotlin", "C#", ".NET", "PHP", "Elixir", "Erlang", "Swift", "Scala", "Clojure"]);
+
+/**
+ * Each place where `text` states the Workhorse worker languages differently from `languages`.
+ *
+ * A list is three or more language names. It can use any order, but it must name each language of
+ * the row and no other. A count is "eight languages", or "Go and seven other languages". A list or
+ * count belongs to Workhorse unless another product is the nearest name before it in its sentence,
+ * as in "<product> has workers in ...". "Workhorse" after that name makes the list Workhorse's
+ * again. The sentence starts after the last ". ", ": ", or "- " before the list.
+ */
+function languageStatementErrors(
+  text: string,
+  languages: readonly string[],
+  productNames: readonly string[],
+): string[] {
+  const prose = text.replace(/\s+/g, " ");
+  const names = [...new Set([...knownLanguages, ...languages])]
+    .toSorted((left, right) => right.length - left.length)
+    .map(escapeRegExp)
+    .join("|");
+  const language = `(?<![\\w#.])(?:${names})(?![\\w#])`;
+  const separator = "(?:,\\s+(?:and\\s+|or\\s+)?|\\s+(?:and|or)\\s+)";
+  const list = new RegExp(`${language}(?:${separator}${language}){2,}`, "g");
+  const count = new RegExp(`(?:(${language}) and )?\\b(\\w+) (other )?languages\\b`, "gi");
+  const otherProduct = (index: number) => {
+    const before = prose.slice(0, index);
+    const start = Math.max(
+      before.lastIndexOf(". "),
+      before.lastIndexOf(": "),
+      before.lastIndexOf("- "),
+    );
+    // The nearest subject wins: "<product> has ..., and Workhorse has workers in ..." is Workhorse.
+    const sentence = before.slice(start + 1);
+    const nearestProduct = Math.max(
+      ...productNames.map((product) => sentence.lastIndexOf(product)),
+    );
+    return nearestProduct > sentence.lastIndexOf("Workhorse");
+  };
+
+  const errors: string[] = [];
+  for (const match of prose.matchAll(list)) {
+    if (otherProduct(match.index)) continue;
+    const stated = match[0].split(new RegExp(separator)).filter((entry) => entry !== "");
+    // The row states a set of languages. A page can name them in another order.
+    if (!isDeepStrictEqual(stated.toSorted(), languages.toSorted())) {
+      errors.push(`"${match[0]}" is not ${languages.join(", ")}`);
+    }
+  }
+  for (const match of prose.matchAll(count)) {
+    const word = (match[2] ?? "").toLowerCase();
+    const number = /^\d+$/.test(word) ? Number(word) : countWords.indexOf(word);
+    if (number < 0 || otherProduct(match.index)) continue;
+    const total = number + (match[1] !== undefined && match[3] !== undefined ? 1 : 0);
+    if (total !== languages.length) {
+      errors.push(`"${match[0]}" does not count ${languages.length} languages`);
+    }
+  }
+  return errors;
+}
+
+/** The Workhorse worker languages that the languages row of the data file states. */
+function workerLanguages(): string[] {
+  const row = comparisons.rows.find((candidate) => candidate.id === "worker-languages");
+  if (row === undefined) throw new Error("site/comparisons.json has no worker-languages row");
+  return cellText(row.workhorse).split(", ");
+}
+
+/** Every name and alias of a compared product. */
+const productNames = comparisons.products.flatMap((product) => [
+  product.name,
+  ...(product.aliases ?? []),
+]);
+
 /** The own rows that every product of the workflow platform category states. */
 const workflowCategory = "workflow-platform";
 const workflowRows = ["deterministic-replay", "child-workflows", "code-versioning"];
@@ -709,6 +803,67 @@ describe("the comparison data", () => {
       }
     }
     expect(errors).toEqual([]);
+  });
+
+  /**
+   * ADR 0104 rule 4: a page does not state a cell fact in its own text that the data file does not
+   * hold. Most pages repeat the Workhorse worker languages in a sentence, and 16 of them lost C#
+   * when the .NET SDK shipped (SM-1973).
+   */
+  it("lists the Workhorse worker languages in the page text as the languages row states them", async () => {
+    const languages = workerLanguages();
+    const errors: string[] = [];
+    let statements = 0;
+    for (const file of (await readdir(resolve(docsDir, "compare"))).filter((entry) =>
+      entry.endsWith(".mdx"),
+    )) {
+      const text = await readFile(resolve(docsDir, "compare", file), "utf8");
+      statements += [...text.replace(/\s+/g, " ").matchAll(/workers (?:in|run in|are in) /gi)]
+        .length;
+      for (const error of languageStatementErrors(text, languages, productNames)) {
+        errors.push(`${file}: ${error}`);
+      }
+    }
+    expect(statements).toBeGreaterThan(0);
+    expect(errors).toEqual([]);
+  });
+
+  it("refuses a Workhorse language list or count that differs from the languages row", () => {
+    const languages = workerLanguages();
+    const full = "TypeScript, Python, Go, Rust, Ruby, Java, Kotlin, and C#";
+    const check = (text: string) => languageStatementErrors(text, languages, productNames);
+
+    expect(languages.join(", ")).toBe("TypeScript, Python, Go, Rust, Ruby, Java, Kotlin, C#");
+    expect(check(`Workhorse has workers in ${full}.`)).toEqual([]);
+    expect(check("Workhorse has workers in eight languages.")).toEqual([]);
+    expect(check("Workhorse runs workers in Go and seven other languages.")).toEqual([]);
+    const other = productNames[0] ?? "";
+    expect(other).not.toBe("");
+    expect(check(`${other} has workers in TypeScript, Python, Elixir, Rust, and .NET.`)).toEqual(
+      [],
+    );
+    expect(
+      check(
+        `${other} has workers in Go and Ruby, and Workhorse has workers in TypeScript, Python, Go.`,
+      ),
+    ).toHaveLength(1);
+    expect(
+      check(`Workhorse has a Go SDK, and ${other} has workers in Python, Go, and Ruby.`),
+    ).toEqual([]);
+    expect(
+      check("Your workers are in TypeScript, Python, Go, Rust, Ruby, Java, or Kotlin."),
+    ).toHaveLength(1);
+    expect(
+      check("Workhorse has workers in Python, TypeScript, Go, Rust, Ruby, Java, Kotlin, and C#."),
+    ).toEqual([]);
+    expect(
+      check("Workhorse has workers in Python, TypeScript, Go, Rust, Ruby, Java, and Kotlin."),
+    ).toHaveLength(1);
+    expect(
+      check("Its workers run in TypeScript, Python, Go, Rust, Ruby, Java, and Kotlin."),
+    ).toHaveLength(1);
+    expect(check("Workhorse runs workers in Go and six other languages.")).toHaveLength(1);
+    expect(check("Workhorse has workers in seven languages.")).toHaveLength(1);
   });
 
   it("gives each published page the required sections, its table, and the hub link", async () => {

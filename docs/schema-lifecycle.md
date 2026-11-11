@@ -61,7 +61,9 @@ Every schema change ships as an ordered, immutable step:
    catalogue. The package build generates its clean-install artifact from the tracked source.
 4. When a version has shipped in a published release, freeze its clean-install artifact as
    `sql/releases/<NNNN>.sql`. Released artifacts and released migrations are never edited, and a
-   released migration never renames a function or reinterprets its `_vN` suffix.
+   released migration never renames a function or reinterprets its `_vN` suffix. Record the digests
+   of the newly released files in `sql/released-digests.json`, as
+   [the release process](releasing.md#release-train) states.
 
 `typescript/core/test/schema-migrations.test.ts` iterates
 whatever it contains, so the released-artifact check starts running by itself when the first

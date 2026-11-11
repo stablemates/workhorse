@@ -6,7 +6,8 @@ Objection uses the same adapter because its transactions are Knex transactions.
 **Public beta:** Workhorse is usable for evaluation and early production adoption.
 A 0.x minor release may change behaviour. Read the changelog before upgrading.
 For upgrades, inside a major line a migration only adds: a running deployment upgrades in place.
-The exception is migration 0025, crossed offline when upgrading from before 0.5.0.
+Migration 0025 is the one exception. If your database is from a release before 0.5.0, upgrade it
+offline with [these steps](https://workhorse.run/docs/installation#upgrade-a-04x-database-offline).
 
 ## Install
 

@@ -40,6 +40,23 @@ export function hasCutoverException(contents: string): boolean {
   return prose(contents).toLowerCase().includes(cutoverException);
 }
 
+/**
+ * The page section that gives the offline steps across migration 0025. A README is read on a
+ * registry page as well as in the repository, so its notice links the published site.
+ */
+export const offlineUpgradeSteps =
+  "https://workhorse.run/docs/installation#upgrade-a-04x-database-offline";
+
+/**
+ * Whether a README that states {@link compatibilityNotice} also names its exception and links
+ * {@link offlineUpgradeSteps}. A README without the promise needs neither. A team on a release
+ * before 0.5.0 that reads the promise alone can plan a rolling deployment across the contract step.
+ */
+export function hasReadmeCutoverNotice(contents: string): boolean {
+  if (!prose(contents).includes(compatibilityNotice)) return true;
+  return hasCutoverException(contents) && contents.includes(offlineUpgradeSteps);
+}
+
 /** Whether `contents` carries the public-beta notice: the label and the compatibility boundary. */
 export function hasPublicBetaNotice(contents: string): boolean {
   return (

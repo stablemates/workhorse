@@ -6,7 +6,10 @@ import path from "node:path";
 import { promisify } from "node:util";
 import { auditPackedTree } from "../../../scripts/audit-npm-dependencies.js";
 import { publishedPackages, workspacePackages } from "../../../scripts/packages.js";
-import { hasPublicBetaNotice } from "../../../scripts/public-beta-notice.js";
+import {
+  hasPublicBetaNotice,
+  hasReadmeCutoverNotice,
+} from "../../../scripts/public-beta-notice.js";
 import {
   MINIMUM_PROTOCOL_VERSION,
   PROTOCOL_VERSION,
@@ -188,6 +191,11 @@ try {
     const readme = await readFile(path.join(packageRoot, "README.md"), "utf8");
     if (!hasPublicBetaNotice(readme)) {
       throw new Error(`${entry.name} README does not carry the public beta notice`);
+    }
+    if (!hasReadmeCutoverNotice(readme)) {
+      throw new Error(
+        `${entry.name} README states the additive promise without the migration 0025 exception and its offline steps`,
+      );
     }
     const packageLicense = await readFile(path.join(packageRoot, "LICENSE"));
     if (!packageLicense.equals(repositoryLicense)) {
