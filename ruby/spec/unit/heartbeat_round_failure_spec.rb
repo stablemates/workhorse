@@ -141,7 +141,7 @@ RSpec.describe "Failed heartbeat rounds" do
         when W::SqlCatalogue::COMPLETE_V1
           completed << params[0]
           [{"accepted" => "t"}]
-        when W::SqlCatalogue::FAIL_V1 then [{"state" => "failed"}]
+        when W::SqlCatalogue::FAIL_V2 then [{"state" => "failed"}]
         else []
         end
       end
@@ -203,7 +203,7 @@ RSpec.describe "Failed heartbeat rounds" do
       expect(run_until_three_heartbeats).to be(false)
       expect(heartbeats.value).to be >= 3
       expect(completed).to eq([task_id])
-      expect(pool.statements.map(&:first)).not_to include(W::SqlCatalogue::FAIL_V1)
+      expect(pool.statements.map(&:first)).not_to include(W::SqlCatalogue::FAIL_V2)
       expect_one_round_failure("connection")
     end
   end

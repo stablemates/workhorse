@@ -16,8 +16,8 @@ internal static class SqlCatalogue
 
     internal const int MinimumProtocolVersion = 5;
     internal const int MaximumProtocolVersion = 5;
-    internal const int MinimumSchemaVersion = 98;
-    internal const int MaximumSchemaVersion = 98;
+    internal const int MinimumSchemaVersion = 99;
+    internal const int MaximumSchemaVersion = 99;
 
     /// <summary>PostgreSQL's atomic enqueue batch limit.</summary>
     internal const int MaxEnqueueBatchSize = 1000;
@@ -136,6 +136,12 @@ internal static class SqlCatalogue
     internal static readonly Statement FailV1 = new(
         "fail_v1",
         "SELECT workhorse.fail_v1($1::uuid, $2::text, $3::bigint, $4::jsonb, $5::integer) AS state",
+        5);
+
+    /// <summary><c>fail_v2</c> (protocol).</summary>
+    internal static readonly Statement FailV2 = new(
+        "fail_v2",
+        "SELECT workhorse.fail_v2($1::uuid, $2::text, $3::bigint, $4::jsonb, $5::integer) AS state",
         5);
 
     /// <summary><c>release_owned_v1</c> (protocol).</summary>
@@ -358,6 +364,12 @@ internal static class SqlCatalogue
     internal static readonly Statement SaveCheckpointV2 = new(
         "save_checkpoint_v2",
         "SELECT status, checkpoint_value, attempt, fence_token::text, worker_id, created_at, input_fingerprint FROM workhorse.save_checkpoint_v2($1::uuid, $2::text, $3::bigint, $4::text, $5::jsonb, $6::text)",
+        6);
+
+    /// <summary><c>save_checkpoint_v3</c> (protocol).</summary>
+    internal static readonly Statement SaveCheckpointV3 = new(
+        "save_checkpoint_v3",
+        "SELECT status, checkpoint_value, attempt, fence_token::text, worker_id, created_at, input_fingerprint, value_bytes, max_bytes FROM workhorse.save_checkpoint_v3($1::uuid, $2::text, $3::bigint, $4::text, $5::jsonb, $6::text)",
         6);
 
     /// <summary><c>schedule_wait_v1</c> (protocol).</summary>
@@ -1077,6 +1089,7 @@ internal static class SqlCatalogue
         EnqueueManyV1,
         ExpireOwnedTelemetryV1,
         FailV1,
+        FailV2,
         ReleaseOwnedV1,
         FireDueSchedulesV2,
         GetCheckpoint,
@@ -1114,6 +1127,7 @@ internal static class SqlCatalogue
         RunMaintenanceV1,
         SaveCheckpointV1,
         SaveCheckpointV2,
+        SaveCheckpointV3,
         ScheduleWaitV1,
         ScheduleWaitV2,
         SchemaVersion,

@@ -66,6 +66,26 @@ class CheckpointConflictError(WorkhorseError):
         )
 
 
+class CheckpointValueSizeLimitError(WorkhorseError):
+    """PostgreSQL cannot store a checkpoint value, because its jsonb text is above the limit.
+
+    The operation of the checkpoint already ran, and a retry would run it again with its effects.
+    Thus the worker fails the task without a retry (SM-1982).
+    """
+
+    def __init__(
+        self, task_id: str, checkpoint_name: str, actual_bytes: int, max_bytes: int
+    ) -> None:
+        self.task_id = task_id
+        self.checkpoint_name = checkpoint_name
+        self.actual_bytes = actual_bytes
+        self.max_bytes = max_bytes
+        super().__init__(
+            f"Checkpoint {checkpoint_name} for task {task_id} has {actual_bytes} bytes of jsonb"
+            f" text, above its limit of {max_bytes} bytes"
+        )
+
+
 class CheckpointInputConflictError(CheckpointConflictError):
     """A checkpoint stores the result of a different input (ADR 0098).
 
@@ -438,6 +458,7 @@ __all__ = [
     "CheckpointConflictError",
     "CheckpointInputConflictError",
     "CheckpointLeaseLostError",
+    "CheckpointValueSizeLimitError",
     "ChildConflictError",
     "ChildLeaseLostError",
     "ChildLimitExceededError",

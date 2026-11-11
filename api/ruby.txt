@@ -104,6 +104,13 @@ class Stablemates::Workhorse::CheckpointInputConflictError
   def requested_fingerprint
   def stored_fingerprint
 
+class Stablemates::Workhorse::CheckpointValueSizeLimitError
+  superclass Stablemates::Workhorse::Error
+  def initialize(name, actual_bytes, max_bytes)
+  def actual_bytes
+  def max_bytes
+  def name
+
 class Stablemates::Workhorse::ChildOutcome
   superclass Data
   members status, result, error

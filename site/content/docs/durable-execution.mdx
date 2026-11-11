@@ -355,7 +355,7 @@ operation ran. Nothing is stored, so the next attempt runs the operation again.
 - The TypeScript `Handler` type does not change. A typed handler with no result writes
   `return null`. A JavaScript handler that returns `undefined` also stores the result `null`.
 - In TypeScript, `encodeStoredJson` throws a `TypeError` for a `NaN` or infinite number, a `Map`,
-  or a `Set` at any depth, before `save_checkpoint_v2`. The error names the task type and the
+  or a `Set` at any depth, before `save_checkpoint_v3`. The error names the task type and the
   path of the value.
 - An `undefined` property of an object and an `undefined` member of an array keep the JSON rules.
 
@@ -561,8 +561,10 @@ still hides the error details.
 Other errors keep their usual rules. A transient error follows the retry policy of the task. A
 refusal at the child limit also follows the retry policy. A second child set is the exception:
 Workhorse fails the task with the child limit error and does not retry it, as it did when it
-reported a second set as a replay conflict. A lost lease keeps its usual rules. A signal wait that
-is already pending keeps its usual rules.
+reported a second set as a replay conflict. A checkpoint value that is too large to store is an
+exception too: Workhorse fails the task and does not retry it, because another attempt would run the
+operation of the checkpoint again ([checkpoint value limit](/docs/concepts#keep-a-checkpoint-value-below-its-limit)). A lost lease keeps its usual
+rules. A signal wait that is already pending keeps its usual rules.
 
 <details>
 <summary>Reference: conflict classes</summary>
@@ -581,15 +583,17 @@ The terminal classes are `CheckpointConflictError`, `CheckpointInputConflictErro
 includes a changed child set. A checkpoint call raises
 `CheckpointInputConflictError` only when the call gives an input.
 
-The worker settles the conflict through `fail_v1` with `p_retry_delay_ms = -1`. The failure keeps
-the current attempt. Operator reads show the conflict class. Redaction records `RedactedTaskError`.
+The worker settles the conflict through `fail_v2` with `p_retry_delay_ms = -1`. The failure keeps
+the current attempt. The worker settles an oversized checkpoint value in the same way:
+`CheckpointValueSizeLimitError` in TypeScript, Python, Go, and Ruby, `Error::CheckpointValueSizeLimit`
+in Rust, and `CheckpointValueSizeLimitException` in the JVM and .NET. Operator reads show the conflict class. Redaction records `RedactedTaskError`.
 If the handler wraps the conflict in its own error, the conflict is also terminal. The failure then
 records the conflict class. Its fields `message` and `stack` stay those of the outer error.
 
 Transient failures, lease loss, child-limit refusals, and already-waiting signal refusals keep
 their existing settlement behavior.
 
-More detail: [Task lifecycle: Durable timer suspension](https://github.com/stablemates/workhorse/blob/main/docs/architecture/lifecycle.md#durable-timer-suspension) and [Schema and protocol: Durable replay conflicts](https://github.com/stablemates/workhorse/blob/main/docs/architecture/schema-and-protocol.md#durable-replay-conflicts).
+More detail: [Task lifecycle: Durable timer suspension](https://github.com/stablemates/workhorse/blob/main/docs/architecture/lifecycle.md#durable-timer-suspension), [Schema and protocol: Durable replay conflicts](https://github.com/stablemates/workhorse/blob/main/docs/architecture/schema-and-protocol.md#durable-replay-conflicts), and [Schema and protocol: Oversized checkpoint values](https://github.com/stablemates/workhorse/blob/main/docs/architecture/schema-and-protocol.md#oversized-checkpoint-values).
 
 </details>
 

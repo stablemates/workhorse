@@ -677,11 +677,11 @@ impl Inner {
     ) -> Result<String, Error> {
         let rows = fenced_rows(
             &self.statements(),
-            sql::FAIL_V1,
+            sql::FAIL_V2,
             &[&task.id, &self.worker_id, &task.fence_token, envelope, &delay],
         )
         .await?;
-        let state: Option<String> = exactly_one(&rows, "fail_v1")?.try_get("state")?;
+        let state: Option<String> = exactly_one(&rows, "fail_v2")?.try_get("state")?;
         let state = state.unwrap_or_default();
         tracing::Span::current().record("workhorse.retry.outcome", state.as_str());
         if !matches!(
@@ -731,16 +731,48 @@ fn holds_nul(value: &Value) -> bool {
     }
 }
 
-/// The failure envelope of `protocol/v1/failures.json` that `fail_v1` stores for `error`.
+/// The failure envelope of `protocol/v1/failures.json` that `fail_v2` stores for `error`.
 fn failure_envelope(error: &HandlerError, redact: bool) -> Value {
     if redact {
         return json!({"name": "RedactedTaskError", "message": "Task handler failed; details redacted"});
     }
-    json!({
-        "name": storable_text(error.name.as_deref().unwrap_or("Error")),
-        "message": storable_text(&error.message),
-        "stack": error.stack.as_deref().map(storable_text),
-    })
+    let name = storable_text(error.name.as_deref().unwrap_or("Error"));
+    let message = storable_text(&error.message);
+    let stack = error.stack.as_deref().map(storable_text);
+    let bounded_name = utf8_prefix(&name, ENVELOPE_NAME_MAX_BYTES);
+    let bounded_message = utf8_prefix(&message, ENVELOPE_MESSAGE_MAX_BYTES);
+    let bounded_stack = stack.as_deref().map(|text| utf8_prefix(text, ENVELOPE_STACK_MAX_BYTES));
+    let truncated = bounded_name.len() != name.len()
+        || bounded_message.len() != message.len()
+        || bounded_stack.map(str::len) != stack.as_deref().map(str::len);
+    let mut envelope = json!({
+        "name": bounded_name,
+        "message": bounded_message,
+        "stack": bounded_stack,
+    });
+    if truncated {
+        envelope["truncated"] = Value::Bool(true);
+    }
+    envelope
+}
+
+// The UTF-8 byte limit of each envelope field, as `protocol/v1/failures.json` states it (SM-1983).
+// `bound_error_envelope_v1` applies the same cut, so `fail_v2` does not change this envelope.
+const ENVELOPE_NAME_MAX_BYTES: usize = 1024;
+const ENVELOPE_MESSAGE_MAX_BYTES: usize = 16_384;
+const ENVELOPE_STACK_MAX_BYTES: usize = 65_536;
+
+/// The longest prefix of `text` whose UTF-8 form has at most `max_bytes` bytes. A Rust string is
+/// UTF-8, so the cut moves back to a character boundary.
+fn utf8_prefix(text: &str, max_bytes: usize) -> &str {
+    if text.len() <= max_bytes {
+        return text;
+    }
+    let mut cut = max_bytes;
+    while !text.is_char_boundary(cut) {
+        cut -= 1;
+    }
+    &text[..cut]
 }
 
 /// Returns `text` with each NUL replaced by U+FFFD, as the JVM and .NET workers do. jsonb refuses
@@ -769,7 +801,7 @@ mod tests {
 
     use serde_json::json;
 
-    use super::{failure_envelope, retry_delay_millis, storable_text};
+    use super::{failure_envelope, retry_delay_millis, storable_text, utf8_prefix};
     use crate::Error;
     use crate::HandlerError;
 
@@ -795,6 +827,28 @@ mod tests {
         assert_eq!(
             failure_envelope(&error, true),
             json!({"name": "RedactedTaskError", "message": "Task handler failed; details redacted"})
+        );
+    }
+
+    // SM-1983: each field is cut at a character boundary to its UTF-8 byte limit.
+    #[test]
+    fn failure_envelope_cuts_each_field_without_splitting_a_character() {
+        assert_eq!(utf8_prefix("a\u{e9}", 2), "a");
+        assert_eq!(utf8_prefix("a\u{e9}", 3), "a\u{e9}");
+        assert_eq!(utf8_prefix("\u{20ac}\u{20ac}", 5), "\u{20ac}");
+        assert_eq!(utf8_prefix("a\u{1F600}", 4), "a");
+        assert_eq!(utf8_prefix("a\u{1F600}", 5), "a\u{1F600}");
+        let mut error =
+            HandlerError::named(format!("a{}", "\u{20ac}".repeat(342)), "m".repeat(70_000));
+        error.stack = Some(format!("a{}", "\u{1F600}".repeat(16_384)));
+        assert_eq!(
+            failure_envelope(&error, false),
+            json!({
+                "name": format!("a{}", "\u{20ac}".repeat(341)),
+                "message": "m".repeat(16_384),
+                "stack": format!("a{}", "\u{1F600}".repeat(16_383)),
+                "truncated": true,
+            })
         );
     }
 

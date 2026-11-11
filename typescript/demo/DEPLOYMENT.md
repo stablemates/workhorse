@@ -685,8 +685,8 @@ therefore makes this release one offline cutover. For this release only, deploy 
    applies 0025 and leaves the database at version 25. Without `--yes`, the command applies nothing
    and names any old worker that still heartbeated inside its lease.
 4. From the same image, run `workhorse schema migrate` again against each database. It applies the
-   additive steps after 0025 and leaves the database at version 98.
-5. Deploy the new release as usual. Its pre-deploy hook finds version 98, installs the demo's own
+   additive steps after 0025 and leaves the database at version 99.
+5. Deploy the new release as usual. Its pre-deploy hook finds version 99, installs the demo's own
    tables, and verifies both workspaces before any container starts.
 
 The CLI reads the database from `--database-url`, `WORKHORSE_DATABASE_URL`, or `DATABASE_URL`. Pass
@@ -775,14 +775,19 @@ stage, so a new commit invalidates none of the cached layers.
 
 ### Dashboard schema
 
-The current build ships Workhorse schema version 98; its packaged migrations carry a version 6
+The current build ships Workhorse schema version 99; its packaged migrations carry a version 6
 baseline forward to it. Version 25 is a contract step, which the
 [fast-tier cutover](#the-fast-tier-release-needs-one-offline-cutover) applies. Versions 26 through
-98 are additive, so the ordinary schema step applies them to a database at version 25. Every client in
-this build refuses mutations against a schema below 98, because every statement catalogue of this
-build names `override_retention_policy_v2` and the three other audited policy functions, which
-version 98 adds. Run `workhorse schema migrate` before any process from this build starts.
-Migration 0099 produces version 98. It adds the nullable `operator_audit` column to
+99 are additive, so the ordinary schema step applies them to a database at version 25. Every client in
+this build refuses mutations against a schema below 99, because every statement catalogue of this
+build names `fail_v2` and `save_checkpoint_v3`, which version 99 adds. Run
+`workhorse schema migrate` before any process from this build starts. Migration 0100 produces
+version 99. It adds `fail_v2`, `fast_fail_v2`, and `save_checkpoint_v3`, and the internal functions
+`bound_error_envelope_v1` and `utf8_prefix_v1`. After it, a worker of this build cuts the name,
+the message, and the stack of a failure envelope to 1,024, 16,384, and 65,536 UTF-8 bytes, and
+fails a task without a retry when a checkpoint value is too large to store. It replaces no function
+body and changes no stored data, and it raises the floor from 98 to 99. Migration 0099 produces
+version 98. It adds the nullable `operator_audit` column to
 `retention_policy` and `maintenance_policy`, the audited functions `override_retention_policy_v2`,
 `revert_retention_policy_v2`, `override_maintenance_policy_v2`, and `revert_maintenance_policy_v2`,
 and three helper functions. It replaces the bodies of the six released policy writers and of

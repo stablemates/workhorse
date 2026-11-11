@@ -84,8 +84,9 @@ impl CancellationToken {
 ///
 /// Any owned (`'static`) `std::error::Error` converts into it, so a handler can use `?`. A
 /// durable replay conflict ([`crate::Error::Conflict`] or
-/// [`crate::Error::CheckpointInputConflict`]) and the limit error of a second child set convert
-/// into an error that fails the task without a retry. Only that conversion marks it: an error built with [`HandlerError::named`]
+/// [`crate::Error::CheckpointInputConflict`]), the limit error of a second child set, and an
+/// oversized checkpoint value ([`crate::Error::CheckpointValueSizeLimit`]) convert into an error
+/// that fails the task without a retry. Only that conversion marks it: an error built with [`HandlerError::named`]
 /// retries under the policy, whatever its name.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct HandlerError {
@@ -163,6 +164,12 @@ impl<E: std::error::Error + 'static> From<E> for HandlerError {
                     // The envelope keeps the generic name of this error.
                     return Self { conflict: true, ..Self::new(error.to_string()) };
                 }
+            }
+            // Not a replay conflict, but terminal for the same reason: a retry runs the operation
+            // of the checkpoint again and still cannot store its value (SM-1982).
+            if let Some(crate::Error::CheckpointValueSizeLimit { .. }) = error_kind {
+                let name = "CheckpointValueSizeLimitError";
+                return Self { conflict: true, ..Self::named(name, error.to_string()) };
             }
             if let Some(crate::Error::Conflict { operation, .. }) = error_kind {
                 let name = match operation {

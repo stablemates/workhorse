@@ -103,6 +103,7 @@ func TestGoWorkerSatisfiesEverySharedRuntimeFixture(t *testing.T) {
 		"checkpoint-no-value":      executeWorkerCheckpointNoValueFixture,
 		"durable-script":           executeWorkerDurableScriptFixture,
 		"oversized-result":         executeWorkerOversizedResultFixture,
+		"oversized-checkpoint":     executeWorkerOversizedCheckpointFixture,
 		"result-contract-failure":  executeWorkerResultContractFailureFixture,
 		"shutdown-cancellation":    executeWorkerShutdownCancellationFixture,
 		"heartbeat-failure":        executeWorkerHeartbeatFailureFixture,
@@ -1236,6 +1237,79 @@ func executeWorkerReleaseWaitFixture(t *testing.T, fixture workerRuntimeFixture)
 			t.Fatalf("the worker released the task again after %.0f ms", gap)
 		}
 	}
+}
+
+// executeWorkerOversizedCheckpointFixture checkpoints an array of zeros whose jsonb text is above
+// the checkpoint limit. The worker fails the task without a retry, so the operation runs one time.
+func executeWorkerOversizedCheckpointFixture(t *testing.T, fixture workerRuntimeFixture) {
+	databaseURL := createConformanceDatabase(t, testDatabaseURL(t), "worker-oversized-checkpoint")
+	ctx := context.Background()
+	pool, err := pgxpool.New(ctx, databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(pool.Close)
+
+	queueName := "runtime-" + fixture.ID
+	executor := workhorse.NewPGXExecutor(pool)
+	admin := workhorse.NewAdmin(executor)
+	taskID, err := workhorse.NewQueue(executor, queueName).Enqueue(ctx, fixture.TaskType, fixture.OversizedZeros, workhorse.EnqueueOptions{
+		MaxAttempts: fixture.MaxAttempts,
+		RetryPolicy: map[string]any{"type": "fixed", "delayMs": 0},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	worker, err := workhorse.NewWorker(pool, workhorse.WorkerOptions{
+		Queue: queueName, WorkerID: "go-" + fixture.ID,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var operations, handlerRuns int
+	worker.Handle(fixture.TaskType, func(_ context.Context, payload any, handler *workhorse.HandlerContext) (any, error) {
+		handlerRuns++
+		if _, err := handler.Checkpoint(fixture.CheckpointName, func() (any, error) {
+			operations++
+			return make([]int, int(payload.(float64))), nil
+		}); err != nil {
+			return nil, err
+		}
+		return map[string]any{}, nil
+	})
+	settled := fixture.ExpectedSettled
+	for pass := 0; pass < fixture.MaxAttempts; pass++ {
+		task, err := admin.GetTask(ctx, taskID)
+		if err != nil || task == nil {
+			t.Fatalf("read task %s: task=%v err=%v", taskID, task, err)
+		}
+		if string(task.State) == settled.State {
+			break
+		}
+		if processed, err := worker.RunOnce(ctx); err != nil || !processed {
+			t.Fatalf("pass %d did not process the checkpoint task: processed=%t err=%v", pass, processed, err)
+		}
+	}
+	if operations != fixture.ExpectedCheckpointOperations || handlerRuns != fixture.ExpectedHandlerRuns {
+		t.Fatalf("the operation ran %d times and the handler %d times, want %d and %d",
+			operations, handlerRuns, fixture.ExpectedCheckpointOperations, fixture.ExpectedHandlerRuns)
+	}
+	task, err := admin.GetTask(ctx, taskID)
+	if err != nil || task == nil {
+		t.Fatalf("read task %s: task=%v err=%v", taskID, task, err)
+	}
+	if failure, _ := task.Error.(map[string]any); failure["name"] != fixture.ExpectedErrorNames["go"] {
+		t.Fatalf("the task records the error %v, want the name %s", task.Error, fixture.ExpectedErrorNames["go"])
+	}
+	var stored int
+	if err := pool.QueryRow(ctx, "SELECT count(*)::int FROM workhorse.task_checkpoint WHERE task_id = $1", taskID).Scan(&stored); err != nil {
+		t.Fatal(err)
+	}
+	if stored != fixture.ExpectedStoredCheckpoints {
+		t.Fatalf("the task stores %d checkpoints, want %d", stored, fixture.ExpectedStoredCheckpoints)
+	}
+	assertWorkerFixtureTaskState(t, ctx, pool, taskID, settled)
+	assertWorkerFixtureAttemptOutcomes(t, ctx, pool, taskID, fixture.ExpectedAttemptOutcomes)
 }
 
 // executeWorkerOversizedResultFixture returns an array of zeros, whose jsonb text is longer than its

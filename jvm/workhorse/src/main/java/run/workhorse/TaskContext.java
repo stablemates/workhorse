@@ -164,9 +164,17 @@ final class TaskContext implements HandlerContext {
                   String encoded = storable(operation.call(), "checkpoint value");
                   Row row =
                       worker.fencedRow(
-                          SqlCatalogue.SAVE_CHECKPOINT_V2, task, name, encoded, fingerprint);
+                          SqlCatalogue.SAVE_CHECKPOINT_V3, task, name, encoded, fingerprint);
                   if ("input_conflict".equals(row.text("status"))) {
                     checkInput(name, row.text("input_fingerprint"), fingerprint);
+                  }
+                  if ("value_too_large".equals(row.text("status"))) {
+                    Long actualBytes = row.longValue("value_bytes");
+                    Long maxBytes = row.longValue("max_bytes");
+                    throw new CheckpointValueSizeLimitException(
+                        name,
+                        actualBytes == null ? 0 : actualBytes,
+                        maxBytes == null ? 0 : maxBytes);
                   }
                   String status = expect("checkpoint", row, Set.of("saved", "existing"), name);
                   log(

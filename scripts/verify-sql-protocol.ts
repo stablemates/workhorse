@@ -401,6 +401,28 @@ export interface OversizedResultRuntimeFixture extends RuntimeFixtureBase {
 }
 
 /**
+ * A checkpoint value above the checkpoint limit fails the task without a retry (SM-1982). The
+ * runner enqueues the payload `oversizedZeros` with `maxAttempts` and the retry policy
+ * `{ "type": "fixed", "delayMs": 0 }`. Each handler run calls the checkpoint `checkpointName` with
+ * an operation that counts its runs and returns an array of `oversizedZeros` zeros. The compact
+ * JSON of the array fits in 1 MiB, but its jsonb text does not, so only PostgreSQL can refuse it.
+ * The operation ran before the refusal, so a retry would run it again. The runner passes at most
+ * `maxAttempts` times until the task settles, and checks that the task stores no checkpoint.
+ */
+export interface OversizedCheckpointRuntimeFixture extends RuntimeFixtureBase {
+  kind: "oversized-checkpoint";
+  checkpointName: string;
+  maxAttempts: number;
+  oversizedZeros: number;
+  expectedCheckpointOperations: number;
+  expectedHandlerRuns: number;
+  expectedStoredCheckpoints: number;
+  expectedSettled: ExpectedRuntimeState;
+  expectedAttemptOutcomes: TaskAttemptOutcome[];
+  expectedErrorNames: Record<string, string>;
+}
+
+/**
  * A handler result that fails its result contract fails each attempt through the retry policy. The
  * runner syncs `contract` through `sync_contract_definitions_v1`, enqueues `rejectedResult` as the
  * payload, and registers a handler that returns its payload. The settled task records the contract
@@ -655,6 +677,7 @@ export type RuntimeFixture =
   | CheckpointNoValueRuntimeFixture
   | DurableScriptRuntimeFixture
   | OversizedResultRuntimeFixture
+  | OversizedCheckpointRuntimeFixture
   | ResultContractFailureRuntimeFixture
   | ShutdownCancellationRuntimeFixture
   | HeartbeatFailureRuntimeFixture

@@ -104,6 +104,7 @@ export {
   CheckpointConflictError,
   CheckpointInputConflictError,
   CheckpointLeaseLostError,
+  CheckpointValueSizeLimitError,
   ChildConflictError,
   ChildLeaseLostError,
   ChildLimitExceededError,

@@ -167,6 +167,7 @@ internal sealed class RuntimeFixtures : IAsyncDisposable
             "checkpoint-no-value" => CheckpointNoValueAsync(fixture),
             "durable-script" => new DurableScript(_database.Builder, _database.DataSource).RunAsync(fixture, "all"),
             "oversized-result" => OversizedResultAsync(fixture),
+            "oversized-checkpoint" => OversizedCheckpointAsync(fixture),
             "result-contract-failure" => ResultContractFailureAsync(fixture),
             "shutdown-cancellation" => ShutdownCancellationAsync(fixture),
             "heartbeat-failure" => HeartbeatFailureAsync(fixture),
@@ -207,7 +208,14 @@ internal sealed class RuntimeFixtures : IAsyncDisposable
                 continue;
             }
 
-            var unit = Runner.Text(Runner.Object(part, "message part")["unpairedSurrogate"]);
+            var described = Runner.Object(part, "message part");
+            if (described.GetValueOrDefault("repeat") is string repeat)
+            {
+                built.Insert(built.Length, repeat, checked((int)(long)described["count"]!));
+                continue;
+            }
+
+            var unit = Runner.Text(described["unpairedSurrogate"]);
             built.Append((char)int.Parse(unit, NumberStyles.HexNumber, CultureInfo.InvariantCulture));
         }
 
@@ -233,7 +241,7 @@ internal sealed class RuntimeFixtures : IAsyncDisposable
         // PostgreSQL also redacts, so the runner reads the envelope before it leaves the worker.
         var hook = new Intercept.Callbacks(before: call =>
         {
-            if (call.Is(SqlCatalogue.FailV1))
+            if (call.Is(SqlCatalogue.FailV2))
             {
                 sent.Enqueue(Json.Parse((string)call.Parameter(4)!));
             }
@@ -267,7 +275,7 @@ internal sealed class RuntimeFixtures : IAsyncDisposable
         }
 
         Failure.Check(handedStack == declaresStack, $"the handler raised an error with a stack {handedStack}, want declaresStack {declaresStack}");
-        Failure.Check(sent.Count == 1, $"the worker sent {sent.Count} fail_v1 calls, want 1");
+        Failure.Check(sent.Count == 1, $"the worker sent {sent.Count} fail_v2 calls, want 1");
         var stored = Json.Parse((await ValueAsync($"SELECT error::text FROM workhorse.task_outcome WHERE task_id = '{taskId}'"))!);
         FailureEnvelope(fixture, "sent", Runner.Object(sent.Single(), "sent envelope"));
         FailureEnvelope(fixture, "stored", Runner.Object(stored, "stored envelope"));
@@ -276,9 +284,25 @@ internal sealed class RuntimeFixtures : IAsyncDisposable
     private void FailureEnvelope(OrderedDictionary<string, object?> fixture, string label, OrderedDictionary<string, object?> stored)
     {
         var redacted = fixture.GetValueOrDefault("redactErrorDetails") is true;
-        var fields = Runner.Strings(_envelope[redacted ? "redactedFields" : "fields"]).ToHashSet(StringComparer.Ordinal);
-        Failure.Check(fields.SetEquals(stored.Keys), $"{label} envelope fields [{string.Join(", ", stored.Keys)}], want [{string.Join(", ", fields)}]");
         var expected = Runner.Object(fixture.GetValueOrDefault("envelope"), "envelope");
+        var limits = Runner.Object(_envelope["limits"], "limits");
+        var fields = Runner.Strings(_envelope[redacted ? "redactedFields" : "fields"]).ToHashSet(StringComparer.Ordinal);
+        if (expected.GetValueOrDefault("truncated") is true)
+        {
+            fields.Add(Runner.Text(limits["truncatedField"]));
+            Failure.Check(stored.GetValueOrDefault("truncated") is true, $"{label} envelope truncated {Matcher.Render(stored.GetValueOrDefault("truncated"))}, want true");
+        }
+
+        Failure.Check(fields.SetEquals(stored.Keys), $"{label} envelope fields [{string.Join(", ", stored.Keys)}], want [{string.Join(", ", fields)}]");
+        foreach (var field in new[] { "name", "message", "stack" })
+        {
+            if (stored.GetValueOrDefault(field) is string text)
+            {
+                var bytes = Encoding.UTF8.GetByteCount(text);
+                var limit = (long)limits[field]!;
+                Failure.Check(bytes <= limit, $"{label} envelope {field} has {bytes} bytes, above its limit of {limit}");
+            }
+        }
         var want = expected.GetValueOrDefault("name");
         if (want is "$generic")
         {
@@ -287,7 +311,7 @@ internal sealed class RuntimeFixtures : IAsyncDisposable
 
         Failure.Check(Matcher.Same(stored.GetValueOrDefault("name"), want), $"{label} envelope name {Matcher.Render(stored.GetValueOrDefault("name"))}, want {Matcher.Render(want)}");
         Failure.Check(
-            Matcher.Same(stored.GetValueOrDefault("message"), expected.GetValueOrDefault("message")),
+            Matcher.Same(stored.GetValueOrDefault("message"), FixtureMessage(expected.GetValueOrDefault("message"))),
             $"{label} envelope message {Matcher.Render(stored.GetValueOrDefault("message"))}, want {Matcher.Render(expected.GetValueOrDefault("message"))}");
         var stack = stored.GetValueOrDefault("stack");
         switch (expected.GetValueOrDefault("stack"))
@@ -1874,6 +1898,56 @@ internal sealed class RuntimeFixtures : IAsyncDisposable
         Failure.Check(values.Count == runs && values.All(value => value is null), $"the checkpoint returned {Matcher.Render(values.ToList())}");
         var stored = await ValueAsync($"SELECT jsonb_typeof(checkpoint_value) FROM workhorse.task_checkpoint WHERE task_id = '{taskId}'");
         Failure.Check(Equals(stored, fixture["expectedCheckpointValueJsonType"]), $"the checkpoint value is stored as JSON type {stored}");
+        await ExpectStateAsync(taskId, settled);
+        await ExpectOutcomesAsync(taskId, (List<object?>)fixture["expectedAttemptOutcomes"]!);
+    }
+
+    /// <summary>
+    /// The checkpoint operation returns an array of zeros, whose <c>jsonb</c> text is above the
+    /// checkpoint limit. The worker fails the task without a retry, so the operation runs one time
+    /// (SM-1982).
+    /// </summary>
+    private async Task OversizedCheckpointAsync(OrderedDictionary<string, object?> fixture)
+    {
+        var maxAttempts = checked((int)(long)fixture["maxAttempts"]!);
+        var taskId = await EnqueueAsync(TaskType(fixture), fixture.GetValueOrDefault("oversizedZeros"), Options(QueueName(fixture)) with { MaxAttempts = maxAttempts, RetryPolicy = RetryPolicy.Fixed(TimeSpan.Zero) });
+        var settled = Get(fixture, "expectedSettled");
+        var runs = 0;
+        var operations = 0;
+        await using (var pool = Intercept.Create(_database, Intercept.Hook.None))
+        {
+            await using var subject = NewWorker(pool, fixture);
+            subject.Handle<long, object?>(TaskType(fixture), async (context, count) =>
+            {
+                Interlocked.Increment(ref runs);
+                await context.CheckpointAsync<IReadOnlyList<long>>(
+                    (string)fixture["checkpointName"]!,
+                    _ =>
+                    {
+                        Interlocked.Increment(ref operations);
+                        return Task.FromResult<IReadOnlyList<long>>(new long[count]);
+                    });
+                return Json.Members();
+            });
+            for (var attempt = 0; attempt < maxAttempts; attempt++)
+            {
+                if (Matcher.Same((await StateAsync(taskId))["state"], settled["state"]))
+                {
+                    break;
+                }
+
+                Failure.Check(await subject.RunOnceAsync(), "the worker did not run the checkpoint task");
+            }
+        }
+
+        Failure.Check(
+            operations == (long)fixture["expectedCheckpointOperations"]! && runs == (long)fixture["expectedHandlerRuns"]!,
+            $"the operation ran {operations} times and the handler {runs} times");
+        var errorName = Get(fixture, "expectedErrorNames")[Language];
+        var task = await StateAsync(taskId);
+        Failure.Check(Matcher.Same(task["errorName"], errorName), $"the task records the error {task["errorName"]}, want {errorName}");
+        var stored = await ValueAsync($"SELECT count(*)::text FROM workhorse.task_checkpoint WHERE task_id = '{taskId}'");
+        Failure.Check(Equals(stored, Convert.ToString(fixture["expectedStoredCheckpoints"], CultureInfo.InvariantCulture)), $"the task stores {stored} checkpoints");
         await ExpectStateAsync(taskId, settled);
         await ExpectOutcomesAsync(taskId, (List<object?>)fixture["expectedAttemptOutcomes"]!);
     }

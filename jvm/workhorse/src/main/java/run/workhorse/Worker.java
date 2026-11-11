@@ -3199,7 +3199,7 @@ public final class Worker implements AutoCloseable {
             error,
             () ->
                 fencedRow(
-                        SqlCatalogue.FAIL_V1,
+                        SqlCatalogue.FAIL_V2,
                         task,
                         envelope,
                         delay == null ? null : Long.toString(delay))
@@ -3246,11 +3246,49 @@ public final class Worker implements AutoCloseable {
     StringWriter stack = new StringWriter();
     error.printStackTrace(new PrintWriter(stack));
     // A durable replay conflict keeps its class name through a wrapper, as in Go and Rust.
-    NamedOperationException conflict = replayConflict(error);
-    envelope.put("name", failureName(conflict == null ? error : conflict));
-    envelope.put("message", storable(error.getMessage() == null ? "" : error.getMessage()));
-    envelope.put("stack", storable(stack.toString()));
+    WorkhorseException conflict = replayConflict(error);
+    String name = failureName(conflict == null ? error : conflict);
+    String message = storable(error.getMessage() == null ? "" : error.getMessage());
+    String trace = storable(stack.toString());
+    envelope.put("name", utf8Prefix(name, ENVELOPE_NAME_MAX_BYTES));
+    envelope.put("message", utf8Prefix(message, ENVELOPE_MESSAGE_MAX_BYTES));
+    envelope.put("stack", utf8Prefix(trace, ENVELOPE_STACK_MAX_BYTES));
+    if (!name.equals(envelope.get("name"))
+        || !message.equals(envelope.get("message"))
+        || !trace.equals(envelope.get("stack"))) {
+      envelope.put("truncated", true);
+    }
     return envelope;
+  }
+
+  // The UTF-8 byte limit of each envelope field, as protocol/v1/failures.json states it (SM-1983).
+  // bound_error_envelope_v1 applies the same cut, so fail_v2 does not change this envelope.
+  private static final int ENVELOPE_NAME_MAX_BYTES = 1024;
+  private static final int ENVELOPE_MESSAGE_MAX_BYTES = 16384;
+  private static final int ENVELOPE_STACK_MAX_BYTES = 65536;
+
+  /**
+   * The longest prefix of {@code text} whose UTF-8 form has at most {@code maxBytes} bytes. The cut
+   * never splits a surrogate pair. {@link #storable} already replaced each lone surrogate with
+   * U+FFFD, which has three bytes.
+   */
+  static String utf8Prefix(String text, int maxBytes) {
+    // A UTF-16 code unit is at most three UTF-8 bytes, so a short text needs no count.
+    if ((long) text.length() * 3 <= maxBytes) {
+      return text;
+    }
+    int bytes = 0;
+    int index = 0;
+    while (index < text.length()) {
+      int codePoint = text.codePointAt(index);
+      int size = codePoint < 0x80 ? 1 : codePoint < 0x800 ? 2 : codePoint < 0x10000 ? 3 : 4;
+      if (bytes + size > maxBytes) {
+        return text.substring(0, index);
+      }
+      bytes += size;
+      index += Character.charCount(codePoint);
+    }
+    return text;
   }
 
   /**
@@ -3306,11 +3344,13 @@ public final class Worker implements AutoCloseable {
    * The durable replay conflict of ADR 0098, or the limit error of a second child set, that {@code
    * error} is or wraps, or {@code null}. Each one ends the task with no retry. A second child set
    * was a replay conflict before {@code create_children_v2} named it a limit, so it stays terminal.
-   * Each other child limit refusal follows the retry policy (the ADR 0098 amendment of SM-1956).
-   * Such an error is terminal also inside a wrapper, such as the {@code CompletionException} of a
-   * {@code join()}, as in Go and Rust (SM-1512). The walk stays bounded against a cyclic chain.
+   * Each other child limit refusal follows the retry policy (the ADR 0098 amendment of SM-1956). An
+   * oversized checkpoint value is terminal too, because a retry runs the operation again and still
+   * cannot store its value (SM-1982). Such an error is terminal also inside a wrapper, such as the
+   * {@code CompletionException} of a {@code join()}, as in Go and Rust (SM-1512). The walk stays
+   * bounded against a cyclic chain.
    */
-  static @Nullable NamedOperationException replayConflict(Throwable error) {
+  static @Nullable WorkhorseException replayConflict(Throwable error) {
     Throwable current = error;
     for (int depth = 0; depth < CAUSE_DEPTH && current != null; depth++) {
       if (current instanceof ConflictException conflict) {
@@ -3318,6 +3358,9 @@ public final class Worker implements AutoCloseable {
       }
       if (current instanceof LimitExceededException limit && limit.isSecondChildSet()) {
         return limit;
+      }
+      if (current instanceof CheckpointValueSizeLimitException oversized) {
+        return oversized;
       }
       current = current.getCause();
     }

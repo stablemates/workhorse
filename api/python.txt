@@ -276,6 +276,9 @@ class CheckpointInputConflictError(CheckpointConflictError)
 class CheckpointLeaseLostError(LifecycleError)
   def __init__(self, task_id: str, checkpoint_name: str) -> None
 
+class CheckpointValueSizeLimitError(WorkhorseError)
+  def __init__(self, task_id: str, checkpoint_name: str, actual_bytes: int, max_bytes: int) -> None
+
 class ChildCanceled(dict)
   def __init__(self, *args, **kwargs)
   def __iter__(self)
@@ -6213,6 +6216,9 @@ class CheckpointInputConflictError(CheckpointConflictError)
 
 class CheckpointLeaseLostError(LifecycleError)
   def __init__(self, task_id: str, checkpoint_name: str) -> None
+
+class CheckpointValueSizeLimitError(WorkhorseError)
+  def __init__(self, task_id: str, checkpoint_name: str, actual_bytes: int, max_bytes: int) -> None
 
 class ChildConflictError(WorkhorseError)
   def __init__(self, parent_task_id: str, child_name: str, stored_child_name: str | None = None) -> None

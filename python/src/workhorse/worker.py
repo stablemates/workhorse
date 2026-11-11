@@ -112,6 +112,7 @@ from .errors import (
     CheckpointConflictError,
     CheckpointInputConflictError,
     CheckpointLeaseLostError,
+    CheckpointValueSizeLimitError,
     ChildConflictError,
     ChildLeaseLostError,
     ChildLimitExceededError,
@@ -989,6 +990,13 @@ class _HandlerDurability:
                 status = row["status"]
                 if status == "stale":
                     raise CheckpointLeaseLostError(self._task.id, name)
+                if status == "value_too_large":
+                    raise CheckpointValueSizeLimitError(
+                        self._task.id,
+                        name,
+                        cast(int, row["value_bytes"]),
+                        cast(int, row["max_bytes"]),
+                    )
                 if status == "input_conflict":
                     self._check_input(name, cast(str | None, row["input_fingerprint"]), fingerprint)
                 if status == "conflict":
@@ -4812,7 +4820,7 @@ def _is_second_child_set_limit(error: BaseException) -> bool:
 
 
 def _durable_replay_conflict(error: BaseException) -> BaseException | None:
-    """The durable replay conflict (ADR 0098) in the cause chain of `error`, or None.
+    """The durable replay conflict (ADR 0098) or oversized checkpoint value in the chain, or None.
 
     A handler can wrap a conflict in its own exception, explicitly with `raise ... from` or
     implicitly inside an `except` block. The conflict is terminal also then, as in Go and Rust, and
@@ -4830,6 +4838,9 @@ def _durable_replay_conflict(error: BaseException) -> BaseException | None:
                 WaitConflictError,
                 ChildConflictError,
                 HumanWaitConflictError,
+                # Not a replay conflict, but terminal for the same reason: a retry runs the
+                # operation of the checkpoint again and still cannot store its value (SM-1982).
+                CheckpointValueSizeLimitError,
             ),
         ) or _is_second_child_set_limit(current):
             return current
@@ -4848,11 +4859,49 @@ def _error_envelope(error: Exception, redact_details: bool) -> Json:
         return {"name": _REDACTED_ERROR_NAME, "message": _REDACTED_ERROR_MESSAGE}
     # A wrapped durable replay conflict keeps its name. The message and stack stay the outer ones.
     conflict = _durable_replay_conflict(error)
-    return {
-        "name": _storable_text(type(conflict if conflict is not None else error).__name__),
-        "message": _storable_text(str(error)),
-        "stack": _storable_text("".join(traceback.format_exception(error))),
+    return _bounded_envelope(
+        _storable_text(type(conflict if conflict is not None else error).__name__),
+        _storable_text(str(error)),
+        _storable_text("".join(traceback.format_exception(error))),
+    )
+
+
+# The UTF-8 byte limit of each envelope field, as protocol/v1/failures.json states it (SM-1983).
+_ENVELOPE_NAME_MAX_BYTES = 1024
+_ENVELOPE_MESSAGE_MAX_BYTES = 16384
+_ENVELOPE_STACK_MAX_BYTES = 65536
+
+
+def _bounded_envelope(name: str, message: str, stack: str) -> Json:
+    """The envelope with each field cut to its limit, and ``truncated`` if a cut happened.
+
+    bound_error_envelope_v1 applies the same cut, so fail_v2 does not change this envelope.
+    """
+    bounded = {
+        "name": _utf8_prefix(name, _ENVELOPE_NAME_MAX_BYTES),
+        "message": _utf8_prefix(message, _ENVELOPE_MESSAGE_MAX_BYTES),
+        "stack": _utf8_prefix(stack, _ENVELOPE_STACK_MAX_BYTES),
     }
+    envelope: dict[str, Json] = dict(bounded)
+    if (bounded["name"], bounded["message"], bounded["stack"]) != (name, message, stack):
+        envelope["truncated"] = True
+    return envelope
+
+
+def _utf8_prefix(text: str, max_bytes: int) -> str:
+    """The longest prefix of `text` whose UTF-8 form has at most `max_bytes` bytes.
+
+    The cut is at a code point boundary. `_storable_text` already replaced each surrogate, so the
+    text encodes without an error.
+    """
+    if len(text) * 4 <= max_bytes:
+        return text
+    encoded = text.encode("utf-8")
+    if len(encoded) <= max_bytes:
+        return text
+    # The input is valid UTF-8, so "ignore" drops only the bytes of the character that the cut split
+    # in two.
+    return encoded[:max_bytes].decode("utf-8", errors="ignore")
 
 
 _UNSTORABLE_TEXT = re.compile("[\x00\ud800-\udfff]")

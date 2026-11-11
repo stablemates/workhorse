@@ -63,7 +63,7 @@ RSpec.describe W::Worker do
 
         completed << params[0]
         [{"accepted" => "t"}]
-      when W::SqlCatalogue::FAIL_V1 then [{"state" => "failed"}]
+      when W::SqlCatalogue::FAIL_V2 then [{"state" => "failed"}]
       else []
       end
     end
@@ -87,7 +87,7 @@ RSpec.describe W::Worker do
   def statements(sql) = pool.statements.select { |statement, _| statement == sql }.map(&:last)
 
   def failures
-    statements(W::SqlCatalogue::FAIL_V1).to_h { |params| [params[0], JSON.parse(params[3])] }
+    statements(W::SqlCatalogue::FAIL_V2).to_h { |params| [params[0], JSON.parse(params[3])] }
   end
 
   # Runs the worker until +ids+ completed, then stops it and returns what run returned.

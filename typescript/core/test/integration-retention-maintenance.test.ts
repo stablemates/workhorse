@@ -5033,7 +5033,7 @@ describe("retention maintenance", () => {
             SELECT 1 FROM pg_stat_activity
              WHERE datid = (SELECT oid FROM pg_database WHERE datname = current_database())
                AND wait_event_type = 'Lock'
-               AND query LIKE 'SELECT workhorse.fail_v1%'
+               AND query LIKE 'SELECT workhorse.fail_v2%'
           ) AS waiting`);
         return result.rows[0]!.waiting;
       });

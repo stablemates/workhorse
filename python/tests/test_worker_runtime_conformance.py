@@ -86,6 +86,7 @@ SYNC_ONLY_RUNTIME_FIXTURE_KINDS = frozenset(
         "expiration",
         "heartbeat-cadence",
         "lease-loss",
+        "oversized-checkpoint",
         "oversized-result",
         "poll-cadence",
         "refused-completion",
@@ -193,6 +194,7 @@ def execute_runtime_fixture(
             setup_connection, worker_pool, script_fixture, "all"
         ),
         "oversized-result": execute_oversized_result_fixture,
+        "oversized-checkpoint": execute_oversized_checkpoint_fixture,
         "result-contract-failure": execute_result_contract_failure_fixture,
         "shutdown-cancellation": execute_shutdown_cancellation_fixture,
         "heartbeat-failure": execute_heartbeat_failure_fixture,
@@ -1948,6 +1950,60 @@ def execute_checkpoint_no_value_fixture(
         == (fixture["expectedCheckpointValueJsonType"])
     )
     assert_task_states(connection, {"task": task_id}, {"task": settled})
+    assert_attempt_outcomes(connection, task_id, fixture["expectedAttemptOutcomes"])
+
+
+def execute_oversized_checkpoint_fixture(
+    connection: psycopg.Connection[Any], fixture: Mapping[str, Any]
+) -> None:
+    queue_name = runtime_queue(fixture)
+    task_id = Queue(connection).enqueue(
+        fixture["taskType"],
+        fixture["oversizedZeros"],
+        EnqueueOptions(
+            queue=queue_name,
+            max_attempts=fixture["maxAttempts"],
+            retry_policy={"type": "fixed", "delayMs": 0},
+        ),
+    )
+    operations = 0
+    handler_runs = 0
+
+    def handler(zeros: int, context: HandlerContext) -> dict[str, object]:
+        nonlocal handler_runs
+        handler_runs += 1
+
+        def operation() -> list[int]:
+            nonlocal operations
+            operations += 1
+            return [0] * zeros
+
+        context.checkpoint(fixture["checkpointName"], operation)
+        return {}
+
+    worker = Worker(worker_pool, queue=queue_name, worker_id=f"python-{fixture['id']}").handle(
+        fixture["taskType"], handler
+    )
+    admin = Admin(connection)
+    settled = fixture["expectedSettled"]
+    for _ in range(fixture["maxAttempts"]):
+        snapshot = admin.get_task(task_id)
+        if snapshot is not None and snapshot.state == settled["state"]:
+            break
+        assert worker.run_once() is True
+    assert (operations, handler_runs) == (
+        fixture["expectedCheckpointOperations"],
+        fixture["expectedHandlerRuns"],
+    )
+    snapshot = admin.get_task(task_id)
+    assert snapshot is not None
+    assert (snapshot.state, snapshot.current_attempt) == (settled["state"], settled["attempt"])
+    assert isinstance(snapshot.error, dict)
+    assert snapshot.error["name"] == fixture["expectedErrorNames"]["python"]
+    stored = connection.execute(
+        "SELECT count(*)::int FROM workhorse.task_checkpoint WHERE task_id = %s", (task_id,)
+    ).fetchone()
+    assert stored == (fixture["expectedStoredCheckpoints"],)
     assert_attempt_outcomes(connection, task_id, fixture["expectedAttemptOutcomes"])
 
 

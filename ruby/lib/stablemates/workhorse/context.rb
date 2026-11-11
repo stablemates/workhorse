@@ -172,8 +172,11 @@ module Stablemates
 
           live!(:checkpoint)
           value = block.call
-          row = write(SqlCatalogue::SAVE_CHECKPOINT_V2, name, Values.json(value, "checkpoint value"), fingerprint)
+          row = write(SqlCatalogue::SAVE_CHECKPOINT_V3, name, Values.json(value, "checkpoint value"), fingerprint)
           check_input(name, row["input_fingerprint"], fingerprint) if row.fetch("status") == "input_conflict"
+          if row.fetch("status") == "value_too_large"
+            raise CheckpointValueSizeLimitError.new(name, Integer(row.fetch("value_bytes")), Integer(row.fetch("max_bytes")))
+          end
           status = expect(:checkpoint, row, %w[saved existing], name)
           log(:debug, "workhorse.task.checkpoint_saved", "Task checkpoint persisted",
             "workhorse.checkpoint.name" => name, "workhorse.checkpoint.status" => status)

@@ -281,7 +281,7 @@ describe("unstorable handler results", () => {
     );
 
     await expect(worker.runOnce()).rejects.toBe(outage);
-    expect(statements.some((statement) => statement.text.includes("workhorse.fail_v1("))).toBe(
+    expect(statements.some((statement) => statement.text.includes("workhorse.fail_v2("))).toBe(
       false,
     );
     await sleep(0);

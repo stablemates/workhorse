@@ -14,7 +14,7 @@ installation from one version to the next.
 
 ### Current version and baseline
 
-The current schema version is 98 (`WORKHORSE_SCHEMA_VERSION`) and the migration baseline is 6
+The current schema version is 99 (`WORKHORSE_SCHEMA_VERSION`) and the migration baseline is 6
 (`WORKHORSE_SCHEMA_BASELINE_VERSION`). `sql/releases/0006.sql` contains the baseline clean-install
 artifact, which is the 0.2.0 schema.
 
@@ -38,10 +38,10 @@ function or give that suffix a different meaning.
 
 The current migration plan has one contract step. `0025-add-a-fast-task-tier.sql` moves schema 24 to
 25 and retires protocols 1 through 4. Thus, on an older installation, `migrateSchema` stops at
-schema 24, and `contractSchema` applies step 25. The additive steps 26 through 98 follow. A second
+schema 24, and `contractSchema` applies step 25. The additive steps 26 through 99 follow. A second
 `migrateSchema` run then completes the plan.
 
-Their files run from `0026` to `0099`. File number `0035` was reserved and never used. Thus, from
+Their files run from `0026` to `0100`. File number `0035` was reserved and never used. Thus, from
 `0036` on, the number of a file is one above the version that it produces.
 
 Step 25 ships without the usual retention window, as
@@ -119,7 +119,7 @@ version. The runner reports `Workhorse migration <file> failed part-way and roll
 
 Each of these fails without running a migration:
 
-- An installed version below the baseline 6 or above the current 98.
+- An installed version below the baseline 6 or above the current 99.
 - A version no step starts from.
 - A `workhorse.schema_version` table without exactly one row.
 
@@ -139,10 +139,13 @@ sure that each language uses the protocol in the same way.
 ### Manifest and compatibility fixture
 
 `protocol/v1/manifest.json` declares fixture format 1 and SQL protocol 5. It accepts installed
-schema versions 97 and newer inside the major line, and client protocol 5 only. Schema version 97
-is the floor because it adds `schedule_wait_v2`, `send_signal_v2`, and `create_children_v2`, which
-every SDK catalogue names. Before that, schema version 76 was the floor because it adds
-`deregister_worker_v2`, which every SDK catalogue names. Before that,
+schema versions 99 and newer inside the major line, and client protocol 5 only. Schema version 99
+is the floor because it adds `fail_v2` and `save_checkpoint_v3`, which every SDK catalogue names.
+Before that, schema version 98 was the floor because it adds `override_retention_policy_v2` and the
+three other audited policy functions, which every SDK catalogue also names. Before that, schema
+version 97 was the floor because it adds `schedule_wait_v2`, `send_signal_v2`,
+and `create_children_v2`, which every SDK catalogue also names. Before that, schema version 76 was
+the floor because it adds `deregister_worker_v2`, which every SDK catalogue names. Before that,
 schema version 75 was the floor because it adds `dashboard_retention_preview_v1`, which every SDK
 catalogue also names. Before that, schema version 73 was the floor because it adds `heartbeat_v2`, which every SDK catalogue
 also names. Schema version 74
@@ -285,7 +288,7 @@ obeys these rules:
 All seven SDK workers settle durable replay conflicts through `fail_v1` with `p_retry_delay_ms = -1`.
 Schema version 54 reserves that override for terminal failure, even when
 `current_attempt < max_attempts`. Earlier schemas read the terminal override as an immediate retry.
-Thus workers require schema version 54 or newer. The current floor, 97, includes it.
+Thus workers require schema version 54 or newer. The current floor, 99, includes it.
 
 Both `fail_v1` and `fast_fail_v1` keep the current attempt and write the usual failed outcome and
 history. The ownership, cancellation, deadline, and execution-timeout checks still occur before the
@@ -330,6 +333,32 @@ records the name of the conflict. Its fields `message` and `stack` stay those of
 - Go finds a wrapped `*CheckpointInputConflictError` with `errors.As` and records the name
   `CheckpointInputConflictError`. It is a separate type, so `errors.As` does not match it as a
   `*CheckpointConflictError`.
+
+#### Oversized checkpoint values
+
+An oversized checkpoint value is not a replay conflict, but the worker settles it in the same way
+(SM-1982). `save_checkpoint_v3` answers `value_too_large` when the jsonb text of the value is above
+1,048,576 bytes, and it stores nothing
+([Data model: `task_checkpoint`](data-model.md#task_checkpoint)). The operation of the checkpoint
+ran before that answer. Thus a retry runs the operation again, with its effects, and still cannot
+store the value. The worker fails the task at once and keeps the current attempt.
+
+| SDK        | Error                                                                          |
+| ---------- | ------------------------------------------------------------------------------ |
+| TypeScript | `CheckpointValueSizeLimitError`                                                |
+| Python     | `CheckpointValueSizeLimitError`                                                |
+| Go         | `*CheckpointValueSizeLimitError`                                               |
+| Rust       | `Error::CheckpointValueSizeLimit`, recorded as `CheckpointValueSizeLimitError` |
+| Ruby       | `Stablemates::Workhorse::CheckpointValueSizeLimitError`                        |
+| JVM        | `CheckpointValueSizeLimitException`                                            |
+| .NET       | `CheckpointValueSizeLimitException`                                            |
+
+Each error carries the checkpoint name, the measured bytes, and the limit. Each SDK finds it in the
+cause chain as it finds a conflict, so a wrapped error is terminal too and the envelope records its
+name. Rust gives the converted `HandlerError` the conflict flag. No SDK measures the value, because
+only PostgreSQL produces the jsonb text that the limit counts. The fixture
+`oversized-checkpoint-value-fails-the-task-without-a-retry` in `protocol/v1/runtime.json` checks in
+each SDK that the operation runs one time and that the task stores no checkpoint.
 
 #### Settling a conflict
 
@@ -503,15 +532,52 @@ result, a child result, or the stored child request (`task_child.request_fingerp
 
 ### Failure envelope
 
-`protocol/v1/failures.json` pins the JSON error envelope that a worker passes to `fail_v1`.
+`protocol/v1/failures.json` pins the JSON error envelope that a worker passes to `fail_v2`.
 
 | Envelope   | Fields                                                                                                 |
 | ---------- | ------------------------------------------------------------------------------------------------------ |
-| Unredacted | Exactly `name`, `message`, and `stack`. `stack` is a string or null.                                   |
+| Unredacted | Exactly `name`, `message`, and `stack`. `stack` is a string or null. A cut adds `truncated`.           |
 | Redacted   | Exactly `name` and `message`, holding `RedactedTaskError` and `Task handler failed; details redacted`. |
 
 The redacted values are the values that `redact_error_details_v1` writes. Thus an envelope that a
 worker redacts locally has the same shape as an envelope that PostgreSQL redacts.
+
+#### Envelope limits
+
+A handler error can carry a large `message`, such as a full response body. A retry writes the
+envelope three times: to `task_runtime.error`, to `attempt_history.error`, and to the
+`retry_scheduled` event. Thus each field has a limit in UTF-8 bytes (SM-1983):
+
+| Field     | Limit        |
+| --------- | ------------ |
+| `name`    | 1,024 bytes  |
+| `message` | 16,384 bytes |
+| `stack`   | 65,536 bytes |
+
+1. Each SDK replaces the text that jsonb cannot store, and then cuts each field that is longer than
+   its limit. The cut keeps the longest prefix that has at most the limit in bytes and ends at a
+   code point boundary. Thus the prefix is valid UTF-8, and TypeScript, the JVM, and .NET do not
+   split a surrogate pair.
+2. If the SDK cut a field, it adds the key `truncated` with the value `true`.
+3. `fail_v2` and `fast_fail_v2` apply the same cut with `bound_error_envelope_v1` and
+   `utf8_prefix_v1`, and then call `fail_v1` and `fast_fail_v1`. A field that fits does not change,
+   so PostgreSQL does not change an envelope that an SDK cut. A client that does not cut cannot
+   store a longer field.
+4. The bound cuts only a string field. A field that is not a string, another key, and an envelope
+   that is not an object do not change. The bound never raises for a large envelope, so a large
+   error cannot stop the settlement. It reads no clock and takes no lock.
+5. A redacted envelope has no `truncated` key, because redaction replaces the whole envelope.
+
+`fail_v1` and `fast_fail_v1` keep their behavior: they store the envelope as it comes. A worker of
+an earlier release calls them, and it must still settle. Each reader of an envelope ignores a key
+that it does not know: the SDKs hold the envelope as a JSON value, and the dashboard server and the
+SPA copy the keys that they do not remove.
+
+The other SQL functions that store an error envelope do not take one from a client. A batch
+failure, an expiry, a release, a lease recovery, a dependency or child outcome, a task group
+outcome, and a dashboard action write an envelope that PostgreSQL builds, or copy one that
+`fail_v2` already stored. `fail_cold_export_segment_v1` stores the error of the cold exporter in
+`cold_export_segment`. That error is not a task failure envelope, so the limits do not apply to it.
 
 #### Error names and stacks
 
@@ -881,7 +947,7 @@ through a cached check for each queue instead. Thus a warm enqueue sends only `e
 `serialize_request` in `_protocol.py` refuses an option, the call raises `ValueError` and sends no
 statement. PostgreSQL checks the other limits.
 
-`python/src/workhorse/_protocol.py` accepts schema version 97 or newer and client protocol 5. Before
+`python/src/workhorse/_protocol.py` accepts schema version 99 or newer and client protocol 5. Before
 the mutating statement, it refuses an unreadable, missing, older, or newer schema.
 
 `python/src/workhorse/_statements.py` owns each statement in `STATEMENTS`, with explicit Psycopg and
@@ -1205,7 +1271,7 @@ released with its task.
 
 #### Failure settlement
 
-Ordinary handler failures pass a JSON error envelope to `fail_v1` with the configured retry
+Ordinary handler failures pass a JSON error envelope to `fail_v2` with the configured retry
 override. PostgreSQL then selects `ready`, `scheduled`, or `failed` from the persisted attempt
 budget and retry policy. `_error_envelope` builds that envelope in the shape that
 `protocol/v1/failures.json` pins.

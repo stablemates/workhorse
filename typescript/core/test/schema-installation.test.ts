@@ -445,6 +445,8 @@ describe("schema installation", () => {
       { name: "create_children_v2" },
       { name: "create_single_child_v2" },
       { name: "deregister_worker_v2" },
+      { name: "fail_v2" },
+      { name: "fast_fail_v2" },
       { name: "fire_due_schedules_v2" },
       { name: "heartbeat_many_v2" },
       { name: "heartbeat_v2" },
@@ -453,6 +455,7 @@ describe("schema installation", () => {
       { name: "revert_maintenance_policy_v2" },
       { name: "revert_retention_policy_v2" },
       { name: "save_checkpoint_v2" },
+      { name: "save_checkpoint_v3" },
       { name: "schedule_wait_v2" },
       { name: "send_signal_v2" },
       { name: "sync_queue_health_policy_v2" },
@@ -756,6 +759,11 @@ describe("schema installation", () => {
         version: 98,
         description:
           "keep the settings audit, withhold error stacks, and find derived history records",
+      },
+      {
+        version: 99,
+        description:
+          "bound failure envelopes and answer an oversized checkpoint value with a status",
       },
     ]);
 

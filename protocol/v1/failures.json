@@ -19,6 +19,13 @@
     "storableText": {
       "replacement": "\ufffd",
       "description": "PostgreSQL jsonb cannot store a NUL character or an unpaired surrogate. Before the worker sends the envelope, it replaces each one in the name, the message, and the stack with the replacement. A valid surrogate pair and all other text do not change. An error message can be an array of parts. A string part is text. A part {\"unpairedSurrogate\": \"D800\"} is one UTF-16 code unit that no strict JSON parser reads from an escape. TypeScript, Java, C#, and Python put that code unit in the string. Go and Ruby strings hold bytes, so they use the byte 0xFF, which is not UTF-8. A Rust String holds only UTF-8, so Rust uses the text that String::from_utf8_lossy makes from the byte 0xFF."
+    },
+    "limits": {
+      "name": 1024,
+      "message": 16384,
+      "stack": 65536,
+      "truncatedField": "truncated",
+      "description": "Each limit is a number of UTF-8 bytes. After the worker replaces the text that jsonb cannot store, it cuts each field that is longer than its limit. The cut keeps the longest prefix that has at most the limit in bytes and ends at a code point boundary, so the prefix is valid UTF-8 and a surrogate pair stays whole. If the worker cuts a field, it adds the key truncated with the value true. A redacted envelope is never cut. fail_v2 and fast_fail_v2 apply the same cut, so they do not change an envelope that a worker cut. fail_v1 and fast_fail_v1 store the envelope as it comes. A message part {\"repeat\": \"\u00e9\", \"count\": 3} is the text of repeat, count times. An expected message can use the same parts."
     }
   },
   "fixtures": [
@@ -103,6 +110,99 @@
       "id": "redacted-nul-in-message",
       "description": "Redaction replaces an unstorable message with the fixed redacted envelope.",
       "error": { "declaresName": true, "declaresStack": true, "message": "card\u0000declined" },
+      "redactErrorDetails": true,
+      "envelope": {
+        "name": "RedactedTaskError",
+        "message": "Task handler failed; details redacted"
+      }
+    },
+    {
+      "id": "message-above-limit-cut-before-a-two-byte-character",
+      "description": "A message of 16,385 bytes ends with two-byte characters. The cut keeps 16,383 bytes, because the next character does not fit.",
+      "error": {
+        "declaresName": true,
+        "declaresStack": true,
+        "message": ["a", { "repeat": "\u00e9", "count": 8192 }]
+      },
+      "redactErrorDetails": false,
+      "envelope": {
+        "name": "PaymentDeclined",
+        "message": ["a", { "repeat": "\u00e9", "count": 8191 }],
+        "stack": "string",
+        "truncated": true
+      }
+    },
+    {
+      "id": "message-above-limit-cut-before-a-three-byte-character",
+      "description": "A message of 16,385 bytes ends with three-byte characters. The cut keeps 16,382 bytes.",
+      "error": {
+        "declaresName": true,
+        "declaresStack": true,
+        "message": ["ab", { "repeat": "\u20ac", "count": 5461 }]
+      },
+      "redactErrorDetails": false,
+      "envelope": {
+        "name": "PaymentDeclined",
+        "message": ["ab", { "repeat": "\u20ac", "count": 5460 }],
+        "stack": "string",
+        "truncated": true
+      }
+    },
+    {
+      "id": "message-above-limit-cut-before-a-four-byte-character",
+      "description": "A message of 16,385 bytes ends with four-byte characters, which UTF-16 holds as surrogate pairs. The cut keeps 16,381 bytes and splits no pair.",
+      "error": {
+        "declaresName": true,
+        "declaresStack": true,
+        "message": ["a", { "repeat": "\ud83d\ude00", "count": 4096 }]
+      },
+      "redactErrorDetails": false,
+      "envelope": {
+        "name": "PaymentDeclined",
+        "message": ["a", { "repeat": "\ud83d\ude00", "count": 4095 }],
+        "stack": "string",
+        "truncated": true
+      }
+    },
+    {
+      "id": "message-at-limit-is-not-cut",
+      "description": "A message of exactly 16,384 bytes fits, so it does not change and the envelope has no truncated key.",
+      "error": {
+        "declaresName": true,
+        "declaresStack": true,
+        "message": [{ "repeat": "\u00e9", "count": 8192 }]
+      },
+      "redactErrorDetails": false,
+      "envelope": {
+        "name": "PaymentDeclined",
+        "message": [{ "repeat": "\u00e9", "count": 8192 }],
+        "stack": "string"
+      }
+    },
+    {
+      "id": "replaced-text-is-cut-after-the-replacement",
+      "description": "Each NUL becomes the three-byte replacement before the cut. 5,462 NUL characters become 16,386 bytes, and the cut keeps 5,461 replacements.",
+      "error": {
+        "declaresName": true,
+        "declaresStack": true,
+        "message": [{ "repeat": "\u0000", "count": 5462 }]
+      },
+      "redactErrorDetails": false,
+      "envelope": {
+        "name": "PaymentDeclined",
+        "message": [{ "repeat": "\ufffd", "count": 5461 }],
+        "stack": "string",
+        "truncated": true
+      }
+    },
+    {
+      "id": "redacted-message-above-limit",
+      "description": "Redaction replaces a long message with the fixed redacted envelope, which no limit cuts.",
+      "error": {
+        "declaresName": true,
+        "declaresStack": true,
+        "message": ["a", { "repeat": "\ud83d\ude00", "count": 4096 }]
+      },
       "redactErrorDetails": true,
       "envelope": {
         "name": "RedactedTaskError",

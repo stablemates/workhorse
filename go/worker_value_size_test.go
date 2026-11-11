@@ -388,12 +388,12 @@ func TestFastWorkerFailsOnlyTheOversizedMemberOfABatch(t *testing.T) {
 		t.Fatal("no valid member completed through a completion batch")
 	}
 	failures := 0
-	for _, statement := range tracer.matching("workhorse.fail_v1(") {
+	for _, statement := range tracer.matching("workhorse.fail_v2(") {
 		if statement.args[0] == oversizedID {
 			failures++
 		}
 	}
 	if failures != 1 {
-		t.Fatalf("the worker sent fail_v1 for the oversized task %d times, want 1", failures)
+		t.Fatalf("the worker sent fail_v2 for the oversized task %d times, want 1", failures)
 	}
 }

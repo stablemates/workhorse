@@ -79,6 +79,7 @@ pub async fn run_runtime(fixture: &Value) -> Outcome {
                 super::durable_script::run_phase(database.url(), fixture, "all").await
             }
             "oversized-result" => oversized_result(database, fixture).await,
+            "oversized-checkpoint" => oversized_checkpoint(database, fixture).await,
             "result-contract-failure" => result_contract_failure(database, fixture).await,
             "shutdown-cancellation" => shutdown_cancellation(database, fixture).await,
             "heartbeat-failure" => heartbeat_failure(database, fixture).await,
@@ -306,7 +307,22 @@ async fn failure(database: &ScratchDatabase, fixture: &Value, envelope: &Value) 
         .get(0);
     let fields = if redacted { &envelope["redactedFields"] } else { &envelope["fields"] };
     let mut want: Vec<&str> = strings(fields);
+    let limits = &envelope["limits"];
+    if fixture["envelope"]["truncated"] == Value::Bool(true) {
+        want.push(text(limits, "truncatedField"));
+        check(stored["truncated"] == Value::Bool(true), || {
+            format!("envelope truncated {}, want true", stored["truncated"])
+        })?;
+    }
     want.sort_unstable();
+    for field in ["name", "message", "stack"] {
+        let limit = limits[field].as_u64().unwrap_or_default();
+        if let Some(value) = stored[field].as_str() {
+            check(value.len() as u64 <= limit, || {
+                format!("envelope {field} has {} bytes, above its limit of {limit}", value.len())
+            })?;
+        }
+    }
     let mut keys: Vec<&str> =
         stored.as_object().into_iter().flatten().map(|(key, _)| key.as_str()).collect();
     keys.sort_unstable();
@@ -317,7 +333,8 @@ async fn failure(database: &ScratchDatabase, fixture: &Value, envelope: &Value) 
         name = text(&envelope["genericName"], "rust");
     }
     check(stored["name"] == name, || format!("envelope name {}, want {name}", stored["name"]))?;
-    check(stored["message"] == expected["message"], || {
+    let expected_message = fixture_message(&expected["message"])?;
+    check(stored["message"].as_str() == Some(expected_message.as_str()), || {
         format!("envelope message {}, want {}", stored["message"], expected["message"])
     })?;
     match expected["stack"].as_str() {
@@ -352,10 +369,17 @@ fn fixture_message(message: &Value) -> Checked<String> {
     let parts = message.as_array().ok_or_else(|| format!("message {message} is not text"))?;
     let mut built = String::new();
     for part in parts {
-        match (part.as_str(), part["unpairedSurrogate"].as_str()) {
-            (Some(text), _) => built.push_str(text),
-            (None, Some(_)) => built.push_str(&String::from_utf8_lossy(&[0xFF])),
-            (None, None) => return Err(format!("message part {part} is not text or a surrogate")),
+        match (part.as_str(), part["unpairedSurrogate"].as_str(), part["repeat"].as_str()) {
+            (Some(text), _, _) => built.push_str(text),
+            (None, Some(_), _) => built.push_str(&String::from_utf8_lossy(&[0xFF])),
+            (None, None, Some(repeat)) => {
+                let count =
+                    part["count"].as_u64().ok_or_else(|| format!("part {part} has no count"))?;
+                built.push_str(&repeat.repeat(usize::try_from(count).map_err(|e| e.to_string())?));
+            }
+            (None, None, None) => {
+                return Err(format!("message part {part} is not text, a repeat, or a surrogate"));
+            }
         }
     }
     Ok(built)
@@ -1992,6 +2016,78 @@ async fn checkpoint_no_value(database: &ScratchDatabase, fixture: &Value) -> Che
     let want = text(fixture, "expectedCheckpointValueJsonType");
     check(stored.as_deref() == Some(want), || {
         format!("the checkpoint value is stored as JSON type {stored:?}, want {want}")
+    })?;
+    assert_state(&client, task, settled).await?;
+    let outcomes: Vec<&str> = fixture["expectedAttemptOutcomes"]
+        .as_array()
+        .ok_or("expectedAttemptOutcomes is not an array")?
+        .iter()
+        .map(|outcome| outcome.as_str().unwrap_or_default())
+        .collect();
+    assert_outcomes(&client, task, &outcomes).await
+}
+
+/// A checkpoint value above the checkpoint limit fails the task without a retry (SM-1982). The
+/// operation returns an array of zeros, whose jsonb text is longer than its compact JSON.
+async fn oversized_checkpoint(database: &ScratchDatabase, fixture: &Value) -> Checked {
+    let client = database.connect().await;
+    let admin = Admin::connect(database.url()).await.map_err(driver)?;
+    let queue = queue(database, fixture).await?;
+    let task_type = text(fixture, "taskType");
+    let retried = EnqueueOptions {
+        max_attempts: i32::try_from(number(fixture, "maxAttempts")).map_err(|e| e.to_string())?,
+        retry_policy: json!({ "type": "fixed", "delayMs": 0 }).as_object().cloned(),
+        ..Default::default()
+    };
+    let zeros = number(fixture, "oversizedZeros");
+    let task = queue.enqueue(task_type, &json!(zeros), retried).await.map_err(driver)?.task_id;
+    let worker = worker(database, 4, options(fixture))?;
+    let (runs, operations) = (Arc::new(AtomicUsize::new(0)), Arc::new(AtomicUsize::new(0)));
+    let (counted, operated) = (Arc::clone(&runs), Arc::clone(&operations));
+    let checkpoint = text(fixture, "checkpointName").to_owned();
+    worker.handle(task_type, move |zeros: usize, context: HandlerContext| {
+        let (counted, operated, checkpoint) =
+            (Arc::clone(&counted), Arc::clone(&operated), checkpoint.clone());
+        async move {
+            counted.fetch_add(1, Ordering::SeqCst);
+            let _: Vec<i32> = context
+                .checkpoint(&checkpoint, || async move {
+                    operated.fetch_add(1, Ordering::SeqCst);
+                    Ok(vec![0_i32; zeros])
+                })
+                .await?;
+            Ok(json!({}))
+        }
+    });
+    let settled = &fixture["expectedSettled"];
+    for _ in 0..number(fixture, "maxAttempts") {
+        let snapshot = admin.get_task(task).await.map_err(driver)?.ok_or("the task is gone")?;
+        if snapshot.state.as_str() == text(settled, "state") {
+            break;
+        }
+        run_once(&worker, true).await?;
+    }
+    let (operations, runs) = (operations.load(Ordering::SeqCst), runs.load(Ordering::SeqCst));
+    let want =
+        (number(fixture, "expectedCheckpointOperations"), number(fixture, "expectedHandlerRuns"));
+    check((operations as i64, runs as i64) == want, || {
+        format!("the operation ran {operations} times and the handler {runs} times, want {want:?}")
+    })?;
+    let snapshot = admin.get_task(task).await.map_err(driver)?.ok_or("the task is gone")?;
+    let name = snapshot.error.as_ref().and_then(|error| error["name"].as_str());
+    let error_name = text(&fixture["expectedErrorNames"], "rust");
+    check(name == Some(error_name), || format!("task error {name:?}, want {error_name:?}"))?;
+    let stored: i32 = client
+        .query_one(
+            "SELECT count(*)::int FROM workhorse.task_checkpoint WHERE task_id = $1",
+            &[&task],
+        )
+        .await
+        .map_err(sql)?
+        .get(0);
+    let want = number(fixture, "expectedStoredCheckpoints");
+    check(i64::from(stored) == want, || {
+        format!("the task stores {stored} checkpoints, want {want}")
     })?;
     assert_state(&client, task, settled).await?;
     let outcomes: Vec<&str> = fixture["expectedAttemptOutcomes"]

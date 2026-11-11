@@ -33,6 +33,23 @@ public sealed class WorkerUnitTests
         Assert.Equal("wrapped", envelope.RootElement.GetProperty("message").GetString());
     }
 
+    // SM-1983: each field is cut at a code point boundary to its UTF-8 byte limit.
+    [Fact]
+    public void EachEnvelopeFieldIsCutWithoutSplittingASurrogatePair()
+    {
+        Assert.Equal("a", FailureEnvelope.Utf8Prefix("a\u00e9", 2));
+        Assert.Equal("\u20ac", FailureEnvelope.Utf8Prefix("\u20ac\u20ac", 5));
+        Assert.Equal("a", FailureEnvelope.Utf8Prefix("a\ud83d\ude00", 4));
+        Assert.Equal("a\ud83d\ude00", FailureEnvelope.Utf8Prefix("a\ud83d\ude00", 5));
+        var emoji = "a" + string.Concat(Enumerable.Repeat("\ud83d\ude00", 5000));
+        Assert.Equal("a" + string.Concat(Enumerable.Repeat("\ud83d\ude00", 4095)), FailureEnvelope.Utf8Prefix(emoji, FailureEnvelope.MessageMaxBytes));
+
+        using var envelope = JsonDocument.Parse(FailureEnvelope.Write(new InvalidOperationException(new string('m', 70_000)), redact: false));
+        Assert.Equal(new string('m', 16_384), envelope.RootElement.GetProperty("message").GetString());
+        Assert.True(System.Text.Encoding.UTF8.GetByteCount(envelope.RootElement.GetProperty("stack").GetString()!) <= FailureEnvelope.StackMaxBytes);
+        Assert.True(envelope.RootElement.GetProperty("truncated").GetBoolean());
+    }
+
     [Fact]
     public void TheConflictWalkReadsOnlyTheFirstInnerExceptionAndStopsAtItsBound()
     {

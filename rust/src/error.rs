@@ -222,6 +222,13 @@ pub enum Error {
         stored_fingerprint: String,
         requested_fingerprint: String,
     },
+    /// PostgreSQL cannot store a checkpoint value, because its jsonb text is above the limit. The
+    /// operation already ran, and a retry would run it again with its effects, so the worker fails
+    /// the task without a retry (SM-1982).
+    #[error(
+        "Checkpoint {name} for task {task_id} has {actual_bytes} bytes of jsonb text, above its limit of {max_bytes} bytes"
+    )]
+    CheckpointValueSizeLimit { task_id: Uuid, name: String, actual_bytes: i64, max_bytes: i64 },
     #[error("{operation} {name} exceeded its limit")]
     LimitExceeded { operation: Operation, name: String },
     #[error("{operation} {name} is already waiting")]
@@ -327,6 +334,14 @@ impl Error {
                 stored_fingerprint: stored_fingerprint.clone(),
                 requested_fingerprint: requested_fingerprint.clone(),
             },
+            Self::CheckpointValueSizeLimit { task_id, name, actual_bytes, max_bytes } => {
+                Self::CheckpointValueSizeLimit {
+                    task_id: *task_id,
+                    name: name.clone(),
+                    actual_bytes: *actual_bytes,
+                    max_bytes: *max_bytes,
+                }
+            }
             Self::LimitExceeded { operation, name } => {
                 Self::LimitExceeded { operation: *operation, name: name.clone() }
             }

@@ -23,6 +23,12 @@ type failureEnvelopeTable struct {
 		} `json:"redacted"`
 		GenericName             map[string]string `json:"genericName"`
 		ForbiddenNameCharacters []string          `json:"forbiddenNameCharacters"`
+		Limits                  struct {
+			Name           int    `json:"name"`
+			Message        int    `json:"message"`
+			Stack          int    `json:"stack"`
+			TruncatedField string `json:"truncatedField"`
+		} `json:"limits"`
 	} `json:"envelope"`
 	Fixtures []failureEnvelopeFixture `json:"fixtures"`
 }
@@ -36,17 +42,18 @@ type failureEnvelopeFixture struct {
 	} `json:"error"`
 	RedactErrorDetails bool `json:"redactErrorDetails"`
 	Envelope           struct {
-		Name    string `json:"name"`
-		Message string `json:"message"`
-		Stack   string `json:"stack"`
+		Name      string         `json:"name"`
+		Message   fixtureMessage `json:"message"`
+		Stack     string         `json:"stack"`
+		Truncated bool           `json:"truncated"`
 	} `json:"envelope"`
 }
 
 const declaredFailureName = "PaymentDeclined"
 
-// fixtureMessage is the message a fixture describes: text, or an array of text parts and unpaired
-// surrogates. A Go string holds bytes, so an unpaired surrogate becomes the byte 0xFF, which is not
-// UTF-8.
+// fixtureMessage is the message a fixture describes: text, or an array of text parts, repeated
+// text parts, and unpaired surrogates. A Go string holds bytes, so an unpaired surrogate becomes the
+// byte 0xFF, which is not UTF-8.
 type fixtureMessage string
 
 func (message *fixtureMessage) UnmarshalJSON(data []byte) error {
@@ -65,13 +72,22 @@ func (message *fixtureMessage) UnmarshalJSON(data []byte) error {
 			built.WriteString(text)
 			continue
 		}
-		var surrogate struct {
+		var object struct {
 			UnpairedSurrogate string `json:"unpairedSurrogate"`
+			Repeat            string `json:"repeat"`
+			Count             int    `json:"count"`
 		}
-		if err := json.Unmarshal(part, &surrogate); err != nil || surrogate.UnpairedSurrogate == emptyString {
-			return fmt.Errorf("message part %s is neither text nor an unpaired surrogate", part)
+		if err := json.Unmarshal(part, &object); err != nil {
+			return err
 		}
-		built.WriteByte(0xff)
+		switch {
+		case object.Repeat != emptyString:
+			built.WriteString(strings.Repeat(object.Repeat, object.Count))
+		case object.UnpairedSurrogate != emptyString:
+			built.WriteByte(0xff)
+		default:
+			return fmt.Errorf("message part %s is not text, a repeat, or an unpaired surrogate", part)
+		}
 	}
 	*message = fixtureMessage(built.String())
 	return nil
@@ -120,9 +136,25 @@ func TestFailureEnvelopeMatchesSharedTable(t *testing.T) {
 	for _, fixture := range table.Fixtures {
 		t.Run(fixture.ID, func(t *testing.T) {
 			envelope := handlerErrorEnvelope(fixtureFailureError(fixture), fixture.RedactErrorDetails)
-			expectedFields := table.Envelope.Fields
+			expectedFields := append([]string{}, table.Envelope.Fields...)
 			if fixture.RedactErrorDetails {
-				expectedFields = table.Envelope.RedactedFields
+				expectedFields = append([]string{}, table.Envelope.RedactedFields...)
+			}
+			if fixture.Envelope.Truncated {
+				expectedFields = append(expectedFields, table.Envelope.Limits.TruncatedField)
+				if envelope[errorTruncatedField] != true {
+					t.Fatalf("truncated is %v, expected true", envelope[errorTruncatedField])
+				}
+			}
+			limits := map[string]int{
+				errorNameField:    table.Envelope.Limits.Name,
+				errorMessageField: table.Envelope.Limits.Message,
+				errorStackField:   table.Envelope.Limits.Stack,
+			}
+			for field, limit := range limits {
+				if text, ok := envelope[field].(string); ok && len(text) > limit {
+					t.Fatalf("%s has %d bytes, above its limit of %d", field, len(text), limit)
+				}
 			}
 			if len(envelope) != len(expectedFields) {
 				t.Fatalf("envelope has fields %v, expected %v", envelope, expectedFields)
@@ -132,7 +164,7 @@ func TestFailureEnvelopeMatchesSharedTable(t *testing.T) {
 					t.Fatalf("envelope is missing %q", field)
 				}
 			}
-			if envelope[errorMessageField] != fixture.Envelope.Message {
+			if envelope[errorMessageField] != string(fixture.Envelope.Message) {
 				t.Fatalf("message is %v", envelope[errorMessageField])
 			}
 			expectedName := fixture.Envelope.Name
@@ -261,5 +293,39 @@ func TestFailureEnvelopeCarriesAPanicStack(t *testing.T) {
 	stack, ok := envelope[errorStackField].(string)
 	if !ok || !strings.Contains(stack, "goroutine") {
 		t.Fatalf("stack is %v", envelope[errorStackField])
+	}
+}
+
+// SM-1983: each field is cut at a code point boundary to its UTF-8 byte limit.
+func TestFailureEnvelopeCutsEachFieldWithoutSplittingACharacter(t *testing.T) {
+	cases := []struct {
+		text     string
+		maxBytes int
+		want     string
+	}{
+		{"a\u00e9", 2, "a"},
+		{"a\u00e9", 3, "a\u00e9"},
+		{"\u20ac\u20ac", 5, "\u20ac"},
+		{"a\U0001F600", 4, "a"},
+		{"a\U0001F600", 5, "a\U0001F600"},
+	}
+	for _, item := range cases {
+		if got := utf8Prefix(item.text, item.maxBytes); got != item.want {
+			t.Fatalf("utf8Prefix(%q, %d) = %q, want %q", item.text, item.maxBytes, got, item.want)
+		}
+	}
+	err := &paymentDeclined{
+		message: strings.Repeat("m", 70_000),
+		stack:   "a" + strings.Repeat("\U0001F600", 16_384),
+	}
+	envelope := handlerErrorEnvelope(err, false)
+	if envelope[errorMessageField] != strings.Repeat("m", 16_384) {
+		t.Fatalf("message has %d bytes", len(envelope[errorMessageField].(string)))
+	}
+	if envelope[errorStackField] != "a"+strings.Repeat("\U0001F600", 16_383) {
+		t.Fatalf("stack has %d bytes", len(envelope[errorStackField].(string)))
+	}
+	if envelope[errorTruncatedField] != true {
+		t.Fatalf("truncated is %v", envelope[errorTruncatedField])
 	}
 }

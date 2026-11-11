@@ -121,10 +121,15 @@ public sealed partial class Worker
 
                     Live("checkpoint");
                     var encoded = Storable(await operation(CancellationToken).ConfigureAwait(false), "checkpoint value");
-                    var row = await FencedAsync(SqlCatalogue.SaveCheckpointV2, Parameters.Text(name), Parameters.Json(encoded), Parameters.Text(fingerprint)).ConfigureAwait(false);
+                    var row = await FencedAsync(SqlCatalogue.SaveCheckpointV3, Parameters.Text(name), Parameters.Json(encoded), Parameters.Text(fingerprint)).ConfigureAwait(false);
                     if (row.Text("status") == "input_conflict")
                     {
                         CheckInput(name, row.Text("input_fingerprint"), fingerprint);
+                    }
+
+                    if (row.Text("status") == "value_too_large")
+                    {
+                        throw new CheckpointValueSizeLimitException(name, row.Long("value_bytes") ?? 0, row.Long("max_bytes") ?? 0);
                     }
 
                     var status = Expect("checkpoint", row, name, "saved", "existing");

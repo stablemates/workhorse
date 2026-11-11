@@ -422,7 +422,7 @@ public sealed class DurableContextTests(ScratchDatabase database) : IClassFixtur
     private async Task<long> WaitingWritesAsync() =>
         (long)(await ScalarAsync(
             DataSource,
-            "SELECT count(*) FROM pg_stat_activity WHERE datname = current_database() AND wait_event_type = 'Lock' AND query LIKE '%save_checkpoint_v2%'"))!;
+            "SELECT count(*) FROM pg_stat_activity WHERE datname = current_database() AND wait_event_type = 'Lock' AND query LIKE '%save_checkpoint_v3%'"))!;
 
     [Fact]
     public async Task AnInvalidNameThrowsBeforeAnyStatement()

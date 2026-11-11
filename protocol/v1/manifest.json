@@ -2,9 +2,9 @@
   "formatVersion": 1,
   "protocolVersion": 5,
   "schema": {
-    "installedVersion": 98,
-    "minimumVersion": 98,
-    "maximumVersion": 98,
+    "installedVersion": 99,
+    "minimumVersion": 99,
+    "maximumVersion": 99,
     "baselineVersion": 6
   },
   "supportedClientProtocol": {
@@ -98,6 +98,7 @@
     "maintenance-phase-resilience",
     "terminal-replay-conflict",
     "result-size-limit",
+    "checkpoint-value-size-limit",
     "result-contract-failure",
     "shutdown-cancellation-release",
     "shutdown-cancellation-completion",
@@ -197,6 +198,11 @@
       "contract": "SELECT workhorse.fail_v1($1::uuid, $2::text, $3::bigint, $4::jsonb, $5::integer) AS state"
     },
     {
+      "name": "fail_v2",
+      "arity": 5,
+      "contract": "SELECT workhorse.fail_v2($1::uuid, $2::text, $3::bigint, $4::jsonb, $5::integer) AS state"
+    },
+    {
       "name": "release_owned_v1",
       "arity": 3,
       "contract": "SELECT workhorse.release_owned_v1($1::uuid, $2::text, $3::bigint) AS status"
@@ -220,6 +226,11 @@
       "name": "save_checkpoint_v2",
       "arity": 6,
       "contract": "SELECT status, checkpoint_value, attempt, fence_token::text, worker_id, created_at, input_fingerprint FROM workhorse.save_checkpoint_v2($1::uuid, $2::text, $3::bigint, $4::text, $5::jsonb, $6::text)"
+    },
+    {
+      "name": "save_checkpoint_v3",
+      "arity": 6,
+      "contract": "SELECT status, checkpoint_value, attempt, fence_token::text, worker_id, created_at, input_fingerprint, value_bytes, max_bytes FROM workhorse.save_checkpoint_v3($1::uuid, $2::text, $3::bigint, $4::text, $5::jsonb, $6::text)"
     },
     {
       "name": "update_progress_v1",
@@ -409,9 +420,15 @@
     },
     {
       "name": "fail_v1",
-      "pythonBinding": "fail",
       "arity": 5,
       "contract": "SELECT workhorse.fail_v1($1::uuid, $2::text, $3::bigint, $4::jsonb, $5::integer) AS state",
+      "catalogues": ["protocol"]
+    },
+    {
+      "name": "fail_v2",
+      "pythonBinding": "fail",
+      "arity": 5,
+      "contract": "SELECT workhorse.fail_v2($1::uuid, $2::text, $3::bigint, $4::jsonb, $5::integer) AS state",
       "catalogues": ["protocol"]
     },
     {
@@ -646,9 +663,15 @@
     },
     {
       "name": "save_checkpoint_v2",
-      "pythonBinding": "save_checkpoint",
       "arity": 6,
       "contract": "SELECT status, checkpoint_value, attempt, fence_token::text, worker_id, created_at, input_fingerprint FROM workhorse.save_checkpoint_v2($1::uuid, $2::text, $3::bigint, $4::text, $5::jsonb, $6::text)",
+      "catalogues": ["protocol"]
+    },
+    {
+      "name": "save_checkpoint_v3",
+      "pythonBinding": "save_checkpoint",
+      "arity": 6,
+      "contract": "SELECT status, checkpoint_value, attempt, fence_token::text, worker_id, created_at, input_fingerprint, value_bytes, max_bytes FROM workhorse.save_checkpoint_v3($1::uuid, $2::text, $3::bigint, $4::text, $5::jsonb, $6::text)",
       "catalogues": ["protocol"]
     },
     {

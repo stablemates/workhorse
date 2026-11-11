@@ -2142,7 +2142,8 @@ export class Worker {
       : typeof this.options.retryDelayMs === "function"
         ? this.options.retryDelayMs(task.attempt, task)
         : this.options.retryDelayMs;
-    // fail_v1 reads -1 as the terminal sentinel, which only a terminal replay error may send.
+    // fail_v2 reads -1 as the terminal sentinel, which only a terminal replay error or an
+    // oversized checkpoint value may send.
     if (
       !terminalConflict &&
       delay !== undefined &&

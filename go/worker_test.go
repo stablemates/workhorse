@@ -50,6 +50,7 @@ type workerRuntimeFixture struct {
 	ExpectedHandlerOrder                 []string                          `json:"expectedHandlerOrder"`
 	ExpectedHandlerRuns                  int                               `json:"expectedHandlerRuns"`
 	ExpectedCheckpointOperations         int                               `json:"expectedCheckpointOperations"`
+	ExpectedStoredCheckpoints            int                               `json:"expectedStoredCheckpoints"`
 	ExpectedAttemptsAfterSuspension      int                               `json:"expectedAttemptsAfterSuspension"`
 	ExpectedAttemptsAfterReplay          int                               `json:"expectedAttemptsAfterReplay"`
 	ExpectedAfterSuspension              map[string]workerFixtureTaskState `json:"expectedAfterSuspension"`

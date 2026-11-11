@@ -705,6 +705,13 @@ export const SCHEMA_MIGRATIONS: readonly SchemaMigrationStep[] = [
     description: "keep the settings audit, withhold error stacks, and find derived history records",
     kind: "additive",
   },
+  {
+    fromVersion: 98,
+    toVersion: 99,
+    file: "0100-bound-failure-envelopes-and-answer-oversized-checkpoints.sql",
+    description: "bound failure envelopes and answer an oversized checkpoint value with a status",
+    kind: "additive",
+  },
 ];
 
 /**

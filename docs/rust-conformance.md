@@ -12,13 +12,13 @@ fixture does not pass, and when a listed fixture passes. `pnpm rust:test` runs i
 
 | Fixture file            | Declared | Passing | Expected unsupported |
 | ----------------------- | -------: | ------: | -------------------: |
-| `compatibility.json`    |       23 |      23 |                    0 |
+| `compatibility.json`    |       24 |      24 |                    0 |
 | `contracts.json`        |       43 |      43 |                    0 |
 | `cron-occurrences.json` |       27 |      27 |                    0 |
-| `failures.json`         |        8 |       8 |                    0 |
+| `failures.json`         |       14 |      14 |                    0 |
 | `interpreter.json`      |        1 |       1 |                    0 |
 | `requests.json`         |        7 |       7 |                    0 |
-| `runtime.json`          |       44 |      44 |                    0 |
+| `runtime.json`          |       45 |      45 |                    0 |
 | `scenarios.json`        |       22 |      22 |                    0 |
 | `schedules.json`        |        3 |       3 |                    0 |
 

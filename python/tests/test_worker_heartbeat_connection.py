@@ -590,7 +590,7 @@ def test_a_handler_is_aborted_when_no_heartbeat_is_accepted_within_the_lease(
     assert cancelled_after[0] <= 3 * WATCHDOG_LEASE_MS / 1000
     # The attempt recorded a lost lease, so the worker settled nothing through fail_v1. The task
     # returns through lease recovery instead.
-    assert not any("fail_v1" in statement for statement in log.statements()), log.statements()
+    assert not any("fail_v2" in statement for statement in log.statements()), log.statements()
 
 
 # The first round leaves at about 0.5 s, and the local window from the claim ends at about 1 s. The

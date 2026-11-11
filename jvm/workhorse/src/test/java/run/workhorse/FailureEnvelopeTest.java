@@ -52,13 +52,15 @@ class FailureEnvelopeTest {
     }
     StringBuilder built = new StringBuilder();
     for (Object part : (List<?>) java.util.Objects.requireNonNull(message)) {
-      built.append(
-          part instanceof String text
-              ? text
-              : String.valueOf(
-                  (char)
-                      Integer.parseInt(
-                          String.valueOf(((Map<?, ?>) part).get("unpairedSurrogate")), 16)));
+      if (part instanceof String text) {
+        built.append(text);
+      } else if (((Map<?, ?>) part).get("repeat") instanceof String repeat) {
+        built.append(repeat.repeat(((Number) ((Map<?, ?>) part).get("count")).intValue()));
+      } else {
+        built.append(
+            (char)
+                Integer.parseInt(String.valueOf(((Map<?, ?>) part).get("unpairedSurrogate")), 16));
+      }
     }
     return built.toString();
   }
@@ -139,9 +141,27 @@ class FailureEnvelopeTest {
       }
       String name = at(expected, "name");
       assertEquals(name.equals("$generic") ? generic : name, actual.get("name"), id);
-      assertEquals(expected.get("message"), actual.get("message"), id);
+      assertEquals(message(expected.get("message")), actual.get("message"), id);
       assertTrue(actual.get("stack") instanceof String, id + " records a stack");
+      assertEquals(expected.containsKey("truncated"), actual.containsKey("truncated"), id);
     }
+  }
+
+  // SM-1983: each field is cut at a code point boundary to its UTF-8 byte limit.
+  @Test
+  void cutsEachFieldWithoutSplittingASurrogatePair() {
+    assertEquals("a", Worker.utf8Prefix("a\u00e9", 2));
+    assertEquals("\u20ac", Worker.utf8Prefix("\u20ac\u20ac", 5));
+    assertEquals("a", Worker.utf8Prefix("a\ud83d\ude00", 4));
+    assertEquals("a\ud83d\ude00", Worker.utf8Prefix("a\ud83d\ude00", 5));
+    String emoji = "a" + "\ud83d\ude00".repeat(5000);
+    assertEquals("a" + "\ud83d\ude00".repeat(4095), Worker.utf8Prefix(emoji, 16_384));
+    Map<String, @Nullable Object> envelope =
+        Worker.failureEnvelope(new IllegalStateException("m".repeat(70_000)), false);
+    assertEquals("m".repeat(16_384), envelope.get("message"));
+    String stack = String.valueOf(envelope.get("stack"));
+    assertTrue(stack.getBytes(java.nio.charset.StandardCharsets.UTF_8).length <= 65_536);
+    assertEquals(true, envelope.get("truncated"));
   }
 
   // SM-1512: a wrapped durable replay conflict keeps its class name, as in Go and Rust.

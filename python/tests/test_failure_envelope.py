@@ -14,7 +14,7 @@ from protocol_fixtures import read_protocol_fixture
 from psycopg_pool import ConnectionPool
 
 from workhorse import Admin, AdminAudit, EnqueueOptions, Queue, Worker
-from workhorse.worker import _error_envelope
+from workhorse.worker import _error_envelope, _utf8_prefix
 
 FAILURES: dict[str, Any] = read_protocol_fixture("failures.json")
 ENVELOPE: dict[str, Any] = FAILURES["envelope"]
@@ -31,10 +31,15 @@ def _fixture_message(message: str | list[Any]) -> str:
     """Return the message a fixture describes. A Python string holds an unpaired surrogate."""
     if isinstance(message, str):
         return message
-    return "".join(
-        part if isinstance(part, str) else chr(int(part["unpairedSurrogate"], 16))
-        for part in message
-    )
+    return "".join(_fixture_part(part) for part in message)
+
+
+def _fixture_part(part: str | dict[str, Any]) -> str:
+    if isinstance(part, str):
+        return part
+    if "repeat" in part:
+        return str(part["repeat"]) * int(part["count"])
+    return chr(int(part["unpairedSurrogate"], 16))
 
 
 def _fixture_error(fixture: dict[str, Any]) -> Exception:
@@ -60,11 +65,19 @@ def _envelope(fixture: dict[str, Any]) -> dict[str, Any]:
 @pytest.mark.parametrize("fixture", FIXTURES, ids=[fixture["id"] for fixture in FIXTURES])
 def test_failure_envelope_matches_shared_table(fixture: dict[str, Any]) -> None:
     envelope = _envelope(fixture)
-    expected_fields = (
+    expected_fields = list(
         ENVELOPE["redactedFields"] if fixture["redactErrorDetails"] else ENVELOPE["fields"]
     )
+    if fixture["envelope"].get("truncated") is True:
+        expected_fields.append(ENVELOPE["limits"]["truncatedField"])
+        assert envelope["truncated"] is True
     assert sorted(envelope) == sorted(expected_fields)
-    assert envelope["message"] == fixture["envelope"]["message"]
+    assert envelope["message"] == _fixture_message(fixture["envelope"]["message"])
+    # Each field fits its limit in UTF-8 bytes, also the stack that the traceback builds.
+    for field in ("name", "message", "stack"):
+        value = envelope.get(field)
+        if isinstance(value, str):
+            assert len(value.encode("utf-8")) <= ENVELOPE["limits"][field]
     expected_name = fixture["envelope"]["name"]
     if expected_name == "$generic":
         expected_name = ENVELOPE["genericName"]["python"]
@@ -83,6 +96,26 @@ def test_failure_envelope_never_records_a_type_system_artifact(fixture: dict[str
     assert name
     for character in ENVELOPE["forbiddenNameCharacters"]:
         assert character not in name
+
+
+def test_failure_envelope_cuts_each_field_without_splitting_a_character() -> None:
+    """SM-1983: each field is cut at a code point boundary to its UTF-8 byte limit."""
+    assert _utf8_prefix("a\u00e9", 2) == "a"
+    assert _utf8_prefix("\u20ac\u20ac", 5) == "\u20ac"
+    assert _utf8_prefix("a\U0001f600", 4) == "a"
+    assert _utf8_prefix("a\U0001f600", 5) == "a\U0001f600"
+    long_name = type("A" + "\u20ac" * 342, (Exception,), {})
+    try:
+        raise long_name("m" * 70_000)
+    except Exception as raised:
+        envelope = _error_envelope(raised, False)
+    assert isinstance(envelope, dict)
+    assert envelope["name"] == "A" + "\u20ac" * 341
+    assert envelope["message"] == "m" * 16_384
+    stack = envelope["stack"]
+    assert isinstance(stack, str)
+    assert len(stack.encode("utf-8")) <= 65_536
+    assert envelope["truncated"] is True
 
 
 def test_redaction_matches_redact_error_details_v1() -> None:

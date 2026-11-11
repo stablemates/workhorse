@@ -13,8 +13,8 @@ public final class SqlCatalogue {
 
   public static final int MINIMUM_PROTOCOL_VERSION = 5;
   public static final int MAXIMUM_PROTOCOL_VERSION = 5;
-  public static final int MINIMUM_SCHEMA_VERSION = 98;
-  public static final int MAXIMUM_SCHEMA_VERSION = 98;
+  public static final int MINIMUM_SCHEMA_VERSION = 99;
+  public static final int MAXIMUM_SCHEMA_VERSION = 99;
 
   /** PostgreSQL's atomic enqueue batch limit. */
   public static final int MAX_ENQUEUE_BATCH_SIZE = 1000;
@@ -218,6 +218,14 @@ public final class SqlCatalogue {
       new Statement(
           "fail_v1",
           "SELECT workhorse.fail_v1(?::uuid, ?::text, ?::bigint, ?::jsonb, ?::integer) AS state",
+          5,
+          new int[] {1, 2, 3, 4, 5});
+
+  /** {@code fail_v2} (protocol). */
+  public static final Statement FAIL_V2 =
+      new Statement(
+          "fail_v2",
+          "SELECT workhorse.fail_v2(?::uuid, ?::text, ?::bigint, ?::jsonb, ?::integer) AS state",
           5,
           new int[] {1, 2, 3, 4, 5});
 
@@ -514,6 +522,14 @@ public final class SqlCatalogue {
       new Statement(
           "save_checkpoint_v2",
           "SELECT status, checkpoint_value, attempt, fence_token::text, worker_id, created_at, input_fingerprint FROM workhorse.save_checkpoint_v2(?::uuid, ?::text, ?::bigint, ?::text, ?::jsonb, ?::text)",
+          6,
+          new int[] {1, 2, 3, 4, 5, 6});
+
+  /** {@code save_checkpoint_v3} (protocol). */
+  public static final Statement SAVE_CHECKPOINT_V3 =
+      new Statement(
+          "save_checkpoint_v3",
+          "SELECT status, checkpoint_value, attempt, fence_token::text, worker_id, created_at, input_fingerprint, value_bytes, max_bytes FROM workhorse.save_checkpoint_v3(?::uuid, ?::text, ?::bigint, ?::text, ?::jsonb, ?::text)",
           6,
           new int[] {1, 2, 3, 4, 5, 6});
 
@@ -1466,6 +1482,7 @@ public final class SqlCatalogue {
           ENQUEUE_MANY_V1,
           EXPIRE_OWNED_TELEMETRY_V1,
           FAIL_V1,
+          FAIL_V2,
           RELEASE_OWNED_V1,
           FIRE_DUE_SCHEDULES_V2,
           GET_CHECKPOINT,
@@ -1503,6 +1520,7 @@ public final class SqlCatalogue {
           RUN_MAINTENANCE_V1,
           SAVE_CHECKPOINT_V1,
           SAVE_CHECKPOINT_V2,
+          SAVE_CHECKPOINT_V3,
           SCHEDULE_WAIT_V1,
           SCHEDULE_WAIT_V2,
           SCHEMA_VERSION,

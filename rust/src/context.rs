@@ -199,9 +199,18 @@ impl HandlerContext {
         }
         let value = finite_json(&op().await?, "Checkpoint")?;
         let params: [&(dyn tokio_postgres::types::ToSql + Sync); 3] = [&name, &value, &fingerprint];
-        let row = self.call(sql::SAVE_CHECKPOINT_V2, "save_checkpoint_v2", &params).await?;
+        let row = self.call(sql::SAVE_CHECKPOINT_V3, "save_checkpoint_v3", &params).await?;
         match status(&row)?.as_str() {
             "saved" | "existing" => Ok(row.try_get::<_, Value>("checkpoint_value")?),
+            "value_too_large" => Err(HandlerError::from(Error::CheckpointValueSizeLimit {
+                task_id: task.id,
+                name: name.to_owned(),
+                actual_bytes: row
+                    .try_get::<_, Option<i32>>("value_bytes")?
+                    .unwrap_or_default()
+                    .into(),
+                max_bytes: row.try_get::<_, Option<i32>>("max_bytes")?.unwrap_or_default().into(),
+            })),
             "input_conflict" => {
                 let stored = row.try_get::<_, Option<String>>("input_fingerprint")?;
                 let stored = stored.unwrap_or_default();

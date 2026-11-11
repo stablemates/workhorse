@@ -230,6 +230,7 @@ final class RuntimeFixtures {
         case "checkpoint-no-value" -> checkpointNoValue(fixture);
         case "durable-script" -> new DurableScript(opener, connection).run(fixture, "all");
         case "oversized-result" -> oversizedResult(fixture);
+        case "oversized-checkpoint" -> oversizedCheckpoint(fixture);
         case "result-contract-failure" -> resultContractFailure(fixture);
         case "shutdown-cancellation" -> shutdownCancellation(fixture);
         case "heartbeat-failure" -> heartbeatFailure(fixture);
@@ -274,6 +275,9 @@ final class RuntimeFixtures {
     for (Object part : (List<?>) Objects.requireNonNull(message, "message")) {
       if (part instanceof String text) {
         built.append(text);
+      } else if (Runner.object(part, "message part").get("repeat") instanceof String repeat) {
+        Object count = Runner.object(part, "message part").get("count");
+        built.append(repeat.repeat(((Number) Objects.requireNonNull(count, "count")).intValue()));
       } else {
         Object unit = Runner.object(part, "message part").get("unpairedSurrogate");
         built.append((char) Integer.parseInt(String.valueOf(unit), 16));
@@ -308,8 +312,8 @@ final class RuntimeFixtures {
           @Override
           public void before(Intercept.Call call) {
             // PostgreSQL also redacts, so the envelope is checked before it leaves the worker.
-            if (call.is(SqlCatalogue.FAIL_V1)) {
-              sent.add(Json.parse(String.valueOf(call.parameter(SqlCatalogue.FAIL_V1, 4))));
+            if (call.is(SqlCatalogue.FAIL_V2)) {
+              sent.add(Json.parse(String.valueOf(call.parameter(SqlCatalogue.FAIL_V2, 4))));
             }
           }
         };
@@ -335,7 +339,7 @@ final class RuntimeFixtures {
             + error.getStackTrace().length
             + " frames, want declaresStack "
             + declaresStack);
-    check(sent.size() == 1, "the worker sent " + sent.size() + " fail_v1 calls, want 1");
+    check(sent.size() == 1, "the worker sent " + sent.size() + " fail_v2 calls, want 1");
     Object stored =
         Json.parse(
             value(
@@ -347,11 +351,28 @@ final class RuntimeFixtures {
   private void failureEnvelope(
       Map<String, @Nullable Object> fixture, String label, Map<String, @Nullable Object> stored) {
     boolean redacted = Boolean.TRUE.equals(fixture.get("redactErrorDetails"));
-    Set<Object> fields = Set.copyOf((List<?>) envelope.get(redacted ? "redactedFields" : "fields"));
+    Map<String, @Nullable Object> expected = Runner.object(fixture.get("envelope"), "envelope");
+    Map<String, @Nullable Object> limits = Runner.object(envelope.get("limits"), "limits");
+    Set<Object> fields =
+        new java.util.HashSet<>((List<?>) envelope.get(redacted ? "redactedFields" : "fields"));
+    if (Boolean.TRUE.equals(expected.get("truncated"))) {
+      fields.add(Objects.requireNonNull(limits.get("truncatedField"), "truncatedField"));
+      check(
+          Boolean.TRUE.equals(stored.get("truncated")),
+          label + " envelope truncated " + stored.get("truncated") + ", want true");
+    }
     check(
         Set.copyOf(stored.keySet()).equals(fields),
         label + " envelope fields " + stored.keySet() + ", want " + fields);
-    Map<String, @Nullable Object> expected = Runner.object(fixture.get("envelope"), "envelope");
+    for (String field : List.of("name", "message", "stack")) {
+      if (stored.get(field) instanceof String text) {
+        long limit = ((Number) Objects.requireNonNull(limits.get(field), field)).longValue();
+        int bytes = text.getBytes(java.nio.charset.StandardCharsets.UTF_8).length;
+        check(
+            bytes <= limit,
+            label + " envelope " + field + " has " + bytes + " bytes, above its limit of " + limit);
+      }
+    }
     Object want = expected.get("name");
     if ("$generic".equals(want)) {
       want = Runner.object(envelope.get("genericName"), "genericName").get("java");
@@ -360,7 +381,7 @@ final class RuntimeFixtures {
         Matcher.same(stored.get("name"), want),
         label + " envelope name " + Matcher.render(stored.get("name")) + ", want " + want);
     check(
-        Matcher.same(stored.get("message"), expected.get("message")),
+        Matcher.same(stored.get("message"), fixtureMessage(expected.get("message"))),
         label
             + " envelope message "
             + Matcher.render(stored.get("message"))
@@ -2201,6 +2222,71 @@ final class RuntimeFixtures {
     check(
         Objects.equals(stored, fixture.get("expectedCheckpointValueJsonType")),
         "the checkpoint value is stored as JSON type " + stored);
+    expectState(taskId, settled);
+    expectOutcomes(
+        taskId, (List<?>) Objects.requireNonNull(fixture.get("expectedAttemptOutcomes")));
+  }
+
+  /**
+   * The checkpoint operation returns an array of zeros, whose {@code jsonb} text is above the
+   * checkpoint limit. The worker fails the task without a retry, so the operation runs one time
+   * (SM-1982).
+   */
+  private void oversizedCheckpoint(Map<String, @Nullable Object> fixture) throws Exception {
+    int maxAttempts = Math.toIntExact((Long) fixture.get("maxAttempts"));
+    UUID taskId =
+        enqueue(
+            taskType(fixture),
+            fixture.get("oversizedZeros"),
+            options(queueName(fixture))
+                .maxAttempts(maxAttempts)
+                .retryPolicy(Map.of("type", "fixed", "delayMs", 0)));
+    Map<String, @Nullable Object> settled = object(fixture, "expectedSettled");
+    AtomicInteger operations = new AtomicInteger();
+    AtomicInteger runs = new AtomicInteger();
+    try (Intercept pool = new Intercept(opener, new Intercept.Hook() {})) {
+      Handler<Object> handler =
+          (ctx, count) -> {
+            runs.incrementAndGet();
+            ctx.checkpoint(
+                (String) fixture.get("checkpointName"),
+                Object.class,
+                () -> {
+                  operations.incrementAndGet();
+                  return Collections.nCopies(Math.toIntExact((Long) count), 0L);
+                });
+            return Map.of();
+          };
+      Worker subject =
+          worker(pool, fixture).handle(taskType(fixture), Object.class, handler).build();
+      for (int attempt = 0; attempt < maxAttempts; attempt++) {
+        if (Matcher.same(state(taskId).get("state"), settled.get("state"))) {
+          break;
+        }
+        check(subject.runOnce(), "the worker did not run the checkpoint task");
+      }
+    }
+    check(
+        Matcher.same((long) operations.get(), fixture.get("expectedCheckpointOperations"))
+            && Matcher.same((long) runs.get(), fixture.get("expectedHandlerRuns")),
+        "the operation ran "
+            + operations.get()
+            + " times and the handler "
+            + runs.get()
+            + " times");
+    Object errorName = object(fixture, "expectedErrorNames").get("java");
+    Object recorded = state(taskId).get("errorName");
+    check(
+        Matcher.same(recorded, errorName),
+        "the task records the error " + recorded + ", want " + errorName);
+    String stored =
+        value(
+            "SELECT count(*)::text FROM workhorse.task_checkpoint WHERE task_id = '"
+                + taskId
+                + "'");
+    check(
+        Objects.equals(stored, String.valueOf(fixture.get("expectedStoredCheckpoints"))),
+        "the task stores " + stored + " checkpoints");
     expectState(taskId, settled);
     expectOutcomes(
         taskId, (List<?>) Objects.requireNonNull(fixture.get("expectedAttemptOutcomes")));

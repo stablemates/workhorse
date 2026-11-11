@@ -108,6 +108,7 @@ module Conformance
       when "checkpoint-no-value" then checkpoint_no_value(fixture)
       when "durable-script" then DurableScript.new(@url, fixture).run("all")
       when "oversized-result" then oversized_result(fixture)
+      when "oversized-checkpoint" then oversized_checkpoint(fixture)
       when "result-contract-failure" then result_contract_failure(fixture)
       when "shutdown-cancellation" then shutdown_cancellation(fixture)
       when "heartbeat-failure" then heartbeat_failure(fixture)
@@ -145,7 +146,7 @@ module Conformance
           disable_registry: true).handle("protocol.failure") { raise error }
         # PostgreSQL also redacts, so the envelope is checked before it leaves the worker.
         wrap_rows(subject) do |original, sql, params|
-          sent << JSON.parse(params[3]) if sql == W::SqlCatalogue::FAIL_V1
+          sent << JSON.parse(params[3]) if sql == W::SqlCatalogue::FAIL_V2
           original.call(sql, params)
         end
         check(subject.run_once == true, "the worker did not run the failing task")
@@ -153,7 +154,7 @@ module Conformance
       check(error.backtrace.empty? != declared["declaresStack"],
         "the handler raised #{error.backtrace.empty? ? "no" : "a"} backtrace, want declaresStack " \
         "#{declared["declaresStack"]}")
-      check(sent.length == 1, "the worker sent #{sent.length} fail_v1 calls, want 1")
+      check(sent.length == 1, "the worker sent #{sent.length} fail_v2 calls, want 1")
       stored = JSON.parse(value("SELECT error FROM workhorse.task_outcome WHERE task_id = $1", task_id))
       [["sent", sent.first], ["stored", stored]].each { |label, envelope| failure_envelope(fixture, label, envelope) }
     end
@@ -161,22 +162,41 @@ module Conformance
     private
 
     # The message a failures fixture describes. A Ruby string holds bytes, so an unpaired surrogate
-    # becomes the byte 0xFF, which is not UTF-8.
+    # becomes the byte 0xFF, which is not UTF-8. A repeat part is its text, count times.
     def fixture_message(message)
       return message if message.is_a?(String)
 
-      message.map { |part| part.is_a?(String) ? part.b : "\xFF".b }.join.force_encoding(Encoding::UTF_8)
+      message.map { |part| fixture_part(part) }.join.force_encoding(Encoding::UTF_8)
+    end
+
+    def fixture_part(part)
+      return part.b if part.is_a?(String)
+      return (part.fetch("repeat") * part.fetch("count")).b if part.key?("repeat")
+
+      "\xFF".b
     end
 
     def failure_envelope(fixture, label, stored)
       redacted = fixture["redactErrorDetails"] == true
-      fields = @envelope.fetch(redacted ? "redactedFields" : "fields")
-      check(stored.keys.sort == fields.sort, "#{label} envelope fields #{stored.keys.sort}, want #{fields.sort}")
       expected = fixture.fetch("envelope")
+      limits = @envelope.fetch("limits")
+      fields = @envelope.fetch(redacted ? "redactedFields" : "fields")
+      if expected["truncated"] == true
+        fields += [limits.fetch("truncatedField")]
+        check(stored["truncated"] == true, "#{label} envelope truncated #{stored["truncated"].inspect}, want true")
+      end
+      check(stored.keys.sort == fields.sort, "#{label} envelope fields #{stored.keys.sort}, want #{fields.sort}")
+      %w[name message stack].each do |field|
+        next unless stored[field].is_a?(String)
+
+        check(stored[field].bytesize <= limits.fetch(field),
+          "#{label} envelope #{field} has #{stored[field].bytesize} bytes, above its limit of #{limits.fetch(field)}")
+      end
       want = expected["name"]
       want = @envelope.dig("genericName", "ruby") if want == "$generic"
       check(stored["name"] == want, "#{label} envelope name #{Matcher.render(stored["name"])}, want #{want}")
-      check(stored["message"] == expected["message"],
+      want_message = fixture_message(expected["message"])
+      check(stored["message"] == want_message,
         "#{label} envelope message #{Matcher.render(stored["message"])}, want #{Matcher.render(expected["message"])}")
       case expected["stack"]
       when "string"
@@ -1057,6 +1077,40 @@ module Conformance
       check(values.to_a == [nil] * fixture["expectedHandlerRuns"], "the checkpoint returned #{Matcher.render(values.to_a)}")
       stored = value("SELECT jsonb_typeof(checkpoint_value) FROM workhorse.task_checkpoint WHERE task_id = $1", task_id)
       check(stored == fixture["expectedCheckpointValueJsonType"], "the checkpoint value is stored as JSON type #{stored.inspect}")
+      expect_state(task_id, settled)
+      expect_outcomes(task_id, fixture["expectedAttemptOutcomes"])
+    end
+
+    # The block returns an array of zeros, whose jsonb text is above the checkpoint limit. The
+    # worker fails the task without a retry, so the block runs one time (SM-1982).
+    def oversized_checkpoint(fixture)
+      admin = W::Admin.new(@connection)
+      task_id = queue.enqueue(fixture["taskType"], fixture["oversizedZeros"], queue: queue_name(fixture),
+        max_attempts: fixture["maxAttempts"], retry_policy: {"type" => "fixed", "delayMs" => 0}).task_id
+      settled = fixture.fetch("expectedSettled")
+      counts = {operations: 0, runs: 0}
+      with_pool do |pool|
+        subject = worker(pool, fixture).handle(fixture["taskType"]) do |zeros, context|
+          counts[:runs] += 1
+          context.checkpoint(fixture["checkpointName"]) do
+            counts[:operations] += 1
+            Array.new(zeros, 0)
+          end
+          {}
+        end
+        fixture["maxAttempts"].times do
+          break if admin.get_task(task_id).state.to_s == settled["state"]
+          check(subject.run_once == true, "the worker did not run the checkpoint task")
+        end
+      end
+      check(counts == {operations: fixture["expectedCheckpointOperations"], runs: fixture["expectedHandlerRuns"]},
+        "the block ran #{counts[:operations]} times and the handler #{counts[:runs]} times")
+      error_name = fixture.dig("expectedErrorNames", "ruby")
+      task = admin.get_task(task_id)
+      check(task.error&.fetch("name", nil) == error_name,
+        "the task records the error #{Matcher.render(task.error)}, want #{error_name}")
+      stored = value("SELECT count(*) FROM workhorse.task_checkpoint WHERE task_id = $1", task_id)
+      check(Integer(stored) == fixture["expectedStoredCheckpoints"], "the task stores #{stored} checkpoints")
       expect_state(task_id, settled)
       expect_outcomes(task_id, fixture["expectedAttemptOutcomes"])
     end
