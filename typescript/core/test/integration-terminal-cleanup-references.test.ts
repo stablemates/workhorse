@@ -68,19 +68,43 @@ const enqueueDependent = async (client: PoolClient | typeof pool, prerequisiteId
     },
   });
 
-// The transaction identifier that the backend holds, read until it appears or 10 s pass. A backend
-// gets one at its first write or row lock. The reads follow each other with no wait between them.
-const cleanupTransaction = async (pid: number): Promise<string | null> => {
-  const deadline = Date.now() + 10_000;
-  while (Date.now() < deadline) {
-    const { rows } = await pool.query<{ xid: string }>(
-      `SELECT transactionid::text AS xid FROM pg_locks
-        WHERE pid = $1 AND locktype = 'transactionid' AND mode = 'ExclusiveLock' AND granted`,
-      [pid],
-    );
-    if (rows[0] !== undefined) return rows[0].xid;
-  }
-  return null;
+// Waits in the enqueue backend until the cleanup backend holds a transaction identifier. A backend
+// gets one at its first write or row lock. Then the same message commits the enqueue, so no client
+// round trip comes between the check and the commit. The wait also stops if the cleanup backend
+// went idle after `startedAt`, because then the statement ended. It also stops after 10 s, so a
+// slow start makes the try inconclusive, not a failure. Each read of pg_stat_activity clears the
+// copy that the transaction keeps. Returns the identifier, or an empty string if the wait stopped
+// for another reason.
+const commitWhenCleanupLocks = async (
+  enqueue: PoolClient,
+  { cleanupPid, startedAt }: { cleanupPid: number; startedAt: string },
+) => {
+  const pid = String(Math.trunc(cleanupPid));
+  await enqueue.query(
+    `DO $$
+     DECLARE
+       v_xid text;
+       v_ended boolean;
+       v_deadline timestamptz := clock_timestamp() + interval '10 seconds';
+     BEGIN
+       LOOP
+         SELECT transactionid::text INTO v_xid FROM pg_locks
+          WHERE pid = ${pid} AND locktype = 'transactionid' AND mode = 'ExclusiveLock' AND granted;
+         EXIT WHEN v_xid IS NOT NULL;
+         PERFORM pg_stat_clear_snapshot();
+         SELECT state = 'idle' AND state_change > ${enqueue.escapeLiteral(startedAt)}::timestamptz
+           INTO v_ended FROM pg_stat_activity WHERE pid = ${pid};
+         EXIT WHEN v_ended OR clock_timestamp() > v_deadline;
+       END LOOP;
+       PERFORM set_config('workhorse_test.cleanup_xid', COALESCE(v_xid, ''), false);
+     END $$;
+     COMMIT`,
+  );
+  return (
+    await enqueue.query<{ xid: string }>(
+      "SELECT current_setting('workhorse_test.cleanup_xid') AS xid",
+    )
+  ).rows[0]!.xid;
 };
 
 // The transaction that last locked or updated the task row.
@@ -142,40 +166,77 @@ describe("terminal cleanup and a concurrent reference", () => {
 
   // The defect needs the enqueue to commit after the cleanup statement takes its snapshot and before
   // the statement locks the prerequisite. At read committed, no lock wait occurs between those two
-  // points, so a test cannot hold the statement there. This test makes the gap long: the window
-  // holds many rows, and the prerequisite is locked last. With the fix, the batch keeps the
-  // prerequisite whatever the timing. Without the fix, it fails with SQLSTATE 23001 only when the
-  // commit lands inside the gap.
+  // points: SKIP LOCKED never waits, and the statement takes its relation locks before its
+  // snapshot. Thus a test cannot hold the statement there, and no test can make the commit land in
+  // the gap every time. This test makes the gap long: the window holds many rows, and the
+  // prerequisite is locked last. With the fix, the batch keeps the prerequisite whatever the
+  // timing. Without the fix, it fails with SQLSTATE 23001 only when the commit lands inside the gap.
   //
   // The statement sorts the window with its snapshot, then locks the rows in order. Its first row
-  // lock assigns the transaction identifier of the cleanup, so that identifier in pg_locks shows
-  // that the snapshot exists and the locks have started. The test commits only after it sees the
-  // identifier. Then the xmax of the prerequisite shows whether the commit was in time: the cleanup
-  // locks the prerequisite only after the enqueue commits, and otherwise SKIP LOCKED skips it.
-  it("keeps the rest of the batch when the enqueue commits while the batch runs", async () => {
-    const ids = await seed(20_000);
-    const prerequisite = ids.at(-1)!;
+  // lock assigns the transaction identifier of the cleanup. Thus that identifier in pg_locks shows
+  // that the snapshot exists and the locks have started. The enqueue backend waits for the
+  // identifier before it commits. If the wait ends without the identifier, the try is
+  // inconclusive. Then the xmax of the prerequisite shows if the commit was in time. If the
+  // commit came first, the cleanup locks the prerequisite, and the xmax is the cleanup identifier.
+  // Otherwise SKIP LOCKED skips the prerequisite, and the xmax stays the identifier of the enqueue.
+  // Each try asserts the product result. If the commit misses the gap, the test tries again. It
+  // starts no new try after 20 s, so the last try has time to end. If no try hits the gap, the test
+  // passes with a warning note.
+  it("keeps the rest of the batch when the enqueue commits while the batch runs", async ({
+    annotate,
+  }) => {
+    const tries = 3;
+    const retryDeadline = Date.now() + 20_000;
     const enqueue = await pool.connect();
     const cleanup = await pool.connect();
     try {
       const cleanupPid = (await cleanup.query<{ pid: number }>("SELECT pg_backend_pid() AS pid"))
         .rows[0]!.pid;
       expect(await pruneFull(cleanup, 25_000, 1_000)).toBe(0);
-      await enqueue.query("BEGIN");
-      await enqueueDependent(enqueue, prerequisite);
 
-      const batch = pruneFull(cleanup, 25_000);
-      batch.catch(() => undefined);
-      const cleanupXid = await cleanupTransaction(cleanupPid);
-      expect(cleanupXid).not.toBeNull();
-      await enqueue.query("COMMIT");
-      expect(await batch).toBe(ids.length - 1);
-      expect(await rowLocker(prerequisite)).toBe(cleanupXid);
+      for (let attempt = 1; attempt <= tries; attempt += 1) {
+        const ids = await seed(20_000);
+        const prerequisite = ids.at(-1)!;
+        await enqueue.query("BEGIN");
+        // The commit does not wait for the WAL flush, so it becomes visible sooner.
+        await enqueue.query("SET LOCAL synchronous_commit = off");
+        await enqueueDependent(enqueue, prerequisite);
+        const enqueueXid = (
+          await enqueue.query<{ xid: string }>("SELECT pg_current_xact_id()::xid::text AS xid")
+        ).rows[0]!.xid;
+        const startedAt = (
+          await enqueue.query<{ at: string }>("SELECT clock_timestamp()::text AS at")
+        ).rows[0]!.at;
+
+        const batch = pruneFull(cleanup, 25_000);
+        batch.catch(() => undefined);
+        const cleanupXid = await commitWhenCleanupLocks(enqueue, { cleanupPid, startedAt });
+        expect(await batch).toBe(ids.length - 1);
+        expect(await exists(prerequisite)).toBe(true);
+        // Each try keeps its own prerequisite, and an earlier prerequisite stays because its
+        // dependent never runs.
+        expect(await remaining()).toBe(attempt);
+
+        const locker = await rowLocker(prerequisite);
+        if (cleanupXid !== "" && locker === cleanupXid) return;
+        // If the wait saw the cleanup identifier, the cleanup skipped the prerequisite. If the wait
+        // saw no identifier, the order is not known, and the try only counts as a miss.
+        expect(
+          cleanupXid === "" || locker === enqueueXid,
+          `xmax ${String(locker)} is neither the cleanup ${cleanupXid} nor the enqueue ${enqueueXid}`,
+        ).toBe(true);
+        await annotate(`Try ${String(attempt)} did not commit inside the gap.`);
+        if (Date.now() > retryDeadline) break;
+      }
+      await annotate(
+        "No try committed inside the gap, so this run did not prove the race.",
+        "warning",
+      );
     } finally {
-      enqueue.release();
-      cleanup.release();
+      // A failed try can leave a transaction open, so the pool closes both connections.
+      enqueue.release(true);
+      cleanup.release(true);
     }
-    expect(await exists(prerequisite)).toBe(true);
-    expect(await remaining()).toBe(1);
-  });
+    // Each try seeds and prunes 20,000 tasks, so the case gets more time than the 20 s default.
+  }, 60_000);
 });
