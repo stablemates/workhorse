@@ -18,6 +18,7 @@ type backend struct {
 	environment       string
 	configuredWorkers []string
 	readOnly          bool
+	redactErrorStacks bool
 	maintenanceLoops  map[string]int
 
 	healthMu        sync.Mutex

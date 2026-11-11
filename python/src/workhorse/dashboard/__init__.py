@@ -197,6 +197,11 @@ class DashboardHost:
     reported, the read runs directly with no bound, and the host commits nothing and rolls nothing
     back. The host runs one procedure at a time on the
     connection, and no other code may use the connection while a request runs.
+
+    ``redact_error_stacks`` removes the stack of each worker error from task detail, the event
+    feed, and event detail, also from ``details.error`` of a ``failed`` or ``retry_scheduled``
+    event. The event search then does not match a withheld stack. A request cannot change it. The
+    default ``False`` returns each error as stored.
     """
 
     def __init__(
@@ -215,6 +220,7 @@ class DashboardHost:
         set_schedule_paused: DashboardProcedure | None = None,
         allowed_hosts: tuple[str, ...] = (),
         statement_timeout_ms: int = _DASHBOARD_STATEMENT_TIMEOUT_MS,
+        redact_error_stacks: bool = False,
         _procedures: Mapping[str, DashboardProcedure] | None = None,
         _skip_compatibility_check: bool = False,
     ) -> None:
@@ -241,6 +247,7 @@ class DashboardHost:
             maintenance_loops=maintenance_loops or {"tickIntervalMs": 1_000},
             read_only=read_only,
             statement_timeout_ms=statement_timeout_ms,
+            redact_error_stacks=redact_error_stacks,
         )
         # A read runs as several statements in one transaction on the shared connection. The
         # host runs one procedure at a time, so a statement of another request cannot run inside

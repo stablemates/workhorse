@@ -67,3 +67,31 @@ The settings surface displays process-owned options read-only, with their proven
 - A general-purpose key/value settings store. Every policy value stays a typed, constrained column that PostgreSQL validates, exactly as retention and maintenance do today.
 - Editing schedule _definitions_ from the dashboard. Definitions are typed application code synchronized by namespace; only their pause is operator state.
 - Runtime reconfiguration of a running worker's concurrency. That is a deployment change, and pausing already covers the incident case.
+
+## Amendment: keep the audit of each operator change of a policy setting (2026-11-11)
+
+The dashboard asked for an actor, a reason, and a request ID for each override and revert of the
+retention and the maintenance policy. The policy functions took none, and nothing kept them. Thus
+the provenance display showed that an operator owned a value, but not which operator or why.
+SM-1996 records this amendment.
+
+1. Migration 0099 adds the nullable `jsonb` column `operator_audit` to `retention_policy` and
+   `maintenance_policy`. It maps a column name to the entry of the last operator change of that
+   setting. The audit is kept for each setting, not for the row, because each table holds one row
+   and its settings change at different times.
+2. `override_retention_policy_v2`, `revert_retention_policy_v2`, `override_maintenance_policy_v2`,
+   and `revert_maintenance_policy_v2` take the actor, the reason, and the request ID. They check
+   them with the limits of queue control and write one entry for each changed setting. The raw
+   request ID is never stored. The entry of a revert stays after the revert, so the settings
+   surface can show who removed an override and why.
+3. The released writers change their body to keep each entry true. `override_*_policy_v1` and
+   `revert_*_policy_v1` remove the entry of each setting that they change, and
+   `sync_*_policy_v1` with `p_force` removes every entry. A sync without `p_force` changes no
+   operator value, so an override entry stays. It removes the entry of each setting whose
+   effective value it changes. Without this, a setting would show an actor who did not
+   set its value. Each released function keeps its name, its arguments, and the answers that it
+   gave. The functions that return a policy row return the new column at its end.
+4. Each embedded dashboard host calls the `_v2` functions with the authenticated actor of the
+   request, the same actor as for queue control, and with the reason and the request ID of the
+   request. `dashboard_settings_v1` shows the entry under `lastChanges.<setting>` of its policy.
+   The provenance entries keep their shape, so the generated SDK bindings only add a field.

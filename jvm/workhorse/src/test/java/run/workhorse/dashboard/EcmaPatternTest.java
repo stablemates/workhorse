@@ -33,9 +33,10 @@ class EcmaPatternTest {
           "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}"
               + "|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
           List.of("018f0000-0000-7000-8000-000000000001", "018f0000-0000-9000-8000-000000000001"),
-          "^(event|attempt):[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+          // A record that the dashboard derives for a fast-tier task has any version digit.
+          "^(event|attempt):[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
           List.of(
-              "attempt:018f0000-0000-7000-8000-000000000001", "task:018f0000-0000-7000-8000-0"));
+              "attempt:a326ee37-afbc-b371-de56-c85313ead889", "task:018f0000-0000-7000-8000-0"));
 
   @Test
   void compilesEveryPatternInTheInputSchemasAndRefusesAFinalLineTerminator() {

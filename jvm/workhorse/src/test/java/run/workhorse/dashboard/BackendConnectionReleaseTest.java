@@ -55,7 +55,7 @@ class BackendConnectionReleaseTest {
           }
         };
     Backend backend =
-        new Backend(source, "test", List.of(), Map.of(), true, Duration.ofSeconds(15));
+        new Backend(source, "test", List.of(), Map.of(), true, Duration.ofSeconds(15), false);
 
     OutOfMemoryError thrown =
         assertThrows(
@@ -98,7 +98,7 @@ class BackendConnectionReleaseTest {
           }
         };
     Backend backend =
-        new Backend(source, "test", List.of(), Map.of(), true, Duration.ofSeconds(15));
+        new Backend(source, "test", List.of(), Map.of(), true, Duration.ofSeconds(15), false);
 
     AssertionError thrown =
         assertThrows(
@@ -151,7 +151,7 @@ class BackendConnectionReleaseTest {
           }
         };
     Backend backend =
-        new Backend(source, "test", List.of(), Map.of(), true, Duration.ofSeconds(15));
+        new Backend(source, "test", List.of(), Map.of(), true, Duration.ofSeconds(15), false);
 
     OutOfMemoryError thrown =
         assertThrows(

@@ -860,7 +860,13 @@ the refusal. The refusal does not change the mode that task details shows.
 
 The Events page can filter by worker and by text in the selected time window. One successful
 execution can make two records: a task lifecycle record and an attempt record. The status tooltips
-show the source of each record. Event details has a control that copies the task ID.
+show the source of each record. Event details has a control that copies the task ID. Each record
+opens its event details, also a record that the dashboard derives for a fast-tier task.
+
+A worker error keeps its stack, and a stack can show container paths and source lines. Turn on the
+stack redaction option of your host to withhold each stack from task details and the Events page.
+The option is off by default. A request cannot turn it off, and a search does not match a withheld
+stack.
 
 <details>
 <summary>Reference: enqueue modes and events</summary>
@@ -874,10 +880,18 @@ show the source of each record. Event details has a control that copies the task
 - The event listing accepts `worker` and `search`. `search` is a case-insensitive literal
   substring match over task ID, queue, type, event name, worker, and recorded details or error
   message.
+- `eventDetail` accepts `event:<uuid>` or `attempt:<uuid>` with any UUID in canonical form. A
+  derived fast-tier record has an MD5 value as its UUID.
+- The stack redaction option is `redactErrorStacks` in TypeScript, `redact_error_stacks` in Python
+  and Ruby, `RedactErrorStacks` in Go and .NET, `redact_error_stacks` in Rust `DashboardOptions`,
+  and `redactErrorStacks` on the Java `Dashboard.Builder`. Each one is off by default. The host sets the SQL input key
+  `redactErrorStacks` after it drops the undeclared keys of the request.
 
 More detail: [Dashboard: Enqueue mode section](https://github.com/stablemates/workhorse/blob/main/docs/architecture/dashboard.md#enqueue-mode-section),
 [Dashboard: Listing enqueue mode](https://github.com/stablemates/workhorse/blob/main/docs/architecture/dashboard.md#listing-enqueue-mode),
-and [Dashboard: Event feed](https://github.com/stablemates/workhorse/blob/main/docs/architecture/dashboard.md#event-feed).
+[Dashboard: Event feed](https://github.com/stablemates/workhorse/blob/main/docs/architecture/dashboard.md#event-feed),
+[Dashboard: Event detail](https://github.com/stablemates/workhorse/blob/main/docs/architecture/dashboard.md#event-detail),
+and [Dashboard: Error-stack redaction](https://github.com/stablemates/workhorse/blob/main/docs/architecture/dashboard.md#error-stack-redaction).
 
 </details>
 
@@ -926,6 +940,10 @@ those values, change the worker configuration and deploy again.
 
 If the host did not authorize settings changes, the Settings page is read-only.
 
+Each override and revert keeps its actor, reason, and time for each setting that it changes. The
+Settings page shows the last change beside each setting, so you can see who owns the current value
+and why.
+
 <details>
 <summary>Reference: controllers and settings</summary>
 
@@ -941,9 +959,13 @@ If the host did not authorize settings changes, the Settings page is read-only.
   `DashboardSettingsController`.
 - Policy mutation requires `operator.mode === "writable"` and a `DashboardSettingsController`.
   Each call carries actor, reason, request ID, and server-assigned occurrence time.
+- The embedded hosts of the other SDKs call `override_retention_policy_v2` and the three other
+  audited functions with the authenticated actor. `lastChanges.<setting>` of each policy in the
+  `settings` read holds the last change of a setting that has one.
 
 More detail: [Dashboard: Controller types](https://github.com/stablemates/workhorse/blob/main/docs/architecture/dashboard.md#controller-types),
 [Dashboard: Settings page](https://github.com/stablemates/workhorse/blob/main/docs/architecture/dashboard.md#settings-page),
+[Dashboard: Audit of each settings change](https://github.com/stablemates/workhorse/blob/main/docs/architecture/dashboard.md#audit-of-each-settings-change),
 and [Overview: Operator dashboard](https://github.com/stablemates/workhorse/blob/main/docs/architecture/overview.md#operator-dashboard).
 
 </details>

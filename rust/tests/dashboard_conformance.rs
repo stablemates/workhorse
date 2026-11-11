@@ -4,7 +4,7 @@
 //! scratch database: the seed steps of a scenario run first, then each of its exchanges travels
 //! through [`DashboardService`] as an HTTP request.
 //! A normal host serves the exchanges without a mode; a read-only host serves the `read-only`
-//! ones. Without `DATABASE_URL_TEST` a local run skips and says so on standard error.
+//! ones, and a host with `redact_error_stacks` serves the `redact-error-stacks` ones. Without `DATABASE_URL_TEST` a local run skips and says so on standard error.
 
 #[allow(dead_code)]
 mod conformance;
@@ -41,7 +41,8 @@ fn text(value: &Value, key: &str) -> String {
     value[key].as_str().unwrap_or_default().to_owned()
 }
 
-fn service(harness: &Value, pool: &Pool, read_only: bool) -> DashboardService<Pool> {
+fn service(harness: &Value, pool: &Pool, mode: &str) -> DashboardService<Pool> {
+    let read_only = mode == "read-only";
     let actor = text(harness, "authenticatedActor");
     let authorize = dashboard::authorize(move |_parts| {
         let actor = actor.clone();
@@ -51,6 +52,7 @@ fn service(harness: &Value, pool: &Pool, read_only: bool) -> DashboardService<Po
     options.path = text(harness, "basePath");
     options.environment = text(harness, "environment");
     options.read_only = read_only;
+    options.redact_error_stacks = mode == "redact-error-stacks";
     options.configured_workers = harness["configuredWorkers"]
         .as_array()
         .unwrap()
@@ -190,8 +192,9 @@ async fn dashboard_satisfies_every_shared_http_scenario() {
     let harness = &fixture["harness"];
     let scenarios = fixture["scenarios"].as_array().unwrap();
     let mut references = References::new();
-    let host = service(harness, &pool, false);
-    let read_only_host = service(harness, &pool, true);
+    let host = service(harness, &pool, "writable");
+    let read_only_host = service(harness, &pool, "read-only");
+    let redacting_host = service(harness, &pool, "redact-error-stacks");
     let mut failures = Vec::new();
     let mut executed = 0;
     // The scenarios run strictly in order. A later seed can change state that an earlier
@@ -205,6 +208,7 @@ async fn dashboard_satisfies_every_shared_http_scenario() {
             let location = format!("{}/{}", text(scenario, "id"), text(item, "id"));
             let selected = match item.get("mode").and_then(Value::as_str) {
                 Some("read-only") => &read_only_host,
+                Some("redact-error-stacks") => &redacting_host,
                 _ => &host,
             };
             let outcome =

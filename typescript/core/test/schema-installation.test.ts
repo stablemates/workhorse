@@ -448,6 +448,10 @@ describe("schema installation", () => {
       { name: "fire_due_schedules_v2" },
       { name: "heartbeat_many_v2" },
       { name: "heartbeat_v2" },
+      { name: "override_maintenance_policy_v2" },
+      { name: "override_retention_policy_v2" },
+      { name: "revert_maintenance_policy_v2" },
+      { name: "revert_retention_policy_v2" },
       { name: "save_checkpoint_v2" },
       { name: "schedule_wait_v2" },
       { name: "send_signal_v2" },
@@ -747,6 +751,11 @@ describe("schema installation", () => {
         version: 97,
         description:
           "compare wait targets in milliseconds, end signals to terminal tasks, limit a second child set, and show failed callbacks",
+      },
+      {
+        version: 98,
+        description:
+          "keep the settings audit, withhold error stacks, and find derived history records",
       },
     ]);
 

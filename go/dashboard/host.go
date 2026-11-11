@@ -51,11 +51,16 @@ func (failure *RPCError) Error() string { return failure.Message }
 
 // HandlerOptions configure one single-workspace embedded dashboard.
 type HandlerOptions struct {
-	Executor          workhorse.Executor
-	Authorize         Authorize
-	Path              string
-	Environment       string
-	ReadOnly          bool
+	Executor    workhorse.Executor
+	Authorize   Authorize
+	Path        string
+	Environment string
+	ReadOnly    bool
+	// RedactErrorStacks removes the stack of each worker error from task detail, the event feed,
+	// and event detail, also from details.error of a failed or retry_scheduled event. The event
+	// search then does not match a withheld stack. A request cannot change it. The default false
+	// returns each error as stored.
+	RedactErrorStacks bool
 	BrowserModules    []string
 	ConfiguredWorkers []string
 	MaintenanceLoops  map[string]int
@@ -155,7 +160,7 @@ func newHandler(options HandlerOptions, skipCompatibilityCheck bool) (http.Handl
 	if options.StatementTimeout == 0 {
 		options.StatementTimeout = DefaultStatementTimeout
 	}
-	builtins := (&backend{executor: options.Executor, reader: newBoundedReader(options.Executor, options.StatementTimeout), admin: workhorse.NewAdmin(options.Executor), environment: options.Environment, configuredWorkers: options.ConfiguredWorkers, readOnly: options.ReadOnly, maintenanceLoops: options.MaintenanceLoops}).procedures()
+	builtins := (&backend{executor: options.Executor, reader: newBoundedReader(options.Executor, options.StatementTimeout), admin: workhorse.NewAdmin(options.Executor), environment: options.Environment, configuredWorkers: options.ConfiguredWorkers, readOnly: options.ReadOnly, redactErrorStacks: options.RedactErrorStacks, maintenanceLoops: options.MaintenanceLoops}).procedures()
 	for name, procedure := range options.Procedures {
 		builtins[name] = procedure
 	}

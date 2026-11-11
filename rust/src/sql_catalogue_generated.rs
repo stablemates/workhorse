@@ -5,8 +5,8 @@
 pub const CLIENT_PROTOCOL_VERSION: i32 = 5;
 pub const MINIMUM_PROTOCOL_VERSION: i32 = 5;
 pub const MAXIMUM_PROTOCOL_VERSION: i32 = 5;
-pub const MINIMUM_SCHEMA_VERSION: i32 = 97;
-pub const MAXIMUM_SCHEMA_VERSION: i32 = 97;
+pub const MINIMUM_SCHEMA_VERSION: i32 = 98;
+pub const MAXIMUM_SCHEMA_VERSION: i32 = 98;
 /// PostgreSQL's atomic enqueue batch limit.
 pub const MAX_ENQUEUE_BATCH_SIZE: usize = 1000;
 pub const DEFAULT_TASK_VALUE_MAX_BYTES: i64 = 1048576;
@@ -761,9 +761,19 @@ pub const SYNC_RETENTION_POLICY_V1: &str = r#"SELECT (policy).* FROM workhorse.s
 pub const OVERRIDE_RETENTION_POLICY_V1: &str =
     r#"SELECT (policy).* FROM workhorse.override_retention_policy_v1($1::jsonb) policy"#;
 
+/// `override_retention_policy_v2` (internal)
+pub const OVERRIDE_RETENTION_POLICY_V2: &str = r#"SELECT (policy).* FROM workhorse.override_retention_policy_v2(
+         $1::jsonb, $2::text, $3::text, $4::text
+       ) policy"#;
+
 /// `revert_retention_policy_v1` (internal)
 pub const REVERT_RETENTION_POLICY_V1: &str =
     r#"SELECT (policy).* FROM workhorse.revert_retention_policy_v1($1::text[]) policy"#;
+
+/// `revert_retention_policy_v2` (internal)
+pub const REVERT_RETENTION_POLICY_V2: &str = r#"SELECT (policy).* FROM workhorse.revert_retention_policy_v2(
+         $1::text[], $2::text, $3::text, $4::text
+       ) policy"#;
 
 /// `dashboard_retention_preview_v1` (internal)
 pub const DASHBOARD_RETENTION_PREVIEW_V1: &str =
@@ -846,9 +856,20 @@ pub const OVERRIDE_MAINTENANCE_POLICY_V1: &str = r#"SELECT (policy).* FROM workh
          $1::text, $2::integer, $3::integer, $4::time, $5::integer, $6::integer, $7::integer
        ) policy"#;
 
+/// `override_maintenance_policy_v2` (internal)
+pub const OVERRIDE_MAINTENANCE_POLICY_V2: &str = r#"SELECT (policy).* FROM workhorse.override_maintenance_policy_v2(
+         $1::text, $2::integer, $3::integer, $4::time, $5::integer, $6::integer, $7::integer,
+         $8::text, $9::text, $10::text
+       ) policy"#;
+
 /// `revert_maintenance_policy_v1` (internal)
 pub const REVERT_MAINTENANCE_POLICY_V1: &str =
     r#"SELECT (policy).* FROM workhorse.revert_maintenance_policy_v1($1::text[]) policy"#;
+
+/// `revert_maintenance_policy_v2` (internal)
+pub const REVERT_MAINTENANCE_POLICY_V2: &str = r#"SELECT (policy).* FROM workhorse.revert_maintenance_policy_v2(
+         $1::text[], $2::text, $3::text, $4::text
+       ) policy"#;
 
 /// `get_maintenance_policy_v1` (internal)
 pub const GET_MAINTENANCE_POLICY_V1: &str =

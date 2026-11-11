@@ -112,8 +112,11 @@ func runDashboardConformance(t *testing.T, open func(*testing.T, string, *pgxpoo
 	executor := open(t, databaseURL, pool)
 	fixture := readDashboardFixture(t)
 	references := make(map[string]any)
-	host := newDashboardConformanceHandler(t, fixture.Harness, executor, false)
-	readOnlyHost := newDashboardConformanceHandler(t, fixture.Harness, executor, true)
+	hosts := map[string]http.Handler{
+		"writable":            newDashboardConformanceHandler(t, fixture.Harness, executor, "writable"),
+		"read-only":           newDashboardConformanceHandler(t, fixture.Harness, executor, "read-only"),
+		"redact-error-stacks": newDashboardConformanceHandler(t, fixture.Harness, executor, "redact-error-stacks"),
+	}
 	// The scenarios run strictly in order. A later seed can change state that an earlier
 	// exchange reads, such as the slow read that the read-timeout scenario installs.
 	for _, scenario := range fixture.Scenarios {
@@ -122,9 +125,13 @@ func runDashboardConformance(t *testing.T, open func(*testing.T, string, *pgxpoo
 		}
 		for _, exchange := range scenario.Exchanges {
 			t.Run(scenario.ID+"/"+exchange.ID, func(t *testing.T) {
-				selected := host
-				if exchange.Mode == "read-only" {
-					selected = readOnlyHost
+				mode := exchange.Mode
+				if mode == "" {
+					mode = "writable"
+				}
+				selected, ok := hosts[mode]
+				if !ok {
+					t.Fatalf("unknown conformance mode %q", mode)
 				}
 				status, body := executeDashboardExchange(t, selected, fixture.Harness, exchange, references)
 				if status != exchange.Expect.Status {
@@ -145,8 +152,11 @@ func runDashboardConformance(t *testing.T, open func(*testing.T, string, *pgxpoo
 	}
 }
 
-func newDashboardConformanceHandler(t *testing.T, harness dashboardHarness, executor workhorse.Executor, readOnly bool) http.Handler {
+// newDashboardConformanceHandler builds the deployment of one conformance mode. The
+// "redact-error-stacks" mode is the writable deployment with RedactErrorStacks on.
+func newDashboardConformanceHandler(t *testing.T, harness dashboardHarness, executor workhorse.Executor, mode string) http.Handler {
 	t.Helper()
+	readOnly := mode == "read-only"
 	procedures := map[string]Procedure{}
 	if !readOnly {
 		queue := workhorse.NewQueue(executor, "conformance-demo")
@@ -178,6 +188,7 @@ $1::text, $2::text, $3::boolean, $4::text, $5::text) AS paused`, value["namespac
 			return Authorization{Principal: &Principal{Actor: harness.AuthenticatedActor}}
 		},
 		Path: harness.BasePath, Environment: harness.Environment, ReadOnly: readOnly,
+		RedactErrorStacks: mode == "redact-error-stacks",
 		ConfiguredWorkers: harness.ConfiguredWorkers, MaintenanceLoops: harness.MaintenanceLoops,
 		Procedures: procedures, AllowedHosts: []string{strings.TrimPrefix(harness.Origin, "http://")},
 		StatementTimeout: time.Duration(harness.StatementTimeoutMs) * time.Millisecond,

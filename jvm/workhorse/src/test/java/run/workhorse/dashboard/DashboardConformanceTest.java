@@ -139,9 +139,12 @@ class DashboardConformanceTest {
                   })
               .build();
       Dashboard readOnlyHost = options.readOnly(true).build();
+      // The writable deployment with the stack redaction option on.
+      Dashboard redactingHost = options.readOnly(false).redactErrorStacks(true).build();
 
       try (TestServer server = new TestServer("", host);
-          TestServer readOnly = new TestServer("", readOnlyHost)) {
+          TestServer readOnly = new TestServer("", readOnlyHost);
+          TestServer redacting = new TestServer("", redactingHost)) {
         int count = 0;
         // The scenarios run strictly in order, so a later seed runs after the earlier exchanges.
         for (Object scenario : scenarios.subList(1, scenarios.size())) {
@@ -155,8 +158,13 @@ class DashboardConformanceTest {
           }
           for (Object item : items) {
             Map<String, @Nullable Object> exchange = object(item);
-            exchange(
-                "read-only".equals(exchange.get("mode")) ? readOnly : server, exchange, harness);
+            TestServer selected =
+                switch (String.valueOf(exchange.getOrDefault("mode", "writable"))) {
+                  case "read-only" -> readOnly;
+                  case "redact-error-stacks" -> redacting;
+                  default -> server;
+                };
+            exchange(selected, exchange, harness);
             count++;
           }
         }

@@ -21,6 +21,11 @@ import type {
  * minimal implementations the fixtures assume (enqueue one `conformance.demo-{kind}` task on the
  * `conformance-demo` queue; set `workhorse.schedule_definition.paused`).
  */
+/** The column name of a policy setting, as the embedded hosts derive it. */
+function snake(name: string): string {
+  return name.replaceAll(/[A-Z]/g, (letter) => `_${letter.toLowerCase()}`);
+}
+
 export function createDashboardConformanceTransport(
   database: Queryable,
   harness: DashboardConformanceHarness,
@@ -30,18 +35,54 @@ export function createDashboardConformanceTransport(
   const controllers = createDashboardOperatorControllers({
     run: (_action, operation) => operation({ admin, queue }),
   });
+  // The embedded hosts call the audited SQL functions, so the reference controller does too. The
+  // router puts the authenticated actor into the audit.
   const settingsController: DashboardSettingsController = {
-    async overrideMaintenancePolicy(definition) {
-      await queue.overrideMaintenancePolicy(definition);
+    async overrideMaintenancePolicy(definition, audit) {
+      await database.query(
+        `SELECT (policy).* FROM workhorse.override_maintenance_policy_v2(
+           $1::text, $2::integer, $3::integer, $4::time, $5::integer, $6::integer, $7::integer,
+           $8::text, $9::text, $10::text) policy`,
+        [
+          definition.timezone ?? null,
+          definition.partitionPreparationIntervalMs ?? null,
+          definition.terminalCleanupIntervalMs ?? null,
+          definition.historyRetentionLocalTime ?? null,
+          definition.statisticsRollupIntervalMs ?? null,
+          definition.statisticsGroupLimit ?? null,
+          definition.statisticsRecomputeBuckets ?? null,
+          audit.actor,
+          audit.reason,
+          audit.requestId,
+        ],
+      );
     },
-    async revertMaintenancePolicy(settings) {
-      await queue.revertMaintenancePolicy(settings);
+    async revertMaintenancePolicy(settings, audit) {
+      await database.query(
+        "SELECT (policy).* FROM workhorse.revert_maintenance_policy_v2($1::text[], $2, $3, $4) policy",
+        [settings.map(snake), audit.actor, audit.reason, audit.requestId],
+      );
     },
-    async overrideRetentionPolicy(definition) {
-      await queue.overrideRetentionPolicy(definition);
+    async overrideRetentionPolicy(definition, audit) {
+      await database.query(
+        "SELECT (policy).* FROM workhorse.override_retention_policy_v2($1::jsonb, $2, $3, $4) policy",
+        [
+          JSON.stringify(
+            Object.fromEntries(
+              Object.entries(definition).map(([key, value]) => [snake(key), value]),
+            ),
+          ),
+          audit.actor,
+          audit.reason,
+          audit.requestId,
+        ],
+      );
     },
-    async revertRetentionPolicy(settings) {
-      await queue.revertRetentionPolicy(settings);
+    async revertRetentionPolicy(settings, audit) {
+      await database.query(
+        "SELECT (policy).* FROM workhorse.revert_retention_policy_v2($1::text[], $2, $3, $4) policy",
+        [settings.map(snake), audit.actor, audit.reason, audit.requestId],
+      );
     },
   };
   const scheduleController: DashboardScheduleController = {
@@ -81,8 +122,13 @@ export function createDashboardConformanceTransport(
     settingsController,
   });
   const readOnly = createDashboardHost({ ...shared, operator: { mode: "read-only" } });
+  const redacting = createDashboardHost({
+    ...shared,
+    ...controllers,
+    operator: { mode: "writable" },
+    redactErrorStacks: true,
+  });
+  const hosts = { writable, "read-only": readOnly, "redact-error-stacks": redacting };
 
-  return {
-    handle: (mode, request) => (mode === "writable" ? writable : readOnly).handle(request),
-  };
+  return { handle: (mode, request) => hosts[mode].handle(request) };
 }

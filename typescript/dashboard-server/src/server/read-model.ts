@@ -317,7 +317,13 @@ export async function readDashboardTaskDetail(
   canCompleteHumanWait = false,
 ): Promise<DashboardTaskDetail | null> {
   const health = await readQueueHealth?.();
-  const input = JSON.stringify({ id, canSignal, canCompleteHumanWait, health });
+  const input = JSON.stringify({
+    id,
+    canSignal,
+    canCompleteHumanWait,
+    health,
+    ...stackRedactionInput(redactErrorStacks),
+  });
   const result = await database.execute<{ result: DashboardTaskDetail | null }>(sql`
     SELECT workhorse.dashboard_task_detail_v1(${input}::jsonb) AS result
   `);
@@ -365,6 +371,18 @@ export async function readDashboardTaskValue(
     SELECT workhorse.dashboard_task_value_v1(${input}::jsonb) AS result
   `);
   return expectOneRow(rows, "the dashboard task value procedure").result;
+}
+
+/**
+ * The SQL input key that withholds stacks in the three history reads.
+ *
+ * The SQL procedures remove `stack` themselves when the input sets `redactErrorStacks`, and the
+ * event search then does not match a withheld stack. The router parses each request with a schema
+ * that drops undeclared keys, so only this host option can set the key. This host also removes the
+ * stacks from the returned document, as it did before the procedures took the key.
+ */
+function stackRedactionInput(redactErrorStacks: boolean): { redactErrorStacks?: true } {
+  return redactErrorStacks ? { redactErrorStacks: true } : {};
 }
 
 function redactErrorStack(error: unknown): unknown {
@@ -476,7 +494,7 @@ export async function readDashboardEvents(
   query: DashboardEventsQuery = {},
   redactErrorStacks = false,
 ): Promise<DashboardEventsPage> {
-  const input = JSON.stringify(query);
+  const input = JSON.stringify({ ...query, ...stackRedactionInput(redactErrorStacks) });
   const rows = await database.execute<{ result: DashboardEventsPage }>(sql`
     SELECT workhorse.dashboard_events_v1(${input}::jsonb) AS result
   `);
@@ -500,7 +518,7 @@ export async function readDashboardEventDetail(
   id: string,
   redactErrorStacks = false,
 ): Promise<DashboardEventDetail | null> {
-  const input = JSON.stringify({ id });
+  const input = JSON.stringify({ id, ...stackRedactionInput(redactErrorStacks) });
   const rows = await database.execute<{ result: DashboardEventDetail | null }>(sql`
     SELECT workhorse.dashboard_event_detail_v1(${input}::jsonb) AS result
   `);

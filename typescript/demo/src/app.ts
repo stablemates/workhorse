@@ -1663,7 +1663,7 @@ function createLocalSettingsController(database: DemoDatabase): SettingsControll
     action: string,
     target: string,
     audit: AuditContext,
-    change: (queue: Queue) => Promise<unknown>,
+    change: (transaction: DemoTransaction) => Promise<unknown>,
   ): Promise<void> {
     await runOperatorTransaction(database, async (transaction) => {
       const workhorse = createDrizzleAdapter(transaction, {
@@ -1674,7 +1674,7 @@ function createLocalSettingsController(database: DemoDatabase): SettingsControll
         maintenance: await workhorse.queue.getMaintenancePolicy(),
         retention: await workhorse.queue.getRetentionPolicy(),
       };
-      await change(workhorse.queue);
+      await change(transaction);
       const after = {
         maintenance: await workhorse.queue.getMaintenancePolicy(),
         retention: await workhorse.queue.getRetentionPolicy(),
@@ -1689,24 +1689,58 @@ function createLocalSettingsController(database: DemoDatabase): SettingsControll
       `);
     });
   }
+  // Each change records its audit for each changed setting through the audited policy functions,
+  // so the Settings page shows who made it and why.
   return {
     overrideMaintenancePolicy: (definition, audit) =>
-      mutate("overrideMaintenancePolicy", "maintenance-policy", audit, (queue) =>
-        queue.overrideMaintenancePolicy(definition),
+      mutate("overrideMaintenancePolicy", "maintenance-policy", audit, (transaction) =>
+        transaction.execute(sql`
+          SELECT (policy).* FROM workhorse.override_maintenance_policy_v2(
+            ${definition.timezone ?? null}::text,
+            ${definition.partitionPreparationIntervalMs ?? null}::integer,
+            ${definition.terminalCleanupIntervalMs ?? null}::integer,
+            ${definition.historyRetentionLocalTime ?? null}::time,
+            ${definition.statisticsRollupIntervalMs ?? null}::integer,
+            ${definition.statisticsGroupLimit ?? null}::integer,
+            ${definition.statisticsRecomputeBuckets ?? null}::integer,
+            ${audit.actor}, ${audit.reason}, ${audit.requestId}) policy
+        `),
       ),
     revertMaintenancePolicy: (settings, audit) =>
-      mutate("revertMaintenancePolicy", "maintenance-policy", audit, (queue) =>
-        queue.revertMaintenancePolicy(settings),
+      mutate("revertMaintenancePolicy", "maintenance-policy", audit, (transaction) =>
+        transaction.execute(sql`
+          SELECT (policy).* FROM workhorse.revert_maintenance_policy_v2(
+            ARRAY(SELECT jsonb_array_elements_text(${JSON.stringify(settings.map(policyColumn))}::jsonb)),
+            ${audit.actor}, ${audit.reason},
+            ${audit.requestId}) policy
+        `),
       ),
     overrideRetentionPolicy: (definition, audit) =>
-      mutate("overrideRetentionPolicy", "retention-policy", audit, (queue) =>
-        queue.overrideRetentionPolicy(definition),
+      mutate("overrideRetentionPolicy", "retention-policy", audit, (transaction) =>
+        transaction.execute(sql`
+          SELECT (policy).* FROM workhorse.override_retention_policy_v2(
+            ${JSON.stringify(
+              Object.fromEntries(
+                Object.entries(definition).map(([name, value]) => [policyColumn(name), value]),
+              ),
+            )}::jsonb, ${audit.actor}, ${audit.reason}, ${audit.requestId}) policy
+        `),
       ),
     revertRetentionPolicy: (settings, audit) =>
-      mutate("revertRetentionPolicy", "retention-policy", audit, (queue) =>
-        queue.revertRetentionPolicy(settings),
+      mutate("revertRetentionPolicy", "retention-policy", audit, (transaction) =>
+        transaction.execute(sql`
+          SELECT (policy).* FROM workhorse.revert_retention_policy_v2(
+            ARRAY(SELECT jsonb_array_elements_text(${JSON.stringify(settings.map(policyColumn))}::jsonb)),
+            ${audit.actor}, ${audit.reason},
+            ${audit.requestId}) policy
+        `),
       ),
   };
+}
+
+/** The column name of a policy setting, as the policy functions name it. */
+function policyColumn(setting: string): string {
+  return setting.replaceAll(/[A-Z]/g, (letter) => `_${letter.toLowerCase()}`);
 }
 
 export function createDemoApplication(

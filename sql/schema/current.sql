@@ -2151,7 +2151,10 @@ CREATE TABLE IF NOT EXISTS workhorse.maintenance_policy (
   ),
   application_statistics_recompute_buckets integer NOT NULL CHECK (
     application_statistics_recompute_buckets BETWEEN 0 AND 1440
-  )
+  ),
+  -- The audit of the last operator change of each setting, keyed by column name. See
+  -- policy_audit_entry_internal_v1 for the shape and the writers that keep it true.
+  operator_audit jsonb
 );
 INSERT INTO workhorse.maintenance_policy(
   singleton, timezone, partition_preparation_interval_ms,
@@ -2700,6 +2703,9 @@ CREATE TABLE IF NOT EXISTS workhorse.retention_policy (
     ]::text[]
   ),
   updated_at timestamptz NOT NULL DEFAULT clock_timestamp(),
+  -- The audit of the last operator change of each setting, keyed by column name. See
+  -- policy_audit_entry_internal_v1 for the shape and the writers that keep it true.
+  operator_audit jsonb,
   CHECK (
     (terminal_outcome_retention_days IS NULL OR task_identity_retention_days IS NOT NULL)
     AND (
@@ -4529,9 +4535,30 @@ BEGIN
       WHEN NOT ('statistics_rows_per_pass' = ANY(policy.operator_overrides))
         THEN p_statistics_rows_per_pass ELSE policy.statistics_rows_per_pass END,
     operator_overrides = CASE WHEN p_force THEN '{}'::text[] ELSE policy.operator_overrides END,
+    operator_audit = CASE WHEN p_force THEN NULL ELSE policy.operator_audit END,
     updated_at = clock_timestamp()
   WHERE singleton
   RETURNING * INTO v_policy;
+  -- A sync without force changes the effective value of a setting only when no operator owns it.
+  -- An entry of such a setting describes a revert to the earlier value, so it goes too.
+  IF p_force IS NOT TRUE AND v_policy.operator_audit IS NOT NULL THEN
+    UPDATE workhorse.retention_policy policy
+       SET operator_audit = NULLIF(policy.operator_audit - ARRAY(
+             SELECT setting.name
+               FROM unnest(ARRAY[
+        'task_identity_retention_days', 'terminal_outcome_retention_days',
+        'task_event_retention_days', 'attempt_history_retention_days',
+        'schedule_occurrence_retention_days', 'statistics_retention_days',
+        'terminal_task_prune_limit', 'history_partitions_per_pass',
+        'default_partition_rows_per_pass', 'occurrence_rows_per_pass',
+        'statistics_rows_per_pass'
+               ]::text[]) setting(name)
+              WHERE to_jsonb(v_policy) -> setting.name
+                    IS DISTINCT FROM to_jsonb(v_previous) -> setting.name
+           ), '{}'::jsonb)
+     WHERE singleton
+     RETURNING * INTO v_policy;
+  END IF;
   IF (
        v_previous.task_event_retention_days IS DISTINCT FROM v_policy.task_event_retention_days
        OR v_previous.attempt_history_retention_days IS DISTINCT FROM
@@ -4627,6 +4654,7 @@ BEGIN
     operator_overrides = ARRAY(
       SELECT DISTINCT name FROM unnest(policy.operator_overrides || v_names) name ORDER BY name
     ),
+    operator_audit = NULLIF(policy.operator_audit - v_names, '{}'::jsonb),
     updated_at = clock_timestamp()
   WHERE singleton
   RETURNING * INTO v_policy;
@@ -4710,6 +4738,7 @@ BEGIN
     operator_overrides = ARRAY(
       SELECT name FROM unnest(policy.operator_overrides) name WHERE NOT (name = ANY(p_settings))
     ),
+    operator_audit = NULLIF(policy.operator_audit - p_settings, '{}'::jsonb),
     updated_at = clock_timestamp()
   WHERE singleton
   RETURNING * INTO v_policy;
@@ -4824,9 +4853,27 @@ BEGIN
         THEN p_statistics_recompute_buckets
       ELSE policy.statistics_recompute_buckets END,
     operator_overrides = CASE WHEN p_force THEN '{}'::text[] ELSE policy.operator_overrides END,
+    operator_audit = CASE WHEN p_force THEN NULL ELSE policy.operator_audit END,
     updated_at = clock_timestamp()
   WHERE singleton
   RETURNING * INTO v_policy;
+  -- A sync without force changes the effective value of a setting only when no operator owns it.
+  -- An entry of such a setting describes a revert to the earlier value, so it goes too.
+  IF p_force IS NOT TRUE AND v_policy.operator_audit IS NOT NULL THEN
+    UPDATE workhorse.maintenance_policy policy
+       SET operator_audit = NULLIF(policy.operator_audit - ARRAY(
+             SELECT setting.name
+               FROM unnest(ARRAY[
+        'timezone', 'partition_preparation_interval_ms',
+        'terminal_cleanup_interval_ms', 'history_retention_local_time',
+        'statistics_rollup_interval_ms', 'statistics_group_limit', 'statistics_recompute_buckets'
+               ]::text[]) setting(name)
+              WHERE to_jsonb(v_policy) -> setting.name
+                    IS DISTINCT FROM to_jsonb(v_previous) -> setting.name
+           ), '{}'::jsonb)
+     WHERE singleton
+     RETURNING * INTO v_policy;
+  END IF;
   IF v_previous.timezone IS DISTINCT FROM v_policy.timezone
      OR v_previous.history_retention_local_time IS DISTINCT FROM v_policy.history_retention_local_time THEN
     UPDATE workhorse.maintenance_state
@@ -4905,6 +4952,7 @@ BEGIN
     operator_overrides = ARRAY(
       SELECT DISTINCT name FROM unnest(policy.operator_overrides || v_overrides) name ORDER BY name
     ),
+    operator_audit = NULLIF(policy.operator_audit - v_overrides, '{}'::jsonb),
     updated_at = clock_timestamp()
   WHERE singleton
   RETURNING * INTO v_policy;
@@ -4964,6 +5012,7 @@ BEGIN
     operator_overrides = ARRAY(
       SELECT name FROM unnest(policy.operator_overrides) name WHERE NOT (name = ANY(p_settings))
     ),
+    operator_audit = NULLIF(policy.operator_audit - p_settings, '{}'::jsonb),
     updated_at = clock_timestamp()
   WHERE singleton
   RETURNING * INTO v_policy;
@@ -4973,6 +5022,190 @@ BEGIN
        SET last_completed_local_date = NULL, updated_at = clock_timestamp()
      WHERE routine_name = 'history_retention';
   END IF;
+  RETURN v_policy;
+END;
+$$;
+
+-- The audit entry of one operator change of a policy setting. `operator_audit` on
+-- retention_policy and maintenance_policy maps a column name to the entry of the last operator
+-- change of that setting. The checks and the request identity follow set_queue_paused_v1: the raw
+-- request id is never stored. The caller adds `changedAt` after it holds the policy row lock.
+--
+-- The writers keep each entry true for the value that it describes:
+-- - override_*_policy_v2 and revert_*_policy_v2 write the entry of each setting that they change.
+-- - override_*_policy_v1 and revert_*_policy_v1 remove the entry of each setting that they change.
+-- - sync_*_policy_v1 with p_force removes every entry. Without p_force it changes no operator
+--   value, so an override entry stays. It removes the entry of each setting whose effective value
+--   it changes, because that entry describes the earlier value.
+CREATE OR REPLACE FUNCTION workhorse.policy_audit_entry_internal_v1(
+  p_action text,
+  p_actor text,
+  p_reason text,
+  p_request_id text
+) RETURNS jsonb
+LANGUAGE plpgsql
+IMMUTABLE
+AS $$
+DECLARE
+  v_length integer;
+BEGIN
+  IF p_action IS NULL OR p_action NOT IN ('override', 'revert') THEN
+    RAISE EXCEPTION 'policy audit action must be override or revert';
+  END IF;
+  IF p_actor IS NULL OR p_actor = '' OR char_length(p_actor) > 200 THEN
+    RAISE EXCEPTION 'requested_by must contain between 1 and 200 characters';
+  END IF;
+  IF p_reason IS NULL OR p_reason = '' OR char_length(p_reason) > 2000 THEN
+    RAISE EXCEPTION 'reason must contain between 1 and 2000 characters';
+  END IF;
+  IF p_request_id IS NULL OR p_request_id = '' OR octet_length(p_request_id) > 512 THEN
+    RAISE EXCEPTION 'request_id must contain between 1 and 512 UTF-8 bytes';
+  END IF;
+  v_length := char_length(p_request_id);
+  RETURN jsonb_build_object(
+    'action', p_action,
+    'actor', p_actor,
+    'reason', p_reason,
+    'requestIdPreview', CASE
+      WHEN v_length <= 4 THEN repeat('•', v_length)
+      WHEN v_length <= 8 THEN left(p_request_id, 2) || '…' || right(p_request_id, 2)
+      ELSE left(p_request_id, 8) || '…' || right(p_request_id, 4)
+    END,
+    'requestIdDigest', left(encode(sha256(convert_to(p_request_id, 'UTF8')), 'hex'), 12),
+    'requestIdLength', v_length
+  );
+END;
+$$;
+
+-- An operator change that keeps its audit. The v1 function makes the change and removes the
+-- entries of the changed settings under the row lock. This function then writes one entry for
+-- each changed setting, with the row's new updated_at as its time.
+CREATE OR REPLACE FUNCTION workhorse.override_retention_policy_v2(
+  p_overrides jsonb,
+  p_actor text,
+  p_reason text,
+  p_request_id text
+) RETURNS workhorse.retention_policy
+LANGUAGE plpgsql
+AS $$
+DECLARE v_entry jsonb := workhorse.policy_audit_entry_internal_v1(
+  'override', p_actor, p_reason, p_request_id
+);
+DECLARE v_policy workhorse.retention_policy%ROWTYPE;
+BEGIN
+  v_policy := workhorse.override_retention_policy_v1(p_overrides);
+  UPDATE workhorse.retention_policy policy
+     SET operator_audit = COALESCE(policy.operator_audit, '{}'::jsonb) || (
+           SELECT jsonb_object_agg(name, v_entry || jsonb_build_object('changedAt',
+                    to_char(v_policy.updated_at AT TIME ZONE 'UTC',
+                            'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')))
+             FROM jsonb_object_keys(p_overrides) name
+         )
+   WHERE singleton
+   RETURNING * INTO v_policy;
+  RETURN v_policy;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION workhorse.revert_retention_policy_v2(
+  p_settings text[],
+  p_actor text,
+  p_reason text,
+  p_request_id text
+) RETURNS workhorse.retention_policy
+LANGUAGE plpgsql
+AS $$
+DECLARE v_entry jsonb := workhorse.policy_audit_entry_internal_v1(
+  'revert', p_actor, p_reason, p_request_id
+);
+DECLARE v_policy workhorse.retention_policy%ROWTYPE;
+BEGIN
+  -- revert_retention_policy_v1 reads the clock in its UPDATE. Take the row lock first, so the
+  -- time of the change is read after any wait for the lock.
+  PERFORM 1 FROM workhorse.retention_policy WHERE singleton FOR UPDATE;
+  v_policy := workhorse.revert_retention_policy_v1(p_settings);
+  UPDATE workhorse.retention_policy policy
+     SET operator_audit = COALESCE(policy.operator_audit, '{}'::jsonb) || (
+           SELECT jsonb_object_agg(name, v_entry || jsonb_build_object('changedAt',
+                    to_char(v_policy.updated_at AT TIME ZONE 'UTC',
+                            'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')))
+             FROM unnest(p_settings) name
+         )
+   WHERE singleton
+   RETURNING * INTO v_policy;
+  RETURN v_policy;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION workhorse.override_maintenance_policy_v2(
+  p_timezone text,
+  p_partition_preparation_interval_ms integer,
+  p_terminal_cleanup_interval_ms integer,
+  p_history_retention_local_time time,
+  p_statistics_rollup_interval_ms integer,
+  p_statistics_group_limit integer,
+  p_statistics_recompute_buckets integer,
+  p_actor text,
+  p_reason text,
+  p_request_id text
+) RETURNS workhorse.maintenance_policy
+LANGUAGE plpgsql
+AS $$
+DECLARE v_entry jsonb := workhorse.policy_audit_entry_internal_v1(
+  'override', p_actor, p_reason, p_request_id
+);
+DECLARE v_policy workhorse.maintenance_policy%ROWTYPE;
+BEGIN
+  v_policy := workhorse.override_maintenance_policy_v1(
+    p_timezone, p_partition_preparation_interval_ms, p_terminal_cleanup_interval_ms,
+    p_history_retention_local_time, p_statistics_rollup_interval_ms, p_statistics_group_limit,
+    p_statistics_recompute_buckets
+  );
+  UPDATE workhorse.maintenance_policy policy
+     SET operator_audit = COALESCE(policy.operator_audit, '{}'::jsonb) || (
+           SELECT jsonb_object_agg(setting.name, v_entry || jsonb_build_object('changedAt',
+                    to_char(v_policy.updated_at AT TIME ZONE 'UTC',
+                            'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')))
+             FROM (VALUES
+               ('timezone', p_timezone IS NOT NULL),
+               ('partition_preparation_interval_ms', p_partition_preparation_interval_ms IS NOT NULL),
+               ('terminal_cleanup_interval_ms', p_terminal_cleanup_interval_ms IS NOT NULL),
+               ('history_retention_local_time', p_history_retention_local_time IS NOT NULL),
+               ('statistics_rollup_interval_ms', p_statistics_rollup_interval_ms IS NOT NULL),
+               ('statistics_group_limit', p_statistics_group_limit IS NOT NULL),
+               ('statistics_recompute_buckets', p_statistics_recompute_buckets IS NOT NULL)
+             ) setting(name, changed)
+            WHERE setting.changed
+         )
+   WHERE singleton
+   RETURNING * INTO v_policy;
+  RETURN v_policy;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION workhorse.revert_maintenance_policy_v2(
+  p_settings text[],
+  p_actor text,
+  p_reason text,
+  p_request_id text
+) RETURNS workhorse.maintenance_policy
+LANGUAGE plpgsql
+AS $$
+DECLARE v_entry jsonb := workhorse.policy_audit_entry_internal_v1(
+  'revert', p_actor, p_reason, p_request_id
+);
+DECLARE v_policy workhorse.maintenance_policy%ROWTYPE;
+BEGIN
+  v_policy := workhorse.revert_maintenance_policy_v1(p_settings);
+  UPDATE workhorse.maintenance_policy policy
+     SET operator_audit = COALESCE(policy.operator_audit, '{}'::jsonb) || (
+           SELECT jsonb_object_agg(name, v_entry || jsonb_build_object('changedAt',
+                    to_char(v_policy.updated_at AT TIME ZONE 'UTC',
+                            'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')))
+             FROM unnest(p_settings) name
+         )
+   WHERE singleton
+   RETURNING * INTO v_policy;
   RETURN v_policy;
 END;
 $$;
@@ -21870,8 +22103,11 @@ BEGIN
       __scope_from__
       LEFT JOIN workhorse.dashboard_task_runtime_v1 r ON r.task_id = j.id
       LEFT JOIN workhorse.dashboard_task_outcome_v1 o ON o.task_id = j.id
-  -- No materialization hint: one reference lets the limit reach the filter, and a request that
-  -- asks for an exact count adds the second reference PostgreSQL materializes for.
+  -- The statement names filtered two times in each request: in candidate_ids and in the
+  -- exact-count branch of `total`, which the plan keeps also when the request asks for no count.
+  -- Thus PostgreSQL materializes filtered for each request, and the limit of candidate_ids cannot
+  -- reach the filter. A request with no tag, queue, or task type therefore reads each task. The
+  -- SPA uses dashboard_tasks_cursor_v1, and the read time bound of each host ends a long read.
   ), filtered AS (
     SELECT task_rows.* FROM task_rows CROSS JOIN parameters
      WHERE CASE parameters.filter
@@ -22195,6 +22431,37 @@ AS $$
 $$;
 
 
+-- Error-stack redaction for the dashboard reads. A host that sets `redactErrorStacks` in the input
+-- of dashboard_task_detail_v1, dashboard_events_v1, or dashboard_event_detail_v1 gets each error
+-- envelope without its `stack`. A stored error keeps `stack` at its top level only. A request
+-- cannot set the key: each host drops the input keys that the request schema does not declare, and
+-- then sets this one from its own option.
+CREATE OR REPLACE FUNCTION workhorse.dashboard_error_without_stack_v1(
+  p_error jsonb, p_redact boolean
+) RETURNS jsonb
+LANGUAGE sql
+IMMUTABLE
+PARALLEL SAFE
+AS $$
+  SELECT CASE WHEN p_redact AND jsonb_typeof(p_error) = 'object'
+              THEN p_error - 'stack' ELSE p_error END;
+$$;
+
+-- An event that records a failure, such as `failed` or `retry_scheduled`, copies the worker error
+-- into `details.error`. Each other key of the details stays as stored.
+CREATE OR REPLACE FUNCTION workhorse.dashboard_details_without_stack_v1(
+  p_details jsonb, p_redact boolean
+) RETURNS jsonb
+LANGUAGE sql
+IMMUTABLE
+PARALLEL SAFE
+AS $$
+  SELECT CASE WHEN p_redact AND jsonb_typeof(p_details) = 'object' AND p_details ? 'error'
+              THEN jsonb_set(p_details, '{error}',
+                             workhorse.dashboard_error_without_stack_v1(p_details->'error', true))
+              ELSE p_details END;
+$$;
+
 CREATE OR REPLACE FUNCTION workhorse.dashboard_events_v1(p_input jsonb)
 RETURNS jsonb
 LANGUAGE plpgsql
@@ -22237,7 +22504,8 @@ BEGIN
              CASE WHEN jsonb_typeof(p_input->'types') = 'array'
                   THEN ARRAY(SELECT jsonb_array_elements_text(p_input->'types'))
                   ELSE ARRAY[]::text[] END AS event_types,
-             NULLIF(p_input->>'taskId', '')::uuid AS task_id
+             NULLIF(p_input->>'taskId', '')::uuid AS task_id,
+             COALESCE((p_input->>'redactErrorStacks')::boolean, false) AS redact_error_stacks
     ), event_records AS NOT MATERIALIZED (
       SELECT event.*, COALESCE(event.details->>'worker_id', (
         SELECT history.worker_id FROM workhorse.dashboard_attempt_history_v1 history
@@ -22258,7 +22526,7 @@ BEGIN
          AND (parameters.task_id IS NULL OR event.task_id = parameters.task_id)
          AND (parameters.worker_filter IS NULL OR event.resolved_worker_id = parameters.worker_filter)
          AND (parameters.search_filter IS NULL
-           OR strpos(lower(concat_ws(' ', event.task_id::text, event.event_type, event.resolved_worker_id, event.details::text)), lower(parameters.search_filter)) > 0
+           OR strpos(lower(concat_ws(' ', event.task_id::text, event.event_type, event.resolved_worker_id, workhorse.dashboard_details_without_stack_v1(event.details, parameters.redact_error_stacks)::text)), lower(parameters.search_filter)) > 0
            OR EXISTS (SELECT 1 FROM workhorse.dashboard_task_v1 task WHERE task.id = event.task_id
              AND strpos(lower(concat_ws(' ', task.queue_name, task.task_type)), lower(parameters.search_filter)) > 0))
          AND (cardinality(parameters.event_types) = 0
@@ -22320,7 +22588,7 @@ BEGIN
            AND (parameters.task_id IS NULL OR event.task_id = parameters.task_id)
            AND (parameters.worker_filter IS NULL OR event.resolved_worker_id = parameters.worker_filter)
            AND (parameters.search_filter IS NULL
-             OR strpos(lower(concat_ws(' ', event.task_id::text, event.event_type, event.resolved_worker_id, event.details::text)), lower(parameters.search_filter)) > 0
+             OR strpos(lower(concat_ws(' ', event.task_id::text, event.event_type, event.resolved_worker_id, workhorse.dashboard_details_without_stack_v1(event.details, parameters.redact_error_stacks)::text)), lower(parameters.search_filter)) > 0
              OR EXISTS (SELECT 1 FROM workhorse.dashboard_task_v1 task WHERE task.id = event.task_id
                AND strpos(lower(concat_ws(' ', task.queue_name, task.task_type)), lower(parameters.search_filter)) > 0))
            AND (cardinality(parameters.event_types) = 0
@@ -22373,7 +22641,9 @@ BEGIN
           'taskType', task.task_type,
           'occurredAt', workhorse.dashboard_iso_v1(event_page.occurred_at),
           'attempt', event_page.attempt, 'type', event_page.type,
-          'details', event_page.details, 'workerId', event_page.worker_id,
+          'details', workhorse.dashboard_details_without_stack_v1(
+            event_page.details, parameters.redact_error_stacks),
+          'workerId', event_page.worker_id,
           'fenceToken', event_page.fence_token::text,
           'durationMs', CASE WHEN event_page.started_at IS NULL
                                   OR event_page.finished_at IS NULL THEN NULL
@@ -22397,11 +22667,16 @@ LANGUAGE plpgsql
 AS $$
 DECLARE
   v_identity text := p_input->>'id';
+  v_redact boolean := COALESCE((p_input->>'redactErrorStacks')::boolean, false);
   v_kind text;
   v_record_id uuid;
   v_result jsonb;
 BEGIN
-  IF v_identity IS NULL OR v_identity !~* '^(event|attempt):[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$' THEN
+  -- A recorded event or attempt has a version 7 UUID. A record that dashboard_task_event_v1 or
+  -- dashboard_attempt_history_v1 derives for a fast-tier task has an MD5 value cast to uuid, which
+  -- can have any version and variant digits. Thus the check accepts any UUID in canonical form, and
+  -- the lookup below reads each fast-tier row to find a derived record.
+  IF v_identity IS NULL OR v_identity !~* '^(event|attempt):[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' THEN
     RETURN NULL;
   END IF;
   v_kind := split_part(v_identity, ':', 1);
@@ -22413,7 +22688,8 @@ BEGIN
       'recordId', event.event_id::text, 'taskId', event.task_id::text,
       'queue', task.queue_name, 'taskType', task.task_type,
       'occurredAt', workhorse.dashboard_iso_v1(event.occurred_at),
-      'attempt', event.attempt, 'type', event.event_type, 'details', event.details,
+      'attempt', event.attempt, 'type', event.event_type,
+      'details', workhorse.dashboard_details_without_stack_v1(event.details, v_redact),
       'workerId', COALESCE(event.details->>'worker_id', (
         SELECT history.worker_id FROM workhorse.dashboard_attempt_history_v1 history
          WHERE history.task_id = event.task_id AND history.attempt = event.attempt
@@ -22436,7 +22712,8 @@ BEGIN
       'claimedAt', workhorse.dashboard_iso_v1(history.claimed_at),
       'finishedAt', workhorse.dashboard_iso_v1(history.finished_at),
       'durationMs', round(extract(epoch FROM history.finished_at - history.started_at) * 1000),
-      'error', history.error, 'errorMessage', history.error->>'message')
+      'error', workhorse.dashboard_error_without_stack_v1(history.error, v_redact),
+      'errorMessage', history.error->>'message')
       INTO v_result
       FROM workhorse.dashboard_attempt_history_v1 history
       LEFT JOIN workhorse.dashboard_task_v1 task ON task.id = history.task_id
@@ -23095,7 +23372,8 @@ SET jit = off
 AS $$
   WITH parameters AS (
     SELECT (p_input->>'id')::uuid AS task_id,
-           COALESCE((p_input->>'canSignal')::boolean, false) AS can_signal
+           COALESCE((p_input->>'canSignal')::boolean, false) AS can_signal,
+           COALESCE((p_input->>'redactErrorStacks')::boolean, false) AS redact
   ), task AS (
     SELECT j.id, j.queue_name AS queue, j.task_type AS type, j.priority, j.payload,
            j.max_attempts, j.retry_policy, j.deadline_at, j.execution_timeout_ms,
@@ -23191,14 +23469,15 @@ AS $$
         'name', child_name, 'type', child_type,
         'createdAt', workhorse.dashboard_iso_v1(created_at),
         'joinedAt', workhorse.dashboard_iso_v1(joined_at),
-        'outcomeState', outcome_state, 'error', outcome_error
+        'outcomeState', outcome_state,
+        'error', workhorse.dashboard_error_without_stack_v1(outcome_error, redact)
       ) ORDER BY created_at, parent_task_id, child_task_id) FILTER (WHERE ordinal <= 101),
         '[]'::jsonb),
       'truncated', count(*) > 101
     ) AS value
       FROM (
         SELECT edge.*, child.task_type AS child_type, outcome.state AS outcome_state,
-               outcome.error AS outcome_error,
+               outcome.error AS outcome_error, parameters.redact,
                row_number() OVER (ORDER BY edge.created_at, edge.parent_task_id,
                                             edge.child_task_id) AS ordinal
           FROM parameters
@@ -23277,7 +23556,7 @@ AS $$
           'requestedAt', workhorse.dashboard_iso_v1(cancel_requested_at),
           'requestedBy', NULLIF(cancel_requested_by, ''),
           'reason', NULLIF(cancel_reason, '')) END,
-        'error', runtime_error) END,
+        'error', workhorse.dashboard_error_without_stack_v1(runtime_error, parameters.redact)) END,
       'outcome', CASE WHEN outcome_state IS NOT NULL THEN jsonb_build_object(
         'state', outcome_state, 'attempt', outcome_attempt,
         'finishedAt', workhorse.dashboard_iso_v1(finished_at),
@@ -23286,11 +23565,12 @@ AS $$
         'result', CASE WHEN task_values.result_bytes <= task_values.inline_bytes THEN result END,
         'resultBytes', task_values.result_bytes,
         'resultOmitted', task_values.result_bytes > task_values.inline_bytes,
-        'error', outcome_error) END,
+        'error', workhorse.dashboard_error_without_stack_v1(outcome_error, parameters.redact)) END,
       -- The result appears under the outcome alone. A result exists only once a task finishes, so
       -- a second copy beside it doubled what a megabyte result costs to open and named no new fact.
-      'error', COALESCE(outcome_error, runtime_error)
-    ) AS value FROM task CROSS JOIN task_values
+      'error', workhorse.dashboard_error_without_stack_v1(
+        COALESCE(outcome_error, runtime_error), parameters.redact)
+    ) AS value FROM task CROSS JOIN task_values CROSS JOIN parameters
   ), batch_executions AS (
     SELECT COALESCE(jsonb_agg(jsonb_build_object(
       'id', batch_id, 'attempt', selected_attempt,
@@ -23301,7 +23581,9 @@ AS $$
         SELECT batch_id, selected_attempt, dispatched_at, batch_wide_failure,
                jsonb_agg(jsonb_build_object(
                  'id', member_task_id, 'type', task_type, 'attempt', attempt,
-                 'outcome', outcome, 'error', error) ORDER BY ordinal) AS members
+                 'outcome', outcome,
+                 'error', workhorse.dashboard_error_without_stack_v1(error, redact))
+                 ORDER BY ordinal) AS members
           FROM (
             SELECT dispatch.details->>'batch_id' AS batch_id,
                    dispatch.attempt AS selected_attempt,
@@ -23316,7 +23598,7 @@ AS $$
                    member.ordinal, member.value->>'task_id' AS member_task_id,
                    COALESCE(member_task.task_type, selected_task.task_type) AS task_type,
                    (member.value->>'attempt')::integer AS attempt,
-                   history.outcome, history.error
+                   history.outcome, history.error, parameters.redact
               FROM parameters
               JOIN workhorse.dashboard_task_event_v1 dispatch
                 ON dispatch.task_id = parameters.task_id AND dispatch.event_type = 'batch_dispatched'
@@ -23329,7 +23611,7 @@ AS $$
                 ON history.task_id = (member.value->>'task_id')::uuid
                AND history.attempt = (member.value->>'attempt')::integer
           ) batch_rows
-         GROUP BY batch_id, selected_attempt, dispatched_at, batch_wide_failure
+         GROUP BY batch_id, selected_attempt, dispatched_at, batch_wide_failure, redact
       ) executions
   -- Each history section keeps its most recent rows and reports that it was cut. A task that
   -- retried for days would otherwise put its whole recorded life into one drawer, and the event
@@ -23343,14 +23625,15 @@ AS $$
       'durationMs', extract(epoch FROM finished_at - claimed_at) * 1000,
       'executionMs', extract(epoch FROM finished_at - claimed_at) * 1000,
       'elapsedMs', extract(epoch FROM finished_at - started_at) * 1000,
-      'error', error) ORDER BY attempt, attempt_id)
+      'error', workhorse.dashboard_error_without_stack_v1(error, redact))
+      ORDER BY attempt, attempt_id)
       FILTER (WHERE ordinal <= workhorse.dashboard_task_detail_limit_v1()), '[]'::jsonb) AS value,
       count(*) > workhorse.dashboard_task_detail_limit_v1() AS truncated
       FROM (
         SELECT recent.*, row_number() OVER (ORDER BY recent.attempt DESC, recent.attempt_id DESC)
                  AS ordinal
           FROM (
-            SELECT history.* FROM parameters
+            SELECT history.*, parameters.redact FROM parameters
               JOIN workhorse.dashboard_attempt_history_v1 history
                 ON history.task_id = parameters.task_id
              ORDER BY history.attempt DESC, history.attempt_id DESC
@@ -23408,7 +23691,8 @@ AS $$
   ), events AS (
     SELECT COALESCE(jsonb_agg(jsonb_build_object(
       'id', event_id::text, 'attempt', attempt, 'type', event_type,
-      'details', details, 'occurredAt', workhorse.dashboard_iso_v1(occurred_at)
+      'details', workhorse.dashboard_details_without_stack_v1(details, redact),
+      'occurredAt', workhorse.dashboard_iso_v1(occurred_at)
     ) ORDER BY occurred_at, event_id)
       FILTER (WHERE ordinal <= workhorse.dashboard_task_event_limit_v1()), '[]'::jsonb) AS value,
       count(*) > workhorse.dashboard_task_event_limit_v1() AS truncated
@@ -23416,7 +23700,7 @@ AS $$
         SELECT recent.*,
                row_number() OVER (ORDER BY recent.occurred_at DESC, recent.event_id DESC) AS ordinal
           FROM (
-            SELECT event_record.* FROM parameters
+            SELECT event_record.*, parameters.redact FROM parameters
               JOIN workhorse.dashboard_task_event_v1 event_record
                 ON event_record.task_id = parameters.task_id
              ORDER BY event_record.occurred_at DESC, event_record.event_id DESC
@@ -23573,23 +23857,39 @@ AS $$
         ('retention', 'statisticsRowsPerPass', 'statistics_rows_per_pass',
           to_jsonb(retention.application_statistics_rows_per_pass))
       ) field(policy, wire_name, column_name, application_default)
-  ), provenance AS (
-    SELECT fields.policy, jsonb_object_agg(fields.wire_name, jsonb_build_object(
-             'source', CASE
-               WHEN fields.column_name = ANY(
-                 CASE fields.policy WHEN 'maintenance' THEN maintenance.operator_overrides
-                                    ELSE retention.operator_overrides END
-               ) THEN 'operator'
-               ELSE 'application'
-             END,
-             'applicationDefault', fields.application_default
-           )) AS document
+  ), field_sources AS (
+    SELECT fields.*,
+           CASE WHEN fields.column_name = ANY(
+             CASE fields.policy WHEN 'maintenance' THEN maintenance.operator_overrides
+                                ELSE retention.operator_overrides END
+           ) THEN 'operator' ELSE 'application' END AS source,
+           CASE fields.policy WHEN 'maintenance' THEN maintenance.operator_audit
+                              ELSE retention.operator_audit END -> fields.column_name AS audit
       FROM provenance_fields fields CROSS JOIN maintenance CROSS JOIN retention
+  ), provenance AS (
+    -- An override entry describes an operator value and a revert entry an application value. An
+    -- entry whose action does not match the source of the setting is not shown. `provenance` keeps
+    -- its released shape, and `lastChanges` holds the shown entries.
+    SELECT fields.policy, jsonb_object_agg(fields.wire_name, jsonb_build_object(
+             'source', fields.source,
+             'applicationDefault', fields.application_default
+           )) AS document,
+           COALESCE(jsonb_object_agg(fields.wire_name, jsonb_build_object(
+             'action', fields.audit->>'action',
+             'actor', fields.audit->>'actor',
+             'reason', fields.audit->>'reason',
+             'requestIdPreview', fields.audit->>'requestIdPreview',
+             'requestIdDigest', fields.audit->>'requestIdDigest',
+             'requestIdLength', (fields.audit->>'requestIdLength')::integer,
+             'changedAt', workhorse.dashboard_iso_v1((fields.audit->>'changedAt')::timestamptz))
+           ) FILTER (WHERE fields.audit->>'action' = CASE fields.source
+             WHEN 'operator' THEN 'override' ELSE 'revert' END), '{}'::jsonb) AS last_changes
+      FROM field_sources fields
      GROUP BY fields.policy
   ), maintenance_provenance AS (
-    SELECT document FROM provenance WHERE policy = 'maintenance'
+    SELECT document, last_changes FROM provenance WHERE policy = 'maintenance'
   ), retention_provenance AS (
-    SELECT document FROM provenance WHERE policy = 'retention'
+    SELECT document, last_changes FROM provenance WHERE policy = 'retention'
   ), health AS (
     SELECT COALESCE(p_input->'health', workhorse.queue_health_v1()) AS document
   ), enqueue_rate AS (
@@ -23631,6 +23931,7 @@ AS $$
       'statisticsGroupLimit', maintenance.statistics_group_limit,
       'statisticsRecomputeBuckets', maintenance.statistics_recompute_buckets,
       'provenance', maintenance_provenance.document,
+      'lastChanges', maintenance_provenance.last_changes,
       'updatedAt', workhorse.dashboard_iso_v1(maintenance.updated_at)
     ),
     'retention', jsonb_build_object(
@@ -23646,6 +23947,7 @@ AS $$
       'occurrenceRowsPerPass', retention.occurrence_rows_per_pass,
       'statisticsRowsPerPass', retention.statistics_rows_per_pass,
       'provenance', retention_provenance.document,
+      'lastChanges', retention_provenance.last_changes,
       'updatedAt', workhorse.dashboard_iso_v1(retention.updated_at)
     ),
     'recommendationInputs', jsonb_build_object(
@@ -25065,10 +25367,11 @@ INSERT INTO workhorse.schema_migration(version, description) VALUES
   (94, 'isolate each schedule in a pass, refuse fast-tier keys, and match two wildcard day fields'),
   (95, 'wait for the cold export frontier, keep stat rows for the next tier, and keep held retention due'),
   (96, 'give cleanup and health one retention rule, use fixed-hour windows, and bound health walks'),
-  (97, 'compare wait targets in milliseconds, end signals to terminal tasks, limit a second child set, and show failed callbacks')
+  (97, 'compare wait targets in milliseconds, end signals to terminal tasks, limit a second child set, and show failed callbacks'),
+  (98, 'keep the settings audit, withhold error stacks, and find derived history records')
 ON CONFLICT DO NOTHING;
 
-INSERT INTO workhorse.schema_version(version) VALUES (97) ON CONFLICT DO NOTHING;
+INSERT INTO workhorse.schema_version(version) VALUES (98) ON CONFLICT DO NOTHING;
 
 INSERT INTO workhorse.protocol_version(version) VALUES (5) ON CONFLICT DO NOTHING;
 SELECT workhorse.create_history_day_v1(

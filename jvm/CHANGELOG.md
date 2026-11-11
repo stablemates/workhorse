@@ -214,6 +214,41 @@ moves the schema to version 97. It adds `schedule_wait_v2`, `send_signal_v2`, an
 answers. The SDK floor rises from 76 to 97, so run `workhorse schema migrate` before the first
 process of this release starts.
 
+### The dashboard keeps the audit of each settings change
+
+An operator decreased `taskEventRetentionDays` on the Settings page and gave a reason. The next
+retention pass deleted the older history, and no table named the operator or the reason.
+`run.workhorse.dashboard.Dashboard` now calls `override_retention_policy_v2`, `revert_retention_policy_v2`,
+`override_maintenance_policy_v2`, or `revert_maintenance_policy_v2`. Each records the authenticated
+actor, the reason, a preview and a digest of the request ID, and the time for each changed setting
+in the new nullable `operator_audit` column of `retention_policy` or `maintenance_policy`. The
+`settings` read shows it as `lastChanges.<setting>` of each policy, and the Settings page shows who made
+the last change and why. A revert keeps its own entry. `override_*_policy_v1`, `revert_*_policy_v1`,
+and each `sync_*_policy_v1` remove the entries of the settings whose value they change, so a setting
+never names an actor who did not set its value (SM-1996).
+
+### The dashboard can withhold error stacks and opens each derived record
+
+`Dashboard.Builder.redactErrorStacks` of `run.workhorse.dashboard.Dashboard` removes the stack of each worker error from task detail, the event feed, and event
+detail, also from `details.error` of a `failed` or `retry_scheduled` event. It is off by default.
+`dashboard_task_detail_v1`, `dashboard_events_v1`, and `dashboard_event_detail_v1` do the
+redaction from the `redactErrorStacks` input key. The host sets the key after it drops the
+undeclared input keys, so a request cannot turn the redaction off, and the event search does not
+match a withheld stack (SM-1968).
+
+A record that the dashboard derives for a fast-tier task has an MD5 identity, and event detail
+refused almost each one with an input validation error. `eventDetail` now accepts any UUID in
+canonical form, and `dashboard_event_detail_v1` finds the derived record (SM-1999). The comment
+and the architecture page state that a `tasks` request with no tag, queue, or task type reads each
+task (SM-1961).
+
+Migration 0099 (`0099-keep-the-settings-audit-withhold-error-stacks-and-find-derived-records.sql`)
+moves the schema to version 98. It adds the two nullable columns, the four audited functions, and
+three helper functions, and replaces the bodies of the six released policy writers and of five
+dashboard functions. It changes no rows. The dashboard host calls the audited functions, so the
+SDK compatibility floor rises from 97 to 98. Run `workhorse schema migrate` before the new
+processes start.
+
 ## 0.12.0 — 2026-11-07
 
 The npm packages, Python distribution, Go module, Rust crate, Ruby gem, JVM artifacts, and .NET

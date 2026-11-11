@@ -2010,6 +2010,205 @@
         "maintenance.historyRetentionLocalTime": {
           "type": "string"
         },
+        "maintenance.lastChanges": {
+          "type": "object"
+        },
+        "maintenance.lastChanges.historyRetentionLocalTime": {
+          "type": "object"
+        },
+        "maintenance.lastChanges.historyRetentionLocalTime.action": {
+          "type": "enum",
+          "enum": [
+            "override",
+            "revert"
+          ]
+        },
+        "maintenance.lastChanges.historyRetentionLocalTime.actor": {
+          "type": "string"
+        },
+        "maintenance.lastChanges.historyRetentionLocalTime.changedAt": {
+          "type": "string"
+        },
+        "maintenance.lastChanges.historyRetentionLocalTime.reason": {
+          "type": "string"
+        },
+        "maintenance.lastChanges.historyRetentionLocalTime.requestIdDigest": {
+          "type": "string"
+        },
+        "maintenance.lastChanges.historyRetentionLocalTime.requestIdLength": {
+          "type": "number"
+        },
+        "maintenance.lastChanges.historyRetentionLocalTime.requestIdPreview": {
+          "type": "string"
+        },
+        "maintenance.lastChanges.partitionPreparationIntervalMs": {
+          "type": "object"
+        },
+        "maintenance.lastChanges.partitionPreparationIntervalMs.action": {
+          "type": "enum",
+          "enum": [
+            "override",
+            "revert"
+          ]
+        },
+        "maintenance.lastChanges.partitionPreparationIntervalMs.actor": {
+          "type": "string"
+        },
+        "maintenance.lastChanges.partitionPreparationIntervalMs.changedAt": {
+          "type": "string"
+        },
+        "maintenance.lastChanges.partitionPreparationIntervalMs.reason": {
+          "type": "string"
+        },
+        "maintenance.lastChanges.partitionPreparationIntervalMs.requestIdDigest": {
+          "type": "string"
+        },
+        "maintenance.lastChanges.partitionPreparationIntervalMs.requestIdLength": {
+          "type": "number"
+        },
+        "maintenance.lastChanges.partitionPreparationIntervalMs.requestIdPreview": {
+          "type": "string"
+        },
+        "maintenance.lastChanges.statisticsGroupLimit": {
+          "type": "object"
+        },
+        "maintenance.lastChanges.statisticsGroupLimit.action": {
+          "type": "enum",
+          "enum": [
+            "override",
+            "revert"
+          ]
+        },
+        "maintenance.lastChanges.statisticsGroupLimit.actor": {
+          "type": "string"
+        },
+        "maintenance.lastChanges.statisticsGroupLimit.changedAt": {
+          "type": "string"
+        },
+        "maintenance.lastChanges.statisticsGroupLimit.reason": {
+          "type": "string"
+        },
+        "maintenance.lastChanges.statisticsGroupLimit.requestIdDigest": {
+          "type": "string"
+        },
+        "maintenance.lastChanges.statisticsGroupLimit.requestIdLength": {
+          "type": "number"
+        },
+        "maintenance.lastChanges.statisticsGroupLimit.requestIdPreview": {
+          "type": "string"
+        },
+        "maintenance.lastChanges.statisticsRecomputeBuckets": {
+          "type": "object"
+        },
+        "maintenance.lastChanges.statisticsRecomputeBuckets.action": {
+          "type": "enum",
+          "enum": [
+            "override",
+            "revert"
+          ]
+        },
+        "maintenance.lastChanges.statisticsRecomputeBuckets.actor": {
+          "type": "string"
+        },
+        "maintenance.lastChanges.statisticsRecomputeBuckets.changedAt": {
+          "type": "string"
+        },
+        "maintenance.lastChanges.statisticsRecomputeBuckets.reason": {
+          "type": "string"
+        },
+        "maintenance.lastChanges.statisticsRecomputeBuckets.requestIdDigest": {
+          "type": "string"
+        },
+        "maintenance.lastChanges.statisticsRecomputeBuckets.requestIdLength": {
+          "type": "number"
+        },
+        "maintenance.lastChanges.statisticsRecomputeBuckets.requestIdPreview": {
+          "type": "string"
+        },
+        "maintenance.lastChanges.statisticsRollupIntervalMs": {
+          "type": "object"
+        },
+        "maintenance.lastChanges.statisticsRollupIntervalMs.action": {
+          "type": "enum",
+          "enum": [
+            "override",
+            "revert"
+          ]
+        },
+        "maintenance.lastChanges.statisticsRollupIntervalMs.actor": {
+          "type": "string"
+        },
+        "maintenance.lastChanges.statisticsRollupIntervalMs.changedAt": {
+          "type": "string"
+        },
+        "maintenance.lastChanges.statisticsRollupIntervalMs.reason": {
+          "type": "string"
+        },
+        "maintenance.lastChanges.statisticsRollupIntervalMs.requestIdDigest": {
+          "type": "string"
+        },
+        "maintenance.lastChanges.statisticsRollupIntervalMs.requestIdLength": {
+          "type": "number"
+        },
+        "maintenance.lastChanges.statisticsRollupIntervalMs.requestIdPreview": {
+          "type": "string"
+        },
+        "maintenance.lastChanges.terminalCleanupIntervalMs": {
+          "type": "object"
+        },
+        "maintenance.lastChanges.terminalCleanupIntervalMs.action": {
+          "type": "enum",
+          "enum": [
+            "override",
+            "revert"
+          ]
+        },
+        "maintenance.lastChanges.terminalCleanupIntervalMs.actor": {
+          "type": "string"
+        },
+        "maintenance.lastChanges.terminalCleanupIntervalMs.changedAt": {
+          "type": "string"
+        },
+        "maintenance.lastChanges.terminalCleanupIntervalMs.reason": {
+          "type": "string"
+        },
+        "maintenance.lastChanges.terminalCleanupIntervalMs.requestIdDigest": {
+          "type": "string"
+        },
+        "maintenance.lastChanges.terminalCleanupIntervalMs.requestIdLength": {
+          "type": "number"
+        },
+        "maintenance.lastChanges.terminalCleanupIntervalMs.requestIdPreview": {
+          "type": "string"
+        },
+        "maintenance.lastChanges.timezone": {
+          "type": "object"
+        },
+        "maintenance.lastChanges.timezone.action": {
+          "type": "enum",
+          "enum": [
+            "override",
+            "revert"
+          ]
+        },
+        "maintenance.lastChanges.timezone.actor": {
+          "type": "string"
+        },
+        "maintenance.lastChanges.timezone.changedAt": {
+          "type": "string"
+        },
+        "maintenance.lastChanges.timezone.reason": {
+          "type": "string"
+        },
+        "maintenance.lastChanges.timezone.requestIdDigest": {
+          "type": "string"
+        },
+        "maintenance.lastChanges.timezone.requestIdLength": {
+          "type": "number"
+        },
+        "maintenance.lastChanges.timezone.requestIdPreview": {
+          "type": "string"
+        },
         "maintenance.partitionPreparationIntervalMs": {
           "type": "number"
         },
@@ -2238,6 +2437,317 @@
         },
         "retention.historyPartitionsPerPass": {
           "type": "number"
+        },
+        "retention.lastChanges": {
+          "type": "object"
+        },
+        "retention.lastChanges.attemptHistoryRetentionDays": {
+          "type": "object"
+        },
+        "retention.lastChanges.attemptHistoryRetentionDays.action": {
+          "type": "enum",
+          "enum": [
+            "override",
+            "revert"
+          ]
+        },
+        "retention.lastChanges.attemptHistoryRetentionDays.actor": {
+          "type": "string"
+        },
+        "retention.lastChanges.attemptHistoryRetentionDays.changedAt": {
+          "type": "string"
+        },
+        "retention.lastChanges.attemptHistoryRetentionDays.reason": {
+          "type": "string"
+        },
+        "retention.lastChanges.attemptHistoryRetentionDays.requestIdDigest": {
+          "type": "string"
+        },
+        "retention.lastChanges.attemptHistoryRetentionDays.requestIdLength": {
+          "type": "number"
+        },
+        "retention.lastChanges.attemptHistoryRetentionDays.requestIdPreview": {
+          "type": "string"
+        },
+        "retention.lastChanges.defaultPartitionRowsPerPass": {
+          "type": "object"
+        },
+        "retention.lastChanges.defaultPartitionRowsPerPass.action": {
+          "type": "enum",
+          "enum": [
+            "override",
+            "revert"
+          ]
+        },
+        "retention.lastChanges.defaultPartitionRowsPerPass.actor": {
+          "type": "string"
+        },
+        "retention.lastChanges.defaultPartitionRowsPerPass.changedAt": {
+          "type": "string"
+        },
+        "retention.lastChanges.defaultPartitionRowsPerPass.reason": {
+          "type": "string"
+        },
+        "retention.lastChanges.defaultPartitionRowsPerPass.requestIdDigest": {
+          "type": "string"
+        },
+        "retention.lastChanges.defaultPartitionRowsPerPass.requestIdLength": {
+          "type": "number"
+        },
+        "retention.lastChanges.defaultPartitionRowsPerPass.requestIdPreview": {
+          "type": "string"
+        },
+        "retention.lastChanges.historyPartitionsPerPass": {
+          "type": "object"
+        },
+        "retention.lastChanges.historyPartitionsPerPass.action": {
+          "type": "enum",
+          "enum": [
+            "override",
+            "revert"
+          ]
+        },
+        "retention.lastChanges.historyPartitionsPerPass.actor": {
+          "type": "string"
+        },
+        "retention.lastChanges.historyPartitionsPerPass.changedAt": {
+          "type": "string"
+        },
+        "retention.lastChanges.historyPartitionsPerPass.reason": {
+          "type": "string"
+        },
+        "retention.lastChanges.historyPartitionsPerPass.requestIdDigest": {
+          "type": "string"
+        },
+        "retention.lastChanges.historyPartitionsPerPass.requestIdLength": {
+          "type": "number"
+        },
+        "retention.lastChanges.historyPartitionsPerPass.requestIdPreview": {
+          "type": "string"
+        },
+        "retention.lastChanges.occurrenceRowsPerPass": {
+          "type": "object"
+        },
+        "retention.lastChanges.occurrenceRowsPerPass.action": {
+          "type": "enum",
+          "enum": [
+            "override",
+            "revert"
+          ]
+        },
+        "retention.lastChanges.occurrenceRowsPerPass.actor": {
+          "type": "string"
+        },
+        "retention.lastChanges.occurrenceRowsPerPass.changedAt": {
+          "type": "string"
+        },
+        "retention.lastChanges.occurrenceRowsPerPass.reason": {
+          "type": "string"
+        },
+        "retention.lastChanges.occurrenceRowsPerPass.requestIdDigest": {
+          "type": "string"
+        },
+        "retention.lastChanges.occurrenceRowsPerPass.requestIdLength": {
+          "type": "number"
+        },
+        "retention.lastChanges.occurrenceRowsPerPass.requestIdPreview": {
+          "type": "string"
+        },
+        "retention.lastChanges.scheduleOccurrenceRetentionDays": {
+          "type": "object"
+        },
+        "retention.lastChanges.scheduleOccurrenceRetentionDays.action": {
+          "type": "enum",
+          "enum": [
+            "override",
+            "revert"
+          ]
+        },
+        "retention.lastChanges.scheduleOccurrenceRetentionDays.actor": {
+          "type": "string"
+        },
+        "retention.lastChanges.scheduleOccurrenceRetentionDays.changedAt": {
+          "type": "string"
+        },
+        "retention.lastChanges.scheduleOccurrenceRetentionDays.reason": {
+          "type": "string"
+        },
+        "retention.lastChanges.scheduleOccurrenceRetentionDays.requestIdDigest": {
+          "type": "string"
+        },
+        "retention.lastChanges.scheduleOccurrenceRetentionDays.requestIdLength": {
+          "type": "number"
+        },
+        "retention.lastChanges.scheduleOccurrenceRetentionDays.requestIdPreview": {
+          "type": "string"
+        },
+        "retention.lastChanges.statisticsRetentionDays": {
+          "type": "object"
+        },
+        "retention.lastChanges.statisticsRetentionDays.action": {
+          "type": "enum",
+          "enum": [
+            "override",
+            "revert"
+          ]
+        },
+        "retention.lastChanges.statisticsRetentionDays.actor": {
+          "type": "string"
+        },
+        "retention.lastChanges.statisticsRetentionDays.changedAt": {
+          "type": "string"
+        },
+        "retention.lastChanges.statisticsRetentionDays.reason": {
+          "type": "string"
+        },
+        "retention.lastChanges.statisticsRetentionDays.requestIdDigest": {
+          "type": "string"
+        },
+        "retention.lastChanges.statisticsRetentionDays.requestIdLength": {
+          "type": "number"
+        },
+        "retention.lastChanges.statisticsRetentionDays.requestIdPreview": {
+          "type": "string"
+        },
+        "retention.lastChanges.statisticsRowsPerPass": {
+          "type": "object"
+        },
+        "retention.lastChanges.statisticsRowsPerPass.action": {
+          "type": "enum",
+          "enum": [
+            "override",
+            "revert"
+          ]
+        },
+        "retention.lastChanges.statisticsRowsPerPass.actor": {
+          "type": "string"
+        },
+        "retention.lastChanges.statisticsRowsPerPass.changedAt": {
+          "type": "string"
+        },
+        "retention.lastChanges.statisticsRowsPerPass.reason": {
+          "type": "string"
+        },
+        "retention.lastChanges.statisticsRowsPerPass.requestIdDigest": {
+          "type": "string"
+        },
+        "retention.lastChanges.statisticsRowsPerPass.requestIdLength": {
+          "type": "number"
+        },
+        "retention.lastChanges.statisticsRowsPerPass.requestIdPreview": {
+          "type": "string"
+        },
+        "retention.lastChanges.taskEventRetentionDays": {
+          "type": "object"
+        },
+        "retention.lastChanges.taskEventRetentionDays.action": {
+          "type": "enum",
+          "enum": [
+            "override",
+            "revert"
+          ]
+        },
+        "retention.lastChanges.taskEventRetentionDays.actor": {
+          "type": "string"
+        },
+        "retention.lastChanges.taskEventRetentionDays.changedAt": {
+          "type": "string"
+        },
+        "retention.lastChanges.taskEventRetentionDays.reason": {
+          "type": "string"
+        },
+        "retention.lastChanges.taskEventRetentionDays.requestIdDigest": {
+          "type": "string"
+        },
+        "retention.lastChanges.taskEventRetentionDays.requestIdLength": {
+          "type": "number"
+        },
+        "retention.lastChanges.taskEventRetentionDays.requestIdPreview": {
+          "type": "string"
+        },
+        "retention.lastChanges.taskIdentityRetentionDays": {
+          "type": "object"
+        },
+        "retention.lastChanges.taskIdentityRetentionDays.action": {
+          "type": "enum",
+          "enum": [
+            "override",
+            "revert"
+          ]
+        },
+        "retention.lastChanges.taskIdentityRetentionDays.actor": {
+          "type": "string"
+        },
+        "retention.lastChanges.taskIdentityRetentionDays.changedAt": {
+          "type": "string"
+        },
+        "retention.lastChanges.taskIdentityRetentionDays.reason": {
+          "type": "string"
+        },
+        "retention.lastChanges.taskIdentityRetentionDays.requestIdDigest": {
+          "type": "string"
+        },
+        "retention.lastChanges.taskIdentityRetentionDays.requestIdLength": {
+          "type": "number"
+        },
+        "retention.lastChanges.taskIdentityRetentionDays.requestIdPreview": {
+          "type": "string"
+        },
+        "retention.lastChanges.terminalOutcomeRetentionDays": {
+          "type": "object"
+        },
+        "retention.lastChanges.terminalOutcomeRetentionDays.action": {
+          "type": "enum",
+          "enum": [
+            "override",
+            "revert"
+          ]
+        },
+        "retention.lastChanges.terminalOutcomeRetentionDays.actor": {
+          "type": "string"
+        },
+        "retention.lastChanges.terminalOutcomeRetentionDays.changedAt": {
+          "type": "string"
+        },
+        "retention.lastChanges.terminalOutcomeRetentionDays.reason": {
+          "type": "string"
+        },
+        "retention.lastChanges.terminalOutcomeRetentionDays.requestIdDigest": {
+          "type": "string"
+        },
+        "retention.lastChanges.terminalOutcomeRetentionDays.requestIdLength": {
+          "type": "number"
+        },
+        "retention.lastChanges.terminalOutcomeRetentionDays.requestIdPreview": {
+          "type": "string"
+        },
+        "retention.lastChanges.terminalTaskPruneLimit": {
+          "type": "object"
+        },
+        "retention.lastChanges.terminalTaskPruneLimit.action": {
+          "type": "enum",
+          "enum": [
+            "override",
+            "revert"
+          ]
+        },
+        "retention.lastChanges.terminalTaskPruneLimit.actor": {
+          "type": "string"
+        },
+        "retention.lastChanges.terminalTaskPruneLimit.changedAt": {
+          "type": "string"
+        },
+        "retention.lastChanges.terminalTaskPruneLimit.reason": {
+          "type": "string"
+        },
+        "retention.lastChanges.terminalTaskPruneLimit.requestIdDigest": {
+          "type": "string"
+        },
+        "retention.lastChanges.terminalTaskPruneLimit.requestIdLength": {
+          "type": "number"
+        },
+        "retention.lastChanges.terminalTaskPruneLimit.requestIdPreview": {
+          "type": "string"
         },
         "retention.occurrenceRowsPerPass": {
           "type": "number"

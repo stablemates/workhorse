@@ -171,6 +171,11 @@ pub struct DashboardOptions<E> {
     /// `deadpool_postgres::Pool` executor. A read through a client or a caller transaction runs
     /// with no bound. [`handler`] refuses a bound under 1 ms.
     pub statement_timeout: std::time::Duration,
+    /// Removes the stack of each worker error from task detail, the event feed, and event detail,
+    /// also from `details.error` of a `failed` or `retry_scheduled` event. The event search then
+    /// does not match a withheld stack. A request cannot change it. `false` by default, which
+    /// returns each error as stored.
+    pub redact_error_stacks: bool,
 }
 
 /// How long one dashboard read can run before PostgreSQL cancels it: 15 seconds, the
@@ -192,6 +197,7 @@ impl<E> DashboardOptions<E> {
             https: false,
             procedures: HashMap::new(),
             statement_timeout: DEFAULT_STATEMENT_TIMEOUT,
+            redact_error_stacks: false,
         }
     }
 }
@@ -232,6 +238,7 @@ pub fn handler<E: Executor>(options: DashboardOptions<E>) -> Result<DashboardSer
         options.read_only,
         options.maintenance_loops.unwrap_or_else(|| json!({ "tickIntervalMs": 1000 })),
         options.statement_timeout,
+        options.redact_error_stacks,
     );
     let host = Host {
         backend,

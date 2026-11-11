@@ -7903,6 +7903,7 @@
                       "applicationDefault": 14
                     }
                   },
+                  "lastChanges": {},
                   "occurrenceRowsPerPass": 10000,
                   "statisticsRowsPerPass": 10000,
                   "taskEventRetentionDays": 14,
@@ -7953,6 +7954,7 @@
                       "applicationDefault": 21600000
                     }
                   },
+                  "lastChanges": {},
                   "statisticsGroupLimit": 200,
                   "historyRetentionLocalTime": "03:00",
                   "terminalCleanupIntervalMs": 300000,
@@ -13111,6 +13113,7 @@
                       "applicationDefault": 14
                     }
                   },
+                  "lastChanges": {},
                   "occurrenceRowsPerPass": 10000,
                   "statisticsRowsPerPass": 10000,
                   "taskEventRetentionDays": 14,
@@ -13161,6 +13164,7 @@
                       "applicationDefault": 21600000
                     }
                   },
+                  "lastChanges": {},
                   "statisticsGroupLimit": 200,
                   "historyRetentionLocalTime": "03:00",
                   "terminalCleanupIntervalMs": 300000,
@@ -15923,6 +15927,1880 @@
           "sql": "DO $do$\nBEGIN\n  DROP FUNCTION workhorse.dashboard_events_v1(jsonb);\n  ALTER FUNCTION workhorse.dashboard_events_v1_before_slow_read(jsonb) RENAME TO dashboard_events_v1;\nEND\n$do$",
           "expect": {
             "rows": []
+          }
+        }
+      ]
+    },
+    {
+      "id": "settings-audit",
+      "exchanges": [
+        {
+          "id": "override-retention-audited",
+          "procedure": "overrideRetentionPolicy",
+          "request": {
+            "json": {
+              "definition": {
+                "taskEventRetentionDays": 7
+              },
+              "audit": {
+                "actor": "browser-operator",
+                "reason": "conformance audit",
+                "requestId": "conformance-audit-request-1"
+              }
+            }
+          },
+          "expect": {
+            "status": 200,
+            "body": {}
+          }
+        },
+        {
+          "id": "settings-after-override",
+          "procedure": "settings",
+          "request": {},
+          "coerce": {
+            "body.json.recommendationInputs.statistics.rolledUpThrough": "timestamp"
+          },
+          "expect": {
+            "status": 200,
+            "body": {
+              "json": {
+                "workers": [
+                  {
+                    "id": "conformance-worker",
+                    "queue": "conformance",
+                    "pollMs": 250,
+                    "queues": [
+                      "conformance"
+                    ],
+                    "leaseMs": 30000,
+                    "lastSeenAt": {
+                      "$type": "timestamp"
+                    },
+                    "concurrency": 2,
+                    "heartbeatMs": 10000,
+                    "registryIntervalMs": 5000,
+                    "maintenanceIntervalMs": 1000,
+                    "maintenanceRoutinePollMs": 60000
+                  }
+                ],
+                "editable": true,
+                "retention": {
+                  "updatedAt": {
+                    "$type": "timestamp"
+                  },
+                  "provenance": {
+                    "occurrenceRowsPerPass": {
+                      "source": "application",
+                      "applicationDefault": 10000
+                    },
+                    "statisticsRowsPerPass": {
+                      "source": "application",
+                      "applicationDefault": 10000
+                    },
+                    "taskEventRetentionDays": {
+                      "source": "operator",
+                      "applicationDefault": 14
+                    },
+                    "terminalTaskPruneLimit": {
+                      "source": "application",
+                      "applicationDefault": 1000
+                    },
+                    "statisticsRetentionDays": {
+                      "source": "application",
+                      "applicationDefault": 14
+                    },
+                    "historyPartitionsPerPass": {
+                      "source": "application",
+                      "applicationDefault": 4
+                    },
+                    "taskIdentityRetentionDays": {
+                      "source": "application",
+                      "applicationDefault": 14
+                    },
+                    "attemptHistoryRetentionDays": {
+                      "source": "application",
+                      "applicationDefault": 14
+                    },
+                    "defaultPartitionRowsPerPass": {
+                      "source": "application",
+                      "applicationDefault": 10000
+                    },
+                    "terminalOutcomeRetentionDays": {
+                      "source": "application",
+                      "applicationDefault": 14
+                    },
+                    "scheduleOccurrenceRetentionDays": {
+                      "source": "application",
+                      "applicationDefault": 14
+                    }
+                  },
+                  "lastChanges": {
+                    "taskEventRetentionDays": {
+                      "actor": "conformance",
+                      "action": "override",
+                      "reason": "conformance audit",
+                      "changedAt": {
+                        "$type": "timestamp"
+                      },
+                      "requestIdDigest": "d4e1eed6721b",
+                      "requestIdLength": 27,
+                      "requestIdPreview": "conforma…st-1"
+                    },
+                    "statisticsRetentionDays": {
+                      "actor": "conformance",
+                      "action": "revert",
+                      "reason": "conformance exchange",
+                      "changedAt": {
+                        "$type": "timestamp"
+                      },
+                      "requestIdDigest": "d4e9bf8d68c9",
+                      "requestIdLength": 19,
+                      "requestIdPreview": "conforma…uest"
+                    }
+                  },
+                  "occurrenceRowsPerPass": 10000,
+                  "statisticsRowsPerPass": 10000,
+                  "taskEventRetentionDays": 7,
+                  "terminalTaskPruneLimit": 1000,
+                  "statisticsRetentionDays": 14,
+                  "historyPartitionsPerPass": 4,
+                  "taskIdentityRetentionDays": 14,
+                  "attemptHistoryRetentionDays": 14,
+                  "defaultPartitionRowsPerPass": 10000,
+                  "terminalOutcomeRetentionDays": 14,
+                  "scheduleOccurrenceRetentionDays": 14
+                },
+                "capturedAt": {
+                  "$type": "timestamp"
+                },
+                "maintenance": {
+                  "timezone": "UTC",
+                  "updatedAt": {
+                    "$type": "timestamp"
+                  },
+                  "provenance": {
+                    "timezone": {
+                      "source": "application",
+                      "applicationDefault": "UTC"
+                    },
+                    "statisticsGroupLimit": {
+                      "source": "application",
+                      "applicationDefault": 200
+                    },
+                    "historyRetentionLocalTime": {
+                      "source": "application",
+                      "applicationDefault": "03:00"
+                    },
+                    "terminalCleanupIntervalMs": {
+                      "source": "application",
+                      "applicationDefault": 300000
+                    },
+                    "statisticsRecomputeBuckets": {
+                      "source": "application",
+                      "applicationDefault": 2
+                    },
+                    "statisticsRollupIntervalMs": {
+                      "source": "application",
+                      "applicationDefault": 60000
+                    },
+                    "partitionPreparationIntervalMs": {
+                      "source": "application",
+                      "applicationDefault": 21600000
+                    }
+                  },
+                  "lastChanges": {
+                    "historyRetentionLocalTime": {
+                      "actor": "conformance",
+                      "action": "revert",
+                      "reason": "conformance exchange",
+                      "changedAt": {
+                        "$type": "timestamp"
+                      },
+                      "requestIdDigest": "d4e9bf8d68c9",
+                      "requestIdLength": 19,
+                      "requestIdPreview": "conforma…uest"
+                    }
+                  },
+                  "statisticsGroupLimit": 200,
+                  "historyRetentionLocalTime": "03:00",
+                  "terminalCleanupIntervalMs": 300000,
+                  "statisticsRecomputeBuckets": 2,
+                  "statisticsRollupIntervalMs": 60000,
+                  "partitionPreparationIntervalMs": 21600000
+                },
+                "recommendationInputs": {
+                  "reasons": [
+                    {
+                      "code": "rollup-stalled",
+                      "budget": 1800000,
+                      "observed": {
+                        "$type": "number"
+                      },
+                      "severity": "degraded"
+                    },
+                    {
+                      "code": "retention-lag",
+                      "budget": 21600000,
+                      "category": "taskIdentity",
+                      "observed": {
+                        "$type": "number"
+                      },
+                      "severity": "degraded"
+                    },
+                    {
+                      "code": "retention-lag",
+                      "budget": 21600000,
+                      "category": "terminalOutcome",
+                      "observed": {
+                        "$type": "number"
+                      },
+                      "severity": "degraded"
+                    }
+                  ],
+                  "statistics": {
+                    "lagMs": {
+                      "$type": "number"
+                    },
+                    "lastRunAt": null,
+                    "rolledUpThrough": {
+                      "$type": "timestamp"
+                    }
+                  },
+                  "enqueueRate": {
+                    "tasks": 18,
+                    "windowMs": 3600000
+                  },
+                  "defaultHistoryRows": {
+                    "taskEvents": 0,
+                    "attemptHistory": 0
+                  },
+                  "defaultHistoryRowsCapped": {
+                    "taskEvents": false,
+                    "attemptHistory": false
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "id": "revert-retention-audited",
+          "procedure": "revertRetentionPolicy",
+          "request": {
+            "json": {
+              "settings": [
+                "taskEventRetentionDays"
+              ],
+              "audit": {
+                "actor": "browser-operator",
+                "reason": "conformance revert",
+                "requestId": "conformance-audit-request-2"
+              }
+            }
+          },
+          "expect": {
+            "status": 200,
+            "body": {}
+          }
+        },
+        {
+          "id": "override-maintenance-audited",
+          "procedure": "overrideMaintenancePolicy",
+          "request": {
+            "json": {
+              "definition": {
+                "historyRetentionLocalTime": "02:15"
+              },
+              "audit": {
+                "actor": "browser-operator",
+                "reason": "conformance maintenance",
+                "requestId": "conformance-audit-request-3"
+              }
+            }
+          },
+          "expect": {
+            "status": 200,
+            "body": {}
+          }
+        },
+        {
+          "id": "settings-after-revert",
+          "procedure": "settings",
+          "request": {},
+          "coerce": {
+            "body.json.recommendationInputs.statistics.rolledUpThrough": "timestamp"
+          },
+          "expect": {
+            "status": 200,
+            "body": {
+              "json": {
+                "workers": [
+                  {
+                    "id": "conformance-worker",
+                    "queue": "conformance",
+                    "pollMs": 250,
+                    "queues": [
+                      "conformance"
+                    ],
+                    "leaseMs": 30000,
+                    "lastSeenAt": {
+                      "$type": "timestamp"
+                    },
+                    "concurrency": 2,
+                    "heartbeatMs": 10000,
+                    "registryIntervalMs": 5000,
+                    "maintenanceIntervalMs": 1000,
+                    "maintenanceRoutinePollMs": 60000
+                  }
+                ],
+                "editable": true,
+                "retention": {
+                  "updatedAt": {
+                    "$type": "timestamp"
+                  },
+                  "provenance": {
+                    "occurrenceRowsPerPass": {
+                      "source": "application",
+                      "applicationDefault": 10000
+                    },
+                    "statisticsRowsPerPass": {
+                      "source": "application",
+                      "applicationDefault": 10000
+                    },
+                    "taskEventRetentionDays": {
+                      "source": "application",
+                      "applicationDefault": 14
+                    },
+                    "terminalTaskPruneLimit": {
+                      "source": "application",
+                      "applicationDefault": 1000
+                    },
+                    "statisticsRetentionDays": {
+                      "source": "application",
+                      "applicationDefault": 14
+                    },
+                    "historyPartitionsPerPass": {
+                      "source": "application",
+                      "applicationDefault": 4
+                    },
+                    "taskIdentityRetentionDays": {
+                      "source": "application",
+                      "applicationDefault": 14
+                    },
+                    "attemptHistoryRetentionDays": {
+                      "source": "application",
+                      "applicationDefault": 14
+                    },
+                    "defaultPartitionRowsPerPass": {
+                      "source": "application",
+                      "applicationDefault": 10000
+                    },
+                    "terminalOutcomeRetentionDays": {
+                      "source": "application",
+                      "applicationDefault": 14
+                    },
+                    "scheduleOccurrenceRetentionDays": {
+                      "source": "application",
+                      "applicationDefault": 14
+                    }
+                  },
+                  "lastChanges": {
+                    "taskEventRetentionDays": {
+                      "actor": "conformance",
+                      "action": "revert",
+                      "reason": "conformance revert",
+                      "changedAt": {
+                        "$type": "timestamp"
+                      },
+                      "requestIdDigest": "eccc16adb849",
+                      "requestIdLength": 27,
+                      "requestIdPreview": "conforma…st-2"
+                    },
+                    "statisticsRetentionDays": {
+                      "actor": "conformance",
+                      "action": "revert",
+                      "reason": "conformance exchange",
+                      "changedAt": {
+                        "$type": "timestamp"
+                      },
+                      "requestIdDigest": "d4e9bf8d68c9",
+                      "requestIdLength": 19,
+                      "requestIdPreview": "conforma…uest"
+                    }
+                  },
+                  "occurrenceRowsPerPass": 10000,
+                  "statisticsRowsPerPass": 10000,
+                  "taskEventRetentionDays": 14,
+                  "terminalTaskPruneLimit": 1000,
+                  "statisticsRetentionDays": 14,
+                  "historyPartitionsPerPass": 4,
+                  "taskIdentityRetentionDays": 14,
+                  "attemptHistoryRetentionDays": 14,
+                  "defaultPartitionRowsPerPass": 10000,
+                  "terminalOutcomeRetentionDays": 14,
+                  "scheduleOccurrenceRetentionDays": 14
+                },
+                "capturedAt": {
+                  "$type": "timestamp"
+                },
+                "maintenance": {
+                  "timezone": "UTC",
+                  "updatedAt": {
+                    "$type": "timestamp"
+                  },
+                  "provenance": {
+                    "timezone": {
+                      "source": "application",
+                      "applicationDefault": "UTC"
+                    },
+                    "statisticsGroupLimit": {
+                      "source": "application",
+                      "applicationDefault": 200
+                    },
+                    "historyRetentionLocalTime": {
+                      "source": "operator",
+                      "applicationDefault": "03:00"
+                    },
+                    "terminalCleanupIntervalMs": {
+                      "source": "application",
+                      "applicationDefault": 300000
+                    },
+                    "statisticsRecomputeBuckets": {
+                      "source": "application",
+                      "applicationDefault": 2
+                    },
+                    "statisticsRollupIntervalMs": {
+                      "source": "application",
+                      "applicationDefault": 60000
+                    },
+                    "partitionPreparationIntervalMs": {
+                      "source": "application",
+                      "applicationDefault": 21600000
+                    }
+                  },
+                  "lastChanges": {
+                    "historyRetentionLocalTime": {
+                      "actor": "conformance",
+                      "action": "override",
+                      "reason": "conformance maintenance",
+                      "changedAt": {
+                        "$type": "timestamp"
+                      },
+                      "requestIdDigest": "82dd02803b90",
+                      "requestIdLength": 27,
+                      "requestIdPreview": "conforma…st-3"
+                    }
+                  },
+                  "statisticsGroupLimit": 200,
+                  "historyRetentionLocalTime": "02:15",
+                  "terminalCleanupIntervalMs": 300000,
+                  "statisticsRecomputeBuckets": 2,
+                  "statisticsRollupIntervalMs": 60000,
+                  "partitionPreparationIntervalMs": 21600000
+                },
+                "recommendationInputs": {
+                  "reasons": [
+                    {
+                      "code": "rollup-stalled",
+                      "budget": 1800000,
+                      "observed": {
+                        "$type": "number"
+                      },
+                      "severity": "degraded"
+                    },
+                    {
+                      "code": "retention-lag",
+                      "budget": 21600000,
+                      "category": "taskIdentity",
+                      "observed": {
+                        "$type": "number"
+                      },
+                      "severity": "degraded"
+                    },
+                    {
+                      "code": "retention-lag",
+                      "budget": 21600000,
+                      "category": "terminalOutcome",
+                      "observed": {
+                        "$type": "number"
+                      },
+                      "severity": "degraded"
+                    }
+                  ],
+                  "statistics": {
+                    "lagMs": {
+                      "$type": "number"
+                    },
+                    "lastRunAt": null,
+                    "rolledUpThrough": {
+                      "$type": "timestamp"
+                    }
+                  },
+                  "enqueueRate": {
+                    "tasks": 18,
+                    "windowMs": 3600000
+                  },
+                  "defaultHistoryRows": {
+                    "taskEvents": 0,
+                    "attemptHistory": 0
+                  },
+                  "defaultHistoryRowsCapped": {
+                    "taskEvents": false,
+                    "attemptHistory": false
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "id": "revert-maintenance-audited",
+          "procedure": "revertMaintenancePolicy",
+          "request": {
+            "json": {
+              "settings": [
+                "historyRetentionLocalTime"
+              ],
+              "audit": {
+                "actor": "browser-operator",
+                "reason": "conformance maintenance revert",
+                "requestId": "conformance-audit-request-4"
+              }
+            }
+          },
+          "expect": {
+            "status": 200,
+            "body": {}
+          }
+        }
+      ]
+    },
+    {
+      "id": "derived-event-detail",
+      "seed": [
+        {
+          "id": "set-derived-fast-tier",
+          "sql": "SELECT workhorse.set_queue_tier_v1($1::text, $2::text, $3::text, $4::text) AS tier",
+          "parameters": [
+            "conformance-derived",
+            "fast",
+            "conformance",
+            "seed a fast-tier queue that records no history"
+          ],
+          "expect": {
+            "rows": [
+              {
+                "tier": "fast"
+              }
+            ]
+          }
+        },
+        {
+          "id": "enqueue-derived",
+          "sql": "SELECT jsonb_build_object('taskId', task_id, 'outcome', outcome) AS value FROM workhorse.enqueue_many_v1($1::jsonb)",
+          "parameters": [
+            [
+              {
+                "queue": "conformance-derived",
+                "type": "conformance.derived",
+                "payload": {}
+              }
+            ]
+          ],
+          "expect": {
+            "rows": [
+              {
+                "value": {
+                  "taskId": {
+                    "$type": "uuid"
+                  },
+                  "outcome": "accepted"
+                }
+              }
+            ]
+          },
+          "capture": {
+            "derivedTask": "0.value.taskId"
+          }
+        },
+        {
+          "id": "claim-derived",
+          "sql": "SELECT jsonb_build_object('taskId', task_id, 'fenceToken', fence_token) AS value FROM workhorse.fast_claim_v1($1::text, $2::text, $3::integer, $4::integer, $5::boolean)",
+          "parameters": [
+            "conformance-derived",
+            "conformance-worker",
+            1,
+            30000,
+            false
+          ],
+          "expect": {
+            "rows": [
+              {
+                "value": {
+                  "taskId": {
+                    "$ref": "derivedTask"
+                  },
+                  "fenceToken": {
+                    "$type": "integer"
+                  }
+                }
+              }
+            ]
+          },
+          "capture": {
+            "derivedFence": "0.value.fenceToken"
+          }
+        },
+        {
+          "id": "complete-derived",
+          "sql": "SELECT workhorse.fast_complete_v1($1::uuid, $2::text, $3::bigint, $4::jsonb) AS accepted",
+          "parameters": [
+            {
+              "$ref": "derivedTask"
+            },
+            "conformance-worker",
+            {
+              "$ref": "derivedFence"
+            },
+            {
+              "ok": true
+            }
+          ],
+          "expect": {
+            "rows": [
+              {
+                "accepted": true
+              }
+            ]
+          }
+        }
+      ],
+      "exchanges": [
+        {
+          "id": "derived-events",
+          "procedure": "events",
+          "request": {
+            "json": {
+              "window": "1h",
+              "pageSize": 25,
+              "taskId": {
+                "$ref": "derivedTask"
+              }
+            }
+          },
+          "capture": {
+            "derivedRecord0": "json.events.0.id",
+            "derivedRecord1": "json.events.1.id",
+            "derivedRecord2": "json.events.2.id",
+            "derivedRecord3": "json.events.3.id"
+          },
+          "expect": {
+            "status": 200,
+            "body": {
+              "json": {
+                "page": 1,
+                "count": "none",
+                "total": 4,
+                "events": [
+                  {
+                    "id": {
+                      "$type": "string"
+                    },
+                    "kind": "event",
+                    "type": "succeeded",
+                    "queue": "conformance-derived",
+                    "taskId": {
+                      "$ref": "derivedTask"
+                    },
+                    "attempt": 1,
+                    "details": {
+                      "fence_token": "11"
+                    },
+                    "recordId": {
+                      "$type": "uuid"
+                    },
+                    "taskType": "conformance.derived",
+                    "workerId": "conformance-worker",
+                    "durationMs": null,
+                    "fenceToken": null,
+                    "occurredAt": {
+                      "$type": "timestamp"
+                    },
+                    "errorMessage": null
+                  },
+                  {
+                    "id": {
+                      "$type": "string"
+                    },
+                    "kind": "attempt",
+                    "type": "succeeded",
+                    "queue": "conformance-derived",
+                    "taskId": {
+                      "$ref": "derivedTask"
+                    },
+                    "attempt": 1,
+                    "details": null,
+                    "recordId": {
+                      "$type": "uuid"
+                    },
+                    "taskType": "conformance.derived",
+                    "workerId": "conformance-worker",
+                    "durationMs": {
+                      "$type": "number"
+                    },
+                    "fenceToken": "11",
+                    "occurredAt": {
+                      "$type": "timestamp"
+                    },
+                    "errorMessage": null
+                  },
+                  {
+                    "id": {
+                      "$type": "string"
+                    },
+                    "kind": "event",
+                    "type": "claimed",
+                    "queue": "conformance-derived",
+                    "taskId": {
+                      "$ref": "derivedTask"
+                    },
+                    "attempt": 1,
+                    "details": {
+                      "worker_id": "conformance-worker",
+                      "fence_token": "11"
+                    },
+                    "recordId": {
+                      "$type": "uuid"
+                    },
+                    "taskType": "conformance.derived",
+                    "workerId": "conformance-worker",
+                    "durationMs": null,
+                    "fenceToken": null,
+                    "occurredAt": {
+                      "$type": "timestamp"
+                    },
+                    "errorMessage": null
+                  },
+                  {
+                    "id": {
+                      "$type": "string"
+                    },
+                    "kind": "event",
+                    "type": "enqueued",
+                    "queue": "conformance-derived",
+                    "taskId": {
+                      "$ref": "derivedTask"
+                    },
+                    "attempt": null,
+                    "details": {
+                      "tier": "fast"
+                    },
+                    "recordId": {
+                      "$type": "uuid"
+                    },
+                    "taskType": "conformance.derived",
+                    "workerId": null,
+                    "durationMs": null,
+                    "fenceToken": null,
+                    "occurredAt": {
+                      "$type": "timestamp"
+                    },
+                    "errorMessage": null
+                  }
+                ],
+                "window": "1h",
+                "hasMore": false,
+                "pageSize": 25,
+                "rangeEnd": {
+                  "$type": "timestamp"
+                },
+                "retention": {
+                  "taskEventDays": 14,
+                  "attemptHistoryDays": 14
+                },
+                "capturedAt": {
+                  "$type": "timestamp"
+                },
+                "rangeStart": {
+                  "$type": "timestamp"
+                },
+                "windowSeconds": 3600
+              }
+            }
+          },
+          "coerce": {
+            "body.json.events.*.durationMs": "number"
+          }
+        },
+        {
+          "id": "derived-event-detail-0",
+          "procedure": "eventDetail",
+          "request": {
+            "json": {
+              "id": {
+                "$ref": "derivedRecord0"
+              }
+            }
+          },
+          "expect": {
+            "status": 200,
+            "body": {
+              "json": {
+                "id": {
+                  "$ref": "derivedRecord0"
+                },
+                "kind": "event",
+                "type": "succeeded",
+                "error": null,
+                "queue": "conformance-derived",
+                "taskId": {
+                  "$ref": "derivedTask"
+                },
+                "attempt": 1,
+                "details": {
+                  "fence_token": "11"
+                },
+                "recordId": {
+                  "$type": "uuid"
+                },
+                "taskType": "conformance.derived",
+                "workerId": "conformance-worker",
+                "claimedAt": null,
+                "startedAt": null,
+                "durationMs": null,
+                "fenceToken": null,
+                "finishedAt": null,
+                "occurredAt": {
+                  "$type": "timestamp"
+                },
+                "errorMessage": null
+              }
+            }
+          }
+        },
+        {
+          "id": "derived-event-detail-1",
+          "procedure": "eventDetail",
+          "request": {
+            "json": {
+              "id": {
+                "$ref": "derivedRecord1"
+              }
+            }
+          },
+          "expect": {
+            "status": 200,
+            "body": {
+              "json": {
+                "id": {
+                  "$ref": "derivedRecord1"
+                },
+                "kind": "attempt",
+                "type": "succeeded",
+                "error": null,
+                "queue": "conformance-derived",
+                "taskId": {
+                  "$ref": "derivedTask"
+                },
+                "attempt": 1,
+                "details": null,
+                "recordId": {
+                  "$type": "uuid"
+                },
+                "taskType": "conformance.derived",
+                "workerId": "conformance-worker",
+                "claimedAt": {
+                  "$type": "timestamp"
+                },
+                "startedAt": {
+                  "$type": "timestamp"
+                },
+                "durationMs": {
+                  "$type": "number"
+                },
+                "fenceToken": "11",
+                "finishedAt": {
+                  "$type": "timestamp"
+                },
+                "occurredAt": {
+                  "$type": "timestamp"
+                },
+                "errorMessage": null
+              }
+            }
+          },
+          "coerce": {
+            "body.json.durationMs": "number"
+          }
+        },
+        {
+          "id": "derived-event-detail-2",
+          "procedure": "eventDetail",
+          "request": {
+            "json": {
+              "id": {
+                "$ref": "derivedRecord2"
+              }
+            }
+          },
+          "expect": {
+            "status": 200,
+            "body": {
+              "json": {
+                "id": {
+                  "$ref": "derivedRecord2"
+                },
+                "kind": "event",
+                "type": "claimed",
+                "error": null,
+                "queue": "conformance-derived",
+                "taskId": {
+                  "$ref": "derivedTask"
+                },
+                "attempt": 1,
+                "details": {
+                  "worker_id": "conformance-worker",
+                  "fence_token": "11"
+                },
+                "recordId": {
+                  "$type": "uuid"
+                },
+                "taskType": "conformance.derived",
+                "workerId": "conformance-worker",
+                "claimedAt": null,
+                "startedAt": null,
+                "durationMs": null,
+                "fenceToken": null,
+                "finishedAt": null,
+                "occurredAt": {
+                  "$type": "timestamp"
+                },
+                "errorMessage": null
+              }
+            }
+          }
+        },
+        {
+          "id": "derived-event-detail-3",
+          "procedure": "eventDetail",
+          "request": {
+            "json": {
+              "id": {
+                "$ref": "derivedRecord3"
+              }
+            }
+          },
+          "expect": {
+            "status": 200,
+            "body": {
+              "json": {
+                "id": {
+                  "$ref": "derivedRecord3"
+                },
+                "kind": "event",
+                "type": "enqueued",
+                "error": null,
+                "queue": "conformance-derived",
+                "taskId": {
+                  "$ref": "derivedTask"
+                },
+                "attempt": null,
+                "details": {
+                  "tier": "fast"
+                },
+                "recordId": {
+                  "$type": "uuid"
+                },
+                "taskType": "conformance.derived",
+                "workerId": null,
+                "claimedAt": null,
+                "startedAt": null,
+                "durationMs": null,
+                "fenceToken": null,
+                "finishedAt": null,
+                "occurredAt": {
+                  "$type": "timestamp"
+                },
+                "errorMessage": null
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": "error-stacks",
+      "seed": [
+        {
+          "id": "enqueue-stack-task",
+          "sql": "SELECT jsonb_build_object('taskId', task_id, 'outcome', outcome) AS value FROM workhorse.enqueue_many_v1($1::jsonb)",
+          "parameters": [
+            [
+              {
+                "queue": "conformance-stacks",
+                "type": "conformance.stacks",
+                "payload": {},
+                "maxAttempts": 1
+              }
+            ]
+          ],
+          "expect": {
+            "rows": [
+              {
+                "value": {
+                  "taskId": {
+                    "$type": "uuid"
+                  },
+                  "outcome": "accepted"
+                }
+              }
+            ]
+          },
+          "capture": {
+            "stackTask": "0.value.taskId"
+          }
+        },
+        {
+          "id": "claim-stack-task",
+          "sql": "SELECT jsonb_build_object('taskId', task_id, 'fenceToken', fence_token) AS value FROM workhorse.claim_v1($1::text, $2::text, $3::integer)",
+          "parameters": [
+            "conformance-stacks",
+            "conformance-worker",
+            30000
+          ],
+          "expect": {
+            "rows": [
+              {
+                "value": {
+                  "taskId": {
+                    "$ref": "stackTask"
+                  },
+                  "fenceToken": {
+                    "$type": "integer"
+                  }
+                }
+              }
+            ]
+          },
+          "capture": {
+            "stackFence": "0.value.fenceToken"
+          }
+        },
+        {
+          "id": "fail-stack-task",
+          "sql": "SELECT workhorse.fail_v1($1::uuid, $2::text, $3::bigint, $4::jsonb) AS state",
+          "parameters": [
+            {
+              "$ref": "stackTask"
+            },
+            "conformance-worker",
+            {
+              "$ref": "stackFence"
+            },
+            {
+              "name": "Error",
+              "message": "conformance failure",
+              "stack": "Error: conformance failure\n    at handler (/srv/conformance/worker.js:7:3)"
+            }
+          ],
+          "expect": {
+            "rows": [
+              {
+                "state": "failed"
+              }
+            ]
+          }
+        }
+      ],
+      "exchanges": [
+        {
+          "id": "failed-event-redacted",
+          "procedure": "events",
+          "mode": "redact-error-stacks",
+          "request": {
+            "json": {
+              "window": "1h",
+              "kind": "event",
+              "types": [
+                "failed"
+              ],
+              "taskId": {
+                "$ref": "stackTask"
+              },
+              "redactErrorStacks": false
+            }
+          },
+          "capture": {
+            "stackEvent": "json.events.0.id"
+          },
+          "expect": {
+            "status": 200,
+            "body": {
+              "json": {
+                "page": 1,
+                "count": "none",
+                "total": 1,
+                "events": [
+                  {
+                    "id": {
+                      "$type": "string"
+                    },
+                    "kind": "event",
+                    "type": "failed",
+                    "queue": "conformance-stacks",
+                    "taskId": {
+                      "$ref": "stackTask"
+                    },
+                    "attempt": 1,
+                    "details": {
+                      "error": {
+                        "name": "Error",
+                        "message": "conformance failure"
+                      }
+                    },
+                    "recordId": {
+                      "$type": "uuid"
+                    },
+                    "taskType": "conformance.stacks",
+                    "workerId": "conformance-worker",
+                    "durationMs": null,
+                    "fenceToken": null,
+                    "occurredAt": {
+                      "$type": "timestamp"
+                    },
+                    "errorMessage": null
+                  }
+                ],
+                "window": "1h",
+                "hasMore": false,
+                "pageSize": 50,
+                "rangeEnd": {
+                  "$type": "timestamp"
+                },
+                "retention": {
+                  "taskEventDays": 14,
+                  "attemptHistoryDays": 14
+                },
+                "capturedAt": {
+                  "$type": "timestamp"
+                },
+                "rangeStart": {
+                  "$type": "timestamp"
+                },
+                "windowSeconds": 3600
+              }
+            }
+          }
+        },
+        {
+          "id": "failed-attempt-redacted",
+          "procedure": "events",
+          "mode": "redact-error-stacks",
+          "request": {
+            "json": {
+              "window": "1h",
+              "kind": "attempt",
+              "taskId": {
+                "$ref": "stackTask"
+              }
+            }
+          },
+          "capture": {
+            "stackAttempt": "json.events.0.id"
+          },
+          "expect": {
+            "status": 200,
+            "body": {
+              "json": {
+                "page": 1,
+                "count": "none",
+                "total": 1,
+                "events": [
+                  {
+                    "id": {
+                      "$type": "string"
+                    },
+                    "kind": "attempt",
+                    "type": "failed",
+                    "queue": "conformance-stacks",
+                    "taskId": {
+                      "$ref": "stackTask"
+                    },
+                    "attempt": 1,
+                    "details": null,
+                    "recordId": {
+                      "$type": "uuid"
+                    },
+                    "taskType": "conformance.stacks",
+                    "workerId": "conformance-worker",
+                    "durationMs": {
+                      "$type": "number"
+                    },
+                    "fenceToken": "12",
+                    "occurredAt": {
+                      "$type": "timestamp"
+                    },
+                    "errorMessage": "conformance failure"
+                  }
+                ],
+                "window": "1h",
+                "hasMore": false,
+                "pageSize": 50,
+                "rangeEnd": {
+                  "$type": "timestamp"
+                },
+                "retention": {
+                  "taskEventDays": 14,
+                  "attemptHistoryDays": 14
+                },
+                "capturedAt": {
+                  "$type": "timestamp"
+                },
+                "rangeStart": {
+                  "$type": "timestamp"
+                },
+                "windowSeconds": 3600
+              }
+            }
+          },
+          "coerce": {
+            "body.json.events.*.durationMs": "number"
+          }
+        },
+        {
+          "id": "event-detail-redacted",
+          "procedure": "eventDetail",
+          "mode": "redact-error-stacks",
+          "request": {
+            "json": {
+              "id": {
+                "$ref": "stackEvent"
+              },
+              "redactErrorStacks": false
+            }
+          },
+          "expect": {
+            "status": 200,
+            "body": {
+              "json": {
+                "id": {
+                  "$ref": "stackEvent"
+                },
+                "kind": "event",
+                "type": "failed",
+                "error": null,
+                "queue": "conformance-stacks",
+                "taskId": {
+                  "$ref": "stackTask"
+                },
+                "attempt": 1,
+                "details": {
+                  "error": {
+                    "name": "Error",
+                    "message": "conformance failure"
+                  }
+                },
+                "recordId": {
+                  "$type": "uuid"
+                },
+                "taskType": "conformance.stacks",
+                "workerId": "conformance-worker",
+                "claimedAt": null,
+                "startedAt": null,
+                "durationMs": null,
+                "fenceToken": null,
+                "finishedAt": null,
+                "occurredAt": {
+                  "$type": "timestamp"
+                },
+                "errorMessage": null
+              }
+            }
+          }
+        },
+        {
+          "id": "attempt-detail-redacted",
+          "procedure": "eventDetail",
+          "mode": "redact-error-stacks",
+          "request": {
+            "json": {
+              "id": {
+                "$ref": "stackAttempt"
+              },
+              "redactErrorStacks": false
+            }
+          },
+          "expect": {
+            "status": 200,
+            "body": {
+              "json": {
+                "id": {
+                  "$ref": "stackAttempt"
+                },
+                "kind": "attempt",
+                "type": "failed",
+                "error": {
+                  "name": "Error",
+                  "message": "conformance failure"
+                },
+                "queue": "conformance-stacks",
+                "taskId": {
+                  "$ref": "stackTask"
+                },
+                "attempt": 1,
+                "details": null,
+                "recordId": {
+                  "$type": "uuid"
+                },
+                "taskType": "conformance.stacks",
+                "workerId": "conformance-worker",
+                "claimedAt": {
+                  "$type": "timestamp"
+                },
+                "startedAt": {
+                  "$type": "timestamp"
+                },
+                "durationMs": {
+                  "$type": "number"
+                },
+                "fenceToken": "12",
+                "finishedAt": {
+                  "$type": "timestamp"
+                },
+                "occurredAt": {
+                  "$type": "timestamp"
+                },
+                "errorMessage": "conformance failure"
+              }
+            }
+          },
+          "coerce": {
+            "body.json.durationMs": "number"
+          }
+        },
+        {
+          "id": "task-detail-redacted",
+          "procedure": "taskDetail",
+          "mode": "redact-error-stacks",
+          "request": {
+            "json": {
+              "id": {
+                "$ref": "stackTask"
+              },
+              "redactErrorStacks": false
+            }
+          },
+          "expect": {
+            "status": 200,
+            "body": {
+              "json": {
+                "tags": [],
+                "group": null,
+                "waits": [],
+                "events": [
+                  {
+                    "id": {
+                      "$type": "uuid"
+                    },
+                    "type": "enqueued",
+                    "attempt": null,
+                    "details": {
+                      "state": "ready",
+                      "run_at": {
+                        "$type": "timestamp"
+                      },
+                      "priority": 0,
+                      "deadline_at": null,
+                      "execution_timeout_ms": null
+                    },
+                    "occurredAt": {
+                      "$type": "timestamp"
+                    }
+                  },
+                  {
+                    "id": {
+                      "$type": "uuid"
+                    },
+                    "type": "claimed",
+                    "attempt": 1,
+                    "details": {
+                      "worker_id": "conformance-worker",
+                      "expires_at": {
+                        "$type": "timestamp"
+                      },
+                      "fence_token": "12"
+                    },
+                    "occurredAt": {
+                      "$type": "timestamp"
+                    }
+                  },
+                  {
+                    "id": {
+                      "$type": "uuid"
+                    },
+                    "type": "failed",
+                    "attempt": 1,
+                    "details": {
+                      "error": {
+                        "name": "Error",
+                        "message": "conformance failure"
+                      }
+                    },
+                    "occurredAt": {
+                      "$type": "timestamp"
+                    }
+                  }
+                ],
+                "current": {
+                  "error": {
+                    "name": "Error",
+                    "message": "conformance failure"
+                  },
+                  "outcome": {
+                    "error": {
+                      "name": "Error",
+                      "message": "conformance failure"
+                    },
+                    "state": "failed",
+                    "result": null,
+                    "attempt": 1,
+                    "finishedAt": {
+                      "$type": "timestamp"
+                    },
+                    "resultBytes": 0,
+                    "resultOmitted": false
+                  },
+                  "runtime": null
+                },
+                "payload": {},
+                "attempts": [
+                  {
+                    "error": {
+                      "name": "Error",
+                      "message": "conformance failure"
+                    },
+                    "attempt": 1,
+                    "outcome": "failed",
+                    "workerId": "conformance-worker",
+                    "claimedAt": {
+                      "$type": "timestamp"
+                    },
+                    "elapsedMs": {
+                      "$type": "number"
+                    },
+                    "startedAt": {
+                      "$type": "timestamp"
+                    },
+                    "durationMs": {
+                      "$type": "number"
+                    },
+                    "finishedAt": {
+                      "$type": "timestamp"
+                    },
+                    "executionMs": {
+                      "$type": "number"
+                    }
+                  }
+                ],
+                "identity": {
+                  "id": {
+                    "$ref": "stackTask"
+                  },
+                  "type": "conformance.stacks",
+                  "queue": "conformance-stacks",
+                  "state": "failed",
+                  "priority": 0,
+                  "createdAt": {
+                    "$type": "timestamp"
+                  },
+                  "deadlineAt": null,
+                  "maxAttempts": 1,
+                  "retryPolicy": null,
+                  "blockedReason": null,
+                  "concurrencyKey": null,
+                  "dependencyPolicy": null,
+                  "executionTimeoutMs": null,
+                  "prerequisiteTaskId": null,
+                  "prerequisiteTaskIds": [],
+                  "dependencyReleasedAt": null
+                },
+                "progress": null,
+                "canSignal": true,
+                "humanWait": null,
+                "truncated": {
+                  "waits": false,
+                  "events": false,
+                  "attempts": false,
+                  "checkpoints": false
+                },
+                "durability": null,
+                "signalWait": null,
+                "checkpoints": [],
+                "childLineage": {
+                  "records": [],
+                  "truncated": false
+                },
+                "payloadBytes": 2,
+                "payloadOmitted": false,
+                "redriveLineage": {
+                  "records": [],
+                  "truncated": false
+                },
+                "batchExecutions": [],
+                "concurrencyPolicy": null,
+                "dependencyLineage": {
+                  "records": [],
+                  "truncated": false
+                },
+                "canCompleteHumanWait": true
+              }
+            }
+          },
+          "coerce": {
+            "body.json.attempts.*.durationMs": "number",
+            "body.json.attempts.*.executionMs": "number",
+            "body.json.attempts.*.elapsedMs": "number"
+          }
+        },
+        {
+          "id": "event-search-skips-withheld-stack",
+          "procedure": "events",
+          "mode": "redact-error-stacks",
+          "request": {
+            "json": {
+              "window": "1h",
+              "search": "srv/conformance/worker",
+              "count": "exact",
+              "taskId": {
+                "$ref": "stackTask"
+              }
+            }
+          },
+          "expect": {
+            "status": 200,
+            "body": {
+              "json": {
+                "page": 1,
+                "count": "exact",
+                "total": 0,
+                "events": [],
+                "window": "1h",
+                "hasMore": false,
+                "pageSize": 50,
+                "rangeEnd": {
+                  "$type": "timestamp"
+                },
+                "retention": {
+                  "taskEventDays": 14,
+                  "attemptHistoryDays": 14
+                },
+                "capturedAt": {
+                  "$type": "timestamp"
+                },
+                "rangeStart": {
+                  "$type": "timestamp"
+                },
+                "windowSeconds": 3600
+              }
+            }
+          }
+        },
+        {
+          "id": "event-detail-default",
+          "procedure": "eventDetail",
+          "request": {
+            "json": {
+              "id": {
+                "$ref": "stackEvent"
+              },
+              "redactErrorStacks": true
+            }
+          },
+          "expect": {
+            "status": 200,
+            "body": {
+              "json": {
+                "id": {
+                  "$ref": "stackEvent"
+                },
+                "kind": "event",
+                "type": "failed",
+                "error": null,
+                "queue": "conformance-stacks",
+                "taskId": {
+                  "$ref": "stackTask"
+                },
+                "attempt": 1,
+                "details": {
+                  "error": {
+                    "name": "Error",
+                    "stack": "Error: conformance failure\n    at handler (/srv/conformance/worker.js:7:3)",
+                    "message": "conformance failure"
+                  }
+                },
+                "recordId": {
+                  "$type": "uuid"
+                },
+                "taskType": "conformance.stacks",
+                "workerId": "conformance-worker",
+                "claimedAt": null,
+                "startedAt": null,
+                "durationMs": null,
+                "fenceToken": null,
+                "finishedAt": null,
+                "occurredAt": {
+                  "$type": "timestamp"
+                },
+                "errorMessage": null
+              }
+            }
+          }
+        },
+        {
+          "id": "attempt-detail-default",
+          "procedure": "eventDetail",
+          "request": {
+            "json": {
+              "id": {
+                "$ref": "stackAttempt"
+              }
+            }
+          },
+          "expect": {
+            "status": 200,
+            "body": {
+              "json": {
+                "id": {
+                  "$ref": "stackAttempt"
+                },
+                "kind": "attempt",
+                "type": "failed",
+                "error": {
+                  "name": "Error",
+                  "stack": "Error: conformance failure\n    at handler (/srv/conformance/worker.js:7:3)",
+                  "message": "conformance failure"
+                },
+                "queue": "conformance-stacks",
+                "taskId": {
+                  "$ref": "stackTask"
+                },
+                "attempt": 1,
+                "details": null,
+                "recordId": {
+                  "$type": "uuid"
+                },
+                "taskType": "conformance.stacks",
+                "workerId": "conformance-worker",
+                "claimedAt": {
+                  "$type": "timestamp"
+                },
+                "startedAt": {
+                  "$type": "timestamp"
+                },
+                "durationMs": {
+                  "$type": "number"
+                },
+                "fenceToken": "12",
+                "finishedAt": {
+                  "$type": "timestamp"
+                },
+                "occurredAt": {
+                  "$type": "timestamp"
+                },
+                "errorMessage": "conformance failure"
+              }
+            }
+          },
+          "coerce": {
+            "body.json.durationMs": "number"
+          }
+        },
+        {
+          "id": "task-detail-default",
+          "procedure": "taskDetail",
+          "request": {
+            "json": {
+              "id": {
+                "$ref": "stackTask"
+              },
+              "redactErrorStacks": true
+            }
+          },
+          "expect": {
+            "status": 200,
+            "body": {
+              "json": {
+                "tags": [],
+                "group": null,
+                "waits": [],
+                "events": [
+                  {
+                    "id": {
+                      "$type": "uuid"
+                    },
+                    "type": "enqueued",
+                    "attempt": null,
+                    "details": {
+                      "state": "ready",
+                      "run_at": {
+                        "$type": "timestamp"
+                      },
+                      "priority": 0,
+                      "deadline_at": null,
+                      "execution_timeout_ms": null
+                    },
+                    "occurredAt": {
+                      "$type": "timestamp"
+                    }
+                  },
+                  {
+                    "id": {
+                      "$type": "uuid"
+                    },
+                    "type": "claimed",
+                    "attempt": 1,
+                    "details": {
+                      "worker_id": "conformance-worker",
+                      "expires_at": {
+                        "$type": "timestamp"
+                      },
+                      "fence_token": "12"
+                    },
+                    "occurredAt": {
+                      "$type": "timestamp"
+                    }
+                  },
+                  {
+                    "id": {
+                      "$type": "uuid"
+                    },
+                    "type": "failed",
+                    "attempt": 1,
+                    "details": {
+                      "error": {
+                        "name": "Error",
+                        "stack": "Error: conformance failure\n    at handler (/srv/conformance/worker.js:7:3)",
+                        "message": "conformance failure"
+                      }
+                    },
+                    "occurredAt": {
+                      "$type": "timestamp"
+                    }
+                  }
+                ],
+                "current": {
+                  "error": {
+                    "name": "Error",
+                    "stack": "Error: conformance failure\n    at handler (/srv/conformance/worker.js:7:3)",
+                    "message": "conformance failure"
+                  },
+                  "outcome": {
+                    "error": {
+                      "name": "Error",
+                      "stack": "Error: conformance failure\n    at handler (/srv/conformance/worker.js:7:3)",
+                      "message": "conformance failure"
+                    },
+                    "state": "failed",
+                    "result": null,
+                    "attempt": 1,
+                    "finishedAt": {
+                      "$type": "timestamp"
+                    },
+                    "resultBytes": 0,
+                    "resultOmitted": false
+                  },
+                  "runtime": null
+                },
+                "payload": {},
+                "attempts": [
+                  {
+                    "error": {
+                      "name": "Error",
+                      "stack": "Error: conformance failure\n    at handler (/srv/conformance/worker.js:7:3)",
+                      "message": "conformance failure"
+                    },
+                    "attempt": 1,
+                    "outcome": "failed",
+                    "workerId": "conformance-worker",
+                    "claimedAt": {
+                      "$type": "timestamp"
+                    },
+                    "elapsedMs": {
+                      "$type": "number"
+                    },
+                    "startedAt": {
+                      "$type": "timestamp"
+                    },
+                    "durationMs": {
+                      "$type": "number"
+                    },
+                    "finishedAt": {
+                      "$type": "timestamp"
+                    },
+                    "executionMs": {
+                      "$type": "number"
+                    }
+                  }
+                ],
+                "identity": {
+                  "id": {
+                    "$ref": "stackTask"
+                  },
+                  "type": "conformance.stacks",
+                  "queue": "conformance-stacks",
+                  "state": "failed",
+                  "priority": 0,
+                  "createdAt": {
+                    "$type": "timestamp"
+                  },
+                  "deadlineAt": null,
+                  "maxAttempts": 1,
+                  "retryPolicy": null,
+                  "blockedReason": null,
+                  "concurrencyKey": null,
+                  "dependencyPolicy": null,
+                  "executionTimeoutMs": null,
+                  "prerequisiteTaskId": null,
+                  "prerequisiteTaskIds": [],
+                  "dependencyReleasedAt": null
+                },
+                "progress": null,
+                "canSignal": true,
+                "humanWait": null,
+                "truncated": {
+                  "waits": false,
+                  "events": false,
+                  "attempts": false,
+                  "checkpoints": false
+                },
+                "durability": null,
+                "signalWait": null,
+                "checkpoints": [],
+                "childLineage": {
+                  "records": [],
+                  "truncated": false
+                },
+                "payloadBytes": 2,
+                "payloadOmitted": false,
+                "redriveLineage": {
+                  "records": [],
+                  "truncated": false
+                },
+                "batchExecutions": [],
+                "concurrencyPolicy": null,
+                "dependencyLineage": {
+                  "records": [],
+                  "truncated": false
+                },
+                "canCompleteHumanWait": true
+              }
+            }
+          },
+          "coerce": {
+            "body.json.attempts.*.durationMs": "number",
+            "body.json.attempts.*.executionMs": "number",
+            "body.json.attempts.*.elapsedMs": "number"
           }
         }
       ]

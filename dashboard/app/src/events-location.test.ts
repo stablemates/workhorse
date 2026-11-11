@@ -42,6 +42,16 @@ describe("events location state", () => {
     );
   });
 
+  it("opens a record that the dashboard derives for a fast-tier task", () => {
+    // A derived identity is an MD5 value cast to uuid, so its version digit is rarely 7.
+    const derived = "event:9e71565f-a9e8-f2c9-939b-0e7ff240bf26";
+    expect(parseEventsLocation(`?event=${derived}`).eventId).toBe(derived);
+    expect(parseEventsLocation("?event=attempt:a326ee37-afbc-b371-de56-c85313ead889").eventId).toBe(
+      "attempt:a326ee37-afbc-b371-de56-c85313ead889",
+    );
+    expect(parseEventsLocation("?event=event:9e71565f-a9e8-f2c9-939b").eventId).toBeNull();
+  });
+
   it("never asks for a page past the one the server accepts", () => {
     // A bookmarked or hand-edited URL would otherwise send a page the router rejects.
     expect(parseEventsLocation(`?page=${dashboardPageMax + 1}`).page).toBe(dashboardPageMax);

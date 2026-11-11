@@ -698,6 +698,13 @@ export const SCHEMA_MIGRATIONS: readonly SchemaMigrationStep[] = [
       "compare wait targets in milliseconds, end signals to terminal tasks, limit a second child set, and show failed callbacks",
     kind: "additive",
   },
+  {
+    fromVersion: 97,
+    toVersion: 98,
+    file: "0099-keep-the-settings-audit-withhold-error-stacks-and-find-derived-records.sql",
+    description: "keep the settings audit, withhold error stacks, and find derived history records",
+    kind: "additive",
+  },
 ];
 
 /**

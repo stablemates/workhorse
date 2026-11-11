@@ -128,7 +128,8 @@ internal sealed partial class DashboardHost
             [.. options.ConfiguredWorkers ?? []],
             options.MaintenanceLoops ?? new Dictionary<string, JsonElement>(),
             options.ReadOnly,
-            options.StatementTimeout);
+            options.StatementTimeout,
+            options.RedactErrorStacks);
         var procedures = _backend.Procedures();
         var added = new Dictionary<string, DashboardProcedure>(options.Procedures ?? new Dictionary<string, DashboardProcedure>(), StringComparer.Ordinal);
         if (options.EnqueueTest is { } enqueueTest)

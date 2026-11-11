@@ -3043,6 +3043,7 @@ pub type workhorse::RetryPolicy = serde_json::map::Map<alloc::string::String, se
 #[cfg(feature = "dashboard")] pub workhorse::dashboard::DashboardOptions::path: alloc::string::String
 #[cfg(feature = "dashboard")] pub workhorse::dashboard::DashboardOptions::procedures: std::collections::hash::map::HashMap<alloc::string::String, workhorse::dashboard::Procedure>
 #[cfg(feature = "dashboard")] pub workhorse::dashboard::DashboardOptions::read_only: bool
+#[cfg(feature = "dashboard")] pub workhorse::dashboard::DashboardOptions::redact_error_stacks: bool
 #[cfg(feature = "dashboard")] pub workhorse::dashboard::DashboardOptions::statement_timeout: core::time::Duration
 #[cfg(feature = "dashboard")] impl<E> workhorse::dashboard::DashboardOptions<E>
 #[cfg(feature = "dashboard")] pub fn workhorse::dashboard::DashboardOptions<E>::new(executor: E, authorize: workhorse::dashboard::Authorize) -> Self

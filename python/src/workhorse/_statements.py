@@ -9,8 +9,8 @@ from typing import Literal
 PROTOCOL_VERSION = 5
 MINIMUM_PROTOCOL_VERSION = 5
 MAXIMUM_PROTOCOL_VERSION = 5
-MINIMUM_SCHEMA_VERSION = 97
-MAXIMUM_SCHEMA_VERSION = 97
+MINIMUM_SCHEMA_VERSION = 98
+MAXIMUM_SCHEMA_VERSION = 98
 DEFAULT_VALUE_MAX_BYTES = 1048576
 MAX_BATCH_SIZE = 1000
 
@@ -499,9 +499,17 @@ SQL_STATEMENTS: dict[str, tuple[str, str]] = {
         "SELECT (policy).* FROM workhorse.override_retention_policy_v1(%s::jsonb) policy",
         "SELECT (policy).* FROM workhorse.override_retention_policy_v1($1::jsonb) policy",
     ),
+    "override_retention_policy_v2": (
+        "SELECT (policy).* FROM workhorse.override_retention_policy_v2(\n         %s::jsonb, %s::text, %s::text, %s::text\n       ) policy",
+        "SELECT (policy).* FROM workhorse.override_retention_policy_v2(\n         $1::jsonb, $2::text, $3::text, $4::text\n       ) policy",
+    ),
     "revert_retention_policy_v1": (
         "SELECT (policy).* FROM workhorse.revert_retention_policy_v1(%s::text[]) policy",
         "SELECT (policy).* FROM workhorse.revert_retention_policy_v1($1::text[]) policy",
+    ),
+    "revert_retention_policy_v2": (
+        "SELECT (policy).* FROM workhorse.revert_retention_policy_v2(\n         %s::text[], %s::text, %s::text, %s::text\n       ) policy",
+        "SELECT (policy).* FROM workhorse.revert_retention_policy_v2(\n         $1::text[], $2::text, $3::text, $4::text\n       ) policy",
     ),
     "dashboard_retention_preview_v1": (
         "SELECT workhorse.dashboard_retention_preview_v1(%s::jsonb) AS result",
@@ -583,9 +591,17 @@ SQL_STATEMENTS: dict[str, tuple[str, str]] = {
         "SELECT (policy).* FROM workhorse.override_maintenance_policy_v1(\n         %s::text, %s::integer, %s::integer, %s::time, %s::integer, %s::integer, %s::integer\n       ) policy",
         "SELECT (policy).* FROM workhorse.override_maintenance_policy_v1(\n         $1::text, $2::integer, $3::integer, $4::time, $5::integer, $6::integer, $7::integer\n       ) policy",
     ),
+    "override_maintenance_policy_v2": (
+        "SELECT (policy).* FROM workhorse.override_maintenance_policy_v2(\n         %s::text, %s::integer, %s::integer, %s::time, %s::integer, %s::integer, %s::integer,\n         %s::text, %s::text, %s::text\n       ) policy",
+        "SELECT (policy).* FROM workhorse.override_maintenance_policy_v2(\n         $1::text, $2::integer, $3::integer, $4::time, $5::integer, $6::integer, $7::integer,\n         $8::text, $9::text, $10::text\n       ) policy",
+    ),
     "revert_maintenance_policy_v1": (
         "SELECT (policy).* FROM workhorse.revert_maintenance_policy_v1(%s::text[]) policy",
         "SELECT (policy).* FROM workhorse.revert_maintenance_policy_v1($1::text[]) policy",
+    ),
+    "revert_maintenance_policy_v2": (
+        "SELECT (policy).* FROM workhorse.revert_maintenance_policy_v2(\n         %s::text[], %s::text, %s::text, %s::text\n       ) policy",
+        "SELECT (policy).* FROM workhorse.revert_maintenance_policy_v2(\n         $1::text[], $2::text, $3::text, $4::text\n       ) policy",
     ),
     "get_maintenance_policy_v1": (
         "SELECT (policy).* FROM workhorse.get_maintenance_policy_v1() policy",

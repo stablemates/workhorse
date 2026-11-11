@@ -13,8 +13,8 @@ public final class SqlCatalogue {
 
   public static final int MINIMUM_PROTOCOL_VERSION = 5;
   public static final int MAXIMUM_PROTOCOL_VERSION = 5;
-  public static final int MINIMUM_SCHEMA_VERSION = 97;
-  public static final int MAXIMUM_SCHEMA_VERSION = 97;
+  public static final int MINIMUM_SCHEMA_VERSION = 98;
+  public static final int MAXIMUM_SCHEMA_VERSION = 98;
 
   /** PostgreSQL's atomic enqueue batch limit. */
   public static final int MAX_ENQUEUE_BATCH_SIZE = 1000;
@@ -1021,6 +1021,14 @@ public final class SqlCatalogue {
           1,
           new int[] {1});
 
+  /** {@code override_retention_policy_v2} (internal). */
+  public static final Statement OVERRIDE_RETENTION_POLICY_V2 =
+      new Statement(
+          "override_retention_policy_v2",
+          "SELECT (policy).* FROM workhorse.override_retention_policy_v2(\n         ?::jsonb, ?::text, ?::text, ?::text\n       ) policy",
+          4,
+          new int[] {1, 2, 3, 4});
+
   /** {@code revert_retention_policy_v1} (internal). */
   public static final Statement REVERT_RETENTION_POLICY_V1 =
       new Statement(
@@ -1028,6 +1036,14 @@ public final class SqlCatalogue {
           "SELECT (policy).* FROM workhorse.revert_retention_policy_v1(?::text[]) policy",
           1,
           new int[] {1});
+
+  /** {@code revert_retention_policy_v2} (internal). */
+  public static final Statement REVERT_RETENTION_POLICY_V2 =
+      new Statement(
+          "revert_retention_policy_v2",
+          "SELECT (policy).* FROM workhorse.revert_retention_policy_v2(\n         ?::text[], ?::text, ?::text, ?::text\n       ) policy",
+          4,
+          new int[] {1, 2, 3, 4});
 
   /** {@code dashboard_retention_preview_v1} (internal). */
   public static final Statement DASHBOARD_RETENTION_PREVIEW_V1 =
@@ -1189,6 +1205,14 @@ public final class SqlCatalogue {
           7,
           new int[] {1, 2, 3, 4, 5, 6, 7});
 
+  /** {@code override_maintenance_policy_v2} (internal). */
+  public static final Statement OVERRIDE_MAINTENANCE_POLICY_V2 =
+      new Statement(
+          "override_maintenance_policy_v2",
+          "SELECT (policy).* FROM workhorse.override_maintenance_policy_v2(\n         ?::text, ?::integer, ?::integer, ?::time, ?::integer, ?::integer, ?::integer,\n         ?::text, ?::text, ?::text\n       ) policy",
+          10,
+          new int[] {1, 2, 3, 4, 5, 6, 7, 8, 9, 10});
+
   /** {@code revert_maintenance_policy_v1} (internal). */
   public static final Statement REVERT_MAINTENANCE_POLICY_V1 =
       new Statement(
@@ -1196,6 +1220,14 @@ public final class SqlCatalogue {
           "SELECT (policy).* FROM workhorse.revert_maintenance_policy_v1(?::text[]) policy",
           1,
           new int[] {1});
+
+  /** {@code revert_maintenance_policy_v2} (internal). */
+  public static final Statement REVERT_MAINTENANCE_POLICY_V2 =
+      new Statement(
+          "revert_maintenance_policy_v2",
+          "SELECT (policy).* FROM workhorse.revert_maintenance_policy_v2(\n         ?::text[], ?::text, ?::text, ?::text\n       ) policy",
+          4,
+          new int[] {1, 2, 3, 4});
 
   /** {@code get_maintenance_policy_v1} (internal). */
   public static final Statement GET_MAINTENANCE_POLICY_V1 =
@@ -1534,7 +1566,9 @@ public final class SqlCatalogue {
           FAIL_COLD_EXPORT_SEGMENT_V1,
           SYNC_RETENTION_POLICY_V1,
           OVERRIDE_RETENTION_POLICY_V1,
+          OVERRIDE_RETENTION_POLICY_V2,
           REVERT_RETENTION_POLICY_V1,
+          REVERT_RETENTION_POLICY_V2,
           DASHBOARD_RETENTION_PREVIEW_V1,
           DASHBOARD_TASK_COUNTS_V1,
           DASHBOARD_TASK_FACETS_V1,
@@ -1555,7 +1589,9 @@ public final class SqlCatalogue {
           GET_RETENTION_POLICY_V1,
           SYNC_MAINTENANCE_POLICY_V1,
           OVERRIDE_MAINTENANCE_POLICY_V1,
+          OVERRIDE_MAINTENANCE_POLICY_V2,
           REVERT_MAINTENANCE_POLICY_V1,
+          REVERT_MAINTENANCE_POLICY_V2,
           GET_MAINTENANCE_POLICY_V1,
           SET_WORKER_PAUSED_V1,
           WORKER_REGISTRY__WORKER_REGISTRY,

@@ -2,9 +2,9 @@
   "formatVersion": 1,
   "protocolVersion": 5,
   "schema": {
-    "installedVersion": 97,
-    "minimumVersion": 97,
-    "maximumVersion": 97,
+    "installedVersion": 98,
+    "minimumVersion": 98,
+    "maximumVersion": 98,
     "baselineVersion": 6
   },
   "supportedClientProtocol": {
@@ -1043,9 +1043,21 @@
       "catalogues": ["internal"]
     },
     {
+      "name": "override_retention_policy_v2",
+      "arity": 4,
+      "contract": "SELECT (policy).* FROM workhorse.override_retention_policy_v2(\n         $1::jsonb, $2::text, $3::text, $4::text\n       ) policy",
+      "catalogues": ["internal"]
+    },
+    {
       "name": "revert_retention_policy_v1",
       "arity": 1,
       "contract": "SELECT (policy).* FROM workhorse.revert_retention_policy_v1($1::text[]) policy",
+      "catalogues": ["internal"]
+    },
+    {
+      "name": "revert_retention_policy_v2",
+      "arity": 4,
+      "contract": "SELECT (policy).* FROM workhorse.revert_retention_policy_v2(\n         $1::text[], $2::text, $3::text, $4::text\n       ) policy",
       "catalogues": ["internal"]
     },
     {
@@ -1169,9 +1181,21 @@
       "catalogues": ["internal"]
     },
     {
+      "name": "override_maintenance_policy_v2",
+      "arity": 10,
+      "contract": "SELECT (policy).* FROM workhorse.override_maintenance_policy_v2(\n         $1::text, $2::integer, $3::integer, $4::time, $5::integer, $6::integer, $7::integer,\n         $8::text, $9::text, $10::text\n       ) policy",
+      "catalogues": ["internal"]
+    },
+    {
       "name": "revert_maintenance_policy_v1",
       "arity": 1,
       "contract": "SELECT (policy).* FROM workhorse.revert_maintenance_policy_v1($1::text[]) policy",
+      "catalogues": ["internal"]
+    },
+    {
+      "name": "revert_maintenance_policy_v2",
+      "arity": 4,
+      "contract": "SELECT (policy).* FROM workhorse.revert_maintenance_policy_v2(\n         $1::text[], $2::text, $3::text, $4::text\n       ) policy",
       "catalogues": ["internal"]
     },
     {

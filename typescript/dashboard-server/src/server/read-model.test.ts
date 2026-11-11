@@ -154,9 +154,12 @@ describe("dashboard event-detail error redaction", () => {
   });
 });
 
-function capturingDatabase(): { database: DashboardDatabase; inputs: () => unknown[] } {
+function capturingDatabase(result: unknown = null): {
+  database: DashboardDatabase;
+  inputs: () => unknown[];
+} {
   const execute = vi.fn<(query: DashboardSql) => Promise<{ rows: { result: unknown }[] }>>(
-    async () => ({ rows: [{ result: null }] }),
+    async () => ({ rows: [{ result }] }),
   );
   return {
     database: { execute } as unknown as DashboardDatabase,
@@ -164,6 +167,33 @@ function capturingDatabase(): { database: DashboardDatabase; inputs: () => unkno
       execute.mock.calls.map(([query]) => JSON.parse(query.values[0] as string) as unknown),
   };
 }
+
+describe("dashboard stack redaction input", () => {
+  it("asks each history procedure to withhold stacks only when the host redacts", async () => {
+    const { database: db, inputs } = capturingDatabase();
+    const { database: feed, inputs: feedInputs } = capturingDatabase({ events: [] });
+
+    await readDashboardTaskDetail(db, "task-1", undefined, undefined, false, undefined, true);
+    await readDashboardEventDetail(db, "attempt:id", true);
+    await readDashboardTaskDetail(db, "task-1");
+    await readDashboardEventDetail(db, "attempt:id");
+    await readDashboardEvents(feed, { window: "1h" }, true);
+    await readDashboardEvents(feed, { window: "1h" });
+
+    expect(inputs()).toEqual([
+      {
+        id: "task-1",
+        canSignal: false,
+        canCompleteHumanWait: false,
+        redactErrorStacks: true,
+      },
+      { id: "attempt:id", redactErrorStacks: true },
+      { id: "task-1", canSignal: false, canCompleteHumanWait: false },
+      { id: "attempt:id" },
+    ]);
+    expect(feedInputs()).toEqual([{ window: "1h", redactErrorStacks: true }, { window: "1h" }]);
+  });
+});
 
 describe("dashboard task value reads", () => {
   it("names the task and the kind the procedure is asked for", async () => {

@@ -44,11 +44,24 @@ func (service *backend) humanWaits(ctx context.Context, _ any, _ string) (any, e
 	)
 }
 
+// withStackRedaction sets the redactErrorStacks key of a history read from the host option. The
+// host has already dropped each input key that the request schema does not declare, so a request
+// cannot set it.
+func (service *backend) withStackRedaction(input any) map[string]any {
+	value, _ := document(input)
+	result := make(map[string]any, len(value)+1)
+	for key, item := range value {
+		result[key] = item
+	}
+	result["redactErrorStacks"] = service.redactErrorStacks
+	return result
+}
+
 func (service *backend) events(ctx context.Context, input any, _ string) (any, error) {
 	return service.jsonQuery(
 		ctx,
 		"SELECT workhorse.dashboard_events_v1($1::jsonb) AS result",
-		string(mustJSON(input)),
+		string(mustJSON(service.withStackRedaction(input))),
 	)
 }
 
@@ -56,7 +69,7 @@ func (service *backend) eventDetail(ctx context.Context, input any, _ string) (a
 	rows, err := service.readExecutor().Query(
 		ctx,
 		"SELECT workhorse.dashboard_event_detail_v1($1::jsonb) AS result",
-		string(mustJSON(input)),
+		string(mustJSON(service.withStackRedaction(input))),
 	)
 	if err != nil {
 		return nil, err
@@ -105,7 +118,7 @@ func (service *backend) previewRetentionPolicy(ctx context.Context, input any, _
 }
 
 func (service *backend) taskDetail(ctx context.Context, input any, _ string) (any, error) {
-	value, _ := document(input)
+	value := service.withStackRedaction(input)
 	health, err := service.queueHealth(ctx)
 	if err != nil {
 		return nil, err

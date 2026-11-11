@@ -1998,7 +1998,7 @@
                     "properties": {
                       "id": {
                         "type": "string",
-                        "pattern": "^(event|attempt):[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+                        "pattern": "^(event|attempt):[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
                       }
                     },
                     "required": [
@@ -2013,7 +2013,7 @@
               "examples": {
                 "conformance": {
                   "summary": "Request",
-                  "description": "Taken from conformance.json. Generated identifiers, timestamps, and measurements are replaced by placeholders: 00000000-0000-7000-8000-000000000000 stands for a UUID, 2026-01-01T00:00:00.000Z for a timestamp, 0 and \"string\" for a measured number or text. Fixture: event-detail.",
+                  "description": "Taken from conformance.json. Generated identifiers, timestamps, and measurements are replaced by placeholders: 00000000-0000-7000-8000-000000000000 stands for a UUID, 2026-01-01T00:00:00.000Z for a timestamp, 0 and \"string\" for a measured number or text. Fixture: derived-event-detail-3.",
                   "value": {
                     "json": {
                       "id": "event:00000000-0000-7000-8000-000000000000"
@@ -2043,25 +2043,21 @@
                 "examples": {
                   "conformance": {
                     "summary": "Response",
-                    "description": "Taken from conformance.json. Generated identifiers, timestamps, and measurements are replaced by placeholders: 00000000-0000-7000-8000-000000000000 stands for a UUID, 2026-01-01T00:00:00.000Z for a timestamp, 0 and \"string\" for a measured number or text. Fixture: event-detail.",
+                    "description": "Taken from conformance.json. Generated identifiers, timestamps, and measurements are replaced by placeholders: 00000000-0000-7000-8000-000000000000 stands for a UUID, 2026-01-01T00:00:00.000Z for a timestamp, 0 and \"string\" for a measured number or text. Fixture: derived-event-detail-3.",
                     "value": {
                       "json": {
                         "id": "event:00000000-0000-7000-8000-000000000000",
                         "kind": "event",
                         "type": "enqueued",
                         "error": null,
-                        "queue": "conformance-groups",
+                        "queue": "conformance-derived",
                         "taskId": "00000000-0000-7000-8000-000000000000",
                         "attempt": null,
                         "details": {
-                          "state": "ready",
-                          "run_at": "2026-01-01T00:00:00.000Z",
-                          "priority": 0,
-                          "deadline_at": null,
-                          "execution_timeout_ms": null
+                          "tier": "fast"
                         },
                         "recordId": "00000000-0000-7000-8000-000000000000",
-                        "taskType": "conformance.group-member",
+                        "taskType": "conformance.derived",
                         "workerId": null,
                         "claimedAt": null,
                         "startedAt": null,
@@ -3915,6 +3911,7 @@
                               "applicationDefault": 14
                             }
                           },
+                          "lastChanges": {},
                           "occurrenceRowsPerPass": 10000,
                           "statisticsRowsPerPass": 10000,
                           "taskEventRetentionDays": 14,
@@ -3961,6 +3958,7 @@
                               "applicationDefault": 21600000
                             }
                           },
+                          "lastChanges": {},
                           "statisticsGroupLimit": 200,
                           "historyRetentionLocalTime": "03:00",
                           "terminalCleanupIntervalMs": 300000,
@@ -9367,6 +9365,32 @@
               "statisticsRecomputeBuckets"
             ]
           },
+          "lastChanges": {
+            "type": "object",
+            "properties": {
+              "historyRetentionLocalTime": {
+                "$ref": "#/components/schemas/DashboardPolicyChange"
+              },
+              "partitionPreparationIntervalMs": {
+                "$ref": "#/components/schemas/DashboardPolicyChange"
+              },
+              "statisticsGroupLimit": {
+                "$ref": "#/components/schemas/DashboardPolicyChange"
+              },
+              "statisticsRecomputeBuckets": {
+                "$ref": "#/components/schemas/DashboardPolicyChange"
+              },
+              "statisticsRollupIntervalMs": {
+                "$ref": "#/components/schemas/DashboardPolicyChange"
+              },
+              "terminalCleanupIntervalMs": {
+                "$ref": "#/components/schemas/DashboardPolicyChange"
+              },
+              "timezone": {
+                "$ref": "#/components/schemas/DashboardPolicyChange"
+              }
+            }
+          },
           "updatedAt": {
             "type": "string"
           }
@@ -9380,6 +9404,7 @@
           "statisticsGroupLimit",
           "statisticsRecomputeBuckets",
           "provenance",
+          "lastChanges",
           "updatedAt"
         ]
       },
@@ -9545,6 +9570,44 @@
           "terminalCountsApproximate",
           "concurrencyPolicy",
           "rateLimitPolicy"
+        ]
+      },
+      "DashboardPolicyChange": {
+        "type": "object",
+        "properties": {
+          "action": {
+            "enum": [
+              "override",
+              "revert"
+            ]
+          },
+          "actor": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "requestIdPreview": {
+            "type": "string"
+          },
+          "requestIdDigest": {
+            "type": "string"
+          },
+          "requestIdLength": {
+            "type": "number"
+          },
+          "changedAt": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "action",
+          "actor",
+          "reason",
+          "requestIdPreview",
+          "requestIdDigest",
+          "requestIdLength",
+          "changedAt"
         ]
       },
       "DashboardQueueHealthReason": {
@@ -10283,6 +10346,44 @@
               "statisticsRowsPerPass"
             ]
           },
+          "lastChanges": {
+            "type": "object",
+            "properties": {
+              "attemptHistoryRetentionDays": {
+                "$ref": "#/components/schemas/DashboardPolicyChange"
+              },
+              "defaultPartitionRowsPerPass": {
+                "$ref": "#/components/schemas/DashboardPolicyChange"
+              },
+              "historyPartitionsPerPass": {
+                "$ref": "#/components/schemas/DashboardPolicyChange"
+              },
+              "occurrenceRowsPerPass": {
+                "$ref": "#/components/schemas/DashboardPolicyChange"
+              },
+              "scheduleOccurrenceRetentionDays": {
+                "$ref": "#/components/schemas/DashboardPolicyChange"
+              },
+              "statisticsRetentionDays": {
+                "$ref": "#/components/schemas/DashboardPolicyChange"
+              },
+              "statisticsRowsPerPass": {
+                "$ref": "#/components/schemas/DashboardPolicyChange"
+              },
+              "taskEventRetentionDays": {
+                "$ref": "#/components/schemas/DashboardPolicyChange"
+              },
+              "taskIdentityRetentionDays": {
+                "$ref": "#/components/schemas/DashboardPolicyChange"
+              },
+              "terminalOutcomeRetentionDays": {
+                "$ref": "#/components/schemas/DashboardPolicyChange"
+              },
+              "terminalTaskPruneLimit": {
+                "$ref": "#/components/schemas/DashboardPolicyChange"
+              }
+            }
+          },
           "updatedAt": {
             "type": "string"
           }
@@ -10300,6 +10401,7 @@
           "occurrenceRowsPerPass",
           "statisticsRowsPerPass",
           "provenance",
+          "lastChanges",
           "updatedAt"
         ]
       },

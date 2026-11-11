@@ -34,6 +34,14 @@ public sealed class DashboardOptions
     /// <summary>Refuses every control, and tells the browser to offer none.</summary>
     public bool ReadOnly { get; init; }
 
+    /// <summary>
+    /// Removes the stack of each worker error from task detail, the event feed, and event detail,
+    /// also from <c>details.error</c> of a <c>failed</c> or <c>retry_scheduled</c> event. The event
+    /// search then does not match a withheld stack. A request cannot change it. The default
+    /// <see langword="false"/> returns each error as stored.
+    /// </summary>
+    public bool RedactErrorStacks { get; init; }
+
     /// <summary>Extra browser module URLs that the application shell loads.</summary>
     public IReadOnlyList<string> BrowserModules { get; init; } = [];
 

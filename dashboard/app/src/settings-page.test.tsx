@@ -12,6 +12,14 @@ Object.defineProperty(globalThis, "localStorage", {
   },
 });
 
+const auditedChange = {
+  actor: "alice",
+  reason: "shorter history for the audit",
+  requestIdPreview: "request-…6789",
+  requestIdDigest: "46464675dd41",
+  requestIdLength: 18,
+  changedAt: "2026-08-10T11:00:00.000Z",
+};
 const maintenanceProvenance = {
   timezone: { source: "operator" as const, applicationDefault: "UTC" },
   partitionPreparationIntervalMs: {
@@ -50,6 +58,7 @@ const data: DashboardSettingsPage = {
     statisticsGroupLimit: 200,
     statisticsRecomputeBuckets: 2,
     provenance: maintenanceProvenance,
+    lastChanges: {},
     updatedAt: "2026-08-10T12:00:00.000Z",
   },
   retention: {
@@ -65,6 +74,15 @@ const data: DashboardSettingsPage = {
     occurrenceRowsPerPass: 10_000,
     statisticsRowsPerPass: 10_000,
     provenance: retentionProvenance,
+    lastChanges: {
+      taskEventRetentionDays: { ...auditedChange, action: "override" },
+      statisticsRetentionDays: {
+        ...auditedChange,
+        actor: "bob",
+        reason: "back to default",
+        action: "revert",
+      },
+    },
     updatedAt: "2026-08-10T12:00:00.000Z",
   },
   recommendationInputs: {
@@ -115,6 +133,11 @@ describe("settings page", () => {
       ),
     );
 
+    // The last audited change of a setting names its actor and its reason.
+    expect(html).toContain("Overridden by alice at");
+    expect(html).toContain("shorter history for the audit");
+    expect(html).toContain("Reverted by bob at");
+    expect(html.match(/data-testid="policy-change"/g)).toHaveLength(2);
     expect(html).toContain("Your preferences");
     expect(html).toContain("Browser display timezone");
     expect(html).toContain("Workhorse settings");

@@ -361,8 +361,12 @@ function capturePlaceholder(name: string, location: string): unknown {
   if (name.endsWith("Task")) return placeholderUuid;
   if (name.endsWith("Fence")) return 1;
   if (name.endsWith("Group")) return placeholderUuid;
-  // The one non-task capture is an event id, `event:<uuid>`, taken from the events page.
-  if (name === "eventDetailId") return `event:${placeholderUuid}`;
+  // The other captures are history identities, `event:<uuid>` or `attempt:<uuid>`, taken from the
+  // events page.
+  if (name === "eventDetailId" || /(?:Record\d+|Event)$/.test(name)) {
+    return `event:${placeholderUuid}`;
+  }
+  if (name.endsWith("Attempt")) return `attempt:${placeholderUuid}`;
   throw new Error(`${location} cites capture ${name}, whose placeholder is unknown`);
 }
 
