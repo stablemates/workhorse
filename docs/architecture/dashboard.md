@@ -1948,6 +1948,10 @@ token in `__Host-workhorse-dashboard-session` with `Path=/`, `Max-Age`, `Secure`
   Another method on the logout path answers `405` with `Allow: POST`.
 - `POST /logout` applies `rejectCrossOriginMutation` before it reads the cookie. If the `Origin`
   is absent, malformed, or a different origin, logout answers `403` and keeps the session.
+- `POST /login` applies `rejectCrossOriginMutation` before it reads the body and before it
+  reserves a throttle slot. If the `Origin` is absent, malformed, or a different origin, login
+  answers `403` with no cookie. Thus a page on another site cannot fill the failure window of the
+  administrator's address (SM-1949). The login page sends its own `Origin` with its form.
 - An expired server record never authorizes a request, even if a client retains its cookie.
 - A successful login answers `303` to the mount path. The mount path is the login path without its
   trailing `/login`, or `/` for a root mount.
@@ -2066,7 +2070,7 @@ list.
 
 For every mutation, `rejectCrossOriginMutation` requires an `Origin` header whose parsed origin
 exactly matches the request URL origin. An absent or malformed `Origin` fails with `403`. The
-single-admin logout applies the same check (see [Sessions](#sessions)).
+single-admin login and logout apply the same check (see [Sessions](#sessions)).
 
 For every other owned request, `rejectCrossOriginRead` refuses an `Origin` header that does not
 name the request URL origin, with `403` and `{"error":"A same-origin request is required"}`. A
@@ -2164,32 +2168,57 @@ port. Two listeners set no list:
 
 If an embedded host does not set it, that host relies on its application to validate `Host`.
 
+Without `allowedHosts` and without `publicOrigin`, `requestUrl` in `node.ts` builds the request URL
+from the `Host` header. A foreign host name that resolves to the dashboard address (DNS rebinding)
+then passes `rejectCrossOriginMutation`, because the `Origin` and the `Host` of its page name the
+same host. This case applies only when `authorize` accepts the rebound request:
+
+- Authorization by network position, such as each request from an internal network, accepts it.
+- Authorization by a session cookie for the dashboard host name refuses it, because the browser
+  does not send that cookie to the foreign name.
+- The single-admin mode uses such a cookie. `workhorse dashboard` also sets `allowedHosts` for
+  each TCP listener without a public origin.
+
+Both settings stay optional (SM-1993). An embedder whose `authorize` accepts by network position
+must set one of them.
+
 ### Browser security headers
 
 `startDashboardServer` sets five browser headers on every response, before the middleware writes.
 A dashboard response that names one of them therefore still wins.
 
-- `content-security-policy`
+- `content-security-policy`, in the form without a nonce
 - `x-content-type-options: nosniff`
 - `referrer-policy: strict-origin-when-cross-origin`
 - `x-frame-options: DENY`
 - `x-robots-tag: noindex, nofollow, noarchive`
 
-The policy is:
+The policy without a nonce is:
 
 ```text
-default-src 'self'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'; object-src 'none'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self'
+default-src 'self'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'; object-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self'
 ```
 
-`unsafe-inline` covers three things:
+A dashboard page replaces it with the same policy whose `script-src` is
+`'self' 'nonce-<nonce>'`. The packaged document has two inline boot scripts: the color scheme
+script and the runtime configuration that `renderDashboardHtml` writes. No other inline script and
+no inline event handler runs. `style-src` keeps `'unsafe-inline'` for the style elements that
+Mantine adds while the application renders (SM-1995).
 
-- the packaged document's two boot scripts;
-- the runtime configuration `renderDashboardHtml` writes into it;
-- the style elements Mantine injects while the application renders.
+`DashboardHostOptions.contentSecurityPolicy` carries the page policy:
 
-`createDashboardHost` sets none of these headers. An embedded application shares the origin with
-its own pages. A second policy on the dashboard's responses would intersect with the application's
-own. `typescript/dashboard-server/README.md` states the policy an embedder copies.
+1. For each dashboard page, `serveApplication` makes a nonce from 16 random bytes in base64.
+2. `renderDashboardHtml` receives it as `scriptNonce`. `addInlineScriptNonce` puts it on each
+   script element that has no `src` and no `nonce`.
+3. In development, the host applies `addInlineScriptNonce` again after `transformHtml`, so the
+   inline scripts that Vite adds get the nonce too.
+4. The host calls `contentSecurityPolicy({ nonce })` and sends the result as the page's
+   `content-security-policy` header.
+
+`startDashboardServer` supplies that function. Without the option, `createDashboardHost` sets no
+browser header. An embedded application shares the origin with its own pages. A second policy on
+the dashboard's responses would intersect with the application's own.
+`typescript/dashboard-server/README.md` states the policy an embedder uses.
 
 ### Container image
 

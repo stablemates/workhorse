@@ -284,6 +284,15 @@ supply:
 demo mode and environment labels, the single-admin credentials, telemetry, seeding, and the shutdown
 grace period.
 
+The demo starts without `WORKHORSE_DEMO_PUBLIC_ORIGIN`, and it does not refuse to start in
+production. Without the value, the dashboard host takes its origin from the `Host` header and has no
+host check. A foreign host name that resolves to the demo (DNS rebinding) then passes the
+same-origin check of the dashboard. The demo authorizes each visitor by design, so such a page can
+use the same operator controls as a visitor, inside the same rate limit and budget. A refusal to
+start would stop the public deployment if the variable went missing, and this repository cannot
+test that deployment. Thus the deployment must set the variable, and the demo does not enforce it
+(SM-1993).
+
 `WORKHORSE_WORKER_POLL_MS` is optional. It sets the idle poll delay of the demo workers in
 milliseconds, and the default is 15,000. Set an integer from 1 through 2,147,483,647. If the value
 is 0, the TypeScript and Python workers stop at startup. Thus a deployment that set 0 to get a 1 ms
@@ -513,16 +522,39 @@ the literal path, so a trailing slash or a doubled slash cannot carry a mutation
 
 An operator mutation on the demo is durable, and every later visitor would otherwise inherit it. A
 reconciliation pass in the server process restores the defaults at startup and every fifteen
-minutes after that: it resumes
-paused workers, paused queues, and paused schedules, and it reverts retention and maintenance
-settings an operator overrode back to the values the application ships. Provenance decides what to
-revert, so the pass never disturbs a value the application set. It writes nothing when nothing
-drifted. A visitor therefore sees a control take effect and sees the demo repair itself within that
-interval. The database role needs the same write access the writable demo already requires.
+minutes after that. It restores these values:
+
+- It resumes paused workers, paused queues, and paused schedules.
+- It reverts each retention and maintenance setting that an operator overrode to the value the
+  application ships. Provenance decides what to revert, so the pass never disturbs a value the
+  application set.
+- It sets the history settings, `recordAttempts` and `recordClaims`, of each demo queue back to
+  the seeded values. Each fast-tier queue has its own seeded values. Every other queue records
+  neither.
+- It sets the tier of each demo queue back to the seeded tier: `fast` for the fast-tier queue of
+  each language, and `full` for every other queue.
+
+Workhorse refuses a tier change while the queue holds a live task. The pass then purges the
+blocked, ready, and scheduled tasks of that queue, which are demo data, and tries again. If an
+active or waiting task still blocks the change, the pass logs the queue in `workhorse.demo.deferred_queue_tiers`,
+and the next pass tries again. The pass acts only on a queue that has a `queue_control` row,
+because each visitor change writes one. A fast-tier queue whose seed step did not run yet has no
+row, and its seed step sets its tier.
+
+The pass writes nothing when nothing drifted. A visitor therefore sees a control take effect and
+sees the demo repair itself within that interval. The database role needs the same write access the
+writable demo already requires.
 
 The server sends a `Content-Security-Policy` on every response. The production policy grants no
 `ws:` or `wss:` source, because only Vite's hot-reload client opens a WebSocket and only the
 development entry point serves it. A proxy must not add either source back.
+
+The policy has `form-action 'self'`, and its `script-src` allows no inline script. Each dashboard
+page gets the policy with a new nonce, and the inline boot scripts of the page carry that nonce.
+The Google Analytics tag loads from `https://www.googletagmanager.com`, which `script-src` names.
+The code that starts it is the same-origin file `/demo-analytics.js`, not an inline script. A proxy
+must not add `'unsafe-inline'` to `script-src` or rewrite the page, because a rewrite can drop the
+nonce.
 
 Because the demo is unauthenticated by design, the edge in front of it must carry controls of its
 own. The concrete rules live in the private operations repository; this list is the contract they

@@ -123,6 +123,9 @@ async function restoreOperatorDefaults(): Promise<void> {
         "workhorse.demo.resumed_schedules": reconciliation.resumedSchedules,
         "workhorse.demo.reverted_retention_settings": reconciliation.revertedRetentionSettings,
         "workhorse.demo.reverted_maintenance_settings": reconciliation.revertedMaintenanceSettings,
+        "workhorse.demo.restored_queue_history": reconciliation.restoredQueueHistory,
+        "workhorse.demo.restored_queue_tiers": reconciliation.restoredQueueTiers,
+        "workhorse.demo.deferred_queue_tiers": reconciliation.deferredQueueTiers,
       },
     );
   } catch (error: unknown) {

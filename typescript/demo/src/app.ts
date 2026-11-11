@@ -250,13 +250,20 @@ export function runOperatorTransaction<T>(
   });
 }
 
+/**
+ * The path of the script that starts Google Analytics. It is a file, not an inline script, so the
+ * policy does not have to allow inline script for it.
+ */
+export const DEMO_ANALYTICS_SCRIPT_PATH = "/demo-analytics.js";
+
+const DEMO_ANALYTICS_SCRIPT = `window.dataLayer = window.dataLayer || [];
+function gtag(){dataLayer.push(arguments);}
+gtag('js', new Date());
+gtag('config', 'G-9NC8FKZPVB');
+`;
+
 const GOOGLE_ANALYTICS_TAG = `<script async src="https://www.googletagmanager.com/gtag/js?id=G-9NC8FKZPVB"></script>
-<script>
-  window.dataLayer = window.dataLayer || [];
-  function gtag(){dataLayer.push(arguments);}
-  gtag('js', new Date());
-  gtag('config', 'G-9NC8FKZPVB');
-</script>`;
+<script src="${DEMO_ANALYTICS_SCRIPT_PATH}"></script>`;
 
 /**
  * Build the demo's Content-Security-Policy for one delivery mode.
@@ -264,8 +271,15 @@ const GOOGLE_ANALYTICS_TAG = `<script async src="https://www.googletagmanager.co
  * Only Vite's hot-reload client opens a WebSocket, and only development serves it. A deployment
  * that ships the packaged bundle therefore needs no `ws:` or `wss:` source, and carrying one
  * would let injected script reach any host over either scheme.
+ *
+ * `script-src` allows no inline script. A dashboard page gets the policy with the `nonce` of that
+ * page, which allows the inline boot scripts that the dashboard host writes. Every other response
+ * gets the policy without a nonce.
  */
-export function demoContentSecurityPolicy(mode: "development" | "production"): string {
+export function demoContentSecurityPolicy(
+  mode: "development" | "production",
+  nonce?: string,
+): string {
   const connect = [
     "'self'",
     ...(mode === "development" ? ["ws:", "wss:"] : []),
@@ -275,9 +289,14 @@ export function demoContentSecurityPolicy(mode: "development" | "production"): s
   return [
     "default-src 'self'",
     "base-uri 'self'",
+    "form-action 'self'",
     "frame-ancestors 'none'",
     "object-src 'none'",
-    "script-src 'self' 'unsafe-inline' https://www.googletagmanager.com",
+    [
+      "script-src 'self'",
+      ...(nonce === undefined ? [] : [`'nonce-${nonce}'`]),
+      "https://www.googletagmanager.com",
+    ].join(" "),
     "style-src 'self' 'unsafe-inline'",
     "img-src 'self' data: https://*.google-analytics.com https://www.google-analytics.com",
     "font-src 'self'",
@@ -1701,9 +1720,8 @@ export function createDemoApplication(
     : undefined;
   // The development entry point is the only caller that supplies `dev`, and it is the only mode
   // that serves Vite's hot-reload WebSocket, so it alone widens `connect-src`.
-  const contentSecurityPolicy = demoContentSecurityPolicy(
-    options.dev ? "development" : "production",
-  );
+  const contentSecurityPolicyMode = options.dev ? "development" : "production";
+  const contentSecurityPolicy = demoContentSecurityPolicy(contentSecurityPolicyMode);
   const localControllers = createLocalOperatorControllers(database);
   // Worker pause state is durable and fleet-wide; it survives restarts and reaches remote workers.
   const workerController = options.workerController ?? localControllers.workerController;
@@ -1724,7 +1742,10 @@ export function createDemoApplication(
 
   app.use("*", async (context, next) => {
     await next();
-    context.res.headers.set("Content-Security-Policy", contentSecurityPolicy);
+    // A dashboard page already carries the policy with the nonce of that page.
+    if (!context.res.headers.has("Content-Security-Policy")) {
+      context.res.headers.set("Content-Security-Policy", contentSecurityPolicy);
+    }
     context.res.headers.set("X-Content-Type-Options", "nosniff");
     context.res.headers.set("Referrer-Policy", "strict-origin-when-cross-origin");
     context.res.headers.set("X-Robots-Tag", "noindex, nofollow, noarchive");
@@ -1735,6 +1756,14 @@ export function createDemoApplication(
   // Kamal keeps the previous container on traffic until this process has prepared its schema and
   // opened the HTTP listener. Keep the probe outside dashboard authentication and database reads.
   app.get("/up", (context) => context.json({ status: "ok" }));
+
+  // Every page loads this script, the login page too, so it stays outside dashboard authentication.
+  app.get(DEMO_ANALYTICS_SCRIPT_PATH, (context) =>
+    context.body(DEMO_ANALYTICS_SCRIPT, 200, {
+      "Content-Type": "text/javascript; charset=utf-8",
+      "Cache-Control": "public, max-age=3600",
+    }),
+  );
 
   if (options.dashboard !== false) {
     const production = {
@@ -1788,6 +1817,8 @@ export function createDemoApplication(
       // Visitors can intentionally fail tasks, so task details must not reveal container paths.
       redactErrorStacks: true,
       auditActor: "local-demo",
+      contentSecurityPolicy: ({ nonce }) =>
+        demoContentSecurityPolicy(contentSecurityPolicyMode, nonce),
       dev: options.dev,
       ...(options.workhorseRevision ? { workhorseRevision: options.workhorseRevision } : {}),
     });

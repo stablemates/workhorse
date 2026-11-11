@@ -166,6 +166,9 @@ describe("demo operator reconciliation", () => {
       resumedSchedules: [],
       revertedRetentionSettings: [],
       revertedMaintenanceSettings: [],
+      restoredQueueHistory: [],
+      restoredQueueTiers: [],
+      deferredQueueTiers: [],
     });
     expect(reconciliationRestoredAnything(reconciliation)).toBe(false);
   });

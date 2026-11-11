@@ -75,6 +75,34 @@ schema to version 92. It replaces the bodies of `enqueue_batch_v1`, `enqueue_deb
 SDK compatibility floor and changes no rows.
 Run `workhorse schema migrate`.
 
+### A page on another site cannot fill the login throttle of the administrator
+
+The administrator of a single-admin dashboard opened a page on another site. That page submitted
+five login forms with a wrong password. Each form counted as a failure for the address of the
+administrator, so the next valid login got `429` until the window ended.
+
+The login `POST` of `@stablemates/workhorse-dashboard-server` now applies `rejectCrossOriginMutation`,
+as logout does. The check runs before the server reads the body or reserves a throttle slot. A
+request whose `Origin` is absent, malformed, or another origin gets `403` and no cookie. The login
+page of the dashboard sends its own `Origin`, so a browser login works as before. A client that
+posts the login form itself must send the `Origin` of the dashboard. Behind a TLS proxy, set
+`publicOrigin`, as mutations and logout already require.
+
+### The dashboard pages allow inline scripts only with a nonce
+
+The standalone dashboard sent `script-src 'self' 'unsafe-inline'`. If a later component rendered
+markup from data, the policy did not stop an injected script.
+
+`createDashboardHost` now makes a nonce for each dashboard page and puts it on each inline script
+of the page. The new option `DashboardHostOptions.contentSecurityPolicy` receives that nonce and
+returns the `Content-Security-Policy` header of the page. Without the option, the host sends no
+policy, as before. `RenderDashboardHtmlOptions.scriptNonce` gives the same nonce to
+`renderDashboardHtml`. Both are additive.
+`workhorse dashboard` now sends `script-src 'self' 'nonce-…'` on each page and `script-src 'self'`
+on every other response. `style-src` keeps `'unsafe-inline'` for the styles that the application
+adds. An embedder that copies the policy from the package README must move to the new policy. The
+old policy still works.
+
 ## 0.12.0 — 2026-11-07
 
 The npm packages, Python distribution, Go module, Rust crate, Ruby gem, JVM artifacts, and .NET

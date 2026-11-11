@@ -11,6 +11,7 @@ import { seedStagingData, syncStagingSchedules } from "../src/staging.js";
 import { Queue, type Json } from "@stablemates/workhorse";
 import { createDrizzleAdapter } from "@stablemates/workhorse-drizzle";
 import {
+  DEMO_ANALYTICS_SCRIPT_PATH,
   assertDemoSchemaCompatible,
   createLocalOperator,
   createLocalOperatorControllers,
@@ -174,7 +175,25 @@ dashboardBrowserTest(settingsDashboardTestName, async () => {
   const html = await page.text();
   expect(html).toContain('<div id="root"></div>');
   expect(html).toContain("https://www.googletagmanager.com/gtag/js?id=G-9NC8FKZPVB");
-  expect(html).toContain("gtag('config', 'G-9NC8FKZPVB')");
+  expect(html).toContain(`<script src="${DEMO_ANALYTICS_SCRIPT_PATH}"></script>`);
+  // Each inline script carries the nonce that the policy of the page names.
+  const policy = page.headers.get("content-security-policy") ?? "";
+  const nonce =
+    /script-src 'self' 'nonce-([A-Za-z0-9+/]+={0,2})' https:\/\/www\.googletagmanager\.com;/.exec(
+      policy,
+    )?.[1];
+  expect(nonce).toBeDefined();
+  const inline = [...html.matchAll(/<script\b[^>]*>/gi)]
+    .map(([tag]) => tag)
+    .filter((tag) => !/\ssrc\s*=/i.test(tag));
+  expect(inline).toEqual([`<script nonce="${nonce}">`, `<script nonce="${nonce}">`]);
+  expect(html).not.toMatch(/<[a-z][^>]*\son[a-z]+\s*=/i);
+
+  const analytics = await app.request(DEMO_ANALYTICS_SCRIPT_PATH);
+  expect(analytics.status).toBe(200);
+  expect(analytics.headers.get("content-type")).toContain("text/javascript");
+  await expect(analytics.text()).resolves.toContain("gtag('config', 'G-9NC8FKZPVB')");
+  expect(analytics.headers.get("content-security-policy")).not.toContain("nonce-");
   await expect(dashboardClient(app).dashboard.settings()).resolves.toMatchObject({
     editable: true,
     maintenance: { timezone: "UTC" },

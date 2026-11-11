@@ -315,6 +315,10 @@ export function createSingleAdminAuthentication(
       if (request.method !== "POST") {
         return new Response(null, { status: 405, headers: { allow: "GET, HEAD, POST" } });
       }
+      // A page on another site must not spend this client's failed-login budget. The check runs
+      // before the body is read and before a throttle slot is reserved, as it does for logout.
+      const crossOriginRejection = rejectCrossOriginMutation(request);
+      if (crossOriginRejection) return crossOriginRejection;
       const contentLengthHeader = request.headers.get("content-length");
       if (contentLengthHeader !== null) {
         if (!/^\d+$/.test(contentLengthHeader)) return new Response(null, { status: 413 });

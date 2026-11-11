@@ -48,6 +48,34 @@ export interface RenderDashboardHtmlOptions {
   runtime: DashboardRuntimeConfig;
   /** Trusted host-owned ES modules loaded before the dashboard browser entry. */
   browserModules?: readonly string[];
+  /**
+   * The Content-Security-Policy nonce of this response. When it is set, each inline script element
+   * of the document gets a `nonce` attribute with this value, so a policy can allow those scripts
+   * without `'unsafe-inline'`. It must contain only base64 or base64url characters.
+   */
+  scriptNonce?: string;
+}
+
+/** The characters a nonce can contain, so it cannot end the attribute that holds it. */
+const SCRIPT_NONCE = /^[A-Za-z0-9+/_-]+={0,2}$/;
+
+/** A script start tag. The template is trusted, and the runtime configuration escapes `<`. */
+const SCRIPT_START_TAG = /<script\b([^>]*)>/gi;
+
+/**
+ * Give each inline script element of a document the nonce of its response.
+ *
+ * A script element with a `src` attribute loads from its URL, so `'self'` already covers it. An
+ * element that already has a `nonce` attribute keeps it, so a second pass over the same document
+ * changes nothing.
+ */
+export function addInlineScriptNonce(html: string, nonce: string): string {
+  if (!SCRIPT_NONCE.test(nonce)) {
+    throw new TypeError("A dashboard script nonce must contain only base64 characters");
+  }
+  return html.replace(SCRIPT_START_TAG, (tag: string, attributes: string) =>
+    /\s(?:src|nonce)\s*=/i.test(attributes) ? tag : `<script nonce="${nonce}"${attributes}>`,
+  );
 }
 
 /** Placeholder the packaged `index.html` reserves for the runtime configuration script body. */
@@ -73,15 +101,17 @@ function escapeHtmlAttribute(value: string): string {
  * silently applying to one of them.
  *
  * The serialized config escapes `<` so a value can never terminate the surrounding script element,
- * and host-owned module URLs are attribute-escaped.
+ * and host-owned module URLs are attribute-escaped. With `scriptNonce`, each inline script element
+ * carries the nonce.
  */
 export function renderDashboardHtml(template: string, options: RenderDashboardHtmlOptions): string {
   const serialized = JSON.stringify(options.runtime).replaceAll("<", "\\u003c");
-  return template
+  const html = template
     .replace(DASHBOARD_RUNTIME_CONFIG_PLACEHOLDER, () => `window.workhorseDashboard=${serialized}`)
     .replace(DASHBOARD_BROWSER_MODULES_PLACEHOLDER, () =>
       (options.browserModules ?? [])
         .map((source) => `<script type="module" src="${escapeHtmlAttribute(source)}"></script>`)
         .join("\n"),
     );
+  return options.scriptNonce === undefined ? html : addInlineScriptNonce(html, options.scriptNonce);
 }

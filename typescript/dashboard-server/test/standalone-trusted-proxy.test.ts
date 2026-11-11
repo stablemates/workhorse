@@ -42,7 +42,11 @@ async function withListener(
       const response = await fetch(`${running.url}/login`, {
         method: "POST",
         redirect: "manual",
-        headers: { "content-type": "application/x-www-form-urlencoded", ...headers },
+        headers: {
+          "content-type": "application/x-www-form-urlencoded",
+          origin: running.url,
+          ...headers,
+        },
         body: new URLSearchParams({ username: "operator", password }),
       });
       await response.body?.cancel();

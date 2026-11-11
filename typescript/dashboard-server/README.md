@@ -57,23 +57,50 @@ Set `allowedHosts` to the `host[:port]` values the dashboard answers to when the
 not already validate `Host`. The host then answers any other host with `421 Misdirected Request`
 before `authorize` runs. `workhorse dashboard` sets it to its own loopback address.
 
+Set `allowedHosts` or `publicOrigin` if `authorize` accepts a request by its network position, for
+example each request from the internal network. Without both settings, the host takes its origin
+from the `Host` header. A foreign host name can resolve to the address of the dashboard (DNS
+rebinding). A page on that name then sends the same name in `Host` and in `Origin`, so the
+same-origin check accepts its mutations. A session cookie for the dashboard host name is not sent
+to the foreign name. Thus `authorize` that requires such a cookie refuses the request, and this
+case does not apply to it.
+
 ## Response headers an embedder owns
 
 `workhorse dashboard` owns its whole origin, so it sends a Content Security Policy,
 `X-Content-Type-Options`, `Referrer-Policy`, `X-Frame-Options`, and `X-Robots-Tag` on every
 response. An embedded host shares its origin with its own pages, and a second policy on the
-dashboard's responses would intersect with the application's own, so this package sends none and
-the embedder decides. Copy this policy if the application has no stricter one:
+dashboard's responses would intersect with the application's own, so this package sends none by
+default and the embedder decides.
 
-```
-default-src 'self'; base-uri 'self'; form-action 'self'; frame-ancestors 'none';
-object-src 'none'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline';
-img-src 'self' data:; font-src 'self'; connect-src 'self'
+Each dashboard page has two inline boot scripts: the color scheme script and the runtime
+configuration that the host writes. The host makes a new nonce for each page and puts it on both
+scripts. Give the host a `contentSecurityPolicy` function to send the page policy with that nonce.
+Use this policy if the application has no stricter one:
+
+```ts
+createDashboardHost({
+  // ...
+  contentSecurityPolicy: ({ nonce }) =>
+    [
+      "default-src 'self'",
+      "base-uri 'self'",
+      "form-action 'self'",
+      "frame-ancestors 'none'",
+      "object-src 'none'",
+      `script-src 'self' 'nonce-${nonce}'`,
+      "style-src 'self' 'unsafe-inline'",
+      "img-src 'self' data:",
+      "font-src 'self'",
+      "connect-src 'self'",
+    ].join("; "),
+});
 ```
 
-`unsafe-inline` covers the packaged document's boot scripts, the runtime configuration the host
-writes into it, and the style elements the application injects as it renders. Widen `connect-src`
-and `img-src` only for origins the application itself adds.
+The other dashboard responses have no inline script. For them, use the same policy with
+`script-src 'self'`. `style-src` keeps `'unsafe-inline'` for the style elements that the
+application adds as it renders. Widen `connect-src` and `img-src` only for origins that the
+application itself adds.
 
 The server reads core-owned `workhorse.dashboard_*_v1` views and versioned SQL functions. [Workhorse core](https://workhorse.run/docs/installation)
 owns schema installation and changes. Workers can run in other processes because PostgreSQL owns

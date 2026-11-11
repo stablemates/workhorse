@@ -135,7 +135,9 @@ browser's ambient credentials.
   cross-origin page reads a response.
 - Confirm `rejectCrossOriginMutation` refuses a mutation whose `Origin` is absent, unparseable, or
   a different origin. Absent must fail closed. Confirm the single-admin logout applies the same
-  check, so a cross-origin request cannot end a session.
+  check, so a cross-origin request cannot end a session. Confirm the single-admin login applies
+  it too, before it reads the body or reserves a throttle slot, so a cross-origin form cannot fill
+  the failure window of the administrator's address.
 - Confirm each backend refuses a page, an asset, or a read procedure whose `Origin` names another
   origin, with 403, and serves a request without `Origin`. A host CORS policy can wrap an embedded
   host, so the first bullet does not hold for every embedding. The `cross-origin-read` conformance
@@ -156,9 +158,14 @@ browser's ambient credentials.
   owns its own response headers, because a second policy on the dashboard's responses would
   intersect with the application's; `typescript/dashboard-server/README.md` states the policy an
   embedder copies.
+- Confirm `script-src` has no `'unsafe-inline'` in the standalone and the demo policies. Confirm
+  each page gets a new nonce, that each inline script of the page carries it, and that the page
+  policy names it. Confirm the built pages have no other inline script and no inline event handler.
+- Confirm an embedder whose `authorize` accepts a request by network position sets `allowedHosts`
+  or `publicOrigin`. Without both, a rebound host name passes the Origin check.
 
-**Re-walk when** the mount adds a header, when the Host check, the Origin check, or the mutation
-classifier changes, when the cookie attributes change, or when the oRPC path matcher changes.
+**Re-walk when** the mount adds a header, when the Host check, the Origin check, the page policy,
+or the mutation classifier changes, when the packaged document adds an inline script, when the cookie attributes change, or when the oRPC path matcher changes.
 
 ## Row 6: what the standalone credential mode enforces
 

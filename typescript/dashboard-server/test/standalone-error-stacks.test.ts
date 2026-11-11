@@ -76,7 +76,8 @@ async function persistedErrors(port: number): Promise<unknown[]> {
     });
   const login = await send(
     "/login",
-    { "content-type": "application/x-www-form-urlencoded" },
+    // The listener's public origin is the origin that a browser on the login page sends.
+    { "content-type": "application/x-www-form-urlencoded", origin: "https://dashboard.example" },
     new URLSearchParams({ username: "operator", password: "correct horse" }).toString(),
   );
   const cookie = (login.headers.get("set-cookie") ?? "").split(";", 1)[0] ?? "";

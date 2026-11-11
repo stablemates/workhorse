@@ -23,7 +23,7 @@ function isSameOrigin(request: Request): boolean {
  *
  * The request must carry an `Origin` header whose parsed origin exactly matches the request URL
  * origin. An absent or malformed `Origin` fails closed. The host applies this check to every
- * dashboard mutation, and the single-admin authentication applies it to logout.
+ * dashboard mutation, and the single-admin authentication applies it to login and logout.
  */
 export function rejectCrossOriginMutation(request: Request): Response | null {
   if (isSameOrigin(request)) return null;
