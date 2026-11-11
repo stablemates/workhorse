@@ -162,6 +162,10 @@ export const FILTERED_LANES = {
       "docs/architecture/schema-and-protocol.md",
     ],
   },
+  // The Go job also runs scripts/cross-sdk-replay.ts for the TypeScript and Go pair (SM-1950). It
+  // reads go/**, the TypeScript build, and the shared inputs protocol/** and sql/**, so a change to
+  // any other SDK does not run it. The harness names the runners of the other SDKs for a local run,
+  // so it is not a source here, and those runners are not inputs.
   go: {
     sources: ["go/**", "scripts/run-go-check.ts"],
     inputs: ["go/**", ...typescriptBuild, "api/go.txt"],

@@ -142,6 +142,28 @@ fn outcome(result: Result<(), String>) -> Outcome {
     }
 }
 
+/// The entry point of `scripts/cross-sdk-replay.ts`. It runs one phase of a `durable-script`
+/// fixture against a database that the harness owns, and it returns at once when the harness did
+/// not start it.
+#[tokio::test(flavor = "multi_thread")]
+async fn cross_sdk_durable_script_phase() {
+    let Ok(phase) = std::env::var("WORKHORSE_CROSS_SDK_PHASE") else {
+        eprintln!("scripts/cross-sdk-replay.ts sets WORKHORSE_CROSS_SDK_PHASE");
+        return;
+    };
+    let url = std::env::var("WORKHORSE_CROSS_SDK_DATABASE_URL")
+        .expect("WORKHORSE_CROSS_SDK_DATABASE_URL is not set");
+    let id = std::env::var("WORKHORSE_CROSS_SDK_FIXTURE").expect("WORKHORSE_CROSS_SDK_FIXTURE");
+    let fixtures = read_json(&protocol_directory().join("runtime.json"));
+    let fixture = fixtures
+        .as_array()
+        .and_then(|fixtures| fixtures.iter().find(|fixture| fixture["id"] == id.as_str()))
+        .unwrap_or_else(|| panic!("runtime fixture {id} was not found"));
+    if let Err(reason) = conformance::durable_script::run_phase(&url, fixture, &phase).await {
+        panic!("{reason}");
+    }
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn every_protocol_fixture_passes_or_is_listed() {
     let catalogue =

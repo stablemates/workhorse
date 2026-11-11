@@ -164,6 +164,117 @@ and structured database errors. A language runtime owns local validation, handle
 concurrency, heartbeats, polling or notifications, cancellation delivery, telemetry, and graceful
 shutdown.
 
+## Durable-script fixtures
+
+A `durable-script` fixture runs a handler through its handler context to a terminal state, and it
+checks the stored rows after each part. The handler runs the operations of `script` in order. Each
+operation that has a `key` puts its value under that key in the result of the handler.
+
+| Operation                | What the handler does                                                          |
+| ------------------------ | ------------------------------------------------------------------------------ |
+| `checkpoint`             | Saves `value` under `name`, with `input` if the operation has one.             |
+| `sleep`                  | Starts the timer `name` for `durationMs`.                                      |
+| `sleepUntil`             | Starts the timer `name` until the time in the payload field `wakeAtField`.     |
+| `waitForSignal`          | Waits for the signal `name`.                                                   |
+| `waitForHuman`           | Waits for the human decision `name` with `context`.                            |
+| `runChild`               | Runs the child `name` on `childQueue`, with the times in the payload fields.   |
+| `runChildren`            | Runs the children as one set and gives `{ status, result }` for each name.     |
+| `catchSuspension`        | Runs `step` and catches each error. After a catch, it returns `{ key: true }`. |
+| `overlappingCheckpoints` | Starts a second checkpoint call with one name while the first one runs.        |
+
+The child handler returns `{ "echo": payload }`. For `overlappingCheckpoints`, the operation of a
+call returns `{ "operation": n }`, and `n` counts the operations. The first operation waits for a
+second operation for at most `overlapWindowMs`, and the second call starts after the first
+operation starts. If the second call does not join the call in flight and reads the checkpoint
+before the window ends, it runs the operation again, and the fixture sees `n = 2`. A second call
+that reads after the window ends gets the stored value, so the window limits what the fixture can
+see. No SDK has a hook at the join, so the fixture cannot make the overlap certain. A correct SDK
+passes also when the window ends.
+
+The runner then runs the steps in order. `$1` in each statement is the task ID.
+
+| Step      | What the runner does                                                                          |
+| --------- | --------------------------------------------------------------------------------------------- |
+| `run`     | Runs the task worker, or the child worker for `worker: "child"`, until a claim finds no task. |
+| `sql`     | Runs the statement, for example to deliver a signal or to move a timer to the past.           |
+| `expect`  | Compares the JSON of the `observe` query, and the counters that the step names.               |
+| `handOff` | Ends the first phase of a cross-SDK run. The counters start again at zero.                    |
+
+A `run` step does not count claims, because `runOnce` can claim more than one task in some SDKs.
+The children go to `childQueue`, so a run of the task worker ends when the parent task suspends.
+The counters are `handlerRuns`, `checkpointOperations`, `caughtSuspensions`, `completedScripts`,
+and `returnedSuspendingCalls`. A run that suspends must stop at the suspending call, so that call
+does not return and the run does not reach the end of the script:
+
+- `completedScripts` counts the handler runs that reach the end of the script.
+- `returnedSuspendingCalls` counts the `sleep`, `sleepUntil`, `waitForSignal`, `waitForHuman`,
+  `runChild`, and `runChildren` calls that return. A runner counts a `runChildren` call before it
+  reads the outcomes, so a call that returns a wrong value still counts.
+
+PostgreSQL refuses each write of an attempt after the attempt suspends, and it records nothing for
+the refusal. Thus no fixture can see a worker that sends a completion after a caught suspension.
+The worker tests of TypeScript and Python check the `workhorse.handler.signal_swallowed` warning
+of that case. Ruby, the JVM, and .NET emit the warning, but their tests do not check it. The Go and
+Rust workers do not emit it.
+
+Each expected result is the rule that the architecture pages state:
+
+- A signal wait and a human wait suspend the attempt, and the replay returns the stored value
+  ([Durable signal suspension](../docs/architecture/lifecycle.md#durable-signal-suspension) and
+  [Human decision suspension](../docs/architecture/lifecycle.md#human-decision-suspension)).
+- A `runChild` join and a `runChildren` join block the parent until each child ends. The replay
+  returns the result of each child.
+- A handler that catches the suspension and returns still suspends the task
+  ([Worker suspension](../docs/architecture/lifecycle.md#worker-suspension)).
+- Overlapping checkpoint calls with one name run the operation one time and share its value
+  ([`task_checkpoint`](../docs/architecture/data-model.md#handler-behavior)).
+
+### Cross-SDK replay
+
+A fixture with a `handOff` step can run in two SDKs. SDK A runs the steps before `handOff`, so it
+runs the task to its first suspension. SDK B runs the steps after it, so it replays the task to the
+end. `scripts/cross-sdk-replay.ts` creates the database, runs the two phases, and then reads the
+rows of the last `expect` step again. A runner skips its phase entry point when the harness did not
+start it, so the harness does not trust the exit status alone.
+
+Each runner has one entry point for its phases. It reads `WORKHORSE_CROSS_SDK_PHASE` (`suspend` or
+`replay`), `WORKHORSE_CROSS_SDK_FIXTURE`, and `WORKHORSE_CROSS_SDK_DATABASE_URL`.
+
+| SDK        | Entry point                                                                                |
+| ---------- | ------------------------------------------------------------------------------------------ |
+| TypeScript | `runDurableScriptPhase` in `typescript/core/test/support/durable-script.ts`                |
+| Python     | `test_cross_sdk_durable_script_phase` in `python/tests/test_worker_runtime_conformance.py` |
+| Go         | `TestCrossSDKDurableScriptPhase` in `go/durable_script_conformance_test.go`                |
+| Rust       | `cross_sdk_durable_script_phase` in `rust/tests/protocol_conformance.rs`                   |
+| Ruby       | The cross-SDK example in `ruby/spec/conformance/protocol_conformance_spec.rb`              |
+| JVM        | `CrossSdkPhaseTest` in `jvm/workhorse/src/test/java/run/workhorse/conformance/`            |
+| .NET       | `CrossSdkPhaseTests` in `dotnet/tests/Workhorse.Tests/Conformance/`                        |
+
+Run `pnpm test:cross-sdk` for the pairs of `CROSS_SDK_PAIRS`: TypeScript to Go and Go to
+TypeScript. The Go CI job runs them. Add `--pair <a>:<b>` to run another pair, with the SDK names
+`typescript`, `python`, `go`, `rust`, `ruby`, `java`, and `csharp`. A pair needs the toolchain of
+each SDK.
+
+Three cross-SDK fixtures run one script with the same payload. They differ in the rows that SDK A
+stores before `handOff`, which SDK B then replays:
+
+| Fixture                                                         | SDK A stores before `handOff`                    |
+| --------------------------------------------------------------- | ------------------------------------------------ |
+| `durable-script-replays-in-another-sdk`                         | The checkpoint and the timer                     |
+| `durable-script-replays-a-pending-child-request-in-another-sdk` | Also the child request, and SDK B runs the child |
+| `durable-script-replays-a-pending-human-wait-in-another-sdk`    | Also the child result and the pending human wait |
+
+The script gives each value the forms that differ between languages: number forms, key order, text
+outside the Basic Multilingual Plane, time zone offsets, and fractional seconds. Its checkpoint
+input has a fixed fingerprint, so both SDKs must compute the same digest. Its child `deadline` and
+`runAt` have microsecond digits.
+
+The absolute timer of the script has millisecond digits. TypeScript, Ruby, and the JVM send a timer
+target with milliseconds, and Python, Go, Rust, and .NET send microseconds. Thus a pair of a
+millisecond SDK and a microsecond SDK fails a target with microsecond digits with
+`WaitConflictError` (SM-1945). The `payloadSql` of each of the three fixtures holds the setting
+`'milliseconds'`. Change it to `'microseconds'` when SM-1945 is fixed.
+
 ## Supported host load
 
 The runtime fixtures set time limits, so a very slow host can fail a fixture without a defect in

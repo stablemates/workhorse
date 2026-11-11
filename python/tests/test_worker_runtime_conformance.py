@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import inspect
 import json
+import os
 import sys
 import traceback
 from collections.abc import AsyncIterator, Awaitable, Callable, Iterator, Mapping
@@ -50,6 +51,7 @@ from workhorse import (
     Worker,
 )
 import workhorse.worker as worker_module
+import durable_script
 from workhorse._pool_hub import connection_budget_ms
 from workhorse._statements import SQL_STATEMENTS, STATEMENTS, DriverStatement
 from workhorse._drivers import PooledSyncExecutor, SyncExecutor
@@ -65,6 +67,7 @@ REPOSITORY = Path(__file__).parents[2]
 ASYNC_RUNTIME_FIXTURE_KINDS = frozenset(
     {
         "cooperative-cancellation",
+        "durable-script",
         "graceful-drain",
         "heartbeat-busy",
         "heartbeat-failure",
@@ -136,6 +139,22 @@ def test_python_worker_satisfies_every_shared_runtime_fixture(
     assert coverage == set(manifest["runtimeCoverage"])
 
 
+def test_cross_sdk_durable_script_phase() -> None:
+    """The entry point of scripts/cross-sdk-replay.ts. It runs one phase of a durable-script
+    fixture against a database that the harness owns, and the harness sets its environment."""
+    phase = os.environ.get("WORKHORSE_CROSS_SDK_PHASE")
+    if phase is None:
+        pytest.skip("scripts/cross-sdk-replay.ts sets WORKHORSE_CROSS_SDK_PHASE")
+    target = os.environ["WORKHORSE_CROSS_SDK_DATABASE_URL"]
+    fixture_id = os.environ["WORKHORSE_CROSS_SDK_FIXTURE"]
+    fixture = next(f for f in read_json("protocol/v1/runtime.json") if f["id"] == fixture_id)
+    with (
+        psycopg.connect(target, autocommit=True) as connection,
+        ConnectionPool(target, min_size=3, max_size=3, kwargs={"autocommit": True}) as pool,
+    ):
+        durable_script.run_phase(connection, pool, fixture, phase)
+
+
 def execute_runtime_fixture(
     connection: psycopg.Connection[Any], fixture: Mapping[str, Any], database_url: str
 ) -> None:
@@ -170,6 +189,9 @@ def execute_runtime_fixture(
         "replay-conflict": execute_replay_conflict_fixture,
         "json-round-trip": execute_json_round_trip_fixture,
         "checkpoint-no-value": execute_checkpoint_no_value_fixture,
+        "durable-script": lambda setup_connection, script_fixture: durable_script.run_phase(
+            setup_connection, worker_pool, script_fixture, "all"
+        ),
         "oversized-result": execute_oversized_result_fixture,
         "result-contract-failure": execute_result_contract_failure_fixture,
         "shutdown-cancellation": execute_shutdown_cancellation_fixture,
@@ -2338,6 +2360,9 @@ async def execute_async_runtime_fixture(
 ) -> None:
     executors: dict[str, Any] = {
         "cooperative-cancellation": execute_async_cancellation_fixture,
+        "durable-script": lambda setup_connection, script_fixture, url: (
+            durable_script.run_async_phase(setup_connection, url, script_fixture, "all", returned)
+        ),
         "graceful-drain": execute_async_graceful_drain_fixture,
         "heartbeat-busy": execute_async_heartbeat_busy_fixture,
         "heartbeat-failure": execute_async_heartbeat_failure_fixture,

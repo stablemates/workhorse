@@ -32,6 +32,7 @@
     "test:integration:github": "tsx scripts/with-env.ts node node_modules/vitest/vitest.mjs run --config vitest.database.config.ts typescript/core/test/github-triage-integration.test.ts",
     "test:database:changed": "tsx scripts/with-env.ts node node_modules/vitest/vitest.mjs related --run --passWithNoTests --config vitest.database.config.ts",
     "test:schema": "tsx scripts/with-env.ts node node_modules/vitest/vitest.mjs run typescript/core/test/schema-limits.test.ts typescript/core/test/schema-installation.test.ts typescript/core/test/schema-migrations.test.ts",
+    "test:cross-sdk": "tsx scripts/with-env.ts tsx scripts/cross-sdk-replay.ts",
     "test:protocol": "tsx scripts/with-env.ts node node_modules/vitest/vitest.mjs run --config vitest.database.config.ts typescript/core/test/sql-protocol-conformance.test.ts typescript/core/test/schema-migrations.test.ts",
     "sql-catalogues:generate": "tsx scripts/generate-sql-catalogues.ts",
     "sql-catalogues:check": "tsx scripts/generate-sql-catalogues.ts --check",

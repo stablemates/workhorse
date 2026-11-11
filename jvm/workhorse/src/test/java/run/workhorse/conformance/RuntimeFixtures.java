@@ -228,6 +228,7 @@ final class RuntimeFixtures {
         case "subscription-recovery" -> subscriptionRecovery(fixture);
         case "json-round-trip" -> jsonRoundTrip(fixture);
         case "checkpoint-no-value" -> checkpointNoValue(fixture);
+        case "durable-script" -> new DurableScript(opener, connection).run(fixture, "all");
         case "oversized-result" -> oversizedResult(fixture);
         case "result-contract-failure" -> resultContractFailure(fixture);
         case "shutdown-cancellation" -> shutdownCancellation(fixture);

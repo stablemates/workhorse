@@ -18,6 +18,16 @@ RSpec.describe "protocol/v1 conformance" do
       "Ruby protocol conformance disagrees with its list:\n  #{problems.join("\n  ")}"
   end
 
+  # The entry point of scripts/cross-sdk-replay.ts. It runs one phase of a durable-script fixture
+  # against a database that the harness owns, and the harness sets its environment.
+  it "runs one phase of a cross-SDK durable-script fixture" do
+    phase = ENV["WORKHORSE_CROSS_SDK_PHASE"]
+    skip("scripts/cross-sdk-replay.ts sets WORKHORSE_CROSS_SDK_PHASE") if phase.nil?
+    id = ENV.fetch("WORKHORSE_CROSS_SDK_FIXTURE")
+    fixture = JSON.parse(File.read(File.join(Conformance::PROTOCOL, "runtime.json"))).find { |entry| entry["id"] == id }
+    Conformance::DurableScript.new(ENV.fetch("WORKHORSE_CROSS_SDK_DATABASE_URL"), fixture).run(phase)
+  end
+
   it "fails replay conflicts on their first occurrence" do
     reason = ScratchDatabase.skip_reason
     skip(reason) if reason

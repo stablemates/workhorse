@@ -165,6 +165,7 @@ internal sealed class RuntimeFixtures : IAsyncDisposable
             "subscription-recovery" => SubscriptionRecoveryAsync(fixture),
             "json-round-trip" => JsonRoundTripAsync(fixture),
             "checkpoint-no-value" => CheckpointNoValueAsync(fixture),
+            "durable-script" => new DurableScript(_database.Builder, _database.DataSource).RunAsync(fixture, "all"),
             "oversized-result" => OversizedResultAsync(fixture),
             "result-contract-failure" => ResultContractFailureAsync(fixture),
             "shutdown-cancellation" => ShutdownCancellationAsync(fixture),

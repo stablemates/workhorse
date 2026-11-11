@@ -995,6 +995,13 @@ One immutable row links a parent identity to each named child.
 - `last_seen_fence_token` records the parent fence that created or successfully joined an
   individual child.
 
+The shared cases `durable-run-child-joins-the-child-result` and
+`durable-run-children-joins-every-outcome` check in every SDK that the parent is `blocked` while
+its children are ready, and that the edge of each child has the policies of its join mode. They also
+check that the replay sets `joined_at` and returns the result of each child in one attempt
+(SM-1950). The child-set case ends both children before it reads the parent again, so it does not
+check that the parent waits for its last child.
+
 #### Renamed replay of a single child
 
 `create_child_v2` and `create_single_child_v2` return `stored_child_name` alongside their status.
@@ -1696,7 +1703,9 @@ tasks already stored the name, or remove the input, and still read the stored va
 
 `HandlerContext.checkpoint(name, operation)` reads an existing value before running user code. It
 coalesces overlapping calls for the same name inside one handler. A duplicate call receives the
-first call's result or error.
+first call's result or error. The shared case
+`durable-overlapping-checkpoint-calls-with-one-name-run-the-operation-once` checks in every SDK that
+the operation runs one time and that both calls return its value (SM-1950).
 
 An operation that returns the "no value" of its language stores JSON `null`: `undefined` in
 TypeScript, `None` in Python, `nil` in Go and Ruby, `null` in the JVM and .NET, and `()` in Rust

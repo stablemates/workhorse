@@ -249,7 +249,7 @@ public sealed class ScratchTemplate : IAsyncLifetime
         || Environment.GetEnvironmentVariable("WORKHORSE_REQUIRE_DATABASE") == "1";
 
     /// <summary>Npgsql reads no URL, so the fixture turns the URL into a connection string.</summary>
-    private static NpgsqlConnectionStringBuilder Parse(Uri url)
+    internal static NpgsqlConnectionStringBuilder Parse(Uri url)
     {
         if (!Loopback.Contains(url.Host, StringComparer.Ordinal))
         {

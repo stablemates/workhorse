@@ -101,7 +101,14 @@
     "result-contract-failure",
     "shutdown-cancellation-release",
     "shutdown-cancellation-completion",
-    "shutdown-cancellation-panic"
+    "shutdown-cancellation-panic",
+    "signal-wait-replay",
+    "human-wait-replay",
+    "child-join-replay",
+    "child-set-join-replay",
+    "caught-suspension",
+    "overlapping-durable-calls",
+    "cross-sdk-replay"
   ],
   "functions": [
     {

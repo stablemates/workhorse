@@ -4,6 +4,7 @@ require "connection_pool"
 require "json"
 require "opentelemetry"
 require "pg"
+require_relative "durable_script"
 
 # The error a failures fixture declares by name. It lives at the top level so its class name is
 # the bare name the envelope records.
@@ -105,6 +106,7 @@ module Conformance
       when "release-wait" then release_wait(fixture)
       when "json-round-trip" then json_round_trip(fixture)
       when "checkpoint-no-value" then checkpoint_no_value(fixture)
+      when "durable-script" then DurableScript.new(@url, fixture).run("all")
       when "oversized-result" then oversized_result(fixture)
       when "result-contract-failure" then result_contract_failure(fixture)
       when "shutdown-cancellation" then shutdown_cancellation(fixture)
