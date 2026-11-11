@@ -33,6 +33,7 @@ import {
 } from "../types.js";
 import { compileContractSchema, parseStoredContractSchema } from "../contract-schema.js";
 import { QueueModule, type QueueModuleContext } from "./module-context.js";
+import { encodeStoredJson } from "./stored-json.js";
 import type { CachedContractDefinition, QueueModuleState } from "./modules.js";
 
 /** The same scoped enqueue key is still retained for a materially different request. */
@@ -529,7 +530,8 @@ function serializeJsonWithinLimit(
   value: Json,
   maxBytes: number,
 ): string {
-  const serialized = JSON.stringify(value);
+  const subject = `${kind === "payload" ? "Payload" : "Result"} of task type ${taskType}`;
+  const serialized = encodeStoredJson(value, subject);
   const compactBytes = Buffer.byteLength(serialized, "utf8");
   if (compactBytes * 2 <= maxBytes && !EXPONENT_NUMBER.test(serialized)) return serialized;
   const actualBytes = jsonbTextBytes(serialized);
@@ -787,7 +789,15 @@ type SerializedEnqueueRequest = { serializedPayload: string; runAt?: string } & 
   unknown
 >;
 
-function serializedRequest(request: Record<string, unknown>, serializedPayload: string): string {
+/**
+ * The JSON text of `request` with `serializedPayload` as its `payload` member. The payload text is
+ * the text that the checks of `encodeStoredJson` read, so a `toJSON` method of the payload runs
+ * one time and the statement carries the value that passed the checks.
+ */
+export function serializedRequest(
+  request: Record<string, unknown>,
+  serializedPayload: string,
+): string {
   const serialized = JSON.stringify(request);
   return `${serialized.slice(0, -1)},"payload":${serializedPayload}}`;
 }
@@ -873,10 +883,8 @@ export class EnqueueContractsModule extends QueueModule {
     taskType: string,
     payload: Json,
     version?: string | null,
-  ): Promise<TaskAcceptance> {
-    if (version === undefined) {
-      return (await this.serializedTaskAcceptance(taskType, payload)).acceptance;
-    }
+  ): Promise<SerializedTaskAcceptance> {
+    if (version === undefined) return this.serializedTaskAcceptance(taskType, payload);
     // A retained child without a contract must stay uncontracted on replay, even when its type
     // now has a current version. Pinned versions never replace the current-contract cache.
     let definition: CachedContractDefinition | null = null;
@@ -886,7 +894,7 @@ export class EnqueueContractsModule extends QueueModule {
       if (definition === null && local !== undefined) definition = { version, contract: local };
       if (definition === null) throw new TaskContractUnavailableError(taskType, version);
     }
-    return this.serializedTaskAcceptanceUnder(taskType, payload, definition).acceptance;
+    return this.serializedTaskAcceptanceUnder(taskType, payload, definition);
   }
 
   // A schedule stores the contract fields of its task type, and firing an occurrence does not check
@@ -894,7 +902,7 @@ export class EnqueueContractsModule extends QueueModule {
   // contract comes from PostgreSQL, not from the cache or the local definitions.
   async currentTaskAcceptances(
     tasks: readonly { type: string; payload: Json }[],
-  ): Promise<TaskAcceptance[]> {
+  ): Promise<SerializedTaskAcceptance[]> {
     const taskTypes = [...new Set(tasks.map((task) => task.type))];
     const definitions = new Map(
       await Promise.all(
@@ -903,13 +911,12 @@ export class EnqueueContractsModule extends QueueModule {
         ),
       ),
     );
-    return tasks.map(
-      (task) =>
-        this.serializedTaskAcceptanceUnder(
-          task.type,
-          task.payload,
-          definitions.get(task.type) ?? null,
-        ).acceptance,
+    return tasks.map((task) =>
+      this.serializedTaskAcceptanceUnder(
+        task.type,
+        task.payload,
+        definitions.get(task.type) ?? null,
+      ),
     );
   }
 

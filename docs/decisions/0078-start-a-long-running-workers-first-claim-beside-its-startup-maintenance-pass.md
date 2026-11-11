@@ -4,6 +4,8 @@
 - **Date:** 2026-09-26
 - **Amends:** [ADR 0072](0072-converge-the-worker-runtime-defaults.md),
   [ADR 0076](0076-keep-overlapping-batched-claims-in-flight-to-fill-worker-slots.md)
+- **Amended by:** [ADR 0120](0120-let-a-stop-before-a-typescript-worker-call-end-the-next-call.md)
+  (rule 5, when a TypeScript run is already stopping)
 - **Related:** [ADR 0011](0011-daily-retention-and-split-maintenance.md),
   [SM-907](https://linear.app/stablemates/issue/SM-907),
   [SM-912](https://linear.app/stablemates/issue/SM-912)

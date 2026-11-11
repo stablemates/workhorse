@@ -10,7 +10,11 @@ import {
   WorkhorseError,
 } from "./errors.js";
 import { Queue } from "./queue.js";
-import { errorForTelemetry, type FailureStatus } from "./queue/claim-lease-fence.js";
+import {
+  errorForTelemetry,
+  inspectableThrownValue,
+  type FailureStatus,
+} from "./queue/claim-lease-fence.js";
 import { durableReplayConflict } from "./queue/replay-conflicts.js";
 import { jitterDuration } from "./notifications.js";
 import type { TaskNotificationSubscription } from "./notifications.js";
@@ -204,6 +208,11 @@ export interface HandlerContext<TPayload extends Json = Json> {
    * Return the persisted value when this name already exists. Otherwise run the operation and
    * immutably persist its JSON result under the current fenced lease.
    *
+   * The operation must return a JSON value or no value. If it returns `undefined`, the checkpoint
+   * stores JSON `null` and returns `null`, so a retry does not run the operation again. Each other
+   * value must be JSON: a value that JSON cannot store as given, such as `NaN` or a `Map`, fails
+   * with a `TypeError` after the operation ran, and a retry runs the operation again.
+   *
    * With `options.input`, the checkpoint also stores the fingerprint of the input. A later call
    * whose input has a different fingerprint fails with `CheckpointInputConflictError`.
    */
@@ -212,6 +221,11 @@ export interface HandlerContext<TPayload extends Json = Json> {
     operation: () => Promise<TValue> | TValue,
     options?: CheckpointOptions,
   ): Promise<TValue>;
+  checkpoint(
+    name: string,
+    operation: () => Promise<void> | void,
+    options?: CheckpointOptions,
+  ): Promise<null>;
   /** Suspend this task without consuming its logical attempt until the relative timer is due. */
   sleep(name: string, durationMs: number): Promise<void>;
   /** Suspend this task without consuming its logical attempt until the absolute target is due. */
@@ -754,6 +768,10 @@ export class Worker {
   private draining = false;
   private running = false;
   private stopVersion = 0;
+  // The run() and runOnce() calls that did not settle, counted from the call.
+  private activeEntryCalls = 0;
+  // Set by a stop() that came when no call was active. The next call takes it (ADR 0120).
+  private stopBeforeNextCall = false;
   private executionTail: Promise<void> = Promise.resolve();
   /** Serializes only durable batch announcements; batch callbacks still execute concurrently. */
   private batchDispatchRecording: Promise<void> = Promise.resolve();
@@ -1402,7 +1420,16 @@ export class Worker {
     return this;
   }
 
+  /**
+   * Stops the work of this worker: the worker claims no new task, and the active handlers finish.
+   *
+   * A stop that comes during a `run()` or `runOnce()` call ends only that call, also when the call
+   * still waits to start. The next call starts normally. A stop that comes when no call is active
+   * ends the next `run()` or `runOnce()` call at once, with no claim and no maintenance pass. That
+   * call uses the stop, so the call after it starts normally (ADR 0120).
+   */
   stop(): void {
+    if (this.activeEntryCalls === 0) this.stopBeforeNextCall = true;
     this.stopVersion += 1;
     this.stopping = true;
     this.abortRun?.();
@@ -1493,18 +1520,46 @@ export class Worker {
    * Runs maintenance, claims tasks for the free slots once, and waits for those tasks to settle.
    *
    * Returns `true` only if a handler ran. A pass that claimed no task, or that released each task
-   * because no handler is registered for its type, returns `false`. The worker keeps no state
+   * because no handler is registered for its type, returns `false`. The worker keeps no poll wait
    * between calls, so a caller that calls `runOnce()` in a loop must wait after `false`.
+   *
+   * A `stop()` during the call ends the pass before its claim. If a `stop()` came when no call was
+   * active, this call returns `false` at once, with no maintenance pass and no claim, and the next
+   * call starts normally (ADR 0120).
    */
   runOnce(): Promise<boolean> {
-    return this.withExclusiveExecution(async () => {
-      try {
-        return await this.runBatch(true);
-      } finally {
-        // A pass that claimed nothing registered no lease, so no lease returns the hold.
-        await this.releaseHeartbeatChannel();
-      }
-    });
+    if (this.takeStopBeforeCall()) return Promise.resolve(false);
+    const requestedStopVersion = this.stopVersion;
+    return this.trackEntryCall(() =>
+      this.withExclusiveExecution(async () => {
+        // A shutdown abort of an earlier run ends with that run, as at the start of run().
+        this.shutdownAborted = false;
+        try {
+          return await this.runBatch(true, () => this.stopVersion !== requestedStopVersion);
+        } finally {
+          // A pass that claimed nothing registered no lease, so no lease returns the hold.
+          await this.releaseHeartbeatChannel();
+        }
+      }),
+    );
+  }
+
+  // A stop() that came when no call was active ends the next call at once, and only that call.
+  private takeStopBeforeCall(): boolean {
+    const stopped = this.stopBeforeNextCall;
+    this.stopBeforeNextCall = false;
+    return stopped;
+  }
+
+  // Counts a run() or runOnce() call from the call until it settles, so that a stop() in that
+  // time ends the call and does not reach the next one.
+  private async trackEntryCall<T>(operation: () => Promise<T>): Promise<T> {
+    this.activeEntryCalls += 1;
+    try {
+      return await operation();
+    } finally {
+      this.activeEntryCalls -= 1;
+    }
   }
 
   // Claims up to `limit` tasks across this worker's queues. A failing claim on a later queue must
@@ -1644,10 +1699,9 @@ export class Worker {
     for (const task of claimed) this.tierReads.set(task, tierRead);
   }
 
-  private async runBatch(
-    includeMaintenance: boolean,
-    shouldStop: () => boolean = () => this.stopping,
-  ): Promise<boolean> {
+  private async runBatch(includeMaintenance: boolean, shouldStop: () => boolean): Promise<boolean> {
+    // A stop that came before the pass started ends it with no maintenance offer (ADR 0120).
+    if (shouldStop()) return false;
     if (includeMaintenance) {
       // runOnce() registers in its maintenance pass, so the stop path of an ended run must settle.
       await this.settlePreviousRun();
@@ -1778,24 +1832,32 @@ export class Worker {
     if (this.shutdownAborted) attempt.abortForShutdown();
     try {
       let writeCompletion: (claim?: CompletionClaim) => Promise<CompletionClaimResult>;
+      let handler: Handler | undefined;
       try {
         // afterClaim is outside the committed claim transaction. Throwing here leaves the lease
         // exactly as a killed process would, which allows deterministic expiry-recovery testing.
         await this.inject("afterClaim", task);
-        const handler = this.handlers.get(task.type);
-        if (!handler) {
-          // A claim carries no task-type filter, so this worker can hold a task it cannot run.
-          // The attempt belongs to whichever worker reaches the handler, so the claim goes back
-          // to the queue intact rather than being failed. During a rolling deployment that is
-          // what keeps a release's new task types from being retried away by the old one.
-          logWarn("workhorse.handler.missing", "No handler registered for the claimed task type", {
-            ...taskSpanAttributes(task),
-            "workhorse.queue.name": task.queue,
-            "workhorse.worker.id": this.workerId,
-          });
-          await this.releaseOwned(task, span, attempt);
-          return;
-        }
+        handler = this.handlers.get(task.type);
+      } catch (error) {
+        await this.settleFailure(task, span, attempt, error);
+        return;
+      }
+      if (!handler) {
+        // A claim carries no task-type filter, so this worker can hold a task it cannot run.
+        // The attempt belongs to whichever worker reaches the handler, so the claim goes back
+        // to the queue intact rather than being failed. During a rolling deployment that is
+        // what keeps a release's new task types from being retried away by the old one. The
+        // release runs outside the handler's try: a database error here propagates like a
+        // failing fail_v1 and does not charge the attempt, as in the other SDKs (SM-1944).
+        logWarn("workhorse.handler.missing", "No handler registered for the claimed task type", {
+          ...taskSpanAttributes(task),
+          "workhorse.queue.name": task.queue,
+          "workhorse.worker.id": this.workerId,
+        });
+        await this.releaseOwned(task, span, attempt);
+        return;
+      }
+      try {
         await this.inject("beforeHandler", task);
         // A claim answer can arrive after its lease window has run out. The handler must not start
         // then, because its first synchronous effects would run under a claim another worker may hold.
@@ -1810,7 +1872,8 @@ export class Worker {
         handlerReturns.set(context, () => attempt.markHandlerReturned());
         let result: Json;
         try {
-          result = await handler(task.payload, context);
+          // A JavaScript handler can return no value. The result is then null (ADR 0119).
+          result = ((await handler(task.payload, context)) as Json | undefined) ?? null;
         } finally {
           attempt.markHandlerReturned();
         }
@@ -1994,8 +2057,11 @@ export class Worker {
     task: ClaimedTask,
     span: WorkhorseTelemetrySpan,
     attempt: TaskAttempt,
-    error: unknown,
+    thrown: unknown,
   ): Promise<void> {
+    // A revoked proxy throws on each instanceof check, so it becomes a fixed text first. The
+    // attempt then fails with NonErrorThrown, and the worker continues (SM-1940).
+    const error = inspectableThrownValue(thrown);
     const { arbiter } = attempt;
     if (arbiter.isSuspended()) {
       span.setAttribute("workhorse.handler.outcome", "suspended");
@@ -2330,9 +2396,19 @@ export class Worker {
     }
   }
 
+  /**
+   * Runs the worker until `stop()` or `signal` ends it, and settles when the stop path ends.
+   *
+   * A `stop()` after this call ends this run, also when the run still waits to start. If a `stop()`
+   * came when no call was active, this call settles at once, with no registration, no maintenance
+   * pass, and no claim. The next call starts normally (ADR 0120).
+   */
   run(signal?: AbortSignal): Promise<void> {
+    if (this.takeStopBeforeCall()) return Promise.resolve();
     const requestedStopVersion = this.stopVersion;
-    return this.withExclusiveExecution(() => this.runLoop(signal, requestedStopVersion));
+    return this.trackEntryCall(() =>
+      this.withExclusiveExecution(() => this.runLoop(signal, requestedStopVersion)),
+    );
   }
 
   private async runLoop(

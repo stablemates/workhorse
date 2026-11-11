@@ -4,6 +4,7 @@ import { logDebug, logInfo, recordScheduleFired, withSpan } from "../telemetry.j
 import type { Json, RetryPolicy } from "../types.js";
 import {
   maxAttemptsValue,
+  serializedRequest,
   validateTaskPriority,
   type EnqueueContractsModule,
 } from "./enqueue-contracts.js";
@@ -67,28 +68,33 @@ export class CronSchedulesModule extends QueueModule {
     const acceptances = await this.enqueueContracts.currentTaskAcceptances(
       definitions.map((definition) => definition.task),
     );
-    const scheduleInputs = definitions.map((definition, index) => ({
-      ...acceptances[index]!,
-      name: definition.name,
-      schedule: definition.schedule,
-      timezone: definition.timezone ?? "UTC",
-      catchupPolicy: definition.catchupPolicy ?? "skip",
-      enabled: definition.enabled ?? true,
-      queue: definition.task.queue ?? this.context.defaultQueue,
-      priority: validateTaskPriority(definition.task.priority),
-      concurrencyKey: definition.task.concurrencyKey ?? null,
-      type: definition.task.type,
-      payload: definition.task.payload,
-      maxAttempts: maxAttempts[index]!,
-      retryPolicy: definition.task.retryPolicy ?? null,
-    }));
+    // Each input carries the payload text that passed the checks, not a second encoding.
+    const scheduleInputs = definitions.map((definition, index) =>
+      serializedRequest(
+        {
+          ...acceptances[index]!.acceptance,
+          name: definition.name,
+          schedule: definition.schedule,
+          timezone: definition.timezone ?? "UTC",
+          catchupPolicy: definition.catchupPolicy ?? "skip",
+          enabled: definition.enabled ?? true,
+          queue: definition.task.queue ?? this.context.defaultQueue,
+          priority: validateTaskPriority(definition.task.priority),
+          concurrencyKey: definition.task.concurrencyKey ?? null,
+          type: definition.task.type,
+          maxAttempts: maxAttempts[index]!,
+          retryPolicy: definition.task.retryPolicy ?? null,
+        },
+        acceptances[index]!.serializedPayload,
+      ),
+    );
     await withSpan(
       "workhorse.schedule.synchronize",
       { "workhorse.schedule.definition_count": definitions.length },
       async () => {
         await this.context.database.query(SQL_STATEMENTS["sync_schedule_definitions_v2"], [
           namespace,
-          JSON.stringify(scheduleInputs),
+          `[${scheduleInputs.join(",")}]`,
           options.prune ?? true,
         ]);
         logInfo("workhorse.schedules.synchronized", "Recurring schedules synchronized", {

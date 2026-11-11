@@ -100,6 +100,10 @@ export interface HandlerReplayReport<TResult extends Json = Json> extends Handle
   /**
    * `completed` when the handler returned. `suspended` when it reached a stored pending boundary
    * or a new wait or child, where a live task suspends.
+   *
+   * A JavaScript handler that returns `undefined` completes with the result `null`, as on a live
+   * worker (ADR 0119). The `Handler` type requires a value, so a typed handler with no result
+   * returns `null`.
    */
   outcome: { status: "completed"; result: TResult } | { status: "suspended"; at: DurableName };
 }
@@ -175,11 +179,12 @@ export async function replayHandler<TPayload extends Json, TResult extends Json>
     ...options.task,
     payload,
   };
-  let result: TResult | undefined;
+  let result: TResult | null = null;
   let thrown: unknown;
   let failed = false;
   try {
-    result = await handler(payload, replay.context(task));
+    // A handler that returns no value completes with the result null, as on a live worker.
+    result = (await handler(payload, replay.context(task))) ?? null;
   } catch (error) {
     failed = true;
     thrown = error;
@@ -376,9 +381,9 @@ class Replay {
         };
         return this.progress as TaskProgress<TValue>;
       },
-      checkpoint: async <TValue extends Json>(
+      checkpoint: (async <TValue extends Json>(
         name: string,
-        operation: () => Promise<TValue> | TValue,
+        operation: () => Promise<TValue | void> | TValue | void,
         options: CheckpointOptions = {},
       ): Promise<TValue> => {
         const fingerprint =
@@ -400,7 +405,8 @@ class Replay {
             checkInput(name, added.fingerprint, fingerprint, "an earlier call in this replay");
             return added.value as TValue;
           }
-          const value = await operation();
+          // An operation that returns no value stores null, as on a live worker.
+          const value = ((await operation()) ?? null) as TValue;
           this.stop();
           this.newCheckpoints.set(name, { value, fingerprint });
           return value;
@@ -413,7 +419,7 @@ class Replay {
             inFlightCheckpoints.delete(name);
           }
         }
-      },
+      }) as HandlerContext["checkpoint"],
       sleep: async (name: string) => this.timer(name, "relative", null),
       sleepUntil: async (name: string, wakeAt: Date) => this.timer(name, "absolute", wakeAt),
       waitForSignal: async <TSignal extends Json>(name: string): Promise<TSignal> => {

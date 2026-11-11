@@ -339,12 +339,47 @@ export interface ReleaseWaitRuntimeFixture extends RuntimeFixtureBase {
   expectedMinimumReleaseGapMs: number;
 }
 
-/** Every JSON value a payload may carry reaches the handler and returns as the result unchanged. */
+/**
+ * Every JSON value a payload may carry reaches the handler and returns as the result unchanged.
+ *
+ * Each result case then enqueues the payload `{}` under its own task type on the same queue, and
+ * one pass runs it. Its handler returns JSON null (`"null"`) or the "no value" of the language
+ * (`"no-value"`): `undefined`, `None`, `nil`, `null`, or `()`. The stored result has the JSON type
+ * `expectedResultJsonType`, and the task settles as `expectedState` with one
+ * `expectedAttemptOutcome`.
+ */
 export interface JsonRoundTripRuntimeFixture extends RuntimeFixtureBase {
   kind: "json-round-trip";
   payload: JsonValue;
+  resultCases: Array<{
+    taskType: string;
+    handlerReturns: "null" | "no-value";
+    expectedResultJsonType: "null";
+  }>;
   expectedState: ExpectedRuntimeState;
   expectedAttemptOutcome: TaskAttemptOutcome;
+}
+
+/**
+ * A checkpoint operation that returns the "no value" of the language stores JSON null, so a retry
+ * reads the checkpoint and does not run the operation again.
+ *
+ * The runner enqueues the payload `{}` with `maxAttempts` and the retry policy
+ * `{ "type": "fixed", "delayMs": 0 }`. Each handler run calls the checkpoint `checkpointName` with
+ * an operation that counts its runs and returns no value. The handler fails its first run after the
+ * checkpoint, and it returns `{}` on a later run. Each value that the checkpoint call returns is
+ * null. A runner passes at most `maxAttempts` times until the task settles, because one pass may
+ * run the immediate retry too.
+ */
+export interface CheckpointNoValueRuntimeFixture extends RuntimeFixtureBase {
+  kind: "checkpoint-no-value";
+  checkpointName: string;
+  maxAttempts: number;
+  expectedCheckpointOperations: number;
+  expectedHandlerRuns: number;
+  expectedCheckpointValueJsonType: "null";
+  expectedSettled: ExpectedRuntimeState;
+  expectedAttemptOutcomes: TaskAttemptOutcome[];
 }
 
 /**
@@ -542,6 +577,7 @@ export type RuntimeFixture =
   | MissingHandlerRuntimeFixture
   | ReleaseWaitRuntimeFixture
   | JsonRoundTripRuntimeFixture
+  | CheckpointNoValueRuntimeFixture
   | OversizedResultRuntimeFixture
   | ShutdownCancellationRuntimeFixture
   | HeartbeatFailureRuntimeFixture

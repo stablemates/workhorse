@@ -100,6 +100,7 @@ func TestGoWorkerSatisfiesEverySharedRuntimeFixture(t *testing.T) {
 		"missing-handler":          executeWorkerMissingHandlerFixture,
 		"release-wait":             executeWorkerReleaseWaitFixture,
 		"json-round-trip":          executeWorkerJSONRoundTripFixture,
+		"checkpoint-no-value":      executeWorkerCheckpointNoValueFixture,
 		"oversized-result":         executeWorkerOversizedResultFixture,
 		"shutdown-cancellation":    executeWorkerShutdownCancellationFixture,
 		"heartbeat-failure":        executeWorkerHeartbeatFailureFixture,
@@ -1452,6 +1453,136 @@ func executeWorkerJSONRoundTripFixture(t *testing.T, fixture workerRuntimeFixtur
 	}
 	assertWorkerFixtureTaskState(t, ctx, pool, taskID, fixture.ExpectedState)
 	assertWorkerFixtureAttemptOutcomes(t, ctx, pool, taskID, []string{fixture.ExpectedAttemptOutcome})
+
+	// Go has one "no value", nil, so both result cases return it.
+	for _, resultCase := range loadNoValueRuntimeFixture(t, fixture.ID).ResultCases {
+		worker.Handle(resultCase.TaskType, func(context.Context, any, *workhorse.HandlerContext) (any, error) {
+			return nil, nil
+		})
+		caseID, err := queue.Enqueue(ctx, resultCase.TaskType, map[string]any{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if processed, err := worker.RunOnce(ctx); err != nil || !processed {
+			t.Fatalf("worker did not process the %s task: processed=%t err=%v", resultCase.HandlerReturns, processed, err)
+		}
+		if stored := storedJSONType(t, ctx, pool, "result", caseID); stored != resultCase.ExpectedResultJSONType {
+			t.Fatalf("the %s result is stored as JSON type %q, want %q", resultCase.HandlerReturns, stored, resultCase.ExpectedResultJSONType)
+		}
+		assertWorkerFixtureTaskState(t, ctx, pool, caseID, fixture.ExpectedState)
+		assertWorkerFixtureAttemptOutcomes(t, ctx, pool, caseID, []string{fixture.ExpectedAttemptOutcome})
+	}
+}
+
+// The fields of the "no value" fixtures that workerRuntimeFixture does not read.
+type noValueRuntimeFixture struct {
+	ID          string `json:"id"`
+	ResultCases []struct {
+		TaskType               string `json:"taskType"`
+		HandlerReturns         string `json:"handlerReturns"`
+		ExpectedResultJSONType string `json:"expectedResultJsonType"`
+	} `json:"resultCases"`
+	ExpectedCheckpointValueJSONType string `json:"expectedCheckpointValueJsonType"`
+}
+
+func loadNoValueRuntimeFixture(t *testing.T, id string) noValueRuntimeFixture {
+	t.Helper()
+	for _, fixture := range readFixture[[]noValueRuntimeFixture](t, "runtime.json") {
+		if fixture.ID == id {
+			return fixture
+		}
+	}
+	t.Fatalf("runtime fixture %s was not found", id)
+	return noValueRuntimeFixture{}
+}
+
+// storedJSONType reads the jsonb_typeof of a stored value, so that JSON null differs from SQL NULL.
+func storedJSONType(t *testing.T, ctx context.Context, pool *pgxpool.Pool, value string, taskID string) string {
+	t.Helper()
+	statement := `SELECT jsonb_typeof(result) FROM workhorse.task_outcome WHERE task_id = $1::uuid`
+	if value == "checkpoint" {
+		statement = `SELECT jsonb_typeof(checkpoint_value) FROM workhorse.task_checkpoint WHERE task_id = $1::uuid`
+	}
+	var stored *string
+	if err := pool.QueryRow(ctx, statement, taskID).Scan(&stored); err != nil {
+		t.Fatal(err)
+	}
+	if stored == nil {
+		return ""
+	}
+	return *stored
+}
+
+func executeWorkerCheckpointNoValueFixture(t *testing.T, fixture workerRuntimeFixture) {
+	databaseURL := createConformanceDatabase(t, testDatabaseURL(t), "worker-checkpoint-no-value")
+	ctx := context.Background()
+	pool, err := pgxpool.New(ctx, databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(pool.Close)
+
+	queueName := "runtime-" + fixture.ID
+	executor := workhorse.NewPGXExecutor(pool)
+	admin := workhorse.NewAdmin(executor)
+	taskID, err := workhorse.NewQueue(executor, queueName).Enqueue(ctx, fixture.TaskType, map[string]any{}, workhorse.EnqueueOptions{
+		MaxAttempts: fixture.MaxAttempts,
+		RetryPolicy: map[string]any{"type": "fixed", "delayMs": 0},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	worker, err := workhorse.NewWorker(pool, workhorse.WorkerOptions{
+		Queue: queueName, WorkerID: "go-" + fixture.ID,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var operations, handlerRuns int
+	var checkpointValues []any
+	worker.Handle(fixture.TaskType, func(_ context.Context, _ any, handler *workhorse.HandlerContext) (any, error) {
+		handlerRuns++
+		value, err := handler.Checkpoint(fixture.CheckpointName, func() (any, error) {
+			operations++
+			return nil, nil
+		})
+		if err != nil {
+			return nil, err
+		}
+		checkpointValues = append(checkpointValues, value)
+		if handlerRuns == 1 {
+			return nil, errors.New("fail the first attempt after the checkpoint")
+		}
+		return map[string]any{}, nil
+	})
+	settled := fixture.ExpectedSettled
+	for pass := 0; pass < fixture.MaxAttempts; pass++ {
+		task, err := admin.GetTask(ctx, taskID)
+		if err != nil || task == nil {
+			t.Fatalf("read task %s: task=%v err=%v", taskID, task, err)
+		}
+		if string(task.State) == settled.State {
+			break
+		}
+		if processed, err := worker.RunOnce(ctx); err != nil || !processed {
+			t.Fatalf("pass %d did not process the checkpoint task: processed=%t err=%v", pass, processed, err)
+		}
+	}
+	if operations != fixture.ExpectedCheckpointOperations || handlerRuns != fixture.ExpectedHandlerRuns {
+		t.Fatalf("the operation ran %d times and the handler %d times, want %d and %d",
+			operations, handlerRuns, fixture.ExpectedCheckpointOperations, fixture.ExpectedHandlerRuns)
+	}
+	for run, value := range checkpointValues {
+		if value != nil {
+			t.Fatalf("handler run %d received the checkpoint value %#v, want nil", run+1, value)
+		}
+	}
+	want := loadNoValueRuntimeFixture(t, fixture.ID).ExpectedCheckpointValueJSONType
+	if stored := storedJSONType(t, ctx, pool, "checkpoint", taskID); stored != want {
+		t.Fatalf("the checkpoint value is stored as JSON type %q, want %q", stored, want)
+	}
+	assertWorkerFixtureTaskState(t, ctx, pool, taskID, settled)
+	assertWorkerFixtureAttemptOutcomes(t, ctx, pool, taskID, fixture.ExpectedAttemptOutcomes)
 }
 
 func executeWorkerHeartbeatFailureFixture(t *testing.T, fixture workerRuntimeFixture) {

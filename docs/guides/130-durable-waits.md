@@ -137,6 +137,48 @@ More detail: [Task lifecycle: Worker suspension](../architecture/lifecycle.md#wo
 
 </details>
 
+## Return a JSON value or no value from a checkpoint
+
+A checkpoint stores the value that its operation returns. An operation that only causes an effect,
+such as an email, often returns no value.
+
+**Example.** The `welcome` checkpoint calls `mailer.welcome`, which resolves to no value.
+
+1. Worker A runs the operation, and the welcome email goes out.
+2. The operation returns `undefined`, and the checkpoint stores `null`.
+3. The handler fails later in the same attempt, and the retry policy schedules a new attempt.
+4. Worker B reaches the `welcome` checkpoint. The checkpoint returns `null`, and the welcome email
+   does not go out again.
+
+Thus, an operation must return a JSON value or no value. If it returns no value, the checkpoint
+stores `null` and returns `null`. Each SDK does the same with the "no value" of its language. If
+the value holds a number that is not finite, a `Map`, or a `Set`, the checkpoint fails after the
+operation ran. Nothing is stored, so the next attempt runs the operation again.
+
+<details>
+<summary>Reference: checkpoint values</summary>
+
+| SDK              | No value    | Stored value |
+| ---------------- | ----------- | ------------ |
+| TypeScript       | `undefined` | JSON `null`  |
+| Python           | `None`      | JSON `null`  |
+| Go and Ruby      | `nil`       | JSON `null`  |
+| The JVM and .NET | `null`      | JSON `null`  |
+| Rust             | `()`        | JSON `null`  |
+
+- The TypeScript `HandlerContext.checkpoint` has a signature for an operation that returns `void`.
+  That signature returns `Promise<null>`.
+- The TypeScript `Handler` type does not change. A typed handler with no result writes
+  `return null`. A JavaScript handler that returns `undefined` also stores the result `null`.
+- In TypeScript, `encodeStoredJson` throws a `TypeError` for a `NaN` or infinite number, a `Map`,
+  or a `Set` at any depth, before `save_checkpoint_v2`. The error names the task type and the
+  path of the value.
+- An `undefined` property of an object and an `undefined` member of an array keep the JSON rules.
+
+More detail: [Data model: `task_checkpoint`](../architecture/data-model.md#task_checkpoint).
+
+</details>
+
 ## Expect a wait to keep the attempt
 
 A wait is a normal part of the work of a task. It is not a failure, so it does not use an attempt.

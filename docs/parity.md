@@ -512,6 +512,38 @@ Linear owns the SDK roadmap, sequencing, blockers, and completion state in the `
 workspace, `SM` team, and `workhorse` project. This document changes only
 when repository tests prove a capability has shipped or been withdrawn.
 
+## Values that JSON cannot store as given
+
+Each SDK encodes a payload as JSON before it sends the enqueue statement. Some values of a language
+have no JSON form that reads back as the same value. If the encoder changed such a value with no
+error, the stored payload would differ from the value of the caller.
+
+- **TypeScript** refuses a `NaN` or infinite number, a `Map`, and a `Set` at any depth, before it
+  sends the statement that writes the value, so no task with a changed value is stored. On a new
+  `Queue`, the compatibility query can run first, and a schedule sync can read the contract first.
+  The rule applies to a payload, a handler result, a child payload, a signal
+  payload, a human-wait value, a checkpoint value, and a progress value. The `TypeError` names the
+  path of the value, such as `$.items[2]`. It also names the task type, or the task ID for a signal
+  payload and a human-wait result, because their sender does not read the task type.
+  `JSON.stringify` writes a `Map` or a `Set` as `{}` and a non-finite number as `null`, so before
+  this rule the stored value was different. An `undefined` property of an object is left out, and
+  an `undefined` member of an array becomes `null`, as `JSON.stringify` does. A handler or a
+  checkpoint operation that returns `undefined` stores `null`, as the other SDKs do for their "no
+  value"
+  ([ADR 0119](decisions/0119-store-null-when-a-typescript-handler-or-checkpoint-returns-no-value.md)).
+- **Python** refuses an enqueue value that has a key that is not a `str`, or a `NaN` or infinite
+  `float`, before any statement, also before the compatibility query of a new client. The
+  `ValueError` names the task type and the path of the
+  value. Before this rule, `json.dumps` turned such a key into a string, so two keys could become
+  one key and `jsonb` kept only the last. It wrote a non-finite number as a bare token, and
+  PostgreSQL then refused the statement and aborted the transaction of the caller.
+- **Go** encodes a string with `encoding/json`, which replaces each byte sequence that is not valid
+  UTF-8 with U+FFFD. Workhorse does not refuse such a string. Send binary data as base64 text.
+
+`typescript/core/test/stored-json-values.test.ts` and
+`python/tests/test_enqueue.py::test_refuses_a_payload_that_json_cannot_store_before_the_enqueue`
+hold TypeScript and Python to this rule.
+
 ## Product operator capability
 
 PostgreSQL implements every operator read and control. The standalone or embedded dashboard and

@@ -17,16 +17,20 @@ const MAX_CAUSE_DEPTH = 16;
  */
 export function durableReplayConflict(error: unknown): Error | undefined {
   let current = error;
-  for (let depth = 0; depth < MAX_CAUSE_DEPTH && current instanceof Error; depth += 1) {
-    if (
-      current instanceof CheckpointConflictError ||
-      current instanceof CheckpointInputConflictError ||
-      current instanceof WaitConflictError ||
-      current instanceof ChildConflictError ||
-      current instanceof HumanWaitConflictError
-    )
-      return current;
-    current = current.cause;
+  try {
+    for (let depth = 0; depth < MAX_CAUSE_DEPTH && current instanceof Error; depth += 1) {
+      if (
+        current instanceof CheckpointConflictError ||
+        current instanceof CheckpointInputConflictError ||
+        current instanceof WaitConflictError ||
+        current instanceof ChildConflictError ||
+        current instanceof HumanWaitConflictError
+      )
+        return current;
+      current = current.cause;
+    }
+  } catch {
+    // A cause that is a revoked proxy throws on the instanceof check. Such a cause is no conflict.
   }
   return undefined;
 }

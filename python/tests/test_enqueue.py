@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from datetime import UTC, datetime
 from types import SimpleNamespace
 from typing import Any, cast
@@ -170,6 +171,31 @@ def test_refuses_a_max_attempts_outside_the_range_before_the_enqueue(max_attempt
         serialize_child_request(parent, "attempts.child", {}, options)
     with pytest.raises(ValueError, match=message):
         serialize_schedules([schedule], "default")
+    assert connection.calls == []
+
+
+@pytest.mark.parametrize(
+    ("payload", "detail"),
+    [
+        ({"amount": float("nan")}, "must contain only finite numbers, but $.amount is nan"),
+        ({"lines": [1, float("inf")]}, "must contain only finite numbers, but $.lines[1] is inf"),
+        (
+            {"totals": {1: "a", "1": "b"}},
+            "must have only str keys, but $.totals has the key 1 of type int",
+        ),
+        ({None: 2}, "must have only str keys, but $ has the key None of type NoneType"),
+    ],
+)
+def test_refuses_a_payload_that_json_cannot_store_before_the_enqueue(
+    payload: Any, detail: str
+) -> None:
+    # SM-1989: json.dumps turned the key 1 into "1", so jsonb kept one of the two keys. It wrote NaN
+    # as a bare token, which PostgreSQL refused after the statement was sent.
+    # A fresh client sends its compatibility query first, so no response means no statement.
+    connection = Connection([])
+
+    with pytest.raises(ValueError, match=re.escape(f"Payload of task type invoice.send {detail}")):
+        Queue(connection).enqueue("invoice.send", payload)
     assert connection.calls == []
 
 

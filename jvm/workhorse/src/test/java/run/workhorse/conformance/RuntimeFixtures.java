@@ -226,6 +226,7 @@ final class RuntimeFixtures {
         case "release-wait" -> releaseWait(fixture);
         case "subscription-recovery" -> subscriptionRecovery(fixture);
         case "json-round-trip" -> jsonRoundTrip(fixture);
+        case "checkpoint-no-value" -> checkpointNoValue(fixture);
         case "oversized-result" -> oversizedResult(fixture);
         case "shutdown-cancellation" -> shutdownCancellation(fixture);
         case "heartbeat-failure" -> heartbeatFailure(fixture);
@@ -2111,6 +2112,95 @@ final class RuntimeFixtures {
     check(exact(result, payload), "the stored result is " + Matcher.render(result));
     expectState(taskId, object(fixture, "expectedState"));
     expectOutcomes(taskId, List.of(fixture.get("expectedAttemptOutcome")));
+    // Java has one "no value", null, so both result cases return it.
+    for (Object entry : (List<?>) Objects.requireNonNull(fixture.get("resultCases"))) {
+      @SuppressWarnings("unchecked")
+      Map<String, @Nullable Object> resultCase = (Map<String, @Nullable Object>) entry;
+      String caseType = String.valueOf(resultCase.get("taskType"));
+      UUID caseId = enqueue(caseType, Map.of(), options(queueName(fixture)));
+      try (Intercept pool = new Intercept(opener, new Intercept.Hook() {})) {
+        Handler<Object> noValue = (ctx, ignored) -> null;
+        Worker subject = worker(pool, fixture).handle(caseType, Object.class, noValue).build();
+        check(subject.runOnce(), "the worker did not run the " + caseType + " task");
+      }
+      String resultType =
+          value(
+              "SELECT jsonb_typeof(result) FROM workhorse.task_outcome WHERE task_id = '"
+                  + caseId
+                  + "'");
+      check(
+          Objects.equals(resultType, resultCase.get("expectedResultJsonType")),
+          "the " + caseType + " result is stored as JSON type " + resultType);
+      expectState(caseId, object(fixture, "expectedState"));
+      expectOutcomes(caseId, List.of(fixture.get("expectedAttemptOutcome")));
+    }
+  }
+
+  /**
+   * A checkpoint operation that returns {@code null} stores JSON null, so a retry does not run it
+   * again. One pass may also run the immediate retry, so the runner passes until the task settles.
+   */
+  private void checkpointNoValue(Map<String, @Nullable Object> fixture) throws Exception {
+    int maxAttempts = Math.toIntExact((Long) fixture.get("maxAttempts"));
+    UUID taskId =
+        enqueue(
+            taskType(fixture),
+            Map.of(),
+            options(queueName(fixture))
+                .maxAttempts(maxAttempts)
+                .retryPolicy(Map.of("type", "fixed", "delayMs", 0)));
+    Map<String, @Nullable Object> settled = object(fixture, "expectedSettled");
+    AtomicInteger operations = new AtomicInteger();
+    AtomicInteger runs = new AtomicInteger();
+    List<@Nullable Object> values = new CopyOnWriteArrayList<>();
+    try (Intercept pool = new Intercept(opener, new Intercept.Hook() {})) {
+      Handler<Object> handler =
+          (ctx, ignored) -> {
+            int run = runs.incrementAndGet();
+            values.add(
+                ctx.checkpoint(
+                    (String) fixture.get("checkpointName"),
+                    Object.class,
+                    () -> {
+                      operations.incrementAndGet();
+                      return null;
+                    }));
+            if (run == 1) {
+              throw new IllegalStateException("fail the first attempt after the checkpoint");
+            }
+            return Map.of();
+          };
+      Worker subject =
+          worker(pool, fixture).handle(taskType(fixture), Object.class, handler).build();
+      for (int attempt = 0; attempt < maxAttempts; attempt++) {
+        if (Matcher.same(state(taskId).get("state"), settled.get("state"))) {
+          break;
+        }
+        check(subject.runOnce(), "the worker did not run the checkpoint task");
+      }
+    }
+    check(
+        Matcher.same((long) operations.get(), fixture.get("expectedCheckpointOperations"))
+            && Matcher.same((long) runs.get(), fixture.get("expectedHandlerRuns")),
+        "the operation ran "
+            + operations.get()
+            + " times and the handler "
+            + runs.get()
+            + " times");
+    check(
+        values.size() == runs.get() && values.stream().allMatch(Objects::isNull),
+        "the checkpoint returned " + Matcher.render(values));
+    String stored =
+        value(
+            "SELECT jsonb_typeof(checkpoint_value) FROM workhorse.task_checkpoint WHERE task_id = '"
+                + taskId
+                + "'");
+    check(
+        Objects.equals(stored, fixture.get("expectedCheckpointValueJsonType")),
+        "the checkpoint value is stored as JSON type " + stored);
+    expectState(taskId, settled);
+    expectOutcomes(
+        taskId, (List<?>) Objects.requireNonNull(fixture.get("expectedAttemptOutcomes")));
   }
 
   /**

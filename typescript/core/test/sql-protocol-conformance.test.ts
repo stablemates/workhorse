@@ -42,6 +42,7 @@ import type {
   ReplayConflictRuntimeFixture,
   BatchRuntimeFixture,
   BudgetAdmissionRaceRuntimeFixture,
+  CheckpointNoValueRuntimeFixture,
   CooperativeCancellationRuntimeFixture,
   ExpirationRuntimeFixture,
   GracefulDrainRuntimeFixture,
@@ -1460,6 +1461,92 @@ async function executeJsonRoundTripRuntimeFixture(
     result: fixture.payload,
   });
   await expectAttemptOutcome(database, id, fixture.expectedAttemptOutcome);
+
+  for (const resultCase of fixture.resultCases) {
+    // The Handler type requires a value, so the no-value case acts as a JavaScript handler.
+    const noValue = undefined as unknown as Json;
+    worker.handle(resultCase.taskType, () =>
+      resultCase.handlerReturns === "null" ? null : noValue,
+    );
+    const caseId = await queue.enqueue(resultCase.taskType, {}, { queue: queueName });
+    await expect(worker.runOnce()).resolves.toBe(true);
+    await expect(storedJsonType(database, "result", caseId)).resolves.toBe(
+      resultCase.expectedResultJsonType,
+    );
+    await expect(admin.getTask(caseId)).resolves.toMatchObject({
+      state: fixture.expectedState.state,
+      currentAttempt: fixture.expectedState.attempt,
+    });
+    await expectAttemptOutcome(database, caseId, fixture.expectedAttemptOutcome);
+  }
+}
+
+// The jsonb_typeof of a stored value, so that JSON null differs from SQL NULL.
+async function storedJsonType(
+  database: Queryable,
+  value: "result" | "checkpoint",
+  taskId: string,
+): Promise<string | null> {
+  const statement =
+    value === "result"
+      ? "SELECT jsonb_typeof(result) AS type FROM workhorse.task_outcome WHERE task_id = $1"
+      : "SELECT jsonb_typeof(checkpoint_value) AS type FROM workhorse.task_checkpoint WHERE task_id = $1";
+  const rows = await database.query<{ type: string | null }>(statement, [taskId]);
+  expect(rows.rows).toHaveLength(1);
+  return rows.rows[0]!.type;
+}
+
+async function executeCheckpointNoValueRuntimeFixture(
+  queue: Queue,
+  admin: Admin,
+  database: Queryable,
+  fixture: CheckpointNoValueRuntimeFixture,
+): Promise<void> {
+  const queueName = `runtime-${fixture.id}`;
+  const id = await queue.enqueue(
+    fixture.taskType,
+    {},
+    {
+      queue: queueName,
+      maxAttempts: fixture.maxAttempts,
+      retryPolicy: { type: "fixed", delayMs: 0 },
+    },
+  );
+  let operations = 0;
+  let handlerRuns = 0;
+  const checkpointValues: unknown[] = [];
+  const worker = new Worker(queue, {
+    workerId: `runtime-${fixture.id}`,
+    queue: queueName,
+    registryIntervalMs: 0,
+  }).handle(fixture.taskType, async (_payload, context) => {
+    handlerRuns += 1;
+    checkpointValues.push(
+      await context.checkpoint(fixture.checkpointName, async () => {
+        operations += 1;
+      }),
+    );
+    if (handlerRuns === 1) throw new Error("fail the first attempt after the checkpoint");
+    return {};
+  });
+
+  for (let pass = 0; pass < fixture.maxAttempts; pass += 1) {
+    if ((await admin.getTask(id))?.state === fixture.expectedSettled.state) break;
+    await expect(worker.runOnce()).resolves.toBe(true);
+  }
+  expect({ operations, handlerRuns }).toEqual({
+    operations: fixture.expectedCheckpointOperations,
+    handlerRuns: fixture.expectedHandlerRuns,
+  });
+  expect(checkpointValues).toEqual(Array.from({ length: fixture.expectedHandlerRuns }, () => null));
+  await expect(storedJsonType(database, "checkpoint", id)).resolves.toBe(
+    fixture.expectedCheckpointValueJsonType,
+  );
+  await expect(admin.getTask(id)).resolves.toMatchObject({
+    state: fixture.expectedSettled.state,
+    currentAttempt: fixture.expectedSettled.attempt,
+  });
+  await expectAttemptOutcome(database, id, fixture.expectedAttemptOutcomes);
 }
 
 async function executeOversizedResultRuntimeFixture(
@@ -2101,6 +2188,9 @@ async function executeRuntimeFixture(
       break;
     case "json-round-trip":
       await executeJsonRoundTripRuntimeFixture(queue, admin, database, fixture);
+      break;
+    case "checkpoint-no-value":
+      await executeCheckpointNoValueRuntimeFixture(queue, admin, database, fixture);
       break;
     case "oversized-result":
       await executeOversizedResultRuntimeFixture(queue, admin, fixture);

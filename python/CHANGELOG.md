@@ -72,6 +72,15 @@ with SQLSTATE `P1007`. The dashboard schedule read returns `lastErrorAt`, `lastE
 matches each day. The migration does not raise the SDK compatibility floor (SM-1927, SM-1947,
 ADR 0118).
 
+### An enqueue refuses a key that is not a string and a non-finite number
+
+An enqueue encoded its payload with `json.dumps`, which turned a key that is not a `str` into a
+string. Thus `{1: "a", "1": "b"}` reached PostgreSQL with two equal keys, and `jsonb` kept only
+`"b"`. A `NaN` or infinite `float` went out as a bare token, and PostgreSQL refused the statement
+and aborted the transaction of the caller. The enqueue now raises `ValueError` before any
+statement, also before the compatibility query of a new client. The error names the task type and the path of the value. A payload with such a key
+was accepted before and now fails (SM-1989).
+
 ## 0.12.0 — 2026-11-07
 
 The npm packages, Python distribution, Go module, Rust crate, Ruby gem, JVM artifacts, and .NET

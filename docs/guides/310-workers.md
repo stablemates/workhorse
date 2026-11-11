@@ -55,9 +55,11 @@ handler code cannot write as an old owner after another worker owns the task.
 | `runOnce`            | Runs one claim-and-run pass and returns whether a handler ran.            |
 
 A handler receives the payload and a `HandlerContext`. Its JSON return value becomes the `result`
-of the task. A thrown error fails the attempt, and the task retries while attempts remain.
+of the task. A JavaScript handler that returns `undefined` stores the result `null`. A typed
+handler with no result returns `null`, because the `Handler` type requires a value. A thrown error fails the
+attempt, and the task retries while attempts remain.
 
-More detail: [Task lifecycle: Worker concurrency and lifecycle](../architecture/lifecycle.md#worker-concurrency-and-lifecycle).
+More detail: [Task lifecycle: Worker concurrency and lifecycle](../architecture/lifecycle.md#worker-concurrency-and-lifecycle) and [Data model: Value size limits](../architecture/data-model.md#value-size-limits).
 
 </details>
 
@@ -819,6 +821,36 @@ It writes no `attempt_history` row, because the attempt is not closed. A claim c
 it returns no row, or only rows that it released.
 
 More detail: [Task lifecycle: Owned release](../architecture/lifecycle.md#owned-release).
+
+</details>
+
+## Stop a TypeScript worker before its run starts
+
+A process can call `stop()` before it calls `run`. For example, a termination signal can arrive
+while the process still prepares its work.
+
+**Example.** A TypeScript process builds the worker `mailer-1` and calls
+`process.once("SIGTERM", () => worker.stop())`. Then it waits for a setup step.
+
+1. `SIGTERM` arrives during the setup step, and `stop()` runs. No call of the worker is active.
+2. The setup step ends, and the process calls `await worker.run()`.
+3. The run resolves at once. It claims no task, so no task is in flight when the process exits.
+
+Thus, a stop when no call is active ends the next `run` or `runOnce` call at once. That call uses
+the stop, so the call after it starts normally. A stop during a call ends that call, also when the
+call still waits for an earlier call to end. The stop does not reach a call that starts later.
+
+<details>
+<summary>Reference: a stop and the next call</summary>
+
+| When `stop()` comes                               | Result                                                                                            |
+| ------------------------------------------------- | ------------------------------------------------------------------------------------------------- |
+| No `run()` or `runOnce()` call is active          | The next call settles at once: no registration, no maintenance offer, no claim. The stop is used. |
+| A call is active, or it waits for an earlier call | Each active call ends. A later call starts normally.                                              |
+
+`run()` that a stop ends resolves. `runOnce()` that a stop ends before its claim resolves `false`.
+
+More detail: [Task lifecycle: Pause, resume, and stop](../architecture/lifecycle.md#pause-resume-and-stop).
 
 </details>
 

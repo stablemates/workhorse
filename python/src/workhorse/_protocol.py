@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import math
 from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime
 from typing import Literal, cast
@@ -101,7 +102,42 @@ def serialize_requests(
 
 
 def encode_request_values(values: Sequence[Mapping[str, Json]]) -> str:
-    return json.dumps(list(values), separators=(",", ":"), ensure_ascii=False)
+    # serialize_request already refused a non-finite number, so allow_nan=False only guards.
+    return json.dumps(list(values), separators=(",", ":"), ensure_ascii=False, allow_nan=False)
+
+
+def _check_storable_request(value: Mapping[str, Json]) -> None:
+    """Refuse an enqueue value that JSON cannot store as given, before any statement.
+
+    ``json.dumps`` turns a key that is not a ``str`` into a string, so two keys can become one and
+    ``jsonb`` keeps only the last. It writes a non-finite number as a bare token that PostgreSQL
+    refuses, which aborts the transaction of the caller. Thus such a value raises ``ValueError``.
+    """
+    task_type = value.get("type")
+    for field, nested in value.items():
+        subject = (
+            f"Payload of task type {task_type}"
+            if field == "payload"
+            else f"Enqueue field {field} of task type {task_type}"
+        )
+        _check_storable_json(nested, subject, "$")
+
+
+def _check_storable_json(value: object, subject: str, path: str) -> None:
+    if isinstance(value, float):
+        if not math.isfinite(value):
+            raise ValueError(f"{subject} must contain only finite numbers, but {path} is {value!r}")
+    elif isinstance(value, Mapping):
+        for key, nested in value.items():
+            if not isinstance(key, str):
+                raise ValueError(
+                    f"{subject} must have only str keys, but {path} has the key {key!r}"
+                    f" of type {type(key).__name__}"
+                )
+            _check_storable_json(nested, subject, f"{path}.{key}")
+    elif isinstance(value, list | tuple):
+        for index, nested in enumerate(value):
+            _check_storable_json(nested, subject, f"{path}[{index}]")
 
 
 def serialize_schedules(
@@ -174,6 +210,7 @@ def serialize_request(
         value["throttle"] = _throttle(options.throttle)
     if trace_context is not None:
         value["traceContext"] = dict(trace_context)
+    _check_storable_request(value)
     return value
 
 

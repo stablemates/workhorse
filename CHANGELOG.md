@@ -195,6 +195,50 @@ the schema to version 94. It adds the three nullable columns and replaces the bo
 `dashboard_schedule_definition_v1`, and `dashboard_cron_v1`. It does not raise the SDK
 compatibility floor and rewrites no rows. Run `workhorse schema migrate`.
 
+### TypeScript refuses a stored value that JSON would change
+
+A payload `{ amount: NaN }` was stored as `{ "amount": null }`, and the task was accepted. A
+handler result `{ ratio: Infinity }` completed its task as `{ "ratio": null }`. A `Map` or a `Set`
+was stored as `{}`. Now the TypeScript SDK refuses a `NaN` or infinite number, a `Map`, and a
+`Set` at any depth in each value that it stores as JSON. The `TypeError` names the path of the
+value and the task type, or the task ID for a signal payload and a human-wait result. The rule
+applies to a payload, a handler result, a child payload, a signal payload, a human-wait value, a
+checkpoint value, and a progress value. An enqueue fails before the enqueue statement, so no task
+with a changed value is stored. On a new `Queue`, the compatibility query can run first. A handler
+result fails its attempt under the retry policy. This rejects a value that was accepted before (SM-1930,
+SM-1989).
+
+### A TypeScript handler or checkpoint that returns no value stores null
+
+A handler that returned `undefined` failed each attempt, because the result had no JSON text. A
+checkpoint operation that returned `undefined` ran its effect, stored nothing, and ran again on
+each retry. Both now store JSON `null`, as the other six SDKs do for their "no value".
+`HandlerContext.checkpoint` has a new signature for an operation that returns `void`, which returns
+`Promise<null>`. The `Handler` type does not change, so a typed handler with no result writes
+`return null`. An `undefined` property of an object and an `undefined` member of an array keep
+the JSON rules (SM-1969, ADR 0119).
+
+### A TypeScript worker survives a thrown value that cannot become text
+
+A handler threw a value that is not an `Error`, and the `toString` of that value threw. The
+conversion error stopped the worker, `run()` rejected, and the attempt got no failure record. The
+worker now records `NonErrorThrown` with a fixed message for such a value and continues (SM-1940).
+
+### A failed release of a task with no handler no longer charges the attempt
+
+A TypeScript worker claimed a task type that it had no handler for, and the release of that task
+failed. The worker then failed the attempt through `fail_v1`, with the database error as the
+failure. Now the release error ends the pass as a failing `fail_v1` does, and the task keeps its
+attempt, as in the other six SDKs (SM-1944).
+
+### A TypeScript stop before a worker call ends the next call
+
+A `stop()` that came before `run()` was forgotten, so the run claimed tasks until a later `stop()`.
+A `stop()` before `runOnce()` made that call and each later call return `false` until a `run()`.
+Now a `stop()` when no call is active ends the next `run()` or `runOnce()` call at once, with no
+claim, and the call after it starts normally. A `stop()` during a call ends only that call
+(SM-1970, ADR 0120).
+
 ## 0.12.0 — 2026-11-07
 
 The npm packages, Python distribution, Go module, Rust crate, Ruby gem, JVM artifacts, and .NET

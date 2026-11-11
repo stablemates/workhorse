@@ -1335,6 +1335,36 @@ More detail: [Task lifecycle: Owned release](https://github.com/stablemates/work
 
 </details>
 
+## Stop a TypeScript worker before its run starts
+
+A process can call `stop()` before it calls `run`. For example, a termination signal can arrive
+while the process still prepares its work.
+
+**Example.** A TypeScript process builds the worker `mailer-1` and calls
+`process.once("SIGTERM", () => worker.stop())`. Then it waits for a setup step.
+
+1. `SIGTERM` arrives during the setup step, and `stop()` runs. No call of the worker is active.
+2. The setup step ends, and the process calls `await worker.run()`.
+3. The run resolves at once. It claims no task, so no task is in flight when the process exits.
+
+Thus, a stop when no call is active ends the next `run` or `runOnce` call at once. That call uses
+the stop, so the call after it starts normally. A stop during a call ends that call, also when the
+call still waits for an earlier call to end. The stop does not reach a call that starts later.
+
+<details>
+<summary>Reference: a stop and the next call</summary>
+
+| When `stop()` comes                               | Result                                                                                            |
+| ------------------------------------------------- | ------------------------------------------------------------------------------------------------- |
+| No `run()` or `runOnce()` call is active          | The next call settles at once: no registration, no maintenance offer, no claim. The stop is used. |
+| A call is active, or it waits for an earlier call | Each active call ends. A later call starts normally.                                              |
+
+`run()` that a stop ends resolves. `runOnce()` that a stop ends before its claim resolves `false`.
+
+More detail: [Task lifecycle: Pause, resume, and stop](https://github.com/stablemates/workhorse/blob/main/docs/architecture/lifecycle.md#pause-resume-and-stop).
+
+</details>
+
 ## Give a Python worker its connection pool
 
 A Python worker uses a connection pool that your code creates. Your code owns the pool, so it must

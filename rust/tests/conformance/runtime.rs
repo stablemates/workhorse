@@ -74,6 +74,7 @@ pub async fn run_runtime(fixture: &Value) -> Outcome {
             "missing-handler" => missing_handler(database, fixture).await,
             "release-wait" => release_wait(database, fixture).await,
             "json-round-trip" => json_round_trip(database, fixture).await,
+            "checkpoint-no-value" => checkpoint_no_value(database, fixture).await,
             "oversized-result" => oversized_result(database, fixture).await,
             "shutdown-cancellation" => shutdown_cancellation(database, fixture).await,
             "heartbeat-failure" => heartbeat_failure(database, fixture).await,
@@ -1898,7 +1899,104 @@ async fn json_round_trip(database: &ScratchDatabase, fixture: &Value) -> Checked
         format!("stored payload {stored} and result {result} differ from {payload}")
     })?;
     assert_state(&client, task, &fixture["expectedState"]).await?;
-    assert_outcomes(&client, task, &[text(fixture, "expectedAttemptOutcome")]).await
+    assert_outcomes(&client, task, &[text(fixture, "expectedAttemptOutcome")]).await?;
+    for case in fixture["resultCases"].as_array().ok_or("resultCases is not an array")? {
+        let case_type = text(case, "taskType");
+        // Rust has two forms: `Value::Null` for JSON null, and `()` for no value.
+        if text(case, "handlerReturns") == "null" {
+            worker.handle(case_type, |_: Value, _| async { Ok(Value::Null) });
+        } else {
+            worker.handle(case_type, |_: Value, _| async { Ok(()) });
+        }
+        let id = queue.enqueue(case_type, &json!({}), Default::default()).await.map_err(driver)?;
+        run_once(&worker, true).await?;
+        let stored = stored_json_type(&client, "result", id.task_id).await?;
+        let want = text(case, "expectedResultJsonType");
+        check(stored.as_deref() == Some(want), || {
+            format!("the {case_type} result is stored as JSON type {stored:?}, want {want}")
+        })?;
+        assert_state(&client, id.task_id, &fixture["expectedState"]).await?;
+        assert_outcomes(&client, id.task_id, &[text(fixture, "expectedAttemptOutcome")]).await?;
+    }
+    Ok(())
+}
+
+/// The `jsonb_typeof` of a stored value, so that JSON null differs from SQL NULL.
+async fn stored_json_type(
+    client: &Client,
+    value: &str,
+    task: Uuid,
+) -> Result<Option<String>, String> {
+    let statement = if value == "result" {
+        "SELECT jsonb_typeof(result) FROM workhorse.task_outcome WHERE task_id = $1"
+    } else {
+        "SELECT jsonb_typeof(checkpoint_value) FROM workhorse.task_checkpoint WHERE task_id = $1"
+    };
+    let row = client.query_one(statement, &[&task]).await.map_err(sql)?;
+    Ok(row.get(0))
+}
+
+/// A checkpoint operation that returns `()` stores JSON null, so a retry does not run it again.
+async fn checkpoint_no_value(database: &ScratchDatabase, fixture: &Value) -> Checked {
+    let client = database.connect().await;
+    let admin = Admin::connect(database.url()).await.map_err(driver)?;
+    let queue = queue(database, fixture).await?;
+    let task_type = text(fixture, "taskType");
+    let retried = EnqueueOptions {
+        max_attempts: i32::try_from(number(fixture, "maxAttempts")).map_err(|e| e.to_string())?,
+        retry_policy: json!({ "type": "fixed", "delayMs": 0 }).as_object().cloned(),
+        ..Default::default()
+    };
+    let task = queue.enqueue(task_type, &json!({}), retried).await.map_err(driver)?.task_id;
+    let worker = worker(database, 4, options(fixture))?;
+    let (runs, operations) = (Arc::new(AtomicUsize::new(0)), Arc::new(AtomicUsize::new(0)));
+    let (counted, operated) = (Arc::clone(&runs), Arc::clone(&operations));
+    let checkpoint = text(fixture, "checkpointName").to_owned();
+    worker.handle(task_type, move |_: Value, context: HandlerContext| {
+        let (counted, operated, checkpoint) =
+            (Arc::clone(&counted), Arc::clone(&operated), checkpoint.clone());
+        async move {
+            let run = counted.fetch_add(1, Ordering::SeqCst) + 1;
+            let () = context
+                .checkpoint(&checkpoint, || async move {
+                    operated.fetch_add(1, Ordering::SeqCst);
+                    Ok(())
+                })
+                .await?;
+            if run == 1 {
+                return Err(HandlerError::new("fail the first attempt after the checkpoint"));
+            }
+            Ok(json!({}))
+        }
+    });
+    let settled = &fixture["expectedSettled"];
+    // One pass may also run the immediate retry, so the runner passes until the task settles.
+    for _ in 0..number(fixture, "maxAttempts") {
+        let snapshot = admin.get_task(task).await.map_err(driver)?.ok_or("the task is gone")?;
+        if snapshot.state.as_str() == text(settled, "state") {
+            break;
+        }
+        run_once(&worker, true).await?;
+    }
+    let (operations, runs) = (operations.load(Ordering::SeqCst), runs.load(Ordering::SeqCst));
+    let want =
+        (number(fixture, "expectedCheckpointOperations"), number(fixture, "expectedHandlerRuns"));
+    check((operations as i64, runs as i64) == want, || {
+        format!("the operation ran {operations} times and the handler {runs} times, want {want:?}")
+    })?;
+    let stored = stored_json_type(&client, "checkpoint", task).await?;
+    let want = text(fixture, "expectedCheckpointValueJsonType");
+    check(stored.as_deref() == Some(want), || {
+        format!("the checkpoint value is stored as JSON type {stored:?}, want {want}")
+    })?;
+    assert_state(&client, task, settled).await?;
+    let outcomes: Vec<&str> = fixture["expectedAttemptOutcomes"]
+        .as_array()
+        .ok_or("expectedAttemptOutcomes is not an array")?
+        .iter()
+        .map(|outcome| outcome.as_str().unwrap_or_default())
+        .collect();
+    assert_outcomes(&client, task, &outcomes).await
 }
 
 /// A result over the task's size limit fails its attempt through the retry policy. The handler
