@@ -1123,13 +1123,18 @@
     "taskType": "protocol.durable-script.run-children",
     "childTaskType": "protocol.durable-script.child",
     "childQueue": "runtime-durable-script-children",
+    "secondChildQueue": "runtime-durable-script-second-children",
     "script": [
       {
         "op": "runChildren",
         "key": "children",
         "children": [
           { "name": "fraud", "payload": { "check": "fraud" } },
-          { "name": "inventory", "payload": { "check": "inventory", "skus": ["A-1", "B-2"] } }
+          {
+            "name": "inventory",
+            "payload": { "check": "inventory", "skus": ["A-1", "B-2"] },
+            "secondQueue": true
+          }
         ]
       }
     ],
@@ -1179,6 +1184,49 @@
         }
       },
       { "action": "run", "worker": "child" },
+      {
+        "action": "expect",
+        "handlerRuns": 1,
+        "completedScripts": 0,
+        "returnedSuspendingCalls": 0,
+        "observed": {
+          "state": "blocked",
+          "attempt": 1,
+          "result": null,
+          "attempts": [],
+          "children": [
+            {
+              "name": "fraud",
+              "type": "protocol.durable-script.child",
+              "payload": { "check": "fraud" },
+              "state": "succeeded",
+              "result": { "echo": { "check": "fraud" } },
+              "joined": false,
+              "edge": {
+                "onSuccess": "release",
+                "onFailure": "release",
+                "onCancellation": "release"
+              },
+              "set": true
+            },
+            {
+              "name": "inventory",
+              "type": "protocol.durable-script.child",
+              "payload": { "check": "inventory", "skus": ["A-1", "B-2"] },
+              "state": "ready",
+              "result": null,
+              "joined": false,
+              "edge": {
+                "onSuccess": "release",
+                "onFailure": "release",
+                "onCancellation": "release"
+              },
+              "set": true
+            }
+          ]
+        }
+      },
+      { "action": "run", "worker": "secondChild" },
       {
         "action": "expect",
         "handlerRuns": 1,

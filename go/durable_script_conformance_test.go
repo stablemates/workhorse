@@ -19,14 +19,16 @@ import (
 // durableScriptFixture is a fixture of the kind durable-script. protocol/README.md describes the
 // operations of its script and the actions of its steps.
 type durableScriptFixture struct {
-	ID            string                   `json:"id"`
-	TaskType      string                   `json:"taskType"`
-	ChildTaskType string                   `json:"childTaskType"`
-	ChildQueue    string                   `json:"childQueue"`
-	PayloadSQL    string                   `json:"payloadSql"`
-	Script        []durableScriptOperation `json:"script"`
-	Observe       string                   `json:"observe"`
-	Steps         []durableScriptStep      `json:"steps"`
+	ID            string `json:"id"`
+	TaskType      string `json:"taskType"`
+	ChildTaskType string `json:"childTaskType"`
+	ChildQueue    string `json:"childQueue"`
+	// SecondChildQueue is the queue of each child with secondQueue. A third worker claims it.
+	SecondChildQueue string                   `json:"secondChildQueue"`
+	PayloadSQL       string                   `json:"payloadSql"`
+	Script           []durableScriptOperation `json:"script"`
+	Observe          string                   `json:"observe"`
+	Steps            []durableScriptStep      `json:"steps"`
 }
 
 type durableScriptOperation struct {
@@ -47,8 +49,9 @@ type durableScriptOperation struct {
 }
 
 type durableScriptChild struct {
-	Name    string          `json:"name"`
-	Payload json.RawMessage `json:"payload"`
+	Name        string          `json:"name"`
+	Payload     json.RawMessage `json:"payload"`
+	SecondQueue bool            `json:"secondQueue"`
 }
 
 type durableScriptStep struct {
@@ -181,18 +184,24 @@ func runDurableScriptPhase(t *testing.T, databaseURL string, fixture durableScri
 		return runDurableScript(fixture, payload, handler, counters)
 	})
 	workers := map[string]*workhorse.Worker{"": worker, "task": worker}
-	if fixture.ChildTaskType != "" && fixture.ChildQueue != "" {
-		children, err := workhorse.NewWorker(pool, workhorse.WorkerOptions{
-			Queue: fixture.ChildQueue, WorkerID: "go-" + fixture.ID + "-children", Concurrency: 1,
+	for _, children := range []struct{ name, queue, suffix string }{
+		{"child", fixture.ChildQueue, "-children"},
+		{"secondChild", fixture.SecondChildQueue, "-second-children"},
+	} {
+		if fixture.ChildTaskType == "" || children.queue == "" {
+			continue
+		}
+		childWorker, err := workhorse.NewWorker(pool, workhorse.WorkerOptions{
+			Queue: children.queue, WorkerID: "go-" + fixture.ID + children.suffix, Concurrency: 1,
 			DisableRegistry: true,
 		})
 		if err != nil {
 			t.Fatal(err)
 		}
-		children.Handle(fixture.ChildTaskType, func(_ context.Context, payload any, _ *workhorse.HandlerContext) (any, error) {
+		childWorker.Handle(fixture.ChildTaskType, func(_ context.Context, payload any, _ *workhorse.HandlerContext) (any, error) {
 			return map[string]any{"echo": payload}, nil
 		})
-		workers["child"] = children
+		workers[children.name] = childWorker
 	}
 
 	for index, step := range steps {
@@ -393,9 +402,13 @@ func runDurableScriptOperationOnce(
 	case "runChildren":
 		requests := make([]workhorse.ChildTaskRequest, 0, len(operation.Children))
 		for _, child := range operation.Children {
+			queue := fixture.ChildQueue
+			if child.SecondQueue {
+				queue = fixture.SecondChildQueue
+			}
 			requests = append(requests, workhorse.ChildTaskRequest{
 				Name: child.Name, Type: fixture.ChildTaskType, Payload: decodeScriptJSON(child.Payload),
-				Options: workhorse.EnqueueOptions{Queue: fixture.ChildQueue},
+				Options: workhorse.EnqueueOptions{Queue: queue},
 			})
 		}
 		results, err := handler.RunChildren(requests)

@@ -280,9 +280,17 @@ The function follows `cause` for a maximum of 8 links, and it stops at a cycle. 
 no connection URL, no connection parameter, and no environment value to the output. A trigger or a
 function that an operator added to a Workhorse table can put stored data into the error text of
 another SQLSTATE, and the function then prints that data. It removes terminal control
-characters from the text. A socket error, a SQLSTATE that starts with 08 or 28, and `3D000` do not
-get these lines, because `describeDatabaseFailure` answers them first with one sentence. Another
-SQLSTATE gets them, for example `57P01` when an administrator ends the session.
+characters from the text. Outside a migration step, a socket error, a SQLSTATE that starts with
+08 or 28, and `3D000` do not get these lines, because `describeDatabaseFailure` answers them first
+with one sentence. Another SQLSTATE gets them, for example `57P01` when an administrator ends the
+session. A failed step throws `SchemaMigrationStepError` from
+`typescript/core/src/schema-migrations.ts`, and the CLI does not call `describeDatabaseFailure` for
+it. Thus the first line names the step, and the cause lines follow for each SQLSTATE. That includes
+`08006` when the server ends the session under the step (SM-2048). If the cause is not a PostgreSQL
+error, `describeStepCause` writes the `Cause:` line. For a socket error, the line has the sentence
+of `describeDatabaseFailure`. For another cause, it has the first line of the error text of the
+cause, for example `Connection terminated unexpectedly` when the server closes the socket. The error keeps the
+name `Error`, so the first line does not change.
 
 **Invalid indexes.** `workhorse schema status` reads `pg_index` for each index in the `workhorse`
 schema where `indisvalid` or `indisready` is false. A failed `CREATE INDEX CONCURRENTLY` leaves such

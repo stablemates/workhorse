@@ -1033,8 +1033,8 @@ The shared cases `durable-run-child-joins-the-child-result` and
 `durable-run-children-joins-every-outcome` check in every SDK that the parent is `blocked` while
 its children are ready, and that the edge of each child has the policies of its join mode. They also
 check that the replay sets `joined_at` and returns the result of each child in one attempt
-(SM-1950). The child-set case ends both children before it reads the parent again, so it does not
-check that the parent waits for its last child.
+(SM-1950). The child-set case puts its second child on a queue of its own. Thus it ends the first
+child alone, and it checks that the parent stays `blocked` until the second child ends (SM-2017).
 
 #### Renamed replay of a single child
 

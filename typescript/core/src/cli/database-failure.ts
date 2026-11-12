@@ -84,6 +84,31 @@ function sourceSentence(source: DatabaseUrlSource | undefined): string {
 }
 
 /**
+ * The `Cause:` line of a failed migration step whose cause is not a PostgreSQL error, or
+ * `undefined` when the step has no cause.
+ *
+ * The output of a failed step keeps the step on its first line (SM-2048). A socket error or a closed
+ * connection has no SQLSTATE, so `describeDatabaseCause` prints nothing for it, and this line gives
+ * its reason. A socket error gets the sentence of `describeDatabaseFailure`. Another cause, for
+ * example the `Connection terminated unexpectedly` error of the driver when the server closes the
+ * socket, gives the first line of its message. Terminal control characters are removed from it.
+ */
+export function describeStepCause(
+  error: unknown,
+  source: DatabaseUrlSource | undefined,
+): string | undefined {
+  const sentence = describeDatabaseFailure(error, source);
+  if (sentence !== undefined) return `Cause: ${sentence}\n`;
+  const cause = error instanceof Error ? error.cause : undefined;
+  if (!(cause instanceof Error)) return undefined;
+  const message = (cause.message.split("\n", 1)[0] ?? "")
+    // eslint-disable-next-line no-control-regex -- the class names the characters to remove.
+    .replaceAll(/[\u0000-\u001f\u007f-\u009f]/g, "")
+    .trim();
+  return `Cause: ${message === "" ? cause.name : message}\n`;
+}
+
+/**
  * One sentence for a connection this CLI could not use, or `undefined` to let the stack through.
  *
  * The caller decides what to do with `undefined`; this function only classifies, so the top-level

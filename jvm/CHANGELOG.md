@@ -338,6 +338,11 @@ and the completion of the last member of the group can now end one transaction w
 the cancel failed with `40001` before. A read committed enqueue takes no new lock. The migration
 does not raise the SDK compatibility floor.
 
+### Spring Boot 4.0 leaves the supported versions after its end of life
+
+- **Removal notice:** Spring Boot 4.0. Its open-source support ends on 2026-12-31, and a later
+  minor raises the Spring Boot floor of the starter to 4.1 (ADR 0103).
+
 ## 0.12.0 — 2026-11-07
 
 The npm packages, Python distribution, Go module, Rust crate, Ruby gem, JVM artifacts, and .NET

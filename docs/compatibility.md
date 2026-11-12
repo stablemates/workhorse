@@ -243,6 +243,18 @@ PostgreSQL takes two published minors of notice rather than one, because a Postg
 upgrade is a database migration the operator schedules rather than a package bump. Active Job 8.0
 is the one exception: it left the table without that notice, and ADR 0058 records why.
 
+The same test also checks the notice before the date. A notice is an entry of the form
+`- **Removal notice:** Spring Boot 4.0.` in the section of a published minor, with the runtime and
+the version as the table above names them. An `## Unreleased` entry and a patch section do not
+count. From 30 days before the end of a version's end-of-life date, the check fails if the
+changelog of its package line has no such notice. That changelog is `ruby/CHANGELOG.md` for Ruby
+and Active Job, `python/CHANGELOG.md` for Python, `jvm/CHANGELOG.md` for Java and Spring Boot,
+`dotnet/CHANGELOG.md` for .NET, EF Core, and ASP.NET Core, and the root `CHANGELOG.md` for Node.js
+and PostgreSQL. PostgreSQL needs the notice in two published minors, so its check starts 60 days
+before the end of the date. The failure names the runtime, the version, the date, and the changelog
+to update. The longest gap between two published minors up to 0.12.0 is 13 days, so the window
+leaves time to publish the notice.
+
 A floor raise is a minor because it cannot reach code that already runs. The release you installed
 keeps working against the database you built it for; what a dropped runtime loses is future
 releases, and every package manager in these ecosystems reports that as a resolution result.

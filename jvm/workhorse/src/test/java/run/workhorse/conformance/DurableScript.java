@@ -74,7 +74,8 @@ final class DurableScript {
     String taskType = String.valueOf(fixture.get("taskType"));
     UUID taskId = prepareTask(fixture, phase, taskType);
     try (Intercept taskPool = new Intercept(opener, new Intercept.Hook() {});
-        Intercept childPool = new Intercept(opener, new Intercept.Hook() {})) {
+        Intercept childPool = new Intercept(opener, new Intercept.Hook() {});
+        Intercept secondChildPool = new Intercept(opener, new Intercept.Hook() {})) {
       Handler<Object> handler = (context, payload) -> runScript(fixture, payload, context);
       Map<String, Worker> workers = new LinkedHashMap<>();
       workers.put(
@@ -82,11 +83,19 @@ final class DurableScript {
           worker(taskPool, "runtime-" + id, "jvm-" + id)
               .handle(taskType, Object.class, handler)
               .build());
+      Handler<Object> child = (context, payload) -> Map.of("echo", payload);
       if (fixture.get("childQueue") instanceof String childQueue) {
-        Handler<Object> child = (context, payload) -> Map.of("echo", payload);
         workers.put(
             "child",
             worker(childPool, childQueue, "jvm-" + id + "-children")
+                .handle(String.valueOf(fixture.get("childTaskType")), Object.class, child)
+                .build());
+      }
+      // A child with secondQueue goes to secondChildQueue, so one child of a set can end first.
+      if (fixture.get("secondChildQueue") instanceof String secondChildQueue) {
+        workers.put(
+            "secondChild",
+            worker(secondChildPool, secondChildQueue, "jvm-" + id + "-second-children")
                 .handle(String.valueOf(fixture.get("childTaskType")), Object.class, child)
                 .build());
       }
@@ -320,6 +329,7 @@ final class DurableScript {
     String name = String.valueOf(operation.get("name"));
     String childType = String.valueOf(fixture.get("childTaskType"));
     String childQueue = fixture.get("childQueue") instanceof String text ? text : null;
+    String secondChildQueue = fixture.get("secondChildQueue") instanceof String text ? text : null;
     return switch (String.valueOf(operation.get("op"))) {
       case "checkpoint" -> {
         @Nullable Object value = operation.get("value");
@@ -373,7 +383,12 @@ final class DurableScript {
                   String.valueOf(request.get("name")),
                   childType,
                   request.get("payload"),
-                  EnqueueOptions.builder().queue(childQueue).build()));
+                  EnqueueOptions.builder()
+                      .queue(
+                          Boolean.TRUE.equals(request.get("secondQueue"))
+                              ? secondChildQueue
+                              : childQueue)
+                      .build()));
         }
         Map<String, @Nullable Object> outcomes = new LinkedHashMap<>();
         Map<String, ChildOutcome> joined = context.runChildren(requests);

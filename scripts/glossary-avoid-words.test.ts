@@ -109,40 +109,72 @@ const maxContextLength = 60;
 
 type Occurrence = { file: string; line: number; word: string; terms: string[]; used?: number };
 
+/** An avoided word, the terms that avoid it, and its pattern, compiled one time for all files. */
+type AvoidedWord = { word: string; owners: string[]; pattern: RegExp };
+
+/** An allowlist context with its position in the list and its pattern, compiled one time. */
+type CompiledContext = { entry: ContextEntry; index: number; pattern: RegExp };
+
+/** Each avoided word one time, with every term that avoids it. */
+function avoidedWords(terms: readonly Term[]): AvoidedWord[] {
+  // Two terms can avoid the same word, such as "activity" for a task and for a handler.
+  const words = new Map<string, AvoidedWord>();
+  for (const { term, avoid } of terms) {
+    for (const word of avoid) {
+      const key = word.toLowerCase();
+      const known = words.get(key);
+      if (known === undefined) words.set(key, { word, owners: [term], pattern: wordPattern(word) });
+      else known.owners.push(term);
+    }
+  }
+  return [...words.values()];
+}
+
+/** The text of a block with each run of whitespace as one space, and the map to its offsets. */
+function flattened(text: string): { flat: string; flatIndex: number[] } {
+  // `flatIndex` maps each offset in the block to its offset in the flattened text. Offsets count
+  // UTF-16 code units, as regular expression match indexes do.
+  const flatIndex: number[] = [];
+  let flat = "";
+  for (let index = 0; index < text.length; index++) {
+    const space = /\s/.test(text[index]!);
+    if (!space || !/\s/.test(text[index - 1] ?? "")) flat += space ? " " : text[index];
+    flatIndex.push(flat.length - 1);
+  }
+  return { flat, flatIndex };
+}
+
 /** Every avoided word in a file outside code, with the entry that allows it, if any. */
 function occurrencesIn(
   file: string,
   source: string,
-  terms: readonly Term[],
-  contexts: readonly ContextEntry[],
+  words: readonly AvoidedWord[],
+  contexts: readonly CompiledContext[],
 ): Occurrence[] {
-  // Two terms can avoid the same word, such as "activity" for a task and for a handler.
-  const words = new Map<string, { word: string; owners: string[] }>();
-  for (const { term, avoid } of terms) {
-    for (const word of avoid) {
-      const key = word.toLowerCase();
-      words.set(key, {
-        word: words.get(key)?.word ?? word,
-        owners: [...(words.get(key)?.owners ?? []), term],
-      });
-    }
-  }
-  const applicable = contexts
-    .map((entry, index) => ({ entry, index, pattern: new RegExp(entry.context, "g") }))
-    .filter(({ entry }) => path.posix.matchesGlob(file, entry.files));
+  const applicable = contexts.filter(({ entry }) => path.posix.matchesGlob(file, entry.files));
   const found: Occurrence[] = [];
   for (const segments of blocksOf(source)) {
-    // A context reads the block with each run of whitespace as one space, so it can span a line
-    // break. `flatIndex` maps each offset in the block to its offset in that flattened text.
-    const text = segments.map((segment) => segment.text).join("");
-    const flatIndex: number[] = [];
-    let flat = "";
-    // Offsets count UTF-16 code units, as regular expression match indexes do.
-    for (let index = 0; index < text.length; index++) {
-      const space = /\s/.test(text[index]!);
-      if (!space || !/\s/.test(text[index - 1] ?? "")) flat += space ? " " : text[index];
-      flatIndex.push(flat.length - 1);
+    const matches: {
+      segment: Segment;
+      offset: number;
+      word: AvoidedWord;
+      match: RegExpExecArray;
+    }[] = [];
+    let offset = 0;
+    for (const segment of segments) {
+      if (!segment.code) {
+        for (const word of words) {
+          for (const match of segment.text.matchAll(word.pattern))
+            matches.push({ segment, offset, word, match });
+        }
+      }
+      offset += segment.text.length;
     }
+    // Most blocks hold no avoided word, so only a block with a match pays for its contexts.
+    if (matches.length === 0) continue;
+    // A context reads the block with each run of whitespace as one space, so it can span a line
+    // break.
+    const { flat, flatIndex } = flattened(segments.map((segment) => segment.text).join(""));
     // A context longer than `maxContextLength` is ignored, so a pattern cannot reach across a
     // paragraph from a legitimate phrase to an unrelated use of the word.
     const contextMatches = applicable.map(({ entry, index, pattern }) => ({
@@ -152,29 +184,21 @@ function occurrencesIn(
         .filter((match) => match[0].length <= maxContextLength)
         .map((match) => [match.index, match.index + match[0].length]),
     }));
-    let offset = 0;
-    for (const segment of segments) {
-      if (!segment.code) {
-        for (const { word, owners } of words.values()) {
-          for (const match of segment.text.matchAll(wordPattern(word))) {
-            const start = flatIndex[offset + match.index]!;
-            const end = flatIndex[offset + match.index + match[0].length - 1]! + 1;
-            const allowed = contextMatches.find(
-              ({ entry, spans }) =>
-                entry.word.toLowerCase() === word.toLowerCase() &&
-                spans.some(([from, to]) => from! <= start && end <= to!),
-            );
-            found.push({
-              file,
-              line: segment.line + segment.text.slice(0, match.index).split("\n").length - 1,
-              word,
-              terms: owners,
-              used: allowed?.index,
-            });
-          }
-        }
-      }
-      offset += segment.text.length;
+    for (const { segment, offset: at, word, match } of matches) {
+      const start = flatIndex[at + match.index]!;
+      const end = flatIndex[at + match.index + match[0].length - 1]! + 1;
+      const allowed = contextMatches.find(
+        ({ entry, spans }) =>
+          entry.word.toLowerCase() === word.word.toLowerCase() &&
+          spans.some(([from, to]) => from! <= start && end <= to!),
+      );
+      found.push({
+        file,
+        line: segment.line + segment.text.slice(0, match.index).split("\n").length - 1,
+        word: word.word,
+        terms: word.owners,
+        used: allowed?.index,
+      });
     }
   }
   return found;
@@ -219,11 +243,18 @@ function glossaryFindings(
   const findings = invalidEntries(allowlist, terms);
   const usedHistorical = new Set<string>();
   const usedContexts = new Set<number>();
+  // Each pattern is compiled one time here, not again for each file or each block of text.
+  const words = avoidedWords(terms);
+  const contexts = allowlist.contexts.map((entry, index) => ({
+    entry,
+    index,
+    pattern: new RegExp(entry.context, "g"),
+  }));
   for (const file of files) {
     const historical = allowlist.historicalPaths.find(
       (entry) => historicalRoots.includes(entry.files) && path.posix.matchesGlob(file, entry.files),
     );
-    for (const occurrence of occurrencesIn(file, read(file), terms, allowlist.contexts)) {
+    for (const occurrence of occurrencesIn(file, read(file), words, contexts)) {
       if (historical !== undefined) usedHistorical.add(historical.files);
       else if (occurrence.used !== undefined) usedContexts.add(occurrence.used);
       else {

@@ -47,19 +47,30 @@ internal sealed class DurableScript(Func<NpgsqlDataSourceBuilder> builder, Npgsq
         var taskId = await PrepareTaskAsync(fixture, phase, taskType);
         await using var taskPool = Intercept.Create(builder(), Intercept.Hook.None);
         await using var childPool = Intercept.Create(builder(), Intercept.Hook.None);
+        await using var secondChildPool = Intercept.Create(builder(), Intercept.Hook.None);
         var workers = new Dictionary<string, Worker>(StringComparer.Ordinal);
         try
         {
             var task = new Worker(taskPool.DataSource, Options($"runtime-{id}", $"dotnet-{id}"));
             task.Handle<JsonElement, object?>(taskType, (context, payload) => RunScriptAsync(fixture, payload, context));
             workers["task"] = task;
-            if (fixture.GetValueOrDefault("childQueue") is string childQueue)
+            // A child with secondQueue goes to secondChildQueue, so one child of a set can end first.
+            foreach (var (workerName, field, suffix, pool) in new[]
             {
-                var child = new Worker(childPool.DataSource, Options(childQueue, $"dotnet-{id}-children"));
+                ("child", "childQueue", "children", childPool),
+                ("secondChild", "secondChildQueue", "second-children", secondChildPool),
+            })
+            {
+                if (fixture.GetValueOrDefault(field) is not string queue)
+                {
+                    continue;
+                }
+
+                var child = new Worker(pool.DataSource, Options(queue, $"dotnet-{id}-{suffix}"));
                 child.Handle<JsonElement, object?>(
                     Runner.Text(fixture["childTaskType"]),
                     (_, payload) => Task.FromResult<object?>(new Dictionary<string, object?> { ["echo"] = payload }));
-                workers["child"] = child;
+                workers[workerName] = child;
             }
 
             for (var index = 0; index < steps.Count; index++)
@@ -274,6 +285,7 @@ internal sealed class DurableScript(Func<NpgsqlDataSourceBuilder> builder, Npgsq
         var name = operation.GetValueOrDefault("name") as string ?? string.Empty;
         var childType = fixture.GetValueOrDefault("childTaskType") as string ?? string.Empty;
         var childQueue = fixture.GetValueOrDefault("childQueue") as string;
+        var secondChildQueue = fixture.GetValueOrDefault("secondChildQueue") as string;
         switch (Runner.Text(operation["op"]))
         {
             case "checkpoint":
@@ -313,7 +325,10 @@ internal sealed class DurableScript(Func<NpgsqlDataSourceBuilder> builder, Npgsq
                         Name = Runner.Text(child["name"]),
                         TaskType = childType,
                         Payload = Json.Element(child["payload"]),
-                        Options = new EnqueueOptions { Queue = childQueue },
+                        Options = new EnqueueOptions
+                        {
+                            Queue = child.GetValueOrDefault("secondQueue") is true ? secondChildQueue : childQueue,
+                        },
                     })
                     .ToList();
                 var outcomes = await context.RunChildrenAsync(requests);

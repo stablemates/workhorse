@@ -115,16 +115,21 @@ pub async fn run_phase(url: &str, fixture: &Value, phase: &str) -> Checked {
         let (script, counters) = (Arc::clone(&script), Arc::clone(&handled));
         async move { run_script(&script, payload, &context, &counters).await }
     });
-    let child_worker = match (fixture["childTaskType"].as_str(), fixture["childQueue"].as_str()) {
-        (Some(child_type), Some(child_queue)) => {
-            let children = worker(url, child_queue, format!("rust-{id}-children"))?;
-            children.handle(child_type, |payload: Value, _: HandlerContext| async move {
-                Ok::<_, HandlerError>(json!({ "echo": payload }))
-            });
-            Some(children)
+    // A child with `secondQueue` goes to `secondChildQueue`, so one child of a set can end first.
+    let child_worker = |field: &str, suffix: &str| -> Checked<Option<Worker>> {
+        match (fixture["childTaskType"].as_str(), fixture[field].as_str()) {
+            (Some(child_type), Some(queue)) => {
+                let children = worker(url, queue, format!("rust-{id}-{suffix}"))?;
+                children.handle(child_type, |payload: Value, _: HandlerContext| async move {
+                    Ok::<_, HandlerError>(json!({ "echo": payload }))
+                });
+                Ok(Some(children))
+            }
+            _ => Ok(None),
         }
-        _ => None,
     };
+    let first_children = child_worker("childQueue", "children")?;
+    let second_children = child_worker("secondChildQueue", "second-children")?;
 
     for (index, step) in steps.iter().enumerate() {
         let action = text(step, "action")?;
@@ -132,7 +137,10 @@ pub async fn run_phase(url: &str, fixture: &Value, phase: &str) -> Checked {
         match action {
             "run" => {
                 let selected = match step["worker"].as_str().unwrap_or("task") {
-                    "child" => child_worker.as_ref().ok_or("the fixture has no child queue")?,
+                    "child" => first_children.as_ref().ok_or("the fixture has no child queue")?,
+                    "secondChild" => {
+                        second_children.as_ref().ok_or("the fixture has no second child queue")?
+                    }
                     _ => &task_worker,
                 };
                 drain(selected, &place).await?;
@@ -254,6 +262,15 @@ fn child_queue(fixture: &Value) -> Option<String> {
     fixture["childQueue"].as_str().map(str::to_owned)
 }
 
+/// The queue of one child of a set: `secondChildQueue` for a child with `secondQueue`.
+fn set_child_queue(fixture: &Value, request: &Value) -> Option<String> {
+    if request["secondQueue"].as_bool() == Some(true) {
+        fixture["secondChildQueue"].as_str().map(str::to_owned)
+    } else {
+        child_queue(fixture)
+    }
+}
+
 fn child_type(fixture: &Value) -> Result<&str, HandlerError> {
     fixture["childTaskType"].as_str().ok_or_else(|| HandlerError::new("no childTaskType"))
 }
@@ -338,7 +355,7 @@ async fn run_operation_once(
                         child,
                         &request["payload"],
                     )?;
-                    child_request.options.queue = child_queue(fixture);
+                    child_request.options.queue = set_child_queue(fixture, request);
                     Ok(child_request)
                 })
                 .collect::<Result<Vec<_>, workhorse::Error>>()?;

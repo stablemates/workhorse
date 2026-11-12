@@ -469,7 +469,8 @@ whether the migrating command reported an error, or whether the process running 
 **The command reported an error.** The step rolled back atomically, so recovery is diagnose and
 rerun:
 
-1. Read the error. The first line names the failed step. The lines after it give the cause that
+1. Read the error. The first line names the failed step, also when PostgreSQL ended the session
+   under the step. The lines after it give the cause that
    PostgreSQL reported: the `Cause:` line has the error text and the SQLSTATE, and the `Detail:`
    and `Hint:` lines show when PostgreSQL gives them. For some SQLSTATEs the command withholds a
    field, as the list after these steps states. The schema is still at the step's starting

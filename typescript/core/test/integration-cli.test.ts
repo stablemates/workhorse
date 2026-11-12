@@ -1,3 +1,5 @@
+import { once } from "node:events";
+import net from "node:net";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
@@ -259,6 +261,125 @@ describe("an invalid Workhorse index", () => {
         );
       }
     }
+  });
+
+  // A step can fail with a connection SQLSTATE, for example when the server ends the session. The
+  // operator must still see which step failed and whether it applied part of its body (SM-2048).
+  it.each(["08006", "28000", "3D000"])(
+    "names the failed step when its cause has the connection SQLSTATE %s",
+    async (sqlState) => {
+      // Remove the record of each step from 0102 on, so a migrate run applies each of them again.
+      const recorded = await pool.query<{ version: number; description: string }>(
+        "DELETE FROM workhorse.schema_migration WHERE version >= 101 RETURNING version, description",
+      );
+      await pool.query("UPDATE workhorse.schema_version SET version = 100");
+      await pool.query(`CREATE FUNCTION workhorse.probe_session_end() RETURNS trigger
+        LANGUAGE plpgsql AS $$
+        BEGIN
+          RAISE EXCEPTION 'probe: the session ended' USING ERRCODE = '${sqlState}';
+        END
+      $$`);
+      await pool.query(
+        "CREATE TRIGGER probe_session_end BEFORE UPDATE ON workhorse.schema_version FOR EACH ROW EXECUTE FUNCTION workhorse.probe_session_end()",
+      );
+      try {
+        const failed = await runCli(["schema", "migrate", `--database-url=${databaseUrl}`]);
+        expect(failed.code).toBe(1);
+        expect(failed.stderr.split("\n")[0]).toBe(
+          "Error: Workhorse migration 0102-index-the-active-leases-of-each-admission-shard.sql failed part-way and rolled nothing back; the schema is still at its starting version and the body reruns from the beginning",
+        );
+        expect(failed.stderr).toContain(`Cause: probe: the session ended (SQLSTATE ${sqlState})`);
+        expect(failed.stderr).not.toContain("PostgreSQL refused the connection");
+      } finally {
+        await pool.query("DROP TRIGGER IF EXISTS probe_session_end ON workhorse.schema_version");
+        await pool.query("DROP FUNCTION IF EXISTS workhorse.probe_session_end()");
+        await pool.query("UPDATE workhorse.schema_version SET version = $1", [
+          WORKHORSE_SCHEMA_VERSION,
+        ]);
+        for (const row of recorded.rows) {
+          await pool.query(
+            "INSERT INTO workhorse.schema_migration (version, description) VALUES ($1, $2) ON CONFLICT DO NOTHING",
+            [row.version, row.description],
+          );
+        }
+      }
+    },
+  );
+
+  // A closed socket gives the driver error `Connection terminated unexpectedly`, which has no
+  // SQLSTATE. A proxy closes the connection when the step sends its statement (SM-2048).
+  it("names the failed step and the reason when the connection closes during the step", async () => {
+    // Remove the record of each step from 0102 on, so a migrate run applies each of them again.
+    const recorded = await pool.query<{ version: number; description: string }>(
+      "DELETE FROM workhorse.schema_migration WHERE version >= 101 RETURNING version, description",
+    );
+    await pool.query("UPDATE workhorse.schema_version SET version = 100");
+    const backend = new URL(databaseUrl);
+    const sockets = new Set<net.Socket>();
+    let cut = false;
+    const proxy = net.createServer((front) => {
+      const back = net.connect({ host: backend.hostname, port: Number(backend.port || 5432) });
+      for (const socket of [front, back]) {
+        sockets.add(socket);
+        socket.on("close", () => sockets.delete(socket));
+      }
+      front.on("error", () => back.destroy());
+      back.on("error", () => front.destroy());
+      let sent = "";
+      front.on("data", (chunk: Buffer) => {
+        sent += chunk.toString();
+        if (!cut && sent.includes("CREATE INDEX CONCURRENTLY IF NOT EXISTS task_runtime_active")) {
+          cut = true;
+          front.end();
+          back.destroy();
+          return;
+        }
+        back.write(chunk);
+      });
+      back.on("data", (chunk: Buffer) => front.write(chunk));
+      front.on("end", () => back.end());
+      back.on("end", () => front.end());
+    });
+    proxy.listen(0, "127.0.0.1");
+    await once(proxy, "listening");
+    try {
+      const address = proxy.address();
+      if (address === null || typeof address === "string") throw new Error("no proxy port");
+      const proxied = new URL(databaseUrl);
+      proxied.hostname = "127.0.0.1";
+      proxied.port = String(address.port);
+      const failed = await runCli(["schema", "migrate", `--database-url=${proxied.href}`]);
+      expect(cut).toBe(true);
+      expect(failed.code).toBe(1);
+      expect(failed.stderr.split("\n")[0]).toMatch(
+        /^Error: Workhorse migration 0102-index-the-active-leases-of-each-admission-shard\.sql failed part-way/,
+      );
+      expect(failed.stderr).toMatch(/^Cause: Connection terminated unexpectedly$/m);
+    } finally {
+      for (const socket of sockets) socket.destroy();
+      proxy.close();
+      await once(proxy, "close");
+      await pool.query("UPDATE workhorse.schema_version SET version = $1", [
+        WORKHORSE_SCHEMA_VERSION,
+      ]);
+      for (const row of recorded.rows) {
+        await pool.query(
+          "INSERT INTO workhorse.schema_migration (version, description) VALUES ($1, $2) ON CONFLICT DO NOTHING",
+          [row.version, row.description],
+        );
+      }
+    }
+  });
+
+  // Before any step runs, a wrong database name is a fault in the URL, so it keeps its sentence.
+  it("keeps the connection sentence when the database does not exist before any step", async () => {
+    const missing = new URL(databaseUrl);
+    missing.pathname = "/workhorse_probe_database_that_does_not_exist";
+    const failed = await runCli(["schema", "migrate", `--database-url=${missing.href}`]);
+    expect(failed.code).toBe(1);
+    expect(failed.stderr.split("\n")[0]).toBe(
+      'Error: PostgreSQL refused the connection: database "workhorse_probe_database_that_does_not_exist" does not exist (3D000). The database URL came from the --database-url option.',
+    );
   });
 
   // A data exception quotes the input in its message, for example a stored value that a step casts.
