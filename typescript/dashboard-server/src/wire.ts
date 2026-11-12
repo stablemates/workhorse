@@ -117,7 +117,7 @@ export interface DashboardIdempotencyEvidence {
   requestDigest: string;
 }
 
-/** @deprecated Renamed to `DashboardIdempotencyEvidence`. Removed in 1.0.0. */
+/** @deprecated Renamed to `DashboardIdempotencyEvidence`. The name stays through the 1.x line. It can go at the first contract step of the 2.x line. */
 export type IdempotencyEvidence = DashboardIdempotencyEvidence;
 
 /**
@@ -192,7 +192,7 @@ export function hasDashboardIdempotencyEvidence(
   return events.some((event) => readDashboardIdempotencyEvidence(event) !== null);
 }
 
-/** @deprecated Renamed to `readDashboardIdempotencyEvidence`. Removed in 1.0.0. */
+/** @deprecated Renamed to `readDashboardIdempotencyEvidence`. The name stays through the 1.x line. It can go at the first contract step of the 2.x line. */
 export function readIdempotencyEvidence(event: {
   type: string;
   details: unknown;
@@ -200,7 +200,7 @@ export function readIdempotencyEvidence(event: {
   return readDashboardIdempotencyEvidence(event);
 }
 
-/** @deprecated Renamed to `hasDashboardIdempotencyEvidence`. Removed in 1.0.0. */
+/** @deprecated Renamed to `hasDashboardIdempotencyEvidence`. The name stays through the 1.x line. It can go at the first contract step of the 2.x line. */
 export function hasIdempotencyEvidence(
   events: ReadonlyArray<{ type: string; details: unknown }>,
 ): boolean {
@@ -210,7 +210,7 @@ export function hasIdempotencyEvidence(
 /** Detail keys the dashboard is allowed to read. Exported so tests can pin the safe surface. */
 export const dashboardIdempotencyEventDetailKeys: readonly string[] = idempotencyDetailKeys;
 
-/** @deprecated Renamed to `dashboardIdempotencyEventDetailKeys`. Removed in 1.0.0. */
+/** @deprecated Renamed to `dashboardIdempotencyEventDetailKeys`. The name stays through the 1.x line. It can go at the first contract step of the 2.x line. */
 export const idempotencyEventDetailKeys: readonly string[] = idempotencyDetailKeys;
 
 /**
@@ -538,7 +538,7 @@ export interface DashboardMaintenanceLoopCadences {
   tickIntervalMs: number;
 }
 
-/** @deprecated Renamed to `DashboardMaintenanceLoopCadences`. Removed in 1.0.0. */
+/** @deprecated Renamed to `DashboardMaintenanceLoopCadences`. The name stays through the 1.x line. It can go at the first contract step of the 2.x line. */
 export type MaintenanceLoopCadences = DashboardMaintenanceLoopCadences;
 
 export interface DashboardWorkerRow {

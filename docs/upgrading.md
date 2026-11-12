@@ -16,7 +16,8 @@ day. It also corrects the statistics catch-up and the completion of history rete
 and queue health use one retention rule, and each retention window is a fixed number of hours. It
 keeps the audit of each settings change of the dashboard, lets each embedded dashboard withhold
 error stacks, and opens the detail of each record of the event feed. It gives the expired-lease scan
-a floor, and it counts the active leases of one admission shard through an index. The upgrade
+a floor, and it counts the active leases of one admission shard through an index. It also corrects
+three SDK APIs before 1.0.0. The upgrade
 is a rolling deployment, and a mixed fleet is supported while it runs.
 
 1. If you run cold exporters, stop each one and let it finish its object and manifest uploads. Keep
@@ -174,6 +175,18 @@ A worker of the new release also changes two rules that need no migration:
   the other six SDKs do. `Worker::run` drains the tasks in flight and returns the error of the pass.
   This also applies to the first pass at startup. Its supervisor must start it again
   ([Schema and SQL protocol: Failed maintenance pass](architecture/schema-and-protocol.md#failed-maintenance-pass)).
+
+Three SDK changes need a change in application code before the deployment. A 0.x minor can make
+such a change, and 1.0.0 cannot:
+
+- Ruby: `Queue#enqueue`, `TaskGroupBuilder#enqueue`, `HandlerContext#run_child`, and the `options`
+  of a `ChildTaskRequest` raise `ArgumentError` for `task_type:` or `payload:`. Pass the task type
+  and the payload as the positional arguments.
+- Python: the six numbered retry policy types of `workhorse.dashboard_v1` take the name of their
+  `type` value, for example `DashboardTaskRowRetryPolicyExponential`. Change each import, as
+  `python/CHANGELOG.md` lists.
+- .NET: `AddWorkhorse` throws for a `Json` section under `Workhorse:Queue` or `Workhorse:Worker`.
+  Remove the section, and set the JSON options in code.
 
 A 0.12 process keeps working on schema version 101, because a migration inside a major line only
 adds. Migration 0098 keeps `schedule_wait_v1`, `send_signal_v1`, and `create_children_v1` and their

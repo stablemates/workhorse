@@ -392,7 +392,8 @@ export {
 } from "./types.js";
 
 // Deprecated 0.x names for the ten types Python and Go already agreed on (WH-590).
-// Each is a type alias of its replacement and is removed in 1.0.0.
+// Each is a type alias of its replacement. Each name stays through the 1.x line. It can go at the
+// first contract step of the 2.x line.
 export type {
   EnqueueIdempotency,
   EnqueueDebounce,

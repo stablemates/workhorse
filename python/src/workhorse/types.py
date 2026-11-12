@@ -17,10 +17,16 @@ type EnqueueNonReplaceableReason = Literal[
     "incompatible_key_mode", "not_pending", "window_elapsed_pending"
 ]
 type NonReplaceableReason = EnqueueNonReplaceableReason
-"""Deprecated. Renamed to ``EnqueueNonReplaceableReason``. Removed in 1.0.0."""
+"""Deprecated. Renamed to ``EnqueueNonReplaceableReason``.
+
+The name stays through the 1.x line. It can go at the first contract step of the 2.x line.
+"""
 type DependencyTerminalPolicy = Literal["release", "cancel", "fail"]
 type TerminalPolicy = DependencyTerminalPolicy
-"""Deprecated. Renamed to ``DependencyTerminalPolicy``. Removed in 1.0.0."""
+"""Deprecated. Renamed to ``DependencyTerminalPolicy``.
+
+The name stays through the 1.x line. It can go at the first contract step of the 2.x line.
+"""
 type SignalDeliveryStatus = Literal[
     "delivered", "duplicate", "not_waiting", "already_delivered", "stale", "not_found"
 ]

@@ -8,6 +8,9 @@ internal static class WorkerConfiguration
     /// <summary>The key that Workhorse 0.11.0 removed, below the <c>Workhorse:Worker</c> section.</summary>
     private const string RemovedSharedHeartbeats = "SharedHeartbeats";
 
+    /// <summary>The configuration path of the worker options.</summary>
+    internal const string Prefix = "Workhorse:Worker";
+
     /// <summary>
     /// Refuses the removed <c>SharedHeartbeats</c> key in <paramref name="section"/>, with any value,
     /// also <c>null</c>. The binder ignores a key that names no option, so the check is explicit.
@@ -29,14 +32,18 @@ internal static class WorkerConfiguration
 
     /// <summary>
     /// Binds <paramref name="section"/>. The binder adds the items of a list key to the default list,
-    /// so a configured list replaces the default here. A reloaded configuration can add the removed
-    /// key after the registration, so the bind refuses it again.
+    /// so a configured list replaces the default here. The configuration can change after the
+    /// registration, so the bind refuses the removed key and each code-only option again. A
+    /// <c>RetryDelay</c> or <c>LoggerFactory</c> section, which the binder cannot fill, is refused
+    /// only here. The worker options register no change token, so this runs when the options are
+    /// read, never in a change callback.
     /// </summary>
-    /// <exception cref="InvalidOperationException">The section sets <c>SharedHeartbeats</c>.</exception>
+    /// <exception cref="InvalidOperationException">The section sets <c>SharedHeartbeats</c> or a code-only option.</exception>
     internal static void Bind(IConfigurationSection section, WorkerOptions options)
     {
         RefuseRemovedKeys(section);
-        section.Bind(options);
+        CodeOnlyOptions.Refuse(section, Prefix, typeof(WorkerOptions), atRegistration: false);
+        CodeOnlyOptions.BindListed(section, Prefix, options);
         if (List(section, nameof(WorkerOptions.Queues)) is { } queues)
         {
             options.Queues = queues;

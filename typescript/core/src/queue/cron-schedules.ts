@@ -21,7 +21,7 @@ export interface ScheduledTask {
   retryPolicy?: RetryPolicy;
 }
 
-/** @deprecated Renamed to {@link ScheduledTask}. Removed in 1.0.0. */
+/** @deprecated Renamed to {@link ScheduledTask}. The name stays through the 1.x line. It can go at the first contract step of the 2.x line. */
 export type ScheduleTaskDefinition = ScheduledTask;
 
 export type ScheduleCatchupPolicy = "skip" | "latest" | "all";

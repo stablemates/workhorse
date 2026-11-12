@@ -42,10 +42,10 @@ export interface HumanWaitCompletionResult<TResult extends Json = Json> {
   completedBy: string | null;
 }
 
-/** @deprecated Renamed to {@link HumanWaitCompletionStatus}. Removed in 1.0.0. */
+/** @deprecated Renamed to {@link HumanWaitCompletionStatus}. The name stays through the 1.x line. It can go at the first contract step of the 2.x line. */
 export type CompleteHumanWaitStatus = HumanWaitCompletionStatus;
 
-/** @deprecated Renamed to {@link HumanWaitCompletionResult}. Removed in 1.0.0. */
+/** @deprecated Renamed to {@link HumanWaitCompletionResult}. The name stays through the 1.x line. It can go at the first contract step of the 2.x line. */
 export type CompleteHumanWaitResult<TResult extends Json = Json> =
   HumanWaitCompletionResult<TResult>;
 

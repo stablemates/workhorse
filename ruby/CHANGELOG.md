@@ -309,6 +309,19 @@ of the whole queue. A heartbeat stays a HOT update. The schema moves to version 
 stays 99. If the build fails, drop the invalid index with `DROP INDEX CONCURRENTLY IF EXISTS
 workhorse.task_runtime_active_queue_shard_idx` and run `workhorse schema migrate` again.
 
+### Breaking: enqueue options cannot name the task type or the payload
+
+A wrapper called `queue.enqueue("send-invoice", payload, **options)`, and `options` held
+`task_type: "refund"` from a configuration file. Ruby keeps the last value of a repeated keyword,
+so Workhorse enqueued a `refund` task. Now `Queue#enqueue`, `TaskGroupBuilder#enqueue`,
+`HandlerContext#run_child`, and the `options` of a `ChildTaskRequest` raise `ArgumentError` for
+`task_type:` or `payload:` before any statement. The message names the keyword and says to use the
+positional argument. `HandlerContext#run_child` now checks its whole request before it reads the
+queue tier, as `run_children` does. `EnqueueRequest.new` keeps both keywords. `enqueue_many`,
+`add_to_task_group`, the Active Job adapter, and `workhorse_options(task_type:)` do not change. To
+upgrade, move the task type or the payload from the options into the positional arguments
+(SM-2039).
+
 ## 0.12.0 — 2026-11-07
 
 The npm packages, Python distribution, Go module, Rust crate, Ruby gem, JVM artifacts, and .NET

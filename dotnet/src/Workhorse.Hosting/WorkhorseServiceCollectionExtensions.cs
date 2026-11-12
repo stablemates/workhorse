@@ -17,6 +17,9 @@ public static class WorkhorseServiceCollectionExtensions
     /// <summary>The configuration section that <see cref="AddWorkhorse(IServiceCollection, IConfiguration)"/> reads.</summary>
     private const string Section = "Workhorse";
 
+    /// <summary>The configuration path of the queue options.</summary>
+    private const string QueueSection = "Workhorse:Queue";
+
     /// <summary>
     /// Registers <see cref="Queue"/> and <see cref="Admin"/> singletons on an <c>NpgsqlDataSource</c>
     /// from the container, and binds <see cref="QueueOptions"/> and <see cref="WorkerOptions"/> from
@@ -31,7 +34,10 @@ public static class WorkhorseServiceCollectionExtensions
     /// </remarks>
     /// <param name="services">The service collection.</param>
     /// <param name="configuration">The application configuration. The method reads its <c>Workhorse</c> section.</param>
-    /// <exception cref="InvalidOperationException">The configuration sets the removed key <c>Workhorse:Worker:SharedHeartbeats</c>.</exception>
+    /// <exception cref="InvalidOperationException">
+    /// The configuration sets the removed key <c>Workhorse:Worker:SharedHeartbeats</c>, or a section
+    /// for an option that only code can set, such as <c>Workhorse:Worker:Json</c>.
+    /// </exception>
     public static IServiceCollection AddWorkhorse(this IServiceCollection services, IConfiguration configuration)
     {
         ArgumentNullException.ThrowIfNull(services);
@@ -42,10 +48,19 @@ public static class WorkhorseServiceCollectionExtensions
         }
 
         var section = configuration.GetSection(Section);
-        // The removed key fails the registration, also in a process that never reads the worker options.
+        // The removed key and a code-only option that the binder can fill, such as Json, fail the
+        // registration, also in a process that never reads the options.
+        var queue = section.GetSection("Queue");
         WorkerConfiguration.RefuseRemovedKeys(section.GetSection("Worker"));
+        CodeOnlyOptions.Refuse(queue, QueueSection, typeof(QueueOptions), atRegistration: true);
+        CodeOnlyOptions.Refuse(section.GetSection("Worker"), WorkerConfiguration.Prefix, typeof(WorkerOptions), atRegistration: true);
         services.AddOptions();
-        services.AddOptions<QueueOptions>().Bind(section.GetSection("Queue"));
+        // The queue options bind only the listed keys, and they follow a reload of those keys, as
+        // Bind does. A Json section that a reload adds never reaches the binder, so the reload keeps
+        // the Web defaults and runs no refusal in a change callback.
+        services.AddOptions<QueueOptions>().Configure(options => CodeOnlyOptions.BindListed(queue, QueueSection, options));
+        services.AddSingleton<IOptionsChangeTokenSource<QueueOptions>>(
+            new ConfigurationChangeTokenSource<QueueOptions>(Options.DefaultName, queue));
         services.AddOptions<WorkerOptions>()
             .Configure(options => WorkerConfiguration.Bind(section.GetSection("Worker"), options))
             .PostConfigure<IServiceProvider>((options, provider) => options.LoggerFactory ??= provider.GetService<ILoggerFactory>());

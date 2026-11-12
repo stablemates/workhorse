@@ -27,10 +27,13 @@ module ApiSnapshot
   LITERALS = [String, Symbol, Integer, Float, TrueClass, FalseClass, NilClass].freeze
   # Where each public method that takes +**+ finds the keywords it accepts. The snapshot lists each
   # source, so a keyword a caller could pass has a line. A public +**+ missing here stops the tool.
+  # A method that takes the task type and the payload as positional arguments refuses those two
+  # keywords (SM-2039), so its source names them as excluded.
+  POSITIONAL_ENQUEUE = "Stablemates::Workhorse::EnqueueRequest#initialize less task_type:, payload:"
   KEYWORD_SOURCES = {
-    "Stablemates::Workhorse::HandlerContext#run_child" => "Stablemates::Workhorse::EnqueueRequest#initialize",
-    "Stablemates::Workhorse::Queue#enqueue" => "Stablemates::Workhorse::EnqueueRequest#initialize",
-    "Stablemates::Workhorse::TaskGroupBuilder#enqueue" => "Stablemates::Workhorse::EnqueueRequest#initialize",
+    "Stablemates::Workhorse::HandlerContext#run_child" => POSITIONAL_ENQUEUE,
+    "Stablemates::Workhorse::Queue#enqueue" => POSITIONAL_ENQUEUE,
+    "Stablemates::Workhorse::TaskGroupBuilder#enqueue" => POSITIONAL_ENQUEUE,
     "Stablemates::Workhorse::ActiveJob::Options::ClassMethods#workhorse_options" =>
       "Stablemates::Workhorse::ActiveJob::OPTION_KEYS"
   }.freeze

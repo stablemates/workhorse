@@ -234,7 +234,8 @@ export type {
 };
 export type { ScheduleCatchupPolicy, ScheduleDefinition, ScheduledTask, StoredSchedule };
 
-// Deprecated 0.x aliases for the names Python and Go already shared. Removed in 1.0.0.
+// Deprecated 0.x aliases for the names Python and Go already shared. Each name stays through the
+// 1.x line. It can go at the first contract step of the 2.x line.
 export type { SendSignalResult, SendSignalStatus } from "./queue/signals.js";
 export type { CompleteHumanWaitResult, CompleteHumanWaitStatus } from "./queue/human-waits.js";
 export type { ExternalWaitListOptions } from "./queue/external-waits.js";
@@ -582,7 +583,7 @@ export class Queue {
     return result.rows.map(concurrencyPolicy);
   }
 
-  /** @deprecated Use `listConcurrencyPolicies`. Removed in 1.0.0. */
+  /** @deprecated Use `listConcurrencyPolicies`. The name stays through the 1.x line. It can go at the first contract step of the 2.x line. */
   concurrencyPolicies(queueNames: readonly string[] = []): Promise<ConcurrencyPolicy[]> {
     return this.listConcurrencyPolicies(queueNames);
   }
@@ -614,7 +615,7 @@ export class Queue {
     return result.rows.map(rateLimitPolicy);
   }
 
-  /** @deprecated Use `listRateLimitPolicies`. Removed in 1.0.0. */
+  /** @deprecated Use `listRateLimitPolicies`. The name stays through the 1.x line. It can go at the first contract step of the 2.x line. */
   rateLimitPolicies(queueNames: readonly string[] = []): Promise<RateLimitPolicy[]> {
     return this.listRateLimitPolicies(queueNames);
   }

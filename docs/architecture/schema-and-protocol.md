@@ -814,8 +814,8 @@ served set instead:
 returns both facts in one round trip as `kind`/`version` rows. The function translates SQLSTATE
 `42P01` or `3F000` to `schema-not-installed`. It accepts exactly one `schema` row.
 
-`AssertCompatible` stays as a deprecated Go alias for the rest of the `0.x` line. It is removed in
-`1.0.0`. `go/compatibility_test.go` runs every case in `protocol/v1/compatibility.json`.
+Go 0.1.4 removed the deprecated alias `AssertCompatible`. `go/compatibility_test.go` runs every
+case in `protocol/v1/compatibility.json`.
 
 ### Conformance runner
 
@@ -1825,9 +1825,8 @@ return typed errors with typed detail structs and matching sentinel errors:
 
 The three `EnqueueNonReplaceableReason` constants have the enum prefix that every other Go constant
 group has: `NonReplaceableIncompatibleKeyMode`, `NonReplaceableNotPending`, and
-`NonReplaceableWindowElapsed`. `IncompatibleKeyMode`, `NotPending`, and `WindowElapsedPending`
-stay as deprecated Go aliases of the same values for the rest of the `0.x` line. They are removed in
-`1.0.0`.
+`NonReplaceableWindowElapsed`. Go 0.1.4 removed the deprecated aliases `IncompatibleKeyMode`,
+`NotPending`, and `WindowElapsedPending`.
 
 #### Compatibility and contract cache
 
@@ -2302,9 +2301,8 @@ an empty result without suspension.
 `ChildResultLimitExceededError` map the matching protocol statuses. The result-limit error keeps
 `ResultBytes` and `ResultLimitBytes`.
 
-The `Create`-prefixed name of each of these three methods stays as a deprecated Go alias for the
-rest of the `0.x` line. It is removed in `1.0.0`. `go/CHANGELOG.md` pairs every old Go name with its
-replacement.
+Go 0.1.4 removed the `Create`-prefixed name of each of these three methods. `go/CHANGELOG.md` pairs
+every old Go name with its replacement.
 
 #### Contracted children
 
@@ -2516,6 +2514,11 @@ Ruby `HandlerContext` in `ruby/lib/stablemates/workhorse/context.rb` also holds 
 | `wait_for_signal(name, timeout:)` and `wait_for_human(name, context, timeout:)` | Take an optional timeout from 1 millisecond through 7 days.                                                                       |
 | `run_child(name, task_type, payload, **options)`                                | Takes the `Queue#enqueue` keywords less the coalescing and dependency options, and calls `create_child_v2`.                       |
 | `run_children(children)` and `run_children_all(children)`                       | Take at most 100 `ChildTaskRequest` values with unique names, and call `create_children_v2` with mode `settled` or `all_success`. |
+
+The positional task type and payload are the only source of both. `run_child`, the `options` of a
+`ChildTaskRequest`, `Queue#enqueue`, and `TaskGroupBuilder#enqueue` raise `ArgumentError` for
+`task_type:` or `payload:` before any statement (SM-2039). `run_child` checks its request before it
+reads the queue tier, as `run_children` checks each child.
 
 `run_children` maps each name to a `ChildOutcome`. `run_children_all` maps each name to its result.
 If the child queue is omitted, it is the queue of the parent task. A replay keeps the queue of the
@@ -4481,6 +4484,21 @@ The `Workhorse:*` configuration keys and their defaults:
 A configured list key replaces its default list. Binding refuses the key of the heartbeat opt-out,
 which 0.11.0 removed, with an `InvalidOperationException` that names the removal. `api/dotnet.txt` records each key in its last
 section.
+
+Configuration sets only these keys. `QueueOptions` and `WorkerOptions` bind the listed keys of
+their sections and no other key. Another property of the options, `Json`, `RetryDelay`, or
+`LoggerFactory`, is set in code. The list below states when a section that names one is refused
+with an `InvalidOperationException`. The error names the section and says to set the option in code. Before this rule,
+a `Json` section gave a `JsonSerializerOptions` with the general defaults in place of the Web
+defaults (SM-2041). A key that names no option property stays ignored.
+
+- `AddWorkhorse` refuses a `Json` section, in any form.
+- The first read of the worker options refuses each code-only section. A `RetryDelay` or
+  `LoggerFactory` key with no child key stays accepted, as the binder accepted it. Thus a host that
+  never reads the worker options keeps working with such a section.
+- The queue options follow a reload of their listed keys, as before. A `Json` section that a reload
+  or a later configuration source adds never reaches the queue options, and no refusal runs in the
+  change callback. The worker options do not follow a reload.
 
 ### .NET EF Core transactions
 
