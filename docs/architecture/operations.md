@@ -249,6 +249,67 @@ All commands use the same exit codes:
 | 2    | Queue degradation reported by `health`                                         |
 | 64   | Usage error, including an unknown command, an unknown flag, or a missing value |
 
+### Schema command diagnostics
+
+An operator must be able to repair a failed migration step from the output of the schema commands.
+Two diagnostics give that output.
+
+**Cause of a failed step.** `applySchemaMigrationPlan` throws `Workhorse migration <file> failed and
+was rolled back`, or `failed part-way and rolled nothing back` for a non-transactional step. It keeps
+the PostgreSQL error as the `cause`. `workhorse schema migrate` prints the outer error first, with
+the same first line as before. Then `describeDatabaseCause` in
+`typescript/core/src/cli/database-cause.ts` prints these lines on stderr:
+
+- `Cause: <message> (SQLSTATE <code>)`;
+- `Detail: <DETAIL>`, only when PostgreSQL gives a DETAIL;
+- `Hint: <HINT>`, only when PostgreSQL gives a HINT.
+
+A row of a Workhorse table can hold a task payload, and a payload can hold a credential. Thus the
+function replaces a field that can quote stored data with
+`withheld, because it can quote the values of a row or an input`:
+
+| SQLSTATE starts with                  | Withheld fields                  | Why                                                 |
+| ------------------------------------- | -------------------------------- | --------------------------------------------------- |
+| `22` (data exception)                 | The error text, DETAIL, and HINT | The error text and DETAIL can quote the input value |
+| `23` (integrity constraint violation) | DETAIL and HINT                  | DETAIL quotes the failing row or the key value      |
+
+The SQLSTATE always shows, and the PostgreSQL server log keeps the full error.
+
+The function follows `cause` for a maximum of 8 links, and it stops at a cycle. It reads only a
+`DatabaseError` of the `pg` driver, which holds what the server sent about one statement. It adds
+no connection URL, no connection parameter, and no environment value to the output. A trigger or a
+function that an operator added to a Workhorse table can put stored data into the error text of
+another SQLSTATE, and the function then prints that data. It removes terminal control
+characters from the text. A socket error, a SQLSTATE that starts with 08 or 28, and `3D000` do not
+get these lines, because `describeDatabaseFailure` answers them first with one sentence. Another
+SQLSTATE gets them, for example `57P01` when an administrator ends the session.
+
+**Invalid indexes.** `workhorse schema status` reads `pg_index` for each index in the `workhorse`
+schema where `indisvalid` or `indisready` is false. A failed `CREATE INDEX CONCURRENTLY` leaves such
+an index. `readInvalidSchemaIndexes` in `typescript/core/src/cli/schema-status.ts` runs the query.
+The query reads only `pg_catalog`, so it works on each schema version and on a database with no
+Workhorse schema. On a healthy database it returns no row, and the command reads no migration file.
+
+For each index, `--json` gives an entry in `schema.invalidIndexes`:
+
+| Field           | Value                                                                                       |
+| --------------- | ------------------------------------------------------------------------------------------- |
+| `name`          | The schema-qualified index name                                                             |
+| `table`         | The schema-qualified table                                                                  |
+| `valid`         | `pg_index.indisvalid`                                                                       |
+| `ready`         | `pg_index.indisready`                                                                       |
+| `dropStatement` | `DROP INDEX CONCURRENTLY IF EXISTS <name>;`, without `CONCURRENTLY` for a partitioned index |
+| `buildStep`     | The newest step whose body has a `CREATE INDEX` of that name, or `null`                     |
+
+`buildStep.applied` is true when the installed version is at or past `buildStep.toVersion`. Then
+`workhorse schema migrate` does not run the step again, and the operator runs its `CREATE INDEX`
+statement. The text output gives two lines for each index: the drop statement, then how the index
+is built again. A last line says that a running concurrent build also shows as not valid. A healthy database gets `[]` and no text line.
+
+An invalid index does not change `schema.compatible` or the exit code. Exit code 1 of
+`schema status` means that this runtime refuses the schema or the server, and an invalid index
+refuses nothing.
+
 ### Repository scripts outside the dispatcher
 
 `typescript/core/src/cli/benchmark.ts` and `typescript/core/src/cli/reset-db.ts` are repository

@@ -417,6 +417,33 @@ interface HumanWaitPage<TContext extends Json = Json> {
   nextCursor: ExternalWaitCursor | null;
 }
 
+interface InvalidSchemaIndex {
+  /** The schema-qualified index name, quoted where PostgreSQL requires it. */
+  readonly name: string;
+  /** The schema-qualified table of the index. */
+  readonly table: string;
+  /** `pg_index.indisvalid`: whether a query can use the index. */
+  readonly valid: boolean;
+  /** `pg_index.indisready`: whether each write updates the index. */
+  readonly ready: boolean;
+  /**
+  * The statement that removes the index. It is `DROP INDEX CONCURRENTLY`, apart from a
+  * partitioned index, where PostgreSQL refuses `CONCURRENTLY`.
+  */
+  readonly dropStatement: string;
+  /**
+  * The last migration step that builds an index of this name, or `null` when no step does.
+  * `applied` is true when the installed schema is past that step: then `workhorse schema migrate`
+  * does not run it again, and the operator runs its `CREATE INDEX` statement.
+  */
+  readonly buildStep: {
+    readonly file: string;
+    readonly fromVersion: number;
+    readonly toVersion: number;
+    readonly applied: boolean;
+  } | null;
+}
+
 type Json = null | boolean | number | string | Json[] | {
   [key: string]: Json;
 };
@@ -829,6 +856,15 @@ interface SchemaStatusReport {
     readonly refusal: string | null;
     /** The same refusal as the code `SchemaCompatibilityError` carries. `null` when compatible. */
     readonly refusalCode: SchemaCompatibilityCode | null;
+    /**
+    * Each index in the `workhorse` schema that PostgreSQL marks not valid or not ready.
+    *
+    * A failed `CREATE INDEX CONCURRENTLY` leaves such an index. It serves no query. When `ready` is
+    * true, each write still updates it. `IF NOT EXISTS` skips the build of the step that runs
+    * again. Empty on a healthy database. An entry does not change `compatible` or the exit code.
+    * A concurrent build that still runs also shows here until it ends.
+    */
+    readonly invalidIndexes: readonly InvalidSchemaIndex[];
   };
   readonly postgres: PostgresSupport & {
     readonly minimumMajor: number;

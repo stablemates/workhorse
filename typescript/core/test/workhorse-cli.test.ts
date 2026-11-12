@@ -257,6 +257,7 @@ describe("schema status JSON", () => {
         compatible: false,
         refusal: expect.stringContaining("below the minimum"),
         refusalCode: "schema-too-old",
+        invalidIndexes: [],
       },
       fleet: { clientProtocolVersions: [], note: FLEET_EVIDENCE_NOTE },
       postgres: {

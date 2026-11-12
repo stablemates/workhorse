@@ -451,6 +451,26 @@ of the whole queue. A heartbeat stays a HOT update. The schema moves to version 
 stays 99. If the build fails, drop the invalid index with `DROP INDEX CONCURRENTLY IF EXISTS
 workhorse.task_runtime_active_queue_shard_idx` and run `workhorse schema migrate` again.
 
+### `workhorse schema migrate` shows the PostgreSQL cause of a failed step
+
+When a migration step failed, `workhorse schema migrate` printed only that the step failed and was
+rolled back, or failed part-way. The PostgreSQL error stayed hidden. Thus the guard of migration 0102
+told nobody to drop the invalid index (SM-2005). The command now prints the PostgreSQL message and
+SQLSTATE on a `Cause:` line after the first line, and `Detail:` and `Hint:` lines when PostgreSQL
+gives them. The first line does not change, so a script that matches it continues to work. The lines
+come only from the error of the PostgreSQL driver, and the command adds no connection URL to them. For a SQLSTATE
+that starts with 22 or 23, the command withholds each field that can quote the values of a row or an
+input, because a task payload can hold a credential. The SQLSTATE still shows.
+
+### `workhorse schema status` reports an invalid Workhorse index
+
+A failed `CREATE INDEX CONCURRENTLY` leaves an invalid index, and no schema check found it
+(SM-2033). `workhorse schema status` now lists each index in the `workhorse` schema that PostgreSQL
+marks not valid or not ready. The `--json` output has the new field `schema.invalidIndexes`. Each
+entry gives the `DROP INDEX CONCURRENTLY` statement and the migration step that builds the index
+again. On a healthy database the list is empty, and the text output does not change. An invalid
+index does not change the exit code, because this runtime does not refuse the schema.
+
 ## 0.12.0 — 2026-11-07
 
 The npm packages, Python distribution, Go module, Rust crate, Ruby gem, JVM artifacts, and .NET

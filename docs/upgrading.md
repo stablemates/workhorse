@@ -210,9 +210,10 @@ If the build fails, PostgreSQL keeps an invalid index with the name
 migration stops with the error
 `workhorse.task_runtime_active_queue_shard_idx is invalid after an earlier failed build`. If a
 peer migrator failed its build at the same time, the step stops with the error
-`workhorse.task_runtime_active_queue_shard_idx is missing or invalid after its build`. The
-`workhorse schema migrate` command reports only that the step failed part-way. To repair the
-database:
+`workhorse.task_runtime_active_queue_shard_idx is missing or invalid after its build`.
+`workhorse schema migrate` prints the error on the `Cause:` line, after the line that names the
+failed step. `workhorse schema status` also lists the invalid index with the statement that drops
+it. To repair the database:
 
 1. Find the cause of the failure, for example a canceled statement or a full disk, and correct it.
 2. Remove the invalid index:
