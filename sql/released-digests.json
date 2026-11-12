@@ -84,6 +84,19 @@
   "sql/migrations/0090-settle-a-fast-tier-cancellation-at-its-deadline-after-its-timeout.sql": "8b7d2e0a82bd12c6985f6bdf1e2c7027271f6d2ee59da9d41fc5e9d2c01cf14a",
   "sql/migrations/0091-show-the-task-group-in-the-task-detail.sql": "01acee6baa81446a84e5cf71b2c96f094269e78210f18030a4867f48791567a9",
   "sql/migrations/0092-scale-the-dashboard-task-estimate-by-the-table-size.sql": "ca978c401c3f07350dcf24e399af633de034cdcdd81b19d4e97440c7087275fa",
+  "sql/migrations/0093-decide-debounce-with-one-clock-and-keep-pending-debounce-keys.sql": "164323b05570c770bebb194ef2ec820af158cd567323a8cd316a3ce83e18b3f3",
+  "sql/migrations/0094-purge-locked-tasks-lock-stale-tiers-and-start-leases-after-locks.sql": "83741b58d7173c41e2ce46c2c8240f1aa158ef0c7766ef728eb06320ee95206e",
+  "sql/migrations/0095-isolate-each-schedule-in-a-pass-and-match-two-wildcard-day-fields.sql": "26909ec93a951d888efae09257fe1d1c3bd4ca06d63ad048e313e5bd604615fe",
+  "sql/migrations/0096-export-a-day-after-its-snapshot-frontier-and-keep-held-retention-due.sql": "21cdfae0e6f2ca972515905059e59456d416e141a86fae44ea5ea1ebd1f31a5b",
+  "sql/migrations/0097-give-cleanup-and-health-one-retention-rule-in-fixed-hours.sql": "b34be8cbc64dc1ef448f6067c15eef4126cde862acedf9ea3873fad7aba3f999",
+  "sql/migrations/0098-compare-wait-targets-in-milliseconds-and-report-second-child-sets.sql": "77120a532e3cae401302347252d6c54124ea22f900718798eef9c956195ff960",
+  "sql/migrations/0099-keep-the-settings-audit-withhold-error-stacks-and-find-derived-records.sql": "74f90e019b982da72997e3c3cc9654c2ae69d8608b2d9aeccaa5e4819ad7ce3c",
+  "sql/migrations/0100-bound-failure-envelopes-and-answer-oversized-checkpoints.sql": "71ae310e2f51397270ecb5f05951d2a7d8a4bc1b3f31e7413d1dfd3831ab92c4",
+  "sql/migrations/0101-floor-the-lease-scan-gate-and-count-one-admission-shard.sql": "fa961b9ee22ccb9d5fac9d92dbcf160b3cd81b6fd8e57da0d984a71bf9a00aad",
+  "sql/migrations/0102-index-the-active-leases-of-each-admission-shard.sql": "b7051a847d96e2a44b7aacdb19296537527a5aaf453efdecb0269783f32478f7",
+  "sql/migrations/0103-take-enqueue-locks-in-key-tier-row-order.sql": "a5b69619f3c0a0bd01de304d4751cd8918c06ae7f224447c1f6a212ade2ac798",
+  "sql/migrations/0104-keep-each-hold-end-and-start-health-walks-after-held-rows.sql": "1d0cc06c68f3c1f306ea65b3a4a0304055f9d30d36e3b8dc1262d47370425ab9",
+  "sql/migrations/0105-seek-the-task-of-an-event-detail-record.sql": "34f5892ff6a6f6b840bc8519cb56c90dd9a9eb22eea7178be758659e76427e07",
   "sql/releases/0006.sql": "5f96a8e70b44c13dc74e8716c849da2bad4cea03510ebfb18181deaf7d6db91b",
   "sql/releases/0009.sql": "41de08c9a7126d243da21f93d2ad844098c515b643f809cf45f7a54099e4e5e4",
   "sql/releases/0023.sql": "338125155cba473f7bbc7638926fb93dfd53467e684a6495a7b0c6ef702ab229",
@@ -95,5 +108,6 @@
   "sql/releases/0073.sql": "9c73a8854f27245832a8b0d84394caedb86c79c5e17499cd821d10d6bfbde84d",
   "sql/releases/0086.sql": "c2781c4e89f3fd313c9f8ece6bc12e1261558dea92dcc94905b2bd0c3fcfda47",
   "sql/releases/0089.sql": "2b8e9ca33d75f0c8a97256093fd0b466ac3ff05d6df22e3aec6c78f814366985",
-  "sql/releases/0091.sql": "ff8334a13039973397490066f269729b82b4cd2bdca53b8150217dab4d6151ec"
+  "sql/releases/0091.sql": "ff8334a13039973397490066f269729b82b4cd2bdca53b8150217dab4d6151ec",
+  "sql/releases/0104.sql": "aea2913736dd0982e1e412f2777da5c86091e564925bb1c95307d98eb9f5369a"
 }

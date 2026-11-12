@@ -7,9 +7,12 @@ schema version, and the steps that the upgrade needs.
 [Compatibility and support boundary](compatibility.md) states the schema guarantees that every
 upgrade keeps. Each changelog states the full changes of its release.
 
-## Upgrade from 0.12.x to the next release
+## Upgrade from 0.12.x to 0.14.0
 
-The next release corrects how debounce, enqueue, queue purge, and claims use the clock and their
+The project publishes no 0.13.0. The maintainer skipped that number, so 0.14.0 is the
+release after 0.12.0, and this section covers the upgrade from each 0.12.x release.
+
+0.14.0 corrects how debounce, enqueue, queue purge, and claims use the clock and their
 locks. It also limits the queue name of an enqueue, and it keeps one failed schedule from stopping
 the other schedules. It makes cold export wait for the transactions that can still write into a
 day. It also corrects the statistics catch-up and the completion of history retention. Terminal cleanup
@@ -19,18 +22,19 @@ error stacks, and opens the detail of each record of the event feed. It gives th
 a floor, and it counts the active leases of one admission shard through an index. It keeps the end
 of each hold of a finished task, starts each health walk after the held rows that an earlier poll
 read, and reports a terminal cleanup that does not complete. The event detail of the dashboard
-reads only the history of its task. It also corrects
-three SDK APIs before 1.0.0. It changes how Rust code builds a record and matches an enum, and it
-removes items from the Rust and Go APIs that were never meant for applications. In TypeScript, the
-`Handler` type accepts a handler with no return value. This changes the type that code which calls a
-handler reads, as
-[Update TypeScript code that reads a handler value](#update-typescript-code-that-reads-a-handler-value)
-states. The upgrade is a rolling deployment, and a mixed fleet is supported while it runs.
+reads only the history of its task. The upgrade is a rolling deployment, and a mixed fleet is
+supported while it runs.
+
+0.14.0 is the last minor release before 1.0.0 that can make a change that is not an addition. It
+makes such changes in the TypeScript, Python, Go, Rust, Ruby, and .NET SDKs.
+[Change application code before the deployment](#change-application-code-before-the-deployment)
+lists them by SDK, with what you must change. The JVM SDK has no such change.
 
 1. If you run cold exporters, stop each one and let it finish its object and manifest uploads. Keep
    cold export enabled, so retention keeps waiting for the export.
 2. Run `workhorse schema migrate`. It applies migrations 0093 through 0105 and leaves the schema at
-   version 104. Do this before the first process of the new release starts, because the floor rises.
+   version 104. Do this before the first process of 0.14.0 starts, because the SDK schema floor
+   rises from 76 to 99.
    Migration 0102 builds an index on `task_runtime` without a block on writes. On a large table the
    build can take a long time, as the next section states.
 3. Roll out the new processes in any order. Then start the exporters again.
@@ -57,7 +61,7 @@ each `cold_export_segment` row that is exporting.
 
 Migrations 0093 through 0097 keep the floor. With migrations 0098, 0099, and 0100, the SDK schema floor rises from 76 to 99.
 Migrations 0101 through 0105 add no function that an SDK calls, so they keep the floor at 99.
-Each SDK statement catalogue of the new release names `schedule_wait_v2`, `send_signal_v2`, and
+Each SDK statement catalogue of 0.14.0 names `schedule_wait_v2`, `send_signal_v2`, and
 `create_children_v2`, which schema version 97 adds. The dashboard host of each SDK calls
 `override_retention_policy_v2` and the three other audited policy functions, which schema version
 98 adds. Migration 0100 adds `fail_v2` and `save_checkpoint_v3`, which each catalogue also names, so
@@ -148,7 +152,7 @@ change for every SDK version when each migration commits:
   derives for a fast-tier task opens its detail. Before, it returned null for almost each such
   record.
 
-Migration 0098 adds function versions, so its answers reach only the processes of the new release:
+Migration 0098 adds function versions, so its answers reach only the processes of 0.14.0:
 
 - A replay of an absolute timer compares the target at millisecond precision. Before, a task that a
   Python, Go, or Rust worker parked with digits below the millisecond failed with a wait conflict
@@ -163,7 +167,7 @@ Migration 0098 adds function versions, so its answers reach only the processes o
   error. The task still fails with no retry.
 - The group snapshot shows a callback that failed to enqueue at the finish, with its SQLSTATE, error message, and time. Retention deletes this record with the group.
 
-Migration 0100 also adds function versions. A worker of the new release changes two failure rules:
+Migration 0100 also adds function versions. A worker of 0.14.0 changes two failure rules:
 
 - It cuts the `name`, the `message`, and the `stack` of a failure envelope to 1,024, 16,384, and 65,536
   UTF-8 bytes, and it adds `"truncated": true` to an envelope that it cut. A reader that expects
@@ -174,7 +178,7 @@ Migration 0100 also adds function versions. A worker of the new release changes 
   ran the operation of the checkpoint again. Correct the handler, and then redrive the task
   ([Delivery guarantees](guides/030-delivery-guarantees.md#keep-a-checkpoint-value-below-its-limit)).
 
-A worker of the new release also changes two rules that need no migration:
+A worker of 0.14.0 also changes two rules that need no migration:
 
 - A child limit refusal now fails the task at the first attempt and not after `maxAttempts`. This
   applies to a second single child, a set of more than 100 children, and a child join whose
@@ -187,21 +191,14 @@ A worker of the new release also changes two rules that need no migration:
   This also applies to the first pass at startup. Its supervisor must start it again
   ([Schema and SQL protocol: Failed maintenance pass](architecture/schema-and-protocol.md#failed-maintenance-pass)).
 
-Three SDK changes need a change in application code before the deployment. A 0.x minor can make
-such a change, and 1.0.0 cannot:
-
-- Ruby: `Queue#enqueue`, `TaskGroupBuilder#enqueue`, `HandlerContext#run_child`, and the `options`
-  of a `ChildTaskRequest` raise `ArgumentError` for `task_type:` or `payload:`. Pass the task type
-  and the payload as the positional arguments.
-- Python: the six numbered retry policy types of `workhorse.dashboard_v1` take the name of their
-  `type` value, for example `DashboardTaskRowRetryPolicyExponential`. Change each import, as
-  `python/CHANGELOG.md` lists.
-- .NET: `AddWorkhorse` throws for a `Json` section under `Workhorse:Queue` or `Workhorse:Worker`.
-  Remove the section, and set the JSON options in code.
+Some changes in the SDKs need a change in application code before the deployment.
+[Change application code before the deployment](#change-application-code-before-the-deployment)
+lists them.
 
 A 0.12 process keeps working on schema version 104, because a migration inside a major line only
 adds. Migration 0098 keeps `schedule_wait_v1`, `send_signal_v1`, and `create_children_v1` and their
 answers. Migration 0100 keeps `fail_v1`, `fast_fail_v1`, and `save_checkpoint_v2` and their answers.
+0.14.0 freezes `sql/releases/0104.sql`.
 
 Migration 0101 changes two function bodies for every SDK version when it commits:
 
@@ -238,7 +235,7 @@ Migration 0104 changes these behaviors for every SDK version when it commits:
 [Lifecycle: Retention health](architecture/lifecycle.md#retention-health)).
 
 Migration 0105 changes one function body for every SDK version when it commits. A dashboard host
-of the new release sends the task of the record that the page opens, and
+of 0.14.0 sends the task of the record that the page opens, and
 `dashboard_event_detail_v1` then reads only the history rows of that task. Before, each event
 detail read each fast-tier row. A host or page of an earlier release sends no task and gets the same
 answer as before. An address that an operator saved before the upgrade names no task and still opens
@@ -250,7 +247,7 @@ its record
 Migration 0102 runs outside a transaction. `CREATE INDEX CONCURRENTLY` lets claims, heartbeats,
 and releases continue during the build. The build reads the whole `task_runtime` table, so its time
 grows with the size of the table. It also waits for each transaction that was open on the table when
-it started, so a long transaction delays it. A process of the new release does not wait for the
+it started, so a long transaction delays it. A process of 0.14.0 does not wait for the
 build, because the floor is 99. Until the build ends, each release with a concurrency policy counts
 its shard more slowly. After the build, each claim writes one more index entry, and a heartbeat
 stays a HOT update.
@@ -276,11 +273,139 @@ it. To repair the database:
 
 [Non-transactional steps](schema-lifecycle.md#non-transactional-steps) states the general rule.
 
-### Change Rust code that builds records or matches enums
+### Change application code before the deployment
 
-The next release opens the public records and enums of the Rust crate to additions, before 1.0.0.
-A later release can then add a field or a variant without a break. The change is in the source of a caller, not in the
-database or the protocol, so it does not affect a rolling deployment.
+A 0.x minor release can make a change that is not an addition, and 1.0.0 cannot. These changes of
+0.14.0 are in the source of an application, not in the database or the protocol. Thus they do not
+affect a rolling deployment, but each one can stop a build or make a call fail. Change the
+application before you deploy 0.14.0. The JVM SDK has no such change.
+
+#### TypeScript: update code that reads a handler value
+
+The `Handler` type returns `HandlerResult<TResult>`. A handler whose result type includes `null`,
+such as the default `Json`, can return no value, and the worker stores `null`. A handler and a call
+to `Worker.handle` or `replayHandler` compile as before. A handler whose result type excludes
+`null` must still return a value (SM-2012).
+
+Code that calls a `Handler` and reads its value can now read `undefined`. Thus this wrapper no
+longer compiles:
+
+```ts
+const logged = async (handler: Handler<null>, context: HandlerContext<null>): Promise<Json> =>
+  await handler(null, context);
+```
+
+To get the value that the worker stores, add `?? null`:
+
+```ts
+const logged = async (handler: Handler<null>, context: HandlerContext<null>): Promise<Json> =>
+  (await handler(null, context)) ?? null;
+```
+
+A wrapper that only gives the value back can use the return type `Promise<HandlerResult>`. A
+generic wrapper with the result type `R` must use the return type `Promise<HandlerResult<R>>`.
+For such a wrapper, `?? null` does not give `R`, because `R` can exclude `null`. This change has no
+effect on the stored results, the database, or a mixed fleet.
+
+#### TypeScript: check payload contracts against the stored value
+
+A TypeScript payload contract or result contract now validates the value of the JSON text that the
+queue stores. Before, it validated the object that the caller gave (SM-2011). The handler reads the
+stored value, so the contract now checks the value that the handler gets. A number token that a
+double cannot hold exactly, such as `JSON.rawJSON("9007199254740993")`, fails each contract with
+`TaskContractValidationError`, because the check could read only a rounded number. This change can
+make an enqueue fail that passed before, or pass that failed before.
+
+The contract reads the value that `JSON.stringify` gives for your object:
+
+| Value in your object                                          | Value that the contract reads                          |
+| ------------------------------------------------------------- | ------------------------------------------------------ |
+| A `Date`, or another object with a `toJSON` method            | The value that `toJSON` gives                          |
+| A property that the object inherits or that is not enumerable | No property                                            |
+| A property whose value is `undefined`                         | No property                                            |
+| A missing or `undefined` array member                         | `null`                                                 |
+| A boxed `Number`, `String`, or `Boolean`                      | Its primitive value                                    |
+| A `JSON.rawJSON` value                                        | Its JSON value, and a number token reads as its number |
+
+Thus, for example:
+
+- A `Date` field under `"type": "object"` now fails with `TaskContractValidationError`. A `Date`
+  field under `"type": "string"`, for example with `"format": "date-time"`, failed before and now
+  passes.
+- A required field that the object only inherits now fails. An object with an `undefined` property
+  now passes `"additionalProperties": false`.
+- A `NaN` or infinite number, a `Map`, or a `Set` now fails with a `TypeError` that names its path,
+  before the contract runs. Before, a contract that refused the value raised
+  `TaskContractValidationError`.
+
+To prepare for the upgrade:
+
+1. Find each task type with a contract whose payload holds a value from the table.
+2. Give such a field a plain JSON value, and give each required field as an own property.
+3. Change the schema so it describes the value in the right column, for example `"type": "string"`
+   for a `Date`.
+4. If your code catches `TaskContractValidationError` for a non-finite number, a `Map`, or a `Set`,
+   also catch `TypeError`.
+
+The rule applies to an enqueue, a task group, a schedule, a child, and a handler result.
+
+#### TypeScript: store only values that JSON keeps
+
+The TypeScript SDK refuses a `NaN` or infinite number, a `Map`, and a `Set` at any depth in each
+value that it stores as JSON, with a `TypeError` that names the path (SM-1930, SM-2011). Before,
+JSON changed such a value to `null` or `{}`, and the task was accepted. The rule also applies to
+the options of an enqueue, a child, or a schedule, and to the policy and contract definitions. For
+example, an `executionTimeoutMs` of `NaN` now fails, and before it was stored as no timeout. Find
+such values, and give a plain JSON value in their place.
+
+#### TypeScript: send the dashboard origin with a login
+
+The login `POST` of `@stablemates/workhorse-dashboard-server` refuses a request whose `Origin` is
+absent, malformed, or another origin, with `403` (SM-1949). The login page of the dashboard sends
+its own `Origin`. A client that posts the login form itself must send the `Origin` of the dashboard.
+Behind a TLS proxy, set `publicOrigin`.
+
+#### Python: rename the dashboard retry policy types
+
+The binding generator of `workhorse.dashboard_v1` now names each branch of a retry policy union
+from its `type` value (SM-2040). The six numbered names are removed, with no alias. Change each
+import:
+
+| Old name                                         | New name                                                   |
+| ------------------------------------------------ | ---------------------------------------------------------- |
+| `DashboardTaskDetailIdentityRetryPolicyVariant2` | `DashboardTaskDetailIdentityRetryPolicyDecorrelatedJitter` |
+| `DashboardTaskDetailIdentityRetryPolicyVariant3` | `DashboardTaskDetailIdentityRetryPolicyExponential`        |
+| `DashboardTaskDetailIdentityRetryPolicyVariant4` | `DashboardTaskDetailIdentityRetryPolicyFixed`              |
+| `DashboardTaskRowRetryPolicyVariant2`            | `DashboardTaskRowRetryPolicyDecorrelatedJitter`            |
+| `DashboardTaskRowRetryPolicyVariant3`            | `DashboardTaskRowRetryPolicyExponential`                   |
+| `DashboardTaskRowRetryPolicyVariant4`            | `DashboardTaskRowRetryPolicyFixed`                         |
+
+#### Python: give each payload key as a string
+
+An enqueue now raises `ValueError` before any statement for a payload key that is not a `str`, and
+for a `NaN` or infinite `float` (SM-1989). Before, `json.dumps` turned such a key into a string, and
+`jsonb` kept one of two equal keys. A non-finite `float` failed in PostgreSQL and aborted the
+transaction of the caller. Give each payload key as a `str`, and send no non-finite number.
+
+#### Go: stop importing the sqlc example package
+
+The generated queries of the sqlc example moved from `go/examples/sqlc/generated` to
+`go/examples/sqlc/internal/generated`. Another module can no longer import them. The package held
+the business queries of one example and was never part of the Workhorse Go API. If your code
+imports `github.com/stablemates/workhorse/go/examples/sqlc/generated`, generate your own queries
+with sqlc, as the example shows.
+
+#### Go: require pgx 5.12.0
+
+The Go module requires pgx 5.12.0, not 5.11.0, because pgx 5.12.0 fixes two high-severity
+advisories. Minimum version selection raises the pgx requirement of your module to that version.
+pgx 5.12.0 adds a `Tx` method to the `BatchResults` interface, so add that method to each custom
+implementation or mock of that interface.
+
+#### Rust: build records in two steps and give each match a fallback arm
+
+0.14.0 opens the public records and enums of the Rust crate to additions, before 1.0.0. A later
+release can then add a field or a variant without a break.
 
 Each public record with public fields and each public enum is now `#[non_exhaustive]`, with eight
 exceptions. The open types are in three groups:
@@ -343,82 +468,29 @@ The crate also no longer publishes these items. No application needs them:
   `Executor` bound exposed. Use
   `contracts::compile_contract_schema` to compile a schema.
 
-### Stop importing the Go sqlc example package
+#### Ruby: give the task type and the payload as positional arguments
 
-The generated queries of the sqlc example moved from `go/examples/sqlc/generated` to
-`go/examples/sqlc/internal/generated`. Another module can no longer import them. The package held
-the business queries of one example and was never part of the Workhorse Go API. If your code
-imports `github.com/stablemates/workhorse/go/examples/sqlc/generated`, generate your own queries
-with sqlc, as the example shows.
+`Queue#enqueue`, `TaskGroupBuilder#enqueue`, `HandlerContext#run_child`, and the `options` of a
+`ChildTaskRequest` raise `ArgumentError` for `task_type:` or `payload:` before any statement
+(SM-2039). Before, Ruby kept the last value of a repeated keyword, so such an option replaced the
+task type or the payload that the positional arguments gave. Move the task type or the payload from
+the options into the positional arguments. `EnqueueRequest.new`, `enqueue_many`,
+`add_to_task_group`, and the Active Job adapter do not change.
 
-### Update TypeScript code that reads a handler value
+#### Ruby: use Active Job 8.1 with the adapter
 
-The `Handler` type returns `HandlerResult<TResult>`. A handler whose result type includes `null`,
-such as the default `Json`, can return no value, and the worker stores `null`. A handler and a call
-to `Worker.handle` or `replayHandler` compile as before. A handler whose result type excludes
-`null` must still return a value (SM-2012).
+The Active Job adapter requires Active Job 8.1 or later, because Rails 8.0 reached the end of its
+security support on 2026-11-07. With Active Job 8.0, a selection or a `require` of the adapter
+raises `LoadError`. An application that uses only the native API still starts on Rails 8.0. If your
+application uses the adapter, upgrade Rails to 8.1 before you deploy 0.14.0.
 
-Code that calls a `Handler` and reads its value can now read `undefined`. Thus this wrapper no
-longer compiles:
+#### .NET: set the JSON options in code
 
-```ts
-const logged = async (handler: Handler<null>, context: HandlerContext<null>): Promise<Json> =>
-  await handler(null, context);
-```
-
-To get the value that the worker stores, add `?? null`:
-
-```ts
-const logged = async (handler: Handler<null>, context: HandlerContext<null>): Promise<Json> =>
-  (await handler(null, context)) ?? null;
-```
-
-A wrapper that only gives the value back can use the return type `Promise<HandlerResult>`. A
-generic wrapper with the result type `R` must use the return type `Promise<HandlerResult<R>>`.
-For such a wrapper, `?? null` does not give `R`, because `R` can exclude `null`. This change has no
-effect on the stored results, the database, or a mixed fleet.
-
-### Check TypeScript payload contracts against the stored value
-
-A TypeScript payload contract or result contract now validates the value of the JSON text that the
-queue stores. Before, it validated the object that the caller gave (SM-2011). The handler reads the
-stored value, so the contract now checks the value that the handler gets. A number token that a
-double cannot hold exactly, such as `JSON.rawJSON("9007199254740993")`, fails each contract with
-`TaskContractValidationError`, because the check could read only a rounded number. This change can
-make an enqueue fail that passed before, or pass that failed before.
-
-The contract reads the value that `JSON.stringify` gives for your object:
-
-| Value in your object                                          | Value that the contract reads                          |
-| ------------------------------------------------------------- | ------------------------------------------------------ |
-| A `Date`, or another object with a `toJSON` method            | The value that `toJSON` gives                          |
-| A property that the object inherits or that is not enumerable | No property                                            |
-| A property whose value is `undefined`                         | No property                                            |
-| A missing or `undefined` array member                         | `null`                                                 |
-| A boxed `Number`, `String`, or `Boolean`                      | Its primitive value                                    |
-| A `JSON.rawJSON` value                                        | Its JSON value, and a number token reads as its number |
-
-Thus, for example:
-
-- A `Date` field under `"type": "object"` now fails with `TaskContractValidationError`. A `Date`
-  field under `"type": "string"`, for example with `"format": "date-time"`, failed before and now
-  passes.
-- A required field that the object only inherits now fails. An object with an `undefined` property
-  now passes `"additionalProperties": false`.
-- A `NaN` or infinite number, a `Map`, or a `Set` now fails with a `TypeError` that names its path,
-  before the contract runs. Before, a contract that refused the value raised
-  `TaskContractValidationError`.
-
-To prepare for the upgrade:
-
-1. Find each task type with a contract whose payload holds a value from the table.
-2. Give such a field a plain JSON value, and give each required field as an own property.
-3. Change the schema so it describes the value in the right column, for example `"type": "string"`
-   for a `Date`.
-4. If your code catches `TaskContractValidationError` for a non-finite number, a `Map`, or a `Set`,
-   also catch `TypeError`.
-
-The rule applies to an enqueue, a task group, a schedule, a child, and a handler result.
+`AddWorkhorse` throws `InvalidOperationException` for a `Json` section under `Workhorse:Queue` or
+`Workhorse:Worker` (SM-2041). Before, the binder created a `JsonSerializerOptions` with the general
+defaults, and that replaced the Web defaults. Remove the section, and set the JSON options in code:
+`services.Configure<WorkerOptions>(options => options.Json = ...)`, or register a `Queue` with
+`new QueueOptions { Json = ... }` before `AddWorkhorse`.
 
 ## Upgrade from 0.11.x to 0.12.0
 

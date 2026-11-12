@@ -52,7 +52,7 @@ EF Core, and ASP.NET Core versions.
 Install the schema once, as a deployment step. The application never installs or migrates it.
 
 ```bash
-npx --package @stablemates/workhorse@0.12.0 workhorse schema install
+npx --package @stablemates/workhorse@0.14.0 workhorse schema install
 ```
 
 The machine that runs that deployment step needs Node.js 22 or newer. The application itself needs

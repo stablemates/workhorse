@@ -37,8 +37,8 @@ SDK. The twelfth check, `dotnet-api:check`, landed on 2026-10-23 in
 Each surface has the committed [snapshot](../api/README.md) that its Gate 1 check reads, and
 [release 0.12.0](https://github.com/stablemates/workhorse/releases/tag/v0.12.0) published the
 artifacts of all seven SDK lines on 2026-11-07. On 2026-11-12, a second model reviewed each API in a
-private record, and found eight items that need a change that is not an addition. Pull requests
-[1248](https://github.com/stablemates/workhorse/pull/1248) and
+private record, and found seven items in five decisions that need a change that is not an addition.
+Pull requests [1248](https://github.com/stablemates/workhorse/pull/1248) and
 [1249](https://github.com/stablemates/workhorse/pull/1249) put each change on `main`, and the next
 release ships them. No outside account has filed a defect in the
 [issue list](https://github.com/stablemates/workhorse/issues).

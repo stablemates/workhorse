@@ -9,7 +9,67 @@ Workhorse is a public beta. Any 0.x minor release may change behaviour. From `0.
 upgrades in place: every release ships ordered migrations, and inside a major line a migration only
 adds.
 
-## Unreleased
+## 0.14.0 — 2026-11-13
+
+There is no 0.13.0. A task queue does not tempt fate.
+
+The npm packages, Python distribution, Go module, Rust crate, Ruby gem, JVM artifacts, and .NET
+packages release from one source commit.
+
+Requires **schema v99**, .NET **10** or newer, and PostgreSQL **15** or newer.
+
+### Upgrade steps
+
+**Migrate the schema before starting updated processes.** Run `workhorse schema migrate` before any
+process of this release starts, producers too. Migrations 0093 through 0105 move the schema from
+version 91 to version **104**. The SDK compatibility floor rises from 76 to **99**, so a process of
+this release refuses every mutation on a schema below version 99. A 0.12 process keeps working on
+version 104, because a migration inside a major line only adds.
+
+If you run cold exporters, stop each one before the migration and let it finish its uploads.
+Migration 0096 fences each export segment that is exporting. It is the only migration that changes
+stored rows.
+
+Migration 0102 builds `task_runtime_active_queue_shard_idx` with `CREATE INDEX CONCURRENTLY`,
+outside a transaction. Its time grows with the size of `task_runtime`. If the build fails,
+PostgreSQL keeps an invalid index, and the schema stays at version 100. Drop the index with
+`DROP INDEX CONCURRENTLY IF EXISTS workhorse.task_runtime_active_queue_shard_idx`, and run
+`workhorse schema migrate` again.
+
+[The upgrade notes](../docs/upgrading.md#upgrade-from-012x-to-0140) give each step and each change that needs a
+change in application code.
+
+### Breaking changes
+
+These changes are not additions. Change the application before you deploy this release:
+
+1. `AddWorkhorse` throws for a `Json` section under `Workhorse:Queue` or `Workhorse:Worker`. Set the
+   JSON options in code. See "Breaking: configuration cannot set the JSON options".
+
+### Behavior changes
+
+These changes can make code that worked on 0.12 act differently:
+
+1. Each read of the embedded dashboard has a statement timeout. See "The embedded dashboard bounds
+   each read and drops undeclared input keys".
+2. The dashboard answers a canceled authorizer with 500. See "The dashboard answers a canceled
+   authorizer with 500".
+3. An enqueue refuses a queue name above 256 UTF-8 bytes, and a stored schedule with such a name no
+   longer fires. See "Queue purge, tier read, queue name, and claim lease use their locks".
+4. At repeatable read or serializable, an enqueue can fail with SQLSTATE `40001` after a tier change,
+   and `set_queue_tier_v1` refuses these levels with `0A000`. See "Queue purge, tier read, queue
+   name, and claim lease use their locks".
+5. Schedule synchronization refuses an enabled schedule with a concurrency key on a fast-tier queue,
+   with SQLSTATE `P1007`. See "One failed schedule no longer stops the schedule pass".
+6. A signal to a terminal task with no wait of that name answers `stale`, not `not_waiting`. See
+   "Three replay answers move to new function versions".
+7. The worker cuts a long failure envelope and adds `"truncated": true`. See "A failure envelope has
+   a size limit".
+8. An oversized checkpoint value and each child limit refusal fail the task at once, with no retry.
+   See "An oversized checkpoint value fails the task without a retry" and "Each child limit refusal
+   ends the task".
+9. Queue health reports the new degraded reasons `maintenance-failing`, `schedule-failing`, and
+   `terminal-cleanup-stalled`. Code that switches on reason codes should accept them.
 
 ### Debounce and enqueue decide with the clock after their locks
 
@@ -173,7 +233,7 @@ replaces the bodies of `queue_health_v1`, `evaluate_queue_health_v1`,
 `maintain_task_groups_v1`. It rewrites no row and does not raise the
 SDK compatibility floor. Run `workhorse schema migrate`.
 
-### Three replay answers move to new function versions, and the floor rises to 97
+### Three replay answers move to new function versions
 
 A Python, Go, or Rust worker parked a task until an absolute time with digits below the
 millisecond. A TypeScript, Ruby, JVM, or .NET worker replayed the same instant at milliseconds, and
@@ -202,8 +262,9 @@ record with the group (SM-1955, ADR 0095).
 Migration 0098 (`0098-compare-wait-targets-in-milliseconds-and-report-second-child-sets.sql`)
 moves the schema to version 97. It adds `schedule_wait_v2`, `send_signal_v2`, and
 `create_children_v2`, and replaces the body of `get_task_group_v1`. The `_v1` functions keep their
-answers. The SDK floor rises from 76 to 97, so run `workhorse schema migrate` before the first
-process of this release starts.
+answers. With this migration, the SDK floor rises from 76 to 97. Migrations 0099 and 0100
+raise it to 99. Run `workhorse schema migrate` before the first process of this release
+starts.
 
 ### The dashboard keeps the audit of each settings change
 
