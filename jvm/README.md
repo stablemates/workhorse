@@ -31,8 +31,44 @@ The JVM SDK has three artifacts. All three use the group `run.workhorse` and one
 | `workhorse-kotlin`              | `run.workhorse.kotlin` | Suspend handlers, suspend wrappers, and a worker DSL             |
 | `workhorse-spring-boot-starter` | `run.workhorse.spring` | Auto-configuration, transactions, lifecycle, and health          |
 
-Maven Central serves these artifacts from `0.9.0`. This page gives no Gradle or Maven dependency
-to copy. [Compatibility](https://workhorse.run/docs/compatibility) states the supported
+Maven Central serves these artifacts from `0.9.0`. A Gradle build adds the core:
+
+```groovy
+implementation("run.workhorse:workhorse:0.12.0")
+```
+
+A Maven build adds the core:
+
+```xml
+<dependency><groupId>run.workhorse</groupId><artifactId>workhorse</artifactId><version>0.12.0</version></dependency>
+```
+
+The Kotlin module and the starter use the same group and version. Add the Kotlin module for
+suspend handlers:
+
+```groovy
+implementation("run.workhorse:workhorse-kotlin:0.12.0")
+```
+
+```xml
+<dependency><groupId>run.workhorse</groupId><artifactId>workhorse-kotlin</artifactId><version>0.12.0</version></dependency>
+```
+
+Add the starter for a Spring Boot application:
+
+```groovy
+implementation("run.workhorse:workhorse-spring-boot-starter:0.12.0")
+```
+
+```xml
+<dependency><groupId>run.workhorse</groupId><artifactId>workhorse-spring-boot-starter</artifactId><version>0.12.0</version></dependency>
+```
+
+The core puts PgJDBC on the runtime class path only. If your code names a PgJDBC class, such as
+`PGSimpleDataSource`, also add `org.postgresql:postgresql` 42.7.12 or newer.
+
+Each command names the version of this release, because a Gradle or Maven dependency has no form
+without a version. [Compatibility](https://workhorse.run/docs/compatibility) states the supported
 Java, Kotlin, Spring Boot, and PgJDBC versions.
 
 Install the schema once, as a deployment step. The application never installs or migrates it.

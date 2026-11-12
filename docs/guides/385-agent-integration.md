@@ -174,8 +174,21 @@ dotnet add package Workhorse
 
 The Ruby SDK also needs the `connection_pool` gem.
 
-Maven Central serves the three JVM artifacts from `0.9.0`. The JVM SDK has no install command
-here. Its README names the three artifacts and their supported versions.
+Maven Central serves the three JVM artifacts from `0.9.0`. A Gradle build adds the Java core:
+
+```groovy
+implementation("run.workhorse:workhorse:0.12.0")
+```
+
+A Maven build adds the Java core:
+
+```xml
+<dependency><groupId>run.workhorse</groupId><artifactId>workhorse</artifactId><version>0.12.0</version></dependency>
+```
+
+For Kotlin, use the artifact ID `workhorse-kotlin`. For Spring Boot, add
+`workhorse-spring-boot-starter`. The group and the version do not change. A Gradle or Maven
+dependency names its version, because it has no form without one.
 
 `dotnet add package Workhorse` adds the core of the .NET SDK from nuget.org.
 [Installation](https://workhorse.run/docs/installation.md) names the other three .NET packages.
