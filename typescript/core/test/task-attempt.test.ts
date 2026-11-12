@@ -558,6 +558,94 @@ describe("TaskAttempt", () => {
     expect(attempt.signal.reason).toBeInstanceOf(DeadlineExceededError);
   });
 
+  // SM-2013: the other six SDKs log each failed expiry request while the handler runs.
+  it("logs each failed expiration request while the handler runs", async () => {
+    vi.useFakeTimers({ now: 0 });
+    const { records, unregister } = recordExpirationRequestFailures();
+    try {
+      const { attempt, services } = startAttempt(claimedTask({ deadlineAt: new Date(1_000) }));
+      vi.mocked(services.expireOwned)
+        .mockRejectedValueOnce(new TypeError("connection refused"))
+        .mockRejectedValueOnce("pool exhausted")
+        .mockResolvedValue("deadline_exceeded");
+
+      await vi.advanceTimersByTimeAsync(1_001);
+      expect(records).toHaveLength(1);
+      await vi.advanceTimersByTimeAsync(2_000);
+
+      expect(services.expireOwned).toHaveBeenCalledTimes(3);
+      expect(attempt.signal.reason).toBeInstanceOf(DeadlineExceededError);
+      expect(records).toEqual(
+        ["TypeError", "string"].map((errorType) =>
+          expect.objectContaining({
+            severity: "warn",
+            eventName: "workhorse.worker.expiration_request_failed",
+            attributes: expect.objectContaining({
+              "workhorse.task.id": "attempt-task",
+              "workhorse.queue.name": "default",
+              "workhorse.worker.id": "attempt-worker",
+              "error.type": errorType,
+            }),
+          }),
+        ),
+      );
+    } finally {
+      unregister();
+    }
+  });
+
+  it("keeps asking when the name of the error of a failed request throws", async () => {
+    vi.useFakeTimers({ now: 0 });
+    const { records, unregister } = recordExpirationRequestFailures();
+    try {
+      const { attempt, services } = startAttempt(claimedTask({ deadlineAt: new Date(1_000) }));
+      const failure = new Error("connection lost");
+      Object.defineProperty(failure, "name", {
+        get() {
+          throw new Error("the name is unavailable");
+        },
+      });
+      vi.mocked(services.expireOwned)
+        .mockRejectedValueOnce(failure)
+        .mockResolvedValue("deadline_exceeded");
+
+      await vi.advanceTimersByTimeAsync(2_001);
+
+      expect(services.expireOwned).toHaveBeenCalledTimes(2);
+      expect(attempt.signal.reason).toBeInstanceOf(DeadlineExceededError);
+      expect(records).toEqual([
+        expect.objectContaining({ attributes: expect.objectContaining({ "error.type": "Error" }) }),
+      ]);
+    } finally {
+      unregister();
+    }
+  });
+
+  it("logs a timer request that fails after the handler ended once, at settlement", async () => {
+    vi.useFakeTimers({ now: 0 });
+    const { records, unregister } = recordExpirationRequestFailures();
+    try {
+      const { attempt, services } = startAttempt(claimedTask({ deadlineAt: new Date(1_000) }));
+      const expiry = deferredExpiry();
+      vi.mocked(services.expireOwned).mockImplementation(() => expiry.promise);
+      await vi.advanceTimersByTimeAsync(1_001);
+      expect(services.expireOwned).toHaveBeenCalledTimes(1);
+
+      const settlement = attempt.settleExpiration();
+      expiry.reject(new TypeError("connection lost"));
+      await settlement;
+
+      expect(records).toEqual([
+        expect.objectContaining({
+          body: "Worker settles a task without the answer of its expiry request",
+        }),
+      ]);
+      attempt.stop();
+    } finally {
+      unregister();
+    }
+  });
+
   it("stop cancels the expiration timer and releases the heartbeat lease", () => {
     vi.useFakeTimers({ now: 0 });
     const { attempt, services, heartbeat } = startAttempt(

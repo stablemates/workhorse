@@ -366,11 +366,12 @@ def test_worker_warns_when_a_handler_swallows_a_suspension_signal(database_url: 
             "SELECT state FROM workhorse.task_runtime WHERE task_id = %s", (task_id,)
         ).fetchone() == ("scheduled",)
 
-    warning = next(
+    # SM-2016: exactly one warning, as in the other six SDKs.
+    (warning,) = [
         record.log_record
         for record in LOG_EXPORTER.get_finished_logs()
         if record.log_record.event_name == "workhorse.handler.signal_swallowed"
-    )
+    ]
     assert warning.severity_text == "WARN"
     assert warning.attributes["workhorse.handler.outcome"] == "suspended"
     assert not any(

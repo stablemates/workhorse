@@ -139,6 +139,22 @@ impl Inner {
                 answer = async { expiring.as_mut().expect("the guard checks it").await },
                     if expiring.is_some() => {
                     expiring = None;
+                    // The handler still runs, so each failed request gets its record, also when
+                    // a stale heartbeat that arrived during the request ends the attempt next.
+                    if let Err(error) = &answer {
+                        tracing::warn!(
+                            parent: &span,
+                            event.name = "workhorse.worker.expiration_request_failed",
+                            workhorse.task.id = %task.id,
+                            workhorse.task.type = %task.task_type,
+                            workhorse.task.attempt = task.attempt,
+                            workhorse.queue.name = %task.queue,
+                            workhorse.worker.id = %self.worker_id,
+                            error.r#type = %error.type_name(),
+                            error = %error,
+                            "Ownership expiration request failed; the worker asks again"
+                        );
+                    }
                     match answer {
                         Ok(status) if decides(status) => {
                             token.cancel(cancel_reason(status));
@@ -151,18 +167,10 @@ impl Inner {
                             watchdog_armed = false;
                             token.cancel(CancelReason::LeaseLost);
                         }
-                        answer => {
+                        _ => {
                             // not_due is the database refusing an expiry its clock has not
                             // reached, and a failed request proves nothing. The handler keeps
                             // running and renewing, and the worker asks again after a backoff.
-                            if let Err(error) = answer {
-                                tracing::warn!(
-                                    parent: &span,
-                                    workhorse.worker.id = %self.worker_id,
-                                    error = %error,
-                                    "Ownership expiration request failed; the worker asks again"
-                                );
-                            }
                             expiry.as_mut().reset(Instant::now() + expiration_retry);
                             expiration_retry = (expiration_retry * 2).min(EXPIRATION_RETRY_MAXIMUM);
                         }
@@ -226,6 +234,22 @@ impl Inner {
 
         // A suspending call settled the task in PostgreSQL, so the handler's return is moot.
         let settled = if context.suspended() {
+            // A handler that ends with anything other than the suspension caught it. The task
+            // still suspends, and the warning is the only record that the handler swallowed it
+            // (SM-2016).
+            if !matches!(&result, Err(error) if error.is_suspension()) {
+                tracing::warn!(
+                    parent: &span,
+                    event.name = "workhorse.handler.signal_swallowed",
+                    workhorse.task.id = %task.id,
+                    workhorse.task.type = %task.task_type,
+                    workhorse.task.attempt = task.attempt,
+                    workhorse.queue.name = %task.queue,
+                    workhorse.worker.id = %self.worker_id,
+                    workhorse.handler.outcome = "suspended",
+                    "Task handler swallowed its suspension signal"
+                );
+            }
             Ok("suspended")
         } else {
             self.settle(&task, result, expired, rejected, token.reason_at_return(), slot)

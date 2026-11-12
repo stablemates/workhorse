@@ -341,8 +341,10 @@ class DurableContextDatabaseTest {
   void aHandlerThatCatchesTheSuspensionStillSuspends() throws SQLException {
     UUID taskId = enqueue("swallowing", null);
     AtomicReference<@Nullable Throwable> caught = new AtomicReference<>();
+    RecordingLogger logs = new RecordingLogger();
     Worker worker =
         worker()
+            .logger(logs)
             .handle(
                 "swallowing",
                 Object.class,
@@ -359,6 +361,53 @@ class DurableContextDatabaseTest {
     assertTrue(worker.runOnce());
     assertEquals("scheduled", state(taskId).state);
     assertInstanceOf(Error.class, caught.get());
+    // SM-2016: the warning is the only record that the handler swallowed its suspension.
+    List<String> swallowed = logs.messages("workhorse.handler.signal_swallowed");
+    assertEquals(1, swallowed.size(), String.valueOf(logs.records));
+    assertTrue(swallowed.get(0).startsWith("WARNING "), swallowed.get(0));
+    assertTrue(swallowed.get(0).contains("workhorse.handler.outcome=suspended"), swallowed.get(0));
+    assertTrue(swallowed.get(0).contains("workhorse.task.id=" + taskId), swallowed.get(0));
+    assertTrue(
+        swallowed.get(0).contains("workhorse.worker.id=jvm-durable-worker"), swallowed.get(0));
+  }
+
+  /** A logger that keeps each record as its level and its message. */
+  private static final class RecordingLogger implements System.Logger {
+    final List<String> records = new CopyOnWriteArrayList<>();
+
+    List<String> messages(String event) {
+      return records.stream()
+          .filter(record -> record.contains("event.name=" + event + ","))
+          .toList();
+    }
+
+    @Override
+    public String getName() {
+      return "recording";
+    }
+
+    @Override
+    public boolean isLoggable(Level level) {
+      return true;
+    }
+
+    @Override
+    public void log(
+        Level level,
+        java.util.@Nullable ResourceBundle bundle,
+        @Nullable String message,
+        @Nullable Throwable thrown) {
+      records.add(level.getName() + " " + message);
+    }
+
+    @Override
+    public void log(
+        Level level,
+        java.util.@Nullable ResourceBundle bundle,
+        @Nullable String format,
+        @Nullable Object... parameters) {
+      log(level, bundle, format, (Throwable) null);
+    }
   }
 
   /** A logger that throws an {@link AssertionError} for one event. */

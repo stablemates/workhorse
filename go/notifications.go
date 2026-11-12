@@ -7,6 +7,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -187,10 +188,20 @@ func (hub *taskNotificationHub) report(err error) {
 func (hub *taskNotificationHub) listen(ctx context.Context) {
 	reconnectDelay := notificationReconnectInitial
 	for ctx.Err() == nil {
-		connection, err := hub.pool.Acquire(ctx)
+		// A panic of caller code in a statement of the listener, such as in a pgx tracer, ends the
+		// listen like an error, and the listener connects again after its delay (SM-2010).
+		var connection *pgxpool.Conn
+		err := recoverQueryPanic(func() error {
+			var err error
+			connection, err = hub.pool.Acquire(ctx)
+			return err
+		})
 		listenSucceeded := false
 		if err == nil {
-			_, err = connection.Exec(ctx, listenForTasksStatement)
+			err = recoverQueryPanic(func() error {
+				_, err := connection.Exec(ctx, listenForTasksStatement)
+				return err
+			})
 			listenSucceeded = err == nil
 		}
 		if err == nil {
@@ -198,7 +209,12 @@ func (hub *taskNotificationHub) listen(ctx context.Context) {
 			reconnectDelay = notificationReconnectInitial
 			hub.wakeAll()
 			for ctx.Err() == nil {
-				notification, waitErr := connection.Conn().WaitForNotification(ctx)
+				var notification *pgconn.Notification
+				waitErr := recoverQueryPanic(func() error {
+					var err error
+					notification, err = connection.Conn().WaitForNotification(ctx)
+					return err
+				})
 				if waitErr != nil {
 					err = waitErr
 					break
@@ -212,7 +228,10 @@ func (hub *taskNotificationHub) listen(ctx context.Context) {
 		if connection != nil {
 			if listenSucceeded && ctx.Err() != nil {
 				cleanupContext, cancelCleanup := context.WithTimeout(context.Background(), notificationCleanupTimeout)
-				_, cleanupError := connection.Exec(cleanupContext, unlistenForTasksStatement)
+				cleanupError := recoverQueryPanic(func() error {
+					_, err := connection.Exec(cleanupContext, unlistenForTasksStatement)
+					return err
+				})
 				cancelCleanup()
 				if cleanupError != nil {
 					hub.report(cleanupError)

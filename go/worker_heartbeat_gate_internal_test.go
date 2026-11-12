@@ -111,7 +111,7 @@ func TestFusedCompletionClaimsNothingWithoutTheHeartbeatConnection(t *testing.T)
 
 	chunk := completionChunk(executor, "a")
 	chunk[0].limit = 3
-	worker.completeChunk("defaults", chunk)
+	worker.completeChunk("defaults", chunk, true)
 	if answer := awaitSignal(t, chunk[0].answer, "the answer of the completion"); answer.err != nil || !answer.accepted {
 		t.Fatalf("the completion answered %#v", answer)
 	}
@@ -119,7 +119,7 @@ func TestFusedCompletionClaimsNothingWithoutTheHeartbeatConnection(t *testing.T)
 	connection.conn = new(pgxpool.Conn)
 	chunk = completionChunk(executor, "b")
 	chunk[0].limit = 3
-	worker.completeChunk("defaults", chunk)
+	worker.completeChunk("defaults", chunk, true)
 	if answer := awaitSignal(t, chunk[0].answer, "the answer of the completion"); answer.err != nil || !answer.accepted {
 		t.Fatalf("the completion answered %#v", answer)
 	}
@@ -315,7 +315,7 @@ func TestAFusedCompletionThatWaitedForItsConnectionClaimsNothingAfterTheHeartbea
 	chunk[0].limit = 3
 	done := make(chan struct{})
 	go func() {
-		worker.completeChunk("defaults", chunk)
+		worker.completeChunk("defaults", chunk, true)
 		close(done)
 	}()
 	awaitSignal(t, borrowing, "the completion to borrow the heartbeat connection", func() { close(lend) })
@@ -372,7 +372,7 @@ func TestAFusedCompletionResendClaimsNothingAfterTheHeartbeatConnectionWentAway(
 	}
 	chunk := completionChunk(executor, "a")
 	chunk[0].limit = 3
-	worker.completeChunk("defaults", chunk)
+	worker.completeChunk("defaults", chunk, true)
 	if answer := awaitSignal(t, chunk[0].answer, "the answer of the completion"); answer.err != nil || !answer.accepted || len(answer.rows) != 0 {
 		t.Fatalf("the completion answered %#v", answer)
 	}

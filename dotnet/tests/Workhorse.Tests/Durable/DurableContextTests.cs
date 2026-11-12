@@ -238,7 +238,8 @@ public sealed class DurableContextTests(ScratchDatabase database) : IClassFixtur
         var taskId = await EnqueueAsync("swallowing", null);
         Exception? caught = null;
         Exception? refused = null;
-        await using var worker = Worker();
+        var logs = new RecordingLoggerFactory();
+        await using var worker = Worker(configure: options => options.LoggerFactory = logs);
         worker.Handle<object?, string>("swallowing", async (context, _) =>
         {
             try
@@ -268,6 +269,79 @@ public sealed class DurableContextTests(ScratchDatabase database) : IClassFixtur
         Assert.True(cancelled.CancellationToken.IsCancellationRequested);
         Assert.Equal(CancelReason.Suspended, Assert.IsType<CancelledException>(refused).Reason);
         Assert.Equal(0L, await ScalarAsync(DataSource, "SELECT count(*) FROM workhorse.task_progress WHERE task_id = $1", taskId));
+        // SM-2016: the warning is the only record that the handler swallowed its suspension.
+        var swallowed = Assert.Single(logs.Records, record => record.Event == "workhorse.handler.signal_swallowed");
+        Assert.Equal(LogLevel.Warning, swallowed.Level);
+        Assert.Equal("suspended", swallowed.Values["HandlerOutcome"]);
+        Assert.Equal(taskId, swallowed.Values["TaskId"]);
+        Assert.Equal("dotnet-durable-worker", swallowed.Values["WorkerId"]);
+    }
+
+    /// <summary>
+    /// SM-2013: each failed expiry request while the handler runs logs one warning with the task, the
+    /// worker, and the error type. The first expire_owned request fails with lock_not_available, as in
+    /// the shared fixture deadline-settles-after-a-failed-expiry-request.
+    /// </summary>
+    [Fact]
+    public async Task AFailedExpiryRequestLogsItsEventWithTheWorkerAndTheErrorType()
+    {
+        await ScalarAsync(DataSource, """
+            DO $setup$ BEGIN
+              CREATE SEQUENCE workhorse.test_expiry_calls;
+              EXECUTE replace(
+                pg_get_functiondef('workhorse.expire_owned_telemetry_v1(uuid,text,bigint)'::regprocedure),
+                'FUNCTION workhorse.expire_owned_telemetry_v1(',
+                'FUNCTION workhorse.test_original_expire_owned_telemetry_v1(');
+              EXECUTE $create$
+                CREATE OR REPLACE FUNCTION workhorse.expire_owned_telemetry_v1(
+                  p_task_id uuid, p_worker_id text, p_fence_token bigint)
+                  RETURNS TABLE (status text, retry_state text) LANGUAGE plpgsql AS $body$
+                  BEGIN
+                    IF nextval('workhorse.test_expiry_calls') = 1 THEN
+                      RAISE EXCEPTION 'injected expiry request failure' USING ERRCODE = '55P03';
+                    END IF;
+                    RETURN QUERY SELECT * FROM workhorse.test_original_expire_owned_telemetry_v1(
+                      p_task_id, p_worker_id, p_fence_token);
+                  END $body$
+              $create$;
+            END $setup$
+            """);
+        try
+        {
+            var taskId = await EnqueueAsync("expiring", null, new EnqueueOptions
+            {
+                MaxAttempts = 1,
+                Deadline = DateTimeOffset.UtcNow.AddMilliseconds(300),
+            });
+            var logs = new RecordingLoggerFactory();
+            await using var worker = Worker(configure: options => options.LoggerFactory = logs);
+            worker.Handle<object?, string>("expiring", async (context, _) =>
+            {
+                await Task.Delay(Timeout.Infinite, context.CancellationToken);
+                return "not reached";
+            });
+
+            Assert.True(await worker.RunOnceAsync(Token));
+            var failed = Assert.Single(logs.Records, record => record.Event == "workhorse.worker.expiration_request_failed");
+            Assert.Equal(LogLevel.Warning, failed.Level);
+            Assert.Equal(taskId, failed.Values["TaskId"]);
+            Assert.Equal("dotnet-durable-worker", failed.Values["WorkerId"]);
+            Assert.Equal("Workhorse.DatabaseException", failed.Values["ErrorType"]);
+            Assert.Equal("failed", (await TaskAsync(DataSource, taskId)).Text("state"));
+        }
+        finally
+        {
+            await ScalarAsync(DataSource, """
+                DO $teardown$ BEGIN
+                  EXECUTE replace(
+                    pg_get_functiondef('workhorse.test_original_expire_owned_telemetry_v1(uuid,text,bigint)'::regprocedure),
+                    'FUNCTION workhorse.test_original_expire_owned_telemetry_v1(',
+                    'FUNCTION workhorse.expire_owned_telemetry_v1(');
+                  DROP FUNCTION workhorse.test_original_expire_owned_telemetry_v1(uuid,text,bigint);
+                  DROP SEQUENCE workhorse.test_expiry_calls;
+                END $teardown$
+                """);
+        }
     }
 
     /// <summary>
@@ -899,6 +973,37 @@ public sealed class DurableContextTests(ScratchDatabase database) : IClassFixtur
 
     // ---------------------------------------------------------------------------------------------
     // Support
+
+    /// <summary>A logger factory whose loggers keep each record with its named template values.</summary>
+    private sealed class RecordingLoggerFactory : ILoggerFactory, ILogger
+    {
+        public System.Collections.Concurrent.ConcurrentQueue<LogRecord> Records { get; } = new();
+
+        public ILogger CreateLogger(string categoryName) => this;
+
+        public void AddProvider(ILoggerProvider provider)
+        {
+        }
+
+        public void Dispose()
+        {
+        }
+
+        public IDisposable? BeginScope<TState>(TState state)
+            where TState : notnull => null;
+
+        public bool IsEnabled(LogLevel logLevel) => true;
+
+        public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter)
+        {
+            var values = state is IEnumerable<KeyValuePair<string, object?>> pairs
+                ? pairs.ToDictionary(pair => pair.Key, pair => pair.Value)
+                : new Dictionary<string, object?>();
+            Records.Enqueue(new LogRecord(logLevel, eventId.Name, values));
+        }
+    }
+
+    private sealed record LogRecord(LogLevel Level, string? Event, Dictionary<string, object?> Values);
 
     /// <summary>A logger factory whose loggers throw for the named events.</summary>
     private sealed class FailingLoggerFactory(params string[] events) : ILoggerFactory, ILogger

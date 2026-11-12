@@ -806,9 +806,13 @@ Suspension aborts the cooperative signal of the handler. It exits through privat
 flow. The heartbeat stops, and the worker slot becomes free for another claim.
 
 If the handler catches that signal and returns, the worker applies the recorded suspension again.
-The TypeScript, Python, Ruby, JVM, and .NET workers also emit `workhorse.handler.signal_swallowed`
-at warning severity with `workhorse.handler.outcome = suspended`. The Go and Rust workers do not
-emit it yet. The shared case
+Every SDK also emits `workhorse.handler.signal_swallowed` at warning severity with
+`workhorse.handler.outcome = suspended` (SM-2016). If the handler throws or returns an error other
+than the suspension, the worker also applies the suspension. The Go, Rust, Ruby, JVM, and .NET
+workers then emit the same warning. The TypeScript and Python workers do not emit it in that case.
+Go and Rust read an error that wraps the suspension as the suspension, so they emit no warning for
+it. Ruby, the JVM, and .NET compare the thrown exception itself.
+The shared case
 `durable-suspension-that-the-handler-catches-still-suspends` checks in every SDK that the task stays
 `scheduled` with no attempt row, and that the replay completes the same attempt (SM-1950).
 
@@ -3130,11 +3134,9 @@ In Python, Ruby, the JVM, and .NET, a heartbeat round that reports the expiry al
 request. If that request fails, the next round reports the expiry again. The error has no effect on
 the other leases of the round.
 
-| SDK                             | Record of a failed expiry request while the handler runs                     |
-| ------------------------------- | ---------------------------------------------------------------------------- |
-| TypeScript                      | No record. `TaskAttempt` arms the expiry timer again.                        |
-| Go, Rust                        | A warning: `Ownership expiration request failed; the worker asks again`      |
-| Python, Ruby, the JVM, and .NET | The warning event `workhorse.worker.expiration_request_failed` and the error |
+Every SDK logs the warning event `workhorse.worker.expiration_request_failed`, with `error.type`
+and the task and worker identity, for each expiry request of the local timer that fails while the
+handler runs ([Warning event names](telemetry.md#warning-event-names), SM-2013).
 
 The shared case `deadline-settles-after-a-failed-expiry-request` checks this rule in the conformance
 runner of every SDK (SM-1934). Its first expiry request fails. The handler must see the cancellation

@@ -880,7 +880,7 @@ func TestBatchedCompletionNamesTasksInIDOrderAndRetriesADeadlock(t *testing.T) {
 	worker := newDefaultWorker(t, WorkerOptions{})
 	executor := &deadlockingExecutor{deadlocks: fencedWriteDeadlockAttempts - 1}
 	chunk := completionChunk(executor, "c", "a", "b")
-	worker.completeChunk("defaults", chunk)
+	worker.completeChunk("defaults", chunk, true)
 	if len(executor.sent) != fencedWriteDeadlockAttempts {
 		t.Fatalf("sent the chunk %d times", len(executor.sent))
 	}
@@ -895,7 +895,7 @@ func TestBatchedCompletionNamesTasksInIDOrderAndRetriesADeadlock(t *testing.T) {
 
 	executor = &deadlockingExecutor{deadlocks: fencedWriteDeadlockAttempts}
 	chunk = completionChunk(executor, "a")
-	worker.completeChunk("defaults", chunk)
+	worker.completeChunk("defaults", chunk, true)
 	if answer := awaitSignal(t, chunk[0].answer, "the answer of the deadlocked chunk"); !hasSQLState(answer.err, deadlockDetectedSQLState) {
 		t.Fatalf("a chunk that kept deadlocking answered %#v", answer)
 	}

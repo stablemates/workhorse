@@ -222,9 +222,10 @@ does not return and the run does not reach the end of the script:
 
 PostgreSQL refuses each write of an attempt after the attempt suspends, and it records nothing for
 the refusal. Thus no fixture can see a worker that sends a completion after a caught suspension.
-The worker tests of TypeScript and Python check the `workhorse.handler.signal_swallowed` warning
-of that case. Ruby, the JVM, and .NET emit the warning, but their tests do not check it. The Go and
-Rust workers do not emit it.
+A worker test of each of the seven SDKs checks that the case writes exactly one
+`workhorse.handler.signal_swallowed` warning with `workhorse.handler.outcome = suspended` (SM-2016).
+The .NET record names that value `HandlerOutcome`.
+A fixture cannot hold this rule, because a runner does not read the log records of its worker.
 
 An `expect` step can give `errorNames`, the error name of each SDK. Before the comparison, the
 runner puts the name of its SDK into `errorName` of the expected value. Thus one fixture can check

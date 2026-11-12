@@ -425,6 +425,30 @@ record of another task returns `NOT_FOUND`. A request without `taskId` gets the 
 before. The host works on schema version 103 and earlier, which ignore the key. Migration 0105 moves the
 schema to version 104, and the floor stays 99.
 
+### Worker warnings carry their event names
+
+A failed expiry request while the handler runs logged a warning without `event.name` and
+`error.type`, so an alert on `workhorse.worker.expiration_request_failed` did not see Go workers.
+The warning now carries that event name, `error.type`, and the task and worker identity
+(SM-2013). The retry does not change.
+
+A handler can catch the suspension of a durable call and return. The task still suspends, but the
+Go worker wrote no record of the swallowed suspension. It now logs
+`workhorse.handler.signal_swallowed` at warning level with `workhorse.handler.outcome = suspended`,
+as the other SDKs do (SM-2016).
+
+### A panic in a pgx tracer no longer ends the worker process
+
+A caller can give the pool of a worker a pgx tracer. pgx runs it inside each query. If it panicked
+on the goroutine of `Run` or on a worker goroutine other than the execution goroutine, the process
+ended with every running handler. For example, the query was the startup check, a registration, a
+completion flush of the fast tier, the expiry request, the heartbeat, maintenance, a claim, or the
+notification listener. The panic now becomes the error of that database call, and the goroutine
+handles it as a database error (SM-2010). Each completion entry of a failed chunk gets that error
+as its answer. A panic of Workhorse code still ends the process, also inside the standard library.
+A panic during an acquire or a release of pgxpool also still ends the process, because pgxpool can
+lose the connection.
+
 ## 0.12.0 — 2026-11-07
 
 The npm packages, Python distribution, Go module, Rust crate, Ruby gem, JVM artifacts, and .NET

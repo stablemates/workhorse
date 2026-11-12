@@ -713,7 +713,10 @@ successful configuration changes at info.
 #### Warning event names
 
 - `workhorse.handler.signal_swallowed` carries bounded task and worker identity plus
-  `workhorse.handler.outcome`. It never carries the swallowed value or error.
+  `workhorse.handler.outcome`, which is `suspended`. It never carries the swallowed value or error.
+  Each of the seven workers emits it when a handler returns a value after a durable call suspended
+  it ([Worker suspension](lifecycle.md#worker-suspension)). The .NET record names the values
+  `TaskId`, `WorkerId`, and `HandlerOutcome` by its log template.
 - `workhorse.handler.missing` carries `workhorse.task.id`, `workhorse.task.type`,
   `workhorse.task.attempt`, `workhorse.queue.name`, and `workhorse.worker.id`. The worker emits it
   when it claims a task of a type that it has no handler for. The worker then returns the task to
@@ -742,12 +745,18 @@ successful configuration changes at info.
   ([Shutdown deadline and failure](operations.md#shutdown-deadline-and-failure)).
 
 - `workhorse.worker.expiration_request_failed` carries bounded task and worker identity and
-  `error.type`. The TypeScript worker emits it when a handler ends and the `expire_owned_v1`
-  request in flight fails or gives no answer within 1,000 ms. For no answer, `error.type` is
-  `timeout`. Either result proves nothing about the expiry, so `fail_v1` then settles the attempt
-  ([Local timers](lifecycle.md#local-timers)). The Python, Ruby, and Java workers emit it when an
-  expiry request fails while the handler runs. The worker then asks again, and the handler keeps
-  running. The .NET worker logs the same event name through `ILogger` with the exception.
+  `error.type`. Each of the seven workers emits it once for each expiry request that fails while
+  the handler runs. The worker then asks again, and the handler keeps running
+  ([Local timers](lifecycle.md#local-timers)). `error.type` is the type of the error: the error
+  name in TypeScript, the type name in Python, Ruby, and Java, the `%T` type in Go, and the variant
+  of `workhorse::Error` in Rust, such as `Postgres`. The .NET worker logs the event name through
+  `ILogger` with the exception, and its template names the values `TaskId`, `WorkerId`, and
+  `ErrorType`. The Go and Rust records also carry the error text in `error`.
+  The TypeScript worker sends the request of an expiry that a heartbeat reported without a retry.
+  If that request fails, the worker aborts the handler, and the record comes at settlement. The
+  TypeScript worker also emits it when a handler ends and the `expire_owned_v1` request in
+  flight fails or gives no answer within 1,000 ms. For no answer, `error.type` is `timeout`. Either
+  result proves nothing about the expiry, so `fail_v1` then settles the attempt.
 
 - `workhorse.worker.reporter_failed` carries `workhorse.worker.id`, `workhorse.worker.reporter`,
   and `error.type`. `workhorse.worker.reporter` names the reporter callback that failed:

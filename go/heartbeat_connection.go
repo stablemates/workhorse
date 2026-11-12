@@ -78,6 +78,22 @@ func (executor serverBoundedExecutor) query(
 	statement string,
 	argumentsFor func() []any,
 ) ([]Row, error) {
+	// A panic of caller code in a statement of the round, such as in a pgx tracer, fails the round
+	// like an error. The round then discards the connection (SM-2010).
+	var rows []Row
+	err := recoverQueryPanic(func() error {
+		var err error
+		rows, err = executor.boundedQuery(ctx, statement, argumentsFor)
+		return err
+	})
+	return rows, err
+}
+
+func (executor serverBoundedExecutor) boundedQuery(
+	ctx context.Context,
+	statement string,
+	argumentsFor func() []any,
+) ([]Row, error) {
 	deadline, ok := ctx.Deadline()
 	if !ok {
 		return nil, errors.New(heartbeatRoundWithoutDeadlineMessage)
@@ -350,9 +366,16 @@ func (connection *heartbeatConnection) acquireUntilHeld() {
 	connection.mu.Unlock()
 	delay := heartbeatReacquireInitialDelay
 	for {
-		acquired, err := connection.acquire(connection.lifetime)
+		// A panic of caller code in the acquire or in the prepare, such as in a pgx tracer or a
+		// connect hook, fails this attempt like an error, and the loop tries again (SM-2010).
+		var acquired *pgxpool.Conn
+		err := recoverQueryPanic(func() error {
+			var err error
+			acquired, err = connection.acquire(connection.lifetime)
+			return err
+		})
 		if err == nil {
-			if err = connection.prepare(acquired); err != nil {
+			if err = recoverQueryPanic(func() error { return connection.prepare(acquired) }); err != nil {
 				closeAndRemove(connection.pool, acquired)
 				acquired = nil
 			}
@@ -803,12 +826,14 @@ const heartbeatCloseTimeout = 15 * time.Second
 // more sessions than its maximum.
 func closeAndRemove(pool *pgxpool.Pool, held *pgxpool.Conn) {
 	conn := held.Conn()
+	// BeforeClose is code of the caller, and the close can run its tracer. A panic in either still
+	// removes the connection (SM-2010).
 	if beforeClose := pool.Config().BeforeClose; beforeClose != nil {
-		beforeClose(conn)
+		recoverCallerHook(beforeClose, conn)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), heartbeatCloseTimeout)
 	defer cancel()
-	_ = conn.Close(ctx)
+	_ = recoverQueryPanic(func() error { return conn.Close(ctx) })
 	select {
 	case <-conn.PgConn().CleanupDone():
 	case <-ctx.Done():

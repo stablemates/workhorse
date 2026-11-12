@@ -422,6 +422,19 @@ record of another task returns `NOT_FOUND`. A request without `taskId` gets the 
 before. The host works on schema version 103 and earlier, which ignore the key. Migration 0105 moves the
 schema to version 104, and the floor stays 99.
 
+### Worker warnings carry their event names
+
+A failed expiry request while the handler runs logged a warning without `event.name` and
+`error.type`, so an alert on `workhorse.worker.expiration_request_failed` did not see Rust workers.
+The warning now carries that event name, `error.type`, the variant of `workhorse::Error`, such as
+`Postgres`, and the task and worker identity (SM-2013). The retry does not change.
+
+A handler can catch the suspension of a durable call and return. The task still suspends, but the
+Rust worker wrote no record of the swallowed suspension. It now logs
+`workhorse.handler.signal_swallowed` at warning level with `workhorse.handler.outcome = suspended`
+and the task and worker identity, as the other SDKs do (SM-2016). Both records carry the identity
+themselves, so a subscriber that keeps only warnings still sees it.
+
 ## 0.12.0 — 2026-11-07
 
 The npm packages, Python distribution, Go module, Rust crate, Ruby gem, JVM artifacts, and .NET

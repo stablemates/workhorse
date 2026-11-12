@@ -385,6 +385,22 @@ record of another task returns `NOT_FOUND`. A request without `taskId` gets the 
 before. The host works on schema version 103 and earlier, which ignore the key. Migration 0105 moves the
 schema to version 104, and the floor stays 99.
 
+### Two worker warnings name the worker and the outcome
+
+The `workhorse.worker.expiration_request_failed` warning now names the values `WorkerId` and
+`ErrorType` in its log template, next to `TaskId` and the exception (SM-2013). The
+`workhorse.handler.signal_swallowed` warning now names `WorkerId` and `HandlerOutcome`, which is
+`suspended` (SM-2016). An alert can then match the worker and the kind of the failure, as the
+other SDKs carry `workhorse.worker.id`, `error.type`, and `workhorse.handler.outcome`.
+
+### A wrapped enqueue error does not make the EF Core strategy run the block again
+
+The EF Core retrying execution strategy runs a block again only for an exception that it classifies
+as transient. It reads the `InnerException` of a `DbUpdateException` only. The caller form of `Queue` throws
+`DatabaseException` for a driver error, with the `NpgsqlException` as `InnerException`. Thus a
+transient failure during `EnqueueAsync` does not make the strategy run the block again. The README,
+the enqueue guide, and the architecture page now state this limit, and a test checks it (SM-2014).
+
 ## 0.12.0 — 2026-11-07
 
 The npm packages, Python distribution, Go module, Rust crate, Ruby gem, JVM artifacts, and .NET
