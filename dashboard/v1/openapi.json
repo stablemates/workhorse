@@ -7248,7 +7248,7 @@
               "examples": {
                 "conformance": {
                   "summary": "Request",
-                  "description": "Taken from conformance.json. Generated identifiers, timestamps, and measurements are replaced by placeholders: 00000000-0000-7000-8000-000000000000 stands for a UUID, 2026-01-01T00:00:00.000Z for a timestamp, 0 and \"string\" for a measured number or text. Fixture: signal-task.",
+                  "description": "Taken from conformance.json. Generated identifiers, timestamps, and measurements are replaced by placeholders: 00000000-0000-7000-8000-000000000000 stands for a UUID, 2026-01-01T00:00:00.000Z for a timestamp, 0 and \"string\" for a measured number or text. Fixture: signal-task-ended.",
                   "value": {
                     "json": {
                       "id": "00000000-0000-7000-8000-000000000000",
@@ -7256,7 +7256,7 @@
                       "payload": {
                         "approved": true
                       },
-                      "idempotencyKey": "conformance-signal",
+                      "idempotencyKey": "conformance-signal-ended",
                       "audit": {
                         "actor": "browser-operator",
                         "reason": "conformance exchange",
@@ -7288,17 +7288,15 @@
                 "examples": {
                   "conformance": {
                     "summary": "Response",
-                    "description": "Taken from conformance.json. Generated identifiers, timestamps, and measurements are replaced by placeholders: 00000000-0000-7000-8000-000000000000 stands for a UUID, 2026-01-01T00:00:00.000Z for a timestamp, 0 and \"string\" for a measured number or text. Fixture: signal-task.",
+                    "description": "Taken from conformance.json. Generated identifiers, timestamps, and measurements are replaced by placeholders: 00000000-0000-7000-8000-000000000000 stands for a UUID, 2026-01-01T00:00:00.000Z for a timestamp, 0 and \"string\" for a measured number or text. Fixture: signal-task-ended.",
                     "value": {
                       "json": {
-                        "status": "delivered",
+                        "status": "stale",
                         "taskId": "00000000-0000-7000-8000-000000000000",
                         "name": "approval",
-                        "payload": {
-                          "approved": true
-                        },
-                        "deliveredAt": "2026-01-01T00:00:00.000Z",
-                        "deliveredBy": "conformance"
+                        "payload": null,
+                        "deliveredAt": null,
+                        "deliveredBy": null
                       }
                     }
                   }
@@ -13244,11 +13242,33 @@
                 "type": "string"
               }
             ]
+          },
+          "failure": {
+            "$ref": "#/components/schemas/DashboardTaskGroupCallbackFailure"
           }
         },
         "required": [
           "kind",
           "taskId"
+        ]
+      },
+      "DashboardTaskGroupCallbackFailure": {
+        "type": "object",
+        "properties": {
+          "code": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          },
+          "failedAt": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "message",
+          "failedAt"
         ]
       },
       "DashboardTaskGroupCounts": {

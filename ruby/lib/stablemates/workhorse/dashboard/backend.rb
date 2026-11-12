@@ -223,7 +223,7 @@ module Stablemates
         end
 
         def signal_task(input, actor)
-          row = operation(SqlCatalogue::SEND_SIGNAL_V1, [
+          row = operation(SqlCatalogue::SEND_SIGNAL_V2, [
             input.fetch("id"), input.fetch("name"), Values.json(input.fetch("payload"), "payload"),
             input.fetch("idempotencyKey"), actor
           ])

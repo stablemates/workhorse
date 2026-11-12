@@ -577,6 +577,25 @@ failed step for each SQLSTATE, and the `Cause:` line follows. If a socket error 
 connection ends the step, the `Cause:` line gives that reason. A connection that fails before a
 step runs still gets its one sentence.
 
+### The dashboard shows a failed group callback, a failed schedule, and an ended signal target
+
+A finished group that failed to enqueue a callback showed that callback with no task and no
+reason. In `@stablemates/workhorse-dashboard-server`, the `taskGroupDetail` and `cancelTaskGroup`
+answers now add `failure` to such a callback, with `code`, `message`, and `failedAt`.
+`DashboardTaskGroupCallback` gains the optional `failure`, and the wire module exports
+`DashboardTaskGroupCallbackFailure`. These are additive changes to `dashboard/v1`. The group list
+does not carry the key. A schema below version 97 returns no `failure`. The group detail page of
+`@stablemates/workhorse-dashboard` shows the failure as text (SM-2027).
+
+Since schema version 94, `dashboard_cron_v1` returns the last schedule pass error of each schedule.
+The Schedules page now shows a red `Failed` badge with the relative time in the Last run cell.
+The tooltip and the accessible name give the exact time, the SQLSTATE, and the message. A schedule
+with no recorded error shows no badge (SM-2007).
+
+A signal to a task that ended with no wait of that name answers `stale`. The task drawer now says
+that the task or its wait has ended and that Workhorse did not deliver the signal. The other six
+dashboard hosts now give the same answer as the TypeScript host (SM-2026).
+
 ## 0.12.0 — 2026-11-07
 
 The npm packages, Python distribution, Go module, Rust crate, Ruby gem, JVM artifacts, and .NET

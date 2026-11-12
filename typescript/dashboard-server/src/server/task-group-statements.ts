@@ -25,7 +25,16 @@ function iso(expression: string): string {
   return `to_char((${expression}) AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"')`;
 }
 
-/** The JSON of one `get_task_group_v1` row named `snapshot`, with the callbacks in a fixed order. */
+/** The stored failure of one callback in the `snapshot` row, or null when it has none. */
+const callbackFailure = "snapshot.callbacks -> callback.name -> 'failure'";
+
+/**
+ * The JSON of one `get_task_group_v1` row named `snapshot`, with the callbacks in a fixed order.
+ *
+ * From schema version 97, a callback that failed to enqueue has a `failure` object. The statement
+ * adds the `failure` key only when that object exists, so a read on an older schema returns no
+ * such key. It writes `failedAt` in the dashboard time format.
+ */
 const taskGroupJson = `jsonb_build_object(
     'id', snapshot.group_id,
     'state', snapshot.state,
@@ -47,7 +56,12 @@ const taskGroupJson = `jsonb_build_object(
       SELECT COALESCE(jsonb_agg(jsonb_build_object(
                'kind', callback.kind,
                'taskId', snapshot.callbacks -> callback.name ->> 'taskId'
-             ) ORDER BY callback.ordinal), '[]'::jsonb)
+             ) || CASE WHEN ${callbackFailure} IS NULL THEN '{}'::jsonb
+                  ELSE jsonb_build_object('failure', jsonb_build_object(
+                    'code', ${callbackFailure} ->> 'code',
+                    'message', ${callbackFailure} ->> 'message',
+                    'failedAt', ${iso(`(${callbackFailure} ->> 'failedAt')::timestamptz`)}
+                  )) END ORDER BY callback.ordinal), '[]'::jsonb)
         FROM (VALUES
           (1, 'on_finish', 'onFinish'),
           (2, 'on_success', 'onSuccess'),

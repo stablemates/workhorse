@@ -309,7 +309,7 @@ func (service *backend) redriveDeadLetters(ctx context.Context, input any, actor
 func (service *backend) signalTask(ctx context.Context, input any, actor string) (any, error) {
 	value, _ := document(input)
 	payload, _ := json.Marshal(value["payload"])
-	rows, err := service.executor.Query(ctx, "SELECT status,payload::text AS payload,delivered_at,delivered_by FROM workhorse.send_signal_v1($1::uuid,$2::text,$3::jsonb,$4::text,$5::text)", value["id"], value["name"], payload, value["idempotencyKey"], actor)
+	rows, err := service.executor.Query(ctx, "SELECT status,payload::text AS payload,delivered_at,delivered_by FROM workhorse.send_signal_v2($1::uuid,$2::text,$3::jsonb,$4::text,$5::text)", value["id"], value["name"], payload, value["idempotencyKey"], actor)
 	if err != nil {
 		return nil, err
 	}

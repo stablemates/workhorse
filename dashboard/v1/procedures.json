@@ -7601,11 +7601,33 @@
               "type": "string"
             }
           ]
+        },
+        "failure": {
+          "$ref": "#/$defs/DashboardTaskGroupCallbackFailure"
         }
       },
       "required": [
         "kind",
         "taskId"
+      ]
+    },
+    "DashboardTaskGroupCallbackFailure": {
+      "type": "object",
+      "properties": {
+        "code": {
+          "type": "string"
+        },
+        "message": {
+          "type": "string"
+        },
+        "failedAt": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "code",
+        "message",
+        "failedAt"
       ]
     },
     "DashboardTaskGroupCounts": {

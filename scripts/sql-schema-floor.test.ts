@@ -84,6 +84,23 @@ describe("schema floor", () => {
     expect(manifest.schema.minimumVersion).toBeGreaterThanOrEqual(floor.version);
   });
 
+  it("covers the signal send of the dashboard hosts with the dashboard floor", async () => {
+    // The Go and Python dashboard read models that this test scans send an operator signal through
+    // `send_signal_v2`, so an operator gets the answers that an SDK caller gets (SM-2026). The
+    // dashboard conformance scenarios hold the other hosts to the same answers. Schema version 97
+    // introduced the function, below the floor of the dashboard reads, so the floor stays.
+    const dashboards = (
+      await Promise.all(
+        dashboardRoots.map((root) => readCallerSources(path.join(repository, root))),
+      )
+    ).flat();
+    const references = new Set(dashboards.flatMap((file) => [...referencedObjects(file)]));
+    expect(references).toContain("send_signal_v2");
+    expect(references).not.toContain("send_signal_v1");
+    expect(introduced.get("send_signal_v2")).toBe(97);
+    expect((await floorFor(dashboards)).version).toBeGreaterThanOrEqual(97);
+  });
+
   it("never raises the floor past the version the release installs", () => {
     // A floor above the installed version would refuse the schema this release's own clean
     // installation writes, which is a release that cannot run against itself.

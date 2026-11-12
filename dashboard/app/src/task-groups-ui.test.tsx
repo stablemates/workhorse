@@ -18,9 +18,11 @@ Object.defineProperty(globalThis, "localStorage", {
   value: { getItem: () => null, setItem: () => undefined },
 });
 const { DashboardClientContext } = await import("./core.js");
+const { formatExact } = await import("./preferences.js");
 const {
   TaskGroupDetailView,
   TaskGroupsList,
+  callbackFailureSummary,
   callbackPendingReason,
   taskGroupProgressLabel,
   taskGroupProgressSections,
@@ -226,5 +228,73 @@ describe("task group pages", () => {
     expect(markup).toContain(`/workhorse/tasks?task=${callbackId}`);
     expect(markup).toContain("Not enqueued, because a member task did not succeed");
     expect(markup).not.toContain("Cancel group");
+  });
+  it("shows a callback that failed to enqueue, and no failure for a callback the result skips", () => {
+    const failedAt = "2026-10-11T10:02:00.000Z";
+    const finished = group({
+      state: "finished",
+      result: "succeeded",
+      finishedAt: failedAt,
+      counts: { total: 4, succeeded: 4, failed: 0, canceled: 0, pending: 0 },
+      callbacks: [
+        {
+          kind: "onFinish",
+          taskId: null,
+          failure: {
+            code: "0A000",
+            message: 'queue "<imports>" is in the fast tier',
+            failedAt,
+          },
+        },
+        { kind: "onSuccess", taskId: callbackId },
+        { kind: "onFailure", taskId: null },
+      ],
+    });
+    const markup = render(
+      createElement(TaskGroupDetailView, {
+        data: detail({ group: finished, nextAfter: null }),
+        location: { ...defaultTaskGroupsLocation, groupId },
+        navigation,
+        navigate: () => undefined,
+        auditActor: "operator",
+        reload: async () => undefined,
+      }),
+    );
+    const summary = callbackFailureSummary({ code: "0A000", message: "", failedAt });
+    expect(summary).toBe(
+      `Not enqueued. The enqueue failed at ${formatExact(failedAt)}, and Workhorse does not try it again.`,
+    );
+    expect(markup).toContain(summary);
+    expect(markup).toContain("0A000</code>");
+    // The page writes the stored message as escaped text.
+    expect(markup).toContain("queue &quot;&lt;imports&gt;&quot; is in the fast tier");
+    expect(markup).not.toContain("<imports>");
+    expect(markup).toContain(`/workhorse/tasks?task=${callbackId}`);
+    // The result selects no onFailure callback, so it has no failure.
+    expect(markup).toContain("Not enqueued, because every member task succeeded");
+    expect(markup.match(/Not enqueued\. The enqueue failed/g)).toHaveLength(1);
+  });
+
+  it("shows no failure for a callback read from a schema below version 97", () => {
+    // A schema below version 97 returns no failure key, so the page gives the general reason.
+    const finished = group({
+      state: "finished",
+      result: "succeeded",
+      finishedAt: "2026-10-11T10:02:00.000Z",
+      counts: { total: 4, succeeded: 4, failed: 0, canceled: 0, pending: 0 },
+      callbacks: [{ kind: "onFinish", taskId: null }],
+    });
+    const markup = render(
+      createElement(TaskGroupDetailView, {
+        data: detail({ group: finished, nextAfter: null }),
+        location: { ...defaultTaskGroupsLocation, groupId },
+        navigation,
+        navigate: () => undefined,
+        auditActor: "operator",
+        reload: async () => undefined,
+      }),
+    );
+    expect(markup).toContain("Not enqueued. The group events tell why.");
+    expect(markup).not.toContain("The enqueue failed");
   });
 });

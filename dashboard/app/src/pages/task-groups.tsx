@@ -1,5 +1,6 @@
 import type {
   DashboardTaskGroup,
+  DashboardTaskGroupCallbackFailure,
   DashboardTaskGroupCounts,
   DashboardTaskGroupDetail,
   DashboardTaskGroupsPage,
@@ -296,6 +297,14 @@ export function callbackPendingReason(
   return "Not enqueued. The group events tell why.";
 }
 
+/**
+ * Why a finished group has no task for a callback that it selected: the enqueue failed. Workhorse
+ * does not try the callback again (ADR 0095). A read on a schema below version 97 has no failure.
+ */
+export function callbackFailureSummary(failure: DashboardTaskGroupCallbackFailure): string {
+  return `Not enqueued. The enqueue failed at ${formatExact(failure.failedAt)}, and Workhorse does not try it again.`;
+}
+
 export function TaskGroupDetailView({
   data,
   location,
@@ -465,6 +474,15 @@ export function TaskGroupDetailView({
                         >
                           {callback.taskId}
                         </Anchor>
+                      ) : callback.failure ? (
+                        <Stack gap={2}>
+                          <Text size="sm" c="red">
+                            {callbackFailureSummary(callback.failure)}
+                          </Text>
+                          <Text size="xs" c="dimmed">
+                            <Code fz="xs">{callback.failure.code}</Code> {callback.failure.message}
+                          </Text>
+                        </Stack>
                       ) : (
                         <Text size="sm" c="dimmed">
                           {callbackPendingReason(group, callback.kind)}

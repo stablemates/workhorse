@@ -437,8 +437,10 @@ A finished group with no callback task for a kind and a `callback_failed` event 
 the SQLSTATE, and `failedAt` is the `occurred_at` of the event. Each released reader reads only
 `taskId` from a callback object, so the function keeps its suffix. Each SDK type of a callback has
 an optional failure field. The record lives as long as the group row: maintenance deletes it with
-the group after the outcome cutoff. The `dashboard/v1` group documents carry only `kind` and
-`taskId`.
+the group after the outcome cutoff. The `dashboard/v1` group detail and the cancel answer copy the
+failure into the callback as `failure`, with `failedAt` in the dashboard time format. The group
+list carries only `kind` and `taskId`, because `dashboard_task_groups_v1` builds it
+([Dashboard: Task groups page](dashboard.md#task-groups-page)).
 PostgreSQL orders the keys of a `jsonb` object by length, so the key order of `callbacks` is not
 the documented order. Each SDK reads the keys in the order `onFinish`, `onSuccess`, `onFailure`, and
 its `TaskGroup` lists the requested callbacks in that order.

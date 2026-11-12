@@ -1526,6 +1526,23 @@ export interface DashboardTaskGroupCallback {
   kind: "onFinish" | "onSuccess" | "onFailure";
   /** The callback task, or null until the finished group enqueues it. */
   taskId: string | null;
+  /**
+   * Why the finished group could not enqueue this callback, from its newest `callback_failed`
+   * event. No routine tries the callback again (ADR 0095). Only the group detail and the cancel
+   * answer carry it, and only for a callback with no task. Absent when the installed schema
+   * predates version 97, and in the group list.
+   */
+  failure?: DashboardTaskGroupCallbackFailure;
+}
+
+/** The enqueue failure of a task group callback, as `get_task_group_v1` reads it. */
+export interface DashboardTaskGroupCallbackFailure {
+  /** The SQLSTATE of the failed enqueue. */
+  code: string;
+  /** The PostgreSQL message of the failed enqueue. */
+  message: string;
+  /** When the group recorded the failure. */
+  failedAt: string;
 }
 
 /**

@@ -178,7 +178,9 @@ If the sender cannot answer, an operator can send the signal from the dashboard.
 3. In the task drawer, the operator enters `{ "approved": true }` and sends it.
 4. Workhorse resumes the task, as in step 3 of the first example.
 
-Thus, the dashboard uses the same queue operation as `Queue.sendSignal`. The dashboard server
+Thus, each dashboard host uses the same SQL function as `Queue.sendSignal`, and the operator gets
+the same answers. If the task or its wait has ended, the dashboard says that Workhorse did not
+deliver the signal. The dashboard server
 ignores the actor that the browser gives. It records the audit actor of the host. If the host names
 the signed-in operator, the record shows that operator.
 [370-dashboard-authentication.md](370-dashboard-authentication.md) explains which actor each host
@@ -197,8 +199,12 @@ authorization before it calls `Queue.sendSignal`.
   authorized without one.
 - `dashboard.humanWaits` returns the first default page of signal waits and human waits, plus the
   `QueueHealth.externalWaits` diagnostics.
+- Each of the seven dashboard hosts sends the signal through `send_signal_v2`. A terminal task with
+  no wait of that name answers `stale` and writes no event. A live task that has not reached the
+  wait answers `not_waiting`. For `stale`, the task drawer says that the task or its wait has
+  ended.
 
-More detail: [Data model: Dashboard waits](../architecture/data-model.md#dashboard-waits).
+More detail: [Data model: Dashboard waits](../architecture/data-model.md#dashboard-waits) and [Dashboard: Signal delivery](../architecture/dashboard.md#signal-delivery).
 
 </details>
 

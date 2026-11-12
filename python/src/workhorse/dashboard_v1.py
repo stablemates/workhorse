@@ -1235,6 +1235,13 @@ class DashboardTaskGroup(TypedDict, total=False):
 class DashboardTaskGroupCallback(TypedDict, total=False):
     kind: Required[Literal["onFailure", "onFinish", "onSuccess"]]
     taskId: Required[str | None]
+    failure: NotRequired[DashboardTaskGroupCallbackFailure]
+
+
+class DashboardTaskGroupCallbackFailure(TypedDict, total=False):
+    code: Required[str]
+    message: Required[str]
+    failedAt: Required[str]
 
 
 class DashboardTaskGroupCounts(TypedDict, total=False):
@@ -2003,7 +2010,12 @@ SELECT (
       SELECT COALESCE(jsonb_agg(jsonb_build_object(
                'kind', callback.kind,
                'taskId', snapshot.callbacks -> callback.name ->> 'taskId'
-             ) ORDER BY callback.ordinal), '[]'::jsonb)
+             ) || CASE WHEN snapshot.callbacks -> callback.name -> 'failure' IS NULL THEN '{}'::jsonb
+                  ELSE jsonb_build_object('failure', jsonb_build_object(
+                    'code', snapshot.callbacks -> callback.name -> 'failure' ->> 'code',
+                    'message', snapshot.callbacks -> callback.name -> 'failure' ->> 'message',
+                    'failedAt', to_char(((snapshot.callbacks -> callback.name -> 'failure' ->> 'failedAt')::timestamptz) AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"')
+                  )) END ORDER BY callback.ordinal), '[]'::jsonb)
         FROM (VALUES
           (1, 'on_finish', 'onFinish'),
           (2, 'on_success', 'onSuccess'),
@@ -2075,7 +2087,12 @@ SELECT (
       SELECT COALESCE(jsonb_agg(jsonb_build_object(
                'kind', callback.kind,
                'taskId', snapshot.callbacks -> callback.name ->> 'taskId'
-             ) ORDER BY callback.ordinal), '[]'::jsonb)
+             ) || CASE WHEN snapshot.callbacks -> callback.name -> 'failure' IS NULL THEN '{}'::jsonb
+                  ELSE jsonb_build_object('failure', jsonb_build_object(
+                    'code', snapshot.callbacks -> callback.name -> 'failure' ->> 'code',
+                    'message', snapshot.callbacks -> callback.name -> 'failure' ->> 'message',
+                    'failedAt', to_char(((snapshot.callbacks -> callback.name -> 'failure' ->> 'failedAt')::timestamptz) AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"')
+                  )) END ORDER BY callback.ordinal), '[]'::jsonb)
         FROM (VALUES
           (1, 'on_finish', 'onFinish'),
           (2, 'on_success', 'onSuccess'),
@@ -2508,6 +2525,7 @@ __all__ = [
     "DashboardTaskFacets",
     "DashboardTaskGroup",
     "DashboardTaskGroupCallback",
+    "DashboardTaskGroupCallbackFailure",
     "DashboardTaskGroupCounts",
     "DashboardTaskGroupDetail",
     "DashboardTaskGroupEvent",

@@ -398,7 +398,7 @@ final class Backend {
   private Object signalTask(Map<String, ? extends @Nullable Object> input, String actor) {
     Row row =
         operation(
-            SqlCatalogue.SEND_SIGNAL_V1,
+            SqlCatalogue.SEND_SIGNAL_V2,
             text(input, "id"),
             text(input, "name"),
             Json.write(input.get("payload")),
@@ -617,7 +617,7 @@ final class Backend {
               return work.apply(connection);
             }
             connection.setAutoCommit(false);
-            Throwable failure = null;
+            T result;
             try {
               try (var statement = connection.createStatement()) {
                 statement.execute(READ_ONLY);
@@ -626,19 +626,22 @@ final class Backend {
                 bound.setString(1, statementTimeoutMs);
                 bound.execute();
               }
-              return work.apply(connection);
+              result = work.apply(connection);
             } catch (SQLException | RuntimeException | Error error) {
-              failure = error;
-              throw error;
-            } finally {
               // The original failure reaches the caller. A cleanup failure is suppressed into it
               // (SM-1948), and the connection still goes back through withConnection.
-              try {
-                cleanUp(failure, connection::rollback);
-              } finally {
-                cleanUp(failure, () -> connection.setAutoCommit(true));
-              }
+              cleanUp(error, connection::rollback);
+              cleanUp(error, () -> connection.setAutoCommit(true));
+              throw error;
             }
+            // After a read that succeeded, each cleanup step still runs. The first cleanup failure
+            // reaches the caller, and a later one is suppressed into it (SM-2015).
+            Throwable kept = cleanUp(null, connection::rollback);
+            kept = cleanUp(kept, () -> connection.setAutoCommit(true));
+            if (kept != null) {
+              throw rethrow(kept);
+            }
+            return result;
           });
     } catch (RuntimeException error) {
       // A caller transaction can carry a statement_timeout of its own, so its cancel answers
@@ -669,18 +672,38 @@ final class Backend {
   }
 
   /**
-   * Runs {@code step}. After a {@code failure}, a failure of the step is suppressed into it, so the
-   * original failure reaches the caller. Without one, the failure of the step is thrown.
+   * Runs {@code step} and returns the failure to keep. After a {@code failure}, a failure of the
+   * step is suppressed into it, and {@code failure} stays the one to keep. Without one, the failure
+   * of the step becomes the one to keep. The caller throws it after the last step, so each step
+   * runs.
    */
-  private static void cleanUp(@Nullable Throwable failure, Cleanup step) throws SQLException {
+  private static @Nullable Throwable cleanUp(@Nullable Throwable failure, Cleanup step) {
     try {
       step.run();
     } catch (SQLException | RuntimeException | Error cleanup) {
       if (failure == null) {
-        throw cleanup;
+        return cleanup;
       }
       failure.addSuppressed(cleanup);
     }
+    return failure;
+  }
+
+  /**
+   * Throws {@code failure}, which a {@link Cleanup} step threw, with its own type. The return type
+   * lets a caller write {@code throw rethrow(failure)}.
+   */
+  private static RuntimeException rethrow(Throwable failure) throws SQLException {
+    if (failure instanceof SQLException sql) {
+      throw sql;
+    }
+    if (failure instanceof RuntimeException runtime) {
+      throw runtime;
+    }
+    if (failure instanceof Error error) {
+      throw error;
+    }
+    throw new IllegalStateException("A cleanup step threw an unexpected throwable", failure);
   }
 
   private static boolean canceled(Throwable error) {

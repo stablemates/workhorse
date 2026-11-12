@@ -1084,7 +1084,7 @@ Since schema version 94, each definition also returns its last failure in a sche
 The three keys are null until the first failure. A later pass that moves the position of the
 schedule sets them to null
 ([Data model: Error record](data-model.md#error-record)). A database below schema version 94
-returns none of the keys. The Schedules page does not show them yet.
+returns none of the keys.
 
 On the Schedules page:
 
@@ -1102,6 +1102,12 @@ On the Schedules page:
   occurrence. A schedule without a skip shows no badge. Nothing clears the skip keys when later
   occurrences fire. Thus a skip that is 24 hours old or older also shows no badge. The rule is in
   `scheduleSkipSummary` in `dashboard/app/src/pages/schedules.tsx`.
+- If `lastErrorAt` is set, the Last run cell shows a red `Failed · <relative time>` badge. The
+  badge has no time window, because the next pass that moves the position clears the keys. The
+  badge tooltip and accessible name give the exact failure time, `lastErrorCode`, and
+  `lastErrorMessage`. React escapes the error message as text. A schedule with null error keys shows no
+  badge, and so does a database below schema version 94. The rule is in `scheduleErrorSummary` in
+  `dashboard/app/src/pages/schedules.tsx`.
 - Focusable tooltips carry the task type, priority, worker wording, pause durability, and full
   maintenance status.
 
@@ -1207,6 +1213,13 @@ form:
 - `callbacks`, one `{ kind, taskId }` for each callback that the creator requested, in the order
   `onFinish`, `onSuccess`, `onFailure`. `taskId` is null until the finished group enqueues the
   callback.
+- In the detail and the cancel answer, a callback that the finished group failed to enqueue also
+  has `failure`: `{ code, message, failedAt }`. `code` is the SQLSTATE, `message` is the
+  PostgreSQL error message, and `failedAt` is the time of the newest `callback_failed` event for that
+  kind. A callback that the result does not select has no `failure`. The group list has no
+  `failure`, because `dashboard_task_groups_v1` builds its callbacks from `kind` and `taskId`
+  only. A schema below version 97 returns no `failure` from `get_task_group_v1`, so the detail has
+  no such key there.
 
 #### List
 
@@ -1281,7 +1294,10 @@ The detail shows these parts:
 1. The state, the progress bar, the five counts, and the four times. A canceled group also shows
    who canceled it and why. An open group shows that it cannot finish until the application seals
    it.
-2. Callbacks: a link to each callback task, or the reason that the callback has no task yet.
+2. Callbacks: a link to each callback task, or the reason that the callback has no task yet. If
+   the callback has `failure`, the row says in red text that the enqueue failed at `failedAt` and
+   that Workhorse does not try it again. Under that text, it shows `code` and `message` as text.
+   React escapes the error message, as it escapes each other stored error on the page.
 3. Member tasks: the columns #, Task, Type, Queue, State, Counted outcome, and Added, with pages
    of `pageSize` members.
 4. Events: the newest group events first. If `eventsTruncated` is true, the page says that it does
@@ -1551,6 +1567,30 @@ document for three seconds:
 | .NET       | `Backend.QueueHealthAsync`         |
 
 `dashboard_task_detail_v1` takes the same input from the same cache.
+
+#### Signal delivery
+
+Each of the seven hosts sends an operator signal through `send_signal_v2`. Thus an operator gets
+the answers that an SDK caller gets. The TypeScript host calls `Queue.sendSignal`, and the .NET
+host calls `Queue.SendSignalAsync`. The Go, Python, Rust, Ruby, and JVM hosts call the function
+directly.
+
+| Task state when the signal arrives                  | `status`      | Event                 |
+| --------------------------------------------------- | ------------- | --------------------- |
+| Waits for the signal name                           | `delivered`   | one `signal_received` |
+| Live, with no wait row of that name                 | `not_waiting` | one `signal_rejected` |
+| Terminal, with no wait row of that name             | `stale`       | none                  |
+| Has a wait row with no delivery, and the wait ended | `stale`       | one `signal_rejected` |
+
+The `mutations/signal-task` conformance exchange holds the first row for each host. The
+`signal-answers-and-callback-failure` scenario holds the second and third rows, and
+`signal-answer-events` counts their `signal_rejected` events. For `stale`, the task
+drawer says that the task or its wait has ended and that Workhorse did not deliver the signal. The
+rule is in `signalDeliveryNotice` in `dashboard/app/src/components/signal-task.tsx`.
+
+Schema version 97 introduced `send_signal_v2`. The dashboard reads already need schema version 98,
+so the floor of the dashboard reads stays at 98. `scripts/sql-schema-floor.test.ts` holds both
+facts.
 
 ### Task detail
 
