@@ -9,4 +9,5 @@
 
 baseline github.com/stablemates/workhorse/go@v0.12.0 (tag go/v0.12.0)
 
+- Version: value changed from "0.12.0" to "0.14.0"
 - package github.com/stablemates/workhorse/go/examples/sqlc/generated: removed

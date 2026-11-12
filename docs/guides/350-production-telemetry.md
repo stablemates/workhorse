@@ -58,7 +58,7 @@ listener, the SDK starts no span and records no measurement.
 
 - `@opentelemetry/api >=1.9.0 <2`
 - `@opentelemetry/api-logs >=0.200.0 <0.300.0`
-- `@stablemates/workhorse >=0.12.0 <0.13.0`
+- `@stablemates/workhorse >=0.14.0 <0.15.0`
 
 `registerOpenTelemetry()` calls `registerTelemetryProvider(provider)` and returns its cleanup
 function.

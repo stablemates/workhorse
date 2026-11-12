@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.14.0 — 2026-11-13
+
+There is no 0.13.0. A task queue does not tempt fate.
+
+- No code changes. The peer range on `@stablemates/workhorse` is `>=0.14.0 <0.15.0`, so the
+  adapter installs beside the 0.14.0 core. The npm packages, Python distribution, Go module,
+  Rust crate, Ruby gem, JVM artifacts, and .NET packages release from one source commit. The core
+  requires **schema v99**. Migrations 0093 through 0105 move the schema from version 91 to version
+  **104**. Its 0.14.0 entry in [`CHANGELOG.md`](../../CHANGELOG.md) gives the upgrade steps and the
+  breaking changes of the core.
+
 ## 0.12.0 — 2026-11-07
 
 - No code changes. The peer range on `@stablemates/workhorse` is `>=0.12.0 <0.13.0`, so the

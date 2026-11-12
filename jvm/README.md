@@ -34,34 +34,34 @@ The JVM SDK has three artifacts. All three use the group `run.workhorse` and one
 Maven Central serves these artifacts from `0.9.0`. A Gradle build adds the core:
 
 ```groovy
-implementation("run.workhorse:workhorse:0.12.0")
+implementation("run.workhorse:workhorse:0.14.0")
 ```
 
 A Maven build adds the core:
 
 ```xml
-<dependency><groupId>run.workhorse</groupId><artifactId>workhorse</artifactId><version>0.12.0</version></dependency>
+<dependency><groupId>run.workhorse</groupId><artifactId>workhorse</artifactId><version>0.14.0</version></dependency>
 ```
 
 The Kotlin module and the starter use the same group and version. Add the Kotlin module for
 suspend handlers:
 
 ```groovy
-implementation("run.workhorse:workhorse-kotlin:0.12.0")
+implementation("run.workhorse:workhorse-kotlin:0.14.0")
 ```
 
 ```xml
-<dependency><groupId>run.workhorse</groupId><artifactId>workhorse-kotlin</artifactId><version>0.12.0</version></dependency>
+<dependency><groupId>run.workhorse</groupId><artifactId>workhorse-kotlin</artifactId><version>0.14.0</version></dependency>
 ```
 
 Add the starter for a Spring Boot application:
 
 ```groovy
-implementation("run.workhorse:workhorse-spring-boot-starter:0.12.0")
+implementation("run.workhorse:workhorse-spring-boot-starter:0.14.0")
 ```
 
 ```xml
-<dependency><groupId>run.workhorse</groupId><artifactId>workhorse-spring-boot-starter</artifactId><version>0.12.0</version></dependency>
+<dependency><groupId>run.workhorse</groupId><artifactId>workhorse-spring-boot-starter</artifactId><version>0.14.0</version></dependency>
 ```
 
 The core puts PgJDBC on the runtime class path only. If your code names a PgJDBC class, such as
@@ -74,7 +74,7 @@ Java, Kotlin, Spring Boot, and PgJDBC versions.
 Install the schema once, as a deployment step. The application never installs or migrates it.
 
 ```bash
-npx --package @stablemates/workhorse@0.12.0 workhorse schema install
+npx --package @stablemates/workhorse@0.14.0 workhorse schema install
 ```
 
 The machine that runs that deployment step needs Node.js 22 or newer. The application itself needs

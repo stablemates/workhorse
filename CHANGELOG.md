@@ -21,7 +21,73 @@ Workhorse is a public beta. While the line is `0.x`, any minor release may chang
 a major line a migration only adds. Breaking changes are always listed with
 upgrade steps.
 
-## Unreleased
+## 0.14.0 — 2026-11-13
+
+There is no 0.13.0. A task queue does not tempt fate.
+
+The npm packages, Python distribution, Go module, Rust crate, Ruby gem, JVM artifacts, and .NET
+packages release from one source commit.
+
+Requires **schema v99**, Node.js **22** or newer, and PostgreSQL **15** or newer.
+
+### Upgrade steps
+
+**Migrate the schema before starting updated processes.** Run `workhorse schema migrate` before any
+process of this release starts, producers too. Migrations 0093 through 0105 move the schema from
+version 91 to version **104**. The SDK compatibility floor rises from 76 to **99**, so a process of
+this release refuses every mutation on a schema below version 99. A 0.12 process keeps working on
+version 104, because a migration inside a major line only adds.
+
+If you run cold exporters, stop each one before the migration and let it finish its uploads.
+Migration 0096 fences each export segment that is exporting. It is the only migration that changes
+stored rows.
+
+Migration 0102 builds `task_runtime_active_queue_shard_idx` with `CREATE INDEX CONCURRENTLY`,
+outside a transaction. Its time grows with the size of `task_runtime`. If the build fails,
+PostgreSQL keeps an invalid index, and the schema stays at version 100. Drop the index with
+`DROP INDEX CONCURRENTLY IF EXISTS workhorse.task_runtime_active_queue_shard_idx`, and run
+`workhorse schema migrate` again.
+
+[The upgrade notes](docs/upgrading.md#upgrade-from-012x-to-0140) give each step and each change that needs a
+change in application code.
+
+### Breaking changes
+
+These changes are not additions. Change the application before you deploy this release:
+
+1. The `Handler` type returns `HandlerResult<TResult>`. Code that calls a `Handler` and reads its
+   value can read `undefined`. See "A TypeScript handler can return no value".
+2. A payload contract and a result contract validate the stored JSON value, not the object of the
+   caller. See "TypeScript checks a stored value before the compatibility query".
+3. The SDK refuses a `NaN` or infinite number, a `Map`, and a `Set` in each value that it stores and
+   in the options, with a `TypeError`. See "TypeScript refuses a stored value that JSON would
+   change".
+4. The login `POST` of `@stablemates/workhorse-dashboard-server` refuses a request with no `Origin`
+   or another origin. A client that posts the login form itself must send the `Origin` of the
+   dashboard. See "A page on another site cannot fill the login throttle of the administrator".
+
+### Behavior changes
+
+These changes can make code that worked on 0.12 act differently:
+
+1. A `stop()` when no worker call is active ends the next `run()` or `runOnce()` call. See "A
+   TypeScript stop before a worker call ends the next call".
+2. An enqueue refuses a queue name above 256 UTF-8 bytes, and a stored schedule with such a name no
+   longer fires. See "Queue purge, tier read, queue name, and claim lease use their locks".
+3. At repeatable read or serializable, an enqueue can fail with SQLSTATE `40001` after a tier change,
+   and `set_queue_tier_v1` refuses these levels with `0A000`. See "Queue purge, tier read, queue
+   name, and claim lease use their locks".
+4. Schedule synchronization refuses an enabled schedule with a concurrency key on a fast-tier queue,
+   with SQLSTATE `P1007`. See "One failed schedule no longer stops the schedule pass".
+5. A signal to a terminal task with no wait of that name answers `stale`, not `not_waiting`. See
+   "Three replay answers move to new function versions".
+6. The worker cuts a long failure envelope and adds `"truncated": true`. See "A failure envelope has
+   a size limit".
+7. An oversized checkpoint value and each child limit refusal fail the task at once, with no retry.
+   See "An oversized checkpoint value fails the task without a retry" and "Each child limit refusal
+   ends the task".
+8. Queue health reports the new degraded reasons `maintenance-failing`, `schedule-failing`, and
+   `terminal-cleanup-stalled`. Code that switches on reason codes should accept them.
 
 ### A Kysely plugin no longer changes the rows that Workhorse reads
 
@@ -214,8 +280,8 @@ A handler that returned `undefined` failed each attempt, because the result had 
 checkpoint operation that returned `undefined` ran its effect, stored nothing, and ran again on
 each retry. Both now store JSON `null`, as the other six SDKs do for their "no value".
 `HandlerContext.checkpoint` has a new signature for an operation that returns `void`, which returns
-`Promise<null>`. The `Handler` type does not change, so a typed handler with no result writes
-`return null`. An `undefined` property of an object and an `undefined` member of an array keep
+`Promise<null>`. A later entry, "A TypeScript handler can return no value", widens the `Handler`
+type, so a typed handler with no result needs no `return null`. An `undefined` property of an object and an `undefined` member of an array keep
 the JSON rules (SM-1969, ADR 0119).
 
 ### A TypeScript worker survives a thrown value that cannot become text
@@ -325,7 +391,7 @@ replaces the bodies of `queue_health_v1`, `evaluate_queue_health_v1`,
 `maintain_task_groups_v1`. It rewrites no row and does not raise the
 SDK compatibility floor. Run `workhorse schema migrate`.
 
-### Three replay answers move to new function versions, and the floor rises to 97
+### Three replay answers move to new function versions
 
 A Python, Go, or Rust worker parked a task until an absolute time with digits below the
 millisecond. A TypeScript, Ruby, JVM, or .NET worker replayed the same instant at milliseconds, and
@@ -354,8 +420,9 @@ record with the group (SM-1955, ADR 0095).
 Migration 0098 (`0098-compare-wait-targets-in-milliseconds-and-report-second-child-sets.sql`)
 moves the schema to version 97. It adds `schedule_wait_v2`, `send_signal_v2`, and
 `create_children_v2`, and replaces the body of `get_task_group_v1`. The `_v1` functions keep their
-answers. The SDK floor rises from 76 to 97, so run `workhorse schema migrate` before the first
-process of this release starts.
+answers. With this migration, the SDK floor rises from 76 to 97. Migrations 0099 and 0100
+raise it to 99. Run `workhorse schema migrate` before the first process of this release
+starts.
 
 ### The dashboard keeps the audit of each settings change
 
@@ -593,8 +660,9 @@ The tooltip and the accessible name give the exact time, the SQLSTATE, and the m
 with no recorded error shows no badge (SM-2007).
 
 A signal to a task that ended with no wait of that name answers `stale`. The task drawer now says
-that the task or its wait has ended and that Workhorse did not deliver the signal. The other six
-dashboard hosts now give the same answer as the TypeScript host (SM-2026).
+that the task or its wait has ended and that Workhorse did not deliver the signal. The Go, Python,
+Rust, Ruby, and JVM dashboard hosts now give the same answer as the TypeScript and .NET hosts
+(SM-2026).
 
 ### Queue health keeps the end of a hold when an enqueue or a purge meets a locked outcome
 
