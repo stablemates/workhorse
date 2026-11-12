@@ -478,6 +478,67 @@ The deprecation comments of the renamed names in `@stablemates/workhorse` and
 (ADR 0054). Each comment now says that the name stays through the 1.x line and can go at the first
 contract step of the 2.x line. No name and no type changes (SM-2046).
 
+### A TypeScript handler can return no value
+
+A TypeScript handler with no result had to write `return null`, because the `Handler` type required
+a value. The worker already stored `null` when a JavaScript handler returned `undefined` (ADR 0119).
+Now `worker.handle(type, async () => {})` compiles with no `return null`, and the worker stores the
+result `null` (SM-2012). A handler whose result type excludes `null`, such as
+`Handler<P, { id: string }>`, must still return its value. The new type `HandlerResult<TResult>`
+states this rule.
+
+**Breaking (TypeScript types).** Code that calls a `Handler` and reads its value now reads
+`HandlerResult<TResult>`. For a result type that includes `null`, such as the default `Json`, that
+value can be `undefined`. Thus a wrapper that returns `await handler(payload, context)` as
+`Promise<Json>` no longer compiles. Write `(await handler(payload, context)) ?? null` to get the
+value that the worker stores, or give the wrapper the return type `Promise<HandlerResult>`. A
+generic wrapper with the result type `R` must return `Promise<HandlerResult<R>>`. A
+handler, `Worker.handle`, `replayHandler`, and `HandlerReplayReport` compile as before. This is a
+type-level break in a 0.x minor. 1.0.0 narrows nothing, so this release is the last one before
+2.0.0 that can make it. `docs/upgrading.md` states the change.
+
+### TypeScript checks a stored value before the compatibility query
+
+A new TypeScript `Queue` sent its schema compatibility query before it checked a payload. If that
+query failed, for example because the connection broke, the caller got the database error and not
+the `TypeError` that names the path of the value (SM-2011). Now each `Queue` call that stores a JSON
+value encodes and checks the value before any statement. This is also before the compatibility query
+and a contract read.
+
+The rule applies to an enqueue, a task group create or add with its callbacks, a schedule sync, a
+child, a handler result, a signal, a human wait, a checkpoint, and a progress value. It also applies
+to the options of an enqueue, a child, or a schedule, the contract definitions of `syncContracts`, a
+concurrency policy, a rate limit policy, a budget, a retention override, and a retention preview.
+For example, an `executionTimeoutMs` of `NaN` now fails, and before it was stored as no timeout. A
+handler result with a NUL character or an unpaired surrogate now also fails before its contract
+read.
+
+The call keeps the checked text through the contract check and the write. Thus a `toJSON` method
+runs one time for each call, also when a contract mismatch makes the call send its statement again.
+The first encode makes a deep copy of the options, so a change that the caller makes to its own
+options during the call does not reach the statement. A handler context also checks a progress
+value, a child payload, and a human-wait context before it reads the tier of its queue. It gives the
+operation a plain copy of the checked value.
+
+A payload contract and a result contract now validate the value of the checked text, which is the
+value that PostgreSQL stores. Before, a contract validated the object of the caller. For example, a
+`Date` now reaches the contract as its ISO string. A number token reaches the contract as a number
+with the same decimal value, and a token that a double cannot hold exactly, such as
+`JSON.rawJSON("9007199254740993")`, fails the contract. A value that a contract also refuses, such
+as a `NaN` for a `number` field, now fails with the `TypeError` and not with
+`TaskContractValidationError`. `docs/upgrading.md` lists each case that changes.
+
+### The TypeScript `Queue` stores the audit of a policy change
+
+`Queue.overrideRetentionPolicy`, `revertRetentionPolicy`, `overrideMaintenancePolicy`, and
+`revertMaintenancePolicy` called only the `_v1` functions, which store no audit. Thus a
+`DashboardSettingsController` that used `Queue` stored no audit, and the Settings page showed no
+last change (SM-2030). Each method now takes the optional second argument `{ audit }`, with
+`actor`, `reason`, and `requestId`. With `audit`, the method calls the `_v2` function, which stores
+the audit for each changed setting. Without it, the method calls the `_v1` function as before. The
+new types are `PolicyChangeAudit` and `PolicyChangeOptions`. The demo settings controller now uses
+the option and no SQL of its own.
+
 ## 0.12.0 — 2026-11-07
 
 The npm packages, Python distribution, Go module, Rust crate, Ruby gem, JVM artifacts, and .NET

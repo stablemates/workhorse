@@ -527,11 +527,13 @@ Each SDK encodes a payload as JSON before it sends the enqueue statement. Some v
 have no JSON form that reads back as the same value. If the encoder changed such a value with no
 error, the stored payload would differ from the value of the caller.
 
-- **TypeScript** refuses a `NaN` or infinite number, a `Map`, and a `Set` at any depth, before it
-  sends the statement that writes the value, so no task with a changed value is stored. On a new
-  `Queue`, the compatibility query can run first, and a schedule sync can read the contract first.
-  The rule applies to a payload, a handler result, a child payload, a signal
-  payload, a human-wait value, a checkpoint value, and a progress value. The `TypeError` names the
+- **TypeScript** refuses a `NaN` or infinite number, a `Map`, and a `Set` at any depth, before any
+  statement, also before the compatibility query of a new `Queue` and a contract read. Thus no task
+  with a changed value is stored. The rule applies to a payload, a task group callback, a schedule
+  payload, a handler result, a child payload, a signal payload, a human-wait value, a checkpoint
+  value, a progress value, a retry policy, a contract definition, and a policy definition. Each call encodes its value
+  one time and sends that text, so a `toJSON` method runs one time for each call. A contract
+  validates the value of that text. The `TypeError` names the
   path of the value, such as `$.items[2]`. It also names the task type, or the task ID for a signal
   payload and a human-wait result, because their sender does not read the task type.
   `JSON.stringify` writes a `Map` or a `Set` as `{}` and a non-finite number as `null`, so before

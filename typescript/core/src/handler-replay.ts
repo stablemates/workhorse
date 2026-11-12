@@ -101,9 +101,8 @@ export interface HandlerReplayReport<TResult extends Json = Json> extends Handle
    * `completed` when the handler returned. `suspended` when it reached a stored pending boundary
    * or a new wait or child, where a live task suspends.
    *
-   * A JavaScript handler that returns `undefined` completes with the result `null`, as on a live
-   * worker (ADR 0119). The `Handler` type requires a value, so a typed handler with no result
-   * returns `null`.
+   * A handler that returns no value completes with the result `null`, as on a live worker
+   * (ADR 0119).
    */
   outcome: { status: "completed"; result: TResult } | { status: "suspended"; at: DurableName };
 }

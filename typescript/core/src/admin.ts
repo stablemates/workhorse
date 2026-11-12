@@ -542,10 +542,11 @@ export class Admin {
     return this.modules.retentionMaintenance.getRetentionPolicy();
   }
 
-  previewRetentionPolicy(
+  async previewRetentionPolicy(
     definition: Partial<RetentionPolicyDefinition>,
   ): Promise<RetentionPolicyImpact> {
-    return this.modules.retentionMaintenance.previewRetentionPolicy(definition);
+    const input = this.modules.retentionMaintenance.encodeRetentionPreview(definition);
+    return this.modules.retentionMaintenance.previewRetentionPolicy(input);
   }
 
   getMaintenancePolicy(): Promise<MaintenancePolicy> {

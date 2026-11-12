@@ -168,8 +168,9 @@ operation ran. Nothing is stored, so the next attempt runs the operation again.
 
 - The TypeScript `HandlerContext.checkpoint` has a signature for an operation that returns `void`.
   That signature returns `Promise<null>`.
-- The TypeScript `Handler` type does not change. A typed handler with no result writes
-  `return null`. A JavaScript handler that returns `undefined` also stores the result `null`.
+- The TypeScript `Handler` type accepts a handler with no return value when its result type
+  includes `null`, as the default `Json` does. Then the result is `null`. A handler whose result
+  type excludes `null` must return a value. The type of that rule is `HandlerResult`.
 - In TypeScript, `encodeStoredJson` throws a `TypeError` for a `NaN` or infinite number, a `Map`,
   or a `Set` at any depth, before `save_checkpoint_v3`. The error names the task type and the
   path of the value.

@@ -959,6 +959,10 @@ and why.
   `DashboardSettingsController`.
 - Policy mutation requires `operator.mode === "writable"` and a `DashboardSettingsController`.
   Each call carries actor, reason, request ID, and server-assigned occurrence time.
+- A TypeScript `DashboardSettingsController` stores the audit when it passes `{ audit }` to
+  `Queue.overrideMaintenancePolicy`, `revertMaintenancePolicy`, `overrideRetentionPolicy`, or
+  `revertRetentionPolicy`. Without the `audit` option, the method removes the entry of each
+  setting that it changes.
 - The embedded hosts of the other SDKs call `override_retention_policy_v2` and the three other
   audited functions with the authenticated actor. `lastChanges.<setting>` of each policy in the
   `settings` read holds the last change of a setting that has one.

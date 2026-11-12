@@ -1085,6 +1085,31 @@ export interface PolicyValueProvenance<T> {
 
 export type MaintenancePolicySetting = keyof MaintenancePolicyDefinition;
 
+/**
+ * The person and the cause of an operator change of a retention or maintenance policy (ADR 0020).
+ *
+ * Workhorse stores one entry for each setting that the change sets or reverts. The dashboard shows
+ * that entry under `lastChanges` of the policy. Workhorse stores a preview and a digest of
+ * `requestId`, not the request ID.
+ */
+export interface PolicyChangeAudit {
+  /** The operator who made the change. It must contain 1 to 200 characters. */
+  actor: string;
+  /** Why the operator made the change. It must contain 1 to 2,000 characters. */
+  reason: string;
+  /** The ID of the request that made the change. It must contain 1 to 512 UTF-8 bytes. */
+  requestId: string;
+}
+
+/** Options of an override or a revert of a retention or maintenance policy. */
+export interface PolicyChangeOptions {
+  /**
+   * The audit of the change. Without it, Workhorse removes the stored audit entry of each setting
+   * that the change sets or reverts, so the dashboard shows no last change for that setting.
+   */
+  audit?: PolicyChangeAudit;
+}
+
 export interface RetentionCategoryValues<T> {
   taskIdentity: T;
   terminalOutcome: T;

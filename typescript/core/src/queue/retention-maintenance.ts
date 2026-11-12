@@ -10,6 +10,8 @@ import type {
   MaintenancePolicy,
   MaintenancePolicyDefinition,
   MaintenancePolicySetting,
+  PolicyChangeAudit,
+  PolicyChangeOptions,
   PolicyValueProvenance,
   RetentionPolicy,
   RetentionPolicyDefinition,
@@ -18,6 +20,7 @@ import type {
 } from "../types.js";
 import { recordRecoveryTelemetry } from "./claim-lease-fence.js";
 import { QueueModule } from "./module-context.js";
+import { encodeStoredJson } from "./stored-json.js";
 import { DATABASE_NOW, RUN_MAINTENANCE_SQL } from "./maintenance-contract.js";
 
 export type MaintenancePhase =
@@ -239,6 +242,14 @@ function maintenancePhaseResult(row: MaintenancePhaseRow): MaintenancePhaseResul
   };
 }
 
+/**
+ * The actor, the reason, and the request ID, in the order of the last parameters of each `_v2`
+ * policy function. No audit gives no parameters, for the `_v1` function.
+ */
+function auditParameters(audit: PolicyChangeAudit | undefined): string[] {
+  return audit === undefined ? [] : [audit.actor, audit.reason, audit.requestId];
+}
+
 /** Owns retention policy and maintenance operations behind the Queue facade. */
 export class RetentionMaintenanceModule extends QueueModule {
   async tick(
@@ -345,39 +356,63 @@ export class RetentionMaintenanceModule extends QueueModule {
     return policy;
   }
 
+  // With an audit, each policy change calls the `_v2` function, which stores the audit for each
+  // changed setting. Without one, it calls the released `_v1` function, which removes that entry.
+  /** Encode the column overrides of a retention override, before any statement. */
+  encodeRetentionOverrides(definition: Partial<RetentionPolicyDefinition>): string {
+    return encodeStoredJson(
+      Object.fromEntries(
+        Object.entries(definition)
+          .filter(
+            (entry): entry is [RetentionPolicySetting, number | null] => entry[1] !== undefined,
+          )
+          .map(([setting, value]) => [RETENTION_POLICY_COLUMNS[setting], value]),
+      ),
+      "Retention policy overrides",
+    );
+  }
+
+  /** Override the settings that {@link encodeRetentionOverrides} encoded. */
   async overrideRetentionPolicy(
-    definition: Partial<RetentionPolicyDefinition>,
+    overrides: string,
+    { audit }: PolicyChangeOptions = {},
   ): Promise<RetentionPolicy> {
-    const overrides = Object.fromEntries(
-      Object.entries(definition)
-        .filter((entry): entry is [RetentionPolicySetting, number | null] => entry[1] !== undefined)
-        .map(([setting, value]) => [RETENTION_POLICY_COLUMNS[setting], value]),
-    );
-    const result = await this.context.database.query<RetentionPolicyRow>(
-      SQL_STATEMENTS["override_retention_policy_v1"],
-      [JSON.stringify(overrides)],
-    );
-    return retentionPolicy(expectOneRow(result, "workhorse.override_retention_policy_v1"));
+    const name =
+      audit === undefined ? "override_retention_policy_v1" : "override_retention_policy_v2";
+    const result = await this.context.database.query<RetentionPolicyRow>(SQL_STATEMENTS[name], [
+      overrides,
+      ...auditParameters(audit),
+    ]);
+    return retentionPolicy(expectOneRow(result, `workhorse.${name}`));
   }
 
   async revertRetentionPolicy(
     settings: readonly RetentionPolicySetting[],
+    { audit }: PolicyChangeOptions = {},
   ): Promise<RetentionPolicy> {
-    const result = await this.context.database.query<RetentionPolicyRow>(
-      SQL_STATEMENTS["revert_retention_policy_v1"],
-      [policyColumnNames(settings, RETENTION_POLICY_COLUMNS)],
-    );
-    return retentionPolicy(expectOneRow(result, "workhorse.revert_retention_policy_v1"));
+    const name = audit === undefined ? "revert_retention_policy_v1" : "revert_retention_policy_v2";
+    const result = await this.context.database.query<RetentionPolicyRow>(SQL_STATEMENTS[name], [
+      policyColumnNames(settings, RETENTION_POLICY_COLUMNS),
+      ...auditParameters(audit),
+    ]);
+    return retentionPolicy(expectOneRow(result, `workhorse.${name}`));
   }
 
-  async previewRetentionPolicy(
-    definition: Partial<RetentionPolicyDefinition>,
-  ): Promise<RetentionPolicyImpact> {
+  /**
+   * Encode the input of a retention preview, before any statement. JSON writes `NaN` as `null`,
+   * which the preview reads as a disabled category, so such a value fails here.
+   */
+  encodeRetentionPreview(definition: Partial<RetentionPolicyDefinition>): string {
+    return encodeStoredJson({ definition }, "Retention policy preview");
+  }
+
+  /** Preview the retention change that {@link encodeRetentionPreview} encoded. */
+  async previewRetentionPolicy(input: string): Promise<RetentionPolicyImpact> {
     // dashboard_retention_preview_v1 merges the definition into the current policy. An absent or
     // undefined setting keeps its current value, and an explicit null disables its category.
     const result = await this.context.database.query<{ result: RetentionPolicyImpact }>(
       SQL_STATEMENTS["dashboard_retention_preview_v1"],
-      [JSON.stringify({ definition })],
+      [input],
     );
     return expectOneRow(result, "workhorse.dashboard_retention_preview_v1").result;
   }
@@ -416,31 +451,35 @@ export class RetentionMaintenanceModule extends QueueModule {
 
   async overrideMaintenancePolicy(
     definition: Partial<MaintenancePolicyDefinition>,
+    { audit }: PolicyChangeOptions = {},
   ): Promise<MaintenancePolicy> {
     this.validateMaintenanceTime(definition.historyRetentionLocalTime);
-    const result = await this.context.database.query<MaintenancePolicyRow>(
-      SQL_STATEMENTS["override_maintenance_policy_v1"],
-      [
-        definition.timezone ?? null,
-        definition.partitionPreparationIntervalMs ?? null,
-        definition.terminalCleanupIntervalMs ?? null,
-        definition.historyRetentionLocalTime ?? null,
-        definition.statisticsRollupIntervalMs ?? null,
-        definition.statisticsGroupLimit ?? null,
-        definition.statisticsRecomputeBuckets ?? null,
-      ],
-    );
-    return maintenancePolicy(expectOneRow(result, "workhorse.override_maintenance_policy_v1"));
+    const name =
+      audit === undefined ? "override_maintenance_policy_v1" : "override_maintenance_policy_v2";
+    const result = await this.context.database.query<MaintenancePolicyRow>(SQL_STATEMENTS[name], [
+      definition.timezone ?? null,
+      definition.partitionPreparationIntervalMs ?? null,
+      definition.terminalCleanupIntervalMs ?? null,
+      definition.historyRetentionLocalTime ?? null,
+      definition.statisticsRollupIntervalMs ?? null,
+      definition.statisticsGroupLimit ?? null,
+      definition.statisticsRecomputeBuckets ?? null,
+      ...auditParameters(audit),
+    ]);
+    return maintenancePolicy(expectOneRow(result, `workhorse.${name}`));
   }
 
   async revertMaintenancePolicy(
     settings: readonly MaintenancePolicySetting[],
+    { audit }: PolicyChangeOptions = {},
   ): Promise<MaintenancePolicy> {
-    const result = await this.context.database.query<MaintenancePolicyRow>(
-      SQL_STATEMENTS["revert_maintenance_policy_v1"],
-      [policyColumnNames(settings, MAINTENANCE_POLICY_COLUMNS)],
-    );
-    return maintenancePolicy(expectOneRow(result, "workhorse.revert_maintenance_policy_v1"));
+    const name =
+      audit === undefined ? "revert_maintenance_policy_v1" : "revert_maintenance_policy_v2";
+    const result = await this.context.database.query<MaintenancePolicyRow>(SQL_STATEMENTS[name], [
+      policyColumnNames(settings, MAINTENANCE_POLICY_COLUMNS),
+      ...auditParameters(audit),
+    ]);
+    return maintenancePolicy(expectOneRow(result, `workhorse.${name}`));
   }
 
   async setColdExportPolicy(definition: ColdExportPolicyDefinition): Promise<ColdExportStatus> {

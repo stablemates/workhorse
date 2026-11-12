@@ -274,10 +274,23 @@ export interface TaskGroupContext {
   add(requests: readonly EnqueueRequest[]): Promise<EnqueueResult[]>;
 }
 
+/**
+ * The value that a handler can return. A handler whose result type includes `null`, such as the
+ * default `Json`, can also return no value, and the worker stores the result `null` (ADR 0119). A
+ * handler whose result type excludes `null` must return a value of that type.
+ */
+export type HandlerResult<TResult extends Json = Json> =
+  | TResult
+  | (null extends TResult ? void : never);
+
+/**
+ * A task handler. Code that calls a handler gets a {@link HandlerResult}, which can be `undefined`.
+ * Write `(await handler(payload, context)) ?? null` to read the value that the worker stores.
+ */
 export type Handler<TPayload extends Json = Json, TResult extends Json = Json> = (
   payload: TPayload,
   context: HandlerContext<TPayload>,
-) => Promise<TResult> | TResult;
+) => Promise<HandlerResult<TResult>> | HandlerResult<TResult>;
 
 /** Per-task batch context without APIs that suspend and replay an individual handler. */
 export type BatchHandlerContext<TPayload extends Json = Json> = Omit<
@@ -1872,8 +1885,8 @@ export class Worker {
         handlerReturns.set(context, () => attempt.markHandlerReturned());
         let result: Json;
         try {
-          // A JavaScript handler can return no value. The result is then null (ADR 0119).
-          result = ((await handler(task.payload, context)) as Json | undefined) ?? null;
+          // A handler can return no value. The result is then null (ADR 0119).
+          result = (await handler(task.payload, context)) ?? null;
         } finally {
           attempt.markHandlerReturned();
         }

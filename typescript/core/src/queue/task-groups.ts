@@ -13,8 +13,17 @@ import type {
   Queryable,
   TaskState,
 } from "../types.js";
-import type { EnqueueContractsModule, EnqueueRow } from "./enqueue-contracts.js";
-import { validateCallbackRequest, validateEnqueueRequests } from "./enqueue-contracts.js";
+import type {
+  EncodedEnqueueRequest,
+  EnqueueContractsModule,
+  EnqueueRow,
+} from "./enqueue-contracts.js";
+import {
+  encodeEnqueueRequest,
+  encodeEnqueueRequests,
+  validateCallbackRequest,
+  validateEnqueueRequests,
+} from "./enqueue-contracts.js";
 import { QueueModule, type QueueModuleContext } from "./module-context.js";
 import { nullableRowTimestamp, rowTimestamp } from "./row-mapping.js";
 
@@ -385,6 +394,20 @@ function validateCallbacks(callbacks: TaskGroupCallbacks): void {
   }
 }
 
+/** The callbacks of a new group, in a fixed order, each with its payload encoded. */
+export type EncodedCallbacks = readonly {
+  readonly kind: "onFinish" | "onSuccess" | "onFailure";
+  readonly encoded: EncodedEnqueueRequest;
+}[];
+
+function encodeCallbacks(callbacks: TaskGroupCallbacks): EncodedCallbacks {
+  return (["onFinish", "onSuccess", "onFailure"] as const).flatMap((kind) => {
+    const request = callbacks[kind];
+    if (request === undefined) return [];
+    return [{ kind, encoded: encodeEnqueueRequest(request) }];
+  });
+}
+
 function validateLimit(limit: number, maximum: number): void {
   if (!Number.isInteger(limit) || limit < 1 || limit > maximum) {
     throw new RangeError(`limit must be an integer from 1 to ${maximum}`);
@@ -401,32 +424,38 @@ export class TaskGroupsModule extends QueueModule {
   }
 
   private async serializeCallbacks(
-    callbacks: TaskGroupCallbacks,
+    callbacks: EncodedCallbacks,
     transaction: Queryable,
   ): Promise<string> {
     const entries: string[] = [];
-    for (const kind of ["onFinish", "onSuccess", "onFailure"] as const) {
-      const request = callbacks[kind];
-      if (request === undefined) continue;
+    for (const { kind, encoded } of callbacks) {
       entries.push(
-        `${JSON.stringify(kind)}:${await this.enqueueContracts.serializeCallbackRequest(request, transaction)}`,
+        `${JSON.stringify(kind)}:${await this.enqueueContracts.serializeCallbackRequest(encoded, transaction)}`,
       );
     }
     return `{${entries.join(",")}}`;
   }
 
-  /** Check the callbacks of a new group before the first statement. */
-  validateCreate(callbacks: TaskGroupCallbacks): void {
+  /**
+   * Check the callbacks of a new group, then encode the payload of each callback. Both steps send
+   * no statement.
+   */
+  encodeCreate(callbacks: TaskGroupCallbacks): EncodedCallbacks {
     validateCallbacks(callbacks);
+    return encodeCallbacks(callbacks);
   }
 
-  /** Check the requests of an add before the first statement. */
-  validateAdd(requests: readonly EnqueueRequest[]): void {
+  /**
+   * Check the requests of an add, then encode the payload of each request. Both steps send no
+   * statement.
+   */
+  encodeAdd(requests: readonly EnqueueRequest[]): EncodedEnqueueRequest[] {
     validateAddedRequests(requests);
+    return encodeEnqueueRequests(requests);
   }
 
   async create(
-    callbacks: TaskGroupCallbacks = {},
+    callbacks: EncodedCallbacks,
     transaction: Queryable = this.context.database,
   ): Promise<TaskGroup> {
     return (await this.createWith(callbacks, [], false, transaction)).group;
@@ -434,8 +463,8 @@ export class TaskGroupsModule extends QueueModule {
 
   /**
    * Create, add, and seal in one statement, so in one transaction. After `build` returns, each added
-   * request and the callbacks are checked before `beforeCreate`, which runs before the first
-   * statement.
+   * request and the callbacks are checked and encoded before `beforeCreate`, which runs before the
+   * first statement.
    */
   async createSealed(
     callbacks: TaskGroupCallbacks,
@@ -456,20 +485,22 @@ export class TaskGroupsModule extends QueueModule {
     // The options are checked after the build, so a build sees the same refusals as before.
     validateEnqueueRequests(requests);
     validateCallbacks(callbacks);
+    const encodedRequests = encodeEnqueueRequests(requests);
+    const encodedCallbacks = encodeCallbacks(callbacks);
     await beforeCreate();
-    return this.createWith(callbacks, requests, true, transaction);
+    return this.createWith(encodedCallbacks, encodedRequests, true, transaction);
   }
 
   private async createWith(
-    callbacks: TaskGroupCallbacks,
-    requests: readonly EnqueueRequest[],
+    callbacks: EncodedCallbacks,
+    requests: readonly EncodedEnqueueRequest[],
     seal: boolean,
     transaction: Queryable,
   ): Promise<TaskGroupBlockResult> {
-    validateCallbacks(callbacks);
     let groupId: string | null = null;
     // A contract mismatch of a member or a callback creates nothing, and the retry serializes the
-    // callbacks again under the contract versions the mismatch refreshed.
+    // callbacks again under the contract versions the mismatch refreshed. Each serialization
+    // reuses the payload text of each callback.
     const submit = async (serializedInput: string): Promise<EnqueueRow[]> => {
       const serializedCallbacks = await this.serializeCallbacks(callbacks, transaction);
       const result = await transaction.query<EnqueueRow & { group_id: string | null }>(
@@ -488,13 +519,13 @@ export class TaskGroupsModule extends QueueModule {
     return { group, tasks };
   }
 
+  /** Add requests that {@link encodeAdd} checked and encoded. */
   async add(
     groupId: string,
-    requests: readonly EnqueueRequest[],
+    requests: readonly EncodedEnqueueRequest[],
     transaction: Queryable = this.context.database,
     member?: { task: ClaimedTask; workerId: string },
   ): Promise<EnqueueResult[]> {
-    validateAddedRequests(requests);
     if (requests.length === 0) return [];
     return translated(
       this.enqueueContracts.submitEnqueueRequests(
@@ -514,22 +545,24 @@ export class TaskGroupsModule extends QueueModule {
     );
   }
 
+  /** Add requests that {@link encodeAdd} checked and encoded, under the lease of a member task. */
   async addAsMember(
     task: ClaimedTask,
     workerId: string,
-    requests: readonly EnqueueRequest[],
+    requests: readonly EncodedEnqueueRequest[],
   ): Promise<EnqueueResult[]> {
-    validateAddedRequests(requests);
     const link = await this.forTask(task.id);
     if (link?.role !== "member") {
       throw new TypeError(`Task ${task.id} is not a member of a task group`);
     }
     // A request with no queue goes to the queue of the member task that adds it.
-    const queued = requests.map((request) =>
-      request.options?.queue === undefined
-        ? { ...request, options: { ...request.options, queue: task.queue } }
-        : request,
-    );
+    const queued = requests.map(({ request, payload }) => ({
+      request:
+        request.options?.queue === undefined
+          ? { ...request, options: { ...request.options, queue: task.queue } }
+          : request,
+      payload,
+    }));
     return this.add(link.group.id, queued, this.context.database, { task, workerId });
   }
 

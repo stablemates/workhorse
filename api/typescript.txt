@@ -127,6 +127,7 @@ class HandlerReplayError
 interface HandlerReplayNames
 interface HandlerReplayProblem
 interface HandlerReplayReport
+type HandlerResult
 type HeartbeatBatchStatus
 type HeartbeatStatus
 interface HumanWait
@@ -191,6 +192,8 @@ interface MigrateSchemaOptions
 interface MigrateSchemaResult
 class MissingRowError
 const PROTOCOL_VERSION
+interface PolicyChangeAudit
+interface PolicyChangeOptions
 interface PolicyValueProvenance
 class Pool (external: @types/pg)
 interface PostgresSupport
@@ -3583,7 +3586,7 @@ class FastTierUnsupportedError extends WorkhorseError {
 
 const HEALTH_HISTORY_SCAN_LIMIT = 100000;
 
-type Handler<TPayload extends Json = Json, TResult extends Json = Json> = (payload: TPayload, context: HandlerContext<TPayload>) => Promise<TResult> | TResult;
+type Handler<TPayload extends Json = Json, TResult extends Json = Json> = (payload: TPayload, context: HandlerContext<TPayload>) => Promise<HandlerResult<TResult>> | HandlerResult<TResult>;
 
 interface HandlerContext<TPayload extends Json = Json> {
   task: ClaimedTask<TPayload>;
@@ -3653,9 +3656,8 @@ interface HandlerReplayReport<TResult extends Json = Json> extends HandlerReplay
   * `completed` when the handler returned. `suspended` when it reached a stored pending boundary
   * or a new wait or child, where a live task suspends.
   *
-  * A JavaScript handler that returns `undefined` completes with the result `null`, as on a live
-  * worker (ADR 0119). The `Handler` type requires a value, so a typed handler with no result
-  * returns `null`.
+  * A handler that returns no value completes with the result `null`, as on a live worker
+  * (ADR 0119).
   */
   outcome: {
     status: "completed";
@@ -3665,6 +3667,8 @@ interface HandlerReplayReport<TResult extends Json = Json> extends HandlerReplay
     at: DurableName;
   };
 }
+
+type HandlerResult<TResult extends Json = Json> = TResult | (null extends TResult ? void : never);
 
 type HeartbeatBatchStatus = HeartbeatStatus | "busy";
 
@@ -3942,6 +3946,23 @@ interface ParsedHumanWaitResult {
   formatted: string;
 }
 
+interface PolicyChangeAudit {
+  /** The operator who made the change. It must contain 1 to 200 characters. */
+  actor: string;
+  /** Why the operator made the change. It must contain 1 to 2,000 characters. */
+  reason: string;
+  /** The ID of the request that made the change. It must contain 1 to 512 UTF-8 bytes. */
+  requestId: string;
+}
+
+interface PolicyChangeOptions {
+  /**
+  * The audit of the change. Without it, Workhorse removes the stored audit entry of each setting
+  * that the change sets or reverts, so the dashboard shows no last change for that setting.
+  */
+  audit?: PolicyChangeAudit;
+}
+
 interface PolicyValueProvenance<T> {
   source: "application" | "operator";
   applicationDefault: T;
@@ -4177,14 +4198,34 @@ class Queue {
   listBudgets(budgetNames?: readonly string[]): Promise<Budget[]>;
   budgetStatuses(budgetNames?: readonly string[]): Promise<BudgetStatus[]>;
   overrideRetentionPolicy(definition: Partial<RetentionPolicyDefinition>): Promise<RetentionPolicy>;
+  /**
+  * With `options.audit`, Workhorse stores the actor, the reason, and the request ID for each
+  * changed setting, and the dashboard shows them as the last change of that setting.
+  */
+  overrideRetentionPolicy(definition: Partial<RetentionPolicyDefinition>, options?: PolicyChangeOptions): Promise<RetentionPolicy>;
   revertRetentionPolicy(settings: readonly RetentionPolicySetting[]): Promise<RetentionPolicy>;
+  /**
+  * With `options.audit`, Workhorse stores the actor, the reason, and the request ID for each
+  * changed setting, and the dashboard shows them as the last change of that setting.
+  */
+  revertRetentionPolicy(settings: readonly RetentionPolicySetting[], options?: PolicyChangeOptions): Promise<RetentionPolicy>;
   previewRetentionPolicy(definition: Partial<RetentionPolicyDefinition>): Promise<RetentionPolicyImpact>;
   getRetentionPolicy(): Promise<RetentionPolicy>;
   syncMaintenancePolicy(definition: MaintenancePolicyDefinition, options?: {
     force?: boolean;
   }): Promise<MaintenancePolicy>;
   overrideMaintenancePolicy(definition: Partial<MaintenancePolicyDefinition>): Promise<MaintenancePolicy>;
+  /**
+  * With `options.audit`, Workhorse stores the actor, the reason, and the request ID for each
+  * changed setting, and the dashboard shows them as the last change of that setting.
+  */
+  overrideMaintenancePolicy(definition: Partial<MaintenancePolicyDefinition>, options?: PolicyChangeOptions): Promise<MaintenancePolicy>;
   revertMaintenancePolicy(settings: readonly MaintenancePolicySetting[]): Promise<MaintenancePolicy>;
+  /**
+  * With `options.audit`, Workhorse stores the actor, the reason, and the request ID for each
+  * changed setting, and the dashboard shows them as the last change of that setting.
+  */
+  revertMaintenancePolicy(settings: readonly MaintenancePolicySetting[], options?: PolicyChangeOptions): Promise<MaintenancePolicy>;
   getMaintenancePolicy(): Promise<MaintenancePolicy>;
   syncSchedules(namespace: string, definitions: readonly ScheduleDefinition[], options?: {
     prune?: boolean;

@@ -153,15 +153,20 @@ export class SignalsModule extends QueueModule {
     return { status: row.status, payload: row.payload as TPayload | null };
   }
 
+  /** Check a signal before the first statement, and give the JSON text of its payload. */
+  encodeSignal(taskId: string, name: string, payload: Json, request: SendSignalRequest): string {
+    validateExternalWaitName(name, "Signal");
+    validateExternalWaitDeliveryRequest(request, "Signal");
+    return encodeExternalWaitValue(payload, "Signal payload", `task ${taskId}`);
+  }
+
+  /** Send a signal whose payload {@link encodeSignal} checked and encoded. */
   async sendSignal<TPayload extends Json>(
     taskId: string,
     name: string,
-    payload: TPayload,
+    encodedPayload: string,
     request: SendSignalRequest,
   ): Promise<SignalDeliveryResult<TPayload>> {
-    validateExternalWaitName(name, "Signal");
-    validateExternalWaitDeliveryRequest(request, "Signal");
-    const encodedPayload = encodeExternalWaitValue(payload, "Signal payload", `task ${taskId}`);
     const result = await this.context.database.query<SendSignalRow>(
       SQL_STATEMENTS["send_signal_v2"],
       [taskId, name, encodedPayload, request.idempotencyKey, request.requestedBy],

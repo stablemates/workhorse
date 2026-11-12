@@ -239,6 +239,12 @@ export interface DashboardWorkerController {
   ) => Promise<{ paused: boolean }>;
 }
 
+/**
+ * Changes the retention and maintenance policies for the Settings page. To store the audit of each
+ * change, give it to the matching `Queue` method as the `audit` option, for example
+ * `queue.overrideRetentionPolicy(definition, { audit })`. The Settings page then shows the actor
+ * and the reason as the last change of each changed setting.
+ */
 export interface DashboardSettingsController {
   overrideMaintenancePolicy(
     definition: Partial<MaintenancePolicyDefinition>,

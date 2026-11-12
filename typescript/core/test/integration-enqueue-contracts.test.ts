@@ -686,7 +686,9 @@ describe("enqueue contracts", () => {
     });
   });
 
-  it("rejects a non-finite number that JSON would store as a contract-invalid null", async () => {
+  // SM-2011: the value check runs before the contract check, so a non-finite number fails with the
+  // TypeError that names its path, also where the contract would refuse it.
+  it("rejects a non-finite number before the contract check", async () => {
     const contractedQueue = new Queue(pool, "default", {
       contracts: {
         "meter.read": {
@@ -702,8 +704,10 @@ describe("enqueue contracts", () => {
     });
 
     for (const count of [Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY]) {
-      await expect(contractedQueue.enqueue("meter.read", { count })).rejects.toBeInstanceOf(
-        TaskContractValidationError,
+      await expect(contractedQueue.enqueue("meter.read", { count })).rejects.toThrow(
+        new TypeError(
+          `Payload of task type meter.read must contain only finite numbers, but $.count is ${String(count)}`,
+        ),
       );
     }
     await expect(
@@ -719,7 +723,7 @@ describe("enqueue contracts", () => {
 
     await expect(admin.getTask(id)).resolves.toMatchObject({
       state: "failed",
-      error: { name: "TaskContractValidationError" },
+      error: { name: "TypeError" },
       result: null,
     });
   });

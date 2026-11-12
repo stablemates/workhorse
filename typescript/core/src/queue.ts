@@ -36,6 +36,7 @@ import type {
   MaintenancePolicy,
   MaintenancePolicyDefinition,
   MaintenancePolicySetting,
+  PolicyChangeOptions,
   Queryable,
   QueueOptions,
   QueueHealth,
@@ -90,12 +91,15 @@ import {
   TaskContractUnavailableError,
   TaskContractValidationError,
   TaskValueSizeLimitError,
-  maxAttemptsValue,
+  encodeEnqueueRequests,
+  encodePayload,
+  encodeResult,
   validateEnqueueBatch,
   validateEnqueueOptions,
   validateQueueOptions,
-  validateTaskPriority,
+  checkedOptions,
 } from "./queue/enqueue-contracts.js";
+import { encodeStoredJson } from "./queue/stored-json.js";
 import type {
   ScheduleCatchupPolicy,
   ScheduleDefinition,
@@ -311,10 +315,7 @@ export class Queue {
     options: EnqueueOptions = {},
     transaction: Queryable = this.database,
   ): Promise<string> {
-    // Refuse an invalid option before the compatibility check, so the refusal sends no statement.
-    validateEnqueueOptions(options);
-    await this.checkSchema(transaction);
-    return this.modules.enqueueContracts.enqueue(type, payload, options, transaction);
+    return (await this.enqueueWithResult(type, payload, options, transaction)).taskId;
   }
 
   async enqueueWithResult<TPayload extends Json>(
@@ -323,32 +324,37 @@ export class Queue {
     options: EnqueueOptions = {},
     transaction: Queryable = this.database,
   ): Promise<EnqueueResult> {
-    // Refuse an invalid option before the compatibility check, so the refusal sends no statement.
+    // Refuse an invalid option or an unstorable payload before the compatibility check, so the
+    // refusal sends no statement.
     validateEnqueueOptions(options);
+    const encoded = encodeEnqueueRequests([{ type, payload, options, tags: options.tags }]);
     await this.checkSchema(transaction);
-    return this.modules.enqueueContracts.enqueueWithResult(type, payload, options, transaction);
+    const [result] = await this.modules.enqueueContracts.enqueueManyWithResults(
+      encoded,
+      transaction,
+    );
+    return result!;
   }
 
   async enqueueMany(
     requests: readonly EnqueueRequest[],
     transaction: Queryable = this.database,
   ): Promise<string[]> {
-    // An empty batch sends no statement, so it needs no check. The options of every request are
-    // checked before the compatibility check.
-    validateEnqueueBatch(requests);
-    if (requests.length > 0) await this.checkSchema(transaction);
-    return this.modules.enqueueContracts.enqueueMany(requests, transaction);
+    return (await this.enqueueManyWithResults(requests, transaction)).map(
+      (result) => result.taskId,
+    );
   }
 
   async enqueueManyWithResults(
     requests: readonly EnqueueRequest[],
     transaction: Queryable = this.database,
   ): Promise<EnqueueResult[]> {
-    // An empty batch sends no statement, so it needs no check. The options of every request are
-    // checked before the compatibility check.
+    // An empty batch sends no statement, so it needs no check. The options and the payload of
+    // every request are checked before the compatibility check.
     validateEnqueueBatch(requests);
+    const encoded = encodeEnqueueRequests(requests);
     if (requests.length > 0) await this.checkSchema(transaction);
-    return this.modules.enqueueContracts.enqueueManyWithResults(requests, transaction);
+    return this.modules.enqueueContracts.enqueueManyWithResults(encoded, transaction);
   }
 
   /**
@@ -360,9 +366,9 @@ export class Queue {
     callbacks: TaskGroupCallbacks = {},
     transaction: Queryable = this.database,
   ): Promise<TaskGroup> {
-    this.modules.taskGroups.validateCreate(callbacks);
+    const encoded = this.modules.taskGroups.encodeCreate(callbacks);
     await this.checkSchema(transaction);
-    return this.modules.taskGroups.create(callbacks, transaction);
+    return this.modules.taskGroups.create(encoded, transaction);
   }
 
   /**
@@ -374,7 +380,8 @@ export class Queue {
     build: (group: TaskGroupBuilder) => void | Promise<void>,
     transaction: Queryable = this.database,
   ): Promise<TaskGroupBlockResult> {
-    // The group checks its callbacks and each added request before this compatibility check.
+    // The group checks and encodes its callbacks and each added request before this compatibility
+    // check.
     return this.modules.taskGroups.createSealed(callbacks, build, transaction, () =>
       this.checkSchema(transaction),
     );
@@ -389,9 +396,9 @@ export class Queue {
     requests: readonly EnqueueRequest[],
     transaction: Queryable = this.database,
   ): Promise<EnqueueResult[]> {
-    this.modules.taskGroups.validateAdd(requests);
+    const encoded = this.modules.taskGroups.encodeAdd(requests);
     await this.checkSchema(transaction);
-    return this.modules.taskGroups.add(groupId, requests, transaction);
+    return this.modules.taskGroups.add(groupId, encoded, transaction);
   }
 
   /** Add tasks to the group of a running member task, under that task's fenced lease. */
@@ -400,9 +407,9 @@ export class Queue {
     workerId: string,
     requests: readonly EnqueueRequest[],
   ): Promise<EnqueueResult[]> {
-    this.modules.taskGroups.validateAdd(requests);
+    const encoded = this.modules.taskGroups.encodeAdd(requests);
     await this.checkSchema();
-    return this.modules.taskGroups.addAsMember(task, workerId, requests);
+    return this.modules.taskGroups.addAsMember(task, workerId, encoded);
   }
 
   /** Seal an open group. Sealing a sealed or finished group changes nothing. */
@@ -560,16 +567,20 @@ export class Queue {
     definitions: readonly ConcurrencyPolicyDefinition[],
     options: { prune?: boolean } = {},
   ): Promise<ConcurrencyPolicy[]> {
+    // A value that JSON would change, such as a NaN limit, fails before the compatibility check.
+    const input = encodeStoredJson(
+      definitions.map((definition) => ({
+        queue: definition.queue,
+        maxActive: definition.maxActive,
+        maxActivePerKey: definition.maxActivePerKey ?? null,
+      })),
+      "Concurrency policies",
+    );
     await this.checkSchema();
-    const input = definitions.map((definition) => ({
-      queue: definition.queue,
-      maxActive: definition.maxActive,
-      maxActivePerKey: definition.maxActivePerKey ?? null,
-    }));
     const result = await queryFencedWrite<ConcurrencyPolicyRow>(
       this.database,
       SQL_STATEMENTS["sync_concurrency_policies_v1"],
-      [namespace, JSON.stringify(input), options.prune ?? true],
+      [namespace, input, options.prune ?? true],
     );
     return result.rows.map(concurrencyPolicy);
   }
@@ -593,15 +604,19 @@ export class Queue {
     definitions: readonly RateLimitPolicyDefinition[],
     options: { prune?: boolean } = {},
   ): Promise<RateLimitPolicy[]> {
+    // A value that JSON would change, such as a NaN rate, fails before the compatibility check.
+    const input = encodeStoredJson(
+      definitions.map((definition) => ({
+        queue: definition.queue,
+        rate: definition.rate,
+        perKey: definition.perKey ?? null,
+      })),
+      "Rate limit policies",
+    );
     await this.checkSchema();
-    const input = definitions.map((definition) => ({
-      queue: definition.queue,
-      rate: definition.rate,
-      perKey: definition.perKey ?? null,
-    }));
     const result = await this.database.query<RateLimitPolicyRow>(
       SQL_STATEMENTS["sync_rate_limit_policies_v1__queue"],
-      [namespace, JSON.stringify(input), options.prune ?? true],
+      [namespace, input, options.prune ?? true],
     );
     return result.rows.map(rateLimitPolicy);
   }
@@ -630,15 +645,19 @@ export class Queue {
     definitions: readonly BudgetDefinition[],
     options: { prune?: boolean } = {},
   ): Promise<Budget[]> {
+    // A value that JSON would change, such as a NaN limit, fails before the compatibility check.
+    const input = encodeStoredJson(
+      definitions.map((definition) => ({
+        name: definition.name,
+        maxActive: definition.maxActive ?? null,
+        rate: definition.rate ?? null,
+      })),
+      "Budgets",
+    );
     await this.checkSchema();
-    const input = definitions.map((definition) => ({
-      name: definition.name,
-      maxActive: definition.maxActive ?? null,
-      rate: definition.rate ?? null,
-    }));
     const result = await this.database.query<BudgetRow>(SQL_STATEMENTS["sync_budgets_v1"], [
       namespace,
-      JSON.stringify(input),
+      input,
       options.prune ?? true,
     ]);
     return result.rows.map(budget);
@@ -657,25 +676,50 @@ export class Queue {
     return this.modules.operatorReads.budgetStatuses(budgetNames);
   }
 
+  overrideRetentionPolicy(definition: Partial<RetentionPolicyDefinition>): Promise<RetentionPolicy>;
+  // The released signature stays, so this signature is an addition to the API.
+  /**
+   * With `options.audit`, Workhorse stores the actor, the reason, and the request ID for each
+   * changed setting, and the dashboard shows them as the last change of that setting.
+   */
+  overrideRetentionPolicy(
+    definition: Partial<RetentionPolicyDefinition>,
+    options?: PolicyChangeOptions,
+  ): Promise<RetentionPolicy>;
   async overrideRetentionPolicy(
     definition: Partial<RetentionPolicyDefinition>,
+    options: PolicyChangeOptions = {},
   ): Promise<RetentionPolicy> {
+    // A value that JSON would change, such as a NaN window, fails before the compatibility check.
+    const overrides = this.modules.retentionMaintenance.encodeRetentionOverrides(definition);
     await this.checkSchema();
-    return this.modules.retentionMaintenance.overrideRetentionPolicy(definition);
+    return this.modules.retentionMaintenance.overrideRetentionPolicy(overrides, options);
   }
 
+  revertRetentionPolicy(settings: readonly RetentionPolicySetting[]): Promise<RetentionPolicy>;
+  // The released signature stays, so this signature is an addition to the API.
+  /**
+   * With `options.audit`, Workhorse stores the actor, the reason, and the request ID for each
+   * changed setting, and the dashboard shows them as the last change of that setting.
+   */
+  revertRetentionPolicy(
+    settings: readonly RetentionPolicySetting[],
+    options?: PolicyChangeOptions,
+  ): Promise<RetentionPolicy>;
   async revertRetentionPolicy(
     settings: readonly RetentionPolicySetting[],
+    options: PolicyChangeOptions = {},
   ): Promise<RetentionPolicy> {
     await this.checkSchema();
-    return this.modules.retentionMaintenance.revertRetentionPolicy(settings);
+    return this.modules.retentionMaintenance.revertRetentionPolicy(settings, options);
   }
 
   async previewRetentionPolicy(
     definition: Partial<RetentionPolicyDefinition>,
   ): Promise<RetentionPolicyImpact> {
+    const input = this.modules.retentionMaintenance.encodeRetentionPreview(definition);
     await this.checkSchema();
-    return this.modules.retentionMaintenance.previewRetentionPolicy(definition);
+    return this.modules.retentionMaintenance.previewRetentionPolicy(input);
   }
 
   async getRetentionPolicy(): Promise<RetentionPolicy> {
@@ -691,18 +735,44 @@ export class Queue {
     return this.modules.retentionMaintenance.syncMaintenancePolicy(definition, options);
   }
 
+  overrideMaintenancePolicy(
+    definition: Partial<MaintenancePolicyDefinition>,
+  ): Promise<MaintenancePolicy>;
+  // The released signature stays, so this signature is an addition to the API.
+  /**
+   * With `options.audit`, Workhorse stores the actor, the reason, and the request ID for each
+   * changed setting, and the dashboard shows them as the last change of that setting.
+   */
+  overrideMaintenancePolicy(
+    definition: Partial<MaintenancePolicyDefinition>,
+    options?: PolicyChangeOptions,
+  ): Promise<MaintenancePolicy>;
   async overrideMaintenancePolicy(
     definition: Partial<MaintenancePolicyDefinition>,
+    options: PolicyChangeOptions = {},
   ): Promise<MaintenancePolicy> {
     await this.checkSchema();
-    return this.modules.retentionMaintenance.overrideMaintenancePolicy(definition);
+    return this.modules.retentionMaintenance.overrideMaintenancePolicy(definition, options);
   }
 
+  revertMaintenancePolicy(
+    settings: readonly MaintenancePolicySetting[],
+  ): Promise<MaintenancePolicy>;
+  // The released signature stays, so this signature is an addition to the API.
+  /**
+   * With `options.audit`, Workhorse stores the actor, the reason, and the request ID for each
+   * changed setting, and the dashboard shows them as the last change of that setting.
+   */
+  revertMaintenancePolicy(
+    settings: readonly MaintenancePolicySetting[],
+    options?: PolicyChangeOptions,
+  ): Promise<MaintenancePolicy>;
   async revertMaintenancePolicy(
     settings: readonly MaintenancePolicySetting[],
+    options: PolicyChangeOptions = {},
   ): Promise<MaintenancePolicy> {
     await this.checkSchema();
-    return this.modules.retentionMaintenance.revertMaintenancePolicy(settings);
+    return this.modules.retentionMaintenance.revertMaintenancePolicy(settings, options);
   }
 
   async getMaintenancePolicy(): Promise<MaintenancePolicy> {
@@ -715,14 +785,11 @@ export class Queue {
     definitions: readonly ScheduleDefinition[],
     options: { prune?: boolean } = {},
   ): Promise<void> {
-    // Refuse an invalid attempt limit or priority before the compatibility check, so the refusal
-    // sends no statement.
-    for (const definition of definitions) {
-      maxAttemptsValue(definition.task.maxAttempts);
-      validateTaskPriority(definition.task.priority);
-    }
+    // Refuse an invalid attempt limit, priority, or payload before the compatibility check, so the
+    // refusal sends no statement.
+    const encoded = this.modules.cronSchedules.encodeSchedules(definitions);
     await this.checkSchema();
-    return this.modules.cronSchedules.syncSchedules(namespace, definitions, options);
+    return this.modules.cronSchedules.syncSchedules(namespace, encoded, options);
   }
 
   async schedules(namespaces: readonly string[]): Promise<StoredSchedule[]> {
@@ -859,12 +926,18 @@ export class Queue {
     value: TValue,
     options: SaveCheckpointOptions = {},
   ): Promise<TaskCheckpoint<TValue>> {
+    const encoded = this.modules.checkpointsProgressWaits.encodeCheckpoint(
+      task,
+      name,
+      value,
+      options,
+    );
     await this.checkSchema();
-    return this.modules.checkpointsProgressWaits.saveCheckpoint(
+    return this.modules.checkpointsProgressWaits.saveCheckpoint<TValue>(
       task,
       workerId,
       name,
-      value,
+      encoded,
       options,
     );
   }
@@ -881,8 +954,9 @@ export class Queue {
     workerId: string,
     value: TValue,
   ): Promise<TaskProgress<TValue>> {
+    const encoded = this.modules.checkpointsProgressWaits.encodeProgress(task, value);
     await this.checkSchema();
-    return this.modules.checkpointsProgressWaits.updateProgress(task, workerId, value);
+    return this.modules.checkpointsProgressWaits.updateProgress<TValue>(task, workerId, encoded);
   }
 
   async [workerWaitsRead](taskId: string): Promise<TaskWait[]> {
@@ -916,8 +990,9 @@ export class Queue {
     payload: TPayload,
     request: SendSignalRequest,
   ): Promise<SignalDeliveryResult<TPayload>> {
+    const encoded = this.modules.signals.encodeSignal(taskId, name, payload, request);
     await this.checkSchema();
-    return this.modules.signals.sendSignal(taskId, name, payload, request);
+    return this.modules.signals.sendSignal<TPayload>(taskId, name, encoded, request);
   }
 
   async waitForHuman<TContext extends Json, TResult extends Json = Json>(
@@ -927,14 +1002,9 @@ export class Queue {
     context: TContext,
     options: ExternalWaitOptions = {},
   ): Promise<WaitForHumanResult<TResult>> {
+    const encoded = this.modules.humanWaits.encodeHumanWait(task, workerId, name, context, options);
     await this.checkSchema();
-    return this.modules.humanWaits.waitForHuman<TContext, TResult>(
-      task,
-      workerId,
-      name,
-      context,
-      options,
-    );
+    return this.modules.humanWaits.waitForHuman<TResult>(task, workerId, name, encoded, options);
   }
 
   async completeHumanWait<TResult extends Json>(
@@ -943,8 +1013,9 @@ export class Queue {
     result: TResult,
     request: CompleteHumanWaitRequest,
   ): Promise<HumanWaitCompletionResult<TResult>> {
+    const encoded = this.modules.humanWaits.encodeCompletion(taskId, name, result, request);
     await this.checkSchema();
-    return this.modules.humanWaits.completeHumanWait(taskId, name, result, request);
+    return this.modules.humanWaits.completeHumanWait<TResult>(taskId, name, encoded, request);
   }
 
   async createChild<TPayload extends Json, TResult extends Json = Json>(
@@ -956,8 +1027,17 @@ export class Queue {
     options: ChildTaskOptions = {},
   ): Promise<CreateChildResult<TResult>> {
     this.modules.childTasks.validateChild(workerId, name, options);
+    const encoded = encodePayload(type, payload);
+    const childOptions = checkedOptions(options, `Child options of task type ${type}`);
     await this.checkSchema();
-    return this.modules.childTasks.createChild(parent, workerId, name, type, payload, options);
+    return this.modules.childTasks.createChild<TResult>(
+      parent,
+      workerId,
+      name,
+      type,
+      encoded,
+      childOptions,
+    );
   }
 
   async createChildren<TResult extends Record<string, Json> = Record<string, Json>>(
@@ -965,9 +1045,9 @@ export class Queue {
     workerId: string,
     children: readonly ChildTaskRequest[],
   ): Promise<CreateChildrenResult<ChildOutcomes<TResult>>> {
-    this.modules.childTasks.validateChildren(parent, workerId, children);
+    const encoded = this.modules.childTasks.encodeChildren(parent, workerId, children);
     await this.checkSchema();
-    return this.modules.childTasks.createChildren<TResult>(parent, workerId, children);
+    return this.modules.childTasks.createChildren<TResult>(parent, workerId, encoded);
   }
 
   async createChildrenAll<TResult extends Record<string, Json> = Record<string, Json>>(
@@ -975,9 +1055,9 @@ export class Queue {
     workerId: string,
     children: readonly ChildTaskRequest[],
   ): Promise<CreateChildrenResult<TResult>> {
-    this.modules.childTasks.validateChildren(parent, workerId, children);
+    const encoded = this.modules.childTasks.encodeChildren(parent, workerId, children);
     await this.checkSchema();
-    return this.modules.childTasks.createChildrenAll<TResult>(parent, workerId, children);
+    return this.modules.childTasks.createChildrenAll<TResult>(parent, workerId, encoded);
   }
 
   async complete<TResult extends Json>(
@@ -985,9 +1065,10 @@ export class Queue {
     workerId: string,
     result: TResult,
   ): Promise<boolean> {
+    const encoded = encodeResult(task, result);
     await this.checkSchema();
     return this.modules.claimLeaseFence.complete(task, workerId, result, () =>
-      this.modules.enqueueContracts.validateResult(task, result),
+      this.modules.enqueueContracts.validateResult(task, encoded),
     );
   }
 
@@ -1002,8 +1083,9 @@ export class Queue {
     result: TResult,
     claim: CompletionClaim,
   ): Promise<CompletionClaimResult<TPayload>> {
+    const encoded = encodeResult(task, result);
     await this.checkSchema();
-    const serialized = await this.modules.enqueueContracts.validateResult(task, result);
+    const serialized = await this.modules.enqueueContracts.validateResult(task, encoded);
     return (await this.modules.claimLeaseFence.completeAndClaim(
       task,
       workerId,
@@ -1035,8 +1117,9 @@ export class Queue {
     workerId: string,
     result: Json,
   ): Promise<(claim?: CompletionClaim) => Promise<CompletionClaimResult>> {
+    const encoded = encodeResult(task, result);
     await this.checkSchema();
-    const serialized = await this.modules.enqueueContracts.validateResult(task, result);
+    const serialized = await this.modules.enqueueContracts.validateResult(task, encoded);
     const complete = async (): Promise<CompletionClaimResult> => ({
       accepted: await this.modules.claimLeaseFence.complete(
         task,
@@ -1131,8 +1214,10 @@ export class Queue {
 
   /** Seed immutable JSON Schema contracts and the application-selected current versions. */
   async syncContracts(): Promise<void> {
+    // Refuse a contract definition that JSON would change before the compatibility check.
+    const definitions = this.modules.enqueueContracts.encodeContracts();
     await this.checkSchema();
-    return this.modules.enqueueContracts.syncContracts();
+    return this.modules.enqueueContracts.syncContracts(definitions);
   }
 
   async fail(

@@ -17,6 +17,7 @@ import { expectOneRow } from "../errors.js";
 import { QueueModule, type QueueModuleContext } from "./module-context.js";
 import type { EnqueueContractsModule } from "./enqueue-contracts.js";
 import {
+  encodePayload,
   executionTimeoutValue,
   maxAttemptsValue,
   serializedRequest,
@@ -24,7 +25,15 @@ import {
   TaskValueSizeLimitError,
   validateEnqueueOptions,
   validateTaskPriority,
+  checkedOptions,
 } from "./enqueue-contracts.js";
+import type { EncodedJson } from "./stored-json.js";
+
+/** A request of a child set with its payload encoded before the first statement of the call. */
+export interface EncodedChildRequest {
+  readonly request: ChildTaskRequest;
+  readonly payload: EncodedJson;
+}
 
 // Missing or changed children use the current contract; null preserves an uncontracted child.
 // The queue lets a replay of a request with no queue keep the queue of its stored child.
@@ -177,10 +186,10 @@ export class ChildTasksModule extends QueueModule {
     super(context);
   }
 
-  private async childRequest<TPayload extends Json>(
+  private async childRequest(
     parent: ClaimedTask,
     type: string,
-    payload: TPayload,
+    payload: EncodedJson,
     options: ChildTaskOptions,
     version?: string | null,
     storedQueue?: string,
@@ -309,15 +318,40 @@ export class ChildTasksModule extends QueueModule {
     }
   }
 
-  async createChild<TPayload extends Json, TResult extends Json = Json>(
+  /**
+   * Check every request of a child set with {@link validateChildren}, then encode each payload.
+   * Both steps send no statement.
+   */
+  encodeChildren(
+    parent: ClaimedTask,
+    workerId: string,
+    children: readonly ChildTaskRequest[],
+  ): EncodedChildRequest[] {
+    this.validateChildren(parent, workerId, children);
+    return children.map((request) => ({
+      request: {
+        ...request,
+        options:
+          request.options === undefined
+            ? undefined
+            : checkedOptions(request.options, `Child options of task type ${request.type}`),
+      },
+      payload: encodePayload(request.type, request.payload),
+    }));
+  }
+
+  /**
+   * Create a child whose request {@link validateChild} checked and whose payload the caller
+   * encoded. Each build of the request reuses that payload text.
+   */
+  async createChild<TResult extends Json = Json>(
     parent: ClaimedTask,
     workerId: string,
     name: string,
     type: string,
-    payload: TPayload,
+    payload: EncodedJson,
     options: ChildTaskOptions = {},
   ): Promise<CreateChildResult<TResult>> {
-    this.validateChild(workerId, name, options);
     const build: BuildChildRequest = async (versions) =>
       this.childRequest(
         parent,
@@ -356,7 +390,7 @@ export class ChildTasksModule extends QueueModule {
   async createChildren<TResult extends Record<string, Json> = Record<string, Json>>(
     parent: ClaimedTask,
     workerId: string,
-    children: readonly ChildTaskRequest[],
+    children: readonly EncodedChildRequest[],
   ): Promise<CreateChildrenResult<ChildOutcomes<TResult>>> {
     return this.createChildrenWithMode<ChildOutcomes<TResult>>(
       parent,
@@ -369,7 +403,7 @@ export class ChildTasksModule extends QueueModule {
   async createChildrenAll<TResult extends Record<string, Json> = Record<string, Json>>(
     parent: ClaimedTask,
     workerId: string,
-    children: readonly ChildTaskRequest[],
+    children: readonly EncodedChildRequest[],
   ): Promise<CreateChildrenResult<TResult>> {
     return this.createChildrenWithMode<TResult>(parent, workerId, children, "all_success");
   }
@@ -377,14 +411,13 @@ export class ChildTasksModule extends QueueModule {
   private async createChildrenWithMode<TResult extends Record<string, Json>>(
     parent: ClaimedTask,
     workerId: string,
-    children: readonly ChildTaskRequest[],
+    children: readonly EncodedChildRequest[],
     mode: "settled" | "all_success",
   ): Promise<CreateChildrenResult<TResult>> {
-    this.validateChildren(parent, workerId, children);
     const build: BuildChildRequest = async (versions) => {
       const members = await Promise.all(
         children.map(
-          async ({ name, type, payload, options = {} }) =>
+          async ({ request: { name, type, options = {} }, payload }) =>
             `{"name":${JSON.stringify(name)},"request":${await this.childRequest(
               parent,
               type,

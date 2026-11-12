@@ -3,7 +3,8 @@
 - **Status:** Accepted
 - **Date:** 2026-11-10
 - **Amends:** [ADR 0005](0005-explicit-durable-checkpoints.md) (the JSON result of a checkpoint)
-- **Issues:** SM-1969, SM-1930, SM-1950
+- **Issues:** SM-1969, SM-1930, SM-1950, SM-2012
+- **Amended:** 2026-11-12, the `Handler` type accepts a handler with no return value (SM-2012)
 
 ## Context
 
@@ -71,3 +72,28 @@ ran, so a retry runs the operation again.
   example, a wrapper that returns `await handler(payload, context)` as `Promise<Json>` would not
   compile. Thus a change of the `Handler` type is a breaking change, and a follow-up issue owns it
   for a later major line.
+
+## Amendment: the `Handler` type accepts a handler with no return value (2026-11-12)
+
+Decision 1 kept the `Handler` type, so a typed handler with no result had to write `return null`.
+A wider return type also widens the type that a caller of a handler reads, so it is a breaking
+change under [ADR 0054](0054-define-what-1-0-0-promises.md). The maintainer decided on 2026-11-12
+that the change ships in the next 0.x release (SM-2012). That release is the candidate for 1.0.0,
+and 1.0.0 narrows nothing. Thus it is the last release before 2.0.0 that can make this change.
+
+1. `Handler` returns `HandlerResult<TResult>`, which is
+   `TResult | (null extends TResult ? void : never)`. A handler whose result type includes `null`,
+   such as the default `Json`, can return no value. A handler whose result type excludes `null`,
+   such as `Handler<P, { id: string }>`, must still return a value. `HandlerResult` is a new export.
+2. `Worker.handle` and `replayHandler` take the new type. The stored result does not change: the
+   worker and the replay store `null` for no value, as decision 1 and decision 4 state.
+   `HandlerReplayReport` does not change. `BatchHandler` does not change, because a batch outcome
+   carries its result in an object.
+3. Code that calls a `Handler` and reads its value now reads `HandlerResult<TResult>`, which can be
+   `undefined`. A wrapper that returns `await handler(payload, context)` as `Promise<Json>` no
+   longer compiles. The fix is `(await handler(payload, context)) ?? null`, which gives the value
+   that the worker stores, or the return type `Promise<HandlerResult>`. The changelog and
+   `docs/upgrading.md` state this break. `api/typescript.txt` records it as a changed `Handler`
+   line, which is the intended removal of the released line.
+4. The last item of the consequences above no longer holds: the `void` signature applies to the
+   checkpoint and to the handler.

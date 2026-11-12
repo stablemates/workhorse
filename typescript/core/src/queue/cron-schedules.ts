@@ -3,12 +3,15 @@ import { expectOneRow } from "../errors.js";
 import { logDebug, logInfo, recordScheduleFired, withSpan } from "../telemetry.js";
 import type { Json, RetryPolicy } from "../types.js";
 import {
+  encodePayload,
   maxAttemptsValue,
   serializedRequest,
   validateTaskPriority,
+  checkedOptions,
   type EnqueueContractsModule,
 } from "./enqueue-contracts.js";
 import { QueueModule, type QueueModuleContext } from "./module-context.js";
+import type { EncodedJson } from "./stored-json.js";
 
 export interface ScheduledTask {
   type: string;
@@ -37,6 +40,12 @@ export interface ScheduleDefinition {
   task: ScheduledTask;
 }
 
+/** A schedule definition with its payload encoded before the first statement of the call. */
+export interface EncodedSchedule {
+  readonly definition: ScheduleDefinition;
+  readonly payload: EncodedJson;
+}
+
 export interface StoredSchedule {
   namespace: string;
   name: string;
@@ -56,17 +65,42 @@ export class CronSchedulesModule extends QueueModule {
     super(context);
   }
 
+  /**
+   * Check the attempt limit and the priority of each definition, then encode each payload. Both
+   * steps send no statement, so a refused value runs no compatibility query and no contract read.
+   */
+  encodeSchedules(definitions: readonly ScheduleDefinition[]): EncodedSchedule[] {
+    for (const definition of definitions) {
+      maxAttemptsValue(definition.task.maxAttempts);
+      validateTaskPriority(definition.task.priority);
+    }
+    return definitions.map((definition) => {
+      const payload = encodePayload(definition.task.type, definition.task.payload);
+      return {
+        definition: {
+          ...definition,
+          task: {
+            ...checkedOptions(
+              { ...definition.task, payload: undefined },
+              `Schedule ${definition.name}`,
+            ),
+            payload: definition.task.payload,
+          },
+        },
+        payload,
+      };
+    });
+  }
+
+  /** Store the definitions that {@link encodeSchedules} checked and encoded. */
   async syncSchedules(
     namespace: string,
-    definitions: readonly ScheduleDefinition[],
+    encoded: readonly EncodedSchedule[],
     options: { prune?: boolean } = {},
   ): Promise<void> {
-    // Check each attempt limit before the contract read, so a refused value runs no statement.
-    const maxAttempts = definitions.map((definition) =>
-      maxAttemptsValue(definition.task.maxAttempts),
-    );
+    const definitions = encoded.map(({ definition }) => definition);
     const acceptances = await this.enqueueContracts.currentTaskAcceptances(
-      definitions.map((definition) => definition.task),
+      encoded.map(({ definition, payload }) => ({ type: definition.task.type, payload })),
     );
     // Each input carries the payload text that passed the checks, not a second encoding.
     const scheduleInputs = definitions.map((definition, index) =>
@@ -82,7 +116,7 @@ export class CronSchedulesModule extends QueueModule {
           priority: validateTaskPriority(definition.task.priority),
           concurrencyKey: definition.task.concurrencyKey ?? null,
           type: definition.task.type,
-          maxAttempts: maxAttempts[index]!,
+          maxAttempts: maxAttemptsValue(definition.task.maxAttempts),
           retryPolicy: definition.task.retryPolicy ?? null,
         },
         acceptances[index]!.serializedPayload,
