@@ -1078,6 +1078,35 @@ again.
 Priority dispatch has no aging or fair-share control. A sustained stream of higher-priority ready
 work can starve lower-priority rows in the same queue.
 
+##### Cost of the admission count
+
+Each round of a claim on a governed queue counts the unexpired active leases of each shard of the
+queue. The count has no `LIMIT`, because the claim needs the room of each shard. Thus it reads each
+unexpired active lease of the queue. A round that borrows shards reads them again. On a queue with a
+concurrency policy, the active leases are at most about `max_active`. Thus the cost of a claim grows
+with `max_active`, which accepts up to 1,000,000. A queue with a rate policy and no concurrency
+policy runs the same count, and no policy limits its active leases. A queue with no policy row runs
+no count.
+
+The cost follows the leases that are active, not the limit. A queue with a high `max_active` and few
+active leases reads few rows. The maintainer kept this count. A stored count for each shard would
+add one write to each claim and each release
+([SM-2032](https://linear.app/stablemates/issue/SM-2032)). The measurement there holds no plan of
+the claim count. It holds only the time of one claim of 100 rows on a queue with about 990,000
+active leases. `task_runtime_active_queue_shard_idx` did not change that time.
+
+If a queue needs a very large limit:
+
+1. Set `max_active` to the number of tasks that the queue must run at one time, not to a value
+   that only removes the limit.
+2. If the limit only protects a resource that some of the tasks use, put those tasks on a queue of
+   their own with the limit, and keep the other tasks on a queue with no concurrency policy.
+3. If the work does not need a limit, remove the concurrency policy. Then a release runs no count.
+   A claim also runs no count, unless the queue keeps a rate policy.
+4. Claim more tasks in one call. A batch counts once for each round, not once for each task.
+
+A release below the limit has a similar count. See [Count cost](#count-cost).
+
 #### Budgets
 
 If the first 100 ready rows of the queue name budgets, `claim_policy_batch_v1` also takes one
@@ -1755,9 +1784,29 @@ of its queue. Each count stops at a policy limit:
 The trigger writes the counts in this order. In practice, PostgreSQL stops at the first count that
 reaches its limit. Thus a release from a full shard reads only the share of that shard. A release
 below every limit runs each count. The queue count then still reads up to `max_active` index
-entries, so the cost of such a release grows with `max_active`, which accepts up to 1,000,000. The
+entries or rows, so the cost of such a release grows with `max_active`, which accepts up to
+1,000,000. The
 trigger runs on every release of an active row on a governed queue. If a claim holds the shard lock,
 the release publishes without the counts.
+
+The measurement of SM-1991 gives the rows that the queue count reads on a queue whose active leases
+are 1 percent below `max_active`. The measurement ran before migration 0101, so the shard count of
+that time read more. The queue count text did not change. For the last row, the same run first
+built a partial index with the columns and the condition of `task_runtime_active_queue_shard_idx`.
+
+| `max_active` | Active leases | Queue count: plan                                             | Rows read | Buffers |
+| -----------: | ------------: | ------------------------------------------------------------- | --------: | ------: |
+|        1,000 |           990 | Index Only Scan on `task_runtime_active_queue_key_expiry_idx` |       990 |       9 |
+|       10,000 |         9,900 | Index Only Scan on the same index                             |     9,900 |      80 |
+|      100,000 |        99,000 | Index Only Scan on the same index                             |    99,000 |     787 |
+|    1,000,000 |       989,999 | Seq Scan on `task_runtime`                                    |   989,999 |  27,776 |
+|    1,000,000 |       989,935 | Index Only Scan on `task_runtime_active_queue_shard_idx`      |   989,935 |   1,117 |
+
+Thus a release below the limit reads about one row or index entry for each active lease of the
+queue, and the time of the release grows in proportion. The
+maintainer kept this count ([SM-2032](https://linear.app/stablemates/issue/SM-2032)). For a queue
+that needs a very large limit, follow the steps in
+[Cost of the admission count](#cost-of-the-admission-count).
 
 ##### The shard count
 

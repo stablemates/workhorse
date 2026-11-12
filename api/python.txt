@@ -5183,6 +5183,7 @@ class EventDetailInput(dict)
   def pop(...)
   def popitem(self)
   def setdefault(self, key, default=None)
+  taskId: ForwardRef('NotRequired[str | None]', module='dashboard_v1')
   def update(...)
   def values(...)
 

@@ -18,7 +18,8 @@ keeps the audit of each settings change of the dashboard, lets each embedded das
 error stacks, and opens the detail of each record of the event feed. It gives the expired-lease scan
 a floor, and it counts the active leases of one admission shard through an index. It keeps the end
 of each hold of a finished task, starts each health walk after the held rows that an earlier poll
-read, and reports a terminal cleanup that does not complete. It also corrects
+read, and reports a terminal cleanup that does not complete. The event detail of the dashboard
+reads only the history of its task. It also corrects
 three SDK APIs before 1.0.0. It changes how Rust code builds a record and matches an enum, and it
 removes items from the Rust and Go APIs that were never meant for applications. In TypeScript, the
 `Handler` type accepts a handler with no return value. This changes the type that code which calls a
@@ -28,8 +29,8 @@ states. The upgrade is a rolling deployment, and a mixed fleet is supported whil
 
 1. If you run cold exporters, stop each one and let it finish its object and manifest uploads. Keep
    cold export enabled, so retention keeps waiting for the export.
-2. Run `workhorse schema migrate`. It applies migrations 0093 through 0104 and leaves the schema at
-   version 103. Do this before the first process of the new release starts, because the floor rises.
+2. Run `workhorse schema migrate`. It applies migrations 0093 through 0105 and leaves the schema at
+   version 104. Do this before the first process of the new release starts, because the floor rises.
    Migration 0102 builds an index on `task_runtime` without a block on writes. On a large table the
    build can take a long time, as the next section states.
 3. Roll out the new processes in any order. Then start the exporters again.
@@ -52,9 +53,10 @@ each `cold_export_segment` row that is exporting.
 | `0102-index-the-active-leases-of-each-admission-shard.sql`                        | 101            | Builds `task_runtime_active_queue_shard_idx` on `(queue_name, admission_shard)` for active rows with `CREATE INDEX CONCURRENTLY`, outside a transaction                                                                                                                                                                                                                                   |
 | `0103-take-enqueue-locks-in-key-tier-row-order.sql`                               | 102            | `lock_enqueue_prerequisites_internal_v1`, `enqueue_many_v1`, `add_task_group_members_v1`, and `cancel_task_group_v1` take the locks of each enqueue call in key, tier, and row order                                                                                                                                                                                                      |
 | `0104-keep-each-hold-end-and-start-health-walks-after-held-rows.sql`              | 103            | The new table `terminal_hold_end` keeps each hold end that `task_outcome.held_until` cannot take, the hold code tests each array with one sort or hash, `queue_health_v1` starts each walk after the held rows that `terminal_retention_walk_start` stores, and `evaluate_queue_health_v1` adds `terminal-cleanup-stalled`                                                                |
+| `0105-seek-the-task-of-an-event-detail-record.sql`                                | 104            | `dashboard_event_detail_v1` reads the optional input key `taskId` and then reads only the history rows of that task                                                                                                                                                                                                                                                                       |
 
 Migrations 0093 through 0097 keep the floor. With migrations 0098, 0099, and 0100, the SDK schema floor rises from 76 to 99.
-Migrations 0101 through 0104 add no function that an SDK calls, so they keep the floor at 99.
+Migrations 0101 through 0105 add no function that an SDK calls, so they keep the floor at 99.
 Each SDK statement catalogue of the new release names `schedule_wait_v2`, `send_signal_v2`, and
 `create_children_v2`, which schema version 97 adds. The dashboard host of each SDK calls
 `override_retention_policy_v2` and the three other audited policy functions, which schema version
@@ -197,7 +199,7 @@ such a change, and 1.0.0 cannot:
 - .NET: `AddWorkhorse` throws for a `Json` section under `Workhorse:Queue` or `Workhorse:Worker`.
   Remove the section, and set the JSON options in code.
 
-A 0.12 process keeps working on schema version 103, because a migration inside a major line only
+A 0.12 process keeps working on schema version 104, because a migration inside a major line only
 adds. Migration 0098 keeps `schedule_wait_v1`, `send_signal_v1`, and `create_children_v1` and their
 answers. Migration 0100 keeps `fail_v1`, `fast_fail_v1`, and `save_checkpoint_v2` and their answers.
 
@@ -234,6 +236,14 @@ Migration 0104 changes these behaviors for every SDK version when it commits:
 
 ([Lifecycle: Terminal-task pruning](architecture/lifecycle.md#terminal-task-pruning) and
 [Lifecycle: Retention health](architecture/lifecycle.md#retention-health)).
+
+Migration 0105 changes one function body for every SDK version when it commits. A dashboard host
+of the new release sends the task of the record that the page opens, and
+`dashboard_event_detail_v1` then reads only the history rows of that task. Before, each event
+detail read each fast-tier row. A host or page of an earlier release sends no task and gets the same
+answer as before. An address that an operator saved before the upgrade names no task and still opens
+its record
+([Dashboard: Event detail](architecture/dashboard.md#event-detail)).
 
 ### Build the shard index
 

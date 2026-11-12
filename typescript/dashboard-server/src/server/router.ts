@@ -178,6 +178,9 @@ const eventDetailInput = z.object({
   id: z
     .string()
     .regex(/^(event|attempt):[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i),
+  // The task of the record, which the event feed returns with each row. With it, the read seeks
+  // that task and does not read each fast-tier row. A released page sends no task.
+  taskId: z.uuid().nullable().default(null),
 });
 const taskFilter = z.enum(dashboardTaskFilters);
 const taskSort = z.enum(dashboardTaskSorts);
@@ -590,7 +593,7 @@ export const dashboardRouter = {
     eventDetail: procedure.input(eventDetailInput).handler(async ({ context, input }) => {
       const detail = await readDashboardEventDetail(
         context.database,
-        input.id,
+        input,
         context.redactErrorStacks,
       );
       if (!detail) throw new ORPCError("NOT_FOUND", { message: "Event not found" });

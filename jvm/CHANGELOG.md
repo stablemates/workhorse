@@ -394,6 +394,17 @@ takes one sort or one hash over the batch, and the results do not change. Migrat
 schema to version 103. It adds two tables, rewrites no row, and does not raise the floor. Run
 `workhorse schema migrate`.
 
+### Event detail reads only the history of its task
+
+The dashboard derives the history records of a fast-tier task, and no index
+holds their identities. Thus `dashboard_event_detail_v1` read each row of `fast_task_runtime` and
+`fast_task_outcome` to find one record (SM-2029). The page now sends the task of the record as the new optional
+`taskId` key of `eventDetail`, and the embedded dashboard accepts it and passes it to
+`dashboard_event_detail_v1`. The function then reads only the history rows of that task, and a
+record of another task returns `NOT_FOUND`. A request without `taskId` gets the same answer as
+before. The host works on schema version 103 and earlier, which ignore the key. Migration 0105 moves the
+schema to version 104, and the floor stays 99.
+
 ## 0.12.0 — 2026-11-07
 
 The npm packages, Python distribution, Go module, Rust crate, Ruby gem, JVM artifacts, and .NET

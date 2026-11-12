@@ -11,7 +11,11 @@ import {
   dashboardPageMax,
   dashboardTaskEventTypes,
 } from "@stablemates/workhorse-dashboard-server/wire";
-import { isEventTypeFilter, type EventsLocationState } from "../events-location.js";
+import {
+  eventsLocationWithoutEvent,
+  isEventTypeFilter,
+  type EventsLocationState,
+} from "../events-location.js";
 import { eventDetailSummary, eventsWindowOptions } from "../event-presentation.js";
 import {
   Box,
@@ -143,7 +147,8 @@ export function EventsPage({
     if (searchDraft === null) return;
     const timer = setTimeout(() => {
       const search = searchDraft.trim() || null;
-      if (search !== query.search) setQuery({ ...query, search, page: 1, eventId: null });
+      if (search !== query.search)
+        setQuery({ ...eventsLocationWithoutEvent(query), search, page: 1 });
       setSearchDraft(null);
     }, 300);
     return () => clearTimeout(timer);
@@ -182,7 +187,7 @@ export function EventsPage({
   // Any change to what is being asked for returns to the first page: page 4 of the old filter
   // addresses nothing in the new result set.
   const filter = (next: Partial<EventsLocationState>) =>
-    setQuery({ ...query, ...next, page: 1, eventId: null });
+    setQuery({ ...eventsLocationWithoutEvent(query), ...next, page: 1 });
   // The feed reports the total it proved rather than a count over the whole window, so the pager
   // gains one page while more remain and settles on the real last page once it is reached. It
   // stops at the last page the server accepts, and the note below offers the rest another way.
@@ -195,7 +200,7 @@ export function EventsPage({
     totalPages > 1 ? (
       <Pagination
         value={Math.min(data.page, totalPages)}
-        onChange={(page) => setQuery({ ...query, page, eventId: null })}
+        onChange={(page) => setQuery({ ...eventsLocationWithoutEvent(query), page })}
         total={totalPages}
         size="xs"
         aria-label={label}

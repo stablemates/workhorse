@@ -4,13 +4,15 @@ import {
   defaultEventsLocation,
   eventsListingKey,
   eventsLocationHref,
+  eventsLocationWithEvent,
+  eventsLocationWithoutEvent,
   parseEventsLocation,
 } from "./events-location.js";
 
 describe("events location state", () => {
   it("round-trips every shareable filter and the open event", () => {
     const state = parseEventsLocation(
-      "?window=24h&from=2026-08-15T12%3A00%3A00.000Z&to=2026-08-16T12%3A00%3A00.000Z&source=attempt&queue=orders&type=order.process&worker=worker-1&q=invoice&task=3f1c0c8e-0000-4000-8000-000000000001&events=failed,timeout&page=3&per=100&event=attempt:018f0000-0000-7000-8000-000000000042",
+      "?window=24h&from=2026-08-15T12%3A00%3A00.000Z&to=2026-08-16T12%3A00%3A00.000Z&source=attempt&queue=orders&type=order.process&worker=worker-1&q=invoice&task=3f1c0c8e-0000-4000-8000-000000000001&events=failed,timeout&page=3&per=100&event=attempt:018f0000-0000-7000-8000-000000000042&eventTask=018f0000-0000-7000-8000-000000000007",
     );
     expect(state).toEqual({
       window: "24h",
@@ -26,6 +28,7 @@ describe("events location state", () => {
       page: 3,
       pageSize: 100,
       eventId: "attempt:018f0000-0000-7000-8000-000000000042",
+      eventTaskId: "018f0000-0000-7000-8000-000000000007",
     });
     expect(parseEventsLocation(eventsLocationHref(state).split("?")[1] ?? "")).toEqual(state);
   });
@@ -52,6 +55,37 @@ describe("events location state", () => {
     expect(parseEventsLocation("?event=event:9e71565f-a9e8-f2c9-939b").eventId).toBeNull();
   });
 
+  it("keeps the task of the open record only with a valid record identity", () => {
+    const record = "event:9e71565f-a9e8-f2c9-939b-0e7ff240bf26";
+    const task = "018f0000-0000-7000-8000-000000000007";
+    // An address from a released page names no task, and the drawer still opens its record.
+    expect(parseEventsLocation(`?event=${record}`)).toMatchObject({
+      eventId: record,
+      eventTaskId: null,
+    });
+    expect(parseEventsLocation(`?event=${record}&eventTask=${task}`).eventTaskId).toBe(task);
+    expect(parseEventsLocation(`?event=${record}&eventTask=not-a-task`).eventTaskId).toBeNull();
+    expect(parseEventsLocation(`?eventTask=${task}`)).toEqual(defaultEventsLocation);
+    expect(parseEventsLocation(`?event=task:42&eventTask=${task}`)).toEqual(defaultEventsLocation);
+    expect(
+      eventsLocationHref({ ...defaultEventsLocation, eventId: record, eventTaskId: task }),
+    ).toBe(`/events?event=${encodeURIComponent(record)}&eventTask=${task}`);
+  });
+
+  it("opens a feed row with its task and closes the drawer without either", () => {
+    const filtered = parseEventsLocation("?window=6h&queue=orders");
+    const row = {
+      id: "attempt:a326ee37-afbc-b371-de56-c85313ead889",
+      taskId: "018f0000-0000-7000-8000-000000000007",
+    };
+    const opened = eventsLocationWithEvent(filtered, row);
+    expect(eventsLocationHref(opened)).toBe(
+      `/events?window=6h&queue=orders&event=${encodeURIComponent(row.id)}&eventTask=${row.taskId}`,
+    );
+    expect(parseEventsLocation(eventsLocationHref(opened).split("?")[1]!)).toEqual(opened);
+    expect(eventsLocationWithoutEvent(opened)).toEqual(filtered);
+  });
+
   it("never asks for a page past the one the server accepts", () => {
     // A bookmarked or hand-edited URL would otherwise send a page the router rejects.
     expect(parseEventsLocation(`?page=${dashboardPageMax + 1}`).page).toBe(dashboardPageMax);
@@ -74,7 +108,7 @@ describe("events location state", () => {
     const opened = parseEventsLocation(
       "?window=6h&queue=orders&events=failed&page=2&event=event:018f0000-0000-7000-8000-000000000091",
     );
-    const closed = { ...opened, eventId: null };
+    const closed = eventsLocationWithoutEvent(opened);
     expect(eventsLocationHref(closed)).toBe("/events?window=6h&queue=orders&events=failed&page=2");
     expect(eventsListingKey(opened)).toBe(eventsListingKey(closed));
   });

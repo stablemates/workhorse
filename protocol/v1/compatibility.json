@@ -1,14 +1,14 @@
 [
   {
     "id": "current",
-    "installedSchemaVersion": 103,
+    "installedSchemaVersion": 104,
     "clientProtocolVersion": 5,
     "servedProtocolVersions": [5],
     "compatible": true
   },
   {
     "id": "schema-newer-inside-major-line",
-    "installedSchemaVersion": 104,
+    "installedSchemaVersion": 105,
     "clientProtocolVersion": 5,
     "servedProtocolVersions": [5],
     "compatible": true,
@@ -16,11 +16,19 @@
   },
   {
     "id": "served-protocol-undeclared",
-    "installedSchemaVersion": 103,
+    "installedSchemaVersion": 104,
     "clientProtocolVersion": 5,
     "servedProtocolVersions": [],
     "compatible": true,
     "note": "A schema that declares no served protocol has made no statement to enforce."
+  },
+  {
+    "id": "schema-before-the-event-detail-task",
+    "installedSchemaVersion": 103,
+    "clientProtocolVersion": 5,
+    "servedProtocolVersions": [5],
+    "compatible": true,
+    "note": "Schema 104 lets the event detail read seek the task that a host sends with taskId. Schema 103 and earlier ignore that key and find the record as before, so this client still works, because the floor is 99."
   },
   {
     "id": "schema-before-the-admission-shard-index",
@@ -189,7 +197,7 @@
   },
   {
     "id": "schema-serves-only-older-protocols",
-    "installedSchemaVersion": 103,
+    "installedSchemaVersion": 104,
     "clientProtocolVersion": 5,
     "servedProtocolVersions": [4],
     "compatible": false,
@@ -208,7 +216,7 @@
   },
   {
     "id": "schema-no-longer-serves-client",
-    "installedSchemaVersion": 103,
+    "installedSchemaVersion": 104,
     "clientProtocolVersion": 5,
     "servedProtocolVersions": [6],
     "compatible": false,
@@ -217,7 +225,7 @@
   },
   {
     "id": "client-protocol-too-old",
-    "installedSchemaVersion": 103,
+    "installedSchemaVersion": 104,
     "clientProtocolVersion": 4,
     "servedProtocolVersions": [5],
     "compatible": false,
@@ -227,7 +235,7 @@
   },
   {
     "id": "client-protocol-too-new",
-    "installedSchemaVersion": 103,
+    "installedSchemaVersion": 104,
     "clientProtocolVersion": 6,
     "servedProtocolVersions": [5],
     "compatible": false,

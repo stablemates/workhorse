@@ -742,6 +742,13 @@ export const SCHEMA_MIGRATIONS: readonly SchemaMigrationStep[] = [
       "keep each hold end, bound the hold code, start health walks after held rows, and report a stalled cleanup",
     kind: "additive",
   },
+  {
+    fromVersion: 103,
+    toVersion: 104,
+    file: "0105-seek-the-task-of-an-event-detail-record.sql",
+    description: "let an event detail read seek the task of its record",
+    kind: "additive",
+  },
 ];
 
 /**
