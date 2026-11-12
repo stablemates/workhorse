@@ -343,6 +343,31 @@ does not raise the SDK compatibility floor.
 - **Removal notice:** Spring Boot 4.0. Its open-source support ends on 2026-12-31, and a later
   minor raises the Spring Boot floor of the starter to 4.1 (ADR 0103).
 
+### The embedded dashboard sends a signal through `send_signal_v2`
+
+An operator sent a signal from the dashboard to a task that ended with no wait of that name. The
+embedded dashboard called `send_signal_v1`, so it answered `not_waiting` and recorded a
+`signal_rejected` event each time. The SDK `Queue` already called `send_signal_v2`. The dashboard
+host now calls `send_signal_v2` too. For such a task, it answers `stale` and records no event. A
+live task that has not reached the wait still answers `not_waiting`. The task drawer says that the
+task or its wait has ended (SM-2026).
+
+### The embedded dashboard shows a group callback that failed to enqueue
+
+A finished group that failed to enqueue a callback showed that callback with no task and no
+reason. The `taskGroupDetail` and `cancelTaskGroup` answers now add `failure` to such a callback,
+with `code`, `message`, and `failedAt`. The key is optional and new in `dashboard/v1`, an additive
+change. The group list does not carry it. A schema below version 97 returns no `failure`. The group
+detail page shows the failure as text (SM-2027).
+
+### A dashboard read that succeeds keeps its first cleanup error
+
+The JVM dashboard host runs a read in its own read-only transaction. After a read that succeeded,
+`rollback()` failed, and then `setAutoCommit(true)` failed too. The second error replaced the first,
+so the more useful error was lost. Each cleanup step still runs, and the host now throws the first
+cleanup error with each later one as a suppressed exception. A read that fails keeps its own error,
+as before (SM-2015).
+
 ## 0.12.0 — 2026-11-07
 
 The npm packages, Python distribution, Go module, Rust crate, Ruby gem, JVM artifacts, and .NET

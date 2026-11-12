@@ -61,6 +61,30 @@ export function scheduleSkipSummary(
 }
 
 /**
+ * The last failure of the schedule pass for one schedule, or null when no pass failed since the
+ * last pass that moved its position. Workhorse clears the error keys after such a pass, so the
+ * badge needs no time window. A database below schema 94 returns no error keys, so the page shows
+ * no error there.
+ */
+export function scheduleErrorSummary(
+  schedule: {
+    lastErrorAt?: string | null;
+    lastErrorCode?: string | null;
+    lastErrorMessage?: string | null;
+  },
+  now = Date.now(),
+): { label: string; detail: string } | null {
+  const failedAt = schedule.lastErrorAt ?? null;
+  if (failedAt === null) return null;
+  const code = schedule.lastErrorCode ?? "unknown";
+  const message = schedule.lastErrorMessage ?? "No message was recorded.";
+  return {
+    label: `Failed · ${formatRelative(failedAt, now)}`,
+    detail: `At ${formatExact(failedAt)}, the schedule pass could not enqueue this schedule. SQLSTATE ${code}: ${message}`,
+  };
+}
+
+/**
  * The occurrence count of an application schedule. Workhorse stops the count at 1,000 from schema
  * 88, and `occurrenceCountCapped` then says that more occurrences are retained. A database below
  * schema 88 returns an exact count and no cap key.
@@ -238,6 +262,7 @@ export function CronPage({
                     schedule.maintenance?.lastStartedAt ??
                     schedule.lastFiredAt;
                   const skip = scheduleSkipSummary(schedule);
+                  const failure = scheduleErrorSummary(schedule);
                   return (
                     <Fragment key={scheduleKey}>
                       <Table.Tr>
@@ -441,6 +466,25 @@ export function CronPage({
                                 aria-label={`Last skip: ${skip.detail}`}
                               >
                                 {skip.label}
+                              </Badge>
+                            </Tooltip>
+                          ) : null}
+                          {failure ? (
+                            <Tooltip
+                              label={failure.detail}
+                              multiline
+                              maw={360}
+                              withArrow
+                              events={{ hover: true, focus: true, touch: true }}
+                            >
+                              <Badge
+                                color="red"
+                                variant="light"
+                                size="sm"
+                                tabIndex={0}
+                                aria-label={`Last error: ${failure.detail}`}
+                              >
+                                {failure.label}
                               </Badge>
                             </Tooltip>
                           ) : null}

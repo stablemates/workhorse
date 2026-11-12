@@ -340,6 +340,14 @@ and the completion of the last member of the group can now end one transaction w
 the cancel failed with `40001` before. A read committed enqueue takes no new lock. The migration
 does not raise the SDK compatibility floor.
 
+### The embedded dashboard shows a group callback that failed to enqueue
+
+A finished group that failed to enqueue a callback showed that callback with no task and no
+reason. The `taskGroupDetail` and `cancelTaskGroup` answers now add `failure` to such a callback,
+with `code`, `message`, and `failedAt`. The key is optional and new in `dashboard/v1`, an additive
+change. The group list does not carry it. A schema below version 97 returns no `failure`. The group
+detail page shows the failure as text (SM-2027).
+
 ## 0.12.0 — 2026-11-07
 
 The npm packages, Python distribution, Go module, Rust crate, Ruby gem, JVM artifacts, and .NET

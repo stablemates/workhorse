@@ -17820,6 +17820,464 @@
           }
         }
       ]
+    },
+    {
+      "id": "signal-answers-and-callback-failure",
+      "seed": [
+        {
+          "id": "enqueue-ended-signal-task",
+          "sql": "SELECT jsonb_build_object('taskId', task_id, 'outcome', outcome) AS value FROM workhorse.enqueue_many_v1($1::jsonb)",
+          "parameters": [
+            [
+              {
+                "queue": "conformance-signal-ended",
+                "type": "conformance.signal-answer",
+                "payload": {}
+              }
+            ]
+          ],
+          "expect": {
+            "rows": [
+              {
+                "value": {
+                  "taskId": {
+                    "$type": "uuid"
+                  },
+                  "outcome": "accepted"
+                }
+              }
+            ]
+          },
+          "capture": {
+            "endedSignalTask": "0.value.taskId"
+          }
+        },
+        {
+          "id": "claim-ended-signal-task",
+          "sql": "SELECT jsonb_build_object('taskId', task_id, 'fenceToken', fence_token) AS value FROM workhorse.claim_v1($1::text, $2::text, $3::integer)",
+          "parameters": [
+            "conformance-signal-ended",
+            "conformance-worker",
+            30000
+          ],
+          "expect": {
+            "rows": [
+              {
+                "value": {
+                  "taskId": {
+                    "$ref": "endedSignalTask"
+                  },
+                  "fenceToken": {
+                    "$type": "integer"
+                  }
+                }
+              }
+            ]
+          },
+          "capture": {
+            "endedSignalFence": "0.value.fenceToken"
+          }
+        },
+        {
+          "id": "complete-ended-signal-task",
+          "sql": "SELECT workhorse.complete_v1($1::uuid, $2::text, $3::bigint, $4::jsonb) AS accepted",
+          "parameters": [
+            {
+              "$ref": "endedSignalTask"
+            },
+            "conformance-worker",
+            {
+              "$ref": "endedSignalFence"
+            },
+            {
+              "ok": true
+            }
+          ],
+          "expect": {
+            "rows": [
+              {
+                "accepted": true
+              }
+            ]
+          }
+        },
+        {
+          "id": "enqueue-early-signal-task",
+          "sql": "SELECT jsonb_build_object('taskId', task_id, 'outcome', outcome) AS value FROM workhorse.enqueue_many_v1($1::jsonb)",
+          "parameters": [
+            [
+              {
+                "queue": "conformance-signal-early",
+                "type": "conformance.signal-answer",
+                "payload": {}
+              }
+            ]
+          ],
+          "expect": {
+            "rows": [
+              {
+                "value": {
+                  "taskId": {
+                    "$type": "uuid"
+                  },
+                  "outcome": "accepted"
+                }
+              }
+            ]
+          },
+          "capture": {
+            "earlySignalTask": "0.value.taskId"
+          }
+        },
+        {
+          "id": "create-lost-callback-group",
+          "sql": "SELECT jsonb_build_object('groupId', min(group_id::text), 'members', count(task_id)) AS value FROM workhorse.create_task_group_v1($1::jsonb, $2::jsonb, $3::boolean)",
+          "parameters": [
+            {
+              "onFinish": {
+                "queue": "conformance-lost-callbacks",
+                "type": "conformance.group-callback",
+                "payload": {
+                  "callback": "finish"
+                },
+                "concurrencyKey": "conformance-tenant"
+              }
+            },
+            [
+              {
+                "queue": "conformance-lost-members",
+                "type": "conformance.group-member",
+                "payload": {
+                  "member": 5
+                },
+                "tags": [
+                  "conformance"
+                ]
+              }
+            ],
+            true
+          ],
+          "expect": {
+            "rows": [
+              {
+                "value": {
+                  "groupId": {
+                    "$type": "uuid"
+                  },
+                  "members": 1
+                }
+              }
+            ]
+          },
+          "capture": {
+            "lostCallbackGroup": "0.value.groupId"
+          }
+        },
+        {
+          "id": "set-lost-callback-fast-tier",
+          "sql": "SELECT workhorse.set_queue_tier_v1($1::text, $2::text, $3::text, $4::text) AS tier",
+          "parameters": [
+            "conformance-lost-callbacks",
+            "fast",
+            "conformance",
+            "seed a fast-tier queue that refuses a concurrency key"
+          ],
+          "expect": {
+            "rows": [
+              {
+                "tier": "fast"
+              }
+            ]
+          }
+        },
+        {
+          "id": "claim-lost-callback-member",
+          "sql": "SELECT jsonb_build_object('taskId', task_id, 'fenceToken', fence_token) AS value FROM workhorse.claim_v1($1::text, $2::text, $3::integer)",
+          "parameters": [
+            "conformance-lost-members",
+            "conformance-worker",
+            30000
+          ],
+          "expect": {
+            "rows": [
+              {
+                "value": {
+                  "taskId": {
+                    "$type": "uuid"
+                  },
+                  "fenceToken": {
+                    "$type": "integer"
+                  }
+                }
+              }
+            ]
+          },
+          "capture": {
+            "lostMemberTask": "0.value.taskId",
+            "lostMemberFence": "0.value.fenceToken"
+          }
+        },
+        {
+          "id": "complete-lost-callback-member",
+          "sql": "SELECT workhorse.complete_v1($1::uuid, $2::text, $3::bigint, $4::jsonb) AS accepted",
+          "parameters": [
+            {
+              "$ref": "lostMemberTask"
+            },
+            "conformance-worker",
+            {
+              "$ref": "lostMemberFence"
+            },
+            {
+              "ok": true
+            }
+          ],
+          "expect": {
+            "rows": [
+              {
+                "accepted": true
+              }
+            ]
+          }
+        }
+      ],
+      "exchanges": [
+        {
+          "id": "signal-task-ended",
+          "procedure": "signalTask",
+          "request": {
+            "json": {
+              "id": {
+                "$ref": "endedSignalTask"
+              },
+              "name": "approval",
+              "payload": {
+                "approved": true
+              },
+              "idempotencyKey": "conformance-signal-ended",
+              "audit": {
+                "actor": "browser-operator",
+                "reason": "conformance exchange",
+                "requestId": "conformance-request"
+              }
+            }
+          },
+          "expect": {
+            "status": 200,
+            "body": {
+              "json": {
+                "status": "stale",
+                "taskId": {
+                  "$ref": "endedSignalTask"
+                },
+                "name": "approval",
+                "payload": null,
+                "deliveredAt": null,
+                "deliveredBy": null
+              }
+            }
+          }
+        },
+        {
+          "id": "signal-task-not-waiting",
+          "procedure": "signalTask",
+          "request": {
+            "json": {
+              "id": {
+                "$ref": "earlySignalTask"
+              },
+              "name": "approval",
+              "payload": {
+                "approved": true
+              },
+              "idempotencyKey": "conformance-signal-early",
+              "audit": {
+                "actor": "browser-operator",
+                "reason": "conformance exchange",
+                "requestId": "conformance-request"
+              }
+            }
+          },
+          "expect": {
+            "status": 200,
+            "body": {
+              "json": {
+                "status": "not_waiting",
+                "taskId": {
+                  "$ref": "earlySignalTask"
+                },
+                "name": "approval",
+                "payload": null,
+                "deliveredAt": null,
+                "deliveredBy": null
+              }
+            }
+          }
+        },
+        {
+          "id": "task-group-detail-callback-failure",
+          "procedure": "taskGroupDetail",
+          "request": {
+            "json": {
+              "id": {
+                "$ref": "lostCallbackGroup"
+              }
+            }
+          },
+          "expect": {
+            "status": 200,
+            "body": {
+              "json": {
+                "group": {
+                  "id": {
+                    "$ref": "lostCallbackGroup"
+                  },
+                  "state": "finished",
+                  "counts": {
+                    "total": 1,
+                    "failed": 0,
+                    "pending": 0,
+                    "canceled": 0,
+                    "succeeded": 1
+                  },
+                  "result": "succeeded",
+                  "sealedAt": {
+                    "$type": "timestamp"
+                  },
+                  "callbacks": [
+                    {
+                      "kind": "onFinish",
+                      "taskId": null,
+                      "failure": {
+                        "code": "P1007",
+                        "message": "fast-tier queue conformance-lost-callbacks does not support concurrency keys",
+                        "failedAt": {
+                          "$type": "timestamp"
+                        }
+                      }
+                    }
+                  ],
+                  "createdAt": {
+                    "$type": "timestamp"
+                  },
+                  "canceledAt": null,
+                  "canceledBy": null,
+                  "finishedAt": {
+                    "$type": "timestamp"
+                  },
+                  "cancelReason": null
+                },
+                "events": [
+                  {
+                    "id": {
+                      "$type": "uuid"
+                    },
+                    "type": "callback_failed",
+                    "details": {
+                      "code": "P1007",
+                      "kind": "on_finish",
+                      "message": "fast-tier queue conformance-lost-callbacks does not support concurrency keys"
+                    },
+                    "occurredAt": {
+                      "$type": "timestamp"
+                    }
+                  },
+                  {
+                    "id": {
+                      "$type": "uuid"
+                    },
+                    "type": "finished",
+                    "details": {
+                      "total": 1,
+                      "failed": 0,
+                      "result": "succeeded",
+                      "canceled": 0,
+                      "succeeded": 1
+                    },
+                    "occurredAt": {
+                      "$type": "timestamp"
+                    }
+                  },
+                  {
+                    "id": {
+                      "$type": "uuid"
+                    },
+                    "type": "sealed",
+                    "details": {
+                      "total": 1
+                    },
+                    "occurredAt": {
+                      "$type": "timestamp"
+                    }
+                  },
+                  {
+                    "id": {
+                      "$type": "uuid"
+                    },
+                    "type": "created",
+                    "details": {
+                      "callbacks": [
+                        "onFinish"
+                      ]
+                    },
+                    "occurredAt": {
+                      "$type": "timestamp"
+                    }
+                  }
+                ],
+                "members": [
+                  {
+                    "queue": "conformance-lost-members",
+                    "state": "succeeded",
+                    "taskId": {
+                      "$ref": "lostMemberTask"
+                    },
+                    "addedAt": {
+                      "$type": "timestamp"
+                    },
+                    "outcome": "succeeded",
+                    "position": 1,
+                    "taskType": "conformance.group-member",
+                    "countedAt": {
+                      "$type": "timestamp"
+                    }
+                  }
+                ],
+                "canCancel": true,
+                "nextAfter": null,
+                "eventsTruncated": false
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": "signal-answer-events",
+      "seed": [
+        {
+          "id": "count-signal-rejections",
+          "sql": "SELECT jsonb_build_object('ended', count(*) FILTER (WHERE task_id = $1::uuid), 'early', count(*) FILTER (WHERE task_id = $2::uuid)) AS value FROM workhorse.task_event WHERE event_type = 'signal_rejected'",
+          "parameters": [
+            {
+              "$ref": "endedSignalTask"
+            },
+            {
+              "$ref": "earlySignalTask"
+            }
+          ],
+          "expect": {
+            "rows": [
+              {
+                "value": {
+                  "ended": 0,
+                  "early": 1
+                }
+              }
+            ]
+          }
+        }
+      ]
     }
   ]
 }

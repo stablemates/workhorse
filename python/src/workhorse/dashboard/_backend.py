@@ -549,7 +549,7 @@ class DashboardBackend:
         value = cast(Mapping[str, object], input)
         row = self._rows(
             """
-            SELECT status, payload, delivered_at, delivered_by FROM workhorse.send_signal_v1(
+            SELECT status, payload, delivered_at, delivered_by FROM workhorse.send_signal_v2(
               %s::uuid, %s::text, %s::jsonb, %s::text, %s::text)
             """,
             (

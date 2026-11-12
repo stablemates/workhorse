@@ -154,6 +154,67 @@ describe("schedules page", () => {
     expect(scheduleSkipSummary({})).toBeNull();
   });
 
+  it("shows the last error of a schedule, and nothing without one", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date(page.capturedAt));
+    const { CronPage, scheduleErrorSummary } = await import("./pages/schedules.js");
+    const { formatExact } = await import("./preferences.js");
+    const [invoices] = page.schedules;
+    const render = (schedule: DashboardCronPage["schedules"][number]) =>
+      renderToStaticMarkup(
+        createElement(
+          MantineProvider,
+          null,
+          createElement(CronPage, {
+            data: { ...page, schedules: [schedule] },
+            togglingSchedule: null,
+            setSchedulePaused: () => undefined,
+            scheduleTasksHref: () => "/tasks",
+          }),
+        ),
+      );
+
+    const failed = render({
+      ...invoices!,
+      lastErrorAt: "2026-08-26T09:00:00.000Z",
+      lastErrorCode: "23514",
+      lastErrorMessage: 'new row violates check constraint "<invoice>"',
+    });
+    expect(failed).toContain("Failed · 3h ago");
+    // The tooltip and the accessible name give the exact time, the SQLSTATE, and the message. The
+    // page escapes the stored message as text.
+    const detail = `At ${formatExact("2026-08-26T09:00:00.000Z")}, the schedule pass could not enqueue this schedule. SQLSTATE 23514: new row violates check constraint &quot;&lt;invoice&gt;&quot;`;
+    expect(failed).toContain(`aria-label="Last error: ${detail}"`);
+    expect(failed).not.toContain("<invoice>");
+    expect(failed).toContain("--badge-bg:var(--mantine-color-red-light)");
+    expect(
+      scheduleErrorSummary({
+        lastErrorAt: "2026-08-26T09:00:00.000Z",
+        lastErrorCode: "23514",
+        lastErrorMessage: "stored message",
+      })?.detail,
+    ).toBe(
+      `At ${formatExact("2026-08-26T09:00:00.000Z")}, the schedule pass could not enqueue this schedule. SQLSTATE 23514: stored message`,
+    );
+
+    // Null error fields show no badge.
+    const cleared = render({
+      ...invoices!,
+      lastErrorAt: null,
+      lastErrorCode: null,
+      lastErrorMessage: null,
+    });
+    expect(cleared).not.toContain("Failed ·");
+    expect(cleared).not.toContain("Last error");
+
+    // A database below schema 94 returns none of the keys.
+    const older = render(invoices!);
+    expect(Object.hasOwn(invoices!, "lastErrorAt")).toBe(false);
+    expect(older).not.toContain("Failed ·");
+    expect(older).not.toContain("Last error");
+    expect(scheduleErrorSummary({})).toBeNull();
+  });
+
   it("shows a capped occurrence count with a plus sign", async () => {
     const { CronPage, scheduleOccurrenceCount } = await import("./pages/schedules.js");
     const [invoices] = page.schedules;

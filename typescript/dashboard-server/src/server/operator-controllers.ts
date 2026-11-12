@@ -114,7 +114,8 @@ const taskGroupCallbackOrder = ["onFinish", "onSuccess", "onFailure"] as const;
  * Project an `Admin` task group snapshot onto the wire.
  *
  * The other backends read the same snapshot through SQL, so the callbacks take the fixed order
- * finish, success, failure that the shared statement writes.
+ * finish, success, failure that the shared statement writes. A callback carries `failure` only
+ * when the snapshot has one, as the shared statement writes it.
  */
 function dashboardTaskGroup(group: TaskGroup): DashboardTaskGroup {
   return {
@@ -131,7 +132,19 @@ function dashboardTaskGroup(group: TaskGroup): DashboardTaskGroup {
     callbacks: taskGroupCallbackOrder.flatMap((kind) =>
       group.callbacks
         .filter((callback) => callback.kind === kind)
-        .map((callback) => ({ kind, taskId: callback.taskId })),
+        .map(({ taskId, failure }) =>
+          failure === undefined
+            ? { kind, taskId }
+            : {
+                kind,
+                taskId,
+                failure: {
+                  code: failure.code,
+                  message: failure.message,
+                  failedAt: failure.failedAt.toISOString(),
+                },
+              },
+        ),
     ),
   };
 }

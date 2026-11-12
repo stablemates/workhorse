@@ -121,4 +121,28 @@ describe("dashboard signal waits", () => {
     expect(html).toContain('aria-label="Signal account-approval for task signal-task"');
     expect(html).toContain('aria-label="Signal input for account-approval"');
   });
+  it("tells the operator when a signal reaches a task or a wait that has ended", async () => {
+    const { signalDeliveryNotice } = await import("./components/signal-task.js");
+
+    expect(signalDeliveryNotice("approval", "delivered")).toEqual({
+      title: "Signal delivered",
+      message: "approval: delivered",
+      tone: "success",
+    });
+    // send_signal_v2 answers stale for a terminal task that has no wait, and for a wait that ended.
+    expect(signalDeliveryNotice("approval", "stale")).toEqual({
+      title: "Signal not delivered",
+      message: "approval: the task or its wait has ended. Workhorse did not deliver the signal.",
+      tone: "neutral",
+    });
+    // A live task that has not reached the wait keeps its answer.
+    expect(signalDeliveryNotice("approval", "not_waiting")).toEqual({
+      title: "Signal unchanged",
+      message: "approval: not_waiting",
+      tone: "neutral",
+    });
+    for (const status of ["already_delivered", "duplicate", "not_found"] as const) {
+      expect(signalDeliveryNotice("approval", status).title).toBe("Signal unchanged");
+    }
+  });
 });

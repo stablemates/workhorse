@@ -1,6 +1,6 @@
 import type { DashboardClient } from "@stablemates/workhorse-dashboard-server";
 import { parseHumanWaitResult } from "../presentation.js";
-import { notifyDashboard, notifyFailure } from "../notifications.js";
+import { notifyDashboard, notifyFailure, type DashboardNotification } from "../notifications.js";
 import type {
   DashboardTaskDetail,
   DashboardSignalWaitRow,
@@ -12,6 +12,31 @@ import { formatExact } from "../preferences.js";
 import { useDashboardClient } from "../core.js";
 import { DrawerSection } from "./task-detail-overview.js";
 import { randomUuid } from "../random-uuid.js";
+
+/** The answer of `signalTask`, from the procedure type of the client. */
+type SignalDeliveryStatus = Awaited<ReturnType<DashboardClient["signalTask"]>>["status"];
+
+/**
+ * The notice for one signal answer. `stale` means that the wait or the whole task ended before the
+ * signal arrived, so the notice says that Workhorse did not deliver it and that sending again does
+ * not help.
+ */
+export function signalDeliveryNotice(
+  name: string,
+  status: SignalDeliveryStatus,
+): Pick<DashboardNotification, "title" | "message" | "tone"> {
+  if (status === "delivered") {
+    return { title: "Signal delivered", message: `${name}: delivered`, tone: "success" };
+  }
+  if (status === "stale") {
+    return {
+      title: "Signal not delivered",
+      message: `${name}: the task or its wait has ended. Workhorse did not deliver the signal.`,
+      tone: "neutral",
+    };
+  }
+  return { title: "Signal unchanged", message: `${name}: ${status}`, tone: "neutral" };
+}
 
 async function deliverDashboardSignal({
   client,
@@ -45,11 +70,7 @@ async function deliverDashboardSignal({
       idempotencyKey: randomUuid(),
       audit: { actor: auditActor, reason, requestId: randomUuid() },
     });
-    notifyDashboard({
-      title: delivery.status === "delivered" ? "Signal delivered" : "Signal unchanged",
-      message: `${name}: ${delivery.status}`,
-      tone: delivery.status === "delivered" ? "success" : "neutral",
-    });
+    notifyDashboard(signalDeliveryNotice(name, delivery.status));
     return true;
   } catch (cause) {
     notifyFailure("Signal not delivered", cause, "Workhorse rejected the signal payload");

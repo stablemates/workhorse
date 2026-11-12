@@ -207,6 +207,18 @@
         "callbacks[]": {
           "type": "object"
         },
+        "callbacks[].failure": {
+          "type": "object"
+        },
+        "callbacks[].failure.code": {
+          "type": "string"
+        },
+        "callbacks[].failure.failedAt": {
+          "type": "string"
+        },
+        "callbacks[].failure.message": {
+          "type": "string"
+        },
         "callbacks[].kind": {
           "type": "enum",
           "enum": [
@@ -4511,6 +4523,18 @@
         "group.callbacks[]": {
           "type": "object"
         },
+        "group.callbacks[].failure": {
+          "type": "object"
+        },
+        "group.callbacks[].failure.code": {
+          "type": "string"
+        },
+        "group.callbacks[].failure.failedAt": {
+          "type": "string"
+        },
+        "group.callbacks[].failure.message": {
+          "type": "string"
+        },
         "group.callbacks[].kind": {
           "type": "enum",
           "enum": [
@@ -4646,6 +4670,18 @@
         },
         "groups[].callbacks[]": {
           "type": "object"
+        },
+        "groups[].callbacks[].failure": {
+          "type": "object"
+        },
+        "groups[].callbacks[].failure.code": {
+          "type": "string"
+        },
+        "groups[].callbacks[].failure.failedAt": {
+          "type": "string"
+        },
+        "groups[].callbacks[].failure.message": {
+          "type": "string"
         },
         "groups[].callbacks[].kind": {
           "type": "enum",

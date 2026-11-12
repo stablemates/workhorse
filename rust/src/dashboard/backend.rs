@@ -527,7 +527,7 @@ impl<E: Executor> Backend<E> {
         let value = document(input);
         let (statement, input_key, value_key, at, by, at_key, by_key) = match delivery {
             Delivery::Signal => (
-                sql::SEND_SIGNAL_V1,
+                sql::SEND_SIGNAL_V2,
                 "payload",
                 "payload",
                 "delivered_at",

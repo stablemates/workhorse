@@ -454,7 +454,7 @@ definition raises an error, its fires roll back, and the pass writes these colum
 - A later pass that moves `last_evaluated_at` sets the three columns to null.
 - An error in the SQLSTATE classes 40 and 57 ends the whole pass, which then rolls back.
 - `dashboard_cron_v1` returns the columns as `lastErrorAt`, `lastErrorCode`, and
-  `lastErrorMessage`. The Schedules page does not show them yet.
+  `lastErrorMessage`. The Schedules page shows them in a `Failed` badge.
 - `sync_schedule_definitions_v2` refuses an enabled definition with a `concurrencyKey` on a
   fast-tier queue, with the enqueue error `fast-tier queue <queue> does not support concurrency
   keys`.
@@ -479,6 +479,11 @@ If a `skip` schedule skipped occurrences recently, its last-run cell shows a `Sk
 the count and the time of the last skip. The tooltip of the badge also shows the newest skipped
 occurrence. A schedule that never skipped an occurrence shows no badge. The record of a skip stays
 after later occurrences fire. Thus, if the last skip is old, the page also shows no badge.
+
+If the last schedule pass could not enqueue a schedule, its last-run cell shows a red `Failed`
+badge with the time of the failure. The tooltip of the badge shows the exact time, the SQLSTATE,
+and the error message. The next pass that enqueues the schedule removes the badge. A schedule with
+no recorded failure shows no badge.
 
 A routine is maintenance work that runs directly in PostgreSQL and creates no task. The page lists
 the routines beside the application schedules. The last-run value of a routine records that direct
@@ -509,6 +514,12 @@ routines.
   null until the first skip. The badge shows a count of 10,000 as `10,000+`. The page shows the
   badge only while `lastSkippedAt` is less than 24 hours older than the browser clock. A database
   below schema version 86 returns none of the keys.
+- `lastErrorAt`, `lastErrorCode`, and `lastErrorMessage` return `last_error_at`, `last_error_code`,
+  and `last_error_message` from `dashboard_schedule_definition_v1`. If `lastErrorAt` is set, the
+  page shows a red `Failed · <relative time>` badge. Its tooltip and accessible name give the exact
+  time, the SQLSTATE, and the error message. The badge has no time window, because a later pass that
+  moves `last_evaluated_at` sets the keys to null. A database below schema version 94 returns none
+  of the keys.
 
 **Maintenance routines.** The page lists `tick`, `history_partitions`, `history_retention`, and
 `terminal_storage`. Each shows its retained run total and its five newest `maintenance_run` rows.

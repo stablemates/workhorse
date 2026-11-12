@@ -368,6 +368,23 @@ and the completion of the last member of the group can now end one transaction w
 the cancel failed with `40001` before. A read committed enqueue takes no new lock. The migration
 does not raise the SDK compatibility floor.
 
+### The embedded dashboard sends a signal through `send_signal_v2`
+
+An operator sent a signal from the dashboard to a task that ended with no wait of that name. The
+embedded dashboard called `send_signal_v1`, so it answered `not_waiting` and recorded a
+`signal_rejected` event each time. The SDK `Queue` already called `send_signal_v2`. The dashboard
+host now calls `send_signal_v2` too. For such a task, it answers `stale` and records no event. A
+live task that has not reached the wait still answers `not_waiting`. The task drawer says that the
+task or its wait has ended (SM-2026).
+
+### The embedded dashboard shows a group callback that failed to enqueue
+
+A finished group that failed to enqueue a callback showed that callback with no task and no
+reason. The `taskGroupDetail` and `cancelTaskGroup` answers now add `failure` to such a callback,
+with `code`, `message`, and `failedAt`. The key is optional and new in `dashboard/v1`, an additive
+change. The group list does not carry it. A schema below version 97 returns no `failure`. The group
+detail page shows the failure as text (SM-2027).
+
 ## 0.12.0 — 2026-11-07
 
 The npm packages, Python distribution, Go module, Rust crate, Ruby gem, JVM artifacts, and .NET
