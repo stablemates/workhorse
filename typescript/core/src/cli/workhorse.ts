@@ -10,8 +10,10 @@ import {
   isMissingDatabaseRelationError,
   migrateSchema,
   readProtocolVersions,
+  readSchemaMigrationStep,
   readSchemaVersion,
   readWorkerClientProtocols,
+  SCHEMA_MIGRATIONS,
   WORKHORSE_SCHEMA_VERSION,
 } from "../schema.js";
 import { MINIMUM_POSTGRES_MAJOR, readPostgresSupport } from "../support.js";
@@ -23,11 +25,17 @@ import {
   resolveDatabaseUrl,
   resolvedDatabaseUrlSource,
 } from "./arguments.js";
+import { describeDatabaseCause } from "./database-cause.js";
 import { describeDatabaseFailure } from "./database-failure.js";
 import { startDashboardServer } from "./dashboard.js";
 import { runHealthCommand } from "./health.js";
 import { initializeProject } from "./init.js";
-import { createSchemaStatusReport, FLEET_EVIDENCE_NOTE } from "./schema-status.js";
+import {
+  createSchemaStatusReport,
+  describeInvalidSchemaIndexes,
+  FLEET_EVIDENCE_NOTE,
+  readInvalidSchemaIndexes,
+} from "./schema-status.js";
 import {
   CLI_COMMANDS,
   CLI_EXIT_CODES,
@@ -109,6 +117,10 @@ already-current schema is left unchanged.
 
 The run applies additive steps and stops before a contract step, which only "schema contract"
 applies. The stop is reported, not an error: the schema still serves every protocol it served.
+
+If a step fails, the first line of the error names the step. The lines after it show the PostgreSQL
+message, SQLSTATE, DETAIL, and HINT of the cause, when PostgreSQL gives them. For a SQLSTATE that
+starts with 22 or 23, a field that can quote the values of a row or an input is withheld.
 `;
 
 const SCHEMA_CONTRACT_HELP = `Usage: workhorse schema contract [options]
@@ -145,6 +157,10 @@ normal middle of a rolling upgrade. The field a deployment gate reads is "schema
 each one reported. Producers never register, so it is evidence about workers and not an inventory
 of every process using the database. It is null when the database cannot answer at all: no schema,
 or a schema older than the columns.
+
+"schema.invalidIndexes" lists each index in the workhorse schema that PostgreSQL marks not valid or
+not ready, for example after a failed CREATE INDEX CONCURRENTLY. Each entry gives the DROP INDEX
+statement and the migration step that builds the index again. An entry does not change the exit code.
 `;
 
 const WORKER_HELP = `Usage: workhorse worker --config <compiled-module> [options]
@@ -417,11 +433,20 @@ async function runSchemaCommand(args: readonly string[]): Promise<void> {
       // Worker evidence for a protocol retirement, which only exists once the schema does. A
       // schema too old to record it also reports null rather than failing this command.
       const workerClientProtocols = version === null ? null : await readWorkerClientProtocols(pool);
+      // A failed concurrent index build leaves an invalid index that no version check sees. The
+      // query reads only the catalog, so it answers on every schema version.
+      const invalidIndexes = await readInvalidSchemaIndexes(pool, {
+        installedVersion: version,
+        migrations: SCHEMA_MIGRATIONS,
+        readStep: readSchemaMigrationStep,
+      });
       const report: CliJsonPayloads["schema status"] = createSchemaStatusReport(
         version,
         protocolVersions,
         support,
         workerClientProtocols,
+        SCHEMA_MIGRATIONS,
+        invalidIndexes,
       );
       if (values.json) {
         process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
@@ -441,6 +466,7 @@ async function runSchemaCommand(args: readonly string[]): Promise<void> {
             ? "This runtime accepts the installed schema.\n"
             : `${report.schema.refusal}\n`,
         );
+        process.stdout.write(describeInvalidSchemaIndexes(report.schema.invalidIndexes));
         if (report.fleet !== null) {
           const counted = report.fleet.clientProtocolVersions;
           process.stdout.write(
@@ -467,6 +493,8 @@ async function runSchemaCommand(args: readonly string[]): Promise<void> {
       }
       // The gate is acceptance, not equality. A schema ahead of this build is the normal middle of
       // a rolling upgrade, and failing a deploy on it would defeat the additive rule that allows it.
+      // An invalid index does not change the exit code: exit 1 means that this runtime refuses the
+      // schema or the server, and an invalid index refuses nothing. The report carries it.
       if (!report.schema.compatible || !support.supported) process.exitCode = 1;
       return;
     }
@@ -864,7 +892,13 @@ try {
     // the input to edit. Everything else keeps its stack, which is the right answer for a defect.
     const failure = describeDatabaseFailure(error, resolvedDatabaseUrlSource());
     if (failure) process.stderr.write(`Error: ${failure}\n`);
-    else console.error(error instanceof Error ? (error.stack ?? error.message) : error);
+    else {
+      console.error(error instanceof Error ? (error.stack ?? error.message) : error);
+      // A failed migration step keeps the PostgreSQL error as its cause. Its lines go after the
+      // outer error, so the first line that a script matches does not change.
+      const cause = describeDatabaseCause(error);
+      if (cause !== undefined) process.stderr.write(cause);
+    }
     process.exitCode = 1;
   }
 }

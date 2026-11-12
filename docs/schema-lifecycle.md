@@ -167,7 +167,9 @@ The header comment of a migration must state why its body changes stay compatibl
 
 When a step fails because a concurrent migrator already committed the same step, the plan runner
 re-reads the version and continues; that outcome is indistinguishable from its own success. Any
-other failure surfaces as `Workhorse migration <file> failed and was rolled back`.
+other failure surfaces as `Workhorse migration <file> failed and was rolled back`. The error keeps
+the PostgreSQL error as its `cause`, and `workhorse schema migrate` prints that cause after the first
+line; see [Backup, rollback, and failed-migration recovery](#backup-rollback-and-failed-migration-recovery).
 
 ### Non-transactional steps
 
@@ -222,8 +224,21 @@ DROP INDEX CONCURRENTLY IF EXISTS workhorse.<index>;
 Migration 0102 first checks for that leftover, and a new concurrent build should do the same. A
 `DO` block raises an error if an index of the same name exists and is not valid, and the error text
 names the `DROP INDEX CONCURRENTLY` statement. Thus a rerun cannot record the step while the index
-is invalid. Migration 0070 has no such check. No schema check finds an invalid index, so after a
-failed concurrent build, run the query above.
+is invalid. `workhorse schema migrate` prints that error text on its `Cause:` line. Migration 0070
+has no such check.
+
+`workhorse schema status` finds each invalid index. It reports each index in the `workhorse` schema
+that PostgreSQL marks not valid or not ready. The text output gives two lines for each index, and
+`--json` gives an entry in `schema.invalidIndexes`. Each entry gives the `DROP INDEX CONCURRENTLY`
+statement and the migration step that builds the index again. If the schema is past that step,
+`workhorse schema migrate` does not run it again: run the `CREATE INDEX CONCURRENTLY IF NOT EXISTS`
+statement of that step yourself. On a healthy database the list is empty and the text output has no
+line for it.
+
+An invalid index does not change the exit code of `workhorse schema status`, because this runtime
+does not refuse the schema. A deployment gate that must stop on an invalid index reads
+`schema.invalidIndexes`. A concurrent build that still runs also shows as not valid, so drop an
+index only when no build of it runs.
 
 ### Backfills and constraints on large tables
 
@@ -454,10 +469,28 @@ whether the migrating command reported an error, or whether the process running 
 **The command reported an error.** The step rolled back atomically, so recovery is diagnose and
 rerun:
 
-1. Read the error. The schema is still at the step's starting version; nothing partial persists.
+1. Read the error. The first line names the failed step. The lines after it give the cause that
+   PostgreSQL reported: the `Cause:` line has the error text and the SQLSTATE, and the `Detail:`
+   and `Hint:` lines show when PostgreSQL gives them. For some SQLSTATEs the command withholds a
+   field, as the list after these steps states. The schema is still at the step's starting
+   version; nothing partial persists.
 2. Fix the environmental cause — privileges, disk, locks held by long transactions.
 3. Rerun `migrateSchema` or `workhorse schema migrate`. The plan revalidates and reapplies the
    failed step from its recorded starting version.
+
+The command always shows the SQLSTATE. It shows the error text, DETAIL, and HINT that PostgreSQL
+returns, apart from a field where PostgreSQL itself copies stored data:
+
+- If the SQLSTATE starts with 22 (data exception), the command withholds the error text, DETAIL,
+  and HINT, because they can quote the input value.
+- If the SQLSTATE starts with 23 (integrity constraint violation), the command withholds DETAIL and
+  HINT, because DETAIL quotes the failing row or the key value.
+
+The withheld field shows as `withheld, because it can quote the values of a row or an input`. The
+PostgreSQL server log keeps the full error. The command adds no connection URL, no connection
+parameter, and no environment value to the output. A trigger or a function that an operator added
+to a Workhorse table can put stored data into the error text of another SQLSTATE, and the command
+then shows that data.
 
 **The process running the migration died.** A killed client does not cancel its migration. The
 PostgreSQL backend runs the step's script to `COMMIT` on its own, and only reports the outcome to a

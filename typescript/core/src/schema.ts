@@ -737,13 +737,18 @@ export const SCHEMA_MIGRATIONS: readonly SchemaMigrationStep[] = [
  */
 const LAST_RELEASE_BELOW_BASELINE = "0.2.1";
 
+/** Read the body of one shipped migration step. `workhorse schema status` reads it too. */
+export async function readSchemaMigrationStep(file: string): Promise<string> {
+  return readFile(sqlAsset(`migrations/${file}`), "utf8");
+}
+
 function schemaMigrationPlan(lockTimeoutMs?: number): SchemaMigrationPlan {
   return {
     baselineVersion: WORKHORSE_SCHEMA_BASELINE_VERSION,
     lastReleaseBelowBaseline: LAST_RELEASE_BELOW_BASELINE,
     currentVersion: WORKHORSE_SCHEMA_VERSION,
     steps: SCHEMA_MIGRATIONS,
-    readStep: async (file) => readFile(sqlAsset(`migrations/${file}`), "utf8"),
+    readStep: readSchemaMigrationStep,
     lockTimeoutMs,
   };
 }
