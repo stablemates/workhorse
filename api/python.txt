@@ -9,6 +9,7 @@
 class Admin(_AdminOperations)
   def __init__(self, connection: _SyncConnection, default_queue: str = 'default') -> None
   def cancel_task_group(self, group_id: str, audit: AdminAudit) -> TaskGroup | None
+  default_queue: str  # set by __init__
   def get_checkpoint(self, task_id: str, name: str) -> TaskCheckpoint | None
   def get_progress(self, task_id: str) -> TaskProgress | None
   def get_task(self, task_id: str) -> TaskSnapshot | None
@@ -44,6 +45,7 @@ class AdminAudit
 class AsyncAdmin(_AdminOperations)
   def __init__(self, executor: _AsyncPsycopgExecutor | _AsyncpgExecutor, default_queue: str = 'default') -> None
   async def cancel_task_group(self, group_id: str, audit: AdminAudit) -> TaskGroup | None
+  default_queue: str  # set by __init__
   @classmethod def from_asyncpg(cls, connection: _AsyncpgConnection, default_queue: str = 'default') -> AsyncAdmin
   @classmethod def from_psycopg(cls, connection: _AsyncPsycopgConnectionInput, default_queue: str = 'default') -> AsyncAdmin
   async def get_checkpoint(self, task_id: str, name: str) -> TaskCheckpoint | None
@@ -122,6 +124,7 @@ class AsyncQueue
   async def cancel(self, task_id: str, *, requested_by: str | None = None, reason: str | None = None) -> CancelResult
   async def complete_human_wait(self, task_id: str, name: str, result: Json, *, idempotency_key: str, requested_by: str) -> HumanWaitCompletionResult
   async def create_task_group(self, *, on_finish: EnqueueRequest | None = None, on_success: EnqueueRequest | None = None, on_failure: EnqueueRequest | None = None) -> TaskGroup
+  default_queue: str  # set by __init__
   async def enqueue(self, type: str, payload: Json, options: EnqueueOptions | None = None) -> str
   async def enqueue_many(self, requests: Sequence[EnqueueRequest]) -> list[str]
   async def enqueue_many_with_results(self, requests: Sequence[EnqueueRequest]) -> list[EnqueueResult]
@@ -259,6 +262,7 @@ type CancelStatus = Literal["canceled", "cancel_requested", "already_terminal", 
 
 class CancellationRequestedError(WorkhorseError)
   def __init__(self, task_id: str) -> None
+  task_id: str  # set by __init__
 
 class CancellationToken
   def __init__(self) -> None
@@ -269,15 +273,27 @@ class CancellationToken
 
 class CheckpointConflictError(WorkhorseError)
   def __init__(self, task_id: str, checkpoint_name: str) -> None
+  checkpoint_name: str  # set by __init__
+  task_id: str  # set by __init__
 
 class CheckpointInputConflictError(CheckpointConflictError)
   def __init__(self, task_id: str, checkpoint_name: str, stored_fingerprint: str, requested_fingerprint: str) -> None
+  checkpoint_name: str  # set by __init__
+  requested_fingerprint: str  # set by __init__
+  stored_fingerprint: str  # set by __init__
+  task_id: str  # set by __init__
 
 class CheckpointLeaseLostError(LifecycleError)
   def __init__(self, task_id: str, checkpoint_name: str) -> None
+  checkpoint_name: str  # set by __init__
+  task_id: str  # set by __init__
 
 class CheckpointValueSizeLimitError(WorkhorseError)
   def __init__(self, task_id: str, checkpoint_name: str, actual_bytes: int, max_bytes: int) -> None
+  actual_bytes: int  # set by __init__
+  checkpoint_name: str  # set by __init__
+  max_bytes: int  # set by __init__
+  task_id: str  # set by __init__
 
 class ChildCanceled(dict)
   def __init__(self, *args, **kwargs)
@@ -298,6 +314,8 @@ class ChildCanceled(dict)
 
 class ChildConflictError(WorkhorseError)
   def __init__(self, parent_task_id: str, child_name: str, stored_child_name: str | None = None) -> None
+  child_name: str  # set by __init__
+  parent_task_id: str  # set by __init__
 
 class ChildFailed(dict)
   def __init__(self, *args, **kwargs)
@@ -318,14 +336,19 @@ class ChildFailed(dict)
 
 class ChildLeaseLostError(LifecycleError)
   def __init__(self, parent_task_id: str) -> None
+  parent_task_id: str  # set by __init__
 
 class ChildLimitExceededError(WorkhorseError)
   def __init__(self, parent_task_id: str) -> None
+  parent_task_id: str  # set by __init__
 
 type ChildOutcome = ChildSucceeded | ChildFailed | ChildCanceled
 
 class ChildResultLimitExceededError(WorkhorseError)
   def __init__(self, parent_task_id: str, result_bytes: int, result_limit_bytes: int) -> None
+  parent_task_id: str  # set by __init__
+  result_bytes: int  # set by __init__
+  result_limit_bytes: int  # set by __init__
 
 class ChildSucceeded(dict)
   def __init__(self, *args, **kwargs)
@@ -437,6 +460,7 @@ class DeadLetterQuery(DeadLetterFilter)
 
 class DeadlineExceededError(WorkhorseError)
   def __init__(self, task_id: str) -> None
+  task_id: str  # set by __init__
 
 class Debounce
   def __init__(self, key: str, window_ms: int, schedule: Literal['reset', 'preserve'], scope: str = 'default') -> None
@@ -454,9 +478,11 @@ class Dependencies
 
 class DependencyCycleError(WorkhorseError)
   def __init__(self, details: Mapping[str, object]) -> None
+  details: Mapping[str, object]  # set by __init__
 
 class DependencyLimitExceededError(WorkhorseError)
   def __init__(self, details: Mapping[str, object]) -> None
+  details: Mapping[str, object]  # set by __init__
 
 class DependencyPolicy
   def __init__(self, on_success: Literal['release', 'cancel', 'fail'], on_failure: Literal['release', 'cancel', 'fail'], on_cancellation: Literal['release', 'cancel', 'fail']) -> None
@@ -468,6 +494,7 @@ type DependencyTerminalPolicy = Literal["release", "cancel", "fail"]
 
 class EnqueueIdempotencyConflictError(WorkhorseError)
   def __init__(self, details: Mapping[str, object]) -> None
+  details: Mapping[str, object]  # set by __init__
 
 type EnqueueNonReplaceableReason = Literal[
     "incompatible_key_mode", "not_pending", "window_elapsed_pending"
@@ -506,6 +533,8 @@ class EnqueueResult
 
 class ExecutionTimeoutError(WorkhorseError)
   def __init__(self, task_id: str, attempt: int) -> None
+  attempt: int  # set by __init__
+  task_id: str  # set by __init__
 
 class ExternalWait
   def __init__(self, task_id: str, queue: str, task_type: str, name: str, attempt: int, created_at: datetime, deadline_at: datetime) -> None
@@ -530,6 +559,9 @@ class ExternalWaitPage
 
 class FastTierUnsupportedError(WorkhorseError)
   def __init__(self, queue: str, feature: str, ordinal: int | None = None) -> None
+  feature: str  # set by __init__
+  ordinal: int | None  # set by __init__
+  queue: str  # set by __init__
 
 type Handler = Callable[[Any, HandlerContext], Json]
 
@@ -564,6 +596,8 @@ class HumanWait(ExternalWait)
 
 class HumanWaitAlreadyWaitingError(WorkhorseError)
   def __init__(self, task_id: str, wait_name: str) -> None
+  task_id: str  # set by __init__
+  wait_name: str  # set by __init__
 
 class HumanWaitCompletionResult
   def __init__(self, status: HumanWaitCompletionStatus, task_id: str, name: str, payload: Json, completed_at: datetime | None, completed_by: str | None) -> None
@@ -580,15 +614,22 @@ type HumanWaitCompletionStatus = Literal[
 
 class HumanWaitConflictError(WorkhorseError)
   def __init__(self, task_id: str, wait_name: str) -> None
+  task_id: str  # set by __init__
+  wait_name: str  # set by __init__
 
 class HumanWaitIdempotencyConflictError(WorkhorseError)
   def __init__(self, task_id: str, wait_name: str) -> None
+  task_id: str  # set by __init__
+  wait_name: str  # set by __init__
 
 class HumanWaitLeaseLostError(LifecycleError)
   def __init__(self, task_id: str, wait_name: str) -> None
+  task_id: str  # set by __init__
+  wait_name: str  # set by __init__
 
 class HumanWaitLimitExceededError(WorkhorseError)
   def __init__(self, task_id: str) -> None
+  task_id: str  # set by __init__
 
 class HumanWaitPage
   def __init__(self, items: tuple[HumanWait, ...], next_cursor: ExternalWaitCursor | None) -> None
@@ -616,15 +657,20 @@ METRIC_ATTRIBUTE_CARDINALITY_LIMIT: int = 2000
 
 class ProgressLeaseLostError(LifecycleError)
   def __init__(self, task_id: str) -> None
+  task_id: str  # set by __init__
 
 class ProgressRateLimitError(WorkhorseError)
   def __init__(self, task_id: str, retry_after_ms: int) -> None
+  retry_after_ms: int  # set by __init__
+  task_id: str  # set by __init__
 
 class ProtocolCompatibilityError(WorkhorseError)
   def __init__(self, code: CompatibilityCode) -> None
+  code: CompatibilityCode  # set by __init__
 
 class PurgeIdempotencyConflictError(WorkhorseError)
   def __init__(self, details: Mapping[str, object]) -> None
+  details: Mapping[str, object]  # set by __init__
 
 class Queue
   def __init__(self, connection: _SyncConnection, default_queue: str = 'default') -> None
@@ -632,6 +678,7 @@ class Queue
   def cancel(self, task_id: str, *, requested_by: str | None = None, reason: str | None = None) -> CancelResult
   def complete_human_wait(self, task_id: str, name: str, result: Json, *, idempotency_key: str, requested_by: str) -> HumanWaitCompletionResult
   def create_task_group(self, *, on_finish: EnqueueRequest | None = None, on_success: EnqueueRequest | None = None, on_failure: EnqueueRequest | None = None) -> TaskGroup
+  default_queue: str  # set by __init__
   def enqueue(self, type: str, payload: Json, options: EnqueueOptions | None = None) -> str
   def enqueue_many(self, requests: Sequence[EnqueueRequest]) -> list[str]
   def enqueue_many_with_results(self, requests: Sequence[EnqueueRequest]) -> list[EnqueueResult]
@@ -683,6 +730,7 @@ class RateLimitPolicyDefinition
 
 class RedriveIdempotencyConflictError(WorkhorseError)
   def __init__(self, details: Mapping[str, object]) -> None
+  details: Mapping[str, object]  # set by __init__
 
 class RedriveResult
   def __init__(self, status: Literal['redriven', 'replayed', 'eligible', 'not_found', 'not_failed'], source_task_id: str, target_task_id: str | None, source_state: TaskState | None, target_state: TaskState | None, requested_at: datetime | None) -> None
@@ -731,18 +779,26 @@ type SignalDeliveryStatus = Literal[
 
 class SignalIdempotencyConflictError(WorkhorseError)
   def __init__(self, task_id: str, wait_name: str) -> None
+  task_id: str  # set by __init__
+  wait_name: str  # set by __init__
 
 class SignalWaitConflictError(WorkhorseError)
   def __init__(self, task_id: str, wait_name: str) -> None
+  task_id: str  # set by __init__
+  wait_name: str  # set by __init__
 
 class SignalWaitLeaseLostError(LifecycleError)
   def __init__(self, task_id: str, wait_name: str) -> None
+  task_id: str  # set by __init__
+  wait_name: str  # set by __init__
 
 class SignalWaitLimitExceededError(WorkhorseError)
   def __init__(self, task_id: str) -> None
+  task_id: str  # set by __init__
 
 class StaleLeaseError(LifecycleError)
   def __init__(self, task_id: str) -> None
+  task_id: str  # set by __init__
 
 TRACE_ATTRIBUTE_COUNT_LIMIT: int = 8
 
@@ -759,9 +815,14 @@ class TaskCheckpoint
 
 class TaskContractUnavailableError(WorkhorseError)
   def __init__(self, task_type: str, version: str) -> None
+  task_type: str  # set by __init__
+  version: str  # set by __init__
 
 class TaskContractValidationError(WorkhorseError)
   def __init__(self, task_type: str, version: str, kind: str) -> None
+  kind: str  # set by __init__
+  task_type: str  # set by __init__
+  version: str  # set by __init__
 
 class TaskContractVersion
   def __init__(self, payload_schema: Json = True, result_schema: Json = True, max_payload_bytes: int = 1048576, max_result_bytes: int = 1048576, sensitive_payload_keys: Sequence[str] = <_HAS_DEFAULT_FACTORY_CLASS>, sensitive_result_keys: Sequence[str] = <_HAS_DEFAULT_FACTORY_CLASS>) -> None
@@ -812,6 +873,10 @@ type TaskGroupCallbackKind = Literal["on_finish", "on_success", "on_failure"]
 
 class TaskGroupClosedError(WorkhorseError)
   def __init__(self, details: Mapping[str, object]) -> None
+  details: Mapping[str, object]  # set by __init__
+  group_id: str  # set by __init__
+  reason: str  # set by __init__
+  state: str  # set by __init__
 
 class TaskGroupContext
   def __init__(self, _get: Callable[[], TaskGroupLink | None], _add: Callable[[Sequence[EnqueueRequest]], list[EnqueueResult]]) -> None
@@ -853,6 +918,11 @@ type TaskGroupEventType = Literal[
 
 class TaskGroupLimitExceededError(WorkhorseError)
   def __init__(self, details: Mapping[str, object]) -> None
+  details: Mapping[str, object]  # set by __init__
+  group_id: str  # set by __init__
+  limit: int  # set by __init__
+  requested: int  # set by __init__
+  total: int  # set by __init__
 
 class TaskGroupLink
   def __init__(self, role: TaskGroupRole, callback: TaskGroupCallbackKind | None, group: TaskGroup) -> None
@@ -880,6 +950,11 @@ class TaskGroupMemberPage
 
 class TaskGroupMembershipConflictError(WorkhorseError)
   def __init__(self, details: Mapping[str, object]) -> None
+  details: Mapping[str, object]  # set by __init__
+  group_id: str  # set by __init__
+  member_of: <unannotated>  # set by __init__
+  ordinal: int  # set by __init__
+  task_id: str  # set by __init__
 
 class TaskGroupRecordedCounts
   def __init__(self, total: int, succeeded: int, failed: int, canceled: int) -> None
@@ -1057,6 +1132,10 @@ class TaskTypeContracts
 
 class TaskValueSizeLimitError(WorkhorseError)
   def __init__(self, task_type: str, value_kind: str, actual_bytes: int, max_bytes: int) -> None
+  actual_bytes: int  # set by __init__
+  max_bytes: int  # set by __init__
+  task_type: str  # set by __init__
+  value_kind: str  # set by __init__
 
 class TaskWait
   def __init__(self, task_id: str, name: str, mode: Literal['relative', 'absolute'], duration_ms: int | None, requested_wake_at: datetime | None, wake_at: datetime, attempt: int, fence_token: int, worker_id: str, created_at: datetime) -> None
@@ -1079,23 +1158,42 @@ class Throttle
 
 class WaitConflictError(WorkhorseError)
   def __init__(self, task_id: str, wait_name: str) -> None
+  task_id: str  # set by __init__
+  wait_name: str  # set by __init__
 
 class WaitLeaseLostError(LifecycleError)
   def __init__(self, task_id: str, wait_name: str) -> None
+  task_id: str  # set by __init__
+  wait_name: str  # set by __init__
 
 class WaitLimitExceededError(WorkhorseError)
   def __init__(self, task_id: str) -> None
+  task_id: str  # set by __init__
 
 class Worker
   def __init__(self, pool: _PsycopgPool, *, queue: str | None = None, queues: Sequence[str] | None = None, worker_id: str | None = None, concurrency: int = 1, cohorts: int | None = None, poll_ms: int | None = None, lease_ms: int = 30000, heartbeat_ms: int | None = None, maintenance_interval_ms: int = 1000, maintenance_routine_poll_ms: int = 60000, registry_interval_ms: int = 5000, retry_delay_ms: int | Callable[[int, ClaimedTask], int | None] | None = None, schedule_namespaces: Sequence[str] = (), schedule_catchup_limit: int = 100, on_notification_error: Callable[[BaseException], None] | None = None, on_registration_error: Callable[[BaseException], None] | None = None, _executor: _SyncRowExecutor | None = None, _heartbeat_executor_factory: _HeartbeatExecutorFactory | None = None, **_removed: Never) -> None
+  cohorts: int | None  # set by __init__
+  concurrency: int  # set by __init__
   def handle(self, type: str, handler: Handler) -> Worker
   def handle_batch(self, type: str, handler: BatchHandler, *, max_size: int, linger_ms: int) -> Worker
+  heartbeat_ms: <unannotated>  # set by __init__
   def is_paused(self) -> bool
+  lease_ms: int  # set by __init__
+  maintenance_interval_ms: int  # set by __init__
+  maintenance_routine_poll_ms: int  # set by __init__
   def pause(self) -> None
+  poll_ms: <unannotated>  # set by __init__
+  queue: <unannotated>  # set by __init__
+  queues: <unannotated>  # set by __init__
+  registry_interval_ms: int  # set by __init__
   def resume(self) -> None
+  retry_delay_ms: int | Callable[[int, ClaimedTask], int | None] | None  # set by __init__
   def run(self) -> None
   def run_once(self) -> bool
+  schedule_catchup_limit: int  # set by __init__
+  schedule_namespaces: <unannotated>  # set by __init__
   def stop(self) -> None
+  worker_id: <unannotated>  # set by __init__
 
 class WorkerPauseResult
   def __init__(self, worker_id: str, paused: bool, paused_by: str | None, reason: str | None, paused_at: datetime | None, last_heartbeat_at: datetime) -> None
@@ -1144,6 +1242,7 @@ def run_worker_process(worker: Worker, *, shutdown_timeout_ms: int = 25000, forc
 class Admin(_AdminOperations)
   def __init__(self, connection: _SyncConnection, default_queue: str = 'default') -> None
   def cancel_task_group(self, group_id: str, audit: AdminAudit) -> TaskGroup | None
+  default_queue: str  # set by __init__
   def get_checkpoint(self, task_id: str, name: str) -> TaskCheckpoint | None
   def get_progress(self, task_id: str) -> TaskProgress | None
   def get_task(self, task_id: str) -> TaskSnapshot | None
@@ -1179,6 +1278,7 @@ class AdminAudit
 class AsyncAdmin(_AdminOperations)
   def __init__(self, executor: _AsyncPsycopgExecutor | _AsyncpgExecutor, default_queue: str = 'default') -> None
   async def cancel_task_group(self, group_id: str, audit: AdminAudit) -> TaskGroup | None
+  default_queue: str  # set by __init__
   @classmethod def from_asyncpg(cls, connection: _AsyncpgConnection, default_queue: str = 'default') -> AsyncAdmin
   @classmethod def from_psycopg(cls, connection: _AsyncPsycopgConnectionInput, default_queue: str = 'default') -> AsyncAdmin
   async def get_checkpoint(self, task_id: str, name: str) -> TaskCheckpoint | None
@@ -1513,6 +1613,7 @@ class AsyncQueue
   async def cancel(self, task_id: str, *, requested_by: str | None = None, reason: str | None = None) -> CancelResult
   async def complete_human_wait(self, task_id: str, name: str, result: Json, *, idempotency_key: str, requested_by: str) -> HumanWaitCompletionResult
   async def create_task_group(self, *, on_finish: EnqueueRequest | None = None, on_success: EnqueueRequest | None = None, on_failure: EnqueueRequest | None = None) -> TaskGroup
+  default_queue: str  # set by __init__
   async def enqueue(self, type: str, payload: Json, options: EnqueueOptions | None = None) -> str
   async def enqueue_many(self, requests: Sequence[EnqueueRequest]) -> list[str]
   async def enqueue_many_with_results(self, requests: Sequence[EnqueueRequest]) -> list[EnqueueResult]
@@ -1541,6 +1642,7 @@ class Queue
   def cancel(self, task_id: str, *, requested_by: str | None = None, reason: str | None = None) -> CancelResult
   def complete_human_wait(self, task_id: str, name: str, result: Json, *, idempotency_key: str, requested_by: str) -> HumanWaitCompletionResult
   def create_task_group(self, *, on_finish: EnqueueRequest | None = None, on_success: EnqueueRequest | None = None, on_failure: EnqueueRequest | None = None) -> TaskGroup
+  default_queue: str  # set by __init__
   def enqueue(self, type: str, payload: Json, options: EnqueueOptions | None = None) -> str
   def enqueue_many(self, requests: Sequence[EnqueueRequest]) -> list[str]
   def enqueue_many_with_results(self, requests: Sequence[EnqueueRequest]) -> list[EnqueueResult]
@@ -1576,6 +1678,7 @@ type Authorize = Callable[[dict[str, object]], DashboardPrincipal | bool | Dashb
 class DashboardHost
   def __call__(self, environ: dict[str, object], start_response: Callable[[str, list[tuple[str, str]]], object]) -> Iterable[bytes]
   def __init__(self, connection: object, *, authorize: Authorize, path: str = '/workhorse', environment: str = 'development', audit_actor: str | None = None, read_only: bool = False, browser_modules: tuple[str, ...] = (), configured_workers: tuple[str, ...] = (), maintenance_loops: Mapping[str, int] | None = None, enqueue_test: DashboardProcedure | None = None, set_schedule_paused: DashboardProcedure | None = None, allowed_hosts: tuple[str, ...] = (), statement_timeout_ms: int = 15000, redact_error_stacks: bool = False, _procedures: Mapping[str, DashboardProcedure] | None = None, _skip_compatibility_check: bool = False) -> None
+  base_path: <unannotated>  # set by __init__
   def handle(self, environ: dict[str, object]) -> DashboardResponse
   def owns(self, path: str) -> bool
 
@@ -6212,13 +6315,17 @@ class WorkhorseTaskBackend(BaseTaskBackend)
   async def aget_result(self, result_id)
   def bind_worker(self, worker: Worker) -> None
   def check(self, **kwargs)
+  database_alias: <unannotated>  # set by __init__
   def enqueue(self, task: Task[Any, Any], args: Sequence[Any], kwargs: Mapping[str, Any]) -> TaskResult[Any, Any]
   def get_result(self, result_id)
+  max_attempts: <unannotated>  # set by __init__
   supports_async_task = False
   supports_defer = False
   supports_get_result = False
   supports_priority = False
   task_class = Task
+  task_paths: tuple  # set by __init__
+  task_type: <unannotated>  # set by __init__
   def validate_task(self, task: Task[Any, Any]) -> None
 
 def enqueue_in_atomic(task_type: str, payload: Json, *, using: str, options: EnqueueOptions | None = None) -> EnqueueResult
@@ -6227,125 +6334,205 @@ def enqueue_in_atomic(task_type: str, payload: Json, *, using: str, options: Enq
 
 class CancellationRequestedError(WorkhorseError)
   def __init__(self, task_id: str) -> None
+  task_id: str  # set by __init__
 
 class CheckpointConflictError(WorkhorseError)
   def __init__(self, task_id: str, checkpoint_name: str) -> None
+  checkpoint_name: str  # set by __init__
+  task_id: str  # set by __init__
 
 class CheckpointInputConflictError(CheckpointConflictError)
   def __init__(self, task_id: str, checkpoint_name: str, stored_fingerprint: str, requested_fingerprint: str) -> None
+  checkpoint_name: str  # set by __init__
+  requested_fingerprint: str  # set by __init__
+  stored_fingerprint: str  # set by __init__
+  task_id: str  # set by __init__
 
 class CheckpointLeaseLostError(LifecycleError)
   def __init__(self, task_id: str, checkpoint_name: str) -> None
+  checkpoint_name: str  # set by __init__
+  task_id: str  # set by __init__
 
 class CheckpointValueSizeLimitError(WorkhorseError)
   def __init__(self, task_id: str, checkpoint_name: str, actual_bytes: int, max_bytes: int) -> None
+  actual_bytes: int  # set by __init__
+  checkpoint_name: str  # set by __init__
+  max_bytes: int  # set by __init__
+  task_id: str  # set by __init__
 
 class ChildConflictError(WorkhorseError)
   def __init__(self, parent_task_id: str, child_name: str, stored_child_name: str | None = None) -> None
+  child_name: str  # set by __init__
+  parent_task_id: str  # set by __init__
 
 class ChildLeaseLostError(LifecycleError)
   def __init__(self, parent_task_id: str) -> None
+  parent_task_id: str  # set by __init__
 
 class ChildLimitExceededError(WorkhorseError)
   def __init__(self, parent_task_id: str) -> None
+  parent_task_id: str  # set by __init__
 
 class ChildResultLimitExceededError(WorkhorseError)
   def __init__(self, parent_task_id: str, result_bytes: int, result_limit_bytes: int) -> None
+  parent_task_id: str  # set by __init__
+  result_bytes: int  # set by __init__
+  result_limit_bytes: int  # set by __init__
 
 type CompatibilityCode = Literal['schema-not-installed', 'schema-too-old', 'schema-too-new', 'client-protocol-too-old', 'client-protocol-too-new']
 
 class DeadlineExceededError(WorkhorseError)
   def __init__(self, task_id: str) -> None
+  task_id: str  # set by __init__
 
 class DependencyCycleError(WorkhorseError)
   def __init__(self, details: Mapping[str, object]) -> None
+  details: Mapping[str, object]  # set by __init__
 
 class DependencyLimitExceededError(WorkhorseError)
   def __init__(self, details: Mapping[str, object]) -> None
+  details: Mapping[str, object]  # set by __init__
 
 class EnqueueIdempotencyConflictError(WorkhorseError)
   def __init__(self, details: Mapping[str, object]) -> None
+  details: Mapping[str, object]  # set by __init__
 
 class ExecutionTimeoutError(WorkhorseError)
   def __init__(self, task_id: str, attempt: int) -> None
+  attempt: int  # set by __init__
+  task_id: str  # set by __init__
 
 class FastTierUnsupportedError(WorkhorseError)
   def __init__(self, queue: str, feature: str, ordinal: int | None = None) -> None
+  feature: str  # set by __init__
+  ordinal: int | None  # set by __init__
+  queue: str  # set by __init__
 
 class HumanWaitAlreadyWaitingError(WorkhorseError)
   def __init__(self, task_id: str, wait_name: str) -> None
+  task_id: str  # set by __init__
+  wait_name: str  # set by __init__
 
 class HumanWaitConflictError(WorkhorseError)
   def __init__(self, task_id: str, wait_name: str) -> None
+  task_id: str  # set by __init__
+  wait_name: str  # set by __init__
 
 class HumanWaitIdempotencyConflictError(WorkhorseError)
   def __init__(self, task_id: str, wait_name: str) -> None
+  task_id: str  # set by __init__
+  wait_name: str  # set by __init__
 
 class HumanWaitLeaseLostError(LifecycleError)
   def __init__(self, task_id: str, wait_name: str) -> None
+  task_id: str  # set by __init__
+  wait_name: str  # set by __init__
 
 class HumanWaitLimitExceededError(WorkhorseError)
   def __init__(self, task_id: str) -> None
+  task_id: str  # set by __init__
 
 class LifecycleError(WorkhorseError)
   def __init__(self, *args, **kwargs)
 
 class ProgressLeaseLostError(LifecycleError)
   def __init__(self, task_id: str) -> None
+  task_id: str  # set by __init__
 
 class ProgressRateLimitError(WorkhorseError)
   def __init__(self, task_id: str, retry_after_ms: int) -> None
+  retry_after_ms: int  # set by __init__
+  task_id: str  # set by __init__
 
 class ProtocolCompatibilityError(WorkhorseError)
   def __init__(self, code: CompatibilityCode) -> None
+  code: CompatibilityCode  # set by __init__
 
 class PurgeIdempotencyConflictError(WorkhorseError)
   def __init__(self, details: Mapping[str, object]) -> None
+  details: Mapping[str, object]  # set by __init__
 
 class RedriveIdempotencyConflictError(WorkhorseError)
   def __init__(self, details: Mapping[str, object]) -> None
+  details: Mapping[str, object]  # set by __init__
 
 class SignalIdempotencyConflictError(WorkhorseError)
   def __init__(self, task_id: str, wait_name: str) -> None
+  task_id: str  # set by __init__
+  wait_name: str  # set by __init__
 
 class SignalWaitConflictError(WorkhorseError)
   def __init__(self, task_id: str, wait_name: str) -> None
+  task_id: str  # set by __init__
+  wait_name: str  # set by __init__
 
 class SignalWaitLeaseLostError(LifecycleError)
   def __init__(self, task_id: str, wait_name: str) -> None
+  task_id: str  # set by __init__
+  wait_name: str  # set by __init__
 
 class SignalWaitLimitExceededError(WorkhorseError)
   def __init__(self, task_id: str) -> None
+  task_id: str  # set by __init__
 
 class StaleLeaseError(LifecycleError)
   def __init__(self, task_id: str) -> None
+  task_id: str  # set by __init__
 
 class TaskContractUnavailableError(WorkhorseError)
   def __init__(self, task_type: str, version: str) -> None
+  task_type: str  # set by __init__
+  version: str  # set by __init__
 
 class TaskContractValidationError(WorkhorseError)
   def __init__(self, task_type: str, version: str, kind: str) -> None
+  kind: str  # set by __init__
+  task_type: str  # set by __init__
+  version: str  # set by __init__
 
 class TaskGroupClosedError(WorkhorseError)
   def __init__(self, details: Mapping[str, object]) -> None
+  details: Mapping[str, object]  # set by __init__
+  group_id: str  # set by __init__
+  reason: str  # set by __init__
+  state: str  # set by __init__
 
 class TaskGroupLimitExceededError(WorkhorseError)
   def __init__(self, details: Mapping[str, object]) -> None
+  details: Mapping[str, object]  # set by __init__
+  group_id: str  # set by __init__
+  limit: int  # set by __init__
+  requested: int  # set by __init__
+  total: int  # set by __init__
 
 class TaskGroupMembershipConflictError(WorkhorseError)
   def __init__(self, details: Mapping[str, object]) -> None
+  details: Mapping[str, object]  # set by __init__
+  group_id: str  # set by __init__
+  member_of: <unannotated>  # set by __init__
+  ordinal: int  # set by __init__
+  task_id: str  # set by __init__
 
 class TaskValueSizeLimitError(WorkhorseError)
   def __init__(self, task_type: str, value_kind: str, actual_bytes: int, max_bytes: int) -> None
+  actual_bytes: int  # set by __init__
+  max_bytes: int  # set by __init__
+  task_type: str  # set by __init__
+  value_kind: str  # set by __init__
 
 class WaitConflictError(WorkhorseError)
   def __init__(self, task_id: str, wait_name: str) -> None
+  task_id: str  # set by __init__
+  wait_name: str  # set by __init__
 
 class WaitLeaseLostError(LifecycleError)
   def __init__(self, task_id: str, wait_name: str) -> None
+  task_id: str  # set by __init__
+  wait_name: str  # set by __init__
 
 class WaitLimitExceededError(WorkhorseError)
   def __init__(self, task_id: str) -> None
+  task_id: str  # set by __init__
 
 class WorkhorseError(Exception)
   def __init__(self, *args, **kwargs)
@@ -6925,14 +7112,28 @@ type Handler = Callable[[Any, HandlerContext], Json]
 
 class Worker
   def __init__(self, pool: _PsycopgPool, *, queue: str | None = None, queues: Sequence[str] | None = None, worker_id: str | None = None, concurrency: int = 1, cohorts: int | None = None, poll_ms: int | None = None, lease_ms: int = 30000, heartbeat_ms: int | None = None, maintenance_interval_ms: int = 1000, maintenance_routine_poll_ms: int = 60000, registry_interval_ms: int = 5000, retry_delay_ms: int | Callable[[int, ClaimedTask], int | None] | None = None, schedule_namespaces: Sequence[str] = (), schedule_catchup_limit: int = 100, on_notification_error: Callable[[BaseException], None] | None = None, on_registration_error: Callable[[BaseException], None] | None = None, _executor: _SyncRowExecutor | None = None, _heartbeat_executor_factory: _HeartbeatExecutorFactory | None = None, **_removed: Never) -> None
+  cohorts: int | None  # set by __init__
+  concurrency: int  # set by __init__
   def handle(self, type: str, handler: Handler) -> Worker
   def handle_batch(self, type: str, handler: BatchHandler, *, max_size: int, linger_ms: int) -> Worker
+  heartbeat_ms: <unannotated>  # set by __init__
   def is_paused(self) -> bool
+  lease_ms: int  # set by __init__
+  maintenance_interval_ms: int  # set by __init__
+  maintenance_routine_poll_ms: int  # set by __init__
   def pause(self) -> None
+  poll_ms: <unannotated>  # set by __init__
+  queue: <unannotated>  # set by __init__
+  queues: <unannotated>  # set by __init__
+  registry_interval_ms: int  # set by __init__
   def resume(self) -> None
+  retry_delay_ms: int | Callable[[int, ClaimedTask], int | None] | None  # set by __init__
   def run(self) -> None
   def run_once(self) -> bool
+  schedule_catchup_limit: int  # set by __init__
+  schedule_namespaces: <unannotated>  # set by __init__
   def stop(self) -> None
+  worker_id: <unannotated>  # set by __init__
 
 ## workhorse.worker_process
 

@@ -208,10 +208,14 @@ describe("the lane-input map and the repository", () => {
   const mentions = new Set([
     "jvm/api-snapshot/build.gradle.kts reads api/java.txt",
     "jvm/api-snapshot/build.gradle.kts reads api/kotlin.txt",
+    // A message of a snapshot reader points the reader of the message to a section of this file.
+    "jvm/api-snapshot/src/main/kotlin/run/workhorse/apisnapshot/KotlinApi.kt reads api/README.md",
+    "jvm/api-snapshot/src/test/kotlin/run/workhorse/apisnapshot/KotlinApiTest.kt reads api/README.md",
     "python/tests/test_json_integers.py reads docs/parity.md",
     "python/tests/test_landing_snippets.py reads site/lib/landing-snippets.ts",
     "python/tests/test_landing_snippets.py reads site/scripts/check-language-examples.ts",
     "python/tests/test_worker_defaults.py reads docs/parity.md",
+    "typescript/dashboard-server/spec/compatibility.ts reads api/README.md",
   ]);
 
   // Helpers in the TypeScript tree that another lane runs.

@@ -185,6 +185,20 @@ a refusal before a mutating function runs.
 `protocol/v1/governed-surface.json` records the wider set. It lists every `workhorse.` function,
 view, and column that a supported release reads. It lists the internal helpers next to them.
 
+For each function, the file records:
+
+- the type of each argument, with `?` for an argument that has a default;
+- in `argumentNames`, the name of each argument, because a caller can pass an argument by name;
+- in `defaults`, the value of each default, keyed by the 1-based position of its argument;
+- the result type, and in `returnsColumns` the name and type of each result column;
+- in `returnsColumnOrder`, the order of the result columns.
+
+A function that returns a row type of a `workhorse` table, such as
+`SETOF workhorse.contract_definition`, records the columns of that table. A reader expands them with
+`(definition).*`. [ADR 0109](../decisions/0109-keep-a-function-suffix-when-a-body-change-stays-compatible.md)
+keeps the types, defaults, order, and names of the arguments, and the columns of the result and
+their order. [`api/README.md`](../../api/README.md) states how the generator writes a default.
+
 `scripts/generate-sql-catalogues.ts` derives that file from these sources. Then it classifies a
 change against the file:
 
@@ -192,7 +206,9 @@ change against the file:
 - the three dashboard backends;
 - the published `dashboard_*_v1` views.
 
-`pnpm sql-catalogues:check` fails a removed or retyped entry by name. It passes an addition. The
+`pnpm sql-catalogues:check` fails a removed or retyped entry by name. It also fails a changed
+default value, a lost default, a renamed argument, and a promised result column that moves. It passes an addition, such
+as a new argument with a default or a new result column after the promised ones. The
 generator can add to that file, but it must never remove an entry from it. Thus a migration that
 drops a function fails, even when `sql/schema/current.sql` also drops it.
 

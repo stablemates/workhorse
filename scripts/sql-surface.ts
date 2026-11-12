@@ -11,6 +11,8 @@ export interface FunctionArgument {
   name: string;
   type: string;
   optional: boolean;
+  /** The default expression, normalized by {@link normalizeDefault}, when the argument has one. */
+  default?: string;
 }
 
 export interface FunctionDefinition {
@@ -111,16 +113,42 @@ function captured(match: RegExpExecArray, index: number): string {
   return value;
 }
 
-/** Strip `--` comments so a keyword scan never matches commentary. */
+/**
+ * Strip `--` comments so a keyword scan never matches commentary. A `--` inside a string literal or
+ * a dollar-quoted literal is part of the value, so it stays.
+ */
 function withoutComments(statement: string): string {
-  return statement.replaceAll(/--[^\n]*/g, "");
+  let result = "";
+  let index = 0;
+  while (index < statement.length) {
+    const skip = literalLength(statement, index);
+    if (skip > 0) {
+      result += statement.slice(index, index + skip);
+      index += skip;
+      continue;
+    }
+    if (statement.startsWith("--", index)) {
+      const end = statement.indexOf("\n", index);
+      index = end === -1 ? statement.length : end;
+      continue;
+    }
+    result += statement[index] ?? "";
+    index += 1;
+  }
+  return result;
 }
 
-/** Return the text between `open` at `from` and its matching close parenthesis. */
+/** Return the text between `(` at `from` and its matching `)`, outside literals. */
 function balanced(text: string, from: number): { body: string; end: number } | null {
   if (text[from] !== "(") return null;
   let depth = 0;
   for (let index = from; index < text.length; index += 1) {
+    // A parenthesis inside a literal is part of the value.
+    const skip = literalLength(text, index);
+    if (skip > 0) {
+      index += skip - 1;
+      continue;
+    }
     if (text[index] === "(") depth += 1;
     else if (text[index] === ")") {
       depth -= 1;
@@ -130,12 +158,17 @@ function balanced(text: string, from: number): { body: string; end: number } | n
   return null;
 }
 
-/** Split on commas that sit outside parentheses. */
+/** Split on commas that sit outside parentheses and outside literals. */
 function splitTopLevel(body: string): string[] {
   const parts: string[] = [];
   let depth = 0;
   let start = 0;
   for (let index = 0; index < body.length; index += 1) {
+    const skip = literalLength(body, index);
+    if (skip > 0) {
+      index += skip - 1;
+      continue;
+    }
     const character = body[index];
     if (character === "(") depth += 1;
     else if (character === ")") depth -= 1;
@@ -150,6 +183,116 @@ function splitTopLevel(body: string): string[] {
 
 function normalizeType(type: string): string {
   return type.trim().replaceAll(/\s+/g, " ").toLowerCase();
+}
+
+/**
+ * The length of the string literal or dollar-quoted literal that starts at `index`, or 0 when no
+ * literal starts there. A literal keeps every character, so both helpers below skip it whole.
+ */
+function literalLength(text: string, index: number): number {
+  if (text[index] === "'") {
+    let end = index + 1;
+    while (end < text.length) {
+      if (text[end] === "'" && text[end + 1] === "'") end += 2;
+      else if (text[end] === "'") return end + 1 - index;
+      else end += 1;
+    }
+    return text.length - index;
+  }
+  if (text[index] === "$") {
+    const tag = /^\$[A-Za-z_]*\$/.exec(text.slice(index));
+    if (tag === null) return 0;
+    const end = text.indexOf(tag[0], index + tag[0].length);
+    return (end === -1 ? text.length : end + tag[0].length) - index;
+  }
+  return 0;
+}
+
+/**
+ * Split one argument declaration into its `name type` part and its default expression. The
+ * separator is the first `DEFAULT` keyword or `=` outside a literal, so a literal that contains
+ * the word `default` stays whole.
+ */
+function splitDefault(item: string): { declaration: string; expression: string | null } {
+  let index = 0;
+  while (index < item.length) {
+    const skip = literalLength(item, index);
+    if (skip > 0) {
+      index += skip;
+      continue;
+    }
+    const rest = item.slice(index);
+    const separator = /^(?:\s+DEFAULT\s+|\s*=\s*)/i.exec(rest);
+    if (separator !== null) {
+      return {
+        declaration: item.slice(0, index),
+        expression: item.slice(index + separator[0].length),
+      };
+    }
+    index += 1;
+  }
+  return { declaration: item, expression: null };
+}
+
+/**
+ * Spell a default expression one way, so a change of layout or keyword case is not a change of
+ * value. Outside a literal, each letter becomes lower case, and each run of whitespace becomes one
+ * space between two words and nothing next to punctuation. A string literal and a dollar-quoted
+ * literal keep every character, because each one is part of the value.
+ */
+export function normalizeDefault(expression: string): string {
+  let normalized = "";
+  let index = 0;
+  const text = expression.trim();
+  while (index < text.length) {
+    const skip = literalLength(text, index);
+    if (skip > 0) {
+      normalized += text.slice(index, index + skip);
+      index += skip;
+      continue;
+    }
+    // A comment is not part of the value, so it reads as whitespace.
+    const comment = commentLength(text, index);
+    const character = comment > 0 ? " " : (text[index] ?? "");
+    if (/\s/.test(character)) {
+      let next = index + Math.max(comment, 1);
+      for (;;) {
+        const more = commentLength(text, next);
+        if (more > 0) next += more;
+        else if (next < text.length && /\s/.test(text[next] ?? "")) next += 1;
+        else break;
+      }
+      // A space stays only between two word characters, where it separates two tokens.
+      if (/\w$/.test(normalized) && /^\w/.test(text[next] ?? "")) normalized += " ";
+      index = next;
+      continue;
+    }
+    normalized += character.toLowerCase();
+    index += 1;
+  }
+  return withoutOuterParentheses(normalized);
+}
+
+/** The length of the line comment or block comment that starts at `index`, or 0. */
+function commentLength(text: string, index: number): number {
+  if (text.startsWith("--", index)) {
+    const end = text.indexOf("\n", index);
+    return (end === -1 ? text.length : end) - index;
+  }
+  if (text.startsWith("/*", index)) {
+    const end = text.indexOf("*/", index + 2);
+    return (end === -1 ? text.length : end + 2) - index;
+  }
+  return 0;
+}
+
+/** Remove parentheses that wrap the whole expression, because `(30000)` is the value `30000`. */
+function withoutOuterParentheses(expression: string): string {
+  let result = expression;
+  while (result.startsWith("(") && balanced(result, 0)?.end === result.length - 1) {
+    result = result.slice(1, -1);
+  }
+  return result;
 }
 
 /** Read a `name type` pair, stopping the type before the first column-constraint keyword. */
@@ -287,10 +430,11 @@ function parseFunction(statement: string): FunctionDefinition | null {
   if (parenthesis === null) return null;
   const args: FunctionArgument[] = [];
   for (const item of splitTopLevel(parenthesis.body)) {
-    const [declaration = "", ...defaultParts] = item.split(/\s+DEFAULT\s+/i);
+    const { declaration, expression } = splitDefault(item);
     const argument = readNameAndType(declaration);
     if (argument === null) continue;
-    args.push({ ...argument, optional: defaultParts.length > 0 });
+    if (expression === null) args.push({ ...argument, optional: false });
+    else args.push({ ...argument, optional: true, default: normalizeDefault(expression) });
   }
   const rest = statement.slice(parenthesis.end + 1);
   const returns = /\bRETURNS\s+/i.exec(rest);

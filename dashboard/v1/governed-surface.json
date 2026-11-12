@@ -1,8 +1,26 @@
 {
   "formatVersion": 1,
+  "recordsValidationBounds": true,
   "procedures": {
     "activity": {
       "mutation": false,
+      "customValidation": {
+        "queue": [
+          "overwrite ( input => input . trim ( ) ) ;",
+          "min_length {\"minimum\":1}",
+          "max_length {\"maximum\":200}"
+        ],
+        "tags[]": [
+          "overwrite ( input => input . trim ( ) ) ;",
+          "min_length {\"minimum\":1}",
+          "max_length {\"maximum\":100}"
+        ],
+        "worker": [
+          "overwrite ( input => input . trim ( ) ) ;",
+          "min_length {\"minimum\":1}",
+          "max_length {\"maximum\":200}"
+        ]
+      },
       "request": {
         "filter": {
           "type": "enum",
@@ -43,18 +61,41 @@
         },
         "queue": {
           "type": "null|string",
+          "branches": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            }
+          ],
           "required": false
         },
         "tags": {
           "type": "array",
+          "maxItems": 20,
           "required": false
         },
         "tags[]": {
           "type": "string",
+          "minLength": 1,
+          "maxLength": 100,
           "required": false
         },
         "worker": {
           "type": "null|string",
+          "branches": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            }
+          ],
           "required": false
         }
       },
@@ -121,6 +162,22 @@
     },
     "cancelTask": {
       "mutation": true,
+      "customValidation": {
+        "audit.actor": [
+          "overwrite ( input => input . trim ( ) ) ;",
+          "min_length {\"minimum\":1}"
+        ],
+        "audit.reason": [
+          "overwrite ( input => input . trim ( ) ) ;",
+          "max_length {\"maximum\":2000}",
+          "transform ( value => value || null ) ;"
+        ],
+        "audit.requestId": [
+          "custom ( value => utf8 . encode ( value ) . length <= 512 ) ;",
+          "overwrite ( input => input . trim ( ) ) ;",
+          "min_length {\"minimum\":1}"
+        ]
+      },
       "request": {
         "audit": {
           "type": "object",
@@ -128,18 +185,31 @@
         },
         "audit.actor": {
           "type": "string",
+          "minLength": 1,
           "required": true
         },
         "audit.reason": {
           "type": "null|string",
+          "branches": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "string",
+              "maxLength": 2000
+            }
+          ],
           "required": false
         },
         "audit.requestId": {
           "type": "string",
+          "minLength": 1,
           "required": true
         },
         "id": {
           "type": "string",
+          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+          "format": "uuid",
           "required": true
         }
       },
@@ -178,6 +248,22 @@
     },
     "cancelTaskGroup": {
       "mutation": true,
+      "customValidation": {
+        "audit.actor": [
+          "overwrite ( input => input . trim ( ) ) ;",
+          "min_length {\"minimum\":1}"
+        ],
+        "audit.reason": [
+          "overwrite ( input => input . trim ( ) ) ;",
+          "min_length {\"minimum\":1}",
+          "max_length {\"maximum\":2000}"
+        ],
+        "audit.requestId": [
+          "custom ( value => utf8 . encode ( value ) . length <= 512 ) ;",
+          "overwrite ( input => input . trim ( ) ) ;",
+          "min_length {\"minimum\":1}"
+        ]
+      },
       "request": {
         "audit": {
           "type": "object",
@@ -185,18 +271,24 @@
         },
         "audit.actor": {
           "type": "string",
+          "minLength": 1,
           "required": true
         },
         "audit.reason": {
           "type": "string",
+          "minLength": 1,
+          "maxLength": 2000,
           "required": true
         },
         "audit.requestId": {
           "type": "string",
+          "minLength": 1,
           "required": true
         },
         "id": {
           "type": "string",
+          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+          "format": "uuid",
           "required": true
         }
       },
@@ -284,13 +376,24 @@
     },
     "checkpointValue": {
       "mutation": false,
+      "customValidation": {
+        "name": [
+          "overwrite ( input => input . trim ( ) ) ;",
+          "min_length {\"minimum\":1}",
+          "max_length {\"maximum\":200}"
+        ]
+      },
       "request": {
         "id": {
           "type": "string",
+          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+          "format": "uuid",
           "required": true
         },
         "name": {
           "type": "string",
+          "minLength": 1,
+          "maxLength": 200,
           "required": true
         }
       },
@@ -320,6 +423,27 @@
     },
     "completeHumanWait": {
       "mutation": true,
+      "customValidation": {
+        "audit.actor": [
+          "overwrite ( input => input . trim ( ) ) ;",
+          "min_length {\"minimum\":1}"
+        ],
+        "audit.reason": [
+          "overwrite ( input => input . trim ( ) ) ;",
+          "min_length {\"minimum\":1}",
+          "max_length {\"maximum\":2000}"
+        ],
+        "audit.requestId": [
+          "custom ( value => utf8 . encode ( value ) . length <= 512 ) ;",
+          "overwrite ( input => input . trim ( ) ) ;",
+          "min_length {\"minimum\":1}"
+        ],
+        "name": [
+          "overwrite ( input => input . trim ( ) ) ;",
+          "min_length {\"minimum\":1}",
+          "max_length {\"maximum\":200}"
+        ]
+      },
       "request": {
         "audit": {
           "type": "object",
@@ -327,26 +451,36 @@
         },
         "audit.actor": {
           "type": "string",
+          "minLength": 1,
           "required": true
         },
         "audit.reason": {
           "type": "string",
+          "minLength": 1,
+          "maxLength": 2000,
           "required": true
         },
         "audit.requestId": {
           "type": "string",
+          "minLength": 1,
           "required": true
         },
         "id": {
           "type": "string",
+          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+          "format": "uuid",
           "required": true
         },
         "idempotencyKey": {
           "type": "string",
+          "minLength": 1,
+          "maxLength": 512,
           "required": true
         },
         "name": {
           "type": "string",
+          "minLength": 1,
+          "maxLength": 200,
           "required": true
         },
         "result": {
@@ -623,6 +757,25 @@
     },
     "enqueueTest": {
       "mutation": true,
+      "customValidation": {
+        "(request)": [
+          "custom ( input => input . kind !== \"feature\" || input . feature !== undefined ) ;"
+        ],
+        "audit.actor": [
+          "overwrite ( input => input . trim ( ) ) ;",
+          "min_length {\"minimum\":1}"
+        ],
+        "audit.reason": [
+          "overwrite ( input => input . trim ( ) ) ;",
+          "min_length {\"minimum\":1}",
+          "max_length {\"maximum\":2000}"
+        ],
+        "audit.requestId": [
+          "custom ( value => utf8 . encode ( value ) . length <= 512 ) ;",
+          "overwrite ( input => input . trim ( ) ) ;",
+          "min_length {\"minimum\":1}"
+        ]
+      },
       "request": {
         "audit": {
           "type": "object",
@@ -630,14 +783,18 @@
         },
         "audit.actor": {
           "type": "string",
+          "minLength": 1,
           "required": true
         },
         "audit.reason": {
           "type": "string",
+          "minLength": 1,
+          "maxLength": 2000,
           "required": true
         },
         "audit.requestId": {
           "type": "string",
+          "minLength": 1,
           "required": true
         },
         "feature": {
@@ -681,6 +838,8 @@
         },
         "priority": {
           "type": "integer",
+          "minimum": 0,
+          "maximum": 100,
           "required": false
         },
         "scenario": {
@@ -711,10 +870,21 @@
       "request": {
         "id": {
           "type": "string",
+          "pattern": "^(event|attempt):[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
           "required": true
         },
         "taskId": {
           "type": "null|string",
+          "branches": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "string",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+              "format": "uuid"
+            }
+          ],
           "required": false
         }
       },
@@ -781,6 +951,31 @@
     },
     "events": {
       "mutation": false,
+      "customValidation": {
+        "(request)": [
+          "custom ( ( input , context ) => { if ( input . rangeStart === null !== ( input . rangeEnd === null ) ) { context . addIssue ( { code : \"custom\" , message : \"rangeStart and rangeEnd must be supplied together\" , path : [ input . rangeStart === null ? \"rangeStart\" : \"rangeEnd\" ] } ) ; } else if ( input . rangeStart !== null && input . rangeEnd !== null && Date . parse ( input . rangeStart ) >= Date . parse ( input . rangeEnd ) ) { context . addIssue ( { code : \"custom\" , message : \"rangeEnd must be later than rangeStart\" , path : [ \"rangeEnd\" ] } ) ; } ; } ) ;"
+        ],
+        "queue": [
+          "overwrite ( input => input . trim ( ) ) ;",
+          "min_length {\"minimum\":1}",
+          "max_length {\"maximum\":200}"
+        ],
+        "search": [
+          "overwrite ( input => input . trim ( ) ) ;",
+          "min_length {\"minimum\":1}",
+          "max_length {\"maximum\":200}"
+        ],
+        "taskType": [
+          "overwrite ( input => input . trim ( ) ) ;",
+          "min_length {\"minimum\":1}",
+          "max_length {\"maximum\":200}"
+        ],
+        "worker": [
+          "overwrite ( input => input . trim ( ) ) ;",
+          "min_length {\"minimum\":1}",
+          "max_length {\"maximum\":200}"
+        ]
+      },
       "request": {
         "count": {
           "type": "enum",
@@ -801,6 +996,8 @@
         },
         "page": {
           "type": "integer",
+          "minimum": 1,
+          "maximum": 100,
           "required": false
         },
         "pageSize": {
@@ -814,30 +1011,91 @@
         },
         "queue": {
           "type": "null|string",
+          "branches": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            }
+          ],
           "required": false
         },
         "rangeEnd": {
           "type": "null|string",
+          "branches": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "string",
+              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$",
+              "format": "date-time"
+            }
+          ],
           "required": false
         },
         "rangeStart": {
           "type": "null|string",
+          "branches": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "string",
+              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$",
+              "format": "date-time"
+            }
+          ],
           "required": false
         },
         "search": {
           "type": "null|string",
+          "branches": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            }
+          ],
           "required": false
         },
         "taskId": {
           "type": "null|string",
+          "branches": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "string",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+              "format": "uuid"
+            }
+          ],
           "required": false
         },
         "taskType": {
           "type": "null|string",
+          "branches": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            }
+          ],
           "required": false
         },
         "types": {
           "type": "array",
+          "maxItems": 44,
           "required": false
         },
         "types[]": {
@@ -902,6 +1160,16 @@
         },
         "worker": {
           "type": "null|string",
+          "branches": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            }
+          ],
           "required": false
         }
       },
@@ -1113,6 +1381,35 @@
     },
     "overrideMaintenancePolicy": {
       "mutation": true,
+      "customValidation": {
+        "audit.actor": [
+          "overwrite ( input => input . trim ( ) ) ;",
+          "min_length {\"minimum\":1}"
+        ],
+        "audit.reason": [
+          "overwrite ( input => input . trim ( ) ) ;",
+          "min_length {\"minimum\":1}",
+          "max_length {\"maximum\":2000}"
+        ],
+        "audit.requestId": [
+          "custom ( value => utf8 . encode ( value ) . length <= 512 ) ;",
+          "overwrite ( input => input . trim ( ) ) ;",
+          "min_length {\"minimum\":1}"
+        ],
+        "definition": [
+          "custom ( definition => Object . keys ( definition ) . length > 0 ) ;"
+        ],
+        "definition.statisticsRollupIntervalMs": [
+          "number_format {\"type\":\"number\",\"format\":\"safeint\"}",
+          "greater_than {\"value\":0,\"inclusive\":true}",
+          "less_than {\"value\":86400000,\"inclusive\":true}",
+          "custom ( value => value === 0 || value >= 1000 ) ;"
+        ],
+        "definition.timezone": [
+          "overwrite ( input => input . trim ( ) ) ;",
+          "min_length {\"minimum\":1}"
+        ]
+      },
       "request": {
         "audit": {
           "type": "object",
@@ -1120,14 +1417,18 @@
         },
         "audit.actor": {
           "type": "string",
+          "minLength": 1,
           "required": true
         },
         "audit.reason": {
           "type": "string",
+          "minLength": 1,
+          "maxLength": 2000,
           "required": true
         },
         "audit.requestId": {
           "type": "string",
+          "minLength": 1,
           "required": true
         },
         "definition": {
@@ -1136,30 +1437,42 @@
         },
         "definition.historyRetentionLocalTime": {
           "type": "string",
+          "pattern": "^(?:[01]\\d|2[0-3]):[0-5]\\d$",
           "required": false
         },
         "definition.partitionPreparationIntervalMs": {
           "type": "integer",
+          "minimum": 60000,
+          "maximum": 604800000,
           "required": false
         },
         "definition.statisticsGroupLimit": {
           "type": "integer",
+          "minimum": 1,
+          "maximum": 10000,
           "required": false
         },
         "definition.statisticsRecomputeBuckets": {
           "type": "integer",
+          "minimum": 0,
+          "maximum": 1440,
           "required": false
         },
         "definition.statisticsRollupIntervalMs": {
           "type": "integer",
+          "minimum": 0,
+          "maximum": 86400000,
           "required": false
         },
         "definition.terminalCleanupIntervalMs": {
           "type": "integer",
+          "minimum": 1000,
+          "maximum": 86400000,
           "required": false
         },
         "definition.timezone": {
           "type": "string",
+          "minLength": 1,
           "required": false
         }
       },
@@ -1167,6 +1480,25 @@
     },
     "overrideRetentionPolicy": {
       "mutation": true,
+      "customValidation": {
+        "audit.actor": [
+          "overwrite ( input => input . trim ( ) ) ;",
+          "min_length {\"minimum\":1}"
+        ],
+        "audit.reason": [
+          "overwrite ( input => input . trim ( ) ) ;",
+          "min_length {\"minimum\":1}",
+          "max_length {\"maximum\":2000}"
+        ],
+        "audit.requestId": [
+          "custom ( value => utf8 . encode ( value ) . length <= 512 ) ;",
+          "overwrite ( input => input . trim ( ) ) ;",
+          "min_length {\"minimum\":1}"
+        ],
+        "definition": [
+          "custom ( definition => Object . keys ( definition ) . length > 0 ) ;"
+        ]
+      },
       "request": {
         "audit": {
           "type": "object",
@@ -1174,14 +1506,18 @@
         },
         "audit.actor": {
           "type": "string",
+          "minLength": 1,
           "required": true
         },
         "audit.reason": {
           "type": "string",
+          "minLength": 1,
+          "maxLength": 2000,
           "required": true
         },
         "audit.requestId": {
           "type": "string",
+          "minLength": 1,
           "required": true
         },
         "definition": {
@@ -1190,46 +1526,116 @@
         },
         "definition.attemptHistoryRetentionDays": {
           "type": "integer|null",
+          "branches": [
+            {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 36500
+            },
+            {
+              "type": "null"
+            }
+          ],
           "required": false
         },
         "definition.defaultPartitionRowsPerPass": {
           "type": "integer",
+          "minimum": 1,
+          "maximum": 1000000,
           "required": false
         },
         "definition.historyPartitionsPerPass": {
           "type": "integer",
+          "minimum": 1,
+          "maximum": 52,
           "required": false
         },
         "definition.occurrenceRowsPerPass": {
           "type": "integer",
+          "minimum": 1,
+          "maximum": 1000000,
           "required": false
         },
         "definition.scheduleOccurrenceRetentionDays": {
           "type": "integer|null",
+          "branches": [
+            {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 36500
+            },
+            {
+              "type": "null"
+            }
+          ],
           "required": false
         },
         "definition.statisticsRetentionDays": {
           "type": "integer|null",
+          "branches": [
+            {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 36500
+            },
+            {
+              "type": "null"
+            }
+          ],
           "required": false
         },
         "definition.statisticsRowsPerPass": {
           "type": "integer",
+          "minimum": 1,
+          "maximum": 1000000,
           "required": false
         },
         "definition.taskEventRetentionDays": {
           "type": "integer|null",
+          "branches": [
+            {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 36500
+            },
+            {
+              "type": "null"
+            }
+          ],
           "required": false
         },
         "definition.taskIdentityRetentionDays": {
           "type": "integer|null",
+          "branches": [
+            {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 36500
+            },
+            {
+              "type": "null"
+            }
+          ],
           "required": false
         },
         "definition.terminalOutcomeRetentionDays": {
           "type": "integer|null",
+          "branches": [
+            {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 36500
+            },
+            {
+              "type": "null"
+            }
+          ],
           "required": false
         },
         "definition.terminalTaskPruneLimit": {
           "type": "integer",
+          "minimum": 1,
+          "maximum": 100000,
           "required": false
         }
       },
@@ -1237,6 +1643,11 @@
     },
     "previewRetentionPolicy": {
       "mutation": false,
+      "customValidation": {
+        "definition": [
+          "custom ( definition => Object . keys ( definition ) . length > 0 ) ;"
+        ]
+      },
       "request": {
         "definition": {
           "type": "object",
@@ -1244,46 +1655,116 @@
         },
         "definition.attemptHistoryRetentionDays": {
           "type": "integer|null",
+          "branches": [
+            {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 36500
+            },
+            {
+              "type": "null"
+            }
+          ],
           "required": false
         },
         "definition.defaultPartitionRowsPerPass": {
           "type": "integer",
+          "minimum": 1,
+          "maximum": 1000000,
           "required": false
         },
         "definition.historyPartitionsPerPass": {
           "type": "integer",
+          "minimum": 1,
+          "maximum": 52,
           "required": false
         },
         "definition.occurrenceRowsPerPass": {
           "type": "integer",
+          "minimum": 1,
+          "maximum": 1000000,
           "required": false
         },
         "definition.scheduleOccurrenceRetentionDays": {
           "type": "integer|null",
+          "branches": [
+            {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 36500
+            },
+            {
+              "type": "null"
+            }
+          ],
           "required": false
         },
         "definition.statisticsRetentionDays": {
           "type": "integer|null",
+          "branches": [
+            {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 36500
+            },
+            {
+              "type": "null"
+            }
+          ],
           "required": false
         },
         "definition.statisticsRowsPerPass": {
           "type": "integer",
+          "minimum": 1,
+          "maximum": 1000000,
           "required": false
         },
         "definition.taskEventRetentionDays": {
           "type": "integer|null",
+          "branches": [
+            {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 36500
+            },
+            {
+              "type": "null"
+            }
+          ],
           "required": false
         },
         "definition.taskIdentityRetentionDays": {
           "type": "integer|null",
+          "branches": [
+            {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 36500
+            },
+            {
+              "type": "null"
+            }
+          ],
           "required": false
         },
         "definition.terminalOutcomeRetentionDays": {
           "type": "integer|null",
+          "branches": [
+            {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 36500
+            },
+            {
+              "type": "null"
+            }
+          ],
           "required": false
         },
         "definition.terminalTaskPruneLimit": {
           "type": "integer",
+          "minimum": 1,
+          "maximum": 100000,
           "required": false
         }
       },
@@ -1328,6 +1809,26 @@
     },
     "purgeQueue": {
       "mutation": true,
+      "customValidation": {
+        "audit.actor": [
+          "overwrite ( input => input . trim ( ) ) ;",
+          "min_length {\"minimum\":1}"
+        ],
+        "audit.reason": [
+          "overwrite ( input => input . trim ( ) ) ;",
+          "min_length {\"minimum\":1}",
+          "max_length {\"maximum\":2000}"
+        ],
+        "audit.requestId": [
+          "custom ( value => utf8 . encode ( value ) . length <= 512 ) ;",
+          "overwrite ( input => input . trim ( ) ) ;",
+          "min_length {\"minimum\":1}"
+        ],
+        "queue": [
+          "overwrite ( input => input . trim ( ) ) ;",
+          "min_length {\"minimum\":1}"
+        ]
+      },
       "request": {
         "audit": {
           "type": "object",
@@ -1335,18 +1836,23 @@
         },
         "audit.actor": {
           "type": "string",
+          "minLength": 1,
           "required": true
         },
         "audit.reason": {
           "type": "string",
+          "minLength": 1,
+          "maxLength": 2000,
           "required": true
         },
         "audit.requestId": {
           "type": "string",
+          "minLength": 1,
           "required": true
         },
         "queue": {
           "type": "string",
+          "minLength": 1,
           "required": true
         }
       },
@@ -1536,6 +2042,37 @@
     },
     "redriveDeadLetters": {
       "mutation": true,
+      "customValidation": {
+        "audit.actor": [
+          "overwrite ( input => input . trim ( ) ) ;",
+          "min_length {\"minimum\":1}"
+        ],
+        "audit.reason": [
+          "overwrite ( input => input . trim ( ) ) ;",
+          "min_length {\"minimum\":1}",
+          "max_length {\"maximum\":2000}"
+        ],
+        "audit.requestId": [
+          "custom ( value => utf8 . encode ( value ) . length <= 512 ) ;",
+          "overwrite ( input => input . trim ( ) ) ;",
+          "min_length {\"minimum\":1}"
+        ],
+        "queue": [
+          "overwrite ( input => input . trim ( ) ) ;",
+          "min_length {\"minimum\":1}",
+          "max_length {\"maximum\":200}"
+        ],
+        "tags[]": [
+          "overwrite ( input => input . trim ( ) ) ;",
+          "min_length {\"minimum\":1}",
+          "max_length {\"maximum\":100}"
+        ],
+        "taskType": [
+          "overwrite ( input => input . trim ( ) ) ;",
+          "min_length {\"minimum\":1}",
+          "max_length {\"maximum\":200}"
+        ]
+      },
       "request": {
         "audit": {
           "type": "object",
@@ -1543,14 +2080,18 @@
         },
         "audit.actor": {
           "type": "string",
+          "minLength": 1,
           "required": true
         },
         "audit.reason": {
           "type": "string",
+          "minLength": 1,
+          "maxLength": 2000,
           "required": true
         },
         "audit.requestId": {
           "type": "string",
+          "minLength": 1,
           "required": true
         },
         "cursor": {
@@ -1559,30 +2100,59 @@
         },
         "cursor.finishedAt": {
           "type": "string",
+          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$",
+          "format": "date-time",
           "required": false
         },
         "cursor.taskId": {
           "type": "string",
+          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+          "format": "uuid",
           "required": false
         },
         "limit": {
           "type": "integer",
+          "minimum": 1,
+          "maximum": 1000,
           "required": false
         },
         "queue": {
           "type": "null|string",
+          "branches": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            }
+          ],
           "required": false
         },
         "tags": {
           "type": "array",
+          "maxItems": 20,
           "required": false
         },
         "tags[]": {
           "type": "string",
+          "minLength": 1,
+          "maxLength": 100,
           "required": false
         },
         "taskType": {
           "type": "null|string",
+          "branches": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            }
+          ],
           "required": false
         }
       },
@@ -1631,6 +2201,22 @@
     },
     "redriveTask": {
       "mutation": true,
+      "customValidation": {
+        "audit.actor": [
+          "overwrite ( input => input . trim ( ) ) ;",
+          "min_length {\"minimum\":1}"
+        ],
+        "audit.reason": [
+          "overwrite ( input => input . trim ( ) ) ;",
+          "min_length {\"minimum\":1}",
+          "max_length {\"maximum\":2000}"
+        ],
+        "audit.requestId": [
+          "custom ( value => utf8 . encode ( value ) . length <= 512 ) ;",
+          "overwrite ( input => input . trim ( ) ) ;",
+          "min_length {\"minimum\":1}"
+        ]
+      },
       "request": {
         "audit": {
           "type": "object",
@@ -1638,18 +2224,24 @@
         },
         "audit.actor": {
           "type": "string",
+          "minLength": 1,
           "required": true
         },
         "audit.reason": {
           "type": "string",
+          "minLength": 1,
+          "maxLength": 2000,
           "required": true
         },
         "audit.requestId": {
           "type": "string",
+          "minLength": 1,
           "required": true
         },
         "id": {
           "type": "string",
+          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+          "format": "uuid",
           "required": true
         }
       },
@@ -1683,6 +2275,22 @@
     },
     "revertMaintenancePolicy": {
       "mutation": true,
+      "customValidation": {
+        "audit.actor": [
+          "overwrite ( input => input . trim ( ) ) ;",
+          "min_length {\"minimum\":1}"
+        ],
+        "audit.reason": [
+          "overwrite ( input => input . trim ( ) ) ;",
+          "min_length {\"minimum\":1}",
+          "max_length {\"maximum\":2000}"
+        ],
+        "audit.requestId": [
+          "custom ( value => utf8 . encode ( value ) . length <= 512 ) ;",
+          "overwrite ( input => input . trim ( ) ) ;",
+          "min_length {\"minimum\":1}"
+        ]
+      },
       "request": {
         "audit": {
           "type": "object",
@@ -1690,18 +2298,23 @@
         },
         "audit.actor": {
           "type": "string",
+          "minLength": 1,
           "required": true
         },
         "audit.reason": {
           "type": "string",
+          "minLength": 1,
+          "maxLength": 2000,
           "required": true
         },
         "audit.requestId": {
           "type": "string",
+          "minLength": 1,
           "required": true
         },
         "settings": {
           "type": "array",
+          "minItems": 1,
           "required": true
         },
         "settings[]": {
@@ -1722,6 +2335,22 @@
     },
     "revertRetentionPolicy": {
       "mutation": true,
+      "customValidation": {
+        "audit.actor": [
+          "overwrite ( input => input . trim ( ) ) ;",
+          "min_length {\"minimum\":1}"
+        ],
+        "audit.reason": [
+          "overwrite ( input => input . trim ( ) ) ;",
+          "min_length {\"minimum\":1}",
+          "max_length {\"maximum\":2000}"
+        ],
+        "audit.requestId": [
+          "custom ( value => utf8 . encode ( value ) . length <= 512 ) ;",
+          "overwrite ( input => input . trim ( ) ) ;",
+          "min_length {\"minimum\":1}"
+        ]
+      },
       "request": {
         "audit": {
           "type": "object",
@@ -1729,18 +2358,23 @@
         },
         "audit.actor": {
           "type": "string",
+          "minLength": 1,
           "required": true
         },
         "audit.reason": {
           "type": "string",
+          "minLength": 1,
+          "maxLength": 2000,
           "required": true
         },
         "audit.requestId": {
           "type": "string",
+          "minLength": 1,
           "required": true
         },
         "settings": {
           "type": "array",
+          "minItems": 1,
           "required": true
         },
         "settings[]": {
@@ -1765,6 +2399,22 @@
     },
     "runTaskNow": {
       "mutation": true,
+      "customValidation": {
+        "audit.actor": [
+          "overwrite ( input => input . trim ( ) ) ;",
+          "min_length {\"minimum\":1}"
+        ],
+        "audit.reason": [
+          "overwrite ( input => input . trim ( ) ) ;",
+          "min_length {\"minimum\":1}",
+          "max_length {\"maximum\":2000}"
+        ],
+        "audit.requestId": [
+          "custom ( value => utf8 . encode ( value ) . length <= 512 ) ;",
+          "overwrite ( input => input . trim ( ) ) ;",
+          "min_length {\"minimum\":1}"
+        ]
+      },
       "request": {
         "audit": {
           "type": "object",
@@ -1772,18 +2422,24 @@
         },
         "audit.actor": {
           "type": "string",
+          "minLength": 1,
           "required": true
         },
         "audit.reason": {
           "type": "string",
+          "minLength": 1,
+          "maxLength": 2000,
           "required": true
         },
         "audit.requestId": {
           "type": "string",
+          "minLength": 1,
           "required": true
         },
         "id": {
           "type": "string",
+          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+          "format": "uuid",
           "required": true
         }
       },
@@ -1811,6 +2467,26 @@
     },
     "setQueueHistory": {
       "mutation": true,
+      "customValidation": {
+        "audit.actor": [
+          "overwrite ( input => input . trim ( ) ) ;",
+          "min_length {\"minimum\":1}"
+        ],
+        "audit.reason": [
+          "overwrite ( input => input . trim ( ) ) ;",
+          "min_length {\"minimum\":1}",
+          "max_length {\"maximum\":2000}"
+        ],
+        "audit.requestId": [
+          "custom ( value => utf8 . encode ( value ) . length <= 512 ) ;",
+          "overwrite ( input => input . trim ( ) ) ;",
+          "min_length {\"minimum\":1}"
+        ],
+        "queue": [
+          "overwrite ( input => input . trim ( ) ) ;",
+          "min_length {\"minimum\":1}"
+        ]
+      },
       "request": {
         "audit": {
           "type": "object",
@@ -1818,18 +2494,23 @@
         },
         "audit.actor": {
           "type": "string",
+          "minLength": 1,
           "required": true
         },
         "audit.reason": {
           "type": "string",
+          "minLength": 1,
+          "maxLength": 2000,
           "required": true
         },
         "audit.requestId": {
           "type": "string",
+          "minLength": 1,
           "required": true
         },
         "queue": {
           "type": "string",
+          "minLength": 1,
           "required": true
         },
         "recordAttempts": {
@@ -1852,6 +2533,26 @@
     },
     "setQueuePaused": {
       "mutation": true,
+      "customValidation": {
+        "audit.actor": [
+          "overwrite ( input => input . trim ( ) ) ;",
+          "min_length {\"minimum\":1}"
+        ],
+        "audit.reason": [
+          "overwrite ( input => input . trim ( ) ) ;",
+          "min_length {\"minimum\":1}",
+          "max_length {\"maximum\":2000}"
+        ],
+        "audit.requestId": [
+          "custom ( value => utf8 . encode ( value ) . length <= 512 ) ;",
+          "overwrite ( input => input . trim ( ) ) ;",
+          "min_length {\"minimum\":1}"
+        ],
+        "queue": [
+          "overwrite ( input => input . trim ( ) ) ;",
+          "min_length {\"minimum\":1}"
+        ]
+      },
       "request": {
         "audit": {
           "type": "object",
@@ -1859,14 +2560,18 @@
         },
         "audit.actor": {
           "type": "string",
+          "minLength": 1,
           "required": true
         },
         "audit.reason": {
           "type": "string",
+          "minLength": 1,
+          "maxLength": 2000,
           "required": true
         },
         "audit.requestId": {
           "type": "string",
+          "minLength": 1,
           "required": true
         },
         "paused": {
@@ -1875,6 +2580,7 @@
         },
         "queue": {
           "type": "string",
+          "minLength": 1,
           "required": true
         }
       },
@@ -1886,6 +2592,26 @@
     },
     "setQueueTier": {
       "mutation": true,
+      "customValidation": {
+        "audit.actor": [
+          "overwrite ( input => input . trim ( ) ) ;",
+          "min_length {\"minimum\":1}"
+        ],
+        "audit.reason": [
+          "overwrite ( input => input . trim ( ) ) ;",
+          "min_length {\"minimum\":1}",
+          "max_length {\"maximum\":2000}"
+        ],
+        "audit.requestId": [
+          "custom ( value => utf8 . encode ( value ) . length <= 512 ) ;",
+          "overwrite ( input => input . trim ( ) ) ;",
+          "min_length {\"minimum\":1}"
+        ],
+        "queue": [
+          "overwrite ( input => input . trim ( ) ) ;",
+          "min_length {\"minimum\":1}"
+        ]
+      },
       "request": {
         "audit": {
           "type": "object",
@@ -1893,18 +2619,23 @@
         },
         "audit.actor": {
           "type": "string",
+          "minLength": 1,
           "required": true
         },
         "audit.reason": {
           "type": "string",
+          "minLength": 1,
+          "maxLength": 2000,
           "required": true
         },
         "audit.requestId": {
           "type": "string",
+          "minLength": 1,
           "required": true
         },
         "queue": {
           "type": "string",
+          "minLength": 1,
           "required": true
         },
         "tier": {
@@ -1933,6 +2664,30 @@
     },
     "setSchedulePaused": {
       "mutation": true,
+      "customValidation": {
+        "audit.actor": [
+          "overwrite ( input => input . trim ( ) ) ;",
+          "min_length {\"minimum\":1}"
+        ],
+        "audit.reason": [
+          "overwrite ( input => input . trim ( ) ) ;",
+          "min_length {\"minimum\":1}",
+          "max_length {\"maximum\":2000}"
+        ],
+        "audit.requestId": [
+          "custom ( value => utf8 . encode ( value ) . length <= 512 ) ;",
+          "overwrite ( input => input . trim ( ) ) ;",
+          "min_length {\"minimum\":1}"
+        ],
+        "name": [
+          "overwrite ( input => input . trim ( ) ) ;",
+          "min_length {\"minimum\":1}"
+        ],
+        "namespace": [
+          "overwrite ( input => input . trim ( ) ) ;",
+          "min_length {\"minimum\":1}"
+        ]
+      },
       "request": {
         "audit": {
           "type": "object",
@@ -1940,14 +2695,18 @@
         },
         "audit.actor": {
           "type": "string",
+          "minLength": 1,
           "required": true
         },
         "audit.reason": {
           "type": "string",
+          "minLength": 1,
+          "maxLength": 2000,
           "required": true
         },
         "audit.requestId": {
           "type": "string",
+          "minLength": 1,
           "required": true
         },
         "kind": {
@@ -1959,10 +2718,12 @@
         },
         "name": {
           "type": "string",
+          "minLength": 1,
           "required": true
         },
         "namespace": {
           "type": "string",
+          "minLength": 1,
           "required": true
         },
         "paused": {
@@ -1978,6 +2739,26 @@
     },
     "setWorkerPaused": {
       "mutation": true,
+      "customValidation": {
+        "audit.actor": [
+          "overwrite ( input => input . trim ( ) ) ;",
+          "min_length {\"minimum\":1}"
+        ],
+        "audit.reason": [
+          "overwrite ( input => input . trim ( ) ) ;",
+          "min_length {\"minimum\":1}",
+          "max_length {\"maximum\":2000}"
+        ],
+        "audit.requestId": [
+          "custom ( value => utf8 . encode ( value ) . length <= 512 ) ;",
+          "overwrite ( input => input . trim ( ) ) ;",
+          "min_length {\"minimum\":1}"
+        ],
+        "workerId": [
+          "overwrite ( input => input . trim ( ) ) ;",
+          "min_length {\"minimum\":1}"
+        ]
+      },
       "request": {
         "audit": {
           "type": "object",
@@ -1985,14 +2766,18 @@
         },
         "audit.actor": {
           "type": "string",
+          "minLength": 1,
           "required": true
         },
         "audit.reason": {
           "type": "string",
+          "minLength": 1,
+          "maxLength": 2000,
           "required": true
         },
         "audit.requestId": {
           "type": "string",
+          "minLength": 1,
           "required": true
         },
         "paused": {
@@ -2001,6 +2786,7 @@
         },
         "workerId": {
           "type": "string",
+          "minLength": 1,
           "required": true
         }
       },
@@ -2985,6 +3771,27 @@
     },
     "signalTask": {
       "mutation": true,
+      "customValidation": {
+        "audit.actor": [
+          "overwrite ( input => input . trim ( ) ) ;",
+          "min_length {\"minimum\":1}"
+        ],
+        "audit.reason": [
+          "overwrite ( input => input . trim ( ) ) ;",
+          "min_length {\"minimum\":1}",
+          "max_length {\"maximum\":2000}"
+        ],
+        "audit.requestId": [
+          "custom ( value => utf8 . encode ( value ) . length <= 512 ) ;",
+          "overwrite ( input => input . trim ( ) ) ;",
+          "min_length {\"minimum\":1}"
+        ],
+        "name": [
+          "overwrite ( input => input . trim ( ) ) ;",
+          "min_length {\"minimum\":1}",
+          "max_length {\"maximum\":200}"
+        ]
+      },
       "request": {
         "audit": {
           "type": "object",
@@ -2992,26 +3799,36 @@
         },
         "audit.actor": {
           "type": "string",
+          "minLength": 1,
           "required": true
         },
         "audit.reason": {
           "type": "string",
+          "minLength": 1,
+          "maxLength": 2000,
           "required": true
         },
         "audit.requestId": {
           "type": "string",
+          "minLength": 1,
           "required": true
         },
         "id": {
           "type": "string",
+          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+          "format": "uuid",
           "required": true
         },
         "idempotencyKey": {
           "type": "string",
+          "minLength": 1,
+          "maxLength": 512,
           "required": true
         },
         "name": {
           "type": "string",
+          "minLength": 1,
+          "maxLength": 200,
           "required": true
         },
         "payload": {
@@ -3784,6 +4601,8 @@
       "request": {
         "id": {
           "type": "string",
+          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+          "format": "uuid",
           "required": true
         }
       },
@@ -4479,10 +5298,22 @@
       "request": {
         "after": {
           "type": "integer|null",
+          "branches": [
+            {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 100000
+            },
+            {
+              "type": "null"
+            }
+          ],
           "required": false
         },
         "id": {
           "type": "string",
+          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+          "format": "uuid",
           "required": true
         },
         "pageSize": {
@@ -4642,6 +5473,8 @@
       "request": {
         "page": {
           "type": "integer",
+          "minimum": 1,
+          "maximum": 100,
           "required": false
         },
         "pageSize": {
@@ -4775,6 +5608,8 @@
       "request": {
         "id": {
           "type": "string",
+          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+          "format": "uuid",
           "required": true
         },
         "kind": {
@@ -4807,6 +5642,33 @@
     },
     "tasks": {
       "mutation": false,
+      "customValidation": {
+        "queue": [
+          "overwrite ( input => input . trim ( ) ) ;",
+          "min_length {\"minimum\":1}",
+          "max_length {\"maximum\":200}"
+        ],
+        "search": [
+          "overwrite ( input => input . trim ( ) ) ;",
+          "max_length {\"maximum\":200}",
+          "transform ( value => value || null ) ;"
+        ],
+        "tags[]": [
+          "overwrite ( input => input . trim ( ) ) ;",
+          "min_length {\"minimum\":1}",
+          "max_length {\"maximum\":100}"
+        ],
+        "taskType": [
+          "overwrite ( input => input . trim ( ) ) ;",
+          "min_length {\"minimum\":1}",
+          "max_length {\"maximum\":200}"
+        ],
+        "worker": [
+          "overwrite ( input => input . trim ( ) ) ;",
+          "min_length {\"minimum\":1}",
+          "max_length {\"maximum\":200}"
+        ]
+      },
       "request": {
         "count": {
           "type": "enum",
@@ -4834,6 +5696,8 @@
         },
         "page": {
           "type": "integer",
+          "minimum": 1,
+          "maximum": 100,
           "required": false
         },
         "pageSize": {
@@ -4847,14 +5711,35 @@
         },
         "priority": {
           "type": "integer|null",
+          "branches": [
+            {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 100
+            },
+            {
+              "type": "null"
+            }
+          ],
           "required": false
         },
         "queue": {
           "type": "null|string",
+          "branches": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            }
+          ],
           "required": false
         },
         "search": {
           "type": "string",
+          "maxLength": 200,
           "required": false
         },
         "sort": {
@@ -4867,18 +5752,41 @@
         },
         "tags": {
           "type": "array",
+          "maxItems": 20,
           "required": false
         },
         "tags[]": {
           "type": "string",
+          "minLength": 1,
+          "maxLength": 100,
           "required": false
         },
         "taskType": {
           "type": "null|string",
+          "branches": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            }
+          ],
           "required": false
         },
         "worker": {
           "type": "null|string",
+          "branches": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            }
+          ],
           "required": false
         }
       },
@@ -5115,6 +6023,33 @@
     },
     "tasksCursor": {
       "mutation": false,
+      "customValidation": {
+        "queue": [
+          "overwrite ( input => input . trim ( ) ) ;",
+          "min_length {\"minimum\":1}",
+          "max_length {\"maximum\":200}"
+        ],
+        "search": [
+          "overwrite ( input => input . trim ( ) ) ;",
+          "max_length {\"maximum\":200}",
+          "transform ( value => value || null ) ;"
+        ],
+        "tags[]": [
+          "overwrite ( input => input . trim ( ) ) ;",
+          "min_length {\"minimum\":1}",
+          "max_length {\"maximum\":100}"
+        ],
+        "taskType": [
+          "overwrite ( input => input . trim ( ) ) ;",
+          "min_length {\"minimum\":1}",
+          "max_length {\"maximum\":200}"
+        ],
+        "worker": [
+          "overwrite ( input => input . trim ( ) ) ;",
+          "min_length {\"minimum\":1}",
+          "max_length {\"maximum\":200}"
+        ]
+      },
       "request": {
         "count": {
           "type": "enum",
@@ -5130,14 +6065,20 @@
         },
         "cursor.id": {
           "type": "string",
+          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+          "format": "uuid",
           "required": false
         },
         "cursor.priority": {
           "type": "integer",
+          "minimum": 0,
+          "maximum": 100,
           "required": false
         },
         "cursor.updatedAt": {
           "type": "string",
+          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d\\.\\d{6}(?:Z))$",
+          "format": "date-time",
           "required": false
         },
         "direction": {
@@ -5175,14 +6116,35 @@
         },
         "priority": {
           "type": "integer|null",
+          "branches": [
+            {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 100
+            },
+            {
+              "type": "null"
+            }
+          ],
           "required": false
         },
         "queue": {
           "type": "null|string",
+          "branches": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            }
+          ],
           "required": false
         },
         "search": {
           "type": "string",
+          "maxLength": 200,
           "required": false
         },
         "sort": {
@@ -5195,18 +6157,41 @@
         },
         "tags": {
           "type": "array",
+          "maxItems": 20,
           "required": false
         },
         "tags[]": {
           "type": "string",
+          "minLength": 1,
+          "maxLength": 100,
           "required": false
         },
         "taskType": {
           "type": "null|string",
+          "branches": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            }
+          ],
           "required": false
         },
         "worker": {
           "type": "null|string",
+          "branches": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            }
+          ],
           "required": false
         }
       },

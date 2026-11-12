@@ -25,6 +25,10 @@ define the surfaces, and Gate 1 of
 
 These are generated artifacts. Do not edit one by hand: run its generator and commit what it wrote.
 
+Two more surfaces keep their promise files beside their own artifacts, because their checks
+classify a change instead of comparing text. "The promise files of the SQL and dashboard surfaces"
+below describes them.
+
 ## Reading a failure
 
 The check prints the lines that went and the lines that arrived. A line that went is the interesting
@@ -50,6 +54,29 @@ The baseline is pinned as data rather than looked up because CI checks out witho
 generator is the only half that reads Git, and it refuses to write a file with no baseline: a
 comparison against nothing would pass every removal silently, which is what these checks exist to
 prevent.
+
+## How the Python file reads the package
+
+`python.txt` imports each public module and prints each name in its `__all__`. A class has a line
+for each method, property, and annotated attribute, its own and inherited.
+
+An attribute that a `workhorse` `__init__` assigns on `self` has a line too, because a caller reads
+`error.code` the same way as a method. Such a line ends with `# set by __init__`. An attribute that
+the class declares already has a line, so it gets no second one.
+
+The tool reads the `__init__` that construction runs, in the order that it runs. A call to
+`super().__init__` or `Base.__init__(self, ...)` runs that base `__init__` at the place of the call.
+A base `__init__` that the chain does not call gives no line, because its assignments never run.
+The tool reads only the statements of each `__init__` body. An attribute that a nested function or
+another method assigns has no line, and neither has an attribute that a base class outside
+`workhorse` assigns.
+
+The type of an attribute is the type of the last assignment that always runs. An assignment inside
+a branch, a loop, or a handler can run or not, so its type is added to the line, such as
+`int | str`. The type of one assignment comes from its annotation, from the annotation of the
+parameter that it copies, from a builtin conversion such as `str(...)`, from the type argument of
+`typing.cast`, or from a literal. If none of these gives a type, the line shows `<unannotated>`.
+Then the check sees a removed or renamed attribute, but not a retyped one.
 
 ## How the Rust file handles features
 
@@ -130,6 +157,15 @@ compiles a call to it into the caller. A type name that the file imports or that
 declares is fully qualified. The reader refuses a star import, because it could not then qualify
 the names.
 
+A top-level line starts with the package, but a compiled caller calls a top-level declaration
+through a JVM class. `@file:JvmName` names that class. Without it, the compiler names the class for
+the file, so `WorkerScope.kt` gives `WorkerScopeKt`. Each `jvm file class` section has one line for
+each top-level function and property that the class holds, with its receiver, its parameter types,
+and the bounds of its type parameters, because a bound is the JVM type of a generic parameter.
+So a changed `@file:JvmName`, a renamed source file, or an overload that moves to another file reads
+as gone lines. A function-level `@JvmName` shows on the declaration line,
+because the line prints each annotation.
+
 ## How the C# file reads the assemblies
 
 `dotnet.txt` reads the built assemblies of `Workhorse`, `Workhorse.Hosting`,
@@ -203,9 +239,94 @@ the `withSpan` call that opens the span, and an attribute name from the object l
 exported union, so `typescript.txt` already prints every member and the compiler already refuses an
 unlisted one.
 
+Two sections of `cli.txt` come from running the built CLI, not from the declaration:
+
+- Every admin subcommand parses with the one admin option set, and then refuses each flag that does
+  not apply to it. "Flags of each admin subcommand" has one line for each subcommand and each flag
+  that it accepts. The generator calls `runAdminCommand` for each pair, with a database URL that no
+  server answers. A pair has a line unless the CLI refuses it with `does not support --<flag>`. Some
+  subcommands require a flag before they connect, such as `--reason`. `requiredFlags` in
+  `scripts/cli-surface.ts` gives those inputs, and the generator stops if a subcommand refuses them.
+- The payload types are TypeScript types, so a `bigint` field is the type before `--json` writes it.
+  "--json encoding" states the JSON type, and the format when a script depends on it, that the
+  writer of the admin subcommands gives each value kind that JSON lacks: `bigint`, `Date`, and
+  `undefined`, as a field and as an item of an array. The generator runs the built `toAdminJson` on
+  one sample of each kind. Then it runs the writer of each admin `--json` command on each field name
+  that a payload type declares, with each kind. If one command or one field gets another JSON type
+  than the table states, or the writer changes a value of a kind that JSON has, the generator stops.
+  The kinds that JSON has are a string, a number, a boolean, `null`, an array, and an object. The
+  generator also stops if a payload type holds another kind that JSON lacks, such as `Map`.
+- `schema status` and `health` write with `JSON.stringify` and no replacer. That call writes a
+  `Date` as the table states and throws on a `bigint`, so the generator stops if one of their
+  payload types holds a `bigint`.
+
 The payload shapes in `cli.txt` repeat shapes `typescript.txt` also prints, because most `--json`
 payloads are public types. That is deliberate: a script reading `--json` should be able to read one
 file, and `SchemaStatusReport` is on the CLI surface without being on the TypeScript one.
+
+## The promise files of the SQL and dashboard surfaces
+
+`protocol/v1/governed-surface.json` and `dashboard/v1/governed-surface.json` record what the SQL
+protocol and `dashboard/v1` promise. `pnpm sql-catalogues:check` and `pnpm dashboard-spec:check`
+compare the current surface with the file. Each check names a change that ADR 0054 or ADR 0109
+calls breaking, and it asks for a regenerate after an addition. The generator only adds to the
+file, so a removal fails even after a regenerate.
+
+The SQL file records, for each function that a supported release reads:
+
+- The type of each argument, with `?` when it has a default.
+- The name of each argument, in `argumentNames`. A caller can pass an argument by name, and the
+  amendment of 2026-11-12 to ADR 0109 fixes each released name.
+- The value of each default, in `defaults`, keyed by the position of the argument. A direct SQL call
+  that leaves out the argument gets this value. The generator writes the expression in lower case
+  without spaces next to punctuation, except inside a string literal or a dollar-quoted literal. So
+  a change of layout or keyword case is not a change of value.
+- The result type, and the name and type of each result column. A function that returns a row type
+  of a `workhorse` table, such as `SETOF workhorse.contract_definition`, records the columns of that
+  table, because a reader expands them with `(definition).*`.
+- The order of the result columns, in `returnsColumnOrder`. The promised columns must come first and
+  in the same order. A new column can follow them.
+
+It also records the columns of each table and view that a supported release reads.
+
+The dashboard file records, for each procedure, the type of each request and response field, the
+values of an enum, and whether a request field is required. It also records the validation bounds of
+each request field: `minimum`, `maximum`, `exclusiveMinimum`, `exclusiveMaximum`, `minLength`,
+`maxLength`, `minItems`, `maxItems`, `multipleOf`, `pattern`, and `format`.
+
+The check gives each finding one of two classes:
+
+- `breaking`: the host now refuses a request that it accepted before. A higher lower bound, a lower
+  upper bound, and a new numeric or length bound are breaking.
+- `cannot prove compatible`: the change can refuse a request, but the check cannot tell. A new or
+  changed `pattern` or `format`, a changed `multipleOf`, and each change of a check that JSON Schema
+  cannot state are in this class. A maintainer reviews such a change, as "Known limits" says.
+
+Both classes fail the check.
+
+If a field accepts several branches, `branches` keeps the bounds of each branch, and a bound beside
+`anyOf`, `enum`, or `const` applies to each branch. The check compares the branches of each JSON
+type. If a current branch of the type has no bound, the field accepts each value of that type. If
+each promised branch is still present, a new branch only accepts more. Another change of several
+bounded branches cannot be proved compatible.
+
+JSON Schema cannot state each request check. A Zod refinement, such as the byte limit of an audit
+request ID, and a normalization, such as `trim`, also decide whether a host accepts a request.
+`customValidation` records the checks of each field that has such a check, or of `(request)` for a
+check of the whole input. `typescript/dashboard-server/spec/custom-validation.ts` reads them from
+the router. A field keeps all its checks in the order that Zod runs them, because a `trim` before a
+length limit accepts more than a `trim` after it. A stated check shows its kind and its parameters.
+A refinement or a normalization shows the tokens of its function, joined with one space. A token
+keeps its text, so a string or a regular expression keeps each character. The reader writes the
+choices of a compiler one way: the spelling of a number and a string, `void 0`, the parentheses
+around one arrow parameter, a trailing comma, and the `;` that ends a statement. So a new compiler,
+or a change of layout, is not a change of the check.
+
+A field whose checks keep their order, and only lose validation checks, accepts more. Each other
+change of the checks of an existing field cannot be proved compatible. A check on a new field
+changes no request that a caller sent before.
+
+`recordsValidationBounds` marks a file that records the bounds and the custom checks.
 
 ## What the snapshots do not cover
 
@@ -214,3 +335,66 @@ moves with a dependency range rather than with a release here; "Moving a depende
 [`docs/compatibility.md`](../docs/compatibility.md) governs that move. Nothing here says whether an
 API is experimental either — the Experimental table in
 [`docs/versioning.md`](../docs/versioning.md#experimental-surface) is the only authority.
+
+Some facts of a surface have no line in any file here, because the surface does not promise them:
+
+- The order of the columns that a supported release reads from a table or a view. A reader names
+  each column.
+- The bounds of a `dashboard/v1` response field, and the default of a request field. ADR 0054
+  governs the type of a response field and the validation of a request, not these values.
+- A flag that a CLI subcommand requires, and two flags that a subcommand refuses together. ADR 0054
+  governs the commands and flags, and the file records each flag that a subcommand accepts.
+
+## Known limits
+
+Two kinds of limit follow. A reader can stop on a construct that it cannot read, although the
+change does not break the surface. And a check can miss a change that breaks the surface.
+
+### When a check stops on a construct that it cannot read
+
+Each of these stops has a message that names the construct, says that the stop is a limit of the
+reader and not a judged break, and points here.
+
+- **CLI: a value-kind word in a literal.** The generator reads the payload types as text. If the
+  word `bigint`, `symbol`, `Map`, `Set`, `Uint8Array`, `Buffer`, or `RegExp` is in a string literal
+  type or in a quoted property name, such as `kind?: "symbol"` or `"bigint"?: string`, it reads the
+  word as that type and stops. Write the property name without quotes. If a literal value must hold
+  the word, a maintainer changes the scan in `scripts/cli-surface.ts` after a review. If the payload
+  really holds that kind, add a sample of it to `encodingSamples`.
+- **Kotlin: an expression in `@file:JvmName`.** The reader reads a string literal without a
+  template, with its escapes, or the name of a `const val` of the same file. It stops on another
+  expression, such as `("Stable")` or `"Sta" + "ble"`. Write the name as a string literal, such as
+  `@file:JvmName("QueueSuspend")`.
+- **Dashboard: a change that the checker cannot prove.** The checker does not evaluate a pattern, a
+  format, or the function of a check, and it does not join several branches. So it reports a new
+  or changed pattern, format, or check as `cannot prove compatible`, also when the change refuses
+  no request, such as a new `pattern: "^"` or a new `min_length 0` after a `trim`. Review the
+  change. If it refuses no request that the promise accepted, record it with
+  `pnpm exec tsx --conditions=workhorse-source typescript/dashboard-server/spec/generate.ts --accept-breaking`,
+  as `docs/versioning.md` describes, and state the review in the pull request.
+
+### When a check can miss a break
+
+The surface promises the facts below, but a check does not see each change to them. A change here
+needs a careful review, because a check can pass on a break.
+
+- **CLI `--json` writer that reads other fields.** The generator gives the admin writer one field
+  at a time. A writer that changes the JSON type of a field only when the object also has another
+  field passes the check.
+- **CLI writers of `schema status` and `health`.** The generator does not run them, because each
+  one needs a database. It reads their source and stops if a `JSON.stringify` of their payload
+  gets a replacer. A writer that changes the payload in another way, for example through a second
+  variable, passes the check.
+- **Dashboard values outside a check.** The file records the source of each refinement, transform,
+  and normalization of a request. A value that the function reads from outside itself, such as a
+  constant that another module declares, has no line. A change to that value passes the check.
+- **Dashboard `when` on a stated check.** Zod gives each length and size check a `when` function of
+  its own, so the file records the `when` of a refinement only. A `when` that a change gives to a
+  length or size check passes the check.
+- **Python attribute types that the source does not state.** An attribute whose type the tool
+  cannot read shows `<unannotated>`, as "How the Python file reads the package" says. A retype of
+  such an attribute passes the check. An attribute that a method other than `__init__` assigns has
+  no line.
+- **Union branches that cover each other together.** If no single current branch accepts each value
+  of a promised branch, the dashboard check reports a change it cannot prove, also when several
+  branches together accept each value. A maintainer reviews it.

@@ -20,6 +20,7 @@ import inspect
 import pkgutil
 import re
 import sys
+import textwrap
 import types
 import typing
 from collections.abc import Callable, Sequence
@@ -58,6 +59,11 @@ IMPLICIT_MEMBERS = frozenset(
         "mro",
         "with_traceback",
     }
+)
+
+# Builtin conversions whose call gives a value of that type, such as ``str(details["state"])``.
+CONVERSIONS = frozenset(
+    {"bool", "bytes", "dict", "float", "frozenset", "int", "list", "str", "tuple"}
 )
 
 # Module attributes whose value moves with every release. The snapshot keeps their name and type,
@@ -168,6 +174,150 @@ class Renderer:
             return f"<{value.__name__}>"
         return f"<{type(value).__qualname__}>"
 
+    def init_attributes(self, cls: type, declared: frozenset[str] = frozenset()) -> dict[str, str]:
+        """Public attributes that the ``workhorse`` ``__init__`` chain assigns on ``self``.
+
+        A caller reads ``error.code`` or ``error.retry_after_ms`` the same way as an annotated
+        attribute, but neither ``dir`` nor the class annotations show it. So the tool reads the
+        ``__init__`` that construction runs in the order that it runs. A call to
+        ``super().__init__`` or ``Base.__init__(self, ...)`` runs that base ``__init__`` at the
+        place of the call, and a base ``__init__`` that the chain does not call assigns nothing.
+
+        The type of an attribute is the type of the last assignment that always runs. An assignment
+        inside a branch or a loop can run or not, so it adds its type to the types that the line
+        states, such as ``int | str``. The type of one assignment is the annotation of the
+        assignment, the annotation of the ``__init__`` parameter that it copies, the builtin that
+        converts the value, the type argument of ``typing.cast``, or the type of a literal.
+        Otherwise it is ``<unannotated>``. A name in ``declared`` already has a line, so it is left
+        out.
+        """
+        mro = cls.__mro__
+        possible: dict[str, set[str]] = {}
+        self._run_initializer(mro, _initializer_index(mro, 0), possible, True, frozenset())
+        return {
+            name: " | ".join(sorted(kinds))
+            for name, kinds in possible.items()
+            if name not in declared
+        }
+
+    def _run_initializer(
+        self,
+        mro: tuple[type, ...],
+        index: int | None,
+        possible: dict[str, set[str]],
+        always: bool,
+        active: frozenset[int],
+    ) -> None:
+        """Read one ``__init__`` of the chain, and each base ``__init__`` that it calls."""
+        if index is None or index in active:
+            return
+        base = mro[index]
+        initializer = vars(base)["__init__"]
+        if not base.__module__.startswith("workhorse") or not inspect.isfunction(initializer):
+            return
+        try:
+            source = textwrap.dedent(inspect.getsource(initializer))
+        except (OSError, TypeError):
+            return
+        definition = ast.parse(source).body[0]
+        if not isinstance(definition, ast.FunctionDef | ast.AsyncFunctionDef):
+            return
+        context = _InitializerContext(
+            mro=mro,
+            position=index,
+            names=initializer.__globals__,
+            parameters=inspect.signature(initializer).parameters,
+            active=active | {index},
+        )
+        self._run_statements(definition.body, context, possible, always)
+
+    def _run_statements(
+        self,
+        body: list[ast.stmt],
+        context: _InitializerContext,
+        possible: dict[str, set[str]],
+        always: bool,
+    ) -> None:
+        """Apply the assignments and base calls of a block in order."""
+        for statement in body:
+            if isinstance(statement, ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef):
+                continue
+            if isinstance(statement, ast.Assign | ast.AnnAssign):
+                targets = (
+                    statement.targets if isinstance(statement, ast.Assign) else [statement.target]
+                )
+                for target in targets:
+                    if (
+                        isinstance(target, ast.Attribute)
+                        and isinstance(target.value, ast.Name)
+                        and target.value.id == "self"
+                        and not target.attr.startswith("_")
+                    ):
+                        kind = self._assigned_type(statement, statement.value, context.parameters)
+                        if always:
+                            possible[target.attr] = {kind}
+                        else:
+                            possible.setdefault(target.attr, set()).add(kind)
+                continue
+            if isinstance(statement, ast.Expr) and isinstance(statement.value, ast.Call):
+                called = _called_initializer(
+                    statement.value, context.mro, context.position, context.names
+                )
+                if called is not None:
+                    self._run_initializer(context.mro, called, possible, always, context.active)
+                    continue
+            # A `with` block and the body of a `try` run whenever construction succeeds. A branch,
+            # a loop, an `else`, and a handler can run or not.
+            for field in ("body", "orelse", "finalbody"):
+                nested = getattr(statement, field, None)
+                if not isinstance(nested, list):
+                    continue
+                runs = always and (
+                    (field == "body" and isinstance(statement, ast.With | ast.AsyncWith | ast.Try))
+                    or field == "finalbody"
+                )
+                self._run_statements(
+                    [item for item in nested if isinstance(item, ast.stmt)], context, possible, runs
+                )
+            for handler in getattr(statement, "handlers", []):
+                if isinstance(handler, ast.ExceptHandler):
+                    self._run_statements(handler.body, context, possible, False)
+            if isinstance(statement, ast.Match):
+                for case in statement.cases:
+                    self._run_statements(case.body, context, possible, False)
+
+    def _assigned_type(
+        self,
+        statement: ast.Assign | ast.AnnAssign,
+        value: ast.expr | None,
+        parameters: typing.Mapping[str, inspect.Parameter],
+    ) -> str:
+        if isinstance(statement, ast.AnnAssign):
+            annotation = statement.annotation
+            # `"str"` and `str` are one annotation; the quotes only defer its evaluation.
+            if isinstance(annotation, ast.Constant) and isinstance(annotation.value, str):
+                return annotation.value
+            return ast.unparse(annotation)
+        if isinstance(value, ast.Name) and value.id in parameters:
+            annotation = parameters[value.id].annotation
+            if annotation is not inspect.Parameter.empty:
+                return self.annotation(annotation)
+        if (
+            isinstance(value, ast.Call)
+            and isinstance(value.func, ast.Name)
+            and value.func.id in CONVERSIONS
+        ):
+            return value.func.id
+        # `cast(int, value)` states the type of its result.
+        if isinstance(value, ast.Call) and value.args and _names_cast(value.func):
+            target = value.args[0]
+            if isinstance(target, ast.Constant) and isinstance(target.value, str):
+                return target.value
+            return ast.unparse(target)
+        if isinstance(value, ast.Constant) and value.value is not None:
+            return type(value.value).__qualname__
+        return "<unannotated>"
+
     def members(self, cls: type) -> list[str]:
         """Every member a caller reaches on a class, own and inherited, sorted by name."""
         annotations: dict[str, object] = {}
@@ -179,6 +329,8 @@ class Renderer:
         names |= {name for name in dir(cls) if name in PROTOCOL_MEMBERS}
         names |= {name for name in annotations if not name.startswith("_")}
         names -= IMPLICIT_MEMBERS
+        assigned = self.init_attributes(cls, frozenset(names))
+        names |= assigned.keys()
         lines: list[str] = []
         for name in sorted(names):
             attribute = inspect.getattr_static(cls, name, None)
@@ -196,6 +348,8 @@ class Renderer:
                 if name in vars(cls):
                     declared = f"{declared} = {self.value(vars(cls)[name])}"
                 lines.append(declared)
+            elif name in assigned:
+                lines.append(f"  {name}: {assigned[name]}  # set by __init__")
             else:
                 lines.append(f"  {name} = {self.value(attribute)}")
         return lines
@@ -233,6 +387,59 @@ class Renderer:
             )
         blocks = ["\n".join(self.render(name, getattr(module, name))) for name in sorted(exported)]
         return f"## {module_name}\n\n" + "\n\n".join(blocks) + "\n"
+
+
+class _InitializerContext(typing.NamedTuple):
+    """What reading one ``__init__`` of the chain needs about it."""
+
+    mro: tuple[type, ...]
+    position: int
+    names: dict[str, object]
+    parameters: typing.Mapping[str, inspect.Parameter]
+    active: frozenset[int]
+
+
+def _names_cast(function: ast.expr) -> bool:
+    """Whether a call names ``typing.cast``, as ``cast`` or as ``typing.cast``."""
+    if isinstance(function, ast.Name):
+        return function.id == "cast"
+    return isinstance(function, ast.Attribute) and function.attr == "cast"
+
+
+def _initializer_index(mro: tuple[type, ...], start: int) -> int | None:
+    """The MRO position of the first class from ``start`` on that defines ``__init__``."""
+    for index in range(start, len(mro)):
+        if "__init__" in vars(mro[index]):
+            return index
+    return None
+
+
+def _called_initializer(
+    call: ast.Call, mro: tuple[type, ...], caller: int, names: dict[str, object]
+) -> int | None:
+    """The MRO position of the ``__init__`` that a call runs, or None for another call.
+
+    ``super().__init__(...)`` runs the next ``__init__`` after the caller's class.
+    ``Base.__init__(self, ...)`` runs the first ``__init__`` from ``Base`` on.
+    """
+    function = call.func
+    if not (isinstance(function, ast.Attribute) and function.attr == "__init__"):
+        return None
+    owner = function.value
+    if (
+        isinstance(owner, ast.Call)
+        and isinstance(owner.func, ast.Name)
+        and owner.func.id == "super"
+    ):
+        if not owner.args:
+            return _initializer_index(mro, caller + 1)
+        named = owner.args[0]
+        base = names.get(named.id) if isinstance(named, ast.Name) else None
+        return _initializer_index(mro, mro.index(base) + 1) if base in mro else None
+    if isinstance(owner, ast.Name):
+        base = names.get(owner.id)
+        return _initializer_index(mro, mro.index(base)) if base in mro else None
+    return None
 
 
 def render(package: str) -> str:

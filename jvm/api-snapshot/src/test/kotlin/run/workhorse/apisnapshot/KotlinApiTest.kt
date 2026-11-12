@@ -88,8 +88,9 @@ class KotlinApiTest {
 
   @Test
   fun `changes the line when a default argument changes`() {
-    val before = lines(source).single { "fun scope(" in it }
-    val after = lines(source.replace("100", "200")).single { "fun scope(" in it }
+    val before = lines(source).single { it.startsWith("sample: ") && "fun scope(" in it }
+    val after =
+      lines(source.replace("100", "200")).single { it.startsWith("sample: ") && "fun scope(" in it }
 
     assertNotEquals(before, after)
   }
@@ -136,7 +137,7 @@ class KotlinApiTest {
       lines(
           "package sample\n\npublic fun f(text: String =\n    /* note */ $literal): Unit = Unit\n",
         )
-        .single { "fun f(" in it }
+        .single { it.startsWith("sample: ") && "fun f(" in it }
 
     val one = line("\"\"\"a\n b\"\"\"")
     val two = line("\"\"\"a\n  b\"\"\"")
@@ -146,5 +147,132 @@ class KotlinApiTest {
     // A literal that holds the escaped text itself must not read as the line break.
     assertNotEquals(one, line("\"\"\"a%0A b\"\"\""))
     assertNotEquals(one, line("\"\"\"a\u2424 b\"\"\""))
+  }
+
+  private fun files(vararg files: Pair<String, String>): List<String> =
+    kotlinSections(files.toList()).flatten()
+
+  private val suspendFile =
+    "@file:JvmName(\"QueueSuspend\")\n\npackage sample\n\npublic fun enqueue(): Unit = Unit\n"
+
+  private val scopeFile = "package sample\n\npublic fun worker(): Unit = Unit\n"
+
+  @Test
+  fun `names the JVM class that holds each top-level declaration`() {
+    val lines = files("QueueSuspend.kt" to suspendFile, "WorkerScope.kt" to scopeFile)
+
+    assertTrue("jvm file class sample.QueueSuspend" in lines, lines.joinToString("\n"))
+    assertTrue("sample.QueueSuspend: fun enqueue()" in lines)
+    assertTrue("jvm file class sample.WorkerScopeKt" in lines)
+    assertTrue("sample.WorkerScopeKt: fun worker()" in lines)
+  }
+
+  @Test
+  fun `loses a line when a JVM file class changes, and only gains one for a new declaration`() {
+    val before = files("QueueSuspend.kt" to suspendFile, "WorkerScope.kt" to scopeFile)
+    val renamedAnnotation =
+      files(
+        "QueueSuspend.kt" to suspendFile.replace("\"QueueSuspend\"", "\"QueueSuspendKt\""),
+        "WorkerScope.kt" to scopeFile,
+      )
+    val renamedFile = files("QueueSuspend.kt" to suspendFile, "Workers.kt" to scopeFile)
+    val added =
+      files(
+        "QueueSuspend.kt" to suspendFile + "\npublic val limit: Int = 1\n",
+        "WorkerScope.kt" to scopeFile,
+      )
+
+    assertTrue("sample.QueueSuspend: fun enqueue()" !in renamedAnnotation)
+    assertTrue("sample.WorkerScopeKt: fun worker()" !in renamedFile)
+    assertTrue(added.containsAll(before))
+    assertEquals(
+      setOf("sample: public val limit: Int = 1", "sample.QueueSuspend: val limit"),
+      added.toSet() - before.toSet(),
+    )
+  }
+
+  @Test
+  fun `loses a line when an overload moves to another JVM file class`() {
+    val alpha = "package sample\n\npublic fun read(value: Int): Unit = Unit\n"
+    val beta = "package sample\n\npublic fun read(value: String): Unit = Unit\n"
+    val before = files("Alpha.kt" to alpha, "Beta.kt" to beta)
+    val exchanged = files("Alpha.kt" to beta, "Beta.kt" to alpha)
+
+    assertTrue("sample.AlphaKt: fun read(Int)" in before, before.joinToString("\n"))
+    assertTrue("sample.AlphaKt: fun read(Int)" !in exchanged)
+    assertTrue("sample.BetaKt: fun read(String)" !in exchanged)
+  }
+
+  @Test
+  fun `loses a line when a generic overload moves to another JVM file class`() {
+    val alpha = "package sample\n\npublic fun <T : Number> read(value: T): Unit = Unit\n"
+    val beta = "package sample\n\npublic fun <T : CharSequence> read(value: T): Unit = Unit\n"
+    val before = files("Alpha.kt" to alpha, "Beta.kt" to beta)
+    val exchanged = files("Alpha.kt" to beta, "Beta.kt" to alpha)
+
+    assertTrue("sample.AlphaKt: fun <T : Number> read(T)" in before, before.joinToString("\n"))
+    assertTrue("sample.AlphaKt: fun <T : Number> read(T)" !in exchanged)
+  }
+
+  @Test
+  fun `loses a line when a generic extension property moves to another JVM file class`() {
+    val alpha = "package sample\n\npublic val <T : Number> T.tag: Int get() = 1\n"
+    val beta = "package sample\n\npublic val <T : CharSequence> T.tag: Int get() = 1\n"
+    val before = files("Alpha.kt" to alpha, "Beta.kt" to beta)
+    val exchanged = files("Alpha.kt" to beta, "Beta.kt" to alpha)
+
+    assertTrue("sample.AlphaKt: val <T : Number> T.tag" in before, before.joinToString("\n"))
+    assertTrue("sample.AlphaKt: val <T : Number> T.tag" !in exchanged)
+  }
+
+  @Test
+  fun `reads the JVM class name by its value`() {
+    val plain =
+      files(
+        "Stable.kt" to
+          "@file:JvmName(\"Stable\")\n\npackage sample\n\npublic fun read(): Unit = Unit\n",
+      )
+    val escaped =
+      files(
+        "Stable.kt" to
+          "@file:JvmName(\"St\\u0061ble\")\n\npackage sample\n\npublic fun read(): Unit = Unit\n",
+      )
+    val constant =
+      files(
+        "Stable.kt" to
+          "@file:JvmName(FACADE)\n\npackage sample\n\nprivate const val FACADE: String = \"Stable\"\n\npublic fun read(): Unit = Unit\n",
+      )
+
+    assertTrue("sample.Stable: fun read()" in plain, plain.joinToString("\n"))
+    assertEquals(plain, escaped)
+    assertEquals(plain, constant)
+  }
+
+  @Test
+  fun `reads JvmName through an import alias`() {
+    val aliased =
+      files(
+        "Stable.kt" to
+          "@file:Facade(\"Stable\")\n\npackage sample\n\nimport kotlin.jvm.JvmName as Facade\n\npublic fun read(): Unit = Unit\n",
+      )
+
+    assertTrue("sample.Stable: fun read()" in aliased, aliased.joinToString("\n"))
+  }
+
+  @Test
+  fun `says that a JvmName expression is a limit of the reader, and where to read next`() {
+    // Known limit K: the reader evaluates a string literal or a const val, not an expression.
+    val error =
+      assertThrows<IllegalStateException> {
+        files(
+          "Stable.kt" to
+            "@file:JvmName(\"Sta\" + \"ble\")\n\npackage sample\n\npublic fun read(): Unit = Unit\n",
+        )
+      }
+
+    val message = error.message.orEmpty()
+    assertTrue("cannot read" in message, message)
+    assertTrue("not a judged break of the Kotlin API" in message, message)
+    assertTrue("\"Known limits\" in api/README.md" in message, message)
   }
 }

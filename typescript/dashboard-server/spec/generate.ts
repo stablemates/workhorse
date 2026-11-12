@@ -4,6 +4,9 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { isProcedure } from "@orpc/server";
 import { z } from "zod";
+// Before the router: this module wraps `superRefine`, so it must run before the router builds its
+// schemas.
+import { customValidation } from "./custom-validation.js";
 import { dashboardRouter } from "../src/server/router.js";
 import {
   DASHBOARD_BROWSER_MODULES_PLACEHOLDER,
@@ -214,7 +217,16 @@ function currentSurface(artifacts: Record<string, string>): DashboardSurface {
   const document = JSON.parse(artifacts["procedures.json"] ?? "{}") as Parameters<
     typeof describeDashboardSurface
   >[0];
-  return describeDashboardSurface(document);
+  return describeDashboardSurface(document, routerCustomValidation());
+}
+
+/** The request checks of each procedure that JSON Schema cannot state, read from the router. */
+export function routerCustomValidation(): Record<string, Record<string, string[]>> {
+  const custom: Record<string, Record<string, string[]>> = {};
+  for (const [name, procedure] of routerProcedures()) {
+    custom[name] = customValidation(procedure.input);
+  }
+  return custom;
 }
 
 function renderSurface(surface: DashboardSurface): string {
@@ -222,9 +234,13 @@ function renderSurface(surface: DashboardSurface): string {
 }
 
 export function formatFindings(findings: readonly SurfaceFinding[]): string {
-  return findings.map((finding) => `  breaking: ${finding.subject} ${finding.change}`).join("\n");
+  return findings
+    .map(
+      (finding) =>
+        `  ${finding.classification === "breaking" ? "breaking" : "cannot prove compatible"}: ${finding.subject} ${finding.change}`,
+    )
+    .join("\n");
 }
-
 export interface DashboardSpecReport {
   stale: string[];
   findings: SurfaceFinding[];
@@ -260,7 +276,8 @@ const invokedDirectly =
 const breakingGuidance =
   "dashboard/v1 is bound to matching SDK backends and a browser bundle, so a break here creates " +
   "dashboard/v2 rather than moving a package major (ADR 0054). Restore the surface, or take the " +
-  "break deliberately with --accept-breaking.";
+  "break deliberately with --accept-breaking. If a change that the check cannot prove compatible " +
+  "only accepts more requests, confirm that by review and take it with --accept-breaking.";
 
 if (invokedDirectly) {
   const acceptBreaking = process.argv.includes("--accept-breaking");
@@ -268,7 +285,7 @@ if (invokedDirectly) {
     const { stale, findings } = await checkDashboardSpec();
     if (findings.length > 0) {
       console.error(
-        `dashboard/v1 has breaking changes:\n${formatFindings(findings)}\n\n${breakingGuidance}`,
+        `dashboard/v1 has changes that break a caller, or that the check cannot prove compatible:\n${formatFindings(findings)}\n\n${breakingGuidance}`,
       );
       process.exit(1);
     }
@@ -288,7 +305,7 @@ if (invokedDirectly) {
     const findings = classifyDashboardSurface(promised, current);
     if (findings.length > 0 && !acceptBreaking) {
       console.error(
-        `dashboard/v1 has breaking changes:\n${formatFindings(findings)}\n\n${breakingGuidance}`,
+        `dashboard/v1 has changes that break a caller, or that the check cannot prove compatible:\n${formatFindings(findings)}\n\n${breakingGuidance}`,
       );
       process.exit(1);
     }

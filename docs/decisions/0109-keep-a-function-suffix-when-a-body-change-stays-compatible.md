@@ -65,3 +65,17 @@ it in the documentation or in a fixture.
 
 A defect correction can change a result that a client saw before. The rule permits that change,
 because the earlier result broke a documented guarantee.
+
+## Amendment: argument names are fixed (2026-11-12)
+
+Condition 1 names the types, defaults, and order of the arguments, but not their names. A caller
+can pass an argument by name, for example `workhorse.claim_v1(p_queue_name => 'emails',
+p_worker_id => 'w1', p_lease_ms => 60000)`. A renamed argument makes that call fail.
+
+PostgreSQL does not let `CREATE OR REPLACE FUNCTION` change the name of an input parameter. A
+migration cannot drop a released function either, because ADR 0053 keeps every migration additive.
+So the name of each argument of a released `_vN` function is already fixed in practice.
+
+Condition 1 therefore also covers the name of each argument. A new name needs a successor, and the
+successor function has its own names. `protocol/v1/governed-surface.json` records the names in
+`argumentNames`, and `pnpm sql-catalogues:check` fails when a promised name changes.
