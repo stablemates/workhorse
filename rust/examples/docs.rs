@@ -27,7 +27,7 @@ use workhorse::{
     BulkRedriveOptions, ChildOutcome, ChildTaskRequest, DeadLetterFilter, DeadLetterQuery,
     Debounce, DebounceSchedule, Dependencies, DependencyTerminalPolicy, EnqueueOptions,
     EnqueueRequest, HandlerContext, HandlerError, Idempotency, Queue, ScheduleDefinition,
-    ScheduledTask, TaskGroupCallbacks, Throttle, Worker, WorkerOptions,
+    ScheduledTask, TaskGroupCallbacks, TaskState, Throttle, Worker, WorkerOptions,
 };
 
 type Result<T = ()> = std::result::Result<T, Box<dyn std::error::Error>>;
@@ -179,39 +179,25 @@ async fn enqueue_basics(
     queue
         .enqueue("email.send", &json!({ "to": "person@example.com" }), EnqueueOptions::default())
         .await?;
-    queue
-        .enqueue(
-            "invoice.remind",
-            &json!({ "invoiceId": invoice_id }),
-            EnqueueOptions {
-                queue: Some("billing".into()),
-                run_at: Some(reminder_date),
-                ..Default::default()
-            },
-        )
-        .await?;
+    let mut options = EnqueueOptions::default();
+    options.queue = Some("billing".into());
+    options.run_at = Some(reminder_date);
+    queue.enqueue("invoice.remind", &json!({ "invoiceId": invoice_id }), options).await?;
     // docs:end
     Ok(())
 }
 
 async fn enqueue_options(queue: &Queue<Client>, end_of_month: DateTime<Utc>) -> Result {
     // docs:start enqueue-options
-    queue
-        .enqueue(
-            "report.generate",
-            &json!({ "month": "2026-08" }),
-            EnqueueOptions {
-                queue: Some("reports".into()),
-                tags: vec!["tenant:acme".into()],
-                concurrency_key: Some("acme".into()),
-                priority: 10,
-                max_attempts: 5,
-                deadline: Some(end_of_month),
-                execution_timeout_ms: Some(120_000),
-                ..Default::default()
-            },
-        )
-        .await?;
+    let mut options = EnqueueOptions::default();
+    options.queue = Some("reports".into());
+    options.tags = vec!["tenant:acme".into()];
+    options.concurrency_key = Some("acme".into());
+    options.priority = 10;
+    options.max_attempts = 5;
+    options.deadline = Some(end_of_month);
+    options.execution_timeout_ms = Some(120_000);
+    queue.enqueue("report.generate", &json!({ "month": "2026-08" }), options).await?;
     // docs:end
     Ok(())
 }
@@ -232,10 +218,10 @@ async fn enqueue_batch(queue: &Queue<Client>, recipients: &[Recipient]) -> Resul
     // docs:start enqueue-many
     let requests = recipients
         .iter()
-        .map(|recipient| EnqueueRequest {
-            task_type: "email.digest".into(),
-            payload: json!({ "to": recipient.email }),
-            options: EnqueueOptions { queue: Some("mail".into()), ..Default::default() },
+        .map(|recipient| {
+            let mut request = EnqueueRequest::new("email.digest", json!({ "to": recipient.email }));
+            request.options.queue = Some("mail".into());
+            request
         })
         .collect();
     let results = queue.enqueue_many(requests).await?;
@@ -262,41 +248,27 @@ async fn pause_and_resume(
 
 async fn priority(queue: &Queue<Client>, invoice_id: &str) -> Result {
     // docs:start priority
-    queue
-        .enqueue(
-            "invoice.remind",
-            &json!({ "invoiceId": invoice_id }),
-            EnqueueOptions { queue: Some("billing".into()), priority: 10, ..Default::default() },
-        )
-        .await?;
+    let mut options = EnqueueOptions::default();
+    options.queue = Some("billing".into());
+    options.priority = 10;
+    queue.enqueue("invoice.remind", &json!({ "invoiceId": invoice_id }), options).await?;
     // docs:end
     Ok(())
 }
 
 async fn retries(queue: &Queue<Client>, account_id: &str) -> Result {
     // docs:start retries-attempts
-    queue
-        .enqueue(
-            "provider.sync",
-            &json!({ "accountId": account_id }),
-            EnqueueOptions { max_attempts: 5, ..Default::default() },
-        )
-        .await?;
+    let mut options = EnqueueOptions::default();
+    options.max_attempts = 5;
+    queue.enqueue("provider.sync", &json!({ "accountId": account_id }), options).await?;
     // docs:end
     // docs:start retries-policy
     let jitter =
         json!({ "type": "decorrelated-jitter", "baseDelayMs": 1_000, "maxDelayMs": 60_000 });
-    queue
-        .enqueue(
-            "provider.sync",
-            &json!({ "accountId": account_id }),
-            EnqueueOptions {
-                retry_policy: jitter.as_object().cloned(),
-                max_attempts: 5,
-                ..Default::default()
-            },
-        )
-        .await?;
+    let mut options = EnqueueOptions::default();
+    options.retry_policy = jitter.as_object().cloned();
+    options.max_attempts = 5;
+    queue.enqueue("provider.sync", &json!({ "accountId": account_id }), options).await?;
     // docs:end
     Ok(())
 }
@@ -310,61 +282,36 @@ async fn deadlines(
     attempt_budget: i32,
 ) -> Result {
     // docs:start deadlines-deadline
-    queue
-        .enqueue(
-            "price.quote",
-            &json!({ "quoteId": quote_id }),
-            EnqueueOptions { deadline: Some(quote_expires_at), ..Default::default() },
-        )
-        .await?;
+    let mut options = EnqueueOptions::default();
+    options.deadline = Some(quote_expires_at);
+    queue.enqueue("price.quote", &json!({ "quoteId": quote_id }), options).await?;
     // docs:end
     // docs:start deadlines-timeout
-    queue
-        .enqueue(
-            "report.build",
-            &json!({ "reportId": report_id }),
-            EnqueueOptions {
-                execution_timeout_ms: Some(attempt_timeout_ms),
-                max_attempts: attempt_budget,
-                ..Default::default()
-            },
-        )
-        .await?;
+    let mut options = EnqueueOptions::default();
+    options.execution_timeout_ms = Some(attempt_timeout_ms);
+    options.max_attempts = attempt_budget;
+    queue.enqueue("report.build", &json!({ "reportId": report_id }), options).await?;
     // docs:end
     Ok(())
 }
 
 async fn idempotency(queue: &Queue<Client>, invoice_id: &str, key: String) -> Result {
     // docs:start idempotency-key
-    let result = queue
-        .enqueue(
-            "invoice.capture",
-            &json!({ "invoiceId": invoice_id }),
-            EnqueueOptions {
-                queue: Some("billing".into()),
-                idempotency: Some(Idempotency {
-                    scope: "invoice-capture".into(),
-                    ..Idempotency::new(format!("capture:{invoice_id}"))
-                }),
-                ..Default::default()
-            },
-        )
-        .await?;
+    let mut options = EnqueueOptions::default();
+    options.queue = Some("billing".into());
+    let mut idempotency = Idempotency::new(format!("capture:{invoice_id}"));
+    idempotency.scope = "invoice-capture".into();
+    options.idempotency = Some(idempotency);
+    let result =
+        queue.enqueue("invoice.capture", &json!({ "invoiceId": invoice_id }), options).await?;
     // docs:end
     // docs:start idempotency-result
-    let result = queue
-        .enqueue(
-            "invoice.capture",
-            &json!({ "invoiceId": invoice_id }),
-            EnqueueOptions {
-                idempotency: Some(Idempotency {
-                    scope: "invoice-capture".into(),
-                    ..Idempotency::new(key)
-                }),
-                ..Default::default()
-            },
-        )
-        .await?;
+    let mut options = EnqueueOptions::default();
+    let mut idempotency = Idempotency::new(key);
+    idempotency.scope = "invoice-capture".into();
+    options.idempotency = Some(idempotency);
+    let result =
+        queue.enqueue("invoice.capture", &json!({ "invoiceId": invoice_id }), options).await?;
     println!("{:?} {}", result.outcome, result.task_id);
     // docs:end
     Ok(())
@@ -377,17 +324,15 @@ async fn debounce(
     quiet_period_ms: i64,
 ) -> Result {
     // docs:start debounce
+    let mut options = EnqueueOptions::default();
+    let mut debounce = Debounce::new(document_id, quiet_period_ms, DebounceSchedule::Reset);
+    debounce.scope = "search-index".into();
+    options.debounce = Some(debounce);
     let result = queue
         .enqueue(
             "search.reindex",
             &json!({ "documentId": document_id, "revision": revision }),
-            EnqueueOptions {
-                debounce: Some(Debounce {
-                    scope: "search-index".into(),
-                    ..Debounce::new(document_id, quiet_period_ms, DebounceSchedule::Reset)
-                }),
-                ..Default::default()
-            },
+            options,
         )
         .await?;
     // docs:end
@@ -396,19 +341,12 @@ async fn debounce(
 
 async fn throttle(queue: &Queue<Client>, account_id: &str, digest_window_ms: i64) -> Result {
     // docs:start throttle
-    let result = queue
-        .enqueue(
-            "email.digest",
-            &json!({ "accountId": account_id }),
-            EnqueueOptions {
-                throttle: Some(Throttle {
-                    scope: "digest".into(),
-                    ..Throttle::new(account_id, digest_window_ms)
-                }),
-                ..Default::default()
-            },
-        )
-        .await?;
+    let mut options = EnqueueOptions::default();
+    let mut throttle = Throttle::new(account_id, digest_window_ms);
+    throttle.scope = "digest".into();
+    options.throttle = Some(throttle);
+    let result =
+        queue.enqueue("email.digest", &json!({ "accountId": account_id }), options).await?;
     // docs:end
     Ok(())
 }
@@ -418,88 +356,48 @@ async fn task_dependencies(queue: &Queue<Client>) -> Result {
     let import = queue
         .enqueue("contacts.import", &json!({ "source": "upload" }), EnqueueOptions::default())
         .await?;
-    queue
-        .enqueue(
-            "contacts.notify",
-            &json!({ "importId": import.task_id }),
-            EnqueueOptions {
-                dependencies: Some(Dependencies {
-                    prerequisite_task_ids: vec![import.task_id],
-                    on_success: DependencyTerminalPolicy::Release,
-                    on_failure: DependencyTerminalPolicy::Fail,
-                    on_cancellation: DependencyTerminalPolicy::Cancel,
-                }),
-                ..Default::default()
-            },
-        )
-        .await?;
+    let mut options = EnqueueOptions::default();
+    options.dependencies = Some(Dependencies::new(
+        vec![import.task_id],
+        DependencyTerminalPolicy::Release,
+        DependencyTerminalPolicy::Fail,
+        DependencyTerminalPolicy::Cancel,
+    ));
+    queue.enqueue("contacts.notify", &json!({ "importId": import.task_id }), options).await?;
     // docs:end
     Ok(())
 }
 
 async fn concurrency_policies(queue: &Queue<Client>, message_id: &str, tenant_id: &str) -> Result {
     // docs:start concurrency-policy
-    let policies = queue
-        .sync_concurrency_policies(
-            "workers",
-            &[ConcurrencyPolicyDefinition {
-                queue: "mail".into(),
-                max_active: 20,
-                max_active_per_key: Some(3),
-            }],
-            false,
-        )
-        .await?;
+    let mut policy = ConcurrencyPolicyDefinition::new("mail", 20);
+    policy.max_active_per_key = Some(3);
+    let policies = queue.sync_concurrency_policies("workers", &[policy], false).await?;
     // docs:end
     // docs:start concurrency-key
-    queue
-        .enqueue(
-            "mail.send",
-            &json!({ "messageId": message_id }),
-            EnqueueOptions {
-                queue: Some("mail".into()),
-                concurrency_key: Some(tenant_id.into()),
-                ..Default::default()
-            },
-        )
-        .await?;
+    let mut options = EnqueueOptions::default();
+    options.queue = Some("mail".into());
+    options.concurrency_key = Some(tenant_id.into());
+    queue.enqueue("mail.send", &json!({ "messageId": message_id }), options).await?;
     // docs:end
     // docs:start concurrency-budget
-    let budgets = queue
-        .sync_budgets(
-            "workers",
-            &[BudgetDefinition { name: "vendor-api".into(), max_active: Some(4), rate: None }],
-            false,
-        )
-        .await?;
-    queue
-        .enqueue(
-            "invoice.sync",
-            &json!({ "id": 1 }),
-            EnqueueOptions {
-                queue: Some("billing".into()),
-                budget: Some("vendor-api".into()),
-                ..Default::default()
-            },
-        )
-        .await?;
+    let mut budget = BudgetDefinition::new("vendor-api");
+    budget.max_active = Some(4);
+    let budgets = queue.sync_budgets("workers", &[budget], false).await?;
+    let mut options = EnqueueOptions::default();
+    options.queue = Some("billing".into());
+    options.budget = Some("vendor-api".into());
+    queue.enqueue("invoice.sync", &json!({ "id": 1 }), options).await?;
     // docs:end
     Ok(())
 }
 
 async fn rate_limits(queue: &Queue<Client>) -> Result {
     // docs:start rate-limits
-    let policies = queue
-        .sync_rate_limit_policies(
-            "workers",
-            &[RateLimitPolicyDefinition {
-                queue: "provider-api".into(),
-                rate: RateLimit { limit: 60, interval_ms: 60_000, burst: 10 },
-                per_key: Some(RateLimit { limit: 5, interval_ms: 60_000, burst: 2 }),
-            }],
-            false,
-        )
-        .await?;
+    let rate = RateLimit { limit: 60, interval_ms: 60_000, burst: 10 };
+    let mut policy = RateLimitPolicyDefinition::new("provider-api", rate);
+    policy.per_key = Some(RateLimit { limit: 5, interval_ms: 60_000, burst: 2 });
+    let policies = queue.sync_rate_limit_policies("workers", &[policy], false).await?;
     // docs:end
     Ok(())
 }
@@ -507,58 +405,32 @@ async fn rate_limits(queue: &Queue<Client>) -> Result {
 async fn multi_tenancy(queue: &Queue<Client>) -> Result {
     // docs:start multi-tenancy
     let tenant = "acme";
-    queue
-        .sync_concurrency_policies(
-            "workers",
-            &[ConcurrencyPolicyDefinition {
-                queue: "reports".into(),
-                max_active: 40,
-                max_active_per_key: Some(4),
-            }],
-            false,
-        )
-        .await?;
-    queue
-        .sync_budgets(
-            "workers",
-            &[BudgetDefinition { name: tenant.into(), max_active: Some(8), rate: None }],
-            false,
-        )
-        .await?;
-    queue
-        .enqueue(
-            "report.generate",
-            &json!({ "month": "2026-08" }),
-            EnqueueOptions {
-                queue: Some("reports".into()),
-                concurrency_key: Some(tenant.into()),
-                budget: Some(tenant.into()),
-                tags: vec![format!("tenant:{tenant}")],
-                ..Default::default()
-            },
-        )
-        .await?;
+    let mut policy = ConcurrencyPolicyDefinition::new("reports", 40);
+    policy.max_active_per_key = Some(4);
+    queue.sync_concurrency_policies("workers", &[policy], false).await?;
+    let mut budget = BudgetDefinition::new(tenant);
+    budget.max_active = Some(8);
+    queue.sync_budgets("workers", &[budget], false).await?;
+    let mut options = EnqueueOptions::default();
+    options.queue = Some("reports".into());
+    options.concurrency_key = Some(tenant.into());
+    options.budget = Some(tenant.into());
+    options.tags = vec![format!("tenant:{tenant}")];
+    queue.enqueue("report.generate", &json!({ "month": "2026-08" }), options).await?;
     // docs:end
     Ok(())
 }
 
 async fn contracts(queue: &Queue<Client>) -> Result {
     // docs:start contracts
-    let contracts = BTreeMap::from([(
-        "mail.send".to_string(),
-        TaskTypeContracts {
-            current_version: "mail-current".into(),
-            versions: BTreeMap::from([(
-                "mail-current".to_string(),
-                TaskContractVersion {
-                    payload_schema: json!({ "type": "object", "required": ["recipient"] }),
-                    result_schema: json!({ "type": "object" }),
-                    sensitive_payload_keys: vec!["accessToken".into()],
-                    ..Default::default()
-                },
-            )]),
-        },
-    )]);
+    let mut task_type_contracts = TaskTypeContracts::default();
+    task_type_contracts.current_version = "mail-current".into();
+    let mut version = TaskContractVersion::default();
+    version.payload_schema = json!({ "type": "object", "required": ["recipient"] });
+    version.result_schema = json!({ "type": "object" });
+    version.sensitive_payload_keys = vec!["accessToken".into()];
+    task_type_contracts.versions = BTreeMap::from([("mail-current".to_string(), version)]);
+    let contracts = BTreeMap::from([("mail.send".to_string(), task_type_contracts)]);
     queue.sync_contracts(&contracts).await?;
     // docs:end
     Ok(())
@@ -573,13 +445,9 @@ async fn schedules(queue: &Queue<Client>, pool: Pool, nightly_cron: &str) -> Res
     queue.sync_schedules("billing-production", vec![schedule], true).await?;
     // docs:end
     // docs:start schedules-worker
-    let worker = Worker::new(
-        pool,
-        WorkerOptions {
-            schedule_namespaces: vec!["billing-production".into()],
-            ..Default::default()
-        },
-    )?;
+    let mut options = WorkerOptions::default();
+    options.schedule_namespaces = vec!["billing-production".into()];
+    let worker = Worker::new(pool, options)?;
     // docs:end
     Ok(())
 }
@@ -618,20 +486,30 @@ async fn queue_health(queue: &Queue<Client>) -> Result {
     Ok(())
 }
 
+/// The fallback arm that `docs/upgrading.md` shows. That page is outside the region check, so this
+/// copy only proves that the code compiles.
+async fn upgrading_match(admin: &Admin<Client>, task_id: Uuid) -> Result {
+    let Some(task) = admin.get_task(task_id).await? else { return Ok(()) };
+    let summary = match task.state {
+        TaskState::Succeeded => "done",
+        TaskState::Failed | TaskState::Canceled => "stopped",
+        // A later release can add a state, so the match needs a fallback arm.
+        _ => "open",
+    };
+    println!("{task_id}: {summary}");
+    Ok(())
+}
+
 async fn dead_letters(admin: &Admin<Client>, source_task_id: Uuid) -> Result {
     // docs:start dead-letters-list
     let finished_after = Utc.with_ymd_and_hms(2026, 3, 14, 9, 0, 0).unwrap();
-    let page = admin
-        .list_dead_letters(DeadLetterQuery {
-            filter: DeadLetterFilter {
-                queue: Some("payments".into()),
-                error_name: Some("ProviderTimeout".into()),
-                finished_after: Some(finished_after),
-                ..Default::default()
-            },
-            ..Default::default()
-        })
-        .await?;
+    let mut query = DeadLetterQuery::default();
+    let mut dead_letter_filter = DeadLetterFilter::default();
+    dead_letter_filter.queue = Some("payments".into());
+    dead_letter_filter.error_name = Some("ProviderTimeout".into());
+    dead_letter_filter.finished_after = Some(finished_after);
+    query.filter = dead_letter_filter;
+    let page = admin.list_dead_letters(query).await?;
     // docs:end
     // docs:start dead-letters-redrive
     let audit = AdminAudit {
@@ -642,38 +520,26 @@ async fn dead_letters(admin: &Admin<Client>, source_task_id: Uuid) -> Result {
     let result = admin.redrive(source_task_id, &audit).await?;
     // docs:end
     // docs:start dead-letters-redrive-many
-    let filter = DeadLetterFilter {
-        queue: Some("payments".into()),
-        error_name: Some("ProviderTimeout".into()),
-        ..Default::default()
-    };
+    let mut filter = DeadLetterFilter::default();
+    filter.queue = Some("payments".into());
+    filter.error_name = Some("ProviderTimeout".into());
     let audit = AdminAudit {
         actor: "ops@example.com".into(),
         reason: "Provider outage ended".into(),
         request_id: "outage-0314".into(),
     };
-    let preview = admin
-        .redrive_many(
-            filter.clone(),
-            &audit,
-            BulkRedriveOptions { dry_run: true, limit: 100, ..Default::default() },
-        )
-        .await?;
-    let mut page = admin
-        .redrive_many(
-            filter.clone(),
-            &audit,
-            BulkRedriveOptions { limit: 100, ..Default::default() },
-        )
-        .await?;
+    let mut redrive = BulkRedriveOptions::default();
+    redrive.dry_run = true;
+    redrive.limit = 100;
+    let preview = admin.redrive_many(filter.clone(), &audit, redrive).await?;
+    let mut redrive = BulkRedriveOptions::default();
+    redrive.limit = 100;
+    let mut page = admin.redrive_many(filter.clone(), &audit, redrive).await?;
     while let Some(cursor) = page.next_cursor {
-        page = admin
-            .redrive_many(
-                filter.clone(),
-                &audit,
-                BulkRedriveOptions { limit: 100, cursor: Some(cursor), ..Default::default() },
-            )
-            .await?;
+        let mut redrive = BulkRedriveOptions::default();
+        redrive.limit = 100;
+        redrive.cursor = Some(cursor);
+        page = admin.redrive_many(filter.clone(), &audit, redrive).await?;
     }
     // docs:end
     Ok(())
@@ -707,14 +573,10 @@ async fn workers_run(
     shutdown: impl Future<Output = ()> + Send,
 ) -> Result {
     // docs:start workers-run
-    let worker = Worker::new(
-        pool,
-        WorkerOptions {
-            queues: vec!["email".into(), "billing".into()],
-            concurrency: worker_concurrency,
-            ..Default::default()
-        },
-    )?;
+    let mut options = WorkerOptions::default();
+    options.queues = vec!["email".into(), "billing".into()];
+    options.concurrency = worker_concurrency;
+    let worker = Worker::new(pool, options)?;
     worker.handle("email.send", |payload: Value, _context| mailer::send(payload));
     worker.run(shutdown).await?;
     // docs:end
@@ -727,30 +589,22 @@ async fn workers_options(
     worker_lease_duration: Duration,
 ) -> Result {
     // docs:start workers-options
-    let worker = Worker::new(
-        pool,
-        WorkerOptions {
-            queues: vec!["email".into(), "billing".into()],
-            concurrency: worker_concurrency,
-            lease_duration: worker_lease_duration,
-            worker_id: Some("email-worker-1".into()),
-            ..Default::default()
-        },
-    )?;
+    let mut options = WorkerOptions::default();
+    options.queues = vec!["email".into(), "billing".into()];
+    options.concurrency = worker_concurrency;
+    options.lease_duration = worker_lease_duration;
+    options.worker_id = Some("email-worker-1".into());
+    let worker = Worker::new(pool, options)?;
     // docs:end
     Ok(())
 }
 
 async fn workers_process(pool: Pool, worker_concurrency: usize) -> Result {
     // docs:start workers-process
-    let worker = Worker::new(
-        pool,
-        WorkerOptions {
-            queues: vec!["email".into(), "billing".into()],
-            concurrency: worker_concurrency,
-            ..Default::default()
-        },
-    )?;
+    let mut options = WorkerOptions::default();
+    options.queues = vec!["email".into(), "billing".into()];
+    options.concurrency = worker_concurrency;
+    let worker = Worker::new(pool, options)?;
     worker.handle("email.send", send_email);
     run_worker_process(&worker).await?;
     // docs:end
@@ -761,7 +615,7 @@ fn batch_handlers(worker: &Worker) {
     // docs:start batch-handlers
     worker.handle_batch(
         "email.send",
-        BatchOptions { max_size: 20, linger: Duration::from_millis(50) },
+        BatchOptions::new(20, Duration::from_millis(50)),
         |items: Vec<BatchItem<Value>>| async move {
             items.iter().map(|_| BatchResult::Succeeded(json!({ "sent": true }))).collect()
         },
@@ -771,20 +625,18 @@ fn batch_handlers(worker: &Worker) {
 
 async fn batch_handlers_enqueue(queue: &Queue<Client>) -> Result {
     // docs:start batch-handlers-enqueue
-    queue
-        .enqueue(
-            "email.send",
-            &json!({ "to": "person@example.com" }),
-            EnqueueOptions { queue: Some("email".into()), ..Default::default() },
-        )
-        .await?;
+    let mut options = EnqueueOptions::default();
+    options.queue = Some("email".into());
+    queue.enqueue("email.send", &json!({ "to": "person@example.com" }), options).await?;
     // docs:end
     Ok(())
 }
 
 async fn task_groups(queue: &Queue<Client>, file: &ImportFile) -> Result {
     // docs:start task-groups
-    let imports = EnqueueOptions { queue: Some("imports".into()), ..Default::default() };
+    let mut options = EnqueueOptions::default();
+    options.queue = Some("imports".into());
+    let imports = options;
     let rows = file
         .rows
         .iter()
@@ -796,10 +648,9 @@ async fn task_groups(queue: &Queue<Client>, file: &ImportFile) -> Result {
     let report =
         EnqueueRequest::new("imports.report", json!({ "importId": "imp-7" })).with_options(imports);
 
-    let group = queue
-        .task_group(TaskGroupCallbacks { on_finish: Some(report), ..Default::default() }, rows)
-        .await?
-        .group;
+    let mut callbacks = TaskGroupCallbacks::default();
+    callbacks.on_finish = Some(report);
+    let group = queue.task_group(callbacks, rows).await?.group;
     // docs:end
     Ok(())
 }
@@ -839,29 +690,16 @@ async fn overview_fulfill(
     // docs:start overview-fulfill
     // Step 1: allow three active fulfillments per merchant, across all workers.
     // PostgreSQL applies this limit when a worker claims a task.
-    queue
-        .sync_concurrency_policies(
-            "shop",
-            &[ConcurrencyPolicyDefinition {
-                queue: "fulfillment".into(),
-                max_active: 20,
-                max_active_per_key: Some(3),
-            }],
-            false,
-        )
-        .await?;
+    let mut policy = ConcurrencyPolicyDefinition::new("fulfillment", 20);
+    policy.max_active_per_key = Some(3);
+    queue.sync_concurrency_policies("shop", &[policy], false).await?;
 
     // Enqueue the task. The merchant is the concurrency key.
+    let mut options = EnqueueOptions::default();
+    options.queue = Some("fulfillment".into());
+    options.concurrency_key = Some(merchant_id.into());
     queue
-        .enqueue(
-            "order.fulfill",
-            &json!({ "orderId": order_id, "email": email }),
-            EnqueueOptions {
-                queue: Some("fulfillment".into()),
-                concurrency_key: Some(merchant_id.into()),
-                ..Default::default()
-            },
-        )
+        .enqueue("order.fulfill", &json!({ "orderId": order_id, "email": email }), options)
         .await?;
 
     worker.handle("order.fulfill", |order: PlacedOrder, context| async move {
@@ -948,13 +786,10 @@ async fn child_tasks(
     order: Order,
 ) -> std::result::Result<Value, HandlerError> {
     // docs:start child-tasks
+    let mut options = EnqueueOptions::default();
+    options.queue = Some("payments".into());
     let charge: Value = context
-        .run_child(
-            "charge",
-            "payments.charge",
-            &json!({ "orderId": order.id }),
-            EnqueueOptions { queue: Some("payments".into()), ..Default::default() },
-        )
+        .run_child("charge", "payments.charge", &json!({ "orderId": order.id }), options)
         .await?;
     // docs:end
     Ok(charge)
@@ -1104,11 +939,10 @@ mod example_agent {
                 let mut children = Vec::with_capacity(plan.tools.len());
                 for tool in &plan.tools {
                     let mut child = ChildTaskRequest::new(&tool.id, "agent.tool", tool)?;
-                    child.options = EnqueueOptions {
-                        queue: Some("tools".into()),
-                        concurrency_key: Some(run.conversation_id.clone()),
-                        ..Default::default()
-                    };
+                    let mut options = EnqueueOptions::default();
+                    options.queue = Some("tools".into());
+                    options.concurrency_key = Some(run.conversation_id.clone());
+                    child.options = options;
                     children.push(child);
                 }
 
@@ -1162,14 +996,10 @@ mod example_schedule {
         let schedule = ScheduleDefinition::new("nightly-invoice-run", "0 3 * * *", task);
         queue.sync_schedules("billing-production", vec![schedule], false).await?;
 
-        let worker = Worker::new(
-            pool,
-            WorkerOptions {
-                queues: vec!["billing".into()],
-                schedule_namespaces: vec!["billing-production".into()],
-                ..Default::default()
-            },
-        )?;
+        let mut options = WorkerOptions::default();
+        options.queues = vec!["billing".into()];
+        options.schedule_namespaces = vec!["billing-production".into()];
+        let worker = Worker::new(pool, options)?;
         worker.handle("invoice.generate", |payload: Value, _context| async move {
             Ok(json!({ "generated": true, "payload": payload }))
         });
@@ -1195,18 +1025,16 @@ mod example_webhook {
         queue: &Queue<Pool>,
         event: &StripeEvent,
     ) -> Result<Value, workhorse::Error> {
+        let mut options = EnqueueOptions::default();
+        options.queue = Some("webhooks".into());
+        let mut idempotency = Idempotency::new(format!("stripe:{}", event.id));
+        idempotency.scope = "stripe-webhooks".into();
+        options.idempotency = Some(idempotency);
         let result = queue
             .enqueue(
                 "stripe.event",
                 &json!({ "eventId": event.id, "eventType": event.event_type }),
-                EnqueueOptions {
-                    queue: Some("webhooks".into()),
-                    idempotency: Some(Idempotency {
-                        scope: "stripe-webhooks".into(),
-                        ..Idempotency::new(format!("stripe:{}", event.id))
-                    }),
-                    ..Default::default()
-                },
+                options,
             )
             .await?;
         Ok(json!({ "accepted": result.task_id }))
@@ -1220,34 +1048,27 @@ mod example_incident {
     use workhorse::{Admin, AdminAudit, BulkRedriveOptions, DeadLetterFilter};
 
     pub async fn redrive_incident(admin: &Admin<Pool>) -> Result<(), workhorse::Error> {
-        let filter = DeadLetterFilter {
-            queue: Some("billing".into()),
-            error_name: Some("ProviderTimeout".into()),
-            ..Default::default()
-        };
+        let mut filter = DeadLetterFilter::default();
+        filter.queue = Some("billing".into());
+        filter.error_name = Some("ProviderTimeout".into());
         let audit = AdminAudit {
             actor: "reviewer@example.com".into(),
             reason: "provider incident INC-2041 resolved".into(),
             request_id: "INC-2041".into(),
         };
-        let preview = admin
-            .redrive_many(
-                filter.clone(),
-                &audit,
-                BulkRedriveOptions { dry_run: true, limit: 100, cursor: None },
-            )
-            .await?;
+        let mut redrive = BulkRedriveOptions::default();
+        redrive.dry_run = true;
+        redrive.limit = 100;
+        let preview = admin.redrive_many(filter.clone(), &audit, redrive).await?;
         println!("{} tasks eligible", preview.results.len());
 
         let mut cursor = None;
         loop {
-            let page = admin
-                .redrive_many(
-                    filter.clone(),
-                    &audit,
-                    BulkRedriveOptions { dry_run: false, limit: 100, cursor },
-                )
-                .await?;
+            let mut redrive = BulkRedriveOptions::default();
+            redrive.dry_run = false;
+            redrive.limit = 100;
+            redrive.cursor = cursor;
+            let page = admin.redrive_many(filter.clone(), &audit, redrive).await?;
             for result in &page.results {
                 println!(
                     "{:?} {} -> {:?}",

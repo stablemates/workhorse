@@ -36,16 +36,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         // One pool per worker, as separate worker processes would have.
         let pool =
             Pool::builder(Manager::new(url.parse()?, NoTls)).max_size(concurrency + 4).build()?;
-        let worker = Worker::new(
-            pool,
-            WorkerOptions {
-                queues: vec![QUEUE.into()],
-                worker_id: Some(format!("benchmark-fast-claim-deadlock-{index}")),
-                concurrency,
-                heartbeat_interval: Some(Duration::from_millis(heartbeat)),
-                ..WorkerOptions::default()
-            },
-        )?;
+        let worker = Worker::new(pool, {
+            let mut worker_options = WorkerOptions::default();
+            worker_options.queues = vec![QUEUE.into()];
+            worker_options.worker_id = Some(format!("benchmark-fast-claim-deadlock-{index}"));
+            worker_options.concurrency = concurrency;
+            worker_options.heartbeat_interval = Some(Duration::from_millis(heartbeat));
+            worker_options
+        })?;
         worker.handle(TASK_TYPE, move |_payload: Value, _context| async move {
             tokio::time::sleep(Duration::from_millis(jitter(work))).await;
             Ok(json!({}))

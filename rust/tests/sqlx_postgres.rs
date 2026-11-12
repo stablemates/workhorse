@@ -176,13 +176,11 @@ async fn native_jsonb_uuid_nulls_timestamps_and_ordered_batch() {
     let payload = json!({"unicode": "é雪", "nested": [null, true, {"number": 2.5}]});
     let run_at: DateTime<Utc> = "2030-01-02T03:04:05.123Z".parse().unwrap();
     let deadline: DateTime<Utc> = "2030-01-03T03:04:05.456Z".parse().unwrap();
-    let options = EnqueueOptions {
-        run_at: Some(run_at),
-        deadline: Some(deadline),
-        priority: 37,
-        idempotency: Some(Idempotency::new("same")),
-        ..Default::default()
-    };
+    let mut options = EnqueueOptions::default();
+    options.run_at = Some(run_at);
+    options.deadline = Some(deadline);
+    options.priority = 37;
+    options.idempotency = Some(Idempotency::new("same"));
     let results = assert_send(client.enqueue_many(
         &mut transaction,
         vec![
@@ -220,23 +218,20 @@ async fn native_jsonb_uuid_nulls_timestamps_and_ordered_batch() {
 }
 
 fn definitions(version: &str) -> BTreeMap<String, TaskTypeContracts> {
-    BTreeMap::from([(
-        "contracted".into(),
-        TaskTypeContracts {
-            current_version: version.into(),
-            versions: BTreeMap::from([(
-                version.into(),
-                TaskContractVersion {
-                    payload_schema: json!({"type":"object", "required":["id"]}),
-                    max_payload_bytes: 4096,
-                    max_result_bytes: 2048,
-                    sensitive_payload_keys: vec!["secret".into()],
-                    sensitive_result_keys: vec!["token".into()],
-                    ..Default::default()
-                },
-            )]),
-        },
-    )])
+    BTreeMap::from([("contracted".into(), {
+        let mut task_type_contracts = TaskTypeContracts::default();
+        task_type_contracts.current_version = version.into();
+        task_type_contracts.versions = BTreeMap::from([(version.into(), {
+            let mut task_contract_version = TaskContractVersion::default();
+            task_contract_version.payload_schema = json!({"type":"object", "required":["id"]});
+            task_contract_version.max_payload_bytes = 4096;
+            task_contract_version.max_result_bytes = 2048;
+            task_contract_version.sensitive_payload_keys = vec!["secret".into()];
+            task_contract_version.sensitive_result_keys = vec!["token".into()];
+            task_contract_version
+        })]);
+        task_type_contracts
+    })])
 }
 
 #[tokio::test]
@@ -346,8 +341,11 @@ async fn native_idempotency_conflict_matches_existing_queue_and_aborts_until_rol
     let Some(database) = scratch_database("sqlx_error_parity").await else { return };
     let observer = database.connect().await;
     let queue = Queue::new(&observer, "errors");
-    let options =
-        EnqueueOptions { idempotency: Some(Idempotency::new("same")), ..Default::default() };
+    let options = {
+        let mut enqueue_options = EnqueueOptions::default();
+        enqueue_options.idempotency = Some(Idempotency::new("same"));
+        enqueue_options
+    };
     queue.enqueue("task", &json!({"id":1}), options.clone()).await.unwrap();
     let mut caller = connection(&database).await;
     let mut transaction = caller.begin().await.unwrap();
@@ -620,7 +618,8 @@ async fn missing_schema_refusal_and_invalid_options_use_shared_owner() {
     transaction.rollback().await.unwrap();
     let mut transaction = caller.begin().await.unwrap();
     let client = EnqueueClient::new("invalid");
-    let options = EnqueueOptions { priority: 101, ..Default::default() };
+    let mut options = EnqueueOptions::default();
+    options.priority = 101;
     assert!(matches!(
         client.enqueue(&mut transaction, "task", &json!({}), options).await,
         Err(Error::InvalidArgument(_))

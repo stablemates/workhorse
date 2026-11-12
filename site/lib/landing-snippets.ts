@@ -122,7 +122,9 @@ pub async fn run(pool: Pool) -> Result<(), Box<dyn std::error::Error>> {
         .enqueue("email.welcome", &welcome, EnqueueOptions::default())
         .await?;
 
-    let worker = Worker::new(pool, WorkerOptions { concurrency: 4, ..Default::default() })?;
+    let mut options = WorkerOptions::default();
+    options.concurrency = 4;
+    let worker = Worker::new(pool, options)?;
     worker.handle("email.welcome", |payload: Value, _context| async move {
         Ok(json!({ "deliveredTo": payload["to"] }))
     });
@@ -780,22 +782,20 @@ pub async fn remind(
     match_id: &str,
     kickoff: DateTime<Utc>,
 ) -> Result<EnqueueResult, Error> {
-    let options = EnqueueOptions {
-        // Pointless after kickoff, whatever else happens.
-        deadline: Some(kickoff),
-        // Any single attempt is stuck after 30 seconds.
-        execution_timeout_ms: Some(30_000),
-        max_attempts: 5,
-        retry_policy: json!({
-            "type": "exponential",
-            "initialDelayMs": 1_000,
-            "multiplier": 2,
-            "maxDelayMs": 60_000,
-        })
-        .as_object()
-        .cloned(),
-        ..Default::default()
-    };
+    let mut options = EnqueueOptions::default();
+    // Pointless after kickoff, whatever else happens.
+    options.deadline = Some(kickoff);
+    // Any single attempt is stuck after 30 seconds.
+    options.execution_timeout_ms = Some(30_000);
+    options.max_attempts = 5;
+    options.retry_policy = json!({
+        "type": "exponential",
+        "initialDelayMs": 1_000,
+        "multiplier": 2,
+        "maxDelayMs": 60_000,
+    })
+    .as_object()
+    .cloned();
     queue.enqueue("match.reminder", &json!({ "matchId": match_id }), options).await
 }`,
 
@@ -928,15 +928,12 @@ use workhorse::{EnqueueOptions, EnqueueResult, Error, Idempotency, Queue};
 
 // A retried webhook gets the same task_id back instead of a second capture.
 pub async fn capture(queue: &Queue<Pool>) -> Result<EnqueueResult, Error> {
-    let options = EnqueueOptions {
-        queue: Some("billing".into()),
-        idempotency: Some(Idempotency {
-            key: "capture:inv-1".into(),
-            scope: "tenant-42".into(),
-            ttl_ms: 86_400_000,
-        }),
-        ..Default::default()
-    };
+    let mut options = EnqueueOptions::default();
+    options.queue = Some("billing".into());
+    let mut idempotency = Idempotency::new("capture:inv-1");
+    idempotency.scope = "tenant-42".into();
+    idempotency.ttl_ms = 86_400_000;
+    options.idempotency = Some(idempotency);
     queue.enqueue("invoice.capture", &json!({ "invoiceId": "inv-1" }), options).await
 }`,
 
@@ -1090,8 +1087,8 @@ pub async fn run(pool: Pool) -> Result<(), Box<dyn std::error::Error>> {
     Queue::new(&pool, "default").sync_schedules("billing", vec![schedule], true).await?;
 
     // Any worker in the namespace fires due schedules itself.
-    let options =
-        WorkerOptions { schedule_namespaces: vec!["billing".into()], ..Default::default() };
+    let mut options = WorkerOptions::default();
+    options.schedule_namespaces = vec!["billing".into()];
     let worker = Worker::new(pool, options)?;
     run_worker_process(&worker).await?;
     Ok(())
@@ -1247,25 +1244,19 @@ pub async fn configure(
     tenant_id: &str,
 ) -> Result<(), Error> {
     // At most 20 mail tasks active; at most 2 per tenant.
-    let mail = ConcurrencyPolicyDefinition {
-        queue: "mail".into(),
-        max_active: 20,
-        max_active_per_key: Some(2),
-    };
+    let mut mail = ConcurrencyPolicyDefinition::new("mail", 20);
+    mail.max_active_per_key = Some(2);
     queue.sync_concurrency_policies("workers", &[mail], false).await?;
 
-    let provider = RateLimitPolicyDefinition {
-        queue: "provider-api".into(),
-        rate: RateLimit { limit: 100, interval_ms: 1_000, burst: 200 },
-        per_key: None,
-    };
+    let provider = RateLimitPolicyDefinition::new(
+        "provider-api",
+        RateLimit { limit: 100, interval_ms: 1_000, burst: 200 },
+    );
     queue.sync_rate_limit_policies("workers", &[provider], false).await?;
 
-    let options = EnqueueOptions {
-        queue: Some("mail".into()),
-        concurrency_key: Some(format!("tenant:{tenant_id}")),
-        ..Default::default()
-    };
+    let mut options = EnqueueOptions::default();
+    options.queue = Some("mail".into());
+    options.concurrency_key = Some(format!("tenant:{tenant_id}"));
     queue.enqueue("mail.send", &json!({ "messageId": message_id }), options).await?;
     Ok(())
 }`,
@@ -1430,20 +1421,22 @@ pub async fn confirm(queue: &Queue<Pool>, order_id: &str) -> Result<(), Error> {
     let inventory =
         queue.enqueue("inventory.reserve", &order, EnqueueOptions::default()).await?;
 
-    let dependencies = Dependencies {
-        prerequisite_task_ids: vec![inventory.task_id],
-        on_success: DependencyTerminalPolicy::Release,
-        on_failure: DependencyTerminalPolicy::Cancel,
-        on_cancellation: DependencyTerminalPolicy::Cancel,
-    };
-    let options = EnqueueOptions { dependencies: Some(dependencies), ..Default::default() };
+    let dependencies = Dependencies::new(
+        vec![inventory.task_id],
+        DependencyTerminalPolicy::Release,
+        DependencyTerminalPolicy::Cancel,
+        DependencyTerminalPolicy::Cancel,
+    );
+    let mut options = EnqueueOptions::default();
+    options.dependencies = Some(dependencies);
     queue.enqueue("order.confirm", &order, options).await?;
     Ok(())
 }
 
 pub fn register_fulfillment(worker: &Worker) {
     worker.handle("order.fulfill", |order: Value, context| async move {
-        let options = EnqueueOptions { queue: Some("payments".into()), ..Default::default() };
+        let mut options = EnqueueOptions::default();
+        options.queue = Some("payments".into());
         let capture = json!({ "orderId": order["id"] });
         let receipt: Value =
             context.run_child("charge", "payment.capture", &capture, options).await?;
@@ -1640,12 +1633,12 @@ pub async fn reindex(
     document_id: &str,
     quiet_ms: i64,
 ) -> Result<(), Error> {
-    let options = || EnqueueOptions {
-        debounce: Some(Debounce {
-            scope: "search-index".into(),
-            ..Debounce::new(document_id, quiet_ms, DebounceSchedule::Reset)
-        }),
-        ..Default::default()
+    let options = || {
+        let mut enqueue_options = EnqueueOptions::default();
+        let mut debounce = Debounce::new(document_id, quiet_ms, DebounceSchedule::Reset);
+        debounce.scope = "search-index".into();
+        enqueue_options.debounce = Some(debounce);
+        enqueue_options
     };
     let first = json!({ "documentId": document_id, "revision": 1 });
     let first = queue.enqueue("search.reindex", &first, options()).await?;
@@ -1824,10 +1817,7 @@ pub async fn deliver_scan(
     result: &Value,
     delivery_id: &str,
 ) -> Result<(), Error> {
-    let delivery = DeliveryOptions {
-        idempotency_key: delivery_id.into(),
-        requested_by: "security-scanner".into(),
-    };
+    let delivery = DeliveryOptions::new(delivery_id, "security-scanner");
     queue.send_signal(task_id, "security-scan", result, delivery).await?;
     Ok(())
 }`,
@@ -1970,7 +1960,7 @@ use workhorse::{BatchItem, BatchOptions, BatchResult, Worker};
 pub fn register_email_batch(worker: &Worker, batch_size: usize, linger: Duration) {
     worker.handle_batch(
         "email.send",
-        BatchOptions { max_size: batch_size, linger },
+        BatchOptions::new(batch_size, linger),
         |items: Vec<BatchItem<Value>>| async move {
             items.into_iter().map(|item| BatchResult::Succeeded(item.payload)).collect()
         },
@@ -2236,13 +2226,13 @@ func redriveBilling(ctx context.Context, admin *workhorse.Admin) error {
 use workhorse::{Admin, AdminAudit, DeadLetterFilter, DeadLetterQuery, Error};
 
 pub async fn redrive_billing(admin: &Admin<Pool>) -> Result<(), Error> {
-    let filter = DeadLetterFilter {
-        queue: Some("billing".into()),
-        error_name: Some("CardDeclined".into()),
-        ..Default::default()
-    };
-    let page =
-        admin.list_dead_letters(DeadLetterQuery { filter, limit: 100, cursor: None }).await?;
+    let mut filter = DeadLetterFilter::default();
+    filter.queue = Some("billing".into());
+    filter.error_name = Some("CardDeclined".into());
+    let mut query = DeadLetterQuery::default();
+    query.filter = filter;
+    query.limit = 100;
+    let page = admin.list_dead_letters(query).await?;
 
     for failure in page.items {
         let audit = AdminAudit {
@@ -2542,13 +2532,10 @@ pub async fn inspect(pool: &Pool) -> Result<(), Error> {
     }
 
     // Cross-state listing on a dedicated projection: reading it never slows dispatch down.
-    let live = Admin::new(pool)
-        .list_tasks(TaskListQuery {
-            states: vec![TaskState::Active, TaskState::Scheduled],
-            limit: 100,
-            ..Default::default()
-        })
-        .await?;
+    let mut query = TaskListQuery::default();
+    query.states = vec![TaskState::Active, TaskState::Scheduled];
+    query.limit = 100;
+    let live = Admin::new(pool).list_tasks(query).await?;
     println!("{}", live.items.len());
     Ok(())
 }`,
@@ -2902,16 +2889,12 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
     let url = std::env::var("DATABASE_URL")?;
     let pool = Pool::builder(Manager::new(url.parse()?, NoTls)).max_size(10).build()?;
 
-    let worker = Worker::new(
-        pool,
-        WorkerOptions {
-            queues: vec!["email".into()],
-            concurrency: 8,
-            // Bounded graceful drain on SIGTERM.
-            shutdown_grace_period: Duration::from_secs(25),
-            ..Default::default()
-        },
-    )?;
+    let mut options = WorkerOptions::default();
+    options.queues = vec!["email".into()];
+    options.concurrency = 8;
+    // Bounded graceful drain on SIGTERM.
+    options.shutdown_grace_period = Duration::from_secs(25);
+    let worker = Worker::new(pool, options)?;
     worker.handle("email.send", |email: Value, _context| async move {
         Ok(json!({ "sent": email["to"] }))
     });

@@ -30,14 +30,23 @@ impl RateLimit {
 
 /// Desired active-task limits for one queue.
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct ConcurrencyPolicyDefinition {
     pub queue: String,
     pub max_active: i32,
     pub max_active_per_key: Option<i32>,
 }
 
+impl ConcurrencyPolicyDefinition {
+    /// At most `max_active` active tasks on `queue`, with no limit for each key.
+    pub fn new(queue: impl Into<String>, max_active: i32) -> Self {
+        Self { queue: queue.into(), max_active, max_active_per_key: None }
+    }
+}
+
 /// A concurrency policy as PostgreSQL stores it.
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct ConcurrencyPolicy {
     pub namespace: String,
     pub queue: String,
@@ -48,14 +57,23 @@ pub struct ConcurrencyPolicy {
 
 /// Desired start rate for one queue, and optionally for each concurrency key.
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct RateLimitPolicyDefinition {
     pub queue: String,
     pub rate: RateLimit,
     pub per_key: Option<RateLimit>,
 }
 
+impl RateLimitPolicyDefinition {
+    /// One `rate` for `queue`, with no rate for each key.
+    pub fn new(queue: impl Into<String>, rate: RateLimit) -> Self {
+        Self { queue: queue.into(), rate, per_key: None }
+    }
+}
+
 /// A rate limit policy as PostgreSQL stores it.
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct RateLimitPolicy {
     pub namespace: String,
     pub queue: String,
@@ -66,14 +84,23 @@ pub struct RateLimitPolicy {
 
 /// A named limit shared by every task that selects it, across queues.
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct BudgetDefinition {
     pub name: String,
     pub max_active: Option<i32>,
     pub rate: Option<RateLimit>,
 }
 
+impl BudgetDefinition {
+    /// A budget with no limit yet. Set `max_active`, `rate`, or both.
+    pub fn new(name: impl Into<String>) -> Self {
+        Self { name: name.into(), max_active: None, rate: None }
+    }
+}
+
 /// A budget as PostgreSQL stores it.
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct Budget {
     pub namespace: String,
     pub name: String,

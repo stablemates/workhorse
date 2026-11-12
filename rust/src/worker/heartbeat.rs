@@ -118,9 +118,9 @@ impl Drop for Membership {
 }
 
 /// Holds a round at its start until the returned future resolves. The round keeps the value of
-/// that future until the round ends. Only the conformance runner sets one
-/// (`Worker::hold_heartbeat_rounds_for_test`, behind the internal `__conformance-hooks` feature).
-#[cfg(feature = "__conformance-hooks")]
+/// that future until the round ends. Only the tests of this crate set one
+/// (`Worker::hold_heartbeat_rounds_for_test`).
+#[cfg(test)]
 pub(super) type RoundGate = Arc<
     dyn Fn() -> futures_util::future::BoxFuture<'static, Box<dyn std::any::Any + Send>>
         + Send
@@ -131,7 +131,7 @@ pub(super) type RoundGate = Arc<
 pub(super) struct Heartbeats {
     state: Mutex<State>,
     wake: Notify,
-    #[cfg(feature = "__conformance-hooks")]
+    #[cfg(test)]
     round_gate: Mutex<Option<RoundGate>>,
     /// Answers the rounds in place of PostgreSQL in unit tests.
     #[cfg(test)]
@@ -203,12 +203,12 @@ impl Heartbeats {
     }
 
     /// Holds each later round at its start with `gate`.
-    #[cfg(feature = "__conformance-hooks")]
+    #[cfg(test)]
     pub(super) fn set_round_gate(&self, gate: RoundGate) {
         *self.round_gate.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(gate);
     }
 
-    #[cfg(feature = "__conformance-hooks")]
+    #[cfg(test)]
     fn round_gate(&self) -> Option<RoundGate> {
         self.round_gate.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clone()
     }
@@ -652,7 +652,7 @@ impl Inner {
     ) -> Result<Vec<Sent>, RoundFailure> {
         // A gate holds the round in the worker, so the round loop cannot start another one. No
         // timeout bounds the hold. The round keeps the value of the gate until it ends.
-        #[cfg(feature = "__conformance-hooks")]
+        #[cfg(test)]
         let _held = match self.heartbeats.round_gate() {
             Some(gate) => Some(gate().await),
             None => None,

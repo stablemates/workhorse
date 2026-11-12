@@ -60,17 +60,13 @@ Use `Admin.listDeadLetters` to filter the list and to read it one page at a time
   <Tab value="Rust">
     ```rust
     let finished_after = Utc.with_ymd_and_hms(2026, 3, 14, 9, 0, 0).unwrap();
-    let page = admin
-        .list_dead_letters(DeadLetterQuery {
-            filter: DeadLetterFilter {
-                queue: Some("payments".into()),
-                error_name: Some("ProviderTimeout".into()),
-                finished_after: Some(finished_after),
-                ..Default::default()
-            },
-            ..Default::default()
-        })
-        .await?;
+    let mut query = DeadLetterQuery::default();
+    let mut dead_letter_filter = DeadLetterFilter::default();
+    dead_letter_filter.queue = Some("payments".into());
+    dead_letter_filter.error_name = Some("ProviderTimeout".into());
+    dead_letter_filter.finished_after = Some(finished_after);
+    query.filter = dead_letter_filter;
+    let page = admin.list_dead_letters(query).await?;
     ```
   </Tab>
   <Tab value="Ruby">
@@ -433,38 +429,26 @@ run shows the tasks of a page and changes nothing.
   </Tab>
   <Tab value="Rust">
     ```rust
-    let filter = DeadLetterFilter {
-        queue: Some("payments".into()),
-        error_name: Some("ProviderTimeout".into()),
-        ..Default::default()
-    };
+    let mut filter = DeadLetterFilter::default();
+    filter.queue = Some("payments".into());
+    filter.error_name = Some("ProviderTimeout".into());
     let audit = AdminAudit {
         actor: "ops@example.com".into(),
         reason: "Provider outage ended".into(),
         request_id: "outage-0314".into(),
     };
-    let preview = admin
-        .redrive_many(
-            filter.clone(),
-            &audit,
-            BulkRedriveOptions { dry_run: true, limit: 100, ..Default::default() },
-        )
-        .await?;
-    let mut page = admin
-        .redrive_many(
-            filter.clone(),
-            &audit,
-            BulkRedriveOptions { limit: 100, ..Default::default() },
-        )
-        .await?;
+    let mut redrive = BulkRedriveOptions::default();
+    redrive.dry_run = true;
+    redrive.limit = 100;
+    let preview = admin.redrive_many(filter.clone(), &audit, redrive).await?;
+    let mut redrive = BulkRedriveOptions::default();
+    redrive.limit = 100;
+    let mut page = admin.redrive_many(filter.clone(), &audit, redrive).await?;
     while let Some(cursor) = page.next_cursor {
-        page = admin
-            .redrive_many(
-                filter.clone(),
-                &audit,
-                BulkRedriveOptions { limit: 100, cursor: Some(cursor), ..Default::default() },
-            )
-            .await?;
+        let mut redrive = BulkRedriveOptions::default();
+        redrive.limit = 100;
+        redrive.cursor = Some(cursor);
+        page = admin.redrive_many(filter.clone(), &audit, redrive).await?;
     }
     ```
   </Tab>

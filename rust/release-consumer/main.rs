@@ -34,8 +34,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let manager = deadpool_postgres::Manager::new(url.parse()?, NoTls);
     let pool = deadpool_postgres::Pool::builder(manager).max_size(4).build()?;
-    let worker =
-        Worker::new(pool, WorkerOptions { queues: vec![QUEUE.into()], ..Default::default() })?;
+    let mut options = WorkerOptions::default();
+    options.queues = vec![QUEUE.into()];
+    let worker = Worker::new(pool, options)?;
     worker.handle(TASK_TYPE, |payload: Value, _| async move { Ok(json!({ "echo": payload })) });
     if !worker.run_once().await? {
         return Err("the worker ran no handler".into());

@@ -60,19 +60,12 @@ To use throttle, give a `throttle` key and a window when you enqueue the task.
   </Tab>
   <Tab value="Rust">
     ```rust
-    let result = queue
-        .enqueue(
-            "email.digest",
-            &json!({ "accountId": account_id }),
-            EnqueueOptions {
-                throttle: Some(Throttle {
-                    scope: "digest".into(),
-                    ..Throttle::new(account_id, digest_window_ms)
-                }),
-                ..Default::default()
-            },
-        )
-        .await?;
+    let mut options = EnqueueOptions::default();
+    let mut throttle = Throttle::new(account_id, digest_window_ms);
+    throttle.scope = "digest".into();
+    options.throttle = Some(throttle);
+    let result =
+        queue.enqueue("email.digest", &json!({ "accountId": account_id }), options).await?;
     ```
   </Tab>
   <Tab value="Ruby">

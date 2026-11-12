@@ -73,14 +73,10 @@ you can chain calls and serve many task types with one worker.
   </Tab>
   <Tab value="Rust">
     ```rust
-    let worker = Worker::new(
-        pool,
-        WorkerOptions {
-            queues: vec!["email".into(), "billing".into()],
-            concurrency: worker_concurrency,
-            ..Default::default()
-        },
-    )?;
+    let mut options = WorkerOptions::default();
+    options.queues = vec!["email".into(), "billing".into()];
+    options.concurrency = worker_concurrency;
+    let worker = Worker::new(pool, options)?;
     worker.handle("email.send", |payload: Value, _context| mailer::send(payload));
     worker.run(shutdown).await?;
     ```
@@ -561,16 +557,12 @@ retry delay, and the schedules of one worker.
   </Tab>
   <Tab value="Rust">
     ```rust
-    let worker = Worker::new(
-        pool,
-        WorkerOptions {
-            queues: vec!["email".into(), "billing".into()],
-            concurrency: worker_concurrency,
-            lease_duration: worker_lease_duration,
-            worker_id: Some("email-worker-1".into()),
-            ..Default::default()
-        },
-    )?;
+    let mut options = WorkerOptions::default();
+    options.queues = vec!["email".into(), "billing".into()];
+    options.concurrency = worker_concurrency;
+    options.lease_duration = worker_lease_duration;
+    options.worker_id = Some("email-worker-1".into());
+    let worker = Worker::new(pool, options)?;
     ```
   </Tab>
   <Tab value="Ruby">
@@ -772,14 +764,10 @@ CLI loads the compiled definition and adds signal handling and supervision.
   </Tab>
   <Tab value="Rust">
     ```rust
-    let worker = Worker::new(
-        pool,
-        WorkerOptions {
-            queues: vec!["email".into(), "billing".into()],
-            concurrency: worker_concurrency,
-            ..Default::default()
-        },
-    )?;
+    let mut options = WorkerOptions::default();
+    options.queues = vec!["email".into(), "billing".into()];
+    options.concurrency = worker_concurrency;
+    let worker = Worker::new(pool, options)?;
     worker.handle("email.send", send_email);
     run_worker_process(&worker).await?;
     ```

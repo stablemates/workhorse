@@ -15,6 +15,7 @@ use crate::contracts::{
     compile_stored_member, serialize_contracts, ContractCache, PayloadContract, TaskTypeContracts,
     CONTRACT_DEFINITION_TEXT,
 };
+use crate::queue::Rows as _;
 use crate::queue::{
     default_scope, non_empty, stamp_contract, task_input, timestamp, trace_context,
     validate_options, Executor,
@@ -26,14 +27,22 @@ use crate::{
 };
 
 /// A protocol bind. SQL types are explicit even when the value is null.
+///
+/// A later release can add a variant. A transport that meets a variant it does not know must
+/// refuse the statement with an error.
 #[derive(Clone, Copy, Debug)]
+#[non_exhaustive]
 pub enum EnqueueBind<'a> {
     Json(&'a Value),
     Text(Option<&'a str>),
 }
 
 /// The PostgreSQL types an enqueue transport must decode without coercion.
+///
+/// A later release can add a variant. A transport that meets a column type it does not know must
+/// refuse the result with an error.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum EnqueueColumnType {
     Int,
     Text,
@@ -44,6 +53,7 @@ pub enum EnqueueColumnType {
 
 /// One required named result column. Null is permitted only when declared here.
 #[derive(Clone, Copy, Debug)]
+#[non_exhaustive]
 pub struct EnqueueColumn {
     pub name: &'static str,
     pub kind: EnqueueColumnType,
@@ -51,7 +61,10 @@ pub struct EnqueueColumn {
 }
 
 /// A decoded PostgreSQL value. Missing columns and SQL null are distinct.
+///
+/// A later release can add a variant, so a `match` outside the crate needs a fallback arm.
 #[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
 pub enum EnqueueValue {
     Null,
     Int(i32),

@@ -8,6 +8,7 @@ use std::future::Future;
 use tokio_postgres::types::ToSql;
 use tokio_postgres::Row;
 
+use crate::queue::Rows as _;
 use crate::{Error, Executor};
 
 /// How many times a fenced write is sent in total when PostgreSQL keeps choosing it as a deadlock

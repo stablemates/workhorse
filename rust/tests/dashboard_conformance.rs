@@ -75,10 +75,8 @@ fn extensions(pool: &Pool) -> HashMap<String, dashboard::Procedure> {
     let enqueue = dashboard::procedure(move |input: Value, _actor: String| {
         let queue = queue.clone();
         async move {
-            let options = EnqueueOptions {
-                priority: input["priority"].as_i64().unwrap_or_default() as i32,
-                ..EnqueueOptions::default()
-            };
+            let mut options = EnqueueOptions::default();
+            options.priority = input["priority"].as_i64().unwrap_or_default() as i32;
             let task_type = format!("conformance.demo-{}", text(&input, "kind"));
             let task_id = queue.enqueue(&task_type, &json!({}), options).await?.task_id;
             Ok(json!({"taskId": task_id.to_string()}))

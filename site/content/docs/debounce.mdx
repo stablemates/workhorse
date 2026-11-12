@@ -57,17 +57,15 @@ To use debounce, give a `debounce` key and a window when you enqueue the task.
   </Tab>
   <Tab value="Rust">
     ```rust
+    let mut options = EnqueueOptions::default();
+    let mut debounce = Debounce::new(document_id, quiet_period_ms, DebounceSchedule::Reset);
+    debounce.scope = "search-index".into();
+    options.debounce = Some(debounce);
     let result = queue
         .enqueue(
             "search.reindex",
             &json!({ "documentId": document_id, "revision": revision }),
-            EnqueueOptions {
-                debounce: Some(Debounce {
-                    scope: "search-index".into(),
-                    ..Debounce::new(document_id, quiet_period_ms, DebounceSchedule::Reset)
-                }),
-                ..Default::default()
-            },
+            options,
         )
         .await?;
     ```

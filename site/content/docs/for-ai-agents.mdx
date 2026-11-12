@@ -496,22 +496,18 @@ Each example does these steps:
             .execute("INSERT INTO orders (id, status) VALUES ($1, $2)", &[&"order-42", &"new"])
             .await?;
         let retry_policy = json!({ "type": "fixed", "delayMs": 1_000 });
+        let mut options = EnqueueOptions::default();
+        options.max_attempts = 5;
+        options.retry_policy = retry_policy.as_object().cloned();
         let enqueued = Queue::new(&transaction, "default")
-            .enqueue(
-                "order.created",
-                &json!({ "orderId": "order-42" }),
-                EnqueueOptions {
-                    max_attempts: 5,
-                    retry_policy: retry_policy.as_object().cloned(),
-                    ..Default::default()
-                },
-            )
+            .enqueue("order.created", &json!({ "orderId": "order-42" }), options)
             .await?;
         transaction.commit().await?; // Dropping an uncommitted transaction rolls it back.
         drop(client);
 
-        let worker =
-            Worker::new(pool.clone(), WorkerOptions { polling_only: true, ..Default::default() })?;
+        let mut options = WorkerOptions::default();
+        options.polling_only = true;
+        let worker = Worker::new(pool.clone(), options)?;
         worker.handle("order.created", |payload: Value, context| async move {
             let order_id = payload["orderId"].as_str().unwrap_or_default().to_owned();
             // After Workhorse saves the receipt, a replay reuses it and skips the send.

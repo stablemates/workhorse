@@ -14,9 +14,13 @@ mod process;
 mod shared;
 
 /// The scratch databases of the integration tests, for the unit tests that need PostgreSQL.
+///
+/// The integration tests build `WorkerOptions` from its default and then set fields, because the
+/// type is `#[non_exhaustive]` outside this crate. Inside the crate clippy prefers a struct literal.
 #[cfg(test)]
+#[allow(clippy::field_reassign_with_default)]
 #[path = "../../tests/support/mod.rs"]
-mod scratch;
+pub(crate) mod scratch;
 
 use std::collections::{HashMap, HashSet};
 use std::future::Future;
@@ -40,11 +44,12 @@ pub use process::run_worker_process;
 
 use crate::contracts::ContractSchema;
 use crate::fenced_write::fenced_rows;
+use crate::queue::Rows as _;
 use crate::queue::{exactly_one, BoundedPool};
 use crate::sql_catalogue_generated as sql;
 use crate::telemetry::{Attribute, Counter, Histogram, Metrics};
 use crate::HandlerContext;
-use crate::{Error, Executor, Operation};
+use crate::{Error, Operation};
 use database_now::DatabaseNow;
 use handler::ErasedHandler;
 
@@ -68,16 +73,11 @@ const MAX_CATCHUP_LIMIT: i32 = 10_000;
 const PROMOTE_LIMIT: i32 = 100;
 const RECOVER_LIMIT: i32 = 100;
 /// How long a stopped handler may unwind after its cancellation fires at the end of grace.
-///
-/// Public only so integration tests derive their shutdown bounds from it; not part of the API.
-#[doc(hidden)]
-pub const UNWIND_WINDOW: Duration = Duration::from_millis(250);
+/// `docs/architecture/schema-and-protocol.md` states this value.
+const UNWIND_WINDOW: Duration = Duration::from_millis(250);
 /// How long shutdown waits, past its deadline, for the registry loop and the listener to stop and
-/// for the worker to deregister.
-///
-/// Public only so integration tests derive their shutdown bounds from it; not part of the API.
-#[doc(hidden)]
-pub const CLEANUP_WINDOW: Duration = Duration::from_secs(1);
+/// for the worker to deregister. `docs/architecture/schema-and-protocol.md` states this value.
+const CLEANUP_WINDOW: Duration = Duration::from_secs(1);
 /// The heartbeat connection plus one claim and one settlement.
 const MIN_DEDICATED_POOL: usize = 3;
 /// The startup budget is the larger of the heartbeat interval and this floor (ADR 0071, rule 3).
@@ -144,7 +144,11 @@ pub type RegistrationErrorHook = Arc<dyn Fn(&Error) + Send + Sync>;
 pub type RetryDelay = Arc<dyn Fn(i32, &ClaimedTask) -> Option<Duration> + Send + Sync>;
 
 /// How a worker claims, leases, maintains and drains. `Default` gives the ADR 0072 values.
+///
+/// A later release can add a field, so a caller starts from `WorkerOptions::default()` and sets the
+/// fields it needs.
 #[derive(Clone)]
+#[non_exhaustive]
 pub struct WorkerOptions {
     /// The queues claimed round-robin. Empty names and duplicates are dropped.
     pub queues: Vec<String>,
@@ -750,21 +754,17 @@ impl Worker {
     }
 
     /// The empty wait of the dispatch loop: its deadline, and whether a notification can end it.
-    /// `None` without a wait.
-    ///
-    /// Public only so the conformance runner can read it; not part of the API.
-    #[doc(hidden)]
-    pub fn empty_wait_for_test(&self) -> Option<(std::time::Instant, bool)> {
+    /// `None` without a wait. Only the tests of this crate read it (`tests/crate_private`).
+    #[cfg(test)]
+    pub(crate) fn empty_wait_for_test(&self) -> Option<(std::time::Instant, bool)> {
         lock(&self.0.empty_wait).map(|(deadline, wakeable)| (deadline.into_std(), wakeable))
     }
 
     /// The claims in flight of the dispatch loop: plain claims, and fused claims reserved and not
-    /// yet handed to the loop. Zero without a run.
-    ///
-    /// Public only so a test can wait until the claims from before a pause end; not part of the
-    /// API.
-    #[doc(hidden)]
-    pub fn claims_in_flight_for_test(&self) -> usize {
+    /// yet handed to the loop. Zero without a run. Only the tests of this crate read it
+    /// (`tests/crate_private`).
+    #[cfg(test)]
+    pub(crate) fn claims_in_flight_for_test(&self) -> usize {
         lock(&self.0.claims_in_flight).as_ref().map_or(0, |claims| claims())
     }
 
@@ -772,12 +772,10 @@ impl Worker {
     /// round keeps the output of that future until the round ends. No timeout bounds the hold, so
     /// the round loop starts no other round meanwhile.
     ///
-    /// Public only so the conformance runner can hold a round in the worker, because PostgreSQL
-    /// ends a held statement by the deadline of its round; not part of the API. Only the internal
-    /// `__conformance-hooks` feature compiles it.
-    #[cfg(feature = "__conformance-hooks")]
-    #[doc(hidden)]
-    pub fn hold_heartbeat_rounds_for_test<F, Fut>(&self, gate: F)
+    /// Only the tests of this crate hold a round (`tests/crate_private`), because PostgreSQL ends a
+    /// held statement by the deadline of its round.
+    #[cfg(test)]
+    pub(crate) fn hold_heartbeat_rounds_for_test<F, Fut>(&self, gate: F)
     where
         F: Fn() -> Fut + Send + Sync + 'static,
         Fut: Future + Send + 'static,
@@ -1921,6 +1919,14 @@ fn recovery_retries(retried: i32, dimensions: &Value) -> Vec<(String, String, u6
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `docs/architecture/schema-and-protocol.md` and `tests/worker_postgres.rs` state these two
+    /// values. A change to a window must change them in the same commit.
+    #[test]
+    fn the_shutdown_windows_keep_their_documented_lengths() {
+        assert_eq!(UNWIND_WINDOW, Duration::from_millis(250));
+        assert_eq!(CLEANUP_WINDOW, Duration::from_secs(1));
+    }
 
     fn pool(max_size: usize) -> deadpool_postgres::Pool {
         let mut config = deadpool_postgres::Config::new();

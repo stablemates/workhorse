@@ -351,6 +351,14 @@ answers 400 `BAD_REQUEST` with the message `Malformed request. Ensure the reques
 formatted and the 'Content-Type' header is set correctly.` A JSON syntax error and a truncated body
 keep their answers (SM-2043).
 
+### The sqlc example code moves under `internal`
+
+The generated queries of the sqlc example were in the package
+`github.com/stablemates/workhorse/go/examples/sqlc/generated`. That package was in the Go module, so
+another module could import it, and 1.0.0 would govern its business types (SM-2037). The code now
+is in `go/examples/sqlc/internal/generated`, which no other module can import. The package was
+never part of the Workhorse API. If you imported it, copy the example code into your own module.
+
 ## 0.12.0 — 2026-11-07
 
 The npm packages, Python distribution, Go module, Rust crate, Ruby gem, JVM artifacts, and .NET

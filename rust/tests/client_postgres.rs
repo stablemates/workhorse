@@ -188,17 +188,15 @@ async fn sync_schedules_stores_and_prunes_definitions() {
     let queue = Queue::connect(database.url(), "rust-schedules").await.unwrap();
     let observer = database.connect().await;
 
-    let mut nightly = ScheduleDefinition::new(
-        "nightly",
-        "0 3 * * *",
-        ScheduledTask {
-            priority: 5,
-            concurrency_key: Some("reports".into()),
-            max_attempts: 4,
-            retry_policy: json!({"type": "fixed", "delayMs": 1000}).as_object().cloned(),
-            ..ScheduledTask::new("report.build", json!({"kind": "daily"}))
-        },
-    );
+    let mut nightly = ScheduleDefinition::new("nightly", "0 3 * * *", {
+        let mut scheduled_task = ScheduledTask::new("report.build", json!({"kind": "daily"}));
+        scheduled_task.priority = 5;
+        scheduled_task.concurrency_key = Some("reports".into());
+        scheduled_task.max_attempts = 4;
+        scheduled_task.retry_policy =
+            json!({"type": "fixed", "delayMs": 1000}).as_object().cloned();
+        scheduled_task
+    });
     nightly.timezone = "Europe/Berlin".into();
     nightly.catchup_policy = ScheduleCatchupPolicy::Latest;
     let hourly =
@@ -263,27 +261,24 @@ async fn sync_schedules_stores_and_prunes_definitions() {
 #[tokio::test]
 async fn sync_schedules_applies_the_current_contract() {
     let Some(database) = scratch_database("client_schedule_contracts").await else { return };
-    let contracts = BTreeMap::from([(
-        "payment.capture".to_string(),
-        TaskTypeContracts {
-            current_version: "v2".into(),
-            versions: BTreeMap::from([(
-                "v2".to_string(),
-                TaskContractVersion {
-                    payload_schema: json!({
-                        "type": "object",
-                        "properties": {"account": {"type": "string"}},
-                        "required": ["account"],
-                    }),
-                    max_payload_bytes: 4096,
-                    max_result_bytes: 8192,
-                    sensitive_payload_keys: vec!["card".into()],
-                    sensitive_result_keys: vec!["receipt".into()],
-                    ..TaskContractVersion::default()
-                },
-            )]),
-        },
-    )]);
+    let contracts = BTreeMap::from([("payment.capture".to_string(), {
+        let mut task_type_contracts = TaskTypeContracts::default();
+        task_type_contracts.current_version = "v2".into();
+        task_type_contracts.versions = BTreeMap::from([("v2".to_string(), {
+            let mut task_contract_version = TaskContractVersion::default();
+            task_contract_version.payload_schema = json!({
+                "type": "object",
+                "properties": {"account": {"type": "string"}},
+                "required": ["account"],
+            });
+            task_contract_version.max_payload_bytes = 4096;
+            task_contract_version.max_result_bytes = 8192;
+            task_contract_version.sensitive_payload_keys = vec!["card".into()];
+            task_contract_version.sensitive_result_keys = vec!["receipt".into()];
+            task_contract_version
+        })]);
+        task_type_contracts
+    })]);
     Queue::connect(database.url(), "rust-schedules")
         .await
         .unwrap()
@@ -352,16 +347,12 @@ async fn sync_concurrency_policies_stores_lists_and_prunes() {
     let queue = Queue::connect(database.url(), "rust-policies").await.unwrap();
 
     let definitions = [
-        ConcurrencyPolicyDefinition {
-            queue: "emails".into(),
-            max_active: 4,
-            max_active_per_key: Some(1),
+        {
+            let mut concurrency_policy_definition = ConcurrencyPolicyDefinition::new("emails", 4);
+            concurrency_policy_definition.max_active_per_key = Some(1);
+            concurrency_policy_definition
         },
-        ConcurrencyPolicyDefinition {
-            queue: "reports".into(),
-            max_active: 2,
-            max_active_per_key: None,
-        },
+        ConcurrencyPolicyDefinition::new("reports", 2),
     ];
     let stored = queue.sync_concurrency_policies("app", &definitions, true).await.unwrap();
     assert_eq!(stored.len(), 2);
@@ -407,7 +398,7 @@ async fn sync_attempts(client: &Client) -> i64 {
 }
 
 fn mail_policy() -> [ConcurrencyPolicyDefinition; 1] {
-    [ConcurrencyPolicyDefinition { queue: "mail".into(), max_active: 2, max_active_per_key: None }]
+    [ConcurrencyPolicyDefinition::new("mail", 2)]
 }
 
 #[tokio::test]
@@ -472,8 +463,12 @@ async fn sync_rate_limit_policies_stores_lists_and_prunes() {
     let rate = RateLimit { limit: 10, interval_ms: 1000, burst: 20 };
     let per_key = RateLimit { limit: 1, interval_ms: 1000, burst: 1 };
     let definitions = [
-        RateLimitPolicyDefinition { queue: "emails".into(), rate, per_key: Some(per_key) },
-        RateLimitPolicyDefinition { queue: "reports".into(), rate, per_key: None },
+        {
+            let mut rate_limit_policy_definition = RateLimitPolicyDefinition::new("emails", rate);
+            rate_limit_policy_definition.per_key = Some(per_key);
+            rate_limit_policy_definition
+        },
+        RateLimitPolicyDefinition::new("reports", rate),
     ];
     queue.sync_rate_limit_policies("app", &definitions, true).await.unwrap();
     let listed = queue.list_rate_limit_policies(&["emails", "reports"]).await.unwrap();
@@ -495,8 +490,17 @@ async fn sync_budgets_stores_lists_and_prunes() {
 
     let rate = RateLimit { limit: 60, interval_ms: 60_000, burst: 60 };
     let definitions = [
-        BudgetDefinition { name: "openai".into(), max_active: Some(8), rate: Some(rate) },
-        BudgetDefinition { name: "smtp".into(), max_active: Some(2), rate: None },
+        {
+            let mut budget_definition = BudgetDefinition::new("openai");
+            budget_definition.max_active = Some(8);
+            budget_definition.rate = Some(rate);
+            budget_definition
+        },
+        {
+            let mut budget_definition = BudgetDefinition::new("smtp");
+            budget_definition.max_active = Some(2);
+            budget_definition
+        },
     ];
     queue.sync_budgets("app", &definitions, true).await.unwrap();
     let listed = queue.list_budgets(&["openai"]).await.unwrap();
@@ -516,23 +520,20 @@ async fn sync_contracts_validates_payloads_and_stamps_contract_fields() {
     let queue = Queue::connect(database.url(), "rust-contracts").await.unwrap();
     let observer = database.connect().await;
 
-    let version = TaskContractVersion {
-        payload_schema: json!({
-            "type": "object",
-            "properties": {"to": {"type": "string"}, "token": {"type": "string"}},
-            "required": ["to"],
-        }),
-        max_payload_bytes: 4096,
-        sensitive_payload_keys: vec!["token".into()],
-        ..TaskContractVersion::default()
-    };
-    let contracts = BTreeMap::from([(
-        "email.send".to_string(),
-        TaskTypeContracts {
-            current_version: "v2".into(),
-            versions: BTreeMap::from([("v2".to_string(), version)]),
-        },
-    )]);
+    let mut version = TaskContractVersion::default();
+    version.payload_schema = json!({
+        "type": "object",
+        "properties": {"to": {"type": "string"}, "token": {"type": "string"}},
+        "required": ["to"],
+    });
+    version.max_payload_bytes = 4096;
+    version.sensitive_payload_keys = vec!["token".into()];
+    let contracts = BTreeMap::from([("email.send".to_string(), {
+        let mut task_type_contracts = TaskTypeContracts::default();
+        task_type_contracts.current_version = "v2".into();
+        task_type_contracts.versions = BTreeMap::from([("v2".to_string(), version)]);
+        task_type_contracts
+    })]);
     queue.sync_contracts(&contracts).await.unwrap();
 
     let refusal =
@@ -574,19 +575,16 @@ async fn sync_contracts_validates_payloads_and_stamps_contract_fields() {
     let refused = other.enqueue("email.send", &json!({}), EnqueueOptions::default()).await;
     assert!(matches!(refused, Err(Error::ContractValidation { .. })), "got {refused:?}");
 
-    let outside_profile = BTreeMap::from([(
-        "bad".to_string(),
-        TaskTypeContracts {
-            current_version: "v1".into(),
-            versions: BTreeMap::from([(
-                "v1".to_string(),
-                TaskContractVersion {
-                    payload_schema: json!({"$ref": "https://example.com/schema"}),
-                    ..TaskContractVersion::default()
-                },
-            )]),
-        },
-    )]);
+    let outside_profile = BTreeMap::from([("bad".to_string(), {
+        let mut task_type_contracts = TaskTypeContracts::default();
+        task_type_contracts.current_version = "v1".into();
+        task_type_contracts.versions = BTreeMap::from([("v1".to_string(), {
+            let mut task_contract_version = TaskContractVersion::default();
+            task_contract_version.payload_schema = json!({"$ref": "https://example.com/schema"});
+            task_contract_version
+        })]);
+        task_type_contracts
+    })]);
     let refusal = queue.sync_contracts(&outside_profile).await;
     assert!(matches!(refusal, Err(Error::InvalidArgument(_))), "got {refusal:?}");
 }

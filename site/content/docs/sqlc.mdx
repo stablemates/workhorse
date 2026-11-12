@@ -96,8 +96,10 @@ WORKHORSE_REQUIRE_DATABASE=1 pnpm exec tsx scripts/with-env.ts \
 ```
 
 The business inputs are `go/examples/sqlc/schema.sql`, `queries.sql`, and `sqlc.yaml`. The output in
-`generated/` is checked in. It contains only application queries, never generated Workhorse protocol
-calls. Workhorse still uses its own maintained SQL catalogue and its own enqueue validation.
+`internal/generated/` is checked in. It contains only application queries, never generated Workhorse
+protocol calls. Because the output is under `internal`, another module cannot import it, and it is
+not part of the Workhorse Go API. Workhorse still uses its own maintained SQL catalogue and its own
+enqueue validation.
 
 The generate command downloads the official sqlc release archive and verifies it. The check command
 generates the code again in a temporary directory and compares it with the checkout. It does not

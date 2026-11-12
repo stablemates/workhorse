@@ -78,17 +78,9 @@ through the connection that they own. `Queue.list_concurrency_policies` and
   </Tab>
   <Tab value="Rust">
     ```rust
-    let policies = queue
-        .sync_concurrency_policies(
-            "workers",
-            &[ConcurrencyPolicyDefinition {
-                queue: "mail".into(),
-                max_active: 20,
-                max_active_per_key: Some(3),
-            }],
-            false,
-        )
-        .await?;
+    let mut policy = ConcurrencyPolicyDefinition::new("mail", 20);
+    policy.max_active_per_key = Some(3);
+    let policies = queue.sync_concurrency_policies("workers", &[policy], false).await?;
     ```
   </Tab>
   <Tab value="Ruby">
@@ -157,17 +149,10 @@ queue. The key can name a tenant, a destination host, or an account.
   </Tab>
   <Tab value="Rust">
     ```rust
-    queue
-        .enqueue(
-            "mail.send",
-            &json!({ "messageId": message_id }),
-            EnqueueOptions {
-                queue: Some("mail".into()),
-                concurrency_key: Some(tenant_id.into()),
-                ..Default::default()
-            },
-        )
-        .await?;
+    let mut options = EnqueueOptions::default();
+    options.queue = Some("mail".into());
+    options.concurrency_key = Some(tenant_id.into());
+    queue.enqueue("mail.send", &json!({ "messageId": message_id }), options).await?;
     ```
   </Tab>
   <Tab value="Ruby">
@@ -358,24 +343,13 @@ A task names its budget when you enqueue it, with the `budget` option beside `co
   </Tab>
   <Tab value="Rust">
     ```rust
-    let budgets = queue
-        .sync_budgets(
-            "workers",
-            &[BudgetDefinition { name: "vendor-api".into(), max_active: Some(4), rate: None }],
-            false,
-        )
-        .await?;
-    queue
-        .enqueue(
-            "invoice.sync",
-            &json!({ "id": 1 }),
-            EnqueueOptions {
-                queue: Some("billing".into()),
-                budget: Some("vendor-api".into()),
-                ..Default::default()
-            },
-        )
-        .await?;
+    let mut budget = BudgetDefinition::new("vendor-api");
+    budget.max_active = Some(4);
+    let budgets = queue.sync_budgets("workers", &[budget], false).await?;
+    let mut options = EnqueueOptions::default();
+    options.queue = Some("billing".into());
+    options.budget = Some("vendor-api".into());
+    queue.enqueue("invoice.sync", &json!({ "id": 1 }), options).await?;
     ```
   </Tab>
   <Tab value="Ruby">

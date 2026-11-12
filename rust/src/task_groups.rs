@@ -13,6 +13,7 @@ use crate::admin::{validate_audit, Admin, AdminAudit};
 use crate::enqueue::{
     enqueue_results, validate_callback, validate_requests, EnqueueClient, TokioTransport,
 };
+use crate::queue::Rows as _;
 use crate::queue::{exactly_one, Executor, Queue};
 use crate::sql_catalogue_generated as sql;
 use crate::types::{string_enum, TaskState};
@@ -30,6 +31,7 @@ pub const MAX_TASK_GROUP_DRIFT_LIMIT: u32 = 10_000;
 string_enum!(
     /// `open` accepts tasks. `sealed` accepts tasks only from a running member task. `finished`
     /// means every member task is finished and the callbacks are enqueued.
+    #[non_exhaustive]
     TaskGroupState {
         Open => "open",
         Sealed => "sealed",
@@ -39,6 +41,7 @@ string_enum!(
 
 string_enum!(
     /// `succeeded` when every member task succeeded, otherwise `failed`.
+    #[non_exhaustive]
     TaskGroupResult {
         Succeeded => "succeeded",
         Failed => "failed",
@@ -47,6 +50,7 @@ string_enum!(
 
 string_enum!(
     /// The kind of a task group callback.
+    #[non_exhaustive]
     TaskGroupCallbackKind {
         OnFinish => "on_finish",
         OnSuccess => "on_success",
@@ -56,6 +60,7 @@ string_enum!(
 
 string_enum!(
     /// The outcome a group counted for one member task.
+    #[non_exhaustive]
     TaskGroupMemberOutcome {
         Succeeded => "succeeded",
         Failed => "failed",
@@ -65,6 +70,7 @@ string_enum!(
 
 string_enum!(
     /// Whether a task is a member task or a callback task of its group.
+    #[non_exhaustive]
     TaskGroupRole {
         Member => "member",
         Callback => "callback",
@@ -73,6 +79,7 @@ string_enum!(
 
 string_enum!(
     /// The type of one task group history event.
+    #[non_exhaustive]
     TaskGroupEventType {
         Created => "created",
         Sealed => "sealed",
@@ -86,6 +93,7 @@ string_enum!(
 
 string_enum!(
     /// What a repair does to one drifted group.
+    #[non_exhaustive]
     TaskGroupRepairAction {
         Recounted => "recounted",
         Finished => "finished",
@@ -95,6 +103,7 @@ string_enum!(
 /// The callbacks of a task group. Each one is an ordinary enqueue request without enqueue
 /// idempotency, debounce, or throttle. A callback can be on any queue, the fast tier included.
 #[derive(Clone, Debug, Default)]
+#[non_exhaustive]
 pub struct TaskGroupCallbacks {
     /// Runs when every member task is finished.
     pub on_finish: Option<EnqueueRequest>,
@@ -105,6 +114,7 @@ pub struct TaskGroupCallbacks {
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct TaskGroupCounts {
     pub total: u32,
     pub succeeded: u32,
@@ -117,6 +127,7 @@ pub struct TaskGroupCounts {
 /// because an operator moved the callback queue to the fast tier and the request has a concurrency
 /// key. Workhorse does not try the callback again. Retention deletes this record with the group.
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct TaskGroupCallbackFailure {
     /// The SQLSTATE of the enqueue error.
     pub code: String,
@@ -126,6 +137,7 @@ pub struct TaskGroupCallbackFailure {
 
 /// A requested callback, and the task the finished group enqueued for it.
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct TaskGroupCallback {
     pub kind: TaskGroupCallbackKind,
     /// `None` until the group finishes, and `None` for the callback the result does not select.
@@ -135,6 +147,7 @@ pub struct TaskGroupCallback {
 }
 
 #[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
 pub struct TaskGroup {
     pub id: Uuid,
     pub state: TaskGroupState,
@@ -151,6 +164,7 @@ pub struct TaskGroup {
 }
 
 #[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
 pub struct TaskGroupMember {
     /// One-based order in which the member joined its group.
     pub position: u32,
@@ -167,6 +181,7 @@ pub struct TaskGroupMember {
 
 /// One page request of a group's member tasks.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct TaskGroupMemberQuery {
     /// Return members after this position.
     pub after: u32,
@@ -181,6 +196,7 @@ impl Default for TaskGroupMemberQuery {
 }
 
 #[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
 pub struct TaskGroupMemberPage {
     pub members: Vec<TaskGroupMember>,
     /// The `after` value of the next page, or `None` on the last page.
@@ -189,6 +205,7 @@ pub struct TaskGroupMemberPage {
 
 /// The group of a running task, as its handler sees it through [`HandlerContext::task_group`].
 #[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
 pub struct TaskGroupLink {
     pub role: TaskGroupRole,
     /// The kind of callback, for a callback task.
@@ -197,6 +214,7 @@ pub struct TaskGroupLink {
 }
 
 #[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
 pub struct TaskGroupEvent {
     pub id: Uuid,
     pub event_type: TaskGroupEventType,
@@ -205,6 +223,7 @@ pub struct TaskGroupEvent {
 }
 
 #[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
 pub struct TaskGroupBlockResult {
     pub group: TaskGroup,
     /// One result for each added request, in order.
@@ -213,6 +232,7 @@ pub struct TaskGroupBlockResult {
 
 /// The counters a group row records.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct TaskGroupRecordedCounts {
     pub total: u32,
     pub succeeded: u32,
@@ -222,6 +242,7 @@ pub struct TaskGroupRecordedCounts {
 
 /// One group whose counters disagree with its member outcomes, or that should have finished.
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct TaskGroupDrift {
     pub group_id: Uuid,
     pub state: TaskGroupState,
@@ -232,6 +253,7 @@ pub struct TaskGroupDrift {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct TaskGroupRepair {
     pub group_id: Uuid,
     pub recorded_pending: u32,

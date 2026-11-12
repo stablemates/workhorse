@@ -18,7 +18,11 @@ use workhorse_demo_worker::{
 const WAIT: Duration = Duration::from_secs(15);
 
 fn on(queue: &str) -> EnqueueOptions {
-    EnqueueOptions { queue: Some(queue.into()), ..Default::default() }
+    {
+        let mut enqueue_options = EnqueueOptions::default();
+        enqueue_options.queue = Some(queue.into());
+        enqueue_options
+    }
 }
 
 async fn enqueue(queue: &Queue<Client>, task_type: &str, payload: Value, on_queue: &str) -> Uuid {
@@ -79,15 +83,12 @@ async fn the_rust_demo_worker_completes_tasks_on_its_full_and_fast_queues() {
     let fast =
         enqueue(&queue, LANGUAGE_TASK_TYPE, json!({"language": "rust"}), RUST_FAST_QUEUE).await;
     let foreign = queue
-        .enqueue(
-            LANGUAGE_TASK_TYPE,
-            &json!({"language": "go"}),
-            EnqueueOptions {
-                queue: Some(RUST_QUEUE.into()),
-                max_attempts: 1,
-                ..Default::default()
-            },
-        )
+        .enqueue(LANGUAGE_TASK_TYPE, &json!({"language": "go"}), {
+            let mut enqueue_options = EnqueueOptions::default();
+            enqueue_options.queue = Some(RUST_QUEUE.into());
+            enqueue_options.max_attempts = 1;
+            enqueue_options
+        })
         .await
         .unwrap()
         .task_id;

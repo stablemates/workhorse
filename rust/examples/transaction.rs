@@ -17,16 +17,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let retry_policy = json!({
         "type": "exponential", "initialDelayMs": 1_000, "multiplier": 2, "maxDelayMs": 60_000,
     });
+    let mut options = EnqueueOptions::default();
+    options.max_attempts = 3;
+    options.retry_policy = retry_policy.as_object().cloned();
     let result = Queue::new(&transaction, "orders")
-        .enqueue(
-            "order.accepted",
-            &json!({ "orderId": "order-42" }),
-            EnqueueOptions {
-                max_attempts: 3,
-                retry_policy: retry_policy.as_object().cloned(),
-                ..Default::default()
-            },
-        )
+        .enqueue("order.accepted", &json!({ "orderId": "order-42" }), options)
         .await?;
     transaction.commit().await?;
     println!("{}", result.task_id);

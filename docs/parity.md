@@ -695,7 +695,9 @@ suite runs the SQL fixtures through `scripts/verify-sql-protocol.ts` and the run
 fixtures through `python/tests/test_protocol_conformance.py` and every runtime fixture through
 `python/tests/test_worker_runtime_conformance.py`. The Rust suite runs every `protocol/v1` fixture
 category through `rust/tests/protocol_conformance.rs`, and
-`rust/tests/conformance/expected-unsupported.json` lists no exception. The Ruby suite runs every
+`rust/tests/conformance/expected-unsupported.json` lists no exception. The unit tests of the crate
+run the contract fixtures and the runtime fixtures that read private worker state
+(`rust/tests/crate_private`). The Ruby suite runs every
 `protocol/v1` fixture through `ruby/spec/conformance/protocol_conformance_spec.rb`. The JVM suite
 runs every `protocol/v1` fixture through
 `jvm/workhorse/src/test/java/run/workhorse/conformance/ProtocolConformanceTest.java`. The .NET suite
@@ -712,8 +714,9 @@ cell must name a Linear `SM-*` issue, whose link the generator also writes.
 
 A Rust Supported cell cites executed evidence instead of a pattern in a test file. It names either
 `protocol/v1` fixtures or one test function in a file that `pnpm rust:integration` runs. The Rust
-runner in `rust/tests/protocol_conformance.rs` executes every fixture. It fails on a fixture that
-neither passes nor appears in `rust/tests/conformance/expected-unsupported.json`. `pnpm parity:check`
+runner in `rust/tests/protocol_conformance.rs` executes every fixture, or records that the unit tests
+of the crate run it. It fails on a fixture that neither passes nor appears in
+`rust/tests/conformance/expected-unsupported.json`. `pnpm parity:check`
 fails when a cited fixture does not exist or the list still holds it. It also fails when the cited
 file is not in that script or has no test function by that name. That script requires a database,
 so the named test cannot skip there.

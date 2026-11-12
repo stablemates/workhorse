@@ -71,17 +71,10 @@ To set a rate limit, synchronize a rate-limit policy for the queue.
   </Tab>
   <Tab value="Rust">
     ```rust
-    let policies = queue
-        .sync_rate_limit_policies(
-            "workers",
-            &[RateLimitPolicyDefinition {
-                queue: "provider-api".into(),
-                rate: RateLimit { limit: 60, interval_ms: 60_000, burst: 10 },
-                per_key: Some(RateLimit { limit: 5, interval_ms: 60_000, burst: 2 }),
-            }],
-            false,
-        )
-        .await?;
+    let rate = RateLimit { limit: 60, interval_ms: 60_000, burst: 10 };
+    let mut policy = RateLimitPolicyDefinition::new("provider-api", rate);
+    policy.per_key = Some(RateLimit { limit: 5, interval_ms: 60_000, burst: 2 });
+    let policies = queue.sync_rate_limit_policies("workers", &[policy], false).await?;
     ```
   </Tab>
   <Tab value="Ruby">

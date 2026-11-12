@@ -4,8 +4,9 @@ Generated from `protocol/v1` at protocol version 5 and from
 `rust/tests/conformance/expected-unsupported.json`.
 
 `rust/tests/protocol_conformance.rs` executes every `protocol/v1` fixture through the Rust
-adapters against a scratch PostgreSQL database. A fixture either passes or appears on the
-expected-unsupported list with the Issue that owns the gap. The runner fails when an unlisted
+adapters against a scratch PostgreSQL database. The contract fixtures and the runtime kinds that read
+private worker state run in the unit tests of the crate (`rust/tests/crate_private`). A fixture
+either passes or appears on the expected-unsupported list with the Issue that owns the gap. The runner fails when an unlisted
 fixture does not pass, and when a listed fixture passes. `pnpm rust:test` runs it in CI.
 
 ## Fixture inventory

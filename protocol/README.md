@@ -315,7 +315,8 @@ average of 60. For example, a run that counts how often a test fails must start 
 
 The Rust integration harness lives in the canonical Cargo workspace rooted at `Cargo.toml`.
 `rust/tests/protocol_conformance.rs` executes every fixture kind through the Rust adapters, as the
-Go and Python lanes do. Fixtures the Rust lane cannot pass yet appear on
+Go and Python lanes do. The contract fixtures and the runtime kinds that read private worker state
+run in the unit tests of the crate (`rust/tests/crate_private`). Fixtures the Rust lane cannot pass yet appear on
 `rust/tests/conformance/expected-unsupported.json`, each with the Issue that owns the gap. The runner
 fails when an unlisted fixture does not pass, and when a listed fixture passes.
 

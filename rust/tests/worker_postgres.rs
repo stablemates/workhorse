@@ -19,12 +19,18 @@ use workhorse::contracts::{TaskContractVersion, TaskTypeContracts};
 use workhorse::{
     Admin, AdminAudit, BatchItem, BatchOptions, BatchResult, CancelReason, ChildTaskRequest,
     ClaimedTask, Debounce, DebounceSchedule, EnqueueOptions, EnqueueOutcome, EnqueueRequest, Error,
-    HandlerContext, HandlerError, Queue, QueueHistory, QueueTier, ScheduleCatchupPolicy,
-    ScheduleDefinition, ScheduledTask, TaskState, Throttle, Worker, WorkerOptions, CLEANUP_WINDOW,
-    UNWIND_WINDOW,
+    HandlerContext, HandlerError, Queue, QueueTier, ScheduleCatchupPolicy, ScheduleDefinition,
+    ScheduledTask, TaskState, Throttle, Worker, WorkerOptions,
 };
 
 const QUEUE: &str = "rust-worker";
+/// How long a stopped handler may unwind after grace ends. "Schema and SQL protocol: Shutdown" in
+/// `docs/architecture/schema-and-protocol.md` states this value for the Rust worker, and a unit test
+/// of `rust/src/worker` holds the worker to it.
+const UNWIND_WINDOW: Duration = Duration::from_millis(250);
+/// How long shutdown waits past its deadline for the registry loop, the listener, and the
+/// deregistration. "Schema and SQL protocol: Cleanup window" states this value.
+const CLEANUP_WINDOW: Duration = Duration::from_secs(1);
 const WAIT: Duration = Duration::from_secs(10);
 /// Holds every heartbeat statement until the transaction ends. `heartbeat_many_v2` locks the rows of
 /// both tiers with `SKIP LOCKED`, so a row lock only makes a lease busy. Its fast-tier step takes a
@@ -74,12 +80,13 @@ impl Harness {
 }
 
 fn options() -> WorkerOptions {
-    WorkerOptions {
-        queues: vec![QUEUE.into()],
-        worker_id: Some(format!("rust-worker-{}", Uuid::new_v4())),
-        polling_only: true,
-        poll_interval: Some(Duration::from_millis(20)),
-        ..WorkerOptions::default()
+    {
+        let mut worker_options = WorkerOptions::default();
+        worker_options.queues = vec![QUEUE.into()];
+        worker_options.worker_id = Some(format!("rust-worker-{}", Uuid::new_v4()));
+        worker_options.polling_only = true;
+        worker_options.poll_interval = Some(Duration::from_millis(20));
+        worker_options
     }
 }
 
@@ -195,7 +202,11 @@ fn judged_cooperative_shutdown(
 async fn a_failed_attempt_settles_through_fail_v1() {
     let Some(harness) = harness("worker_fail").await else { return };
     let task = harness
-        .enqueue("rust.fail", json!({}), EnqueueOptions { max_attempts: 1, ..Default::default() })
+        .enqueue("rust.fail", json!({}), {
+            let mut enqueue_options = EnqueueOptions::default();
+            enqueue_options.max_attempts = 1;
+            enqueue_options
+        })
         .await;
     let worker = harness.worker(options());
     worker.handle("rust.fail", |_: Value, _| async {
@@ -217,7 +228,8 @@ async fn maintenance_passes_its_timestamp_and_an_unregistered_worker_runs() {
 #[tokio::test]
 async fn an_operator_pause_stops_claims_until_it_is_cleared() {
     let Some(harness) = harness("worker_paused").await else { return };
-    let options = WorkerOptions { registry_interval: Duration::from_millis(100), ..options() };
+    let mut options = options();
+    options.registry_interval = Duration::from_millis(100);
     let worker_id = options.worker_id.clone().unwrap();
     let worker = harness.worker(options);
     worker.handle("rust.echo", |payload: Value, _| async move { Ok(payload) });
@@ -259,10 +271,23 @@ async fn an_operator_pause_stops_claims_until_it_is_cleared() {
     .await
     .expect("the worker never stored the pause");
     // A claim that started before the pause can still lease a task. With the pause stored, the
-    // loop starts no claim, so zero claims in flight means none can start.
+    // loop starts no claim. The pool has free connections, so a claim that the loop started is a
+    // statement in PostgreSQL within milliseconds. Two reads 50 ms apart that find no claim
+    // statement therefore mean that no claim from before the pause is left.
     tokio::time::timeout(WAIT, async {
-        while worker.claims_in_flight_for_test() != 0 {
-            tokio::time::sleep(Duration::from_millis(10)).await;
+        let mut idle_reads = 0;
+        while idle_reads < 2 {
+            let row = client
+                .query_one(
+                    "SELECT count(*) FROM pg_stat_activity \
+                     WHERE datname = current_database() AND pid <> pg_backend_pid() \
+                       AND state = 'active' AND query LIKE '%workhorse.claim%'",
+                    &[],
+                )
+                .await
+                .unwrap();
+            idle_reads = if row.get::<_, i64>(0) == 0 { idle_reads + 1 } else { 0 };
+            tokio::time::sleep(Duration::from_millis(50)).await;
         }
     })
     .await
@@ -270,7 +295,6 @@ async fn an_operator_pause_stops_claims_until_it_is_cleared() {
     let task = harness.enqueue("rust.echo", json!({}), EnqueueOptions::default()).await;
     tokio::time::sleep(Duration::from_millis(250)).await;
     assert_eq!(harness.state(task).await, TaskState::Ready, "a paused worker claimed");
-    assert_eq!(worker.claims_in_flight_for_test(), 0, "a paused worker started a claim");
     harness.admin.set_worker_paused(&worker_id, false, &audit()).await.unwrap().unwrap();
     harness.wait_for(task, TaskState::Succeeded).await;
     stop.send(()).unwrap();
@@ -327,10 +351,18 @@ async fn the_handler_result_reaches_the_task_outcome() {
 async fn dispatch_follows_the_task_type_and_releases_an_unhandled_task() {
     let Some(harness) = harness("worker_task_type").await else { return };
     let unhandled = harness
-        .enqueue("rust.unhandled", json!({}), EnqueueOptions { priority: 90, ..Default::default() })
+        .enqueue("rust.unhandled", json!({}), {
+            let mut enqueue_options = EnqueueOptions::default();
+            enqueue_options.priority = 90;
+            enqueue_options
+        })
         .await;
     let handled = harness.enqueue("rust.handled", json!({}), EnqueueOptions::default()).await;
-    let worker = harness.worker(WorkerOptions { concurrency: 2, ..options() });
+    let worker = harness.worker({
+        let mut worker_options = options();
+        worker_options.concurrency = 2;
+        worker_options
+    });
     let seen = Arc::new(Mutex::new(Vec::new()));
     let record = Arc::clone(&seen);
     worker.handle("rust.handled", move |_: Value, context: HandlerContext| {
@@ -350,7 +382,11 @@ async fn a_stuck_handler_is_abandoned_when_grace_ends() {
     let Some(harness) = harness("worker_abandon").await else { return };
     let task = harness.enqueue("rust.stuck", json!({}), EnqueueOptions::default()).await;
     let grace = Duration::from_millis(200);
-    let worker = harness.worker(WorkerOptions { shutdown_grace_period: grace, ..options() });
+    let worker = harness.worker({
+        let mut worker_options = options();
+        worker_options.shutdown_grace_period = grace;
+        worker_options
+    });
     let (started, mut running_handlers) = mpsc::unbounded_channel();
     worker.handle("rust.stuck", move |_: Value, _| {
         let _ = started.send(());
@@ -431,11 +467,12 @@ async fn recover(harness: &Harness, observer: &Client, task: Uuid) {
 }
 
 fn lapsing_options() -> WorkerOptions {
-    WorkerOptions {
-        lease_duration: Duration::from_secs(1),
-        heartbeat_interval: Some(Duration::from_millis(100)),
-        registry_interval: Duration::from_millis(100),
-        ..options()
+    {
+        let mut worker_options = options();
+        worker_options.lease_duration = Duration::from_secs(1);
+        worker_options.heartbeat_interval = Some(Duration::from_millis(100));
+        worker_options.registry_interval = Duration::from_millis(100);
+        worker_options
     }
 }
 
@@ -479,11 +516,11 @@ async fn a_dropped_run_stops_renewing_its_leases_and_releases_the_worker() {
     let worker = Worker::new(pool.clone(), options).unwrap();
     let mut running_handlers = handle_forever(&worker);
     let task = harness
-        .enqueue(
-            "rust.forever",
-            json!({}),
-            EnqueueOptions { max_attempts: 1, ..Default::default() },
-        )
+        .enqueue("rust.forever", json!({}), {
+            let mut enqueue_options = EnqueueOptions::default();
+            enqueue_options.max_attempts = 1;
+            enqueue_options
+        })
         .await;
 
     let (_stop, mut running) = run(&worker);
@@ -536,11 +573,11 @@ async fn a_dropped_run_once_stops_renewing_its_lease() {
     let worker = harness.worker(lapsing_options());
     let mut running_handlers = handle_forever(&worker);
     let task = harness
-        .enqueue(
-            "rust.forever",
-            json!({}),
-            EnqueueOptions { max_attempts: 1, ..Default::default() },
-        )
+        .enqueue("rust.forever", json!({}), {
+            let mut enqueue_options = EnqueueOptions::default();
+            enqueue_options.max_attempts = 1;
+            enqueue_options
+        })
         .await;
 
     let once = worker.clone();
@@ -570,9 +607,10 @@ async fn assert_watchdog_stops_renewals(name: &str, after: AfterWatchdog) {
     let Some(harness) = harness(name).await else { return };
     let mut observer = harness.database.connect().await;
     // The run continues, so its own maintenance would recover the lapsed lease before the test.
-    let worker = harness.worker(WorkerOptions {
-        maintenance_interval: Duration::from_secs(3600),
-        ..lapsing_options()
+    let worker = harness.worker({
+        let mut worker_options = lapsing_options();
+        worker_options.maintenance_interval = Duration::from_secs(3600);
+        worker_options
     });
     let (starts, mut running_handlers) = mpsc::unbounded_channel();
     let (cancelled, mut reasons) = mpsc::unbounded_channel();
@@ -593,11 +631,11 @@ async fn assert_watchdog_stops_renewals(name: &str, after: AfterWatchdog) {
         }
     });
     let task = harness
-        .enqueue(
-            "rust.ignores",
-            json!({}),
-            EnqueueOptions { max_attempts: 1, ..Default::default() },
-        )
+        .enqueue("rust.ignores", json!({}), {
+            let mut enqueue_options = EnqueueOptions::default();
+            enqueue_options.max_attempts = 1;
+            enqueue_options
+        })
         .await;
 
     let (_stop, mut running) = run(&worker);
@@ -663,17 +701,18 @@ async fn a_handler_that_returns_after_the_watchdog_settles_as_lease_lost() {
 async fn a_dropped_run_once_leaves_no_batch_member_for_the_next_run() {
     let Some(harness) = harness("worker_dropped_batch_member").await else { return };
     let observer = harness.database.connect().await;
-    let worker = harness.worker(WorkerOptions {
-        concurrency: 2,
-        lease_duration: Duration::from_secs(30),
-        ..lapsing_options()
+    let worker = harness.worker({
+        let mut worker_options = lapsing_options();
+        worker_options.concurrency = 2;
+        worker_options.lease_duration = Duration::from_secs(30);
+        worker_options
     });
     let (called, mut calls) = mpsc::unbounded_channel();
     // The second member never arrives, so the first lingers until its run is dropped.
     let linger = Duration::from_secs(10);
     worker.handle_batch(
         "rust.batch.dropped",
-        BatchOptions { max_size: 2, linger },
+        BatchOptions::new(2, linger),
         move |items: Vec<BatchItem<Value>>| {
             let attempts =
                 items.iter().map(|item| (item.context.task().id, item.context.task().attempt));
@@ -685,15 +724,12 @@ async fn a_dropped_run_once_leaves_no_batch_member_for_the_next_run() {
     );
     let retry = json!({"type": "fixed", "delayMs": 0});
     let task = harness
-        .enqueue(
-            "rust.batch.dropped",
-            json!({}),
-            EnqueueOptions {
-                max_attempts: 2,
-                retry_policy: Some(retry.as_object().unwrap().clone()),
-                ..Default::default()
-            },
-        )
+        .enqueue("rust.batch.dropped", json!({}), {
+            let mut enqueue_options = EnqueueOptions::default();
+            enqueue_options.max_attempts = 2;
+            enqueue_options.retry_policy = Some(retry.as_object().unwrap().clone());
+            enqueue_options
+        })
         .await;
 
     let once = worker.clone();
@@ -809,7 +845,11 @@ async fn a_drain_finishes_running_handlers_within_grace() {
     let Some(harness) = harness("worker_drain").await else { return };
     let task = harness.enqueue("rust.slow", json!({}), EnqueueOptions::default()).await;
     let grace = Duration::from_secs(1);
-    let worker = harness.worker(WorkerOptions { shutdown_grace_period: grace, ..options() });
+    let worker = harness.worker({
+        let mut worker_options = options();
+        worker_options.shutdown_grace_period = grace;
+        worker_options
+    });
     let (started, mut running_handlers) = mpsc::unbounded_channel();
     worker.handle("rust.slow", move |_: Value, _| {
         let _ = started.send(());
@@ -849,7 +889,8 @@ async fn shutdown_with_a_locked_registry_row(harness: &Harness) -> bool {
     let task = harness.enqueue("rust.cooperative", json!({}), EnqueueOptions::default()).await;
     // Longer than the slack, so a fresh grace period per phase would overrun each bound below.
     let grace = Duration::from_secs(2);
-    let options = WorkerOptions { shutdown_grace_period: grace, ..options() };
+    let mut options = options();
+    options.shutdown_grace_period = grace;
     let worker_id = options.worker_id.clone().unwrap();
     let pool = harness.pool();
     let worker = Worker::new(pool.clone(), options).unwrap();
@@ -942,13 +983,11 @@ async fn shutdown_with_a_locked_registry_row(harness: &Harness) -> bool {
 async fn shutdown_discards_the_connection_of_a_claim_it_abandons() {
     let Some(harness) = harness("worker_stalled_claim").await else { return };
     let grace = Duration::from_millis(100);
-    let options = WorkerOptions {
-        disable_registry: true,
-        maintenance_interval: Duration::from_secs(600),
-        maintenance_routine_interval: Duration::from_secs(600),
-        shutdown_grace_period: grace,
-        ..options()
-    };
+    let mut options = options();
+    options.disable_registry = true;
+    options.maintenance_interval = Duration::from_secs(600);
+    options.maintenance_routine_interval = Duration::from_secs(600);
+    options.shutdown_grace_period = grace;
     let pool = harness.pool();
     let worker = Worker::new(pool.clone(), options).unwrap();
     let (stop, running) = run(&worker);
@@ -1004,12 +1043,10 @@ async fn shutdown_does_not_wait_for_a_stalled_heartbeat_round() {
     let task = harness.enqueue("rust.stuck", json!({}), EnqueueOptions::default()).await;
     let interval = Duration::from_secs(8);
     let grace = Duration::from_millis(200);
-    let options = WorkerOptions {
-        shutdown_grace_period: grace,
-        lease_duration: Duration::from_secs(60),
-        heartbeat_interval: Some(interval),
-        ..options()
-    };
+    let mut options = options();
+    options.shutdown_grace_period = grace;
+    options.lease_duration = Duration::from_secs(60);
+    options.heartbeat_interval = Some(interval);
     let worker = harness.worker(options);
     let (started, mut running_handlers) = mpsc::unbounded_channel();
     worker.handle("rust.stuck", move |_: Value, _| {
@@ -1066,11 +1103,9 @@ async fn a_heartbeat_statement_that_waits_on_a_lock_ends_on_the_server_by_its_de
     let Some(harness) = harness("worker_heartbeat_bound").await else { return };
     let task = harness.enqueue("rust.bounded", json!({}), EnqueueOptions::default()).await;
     let interval = Duration::from_millis(200);
-    let options = WorkerOptions {
-        lease_duration: Duration::from_secs(30),
-        heartbeat_interval: Some(interval),
-        ..options()
-    };
+    let mut options = options();
+    options.lease_duration = Duration::from_secs(30);
+    options.heartbeat_interval = Some(interval);
     let worker = harness.worker(options);
     let (started, mut running_handlers) = mpsc::unbounded_channel();
     let release = Arc::new(tokio::sync::Notify::new());
@@ -1145,10 +1180,11 @@ async fn one_timed_out_heartbeat_round_leaves_a_renewal_margin() {
     let Some(harness) = harness("worker_heartbeat_margin").await else { return };
     let task = harness.enqueue("rust.margin", json!({}), EnqueueOptions::default()).await;
     let interval = Duration::from_secs(4);
-    let worker = harness.worker(WorkerOptions {
-        lease_duration: Duration::from_millis(9200),
-        heartbeat_interval: Some(interval),
-        ..options()
+    let worker = harness.worker({
+        let mut worker_options = options();
+        worker_options.lease_duration = Duration::from_millis(9200);
+        worker_options.heartbeat_interval = Some(interval);
+        worker_options
     });
     let (start, mut running_handlers) = mpsc::unbounded_channel();
     let (reasons, mut reason) = mpsc::unbounded_channel();
@@ -1269,11 +1305,9 @@ async fn a_heartbeat_round_reports_a_locked_row_as_busy() {
     let Some(harness) = harness("worker_heartbeat_busy").await else { return };
     let task = harness.enqueue("rust.busy", json!({}), EnqueueOptions::default()).await;
     let lease = Duration::from_secs(3);
-    let options = WorkerOptions {
-        lease_duration: lease,
-        heartbeat_interval: Some(Duration::from_millis(200)),
-        ..options()
-    };
+    let mut options = options();
+    options.lease_duration = lease;
+    options.heartbeat_interval = Some(Duration::from_millis(200));
     let worker_id = options.worker_id.clone().unwrap();
     let worker = harness.worker(options);
     let (started, mut running_handlers) = mpsc::unbounded_channel();
@@ -1342,7 +1376,11 @@ async fn shutdown_releases_a_cooperative_task(harness: &Harness) -> bool {
     let queue = format!("rust-unwind-{}", Uuid::new_v4());
     let task = harness.enqueue("rust.cooperative", json!({}), on(&queue)).await;
     let grace = Duration::from_millis(100);
-    let worker = harness.worker(WorkerOptions { shutdown_grace_period: grace, ..serving(&queue) });
+    let worker = harness.worker({
+        let mut worker_options = serving(&queue);
+        worker_options.shutdown_grace_period = grace;
+        worker_options
+    });
     let (started, mut running_handlers) = mpsc::unbounded_channel();
     let (returned, mut returns) = mpsc::unbounded_channel();
     worker.handle("rust.cooperative", move |_: Value, context: HandlerContext| {
@@ -1377,7 +1415,11 @@ async fn concurrent_handlers_stay_within_the_concurrency_limit() {
     for _ in 0..6 {
         tasks.push(harness.enqueue("rust.slot", json!({}), EnqueueOptions::default()).await);
     }
-    let worker = harness.worker(WorkerOptions { concurrency: 2, ..options() });
+    let worker = harness.worker({
+        let mut worker_options = options();
+        worker_options.concurrency = 2;
+        worker_options
+    });
     let (running_now, most) = (Arc::new(AtomicUsize::new(0)), Arc::new(AtomicUsize::new(0)));
     let (counter, peak) = (Arc::clone(&running_now), Arc::clone(&most));
     worker.handle("rust.slot", move |_: Value, _| {
@@ -1401,11 +1443,12 @@ async fn concurrent_handlers_stay_within_the_concurrency_limit() {
 #[tokio::test]
 async fn a_notification_wakes_an_idle_worker_before_its_poll() {
     let Some(harness) = harness("worker_notify").await else { return };
-    let worker = harness.worker(WorkerOptions {
-        polling_only: false,
-        poll_interval: Some(Duration::from_secs(60)),
-        listen_config: Some(harness.database.url().parse().unwrap()),
-        ..options()
+    let worker = harness.worker({
+        let mut worker_options = options();
+        worker_options.polling_only = false;
+        worker_options.poll_interval = Some(Duration::from_secs(60));
+        worker_options.listen_config = Some(harness.database.url().parse().unwrap());
+        worker_options
     });
     worker.handle("rust.woken", |_: Value, _| async { Ok(Value::Null) });
     let (stop, running) = run(&worker);
@@ -1549,11 +1592,12 @@ async fn shutdown_closes_the_notification_connection_while_listen_stalls() {
     let Some(harness) = harness("worker_stalled_listen").await else { return };
     let (listen, listen_sent, client_closed) = stalling_listen(&harness).await;
     let grace = Duration::from_millis(100);
-    let worker = harness.worker(WorkerOptions {
-        polling_only: false,
-        listen_config: Some(listen),
-        shutdown_grace_period: grace,
-        ..options()
+    let worker = harness.worker({
+        let mut worker_options = options();
+        worker_options.polling_only = false;
+        worker_options.listen_config = Some(listen);
+        worker_options.shutdown_grace_period = grace;
+        worker_options
     });
     let (stop, running) = run(&worker);
     tokio::time::timeout(WAIT, listen_sent).await.expect("the listener never sent LISTEN").unwrap();
@@ -1575,12 +1619,16 @@ async fn a_batch_handler_receives_its_members_in_one_call() {
     for index in 0..3 {
         tasks.push(harness.enqueue("rust.batch", json!(index), EnqueueOptions::default()).await);
     }
-    let worker = harness.worker(WorkerOptions { concurrency: 3, ..options() });
+    let worker = harness.worker({
+        let mut worker_options = options();
+        worker_options.concurrency = 3;
+        worker_options
+    });
     let sizes = Arc::new(Mutex::new(Vec::new()));
     let record = Arc::clone(&sizes);
     worker.handle_batch(
         "rust.batch",
-        BatchOptions { max_size: 3, linger: Duration::from_millis(500) },
+        BatchOptions::new(3, Duration::from_millis(500)),
         move |items: Vec<BatchItem<i64>>| {
             record.lock().unwrap().push(items.len());
             let results = items
@@ -1635,7 +1683,7 @@ fn stuck_batches(
     let (active, highest) = (Arc::new(AtomicUsize::new(0)), Arc::clone(&peak));
     worker.handle_batch(
         "rust.stuck",
-        BatchOptions { max_size, linger: Duration::ZERO },
+        BatchOptions::new(max_size, Duration::ZERO),
         move |items: Vec<BatchItem<Value>>| {
             highest.fetch_max(active.fetch_add(1, Ordering::SeqCst) + 1, Ordering::SeqCst);
             for item in &items {
@@ -1655,13 +1703,14 @@ async fn cancelled_batch_members_keep_their_callbacks_inside_the_concurrency() {
         harness.enqueue("rust.stuck", json!({}), EnqueueOptions::default()).await;
     }
     let grace = Duration::from_millis(100);
-    let worker = harness.worker(WorkerOptions {
-        concurrency: 1,
+    let worker = harness.worker({
+        let mut worker_options = options();
+        worker_options.concurrency = 1;
         // The worker sees the cancel request only in a heartbeat status. Below 100 ms, the smallest
         // supported interval, every round under host load can time out.
-        heartbeat_interval: Some(Duration::from_millis(100)),
-        shutdown_grace_period: grace,
-        ..options()
+        worker_options.heartbeat_interval = Some(Duration::from_millis(100));
+        worker_options.shutdown_grace_period = grace;
+        worker_options
     });
     let (mut starts, mut cancellations, peak) = stuck_batches(&worker, 1);
     let (stop, running) = run(&worker);
@@ -1684,8 +1733,12 @@ async fn shutdown_counts_a_batch_callback_that_outlives_the_grace_period() {
     let Some(harness) = harness("worker_batch_drain").await else { return };
     harness.enqueue("rust.stuck", json!({}), EnqueueOptions::default()).await;
     let grace = Duration::from_millis(200);
-    let worker =
-        harness.worker(WorkerOptions { concurrency: 1, shutdown_grace_period: grace, ..options() });
+    let worker = harness.worker({
+        let mut worker_options = options();
+        worker_options.concurrency = 1;
+        worker_options.shutdown_grace_period = grace;
+        worker_options
+    });
     let (mut starts, _, _) = stuck_batches(&worker, 1);
     let (stop, running) = run(&worker);
     tokio::time::timeout(WAIT, starts.recv()).await.unwrap().unwrap();
@@ -1703,12 +1756,13 @@ async fn cancelling_one_batch_member_keeps_the_others_outcome() {
     let Some(harness) = harness("worker_batch_cancel").await else { return };
     let cancelled = harness.enqueue("rust.gated", json!(1), EnqueueOptions::default()).await;
     let kept = harness.enqueue("rust.gated", json!(2), EnqueueOptions::default()).await;
-    let worker = harness.worker(WorkerOptions {
-        concurrency: 2,
+    let worker = harness.worker({
+        let mut worker_options = options();
+        worker_options.concurrency = 2;
         // The worker sees the cancel request only in a heartbeat status. Below 100 ms, the smallest
         // supported interval, every round under host load can time out.
-        heartbeat_interval: Some(Duration::from_millis(100)),
-        ..options()
+        worker_options.heartbeat_interval = Some(Duration::from_millis(100));
+        worker_options
     });
     let (called, mut calls) = mpsc::unbounded_channel();
     let (watched, mut cancellations) = mpsc::unbounded_channel();
@@ -1716,7 +1770,7 @@ async fn cancelling_one_batch_member_keeps_the_others_outcome() {
     let opened = Arc::clone(&gate);
     worker.handle_batch(
         "rust.gated",
-        BatchOptions { max_size: 2, linger: Duration::from_millis(500) },
+        BatchOptions::new(2, Duration::from_millis(500)),
         move |items: Vec<BatchItem<i64>>| {
             let _ = called.send(items.len());
             watch_cancellations(&items, &watched);
@@ -1746,15 +1800,23 @@ async fn cancelling_one_batch_member_keeps_the_others_outcome() {
 #[tokio::test]
 async fn a_panicking_batch_callback_fails_every_member_with_failure_evidence() {
     let Some(harness) = harness("worker_batch_panic").await else { return };
-    let once = || EnqueueOptions { max_attempts: 1, ..Default::default() };
+    let once = || {
+        let mut enqueue_options = EnqueueOptions::default();
+        enqueue_options.max_attempts = 1;
+        enqueue_options
+    };
     let mut tasks = Vec::new();
     for task_type in ["rust.batch.eager", "rust.batch.polled"] {
         for index in 0..2 {
             tasks.push((task_type, harness.enqueue(task_type, json!(index), once()).await));
         }
     }
-    let worker = harness.worker(WorkerOptions { concurrency: 4, ..options() });
-    let batch = BatchOptions { max_size: 2, linger: Duration::from_millis(500) };
+    let worker = harness.worker({
+        let mut worker_options = options();
+        worker_options.concurrency = 4;
+        worker_options
+    });
+    let batch = BatchOptions::new(2, Duration::from_millis(500));
     worker.handle_batch("rust.batch.eager", batch, |_: Vec<BatchItem<i64>>| {
         if true {
             panic!("eager batch panic");
@@ -1801,14 +1863,12 @@ async fn maintenance_fires_due_schedules_in_its_namespaces() {
     let Some(harness) = harness("worker_schedules").await else { return };
     // `skip` fires only inside the supported delay of at least 60 seconds, so the missed minute
     // needs `latest`.
-    let definition = ScheduleDefinition {
-        catchup_policy: ScheduleCatchupPolicy::Latest,
-        ..ScheduleDefinition::new(
-            "every-minute",
-            "* * * * *",
-            ScheduledTask::new("rust.cron", json!({})),
-        )
-    };
+    let mut definition = ScheduleDefinition::new(
+        "every-minute",
+        "* * * * *",
+        ScheduledTask::new("rust.cron", json!({})),
+    );
+    definition.catchup_policy = ScheduleCatchupPolicy::Latest;
     harness.queue.sync_schedules("rust-worker", vec![definition], true).await.unwrap();
     let observer = harness.database.connect().await;
     observer
@@ -1819,8 +1879,11 @@ async fn maintenance_fires_due_schedules_in_its_namespaces() {
         )
         .await
         .unwrap();
-    let worker = harness
-        .worker(WorkerOptions { schedule_namespaces: vec!["rust-worker".into()], ..options() });
+    let worker = harness.worker({
+        let mut worker_options = options();
+        worker_options.schedule_namespaces = vec!["rust-worker".into()];
+        worker_options
+    });
     worker.handle("rust.cron", |_: Value, _| async { Ok(json!({"fired": true})) });
     assert!(worker.run_once().await.unwrap(), "the fired occurrence was not claimed");
     let fired: i64 = observer
@@ -2069,10 +2132,11 @@ async fn heartbeat_backend(observer: &Client, except: Option<i32>, idle: bool) -
 async fn heartbeats_resume_after_postgres_terminates_the_idle_reserved_connection() {
     let Some(harness) = harness("worker_heartbeat_terminated").await else { return };
     let observer = harness.database.connect().await;
-    let worker = harness.worker(WorkerOptions {
-        lease_duration: Duration::from_secs(10),
-        heartbeat_interval: Some(Duration::from_secs(1)),
-        ..options()
+    let worker = harness.worker({
+        let mut worker_options = options();
+        worker_options.lease_duration = Duration::from_secs(10);
+        worker_options.heartbeat_interval = Some(Duration::from_secs(1));
+        worker_options
     });
     let release = Arc::new(tokio::sync::Semaphore::new(0));
     let (start, mut running_handlers) = mpsc::unbounded_channel();
@@ -2120,11 +2184,19 @@ async fn heartbeats_resume_after_postgres_terminates_the_idle_reserved_connectio
 // The fast task tier (ADR 0077): one runtime row while a task is live and one outcome row after.
 
 fn on(queue: &str) -> EnqueueOptions {
-    EnqueueOptions { queue: Some(queue.into()), ..Default::default() }
+    {
+        let mut enqueue_options = EnqueueOptions::default();
+        enqueue_options.queue = Some(queue.into());
+        enqueue_options
+    }
 }
 
 fn serving(queue: &str) -> WorkerOptions {
-    WorkerOptions { queues: vec![queue.into()], ..options() }
+    {
+        let mut worker_options = options();
+        worker_options.queues = vec![queue.into()];
+        worker_options
+    }
 }
 
 impl Harness {
@@ -2177,7 +2249,8 @@ impl Harness {
 async fn a_fast_queue_rejects_full_tier_enqueue_features_by_ordinal() {
     let Some(harness) = harness("fast_enqueue").await else { return };
     harness.make_fast("fast-enqueue").await;
-    let keyed = EnqueueOptions { concurrency_key: Some("tenant-a".into()), ..on("fast-enqueue") };
+    let mut keyed = on("fast-enqueue");
+    keyed.concurrency_key = Some("tenant-a".into());
     let error = harness.queue.enqueue("keyed", &json!({}), keyed).await.unwrap_err();
     assert!(
         matches!(&error, Error::FastTierUnsupported { queue, feature, .. }
@@ -2185,13 +2258,19 @@ async fn a_fast_queue_rejects_full_tier_enqueue_features_by_ordinal() {
         "{error:?}"
     );
 
-    let debounced = EnqueueOptions {
-        debounce: Some(Debounce::new("k", 1_000, DebounceSchedule::Reset)),
-        ..on("fast-enqueue")
-    };
+    let mut debounced = on("fast-enqueue");
+    debounced.debounce = Some(Debounce::new("k", 1_000, DebounceSchedule::Reset));
     let requests = vec![
-        EnqueueRequest { options: on("fast-enqueue"), ..EnqueueRequest::new("plain", json!({})) },
-        EnqueueRequest { options: debounced, ..EnqueueRequest::new("debounced", json!({})) },
+        {
+            let mut enqueue_request = EnqueueRequest::new("plain", json!({}));
+            enqueue_request.options = on("fast-enqueue");
+            enqueue_request
+        },
+        {
+            let mut enqueue_request = EnqueueRequest::new("debounced", json!({}));
+            enqueue_request.options = debounced;
+            enqueue_request
+        },
     ];
     let error = harness.queue.enqueue_many(requests).await.unwrap_err();
     assert!(
@@ -2210,8 +2289,10 @@ async fn a_fast_queue_rejects_full_tier_enqueue_features_by_ordinal() {
 async fn a_fast_queue_throttles_an_enqueue_and_writes_no_throttled_event() {
     let Some(harness) = harness("fast_throttle").await else { return };
     harness.make_fast("fast-throttle").await;
-    let throttle = Throttle { scope: "fast-throttle".into(), ..Throttle::new("digest", 60_000) };
-    let throttled = EnqueueOptions { throttle: Some(throttle.clone()), ..on("fast-throttle") };
+    let mut throttle = Throttle::new("digest", 60_000);
+    throttle.scope = "fast-throttle".into();
+    let mut throttled = on("fast-throttle");
+    throttled.throttle = Some(throttle.clone());
 
     let first = harness.queue.enqueue("digest", &json!({"n": 1}), throttled.clone()).await.unwrap();
     assert_eq!(first.outcome, EnqueueOutcome::Accepted);
@@ -2233,14 +2314,27 @@ async fn a_fast_queue_throttles_an_enqueue_and_writes_no_throttled_event() {
     assert_eq!(events, 0);
 
     // A member that runs alone reports a fast-tier rejection with its ordinal in the batch.
-    let keyed = EnqueueOptions {
-        concurrency_key: Some("tenant-a".into()),
-        throttle: Some(Throttle { key: "keyed".into(), ..throttle }),
-        ..on("fast-throttle")
+    let keyed = {
+        let mut enqueue_options = on("fast-throttle");
+        enqueue_options.concurrency_key = Some("tenant-a".into());
+        enqueue_options.throttle = Some({
+            let mut built_throttle = throttle;
+            built_throttle.key = "keyed".into();
+            built_throttle
+        });
+        enqueue_options
     };
     let requests = vec![
-        EnqueueRequest { options: on("fast-throttle"), ..EnqueueRequest::new("plain", json!({})) },
-        EnqueueRequest { options: keyed, ..EnqueueRequest::new("keyed", json!({})) },
+        {
+            let mut enqueue_request = EnqueueRequest::new("plain", json!({}));
+            enqueue_request.options = on("fast-throttle");
+            enqueue_request
+        },
+        {
+            let mut enqueue_request = EnqueueRequest::new("keyed", json!({}));
+            enqueue_request.options = keyed;
+            enqueue_request
+        },
     ];
     let error = harness.queue.enqueue_many(requests).await.unwrap_err();
     assert!(
@@ -2273,7 +2367,7 @@ async fn a_fast_queue_records_attempt_history_only_when_it_opts_in() {
     let Some(harness) = harness("fast_history").await else { return };
     harness.make_fast("fast-history").await;
     let history = harness.admin.set_queue_history("fast-history", Some(true), None).await.unwrap();
-    assert_eq!(history, QueueHistory { record_attempts: true, record_claims: false });
+    assert_eq!((history.record_attempts, history.record_claims), (true, false));
     let task = harness.enqueue("recorded", json!({}), on("fast-history")).await;
     let worker = harness.worker(serving("fast-history"));
     worker.handle("recorded", |_: Value, _| async { Ok(json!({"ok": true})) });
@@ -2294,7 +2388,7 @@ async fn a_fast_queue_records_attempt_history_only_when_it_opts_in() {
     assert_eq!(attempts, [(1, "succeeded".to_owned())]);
     // Leaving a setting out keeps it.
     let history = harness.admin.set_queue_history("fast-history", None, Some(true)).await.unwrap();
-    assert_eq!(history, QueueHistory { record_attempts: true, record_claims: true });
+    assert_eq!((history.record_attempts, history.record_claims), (true, true));
 }
 
 #[tokio::test]
@@ -2302,9 +2396,11 @@ async fn fast_tasks_run_within_the_concurrency_and_leave_one_outcome_each() {
     let Some(harness) = harness("fast_run").await else { return };
     harness.make_fast("fast-run").await;
     let requests = (0..40)
-        .map(|sequence| EnqueueRequest {
-            options: on("fast-run"),
-            ..EnqueueRequest::new("square", json!({ "sequence": sequence }))
+        .map(|sequence| {
+            let mut enqueue_request =
+                EnqueueRequest::new("square", json!({ "sequence": sequence }));
+            enqueue_request.options = on("fast-run");
+            enqueue_request
         })
         .collect();
     let ids: Vec<Uuid> = harness
@@ -2316,7 +2412,11 @@ async fn fast_tasks_run_within_the_concurrency_and_leave_one_outcome_each() {
         .map(|result| result.task_id)
         .collect();
     let concurrency = 4;
-    let worker = harness.worker(WorkerOptions { concurrency, ..serving("fast-run") });
+    let worker = harness.worker({
+        let mut worker_options = serving("fast-run");
+        worker_options.concurrency = concurrency;
+        worker_options
+    });
     let running = Arc::new(AtomicUsize::new(0));
     let peak = Arc::new(AtomicUsize::new(0));
     let (counter, highest) = (Arc::clone(&running), Arc::clone(&peak));
@@ -2412,7 +2512,8 @@ async fn a_fast_task_fails_when_it_asks_for_durable_execution_state() {
         ("run_children_all", "child tasks"),
     ];
     for (operation, feature) in cases {
-        let options = EnqueueOptions { max_attempts: 1, ..on("fast-guard") };
+        let mut options = on("fast-guard");
+        options.max_attempts = 1;
         let task = harness.enqueue("guarded", json!(operation), options).await;
         assert!(worker.run_once().await.unwrap());
         let rejection = seen.lock().unwrap().pop().expect("the handler ran");
@@ -2443,7 +2544,8 @@ async fn a_crashed_fast_worker_loses_no_task_and_records_one_outcome_each() {
     harness.make_fast("fast-crash").await;
     let mut ids = Vec::new();
     for sequence in 0..3 {
-        let options = EnqueueOptions { max_attempts: 3, ..on("fast-crash") };
+        let mut options = on("fast-crash");
+        options.max_attempts = 3;
         ids.push(harness.enqueue("effect", json!({ "sequence": sequence }), options).await);
     }
     // A worker claims every task and vanishes before its lease runs out.
@@ -2537,17 +2639,15 @@ async fn fast_crash_child_process() {
     let Ok(url) = std::env::var(FAST_CRASH_CHILD_URL) else { return };
     let manager = deadpool_postgres::Manager::new(url.parse().unwrap(), NoTls);
     let pool = deadpool_postgres::Pool::builder(manager).max_size(10).build().unwrap();
-    let worker = Worker::new(
-        pool.clone(),
-        WorkerOptions {
-            queues: vec![FAST_CRASH_QUEUE.into()],
-            worker_id: Some("rust-fast-crashed".into()),
-            concurrency: FAST_CRASH_CONCURRENCY,
-            polling_only: true,
-            poll_interval: Some(Duration::from_millis(5)),
-            ..WorkerOptions::default()
-        },
-    )
+    let worker = Worker::new(pool.clone(), {
+        let mut worker_options = WorkerOptions::default();
+        worker_options.queues = vec![FAST_CRASH_QUEUE.into()];
+        worker_options.worker_id = Some("rust-fast-crashed".into());
+        worker_options.concurrency = FAST_CRASH_CONCURRENCY;
+        worker_options.polling_only = true;
+        worker_options.poll_interval = Some(Duration::from_millis(5));
+        worker_options
+    })
     .unwrap();
     worker.handle("effect", move |_: Value, context: HandlerContext| {
         let pool = pool.clone();
@@ -2566,7 +2666,8 @@ async fn a_killed_fast_worker_loses_no_buffered_completion() {
     harness.make_fast(FAST_CRASH_QUEUE).await;
     let mut ids = Vec::new();
     for sequence in 0..12 {
-        let options = EnqueueOptions { max_attempts: 3, ..on(FAST_CRASH_QUEUE) };
+        let mut options = on(FAST_CRASH_QUEUE);
+        options.max_attempts = 3;
         ids.push(harness.enqueue("effect", json!({ "sequence": sequence }), options).await);
     }
     let holder = harness.database.connect().await;
@@ -2690,8 +2791,11 @@ async fn a_killed_fast_worker_loses_no_buffered_completion() {
         .query("SELECT * FROM workhorse.recover_expired_telemetry_v1(100, 0)", &[])
         .await
         .unwrap();
-    let survivor = harness
-        .worker(WorkerOptions { concurrency: FAST_CRASH_CONCURRENCY, ..serving(FAST_CRASH_QUEUE) });
+    let survivor = harness.worker({
+        let mut worker_options = serving(FAST_CRASH_QUEUE);
+        worker_options.concurrency = FAST_CRASH_CONCURRENCY;
+        worker_options
+    });
     let pool = harness.pool();
     survivor.handle("effect", move |_: Value, context: HandlerContext| {
         let pool = pool.clone();
@@ -2733,11 +2837,12 @@ async fn a_worker_serving_both_tiers_completes_each_task_in_its_own_tier() {
         full.push(harness.enqueue("work", json!({ "sequence": sequence }), on("full-mixed")).await);
     }
     // Four slots in two cohorts: fast completions batch, and the full-tier queue turns cohorts off.
-    let worker = harness.worker(WorkerOptions {
-        concurrency: 4,
-        cohorts: Some(2),
-        queues: vec!["fast-mixed".into(), "full-mixed".into()],
-        ..options()
+    let worker = harness.worker({
+        let mut worker_options = options();
+        worker_options.concurrency = 4;
+        worker_options.cohorts = Some(2);
+        worker_options.queues = vec!["fast-mixed".into(), "full-mixed".into()];
+        worker_options
     });
     worker.handle("work", |payload: Value, _| async move { Ok(payload) });
     let (stop, run) = run(&worker);
@@ -2766,9 +2871,15 @@ async fn an_abandoned_batching_worker_reruns_no_more_tasks_than_its_concurrency(
     let Some(harness) = harness("fast_abandon").await else { return };
     harness.make_fast("fast-abandon").await;
     let requests = (0..60)
-        .map(|sequence| EnqueueRequest {
-            options: EnqueueOptions { max_attempts: 3, ..on("fast-abandon") },
-            ..EnqueueRequest::new("effect", json!({ "sequence": sequence }))
+        .map(|sequence| {
+            let mut enqueue_request =
+                EnqueueRequest::new("effect", json!({ "sequence": sequence }));
+            enqueue_request.options = {
+                let mut enqueue_options = on("fast-abandon");
+                enqueue_options.max_attempts = 3;
+                enqueue_options
+            };
+            enqueue_request
         })
         .collect();
     let ids: Vec<Uuid> = harness
@@ -2789,12 +2900,13 @@ async fn an_abandoned_batching_worker_reruns_no_more_tasks_than_its_concurrency(
     // that completed (SM-1155).
     let started = Arc::new(AtomicUsize::new(0));
     let (record, count) = (Arc::clone(&effects), Arc::clone(&started));
-    let crashing = harness.worker(WorkerOptions {
-        concurrency,
-        lease_duration: Duration::from_secs(30),
-        heartbeat_interval: Some(Duration::from_millis(100)),
-        shutdown_grace_period: grace,
-        ..serving("fast-abandon")
+    let crashing = harness.worker({
+        let mut worker_options = serving("fast-abandon");
+        worker_options.concurrency = concurrency;
+        worker_options.lease_duration = Duration::from_secs(30);
+        worker_options.heartbeat_interval = Some(Duration::from_millis(100));
+        worker_options.shutdown_grace_period = grace;
+        worker_options
     });
     crashing.handle("effect", move |_: Value, context: HandlerContext| {
         *record.lock().unwrap().entry(context.task().id).or_default() += 1;
@@ -2836,7 +2948,11 @@ async fn an_abandoned_batching_worker_reruns_no_more_tasks_than_its_concurrency(
         .unwrap();
 
     let record = Arc::clone(&effects);
-    let worker = harness.worker(WorkerOptions { concurrency, ..serving("fast-abandon") });
+    let worker = harness.worker({
+        let mut worker_options = serving("fast-abandon");
+        worker_options.concurrency = concurrency;
+        worker_options
+    });
     worker.handle("effect", move |_: Value, context: HandlerContext| {
         *record.lock().unwrap().entry(context.task().id).or_default() += 1;
         async { Ok(json!({"ok": true})) }
@@ -2861,19 +2977,23 @@ async fn an_abandoned_batching_worker_reruns_no_more_tasks_than_its_concurrency(
 #[tokio::test]
 async fn result_schemas_stay_apart_when_type_and_version_join_alike() {
     let Some(harness) = harness("worker_schema_key").await else { return };
-    let contract = |version: &str, result_schema: Value| TaskTypeContracts {
-        current_version: version.into(),
-        versions: BTreeMap::from([(
-            version.to_string(),
-            TaskContractVersion { result_schema, ..TaskContractVersion::default() },
-        )]),
+    let contract = |version: &str, result_schema: Value| {
+        let mut task_type_contracts = TaskTypeContracts::default();
+        task_type_contracts.current_version = version.into();
+        task_type_contracts.versions = BTreeMap::from([(version.to_string(), {
+            let mut task_contract_version = TaskContractVersion::default();
+            task_contract_version.result_schema = result_schema;
+            task_contract_version
+        })]);
+        task_type_contracts
     };
     let contracts = BTreeMap::from([
         ("a|b".to_string(), contract("c", json!({"type": "string"}))),
         ("a".to_string(), contract("b|c", json!({"type": "number"}))),
     ]);
     harness.queue.sync_contracts(&contracts).await.unwrap();
-    let once = EnqueueOptions { max_attempts: 1, ..Default::default() };
+    let mut once = EnqueueOptions::default();
+    once.max_attempts = 1;
     // A fresh worker per order starts with an empty cache, so each pair takes its turn first.
     for order in [["a|b", "a"], ["a", "a|b"]] {
         let worker = harness.worker(options());
@@ -2899,16 +3019,18 @@ const UNSTORABLE_RESULT: &str =
 /// Runs three results holding NUL and one valid result on `queue`. Each NUL result fails its
 /// attempts through the retry policy, the valid one succeeds, and the worker keeps running.
 async fn run_unstorable_results(harness: &Harness, queue: &str) {
-    let retried = EnqueueOptions { max_attempts: 2, ..on(queue) };
+    let mut retried = on(queue);
+    retried.max_attempts = 2;
     let tasks = [
         harness.enqueue("rust.nul", json!("string"), retried.clone()).await,
         harness.enqueue("rust.nul", json!("key"), retried.clone()).await,
         harness.enqueue("rust.nul", json!("nested"), retried).await,
         harness.enqueue("rust.nul", json!("valid"), on(queue)).await,
     ];
-    let worker = harness.worker(WorkerOptions {
-        retry_delay: Some(Arc::new(|_: i32, _: &ClaimedTask| Some(Duration::ZERO))),
-        ..serving(queue)
+    let worker = harness.worker({
+        let mut worker_options = serving(queue);
+        worker_options.retry_delay = Some(Arc::new(|_: i32, _: &ClaimedTask| Some(Duration::ZERO)));
+        worker_options
     });
     // A payload cannot carry NUL either, so the handler builds each result from a case name.
     worker.handle("rust.nul", |case: Value, _| async move {
@@ -2971,12 +3093,17 @@ const RESULT_MAX_BYTES: usize = 1_048_576;
 async fn run_oversized_results(harness: &Harness, queue: &str) {
     let fits = RESULT_MAX_BYTES / 3;
     let oversized = harness
-        .enqueue("rust.oversized", json!(fits + 1), EnqueueOptions { max_attempts: 2, ..on(queue) })
+        .enqueue("rust.oversized", json!(fits + 1), {
+            let mut enqueue_options = on(queue);
+            enqueue_options.max_attempts = 2;
+            enqueue_options
+        })
         .await;
-    let worker = harness.worker(WorkerOptions {
-        lease_duration: Duration::from_secs(300),
-        retry_delay: Some(Arc::new(|_: i32, _: &ClaimedTask| Some(Duration::ZERO))),
-        ..serving(queue)
+    let worker = harness.worker({
+        let mut worker_options = serving(queue);
+        worker_options.lease_duration = Duration::from_secs(300);
+        worker_options.retry_delay = Some(Arc::new(|_: i32, _: &ClaimedTask| Some(Duration::ZERO)));
+        worker_options
     });
     worker.handle("rust.oversized", |zeros: usize, _| async move {
         Ok(Value::Array(vec![json!(0); zeros]))
@@ -3087,15 +3214,13 @@ async fn workers_on_a_pool_of_20_claim_and_complete(name: &str, workers: usize) 
     let (release, released) = tokio::sync::watch::channel(false);
     let mut runs = Vec::new();
     for _ in 0..workers {
-        let worker = Worker::new(
-            pool.clone(),
-            WorkerOptions {
-                maintenance_interval: Duration::from_secs(60),
-                disable_registry: true,
-                shutdown_grace_period: grace,
-                ..options()
-            },
-        )
+        let worker = Worker::new(pool.clone(), {
+            let mut worker_options = options();
+            worker_options.maintenance_interval = Duration::from_secs(60);
+            worker_options.disable_registry = true;
+            worker_options.shutdown_grace_period = grace;
+            worker_options
+        })
         .unwrap();
         hold_until_released(&worker, &started, &released);
         runs.push(run(&worker));
@@ -3183,20 +3308,18 @@ async fn two_workers_share_one_heartbeat_connection_and_one_listener_connection(
     let (release, released) = tokio::sync::watch::channel(false);
     let mut runs = Vec::new();
     for _ in 0..2 {
-        let worker = Worker::new(
-            pool.clone(),
-            WorkerOptions {
-                polling_only: false,
-                listen_config: Some(listen.clone()),
-                poll_interval: Some(Duration::from_secs(60)),
-                lease_duration: Duration::from_millis(2_000),
-                heartbeat_interval: Some(Duration::from_millis(500)),
-                maintenance_interval: Duration::from_secs(60),
-                disable_registry: true,
-                shutdown_grace_period: grace,
-                ..options()
-            },
-        )
+        let worker = Worker::new(pool.clone(), {
+            let mut worker_options = options();
+            worker_options.polling_only = false;
+            worker_options.listen_config = Some(listen.clone());
+            worker_options.poll_interval = Some(Duration::from_secs(60));
+            worker_options.lease_duration = Duration::from_millis(2_000);
+            worker_options.heartbeat_interval = Some(Duration::from_millis(500));
+            worker_options.maintenance_interval = Duration::from_secs(60);
+            worker_options.disable_registry = true;
+            worker_options.shutdown_grace_period = grace;
+            worker_options
+        })
         .unwrap();
         hold_until_released(&worker, &started, &released);
         runs.push(run(&worker));
@@ -3258,12 +3381,13 @@ async fn a_stalled_listen_leaves_startup_alone_and_the_worker_polls() {
     let Some(harness) = harness("worker_stalled_listen_startup").await else { return };
     let (listen, listen_sent, _client_closed) = stalling_listen(&harness).await;
     let grace = Duration::from_millis(500);
-    let worker = harness.worker(WorkerOptions {
-        polling_only: false,
-        listen_config: Some(listen),
-        poll_interval: Some(Duration::from_millis(50)),
-        shutdown_grace_period: grace,
-        ..options()
+    let worker = harness.worker({
+        let mut worker_options = options();
+        worker_options.polling_only = false;
+        worker_options.listen_config = Some(listen);
+        worker_options.poll_interval = Some(Duration::from_millis(50));
+        worker_options.shutdown_grace_period = grace;
+        worker_options
     });
     worker.handle("rust.polled", |_: Value, _| async { Ok(Value::Null) });
     let (stop, running) = run(&worker);
@@ -3290,10 +3414,11 @@ async fn hold(pool: &deadpool_postgres::Pool, count: usize) -> Vec<deadpool_post
 const STARTUP_BUDGET: Duration = Duration::from_secs(5);
 
 fn full_pool_options() -> WorkerOptions {
-    WorkerOptions {
-        lease_duration: Duration::from_millis(1_000),
-        heartbeat_interval: Some(Duration::from_millis(300)),
-        ..options()
+    {
+        let mut worker_options = options();
+        worker_options.lease_duration = Duration::from_millis(1_000);
+        worker_options.heartbeat_interval = Some(Duration::from_millis(300));
+        worker_options
     }
 }
 
@@ -3347,9 +3472,12 @@ async fn a_stop_with_a_full_pool_finishes_within_the_grace() {
     let Some(harness) = harness("worker_full_pool_stop").await else { return };
     let pool = harness.pool();
     let grace = Duration::from_millis(500);
-    let worker =
-        Worker::new(pool.clone(), WorkerOptions { shutdown_grace_period: grace, ..options() })
-            .unwrap();
+    let worker = Worker::new(pool.clone(), {
+        let mut worker_options = options();
+        worker_options.shutdown_grace_period = grace;
+        worker_options
+    })
+    .unwrap();
     worker.handle("rust.quick", |_: Value, _| async { Ok(Value::Null) });
     let (stop, running) = run(&worker);
     // The worker holds the heartbeat connection once it claims.
@@ -3433,8 +3561,11 @@ async fn a_shutdown_during_the_first_registration_ends_and_the_next_run_waits_fo
         .unwrap();
     let options = full_pool_options();
     let worker_id = options.worker_id.clone().unwrap();
-    let worker = harness
-        .worker(WorkerOptions { shutdown_grace_period: Duration::from_millis(200), ..options });
+    let worker = harness.worker({
+        let mut worker_options = options;
+        worker_options.shutdown_grace_period = Duration::from_millis(200);
+        worker_options
+    });
     worker.handle("rust.quick", |_: Value, _| async { Ok(Value::Null) });
     let (stop, running) = run(&worker);
     let waiting = tokio::time::timeout(WAIT, async {
@@ -3517,11 +3648,12 @@ async fn a_run_dropped_during_its_draining_refresh_keeps_that_refresh_from_the_n
     hold_draining_refreshes(&observer).await;
     let options = full_pool_options();
     let worker_id = options.worker_id.clone().unwrap();
-    let worker = harness.worker(WorkerOptions {
+    let worker = harness.worker({
+        let mut worker_options = options;
         // No periodic refresh runs, so the only held statement is the draining refresh.
-        registry_interval: Duration::from_secs(3_600),
-        shutdown_grace_period: Duration::from_secs(60),
-        ..options
+        worker_options.registry_interval = Duration::from_secs(3_600);
+        worker_options.shutdown_grace_period = Duration::from_secs(60);
+        worker_options
     });
     worker.handle("rust.quick", |_: Value, _| async { Ok(Value::Null) });
     let (stop, running) = run_until_a_task_succeeds(&harness, &worker).await;
@@ -3579,21 +3711,19 @@ async fn a_run_dropped_during_its_draining_refresh_keeps_that_refresh_from_the_n
 async fn an_early_expiry_keeps_the_handler_running_and_renewing_until_postgres_confirms_it() {
     let Some(harness) = harness("worker_expiry_not_due").await else { return };
     let task = harness
-        .enqueue(
-            "rust.expiry-not-due",
-            json!({}),
-            EnqueueOptions {
-                max_attempts: 1,
-                execution_timeout_ms: Some(1500),
-                ..Default::default()
-            },
-        )
+        .enqueue("rust.expiry-not-due", json!({}), {
+            let mut enqueue_options = EnqueueOptions::default();
+            enqueue_options.max_attempts = 1;
+            enqueue_options.execution_timeout_ms = Some(1500);
+            enqueue_options
+        })
         .await;
-    let worker = harness.worker(WorkerOptions {
-        lease_duration: Duration::from_secs(2),
-        heartbeat_interval: Some(Duration::from_millis(200)),
-        maintenance_interval: Duration::from_secs(3600),
-        ..options()
+    let worker = harness.worker({
+        let mut worker_options = options();
+        worker_options.lease_duration = Duration::from_secs(2);
+        worker_options.heartbeat_interval = Some(Duration::from_millis(200));
+        worker_options.maintenance_interval = Duration::from_secs(3600);
+        worker_options
     });
     let (observed, mut observation) = mpsc::unbounded_channel();
     let url = harness.database.url().to_owned();
@@ -3666,23 +3796,21 @@ async fn a_blocked_expiry_request_does_not_outlive_an_attempt_that_lost_its_leas
         .expect("the test never got the expiry lock")
         .unwrap();
     let task = harness
-        .enqueue(
-            "rust.expiry-blocked",
-            json!({}),
-            EnqueueOptions {
-                max_attempts: 1,
-                execution_timeout_ms: Some(200),
-                ..Default::default()
-            },
-        )
+        .enqueue("rust.expiry-blocked", json!({}), {
+            let mut enqueue_options = EnqueueOptions::default();
+            enqueue_options.max_attempts = 1;
+            enqueue_options.execution_timeout_ms = Some(200);
+            enqueue_options
+        })
         .await;
     // No renewal reaches PostgreSQL, so the watchdog ends the attempt one lease after the claim.
     // The lease leaves the expiry request 1.8 s to reach the test's lock first.
-    let worker = harness.worker(WorkerOptions {
-        lease_duration: Duration::from_secs(2),
-        heartbeat_interval: Some(Duration::from_millis(200)),
-        maintenance_interval: Duration::from_secs(3600),
-        ..options()
+    let worker = harness.worker({
+        let mut worker_options = options();
+        worker_options.lease_duration = Duration::from_secs(2);
+        worker_options.heartbeat_interval = Some(Duration::from_millis(200));
+        worker_options.maintenance_interval = Duration::from_secs(3600);
+        worker_options
     });
     let (start, mut handler_started) = mpsc::unbounded_channel();
     let (reasons, mut reason) = mpsc::unbounded_channel();
@@ -3763,21 +3891,19 @@ async fn renewals_continue_while_a_returned_handler_waits_for_its_expiry_answer(
     let expiry_lock = gate.transaction().await.unwrap();
     expiry_lock.execute("SELECT pg_advisory_xact_lock(1652)", &[]).await.unwrap();
     let task = harness
-        .enqueue(
-            "rust.expiry-returned",
-            json!({}),
-            EnqueueOptions {
-                max_attempts: 1,
-                execution_timeout_ms: Some(300),
-                ..Default::default()
-            },
-        )
+        .enqueue("rust.expiry-returned", json!({}), {
+            let mut enqueue_options = EnqueueOptions::default();
+            enqueue_options.max_attempts = 1;
+            enqueue_options.execution_timeout_ms = Some(300);
+            enqueue_options
+        })
         .await;
-    let worker = harness.worker(WorkerOptions {
-        lease_duration: Duration::from_secs(2),
-        heartbeat_interval: Some(Duration::from_millis(200)),
-        maintenance_interval: Duration::from_secs(3600),
-        ..options()
+    let worker = harness.worker({
+        let mut worker_options = options();
+        worker_options.lease_duration = Duration::from_secs(2);
+        worker_options.heartbeat_interval = Some(Duration::from_millis(200));
+        worker_options.maintenance_interval = Duration::from_secs(3600);
+        worker_options
     });
     let (returned, mut handler_returned) = mpsc::unbounded_channel();
     let release = Arc::new(tokio::sync::Notify::new());
@@ -3883,11 +4009,12 @@ async fn a_failed_maintenance_pass_drains_the_tasks_in_flight_and_ends_the_run()
     let observer = harness.database.connect().await;
     let held = harness.enqueue("rust.held", json!({}), EnqueueOptions::default()).await;
     let worker_id = format!("rust-worker-{}", Uuid::new_v4());
-    let worker = harness.worker(WorkerOptions {
-        worker_id: Some(worker_id.clone()),
-        maintenance_interval: Duration::from_millis(100),
-        shutdown_grace_period: WAIT,
-        ..options()
+    let worker = harness.worker({
+        let mut worker_options = options();
+        worker_options.worker_id = Some(worker_id.clone());
+        worker_options.maintenance_interval = Duration::from_millis(100);
+        worker_options.shutdown_grace_period = WAIT;
+        worker_options
     });
     let (handler_started, mut running_handlers) = mpsc::unbounded_channel();
     let (release, released) = oneshot::channel::<()>();

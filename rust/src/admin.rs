@@ -13,6 +13,7 @@ use tokio_postgres::{Client, NoTls, Row};
 use uuid::Uuid;
 
 use crate::compatibility::{check_compatibility, read_compatibility_state, CompatibilityCode};
+use crate::queue::Rows as _;
 use crate::queue::{exactly_one, parse_status, Executor};
 use crate::sql_catalogue_generated as sql;
 use crate::types::{string_enum, DependencyTerminalPolicy, RetryPolicy, TaskState};
@@ -26,6 +27,7 @@ const MAX_REDACT_KEYS: usize = 50;
 
 string_enum!(
     /// Whether a task list item carries its payload.
+    #[non_exhaustive]
     PayloadStatus {
         Omitted => "omitted",
         Included => "included",
@@ -35,6 +37,7 @@ string_enum!(
 
 string_enum!(
     /// Why a task cannot run yet.
+    #[non_exhaustive]
     BlockedReason {
         PrerequisitePending => "prerequisite_pending",
     }
@@ -42,6 +45,7 @@ string_enum!(
 
 string_enum!(
     /// The source table of one task timeline entry.
+    #[non_exhaustive]
     TaskTimelineKind {
         Event => "event",
         Attempt => "attempt",
@@ -50,6 +54,7 @@ string_enum!(
 
 string_enum!(
     /// How a durable timer was requested.
+    #[non_exhaustive]
     WaitMode {
         Relative => "relative",
         Absolute => "absolute",
@@ -58,6 +63,7 @@ string_enum!(
 
 string_enum!(
     /// PostgreSQL's disposition for one redrive request.
+    #[non_exhaustive]
     RedriveStatus {
         Redriven => "redriven",
         Replayed => "replayed",
@@ -70,6 +76,7 @@ string_enum!(
 string_enum!(
     /// Which storage a queue's tasks use (ADR 0077). A fast-tier task keeps one runtime row while
     /// it is live and one outcome row after it settles, and supports no durable execution.
+    #[non_exhaustive]
     QueueTier {
         Fast => "fast",
         Full => "full",
@@ -78,6 +85,7 @@ string_enum!(
 
 /// Whether a fast-tier queue records its attempts and claims for the dashboard.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct QueueHistory {
     pub record_attempts: bool,
     pub record_claims: bool,
@@ -96,6 +104,7 @@ pub struct AdminAudit {
 
 /// The terminal outcomes a dependent task accepts from its prerequisites.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct DependencyPolicy {
     pub on_success: DependencyTerminalPolicy,
     pub on_failure: DependencyTerminalPolicy,
@@ -104,6 +113,7 @@ pub struct DependencyPolicy {
 
 /// Whether and how a task list carries each payload.
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct TaskPayloadProjection {
     pub include: bool,
     /// Between 1 and 1 MiB; a larger payload is reported as too large.
@@ -120,6 +130,7 @@ impl Default for TaskPayloadProjection {
 
 /// The position after the last task of a page.
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct TaskListCursor {
     pub created_at: DateTime<Utc>,
     pub task_id: Uuid,
@@ -127,7 +138,15 @@ pub struct TaskListCursor {
     pub signature: String,
 }
 
+impl TaskListCursor {
+    /// The cursor that a page returned, from its stored fields.
+    pub fn new(created_at: DateTime<Utc>, task_id: Uuid, signature: impl Into<String>) -> Self {
+        Self { created_at, task_id, signature: signature.into() }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct TaskListQuery {
     pub queue: Option<String>,
     pub task_type: Option<String>,
@@ -157,6 +176,7 @@ impl Default for TaskListQuery {
 }
 
 #[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
 pub struct TaskListItem {
     pub id: Uuid,
     pub queue: String,
@@ -189,6 +209,7 @@ pub struct TaskListItem {
 }
 
 #[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
 pub struct TaskListPage {
     pub items: Vec<TaskListItem>,
     pub next_cursor: Option<TaskListCursor>,
@@ -196,6 +217,7 @@ pub struct TaskListPage {
 
 /// The latest progress a task reported.
 #[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
 pub struct TaskProgress {
     pub task_id: Uuid,
     pub value: Value,
@@ -208,7 +230,10 @@ pub struct TaskProgress {
 }
 
 /// One task with its definition, lifecycle state, outcome and latest progress.
+///
+/// A later release can add a field, so a caller reads the fields and does not build the value.
 #[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
 pub struct TaskSnapshot {
     pub id: Uuid,
     pub queue: String,
@@ -245,6 +270,7 @@ pub struct TaskSnapshot {
 
 /// The position after the last timeline entry of a page.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct TaskTimelineCursor {
     pub task_id: Uuid,
     pub occurred_at: DateTime<Utc>,
@@ -252,7 +278,20 @@ pub struct TaskTimelineCursor {
     pub record_id: Uuid,
 }
 
+impl TaskTimelineCursor {
+    /// The cursor that a page returned, from its stored fields.
+    pub fn new(
+        task_id: Uuid,
+        occurred_at: DateTime<Utc>,
+        kind: TaskTimelineKind,
+        record_id: Uuid,
+    ) -> Self {
+        Self { task_id, occurred_at, kind, record_id }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct TaskTimelineQuery {
     /// Between 1 and 1000.
     pub limit: u32,
@@ -268,6 +307,7 @@ impl Default for TaskTimelineQuery {
 
 /// A recorded lifecycle event.
 #[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
 pub struct TaskTimelineEvent {
     pub record_id: Uuid,
     pub priority: i32,
@@ -279,6 +319,7 @@ pub struct TaskTimelineEvent {
 
 /// A finished execution attempt.
 #[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
 pub struct TaskTimelineAttempt {
     pub record_id: Uuid,
     pub priority: i32,
@@ -294,12 +335,14 @@ pub struct TaskTimelineAttempt {
 }
 
 #[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
 pub enum TaskTimelineEntry {
     Event(TaskTimelineEvent),
     Attempt(TaskTimelineAttempt),
 }
 
 #[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
 pub struct TaskTimelinePage {
     pub items: Vec<TaskTimelineEntry>,
     pub next_cursor: Option<TaskTimelineCursor>,
@@ -307,6 +350,7 @@ pub struct TaskTimelinePage {
 
 /// Which failed tasks a dead-letter read or bulk redrive selects.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct DeadLetterFilter {
     pub queue: Option<String>,
     pub task_type: Option<String>,
@@ -319,12 +363,21 @@ pub struct DeadLetterFilter {
 
 /// The position after the last dead letter of a page.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct DeadLetterCursor {
     pub finished_at: DateTime<Utc>,
     pub task_id: Uuid,
 }
 
+impl DeadLetterCursor {
+    /// The cursor that a page returned, from its stored fields.
+    pub fn new(finished_at: DateTime<Utc>, task_id: Uuid) -> Self {
+        Self { finished_at, task_id }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct DeadLetterQuery {
     pub filter: DeadLetterFilter,
     /// Between 1 and 1000.
@@ -339,6 +392,7 @@ impl Default for DeadLetterQuery {
 }
 
 #[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
 pub struct DeadLetter {
     pub task_id: Uuid,
     pub queue: String,
@@ -358,6 +412,7 @@ pub struct DeadLetter {
 }
 
 #[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
 pub struct DeadLetterPage {
     pub items: Vec<DeadLetter>,
     pub next_cursor: Option<DeadLetterCursor>,
@@ -365,6 +420,7 @@ pub struct DeadLetterPage {
 
 /// PostgreSQL's disposition for one failed source task.
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct RedriveResult {
     pub status: RedriveStatus,
     pub source_task_id: Uuid,
@@ -375,6 +431,7 @@ pub struct RedriveResult {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct BulkRedriveOptions {
     /// Between 1 and 1000.
     pub limit: u32,
@@ -390,6 +447,7 @@ impl Default for BulkRedriveOptions {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct BulkRedrivePage {
     pub results: Vec<RedriveResult>,
     pub next_cursor: Option<DeadLetterCursor>,
@@ -397,6 +455,7 @@ pub struct BulkRedrivePage {
 
 /// A durable value a task saved under a name.
 #[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
 pub struct TaskCheckpoint {
     pub task_id: Uuid,
     pub name: String,
@@ -411,6 +470,7 @@ pub struct TaskCheckpoint {
 
 /// A durable timer a task scheduled under a name.
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct TaskWait {
     pub task_id: Uuid,
     pub name: String,
@@ -428,13 +488,22 @@ pub struct TaskWait {
 
 /// The position after the last external wait of a page.
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct ExternalWaitCursor {
     pub created_at: DateTime<Utc>,
     pub task_id: Uuid,
     pub name: String,
 }
 
+impl ExternalWaitCursor {
+    /// The cursor that a page returned, from its stored fields.
+    pub fn new(created_at: DateTime<Utc>, task_id: Uuid, name: impl Into<String>) -> Self {
+        Self { created_at, task_id, name: name.into() }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct ExternalWaitQuery {
     /// Between 1 and 1000.
     pub limit: u32,
@@ -449,6 +518,7 @@ impl Default for ExternalWaitQuery {
 
 /// A task suspended until a named signal arrives.
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct ExternalWait {
     pub task_id: Uuid,
     pub queue: String,
@@ -460,6 +530,7 @@ pub struct ExternalWait {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct ExternalWaitPage {
     pub items: Vec<ExternalWait>,
     pub next_cursor: Option<ExternalWaitCursor>,
@@ -467,6 +538,7 @@ pub struct ExternalWaitPage {
 
 /// A task suspended until a person completes a named decision.
 #[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
 pub struct HumanWait {
     pub task_id: Uuid,
     pub queue: String,
@@ -480,6 +552,7 @@ pub struct HumanWait {
 }
 
 #[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
 pub struct HumanWaitPage {
     pub items: Vec<HumanWait>,
     pub next_cursor: Option<ExternalWaitCursor>,
@@ -487,6 +560,7 @@ pub struct HumanWaitPage {
 
 /// A worker's durable operator pause state after a control.
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct WorkerPauseResult {
     pub worker_id: String,
     pub paused: bool,
@@ -498,6 +572,7 @@ pub struct WorkerPauseResult {
 
 /// One registered worker instance.
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct WorkerRegistryEntry {
     pub worker_id: String,
     pub instance_id: Uuid,

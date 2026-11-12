@@ -58,13 +58,9 @@ To set the budget, give `maxAttempts` when you enqueue the task.
   </Tab>
   <Tab value="Rust">
     ```rust
-    queue
-        .enqueue(
-            "provider.sync",
-            &json!({ "accountId": account_id }),
-            EnqueueOptions { max_attempts: 5, ..Default::default() },
-        )
-        .await?;
+    let mut options = EnqueueOptions::default();
+    options.max_attempts = 5;
+    queue.enqueue("provider.sync", &json!({ "accountId": account_id }), options).await?;
     ```
   </Tab>
   <Tab value="Ruby">
@@ -175,17 +171,10 @@ Workhorse stores the policy with the task. A policy has one of three types:
     ```rust
     let jitter =
         json!({ "type": "decorrelated-jitter", "baseDelayMs": 1_000, "maxDelayMs": 60_000 });
-    queue
-        .enqueue(
-            "provider.sync",
-            &json!({ "accountId": account_id }),
-            EnqueueOptions {
-                retry_policy: jitter.as_object().cloned(),
-                max_attempts: 5,
-                ..Default::default()
-            },
-        )
-        .await?;
+    let mut options = EnqueueOptions::default();
+    options.retry_policy = jitter.as_object().cloned();
+    options.max_attempts = 5;
+    queue.enqueue("provider.sync", &json!({ "accountId": account_id }), options).await?;
     ```
   </Tab>
   <Tab value="Ruby">

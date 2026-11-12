@@ -81,25 +81,19 @@ pub fn build_worker(
     poll_interval: Option<Duration>,
     listen_config: Option<workhorse::deadpool_postgres::tokio_postgres::Config>,
 ) -> Result<Worker, Error> {
-    let worker = Worker::new(
-        pool,
-        WorkerOptions {
-            queues: vec![RUST_QUEUE.into(), SHARED_QUEUE.into(), RUST_FAST_QUEUE.into()],
-            worker_id: Some(worker_id),
-            concurrency: WORKER_CONCURRENCY,
-            poll_interval,
-            schedule_namespaces: vec![
-                SCHEDULE_NAMESPACE.into(),
-                FAST_TIER_SCHEDULE_NAMESPACE.into(),
-            ],
-            maintenance_interval: Duration::from_secs(1),
-            registry_interval: Duration::from_millis(250),
-            shutdown_grace_period: Duration::from_secs(25),
-            polling_only: listen_config.is_none(),
-            listen_config,
-            ..Default::default()
-        },
-    )?;
+    let mut options = WorkerOptions::default();
+    options.queues = vec![RUST_QUEUE.into(), SHARED_QUEUE.into(), RUST_FAST_QUEUE.into()];
+    options.worker_id = Some(worker_id);
+    options.concurrency = WORKER_CONCURRENCY;
+    options.poll_interval = poll_interval;
+    options.schedule_namespaces =
+        vec![SCHEDULE_NAMESPACE.into(), FAST_TIER_SCHEDULE_NAMESPACE.into()];
+    options.maintenance_interval = Duration::from_secs(1);
+    options.registry_interval = Duration::from_millis(250);
+    options.shutdown_grace_period = Duration::from_secs(25);
+    options.polling_only = listen_config.is_none();
+    options.listen_config = listen_config;
+    let worker = Worker::new(pool, options)?;
     worker.handle(LANGUAGE_TASK_TYPE, language_task);
     worker.handle(SHARED_TASK_TYPE, shared_task);
     Ok(worker)

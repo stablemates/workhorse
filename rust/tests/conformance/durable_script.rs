@@ -56,15 +56,13 @@ fn worker(url: &str, queue: &str, worker_id: String) -> Checked<Worker> {
         .max_size(4)
         .build()
         .map_err(|error| error.to_string())?;
-    let options = WorkerOptions {
-        queues: vec![queue.to_owned()],
-        worker_id: Some(worker_id),
-        concurrency: 1,
-        polling_only: true,
-        disable_registry: true,
-        poll_interval: Some(Duration::from_millis(5)),
-        ..WorkerOptions::default()
-    };
+    let mut options = WorkerOptions::default();
+    options.queues = vec![queue.to_owned()];
+    options.worker_id = Some(worker_id);
+    options.concurrency = 1;
+    options.polling_only = true;
+    options.disable_registry = true;
+    options.poll_interval = Some(Duration::from_millis(5));
     Worker::new(pool, options).map_err(|error| error.to_string())
 }
 
@@ -312,8 +310,11 @@ async fn run_operation_once(
             .await?
             .result),
         "runChild" => {
-            let mut options =
-                EnqueueOptions { queue: child_queue(fixture), ..EnqueueOptions::default() };
+            let mut options = {
+                let mut enqueue_options = EnqueueOptions::default();
+                enqueue_options.queue = child_queue(fixture);
+                enqueue_options
+            };
             if let Some(field) = operation["deadlineField"].as_str() {
                 options.deadline = Some(payload_time(payload, field)?);
             }

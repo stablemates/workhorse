@@ -89,6 +89,7 @@ impl CancellationToken {
 /// that fails the task without a retry. Only that conversion marks it: an error built with [`HandlerError::named`]
 /// retries under the policy, whatever its name.
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct HandlerError {
     pub name: Option<String>,
     pub message: String,
@@ -192,6 +193,7 @@ impl<E: std::error::Error + 'static> From<E> for HandlerError {
 
 /// Bounds one process-local batch rendezvous.
 #[derive(Clone, Copy, Debug)]
+#[non_exhaustive]
 pub struct BatchOptions {
     /// Between 1 and 100, and no larger than the worker's concurrency.
     pub max_size: usize,
@@ -199,8 +201,16 @@ pub struct BatchOptions {
     pub linger: Duration,
 }
 
+impl BatchOptions {
+    /// Batches of at most `max_size` tasks, where the first member waits up to `linger` for more.
+    pub fn new(max_size: usize, linger: Duration) -> Self {
+        Self { max_size, linger }
+    }
+}
+
 /// One claimed member of a batch and its independent fenced context.
 #[derive(Debug)]
+#[non_exhaustive]
 pub struct BatchItem<P> {
     pub payload: P,
     pub context: BatchHandlerContext,

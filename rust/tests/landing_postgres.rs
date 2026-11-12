@@ -52,17 +52,15 @@ async fn landing(name: &str) -> Option<Landing> {
 impl Landing {
     /// A polling worker on `queues` that claims at once.
     fn worker(&self, queues: &[&str], concurrency: usize) -> Worker {
-        Worker::new(
-            self.pool.clone(),
-            WorkerOptions {
-                queues: queues.iter().map(|queue| (*queue).into()).collect(),
-                concurrency,
-                polling_only: true,
-                poll_interval: Some(Duration::from_millis(20)),
-                disable_registry: true,
-                ..WorkerOptions::default()
-            },
-        )
+        Worker::new(self.pool.clone(), {
+            let mut worker_options = WorkerOptions::default();
+            worker_options.queues = queues.iter().map(|queue| (*queue).into()).collect();
+            worker_options.concurrency = concurrency;
+            worker_options.polling_only = true;
+            worker_options.poll_interval = Some(Duration::from_millis(20));
+            worker_options.disable_registry = true;
+            worker_options
+        })
         .unwrap()
     }
 
@@ -122,7 +120,7 @@ async fn stop_process(running: JoinHandle<Result<(), String>>) {
 }
 
 fn delivery(key: &str) -> DeliveryOptions {
-    DeliveryOptions { idempotency_key: key.into(), requested_by: "landing-test".into() }
+    DeliveryOptions::new(key, "landing-test")
 }
 
 #[tokio::test]
@@ -404,8 +402,12 @@ async fn the_dead_letters_snippet_redrives_the_declined_billing_task() {
     worker.handle("invoice.capture", |_payload: Value, _context| async move {
         Err::<Value, _>(HandlerError::named("CardDeclined", "the card was declined"))
     });
-    let options =
-        EnqueueOptions { queue: Some("billing".into()), max_attempts: 1, ..Default::default() };
+    let options = {
+        let mut enqueue_options = EnqueueOptions::default();
+        enqueue_options.queue = Some("billing".into());
+        enqueue_options.max_attempts = 1;
+        enqueue_options
+    };
     let task = landing.queue.enqueue("invoice.capture", &json!({}), options).await;
     let task = task.unwrap().task_id;
     landing.drain(&worker, task, TaskState::Failed).await;
@@ -464,15 +466,13 @@ async fn the_operate_fleet_snippet_pauses_only_billing_workers() {
     let Some(landing) = landing("landing_operate_fleet").await else { return };
     let mut running = Vec::new();
     for queue in ["billing", "email"] {
-        let worker = Worker::new(
-            landing.pool.clone(),
-            WorkerOptions {
-                queues: vec![queue.into()],
-                worker_id: Some(format!("{queue}-worker")),
-                polling_only: true,
-                ..WorkerOptions::default()
-            },
-        )
+        let worker = Worker::new(landing.pool.clone(), {
+            let mut worker_options = WorkerOptions::default();
+            worker_options.queues = vec![queue.into()];
+            worker_options.worker_id = Some(format!("{queue}-worker"));
+            worker_options.polling_only = true;
+            worker_options
+        })
         .unwrap();
         let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
         let handle = tokio::spawn(async move {
@@ -516,7 +516,8 @@ async fn the_deploy_snippet_runs_an_email_worker_from_database_url() {
     // The region reads DATABASE_URL. No other test in this binary reads it.
     std::env::set_var("DATABASE_URL", landing.database.url());
     let email = json!({ "to": "ada@example.com" });
-    let options = EnqueueOptions { queue: Some("email".into()), ..Default::default() };
+    let mut options = EnqueueOptions::default();
+    options.queue = Some("email".into());
     landing.queue.enqueue("email.send", &email, options).await.unwrap();
 
     let running = spawn_process(landing::landing_deploy::run());
