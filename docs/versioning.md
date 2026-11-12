@@ -203,8 +203,9 @@ dashboard release inside a major line.
 
 Six gates hold the tag, and each is met with evidence rather than with an assertion
 ([ADR 0056](decisions/0056-set-the-1-0-0-exit-criteria.md)). 1.0.0 ships when the JVM and .NET SDKs
-land. The maintainer changed the gates on 2026-10-18, and the amendment of ADR 0056 records the
-change.
+land. The maintainer changed the gates on 2026-10-18 and on 2026-11-03, and the amendments of ADR
+0056 record the changes. [State of the 1.0.0 release gates](release-gates.md) gives the current state of each gate
+and the date of its last change.
 
 1. Every governed surface has a mechanical check in the CI `required` task. Twelve checks, one per
    surface, as the table above lists. The twelfth is the C# API, with `dotnet-api:check` against
@@ -220,9 +221,10 @@ change.
    ([ADR 0079](decisions/0079-govern-the-rust-api-as-an-eighth-surface.md),
    [ADR 0084](decisions/0084-govern-the-ruby-api-as-a-ninth-surface.md),
    [ADR 0103](decisions/0103-shape-the-jvm-sdk-as-a-java-core-with-kotlin-and-spring-boot-modules.md)).
-4. One database has run 30 consecutive days under continuous work without being reinstalled, across
-   daily partition rollover, a retention pass that dropped a partition, and an ungraceful worker
-   kill with clean recovery.
+4. One installation has proved at least 14 consecutive complete UTC days of completed tasks,
+   without a reinstall. Its evidence also shows at least 14 daily partition rollovers and completed
+   tasks after a retention pass dropped a partition. It shows two releases applied by migration. It
+   also shows recovery from an ungraceful worker stop with no lost or duplicated task.
 5. `@stablemates/workhorse-dashboard-server` has a written security review with every High finding
    resolved. No third-party audit has taken place, and `SECURITY.md` says so.
 6. `pnpm parity:check` passes and the product operator table carries no Planned cell (WH-581

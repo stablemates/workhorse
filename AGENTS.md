@@ -58,6 +58,27 @@ lays out:
 An agent's attribution line comes last. When a follow-up change amends the commit, update the
 description so it describes the whole change.
 
+## Ask each review for the differences between the SDKs
+
+Workhorse has seven SDKs, and they must keep one behaviour. A review of a diff does not find a
+difference in code that the diff does not change. For example, after SM-1934 three groups of SDKs
+logged a failed expiry request in three ways. A table in `docs/architecture/lifecycle.md` recorded
+the difference. Three review rounds and the Greptile review did not question it.
+
+This rule applies to a change to an SDK, a shared fixture, or a document about SDK behaviour. Put
+this question in each review brief for such a change:
+
+> List each place where the seven SDKs still differ after this change. Include behaviour, log
+> records, errors, and documentation. For each difference, say whether a decision record, `docs/parity.md`,
+> or the issue makes it intended.
+
+Ask the question in each round, not only in the first round. A round that checks only the fixes of
+the round before does not read the whole change again.
+
+If a change documents a difference between SDKs, name that difference in the review brief. Also name
+it under `What changes` in the pull request description. A reviewer reads a documented difference as a decision and does not
+question it.
+
 ## Do not run the demo server
 
 Do not start the demo. Not `pnpm demo`, not `pnpm demo:app`, and not a variant in the background.

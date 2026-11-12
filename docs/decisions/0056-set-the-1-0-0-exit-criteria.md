@@ -320,3 +320,16 @@ Record the speaker, statement date, claimed operating dates, and supporting reco
 Do not invent dates or count an operator statement as a recorded completion, partition deletion, migration, or recovery.
 Evidence stays in the private operations repository.
 Automatic collection continues after the gate passes.
+
+## Amendment: publish the state of the gates (2026-11-12)
+
+On 2026-11-12 the maintainer decided to publish the state of each gate (SM-2003, SM-2045).
+[State of the 1.0.0 release gates](../release-gates.md) is the public summary. For each gate, it
+gives the state and the date of its last change. It also gives a short summary with links to the
+public evidence.
+
+This record stays the bar. If the page and this record do not agree, this record is correct.
+SM-34 stays the tracker that links the evidence of each gate, including the private records.
+
+A pull request that moves the state of a gate changes the page in the same pull request. If the
+evidence is not in this repository, the next pull request changes the page.

@@ -18,6 +18,8 @@ published site; they do not own product behavior.
   compatibility.
 - [`versioning.md`](versioning.md) owns what SemVer governs on each surface, the retention of
   superseded functions, and the 1.0.0 gates.
+- [`release-gates.md`](release-gates.md) states the current state of each 1.0.0 gate and the date
+  of its last change.
 - [`upgrading.md`](upgrading.md) owns the upgrade notes of each minor line.
 - [`features.md`](features.md) owns the current product capability matrix.
 - [`parity.md`](parity.md) is the generated matrix of capabilities exposed by each language SDK.
