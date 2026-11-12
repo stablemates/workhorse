@@ -309,6 +309,16 @@ of the whole queue. A heartbeat stays a HOT update. The schema moves to version 
 stays 99. If the build fails, drop the invalid index with `DROP INDEX CONCURRENTLY IF EXISTS
 workhorse.task_runtime_active_queue_shard_idx` and run `workhorse schema migrate` again.
 
+### The README and the install pages give the Gradle and Maven commands
+
+Maven Central serves the three artifacts, but the README and the site said that they gave no Gradle
+or Maven command (SM-1452). The README, the installation and quickstart pages, and the agent pages
+now give the commands from `install.gradle` and `install.maven` in `support.json`. The README and
+the installation page also give the commands for `workhorse-kotlin` and
+`workhorse-spring-boot-starter`. The core puts PgJDBC on the runtime class path only, so these
+pages also tell a reader to add `org.postgresql:postgresql` when the code names a PgJDBC class. A
+test holds each JVM coordinate on a page to the version in `support.json`.
+
 ## 0.12.0 — 2026-11-07
 
 The npm packages, Python distribution, Go module, Rust crate, Ruby gem, JVM artifacts, and .NET

@@ -27,10 +27,11 @@ import { publishedPackages, repositoryRoot } from "./packages.js";
 //
 // A Gradle or Maven dependency is the other exception. Its coordinate has no form without a
 // version, so `install.gradle` and `install.maven` name the version of `jvm/gradle.properties`, and
-// a rule below holds them to it. They name the core, `run.workhorse:workhorse`. The pages that
-// show them name the Kotlin module and the starter by their artifact IDs. No README or site page
-// shows them before Maven Central serves the artifacts (SM-1384), so `docs/compatibility.md` is
-// their only surface until then.
+// a rule below holds them to it. They name the core, `run.workhorse:workhorse`. Maven Central serves
+// the three artifacts from 0.9.0 (SM-1452), so the JVM README, the install pages, and
+// `docs/compatibility.md` show them. A page that gives the command of the Kotlin module or the
+// starter gives the core command with only the artifact ID changed, and a sweep below holds every
+// JVM coordinate on every page to the version of `install.gradle`.
 //
 // A NuGet package needs no version: `dotnet add package` adds the newest release, so
 // `install.dotnet` follows the no-version rule. It names the core, `Workhorse`. nuget.org serves
@@ -85,13 +86,15 @@ const governedSurfaces: readonly GovernedSurface[] = [
   { file: "go/examples/README.md", commands: ["go"] },
   { file: "rust/README.md", commands: ["rust", "schemaPinned"] },
   { file: "ruby/README.md", commands: ["ruby", "schemaPinned"] },
-  { file: "jvm/README.md", commands: ["schemaPinned"] },
+  { file: "jvm/README.md", commands: ["gradle", "maven", "schemaPinned"] },
   { file: "dotnet/README.md", commands: ["dotnet", "schemaPinned"] },
   {
     file: "site/content/docs/installation.mdx",
     commands: [
       "dotnet",
       "go",
+      "gradle",
+      "maven",
       "node",
       "python",
       "ruby",
@@ -103,15 +106,37 @@ const governedSurfaces: readonly GovernedSurface[] = [
   },
   {
     file: "site/content/docs/quickstart.mdx",
-    commands: ["dotnet", "go", "node", "python", "ruby", "rust", "schema", "schemaPinned"],
+    commands: [
+      "dotnet",
+      "go",
+      "gradle",
+      "maven",
+      "node",
+      "python",
+      "ruby",
+      "rust",
+      "schema",
+      "schemaPinned",
+    ],
   },
   {
     file: "site/content/docs/for-ai-agents.mdx",
-    commands: ["dotnet", "go", "node", "python", "ruby", "rust", "schema", "schemaPinned"],
+    commands: [
+      "dotnet",
+      "go",
+      "gradle",
+      "maven",
+      "node",
+      "python",
+      "ruby",
+      "rust",
+      "schema",
+      "schemaPinned",
+    ],
   },
   {
     file: "docs/guides/385-agent-integration.md",
-    commands: ["dotnet", "go", "node", "python", "ruby", "rust"],
+    commands: ["dotnet", "go", "gradle", "maven", "node", "python", "ruby", "rust"],
   },
   { file: "site/content/docs/api.mdx", commands: ["schema", "schemaPinned"] },
   { file: "docs/compatibility.md", commands: ["dotnet", "gradle", "maven"] },
@@ -126,6 +151,159 @@ const optionalDotnetPackages = [
 
 /** The pages that list the four .NET packages with an install command for each. */
 const dotnetPackagePages = ["dotnet/README.md", "site/content/docs/installation.mdx"] as const;
+
+/** The artifact ID that `install.gradle` and `install.maven` name. */
+const jvmCoreArtifact = "workhorse";
+
+/** The JVM artifacts beside the core (ADR 0103), each with the pages that give its commands. */
+const jvmModulePages = [
+  {
+    artifact: "workhorse-kotlin",
+    files: [
+      "jvm/README.md",
+      "site/content/docs/installation.mdx",
+      "site/content/docs/quickstart.mdx",
+    ],
+  },
+  {
+    artifact: "workhorse-spring-boot-starter",
+    files: ["jvm/README.md", "site/content/docs/installation.mdx"],
+  },
+] as const;
+
+/** Each page that gives a Java or Kotlin command, with the number of places that give one. */
+const pgjdbcPages = [
+  ["jvm/README.md", 1],
+  ["site/content/docs/installation.mdx", 2],
+  ["site/content/docs/quickstart.mdx", 2],
+] as const;
+
+/** The sentence that tells a reader to add PgJDBC, with the version that it names. */
+const pgjdbcSentencePattern = /also add `org\.postgresql:postgresql` (\S+) or newer\./g;
+
+/** Every artifact that Maven Central serves in the group `run.workhorse`. */
+const jvmArtifacts: ReadonlySet<string> = new Set([
+  jvmCoreArtifact,
+  ...jvmModulePages.map((entry) => entry.artifact),
+]);
+
+/** A JVM dependency that a page states, split into the parts that a build resolves. */
+interface JvmDependency {
+  /** `prose` is a coordinate in a sentence, which can name an artifact without a version. */
+  readonly kind: "prose" | "build";
+  readonly text: string;
+  readonly group: string;
+  readonly artifact: string;
+  readonly version: string | undefined;
+}
+
+/**
+ * A Gradle coordinate in the group `run.workhorse`, in prose or in a build line. Neither part ends
+ * in punctuation, so a full stop after a coordinate in a sentence stays outside it.
+ */
+const gradleCoordinatePattern = /run\.workhorse:[\w.-]*[\w-](?::[^\s"'`)]*[^\s"'`).,;:])?/g;
+
+/** The string notation of a Gradle dependency, whatever its group. */
+const gradleDependencyPattern =
+  /\b(?:implementation|api|compileOnly|runtimeOnly|testImplementation)\s*\(?\s*["']([^"'\n]+)["']/g;
+
+/**
+ * The map notation of a Gradle dependency, `group: "…", name: "…", version: "…"` in the Groovy DSL
+ * or `group = "…", name = "…", version = "…"` in the Kotlin DSL, in any order of its keys. A comma
+ * separates two entries, and a line break can follow it.
+ */
+const gradleMapEntry = String.raw`\b(?:group|name|version)\s*[:=]\s*["'][^"'\n]*["']`;
+const gradleMapPattern = new RegExp(
+  String.raw`${gradleMapEntry}(?:\s*,\s*${gradleMapEntry}){1,2}`,
+  "g",
+);
+
+function gradleMapValue(notation: string, key: string): string | undefined {
+  return new RegExp(`\\b${key}\\s*[:=]\\s*["']([^"'\\n]*)["']`).exec(notation)?.[1];
+}
+
+/** One Maven dependency block, whatever its group and the order of its elements. */
+const mavenDependencyPattern = /<dependency\s*>([\s\S]*?)<\/dependency\s*>/g;
+
+function mavenElement(block: string, name: string): string | undefined {
+  return new RegExp(`<${name}\\s*>\\s*([^<]*?)\\s*</${name}\\s*>`).exec(block)?.[1];
+}
+
+/**
+ * Every Gradle coordinate and Maven dependency on a page that names the group `run.workhorse` or
+ * an artifact ID that starts with `workhorse`. A wrong group or a missing version is thus still a
+ * dependency that the sweep reads, not text that it skips.
+ */
+function jvmDependencies(contents: string): JvmDependency[] {
+  const found: JvmDependency[] = [];
+  const notations = [
+    ...[...contents.matchAll(gradleCoordinatePattern)].map((match) => ["prose", match[0]] as const),
+    ...[...contents.matchAll(gradleDependencyPattern)].flatMap((match) =>
+      match[1] === undefined ? [] : [["build", match[1]] as const],
+    ),
+  ];
+  for (const [kind, text] of notations) {
+    const [group = "", artifact = "", version] = text.split(":");
+    found.push({ kind, text, group, artifact, version });
+  }
+  for (const [text] of contents.matchAll(gradleMapPattern)) {
+    found.push({
+      kind: "build",
+      text: text.trim(),
+      group: gradleMapValue(text, "group") ?? "",
+      artifact: gradleMapValue(text, "name") ?? "",
+      version: gradleMapValue(text, "version"),
+    });
+  }
+  for (const [text, block = ""] of contents.matchAll(mavenDependencyPattern)) {
+    found.push({
+      kind: "build",
+      text: collapse(text),
+      group: mavenElement(block, "groupId") ?? "",
+      artifact: mavenElement(block, "artifactId") ?? "",
+      version: mavenElement(block, "version"),
+    });
+  }
+  return found.filter(
+    (dependency) =>
+      dependency.group === "run.workhorse" || /^workhorse(?:-|$)/.test(dependency.artifact),
+  );
+}
+
+/** What is wrong with each JVM dependency in a page, against the version of `install.gradle`. */
+function jvmDependencyErrors(contents: string, version: string): string[] {
+  const wrong: string[] = [];
+  for (const dependency of jvmDependencies(contents)) {
+    const { text, group, artifact } = dependency;
+    if (group !== "run.workhorse") wrong.push(`group ${group} in ${text}`);
+    if (!jvmArtifacts.has(artifact)) wrong.push(`unknown artifact in ${text}`);
+    if (dependency.version === undefined) {
+      if (dependency.kind === "build") wrong.push(`no version in ${text}`);
+    } else if (dependency.version !== version) {
+      wrong.push(`${dependency.version} in ${text}, not ${version}`);
+    }
+  }
+  // A string dependency is also a prose coordinate, so one fault can appear twice.
+  return [...new Set(wrong)];
+}
+
+/** The command of a JVM artifact beside the core: the core command with its artifact ID changed. */
+function jvmModuleCommand(command: string, artifact: string): string {
+  const coordinate = command
+    .replace(`run.workhorse:${jvmCoreArtifact}:`, `run.workhorse:${artifact}:`)
+    .replace(`<artifactId>${jvmCoreArtifact}</artifactId>`, `<artifactId>${artifact}</artifactId>`);
+  if (coordinate === command) throw new Error(`no core artifact ID in ${command}`);
+  return coordinate;
+}
+
+/** The version that `install.gradle` names, which every JVM coordinate on a page must name. */
+function jvmVersion(manifest: InstallManifest): string {
+  const version = /^implementation\("run\.workhorse:workhorse:([^"]+)"\)$/.exec(
+    manifest.install.gradle,
+  )?.[1];
+  if (version === undefined) throw new Error(`install.gradle has no core coordinate`);
+  return version;
+}
 
 /** Markdown wraps prose at will, so a sentence rule compares runs of whitespace as one space. */
 function collapse(contents: string): string {
@@ -316,18 +494,138 @@ describe("install commands", () => {
     expect(missing).toEqual([]);
   });
 
-  it("keeps the Gradle and Maven commands off the README and site pages", async () => {
+  // `install.gradle` and `install.maven` name only the core. The Kotlin module and the starter
+  // share its group and version, so their commands change only the artifact ID.
+  it("gives the commands of the Kotlin module and the starter on the pages that name them", async () => {
     const manifest = await readInstallManifest();
-    const shown: string[] = [];
+    const missing: string[] = [];
 
-    for (const [file, contents] of await documentedSurfaces()) {
-      if (!file.endsWith("README.md") && !file.startsWith("site/")) continue;
-      for (const key of ["gradle", "maven"] as const) {
-        if (contents.includes(manifest.install[key])) shown.push(`${file}: install.${key}`);
+    for (const { artifact, files } of jvmModulePages) {
+      for (const file of files) {
+        const contents = await read(file);
+        for (const key of ["gradle", "maven"] as const) {
+          const command = jvmModuleCommand(manifest.install[key], artifact);
+          if (!contents.includes(command)) missing.push(`${file}: ${command}`);
+        }
       }
     }
 
-    expect(shown).toEqual([]);
+    expect(missing).toEqual([]);
+  });
+
+  // A JVM coordinate cannot drop its version, so the no-version sweep does not apply to it. This
+  // sweep replaces it: each Gradle coordinate and each Maven dependency on a page names the group
+  // `run.workhorse`, a published artifact, and the version of `install.gradle`, which a rule above
+  // holds to the train. A prose name such as `run.workhorse:workhorse` names no version and stays
+  // allowed; a dependency in a build line or a Maven block must name one. The sweep guards honest
+  // edits in the string, map, and Maven block forms only: it does not parse every build file form.
+  it("names the support.json group and version in every JVM dependency on a page", async () => {
+    const manifest = await readInstallManifest();
+    const version = jvmVersion(manifest);
+    const wrong: string[] = [];
+
+    expect(manifest.install.maven).toContain(`<version>${version}</version>`);
+    for (const [file, contents] of await documentedSurfaces()) {
+      wrong.push(...jvmDependencyErrors(contents, version).map((error) => `${file}: ${error}`));
+    }
+
+    expect(wrong).toEqual([]);
+  });
+
+  // The core publishes PgJDBC in its runtime variant only, so code that names a PgJDBC class does not
+  // compile from the SDK command alone. Each page that shows a Java or Kotlin command says so, with
+  // the PgJDBC floor of support.json.
+  it("names the PgJDBC floor on the pages that give the JVM commands", async () => {
+    const support = JSON.parse(await read("support.json")) as {
+      readonly support: { readonly pgjdbc: { readonly minimum: string } };
+    };
+    const floor = support.support.pgjdbc.minimum;
+    const wrong: string[] = [];
+
+    for (const [file, tabs] of pgjdbcPages) {
+      const named = [...collapse(await read(file)).matchAll(pgjdbcSentencePattern)].map(
+        (match) => match[1],
+      );
+      if (named.length !== tabs)
+        wrong.push(`${file}: ${named.length} PgJDBC sentences, not ${tabs}`);
+      for (const version of named) {
+        if (version !== floor) wrong.push(`${file}: PgJDBC ${version}, not ${floor}`);
+      }
+    }
+
+    expect(wrong).toEqual([]);
+  });
+
+  // The pages hold only the forms that they use today, so these fixtures keep each form that the
+  // sweep reads, and each edge case that review found, under a test.
+  it.each([
+    ["a string dependency", 'implementation("run.workhorse:workhorse:0.12.0")', []],
+    ["a prose name without a version", "Use `run.workhorse:workhorse`.", []],
+    ["a full stop after a prose coordinate", "Use run.workhorse:workhorse:0.12.0.", []],
+    ["another dependency", 'implementation("org.postgresql:postgresql:42.7.12")', []],
+    [
+      "a Groovy map",
+      'implementation group: "run.workhorse", name: "workhorse-kotlin", version: "0.12.0"',
+      [],
+    ],
+    [
+      "a Kotlin map over several lines",
+      'implementation(\n  name = "workhorse",\n  group = "run.workhorse",\n  version = "0.12.0"\n)',
+      [],
+    ],
+    [
+      "a Maven block with spaced tags",
+      "<dependency >\n  <artifactId>workhorse</artifactId>\n  <groupId >run.workhorse</groupId>\n  <version>0.12.0</version>\n</dependency >",
+      [],
+    ],
+    [
+      "another group",
+      'implementation("com.example:workhorse:0.12.0")',
+      ["group com.example in com.example:workhorse:0.12.0"],
+    ],
+    [
+      "an unknown artifact",
+      "run.workhorse:workhorse.core:0.12.0",
+      ["unknown artifact in run.workhorse:workhorse.core:0.12.0"],
+    ],
+    [
+      "a string dependency without a version",
+      'implementation("run.workhorse:workhorse")',
+      ["no version in run.workhorse:workhorse"],
+    ],
+    [
+      "an old version in prose",
+      "Use run.workhorse:workhorse:0.11.0.",
+      ["0.11.0 in run.workhorse:workhorse:0.11.0, not 0.12.0"],
+    ],
+    [
+      "a Kotlin map over several lines with an old version",
+      'implementation(\n  group = "run.workhorse",\n  name = "workhorse",\n  version = "0.11.0"\n)',
+      [
+        '0.11.0 in group = "run.workhorse",\n  name = "workhorse",\n  version = "0.11.0", not 0.12.0',
+      ],
+    ],
+    [
+      "a map in another group",
+      'implementation name: "workhorse", group: "com.example", version: "0.12.0"',
+      ['group com.example in name: "workhorse", group: "com.example", version: "0.12.0"'],
+    ],
+    [
+      "a Maven block without a version",
+      "<dependency>\n  <groupId>run.workhorse</groupId>\n  <artifactId>workhorse</artifactId>\n</dependency>",
+      [
+        "no version in <dependency> <groupId>run.workhorse</groupId> <artifactId>workhorse</artifactId> </dependency>",
+      ],
+    ],
+    [
+      "a Maven block with spaced tags and an old version",
+      "<dependency >\n<groupId>run.workhorse</groupId><artifactId>workhorse</artifactId><version>0.11.0</version></dependency>",
+      [
+        "0.11.0 in <dependency > <groupId>run.workhorse</groupId><artifactId>workhorse</artifactId><version>0.11.0</version></dependency>, not 0.12.0",
+      ],
+    ],
+  ] as const)("reads %s", (_name, contents, errors) => {
+    expect(jvmDependencyErrors(contents, "0.12.0")).toEqual(errors);
   });
 
   it("leaves the schema command a TypeScript project runs unpinned and local", async () => {

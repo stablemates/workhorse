@@ -70,8 +70,23 @@ Install the package for the language of your application.
 
     The JVM SDK has three artifacts in the group `run.workhorse`: `workhorse` for Java,
     `workhorse-kotlin` for Kotlin, and `workhorse-spring-boot-starter` for Spring Boot. A Java
-    application uses `workhorse`. Maven Central serves the artifacts from `0.9.0`. This step gives
-    no Gradle or Maven command. [Installation](/docs/installation) tells more.
+    application uses `workhorse`. Maven Central serves the artifacts from `0.9.0`. A Gradle build
+    adds the core:
+
+    ```groovy
+    implementation("run.workhorse:workhorse:0.12.0")
+    ```
+
+    A Maven build adds the core:
+
+    ```xml
+    <dependency><groupId>run.workhorse</groupId><artifactId>workhorse</artifactId><version>0.12.0</version></dependency>
+    ```
+
+    The core puts PgJDBC on the runtime class path only. If your code names a PgJDBC class, such as
+    `PGSimpleDataSource`, also add `org.postgresql:postgresql` 42.7.12 or newer.
+
+    [Installation](/docs/installation) gives the command for the Spring Boot starter.
 
     Your application never installs the schema. A deployment step installs it once, and that step
     runs on Node.js.
@@ -81,8 +96,20 @@ Install the package for the language of your application.
 
     A Kotlin application uses `workhorse-kotlin` in the group `run.workhorse`. It adds suspend
     handlers, suspend wrappers, and a worker DSL over the Java core `workhorse`. Maven Central
-    serves the artifacts from `0.9.0`. This step gives no Gradle or Maven command.
-    [Installation](/docs/installation) tells more.
+    serves the artifacts from `0.9.0`. A Gradle build adds the Kotlin module, which brings the core:
+
+    ```groovy
+    implementation("run.workhorse:workhorse-kotlin:0.12.0")
+    ```
+
+    A Maven build adds the Kotlin module:
+
+    ```xml
+    <dependency><groupId>run.workhorse</groupId><artifactId>workhorse-kotlin</artifactId><version>0.12.0</version></dependency>
+    ```
+
+    The core puts PgJDBC on the runtime class path only. If your code names a PgJDBC class, such as
+    `PGSimpleDataSource`, also add `org.postgresql:postgresql` 42.7.12 or newer.
 
     Your application never installs the schema. A deployment step installs it once, and that step
     runs on Node.js.
