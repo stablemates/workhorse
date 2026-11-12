@@ -3,6 +3,7 @@ package workhorse
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"testing"
 	"time"
 )
@@ -186,5 +187,70 @@ func TestAnExpiryRequestEndsWhenTheLeaseWatchdogEndsTheAttempt(t *testing.T) {
 	waitFor(t, ended, "the expiry request outlived the attempt that the watchdog ended")
 	if cause := attempt.cause(); !errors.Is(cause, ErrLeaseLost) {
 		t.Fatalf("the handler was cancelled with %v; want a lost lease", cause)
+	}
+}
+
+// expiryEventLogs is a slog.Handler that sends the event name of each record.
+type expiryEventLogs struct{ events chan string }
+
+func (expiryEventLogs) Enabled(context.Context, slog.Level) bool { return true }
+func (logs expiryEventLogs) Handle(_ context.Context, record slog.Record) error {
+	record.Attrs(func(attribute slog.Attr) bool {
+		if attribute.Key == eventNameAttribute {
+			logs.events <- attribute.Value.String()
+		}
+		return true
+	})
+	return nil
+}
+func (logs expiryEventLogs) WithAttrs([]slog.Attr) slog.Handler { return logs }
+func (logs expiryEventLogs) WithGroup(string) slog.Handler      { return logs }
+
+// SM-2013: a stale heartbeat verdict arrives while an expiry request is in flight, and then the
+// request fails. The handler still ran when the request failed, so the worker logs the failure
+// before the verdict ends the attempt.
+func TestFailedExpiryAfterAStaleHeartbeatVerdictLogsItsEvent(t *testing.T) {
+	fake := &fakeHeartbeat{answerMembers: func(members []*heartbeatMember) []ownershipStatus {
+		statuses := make([]ownershipStatus, len(members))
+		for index, member := range members {
+			statuses[index] = workerOwnershipAccepted
+			if member.expiring.Load() {
+				statuses[index] = workerOwnershipStale
+			}
+		}
+		return statuses
+	}}
+	worker := newBusyHeartbeatWorker(t, 4*time.Second, 20*time.Millisecond, fake)
+	logs := expiryEventLogs{events: make(chan string, 20)}
+	worker.logger = slog.New(logs)
+	asked := make(chan struct{})
+	fail := make(chan struct{})
+	worker.expireOwned = func(ctx context.Context, _ ClaimedTask) (ownershipStatus, error) {
+		close(asked)
+		select {
+		case <-fail:
+			return emptyString, errors.New("the expiry request failed")
+		case <-ctx.Done():
+			return emptyString, ctx.Err()
+		}
+	}
+	attempt := superviseExpiringAttempt(t, worker, "expiry-after-stale-verdict")
+	waitFor(t, asked, "the expiry request to start")
+	waitForUnregistered(t, worker)
+	if attempt.cause() != nil {
+		t.Fatal("the handler was cancelled before the expiry request failed")
+	}
+	close(fail)
+	if result := attempt.returned(); result.status != workerOwnershipStale {
+		t.Fatalf("the attempt ended with %s, want stale", result.status)
+	}
+	count := 0
+	for len(logs.events) > 0 {
+		if <-logs.events == expirationRequestFailedEvent {
+			count++
+		}
+	}
+	if count != 1 {
+		t.Fatalf("got %d expiration_request_failed records, want 1", count)
 	}
 }

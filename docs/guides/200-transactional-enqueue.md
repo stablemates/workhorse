@@ -677,6 +677,13 @@ public async Task CreateAccountWithRetriesAsync(
 }
 ```
 
+The strategy runs the block again only for an exception that it classifies as transient. It reads
+the `InnerException` of a `DbUpdateException` from `SaveChangesAsync`, but not of other exceptions.
+If the enqueue fails, `EnqueueAsync` throws `DatabaseException`,
+with the `NpgsqlException` as `InnerException`. Thus a transient failure during `EnqueueAsync` does
+not make the strategy run the block again. The transaction rolls back, and your code gets the
+`DatabaseException`.
+
 If PostgreSQL refuses an enqueue, it aborts your transaction, also when you catch the error. Read
 [Catch an enqueue error outside the transaction](#catch-an-enqueue-error-outside-the-transaction).
 
@@ -699,6 +706,9 @@ If PostgreSQL refuses an enqueue, it aborts your transaction, also when you catc
 - Under a retrying execution strategy, a transaction that begins outside
   `CreateExecutionStrategy().ExecuteAsync` makes `SaveChangesAsync` throw
   `InvalidOperationException`.
+- Under a retrying execution strategy, a transient failure during `EnqueueAsync` does not make the
+  strategy run the block again. `DatabaseException` derives from `WorkhorseException`, not from
+  `NpgsqlException`.
 - The source form opens each connection inside a suppressed `TransactionScope`, so an ambient scope
   never changes its autocommit call.
 - The caller form passes the `CancellationToken` of the caller to Npgsql. A cancellation fails the

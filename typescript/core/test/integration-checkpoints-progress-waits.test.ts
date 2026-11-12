@@ -1196,18 +1196,18 @@ describe("checkpoints progress waits", () => {
         )
       ).rows[0].count,
     ).toBe(0);
-    expect(records).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          eventName: "workhorse.handler.signal_swallowed",
-          severityText: "WARN",
-          attributes: expect.objectContaining({
-            "workhorse.task.id": id,
-            "workhorse.handler.outcome": "suspended",
-          }),
+    // SM-2016: exactly one warning, as in the other six SDKs.
+    expect(
+      records.filter((record) => record.eventName === "workhorse.handler.signal_swallowed"),
+    ).toEqual([
+      expect.objectContaining({
+        severityText: "WARN",
+        attributes: expect.objectContaining({
+          "workhorse.task.id": id,
+          "workhorse.handler.outcome": "suspended",
         }),
-      ]),
-    );
+      }),
+    ]);
   });
 
   it("preserves durable suspension when application code catches and throws a different error", async () => {

@@ -722,14 +722,19 @@ func (worker *Worker) Run(ctx context.Context) error {
 	worker.instanceID = instanceID
 	worker.registered.Store(false)
 	executor := NewPGXExecutor(worker.pool)
+	// The registration of Run and the registry and claim goroutines run their queries through this
+	// executor. A panic of caller code inside one of them, such as in a pgx tracer, becomes the error
+	// of that query (SM-2010). The execution goroutines keep executor, because their own recover
+	// fails the attempt.
+	guarded := guardQueries(executor)
 	worker.draining.Store(false)
-	worker.refreshRegistration(ctx, executor, false)
+	worker.refreshRegistration(ctx, guarded, false)
 	registryContext, stopRegistry := context.WithCancel(context.WithoutCancel(ctx))
 	registryWake := make(chan struct{}, 1)
 	registryDone := make(chan struct{})
 	go func() {
 		defer close(registryDone)
-		worker.registrationLoop(registryContext, executor, registryWake)
+		worker.registrationLoop(registryContext, guarded, registryWake)
 	}()
 	notificationWake := make(chan struct{}, 1)
 	// Every worker on the pool shares one listener connection. The subscription ends when the run's
@@ -811,7 +816,7 @@ func (worker *Worker) Run(ctx context.Context) error {
 		// error is surfaced. The drain deadline still ends it: a lease it committed but never
 		// returned expires on its own (ADR 0076).
 		claim: func(limit int, fastLimit int) ([]ClaimedTask, error) {
-			return worker.claimNextMany(drainContext, executor, limit, fastLimit)
+			return worker.claimNextMany(drainContext, guarded, limit, fastLimit)
 		},
 		execute: func(claimed ClaimedTask) error {
 			handler := worker.handlerFor(claimed.Type)
@@ -835,7 +840,7 @@ func (worker *Worker) Run(ctx context.Context) error {
 
 	startGrace()
 	worker.draining.Store(true)
-	worker.refreshRegistration(drainContext, executor, true)
+	worker.refreshRegistration(drainContext, guarded, true)
 	stopMaintenance()
 	abandoned, firstError := worker.drainExecutions(
 		drainContext, executionResults, active, firstError, cancelExecutions,
@@ -843,7 +848,7 @@ func (worker *Worker) Run(ctx context.Context) error {
 	stopRegistry()
 	<-registryDone
 	deregisterContext, cancelDeregister := context.WithDeadline(context.WithoutCancel(ctx), stopDeadline)
-	worker.deregister(deregisterContext, executor)
+	worker.deregister(deregisterContext, guarded)
 	cancelDeregister()
 	if abandoned > 0 {
 		incomplete := fmt.Errorf(workerShutdownIncompleteFormat, ErrShutdownIncomplete, abandoned)
@@ -1670,7 +1675,9 @@ func (worker *Worker) acquireRun(ctx context.Context) (func(), error) {
 }
 
 func (worker *Worker) maintenanceLoop(ctx context.Context) error {
-	if err := worker.runMaintenance(ctx); err != nil {
+	// A panic of caller code in a maintenance query becomes the error of that pass (SM-2010).
+	runMaintenance := func() error { return recoverQueryPanic(func() error { return worker.runMaintenance(ctx) }) }
+	if err := runMaintenance(); err != nil {
 		return err
 	}
 	ticker := time.NewTicker(worker.maintenanceInterval)
@@ -1680,7 +1687,7 @@ func (worker *Worker) maintenanceLoop(ctx context.Context) error {
 		case <-ctx.Done():
 			return nil
 		case <-ticker.C:
-			if err := worker.runMaintenance(ctx); err != nil {
+			if err := runMaintenance(); err != nil {
 				return err
 			}
 		}
@@ -2058,7 +2065,7 @@ func (worker *Worker) writeFastCompletion(
 	}
 	if task.slot == nil {
 		// Outside Run the executor may be a caller's transaction, so the completion goes alone.
-		worker.completeChunk(task.Queue, []*completionEntry{entry})
+		worker.completeChunk(task.Queue, []*completionEntry{entry}, false)
 		answer := <-entry.answer
 		return answer.accepted, answer.err
 	}
@@ -2169,7 +2176,7 @@ func (batcher *completionBatcher) flush(worker *Worker, key completionBatchKey) 
 			wait.Add(1)
 			go func() {
 				defer wait.Done()
-				worker.completeChunk(key.queue, chunk)
+				worker.completeChunk(key.queue, chunk, true)
 			}()
 		}
 		wait.Wait()
@@ -2201,7 +2208,12 @@ func completionChunks(entries []*completionEntry) [][]*completionEntry {
 // statements lock shared runtime rows in the same order. A plan that locks in another order can
 // still deadlock. PostgreSQL then rolls back the whole statement, so queryFencedWrite sends the
 // chunk again.
-func (worker *Worker) completeChunk(queue string, chunk []*completionEntry) {
+//
+// A flush goroutine sets guarded. Then a panic of caller code in the statement, such as in a pgx
+// tracer, becomes the error of the statement, and each entry gets that error as its answer
+// (SM-2010). The execution goroutine of RunOnce does not set it, so its own recover fails the
+// attempt (SM-1938).
+func (worker *Worker) completeChunk(queue string, chunk []*completionEntry, guarded bool) {
 	slices.SortFunc(chunk, func(left, right *completionEntry) int {
 		return strings.Compare(left.task.ID, right.task.ID)
 	})
@@ -2213,6 +2225,9 @@ func (worker *Worker) completeChunk(queue string, chunk []*completionEntry) {
 		limit += entry.limit
 	}
 	executor := chunk[0].executor
+	if guarded {
+		executor = guardQueries(executor)
+	}
 	if limit > 0 {
 		// A chunk that claims holds its connection first, so the gate is read after the wait for
 		// the pool and right before each attempt of the statement.
@@ -2608,6 +2623,23 @@ func (worker *Worker) execute(
 	}
 	if durability.suspended.Load() {
 		outcome = handlerOutcomeSuspended
+		// A handler that ends with anything other than the suspension caught it. The task still
+		// suspends, and the warning is the only record that the handler swallowed it (SM-2016).
+		if !errors.Is(handlerError, errDurableWaitSuspension) && !errors.Is(handlerError, errChildSuspension) {
+			logWorkerEvent(
+				ctx,
+				worker.logger,
+				slog.LevelWarn,
+				signalSwallowedEvent,
+				signalSwallowedMessage,
+				func() []any {
+					return append(
+						taskLogAttributes(task, worker.workerID),
+						slog.String(handlerOutcomeAttribute, string(handlerOutcomeSuspended)),
+					)
+				},
+			)
+		}
 		return nil
 	}
 	if ownership.status == workerOwnershipCancelRequested {
@@ -2835,7 +2867,14 @@ func (worker *Worker) superviseOwnership(
 				member.expiring.Store(true)
 				expiryAnswers = make(chan expiryAnswer, 1)
 				go func(answers chan<- expiryAnswer) {
-					status, err := worker.expireOwned(expiryContext, task)
+					// A panic of caller code in the request becomes its error, so the handler keeps
+					// running and the worker asks again (SM-2010).
+					var status ownershipStatus
+					err := recoverQueryPanic(func() error {
+						var err error
+						status, err = worker.expireOwned(expiryContext, task)
+						return err
+					})
 					answers <- expiryAnswer{status: status, err: err}
 				}(expiryAnswers)
 			case answer := <-expiryAnswers:
@@ -2855,6 +2894,24 @@ func (worker *Worker) superviseOwnership(
 					return
 				}
 				member.expiring.Store(false)
+				// The handler still runs, so the failed request gets its record also when a
+				// heartbeat verdict that arrived during the request ends the attempt next.
+				if answer.err != nil && ctx.Err() == nil {
+					logWorkerEvent(
+						ctx,
+						worker.logger,
+						slog.LevelWarn,
+						expirationRequestFailedEvent,
+						expirationRequestFailedMessage,
+						func() []any {
+							return append(
+								taskLogAttributes(task, worker.workerID),
+								slog.String(errorTypeAttribute, fmt.Sprintf(goTypeFormat, answer.err)),
+								errorLogField, answer.err,
+							)
+						},
+					)
+				}
 				if pendingResult != nil {
 					// A heartbeat verdict arrived during the request, and the expiry did not
 					// replace it. A stale verdict did not cancel the handler, so cancel it now.
@@ -2868,12 +2925,6 @@ func (worker *Worker) superviseOwnership(
 				// not_due is the database refusing an expiry its clock has not reached, and a failed
 				// request proves nothing. The handler keeps running and renewing, and the worker asks
 				// again after a backoff. The lease watchdog still ends an attempt nobody renews.
-				if answer.err != nil {
-					worker.logger.WarnContext(
-						ctx, expirationRequestFailedMessage,
-						append(taskLogAttributes(task, worker.workerID), errorLogField, answer.err)...,
-					)
-				}
 				resetTimer(expirationTimer, expirationRetry)
 				expirationRetry = min(2*expirationRetry, expirationRetryMaximum)
 			}
@@ -2939,7 +2990,10 @@ func (worker *Worker) prepareStart(ctx context.Context) error {
 	if err != nil {
 		return worker.startupError(ctx, startupCompatibilityConnectionStep, err)
 	}
-	err = worker.compatibility.assertOn(startupContext, NewPGXExecutor(borrowed))
+	// A panic of caller code in the check, such as in a pgx tracer, is a startup failure (SM-2010).
+	err = recoverQueryPanic(func() error {
+		return worker.compatibility.assertOn(startupContext, NewPGXExecutor(borrowed))
+	})
 	borrowed.Release()
 	// A schema refusal keeps its own error. Any other failure of the check is a startup failure.
 	var refusal *CompatibilityError
@@ -2977,6 +3031,20 @@ var errHeartbeatClaimGateClosed = errors.New(heartbeatClaimGateClosedMessage)
 // release. A claim reads the claim gate after this wait, so the wait for the pool cannot carry a
 // claim past a lost heartbeat connection. Any other executor is returned unchanged.
 func holdClaimConnection(ctx context.Context, executor Executor) (Executor, func(), error) {
+	if guarded, ok := executor.(panicSafeExecutor); ok {
+		// The wait for the pool can run caller code too, such as a pgx connect or acquire hook.
+		var held Executor
+		var release func()
+		err := recoverQueryPanic(func() error {
+			var err error
+			held, release, err = holdClaimConnection(ctx, guarded.executor)
+			return err
+		})
+		if err != nil {
+			return nil, nil, err
+		}
+		return guardQueries(held), release, nil
+	}
 	if pgx, ok := executor.(*pgxExecutor); ok {
 		if pool, ok := pgx.queryer.(*pgxpool.Pool); ok {
 			held, err := pool.Acquire(ctx)

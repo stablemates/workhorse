@@ -144,6 +144,43 @@ public sealed class TransactionExamplesTests(ScratchDatabase scratch)
         Assert.Empty(await db.TasksAsync("account.created", "accountId", id));
     }
 
+    // SM-2014: the caller form of Queue gives an NpgsqlException to the application as a
+    // DatabaseException, with the original as InnerException. The retrying strategy of Npgsql reads
+    // only the exception that the block throws. A trigger in the database of this test makes the
+    // first enqueue fail one time with serialization_failure, which Npgsql marks as transient.
+    [Fact]
+    public async Task TheExecutionStrategyDoesNotRunTheBlockAgainAfterATransientEnqueueFailure()
+    {
+        await using var db = await AccountDatabaseAsync();
+        await db.ExecuteAsync("""
+            CREATE SEQUENCE enqueue_failures;
+            CREATE FUNCTION fail_first_enqueue() RETURNS trigger LANGUAGE plpgsql AS $$
+            BEGIN
+              IF nextval('enqueue_failures') = 1 THEN
+                RAISE EXCEPTION 'injected transient failure' USING ERRCODE = 'serialization_failure';
+              END IF;
+              RETURN NEW;
+            END $$;
+            CREATE TRIGGER fail_first_enqueue BEFORE INSERT ON workhorse.task
+              FOR EACH ROW EXECUTE FUNCTION fail_first_enqueue();
+            """);
+        var id = $"csharp-{Guid.NewGuid()}";
+        await using (var context = RetryingContext(db))
+        {
+            var error = await Assert.ThrowsAsync<DatabaseException>(
+                () => Examples(db).CreateAccountWithRetriesAsync(context, id, $"{id}@example.com", Token));
+            var driver = Assert.IsType<PostgresException>(error.InnerException);
+            Assert.Equal(PostgresErrorCodes.SerializationFailure, driver.SqlState);
+            Assert.True(driver.IsTransient);
+        }
+
+        // Each run of the block reaches the trigger once. The strategy does not read InnerException,
+        // so it does not run the block a second time.
+        Assert.Equal(1L, await db.ScalarAsync<long>("SELECT last_value FROM enqueue_failures"));
+        Assert.Equal(0L, await AccountsAsync(db, id));
+        Assert.Empty(await db.TasksAsync("account.created", "accountId", id));
+    }
+
     private static TransactionExamples Examples(ExampleDatabase db) => new(db.DataSource, db.Queue);
 
     private static AccountsDbContext RetryingContext(ExampleDatabase db) =>

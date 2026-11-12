@@ -668,6 +668,15 @@ found. Without `taskId`, the read finds the record as before, so a host or a pag
 release and an address saved before the upgrade keep working. Migration 0105 changes the function
 body. The schema moves to version 104, and the floor stays 99.
 
+### A failed expiry request logs its event while the handler runs
+
+A task reached its deadline or its execution timeout, and the TypeScript worker asked PostgreSQL to
+expire the attempt. If that request failed, the worker kept the handler running and asked again,
+but it wrote no record. An alert on `workhorse.worker.expiration_request_failed` did not see these
+workers. The worker now logs that warning, with `error.type` and the task and worker identity, for
+each failed request while the handler runs (SM-2013). The record of a request that fails after the
+handler ends does not change. The retry does not change.
+
 ## 0.12.0 — 2026-11-07
 
 The npm packages, Python distribution, Go module, Rust crate, Ruby gem, JVM artifacts, and .NET

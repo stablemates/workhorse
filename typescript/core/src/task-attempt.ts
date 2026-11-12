@@ -29,6 +29,20 @@ const EXPIRATION_RETRY_MAX_MS = 1_000;
 const SHARED_EXPIRATION_BUDGET_MS = 1_000;
 
 /**
+ * The `error.type` of a failed expiry request: the error name, or the type of a thrown value. The
+ * read cannot throw, so a `name` getter that throws cannot stop the next request (SM-2013).
+ */
+function expirationErrorType(error: unknown): string {
+  try {
+    if (!(error instanceof Error)) return typeof error;
+    const name: unknown = error.name;
+    return typeof name === "string" ? name : "Error";
+  } catch {
+    return "Error";
+  }
+}
+
+/**
  * AbortSignal reason when the worker process reaches the end of its shutdown grace.
  *
  * The worker still owns the task, so the heartbeat keeps the lease alive while the handler unwinds.
@@ -380,26 +394,27 @@ export class TaskAttempt {
       const failure = await Promise.race([
         pending.then(
           () => undefined,
-          (error: unknown) => ({
-            errorType: error instanceof Error ? error.name : typeof error,
-          }),
+          (error: unknown) => ({ errorType: expirationErrorType(error) }),
         ),
         timeout,
       ]);
       if (failure === undefined) return;
-      logWarn(
-        "workhorse.worker.expiration_request_failed",
+      this.logExpirationRequestFailure(
         "Worker settles a task without the answer of its expiry request",
-        {
-          ...taskSpanAttributes(this.task),
-          "workhorse.queue.name": this.task.queue,
-          "workhorse.worker.id": this.services.workerId,
-          "error.type": failure.errorType,
-        },
+        failure.errorType,
       );
     } finally {
       cancel?.();
     }
+  }
+
+  private logExpirationRequestFailure(message: string, errorType: string): void {
+    logWarn("workhorse.worker.expiration_request_failed", message, {
+      ...taskSpanAttributes(this.task),
+      "workhorse.queue.name": this.task.queue,
+      "workhorse.worker.id": this.services.workerId,
+      "error.type": errorType,
+    });
   }
 
   /** Records the activation's outcome once; later calls keep the first. */
@@ -528,9 +543,16 @@ export class TaskAttempt {
         // markCancellationRequested already ended a cancel_requested attempt. A not_due answer
         // means another outcome won while PostgreSQL was being asked.
       },
-      () => {
+      (error: unknown) => {
         // A failed request proves nothing about the expiry, so the handler keeps running and the
         // question is asked again. The lease watchdog still ends an attempt PostgreSQL cannot renew.
+        // After the handler ends, settleExpiration logs the failure of this request instead.
+        if (!this.settling) {
+          this.logExpirationRequestFailure(
+            "Ownership expiration request failed; the worker asks again",
+            expirationErrorType(error),
+          );
+        }
         if (this.finished()) return;
         this.expirationPromise = undefined;
         this.armExpirationTimer(

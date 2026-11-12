@@ -2235,6 +2235,56 @@ returns it:
   `*pgxpool.Pool` itself and releases it in a defer. Thus a panic in the pgx tracer of the caller,
   which runs inside the query, does not keep the connection out of the pool.
 
+#### Go query panics on other worker goroutines
+
+The worker does not own its pool, so a caller can give the pool a pgx tracer or a connect hook. pgx
+runs that code inside each query, also on the goroutine of `Run` and on the worker goroutines other
+than the execution goroutine. A panic there used to end the process with every running handler
+(SM-2010).
+
+`recoverQueryPanic` now runs each database call of those goroutines. It turns a panic inside the
+call into a `queryPanicError`. Its error text is
+`a database call of the worker panicked outside Workhorse: <value>`, followed by the stack of the
+panic. The goroutine then takes the path that it takes for any other database error of that call:
+
+| Goroutine                                         | Database call                                               | Path of the error                                                                 |
+| ------------------------------------------------- | ----------------------------------------------------------- | --------------------------------------------------------------------------------- |
+| `Run` at startup                                  | The compatibility check                                     | `Run` returns the startup failure.                                                |
+| `Run` at startup and at the stop                  | `register_worker_v1` and `deregister_worker_v2`             | `OnRegistrationError` gets the registration error. The deregistration ignores it. |
+| Completion flush of the fast tier                 | The pool wait and `complete_many_and_claim_v1`              | Each entry of the chunk gets the error as its answer. `Run` returns the error.    |
+| Expiry request of the ownership supervisor        | `expire_owned_telemetry_v1`                                 | `workhorse.worker.expiration_request_failed`, and the worker asks again           |
+| Heartbeat round, and the connection that it keeps | Each statement of the round, the prepare, and `BeforeClose` | The round fails and discards the connection. The acquisition loop tries again.    |
+| Maintenance loop                                  | Each maintenance pass                                       | `Run` returns the error.                                                          |
+| Registry loop                                     | `register_worker_v1`                                        | `OnRegistrationError` gets the error, and the next interval registers again       |
+| Claim                                             | Each claim statement                                        | `Run` returns the error.                                                          |
+| Notification listener                             | `LISTEN`, the wait, and `UNLISTEN`                          | The listener logs the error and connects again after its delay.                   |
+
+The batch `dispatch` already recovers each panic and gives each member a result. The execution
+goroutine keeps the recover of `execute`, which fails the attempt with a `HandlerPanicError`.
+`RunOnce` runs on the goroutine of its caller, so a panic in its claim or its maintenance pass
+reaches that caller.
+
+`recoverQueryPanic` reads all frames of the panic, from the panic to its callers, also when the
+stack is deep. It accepts the panic only in this case:
+
+1. No frame is an acquire or a release of `pgxpool`. If a tracer or a hook panics during an acquire
+   or a release, pgxpool can lose the connection. A worker that continues could then empty its
+   pool, so the panic continues and ends the process, as before. This includes the release of the
+   connection that the startup check borrows.
+2. A frame of pgx comes before the first frame of this module. Code of the application reaches a
+   database call of the worker only through pgx, for example as a tracer. Thus the package name of
+   that code does not matter.
+
+Any other panic continues with its stack. A defect of the worker reaches a frame of this module
+first, also if it panics inside `reflect` or `strings`, or inside a value that pgx encodes. Thus it
+still ends the process and the test binary that finds it. A defect that makes pgx itself panic,
+such as an argument that pgx cannot handle, becomes an error of the call.
+
+`closeAndRemove` calls the `BeforeClose` hook of the pool through `recoverCallerHook`, with no
+Workhorse code between the two. `recoverCallerHook` drops a panic if its first frame of this module
+is `recoverCallerHook` itself, so a panic of the hook in any package does not end the process. If
+the hook calls back into Workhorse code and that code panics, the panic continues.
+
 ### Go handler context
 
 The handler context gives a Go handler its checkpoint, progress, timer, and child methods.
@@ -4550,9 +4600,18 @@ public async Task CreateAccountWithRetriesAsync(
 }
 ```
 
+The strategy runs the block again only for an exception that its `ShouldRetryOn` classifies as
+transient. The Npgsql strategy accepts an `NpgsqlException` with `IsTransient`, and EF Core reads
+the `InnerException` of a `DbUpdateException` only. The caller form of `Queue` throws
+`DatabaseException` for a driver error, with the `NpgsqlException` as `InnerException`
+([.NET errors](#net-errors)). Thus a transient failure during `EnqueueAsync`, such as a
+`serialization_failure`, does not make the strategy run the block again. The transaction rolls
+back, and the application gets the `DatabaseException`.
+
 `TransactionExamplesTests` in `dotnet/examples/Workhorse.Examples.Tests/` runs this block with
 `EnableRetryOnFailure()`. It also checks that `SaveChangesAsync` throws in a transaction that begins
-outside the strategy.
+outside the strategy. A third test injects one `serialization_failure` during `EnqueueAsync`. It
+checks that the block runs one time, and that no account and no task remain (SM-2014).
 
 ### .NET telemetry
 

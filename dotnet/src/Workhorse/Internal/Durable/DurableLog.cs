@@ -22,6 +22,6 @@ internal static partial class DurableLog
     internal static partial void ProgressUpdated(ILogger logger, Guid taskId, string status);
 
     [LoggerMessage(EventName = "workhorse.handler.signal_swallowed", Level = LogLevel.Warning,
-        Message = "Task handler swallowed its abort signal for task {TaskId}; the attempt still suspends")]
-    internal static partial void SignalSwallowed(ILogger logger, Guid taskId);
+        Message = "Task handler swallowed its abort signal for task {TaskId} on worker {WorkerId}; the attempt still suspends with outcome {HandlerOutcome}")]
+    internal static partial void SignalSwallowed(ILogger logger, Guid taskId, string workerId, string handlerOutcome);
 }

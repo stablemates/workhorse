@@ -163,7 +163,16 @@ RSpec.describe "Worker against PostgreSQL" do
     }.run_once
 
     expect(status(task_id)["state"]).to eq("scheduled")
-    expect(output.string).to include("Task handler swallowed its suspension signal")
+    # SM-2016: exactly one warning, with the outcome and the task and worker identity.
+    records = output.string.lines.grep(/ workhorse\.handler\.signal_swallowed: /)
+    expect(records.size).to eq(1), output.string
+    expect(records.first).to start_with("W, ")
+    attributes = JSON.parse(records.first[/\{.*\}/])
+    expect(attributes).to include(
+      "workhorse.handler.outcome" => "suspended",
+      "workhorse.task.id" => task_id.to_s,
+      "workhorse.worker.id" => an_instance_of(String)
+    )
   end
 
   it "unwinds a scheduled sleep whose release the heartbeat reports as a lost lease first" do

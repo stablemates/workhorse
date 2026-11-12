@@ -152,6 +152,13 @@ await strategy.ExecuteAsync(async () =>
 });
 ```
 
+The strategy runs the block again only for an exception that it classifies as transient. It reads
+the `InnerException` of a `DbUpdateException` from `SaveChangesAsync`, but not of other exceptions.
+If the enqueue fails, `EnqueueAsync` throws `DatabaseException`,
+with the `NpgsqlException` as `InnerException`. Thus a transient failure during `EnqueueAsync` does
+not make the strategy run the block again. The transaction rolls back, and your code gets the
+`DatabaseException`.
+
 ## Examples
 
 `dotnet/examples/Workhorse.Examples/` holds each C# snippet of the documentation. Its tests in

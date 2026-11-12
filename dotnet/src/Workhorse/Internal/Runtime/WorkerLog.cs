@@ -90,8 +90,8 @@ internal static partial class WorkerLog
     internal static partial void OwnershipExpired(ILogger logger, Guid taskId, string? status);
 
     [LoggerMessage(EventName = "workhorse.worker.expiration_request_failed", Level = LogLevel.Warning,
-        Message = "Ownership expiration request failed for task {TaskId}; the worker asks again")]
-    internal static partial void ExpirationRequestFailed(ILogger logger, Guid taskId, Exception error);
+        Message = "Ownership expiration request failed for task {TaskId} on worker {WorkerId} with {ErrorType}; the worker asks again")]
+    internal static partial void ExpirationRequestFailed(ILogger logger, Guid taskId, string workerId, string errorType, Exception error);
 
     [LoggerMessage(EventName = "workhorse.task.cancellation_acknowledged", Level = LogLevel.Information,
         Message = "Task {TaskId} cancellation acknowledged: {Accepted}")]

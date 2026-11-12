@@ -96,11 +96,19 @@ pub struct HandlerError {
     pub stack: Option<String>,
     conflict: bool,
     panic: bool,
+    suspension: bool,
 }
 
 impl HandlerError {
     pub fn new(message: impl Into<String>) -> Self {
-        Self { name: None, message: message.into(), stack: None, conflict: false, panic: false }
+        Self {
+            name: None,
+            message: message.into(),
+            stack: None,
+            conflict: false,
+            panic: false,
+            suspension: false,
+        }
     }
 
     /// Whether the error came from a durable replay conflict, which fails the task for good.
@@ -111,6 +119,11 @@ impl HandlerError {
     /// Whether the error reports a handler panic, which fails the attempt even after a shutdown.
     pub(crate) fn is_panic(&self) -> bool {
         self.panic
+    }
+
+    /// Whether the error is the suspension of a durable call, which the handler returned as is.
+    pub(crate) fn is_suspension(&self) -> bool {
+        self.suspension
     }
 
     pub fn named(name: impl Into<String>, message: impl Into<String>) -> Self {
@@ -149,6 +162,9 @@ impl<E: std::error::Error + 'static> From<E> for HandlerError {
         for _ in 0..16 {
             let Some(current) = source else { break };
             let error_kind = current.downcast_ref::<crate::Error>();
+            if let Some(crate::Error::Suspended) = error_kind {
+                return Self { suspension: true, ..Self::new(error.to_string()) };
+            }
             if let Some(crate::Error::CheckpointInputConflict { .. }) = error_kind {
                 let name = "CheckpointInputConflictError";
                 return Self { conflict: true, ..Self::named(name, error.to_string()) };

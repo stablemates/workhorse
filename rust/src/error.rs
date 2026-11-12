@@ -322,6 +322,15 @@ impl Error {
         Self::InvalidArgument(message.into())
     }
 
+    /// The name of the variant, such as `Postgres` or `Pool`, as the `error.type` of a log record.
+    /// An alert can then match the kind of the failure without parsing its text.
+    pub(crate) fn type_name(&self) -> String {
+        let debug = format!("{self:?}");
+        let end =
+            debug.find(|c: char| !c.is_ascii_alphanumeric() && c != '_').unwrap_or(debug.len());
+        debug[..end].to_owned()
+    }
+
     /// A copy for a concurrent caller that shared this call; driver errors keep only their text.
     pub(crate) fn share(&self) -> Self {
         match self {

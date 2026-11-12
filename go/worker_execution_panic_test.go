@@ -275,11 +275,29 @@ func TestWorkerSettlesAResultEncodingPanicInTheShutdownWindow(t *testing.T) {
 			runContext, stop := context.WithCancel(ctx)
 			runResult := make(chan error, 1)
 			go func() { runResult <- worker.Run(runContext) }()
+			// SM-2010: if a wait below fails, the handler of the before-cancellation case still
+			// waits on stopped. The cleanup releases it, stops the worker, and waits for Run, so
+			// no handler outlives the test.
+			var releaseHandler sync.Once
+			release := func() { releaseHandler.Do(func() { close(stopped) }) }
+			var returned bool
+			t.Cleanup(func() {
+				release()
+				stop()
+				if !returned {
+					select {
+					case <-runResult:
+					case <-time.After(workerRunDeadline):
+						t.Errorf("Run did not return within %s of the cleanup", workerRunDeadline)
+					}
+				}
+			})
 			awaitSignal(t, started, "the handler to start", stop)
 			stop()
-			close(stopped)
-			if err := awaitSignal(t, runResult, "Run to return after the stop"); err != nil &&
-				!errors.Is(err, context.Canceled) {
+			release()
+			err = awaitSignal(t, runResult, "Run to return after the stop")
+			returned = true
+			if err != nil && !errors.Is(err, context.Canceled) {
 				t.Fatalf("Run returned %v", err)
 			}
 			if <-cancelled != test.afterCancel {

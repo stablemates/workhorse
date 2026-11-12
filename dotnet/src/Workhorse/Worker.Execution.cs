@@ -159,7 +159,7 @@ public sealed partial class Worker
                 // A handler that threw another exception after a durable call suspended it still suspends.
                 if (arbiter.Suspended && error is not SuspensionException)
                 {
-                    DurableLog.SignalSwallowed(_logger, claimed.Id);
+                    DurableLog.SignalSwallowed(_logger, claimed.Id, WorkerId, "suspended");
                 }
 
                 return;
@@ -188,7 +188,7 @@ public sealed partial class Worker
             // A handler that returned after a durable call suspended it still suspends (ADR 0107).
             if (arbiter.Suspended)
             {
-                DurableLog.SignalSwallowed(_logger, claimed.Id);
+                DurableLog.SignalSwallowed(_logger, claimed.Id, WorkerId, "suspended");
             }
 
             return;
@@ -732,7 +732,8 @@ public sealed partial class Worker
         }
         catch (Exception error) when (!task.Run.StopPath.Token.IsCancellationRequested)
         {
-            WorkerLog.ExpirationRequestFailed(_logger, task.Task.Id, error);
+            WorkerLog.ExpirationRequestFailed(
+                _logger, task.Task.Id, WorkerId, error.GetType().FullName ?? error.GetType().Name, error);
             return "not_due";
         }
     }
