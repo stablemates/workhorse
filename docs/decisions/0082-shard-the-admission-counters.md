@@ -94,3 +94,26 @@ shards, and let a claim hold only the shards it spends.**
 - Every synchronization rebuilds each affected queue and waits for its open claims. A sync can still
   meet `40P01` from a caller's transaction that claims from several queues, and every SDK sends it
   again as before.
+
+## Amendment: count one shard through an index (2026-11-11)
+
+Item 7 counts the active leases of the released row's shard. The count tested
+`COALESCE(admission_shard, 0) % shards` on each active row of the queue, and no index held
+`admission_shard`. Thus a release read almost every active row of the queue, also when the shard
+was full. A measurement at a large `max_active` is in SM-1991.
+
+1. Migration 0102 builds `task_runtime_active_queue_shard_idx` on `(queue_name, admission_shard)`
+   for active rows, with `CREATE INDEX CONCURRENTLY` in a step outside a transaction.
+2. Migration 0101 rewrites the shard count of `notify_concurrency_capacity_v1` as disjoint parts
+   that the index serves. With one shard, the part is the whole queue. With more shards, the parts
+   are the stored numbers 0 to 7 that map to the shard, a null number for shard 0, and a number
+   below 0 or above 7 that maps to the shard. The parts match the same rows as the modulo, and a
+   `LIMIT` on all of them stops at the share.
+3. The decision of the trigger does not change, and the function keeps its suffix. Without the
+   index, the trigger gives the same answers more slowly.
+4. A heartbeat stays a HOT update. A claim writes one more index entry for each lease.
+
+A stored count for each shard would bound the queue count too, but each claim and each release would
+write it. It is not chosen now. The queue count still reads up to `max_active` index entries when
+the queue is below its limit. [Task lifecycle: Capacity release
+notifications](../architecture/lifecycle.md#capacity-release-notifications) owns the current rule.

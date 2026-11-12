@@ -1412,14 +1412,23 @@ Replay and `Queue` recreation therefore select the same value.
 
 Selective indexes keep unrelated states out of each access path:
 
-| Index                             | Predicate             | Purpose                                                                         |
-| --------------------------------- | --------------------- | ------------------------------------------------------------------------------- |
-| `task_runtime_ready_idx`          | `state = 'ready'`     | Strict-priority claims by `(queue_name, priority DESC, sequence, task_id)`      |
-| `task_runtime_scheduled_idx`      | `state = 'scheduled'` | Bounded due promotion by `(run_at, task_id)`                                    |
-| `task_runtime_expired_active_idx` | `state = 'active'`    | Active recovery candidates by `task_id`; expiry stays heap-only for HOT updates |
+| Index                                 | Predicate             | Purpose                                                                         |
+| ------------------------------------- | --------------------- | ------------------------------------------------------------------------------- |
+| `task_runtime_ready_idx`              | `state = 'ready'`     | Strict-priority claims by `(queue_name, priority DESC, sequence, task_id)`      |
+| `task_runtime_scheduled_idx`          | `state = 'scheduled'` | Bounded due promotion by `(run_at, task_id)`                                    |
+| `task_runtime_expired_active_idx`     | `state = 'active'`    | Active recovery candidates by `task_id`; expiry stays heap-only for HOT updates |
+| `task_runtime_active_queue_shard_idx` | `state = 'active'`    | The active leases of one admission shard by `(queue_name, admission_shard)`     |
 
 The table uses fillfactor 70 because heartbeat and lifecycle updates are intentional churn. State
 changes can still require index maintenance when rows enter or leave a partial index.
+
+Migration 0102 (schema version 101) builds `task_runtime_active_queue_shard_idx` with
+`CREATE INDEX CONCURRENTLY`, so the build does not block writes. The capacity release trigger counts
+the leases of one shard through it, as
+[Capacity release notifications](lifecycle.md#the-shard-count) describes. A heartbeat changes no
+column of the index and does not change `state`, so it stays a HOT update. A claim moves a row into
+the active state, so it writes one entry into this index, as it does into the other active
+indexes. A release moves a row out of the active state and writes no entry into it.
 
 #### Ready index growth
 
@@ -1491,7 +1500,7 @@ queue-scoped. Keyless tasks consume only queue capacity.
 
 `task_runtime_active_queue_key_expiry_idx` contains only active rows. It orders them by queue,
 concurrency key, and task identity. `claim_v1` reads heap-only `expires_at` while counting admission
-pressure. The concurrency policy bounds those candidates. Neither active partial index stores
+pressure. The concurrency policy bounds those candidates. No active partial index stores
 `expires_at`, so an accepted heartbeat can use a HOT update.
 
 #### Budget name
@@ -2619,7 +2628,9 @@ It has no foreign key, so a queue with only a concurrency policy still has rows.
 before version 43 has a null shard and counts against shard 0.
 
 A shard's active count is the queue's unexpired active leases whose
-`COALESCE(admission_shard, 0) % shards` equals the shard.
+`COALESCE(admission_shard, 0) % shards` equals the shard. The capacity release trigger uses the
+same rule through `task_runtime_active_queue_shard_idx`, but it also counts expired leases, as
+[Capacity release notifications](lifecycle.md#the-shard-count) describes.
 
 #### Shard count
 

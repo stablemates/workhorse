@@ -27,6 +27,7 @@ import {
   splitSqlStatements,
 } from "../src/schema-migrations.js";
 import type { Queryable } from "../src/types.js";
+import type { QueryResult, QueryResultRow } from "pg";
 import { createDatabaseTestHarness } from "./support/db.js";
 import { readDependencyCounterDrift } from "./support/dependency-counter.js";
 import {
@@ -1395,6 +1396,155 @@ DROP FUNCTION workhorse.concurrent_probe_v1();`),
         "SELECT version FROM workhorse.schema_version",
       );
       expect(version.rows).toEqual([{ version: WORKHORSE_SCHEMA_VERSION + 1 }]);
+    });
+  });
+
+  // Migration 0102 builds task_runtime_active_queue_shard_idx outside a transaction (SM-1991). A
+  // failed build leaves an invalid index, and the step must then stop instead of recording success.
+  describe("the admission shard index step", () => {
+    const shardIndex = "task_runtime_active_queue_shard_idx";
+    const indexStep = SCHEMA_MIGRATIONS.find((step) => step.toVersion === 101)!;
+    const indexPlan = {
+      baselineVersion: WORKHORSE_SCHEMA_BASELINE_VERSION,
+      currentVersion: indexStep.toVersion,
+      steps: [indexStep],
+      readStep: (file: string) =>
+        readFile(path.join(repository, "sql", "migrations", file), "utf8"),
+    };
+
+    /** Puts the database at version 100, as a database where the step did not run yet. */
+    async function rewindStep(options: { dropIndex: boolean }): Promise<void> {
+      if (options.dropIndex)
+        await concurrentDatabase.pool.query(`DROP INDEX IF EXISTS workhorse.${shardIndex}`);
+      await concurrentDatabase.pool.query(
+        "DELETE FROM workhorse.schema_migration WHERE version = 101",
+      );
+      await concurrentDatabase.pool.query("UPDATE workhorse.schema_version SET version = 100");
+    }
+
+    async function indexState(): Promise<{ version: number; valid: boolean | null }> {
+      const result = await concurrentDatabase.pool.query<{
+        version: number;
+        valid: boolean | null;
+      }>(
+        `SELECT (SELECT version FROM workhorse.schema_version) AS version,
+                (SELECT indisvalid FROM pg_index
+                  WHERE indexrelid = to_regclass('workhorse.${shardIndex}')) AS valid`,
+      );
+      return result.rows[0]!;
+    }
+
+    /**
+     * Leaves an invalid index under the name of the step. A unique build over two leases of the
+     * same shard fails part-way, as a canceled build does.
+     */
+    async function leaveInvalidIndex(): Promise<void> {
+      await concurrentDatabase.pool.query(
+        `INSERT INTO workhorse.task(id, queue_name, task_type, payload, max_attempts)
+         SELECT md5('shard-index-step' || i)::uuid, 'shard-index-step', 'index.step', '{}', 3
+           FROM generate_series(1, 2) AS series(i)`,
+      );
+      await concurrentDatabase.pool.query(
+        `INSERT INTO workhorse.task_runtime(
+           task_id, queue_name, state, run_at, current_attempt, fence_token, worker_id,
+           acquired_at, heartbeat_at, expires_at, attempt_started_at, admission_shard
+         )
+         SELECT md5('shard-index-step' || i)::uuid, 'shard-index-step', 'active',
+                clock_timestamp(), 1, 1, 'index-worker', clock_timestamp(), clock_timestamp(),
+                clock_timestamp() + interval '1 hour', clock_timestamp(), 2
+           FROM generate_series(1, 2) AS series(i)`,
+      );
+      await expect(
+        concurrentDatabase.pool.query(
+          `CREATE UNIQUE INDEX CONCURRENTLY ${shardIndex}
+             ON workhorse.task_runtime (queue_name, admission_shard) WHERE state = 'active'`,
+        ),
+      ).rejects.toThrow("could not create unique index");
+    }
+
+    afterEach(async () => {
+      await concurrentDatabase.pool.query(
+        "DELETE FROM workhorse.task WHERE queue_name = 'shard-index-step'",
+      );
+      if ((await indexState()).valid !== true) {
+        await concurrentDatabase.pool.query(`DROP INDEX IF EXISTS workhorse.${shardIndex}`);
+        await concurrentDatabase.pool.query(
+          `CREATE INDEX ${shardIndex} ON workhorse.task_runtime (queue_name, admission_shard)
+            WHERE state = 'active'`,
+        );
+      }
+      await concurrentDatabase.pool.query(
+        `INSERT INTO workhorse.schema_migration(version, description) VALUES (101, $1)
+         ON CONFLICT DO NOTHING`,
+        [indexStep.description],
+      );
+      await concurrentDatabase.pool.query("UPDATE workhorse.schema_version SET version = 101");
+    });
+
+    it("builds a valid index on a database at version 100", async () => {
+      await rewindStep({ dropIndex: true });
+
+      await applySchemaMigrationPlan(concurrentDatabase.pool, indexPlan, 100);
+
+      expect(await indexState()).toEqual({ version: 101, valid: true });
+    });
+
+    it("runs again when the index is already in place", async () => {
+      // A peer migrator or an operator built the index, and this run did not record the step.
+      await rewindStep({ dropIndex: false });
+
+      await applySchemaMigrationPlan(concurrentDatabase.pool, indexPlan, 100);
+
+      expect(await indexState()).toEqual({ version: 101, valid: true });
+    });
+
+    it("stops at an invalid index of a failed build, and builds it after the drop", async () => {
+      await rewindStep({ dropIndex: true });
+      await leaveInvalidIndex();
+      expect(await indexState()).toEqual({ version: 100, valid: false });
+
+      const failure = await applySchemaMigrationPlan(concurrentDatabase.pool, indexPlan, 100).then(
+        () => null,
+        (error: unknown) => error,
+      );
+      if (!(failure instanceof Error)) throw new TypeError("expected the step to fail");
+      expect(failure.message).toContain("failed part-way");
+      expect(String(failure.cause)).toContain(
+        `Run DROP INDEX CONCURRENTLY IF EXISTS workhorse.${shardIndex}, then run the migration again.`,
+      );
+      expect(await indexState()).toEqual({ version: 100, valid: false });
+
+      await concurrentDatabase.pool.query(
+        `DROP INDEX CONCURRENTLY IF EXISTS workhorse.${shardIndex}`,
+      );
+      await applySchemaMigrationPlan(concurrentDatabase.pool, indexPlan, 100);
+
+      expect(await indexState()).toEqual({ version: 101, valid: true });
+    });
+
+    it("does not record the step when a failed peer build leaves the index after the first check", async () => {
+      await rewindStep({ dropIndex: true });
+      // A peer migrator passes the first check too, starts its build, and fails. This migrator
+      // then reaches its own build, and IF NOT EXISTS skips it because the name is taken.
+      const peerFailsFirst: Queryable = {
+        async query<R extends QueryResultRow = QueryResultRow>(
+          text: string,
+          values?: readonly unknown[],
+        ): Promise<QueryResult<R>> {
+          if (text.startsWith("CREATE INDEX CONCURRENTLY")) await leaveInvalidIndex();
+          return concurrentDatabase.pool.query<R>(text, values === undefined ? [] : [...values]);
+        },
+      };
+
+      const failure = await applySchemaMigrationPlan(peerFailsFirst, indexPlan, 100).then(
+        () => null,
+        (error: unknown) => error,
+      );
+      if (!(failure instanceof Error)) throw new TypeError("expected the step to fail");
+      expect(String(failure.cause)).toContain(
+        `Run DROP INDEX CONCURRENTLY IF EXISTS workhorse.${shardIndex}, then run the migration again.`,
+      );
+      expect(await indexState()).toEqual({ version: 100, valid: false });
     });
   });
 

@@ -539,8 +539,9 @@ workers.
 <details>
 <summary>Reference: capacity and release notifications</summary>
 
-**Counting.** Admission counts only active rows whose `expires_at` is later than now, through
-`task_runtime_active_queue_key_expiry_idx`.
+**Counting.** Admission counts only active rows whose `expires_at` is later than now, through a
+partial index of the active rows of the queue: `task_runtime_active_queue_key_expiry_idx` or
+`task_runtime_active_queue_shard_idx`.
 
 **Notification.** `notify_concurrency_capacity_v1` runs when a governed runtime leaves `active` or
 is deleted. Completion, failure, retry release, cancellation, durable wait, and recovery all count.

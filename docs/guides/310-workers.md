@@ -711,11 +711,12 @@ older SDK can report none of the three identity fields. Then the registry record
 reported nothing. It does not guess. `workhorse schema status --json` counts the live workers by
 their reported protocol. Producers never register, so these counts describe only workers.
 
-Each SDK lets a worker opt out of the registry. An opted-out worker writes no row, so operator
-views cannot see it. Its maintenance interval also never makes the expired-lease scan more frequent.
-That scan starts [recovery](020-leases-and-fences.md). While registered workers continue their
-maintenance, an expired lease can wait up to the maintenance interval of the fastest registered
-worker. Other recovery work can delay it more.
+Each SDK lets a worker opt out of the registry. An opted-out worker writes no row, so operator views
+cannot see it. Its maintenance interval also never makes the expired-lease scan more frequent. That
+scan starts [recovery](020-leases-and-fences.md). While registered workers continue their
+maintenance, an expired lease waits for a scan for a bounded time. The maintenance interval of the
+fastest registered worker and the spacing of the scan set that bound. Other recovery work can delay
+it more.
 
 Queues control which tasks a worker can claim. Schedule namespaces control which recurring
 definitions the worker can evaluate. The Workers page shows both. Claims never read the registry, so
@@ -761,11 +762,13 @@ names the instance of the run that stops, so a late call cannot delete the row o
 `run_maintenance_v1` calls `prune_worker_registry_v1` with a one-minute maximum age.
 
 **Opt-out.** An opted-out worker writes no `worker_registry` row. `tick_v1` spaces the expired-lease
-scan by half the shortest maintenance interval among live registered workers. Thus, an opted-out
-worker never shortens that spacing. While registered workers continue to tick, a tick reaches the
-scan at most one interval of the fastest registered worker after a lease expires. That bound holds
-only while recovery reaches the scan. If other recovery work fills the limit, the scan waits for a
-later tick. With no live registered worker, every tick runs the scan.
+scan by half the gate interval, which the shortest maintenance interval among live registered
+workers sets. Thus, an opted-out worker never shortens that spacing. A tick of an opted-out worker
+can still reset it, because each tick records its scan. While registered workers continue to tick, a
+tick reaches the scan within a bound after a lease expires. The gate interval and the interval of
+the fastest registered worker set that bound. That bound holds only while recovery reaches the scan.
+If other recovery work fills the limit, the scan waits for a later tick. With no live registered
+worker, every tick runs the scan.
 
 A scan is complete only when it returns fewer rows than its share of the recovery limit. A scan that
 fills its share leaves a backlog, so the next tick scans again.

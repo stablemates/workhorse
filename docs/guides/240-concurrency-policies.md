@@ -307,8 +307,9 @@ workers.
 <details>
 <summary>Reference: capacity and release notifications</summary>
 
-**Counting.** Admission counts only active rows whose `expires_at` is later than now, through
-`task_runtime_active_queue_key_expiry_idx`. The count takes no row lock. A renewal through
+**Counting.** Admission counts only active rows whose `expires_at` is later than now, through a
+partial index of the active rows of the queue: `task_runtime_active_queue_key_expiry_idx` or
+`task_runtime_active_queue_shard_idx`. The count takes no row lock. A renewal through
 `heartbeat_many_v2` that commits after a claim reads the clock can put the queue one task above
 `max_active`, or a key one task above `max_active_per_key`, for each such overlap.
 
@@ -321,7 +322,10 @@ It publishes the queue on `workhorse_tasks` when any of these holds:
 3. The `concurrency_key` of the row has `max_active_per_key` active rows.
 
 The count includes expired leases and releases that have not committed. A release that cannot take
-the lock of its shard at once publishes without counting.
+the lock of its shard at once publishes without counting. The trigger counts the shard first, then
+the queue, then the key, and stops at the first count that reaches its limit. It reads the shard
+through `task_runtime_active_queue_shard_idx`. Below every limit, the queue count reads up to
+`max_active` active rows.
 
 **Lease expiry.** Neither `notify_concurrency_capacity_v1` nor `notify_budget_capacity_v1` runs when
 a lease expires. Recovery, `recover_expired_v1`, releases the expired row on a later maintenance

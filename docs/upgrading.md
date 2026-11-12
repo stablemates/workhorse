@@ -15,17 +15,20 @@ the other schedules. It makes cold export wait for the transactions that can sti
 day. It also corrects the statistics catch-up and the completion of history retention. Terminal cleanup
 and queue health use one retention rule, and each retention window is a fixed number of hours. It
 keeps the audit of each settings change of the dashboard, lets each embedded dashboard withhold
-error stacks, and opens the detail of each record of the event feed. The upgrade
+error stacks, and opens the detail of each record of the event feed. It gives the expired-lease scan
+a floor, and it counts the active leases of one admission shard through an index. The upgrade
 is a rolling deployment, and a mixed fleet is supported while it runs.
 
 1. If you run cold exporters, stop each one and let it finish its object and manifest uploads. Keep
    cold export enabled, so retention keeps waiting for the export.
-2. Run `workhorse schema migrate`. It applies migrations 0093 through 0100 and leaves the schema at
-   version 99. Do this before the first process of the new release starts, because the floor rises.
+2. Run `workhorse schema migrate`. It applies migrations 0093 through 0102 and leaves the schema at
+   version 101. Do this before the first process of the new release starts, because the floor rises.
+   Migration 0102 builds an index on `task_runtime` without a block on writes. On a large table the
+   build can take a long time, as the next section states.
 3. Roll out the new processes in any order. Then start the exporters again.
 
 A 0.12.0 database is at schema version 91. The migrations replace function bodies, 0095 adds
-three nullable columns, 0096 adds two nullable columns, 0097 adds one table and one nullable column, 0099 adds one nullable column to each policy table, and 0100 adds functions. Only 0096 changes stored rows: it fences
+three nullable columns, 0096 adds two nullable columns, 0097 adds one table and one nullable column, 0099 adds one nullable column to each policy table, 0100 adds functions, and 0102 adds one index. Only 0096 changes stored rows: it fences
 each `cold_export_segment` row that is exporting.
 
 | Migration                                                                         | Schema version | Changes                                                                                                                                                                                                                                                                                                                                                                                   |
@@ -38,8 +41,11 @@ each `cold_export_segment` row that is exporting.
 | `0098-compare-wait-targets-in-milliseconds-and-report-second-child-sets.sql`      | 97             | `schedule_wait_v2` compares an absolute target at milliseconds, `send_signal_v2` answers `stale` for a terminal task with no wait, `create_children_v2` answers `limit_exceeded` for a second child set, and `get_task_group_v1` shows a callback that failed to enqueue                                                                                                                  |
 | `0099-keep-the-settings-audit-withhold-error-stacks-and-find-derived-records.sql` | 98             | `override_*_policy_v2` and `revert_*_policy_v2` record the audit of each setting in the new `operator_audit` column of each policy table, the released policy writers keep each entry true, three dashboard reads take `redactErrorStacks`, and `dashboard_event_detail_v1` finds each derived record                                                                                     |
 | `0100-bound-failure-envelopes-and-answer-oversized-checkpoints.sql`               | 99             | `fail_v2` and `fast_fail_v2` cut the fields of a failure envelope, and `save_checkpoint_v3` answers `value_too_large` for a checkpoint value that it cannot store                                                                                                                                                                                                                         |
+| `0101-floor-the-lease-scan-gate-and-count-one-admission-shard.sql`                | 100            | `tick_v1` runs the expired-lease scan at most once in 500 ms while a live worker is registered, and `notify_concurrency_capacity_v1` counts one admission shard with parts that an index can serve                                                                                                                                                                                        |
+| `0102-index-the-active-leases-of-each-admission-shard.sql`                        | 101            | Builds `task_runtime_active_queue_shard_idx` on `(queue_name, admission_shard)` for active rows with `CREATE INDEX CONCURRENTLY`, outside a transaction                                                                                                                                                                                                                                   |
 
 Migrations 0093 through 0097 keep the floor. With migrations 0098, 0099, and 0100, the SDK schema floor rises from 76 to 99.
+Migrations 0101 and 0102 add no function that an SDK calls, so they keep the floor at 99.
 Each SDK statement catalogue of the new release names `schedule_wait_v2`, `send_signal_v2`, and
 `create_children_v2`, which schema version 97 adds. The dashboard host of each SDK calls
 `override_retention_policy_v2` and the three other audited policy functions, which schema version
@@ -169,9 +175,55 @@ A worker of the new release also changes two rules that need no migration:
   This also applies to the first pass at startup. Its supervisor must start it again
   ([Schema and SQL protocol: Failed maintenance pass](architecture/schema-and-protocol.md#failed-maintenance-pass)).
 
-A 0.12 process keeps working on schema version 99, because a migration inside a major line only
+A 0.12 process keeps working on schema version 101, because a migration inside a major line only
 adds. Migration 0098 keeps `schedule_wait_v1`, `send_signal_v1`, and `create_children_v1` and their
 answers. Migration 0100 keeps `fail_v1`, `fast_fail_v1`, and `save_checkpoint_v2` and their answers.
+
+Migration 0101 changes two function bodies for every SDK version when it commits:
+
+- While a live worker is registered, `tick_v1` runs the expired-lease scan of the full tier at most
+  once in 500 ms. The gate interval is the shortest live `maintenance_interval_ms`, but never less
+  than 1,000 ms, the default of each SDK. If you set a maintenance interval below 1,000 ms to find
+  expired leases sooner, the full tier now finds an expired lease up to 500 ms plus that interval
+  after it expires. That worker still ticks at its own interval, and each tick still promotes and
+  recovers deadlines, attempt timeouts, and fast-tier leases. A fleet whose shortest interval is
+  1,000 ms or more scans as before. A direct `tick_v1` caller with no live registered worker still
+  scans on each tick
+  ([Lifecycle: Maintenance cadence](architecture/lifecycle.md#maintenance-cadence)).
+- A release from a queue with a concurrency policy counts the active leases of one admission shard
+  through the index of migration 0102. It gives the same answer as before, and without the index it
+  gives the same answer more slowly
+  ([Lifecycle: Capacity release notifications](architecture/lifecycle.md#capacity-release-notifications)).
+
+### Build the shard index
+
+Migration 0102 runs outside a transaction. `CREATE INDEX CONCURRENTLY` lets claims, heartbeats,
+and releases continue during the build. The build reads the whole `task_runtime` table, so its time
+grows with the size of the table. It also waits for each transaction that was open on the table when
+it started, so a long transaction delays it. A process of the new release does not wait for the
+build, because the floor is 99. Until the build ends, each release with a concurrency policy counts
+its shard more slowly. After the build, each claim writes one more index entry, and a heartbeat
+stays a HOT update.
+
+If the build fails, PostgreSQL keeps an invalid index with the name
+`task_runtime_active_queue_shard_idx`, and the schema stays at version 100. A second run of the
+migration stops with the error
+`workhorse.task_runtime_active_queue_shard_idx is invalid after an earlier failed build`. If a
+peer migrator failed its build at the same time, the step stops with the error
+`workhorse.task_runtime_active_queue_shard_idx is missing or invalid after its build`. The
+`workhorse schema migrate` command reports only that the step failed part-way. To repair the
+database:
+
+1. Find the cause of the failure, for example a canceled statement or a full disk, and correct it.
+2. Remove the invalid index:
+
+   ```sql
+   DROP INDEX CONCURRENTLY IF EXISTS workhorse.task_runtime_active_queue_shard_idx;
+   ```
+
+3. Run `workhorse schema migrate` again.
+
+[Non-transactional steps](schema-lifecycle.md#non-transactional-steps) states the general rule.
 
 ## Upgrade from 0.11.x to 0.12.0
 

@@ -100,6 +100,10 @@ func TestKilledWorkerLeaseIsRecoveredByASecondProcess(t *testing.T) {
 		t.Fatal("SIGKILL worker exited successfully")
 	}
 	waitForProcessLeaseExpiration(t, ctx, pool, taskID)
+	// The killed worker stays live in the registry until its own lease passes, and its ticks can
+	// record a lease scan just before the expiry. The recovery worker ticks once, and since
+	// migration 0101 a tick runs the scan only 500 ms after the last one.
+	waitForProcessLeaseScanSpacing(t, ctx, pool)
 
 	_, recoveryDone, recoveryOutput := startProcessWorker(t, binary, databaseURL, queueName, "recover", "process-recovery-worker")
 	if err := waitForProcessExit(t, recoveryDone, recoveryOutput); err != nil {
@@ -236,6 +240,26 @@ func waitForProcessInvocations(t *testing.T, ctx context.Context, pool *pgxpool.
 		time.Sleep(10 * time.Millisecond)
 	}
 	t.Fatalf("task %s did not reach %d process invocations", taskID, expected)
+}
+
+// waitForProcessLeaseScanSpacing waits until the last recorded expired-lease scan is at least
+// 500 ms old, the spacing that tick_v1 keeps while a live worker is registered.
+func waitForProcessLeaseScanSpacing(t *testing.T, ctx context.Context, pool *pgxpool.Pool) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		var spaced bool
+		if err := pool.QueryRow(ctx, `SELECT COALESCE(lease_recovery_started_at
+			<= clock_timestamp() - interval '500 milliseconds', true)
+			FROM workhorse.maintenance_state WHERE routine_name = 'tick'`).Scan(&spaced); err != nil {
+			t.Fatal(err)
+		}
+		if spaced {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("the last lease scan did not become 500 ms old")
 }
 
 func waitForProcessLeaseExpiration(t *testing.T, ctx context.Context, pool *pgxpool.Pool, taskID string) {

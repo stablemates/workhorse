@@ -2,7 +2,7 @@
 
 ## Current policy
 
-Schema version 6 is the migration baseline and schema version 99 is current. `sql/schema/current.sql` is the tracked source and
+Schema version 6 is the migration baseline and schema version 101 is current. `sql/schema/current.sql` is the tracked source and
 `sql/schema.sql` is a build artifact for published packages. `sql/releases/` holds the frozen
 clean-install artifact of every supported published release: `0006.sql` is 0.2.0, `0009.sql` is
 0.2.1, `0023.sql` is 0.3.0, `0024.sql` is 0.4.0, `0043.sql` is 0.5.0, `0052.sql` is 0.6.0, `0064.sql` is 0.7.0, `0071.sql` is 0.8.0, `0073.sql` is 0.9.0, `0086.sql` is 0.10.0, `0089.sql` is 0.11.0, and `0091.sql` is 0.12.0.
@@ -218,6 +218,12 @@ WHERE NOT indisvalid AND indrelid::regclass::text LIKE 'workhorse.%';
 ```sql
 DROP INDEX CONCURRENTLY IF EXISTS workhorse.<index>;
 ```
+
+Migration 0102 first checks for that leftover, and a new concurrent build should do the same. A
+`DO` block raises an error if an index of the same name exists and is not valid, and the error text
+names the `DROP INDEX CONCURRENTLY` statement. Thus a rerun cannot record the step while the index
+is invalid. Migration 0070 has no such check. No schema check finds an invalid index, so after a
+failed concurrent build, run the query above.
 
 ### Backfills and constraints on large tables
 

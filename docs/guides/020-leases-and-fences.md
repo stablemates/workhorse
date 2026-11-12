@@ -46,10 +46,12 @@ accepts a shorter value, but on a loaded host it can renew no lease.
 
 **Recovery cadence.** Each worker calls `tick_v1` once per `maintenanceIntervalMs` (TypeScript
 default 1,000 ms). A tick skips the expired-lease scan when another tick completed it within half
-the shortest maintenance interval among live registered workers. Unregistered workers do not count.
-While registered workers keep ticking, a tick reaches the scan at least once per shortest
-registered interval, unless other recovery work fills the limit first. With no live registered
-worker, every tick runs the scan.
+the gate interval. The gate interval is the shortest maintenance interval among live registered
+workers, but never less than the default interval. Unregistered workers do not count. While
+registered workers keep ticking, the wait for a scan after an expiry has a bound. The interval of
+the fastest registered worker and the gate interval set it, because a tick of any caller can reset
+the spacing. Other recovery work that fills the limit can delay the scan more. With no live
+registered worker, every tick runs the scan.
 
 Each scan recovers a bounded batch of expired rows. A scan is complete when it returns fewer rows
 than its share of the recovery limit. A scan that fills its share leaves a backlog, so the next
