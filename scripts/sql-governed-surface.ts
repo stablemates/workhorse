@@ -1,6 +1,6 @@
 import { readdir, readFile } from "node:fs/promises";
 import path from "node:path";
-import type { FunctionDefinition, SqlSchema } from "./sql-surface.js";
+import type { FunctionDefinition, RelationDefinition, SqlSchema } from "./sql-surface.js";
 
 /**
  * Decide which of the schema's functions, views, and columns Workhorse promises, and classify a
@@ -22,9 +22,27 @@ import type { FunctionDefinition, SqlSchema } from "./sql-surface.js";
 export interface GovernedFunction {
   /** Positional argument types. A trailing `?` marks an argument that has a default. */
   arguments: string[];
-  returns: string;
-  /** The output columns, when the function returns a table. */
+  /**
+   * The name of each argument, in order. A caller can pass an argument by name, and PostgreSQL does
+   * not let `CREATE OR REPLACE FUNCTION` rename one, so a released name is fixed (ADR 0109).
+   */
+  argumentNames?: string[];
+  /**
+   * The default expression of each argument that has one, keyed by its 1-based position. A
+   * direct SQL call that leaves the argument out gets this value, so ADR 0109 governs it.
+   */
+  defaults?: Record<string, string>;
+  /**
+   * The names of the output columns in result order. ADR 0109 keeps the order of a result, and a
+   * reader that expands a row type gets its fields in this order.
+   */
+  returnsColumnOrder?: string[];
+  /**
+   * The output columns, when the function returns a table or a row type of a `workhorse` table.
+   * A reader such as `(definition).*` expands the fields of a row type, so they are governed too.
+   */
   returnsColumns?: Record<string, string>;
+  returns: string;
 }
 
 export interface GovernedRelation {
@@ -116,16 +134,48 @@ function sortedRecord<Value>(entries: Iterable<[string, Value]>): Record<string,
   return Object.fromEntries([...entries].toSorted(([left], [right]) => (left < right ? -1 : 1)));
 }
 
-function describeFunction(definition: FunctionDefinition): GovernedFunction {
+function describeFunction(
+  definition: FunctionDefinition,
+  relations: ReadonlyMap<string, RelationDefinition>,
+): GovernedFunction {
   const args = definition.arguments.map((item) => `${item.type}${item.optional ? "?" : ""}`);
+  const defaults = new Map<string, string>();
+  for (const [index, item] of definition.arguments.entries()) {
+    if (item.default !== undefined) defaults.set(String(index + 1), item.default);
+  }
+  // `defaults`, and the fields of a row type, are written before `returns`. A snapshot that predates
+  // them then gains whole lines and changes none. A table result keeps its first order.
+  const withDefaults = {
+    arguments: args,
+    argumentNames: definition.arguments.map((item) => item.name),
+    ...(defaults.size > 0 ? { defaults: Object.fromEntries(defaults) } : {}),
+  };
   const table = /^table\((.*)\)$/s.exec(definition.returns);
-  if (table === null) return { arguments: args, returns: definition.returns };
+  if (table === null) {
+    const rowType = /^(?:setof )?workhorse\.([a-z0-9_]+)$/.exec(definition.returns);
+    const relation = rowType === null ? undefined : relations.get(rowType[1] ?? "");
+    return {
+      ...withDefaults,
+      ...(relation === undefined
+        ? {}
+        : {
+            returnsColumnOrder: [...relation.columns.keys()],
+            returnsColumns: sortedRecord(relation.columns),
+          }),
+      returns: definition.returns,
+    };
+  }
   const columns = new Map<string, string>();
   for (const field of (table[1] ?? "").split(", ")) {
     const separator = field.indexOf(" ");
     if (separator > 0) columns.set(field.slice(0, separator), field.slice(separator + 1));
   }
-  return { arguments: args, returns: "table", returnsColumns: sortedRecord(columns) };
+  return {
+    ...withDefaults,
+    returnsColumnOrder: [...columns.keys()],
+    returns: "table",
+    returnsColumns: sortedRecord(columns),
+  };
 }
 
 /**
@@ -161,7 +211,8 @@ export function deriveGovernedSurface(
       const overloads = schema.functions.get(name);
       if (overloads !== undefined) {
         const definition = overloads[0];
-        if (definition !== undefined) functions.set(name, describeFunction(definition));
+        if (definition !== undefined)
+          functions.set(name, describeFunction(definition, schema.relations));
         continue;
       }
       const relation = schema.relations.get(name);
@@ -190,7 +241,7 @@ export function deriveGovernedSurface(
   for (const [name, overloads] of schema.functions) {
     const definition = overloads[0];
     if (definition !== undefined && publishedReadSurface(name, "function")) {
-      functions.set(name, describeFunction(definition));
+      functions.set(name, describeFunction(definition, schema.relations));
     }
   }
   for (const [name, relation] of schema.relations) {
@@ -213,6 +264,44 @@ export function deriveGovernedSurface(
 function arities(args: readonly string[]): { least: number; most: number } {
   const optional = args.filter((item) => item.endsWith("?")).length;
   return { least: args.length - optional, most: args.length };
+}
+
+/**
+ * A change of result column order, or `null`. The columns that the promise names and the schema
+ * still returns must come first and in the same order. A new column can follow them.
+ */
+function reorderedColumns(promised: GovernedFunction, current: GovernedFunction): string | null {
+  const was = promised.returnsColumnOrder;
+  const now = current.returnsColumnOrder;
+  if (was === undefined || now === undefined) return null;
+  const kept = was.filter((column) => now.includes(column));
+  const moved = kept.findIndex((column, index) => now[index] !== column);
+  if (moved === -1) return null;
+  return `output column ${moved + 1} changed from ${kept[moved]} to ${now[moved]}`;
+}
+
+/** Each argument whose name changed. A removed argument is reported elsewhere. */
+function renamedArguments(promised: GovernedFunction, current: GovernedFunction): string[] {
+  const changes: string[] = [];
+  for (const [index, name] of (promised.argumentNames ?? []).entries()) {
+    const now = current.argumentNames?.[index];
+    if (now !== undefined && now !== name) {
+      changes.push(`argument ${index + 1} name changed from ${name} to ${now}`);
+    }
+  }
+  return changes;
+}
+
+/** Each argument default that the current schema changed. A lost default is reported elsewhere. */
+function changedDefaults(promised: GovernedFunction, current: GovernedFunction): string[] {
+  const changes: string[] = [];
+  for (const [position, value] of Object.entries(promised.defaults ?? {})) {
+    const now = current.defaults?.[position];
+    if (now !== undefined && now !== value) {
+      changes.push(`argument ${position} default changed from ${value} to ${now}`);
+    }
+  }
+  return changes;
 }
 
 function classifyArguments(promised: readonly string[], current: readonly string[]): string | null {
@@ -250,6 +339,13 @@ export function classifyGovernedSurface(
     }
     const change = classifyArguments(was.arguments, now.arguments);
     if (change !== null) breaking(`function workhorse.${name}`, change);
+    for (const changed of changedDefaults(was, now))
+      breaking(`function workhorse.${name}`, changed);
+    for (const renamed of renamedArguments(was, now)) {
+      breaking(`function workhorse.${name}`, renamed);
+    }
+    const reordered = reorderedColumns(was, now);
+    if (reordered !== null) breaking(`function workhorse.${name}`, reordered);
     if (was.returns !== now.returns) {
       breaking(`function workhorse.${name}`, `returns ${was.returns} became ${now.returns}`);
       continue;

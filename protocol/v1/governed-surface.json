@@ -3,10 +3,24 @@
   "functions": {
     "acknowledge_cancel_v1": {
       "arguments": ["uuid", "text", "bigint"],
+      "argumentNames": ["p_task_id", "p_worker_id", "p_fence_token"],
       "returns": "boolean"
     },
     "add_task_group_members_v1": {
       "arguments": ["uuid", "jsonb", "uuid?", "text?", "bigint?"],
+      "argumentNames": [
+        "p_group_id",
+        "p_requests",
+        "p_member_task_id",
+        "p_worker_id",
+        "p_fence_token"
+      ],
+      "defaults": {
+        "3": "null",
+        "4": "null",
+        "5": "null"
+      },
+      "returnsColumnOrder": ["ordinal", "task_id", "outcome", "reason"],
       "returns": "table",
       "returnsColumns": {
         "ordinal": "integer",
@@ -17,6 +31,23 @@
     },
     "budget_status_v1": {
       "arguments": ["text[]"],
+      "argumentNames": ["p_budget_names"],
+      "returnsColumnOrder": [
+        "namespace",
+        "budget_name",
+        "max_active",
+        "rate_limit",
+        "rate_interval_ms",
+        "rate_burst",
+        "updated_at",
+        "active",
+        "available_tokens",
+        "saturated",
+        "blocked_ready",
+        "next_eligible_at",
+        "sample_capped",
+        "budget_set_capped"
+      ],
       "returns": "table",
       "returnsColumns": {
         "active": "text",
@@ -37,6 +68,24 @@
     },
     "cancel_task_group_v1": {
       "arguments": ["uuid", "text", "text", "text"],
+      "argumentNames": ["p_group_id", "p_requested_by", "p_reason", "p_request_id"],
+      "returnsColumnOrder": [
+        "group_id",
+        "state",
+        "result",
+        "total",
+        "succeeded",
+        "failed",
+        "canceled",
+        "pending",
+        "created_at",
+        "sealed_at",
+        "finished_at",
+        "canceled_at",
+        "canceled_by",
+        "cancel_reason",
+        "callbacks"
+      ],
       "returns": "table",
       "returnsColumns": {
         "callbacks": "jsonb",
@@ -58,6 +107,20 @@
     },
     "cancel_v1": {
       "arguments": ["uuid", "text?", "text?"],
+      "argumentNames": ["p_task_id", "p_requested_by", "p_reason"],
+      "defaults": {
+        "2": "null",
+        "3": "null"
+      },
+      "returnsColumnOrder": [
+        "status",
+        "state",
+        "current_attempt",
+        "requested_at",
+        "requested_by",
+        "reason",
+        "finished_at"
+      ],
       "returns": "table",
       "returnsColumns": {
         "current_attempt": "integer",
@@ -71,6 +134,17 @@
     },
     "claim_cold_export_segment_v1": {
       "arguments": ["text", "text", "integer", "timestamptz?"],
+      "argumentNames": ["p_dataset", "p_exporter_id", "p_lease_ms", "p_now"],
+      "defaults": {
+        "4": "clock_timestamp()"
+      },
+      "returnsColumnOrder": [
+        "dataset",
+        "segment_start",
+        "segment_end",
+        "attempts",
+        "exportable_through"
+      ],
       "returns": "table",
       "returnsColumns": {
         "attempts": "integer",
@@ -82,6 +156,28 @@
     },
     "claim_many_v1": {
       "arguments": ["text", "text", "integer", "integer?"],
+      "argumentNames": ["p_queue_name", "p_worker_id", "p_limit", "p_lease_ms"],
+      "defaults": {
+        "4": "30000"
+      },
+      "returnsColumnOrder": [
+        "task_id",
+        "task_type",
+        "priority",
+        "payload",
+        "contract_version",
+        "result_max_bytes",
+        "redact_error_details",
+        "trace_context",
+        "attempt",
+        "max_attempts",
+        "retry_policy",
+        "deadline_at",
+        "execution_timeout_ms",
+        "attempt_timeout_at",
+        "fence_token",
+        "lease_expires_at"
+      ],
       "returns": "table",
       "returnsColumns": {
         "attempt": "integer",
@@ -104,6 +200,28 @@
     },
     "claim_v1": {
       "arguments": ["text", "text", "integer?"],
+      "argumentNames": ["p_queue_name", "p_worker_id", "p_lease_ms"],
+      "defaults": {
+        "3": "30000"
+      },
+      "returnsColumnOrder": [
+        "task_id",
+        "task_type",
+        "priority",
+        "payload",
+        "contract_version",
+        "result_max_bytes",
+        "redact_error_details",
+        "trace_context",
+        "attempt",
+        "max_attempts",
+        "retry_policy",
+        "deadline_at",
+        "execution_timeout_ms",
+        "attempt_timeout_at",
+        "fence_token",
+        "lease_expires_at"
+      ],
       "returns": "table",
       "returnsColumns": {
         "attempt": "integer",
@@ -126,10 +244,28 @@
     },
     "complete_cold_export_segment_v1": {
       "arguments": ["text", "timestamptz", "integer", "text", "text", "text", "bigint", "bigint"],
+      "argumentNames": [
+        "p_dataset",
+        "p_segment_start",
+        "p_attempts",
+        "p_object_key",
+        "p_manifest_key",
+        "p_checksum_sha256",
+        "p_byte_length",
+        "p_row_count"
+      ],
       "returns": "timestamptz"
     },
     "complete_human_wait_v1": {
       "arguments": ["uuid", "text", "jsonb", "text", "text"],
+      "argumentNames": [
+        "p_task_id",
+        "p_token_name",
+        "p_result",
+        "p_idempotency_key",
+        "p_completed_by"
+      ],
+      "returnsColumnOrder": ["status", "result", "completed_at", "completed_by"],
       "returns": "table",
       "returnsColumns": {
         "completed_at": "timestamptz",
@@ -140,6 +276,37 @@
     },
     "complete_many_and_claim_v1": {
       "arguments": ["text", "uuid[]", "bigint[]", "jsonb[]", "text", "integer", "integer?"],
+      "argumentNames": [
+        "p_worker_id",
+        "p_task_ids",
+        "p_fence_tokens",
+        "p_results",
+        "p_queue_name",
+        "p_limit",
+        "p_lease_ms"
+      ],
+      "defaults": {
+        "7": "30000"
+      },
+      "returnsColumnOrder": [
+        "accepted",
+        "task_id",
+        "task_type",
+        "priority",
+        "payload",
+        "contract_version",
+        "result_max_bytes",
+        "redact_error_details",
+        "trace_context",
+        "attempt",
+        "max_attempts",
+        "retry_policy",
+        "deadline_at",
+        "execution_timeout_ms",
+        "attempt_timeout_at",
+        "fence_token",
+        "lease_expires_at"
+      ],
       "returns": "table",
       "returnsColumns": {
         "accepted": "uuid[]",
@@ -163,10 +330,29 @@
     },
     "complete_v1": {
       "arguments": ["uuid", "text", "bigint", "jsonb?"],
+      "argumentNames": ["p_task_id", "p_worker_id", "p_fence_token", "p_result"],
+      "defaults": {
+        "4": "'null'::jsonb"
+      },
       "returns": "boolean"
     },
     "create_child_v1": {
       "arguments": ["uuid", "text", "bigint", "text", "jsonb"],
+      "argumentNames": [
+        "p_parent_task_id",
+        "p_worker_id",
+        "p_fence_token",
+        "p_child_name",
+        "p_request"
+      ],
+      "returnsColumnOrder": [
+        "status",
+        "child_task_id",
+        "child_type",
+        "created_at",
+        "joined_at",
+        "result"
+      ],
       "returns": "table",
       "returnsColumns": {
         "child_task_id": "uuid",
@@ -179,6 +365,22 @@
     },
     "create_child_v2": {
       "arguments": ["uuid", "text", "bigint", "text", "jsonb"],
+      "argumentNames": [
+        "p_parent_task_id",
+        "p_worker_id",
+        "p_fence_token",
+        "p_child_name",
+        "p_request"
+      ],
+      "returnsColumnOrder": [
+        "status",
+        "child_task_id",
+        "child_type",
+        "created_at",
+        "joined_at",
+        "result",
+        "stored_child_name"
+      ],
       "returns": "table",
       "returnsColumns": {
         "child_task_id": "uuid",
@@ -192,6 +394,8 @@
     },
     "create_children_v1": {
       "arguments": ["uuid", "text", "bigint", "jsonb", "text"],
+      "argumentNames": ["p_parent_task_id", "p_worker_id", "p_fence_token", "p_children", "p_mode"],
+      "returnsColumnOrder": ["status", "children", "results", "result_bytes", "result_limit_bytes"],
       "returns": "table",
       "returnsColumns": {
         "children": "jsonb",
@@ -203,6 +407,8 @@
     },
     "create_children_v2": {
       "arguments": ["uuid", "text", "bigint", "jsonb", "text"],
+      "argumentNames": ["p_parent_task_id", "p_worker_id", "p_fence_token", "p_children", "p_mode"],
+      "returnsColumnOrder": ["status", "children", "results", "result_bytes", "result_limit_bytes"],
       "returns": "table",
       "returnsColumns": {
         "children": "jsonb",
@@ -214,6 +420,13 @@
     },
     "create_task_group_v1": {
       "arguments": ["jsonb?", "jsonb?", "boolean?"],
+      "argumentNames": ["p_callbacks", "p_requests", "p_seal"],
+      "defaults": {
+        "1": "'{}'::jsonb",
+        "2": "'[]'::jsonb",
+        "3": "false"
+      },
+      "returnsColumnOrder": ["group_id", "ordinal", "task_id", "outcome", "reason"],
       "returns": "table",
       "returnsColumns": {
         "group_id": "uuid",
@@ -225,90 +438,113 @@
     },
     "dashboard_activity_v1": {
       "arguments": ["jsonb"],
+      "argumentNames": ["p_input"],
       "returns": "jsonb"
     },
     "dashboard_checkpoint_value_v1": {
       "arguments": ["jsonb"],
+      "argumentNames": ["p_input"],
       "returns": "jsonb"
     },
     "dashboard_cron_v1": {
       "arguments": ["jsonb"],
+      "argumentNames": ["p_input"],
       "returns": "jsonb"
     },
     "dashboard_event_detail_v1": {
       "arguments": ["jsonb"],
+      "argumentNames": ["p_input"],
       "returns": "jsonb"
     },
     "dashboard_events_v1": {
       "arguments": ["jsonb"],
+      "argumentNames": ["p_input"],
       "returns": "jsonb"
     },
     "dashboard_human_waits_v1": {
       "arguments": ["jsonb"],
+      "argumentNames": ["p_input"],
       "returns": "jsonb"
     },
     "dashboard_queues_v1": {
       "arguments": ["jsonb"],
+      "argumentNames": ["p_input"],
       "returns": "jsonb"
     },
     "dashboard_retention_preview_v1": {
       "arguments": ["jsonb"],
+      "argumentNames": ["p_input"],
       "returns": "jsonb"
     },
     "dashboard_settings_v1": {
       "arguments": ["jsonb"],
+      "argumentNames": ["p_input"],
       "returns": "jsonb"
     },
     "dashboard_system_v1": {
       "arguments": ["jsonb"],
+      "argumentNames": ["p_input"],
       "returns": "jsonb"
     },
     "dashboard_task_counts_v1": {
       "arguments": ["jsonb"],
+      "argumentNames": ["p_input"],
       "returns": "jsonb"
     },
     "dashboard_task_detail_v1": {
       "arguments": ["jsonb"],
+      "argumentNames": ["p_input"],
       "returns": "jsonb"
     },
     "dashboard_task_facets_v1": {
       "arguments": ["jsonb"],
+      "argumentNames": ["p_input"],
       "returns": "jsonb"
     },
     "dashboard_task_groups_v1": {
       "arguments": ["jsonb"],
+      "argumentNames": ["p_input"],
       "returns": "jsonb"
     },
     "dashboard_task_result_v1": {
       "arguments": ["uuid"],
+      "argumentNames": ["p_task_id"],
       "returns": "jsonb"
     },
     "dashboard_task_value_v1": {
       "arguments": ["jsonb"],
+      "argumentNames": ["p_input"],
       "returns": "jsonb"
     },
     "dashboard_tasks_cursor_v1": {
       "arguments": ["jsonb"],
+      "argumentNames": ["p_input"],
       "returns": "jsonb"
     },
     "dashboard_tasks_v1": {
       "arguments": ["jsonb"],
+      "argumentNames": ["p_input"],
       "returns": "jsonb"
     },
     "dashboard_workers_v1": {
       "arguments": ["jsonb"],
+      "argumentNames": ["p_input"],
       "returns": "jsonb"
     },
     "deregister_worker_v1": {
       "arguments": ["text"],
+      "argumentNames": ["p_worker_id"],
       "returns": "boolean"
     },
     "deregister_worker_v2": {
       "arguments": ["text", "uuid"],
+      "argumentNames": ["p_worker_id", "p_instance_id"],
       "returns": "boolean"
     },
     "enqueue_many_v1": {
       "arguments": ["jsonb"],
+      "argumentNames": ["p_requests"],
+      "returnsColumnOrder": ["ordinal", "task_id", "outcome", "reason"],
       "returns": "table",
       "returnsColumns": {
         "ordinal": "integer",
@@ -319,6 +555,8 @@
     },
     "expire_owned_telemetry_v1": {
       "arguments": ["uuid", "text", "bigint"],
+      "argumentNames": ["p_task_id", "p_worker_id", "p_fence_token"],
+      "returnsColumnOrder": ["status", "retry_state"],
       "returns": "table",
       "returnsColumns": {
         "retry_state": "text",
@@ -327,18 +565,29 @@
     },
     "fail_cold_export_segment_v1": {
       "arguments": ["text", "timestamptz", "integer", "jsonb"],
+      "argumentNames": ["p_dataset", "p_segment_start", "p_attempts", "p_error"],
       "returns": "void"
     },
     "fail_v1": {
       "arguments": ["uuid", "text", "bigint", "jsonb", "integer?"],
+      "argumentNames": ["p_task_id", "p_worker_id", "p_fence_token", "p_error", "p_retry_delay_ms"],
+      "defaults": {
+        "5": "null"
+      },
       "returns": "text"
     },
     "fail_v2": {
       "arguments": ["uuid", "text", "bigint", "jsonb", "integer?"],
+      "argumentNames": ["p_task_id", "p_worker_id", "p_fence_token", "p_error", "p_retry_delay_ms"],
+      "defaults": {
+        "5": "null"
+      },
       "returns": "text"
     },
     "fire_due_schedules_v2": {
       "arguments": ["text[]", "timestamptz", "integer", "bigint"],
+      "argumentNames": ["p_namespaces", "p_now", "p_catchup_limit", "p_evaluation_window_ms"],
+      "returnsColumnOrder": ["namespace", "schedule_name", "occurrence_at", "task_id"],
       "returns": "table",
       "returnsColumns": {
         "namespace": "text",
@@ -349,10 +598,26 @@
     },
     "fire_schedule_v1": {
       "arguments": ["text", "text", "bigint", "timestamptz?"],
+      "argumentNames": ["p_namespace", "p_schedule_name", "p_expected_revision", "p_occurrence_at"],
+      "defaults": {
+        "4": "date_trunc('second',clock_timestamp())"
+      },
       "returns": "uuid"
     },
     "get_cold_export_status_v1": {
       "arguments": [],
+      "argumentNames": [],
+      "returnsColumnOrder": [
+        "enabled",
+        "dataset",
+        "exported_through",
+        "exportable_through",
+        "complete_segments",
+        "exporting_segment_start",
+        "exporting_attempts",
+        "last_error",
+        "updated_at"
+      ],
       "returns": "table",
       "returnsColumns": {
         "complete_segments": "bigint",
@@ -368,18 +633,160 @@
     },
     "get_contract_definition_v1": {
       "arguments": ["text", "text?"],
+      "argumentNames": ["p_task_type", "p_version"],
+      "defaults": {
+        "2": "null"
+      },
+      "returnsColumnOrder": [
+        "task_type",
+        "version",
+        "schema",
+        "payload_max_bytes",
+        "result_max_bytes",
+        "payload_redact_keys",
+        "result_redact_keys",
+        "source",
+        "created_at"
+      ],
+      "returnsColumns": {
+        "created_at": "timestamptz",
+        "payload_max_bytes": "integer",
+        "payload_redact_keys": "text[]",
+        "result_max_bytes": "integer",
+        "result_redact_keys": "text[]",
+        "schema": "jsonb",
+        "source": "text",
+        "task_type": "text",
+        "version": "text"
+      },
       "returns": "setof workhorse.contract_definition"
     },
     "get_maintenance_policy_v1": {
       "arguments": [],
+      "argumentNames": [],
+      "returnsColumnOrder": [
+        "singleton",
+        "timezone",
+        "partition_preparation_interval_ms",
+        "terminal_cleanup_interval_ms",
+        "history_retention_local_time",
+        "application_timezone",
+        "application_partition_preparation_interval_ms",
+        "application_terminal_cleanup_interval_ms",
+        "application_history_retention_local_time",
+        "operator_overrides",
+        "updated_at",
+        "statistics_rollup_interval_ms",
+        "statistics_group_limit",
+        "statistics_recompute_buckets",
+        "application_statistics_rollup_interval_ms",
+        "application_statistics_group_limit",
+        "application_statistics_recompute_buckets",
+        "operator_audit"
+      ],
+      "returnsColumns": {
+        "application_history_retention_local_time": "time(0)",
+        "application_partition_preparation_interval_ms": "integer",
+        "application_statistics_group_limit": "integer",
+        "application_statistics_recompute_buckets": "integer",
+        "application_statistics_rollup_interval_ms": "integer",
+        "application_terminal_cleanup_interval_ms": "integer",
+        "application_timezone": "text",
+        "history_retention_local_time": "time(0)",
+        "operator_audit": "jsonb",
+        "operator_overrides": "text[]",
+        "partition_preparation_interval_ms": "integer",
+        "singleton": "boolean",
+        "statistics_group_limit": "integer",
+        "statistics_recompute_buckets": "integer",
+        "statistics_rollup_interval_ms": "integer",
+        "terminal_cleanup_interval_ms": "integer",
+        "timezone": "text",
+        "updated_at": "timestamptz"
+      },
       "returns": "workhorse.maintenance_policy"
     },
     "get_retention_policy_v1": {
       "arguments": [],
+      "argumentNames": [],
+      "returnsColumnOrder": [
+        "singleton",
+        "task_identity_retention_days",
+        "terminal_outcome_retention_days",
+        "task_event_retention_days",
+        "attempt_history_retention_days",
+        "schedule_occurrence_retention_days",
+        "statistics_retention_days",
+        "terminal_task_prune_limit",
+        "history_partitions_per_pass",
+        "default_partition_rows_per_pass",
+        "occurrence_rows_per_pass",
+        "statistics_rows_per_pass",
+        "application_task_identity_retention_days",
+        "application_terminal_outcome_retention_days",
+        "application_task_event_retention_days",
+        "application_attempt_history_retention_days",
+        "application_schedule_occurrence_retention_days",
+        "application_statistics_retention_days",
+        "application_terminal_task_prune_limit",
+        "application_history_partitions_per_pass",
+        "application_default_partition_rows_per_pass",
+        "application_occurrence_rows_per_pass",
+        "application_statistics_rows_per_pass",
+        "operator_overrides",
+        "updated_at",
+        "operator_audit"
+      ],
+      "returnsColumns": {
+        "application_attempt_history_retention_days": "integer",
+        "application_default_partition_rows_per_pass": "integer",
+        "application_history_partitions_per_pass": "integer",
+        "application_occurrence_rows_per_pass": "integer",
+        "application_schedule_occurrence_retention_days": "integer",
+        "application_statistics_retention_days": "integer",
+        "application_statistics_rows_per_pass": "integer",
+        "application_task_event_retention_days": "integer",
+        "application_task_identity_retention_days": "integer",
+        "application_terminal_outcome_retention_days": "integer",
+        "application_terminal_task_prune_limit": "integer",
+        "attempt_history_retention_days": "integer",
+        "default_partition_rows_per_pass": "integer",
+        "history_partitions_per_pass": "integer",
+        "occurrence_rows_per_pass": "integer",
+        "operator_audit": "jsonb",
+        "operator_overrides": "text[]",
+        "schedule_occurrence_retention_days": "integer",
+        "singleton": "boolean",
+        "statistics_retention_days": "integer",
+        "statistics_rows_per_pass": "integer",
+        "task_event_retention_days": "integer",
+        "task_identity_retention_days": "integer",
+        "terminal_outcome_retention_days": "integer",
+        "terminal_task_prune_limit": "integer",
+        "updated_at": "timestamptz"
+      },
       "returns": "workhorse.retention_policy"
     },
     "get_task_group_v1": {
       "arguments": ["uuid"],
+      "argumentNames": ["p_group_id"],
+      "returnsColumnOrder": [
+        "group_id",
+        "state",
+        "result",
+        "total",
+        "succeeded",
+        "failed",
+        "canceled",
+        "pending",
+        "created_at",
+        "sealed_at",
+        "finished_at",
+        "canceled_at",
+        "canceled_by",
+        "cancel_reason",
+        "callbacks"
+      ],
       "returns": "table",
       "returnsColumns": {
         "callbacks": "jsonb",
@@ -401,6 +808,8 @@
     },
     "heartbeat_many_v1": {
       "arguments": ["text", "jsonb"],
+      "argumentNames": ["p_worker_id", "p_leases"],
+      "returnsColumnOrder": ["ordinal", "task_id", "status"],
       "returns": "table",
       "returnsColumns": {
         "ordinal": "bigint",
@@ -410,6 +819,8 @@
     },
     "heartbeat_many_v2": {
       "arguments": ["text", "jsonb"],
+      "argumentNames": ["p_worker_id", "p_leases"],
+      "returnsColumnOrder": ["ordinal", "task_id", "status"],
       "returns": "table",
       "returnsColumns": {
         "ordinal": "bigint",
@@ -419,14 +830,48 @@
     },
     "heartbeat_v1": {
       "arguments": ["uuid", "text", "bigint", "integer?"],
+      "argumentNames": ["p_task_id", "p_worker_id", "p_fence_token", "p_lease_ms"],
+      "defaults": {
+        "4": "30000"
+      },
       "returns": "text"
     },
     "heartbeat_v2": {
       "arguments": ["uuid", "text", "bigint", "integer?"],
+      "argumentNames": ["p_task_id", "p_worker_id", "p_fence_token", "p_lease_ms"],
+      "defaults": {
+        "4": "30000"
+      },
       "returns": "text"
     },
     "list_dead_letters_v1": {
       "arguments": ["jsonb?", "integer?", "timestamptz?", "uuid?"],
+      "argumentNames": ["p_filter", "p_limit", "p_cursor_finished_at", "p_cursor_task_id"],
+      "defaults": {
+        "1": "'{}'::jsonb",
+        "2": "100",
+        "3": "null",
+        "4": "null"
+      },
+      "returnsColumnOrder": [
+        "task_id",
+        "queue_name",
+        "task_type",
+        "concurrency_key",
+        "priority",
+        "payload",
+        "tags",
+        "current_attempt",
+        "max_attempts",
+        "retry_policy",
+        "deadline_at",
+        "execution_timeout_ms",
+        "error",
+        "finished_at",
+        "redrive_count",
+        "has_more",
+        "cursor_finished_at"
+      ],
       "returns": "table",
       "returnsColumns": {
         "concurrency_key": "text",
@@ -450,6 +895,16 @@
     },
     "list_dependency_drift_v1": {
       "arguments": ["integer"],
+      "argumentNames": ["p_limit"],
+      "returnsColumnOrder": [
+        "task_id",
+        "queue_name",
+        "pending_prerequisites",
+        "pending_edges",
+        "dependency_rejected",
+        "rejected_edges",
+        "action"
+      ],
       "returns": "table",
       "returnsColumns": {
         "action": "text",
@@ -463,6 +918,8 @@
     },
     "list_newest_task_group_events_v1": {
       "arguments": ["uuid", "integer"],
+      "argumentNames": ["p_group_id", "p_limit"],
+      "returnsColumnOrder": ["event_id", "event_type", "details", "occurred_at"],
       "returns": "table",
       "returnsColumns": {
         "details": "jsonb",
@@ -473,6 +930,21 @@
     },
     "list_task_group_drift_v1": {
       "arguments": ["integer"],
+      "argumentNames": ["p_limit"],
+      "returnsColumnOrder": [
+        "group_id",
+        "state",
+        "recorded_total",
+        "recorded_succeeded",
+        "recorded_failed",
+        "recorded_canceled",
+        "total",
+        "succeeded",
+        "failed",
+        "canceled",
+        "pending",
+        "action"
+      ],
       "returns": "table",
       "returnsColumns": {
         "action": "text",
@@ -491,6 +963,8 @@
     },
     "list_task_group_events_v1": {
       "arguments": ["uuid", "integer"],
+      "argumentNames": ["p_group_id", "p_limit"],
+      "returnsColumnOrder": ["event_id", "event_type", "details", "occurred_at"],
       "returns": "table",
       "returnsColumns": {
         "details": "jsonb",
@@ -501,6 +975,17 @@
     },
     "list_task_group_members_v1": {
       "arguments": ["uuid", "integer", "integer"],
+      "argumentNames": ["p_group_id", "p_after_position", "p_limit"],
+      "returnsColumnOrder": [
+        "member_position",
+        "task_id",
+        "queue_name",
+        "task_type",
+        "state",
+        "outcome",
+        "added_at",
+        "counted_at"
+      ],
       "returns": "table",
       "returnsColumns": {
         "added_at": "timestamptz",
@@ -515,6 +1000,32 @@
     },
     "list_task_timeline_v1": {
       "arguments": ["uuid", "integer", "timestamptz", "text", "uuid"],
+      "argumentNames": [
+        "p_task_id",
+        "p_limit",
+        "p_cursor_occurred_at",
+        "p_cursor_kind",
+        "p_cursor_record_id"
+      ],
+      "returnsColumnOrder": [
+        "kind",
+        "record_id",
+        "task_id",
+        "priority",
+        "occurred_at",
+        "attempt",
+        "event_type",
+        "details",
+        "fence_token",
+        "worker_id",
+        "outcome",
+        "started_at",
+        "claimed_at",
+        "finished_at",
+        "error",
+        "has_more",
+        "cursor_occurred_at"
+      ],
       "returns": "table",
       "returnsColumns": {
         "attempt": "integer",
@@ -538,6 +1049,40 @@
     },
     "list_tasks_v1": {
       "arguments": ["jsonb", "integer", "timestamptz", "uuid", "text", "jsonb"],
+      "argumentNames": [
+        "p_filter",
+        "p_limit",
+        "p_cursor_created_at",
+        "p_cursor_task_id",
+        "p_cursor_signature",
+        "p_payload_projection"
+      ],
+      "returnsColumnOrder": [
+        "task_id",
+        "queue_name",
+        "task_type",
+        "concurrency_key",
+        "priority",
+        "tags",
+        "state",
+        "current_attempt",
+        "max_attempts",
+        "retry_policy",
+        "deadline_at",
+        "execution_timeout_ms",
+        "run_at",
+        "cancel_requested_at",
+        "cancel_requested_by",
+        "cancel_reason",
+        "created_at",
+        "updated_at",
+        "payload",
+        "payload_status",
+        "payload_bytes",
+        "has_more",
+        "cursor_created_at",
+        "cursor_signature"
+      ],
       "returns": "table",
       "returnsColumns": {
         "cancel_reason": "text",
@@ -568,6 +1113,64 @@
     },
     "override_maintenance_policy_v1": {
       "arguments": ["text?", "integer?", "integer?", "time?", "integer?", "integer?", "integer?"],
+      "argumentNames": [
+        "p_timezone",
+        "p_partition_preparation_interval_ms",
+        "p_terminal_cleanup_interval_ms",
+        "p_history_retention_local_time",
+        "p_statistics_rollup_interval_ms",
+        "p_statistics_group_limit",
+        "p_statistics_recompute_buckets"
+      ],
+      "defaults": {
+        "1": "null",
+        "2": "null",
+        "3": "null",
+        "4": "null",
+        "5": "null",
+        "6": "null",
+        "7": "null"
+      },
+      "returnsColumnOrder": [
+        "singleton",
+        "timezone",
+        "partition_preparation_interval_ms",
+        "terminal_cleanup_interval_ms",
+        "history_retention_local_time",
+        "application_timezone",
+        "application_partition_preparation_interval_ms",
+        "application_terminal_cleanup_interval_ms",
+        "application_history_retention_local_time",
+        "operator_overrides",
+        "updated_at",
+        "statistics_rollup_interval_ms",
+        "statistics_group_limit",
+        "statistics_recompute_buckets",
+        "application_statistics_rollup_interval_ms",
+        "application_statistics_group_limit",
+        "application_statistics_recompute_buckets",
+        "operator_audit"
+      ],
+      "returnsColumns": {
+        "application_history_retention_local_time": "time(0)",
+        "application_partition_preparation_interval_ms": "integer",
+        "application_statistics_group_limit": "integer",
+        "application_statistics_recompute_buckets": "integer",
+        "application_statistics_rollup_interval_ms": "integer",
+        "application_terminal_cleanup_interval_ms": "integer",
+        "application_timezone": "text",
+        "history_retention_local_time": "time(0)",
+        "operator_audit": "jsonb",
+        "operator_overrides": "text[]",
+        "partition_preparation_interval_ms": "integer",
+        "singleton": "boolean",
+        "statistics_group_limit": "integer",
+        "statistics_recompute_buckets": "integer",
+        "statistics_rollup_interval_ms": "integer",
+        "terminal_cleanup_interval_ms": "integer",
+        "timezone": "text",
+        "updated_at": "timestamptz"
+      },
       "returns": "workhorse.maintenance_policy"
     },
     "override_maintenance_policy_v2": {
@@ -583,18 +1186,190 @@
         "text",
         "text"
       ],
+      "argumentNames": [
+        "p_timezone",
+        "p_partition_preparation_interval_ms",
+        "p_terminal_cleanup_interval_ms",
+        "p_history_retention_local_time",
+        "p_statistics_rollup_interval_ms",
+        "p_statistics_group_limit",
+        "p_statistics_recompute_buckets",
+        "p_actor",
+        "p_reason",
+        "p_request_id"
+      ],
+      "returnsColumnOrder": [
+        "singleton",
+        "timezone",
+        "partition_preparation_interval_ms",
+        "terminal_cleanup_interval_ms",
+        "history_retention_local_time",
+        "application_timezone",
+        "application_partition_preparation_interval_ms",
+        "application_terminal_cleanup_interval_ms",
+        "application_history_retention_local_time",
+        "operator_overrides",
+        "updated_at",
+        "statistics_rollup_interval_ms",
+        "statistics_group_limit",
+        "statistics_recompute_buckets",
+        "application_statistics_rollup_interval_ms",
+        "application_statistics_group_limit",
+        "application_statistics_recompute_buckets",
+        "operator_audit"
+      ],
+      "returnsColumns": {
+        "application_history_retention_local_time": "time(0)",
+        "application_partition_preparation_interval_ms": "integer",
+        "application_statistics_group_limit": "integer",
+        "application_statistics_recompute_buckets": "integer",
+        "application_statistics_rollup_interval_ms": "integer",
+        "application_terminal_cleanup_interval_ms": "integer",
+        "application_timezone": "text",
+        "history_retention_local_time": "time(0)",
+        "operator_audit": "jsonb",
+        "operator_overrides": "text[]",
+        "partition_preparation_interval_ms": "integer",
+        "singleton": "boolean",
+        "statistics_group_limit": "integer",
+        "statistics_recompute_buckets": "integer",
+        "statistics_rollup_interval_ms": "integer",
+        "terminal_cleanup_interval_ms": "integer",
+        "timezone": "text",
+        "updated_at": "timestamptz"
+      },
       "returns": "workhorse.maintenance_policy"
     },
     "override_retention_policy_v1": {
       "arguments": ["jsonb"],
+      "argumentNames": ["p_overrides"],
+      "returnsColumnOrder": [
+        "singleton",
+        "task_identity_retention_days",
+        "terminal_outcome_retention_days",
+        "task_event_retention_days",
+        "attempt_history_retention_days",
+        "schedule_occurrence_retention_days",
+        "statistics_retention_days",
+        "terminal_task_prune_limit",
+        "history_partitions_per_pass",
+        "default_partition_rows_per_pass",
+        "occurrence_rows_per_pass",
+        "statistics_rows_per_pass",
+        "application_task_identity_retention_days",
+        "application_terminal_outcome_retention_days",
+        "application_task_event_retention_days",
+        "application_attempt_history_retention_days",
+        "application_schedule_occurrence_retention_days",
+        "application_statistics_retention_days",
+        "application_terminal_task_prune_limit",
+        "application_history_partitions_per_pass",
+        "application_default_partition_rows_per_pass",
+        "application_occurrence_rows_per_pass",
+        "application_statistics_rows_per_pass",
+        "operator_overrides",
+        "updated_at",
+        "operator_audit"
+      ],
+      "returnsColumns": {
+        "application_attempt_history_retention_days": "integer",
+        "application_default_partition_rows_per_pass": "integer",
+        "application_history_partitions_per_pass": "integer",
+        "application_occurrence_rows_per_pass": "integer",
+        "application_schedule_occurrence_retention_days": "integer",
+        "application_statistics_retention_days": "integer",
+        "application_statistics_rows_per_pass": "integer",
+        "application_task_event_retention_days": "integer",
+        "application_task_identity_retention_days": "integer",
+        "application_terminal_outcome_retention_days": "integer",
+        "application_terminal_task_prune_limit": "integer",
+        "attempt_history_retention_days": "integer",
+        "default_partition_rows_per_pass": "integer",
+        "history_partitions_per_pass": "integer",
+        "occurrence_rows_per_pass": "integer",
+        "operator_audit": "jsonb",
+        "operator_overrides": "text[]",
+        "schedule_occurrence_retention_days": "integer",
+        "singleton": "boolean",
+        "statistics_retention_days": "integer",
+        "statistics_rows_per_pass": "integer",
+        "task_event_retention_days": "integer",
+        "task_identity_retention_days": "integer",
+        "terminal_outcome_retention_days": "integer",
+        "terminal_task_prune_limit": "integer",
+        "updated_at": "timestamptz"
+      },
       "returns": "workhorse.retention_policy"
     },
     "override_retention_policy_v2": {
       "arguments": ["jsonb", "text", "text", "text"],
+      "argumentNames": ["p_overrides", "p_actor", "p_reason", "p_request_id"],
+      "returnsColumnOrder": [
+        "singleton",
+        "task_identity_retention_days",
+        "terminal_outcome_retention_days",
+        "task_event_retention_days",
+        "attempt_history_retention_days",
+        "schedule_occurrence_retention_days",
+        "statistics_retention_days",
+        "terminal_task_prune_limit",
+        "history_partitions_per_pass",
+        "default_partition_rows_per_pass",
+        "occurrence_rows_per_pass",
+        "statistics_rows_per_pass",
+        "application_task_identity_retention_days",
+        "application_terminal_outcome_retention_days",
+        "application_task_event_retention_days",
+        "application_attempt_history_retention_days",
+        "application_schedule_occurrence_retention_days",
+        "application_statistics_retention_days",
+        "application_terminal_task_prune_limit",
+        "application_history_partitions_per_pass",
+        "application_default_partition_rows_per_pass",
+        "application_occurrence_rows_per_pass",
+        "application_statistics_rows_per_pass",
+        "operator_overrides",
+        "updated_at",
+        "operator_audit"
+      ],
+      "returnsColumns": {
+        "application_attempt_history_retention_days": "integer",
+        "application_default_partition_rows_per_pass": "integer",
+        "application_history_partitions_per_pass": "integer",
+        "application_occurrence_rows_per_pass": "integer",
+        "application_schedule_occurrence_retention_days": "integer",
+        "application_statistics_retention_days": "integer",
+        "application_statistics_rows_per_pass": "integer",
+        "application_task_event_retention_days": "integer",
+        "application_task_identity_retention_days": "integer",
+        "application_terminal_outcome_retention_days": "integer",
+        "application_terminal_task_prune_limit": "integer",
+        "attempt_history_retention_days": "integer",
+        "default_partition_rows_per_pass": "integer",
+        "history_partitions_per_pass": "integer",
+        "occurrence_rows_per_pass": "integer",
+        "operator_audit": "jsonb",
+        "operator_overrides": "text[]",
+        "schedule_occurrence_retention_days": "integer",
+        "singleton": "boolean",
+        "statistics_retention_days": "integer",
+        "statistics_rows_per_pass": "integer",
+        "task_event_retention_days": "integer",
+        "task_identity_retention_days": "integer",
+        "terminal_outcome_retention_days": "integer",
+        "terminal_task_prune_limit": "integer",
+        "updated_at": "timestamptz"
+      },
       "returns": "workhorse.retention_policy"
     },
     "prepare_history_partitions_v1": {
       "arguments": ["boolean?", "timestamptz?"],
+      "argumentNames": ["p_force", "p_now"],
+      "defaults": {
+        "1": "false",
+        "2": "clock_timestamp()"
+      },
+      "returnsColumnOrder": ["phase", "rows_affected", "duration_ms", "skipped_lock", "error"],
       "returns": "table",
       "returnsColumns": {
         "duration_ms": "integer",
@@ -606,10 +1381,20 @@
     },
     "promote_v1": {
       "arguments": ["integer?"],
+      "argumentNames": ["p_limit"],
+      "defaults": {
+        "1": "100"
+      },
       "returns": "integer"
     },
     "prune_terminal_storage_v1": {
       "arguments": ["boolean?", "timestamptz?"],
+      "argumentNames": ["p_force", "p_now"],
+      "defaults": {
+        "1": "false",
+        "2": "clock_timestamp()"
+      },
+      "returnsColumnOrder": ["phase", "rows_affected", "duration_ms", "skipped_lock", "error"],
       "returns": "table",
       "returnsColumns": {
         "duration_ms": "integer",
@@ -621,10 +1406,16 @@
     },
     "prune_worker_registry_v1": {
       "arguments": ["interval?"],
+      "argumentNames": ["p_max_age"],
+      "defaults": {
+        "1": "interval'1 day'"
+      },
       "returns": "integer"
     },
     "purge_queue_v1": {
       "arguments": ["text", "text", "text", "text"],
+      "argumentNames": ["p_queue_name", "p_requested_by", "p_reason", "p_request_id"],
+      "returnsColumnOrder": ["deleted_count", "replayed", "requested_at"],
       "returns": "table",
       "returnsColumns": {
         "deleted_count": "integer",
@@ -634,10 +1425,23 @@
     },
     "queue_health_v1": {
       "arguments": ["timestamptz?"],
+      "argumentNames": ["p_rejected_since"],
+      "defaults": {
+        "1": "clock_timestamp()-interval'1 day'"
+      },
       "returns": "jsonb"
     },
     "read_cold_export_rows_v1": {
       "arguments": ["text", "timestamptz", "timestamptz", "timestamptz", "uuid", "integer"],
+      "argumentNames": [
+        "p_dataset",
+        "p_from",
+        "p_to",
+        "p_after_occurred_at",
+        "p_after_id",
+        "p_limit"
+      ],
+      "returnsColumnOrder": ["occurred_at", "row_id", "record"],
       "returns": "table",
       "returnsColumns": {
         "occurred_at": "timestamptz",
@@ -647,14 +1451,22 @@
     },
     "record_batch_dispatch_v1": {
       "arguments": ["uuid", "uuid[]", "integer[]", "bigint[]", "text"],
+      "argumentNames": ["p_batch_id", "p_task_ids", "p_attempts", "p_fence_tokens", "p_worker_id"],
       "returns": "integer"
     },
     "record_batch_failure_v1": {
       "arguments": ["uuid", "uuid[]", "integer[]", "bigint[]", "text"],
+      "argumentNames": ["p_batch_id", "p_task_ids", "p_attempts", "p_fence_tokens", "p_worker_id"],
       "returns": "integer"
     },
     "recover_expired_telemetry_v1": {
       "arguments": ["integer?", "integer?"],
+      "argumentNames": ["p_limit", "p_retry_delay_ms"],
+      "defaults": {
+        "1": "100",
+        "2": "null"
+      },
+      "returnsColumnOrder": ["rows_affected", "expired_leases", "retried", "retry_dimensions"],
       "returns": "table",
       "returnsColumns": {
         "expired_leases": "integer",
@@ -665,10 +1477,24 @@
     },
     "redact_top_level_keys_v1": {
       "arguments": ["jsonb", "text[]"],
+      "argumentNames": ["p_value", "p_keys"],
       "returns": "jsonb"
     },
     "redrive_lineage_v1": {
       "arguments": ["uuid", "integer"],
+      "argumentNames": ["p_task_id", "p_limit"],
+      "returnsColumnOrder": [
+        "source_task_id",
+        "target_task_id",
+        "requested_by",
+        "reason",
+        "request_id_preview",
+        "request_id_digest",
+        "request_id_length",
+        "source_state",
+        "target_initial_state",
+        "requested_at"
+      ],
       "returns": "table",
       "returnsColumns": {
         "reason": "text",
@@ -685,6 +1511,31 @@
     },
     "redrive_many_v1": {
       "arguments": ["jsonb", "integer", "boolean", "text", "text", "text", "timestamptz?", "uuid?"],
+      "argumentNames": [
+        "p_filter",
+        "p_limit",
+        "p_dry_run",
+        "p_requested_by",
+        "p_reason",
+        "p_request_id",
+        "p_cursor_finished_at",
+        "p_cursor_task_id"
+      ],
+      "defaults": {
+        "7": "null",
+        "8": "null"
+      },
+      "returnsColumnOrder": [
+        "ordinal",
+        "status",
+        "source_task_id",
+        "target_task_id",
+        "source_state",
+        "target_state",
+        "requested_at",
+        "source_finished_at_cursor",
+        "has_more"
+      ],
       "returns": "table",
       "returnsColumns": {
         "has_more": "boolean",
@@ -700,6 +1551,15 @@
     },
     "redrive_v1": {
       "arguments": ["uuid", "text", "text", "text"],
+      "argumentNames": ["p_source_task_id", "p_requested_by", "p_reason", "p_request_id"],
+      "returnsColumnOrder": [
+        "status",
+        "source_task_id",
+        "target_task_id",
+        "source_state",
+        "target_state",
+        "requested_at"
+      ],
       "returns": "table",
       "returnsColumns": {
         "requested_at": "timestamptz",
@@ -731,14 +1591,42 @@
         "text",
         "text"
       ],
+      "argumentNames": [
+        "p_worker_id",
+        "p_instance_id",
+        "p_hostname",
+        "p_pid",
+        "p_queue_names",
+        "p_schedule_namespaces",
+        "p_concurrency",
+        "p_lease_ms",
+        "p_heartbeat_ms",
+        "p_poll_ms",
+        "p_maintenance_interval_ms",
+        "p_maintenance_routine_poll_ms",
+        "p_registry_interval_ms",
+        "p_active_slots",
+        "p_draining",
+        "p_client_protocol_version",
+        "p_sdk_language",
+        "p_sdk_version"
+      ],
       "returns": "boolean"
     },
     "release_owned_v1": {
       "arguments": ["uuid", "text", "bigint"],
+      "argumentNames": ["p_task_id", "p_worker_id", "p_fence_token"],
       "returns": "text"
     },
     "repair_dependency_drift_v1": {
       "arguments": ["integer", "text", "text", "text"],
+      "argumentNames": ["p_limit", "p_requested_by", "p_reason", "p_request_id"],
+      "returnsColumnOrder": [
+        "task_id",
+        "recorded_pending_prerequisites",
+        "pending_edges",
+        "action"
+      ],
       "returns": "table",
       "returnsColumns": {
         "action": "text",
@@ -749,6 +1637,8 @@
     },
     "repair_task_group_drift_v1": {
       "arguments": ["integer", "text", "text", "text"],
+      "argumentNames": ["p_limit", "p_requested_by", "p_reason", "p_request_id"],
+      "returnsColumnOrder": ["group_id", "recorded_pending", "pending", "action"],
       "returns": "table",
       "returnsColumns": {
         "action": "text",
@@ -759,6 +1649,12 @@
     },
     "retain_history_v1": {
       "arguments": ["boolean?", "timestamptz?"],
+      "argumentNames": ["p_force", "p_now"],
+      "defaults": {
+        "1": "false",
+        "2": "clock_timestamp()"
+      },
+      "returnsColumnOrder": ["phase", "rows_affected", "duration_ms", "skipped_lock", "error"],
       "returns": "table",
       "returnsColumns": {
         "duration_ms": "integer",
@@ -770,22 +1666,225 @@
     },
     "revert_maintenance_policy_v1": {
       "arguments": ["text[]"],
+      "argumentNames": ["p_settings"],
+      "returnsColumnOrder": [
+        "singleton",
+        "timezone",
+        "partition_preparation_interval_ms",
+        "terminal_cleanup_interval_ms",
+        "history_retention_local_time",
+        "application_timezone",
+        "application_partition_preparation_interval_ms",
+        "application_terminal_cleanup_interval_ms",
+        "application_history_retention_local_time",
+        "operator_overrides",
+        "updated_at",
+        "statistics_rollup_interval_ms",
+        "statistics_group_limit",
+        "statistics_recompute_buckets",
+        "application_statistics_rollup_interval_ms",
+        "application_statistics_group_limit",
+        "application_statistics_recompute_buckets",
+        "operator_audit"
+      ],
+      "returnsColumns": {
+        "application_history_retention_local_time": "time(0)",
+        "application_partition_preparation_interval_ms": "integer",
+        "application_statistics_group_limit": "integer",
+        "application_statistics_recompute_buckets": "integer",
+        "application_statistics_rollup_interval_ms": "integer",
+        "application_terminal_cleanup_interval_ms": "integer",
+        "application_timezone": "text",
+        "history_retention_local_time": "time(0)",
+        "operator_audit": "jsonb",
+        "operator_overrides": "text[]",
+        "partition_preparation_interval_ms": "integer",
+        "singleton": "boolean",
+        "statistics_group_limit": "integer",
+        "statistics_recompute_buckets": "integer",
+        "statistics_rollup_interval_ms": "integer",
+        "terminal_cleanup_interval_ms": "integer",
+        "timezone": "text",
+        "updated_at": "timestamptz"
+      },
       "returns": "workhorse.maintenance_policy"
     },
     "revert_maintenance_policy_v2": {
       "arguments": ["text[]", "text", "text", "text"],
+      "argumentNames": ["p_settings", "p_actor", "p_reason", "p_request_id"],
+      "returnsColumnOrder": [
+        "singleton",
+        "timezone",
+        "partition_preparation_interval_ms",
+        "terminal_cleanup_interval_ms",
+        "history_retention_local_time",
+        "application_timezone",
+        "application_partition_preparation_interval_ms",
+        "application_terminal_cleanup_interval_ms",
+        "application_history_retention_local_time",
+        "operator_overrides",
+        "updated_at",
+        "statistics_rollup_interval_ms",
+        "statistics_group_limit",
+        "statistics_recompute_buckets",
+        "application_statistics_rollup_interval_ms",
+        "application_statistics_group_limit",
+        "application_statistics_recompute_buckets",
+        "operator_audit"
+      ],
+      "returnsColumns": {
+        "application_history_retention_local_time": "time(0)",
+        "application_partition_preparation_interval_ms": "integer",
+        "application_statistics_group_limit": "integer",
+        "application_statistics_recompute_buckets": "integer",
+        "application_statistics_rollup_interval_ms": "integer",
+        "application_terminal_cleanup_interval_ms": "integer",
+        "application_timezone": "text",
+        "history_retention_local_time": "time(0)",
+        "operator_audit": "jsonb",
+        "operator_overrides": "text[]",
+        "partition_preparation_interval_ms": "integer",
+        "singleton": "boolean",
+        "statistics_group_limit": "integer",
+        "statistics_recompute_buckets": "integer",
+        "statistics_rollup_interval_ms": "integer",
+        "terminal_cleanup_interval_ms": "integer",
+        "timezone": "text",
+        "updated_at": "timestamptz"
+      },
       "returns": "workhorse.maintenance_policy"
     },
     "revert_retention_policy_v1": {
       "arguments": ["text[]"],
+      "argumentNames": ["p_settings"],
+      "returnsColumnOrder": [
+        "singleton",
+        "task_identity_retention_days",
+        "terminal_outcome_retention_days",
+        "task_event_retention_days",
+        "attempt_history_retention_days",
+        "schedule_occurrence_retention_days",
+        "statistics_retention_days",
+        "terminal_task_prune_limit",
+        "history_partitions_per_pass",
+        "default_partition_rows_per_pass",
+        "occurrence_rows_per_pass",
+        "statistics_rows_per_pass",
+        "application_task_identity_retention_days",
+        "application_terminal_outcome_retention_days",
+        "application_task_event_retention_days",
+        "application_attempt_history_retention_days",
+        "application_schedule_occurrence_retention_days",
+        "application_statistics_retention_days",
+        "application_terminal_task_prune_limit",
+        "application_history_partitions_per_pass",
+        "application_default_partition_rows_per_pass",
+        "application_occurrence_rows_per_pass",
+        "application_statistics_rows_per_pass",
+        "operator_overrides",
+        "updated_at",
+        "operator_audit"
+      ],
+      "returnsColumns": {
+        "application_attempt_history_retention_days": "integer",
+        "application_default_partition_rows_per_pass": "integer",
+        "application_history_partitions_per_pass": "integer",
+        "application_occurrence_rows_per_pass": "integer",
+        "application_schedule_occurrence_retention_days": "integer",
+        "application_statistics_retention_days": "integer",
+        "application_statistics_rows_per_pass": "integer",
+        "application_task_event_retention_days": "integer",
+        "application_task_identity_retention_days": "integer",
+        "application_terminal_outcome_retention_days": "integer",
+        "application_terminal_task_prune_limit": "integer",
+        "attempt_history_retention_days": "integer",
+        "default_partition_rows_per_pass": "integer",
+        "history_partitions_per_pass": "integer",
+        "occurrence_rows_per_pass": "integer",
+        "operator_audit": "jsonb",
+        "operator_overrides": "text[]",
+        "schedule_occurrence_retention_days": "integer",
+        "singleton": "boolean",
+        "statistics_retention_days": "integer",
+        "statistics_rows_per_pass": "integer",
+        "task_event_retention_days": "integer",
+        "task_identity_retention_days": "integer",
+        "terminal_outcome_retention_days": "integer",
+        "terminal_task_prune_limit": "integer",
+        "updated_at": "timestamptz"
+      },
       "returns": "workhorse.retention_policy"
     },
     "revert_retention_policy_v2": {
       "arguments": ["text[]", "text", "text", "text"],
+      "argumentNames": ["p_settings", "p_actor", "p_reason", "p_request_id"],
+      "returnsColumnOrder": [
+        "singleton",
+        "task_identity_retention_days",
+        "terminal_outcome_retention_days",
+        "task_event_retention_days",
+        "attempt_history_retention_days",
+        "schedule_occurrence_retention_days",
+        "statistics_retention_days",
+        "terminal_task_prune_limit",
+        "history_partitions_per_pass",
+        "default_partition_rows_per_pass",
+        "occurrence_rows_per_pass",
+        "statistics_rows_per_pass",
+        "application_task_identity_retention_days",
+        "application_terminal_outcome_retention_days",
+        "application_task_event_retention_days",
+        "application_attempt_history_retention_days",
+        "application_schedule_occurrence_retention_days",
+        "application_statistics_retention_days",
+        "application_terminal_task_prune_limit",
+        "application_history_partitions_per_pass",
+        "application_default_partition_rows_per_pass",
+        "application_occurrence_rows_per_pass",
+        "application_statistics_rows_per_pass",
+        "operator_overrides",
+        "updated_at",
+        "operator_audit"
+      ],
+      "returnsColumns": {
+        "application_attempt_history_retention_days": "integer",
+        "application_default_partition_rows_per_pass": "integer",
+        "application_history_partitions_per_pass": "integer",
+        "application_occurrence_rows_per_pass": "integer",
+        "application_schedule_occurrence_retention_days": "integer",
+        "application_statistics_retention_days": "integer",
+        "application_statistics_rows_per_pass": "integer",
+        "application_task_event_retention_days": "integer",
+        "application_task_identity_retention_days": "integer",
+        "application_terminal_outcome_retention_days": "integer",
+        "application_terminal_task_prune_limit": "integer",
+        "attempt_history_retention_days": "integer",
+        "default_partition_rows_per_pass": "integer",
+        "history_partitions_per_pass": "integer",
+        "occurrence_rows_per_pass": "integer",
+        "operator_audit": "jsonb",
+        "operator_overrides": "text[]",
+        "schedule_occurrence_retention_days": "integer",
+        "singleton": "boolean",
+        "statistics_retention_days": "integer",
+        "statistics_rows_per_pass": "integer",
+        "task_event_retention_days": "integer",
+        "task_identity_retention_days": "integer",
+        "terminal_outcome_retention_days": "integer",
+        "terminal_task_prune_limit": "integer",
+        "updated_at": "timestamptz"
+      },
       "returns": "workhorse.retention_policy"
     },
     "rollup_stats_v1": {
       "arguments": ["boolean?", "timestamptz?", "integer?"],
+      "argumentNames": ["p_force", "p_now", "p_max_buckets"],
+      "defaults": {
+        "1": "false",
+        "2": "clock_timestamp()",
+        "3": "240"
+      },
+      "returnsColumnOrder": ["phase", "rows_affected", "duration_ms", "skipped_lock", "error"],
       "returns": "table",
       "returnsColumns": {
         "duration_ms": "integer",
@@ -797,6 +1896,11 @@
     },
     "run_maintenance_v1": {
       "arguments": ["timestamptz?"],
+      "argumentNames": ["p_now"],
+      "defaults": {
+        "1": "clock_timestamp()"
+      },
+      "returnsColumnOrder": ["phase", "rows_affected", "duration_ms", "skipped_lock", "error"],
       "returns": "table",
       "returnsColumns": {
         "duration_ms": "integer",
@@ -808,6 +1912,8 @@
     },
     "run_task_now_v1": {
       "arguments": ["uuid", "text", "text", "text"],
+      "argumentNames": ["p_task_id", "p_requested_by", "p_reason", "p_request_id"],
+      "returnsColumnOrder": ["status", "state", "run_at"],
       "returns": "table",
       "returnsColumns": {
         "run_at": "timestamptz",
@@ -817,6 +1923,21 @@
     },
     "save_checkpoint_v1": {
       "arguments": ["uuid", "text", "bigint", "text", "jsonb"],
+      "argumentNames": [
+        "p_task_id",
+        "p_worker_id",
+        "p_fence_token",
+        "p_checkpoint_name",
+        "p_checkpoint_value"
+      ],
+      "returnsColumnOrder": [
+        "status",
+        "checkpoint_value",
+        "attempt",
+        "fence_token",
+        "worker_id",
+        "created_at"
+      ],
       "returns": "table",
       "returnsColumns": {
         "attempt": "integer",
@@ -829,6 +1950,23 @@
     },
     "save_checkpoint_v2": {
       "arguments": ["uuid", "text", "bigint", "text", "jsonb", "text"],
+      "argumentNames": [
+        "p_task_id",
+        "p_worker_id",
+        "p_fence_token",
+        "p_checkpoint_name",
+        "p_checkpoint_value",
+        "p_input_fingerprint"
+      ],
+      "returnsColumnOrder": [
+        "status",
+        "checkpoint_value",
+        "attempt",
+        "fence_token",
+        "worker_id",
+        "created_at",
+        "input_fingerprint"
+      ],
       "returns": "table",
       "returnsColumns": {
         "attempt": "integer",
@@ -842,6 +1980,25 @@
     },
     "save_checkpoint_v3": {
       "arguments": ["uuid", "text", "bigint", "text", "jsonb", "text"],
+      "argumentNames": [
+        "p_task_id",
+        "p_worker_id",
+        "p_fence_token",
+        "p_checkpoint_name",
+        "p_checkpoint_value",
+        "p_input_fingerprint"
+      ],
+      "returnsColumnOrder": [
+        "status",
+        "checkpoint_value",
+        "attempt",
+        "fence_token",
+        "worker_id",
+        "created_at",
+        "input_fingerprint",
+        "value_bytes",
+        "max_bytes"
+      ],
       "returns": "table",
       "returnsColumns": {
         "attempt": "integer",
@@ -857,6 +2014,26 @@
     },
     "schedule_wait_v1": {
       "arguments": ["uuid", "text", "bigint", "text", "bigint", "timestamptz"],
+      "argumentNames": [
+        "p_task_id",
+        "p_worker_id",
+        "p_fence_token",
+        "p_wait_name",
+        "p_duration_ms",
+        "p_wake_at"
+      ],
+      "returnsColumnOrder": [
+        "status",
+        "wait_name",
+        "mode",
+        "duration_ms",
+        "requested_wake_at",
+        "wake_at",
+        "attempt",
+        "fence_token",
+        "worker_id",
+        "created_at"
+      ],
       "returns": "table",
       "returnsColumns": {
         "attempt": "integer",
@@ -873,6 +2050,26 @@
     },
     "schedule_wait_v2": {
       "arguments": ["uuid", "text", "bigint", "text", "bigint", "timestamptz"],
+      "argumentNames": [
+        "p_task_id",
+        "p_worker_id",
+        "p_fence_token",
+        "p_wait_name",
+        "p_duration_ms",
+        "p_wake_at"
+      ],
+      "returnsColumnOrder": [
+        "status",
+        "wait_name",
+        "mode",
+        "duration_ms",
+        "requested_wake_at",
+        "wake_at",
+        "attempt",
+        "fence_token",
+        "worker_id",
+        "created_at"
+      ],
       "returns": "table",
       "returnsColumns": {
         "attempt": "integer",
@@ -889,6 +2086,24 @@
     },
     "seal_task_group_v1": {
       "arguments": ["uuid"],
+      "argumentNames": ["p_group_id"],
+      "returnsColumnOrder": [
+        "group_id",
+        "state",
+        "result",
+        "total",
+        "succeeded",
+        "failed",
+        "canceled",
+        "pending",
+        "created_at",
+        "sealed_at",
+        "finished_at",
+        "canceled_at",
+        "canceled_by",
+        "cancel_reason",
+        "callbacks"
+      ],
       "returns": "table",
       "returnsColumns": {
         "callbacks": "jsonb",
@@ -910,6 +2125,14 @@
     },
     "send_signal_v1": {
       "arguments": ["uuid", "text", "jsonb", "text", "text"],
+      "argumentNames": [
+        "p_task_id",
+        "p_signal_name",
+        "p_payload",
+        "p_idempotency_key",
+        "p_requested_by"
+      ],
+      "returnsColumnOrder": ["status", "payload", "delivered_at", "delivered_by"],
       "returns": "table",
       "returnsColumns": {
         "delivered_at": "timestamptz",
@@ -920,6 +2143,14 @@
     },
     "send_signal_v2": {
       "arguments": ["uuid", "text", "jsonb", "text", "text"],
+      "argumentNames": [
+        "p_task_id",
+        "p_signal_name",
+        "p_payload",
+        "p_idempotency_key",
+        "p_requested_by"
+      ],
+      "returnsColumnOrder": ["status", "payload", "delivered_at", "delivered_by"],
       "returns": "table",
       "returnsColumns": {
         "delivered_at": "timestamptz",
@@ -930,6 +2161,21 @@
     },
     "set_cold_export_policy_v1": {
       "arguments": ["boolean", "timestamptz?"],
+      "argumentNames": ["p_enabled", "p_from"],
+      "defaults": {
+        "2": "null"
+      },
+      "returnsColumnOrder": [
+        "enabled",
+        "dataset",
+        "exported_through",
+        "exportable_through",
+        "complete_segments",
+        "exporting_segment_start",
+        "exporting_attempts",
+        "last_error",
+        "updated_at"
+      ],
       "returns": "table",
       "returnsColumns": {
         "complete_segments": "bigint",
@@ -945,6 +2191,8 @@
     },
     "set_queue_history_v1": {
       "arguments": ["text", "boolean", "boolean"],
+      "argumentNames": ["p_queue_name", "p_record_attempts", "p_record_claims"],
+      "returnsColumnOrder": ["record_attempts", "record_claims"],
       "returns": "table",
       "returnsColumns": {
         "record_attempts": "boolean",
@@ -953,18 +2201,40 @@
     },
     "set_queue_paused_v1": {
       "arguments": ["text", "boolean", "text", "text", "text"],
+      "argumentNames": ["p_queue_name", "p_paused", "p_requested_by", "p_reason", "p_request_id"],
       "returns": "boolean"
     },
     "set_queue_tier_v1": {
       "arguments": ["text", "text", "text", "text"],
+      "argumentNames": ["p_queue_name", "p_tier", "p_requested_by", "p_reason"],
       "returns": "text"
     },
     "set_schedule_paused_v1": {
       "arguments": ["text", "text", "boolean", "text", "text", "timestamptz?"],
+      "argumentNames": [
+        "p_namespace",
+        "p_schedule_name",
+        "p_paused",
+        "p_requested_by",
+        "p_reason",
+        "p_occurred_at"
+      ],
+      "defaults": {
+        "6": "clock_timestamp()"
+      },
       "returns": "boolean"
     },
     "set_worker_paused_v1": {
       "arguments": ["text", "boolean", "text", "text", "text"],
+      "argumentNames": ["p_worker_id", "p_paused", "p_requested_by", "p_reason", "p_request_id"],
+      "returnsColumnOrder": [
+        "worker_id",
+        "paused",
+        "paused_by",
+        "paused_reason",
+        "paused_at",
+        "last_heartbeat_at"
+      ],
       "returns": "table",
       "returnsColumns": {
         "last_heartbeat_at": "timestamptz",
@@ -977,6 +2247,27 @@
     },
     "stat_buckets_v1": {
       "arguments": ["timestamptz", "timestamptz"],
+      "argumentNames": ["p_from", "p_to"],
+      "returnsColumnOrder": [
+        "bucket_start",
+        "queue_name",
+        "task_type",
+        "enqueued",
+        "task_succeeded",
+        "task_failed",
+        "task_canceled",
+        "attempt_succeeded",
+        "attempt_failed",
+        "attempt_retry",
+        "attempt_lease_expired",
+        "attempt_canceled",
+        "attempt_other",
+        "attempt_duration_ms",
+        "wait_sketch",
+        "last_attempt_at",
+        "last_error",
+        "last_error_at"
+      ],
       "returns": "table",
       "returnsColumns": {
         "attempt_canceled": "bigint",
@@ -1001,6 +2292,19 @@
     },
     "sync_budgets_v1": {
       "arguments": ["text", "jsonb", "boolean?"],
+      "argumentNames": ["p_namespace", "p_definitions", "p_prune"],
+      "defaults": {
+        "3": "true"
+      },
+      "returnsColumnOrder": [
+        "namespace",
+        "budget_name",
+        "max_active",
+        "rate_limit",
+        "rate_interval_ms",
+        "rate_burst",
+        "updated_at"
+      ],
       "returns": "table",
       "returnsColumns": {
         "budget_name": "text",
@@ -1014,6 +2318,17 @@
     },
     "sync_concurrency_policies_v1": {
       "arguments": ["text", "jsonb", "boolean?"],
+      "argumentNames": ["p_namespace", "p_definitions", "p_prune"],
+      "defaults": {
+        "3": "true"
+      },
+      "returnsColumnOrder": [
+        "namespace",
+        "queue_name",
+        "max_active",
+        "max_active_per_key",
+        "updated_at"
+      ],
       "returns": "table",
       "returnsColumns": {
         "max_active": "integer",
@@ -1025,6 +2340,7 @@
     },
     "sync_contract_definitions_v1": {
       "arguments": ["jsonb"],
+      "argumentNames": ["p_definitions"],
       "returns": "void"
     },
     "sync_maintenance_policy_v1": {
@@ -1038,10 +2354,84 @@
         "integer?",
         "boolean?"
       ],
+      "argumentNames": [
+        "p_timezone",
+        "p_partition_preparation_interval_ms",
+        "p_terminal_cleanup_interval_ms",
+        "p_history_retention_local_time",
+        "p_statistics_rollup_interval_ms",
+        "p_statistics_group_limit",
+        "p_statistics_recompute_buckets",
+        "p_force"
+      ],
+      "defaults": {
+        "2": "null",
+        "3": "null",
+        "4": "null",
+        "5": "null",
+        "6": "null",
+        "7": "null",
+        "8": "false"
+      },
+      "returnsColumnOrder": [
+        "singleton",
+        "timezone",
+        "partition_preparation_interval_ms",
+        "terminal_cleanup_interval_ms",
+        "history_retention_local_time",
+        "application_timezone",
+        "application_partition_preparation_interval_ms",
+        "application_terminal_cleanup_interval_ms",
+        "application_history_retention_local_time",
+        "operator_overrides",
+        "updated_at",
+        "statistics_rollup_interval_ms",
+        "statistics_group_limit",
+        "statistics_recompute_buckets",
+        "application_statistics_rollup_interval_ms",
+        "application_statistics_group_limit",
+        "application_statistics_recompute_buckets",
+        "operator_audit"
+      ],
+      "returnsColumns": {
+        "application_history_retention_local_time": "time(0)",
+        "application_partition_preparation_interval_ms": "integer",
+        "application_statistics_group_limit": "integer",
+        "application_statistics_recompute_buckets": "integer",
+        "application_statistics_rollup_interval_ms": "integer",
+        "application_terminal_cleanup_interval_ms": "integer",
+        "application_timezone": "text",
+        "history_retention_local_time": "time(0)",
+        "operator_audit": "jsonb",
+        "operator_overrides": "text[]",
+        "partition_preparation_interval_ms": "integer",
+        "singleton": "boolean",
+        "statistics_group_limit": "integer",
+        "statistics_recompute_buckets": "integer",
+        "statistics_rollup_interval_ms": "integer",
+        "terminal_cleanup_interval_ms": "integer",
+        "timezone": "text",
+        "updated_at": "timestamptz"
+      },
       "returns": "workhorse.maintenance_policy"
     },
     "sync_rate_limit_policies_v1": {
       "arguments": ["text", "jsonb", "boolean?"],
+      "argumentNames": ["p_namespace", "p_definitions", "p_prune"],
+      "defaults": {
+        "3": "true"
+      },
+      "returnsColumnOrder": [
+        "namespace",
+        "queue_name",
+        "rate_limit",
+        "rate_interval_ms",
+        "rate_burst",
+        "per_key_limit",
+        "per_key_interval_ms",
+        "per_key_burst",
+        "updated_at"
+      ],
       "returns": "table",
       "returnsColumns": {
         "namespace": "text",
@@ -1070,14 +2460,117 @@
         "integer?",
         "boolean?"
       ],
+      "argumentNames": [
+        "p_task_identity_retention_days",
+        "p_terminal_outcome_retention_days",
+        "p_task_event_retention_days",
+        "p_attempt_history_retention_days",
+        "p_schedule_occurrence_retention_days",
+        "p_statistics_retention_days",
+        "p_terminal_task_prune_limit",
+        "p_history_partitions_per_pass",
+        "p_default_partition_rows_per_pass",
+        "p_occurrence_rows_per_pass",
+        "p_statistics_rows_per_pass",
+        "p_force"
+      ],
+      "defaults": {
+        "6": "null",
+        "7": "null",
+        "8": "null",
+        "9": "null",
+        "10": "null",
+        "11": "null",
+        "12": "false"
+      },
+      "returnsColumnOrder": [
+        "singleton",
+        "task_identity_retention_days",
+        "terminal_outcome_retention_days",
+        "task_event_retention_days",
+        "attempt_history_retention_days",
+        "schedule_occurrence_retention_days",
+        "statistics_retention_days",
+        "terminal_task_prune_limit",
+        "history_partitions_per_pass",
+        "default_partition_rows_per_pass",
+        "occurrence_rows_per_pass",
+        "statistics_rows_per_pass",
+        "application_task_identity_retention_days",
+        "application_terminal_outcome_retention_days",
+        "application_task_event_retention_days",
+        "application_attempt_history_retention_days",
+        "application_schedule_occurrence_retention_days",
+        "application_statistics_retention_days",
+        "application_terminal_task_prune_limit",
+        "application_history_partitions_per_pass",
+        "application_default_partition_rows_per_pass",
+        "application_occurrence_rows_per_pass",
+        "application_statistics_rows_per_pass",
+        "operator_overrides",
+        "updated_at",
+        "operator_audit"
+      ],
+      "returnsColumns": {
+        "application_attempt_history_retention_days": "integer",
+        "application_default_partition_rows_per_pass": "integer",
+        "application_history_partitions_per_pass": "integer",
+        "application_occurrence_rows_per_pass": "integer",
+        "application_schedule_occurrence_retention_days": "integer",
+        "application_statistics_retention_days": "integer",
+        "application_statistics_rows_per_pass": "integer",
+        "application_task_event_retention_days": "integer",
+        "application_task_identity_retention_days": "integer",
+        "application_terminal_outcome_retention_days": "integer",
+        "application_terminal_task_prune_limit": "integer",
+        "attempt_history_retention_days": "integer",
+        "default_partition_rows_per_pass": "integer",
+        "history_partitions_per_pass": "integer",
+        "occurrence_rows_per_pass": "integer",
+        "operator_audit": "jsonb",
+        "operator_overrides": "text[]",
+        "schedule_occurrence_retention_days": "integer",
+        "singleton": "boolean",
+        "statistics_retention_days": "integer",
+        "statistics_rows_per_pass": "integer",
+        "task_event_retention_days": "integer",
+        "task_identity_retention_days": "integer",
+        "terminal_outcome_retention_days": "integer",
+        "terminal_task_prune_limit": "integer",
+        "updated_at": "timestamptz"
+      },
       "returns": "workhorse.retention_policy"
     },
     "sync_schedule_definitions_v2": {
       "arguments": ["text", "jsonb", "boolean?"],
+      "argumentNames": ["p_namespace", "p_definitions", "p_prune"],
+      "defaults": {
+        "3": "true"
+      },
       "returns": "void"
     },
     "task_group_for_task_v1": {
       "arguments": ["uuid"],
+      "argumentNames": ["p_task_id"],
+      "returnsColumnOrder": [
+        "role",
+        "callback_kind",
+        "group_id",
+        "state",
+        "result",
+        "total",
+        "succeeded",
+        "failed",
+        "canceled",
+        "pending",
+        "created_at",
+        "sealed_at",
+        "finished_at",
+        "canceled_at",
+        "canceled_by",
+        "cancel_reason",
+        "callbacks"
+      ],
       "returns": "table",
       "returnsColumns": {
         "callback_kind": "text",
@@ -1101,10 +2594,26 @@
     },
     "terminal_cleanup_follow_up_delay_ms_v1": {
       "arguments": [],
+      "argumentNames": [],
       "returns": "integer"
     },
     "tick_v1": {
       "arguments": ["integer?", "integer?"],
+      "argumentNames": ["p_promote_limit", "p_recover_limit"],
+      "defaults": {
+        "1": "1000",
+        "2": "1000"
+      },
+      "returnsColumnOrder": [
+        "phase",
+        "rows_affected",
+        "duration_ms",
+        "skipped_lock",
+        "error",
+        "expired_leases",
+        "retried",
+        "retry_dimensions"
+      ],
       "returns": "table",
       "returnsColumns": {
         "duration_ms": "integer",
@@ -1119,6 +2628,18 @@
     },
     "update_progress_v1": {
       "arguments": ["uuid", "text", "bigint", "jsonb"],
+      "argumentNames": ["p_task_id", "p_worker_id", "p_fence_token", "p_progress_value"],
+      "returnsColumnOrder": [
+        "status",
+        "progress_value",
+        "revision",
+        "attempt",
+        "fence_token",
+        "worker_id",
+        "created_at",
+        "updated_at",
+        "retry_after_ms"
+      ],
       "returns": "table",
       "returnsColumns": {
         "attempt": "integer",
@@ -1134,6 +2655,18 @@
     },
     "wait_for_human_v1": {
       "arguments": ["uuid", "text", "bigint", "text", "jsonb", "bigint?"],
+      "argumentNames": [
+        "p_task_id",
+        "p_worker_id",
+        "p_fence_token",
+        "p_token_name",
+        "p_context",
+        "p_timeout_ms"
+      ],
+      "defaults": {
+        "6": "null"
+      },
+      "returnsColumnOrder": ["status", "result"],
       "returns": "table",
       "returnsColumns": {
         "result": "jsonb",
@@ -1142,6 +2675,17 @@
     },
     "wait_for_signal_v1": {
       "arguments": ["uuid", "text", "bigint", "text", "bigint?"],
+      "argumentNames": [
+        "p_task_id",
+        "p_worker_id",
+        "p_fence_token",
+        "p_signal_name",
+        "p_timeout_ms"
+      ],
+      "defaults": {
+        "5": "null"
+      },
+      "returnsColumnOrder": ["status", "payload"],
       "returns": "table",
       "returnsColumns": {
         "payload": "jsonb",
@@ -1150,6 +2694,8 @@
     },
     "worker_client_protocols_v1": {
       "arguments": [],
+      "argumentNames": [],
+      "returnsColumnOrder": ["client_protocol_version", "workers"],
       "returns": "table",
       "returnsColumns": {
         "client_protocol_version": "integer",

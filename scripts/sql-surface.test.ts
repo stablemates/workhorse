@@ -232,3 +232,182 @@ it("promises every governed function and column the installed schema still provi
     "protocol/v1/governed-surface.json is stale; run pnpm sql-catalogues:generate",
   ).toEqual(promised);
 });
+
+const committedSources = await readSurfaceSources(repository);
+const committedPromise = JSON.parse(
+  await readFile(path.join(repository, "protocol/v1/governed-surface.json"), "utf8"),
+) as GovernedSurface;
+
+describe("a default value or a row-type field that the schema changes (SM-2047)", () => {
+  const sources = committedSources;
+  const promised = committedPromise;
+
+  /** Classify a copy of the installed schema with one text replaced, against the committed promise. */
+  function classifyEdited(before: string, after: string): string[] {
+    expect(schemaText.split(before)).toHaveLength(2);
+    const edited = parseSqlSchema(schemaText.replace(before, after));
+    const current = deriveGovernedSurface(
+      edited,
+      sources,
+      Object.keys(promised.functions),
+      promised.relations,
+    );
+    return classifyGovernedSurface(promised, current).map(
+      (finding) => `${finding.subject} ${finding.change}`,
+    );
+  }
+
+  const claimLease = [
+    "CREATE OR REPLACE FUNCTION workhorse.claim_v1(",
+    "  p_queue_name text,",
+    "  p_worker_id text,",
+    "  p_lease_ms integer DEFAULT 30000",
+    ")",
+  ].join("\n");
+
+  it("records the value of each default", () => {
+    expect(promised.functions.claim_v1?.defaults).toEqual({ "3": "30000" });
+  });
+
+  it("names a changed default value", () => {
+    expect(classifyEdited(claimLease, claimLease.replace("30000", "60000"))).toEqual([
+      "function workhorse.claim_v1 argument 3 default changed from 30000 to 60000",
+    ]);
+  });
+
+  it("names a changed argument name, and accepts a new function version", () => {
+    expect(promised.functions.claim_v1?.argumentNames).toEqual([
+      "p_queue_name",
+      "p_worker_id",
+      "p_lease_ms",
+    ]);
+    expect(classifyEdited(claimLease, claimLease.replace("p_lease_ms", "p_lease"))).toEqual([
+      "function workhorse.claim_v1 argument 3 name changed from p_lease_ms to p_lease",
+    ]);
+    // A successor is a new function with its own names, so it only adds to the promise.
+    const successor =
+      "CREATE FUNCTION workhorse.claim_v9(p_queue text, p_lease integer DEFAULT 1)" +
+      " RETURNS integer LANGUAGE sql AS $$ SELECT 1 $$;\n";
+    expect(classifyEdited(claimLease, `${successor}${claimLease}`)).toEqual([]);
+  });
+
+  it("accepts a new argument with a default", () => {
+    const added = claimLease.replace("30000\n)", "30000,\n  p_extra text DEFAULT NULL\n)");
+    expect(classifyEdited(claimLease, added)).toEqual([]);
+  });
+
+  it("accepts a default that only changes layout or keyword case", () => {
+    const contract = "p_task_type text, p_version text DEFAULT NULL\n) RETURNS SETOF";
+    expect(
+      classifyEdited(contract, "p_task_type text, p_version text DEFAULT   null\n) RETURNS SETOF"),
+    ).toEqual([]);
+  });
+
+  const definitionHead =
+    "CREATE TABLE IF NOT EXISTS workhorse.contract_definition (\n  task_type text NOT NULL";
+
+  it("records the fields of a row type that a governed function returns", () => {
+    expect(promised.functions.get_contract_definition_v1?.returnsColumns).toMatchObject({
+      payload_max_bytes: "integer",
+      payload_redact_keys: "text[]",
+    });
+    expect(promised.functions.get_retention_policy_v1?.returnsColumns).toBeDefined();
+    expect(promised.functions.get_maintenance_policy_v1?.returnsColumns).toBeDefined();
+  });
+
+  it("names a retyped or removed field of a returned row type", () => {
+    expect(classifyEdited(definitionHead, definitionHead.replace("text", "varchar"))).toContain(
+      "function workhorse.get_contract_definition_v1 output column task_type changed from text to varchar",
+    );
+    expect(classifyEdited(definitionHead, definitionHead.replace("task_type", "kind"))).toContain(
+      "function workhorse.get_contract_definition_v1 output column task_type was removed",
+    );
+  });
+
+  const definitionTail =
+    "  created_at timestamptz NOT NULL DEFAULT clock_timestamp(),\n  PRIMARY KEY (task_type, version)\n);";
+
+  it("accepts a new field after the fields of a returned row type", () => {
+    const added = definitionTail.replace("\n  PRIMARY", "\n  added_field text,\n  PRIMARY");
+    expect(classifyEdited(definitionTail, added)).toEqual([]);
+  });
+
+  it("names a reordered result, or a new field before the promised ones", () => {
+    const swapped = definitionHead.replace(
+      "task_type text NOT NULL",
+      "version text NOT NULL,\n  task_type text NOT NULL",
+    );
+    const reordered = classifyEdited(
+      `${definitionHead} CHECK (task_type <> ''),\n  version text NOT NULL CHECK (char_length(version) BETWEEN 1 AND 100),`,
+      `${swapped} CHECK (task_type <> ''),`,
+    );
+    expect(reordered).toContain(
+      "function workhorse.get_contract_definition_v1 output column 1 changed from task_type to version",
+    );
+    const inserted = definitionHead.replace("(\n", "(\n  added_field text,\n");
+    expect(classifyEdited(definitionHead, inserted)).toContain(
+      "function workhorse.get_contract_definition_v1 output column 1 changed from task_type to added_field",
+    );
+  });
+});
+
+function defaultOf(argument: string): string | undefined {
+  const parsed = parseSqlSchema(
+    `CREATE FUNCTION workhorse.sample_v1(${argument}) RETURNS integer LANGUAGE sql AS $$ SELECT 1 $$;`,
+  );
+  return parsed.functions.get("sample_v1")?.[0]?.arguments[0]?.default;
+}
+describe("reading a default expression", () => {
+  it("keeps the case and spacing inside a string or dollar-quoted literal", () => {
+    expect(defaultOf("p text DEFAULT $$ABC$$")).toBe("$$ABC$$");
+    expect(defaultOf("p text DEFAULT $$ABC$$")).not.toBe(defaultOf("p text DEFAULT $$abc$$"));
+    expect(defaultOf("p text DEFAULT 'a  B'")).toBe("'a  B'");
+  });
+
+  it("splits at the first DEFAULT outside a literal", () => {
+    expect(defaultOf("p text DEFAULT 'a default b'")).toBe("'a default b'");
+    expect(defaultOf("p text DEFAULT 'a default b'")).not.toBe(
+      defaultOf("p text DEFAULT 'a DEFAULT b'"),
+    );
+  });
+
+  it("reads the = form as the same default", () => {
+    expect(defaultOf("p integer = 30000")).toBe(defaultOf("p integer DEFAULT 30000"));
+  });
+
+  it("gives the same value for a change of layout or keyword case", () => {
+    expect(defaultOf("p timestamptz DEFAULT CLOCK_TIMESTAMP()  -  INTERVAL '1 day'")).toBe(
+      "clock_timestamp()-interval'1 day'",
+    );
+    expect(defaultOf("p timestamptz DEFAULT clock_timestamp()-interval '1 day'")).toBe(
+      defaultOf("p timestamptz DEFAULT clock_timestamp() - interval '1 day'"),
+    );
+    expect(defaultOf("p jsonb DEFAULT '{}' :: jsonb")).toBe(
+      defaultOf("p jsonb DEFAULT '{}'::jsonb"),
+    );
+  });
+
+  it("keeps a comment marker inside a string literal", () => {
+    expect(defaultOf("p text DEFAULT 'a--b'\n")).toBe("'a--b'");
+    expect(defaultOf("p text DEFAULT 'a--b'\n")).not.toBe(defaultOf("p text DEFAULT 'a--c'\n"));
+  });
+
+  it("gives the same value for a comment or for parentheses around the whole default", () => {
+    const plain = defaultOf("p integer DEFAULT 30000");
+    expect(defaultOf("p integer DEFAULT 30000 /* milliseconds */")).toBe(plain);
+    expect(defaultOf("p integer DEFAULT (30000)")).toBe(plain);
+    expect(defaultOf("p integer DEFAULT ((30000))")).toBe(plain);
+    expect(defaultOf("p integer DEFAULT (1) + (2)")).toBe("(1)+(2)");
+    expect(defaultOf("p text DEFAULT '/* kept */'")).toBe("'/* kept */'");
+  });
+
+  it("keeps a parenthesis inside a string literal", () => {
+    expect(defaultOf("p text DEFAULT 'a)b'")).toBe("'a)b'");
+    expect(defaultOf("p text DEFAULT 'a)b'")).not.toBe(defaultOf("p text DEFAULT 'a)c'"));
+  });
+
+  it("keeps a comma inside a string literal", () => {
+    expect(defaultOf("p text DEFAULT 'a,b'")).toBe("'a,b'");
+    expect(defaultOf("p text DEFAULT 'a,b'")).not.toBe(defaultOf("p text DEFAULT 'a,c'"));
+  });
+});

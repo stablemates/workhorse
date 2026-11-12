@@ -86,9 +86,17 @@ because their snapshots in [`api/`](../api/README.md) are not regenerated from t
 describe.
 
 - `dashboard/v1/governed-surface.json` holds every procedure, request field, and response field
-  `dashboard/v1` has served, each with its type and whether validation requires it.
+  `dashboard/v1` has served, each with its type and whether validation requires it. Each request
+  field also has its validation bounds, and the source of each request check that JSON Schema
+  cannot state, such as a Zod refinement.
 - `protocol/v1/governed-surface.json` holds the governed SQL functions, views, and columns, each
-  with its signature or type, and lists the internal helpers beside them.
+  with its signature or type, and lists the internal helpers beside them. Each function also has
+  the name and the default value of each argument, and the names, types, and order of its result
+  columns. For a function that returns a row type of a `workhorse` table, these are the columns of
+  that table.
+
+[`api/README.md`](../api/README.md) states what each promise file records and what it does not
+record.
 
 A removal or a retype fails by name and says what changed about it. An addition passes once the
 generator has recorded it, which needs no hand edit. Taking a break deliberately needs

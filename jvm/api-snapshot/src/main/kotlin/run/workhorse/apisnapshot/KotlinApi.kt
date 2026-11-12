@@ -33,11 +33,14 @@ import org.jetbrains.kotlin.psi.KtClass
 import org.jetbrains.kotlin.psi.KtClassOrObject
 import org.jetbrains.kotlin.psi.KtDeclaration
 import org.jetbrains.kotlin.psi.KtEnumEntry
+import org.jetbrains.kotlin.psi.KtEscapeStringTemplateEntry
+import org.jetbrains.kotlin.psi.KtExpression
 import org.jetbrains.kotlin.psi.KtFile
 import org.jetbrains.kotlin.psi.KtFunctionType
 import org.jetbrains.kotlin.psi.KtIntersectionType
 import org.jetbrains.kotlin.psi.KtModifierList
 import org.jetbrains.kotlin.psi.KtModifierListOwner
+import org.jetbrains.kotlin.psi.KtNameReferenceExpression
 import org.jetbrains.kotlin.psi.KtNamedFunction
 import org.jetbrains.kotlin.psi.KtNullableType
 import org.jetbrains.kotlin.psi.KtObjectDeclaration
@@ -64,6 +67,10 @@ private const val KOTLIN_HEADER =
 # inline function calls. A member line starts with the name of the class that declares it, and a
 # top-level line with the package. A type name that the file imports or that the package declares
 # is fully qualified. Any other name is a Kotlin default import or a type parameter.
+#
+# A `jvm file class` section names the class that holds the top-level declarations of one source
+# file, from its `@file:JvmName` or its file name. A compiled caller calls each declaration through
+# that class, so each line names one declaration that the class holds.
 """
 
 /** Annotations that change no caller: they only steer the compiler inside this module. */
@@ -153,6 +160,7 @@ internal fun kotlinSections(files: List<Pair<String, String>>): List<List<String
           names.flatten().toSet()
         }
     val topLevel = sortedMapOf<String, MutableList<String>>()
+    val fileClasses = sortedMapOf<String, MutableList<String>>()
     val classes = mutableListOf<Pair<String, List<String>>>()
     for (file in parsed) {
       val reader = KotlinFile(file, declared[file.packageFqName.asString()].orEmpty())
@@ -161,16 +169,79 @@ internal fun kotlinSections(files: List<Pair<String, String>>): List<List<String
         if (!published(declaration)) continue
         if (declaration is KtClassOrObject)
           classes += reader.classSections(declaration, pkg, emptySet())
-        else
+        else {
           topLevel.getOrPut(pkg) { mutableListOf() } += reader.member(declaration, pkg, emptySet())
+          reader.jvmMember(declaration)?.let { member ->
+            val owner = jvmFileClass(file)
+            fileClasses.getOrPut(owner) { mutableListOf() } += "$owner: $member"
+          }
+        }
       }
     }
     val packages = topLevel.map { (pkg, lines) -> listOf("package $pkg") + lines }
-    return packages + classes.sortedBy { it.first }.map { it.second }
+    val owners = fileClasses.map { (owner, lines) -> listOf("jvm file class $owner") + lines }
+    return packages + owners + classes.sortedBy { it.first }.map { it.second }
   } finally {
     Disposer.dispose(disposable)
   }
 }
+
+/**
+ * The JVM class that holds the top-level declarations of a file. `@file:JvmName` names it. Without
+ * one, the compiler names it for the file: `WorkerScope.kt` becomes `WorkerScopeKt`.
+ */
+private fun jvmFileClass(file: KtFile): String {
+  // An import can give `JvmName` another name, such as `import kotlin.jvm.JvmName as Facade`.
+  val names =
+    setOf("JvmName") +
+      file.importDirectives
+        .filter { it.importedFqName?.asString() == "kotlin.jvm.JvmName" }
+        .mapNotNull { it.aliasName }
+  val annotation =
+    file.fileAnnotationList?.annotationEntries?.firstOrNull {
+      it.shortName?.asString() in names
+    }
+  val named = annotation?.let { entry ->
+    val argument = entry.valueArguments.singleOrNull()?.getArgumentExpression()
+    checkNotNull(constantString(file, argument)) {
+      "${file.name} sets @file:JvmName with an expression that the snapshot reader cannot read. " +
+        "The reader reads a string literal without a template, or the name of a const val of " +
+        "the same file. This is a limit of the snapshot reader, not a judged break of the " +
+        "Kotlin API. See \"Known limits\" in api/README.md: write the name as a string " +
+        "literal, such as @file:JvmName(\"QueueSuspend\")."
+    }
+  }
+  val simple =
+    named
+      ?: (file.name.substringAfterLast('/').removeSuffix(".kt").replaceFirstChar {
+        it.uppercase()
+      } + "Kt")
+  val pkg = file.packageFqName.asString()
+  return if (pkg.isEmpty()) simple else "$pkg.$simple"
+}
+
+/**
+ * The value of a constant string: a literal without a template, with each escape read as its
+ * character, or the name of a `const val` of the same file that holds one. The compiler names the
+ * JVM class by this value, so `"St\u0061ble"` and `"Stable"` name one class.
+ */
+private fun constantString(file: KtFile, expression: KtExpression?): String? =
+  when (expression) {
+    is KtStringTemplateExpression ->
+      if (expression.hasInterpolation()) null
+      else
+        expression.entries.joinToString("") { entry ->
+          (entry as? KtEscapeStringTemplateEntry)?.unescapedValue ?: entry.text
+        }
+    is KtNameReferenceExpression -> {
+      val constant =
+        file.declarations.filterIsInstance<KtProperty>().singleOrNull {
+          it.name == expression.getReferencedName() && it.hasModifier(KtTokens.CONST_KEYWORD)
+        }
+      constant?.let { constantString(file, it.initializer) }
+    }
+    else -> null
+  }
 
 /**
  * Whether a caller outside the module depends on a declaration.
@@ -304,6 +375,39 @@ private class KotlinFile(file: KtFile, private val packageClasses: Set<String>) 
     head.append(constraints(declaration, scope))
     return head.toString()
   }
+
+  /**
+   * A top-level declaration as its JVM file class holds it, or null for a declaration that compiles
+   * to no member of that class, such as a type alias. The line keeps the receiver and the parameter
+   * types, and with the bounds of its type parameters, because two overloads of one name are two
+   * JVM methods, and each can move to another class on its own.
+   */
+  fun jvmMember(declaration: KtDeclaration): String? =
+    when (declaration) {
+      is KtNamedFunction -> {
+        val scope = typeParameterNames(declaration)
+        val receiver = receiver(declaration, scope)?.let { "$it." }.orEmpty()
+        val types =
+          declaration.valueParameters.joinToString(", ") { parameter ->
+            val vararg = if (parameter.isVarArg) "vararg " else ""
+            vararg + type(parameter.typeReference, scope)
+          }
+        // A bound of a type parameter is the erased JVM type of each parameter that uses it.
+        val generics =
+          typeParameters(declaration, emptySet()).let { if (it.isEmpty()) "" else "$it " }
+        "fun $generics$receiver${declaration.name}($types)${constraints(declaration, emptySet())}"
+      }
+      is KtProperty -> {
+        val receiver = receiver(declaration, typeParameterNames(declaration))?.let { "$it." }
+        // The bound of a type parameter is the JVM type of the receiver of the accessors.
+        val generics =
+          typeParameters(declaration, emptySet()).let { if (it.isEmpty()) "" else "$it " }
+        val kind = if (declaration.isVar) "var" else "val"
+        "$kind $generics${receiver.orEmpty()}${declaration.name}" +
+          constraints(declaration, emptySet())
+      }
+      else -> null
+    }
 
   /** One top-level or member declaration, as `owner: line`. */
   fun member(declaration: KtDeclaration, owner: String, scope: Set<String>): String {

@@ -8,6 +8,10 @@
 # inline function calls. A member line starts with the name of the class that declares it, and a
 # top-level line with the package. A type name that the file imports or that the package declares
 # is fully qualified. Any other name is a Kotlin default import or a type parameter.
+#
+# A `jvm file class` section names the class that holds the top-level declarations of one source
+# file, from its `@file:JvmName` or its file name. A compiled caller calls each declaration through
+# that class, so each line names one declaration that the class holds.
 
 package run.workhorse.kotlin
 run.workhorse.kotlin: @PublishedApi internal inline fun <reified T> javaTypeOf(): java.lang.reflect.Type
@@ -61,6 +65,65 @@ run.workhorse.kotlin: public suspend fun run.workhorse.Queue.syncContractsSuspen
 run.workhorse.kotlin: public suspend fun run.workhorse.Queue.syncRateLimitPoliciesSuspend(namespace: String, definitions: List<run.workhorse.RateLimitPolicyDefinition>, prune: Boolean = true, connection: java.sql.Connection? = null): List<run.workhorse.RateLimitPolicy>
 run.workhorse.kotlin: public suspend fun run.workhorse.Queue.syncSchedulesSuspend(namespace: String, schedules: List<run.workhorse.ScheduleDefinition>, prune: Boolean = true, connection: java.sql.Connection? = null): Unit
 run.workhorse.kotlin: public suspend fun run.workhorse.Queue.taskGroupSuspend(callbacks: run.workhorse.TaskGroupCallbacks, connection: java.sql.Connection? = null, block: run.workhorse.TaskGroupBuilder.() -> Unit): run.workhorse.TaskGroupBlockResult
+
+jvm file class run.workhorse.kotlin.AdminSuspend
+run.workhorse.kotlin.AdminSuspend: fun run.workhorse.Admin.assertCompatibleSuspend(java.sql.Connection?)
+run.workhorse.kotlin.AdminSuspend: fun run.workhorse.Admin.cancelTaskGroupSuspend(java.util.UUID, run.workhorse.AdminAudit, java.sql.Connection?)
+run.workhorse.kotlin.AdminSuspend: fun run.workhorse.Admin.getCheckpointSuspend(java.util.UUID, String, java.sql.Connection?)
+run.workhorse.kotlin.AdminSuspend: fun run.workhorse.Admin.getProgressSuspend(java.util.UUID, java.sql.Connection?)
+run.workhorse.kotlin.AdminSuspend: fun run.workhorse.Admin.getTaskGroupSuspend(java.util.UUID, java.sql.Connection?)
+run.workhorse.kotlin.AdminSuspend: fun run.workhorse.Admin.getTaskSuspend(java.util.UUID, java.sql.Connection?)
+run.workhorse.kotlin.AdminSuspend: fun run.workhorse.Admin.getTaskTimelineSuspend(java.util.UUID, run.workhorse.TimelineQuery, java.sql.Connection?)
+run.workhorse.kotlin.AdminSuspend: fun run.workhorse.Admin.getWaitSuspend(java.util.UUID, String, java.sql.Connection?)
+run.workhorse.kotlin.AdminSuspend: fun run.workhorse.Admin.listCheckpointsSuspend(java.util.UUID, java.sql.Connection?)
+run.workhorse.kotlin.AdminSuspend: fun run.workhorse.Admin.listDeadLettersSuspend(run.workhorse.DeadLetterQuery, java.sql.Connection?)
+run.workhorse.kotlin.AdminSuspend: fun run.workhorse.Admin.listHumanWaitsSuspend(run.workhorse.HumanWaitQuery, java.sql.Connection?)
+run.workhorse.kotlin.AdminSuspend: fun run.workhorse.Admin.listSignalWaitsSuspend(run.workhorse.SignalWaitQuery, java.sql.Connection?)
+run.workhorse.kotlin.AdminSuspend: fun run.workhorse.Admin.listTaskGroupDriftSuspend(Int, java.sql.Connection?)
+run.workhorse.kotlin.AdminSuspend: fun run.workhorse.Admin.listTaskGroupEventsSuspend(java.util.UUID, Int, java.sql.Connection?)
+run.workhorse.kotlin.AdminSuspend: fun run.workhorse.Admin.listTaskGroupMembersSuspend(java.util.UUID, Long, Int, java.sql.Connection?)
+run.workhorse.kotlin.AdminSuspend: fun run.workhorse.Admin.listTasksSuspend(run.workhorse.TaskQuery, java.sql.Connection?)
+run.workhorse.kotlin.AdminSuspend: fun run.workhorse.Admin.listWaitsSuspend(java.util.UUID, java.sql.Connection?)
+run.workhorse.kotlin.AdminSuspend: fun run.workhorse.Admin.listWorkersSuspend(java.sql.Connection?)
+run.workhorse.kotlin.AdminSuspend: fun run.workhorse.Admin.pauseQueueSuspend(String, run.workhorse.AdminAudit, java.sql.Connection?)
+run.workhorse.kotlin.AdminSuspend: fun run.workhorse.Admin.purgeQueueSuspend(String, run.workhorse.AdminAudit, java.sql.Connection?)
+run.workhorse.kotlin.AdminSuspend: fun run.workhorse.Admin.redriveManySuspend(run.workhorse.RedriveFilter, run.workhorse.AdminAudit, java.sql.Connection?)
+run.workhorse.kotlin.AdminSuspend: fun run.workhorse.Admin.redriveSuspend(java.util.UUID, run.workhorse.AdminAudit, java.sql.Connection?)
+run.workhorse.kotlin.AdminSuspend: fun run.workhorse.Admin.repairTaskGroupDriftSuspend(run.workhorse.AdminAudit, Int, java.sql.Connection?)
+run.workhorse.kotlin.AdminSuspend: fun run.workhorse.Admin.resumeQueueSuspend(String, run.workhorse.AdminAudit, java.sql.Connection?)
+run.workhorse.kotlin.AdminSuspend: fun run.workhorse.Admin.setQueueHistorySuspend(String, Boolean?, Boolean?, java.sql.Connection?)
+run.workhorse.kotlin.AdminSuspend: fun run.workhorse.Admin.setQueueTierSuspend(String, run.workhorse.QueueTier, run.workhorse.AdminAudit, java.sql.Connection?)
+run.workhorse.kotlin.AdminSuspend: fun run.workhorse.Admin.setWorkerPausedSuspend(String, Boolean, run.workhorse.AdminAudit, java.sql.Connection?)
+
+jvm file class run.workhorse.kotlin.BlockingKt
+run.workhorse.kotlin.BlockingKt: fun <reified T> javaTypeOf()
+
+jvm file class run.workhorse.kotlin.QueueSuspend
+run.workhorse.kotlin.QueueSuspend: fun run.workhorse.Queue.addToTaskGroupSuspend(java.util.UUID, List<run.workhorse.EnqueueRequest>, java.sql.Connection?)
+run.workhorse.kotlin.QueueSuspend: fun run.workhorse.Queue.assertCompatibleSuspend(java.sql.Connection?)
+run.workhorse.kotlin.QueueSuspend: fun run.workhorse.Queue.cancelSuspend(java.util.UUID, String?, String?, java.sql.Connection?)
+run.workhorse.kotlin.QueueSuspend: fun run.workhorse.Queue.completeHumanWaitSuspend(java.util.UUID, String, Any?, String, String, java.sql.Connection?)
+run.workhorse.kotlin.QueueSuspend: fun run.workhorse.Queue.createTaskGroupSuspend(run.workhorse.TaskGroupCallbacks, java.sql.Connection?)
+run.workhorse.kotlin.QueueSuspend: fun run.workhorse.Queue.enqueueManySuspend(List<run.workhorse.EnqueueRequest>, java.sql.Connection?)
+run.workhorse.kotlin.QueueSuspend: fun run.workhorse.Queue.enqueueSuspend(String, Any?, run.workhorse.EnqueueOptions, java.sql.Connection?)
+run.workhorse.kotlin.QueueSuspend: fun run.workhorse.Queue.findTaskGroupSuspend(java.util.UUID, java.sql.Connection?)
+run.workhorse.kotlin.QueueSuspend: fun run.workhorse.Queue.getTaskGroupSuspend(java.util.UUID, java.sql.Connection?)
+run.workhorse.kotlin.QueueSuspend: fun run.workhorse.Queue.healthSuspend(java.sql.Connection?)
+run.workhorse.kotlin.QueueSuspend: fun run.workhorse.Queue.listBudgetsSuspend(List<String>?, java.sql.Connection?)
+run.workhorse.kotlin.QueueSuspend: fun run.workhorse.Queue.listConcurrencyPoliciesSuspend(List<String>?, java.sql.Connection?)
+run.workhorse.kotlin.QueueSuspend: fun run.workhorse.Queue.listRateLimitPoliciesSuspend(List<String>?, java.sql.Connection?)
+run.workhorse.kotlin.QueueSuspend: fun run.workhorse.Queue.listTaskGroupMembersSuspend(java.util.UUID, Long, Int, java.sql.Connection?)
+run.workhorse.kotlin.QueueSuspend: fun run.workhorse.Queue.sealTaskGroupSuspend(java.util.UUID, java.sql.Connection?)
+run.workhorse.kotlin.QueueSuspend: fun run.workhorse.Queue.sendSignalSuspend(java.util.UUID, String, Any?, String, String, java.sql.Connection?)
+run.workhorse.kotlin.QueueSuspend: fun run.workhorse.Queue.syncBudgetsSuspend(String, List<run.workhorse.BudgetDefinition>, Boolean, java.sql.Connection?)
+run.workhorse.kotlin.QueueSuspend: fun run.workhorse.Queue.syncConcurrencyPoliciesSuspend(String, List<run.workhorse.ConcurrencyPolicyDefinition>, Boolean, java.sql.Connection?)
+run.workhorse.kotlin.QueueSuspend: fun run.workhorse.Queue.syncContractsSuspend(Map<String, run.workhorse.TaskTypeContracts>, java.sql.Connection?)
+run.workhorse.kotlin.QueueSuspend: fun run.workhorse.Queue.syncRateLimitPoliciesSuspend(String, List<run.workhorse.RateLimitPolicyDefinition>, Boolean, java.sql.Connection?)
+run.workhorse.kotlin.QueueSuspend: fun run.workhorse.Queue.syncSchedulesSuspend(String, List<run.workhorse.ScheduleDefinition>, Boolean, java.sql.Connection?)
+run.workhorse.kotlin.QueueSuspend: fun run.workhorse.Queue.taskGroupSuspend(run.workhorse.TaskGroupCallbacks, java.sql.Connection?, run.workhorse.TaskGroupBuilder.() -> Unit)
+
+jvm file class run.workhorse.kotlin.WorkerScopeKt
+run.workhorse.kotlin.WorkerScopeKt: fun workhorseWorker(javax.sql.DataSource, run.workhorse.kotlin.WorkerScope.() -> Unit)
 
 public fun interface run.workhorse.kotlin.SuspendHandler<P>
 run.workhorse.kotlin.SuspendHandler: public abstract suspend fun handle(ctx: run.workhorse.kotlin.SuspendHandlerContext, payload: P): Any?
