@@ -456,6 +456,111 @@ class DashboardServletTest {
     }
   }
 
+  // A built-in procedure keeps the message of an IllegalArgumentException only when a class of
+  // Workhorse threw it. This test class is in the run.workhorse package, so it stands in for one.
+  @Test
+  void answersADriverIllegalArgumentExceptionInABuiltInProcedureWith500() throws Exception {
+    AtomicInteger acquired = new AtomicInteger();
+    for (boolean library : List.of(true, false)) {
+      acquired.set(0);
+      ConnectionSource failing =
+          new ConnectionSource() {
+            @Override
+            public Connection acquire() throws SQLException {
+              // The first connection serves the schema compatibility check.
+              if (acquired.getAndIncrement() == 0) {
+                return source.acquire();
+              }
+              if (library) {
+                UUID.fromString("driver-marker db.internal:" + acquired.get());
+              }
+              throw new IllegalArgumentException("workhorse refusal");
+            }
+
+            @Override
+            public void release(Connection connection, boolean transactional) throws SQLException {
+              source.release(connection, transactional);
+            }
+          };
+      Dashboard dashboard =
+          Dashboard.builder(failing, request -> DashboardAuthorization.principal("operator"))
+              .build();
+      try (TestServer server = new TestServer("", dashboard)) {
+        TestServer.Response response = server.post("/workhorse/rpc/dashboard/queues", "{}");
+        if (library) {
+          assertEquals(500, response.status(), response.text());
+          assertFalse(response.text().contains("driver-marker"), response.text());
+        } else {
+          assertEquals(400, response.status(), response.text());
+          assertTrue(response.text().contains("\"message\":\"workhorse refusal\""));
+        }
+      }
+    }
+  }
+
+  // An application exception gets the fixed 500 answer, also an IllegalArgumentException, which
+  // is the type of the host's own input errors. The text of the exception stays in the log.
+  @Test
+  void answersAnApplicationIllegalArgumentExceptionWith500AndNoDetail() throws Exception {
+    String marker = "application-marker db.internal:5432";
+    Dashboard dashboard =
+        builder()
+            .procedures(
+                Map.of(
+                    "queues",
+                    (input, actor) -> {
+                      throw new IllegalArgumentException(marker);
+                    }))
+            .build();
+    List<LogRecord> records = new CopyOnWriteArrayList<>();
+    Handler capture =
+        new Handler() {
+          @Override
+          public void publish(LogRecord logRecord) {
+            records.add(logRecord);
+          }
+
+          @Override
+          public void flush() {}
+
+          @Override
+          public void close() {}
+        };
+    Logger logger = Logger.getLogger(Dashboard.class.getName());
+    boolean parentHandlers = logger.getUseParentHandlers();
+    logger.setUseParentHandlers(false);
+    logger.addHandler(capture);
+    String rpc = "/workhorse/rpc/dashboard/";
+    try (TestServer server = new TestServer("", dashboard)) {
+      TestServer.Response failed = server.post(rpc + "queues", "{}");
+      assertEquals(500, failed.status());
+      assertEquals(
+          "{\"json\":{\"defined\":false,\"code\":\"INTERNAL_SERVER_ERROR\",\"status\":500,"
+              + "\"message\":\"Internal server error\"}}",
+          failed.text());
+
+      // The host's own parser and validator keep their 400 answer and message.
+      TestServer.Response malformed = server.post(rpc + "meta", "{");
+      assertEquals(400, malformed.status());
+      assertTrue(malformed.text().contains("\"code\":\"BAD_REQUEST\""), malformed.text());
+      assertFalse(malformed.text().contains("\"message\":\"\""), malformed.text());
+      TestServer.Response invalid = server.post(rpc + "tasks", "{\"json\":{\"page\":0}}");
+      assertEquals(400, invalid.status());
+      assertTrue(invalid.text().contains("\"message\":\"Input validation failed\""));
+    } finally {
+      logger.removeHandler(capture);
+      logger.setUseParentHandlers(parentHandlers);
+    }
+    assertTrue(
+        records.stream()
+            .anyMatch(
+                logged ->
+                    logged.getThrown() != null
+                        && logged.getThrown().getCause() != null
+                        && marker.equals(logged.getThrown().getCause().getMessage())),
+        "the application exception reaches the log");
+  }
+
   @Test
   void refusesALongNumberInTheRequestBodyQuickly() throws Exception {
     try (TestServer server = new TestServer("", builder().build())) {

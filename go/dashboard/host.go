@@ -317,10 +317,18 @@ func (host *handler) serveRPC(response http.ResponseWriter, request *http.Reques
 	var envelope struct {
 		JSON any `json:"json"`
 	}
-	decoder := json.NewDecoder(io.LimitReader(request.Body, 2<<20))
+	body := &recordingReader{reader: io.LimitReader(request.Body, 2<<20)}
+	decoder := json.NewDecoder(body)
 	decoder.UseNumber()
 	if err := decoder.Decode(&envelope); err != nil {
-		writeRPCError(response, http.StatusBadRequest, "BAD_REQUEST", err.Error())
+		message := err.Error()
+		if body.err != nil {
+			// The reader of the request body failed. Its text can name a path or an address, so it
+			// stays in the log.
+			slog.WarnContext(request.Context(), "dashboard request body could not be read", "error", body.err)
+			message = malformedRequest
+		}
+		writeRPCError(response, http.StatusBadRequest, "BAD_REQUEST", message)
 		return
 	}
 	if err := ValidateInput(name, envelope.JSON); err != nil {
@@ -366,6 +374,26 @@ func (host *handler) serveRPC(response http.ResponseWriter, request *http.Reques
 		return
 	}
 	writeJSON(response, http.StatusOK, map[string]any{"json": result})
+}
+
+// malformedRequest is the message for a request body that the host could not read. The
+// TypeScript host gives the same message.
+const malformedRequest = "Malformed request. Ensure the request body is properly formatted and the 'Content-Type' header is set correctly."
+
+// recordingReader keeps the first error of the request body reader other than io.EOF. A decoder
+// error then shows whether the reader or the JSON decoder failed.
+type recordingReader struct {
+	reader io.Reader
+	err    error
+}
+
+func (body *recordingReader) Read(buffer []byte) (int, error) {
+	count, err := body.reader.Read(buffer)
+	// An io.Reader returns io.EOF itself at the end of its data. A wrapped io.EOF is a failure.
+	if err != nil && err != io.EOF && body.err == nil {
+		body.err = err
+	}
+	return count, err
 }
 
 // maxRequestIDBytes is the audit request ID bound of the SQL audit functions, in UTF-8 bytes.

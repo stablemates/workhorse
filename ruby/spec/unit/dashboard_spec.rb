@@ -311,5 +311,72 @@ RSpec.describe W::Dashboard do
       expect(status).to eq(500)
       expect(body.dig("json", "message")).to eq("Internal server error")
     end
+
+    it "answers 500 without detail and logs the error when application code raises an ArgumentError" do
+      marker = "application-marker db.internal:5432"
+      internal = {"json" => {"defined" => false, "code" => "INTERNAL_SERVER_ERROR", "status" => 500,
+                             "message" => "Internal server error"}}
+      failing = ->(_input, _actor) { raise ArgumentError, marker }
+      [
+        [dashboard(read_only: true, procedures: {queues: failing}), "queues", nil],
+        [dashboard(enqueue_test: failing), "enqueueTest", {"kind" => "success", "audit" => audit}]
+      ].each do |app, procedure, input|
+        errors = StringIO.new
+
+        status, _, chunks = app.call(env_for("/workhorse/rpc/dashboard/#{procedure}", method: "POST",
+          body: {"json" => input}).merge("rack.errors" => errors))
+
+        expect(status).to eq(500)
+        expect(JSON.parse(chunks.join)).to eq(internal)
+        expect(errors.string).to include("ArgumentError: #{marker}")
+      end
+    end
+
+    it "answers 500 without detail when application code raises a JSON::ParserError" do
+      failing = ->(_input, _actor) { raise JSON::ParserError, "application-marker db.internal:5432" }
+
+      status, body = rpc(dashboard(read_only: true, procedures: {queues: failing}), "queues", nil)
+
+      expect(status).to eq(500)
+      expect(body.dig("json", "message")).to eq("Internal server error")
+    end
+
+    it "answers 500 without detail when a driver raises an ArgumentError in a built-in procedure" do
+      executor = FakeExecutor.new { |_sql, _params| raise ArgumentError, "driver-marker db.internal:5432" }
+
+      status, body = rpc(dashboard(executor), "setQueueHistory",
+        {"queue" => "mail", "recordAttempts" => true, "audit" => audit})
+
+      expect(status).to eq(500)
+      expect(body.dig("json", "message")).to eq("Internal server error")
+    end
+
+    it "keeps the message of an ArgumentError that Workhorse raises in a built-in procedure" do
+      executor = FakeExecutor.new { |_sql, _params| W.checkpoint_input_fingerprint(Object.new) }
+
+      status, body = rpc(dashboard(executor), "setQueueHistory",
+        {"queue" => "mail", "recordAttempts" => true, "audit" => audit})
+
+      expect(status).to eq(400)
+      expect(body.dig("json", "message")).to eq("checkpoint input contains Object, which is not a JSON value")
+    end
+
+    it "keeps the message of its own input errors and of a deliberate RPC error" do
+      env = env_for("/workhorse/rpc/dashboard/queues", method: "POST")
+      env["rack.input"] = StringIO.new("{")
+      status, _, chunks = dashboard.call(env)
+      expect(status).to eq(400)
+      expect(JSON.parse(chunks.join).dig("json", "code")).to eq("BAD_REQUEST")
+      expect(JSON.parse(chunks.join).dig("json", "message")).not_to be_empty
+
+      status, body = rpc(dashboard, "tasks", {"page" => 0})
+      expect(status).to eq(400)
+      expect(body.dig("json", "message")).to eq("Input validation failed")
+
+      refusing = ->(_input, _actor) { raise W::Dashboard::RpcError.new(409, "CONFLICT", "Deliberate refusal") }
+      status, body = rpc(dashboard(read_only: true, procedures: {queues: refusing}), "queues", nil)
+      expect(status).to eq(409)
+      expect(body.dig("json", "message")).to eq("Deliberate refusal")
+    end
   end
 end

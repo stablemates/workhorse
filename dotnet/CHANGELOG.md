@@ -316,6 +316,19 @@ remove the section, and set the option in code:
 `services.Configure<WorkerOptions>(options => options.Json = ...)`, or register a `Queue` with
 `new QueueOptions { Json = ... }` before `AddWorkhorse` (SM-2041).
 
+### The dashboard answers a canceled authorizer with 500
+
+If the `Authorize` callback of the dashboard throws `OperationCanceledException` or
+`TaskCanceledException` and the client did not cancel the request, the backend now logs the
+exception and answers 500 with `{"error":"Internal Server Error"}`. This is the answer for each
+other exception of the callback. If the client cancels the request, the backend ends the request
+with no answer, as before (SM-2042).
+
+An `ArgumentException` that a driver or a library throws in a built-in dashboard procedure now gets
+500 `INTERNAL_SERVER_ERROR` with the message `Internal server error`, and the backend logs it. An
+`ArgumentException` that Workhorse throws keeps its 400 `BAD_REQUEST` answer and its message
+(SM-2043).
+
 ## 0.12.0 — 2026-11-07
 
 The npm packages, Python distribution, Go module, Rust crate, Ruby gem, JVM artifacts, and .NET

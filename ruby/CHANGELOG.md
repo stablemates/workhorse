@@ -322,6 +322,16 @@ queue tier, as `run_children` does. `EnqueueRequest.new` keeps both keywords. `e
 upgrade, move the task type or the payload from the options into the positional arguments
 (SM-2039).
 
+### The dashboard keeps the text of an application exception out of its answer
+
+If an application procedure of `Dashboard`, from `procedures:`, `enqueue_test:`, or
+`set_schedule_paused:`, raises an error other than `RpcError`, the dashboard now answers 500
+`INTERNAL_SERVER_ERROR` with the message `Internal server error`. This includes `ArgumentError` and
+`JSON::ParserError`. An `ArgumentError` that a driver or a library raises in a built-in procedure
+gets the same answer. The dashboard writes each procedure failure to `rack.errors`. Input
+validation errors, JSON parser errors of the request, the refusals that Workhorse writes, and
+`RpcError` keep their answers (SM-2043).
+
 ## 0.12.0 — 2026-11-07
 
 The npm packages, Python distribution, Go module, Rust crate, Ruby gem, JVM artifacts, and .NET

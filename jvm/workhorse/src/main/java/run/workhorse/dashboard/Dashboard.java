@@ -316,6 +316,7 @@ public final class Dashboard implements Filter {
     @Nullable Object input = null;
     @Nullable Object value;
     boolean extended = builtIn == null;
+    boolean calling = false;
     try {
       String text = body.length == 0 ? "{}" : utf8(body);
       Map<String, @Nullable Object> envelope =
@@ -350,10 +351,11 @@ public final class Dashboard implements Filter {
         object = copy;
         input = copy;
       }
+      calling = true;
       value =
           builtIn != null
               ? builtIn.call(object == null ? new LinkedHashMap<>() : object, actor)
-              : Objects.requireNonNull(extension).call(input, actor);
+              : callApplication(Objects.requireNonNull(extension), input, actor);
     } catch (Validator.InputValidationException error) {
       Map<String, @Nullable Object> object = Json.object(input);
       if (procedure.equals("tasks")
@@ -366,6 +368,15 @@ public final class Dashboard implements Filter {
     } catch (DashboardRpcException error) {
       return rpcError(error.status(), error.code(), error.getMessage(), error.data());
     } catch (IllegalArgumentException error) {
+      // A refused input keeps its message only when the host or Workhorse wrote it. A driver or a
+      // library can put a stored value or an address in its message.
+      if (calling && !raisedByWorkhorse(error)) {
+        LOG.log(
+            System.Logger.Level.ERROR,
+            "workhorse dashboard: procedure " + procedure + " failed",
+            error);
+        return rpcError(500, "INTERNAL_SERVER_ERROR", "Internal server error", null);
+      }
       return rpcError(400, "BAD_REQUEST", Objects.requireNonNullElse(error.getMessage(), ""), null);
     } catch (Exception error) {
       LOG.log(
@@ -392,6 +403,36 @@ public final class Dashboard implements Filter {
         200,
         Map.of("Content-Type", JSON_TYPE),
         (result == null ? "{}" : "{\"json\":" + result + "}").getBytes(StandardCharsets.UTF_8));
+  }
+
+  /**
+   * Calls an application procedure. The host answers its own input errors, which are {@link
+   * IllegalArgumentException}s, with their message. The message of an application exception can
+   * name a path or a database address, so an {@link IllegalArgumentException} from the application
+   * gets the fixed 500 answer, as {@link DashboardProcedure#call} states.
+   */
+  private static @Nullable Object callApplication(
+      DashboardProcedure extension, @Nullable Object input, String actor) throws Exception {
+    try {
+      return extension.call(input, actor);
+    } catch (IllegalArgumentException error) {
+      throw new ApplicationProcedureException(error);
+    }
+  }
+
+  /** Whether a class of Workhorse threw {@code error}, not a driver or a library. */
+  private static boolean raisedByWorkhorse(Throwable error) {
+    StackTraceElement[] trace = error.getStackTrace();
+    return trace.length > 0 && trace[0].getClassName().startsWith("run.workhorse.");
+  }
+
+  /** An {@link IllegalArgumentException} from an application procedure. */
+  private static final class ApplicationProcedureException extends Exception {
+    private static final long serialVersionUID = 1L;
+
+    ApplicationProcedureException(IllegalArgumentException cause) {
+      super(cause);
+    }
   }
 
   private static DashboardRpcException invalid(String code, List<String> path, String message) {

@@ -319,6 +319,14 @@ the installation page also give the commands for `workhorse-kotlin` and
 pages also tell a reader to add `org.postgresql:postgresql` when the code names a PgJDBC class. A
 test holds each JVM coordinate on a page to the version in `support.json`.
 
+### The dashboard keeps the text of an application exception out of its answer
+
+If an application `DashboardProcedure` throws `IllegalArgumentException`, the dashboard now logs it
+and answers 500 `INTERNAL_SERVER_ERROR` with the message `Internal server error`, as the Javadoc of
+`DashboardProcedure.call` states. An `IllegalArgumentException` that a driver or a library throws
+in a built-in procedure gets the same answer. Input validation errors, JSON parser errors, the
+refusals that Workhorse writes, and `DashboardRpcException` keep their answers (SM-2043).
+
 ## 0.12.0 — 2026-11-07
 
 The npm packages, Python distribution, Go module, Rust crate, Ruby gem, JVM artifacts, and .NET

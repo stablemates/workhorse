@@ -10967,6 +10967,22 @@
           }
         },
         {
+          "id": "tasks-envelope-not-an-object",
+          "procedure": "tasks",
+          "request": [],
+          "expect": {
+            "status": 400,
+            "body": {
+              "json": {
+                "$type": "any"
+              }
+            }
+          },
+          "coerce": {
+            "body.json": "any"
+          }
+        },
+        {
           "id": "task-detail-not-found",
           "procedure": "taskDetail",
           "request": {

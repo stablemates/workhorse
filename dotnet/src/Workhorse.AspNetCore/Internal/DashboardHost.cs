@@ -1,5 +1,6 @@
 using System.Buffers;
 using System.Collections.Frozen;
+using System.Diagnostics;
 using System.Globalization;
 using System.Numerics;
 using System.Reflection;
@@ -189,8 +190,10 @@ internal sealed partial class DashboardHost
         {
             authorization = await _authorize(context).ConfigureAwait(false);
         }
-        catch (Exception error) when (error is not OperationCanceledException)
+        catch (Exception error) when (error is not OperationCanceledException || !context.RequestAborted.IsCancellationRequested)
         {
+            // A cancellation that the request did not cause is a failure of the callback. Its text
+            // stays in the log, as the text of each other exception from the callback does.
             LogAuthorizerFailed(_logger, error);
             return Json(500, new JsonObject { ["error"] = "Internal Server Error" });
         }
@@ -387,7 +390,7 @@ internal sealed partial class DashboardHost
             {
                 return RpcError(error.Status, error.Code, error.Message, Details(error.Details));
             }
-            catch (Exception failure) when (failure is not OperationCanceledException)
+            catch (Exception failure) when (failure is not OperationCanceledException || !context.RequestAborted.IsCancellationRequested)
             {
                 LogProcedureFailed(_logger, procedure, failure);
                 return RpcError(500, "INTERNAL_SERVER_ERROR", "Internal server error");
@@ -400,9 +403,11 @@ internal sealed partial class DashboardHost
             _backend.Reset();
             return Json(503, new JsonObject { ["error"] = error.Message });
         }
-        catch (ArgumentException error) when (builtIn is not null)
+        catch (ArgumentException error) when (builtIn is not null && RaisedByWorkhorse(error))
         {
-            // The core's checks and the input readers name the field that they refuse.
+            // The core's checks and the input readers name the field that they refuse. An
+            // ArgumentException of a driver or a library can carry a stored value or an address,
+            // so it takes the 500 path below.
             return RpcError(400, "BAD_REQUEST", error.Message);
         }
         catch (OperationCanceledException) when (context.RequestAborted.IsCancellationRequested)
@@ -440,6 +445,33 @@ internal sealed partial class DashboardHost
         {
             throw new InvalidOperationException($"procedure {procedure} returned a value that is not JSON", error);
         }
+    }
+
+    /// <summary>
+    /// Whether Workhorse code threw <paramref name="error"/>, not a driver or a library. A frame of
+    /// a throw helper of an argument exception type, such as
+    /// <see cref="ArgumentException.ThrowIfNullOrWhiteSpace"/>, stands for the frame that called it.
+    /// </summary>
+    internal static bool RaisedByWorkhorse(Exception error)
+    {
+        foreach (var frame in new StackTrace(error, fNeedFileInfo: false).GetFrames())
+        {
+            var type = frame.GetMethod()?.DeclaringType;
+            if (type is null)
+            {
+                return false;
+            }
+
+            if (type.Assembly == typeof(object).Assembly
+                && (typeof(ArgumentException).IsAssignableFrom(type) || type.Name == "ThrowHelper"))
+            {
+                continue;
+            }
+
+            return type.Assembly == typeof(Queue).Assembly || type.Assembly == typeof(DashboardHost).Assembly;
+        }
+
+        return false;
     }
 
     private JsonNode? Details(object? data) => data switch

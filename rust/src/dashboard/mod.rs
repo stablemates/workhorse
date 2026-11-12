@@ -511,17 +511,28 @@ struct RpcRequest<'a> {
     actor: String,
 }
 
+/// The text of a request body that the host could not read. The TypeScript host gives the same text.
+const MALFORMED_REQUEST: &str = "Malformed request. Ensure the request body is properly formatted and the 'Content-Type' header is set correctly.";
+
+/// Answers a body that the host could not read. The size limit keeps its own message. Each other
+/// error comes from the body source of the application, and its text can name a path or an
+/// address, so it stays in the log.
+fn body_error(error: Box<dyn std::error::Error + Send + Sync>) -> RpcError {
+    if error.downcast_ref::<http_body_util::LengthLimitError>().is_some() {
+        return RpcError::bad_request(error.to_string());
+    }
+    tracing::warn!(error = %error, "dashboard request body could not be read");
+    RpcError::bad_request(MALFORMED_REQUEST)
+}
+
 /// Reads the `{"json": input}` envelope and validates the input against the procedure's schema.
 async fn read_input<B>(name: &str, body: B) -> Result<Value, RpcError>
 where
     B: http_body::Body,
     B::Error: Into<Box<dyn std::error::Error + Send + Sync>>,
 {
-    let bytes = Limited::new(body, MAX_REQUEST_BYTES)
-        .collect()
-        .await
-        .map_err(|error| RpcError::bad_request(error.to_string()))?
-        .to_bytes();
+    let bytes =
+        Limited::new(body, MAX_REQUEST_BYTES).collect().await.map_err(body_error)?.to_bytes();
     let envelope: Value = if bytes.is_empty() {
         json!({})
     } else {

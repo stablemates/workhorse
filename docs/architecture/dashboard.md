@@ -172,6 +172,52 @@ A host behind a proxy that ends TLS must give each backend the scheme that the b
 mutation check already requires. Otherwise a module script or a fetch from the dashboard page
 carries an `Origin` that does not match, and the backend refuses it.
 
+### Error answers
+
+An error answer goes to the browser. The message of an exception that a host did not write can
+name a file path, a database address, or a user. Thus each of the seven hosts answers with a message
+only when the host or the application wrote that message for the browser.
+
+- The refusals of the host keep their status, code, and message. These are the input validation
+  errors, the JSON parser errors, the request ID bound, and the fixed refusals such as `NOT_FOUND`
+  and `FORBIDDEN`.
+- A deliberate RPC error of a procedure keeps its status, code, message, and data. The
+  application writes that message. These types carry a message to the browser on purpose:
+
+  | Host       | Deliberate error types                                               |
+  | ---------- | -------------------------------------------------------------------- |
+  | TypeScript | `ORPCError`                                                          |
+  | Python     | none that an application can raise                                   |
+  | Go         | `RPCError`                                                           |
+  | Rust       | `RpcError`, and `Error::InvalidArgument` in `ProcedureError::Client` |
+  | Ruby       | `RpcError`                                                           |
+  | JVM        | `DashboardRpcException`                                              |
+  | .NET       | `DashboardRpcException`                                              |
+
+  The Rust host answers `Error::InvalidArgument` with 400 `BAD_REQUEST` and its text, as the
+  documentation of `ProcedureError` states.
+
+- Each other exception from a procedure answers 500 `INTERNAL_SERVER_ERROR` with the message
+  `Internal server error`. This includes a `ValueError` (Python), an `ArgumentError` or a
+  `JSON::ParserError` (Ruby), and an `IllegalArgumentException` (JVM) from an application
+  procedure. The Python, Ruby, JVM, and .NET hosts log the exception.
+- In the Python, Ruby, JVM, and .NET hosts, an argument error from a built-in procedure keeps its
+  400 `BAD_REQUEST` answer and its message only when Workhorse code raised it. The host reads the
+  frame that raised the error. In Python, that frame must run a `raise` statement, so an error of
+  a runtime function such as `int` does not count. In .NET, a throw helper such as
+  `ArgumentException.ThrowIfNullOrWhiteSpace` stands for the frame that called it. An argument
+  error that a driver or a library raises gets the 500 answer.
+- If the reader of the request body fails in the Go or Rust host, the host answers 400
+  `BAD_REQUEST` with the fixed message `Malformed request. Ensure the request body is properly
+  formatted and the 'Content-Type' header is set correctly.` and logs the error. The TypeScript
+  server gives the same answer for a body that it cannot decode. The size limit keeps its own
+  answer.
+
+If `Authorize` throws in the .NET backend, the backend logs the exception and answers 500 (see
+[.NET backend](#net-backend)). In the TypeScript, Python, Ruby, Go, and JVM hosts, an exception
+from `authorize` goes to the web framework, and the host writes no answer for it. In Rust,
+`authorize` returns an `Authorization` and has no error.
+
 ### Page cache rule
 
 The dashboard page holds `window.workhorseDashboard`. That runtime configuration names the operator
@@ -432,7 +478,8 @@ a closed result family with four factory methods: `Principal(actor, claims)`, `A
 and `Response(status, headers, body)`. A principal names its own actor. `AuditActor` names the actor
 only when `Authorize` returns `Allow()`. `Deny()` answers 401 with `{"error":"Unauthorized"}`.
 `Response` sends its status, headers, and body as they are. If `Authorize` throws, the backend logs
-the error and answers 500.
+the error and answers 500 with `{"error":"Internal Server Error"}`. This includes an
+`OperationCanceledException` that the client did not cause. If the client cancels the request, the backend ends the request with no answer and no log.
 
 A `DashboardProcedure` is a delegate over the `JsonElement` input, the actor, and a
 `CancellationToken`. `Procedures` adds or replaces procedures by name. A procedure can throw
