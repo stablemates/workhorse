@@ -508,6 +508,9 @@ export async function readDashboardEvents(
 /**
  * Read one history record by the stable identity used in Events URLs.
  *
+ * `taskId`, when the caller has it, names the task of the record. The procedure then reads only
+ * the history of that task, and a record of another task is not found.
+ *
  * An attempt record carries the whole persisted error, and a failure event copies it into its
  * details, so this honours `redactErrorStacks` exactly as task detail does. Both surfaces project
  * the same errors, and a host that withholds container paths from one door has to withhold them
@@ -515,10 +518,14 @@ export async function readDashboardEvents(
  */
 export async function readDashboardEventDetail(
   database: DashboardDatabase,
-  id: string,
+  record: { id: string; taskId: string | null },
   redactErrorStacks = false,
 ): Promise<DashboardEventDetail | null> {
-  const input = JSON.stringify({ id, ...stackRedactionInput(redactErrorStacks) });
+  const input = JSON.stringify({
+    id: record.id,
+    ...(record.taskId === null ? {} : { taskId: record.taskId }),
+    ...stackRedactionInput(redactErrorStacks),
+  });
   const rows = await database.execute<{ result: DashboardEventDetail | null }>(sql`
     SELECT workhorse.dashboard_event_detail_v1(${input}::jsonb) AS result
   `);

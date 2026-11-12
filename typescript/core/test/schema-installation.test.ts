@@ -783,6 +783,10 @@ describe("schema installation", () => {
         description:
           "keep each hold end, bound the hold code, start health walks after held rows, and report a stalled cleanup",
       },
+      {
+        version: 104,
+        description: "let an event detail read seek the task of its record",
+      },
     ]);
 
     const protocols = await pool.query<{ version: number }>(

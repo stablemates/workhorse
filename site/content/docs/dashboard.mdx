@@ -861,7 +861,9 @@ the refusal. The refusal does not change the mode that task details shows.
 The Events page can filter by worker and by text in the selected time window. One successful
 execution can make two records: a task lifecycle record and an attempt record. The status tooltips
 show the source of each record. Event details has a control that copies the task ID. Each record
-opens its event details, also a record that the dashboard derives for a fast-tier task.
+opens its event details, also a record that the dashboard derives for a fast-tier task. When the
+page opens a record, it also sends the task of the record. The read then finds the record among the
+history of that task only, so its cost does not grow with the number of fast-tier tasks.
 
 A worker error keeps its stack, and a stack can show container paths and source lines. Turn on the
 stack redaction option of your host to withhold each stack from task details and the Events page.
@@ -881,7 +883,9 @@ stack.
   substring match over task ID, queue, type, event name, worker, and recorded details or error
   message.
 - `eventDetail` accepts `event:<uuid>` or `attempt:<uuid>` with any UUID in canonical form. A
-  derived fast-tier record has an MD5 value as its UUID.
+  derived fast-tier record has an MD5 value as its UUID. Its optional `taskId` names the task of
+  the record. With `taskId`, the read uses an index on `task_id`, and a record of another task
+  returns `NOT_FOUND`. The page keeps the task in the address as `eventTask`.
 - The stack redaction option is `redactErrorStacks` in TypeScript, `redact_error_stacks` in Python
   and Ruby, `RedactErrorStacks` in Go and .NET, `redact_error_stacks` in Rust `DashboardOptions`,
   and `redactErrorStacks` on the Java `Dashboard.Builder`. Each one is off by default. The host sets the SQL input key

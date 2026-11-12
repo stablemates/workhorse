@@ -16990,6 +16990,291 @@
               }
             }
           }
+        },
+        {
+          "id": "derived-event-detail-with-task-0",
+          "procedure": "eventDetail",
+          "request": {
+            "json": {
+              "id": {
+                "$ref": "derivedRecord0"
+              },
+              "taskId": {
+                "$ref": "derivedTask"
+              }
+            }
+          },
+          "expect": {
+            "status": 200,
+            "body": {
+              "json": {
+                "id": {
+                  "$ref": "derivedRecord0"
+                },
+                "kind": "event",
+                "type": "succeeded",
+                "error": null,
+                "queue": "conformance-derived",
+                "taskId": {
+                  "$ref": "derivedTask"
+                },
+                "attempt": 1,
+                "details": {
+                  "fence_token": "11"
+                },
+                "recordId": {
+                  "$type": "uuid"
+                },
+                "taskType": "conformance.derived",
+                "workerId": "conformance-worker",
+                "claimedAt": null,
+                "startedAt": null,
+                "durationMs": null,
+                "fenceToken": null,
+                "finishedAt": null,
+                "occurredAt": {
+                  "$type": "timestamp"
+                },
+                "errorMessage": null
+              }
+            }
+          }
+        },
+        {
+          "id": "derived-event-detail-with-task-1",
+          "procedure": "eventDetail",
+          "request": {
+            "json": {
+              "id": {
+                "$ref": "derivedRecord1"
+              },
+              "taskId": {
+                "$ref": "derivedTask"
+              }
+            }
+          },
+          "expect": {
+            "status": 200,
+            "body": {
+              "json": {
+                "id": {
+                  "$ref": "derivedRecord1"
+                },
+                "kind": "attempt",
+                "type": "succeeded",
+                "error": null,
+                "queue": "conformance-derived",
+                "taskId": {
+                  "$ref": "derivedTask"
+                },
+                "attempt": 1,
+                "details": null,
+                "recordId": {
+                  "$type": "uuid"
+                },
+                "taskType": "conformance.derived",
+                "workerId": "conformance-worker",
+                "claimedAt": {
+                  "$type": "timestamp"
+                },
+                "startedAt": {
+                  "$type": "timestamp"
+                },
+                "durationMs": {
+                  "$type": "number"
+                },
+                "fenceToken": "11",
+                "finishedAt": {
+                  "$type": "timestamp"
+                },
+                "occurredAt": {
+                  "$type": "timestamp"
+                },
+                "errorMessage": null
+              }
+            }
+          },
+          "coerce": {
+            "body.json.durationMs": "number"
+          }
+        },
+        {
+          "id": "derived-event-detail-with-task-2",
+          "procedure": "eventDetail",
+          "request": {
+            "json": {
+              "id": {
+                "$ref": "derivedRecord2"
+              },
+              "taskId": {
+                "$ref": "derivedTask"
+              }
+            }
+          },
+          "expect": {
+            "status": 200,
+            "body": {
+              "json": {
+                "id": {
+                  "$ref": "derivedRecord2"
+                },
+                "kind": "event",
+                "type": "claimed",
+                "error": null,
+                "queue": "conformance-derived",
+                "taskId": {
+                  "$ref": "derivedTask"
+                },
+                "attempt": 1,
+                "details": {
+                  "worker_id": "conformance-worker",
+                  "fence_token": "11"
+                },
+                "recordId": {
+                  "$type": "uuid"
+                },
+                "taskType": "conformance.derived",
+                "workerId": "conformance-worker",
+                "claimedAt": null,
+                "startedAt": null,
+                "durationMs": null,
+                "fenceToken": null,
+                "finishedAt": null,
+                "occurredAt": {
+                  "$type": "timestamp"
+                },
+                "errorMessage": null
+              }
+            }
+          }
+        },
+        {
+          "id": "derived-event-detail-with-task-3",
+          "procedure": "eventDetail",
+          "request": {
+            "json": {
+              "id": {
+                "$ref": "derivedRecord3"
+              },
+              "taskId": {
+                "$ref": "derivedTask"
+              }
+            }
+          },
+          "expect": {
+            "status": 200,
+            "body": {
+              "json": {
+                "id": {
+                  "$ref": "derivedRecord3"
+                },
+                "kind": "event",
+                "type": "enqueued",
+                "error": null,
+                "queue": "conformance-derived",
+                "taskId": {
+                  "$ref": "derivedTask"
+                },
+                "attempt": null,
+                "details": {
+                  "tier": "fast"
+                },
+                "recordId": {
+                  "$type": "uuid"
+                },
+                "taskType": "conformance.derived",
+                "workerId": null,
+                "claimedAt": null,
+                "startedAt": null,
+                "durationMs": null,
+                "fenceToken": null,
+                "finishedAt": null,
+                "occurredAt": {
+                  "$type": "timestamp"
+                },
+                "errorMessage": null
+              }
+            }
+          }
+        },
+        {
+          "id": "derived-event-detail-with-null-task",
+          "procedure": "eventDetail",
+          "request": {
+            "json": {
+              "id": {
+                "$ref": "derivedRecord1"
+              },
+              "taskId": null
+            }
+          },
+          "expect": {
+            "status": 200,
+            "body": {
+              "json": {
+                "id": {
+                  "$ref": "derivedRecord1"
+                },
+                "kind": "attempt",
+                "type": "succeeded",
+                "error": null,
+                "queue": "conformance-derived",
+                "taskId": {
+                  "$ref": "derivedTask"
+                },
+                "attempt": 1,
+                "details": null,
+                "recordId": {
+                  "$type": "uuid"
+                },
+                "taskType": "conformance.derived",
+                "workerId": "conformance-worker",
+                "claimedAt": {
+                  "$type": "timestamp"
+                },
+                "startedAt": {
+                  "$type": "timestamp"
+                },
+                "durationMs": {
+                  "$type": "number"
+                },
+                "fenceToken": "11",
+                "finishedAt": {
+                  "$type": "timestamp"
+                },
+                "occurredAt": {
+                  "$type": "timestamp"
+                },
+                "errorMessage": null
+              }
+            }
+          },
+          "coerce": {
+            "body.json.durationMs": "number"
+          }
+        },
+        {
+          "id": "derived-event-detail-with-other-task",
+          "procedure": "eventDetail",
+          "request": {
+            "json": {
+              "id": {
+                "$ref": "derivedRecord0"
+              },
+              "taskId": "019a7c1e-0000-7000-8000-000000000001"
+            }
+          },
+          "expect": {
+            "status": 404,
+            "body": {
+              "json": {
+                "defined": false,
+                "code": "NOT_FOUND",
+                "status": 404,
+                "message": "Event not found"
+              }
+            }
+          }
         }
       ]
     },

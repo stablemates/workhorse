@@ -973,16 +973,38 @@ complete version 1 event-detail JSON document, which includes attempt timing and
 - A record that `dashboard_task_event_v1` or `dashboard_attempt_history_v1` derives for a fast-tier
   task has `md5(task_id || ':' || attempt || ':' || kind)::uuid` as its identity. An MD5 value can
   have any version and variant digits, so the input schema, each host, the SPA, and the SQL check
-  accept any UUID in canonical form.
+  accept any UUID in canonical form for the identity.
 
-A malformed or missing identity, or one that names no record, returns SQL `NULL`. Backends map SQL
-`NULL` to the version 1 `NOT_FOUND` error. An input that the request schema refuses returns
-`BAD_REQUEST` before the function runs.
+The input can also name `taskId`, the task of the record. The event feed returns `taskId` with each
+row, and the SPA sends it when it opens a row. The SPA also keeps it in the address as `eventTask`,
+beside `event`, so a reload sends it again. An address without `eventTask` opens its record with no
+task. An earlier release wrote such addresses. `taskId` is optional and nullable. Thus a host or a
+page of an earlier release that sends no task keeps working. The function reads an empty `taskId`
+as no task, as it reads the other empty input keys. The request schema refuses an empty string.
 
-The lookup of a derived identity reads each row of `fast_task_runtime` and `fast_task_outcome`, and
-computes the identity of each row, because no index holds a derived identity. The lookup of a
-version 7 identity reads the same rows, because the planner applies the identity filter to each
-branch of the two views. This was true before derived identities were accepted.
+A malformed or missing identity, or one that names no record, returns SQL `NULL`. A `taskId` that is
+not empty and not a UUID in canonical form, or that names a task other than the task of the record, also returns
+SQL `NULL`. Thus a request cannot read a record of another task through the `taskId` of its own.
+Backends map SQL `NULL` to the version 1 `NOT_FOUND` error. An input that the request schema
+refuses returns `BAD_REQUEST` before the function runs.
+
+The cost of the read depends on `taskId`:
+
+- With `taskId`, each branch of `dashboard_task_event_v1` and `dashboard_attempt_history_v1` reads
+  only the rows of that task, through an index on `task_id`: the primary keys of `fast_task_runtime`
+  and `fast_task_outcome`, `task_event_task_time_idx`, and `attempt_history_task_idx`. The function
+  computes the identity of those rows only. The rows read do not grow with the number of fast-tier
+  rows, with a custom plan and with a generic plan. The function runs a separate statement for each
+  case, so a generic plan keeps the `task_id` index condition.
+- Without `taskId`, the lookup stops at the first branch that finds the record. The recorded rows
+  come first, so a recorded event or attempt that `task_event` or `attempt_history` still holds is
+  found through `task_event_identity_idx` or `attempt_history_identity_idx`. For a derived identity,
+  the lookup reads the rows of `fast_task_runtime` and `fast_task_outcome` and computes the identity
+  of each row until one matches, because no index holds a derived identity. An identity that no row
+  holds, for example one whose row retention removed, reads each fast-tier row.
+
+`typescript/core/test/integration-dashboard-event-detail-seek.test.ts` holds the rows read with
+`taskId` to the same number at two sizes of `fast_task_outcome`.
 
 Event details use the same attempt-linked worker resolution as the event listing.
 

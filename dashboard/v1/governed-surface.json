@@ -712,6 +712,10 @@
         "id": {
           "type": "string",
           "required": true
+        },
+        "taskId": {
+          "type": "null|string",
+          "required": false
         }
       },
       "response": {

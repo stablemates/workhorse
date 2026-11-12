@@ -4,6 +4,7 @@ import {
   dashboardTaskEventTypes,
 } from "@stablemates/workhorse-dashboard-server/wire";
 import type {
+  DashboardEventRow,
   DashboardEventKind,
   DashboardEventsWindow,
   DashboardEventTypeFilter,
@@ -31,6 +32,11 @@ export interface EventsLocationState {
   types: DashboardEventTypeFilter[];
   /** The history record shown in the drawer, encoded as `kind:recordId`. */
   eventId: string | null;
+  /**
+   * The task of the record in the drawer, when the page knows it. The detail read then seeks that
+   * task. It is null whenever `eventId` is null, and for an older address that names no task.
+   */
+  eventTaskId: string | null;
 }
 
 export const defaultEventsLocation: EventsLocationState = {
@@ -47,6 +53,7 @@ export const defaultEventsLocation: EventsLocationState = {
   taskId: null,
   types: [],
   eventId: null,
+  eventTaskId: null,
 };
 
 const windows = new Set<DashboardEventsWindow>(["15m", "1h", "6h", "24h"]);
@@ -88,6 +95,9 @@ export function parseEventsLocation(search: string | URLSearchParams): EventsLoc
   const requestedPage = Number(parameters.get("page") ?? "1");
   const requestedPageSize = Number(parameters.get("per") ?? "50");
   const requestedEventId = optionalValue(parameters, "event");
+  const requestedEventTaskId = optionalValue(parameters, "eventTask");
+  const eventId =
+    requestedEventId && historyIdentity.test(requestedEventId) ? requestedEventId : null;
   const requestedTaskId = optionalValue(parameters, "task");
   const requestedFrom = isoInstant(optionalValue(parameters, "from"));
   const requestedTo = isoInstant(optionalValue(parameters, "to"));
@@ -121,7 +131,11 @@ export function parseEventsLocation(search: string | URLSearchParams): EventsLoc
     pageSize: eventPageSizes.includes(requestedPageSize as EventPageSize)
       ? (requestedPageSize as EventPageSize)
       : 50,
-    eventId: requestedEventId && historyIdentity.test(requestedEventId) ? requestedEventId : null,
+    eventId,
+    eventTaskId:
+      eventId !== null && requestedEventTaskId && taskIdentity.test(requestedEventTaskId)
+        ? requestedEventTaskId
+        : null,
   };
 }
 
@@ -142,9 +156,25 @@ export function eventsLocationHref(state: EventsLocationState): string {
   const page = Math.min(state.page, dashboardPageMax);
   if (page > 1) parameters.set("page", String(page));
   if (state.pageSize !== 50) parameters.set("per", String(state.pageSize));
-  if (state.eventId) parameters.set("event", state.eventId);
+  if (state.eventId) {
+    parameters.set("event", state.eventId);
+    if (state.eventTaskId) parameters.set("eventTask", state.eventTaskId);
+  }
   const query = parameters.toString();
   return query ? `/events?${query}` : "/events";
+}
+
+/** The location that opens one feed row in the drawer, with the task that the feed names. */
+export function eventsLocationWithEvent(
+  state: EventsLocationState,
+  event: Pick<DashboardEventRow, "id" | "taskId">,
+): EventsLocationState {
+  return { ...state, eventId: event.id, eventTaskId: event.taskId };
+}
+
+/** The location with the drawer closed. Every filter stays. */
+export function eventsLocationWithoutEvent(state: EventsLocationState): EventsLocationState {
+  return { ...state, eventId: null, eventTaskId: null };
 }
 
 /** Drawer selection is deliberately excluded so opening a row does not reload the listing. */

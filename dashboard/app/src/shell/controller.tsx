@@ -44,6 +44,8 @@ import {
   defaultEventsLocation,
   eventsListingKey,
   eventsLocationHref,
+  eventsLocationWithEvent,
+  eventsLocationWithoutEvent,
   type EventsLocationState,
 } from "../events-location.js";
 import {
@@ -954,7 +956,7 @@ export function useDashboardController(
   );
   const inspectEvent = useCallback(
     (event: DashboardEventRow) => {
-      const next = { ...location.events, eventId: event.id };
+      const next = eventsLocationWithEvent(location.events, event);
       if (taskDetailNavigation(location.events.eventId, event.id) === "push") {
         navigate(eventsLocationHref(next));
       } else {
@@ -968,17 +970,17 @@ export function useDashboardController(
     selectedEventIdRef.current = null;
     setInspectedEvent(null);
     setEventDetailError(null);
-    replace(eventsLocationHref({ ...location.events, eventId: null }));
+    replace(eventsLocationHref(eventsLocationWithoutEvent(location.events)));
   }, [location.events, replace]);
 
   const showEventDetail = useCallback(
-    async (id: string) => {
+    async (id: string, taskId: string | null) => {
       const ticket = eventDetailRequests.current.begin();
       selectedEventIdRef.current = id;
       setInspectedEvent(null);
       setEventDetailError(null);
       try {
-        const detail = await client.eventDetail({ id });
+        const detail = await client.eventDetail({ id, taskId });
         if (eventDetailRequests.current.current(ticket)) setInspectedEvent(detail);
       } catch (cause) {
         if (!eventDetailRequests.current.current(ticket)) return;
@@ -1017,9 +1019,9 @@ export function useDashboardController(
       setInspectedEvent(null);
       setEventDetailError(null);
     } else if (sync === "open") {
-      void showEventDetail(requested!);
+      void showEventDetail(requested!, location.events.eventTaskId);
     }
-  }, [location.route, location.events.eventId, showEventDetail]);
+  }, [location.route, location.events.eventId, location.events.eventTaskId, showEventDetail]);
 
   /**
    * Release one scheduled task so a worker can claim it now.

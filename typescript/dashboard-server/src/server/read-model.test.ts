@@ -125,13 +125,17 @@ describe("dashboard event-detail error redaction", () => {
   }
 
   it("withholds the persisted attempt stack a redacting host withholds from task detail", async () => {
-    const detail = await readDashboardEventDetail(database(), "attempt:id", true);
+    const detail = await readDashboardEventDetail(
+      database(),
+      { id: "attempt:id", taskId: null },
+      true,
+    );
 
     expect(detail?.error).toEqual({ name: "Error", message: "failed" });
   });
 
   it("returns the whole persisted error when the host does not redact", async () => {
-    const detail = await readDashboardEventDetail(database(), "attempt:id");
+    const detail = await readDashboardEventDetail(database(), { id: "attempt:id", taskId: null });
 
     expect(detail?.error).toEqual(attemptError);
   });
@@ -141,12 +145,12 @@ describe("dashboard event-detail error redaction", () => {
 
     const redacted = await readDashboardEventDetail(
       database({ ...event, details: { error: attemptError } }),
-      "event:id",
+      { id: "event:id", taskId: null },
       true,
     );
     const revealed = await readDashboardEventDetail(
       database({ ...event, details: { error: attemptError } }),
-      "event:id",
+      { id: "event:id", taskId: null },
     );
 
     expect(redacted?.details).toEqual({ error: { name: "Error", message: "failed" } });
@@ -169,14 +173,16 @@ function capturingDatabase(result: unknown = null): {
 }
 
 describe("dashboard stack redaction input", () => {
-  it("asks each history procedure to withhold stacks only when the host redacts", async () => {
+  const taskIdentity = "019a7c1e-0000-7000-8000-000000000001";
+
+  it("asks each history procedure to withhold stacks only when the host redacts, and passes a known task", async () => {
     const { database: db, inputs } = capturingDatabase();
     const { database: feed, inputs: feedInputs } = capturingDatabase({ events: [] });
 
     await readDashboardTaskDetail(db, "task-1", undefined, undefined, false, undefined, true);
-    await readDashboardEventDetail(db, "attempt:id", true);
+    await readDashboardEventDetail(db, { id: "attempt:id", taskId: taskIdentity }, true);
     await readDashboardTaskDetail(db, "task-1");
-    await readDashboardEventDetail(db, "attempt:id");
+    await readDashboardEventDetail(db, { id: "attempt:id", taskId: null });
     await readDashboardEvents(feed, { window: "1h" }, true);
     await readDashboardEvents(feed, { window: "1h" });
 
@@ -187,7 +193,7 @@ describe("dashboard stack redaction input", () => {
         canCompleteHumanWait: false,
         redactErrorStacks: true,
       },
-      { id: "attempt:id", redactErrorStacks: true },
+      { id: "attempt:id", taskId: taskIdentity, redactErrorStacks: true },
       { id: "task-1", canSignal: false, canCompleteHumanWait: false },
       { id: "attempt:id" },
     ]);

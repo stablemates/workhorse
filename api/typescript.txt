@@ -3801,7 +3801,7 @@ interface LiveProtocolWorker {
 
 const MAXIMUM_PROTOCOL_VERSION = 5;
 
-const MAXIMUM_SCHEMA_VERSION = 103;
+const MAXIMUM_SCHEMA_VERSION = 104;
 
 const MAX_CANCELLATION_REASON_CHARACTERS = 2000;
 
@@ -5605,7 +5605,7 @@ class TypeOrmQueryError extends QueryError {
 
 const WORKHORSE_SCHEMA_BASELINE_VERSION = 6;
 
-const WORKHORSE_SCHEMA_VERSION = 103;
+const WORKHORSE_SCHEMA_VERSION = 104;
 
 const WORKHORSE_VERSION = "0.12.0";
 
@@ -6354,6 +6354,7 @@ const dashboardRouter: {
     }, z.core.$strip>, import("@orpc/server").Schema<import("../wire.js").DashboardEventsPage, import("../wire.js").DashboardEventsPage>, Record<never, never>, DashboardProcedureMeta & Record<never, never>>;
     eventDetail: import("@orpc/server").DecoratedProcedure<import("@orpc/server").MergedInitialContext<DashboardRpcContext & Record<never, never>, DashboardRpcContext & Record<never, never>, DashboardRpcContext>, import("@orpc/server").MergedCurrentContext<DashboardRpcContext, Record<never, never>>, z.ZodObject<{
       id: z.ZodString;
+      taskId: z.ZodDefault<z.ZodNullable<z.ZodUUID>>;
     }, z.core.$strip>, import("@orpc/server").Schema<import("../wire.js").DashboardEventDetail, import("../wire.js").DashboardEventDetail>, Record<never, never>, DashboardProcedureMeta & Record<never, never>>;
     cron: import("@orpc/server").DecoratedProcedure<import("@orpc/server").MergedInitialContext<DashboardRpcContext & Record<never, never>, DashboardRpcContext & Record<never, never>, DashboardRpcContext>, import("@orpc/server").MergedCurrentContext<DashboardRpcContext, Record<never, never>>, import("@orpc/server").Schema<unknown, unknown>, import("@orpc/server").Schema<import("../wire.js").DashboardCronPage, import("../wire.js").DashboardCronPage>, Record<never, never>, DashboardProcedureMeta & Record<never, never>>;
     queues: import("@orpc/server").DecoratedProcedure<import("@orpc/server").MergedInitialContext<DashboardRpcContext & Record<never, never>, DashboardRpcContext & Record<never, never>, DashboardRpcContext>, import("@orpc/server").MergedCurrentContext<DashboardRpcContext, Record<never, never>>, import("@orpc/server").Schema<unknown, unknown>, import("@orpc/server").Schema<import("../wire.js").DashboardQueuesPage, import("../wire.js").DashboardQueuesPage>, Record<never, never>, DashboardProcedureMeta & Record<never, never>>;

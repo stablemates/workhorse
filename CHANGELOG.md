@@ -655,6 +655,19 @@ six internal functions, and it replaces the bodies of `save_terminal_hold_ends_i
 `purge_queue_internal_v1`, and `maintain_task_groups_v1`. It rewrites no row and does not raise the
 SDK compatibility floor. Run `workhorse schema migrate` (ADR 0122).
 
+### Event detail reads only the history of its task
+
+An operator opened an event on the Events page of a database with many fast-tier tasks. The
+dashboard derives the history records of a fast-tier task, and no index holds their identities.
+Thus `dashboard_event_detail_v1` read each row of `fast_task_runtime` and `fast_task_outcome` to
+find one record, and the read time bound of the host could end the read (SM-2029). The event feed
+already returns the task of each record. The page now sends it as the new optional `taskId` key of
+`eventDetail`, and keeps it in the address as `eventTask`. With `taskId`, the function reads only
+the history rows of that task through an index on `task_id`, and a record of another task is not
+found. Without `taskId`, the read finds the record as before, so a host or a page of an earlier
+release and an address saved before the upgrade keep working. Migration 0105 changes the function
+body. The schema moves to version 104, and the floor stays 99.
+
 ## 0.12.0 — 2026-11-07
 
 The npm packages, Python distribution, Go module, Rust crate, Ruby gem, JVM artifacts, and .NET
