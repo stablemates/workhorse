@@ -242,6 +242,15 @@ TypeScript compiles with Ajv, Python with `Draft202012Validator`, and Go with
 - `strictNumbers: true` is an instance rule. It rejects NaN and the infinities, which JSON would
   store as `null`.
 
+The TypeScript `Queue` validates the value that `parseExactJson` reads from the JSON text that the
+statement sends, not the object of the caller (SM-2011). `encodeStoredJson` makes that text before
+any statement, so it refuses NaN, the infinities, a `Map`, and a `Set` with a `TypeError` before
+the contract runs. A `toJSON` method applies first, so a `Date` reaches the contract as its ISO
+string. `parseContractJson` reads each number token as a number with the same decimal value, so
+`1.0` reads as `1`. If a double cannot hold the decimal value of a token exactly, such as a
+`JSON.rawJSON` token `9007199254740993`, the contract refuses the value with
+`TaskContractValidationError`. A check of the rounded number would not check the stored number.
+
 Every language runs the same fixture table.
 
 #### Contract number comparison

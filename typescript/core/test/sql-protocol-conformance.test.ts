@@ -1470,10 +1470,9 @@ async function executeJsonRoundTripRuntimeFixture(
   await expectAttemptOutcome(database, id, fixture.expectedAttemptOutcome);
 
   for (const resultCase of fixture.resultCases) {
-    // The Handler type requires a value, so the no-value case acts as a JavaScript handler.
-    const noValue = undefined as unknown as Json;
+    // A handler can return no value (ADR 0119), so the no-value case returns undefined.
     worker.handle(resultCase.taskType, () =>
-      resultCase.handlerReturns === "null" ? null : noValue,
+      resultCase.handlerReturns === "null" ? null : undefined,
     );
     const caseId = await queue.enqueue(resultCase.taskType, {}, { queue: queueName });
     await expect(worker.runOnce()).resolves.toBe(true);

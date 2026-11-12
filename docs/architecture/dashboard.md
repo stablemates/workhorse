@@ -1696,8 +1696,11 @@ of the request, as for queue control (see [Mutations and attribution](#mutations
 The reason and the request ID come from the `audit` of the request. Each mutation is one statement
 on the executor of the host. It opens no transaction, so it cannot commit or roll back work of the
 caller. The TypeScript host passes the audit to the `DashboardSettingsController` of the
-application, which owns the write. The controller of the demo calls the four audited functions in
-its operator transaction. The `settings-audit` scenario of `dashboard/v1/conformance.json`
+application, which owns the write. The controller gives that audit as the `audit` option of
+`Queue.overrideMaintenancePolicy`, `revertMaintenancePolicy`, `overrideRetentionPolicy`, or
+`revertRetentionPolicy`. With the option, the method calls the `_v2` function. Without it, the
+method calls the `_v1` function, which removes the entry of each setting that it changes. The
+controller of the demo calls the four `Queue` methods with the option in its operator transaction. The `settings-audit` scenario of `dashboard/v1/conformance.json`
 fixes `lastChanges` after an override and after a revert for each backend.
 
 <details>

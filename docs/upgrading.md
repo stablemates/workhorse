@@ -18,8 +18,11 @@ keeps the audit of each settings change of the dashboard, lets each embedded das
 error stacks, and opens the detail of each record of the event feed. It gives the expired-lease scan
 a floor, and it counts the active leases of one admission shard through an index. It also corrects
 three SDK APIs before 1.0.0. It changes how Rust code builds a record and matches an enum, and it
-removes items from the Rust and Go APIs that were never meant for applications. The upgrade is a
-rolling deployment, and a mixed fleet is supported while it runs.
+removes items from the Rust and Go APIs that were never meant for applications. In TypeScript, the
+`Handler` type accepts a handler with no return value. This changes the type that code which calls a
+handler reads, as
+[Update TypeScript code that reads a handler value](#update-typescript-code-that-reads-a-handler-value)
+states. The upgrade is a rolling deployment, and a mixed fleet is supported while it runs.
 
 1. If you run cold exporters, stop each one and let it finish its object and manifest uploads. Keep
    cold export enabled, so retention keeps waiting for the export.
@@ -130,7 +133,8 @@ change for every SDK version when each migration commits:
   next local date.
 - `override_retention_policy_v1`, `revert_retention_policy_v1`, `override_maintenance_policy_v1`,
   and `revert_maintenance_policy_v1`, which `Queue.overrideRetentionPolicy` and the three other
-  `Queue` policy methods call, remove the audit entry of each setting that they change. A forced
+  `Queue` policy methods call without the `audit` option, remove the audit entry of each setting
+  that they change. With `audit`, these methods call the `_v2` functions and store the entry. A forced
   `sync_*_policy_v1` removes every entry, and a sync without force removes the entry of each
   setting whose effective value it changes. Each function that returns a policy row returns the new
   `operator_audit` column at its end.
@@ -314,6 +318,75 @@ The generated queries of the sqlc example moved from `go/examples/sqlc/generated
 the business queries of one example and was never part of the Workhorse Go API. If your code
 imports `github.com/stablemates/workhorse/go/examples/sqlc/generated`, generate your own queries
 with sqlc, as the example shows.
+
+### Update TypeScript code that reads a handler value
+
+The `Handler` type returns `HandlerResult<TResult>`. A handler whose result type includes `null`,
+such as the default `Json`, can return no value, and the worker stores `null`. A handler and a call
+to `Worker.handle` or `replayHandler` compile as before. A handler whose result type excludes
+`null` must still return a value (SM-2012).
+
+Code that calls a `Handler` and reads its value can now read `undefined`. Thus this wrapper no
+longer compiles:
+
+```ts
+const logged = async (handler: Handler<null>, context: HandlerContext<null>): Promise<Json> =>
+  await handler(null, context);
+```
+
+To get the value that the worker stores, add `?? null`:
+
+```ts
+const logged = async (handler: Handler<null>, context: HandlerContext<null>): Promise<Json> =>
+  (await handler(null, context)) ?? null;
+```
+
+A wrapper that only gives the value back can use the return type `Promise<HandlerResult>`. A
+generic wrapper with the result type `R` must use the return type `Promise<HandlerResult<R>>`.
+For such a wrapper, `?? null` does not give `R`, because `R` can exclude `null`. This change has no
+effect on the stored results, the database, or a mixed fleet.
+
+### Check TypeScript payload contracts against the stored value
+
+A TypeScript payload contract or result contract now validates the value of the JSON text that the
+queue stores. Before, it validated the object that the caller gave (SM-2011). The handler reads the
+stored value, so the contract now checks the value that the handler gets. A number token that a
+double cannot hold exactly, such as `JSON.rawJSON("9007199254740993")`, fails each contract with
+`TaskContractValidationError`, because the check could read only a rounded number. This change can
+make an enqueue fail that passed before, or pass that failed before.
+
+The contract reads the value that `JSON.stringify` gives for your object:
+
+| Value in your object                                          | Value that the contract reads                          |
+| ------------------------------------------------------------- | ------------------------------------------------------ |
+| A `Date`, or another object with a `toJSON` method            | The value that `toJSON` gives                          |
+| A property that the object inherits or that is not enumerable | No property                                            |
+| A property whose value is `undefined`                         | No property                                            |
+| A missing or `undefined` array member                         | `null`                                                 |
+| A boxed `Number`, `String`, or `Boolean`                      | Its primitive value                                    |
+| A `JSON.rawJSON` value                                        | Its JSON value, and a number token reads as its number |
+
+Thus, for example:
+
+- A `Date` field under `"type": "object"` now fails with `TaskContractValidationError`. A `Date`
+  field under `"type": "string"`, for example with `"format": "date-time"`, failed before and now
+  passes.
+- A required field that the object only inherits now fails. An object with an `undefined` property
+  now passes `"additionalProperties": false`.
+- A `NaN` or infinite number, a `Map`, or a `Set` now fails with a `TypeError` that names its path,
+  before the contract runs. Before, a contract that refused the value raised
+  `TaskContractValidationError`.
+
+To prepare for the upgrade:
+
+1. Find each task type with a contract whose payload holds a value from the table.
+2. Give such a field a plain JSON value, and give each required field as an own property.
+3. Change the schema so it describes the value in the right column, for example `"type": "string"`
+   for a `Date`.
+4. If your code catches `TaskContractValidationError` for a non-finite number, a `Map`, or a `Set`,
+   also catch `TypeError`.
+
+The rule applies to an enqueue, a task group, a schedule, a child, and a handler result.
 
 ## Upgrade from 0.11.x to 0.12.0
 

@@ -1663,7 +1663,7 @@ function createLocalSettingsController(database: DemoDatabase): SettingsControll
     action: string,
     target: string,
     audit: AuditContext,
-    change: (transaction: DemoTransaction) => Promise<unknown>,
+    change: (queue: Queue) => Promise<unknown>,
   ): Promise<void> {
     await runOperatorTransaction(database, async (transaction) => {
       const workhorse = createDrizzleAdapter(transaction, {
@@ -1674,7 +1674,7 @@ function createLocalSettingsController(database: DemoDatabase): SettingsControll
         maintenance: await workhorse.queue.getMaintenancePolicy(),
         retention: await workhorse.queue.getRetentionPolicy(),
       };
-      await change(transaction);
+      await change(workhorse.queue);
       const after = {
         maintenance: await workhorse.queue.getMaintenancePolicy(),
         retention: await workhorse.queue.getRetentionPolicy(),
@@ -1689,58 +1689,26 @@ function createLocalSettingsController(database: DemoDatabase): SettingsControll
       `);
     });
   }
-  // Each change records its audit for each changed setting through the audited policy functions,
-  // so the Settings page shows who made it and why.
+  // Each change gives its audit to the Queue, which stores it for each changed setting. Thus the
+  // Settings page shows who made the change and why.
   return {
     overrideMaintenancePolicy: (definition, audit) =>
-      mutate("overrideMaintenancePolicy", "maintenance-policy", audit, (transaction) =>
-        transaction.execute(sql`
-          SELECT (policy).* FROM workhorse.override_maintenance_policy_v2(
-            ${definition.timezone ?? null}::text,
-            ${definition.partitionPreparationIntervalMs ?? null}::integer,
-            ${definition.terminalCleanupIntervalMs ?? null}::integer,
-            ${definition.historyRetentionLocalTime ?? null}::time,
-            ${definition.statisticsRollupIntervalMs ?? null}::integer,
-            ${definition.statisticsGroupLimit ?? null}::integer,
-            ${definition.statisticsRecomputeBuckets ?? null}::integer,
-            ${audit.actor}, ${audit.reason}, ${audit.requestId}) policy
-        `),
+      mutate("overrideMaintenancePolicy", "maintenance-policy", audit, (queue) =>
+        queue.overrideMaintenancePolicy(definition, { audit }),
       ),
     revertMaintenancePolicy: (settings, audit) =>
-      mutate("revertMaintenancePolicy", "maintenance-policy", audit, (transaction) =>
-        transaction.execute(sql`
-          SELECT (policy).* FROM workhorse.revert_maintenance_policy_v2(
-            ARRAY(SELECT jsonb_array_elements_text(${JSON.stringify(settings.map(policyColumn))}::jsonb)),
-            ${audit.actor}, ${audit.reason},
-            ${audit.requestId}) policy
-        `),
+      mutate("revertMaintenancePolicy", "maintenance-policy", audit, (queue) =>
+        queue.revertMaintenancePolicy(settings, { audit }),
       ),
     overrideRetentionPolicy: (definition, audit) =>
-      mutate("overrideRetentionPolicy", "retention-policy", audit, (transaction) =>
-        transaction.execute(sql`
-          SELECT (policy).* FROM workhorse.override_retention_policy_v2(
-            ${JSON.stringify(
-              Object.fromEntries(
-                Object.entries(definition).map(([name, value]) => [policyColumn(name), value]),
-              ),
-            )}::jsonb, ${audit.actor}, ${audit.reason}, ${audit.requestId}) policy
-        `),
+      mutate("overrideRetentionPolicy", "retention-policy", audit, (queue) =>
+        queue.overrideRetentionPolicy(definition, { audit }),
       ),
     revertRetentionPolicy: (settings, audit) =>
-      mutate("revertRetentionPolicy", "retention-policy", audit, (transaction) =>
-        transaction.execute(sql`
-          SELECT (policy).* FROM workhorse.revert_retention_policy_v2(
-            ARRAY(SELECT jsonb_array_elements_text(${JSON.stringify(settings.map(policyColumn))}::jsonb)),
-            ${audit.actor}, ${audit.reason},
-            ${audit.requestId}) policy
-        `),
+      mutate("revertRetentionPolicy", "retention-policy", audit, (queue) =>
+        queue.revertRetentionPolicy(settings, { audit }),
       ),
   };
-}
-
-/** The column name of a policy setting, as the policy functions name it. */
-function policyColumn(setting: string): string {
-  return setting.replaceAll(/[A-Z]/g, (letter) => `_${letter.toLowerCase()}`);
 }
 
 export function createDemoApplication(

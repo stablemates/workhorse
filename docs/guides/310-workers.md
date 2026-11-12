@@ -55,9 +55,10 @@ handler code cannot write as an old owner after another worker owns the task.
 | `runOnce`            | Runs one claim-and-run pass and returns whether a handler ran.            |
 
 A handler receives the payload and a `HandlerContext`. Its JSON return value becomes the `result`
-of the task. A JavaScript handler that returns `undefined` stores the result `null`. A typed
-handler with no result returns `null`, because the `Handler` type requires a value. A thrown error fails the
-attempt, and the task retries while attempts remain.
+of the task. A handler that returns no value stores the result `null`. In TypeScript, a handler
+whose result type includes `null`, as the default `Json` does, can return no value. A handler whose
+result type excludes `null` must return a value. A thrown error fails the attempt, and the task
+retries while attempts remain.
 
 More detail: [Task lifecycle: Worker concurrency and lifecycle](../architecture/lifecycle.md#worker-concurrency-and-lifecycle) and [Data model: Value size limits](../architecture/data-model.md#value-size-limits).
 

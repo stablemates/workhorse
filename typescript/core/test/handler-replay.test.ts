@@ -634,10 +634,9 @@ describe("replayHandler", () => {
   });
 });
 
-// SM-1969 (ADR 0119): the replay follows the worker for a handler or a checkpoint operation that
-// returns no value.
-// A JavaScript handler can return undefined, although the Handler type requires a value.
-const returnsNoValue: Handler<Order> = async () => undefined as unknown as Json;
+// SM-1969 and SM-2012 (ADR 0119): the replay follows the worker for a handler or a checkpoint
+// operation that returns no value.
+const returnsNoValue: Handler<Order> = async () => {};
 
 describe("a replay of a handler that returns no value", () => {
   it("reports the result null for a handler that returns undefined", async () => {

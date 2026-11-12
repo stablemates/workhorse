@@ -249,20 +249,31 @@ export class CheckpointsProgressWaitsModule extends QueueModule {
     return result.rows.map((row) => checkpointRecord<TValue>(row));
   }
 
-  async saveCheckpoint<TValue extends Json>(
+  /** Check a checkpoint before the first statement, and give the JSON text of its value. */
+  encodeCheckpoint(
     task: ClaimedTask,
-    workerId: string,
     name: string,
-    value: TValue,
+    value: Json,
     options: SaveCheckpointOptions = {},
-  ): Promise<TaskCheckpoint<TValue>> {
+  ): string {
     const fingerprint = options.inputFingerprint ?? null;
     if (fingerprint !== null && !CHECKPOINT_INPUT_FINGERPRINT_PATTERN.test(fingerprint)) {
       throw new TypeError(
         "Checkpoint inputFingerprint must be 64 lowercase hexadecimal characters",
       );
     }
-    const encodedValue = encodeStoredJson(value, `Checkpoint ${name} of task type ${task.type}`);
+    return encodeStoredJson(value, `Checkpoint ${name} of task type ${task.type}`);
+  }
+
+  /** Save a checkpoint whose value {@link encodeCheckpoint} checked and encoded. */
+  async saveCheckpoint<TValue extends Json>(
+    task: ClaimedTask,
+    workerId: string,
+    name: string,
+    encodedValue: string,
+    options: SaveCheckpointOptions = {},
+  ): Promise<TaskCheckpoint<TValue>> {
+    const fingerprint = options.inputFingerprint ?? null;
     const result = await queryFencedWrite<SaveCheckpointRow>(
       this.context.database,
       SQL_STATEMENTS["save_checkpoint_v3"],
@@ -309,12 +320,17 @@ export class CheckpointsProgressWaitsModule extends QueueModule {
     return row ? progressRecord<TValue>(row) : null;
   }
 
+  /** Check a progress value before the first statement, and give its JSON text. */
+  encodeProgress(task: ClaimedTask, value: Json): string {
+    return encodeStoredJson(value, `Progress of task type ${task.type}`);
+  }
+
+  /** Replace the progress of a task with a value that {@link encodeProgress} encoded. */
   async updateProgress<TValue extends Json>(
     task: ClaimedTask,
     workerId: string,
-    value: TValue,
+    encodedValue: string,
   ): Promise<TaskProgress<TValue>> {
-    const encodedValue = encodeStoredJson(value, `Progress of task type ${task.type}`);
     const result = await queryFencedWrite<UpdateProgressRow>(
       this.context.database,
       SQL_STATEMENTS["update_progress_v1"],

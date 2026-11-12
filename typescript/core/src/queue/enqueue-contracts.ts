@@ -20,6 +20,7 @@ import type {
   Json,
   Queryable,
   QueueOptions,
+  RetryPolicy,
 } from "../types.js";
 import {
   DEFAULT_IDEMPOTENCY_SCOPE,
@@ -33,7 +34,13 @@ import {
 } from "../types.js";
 import { compileContractSchema, parseStoredContractSchema } from "../contract-schema.js";
 import { QueueModule, type QueueModuleContext } from "./module-context.js";
-import { encodeStoredJson } from "./stored-json.js";
+import {
+  checkedCopy,
+  encodeJson,
+  encodeStoredJson,
+  parseContractJson,
+  type EncodedJson,
+} from "./stored-json.js";
 import type { CachedContractDefinition, QueueModuleState } from "./modules.js";
 
 /** The same scoped enqueue key is still retained for a materially different request. */
@@ -408,6 +415,26 @@ export function validateEnqueueOptions(options: EnqueueOptions): void {
   maxAttemptsValue(options.maxAttempts);
 }
 
+/**
+ * Give back a checked deep copy of `options`. The request carries the options as JSON, so a value
+ * that JSON would change, such as a `NaN` timeout or a `NaN` retry delay, fails here with a
+ * `TypeError`, before any statement. Each later step reads the copy. Thus a `toJSON` method of the
+ * retry policy runs one time, and a change that the caller makes to its own options, at any depth,
+ * after this check does not reach a statement. A `Date` option stays a `Date`.
+ */
+export function checkedOptions<TOptions extends { retryPolicy?: RetryPolicy }>(
+  options: TOptions,
+  subject: string,
+): TOptions {
+  const { retryPolicy, ...rest } = options;
+  const copy = structuredClone(rest);
+  encodeStoredJson(copy, subject);
+  // The copy has every property of `options` but the retry policy, which the next line restores.
+  const checked = copy as TOptions;
+  if (retryPolicy !== undefined) checked.retryPolicy = checkedCopy(retryPolicy, "Retry policy");
+  return checked;
+}
+
 /** The key of a coalescing option, read as serialization reads it. */
 function coalescingKey(mode: { key: string } | undefined): string | undefined {
   return mode === undefined ? undefined : mode.key;
@@ -509,29 +536,88 @@ function validateContractValue(
   taskType: string,
   version: string,
   kind: "payload" | "result",
-  value: Json,
+  value: EncodedJson,
   contract: TaskContractVersion,
   maxBytes: number,
 ): string {
   const schema = kind === "payload" ? contract.payloadSchema : contract.resultSchema;
   if (schema !== undefined) {
     const validator = compileContractSchema(schema);
-    if (!validator(value)) throw new TaskContractValidationError(taskType, version, kind);
+    // The contract reads the value of the text that the statement sends, not the object of the
+    // caller, which can change after the encoding. A number token that a double cannot hold
+    // exactly fails the contract, because the check could read only a rounded number.
+    const checked = parseContractJson(value.text);
+    if (checked === undefined || !validator(checked)) {
+      throw new TaskContractValidationError(taskType, version, kind);
+    }
   }
-  return serializeJsonWithinLimit(taskType, kind, value, maxBytes);
+  return textWithinLimit(taskType, kind, value.text, maxBytes);
+}
+
+/**
+ * Encode the payload of one task. The encoder refuses a value that JSON would change, before any
+ * statement and before the contract and the size limit of the task type are known.
+ */
+export function encodePayload(taskType: string, payload: Json): EncodedJson {
+  return encodeJson(payload, `Payload of task type ${taskType}`);
+}
+
+/** An enqueue request with its payload encoded before the first statement of the call. */
+export interface EncodedEnqueueRequest {
+  readonly request: EnqueueRequest;
+  readonly payload: EncodedJson;
+}
+
+/**
+ * Encode the payload of one request, and copy its checked retry policy. The first value that JSON
+ * would change throws.
+ */
+export function encodeEnqueueRequest(request: EnqueueRequest): EncodedEnqueueRequest {
+  const payload = encodePayload(request.type, request.payload);
+  // The request is a copy, so a change that the caller makes to its request after this check does
+  // not reach a statement.
+  return {
+    request: {
+      ...request,
+      options:
+        request.options === undefined
+          ? undefined
+          : checkedOptions(request.options, `Enqueue options of task type ${request.type}`),
+      tags:
+        request.tags === undefined
+          ? undefined
+          : checkedCopy(request.tags, `Tags of task type ${request.type}`),
+    },
+    payload,
+  };
+}
+
+/** Encode each request with {@link encodeEnqueueRequest}, in order. */
+export function encodeEnqueueRequests(
+  requests: readonly EnqueueRequest[],
+): EncodedEnqueueRequest[] {
+  return requests.map(encodeEnqueueRequest);
+}
+
+/**
+ * Encode the result of a handler, and refuse a value that PostgreSQL jsonb cannot store. Both
+ * checks read only the value, so they run before any statement.
+ */
+export function encodeResult(task: ClaimedTask, result: Json): EncodedJson {
+  const encoded = encodeJson(result, `Result of task type ${task.type}`);
+  assertStorableResult(task.type, encoded.text);
+  return encoded;
 }
 
 // PostgreSQL enforces the limit on octet_length(value::jsonb::text), so the client measures the
 // same text from the JSON it sends. Without exponent notation that text is at most twice as long
 // as the compact JSON, which lets most values skip the exact measure.
-function serializeJsonWithinLimit(
+function textWithinLimit(
   taskType: string,
   kind: "payload" | "result",
-  value: Json,
+  serialized: string,
   maxBytes: number,
 ): string {
-  const subject = `${kind === "payload" ? "Payload" : "Result"} of task type ${taskType}`;
-  const serialized = encodeStoredJson(value, subject);
   const compactBytes = Buffer.byteLength(serialized, "utf8");
   if (compactBytes * 2 <= maxBytes && !EXPONENT_NUMBER.test(serialized)) return serialized;
   const actualBytes = jsonbTextBytes(serialized);
@@ -811,7 +897,11 @@ export class EnqueueContractsModule extends QueueModule {
     super(context);
   }
 
-  async syncContracts(): Promise<void> {
+  /**
+   * Encode the contract definitions of the queue options. A schema that JSON would change, such as
+   * a `NaN` default, fails here, before any statement.
+   */
+  encodeContracts(): string {
     const definitions = Object.entries(this.context.options.contracts ?? {}).map(
       ([taskType, contracts]) => ({
         taskType,
@@ -837,8 +927,13 @@ export class EnqueueContractsModule extends QueueModule {
         ),
       }),
     );
+    return encodeStoredJson(definitions, "Contract definitions");
+  }
+
+  /** Store the definitions that {@link encodeContracts} encoded, and load the current versions. */
+  async syncContracts(definitions: string): Promise<void> {
     await this.context.database.query(SQL_STATEMENTS["sync_contract_definitions_v1"], [
-      JSON.stringify(definitions),
+      definitions,
     ]);
     const currentContracts = new Map<string, CachedContractDefinition>();
     for (const taskType of Object.keys(this.context.options.contracts ?? {})) {
@@ -881,7 +976,7 @@ export class EnqueueContractsModule extends QueueModule {
 
   async taskAcceptance(
     taskType: string,
-    payload: Json,
+    payload: EncodedJson,
     version?: string | null,
   ): Promise<SerializedTaskAcceptance> {
     if (version === undefined) return this.serializedTaskAcceptance(taskType, payload);
@@ -901,7 +996,7 @@ export class EnqueueContractsModule extends QueueModule {
   // the contract policy. A stale version would persist on every occurrence, so each type's current
   // contract comes from PostgreSQL, not from the cache or the local definitions.
   async currentTaskAcceptances(
-    tasks: readonly { type: string; payload: Json }[],
+    tasks: readonly { type: string; payload: EncodedJson }[],
   ): Promise<SerializedTaskAcceptance[]> {
     const taskTypes = [...new Set(tasks.map((task) => task.type))];
     const definitions = new Map(
@@ -927,7 +1022,7 @@ export class EnqueueContractsModule extends QueueModule {
   // mismatch fetched it, and that fetched definition is what PostgreSQL will accept on the retry.
   private async serializedTaskAcceptance(
     taskType: string,
-    payload: Json,
+    payload: EncodedJson,
     database: Queryable = this.context.database,
   ): Promise<SerializedTaskAcceptance> {
     const databaseContract = this.state.currentDatabaseContracts.get(taskType);
@@ -953,7 +1048,7 @@ export class EnqueueContractsModule extends QueueModule {
 
   private serializedTaskAcceptanceUnder(
     taskType: string,
-    payload: Json,
+    payload: EncodedJson,
     databaseContract: CachedContractDefinition | null | undefined,
   ): SerializedTaskAcceptance {
     const { options } = this.context;
@@ -986,12 +1081,7 @@ export class EnqueueContractsModule extends QueueModule {
         serializedPayload,
       };
     } else {
-      const serializedPayload = serializeJsonWithinLimit(
-        taskType,
-        "payload",
-        payload,
-        payloadMaxBytes,
-      );
+      const serializedPayload = textWithinLimit(taskType, "payload", payload.text, payloadMaxBytes);
       return {
         acceptance: {
           contractVersion,
@@ -1005,7 +1095,11 @@ export class EnqueueContractsModule extends QueueModule {
     }
   }
 
-  async validateResult(task: ClaimedTask, result: Json): Promise<string> {
+  /**
+   * Check a result that {@link encodeResult} encoded against the contract of its task and its size
+   * limit. The contract read is the only statement, and it comes after the value checks.
+   */
+  async validateResult(task: ClaimedTask, result: EncodedJson): Promise<string> {
     if (task.contractVersion !== null) {
       const retainedVersions = this.state.retainedDatabaseContracts.get(task.type);
       let contract = retainedVersions?.get(task.contractVersion)?.contract;
@@ -1023,62 +1117,27 @@ export class EnqueueContractsModule extends QueueModule {
       if (contract === undefined) {
         throw new TaskContractUnavailableError(task.type, task.contractVersion);
       }
-      return assertStorableResult(
+      return validateContractValue(
         task.type,
-        validateContractValue(
-          task.type,
-          task.contractVersion,
-          "result",
-          result,
-          contract,
-          task.resultMaxBytes,
-        ),
+        task.contractVersion,
+        "result",
+        result,
+        contract,
+        task.resultMaxBytes,
       );
     }
-    return assertStorableResult(
-      task.type,
-      serializeJsonWithinLimit(task.type, "result", result, task.resultMaxBytes),
-    );
+    return textWithinLimit(task.type, "result", result.text, task.resultMaxBytes);
   }
 
-  async enqueue<TPayload extends Json>(
-    type: string,
-    payload: TPayload,
-    options: EnqueueOptions = {},
-    transaction: Queryable = this.context.database,
-  ): Promise<string> {
-    return (await this.enqueueWithResult(type, payload, options, transaction)).taskId;
-  }
-
-  async enqueueWithResult<TPayload extends Json>(
-    type: string,
-    payload: TPayload,
-    options: EnqueueOptions = {},
-    transaction: Queryable = this.context.database,
-  ): Promise<EnqueueResult> {
-    return (
-      await this.enqueueManyWithResults(
-        [{ type, payload, options, tags: options.tags }],
-        transaction,
-      )
-    )[0]!;
-  }
-
-  async enqueueMany(
-    requests: readonly EnqueueRequest[],
-    transaction: Queryable = this.context.database,
-  ): Promise<string[]> {
-    return (await this.enqueueManyWithResults(requests, transaction)).map(
-      (result) => result.taskId,
-    );
-  }
-
+  /**
+   * Enqueue requests whose payloads the caller encoded before the first statement of the call. The
+   * caller also checked the options and the batch size.
+   */
   async enqueueManyWithResults(
-    requests: readonly EnqueueRequest[],
+    requests: readonly EncodedEnqueueRequest[],
     transaction: Queryable = this.context.database,
   ): Promise<EnqueueResult[]> {
     if (requests.length === 0) return [];
-    validateEnqueueBatch(requests);
     return this.submitEnqueueRequests(requests, transaction, async (serializedInput) => {
       const result = await transaction.query<EnqueueRow>(SQL_STATEMENTS["enqueue_many_v1"], [
         serializedInput,
@@ -1092,13 +1151,13 @@ export class EnqueueContractsModule extends QueueModule {
    * it carries no run time unless the caller set one.
    */
   async serializeCallbackRequest(
-    request: EnqueueRequest,
+    encoded: EncodedEnqueueRequest,
     transaction: Queryable = this.context.database,
   ): Promise<string> {
-    validateCallbackRequest(request);
-    const [input] = await this.serializeEnqueueRequests([request], transaction);
+    validateCallbackRequest(encoded.request);
+    const [input] = await this.serializeEnqueueRequests([encoded], transaction);
     const { serializedPayload, ...serialized } = input!;
-    if (request.options?.runAt === undefined) delete serialized.runAt;
+    if (encoded.request.options?.runAt === undefined) delete serialized.runAt;
     return serializedRequest(serialized, serializedPayload);
   }
 
@@ -1108,7 +1167,7 @@ export class EnqueueContractsModule extends QueueModule {
    * batch one more time.
    */
   async submitEnqueueRequests(
-    requests: readonly EnqueueRequest[],
+    requests: readonly EncodedEnqueueRequest[],
     transaction: Queryable,
     submit: (serializedInput: string) => Promise<readonly EnqueueRow[]>,
   ): Promise<EnqueueResult[]> {
@@ -1116,10 +1175,10 @@ export class EnqueueContractsModule extends QueueModule {
   }
 
   private async serializeEnqueueRequests(
-    requests: readonly EnqueueRequest[],
+    requests: readonly EncodedEnqueueRequest[],
     transaction: Queryable,
   ): Promise<SerializedEnqueueRequest[]> {
-    validateEnqueueRequests(requests);
+    validateEnqueueRequests(requests.map(({ request }) => request));
     const traceContext = injectTraceContext();
     return Promise.all(
       requests.map((request) => this.serializeEnqueueRequest(request, transaction, traceContext)),
@@ -1127,7 +1186,7 @@ export class EnqueueContractsModule extends QueueModule {
   }
 
   private async serializeEnqueueRequest(
-    { type, payload, options = {}, tags }: EnqueueRequest,
+    { request: { type, options = {}, tags }, payload }: EncodedEnqueueRequest,
     transaction: Queryable,
     traceContext: ReturnType<typeof injectTraceContext>,
   ): Promise<SerializedEnqueueRequest> {
@@ -1208,11 +1267,12 @@ export class EnqueueContractsModule extends QueueModule {
   }
 
   private async enqueueManyWithResultsAttempt(
-    requests: readonly EnqueueRequest[],
+    encoded: readonly EncodedEnqueueRequest[],
     transaction: Queryable,
     refreshOnMismatch: boolean,
     submit: (serializedInput: string) => Promise<readonly EnqueueRow[]>,
   ): Promise<EnqueueResult[]> {
+    const requests = encoded.map(({ request }) => request);
     const queueNames = new Set(
       requests.map((request) => request.options?.queue ?? this.context.defaultQueue),
     );
@@ -1226,7 +1286,8 @@ export class EnqueueContractsModule extends QueueModule {
         "workhorse.enqueue.count": requests.length,
       },
       async (span) => {
-        const input = await this.serializeEnqueueRequests(requests, transaction);
+        // A retry after a contract mismatch serializes the same payload text again.
+        const input = await this.serializeEnqueueRequests(encoded, transaction);
         try {
           const serializedInput = `[${input
             .map(({ serializedPayload, ...request }) =>
@@ -1255,7 +1316,7 @@ export class EnqueueContractsModule extends QueueModule {
             if (!refreshOnMismatch) {
               throw new Error("Contract policy changed again while retrying enqueue");
             }
-            return this.enqueueManyWithResultsAttempt(requests, transaction, false, submit);
+            return this.enqueueManyWithResultsAttempt(encoded, transaction, false, submit);
           }
           const enqueueResults = result.rows.map((row): EnqueueResult => {
             if (row.task_id === null || row.outcome === "contract_mismatch") {

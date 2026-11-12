@@ -141,17 +141,30 @@ export class HumanWaitsModule extends QueueModule {
     };
   }
 
-  async waitForHuman<TContext extends Json, TResult extends Json = Json>(
+  /** Check a human wait before the first statement, and give the JSON text of its context. */
+  encodeHumanWait(
     task: ClaimedTask,
     workerId: string,
     name: string,
-    context: TContext,
+    context: Json,
     options: ExternalWaitOptions = {},
-  ): Promise<WaitForHumanResult<TResult>> {
+  ): string {
     validateExternalWaitName(name, "Human wait");
     if (typeof workerId !== "string" || workerId.length === 0) {
       throw new TypeError("Worker ID must be a non-empty string");
     }
+    validateExternalWaitOptions(options);
+    return encodeExternalWaitValue(context, "Human wait context", `task type ${task.type}`);
+  }
+
+  /** Start a human wait whose context {@link encodeHumanWait} checked and encoded. */
+  async waitForHuman<TResult extends Json = Json>(
+    task: ClaimedTask,
+    workerId: string,
+    name: string,
+    encodedContext: string,
+    options: ExternalWaitOptions = {},
+  ): Promise<WaitForHumanResult<TResult>> {
     const query = await queryFencedWrite<WaitRow>(
       this.context.database,
       SQL_STATEMENTS["wait_for_human_v1"],
@@ -160,7 +173,7 @@ export class HumanWaitsModule extends QueueModule {
         workerId,
         task.fenceToken.toString(),
         name,
-        encodeExternalWaitValue(context, "Human wait context", `task type ${task.type}`),
+        encodedContext,
         validateExternalWaitOptions(options),
       ],
     );
@@ -175,23 +188,28 @@ export class HumanWaitsModule extends QueueModule {
     return { status: row.status, payload: row.result as TResult | null };
   }
 
+  /** Check a human wait completion before the first statement, and give the JSON text of its result. */
+  encodeCompletion(
+    taskId: string,
+    name: string,
+    result: Json,
+    request: CompleteHumanWaitRequest,
+  ): string {
+    validateExternalWaitName(name, "Human wait");
+    validateExternalWaitDeliveryRequest(request, "Human wait");
+    return encodeExternalWaitValue(result, "Human wait result", `task ${taskId}`);
+  }
+
+  /** Complete a human wait whose result {@link encodeCompletion} checked and encoded. */
   async completeHumanWait<TResult extends Json>(
     taskId: string,
     name: string,
-    result: TResult,
+    encodedResult: string,
     request: CompleteHumanWaitRequest,
   ): Promise<HumanWaitCompletionResult<TResult>> {
-    validateExternalWaitName(name, "Human wait");
-    validateExternalWaitDeliveryRequest(request, "Human wait");
     const query = await this.context.database.query<CompleteRow>(
       SQL_STATEMENTS["complete_human_wait_v1"],
-      [
-        taskId,
-        name,
-        encodeExternalWaitValue(result, "Human wait result", `task ${taskId}`),
-        request.idempotencyKey,
-        request.requestedBy,
-      ],
+      [taskId, name, encodedResult, request.idempotencyKey, request.requestedBy],
     );
     const row = expectOneRow(query, "workhorse.complete_human_wait_v1");
     if (row.status === "conflict") throw new HumanWaitIdempotencyConflictError(taskId, name);

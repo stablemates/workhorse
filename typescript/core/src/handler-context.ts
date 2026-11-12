@@ -3,7 +3,9 @@ import { checkpointInputFingerprint } from "./checkpoint-fingerprint.js";
 import { FastTierUnsupportedError } from "./errors.js";
 import { CheckpointInputConflictError } from "./queue/checkpoints-progress-waits.js";
 import { ChildConflictError, validateChildSetOptions } from "./queue/child-tasks.js";
+import { checkedOptions } from "./queue/enqueue-contracts.js";
 import { encodeExternalWaitValue, type ExternalWaitOptions } from "./queue/external-waits.js";
+import { checkedCopy } from "./queue/stored-json.js";
 import type { TaskAttempt } from "./task-attempt.js";
 import type { TaskGroupLink } from "./queue/task-groups.js";
 import type {
@@ -18,6 +20,26 @@ import type {
   TaskWait,
 } from "./types.js";
 import type { HandlerContext, WorkerQueueApi } from "./worker.js";
+
+/** Give back child options with a checked plain copy of the retry policy. */
+function checkedChildOptions(options: ChildTaskOptions | undefined): ChildTaskOptions | undefined {
+  return options === undefined ? undefined : checkedOptions(options, "Child options");
+}
+
+/**
+ * Check every child of a set before a tier read, and give each child a checked copy of its payload
+ * and of its retry policy.
+ */
+function checkedChildren(children: readonly ChildTaskRequest[]): [ChildTaskRequest[]] {
+  // Every child option of a set is checked before the first payload.
+  validateChildSetOptions(children);
+  return [
+    children.map((child) => {
+      const payload = checkedCopy(child.payload, `Payload of task type ${child.type}`);
+      return { ...child, payload, options: checkedChildOptions(child.options) };
+    }),
+  ];
+}
 
 /**
  * Builds the durable operations one handler activation sees.
@@ -51,34 +73,51 @@ export function createHandlerContext(
       return operation(...args);
     }) as TOperation;
   };
-  const guardedHumanWait = guard("human waits", context.waitForHuman);
-  // The tier read can query PostgreSQL, so an oversized context fails before it.
-  const waitForHuman = (async (name: string, humanContext: Json, options?: ExternalWaitOptions) => {
-    encodeExternalWaitValue(humanContext, "Human wait context", `task type ${task.type}`);
-    return guardedHumanWait(name, humanContext, options);
-  }) as HandlerContext["waitForHuman"];
-  // The tier read can query PostgreSQL, so every child option of a set is checked before it.
-  const guardChildSet = <TOperation extends HandlerContext["runChildren" | "runChildrenAll"]>(
+  // The tier read can query PostgreSQL, so each value that the operation stores is checked before
+  // the read (SM-2011). The operation then gets a plain copy of the checked text, so the Queue call
+  // after the read encodes the value that passed the check, and a toJSON method runs one time.
+  // `check` checks the arguments and gives them back with each stored value copied.
+  const checked = <TOperation extends (...args: never[]) => Promise<unknown>>(
+    feature: string,
     operation: TOperation,
+    check: (...args: Parameters<TOperation>) => Parameters<TOperation>,
   ): TOperation => {
-    const guarded = guard("child tasks", operation);
+    const guarded = guard(feature, operation);
     if (fastTier === true) return guarded;
-    return (async (children: readonly ChildTaskRequest[]) => {
-      validateChildSetOptions(children);
-      return guarded(children);
-    }) as TOperation;
+    return (async (...args: Parameters<TOperation>) => guarded(...check(...args))) as TOperation;
   };
+
   return {
     ...context,
-    setProgress: guard("progress", context.setProgress),
+    setProgress: checked("progress", context.setProgress, (value: Json) => [
+      checkedCopy(value, `Progress of task type ${task.type}`),
+    ]),
     checkpoint: guard("checkpoints", context.checkpoint),
     sleep: guard("durable waits", context.sleep),
     sleepUntil: guard("durable waits", context.sleepUntil),
     waitForSignal: guard("signal waits", context.waitForSignal),
-    waitForHuman,
-    runChild: guard("child tasks", context.runChild),
-    runChildren: guardChildSet(context.runChildren),
-    runChildrenAll: guardChildSet(context.runChildrenAll),
+    waitForHuman: checked(
+      "human waits",
+      context.waitForHuman,
+      (name: string, value: Json, options?: ExternalWaitOptions) => {
+        const copy = checkedCopy(value, `Human wait context of task type ${task.type}`);
+        // An oversized context also fails before the tier read.
+        encodeExternalWaitValue(copy, "Human wait context", `task type ${task.type}`);
+        return [name, copy, options];
+      },
+    ),
+    runChild: checked(
+      "child tasks",
+      context.runChild,
+      (name: string, type: string, payload: Json, options?: ChildTaskOptions) => [
+        name,
+        type,
+        checkedCopy(payload, `Payload of task type ${type}`),
+        checkedChildOptions(options),
+      ],
+    ),
+    runChildren: checked("child tasks", context.runChildren, checkedChildren),
+    runChildrenAll: checked("child tasks", context.runChildrenAll, checkedChildren),
   };
 }
 

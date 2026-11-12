@@ -1,5 +1,7 @@
 import type { PoolClient, QueryResultRow } from "pg";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { Queue } from "../src/index.js";
+import { SQL_STATEMENTS } from "../src/queue/sql-catalogue.generated.js";
 import { createDatabaseTestHarness } from "./support/db.js";
 
 // The audit of the four dashboard settings mutations (SM-1996). Each policy table holds one row,
@@ -393,6 +395,117 @@ describe("policy audit entries", () => {
     expect((await audit("retention_policy"))!.task_event_retention_days).toMatchObject({
       requestIdLength: 256,
     });
+  });
+});
+
+/** A Queue on the test client that records each statement that it sends. */
+function recordingQueue(): { queue: Queue; statements: string[] } {
+  const statements: string[] = [];
+  const queue = new Queue({
+    query: (text: string, values?: readonly unknown[]) => {
+      statements.push(text);
+      return client.query(text, values as unknown[]);
+    },
+  } as PoolClient);
+  return { queue, statements };
+}
+
+// SM-2030: a TypeScript application stores the audit of a policy change through Queue, with no SQL
+// of its own. Before this option, Queue called only the _v1 functions, which store no audit.
+describe("Queue policy changes", () => {
+  it("stores the actor and the reason of each change under lastChanges", async () => {
+    const { queue, statements } = recordingQueue();
+    const retention = await queue.overrideRetentionPolicy(
+      { taskEventRetentionDays: 1, terminalTaskPruneLimit: 5 },
+      { audit: { actor: "alice", reason: "shrink history", requestId: "request-0123456789" } },
+    );
+    expect(retention.taskEventRetentionDays).toBe(1);
+    expect(await provenance("retention", "taskEventRetentionDays")).toMatchObject({
+      source: "operator",
+      lastChange: {
+        action: "override",
+        actor: "alice",
+        reason: "shrink history",
+        requestIdPreview: "request-…6789",
+      },
+    });
+    expect((await provenance("retention", "terminalTaskPruneLimit")).lastChange).toMatchObject({
+      actor: "alice",
+    });
+
+    await queue.revertRetentionPolicy(["terminalTaskPruneLimit"], {
+      audit: { actor: "bob", reason: "restore the limit", requestId: "r-2" },
+    });
+    expect(await provenance("retention", "terminalTaskPruneLimit")).toMatchObject({
+      source: "application",
+      lastChange: { action: "revert", actor: "bob", reason: "restore the limit" },
+    });
+
+    const maintenance = await queue.overrideMaintenancePolicy(
+      { timezone: "Europe/Berlin", historyRetentionLocalTime: "04:30" },
+      { audit: { actor: "carol", reason: "move the retention pass", requestId: "r-3" } },
+    );
+    expect(maintenance.timezone).toBe("Europe/Berlin");
+    expect(await provenance("maintenance", "historyRetentionLocalTime")).toMatchObject({
+      source: "operator",
+      lastChange: { action: "override", actor: "carol", reason: "move the retention pass" },
+    });
+
+    await queue.revertMaintenancePolicy(["timezone"], {
+      audit: { actor: "dave", reason: "back to UTC", requestId: "r-4" },
+    });
+    expect(await provenance("maintenance", "timezone")).toMatchObject({
+      source: "application",
+      lastChange: { action: "revert", actor: "dave", reason: "back to UTC" },
+    });
+    // The raw request ID is never stored.
+    expect(JSON.stringify(await audit("retention_policy"))).not.toContain("request-0123456789");
+    expect(statements.filter((text) => text.includes("_policy_v"))).toEqual([
+      SQL_STATEMENTS["override_retention_policy_v2"],
+      SQL_STATEMENTS["revert_retention_policy_v2"],
+      SQL_STATEMENTS["override_maintenance_policy_v2"],
+      SQL_STATEMENTS["revert_maintenance_policy_v2"],
+    ]);
+  });
+
+  it("calls the released functions without an audit and removes each changed entry", async () => {
+    const { queue, statements } = recordingQueue();
+    await overrideRetention(
+      { task_event_retention_days: 1, attempt_history_retention_days: 2 },
+      "alice",
+      "shrink",
+      "r-1",
+    );
+    await rows(
+      `SELECT (policy).* FROM workhorse.override_maintenance_policy_v2(
+         'Europe/Berlin', NULL, NULL, '04:30'::time, NULL, NULL, NULL, 'carol', 'tune', 'r-2') policy`,
+    );
+
+    const retention = await queue.overrideRetentionPolicy({ taskEventRetentionDays: 3 });
+    expect(retention).toMatchObject({
+      taskEventRetentionDays: 3,
+      provenance: {
+        taskEventRetentionDays: { source: "operator" },
+        attemptHistoryRetentionDays: { source: "operator" },
+      },
+    });
+    expect(Object.keys((await audit("retention_policy"))!)).toEqual([
+      "attempt_history_retention_days",
+    ]);
+    await queue.revertRetentionPolicy(["attemptHistoryRetentionDays"]);
+    expect(await audit("retention_policy")).toBeNull();
+
+    await queue.overrideMaintenancePolicy({ historyRetentionLocalTime: "05:00" });
+    expect(Object.keys((await audit("maintenance_policy"))!)).toEqual(["timezone"]);
+    await queue.revertMaintenancePolicy(["timezone"]);
+    expect(await audit("maintenance_policy")).toBeNull();
+    expect((await provenance("maintenance", "timezone")).lastChange).toBeNull();
+    expect(statements.filter((text) => text.includes("_policy_v"))).toEqual([
+      SQL_STATEMENTS["override_retention_policy_v1"],
+      SQL_STATEMENTS["revert_retention_policy_v1"],
+      SQL_STATEMENTS["override_maintenance_policy_v1"],
+      SQL_STATEMENTS["revert_maintenance_policy_v1"],
+    ]);
   });
 });
 
