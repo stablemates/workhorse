@@ -596,6 +596,65 @@ A signal to a task that ended with no wait of that name answers `stale`. The tas
 that the task or its wait has ended and that Workhorse did not deliver the signal. The other six
 dashboard hosts now give the same answer as the TypeScript host (SM-2026).
 
+### Queue health keeps the end of a hold when an enqueue or a purge meets a locked outcome
+
+An enqueue that reuses an expired key, and a queue purge, save the end of the hold that they
+remove. They take the outcome of the held task with `SKIP LOCKED`, so they never wait. When another
+transaction held that outcome, for example a redrive, they continued without the write, and health
+counted the old task from its windows until cleanup deleted it (SM-2022). They now save the end in
+the new table `terminal_hold_end`, whose insert takes no row lock. Health reads the latest end there
+too, and the row stays until terminal cleanup deletes the task. Neither statement waits for a lock
+that it did not wait for before.
+
+### Queue health counts a fast-tier task from the end of its hold
+
+A fast-tier outcome has no `held_until`, because the cold export writes each `fast_task_outcome`
+row whole. When the key phase deleted the expired key of a fast-tier task, or a purge deleted the
+target of a fast-tier redrive source, health counted the task from its windows, which can be days
+before the key expired (SM-2024). The end of such a hold now goes to `terminal_hold_end`, and health
+counts the task from it. The fast cleanup batch deletes those rows with their task. The cold export
+rows of `fast_task_outcome` do not change.
+
+### A health poll does not read the same held rows again
+
+Each retention walk of queue health starts at the oldest row and examines at most 1,000 rows. Behind
+more rows that a hold keeps on purpose, each poll read those rows again (SM-2021). A poll now stores,
+in the new table `terminal_retention_walk_start`, where a run of held rows ends and when the first of
+them can become eligible. The next poll starts there until that instant, and a history pass makes
+each walk start from the oldest row again. Rows held by an enqueue key, a schedule occurrence, or a
+row window can be in the run. A poll writes the table only at read committed, in a writable
+transaction, and only when it gets an advisory lock at once, so it waits for no lock and fails on no
+write conflict. Another poll stores nothing and reads as before.
+
+### Accept the new `terminal-cleanup-stalled` health reason
+
+Behind more held rows than a walk examines, row lag is null, so no health reason reported a terminal
+cleanup that did not run at all (SM-2019). Queue health now reports the degraded reason
+`terminal-cleanup-stalled` when terminal cleanup did not complete a pass for longer than
+`row_retention_lag_ms` plus `terminal_cleanup_interval_ms` while finished tasks exist. Before a first
+completion, it waits until a finished task is past both row windows. With
+the defaults, that is 6 h 5 min. A pass completes also when it deletes nothing. The reason reads no
+retention walk. Code that switches on reason codes should accept it. The System page of the dashboard
+shows it. A dashboard package older than this schema does not show it.
+
+### Terminal cleanup tests each array of its hold code once
+
+The hold code of terminal cleanup tested whether a task was in a batch with `NOT x = ANY(array)`.
+Under a generic plan, which a long-lived session uses, PostgreSQL searches the array once for each
+row, so the work grew with the square of the batch, while the key phase held its locks (SM-2023).
+Each such test now takes one sort or one hash over the batch. This covers the key phase, the
+released-edge phase, the occurrence cleanup, both cleanup batches, and the queue purge. Their
+results do not change.
+
+Migration 0104 (`0104-keep-each-hold-end-and-start-health-walks-after-held-rows.sql`) moves the
+schema to version 103. It adds the tables `terminal_hold_end` and `terminal_retention_walk_start` and
+six internal functions, and it replaces the bodies of `save_terminal_hold_ends_internal_v1`,
+`terminal_row_due_at_internal_v1`, `queue_health_v1`, `evaluate_queue_health_v1`,
+`prune_full_terminal_tasks_internal_v1`, `prune_fast_terminal_tasks_internal_v1`,
+`prune_enqueue_idempotency_v1`, `prune_released_dependencies_v1`, `prune_schedule_occurrences_v1`,
+`purge_queue_internal_v1`, and `maintain_task_groups_v1`. It rewrites no row and does not raise the
+SDK compatibility floor. Run `workhorse schema migrate` (ADR 0122).
+
 ## 0.12.0 — 2026-11-07
 
 The npm packages, Python distribution, Go module, Rust crate, Ruby gem, JVM artifacts, and .NET

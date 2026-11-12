@@ -385,6 +385,32 @@ with `code`, `message`, and `failedAt`. The key is optional and new in `dashboar
 change. The group list does not carry it. A schema below version 97 returns no `failure`. The group
 detail page shows the failure as text (SM-2027).
 
+### Queue health keeps the end of each hold, also on the fast tier
+
+An enqueue that reuses an expired key, and a queue purge, never wait for the outcome of the old
+task. When another transaction held that outcome, they dropped the end of the hold, and health
+counted the old task from its windows (SM-2022). A fast-tier task had the same result after the key
+phase deleted its expired key, because `fast_task_outcome` has no `held_until` (SM-2024). Each such
+end now goes to the new table `terminal_hold_end`, whose insert takes no row lock, and health counts
+the task from it. The cold export rows of `fast_task_outcome` do not change.
+
+### A health poll does not read the same held rows again, and a stalled cleanup is reported
+
+Behind more than 1,000 rows that a hold keeps on purpose, each health poll read those rows again
+(SM-2021). A poll now stores where they end, and the next poll starts there while none of them can
+become eligible. A poll writes only at read committed in a writable transaction, and it waits for no lock. The new degraded
+reason `terminal-cleanup-stalled` reports terminal cleanup that did not complete a pass for longer
+than `row_retention_lag_ms` plus `terminal_cleanup_interval_ms` while finished tasks exist (SM-2019).
+Before a first completion, it waits until a finished task is past both row windows. Code that switches on reason codes should accept it.
+
+### Terminal cleanup tests each array of its hold code once
+
+The hold code of terminal cleanup and the queue purge tested batch membership with
+`NOT x = ANY(array)`, which a generic plan evaluates once for each row (SM-2023). Each such test now
+takes one sort or one hash over the batch, and the results do not change. Migration 0104 moves the
+schema to version 103. It adds two tables, rewrites no row, and does not raise the floor. Run
+`workhorse schema migrate`.
+
 ## 0.12.0 — 2026-11-07
 
 The npm packages, Python distribution, Go module, Rust crate, Ruby gem, JVM artifacts, and .NET

@@ -460,6 +460,7 @@ describe("schema installation", () => {
       { name: "send_signal_v2" },
       { name: "sync_queue_health_policy_v2" },
       { name: "sync_schedule_definitions_v2" },
+      { name: "terminal_retention_boundaries_internal_v2" },
     ]);
 
     const orphaned = await pool.query<{ name: string }>(
@@ -776,6 +777,11 @@ describe("schema installation", () => {
       {
         version: 102,
         description: "take the locks of an enqueue call in key, tier, and row order",
+      },
+      {
+        version: 103,
+        description:
+          "keep each hold end, bound the hold code, start health walks after held rows, and report a stalled cleanup",
       },
     ]);
 

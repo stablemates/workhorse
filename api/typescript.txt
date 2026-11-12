@@ -3801,7 +3801,7 @@ interface LiveProtocolWorker {
 
 const MAXIMUM_PROTOCOL_VERSION = 5;
 
-const MAXIMUM_SCHEMA_VERSION = 102;
+const MAXIMUM_SCHEMA_VERSION = 103;
 
 const MAX_CANCELLATION_REASON_CHARACTERS = 2000;
 
@@ -4545,7 +4545,7 @@ interface QueueHealthReason {
   category?: keyof RetentionCategoryValues<unknown>;
 }
 
-type QueueHealthReasonCode = "expired-leases" | "overdue-deadlines" | "overdue-execution-timeouts" | "overdue-external-waits" | "stalled-promotion" | "missing-history-partitions" | "rollup-stalled" | "retention-lag" | "terminal-cleanup-backlog" | "eligible-history-partitions" | "default-history-rows" | "maintenance-failing" | "schedule-failing" | "concurrency-blocked" | "rate-limit-throttled" | "budget-blocked";
+type QueueHealthReasonCode = "expired-leases" | "overdue-deadlines" | "overdue-execution-timeouts" | "overdue-external-waits" | "stalled-promotion" | "missing-history-partitions" | "rollup-stalled" | "retention-lag" | "terminal-cleanup-backlog" | "terminal-cleanup-stalled" | "eligible-history-partitions" | "default-history-rows" | "maintenance-failing" | "schedule-failing" | "concurrency-blocked" | "rate-limit-throttled" | "budget-blocked";
 
 interface QueueHealthStatus {
   level: "healthy" | "degraded" | "critical";
@@ -5605,7 +5605,7 @@ class TypeOrmQueryError extends QueryError {
 
 const WORKHORSE_SCHEMA_BASELINE_VERSION = 6;
 
-const WORKHORSE_SCHEMA_VERSION = 102;
+const WORKHORSE_SCHEMA_VERSION = 103;
 
 const WORKHORSE_VERSION = "0.12.0";
 

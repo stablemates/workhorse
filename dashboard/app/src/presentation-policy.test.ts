@@ -186,6 +186,21 @@ describe("dashboard presentation policy", () => {
     ]);
   });
 
+  it("names a terminal cleanup that has not completed a pass", () => {
+    const { degradedChecks } = healthCheckMessages([
+      {
+        code: "terminal-cleanup-stalled",
+        severity: "degraded",
+        observed: 25_200_000,
+        budget: 21_900_000,
+      },
+    ]);
+    expect(degradedChecks.map(({ message }) => message)).toEqual([
+      "Terminal cleanup has not completed a pass",
+    ]);
+    expect(degradedChecks[0]!.helpHref).toBe("https://workhorse.run/docs/maintenance");
+  });
+
   it("points late schedule runs at the daily history-retention pass", () => {
     const scheduleOnly = healthCheckMessages([retentionLag("scheduleOccurrences")])
       .degradedChecks[0]!;

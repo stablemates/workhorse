@@ -3802,6 +3802,14 @@
                         "$type": "number"
                       },
                       "severity": "degraded"
+                    },
+                    {
+                      "code": "terminal-cleanup-stalled",
+                      "budget": 21900000,
+                      "observed": {
+                        "$type": "integer"
+                      },
+                      "severity": "degraded"
                     }
                   ]
                 },
@@ -5943,6 +5951,14 @@
                         "$type": "number"
                       },
                       "severity": "degraded"
+                    },
+                    {
+                      "code": "terminal-cleanup-stalled",
+                      "budget": 21900000,
+                      "observed": {
+                        "$type": "integer"
+                      },
+                      "severity": "degraded"
                     }
                   ]
                 },
@@ -7987,6 +8003,14 @@
                       "category": "terminalOutcome",
                       "observed": {
                         "$type": "number"
+                      },
+                      "severity": "degraded"
+                    },
+                    {
+                      "code": "terminal-cleanup-stalled",
+                      "budget": 21900000,
+                      "observed": {
+                        "$type": "integer"
                       },
                       "severity": "degraded"
                     }
@@ -13215,6 +13239,14 @@
                         "$type": "number"
                       },
                       "severity": "degraded"
+                    },
+                    {
+                      "code": "terminal-cleanup-stalled",
+                      "budget": 21900000,
+                      "observed": {
+                        "$type": "integer"
+                      },
+                      "severity": "degraded"
                     }
                   ],
                   "statistics": {
@@ -16172,6 +16204,14 @@
                         "$type": "number"
                       },
                       "severity": "degraded"
+                    },
+                    {
+                      "code": "terminal-cleanup-stalled",
+                      "budget": 21900000,
+                      "observed": {
+                        "$type": "integer"
+                      },
+                      "severity": "degraded"
                     }
                   ],
                   "statistics": {
@@ -16440,6 +16480,14 @@
                       "category": "terminalOutcome",
                       "observed": {
                         "$type": "number"
+                      },
+                      "severity": "degraded"
+                    },
+                    {
+                      "code": "terminal-cleanup-stalled",
+                      "budget": 21900000,
+                      "observed": {
+                        "$type": "integer"
                       },
                       "severity": "degraded"
                     }

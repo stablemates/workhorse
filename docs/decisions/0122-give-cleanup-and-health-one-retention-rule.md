@@ -2,7 +2,8 @@
 
 - **Status:** Accepted
 - **Date:** 2026-11-11
-- **Issues:** SM-1935, SM-1936, SM-1852, SM-1990, SM-1992
+- **Issues:** SM-1935, SM-1936, SM-1852, SM-1990, SM-1992; amended for SM-2019, SM-2020, SM-2021,
+  SM-2022, SM-2023, and SM-2024
 - **Related:** [ADR 0007](0007-automated-retention.md),
   [ADR 0118](0118-isolate-each-schedule-definition-in-a-schedule-pass.md),
   [ADR 0011](0011-daily-retention-and-split-maintenance.md),
@@ -99,8 +100,9 @@ earlier filter, "after both windows", dropped that case.
 
 A reference that went before migration 0097 left no value, so such a row has a null `held_until`,
 and its due instant starts from its windows, as on `main`. A fast-tier outcome has no `held_until`,
-because the cold export writes each `fast_task_outcome` row whole. A fast task whose key the key
-phase deleted before the fast batch reached it counts from its windows, as on `main`.
+because the cold export writes each `fast_task_outcome` row whole. Since the amendment of
+2026-11-12, the end of a fast-tier hold goes to `terminal_hold_end`, so a fast task counts from the
+end of its hold too.
 
 Both phases take the reference rows and the outcome rows with SKIP LOCKED, so they never wait. A
 phase deletes the reference of a task that needs the write only in the statement that holds the
@@ -174,10 +176,10 @@ held task has an outcome that another transaction locks. A verification round fo
 An enqueue is an application path, so it must not wait and must not change the lock order. It
 writes only in the branch that deletes an expired key, after it holds the key row, as the key
 phase does. An enqueue with a new key or with no key runs the same statements as on `main` and
-reads no `task_outcome` row ("an enqueue with a new key or no key reads no outcome row"). One case
-stays: if another transaction holds the outcome of the old task, the enqueue continues without the
-write. The lag of that task then counts from its retention anchor until the next cleanup pass
-deletes it.
+reads no `task_outcome` row ("an enqueue with a new key or no key reads no outcome row"). If another
+transaction holds the outcome of the old task, the enqueue does not wait. Since the amendment of
+2026-11-12, it saves the end in `terminal_hold_end` instead, so health still counts the task from
+that end.
 
 ### Cleanup locks only rows that it can delete, in bounded slices
 
@@ -324,11 +326,9 @@ that found an eligible row before the cap reports the earliest due instant among
 examined, so its lag is a lower bound. Behind more held rows than the cap, `retention-lag` cannot
 see a late cleanup. `terminal-cleanup-backlog` reports it instead: a cleanup that deletes rows but
 cannot finish them in a pass records `terminal_cleanup_backlog_since`, and the reason fires when
-that backlog outlasts `terminal_cleanup_backlog_ms`. Behind the cap, no health reason reports a
-terminal cleanup that does not run at all. For that case, an operator reads the `terminal_storage`
-row of the dashboard Schedules page, whose `due` flag and `lastCompletedAt` come from
-`dashboard_cron_v1`, or `maintenance_state.last_completed_at`. `maintenance-failing` reports a
-cleanup that runs and fails.
+that backlog outlasts `terminal_cleanup_backlog_ms`. Since the amendment of 2026-11-12,
+`terminal-cleanup-stalled` reports a terminal cleanup that does not run at all, also behind the cap.
+`maintenance-failing` reports a cleanup that runs and fails.
 
 ### A retention window of N days is N times 24 hours
 
@@ -409,3 +409,124 @@ state of each group.
   one hour less or more than before. It is now the same value as in a UTC session.
 - The migration replaces function bodies, adds thirteen internal functions, the table
   `terminal_prune_position`, and the nullable column `task_outcome.held_until`. It rewrites no row.
+
+## Amendment: keep each hold end and do not read held rows again (2026-11-12)
+
+Pull request 1240 left six follow-ups. This amendment closes them with migration 0104 (schema
+version 103). The rules above stay: a cleanup batch deletes no key and no edge that a hold keeps,
+and each path that removes a hold records its end. No path waits for a lock that it did not wait for
+before.
+
+### A hold end that `held_until` cannot take goes to `terminal_hold_end`
+
+**Example.** A redrive holds the outcome of task A `FOR SHARE`. An enqueue reuses the expired key
+of A. Before this amendment, the enqueue removed the key and dropped the end of the hold, and
+health counted A from its windows until cleanup deleted it (SM-2022). A fast-tier task had the same
+result after the key phase, because `fast_task_outcome` has no `held_until` (SM-2024).
+
+`save_terminal_hold_ends_internal_v1` now writes an end to `task_outcome.held_until` when it locks
+the outcome. Otherwise it inserts a row of the new table `terminal_hold_end`: for a full-tier
+outcome that another transaction locks, and for each fast-tier task. That table has no unique key
+on the task and no foreign key, so the insert takes no row lock and never waits. A maintenance
+statement still keeps its reference while the outcome is locked. An enqueue and a purge remove the
+reference, as before, and the end stays in the table.
+
+The rule that each path records the end of the hold that it removes now reads:
+
+- A path that holds the outcome lock records the end in `task_outcome.held_until`.
+- In each other case, the end goes to a row of `terminal_hold_end`: a fast-tier task, and an
+  enqueue or a purge that meets an outcome that another transaction locks. A maintenance statement
+  that meets a locked outcome keeps its reference instead, so the reference still holds the task.
+- A row of `terminal_hold_end` stays until the cleanup batch that deletes its task deletes it too.
+
+One reader reads the end: `terminal_row_due_at_internal_v1`, which gives queue health the due
+instant of a row, reads the latest end in both places. It is the only statement that reads the end
+to decide a lag. `record_terminal_hold_ends_internal_v1` also reads `held_until`, but only to skip a
+write that would not move the stored end.
+Cleanup tests references and windows and does not read the end. No dashboard read selects the
+column, the cold export does not export `task_outcome`, and no SDK reads it. Thus no reader misses
+an end that is only in `terminal_hold_end`.
+
+An earlier version of this change copied each full-tier row to `held_until` in each cleanup call.
+The fourth review found that the copy held the outcome lock until the pass committed, so a redrive
+of that task waited for the pass. One more copy gave no reader anything, so the copy is gone. The
+second review had found that the copy, when it went through the save function, dropped an end that
+longer windows made irrelevant. `fast_task_outcome` and its cold export rows do not change. A second column on
+`fast_task_outcome` would change each exported row, so this amendment does not add one.
+
+### Each array test of the hold code is one sort or one hash
+
+The hold code computed set differences with `NOT x = ANY(array)` (SM-2023). That test searches the
+array once for each row. PostgreSQL hashes a constant array, so a custom plan stayed linear, but a
+generic plan, which a long-lived session uses, does not hash a parameter array. A save at the
+largest limit then made about five billion comparisons while the key phase held its locks. Each
+such test is now a grouping, a window, or `EXCEPT` over the batch:
+`terminal_deleted_holds_internal_v1`, `terminal_tasks_free_of_internal_v1`, the windows of the key
+phase, the released-edge phase, and the occurrence cleanup, and three statements of the purge. The
+update of `held_until` reads each end from one JSON object and finds its rows with `task_id = ANY`
+through the primary key. A join of the outcome with the array of ends let the planner scan
+`task_outcome` under a generic plan, so it is not used.
+
+A count that does not depend on the speed of the host cannot show a comparison inside an
+expression. The test "tests no array once for each row in the hold code" therefore checks the
+function bodies, and "reads rows in proportion to the limit in the key phase" checks the rows that
+the key phase reads at two limits, beside 4,000 rows that it must not read.
+
+### Each health walk starts after the held rows that a poll passed
+
+Each walk read up to 1,000 held rows again on each poll (SM-2021). A poll now stores, in
+`terminal_retention_walk_start`, the last row of a run of rows at the start of each walk and the
+earliest instant when a row of the run can become eligible. A row keeps the run only when each
+reason that it waits for ends at a known instant: a row window, an enqueue key, or a schedule
+occurrence. No statement removes an unexpired key or an occurrence inside its window from a terminal
+task, and a new terminal row has a later anchor. Thus no row behind the stored point can become
+eligible before that instant, and the walk keeps the earliest due instant. A hold that ends at an
+event, a row that waits for history retention, or a task with no outcome ends the run. The walk
+uses the stored run only before that instant and while both row windows, the occurrence window, and
+the history watermark are the same, so each walk starts from the oldest row at least once a day.
+The first review found that a shorter row window made a row of the run eligible while the walk
+still started after it.
+
+`queue_health_v1` writes the table only at read committed, in a writable transaction, and only when
+it gets an advisory lock at once. A poll therefore waits for no lock, and a poll on a standby or in a
+read-only transaction, as the JVM dashboard reads, stores nothing. The first review found that a
+poll at repeatable read failed with SQLSTATE `40001` when another poll had changed the row after
+its snapshot, so such a poll stores nothing too. The review also found that the read-only dashboard
+role, which has `SELECT` only, failed with SQLSTATE `42501`. A poll now writes only when its role has
+`INSERT` and `UPDATE` on the table. Event holds are not stored, because many
+statements end them. A walk behind many such rows still reads up to its cap on each poll.
+
+### A health reason for a cleanup that does not run
+
+`terminal-cleanup-stalled` (SM-2019) fires when terminal cleanup did not complete a pass for longer
+than `row_retention_lag_ms` plus `terminal_cleanup_interval_ms` while terminal rows exist. After a
+first completion, the reason counts from the last completion while a terminal outcome exists. It
+reads only the oldest terminal outcome, which the snapshot reads for its document anyway. The second
+review found that a sample of the first rows of each index missed an old eligible row behind rows
+that the reads skip. Before a first completion, the reason counts from the earliest instant when one
+terminal row passed both of its row windows, among the first five rows of each retention index, so
+a new database without maintenance does not report it. The first review found that a value that
+combined the oldest creation of one task with the oldest finish of another fired the reason while
+no row had passed both windows. A pass
+completes also when it deletes nothing, so the reason reports a cleanup that does not run. It reads
+no walk. The budget reuses the row retention budget, because the reason reports the lag that
+`retention-lag` cannot see behind the cap. A new policy column would change the policy functions of
+each SDK. The interval in the budget keeps a long `terminal_cleanup_interval_ms` from firing it.
+
+### The read of failing schedules stays without an index
+
+The amendment measured the read of `failing_schedule_definitions` (SM-2020). At 10,000 definitions
+with a few failing ones, the read is one sequential scan of 251 table pages, all in shared buffers.
+The schedule pass reads the definitions of each offered namespace in the same way. The read grows
+in proportion to the definitions. A partial index needs a step outside a transaction. The question
+returns when a deployment holds about 100,000 definitions, a scan of about 2,500 pages for each
+poll.
+
+### Consequences of the amendment
+
+- A health poll can write one row of `terminal_retention_walk_start`. It writes only when the value
+  changes.
+- `terminal_retention_boundaries_internal_v2` replaces `terminal_retention_boundaries_internal_v1`
+  in `queue_health_v1`. The earlier function stays, and no function calls it.
+- A dashboard package of an earlier release does not know `terminal-cleanup-stalled`, so it skips
+  the code, as for the earlier codes.

@@ -114,8 +114,8 @@ function renderChecks(reasons: QueueHealthReason[]): string {
 describe("individual system health checks", () => {
   it("shows every check when none needs attention", () => {
     const html = renderChecks([]);
-    expect(html.match(/<li\b/g)).toHaveLength(16);
-    expect(html.match(/>Passing<\/span>/g)).toHaveLength(16);
+    expect(html.match(/<li\b/g)).toHaveLength(17);
+    expect(html.match(/>Passing<\/span>/g)).toHaveLength(17);
     expect(html).toContain("Worker leases");
     expect(html).toContain("Retention cleanup");
     expect(html).toContain("Rate limits");
@@ -132,7 +132,7 @@ describe("individual system health checks", () => {
         budget: 21_600_000,
       },
     ]);
-    expect(html.match(/<li\b/g)).toHaveLength(16);
+    expect(html.match(/<li\b/g)).toHaveLength(17);
     expect(html.match(/>Degraded<\/span>/g)).toHaveLength(1);
     expect(html).toContain("Terminal cleanup pace");
     expect(html).toContain("Terminal cleanup is not keeping pace");
@@ -148,7 +148,7 @@ describe("individual system health checks", () => {
         routine: "terminal_storage",
       },
     ]);
-    expect(html.match(/<li\b/g)).toHaveLength(16);
+    expect(html.match(/<li\b/g)).toHaveLength(17);
     expect(html.match(/>Degraded<\/span>/g)).toHaveLength(1);
     expect(html).toContain("Maintenance routines");
     expect(html).toContain("Maintenance routine terminal cleanup failed its last 3 runs");
@@ -178,7 +178,7 @@ describe("individual system health checks", () => {
       { code: "overdue-execution-timeouts", severity: "critical", observed: 3, budget: 0 },
       { code: "missing-history-partitions", severity: "critical", observed: 4, budget: 0 },
     ]);
-    expect(html.match(/<li\b/g)).toHaveLength(16);
+    expect(html.match(/<li\b/g)).toHaveLength(17);
     expect(html.match(/>Critical<\/span>/g)).toHaveLength(4);
     expect(html.match(/>Degraded<\/span>/g)).toHaveLength(1);
     expect(html).toContain("Tasks are past their deadlines");

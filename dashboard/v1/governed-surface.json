@@ -2407,7 +2407,8 @@
             "rollup-stalled",
             "schedule-failing",
             "stalled-promotion",
-            "terminal-cleanup-backlog"
+            "terminal-cleanup-backlog",
+            "terminal-cleanup-stalled"
           ]
         },
         "recommendationInputs.reasons[].observed": {
@@ -3705,7 +3706,8 @@
             "rollup-stalled",
             "schedule-failing",
             "stalled-promotion",
-            "terminal-cleanup-backlog"
+            "terminal-cleanup-backlog",
+            "terminal-cleanup-stalled"
           ]
         },
         "status.reasons[].observed": {

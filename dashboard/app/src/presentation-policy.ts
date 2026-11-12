@@ -318,6 +318,17 @@ export function healthCheckMessages(reasons: readonly QueueHealthReason[]): {
           helpHref: docs("maintenance"),
         });
         break;
+      case "terminal-cleanup-stalled":
+        degradedChecks.push({
+          code: reason.code,
+          message: "Terminal cleanup has not completed a pass",
+          advice:
+            "Finished tasks wait for cleanup, and no cleanup pass completed " +
+            "within the budget. Open the Schedules page and read when the terminal storage " +
+            "routine last completed and whether it is due.",
+          helpHref: docs("maintenance"),
+        });
+        break;
       case "eligible-history-partitions":
         degradedChecks.push({
           code: reason.code,
@@ -453,6 +464,10 @@ const healthCheckDefinitions = {
   "terminal-cleanup-backlog": {
     label: "Terminal cleanup pace",
     summary: "Terminal cleanup has kept pace within its budget.",
+  },
+  "terminal-cleanup-stalled": {
+    label: "Terminal cleanup passes",
+    summary: "Terminal cleanup completed a pass within its budget.",
   },
   "eligible-history-partitions": {
     label: "History partition cleanup",

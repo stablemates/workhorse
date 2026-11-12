@@ -2395,6 +2395,41 @@ CREATE TABLE IF NOT EXISTS workhorse.terminal_prune_position (
   CHECK ((sweep_finished_at IS NULL) = (sweep_task_id IS NULL))
 );
 
+-- The end of a hold that a removed reference ended, when task_outcome.held_until cannot keep it
+-- (ADR 0122). record_terminal_hold_ends_internal_v1 writes a row for a fast-tier task, whose outcome
+-- has no held_until, and for a full-tier task whose outcome another transaction locks while an
+-- enqueue or a purge removes the reference. The table has no unique key on the task and no foreign
+-- key, so an insert never waits for a row lock. A row stays until the cleanup batch that deletes its
+-- task deletes it too. Queue health reads the latest end of a task here and in held_until.
+CREATE TABLE IF NOT EXISTS workhorse.terminal_hold_end (
+  entry_id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  task_id uuid NOT NULL,
+  tier text NOT NULL CHECK (tier IN ('full', 'fast')),
+  held_until timestamptz NOT NULL
+);
+CREATE INDEX IF NOT EXISTS terminal_hold_end_task_idx
+  ON workhorse.terminal_hold_end (task_id, held_until);
+
+-- Where each retention walk of queue_health_v1 starts (ADR 0122). anchor_at and task_id mark the
+-- last row of a run of rows at the start of the walk, and no row of that run can become eligible
+-- before valid_until. The two row windows, occurrence_window, and history_before are the settings of
+-- the poll that found the run. A walk starts after the run only while the clock is before valid_until
+-- and each setting is the same. A missing row means the oldest row. A poll writes this table only at
+-- read committed, in a transaction that can write, and only when it gets an advisory lock at once,
+-- so a poll never waits for it and never fails on a write conflict.
+CREATE TABLE IF NOT EXISTS workhorse.terminal_retention_walk_start (
+  walk text PRIMARY KEY CHECK (walk IN ('identity', 'outcome')),
+  anchor_at timestamptz,
+  task_id uuid,
+  valid_until timestamptz,
+  identity_window interval,
+  outcome_window interval,
+  occurrence_window interval,
+  history_before timestamptz,
+  CHECK ((anchor_at IS NULL) = (task_id IS NULL)),
+  CHECK (anchor_at IS NULL OR valid_until IS NOT NULL)
+);
+
 -- Routine history is deliberately small and operational. Slow routines retain every execution;
 -- the hot tick records every error and samples successful task-changing executions once per minute.
 CREATE TABLE IF NOT EXISTS workhorse.maintenance_run (
@@ -3173,6 +3208,21 @@ AS $$
     ) backlog
     WHERE backlog.age_ms > (p_policy->>'terminal_cleanup_backlog_ms')::numeric
     UNION ALL
+    -- Terminal cleanup has rows to examine and has not completed a pass for longer than the row
+    -- retention budget plus its own interval. It does not depend on the capped walks, so it also
+    -- reports a cleanup that does not run behind many held rows (SM-2019). A snapshot of an older
+    -- schema has no stalled instant, so the reason does not fire.
+    SELECT 125, jsonb_build_object(
+      'code', 'terminal-cleanup-stalled', 'severity', 'degraded',
+      'observed', stalled.age_ms, 'budget', stalled.budget_ms
+    ) FROM (
+      SELECT floor(extract(epoch FROM (p_snapshot->>'captured_at')::timestamptz
+               - (p_snapshot->>'terminal_cleanup_stalled_since')::timestamptz) * 1000) AS age_ms,
+             (p_policy->>'row_retention_lag_ms')::numeric
+               + COALESCE((p_snapshot->>'terminal_cleanup_interval_ms')::numeric, 0) AS budget_ms
+    ) stalled
+    WHERE stalled.age_ms > stalled.budget_ms
+    UNION ALL
     SELECT 130, jsonb_build_object(
       'code', 'eligible-history-partitions', 'severity', 'degraded',
       'observed', (p_snapshot->>'eligible_event_partitions')::numeric
@@ -3335,6 +3385,69 @@ AS $$
          );
 $$;
 
+-- When the holds of terminal_row_held_internal_v1 on the terminal row p_task_id end (ADR 0122). The
+-- value is not null exactly when that function is true. It is 'infinity' when a hold ends only at
+-- an event: a redrive source with a target, a member of a task group that has not finished, a
+-- prerequisite of a dependent that is not terminal, a parent of a child that is not eligible, or a
+-- schedule occurrence with no retention window. Otherwise it is the latest end of the enqueue keys
+-- that have not expired and of the schedule occurrences inside their window. No statement removes
+-- such a key or occurrence of a terminal task before that end, so the row stays held until then.
+CREATE OR REPLACE FUNCTION workhorse.terminal_row_hold_until_internal_v1(
+  p_task_id uuid, p_now timestamptz, p_identity_before timestamptz,
+  p_outcome_before timestamptz, p_history_before timestamptz, p_occurrence_window interval
+) RETURNS timestamptz
+LANGUAGE sql
+STABLE
+AS $$
+  SELECT CASE
+           WHEN EXISTS (
+                  SELECT 1 FROM workhorse.task_redrive redrive
+                   WHERE redrive.source_task_id = p_task_id
+                )
+             OR EXISTS (
+                  SELECT 1
+                    FROM workhorse.task_group_member member
+                    JOIN workhorse.task_group member_group ON member_group.id = member.group_id
+                   WHERE member.task_id = p_task_id AND member_group.state <> 'finished'
+                )
+             OR EXISTS (
+                  SELECT 1 FROM workhorse.task_dependency dependency
+                   WHERE dependency.prerequisite_task_id = p_task_id
+                     AND NOT EXISTS (
+                       SELECT 1 FROM workhorse.task_outcome dependent
+                        WHERE dependent.task_id = dependency.dependent_task_id
+                     )
+                )
+             OR EXISTS (
+                  SELECT 1
+                    FROM workhorse.task_child edge
+                    JOIN workhorse.task child ON child.id = edge.child_task_id
+                    LEFT JOIN workhorse.task_outcome child_outcome
+                      ON child_outcome.task_id = edge.child_task_id
+                   WHERE edge.parent_task_id = p_task_id
+                     AND (
+                       child_outcome.task_id IS NULL
+                       OR child.created_at >= p_identity_before
+                       OR child_outcome.finished_at >= p_outcome_before
+                       OR child_outcome.history_through_at >= p_history_before
+                     )
+                )
+             OR (p_occurrence_window IS NULL AND EXISTS (
+                  SELECT 1 FROM workhorse.schedule_occurrence occurrence
+                   WHERE occurrence.task_id = p_task_id
+                ))
+             THEN 'infinity'::timestamptz
+           ELSE GREATEST(
+                  (SELECT max(idempotency.expires_at) FROM workhorse.enqueue_idempotency idempotency
+                    WHERE idempotency.task_id = p_task_id AND idempotency.expires_at > p_now),
+                  (SELECT max(occurrence.occurrence_at + p_occurrence_window)
+                     FROM workhorse.schedule_occurrence occurrence
+                    WHERE occurrence.task_id = p_task_id
+                      AND occurrence.occurrence_at >= p_now - p_occurrence_window)
+                )
+         END;
+$$;
+
 -- The end of a hold when it moves the due instant of a terminal row for one lag, and null when it
 -- does not (ADR 0122). A hold moves that due instant only when it ends after the end of the row
 -- window of that lag: the retention anchor of the row plus its window. A null window end gives the
@@ -3381,27 +3494,38 @@ AS $$
      AND policy.terminal_outcome_retention_days IS NOT NULL;
 $$;
 
--- Saves the end of each hold that a removed reference ends, in task_outcome.held_until of the task
--- that the reference held (ADR 0122). Each statement that removes a reference that a health gate
--- skips calls it before the removal. p_task_ids and p_hold_ends are pairs, and a task can repeat.
--- The function writes the latest end of a task only when terminal_hold_end_internal_v1 gives it for
--- one lag and the stored value is earlier. A task with no task_outcome row needs no write.
+-- Saves the end of each hold that a removed reference ends, for the task that the reference held
+-- (ADR 0122). Each statement that removes a reference that a health gate skips calls it before the
+-- removal. p_task_ids and p_hold_ends are pairs, and a task can repeat. The function saves the latest
+-- end of a task only when terminal_hold_end_internal_v1 gives it for one lag and the stored value is
+-- earlier. A task with no outcome row needs no write.
 --
--- Each task and outcome is one primary-key lookup. The function takes each outcome that needs the
--- write with FOR NO KEY UPDATE SKIP LOCKED, so it never waits. It returns the tasks that need the
--- write but whose outcome another transaction locks. A maintenance caller keeps the references of
--- those tasks for a later pass. An application caller removes them and accepts that the hold end of
--- such a task is lost.
-CREATE OR REPLACE FUNCTION workhorse.save_terminal_hold_ends_internal_v1(
-  p_task_ids uuid[], p_hold_ends timestamptz[]
+-- A full-tier end goes to task_outcome.held_until. The function takes each outcome with FOR NO KEY
+-- UPDATE SKIP LOCKED, so it never waits. A fast-tier outcome has no held_until, so its end goes to a
+-- row of terminal_hold_end. That insert locks no row.
+--
+-- The function returns the full-tier tasks whose outcome another transaction locks. A maintenance
+-- caller passes p_keep_locked false: it keeps the references of those tasks for a later pass, so the
+-- reference still holds the task, and the function saves nothing for it. An application caller, an
+-- enqueue or a purge, passes true: it removes the references, so the function saves each such end
+-- in a row of terminal_hold_end, and health counts the task from it. Each task and outcome is one
+-- primary-key lookup, and one grouping finds the outcomes that it could not lock, so no row searches
+-- an array.
+CREATE OR REPLACE FUNCTION workhorse.record_terminal_hold_ends_internal_v1(
+  p_task_ids uuid[], p_hold_ends timestamptz[], p_keep_locked boolean
 ) RETURNS uuid[]
 LANGUAGE plpgsql
 AS $$
 DECLARE v_identity_window interval;
 DECLARE v_outcome_window interval;
-DECLARE v_needed uuid[];
-DECLARE v_ends timestamptz[];
+DECLARE v_full uuid[];
+DECLARE v_full_ends timestamptz[];
+DECLARE v_fast uuid[];
+DECLARE v_fast_ends timestamptz[];
 DECLARE v_locked uuid[];
+DECLARE v_locked_ends jsonb;
+DECLARE v_skipped uuid[];
+DECLARE v_skipped_ends timestamptz[];
 BEGIN
   IF p_task_ids IS NULL OR cardinality(p_task_ids) = 0 THEN
     RETURN '{}'::uuid[];
@@ -3410,64 +3534,134 @@ BEGIN
          make_interval(hours => 24 * policy.terminal_outcome_retention_days)
     INTO v_identity_window, v_outcome_window
     FROM workhorse.retention_policy policy WHERE policy.singleton;
-  SELECT COALESCE(array_agg(ended.task_id ORDER BY ended.task_id), '{}'::uuid[]),
-         COALESCE(array_agg(ended.at ORDER BY ended.task_id), '{}'::timestamptz[])
-    INTO v_needed, v_ends
+  SELECT COALESCE(array_agg(needed.task_id ORDER BY needed.task_id) FILTER (WHERE NOT needed.fast),
+                  '{}'::uuid[]),
+         COALESCE(array_agg(needed.at ORDER BY needed.task_id) FILTER (WHERE NOT needed.fast),
+                  '{}'::timestamptz[]),
+         COALESCE(array_agg(needed.task_id ORDER BY needed.task_id) FILTER (WHERE needed.fast),
+                  '{}'::uuid[]),
+         COALESCE(array_agg(needed.at ORDER BY needed.task_id) FILTER (WHERE needed.fast),
+                  '{}'::timestamptz[])
+    INTO v_full, v_full_ends, v_fast, v_fast_ends
     FROM (
-      SELECT hold.task_id, max(hold.at) AS at
-        FROM unnest(p_task_ids, p_hold_ends) AS hold(task_id, at)
-       WHERE hold.task_id IS NOT NULL AND hold.at IS NOT NULL
-       GROUP BY hold.task_id
-    ) ended
-    CROSS JOIN LATERAL (
-      SELECT outcome.finished_at, outcome.held_until FROM workhorse.task_outcome outcome
-       WHERE outcome.task_id = ended.task_id LIMIT 1
-    ) terminal
-    CROSS JOIN LATERAL (
-      SELECT task.created_at FROM workhorse.task task WHERE task.id = ended.task_id LIMIT 1
-    ) identity
-   WHERE (terminal.held_until IS NULL OR terminal.held_until < ended.at)
-     AND COALESCE(
-           workhorse.terminal_hold_end_internal_v1(
-             ended.at, identity.created_at + v_identity_window
-           ),
-           workhorse.terminal_hold_end_internal_v1(
-             ended.at, terminal.finished_at + v_outcome_window
-           )
-         ) IS NOT NULL;
-  IF cardinality(v_needed) = 0 THEN
+      SELECT ended.task_id, ended.at, terminal.fast
+        FROM (
+          SELECT hold.task_id, max(hold.at) AS at
+            FROM unnest(p_task_ids, p_hold_ends) AS hold(task_id, at)
+           WHERE hold.task_id IS NOT NULL AND hold.at IS NOT NULL
+           GROUP BY hold.task_id
+        ) ended
+        CROSS JOIN LATERAL (
+          SELECT outcome.finished_at, outcome.held_until, false AS fast
+            FROM workhorse.task_outcome outcome WHERE outcome.task_id = ended.task_id
+          UNION ALL
+          SELECT fast.finished_at, NULL::timestamptz, true
+            FROM workhorse.fast_task_outcome fast WHERE fast.task_id = ended.task_id
+          LIMIT 1
+        ) terminal
+        CROSS JOIN LATERAL (
+          SELECT task.created_at FROM workhorse.task task WHERE task.id = ended.task_id LIMIT 1
+        ) identity
+       WHERE (terminal.held_until IS NULL OR terminal.held_until < ended.at)
+         AND COALESCE(
+               workhorse.terminal_hold_end_internal_v1(
+                 ended.at, identity.created_at + v_identity_window
+               ),
+               workhorse.terminal_hold_end_internal_v1(
+                 ended.at, terminal.finished_at + v_outcome_window
+               )
+             ) IS NOT NULL
+    ) needed;
+  IF cardinality(v_fast) > 0 THEN
+    PERFORM workhorse.keep_terminal_hold_ends_internal_v1(v_fast, v_fast_ends, 'fast');
+  END IF;
+  IF cardinality(v_full) = 0 THEN
     RETURN '{}'::uuid[];
   END IF;
-  SELECT COALESCE(array_agg(locked.task_id), '{}'::uuid[])
-    INTO v_locked
-    FROM (
+  -- One lookup and one lock attempt for each task, in task order. The ends of the locked tasks go
+  -- into one JSON object, so the update reads the end of each row by its key and needs no join.
+  SELECT COALESCE(array_agg(ended.task_id ORDER BY ended.task_id), '{}'::uuid[]),
+         COALESCE(jsonb_object_agg(ended.task_id::text, ended.at), '{}'::jsonb)
+    INTO v_locked, v_locked_ends
+    FROM unnest(v_full, v_full_ends) AS ended(task_id, at)
+    CROSS JOIN LATERAL (
       SELECT outcome.task_id
         FROM workhorse.task_outcome outcome
-       WHERE outcome.task_id = ANY(v_needed)
-       ORDER BY outcome.task_id
+       WHERE outcome.task_id = ended.task_id
          FOR NO KEY UPDATE OF outcome SKIP LOCKED
     ) locked;
   IF cardinality(v_locked) > 0 THEN
     UPDATE workhorse.task_outcome outcome
-       SET held_until = GREATEST(outcome.held_until, ended.at)
-      FROM unnest(v_needed, v_ends) AS ended(task_id, at)
-     WHERE outcome.task_id = ANY(v_locked)
-       AND ended.task_id = outcome.task_id;
+       SET held_until = GREATEST(
+             outcome.held_until, (v_locked_ends->>outcome.task_id::text)::timestamptz
+           )
+     WHERE outcome.task_id = ANY(v_locked);
   END IF;
-  RETURN ARRAY(
-    SELECT needed.task_id FROM unnest(v_needed) AS needed(task_id)
-     WHERE NOT needed.task_id = ANY(v_locked)
-     ORDER BY needed.task_id
-  );
+  IF cardinality(v_locked) = cardinality(v_full) THEN
+    RETURN '{}'::uuid[];
+  END IF;
+  -- The tasks that it could not lock: one grouping over both lists.
+  SELECT COALESCE(array_agg(marked.task_id ORDER BY marked.task_id), '{}'::uuid[]),
+         COALESCE(array_agg(marked.at ORDER BY marked.task_id), '{}'::timestamptz[])
+    INTO v_skipped, v_skipped_ends
+    FROM (
+      SELECT side.task_id, max(side.at) AS at
+        FROM (
+          SELECT needed.task_id, needed.at, false AS locked
+            FROM unnest(v_full, v_full_ends) AS needed(task_id, at)
+          UNION ALL
+          SELECT locked.task_id, NULL::timestamptz, true
+            FROM unnest(v_locked) AS locked(task_id)
+        ) side
+       GROUP BY side.task_id
+      HAVING NOT bool_or(side.locked)
+    ) marked;
+  IF p_keep_locked THEN
+    PERFORM workhorse.keep_terminal_hold_ends_internal_v1(v_skipped, v_skipped_ends, 'full');
+  END IF;
+  RETURN v_skipped;
 END;
+$$;
+
+
+-- The save of an application statement: record_terminal_hold_ends_internal_v1 with p_keep_locked
+-- true (ADR 0122). An enqueue that reuses an expired key and a queue purge call it, because they
+-- remove the reference also when another transaction locks the outcome.
+CREATE OR REPLACE FUNCTION workhorse.save_terminal_hold_ends_internal_v1(
+  p_task_ids uuid[], p_hold_ends timestamptz[]
+) RETURNS uuid[]
+LANGUAGE sql
+AS $$
+  SELECT workhorse.record_terminal_hold_ends_internal_v1(p_task_ids, p_hold_ends, true);
+$$;
+
+-- Inserts a row of terminal_hold_end for each pair of p_task_ids and p_ends, unless a row of the
+-- same task already keeps that end or a later one (ADR 0122). The insert takes no row lock, so it
+-- never waits. Each test of a stored row is one index lookup.
+CREATE OR REPLACE FUNCTION workhorse.keep_terminal_hold_ends_internal_v1(
+  p_task_ids uuid[], p_ends timestamptz[], p_tier text
+) RETURNS void
+LANGUAGE sql
+AS $$
+  INSERT INTO workhorse.terminal_hold_end(task_id, tier, held_until)
+  SELECT ended.task_id, p_tier, ended.at
+    FROM unnest(p_task_ids, p_ends) AS ended(task_id, at)
+    -- A lateral lookup with LIMIT 1 stays one index probe for each end. A NOT EXISTS test let the
+    -- planner choose a join that read the whole table.
+    LEFT JOIN LATERAL (
+      SELECT 1 AS kept FROM workhorse.terminal_hold_end saved
+       WHERE saved.task_id = ended.task_id AND saved.held_until >= ended.at
+       LIMIT 1
+    ) stored ON true
+   WHERE ended.task_id IS NOT NULL AND ended.at IS NOT NULL AND stored.kept IS NULL;
 $$;
 
 -- The due instant of an eligible terminal row (ADR 0122): the latest of the end of its row window,
 -- the scheduled history pass that releases its history, and the end of each hold that ended. Those
 -- ends are the finish of its task group, the expiry of its enqueue keys, the scheduled pass after
 -- its schedule occurrences expire, the finish of its dependents, and the instant when its last
--- child became eligible. task_outcome.held_until keeps the end of a key hold or an edge hold after
--- the key phase or the released-edge phase removed that reference.
+-- child became eligible. task_outcome.held_until and terminal_hold_end keep the end of a hold after a
+-- statement removed its reference.
 CREATE OR REPLACE FUNCTION workhorse.terminal_row_due_at_internal_v1(
   p_task_id uuid, p_window_end timestamptz, p_history_through_at timestamptz,
   p_identity_window interval, p_outcome_window interval, p_history_window interval,
@@ -3484,6 +3678,9 @@ AS $$
     (SELECT workhorse.terminal_hold_end_internal_v1(outcome.held_until, p_window_end)
        FROM workhorse.task_outcome outcome
       WHERE outcome.task_id = p_task_id),
+    (SELECT workhorse.terminal_hold_end_internal_v1(max(saved.held_until), p_window_end)
+       FROM workhorse.terminal_hold_end saved
+      WHERE saved.task_id = p_task_id),
     (SELECT member_group.finished_at
        FROM workhorse.task_group_member member
        JOIN workhorse.task_group member_group ON member_group.id = member.group_id
@@ -3721,6 +3918,273 @@ AS $$
          (SELECT min(due_at) FROM outcome_walk WHERE eligible_at IS NOT NULL);
 $$;
 
+-- The retention boundaries of terminal rows that queue_health_v1 reports, with where each walk can
+-- start on the next poll (ADR 0122). The walks, holds, and due instants are those of
+-- terminal_retention_boundaries_internal_v1.
+--
+-- Each walk can start after a run of rows that a poll stored in terminal_retention_walk_start. A row
+-- of the run is not eligible, and it cannot become eligible before valid_until: it waits for a row
+-- window, or for an enqueue key or a schedule occurrence that ends at a known instant. A row that a
+-- hold keeps until an event, a row that waits for history retention, or a task with no outcome ends
+-- the run. The
+-- walk uses the stored run only while the clock is before valid_until and the two row windows, the
+-- occurrence window, and the history watermark are the same as when the poll stored it. A pass of history retention moves
+-- the watermark, so each walk starts from the oldest row again at least once a day. No statement
+-- writes a terminal row before the run, because the anchors are creation and finish instants.
+--
+-- Each walk returns the run that it passed: the stored run plus the rows at its start that it
+-- examined and that keep the run. The cap of terminal_retention_walk_rows_internal_v1() counts only
+-- the rows that the walk examines after its start, so a later poll reads the rows after the run.
+CREATE OR REPLACE FUNCTION workhorse.terminal_retention_boundaries_internal_v2(
+  p_now timestamptz
+) RETURNS TABLE (
+  eligible_task_identity_at timestamptz,
+  task_identity_due_at timestamptz,
+  eligible_terminal_outcome_at timestamptz,
+  terminal_outcome_due_at timestamptz,
+  identity_start_at timestamptz,
+  identity_start_id uuid,
+  identity_start_until timestamptz,
+  outcome_start_at timestamptz,
+  outcome_start_id uuid,
+  outcome_start_until timestamptz,
+  identity_window interval,
+  outcome_window interval,
+  occurrence_window interval,
+  history_before timestamptz
+)
+LANGUAGE sql
+STABLE
+AS $$
+  WITH RECURSIVE settings AS (
+    -- The LIMIT 1 is a planner fact, not a rule. It keeps the estimate of this singleton at one row.
+    SELECT make_interval(hours => 24 * policy.task_identity_retention_days) AS identity_window,
+           make_interval(hours => 24 * policy.terminal_outcome_retention_days) AS outcome_window,
+           p_now - make_interval(hours => 24 * policy.task_identity_retention_days)
+             AS identity_before,
+           p_now - make_interval(hours => 24 * policy.terminal_outcome_retention_days)
+             AS outcome_before,
+           state.history_retained_before AS history_before,
+           make_interval(hours => 24 * GREATEST(
+             COALESCE(policy.task_event_retention_days, 0),
+             COALESCE(policy.attempt_history_retention_days, 0)
+           )) AS history_window,
+           make_interval(hours => 24 * policy.schedule_occurrence_retention_days)
+             AS occurrence_window,
+           maintenance.timezone, maintenance.history_retention_local_time AS pass_time
+      FROM workhorse.retention_policy policy
+      CROSS JOIN workhorse.maintenance_policy maintenance
+      CROSS JOIN workhorse.maintenance_state state
+     WHERE policy.singleton AND maintenance.singleton
+       AND state.routine_name = 'history_retention'
+       AND policy.task_identity_retention_days IS NOT NULL
+       AND policy.terminal_outcome_retention_days IS NOT NULL
+       AND state.history_retained_before IS NOT NULL
+     LIMIT 1
+  ), starts AS (
+    SELECT stored.walk, stored.anchor_at, stored.task_id, stored.valid_until
+      FROM workhorse.terminal_retention_walk_start stored
+      CROSS JOIN settings
+     WHERE stored.anchor_at IS NOT NULL
+       AND stored.valid_until > p_now
+       AND stored.identity_window = settings.identity_window
+       AND stored.outcome_window = settings.outcome_window
+       AND stored.occurrence_window IS NOT DISTINCT FROM settings.occurrence_window
+       AND stored.history_before = settings.history_before
+  ), identity_walk(
+    created_at, task_id, due_at, eligible_at, examined, run_at, run_id, run_until, run_open
+  ) AS (
+    SELECT COALESCE(start.anchor_at, '-infinity'::timestamptz),
+           COALESCE(start.task_id, '00000000-0000-0000-0000-000000000000'::uuid),
+           'infinity'::timestamptz, NULL::timestamptz, 0,
+           start.anchor_at, start.task_id, COALESCE(start.valid_until, 'infinity'::timestamptz),
+           true
+      FROM (SELECT 1) present
+      LEFT JOIN starts start ON start.walk = 'identity'
+    UNION ALL
+    SELECT step.created_at, step.task_id,
+           CASE WHEN due.at IS NULL THEN walk.due_at ELSE LEAST(walk.due_at, due.at) END,
+           COALESCE(walk.eligible_at, CASE WHEN due.at IS NOT NULL THEN step.created_at END),
+           walk.examined + 1,
+           CASE WHEN walk.run_open AND due.passable_until IS NOT NULL
+                THEN step.created_at ELSE walk.run_at END,
+           CASE WHEN walk.run_open AND due.passable_until IS NOT NULL
+                THEN step.task_id ELSE walk.run_id END,
+           CASE WHEN walk.run_open AND due.passable_until IS NOT NULL
+                THEN LEAST(walk.run_until, due.passable_until) ELSE walk.run_until END,
+           walk.run_open AND due.passable_until IS NOT NULL
+      FROM identity_walk walk
+      CROSS JOIN settings
+      CROSS JOIN LATERAL (
+        SELECT task.created_at, task.id AS task_id
+          FROM workhorse.task task
+         WHERE (task.created_at, task.id) > (walk.created_at, walk.task_id)
+           AND task.created_at < LEAST(
+             settings.identity_before, settings.history_before,
+             walk.due_at - settings.identity_window
+           )
+         ORDER BY task.created_at, task.id
+         LIMIT 1
+      ) step
+      LEFT JOIN LATERAL (
+        SELECT terminal.finished_at, terminal.history_through_at
+          FROM workhorse.task_outcome terminal
+         WHERE terminal.task_id = step.task_id
+        UNION ALL
+        -- A fast-tier outcome has no history boundary of its own. Its history rows, if the queue
+        -- recorded any, end when it finished.
+        SELECT fast.finished_at, fast.finished_at
+          FROM workhorse.fast_task_outcome fast
+         WHERE fast.task_id = step.task_id
+         LIMIT 1
+      ) outcome ON true
+      CROSS JOIN LATERAL (
+        SELECT CASE WHEN outcome.finished_at IS NOT NULL
+                    THEN workhorse.terminal_row_hold_until_internal_v1(
+                           step.task_id, p_now, settings.identity_before,
+                           settings.outcome_before, settings.history_before,
+                           settings.occurrence_window
+                         ) END AS until
+      ) hold
+      CROSS JOIN LATERAL (
+        SELECT CASE WHEN outcome.finished_at < settings.outcome_before
+                     AND outcome.history_through_at < settings.history_before
+                     AND hold.until IS NULL
+                  THEN workhorse.terminal_row_due_at_internal_v1(
+                         step.task_id, step.created_at + settings.identity_window,
+                         outcome.history_through_at, settings.identity_window,
+                         settings.outcome_window, settings.history_window,
+                         settings.occurrence_window, settings.timezone, settings.pass_time
+                       ) END AS at,
+               -- The earliest instant when the row can become eligible, or null when it is
+               -- eligible now, when an event decides it, or when it waits for history retention.
+               CASE WHEN outcome.finished_at IS NULL OR hold.until = 'infinity'
+                      OR outcome.history_through_at >= settings.history_before THEN NULL
+                    WHEN outcome.finished_at < settings.outcome_before
+                     AND hold.until IS NULL THEN NULL
+                    ELSE COALESCE(GREATEST(
+                           CASE WHEN outcome.finished_at >= settings.outcome_before
+                                THEN outcome.finished_at + settings.outcome_window END,
+                           hold.until
+                         ), 'infinity'::timestamptz) END AS passable_until
+      ) due
+     -- The history of a row is at or after its anchor, so the pass that releases the anchor is a
+     -- lower bound of its due instant. That bound grows with the anchor. If it is not earlier than
+     -- the earliest due instant, no later row can be earlier, and the walk stops.
+     WHERE walk.examined < workhorse.terminal_retention_walk_rows_internal_v1()
+       AND workhorse.history_release_due_at_internal_v1(
+             step.created_at, settings.history_window, settings.timezone, settings.pass_time
+           ) < walk.due_at
+  ), outcome_walk(
+    finished_at, task_id, due_at, eligible_at, examined, run_at, run_id, run_until, run_open
+  ) AS (
+    SELECT COALESCE(start.anchor_at, '-infinity'::timestamptz),
+           COALESCE(start.task_id, '00000000-0000-0000-0000-000000000000'::uuid),
+           'infinity'::timestamptz, NULL::timestamptz, 0,
+           start.anchor_at, start.task_id, COALESCE(start.valid_until, 'infinity'::timestamptz),
+           true
+      FROM (SELECT 1) present
+      LEFT JOIN starts start ON start.walk = 'outcome'
+    UNION ALL
+    SELECT step.finished_at, step.task_id,
+           CASE WHEN due.at IS NULL THEN walk.due_at ELSE LEAST(walk.due_at, due.at) END,
+           COALESCE(walk.eligible_at, CASE WHEN due.at IS NOT NULL THEN step.finished_at END),
+           walk.examined + 1,
+           CASE WHEN walk.run_open AND due.passable_until IS NOT NULL
+                THEN step.finished_at ELSE walk.run_at END,
+           CASE WHEN walk.run_open AND due.passable_until IS NOT NULL
+                THEN step.task_id ELSE walk.run_id END,
+           CASE WHEN walk.run_open AND due.passable_until IS NOT NULL
+                THEN LEAST(walk.run_until, due.passable_until) ELSE walk.run_until END,
+           walk.run_open AND due.passable_until IS NOT NULL
+      FROM outcome_walk walk
+      CROSS JOIN settings
+      CROSS JOIN LATERAL (
+        SELECT terminal.finished_at, terminal.task_id, terminal.history_through_at
+          FROM (
+            SELECT outcome.finished_at, outcome.task_id, outcome.history_through_at
+              FROM workhorse.task_outcome outcome
+             WHERE (outcome.finished_at, outcome.task_id) > (walk.finished_at, walk.task_id)
+               AND outcome.finished_at < LEAST(
+                 settings.outcome_before, settings.history_before,
+                 walk.due_at - settings.outcome_window
+               )
+             ORDER BY outcome.finished_at, outcome.task_id
+             LIMIT 1
+          ) terminal
+        UNION ALL
+        SELECT fast.finished_at, fast.task_id, fast.finished_at
+          FROM (
+            SELECT outcome.finished_at, outcome.task_id
+              FROM workhorse.fast_task_outcome outcome
+             WHERE (outcome.finished_at, outcome.task_id) > (walk.finished_at, walk.task_id)
+               AND outcome.finished_at < LEAST(
+                 settings.outcome_before, settings.history_before,
+                 walk.due_at - settings.outcome_window
+               )
+             ORDER BY outcome.finished_at, outcome.task_id
+             LIMIT 1
+          ) fast
+         ORDER BY 1, 2
+         LIMIT 1
+      ) step
+      CROSS JOIN LATERAL (
+        SELECT task.created_at FROM workhorse.task task WHERE task.id = step.task_id LIMIT 1
+      ) identity
+      CROSS JOIN LATERAL (
+        SELECT workhorse.terminal_row_hold_until_internal_v1(
+                 step.task_id, p_now, settings.identity_before,
+                 settings.outcome_before, settings.history_before,
+                 settings.occurrence_window
+               ) AS until
+      ) hold
+      CROSS JOIN LATERAL (
+        SELECT CASE WHEN identity.created_at < settings.identity_before
+                     AND step.history_through_at < settings.history_before
+                     AND hold.until IS NULL
+                  THEN workhorse.terminal_row_due_at_internal_v1(
+                         step.task_id, step.finished_at + settings.outcome_window,
+                         step.history_through_at, settings.identity_window,
+                         settings.outcome_window, settings.history_window,
+                         settings.occurrence_window, settings.timezone, settings.pass_time
+                       ) END AS at,
+               CASE WHEN hold.until = 'infinity'
+                      OR step.history_through_at >= settings.history_before THEN NULL
+                    WHEN identity.created_at < settings.identity_before
+                     AND hold.until IS NULL THEN NULL
+                    ELSE COALESCE(GREATEST(
+                           CASE WHEN identity.created_at >= settings.identity_before
+                                THEN identity.created_at + settings.identity_window END,
+                           hold.until
+                         ), 'infinity'::timestamptz) END AS passable_until
+      ) due
+     WHERE walk.examined < workhorse.terminal_retention_walk_rows_internal_v1()
+       AND workhorse.history_release_due_at_internal_v1(
+             step.finished_at, settings.history_window, settings.timezone, settings.pass_time
+           ) < walk.due_at
+  )
+  SELECT (SELECT min(walk.eligible_at) FROM identity_walk walk),
+         (SELECT min(walk.due_at) FROM identity_walk walk WHERE walk.eligible_at IS NOT NULL),
+         (SELECT min(walk.eligible_at) FROM outcome_walk walk),
+         (SELECT min(walk.due_at) FROM outcome_walk walk WHERE walk.eligible_at IS NOT NULL),
+         identity_run.run_at, identity_run.run_id,
+         CASE WHEN identity_run.run_at IS NOT NULL THEN identity_run.run_until END,
+         outcome_run.run_at, outcome_run.run_id,
+         CASE WHEN outcome_run.run_at IS NOT NULL THEN outcome_run.run_until END,
+         (SELECT settings.identity_window FROM settings),
+         (SELECT settings.outcome_window FROM settings),
+         (SELECT settings.occurrence_window FROM settings),
+         (SELECT settings.history_before FROM settings)
+    FROM (
+      SELECT walk.run_at, walk.run_id, walk.run_until
+        FROM identity_walk walk ORDER BY walk.examined DESC LIMIT 1
+    ) identity_run
+    CROSS JOIN (
+      SELECT walk.run_at, walk.run_id, walk.run_until
+        FROM outcome_walk walk ORDER BY walk.examined DESC LIMIT 1
+    ) outcome_run;
+$$;
+
 CREATE OR REPLACE FUNCTION workhorse.queue_health_v1(
   p_rejected_since timestamptz DEFAULT clock_timestamp() - interval '1 day'
 ) RETURNS jsonb
@@ -3734,10 +4198,16 @@ DECLARE
   -- The retention part reads the clock one time. A cutoff from a variable is a constant for each
   -- scan, so the planner can use it as an index condition (SM-1936).
   v_now timestamptz := clock_timestamp();
+  v_bounds record;
 BEGIN
+  -- terminal_retention_boundaries_internal_v2 applies the holds that terminal cleanup keeps on
+  -- purpose, and it finds the earliest due instant of the rows it can delete. Each walk starts after
+  -- the run of rows that an earlier poll stored, and it returns the run that it passed (SM-2021).
+  SELECT * INTO v_bounds FROM workhorse.terminal_retention_boundaries_internal_v2(v_now);
   SELECT (to_jsonb(snapshot) - 'schedule_occurrence_pass_lag_ms'
            - 'schedule_occurrence_due_lag_ms' - 'task_identity_due_at'
-           - 'terminal_outcome_due_at') || jsonb_build_object(
+           - 'terminal_outcome_due_at' - 'terminal_cleanup_owed_since'
+           - 'terminal_cleanup_stalled_since' - 'terminal_cleanup_interval_ms') || jsonb_build_object(
            'status', workhorse.evaluate_queue_health_v1(to_jsonb(snapshot), to_jsonb(policy)),
            'budgets', jsonb_build_object(
              'promotionLagMs', policy.promotion_lag_ms,
@@ -3887,10 +4357,10 @@ BEGIN
                 AS oldest_task_identity_at,
               (SELECT finished_at FROM terminal_outcome ORDER BY finished_at, task_id LIMIT 1)
                 AS oldest_terminal_outcome_at,
-              row_boundaries.eligible_task_identity_at,
-              row_boundaries.task_identity_due_at,
-              row_boundaries.eligible_terminal_outcome_at,
-              row_boundaries.terminal_outcome_due_at,
+              v_bounds.eligible_task_identity_at AS eligible_task_identity_at,
+              v_bounds.task_identity_due_at AS task_identity_due_at,
+              v_bounds.eligible_terminal_outcome_at AS eligible_terminal_outcome_at,
+              v_bounds.terminal_outcome_due_at AS terminal_outcome_due_at,
               (SELECT occurred_at FROM workhorse.task_event ORDER BY occurred_at, event_id LIMIT 1)
                 AS oldest_task_event_at,
               (SELECT occurred_at FROM workhorse.task_event
@@ -3917,10 +4387,6 @@ BEGIN
                  UNION ALL SELECT bucket_start FROM workhorse.task_stat_bucket_day
                ) statistic_tiers) AS oldest_statistics_at
             FROM policy
-            -- terminal_retention_boundaries_internal_v1 applies the holds that terminal cleanup
-            -- keeps on purpose, and it finds the earliest due instant of the rows it can delete.
-            CROSS JOIN LATERAL workhorse.terminal_retention_boundaries_internal_v1(v_now)
-              row_boundaries
           ), partitions AS (
             SELECT parent.relname AS parent_name,
                    ((regexp_match(
@@ -4059,6 +4525,55 @@ BEGIN
                         - make_interval(hours => 24 * policy.statistics_retention_days)
                         - boundaries.oldest_statistics_at) * 1000) END
                    AS statistics_lag_ms,
+                 -- The earliest instant when one terminal row passed both of its row windows, among
+                 -- the first five rows of task_created_retention_idx and of each outcome retention
+                 -- index. From then on, terminal cleanup has rows to examine (SM-2019). Each value
+                 -- comes from one row, so two rows that each pass one window do not count. When the
+                 -- outcome window is not shorter than the identity window, the first outcome row
+                 -- gives the exact instant, because a task finishes after it is created.
+                 CASE WHEN policy.task_identity_retention_days IS NOT NULL
+                       AND policy.terminal_outcome_retention_days IS NOT NULL
+                      THEN (
+                        SELECT min(GREATEST(
+                                 owed.created_at
+                                   + make_interval(hours => 24 * policy.task_identity_retention_days),
+                                 owed.finished_at
+                                   + make_interval(hours => 24 * policy.terminal_outcome_retention_days)
+                               ))
+                          FROM (
+                            -- Each part takes five index rows first and then looks up the other
+                            -- side, so a live task without an outcome is one of the five rows and
+                            -- does not make the part read further.
+                            SELECT first.created_at, terminal.finished_at
+                              FROM (
+                                SELECT task.id, task.created_at FROM workhorse.task task
+                                 ORDER BY task.created_at, task.id LIMIT 5
+                              ) first
+                              CROSS JOIN LATERAL (
+                                SELECT outcome.finished_at FROM workhorse.task_outcome outcome
+                                 WHERE outcome.task_id = first.id
+                                UNION ALL
+                                SELECT fast.finished_at FROM workhorse.fast_task_outcome fast
+                                 WHERE fast.task_id = first.id
+                                LIMIT 1
+                              ) terminal
+                            UNION ALL
+                            SELECT identity.created_at, first.finished_at
+                              FROM (
+                                (SELECT outcome.task_id, outcome.finished_at
+                                   FROM workhorse.task_outcome outcome
+                                  ORDER BY outcome.finished_at, outcome.task_id LIMIT 5)
+                                UNION ALL
+                                (SELECT outcome.task_id, outcome.finished_at
+                                   FROM workhorse.fast_task_outcome outcome
+                                  ORDER BY outcome.finished_at, outcome.task_id LIMIT 5)
+                              ) first
+                              CROSS JOIN LATERAL (
+                                SELECT task.created_at FROM workhorse.task task
+                                 WHERE task.id = first.task_id LIMIT 1
+                              ) identity
+                          ) owed
+                      ) END AS terminal_cleanup_owed_since,
                  eligible.*, default_rows.*
             FROM policy CROSS JOIN maintenance CROSS JOIN boundaries CROSS JOIN eligible
               CROSS JOIN default_rows
@@ -4446,6 +4961,22 @@ BEGIN
                -- Set while terminal cleanup ends its passes with a full batch, so it is behind.
                (SELECT terminal_cleanup_backlog_since FROM workhorse.maintenance_state
                  WHERE routine_name = 'terminal_storage') AS terminal_cleanup_backlog_since,
+               -- Since when terminal cleanup has not completed a pass while it has rows (SM-2019).
+               -- After a first completion, it is the last completion, while a terminal outcome
+               -- exists. The snapshot reads oldest_terminal_outcome_at for its public document
+               -- anyway, so this test adds no read, and the reason does not depend on the capped
+               -- walks or on the sample, so rows that a read skips cannot hide it. Before a first
+               -- completion, it starts when the sampled rows show a row past both of its windows,
+               -- so a new database does not report it.
+               CASE WHEN completed.at IS NOT NULL
+                     AND retention.oldest_terminal_outcome_at IS NOT NULL
+                      THEN completed.at
+                    WHEN completed.at IS NULL AND retention.terminal_cleanup_owed_since <= v_now
+                      THEN retention.terminal_cleanup_owed_since
+               END AS terminal_cleanup_stalled_since,
+               (SELECT maintenance.terminal_cleanup_interval_ms
+                  FROM workhorse.maintenance_policy maintenance WHERE maintenance.singleton)
+                 AS terminal_cleanup_interval_ms,
                -- Each routine whose newest recorded runs failed one after another, with the count
                -- of those failed runs. The count reads only the runs that started after the last
                -- completion of the routine. The tick records a successful run only when it changed
@@ -4497,6 +5028,10 @@ BEGIN
           CROSS JOIN external_waits
           CROSS JOIN retention
           CROSS JOIN rollup
+          LEFT JOIN LATERAL (
+            SELECT state.last_completed_at AS at FROM workhorse.maintenance_state state
+             WHERE state.routine_name = 'terminal_storage'
+          ) completed ON true
           -- One capped read gives both schedule fields.
           CROSS JOIN LATERAL (
             SELECT count(*) AS definitions FROM (
@@ -4553,6 +5088,40 @@ BEGIN
         FROM pg_stat_activity
        WHERE pid <> pg_backend_pid()
     ) activity;
+
+  -- Store where each walk can start on the next poll. A read-only transaction, a standby, and a
+  -- transaction at repeatable read or serializable skip this: at those levels a row that another
+  -- poll changed after the snapshot fails the write with SQLSTATE 40001. A role that can only read
+  -- the table, such as the read-only dashboard role, skips it too. Every writer takes the advisory
+  -- lock first and keeps it until it commits, so a poll that gets the lock waits for no row lock,
+  -- and a poll that does not get it skips the write.
+  IF current_setting('transaction_read_only') = 'off'
+     AND current_setting('transaction_isolation') = 'read committed'
+     AND has_table_privilege('workhorse.terminal_retention_walk_start', 'INSERT')
+     AND has_table_privilege('workhorse.terminal_retention_walk_start', 'UPDATE')
+     AND pg_try_advisory_xact_lock(hashtextextended('workhorse:terminal-retention-walk-start', 0)) THEN
+    INSERT INTO workhorse.terminal_retention_walk_start AS stored(
+      walk, anchor_at, task_id, valid_until, identity_window, outcome_window, occurrence_window,
+      history_before
+    ) VALUES
+      ('identity', v_bounds.identity_start_at, v_bounds.identity_start_id,
+       v_bounds.identity_start_until, v_bounds.identity_window, v_bounds.outcome_window,
+       v_bounds.occurrence_window, v_bounds.history_before),
+      ('outcome', v_bounds.outcome_start_at, v_bounds.outcome_start_id,
+       v_bounds.outcome_start_until, v_bounds.identity_window, v_bounds.outcome_window,
+       v_bounds.occurrence_window, v_bounds.history_before)
+    ON CONFLICT (walk) DO UPDATE
+      SET anchor_at = EXCLUDED.anchor_at, task_id = EXCLUDED.task_id,
+          valid_until = EXCLUDED.valid_until, identity_window = EXCLUDED.identity_window,
+          outcome_window = EXCLUDED.outcome_window,
+          occurrence_window = EXCLUDED.occurrence_window,
+          history_before = EXCLUDED.history_before
+      WHERE (stored.anchor_at, stored.task_id, stored.valid_until, stored.identity_window,
+             stored.outcome_window, stored.occurrence_window, stored.history_before)
+            IS DISTINCT FROM (EXCLUDED.anchor_at, EXCLUDED.task_id, EXCLUDED.valid_until,
+                              EXCLUDED.identity_window, EXCLUDED.outcome_window,
+                              EXCLUDED.occurrence_window, EXCLUDED.history_before);
+  END IF;
 
   RETURN v_document || jsonb_build_object('observations', v_observations);
 END;
@@ -6588,18 +7157,31 @@ BEGIN
      LIMIT p_limit
      FOR UPDATE SKIP LOCKED
   ), blocked AS MATERIALIZED (
-    SELECT workhorse.save_terminal_hold_ends_internal_v1(
+    SELECT workhorse.record_terminal_hold_ends_internal_v1(
              array_agg(victims.task_id),
              array_agg(workhorse.history_pass_due_at_internal_v1(
                victims.occurrence_at + v_window, v_timezone, v_local_time
-             ))
+             )),
+             false
            ) AS task_ids
       FROM victims
+  ), removable AS MATERIALIZED (
+    -- One window by task marks the occurrences of a blocked task, so no row searches the array.
+    SELECT marked.ctid
+      FROM (
+        SELECT side.ctid, bool_or(side.blocked) OVER (PARTITION BY side.task_id) AS blocked
+          FROM (
+            SELECT victims.ctid, victims.task_id, false AS blocked FROM victims
+            UNION ALL
+            SELECT NULL::tid, held.task_id, true
+              FROM blocked CROSS JOIN unnest(blocked.task_ids) AS held(task_id)
+          ) side
+      ) marked
+     WHERE marked.ctid IS NOT NULL AND NOT marked.blocked
   )
   DELETE FROM workhorse.schedule_occurrence occurrence
-   USING victims, blocked
-   WHERE occurrence.ctid = victims.ctid
-     AND (victims.task_id IS NULL OR NOT victims.task_id = ANY(blocked.task_ids));
+   USING removable
+   WHERE occurrence.ctid = removable.ctid;
   GET DIAGNOSTICS v_count = ROW_COUNT;
   RETURN v_count;
 END;
@@ -10326,17 +10908,30 @@ BEGIN
   -- outside the purge along the longest path. The purge cancels in depth order, so every task is
   -- canceled after its dependents that stay, and each of them sees the purge's own cancel.
   WITH RECURSIVE staying(task_id, depth) AS (
-    SELECT dependency.prerequisite_task_id, 0
-      FROM workhorse.task_dependency dependency
-     WHERE dependency.prerequisite_task_id = ANY(v_purged_task_ids)
-       AND NOT dependency.dependent_task_id = ANY(v_purged_task_ids)
-       AND (
-             dependency.released_at IS NULL
-             OR EXISTS (
-                  SELECT 1 FROM workhorse.task_runtime runtime
-                   WHERE runtime.task_id = dependency.dependent_task_id
-                )
-           )
+    -- One window by dependent marks the edges whose dependent the purge locked, so no row searches
+    -- the array.
+    SELECT marked.prerequisite_task_id, 0
+      FROM (
+        SELECT side.prerequisite_task_id, side.stays,
+               bool_or(side.purged) OVER (PARTITION BY side.dependent_task_id) AS dependent_purged
+          FROM (
+            SELECT dependency.prerequisite_task_id, dependency.dependent_task_id,
+                   (
+                     dependency.released_at IS NULL
+                     OR EXISTS (
+                          SELECT 1 FROM workhorse.task_runtime runtime
+                           WHERE runtime.task_id = dependency.dependent_task_id
+                        )
+                   ) AS stays,
+                   false AS purged
+              FROM workhorse.task_dependency dependency
+             WHERE dependency.prerequisite_task_id = ANY(v_purged_task_ids)
+            UNION ALL
+            SELECT NULL::uuid, purged.task_id, false, true
+              FROM unnest(v_purged_task_ids) AS purged(task_id)
+          ) side
+      ) marked
+     WHERE marked.stays AND NOT marked.dependent_purged
     UNION
     SELECT dependency.prerequisite_task_id, staying.depth + 1
       FROM staying
@@ -10353,10 +10948,10 @@ BEGIN
     ) deepest;
   v_canceled_task_ids := coalesce(v_canceled_task_ids, '{}');
   v_deleted_task_ids := ARRAY(
-    SELECT purged.task_id
-      FROM unnest(v_purged_task_ids) purged(task_id)
-     WHERE NOT purged.task_id = ANY(v_canceled_task_ids)
-     ORDER BY purged.task_id
+    SELECT purged.task_id FROM unnest(v_purged_task_ids) purged(task_id)
+    EXCEPT
+    SELECT canceled.task_id FROM unnest(v_canceled_task_ids) canceled(task_id)
+    ORDER BY 1
   );
 
   -- A purged member task counts as canceled for its group (ADR 0095). Every member is full-tier.
@@ -10375,34 +10970,43 @@ BEGIN
   -- of each such hold before the delete removes the reference (ADR 0122). It is the finish of a
   -- terminal dependent, the instant when a terminal child became eligible, and otherwise the purge.
   -- The write never waits. If another transaction holds an outcome, the purge continues without it.
+  -- One grouping by held task drops the tasks that the purge deletes too, so no row searches the
+  -- array.
   PERFORM workhorse.save_terminal_hold_ends_internal_v1(held.task_ids, held.ends)
     FROM (
       SELECT array_agg(hold.task_id) AS task_ids, array_agg(hold.at) AS ends
         FROM (
-          SELECT dependency.prerequisite_task_id AS task_id,
-                 COALESCE(
-                   (SELECT outcome.finished_at FROM workhorse.task_outcome outcome
-                     WHERE outcome.task_id = dependency.dependent_task_id),
-                   clock_timestamp()
-                 ) AS at
-            FROM workhorse.task_dependency dependency
-           WHERE dependency.dependent_task_id = ANY(v_deleted_task_ids)
-             AND NOT dependency.prerequisite_task_id = ANY(v_deleted_task_ids)
-          UNION ALL
-          SELECT edge.parent_task_id,
-                 LEAST(
-                   COALESCE(workhorse.terminal_child_hold_end_internal_v1(edge.child_task_id),
-                            clock_timestamp()),
-                   clock_timestamp()
-                 )
-            FROM workhorse.task_child edge
-           WHERE edge.child_task_id = ANY(v_deleted_task_ids)
-             AND NOT edge.parent_task_id = ANY(v_deleted_task_ids)
-          UNION ALL
-          SELECT redrive.source_task_id, clock_timestamp()
-            FROM workhorse.task_redrive redrive
-           WHERE redrive.target_task_id = ANY(v_deleted_task_ids)
-             AND NOT redrive.source_task_id = ANY(v_deleted_task_ids)
+          SELECT side.task_id, max(side.at) AS at
+            FROM (
+              SELECT dependency.prerequisite_task_id AS task_id,
+                     COALESCE(
+                       (SELECT outcome.finished_at FROM workhorse.task_outcome outcome
+                         WHERE outcome.task_id = dependency.dependent_task_id),
+                       clock_timestamp()
+                     ) AS at,
+                     false AS deleted
+                FROM workhorse.task_dependency dependency
+               WHERE dependency.dependent_task_id = ANY(v_deleted_task_ids)
+              UNION ALL
+              SELECT edge.parent_task_id,
+                     LEAST(
+                       COALESCE(workhorse.terminal_child_hold_end_internal_v1(edge.child_task_id),
+                                clock_timestamp()),
+                       clock_timestamp()
+                     ),
+                     false
+                FROM workhorse.task_child edge
+               WHERE edge.child_task_id = ANY(v_deleted_task_ids)
+              UNION ALL
+              SELECT redrive.source_task_id, clock_timestamp(), false
+                FROM workhorse.task_redrive redrive
+               WHERE redrive.target_task_id = ANY(v_deleted_task_ids)
+              UNION ALL
+              SELECT deleted.task_id, NULL::timestamptz, true
+                FROM unnest(v_deleted_task_ids) AS deleted(task_id)
+            ) side
+           GROUP BY side.task_id
+          HAVING NOT bool_or(side.deleted)
         ) hold
     ) held
    WHERE held.task_ids IS NOT NULL;
@@ -10460,11 +11064,19 @@ BEGIN
   -- purge saves the end of that hold before the delete removes the redrive edge (ADR 0122).
   PERFORM workhorse.save_terminal_hold_ends_internal_v1(held.task_ids, held.ends)
     FROM (
-      SELECT array_agg(redrive.source_task_id) AS task_ids,
-             array_agg(clock_timestamp()) AS ends
-        FROM workhorse.task_redrive redrive
-       WHERE redrive.target_task_id = ANY(v_fast_task_ids)
-         AND NOT redrive.source_task_id = ANY(v_fast_task_ids)
+      SELECT array_agg(source.task_id) AS task_ids, array_agg(clock_timestamp()) AS ends
+        FROM (
+          SELECT side.task_id
+            FROM (
+              SELECT redrive.source_task_id AS task_id, false AS deleted
+                FROM workhorse.task_redrive redrive
+               WHERE redrive.target_task_id = ANY(v_fast_task_ids)
+              UNION ALL
+              SELECT deleted.task_id, true FROM unnest(v_fast_task_ids) AS deleted(task_id)
+            ) side
+           GROUP BY side.task_id
+          HAVING NOT bool_or(side.deleted)
+        ) source
     ) held
    WHERE held.task_ids IS NOT NULL;
   DELETE FROM workhorse.enqueue_idempotency idempotency
@@ -17332,6 +17944,87 @@ BEGIN
 END;
 $$;
 
+-- The holds that a delete of p_task_ids ends on tasks that stay (ADR 0122): a parent of a deleted
+-- child, a prerequisite of a deleted dependent, and a redrive source of a deleted target. It gives
+-- one row for each task that stays, with the latest end. One index lookup for each deleted task
+-- finds its references, and one grouping drops the tasks that the delete removes too, so no row
+-- searches an array.
+CREATE OR REPLACE FUNCTION workhorse.terminal_deleted_holds_internal_v1(
+  p_task_ids uuid[], p_now timestamptz
+) RETURNS TABLE (task_id uuid, ends_at timestamptz)
+LANGUAGE sql
+STABLE
+AS $$
+  SELECT side.task_id, max(side.ends_at)
+    FROM (
+      SELECT edge.parent_task_id AS task_id,
+             workhorse.terminal_child_hold_end_internal_v1(edge.child_task_id) AS ends_at,
+             false AS deleted
+        FROM workhorse.task_child edge
+       WHERE edge.child_task_id = ANY(p_task_ids)
+      UNION ALL
+      SELECT dependency.prerequisite_task_id, dependent.finished_at, false
+        FROM workhorse.task_dependency dependency
+        JOIN workhorse.task_outcome dependent ON dependent.task_id = dependency.dependent_task_id
+       WHERE dependency.dependent_task_id = ANY(p_task_ids)
+      UNION ALL
+      SELECT redrive.source_task_id, p_now, false
+        FROM workhorse.task_redrive redrive
+       WHERE redrive.target_task_id = ANY(p_task_ids)
+      UNION ALL
+      SELECT deleted.task_id, NULL::timestamptz, true
+        FROM unnest(p_task_ids) AS deleted(task_id)
+    ) side
+   GROUP BY side.task_id
+  HAVING NOT bool_or(side.deleted);
+$$;
+
+-- The tasks of p_task_ids, in their order, that hold no task of p_blocked: no child edge, dependency
+-- edge, or redrive edge leads from a task of p_blocked to them (ADR 0122). One index lookup for each
+-- task finds its references. One window over the references marks those of a blocked task, and one
+-- grouping keeps the other tasks, so no row searches an array.
+CREATE OR REPLACE FUNCTION workhorse.terminal_tasks_free_of_internal_v1(
+  p_task_ids uuid[], p_blocked uuid[]
+) RETURNS uuid[]
+LANGUAGE sql
+STABLE
+AS $$
+  SELECT COALESCE(array_agg(kept.task_id ORDER BY kept.position), '{}'::uuid[])
+    FROM (
+      SELECT side.task_id, min(side.position) AS position
+        FROM (
+          SELECT candidate.task_id, candidate.position, false AS holds
+            FROM unnest(p_task_ids) WITH ORDINALITY AS candidate(task_id, position)
+          UNION ALL
+          SELECT reference.task_id, NULL::bigint, true
+            FROM (
+              SELECT reference.task_id,
+                     bool_or(reference.blocked) OVER (PARTITION BY reference.holder) AS blocked
+                FROM (
+                  SELECT edge.child_task_id AS task_id, edge.parent_task_id AS holder,
+                         false AS blocked
+                    FROM workhorse.task_child edge
+                   WHERE edge.child_task_id = ANY(p_task_ids)
+                  UNION ALL
+                  SELECT dependency.dependent_task_id, dependency.prerequisite_task_id, false
+                    FROM workhorse.task_dependency dependency
+                   WHERE dependency.dependent_task_id = ANY(p_task_ids)
+                  UNION ALL
+                  SELECT redrive.target_task_id, redrive.source_task_id, false
+                    FROM workhorse.task_redrive redrive
+                   WHERE redrive.target_task_id = ANY(p_task_ids)
+                  UNION ALL
+                  SELECT NULL::uuid, blocked.task_id, true
+                    FROM unnest(p_blocked) AS blocked(task_id)
+                ) reference
+            ) reference
+           WHERE reference.blocked AND reference.task_id IS NOT NULL
+        ) side
+       GROUP BY side.task_id
+      HAVING NOT bool_or(side.holds)
+    ) kept;
+$$;
+
 -- One full-tier batch of terminal cleanup. It reports whether it deleted nothing while a dependency
 -- edge kept a prerequisite of its slice that passes each cutoff.
 --
@@ -17489,45 +18182,13 @@ BEGIN
     <<holds>>
     LOOP
       SELECT COALESCE(array_agg(hold.task_id), '{}'::uuid[]),
-             COALESCE(array_agg(hold.at), '{}'::timestamptz[])
+             COALESCE(array_agg(hold.ends_at), '{}'::timestamptz[])
         INTO v_hold_ids, v_hold_ends
-        FROM (
-          SELECT edge.parent_task_id AS task_id,
-                 workhorse.terminal_child_hold_end_internal_v1(edge.child_task_id) AS at
-            FROM workhorse.task_child edge
-           WHERE edge.child_task_id = ANY(v_candidates)
-             AND NOT edge.parent_task_id = ANY(v_candidates)
-          UNION ALL
-          SELECT dependency.prerequisite_task_id, dependent.finished_at
-            FROM workhorse.task_dependency dependency
-            JOIN workhorse.task_outcome dependent ON dependent.task_id = dependency.dependent_task_id
-           WHERE dependency.dependent_task_id = ANY(v_candidates)
-             AND NOT dependency.prerequisite_task_id = ANY(v_candidates)
-          UNION ALL
-          SELECT redrive.source_task_id, v_now
-            FROM workhorse.task_redrive redrive
-           WHERE redrive.target_task_id = ANY(v_candidates)
-             AND NOT redrive.source_task_id = ANY(v_candidates)
-        ) hold;
+        FROM workhorse.terminal_deleted_holds_internal_v1(v_candidates, v_now) hold;
       EXIT holds WHEN cardinality(v_hold_ids) = 0;
-      v_blocked := workhorse.save_terminal_hold_ends_internal_v1(v_hold_ids, v_hold_ends);
+      v_blocked := workhorse.record_terminal_hold_ends_internal_v1(v_hold_ids, v_hold_ends, false);
       EXIT holds WHEN cardinality(v_blocked) = 0;
-      SELECT COALESCE(array_agg(kept.id ORDER BY kept.position), '{}'::uuid[])
-        INTO v_candidates
-        FROM unnest(v_candidates) WITH ORDINALITY AS kept(id, position)
-       WHERE NOT EXISTS (
-               SELECT 1 FROM workhorse.task_child edge
-                WHERE edge.child_task_id = kept.id AND edge.parent_task_id = ANY(v_blocked)
-             )
-         AND NOT EXISTS (
-               SELECT 1 FROM workhorse.task_dependency dependency
-                WHERE dependency.dependent_task_id = kept.id
-                  AND dependency.prerequisite_task_id = ANY(v_blocked)
-             )
-         AND NOT EXISTS (
-               SELECT 1 FROM workhorse.task_redrive redrive
-                WHERE redrive.target_task_id = kept.id AND redrive.source_task_id = ANY(v_blocked)
-             );
+      v_candidates := workhorse.terminal_tasks_free_of_internal_v1(v_candidates, v_blocked);
       EXIT holds WHEN cardinality(v_candidates) = 0;
     END LOOP holds;
     EXIT WHEN cardinality(v_candidates) = 0;
@@ -17540,6 +18201,9 @@ BEGIN
     ), deleted AS (
       DELETE FROM workhorse.task task WHERE task.id = ANY(v_candidates)
       RETURNING task.id
+    ), saved AS (
+      -- The saved hold ends of a deleted task go with it.
+      DELETE FROM workhorse.terminal_hold_end saved WHERE saved.task_id = ANY(v_candidates)
     )
     SELECT (SELECT count(*)::integer FROM deleted),
            COALESCE((SELECT array_agg(released.id ORDER BY released.id) FROM released),
@@ -17698,45 +18362,13 @@ BEGIN
     <<holds>>
     LOOP
       SELECT COALESCE(array_agg(hold.task_id), '{}'::uuid[]),
-             COALESCE(array_agg(hold.at), '{}'::timestamptz[])
+             COALESCE(array_agg(hold.ends_at), '{}'::timestamptz[])
         INTO v_hold_ids, v_hold_ends
-        FROM (
-          SELECT edge.parent_task_id AS task_id,
-                 workhorse.terminal_child_hold_end_internal_v1(edge.child_task_id) AS at
-            FROM workhorse.task_child edge
-           WHERE edge.child_task_id = ANY(v_locked)
-             AND NOT edge.parent_task_id = ANY(v_locked)
-          UNION ALL
-          SELECT dependency.prerequisite_task_id, dependent.finished_at
-            FROM workhorse.task_dependency dependency
-            JOIN workhorse.task_outcome dependent ON dependent.task_id = dependency.dependent_task_id
-           WHERE dependency.dependent_task_id = ANY(v_locked)
-             AND NOT dependency.prerequisite_task_id = ANY(v_locked)
-          UNION ALL
-          SELECT redrive.source_task_id, v_now
-            FROM workhorse.task_redrive redrive
-           WHERE redrive.target_task_id = ANY(v_locked)
-             AND NOT redrive.source_task_id = ANY(v_locked)
-        ) hold;
+        FROM workhorse.terminal_deleted_holds_internal_v1(v_locked, v_now) hold;
       EXIT holds WHEN cardinality(v_hold_ids) = 0;
-      v_blocked := workhorse.save_terminal_hold_ends_internal_v1(v_hold_ids, v_hold_ends);
+      v_blocked := workhorse.record_terminal_hold_ends_internal_v1(v_hold_ids, v_hold_ends, false);
       EXIT holds WHEN cardinality(v_blocked) = 0;
-      SELECT COALESCE(array_agg(kept.id ORDER BY kept.position), '{}'::uuid[])
-        INTO v_locked
-        FROM unnest(v_locked) WITH ORDINALITY AS kept(id, position)
-       WHERE NOT EXISTS (
-               SELECT 1 FROM workhorse.task_child edge
-                WHERE edge.child_task_id = kept.id AND edge.parent_task_id = ANY(v_blocked)
-             )
-         AND NOT EXISTS (
-               SELECT 1 FROM workhorse.task_dependency dependency
-                WHERE dependency.dependent_task_id = kept.id
-                  AND dependency.prerequisite_task_id = ANY(v_blocked)
-             )
-         AND NOT EXISTS (
-               SELECT 1 FROM workhorse.task_redrive redrive
-                WHERE redrive.target_task_id = kept.id AND redrive.source_task_id = ANY(v_blocked)
-             );
+      v_locked := workhorse.terminal_tasks_free_of_internal_v1(v_locked, v_blocked);
       EXIT holds WHEN cardinality(v_locked) = 0;
     END LOOP holds;
     EXIT WHEN cardinality(v_locked) = 0;
@@ -17747,6 +18379,9 @@ BEGIN
     ), deleted AS (
       DELETE FROM workhorse.task task WHERE task.id = ANY(v_locked)
       RETURNING task.id
+    ), saved AS (
+      -- The saved hold ends of a deleted task go with it.
+      DELETE FROM workhorse.terminal_hold_end saved WHERE saved.task_id = ANY(v_locked)
     )
     SELECT (SELECT count(*)::integer FROM deleted),
            COALESCE((SELECT array_agg(released.id ORDER BY released.id) FROM released),
@@ -17891,15 +18526,31 @@ BEGIN
      LIMIT p_limit
   ), blocked AS MATERIALIZED (
     -- The prerequisites whose outcome needs the write but another transaction locks.
-    SELECT workhorse.save_terminal_hold_ends_internal_v1(
-             array_agg(candidates.prerequisite_task_id), array_agg(candidates.dependent_finished_at)
+    SELECT workhorse.record_terminal_hold_ends_internal_v1(
+             array_agg(candidates.prerequisite_task_id), array_agg(candidates.dependent_finished_at),
+             false
            ) AS task_ids
       FROM candidates
+  ), removable AS MATERIALIZED (
+    -- One window by prerequisite marks the edges of a blocked task, so no row searches the array.
+    SELECT marked.dependent_task_id, marked.prerequisite_task_id
+      FROM (
+        SELECT side.dependent_task_id, side.prerequisite_task_id, side.edge,
+               bool_or(side.blocked) OVER (PARTITION BY side.prerequisite_task_id) AS blocked
+          FROM (
+            SELECT candidates.dependent_task_id, candidates.prerequisite_task_id, true AS edge,
+                   false AS blocked
+              FROM candidates
+            UNION ALL
+            SELECT NULL::uuid, held.task_id, false, true
+              FROM blocked CROSS JOIN unnest(blocked.task_ids) AS held(task_id)
+          ) side
+      ) marked
+     WHERE marked.edge AND NOT marked.blocked
   )
-  DELETE FROM workhorse.task_dependency dependency USING candidates, blocked
-   WHERE dependency.dependent_task_id = candidates.dependent_task_id
-     AND dependency.prerequisite_task_id = candidates.prerequisite_task_id
-     AND NOT candidates.prerequisite_task_id = ANY(blocked.task_ids);
+  DELETE FROM workhorse.task_dependency dependency USING removable
+   WHERE dependency.dependent_task_id = removable.dependent_task_id
+     AND dependency.prerequisite_task_id = removable.prerequisite_task_id;
   GET DIAGNOSTICS v_count = ROW_COUNT;
   RETURN v_count;
 END;
@@ -17948,15 +18599,30 @@ BEGIN
      LIMIT p_limit
   ), blocked AS MATERIALIZED (
     -- The tasks whose outcome needs the write but another transaction locks.
-    SELECT workhorse.save_terminal_hold_ends_internal_v1(
-             array_agg(candidates.task_id), array_agg(candidates.expires_at)
+    SELECT workhorse.record_terminal_hold_ends_internal_v1(
+             array_agg(candidates.task_id), array_agg(candidates.expires_at), false
            ) AS task_ids
       FROM candidates
+  ), removable AS MATERIALIZED (
+    -- One window by task marks the keys of a blocked task, so no row searches the array.
+    SELECT marked.idempotency_scope, marked.idempotency_key_hash
+      FROM (
+        SELECT side.idempotency_scope, side.idempotency_key_hash, side.key,
+               bool_or(side.blocked) OVER (PARTITION BY side.task_id) AS blocked
+          FROM (
+            SELECT candidates.idempotency_scope, candidates.idempotency_key_hash,
+                   candidates.task_id, true AS key, false AS blocked
+              FROM candidates
+            UNION ALL
+            SELECT NULL::text, NULL::bytea, held.task_id, false, true
+              FROM blocked CROSS JOIN unnest(blocked.task_ids) AS held(task_id)
+          ) side
+      ) marked
+     WHERE marked.key AND NOT marked.blocked
   )
-  DELETE FROM workhorse.enqueue_idempotency idempotency USING candidates, blocked
-   WHERE idempotency.idempotency_scope = candidates.idempotency_scope
-     AND idempotency.idempotency_key_hash = candidates.idempotency_key_hash
-     AND NOT candidates.task_id = ANY(blocked.task_ids);
+  DELETE FROM workhorse.enqueue_idempotency idempotency USING removable
+   WHERE idempotency.idempotency_scope = removable.idempotency_scope
+     AND idempotency.idempotency_key_hash = removable.idempotency_key_hash;
   GET DIAGNOSTICS v_count = ROW_COUNT;
   SELECT task_identity_retention_days INTO v_purge_retention_days
     FROM workhorse.retention_policy WHERE singleton;
@@ -21944,8 +22610,8 @@ BEGIN
         SELECT member.task_id FROM workhorse.task_group_member member
          WHERE member.group_id = v_group_id
       );
-      CONTINUE WHEN cardinality(workhorse.save_terminal_hold_ends_internal_v1(
-        v_members, array_fill(v_finished_at, ARRAY[cardinality(v_members)])
+      CONTINUE WHEN cardinality(workhorse.record_terminal_hold_ends_internal_v1(
+        v_members, array_fill(v_finished_at, ARRAY[cardinality(v_members)]), false
       )) > 0;
       DELETE FROM workhorse.task_group task_group WHERE task_group.id = v_group_id;
       v_deleted := v_deleted + 1;
@@ -25740,10 +26406,11 @@ INSERT INTO workhorse.schema_migration(version, description) VALUES
   (99, 'bound failure envelopes and answer an oversized checkpoint value with a status'),
   (100, 'floor the expired-lease scan gate and count one admission shard'),
   (101, 'index the active leases of each admission shard'),
-  (102, 'take the locks of an enqueue call in key, tier, and row order')
+  (102, 'take the locks of an enqueue call in key, tier, and row order'),
+  (103, 'keep each hold end, bound the hold code, start health walks after held rows, and report a stalled cleanup')
 ON CONFLICT DO NOTHING;
 
-INSERT INTO workhorse.schema_version(version) VALUES (102) ON CONFLICT DO NOTHING;
+INSERT INTO workhorse.schema_version(version) VALUES (103) ON CONFLICT DO NOTHING;
 
 INSERT INTO workhorse.protocol_version(version) VALUES (5) ON CONFLICT DO NOTHING;
 SELECT workhorse.create_history_day_v1(

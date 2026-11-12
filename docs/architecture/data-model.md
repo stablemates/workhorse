@@ -1571,7 +1571,10 @@ cancellation deletes runtime and inserts the outcome in one transaction.
   a child edge, a redrive edge, or a task group membership. That statement writes the end of the
   hold through `save_terminal_hold_ends_internal_v1`, and queue health counts that lag as due from
   it. `terminal_hold_end_internal_v1` states the rule for both. ADR 0122 lists each such statement. A reference that went before migration 0097 left no value. `fast_task_outcome` has no such
-  column ([ADR 0122](../decisions/0122-give-cleanup-and-health-one-retention-rule.md)).
+  column ([ADR 0122](../decisions/0122-give-cleanup-and-health-one-retention-rule.md)). Since
+  migration 0104, an end that this column cannot take, because the task is fast-tier or another
+  transaction locks the outcome, goes to `terminal_hold_end`, and it stays there until the cleanup
+  batch that deletes the task.
 
 #### Dispatch and retention
 
@@ -3931,6 +3934,52 @@ stops at the main position. When it reaches the main position, it starts again f
 row. `prune_terminal_tasks_v1` holds the `terminal_storage` row of `maintenance_state` for
 update, so one batch at a time writes the table. A test reset truncates it, which restores the
 start ([ADR 0122](../decisions/0122-give-cleanup-and-health-one-retention-rule.md)).
+
+Migration 0104 (schema version 103) adds two retention tables:
+
+| Table                           | Columns                                                                                                                                                          | Writers                                                                                            |
+| ------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------- |
+| `terminal_hold_end`             | `entry_id` (identity primary key), `task_id`, `tier` (`full` or `fast`), `held_until`                                                                            | `record_terminal_hold_ends_internal_v1` inserts; the full and fast cleanup batches delete          |
+| `terminal_retention_walk_start` | `walk` (`identity` or `outcome`, primary key), `anchor_at`, `task_id`, `valid_until`, `identity_window`, `outcome_window`, `occurrence_window`, `history_before` | `queue_health_v1`, at read committed in a writable transaction that gets its advisory lock at once |
+
+`terminal_hold_end` keeps the end of a hold that `task_outcome.held_until` cannot take: the end of a
+fast-tier task, and the end of a full-tier task whose outcome another transaction locked. It has no
+unique key on `task_id` and no foreign key, so an insert takes no row lock. The index
+`terminal_hold_end_task_idx` on `(task_id, held_until)` serves health, the insert test, and the
+deletes of a batch. A row stays until the batch that deletes its task deletes it too.
+How `terminal_hold_end` grows, and what reports it:
+
+- A row exists only for a task that has a `task_outcome` or `fast_task_outcome` row, because
+  `record_terminal_hold_ends_internal_v1` writes nothing for a task with no outcome. A full-tier row
+  comes only from an enqueue or a purge that removed a reference while another transaction locked
+  the outcome. A maintenance statement that meets a locked outcome keeps its reference and writes no
+  row, so a blocked retry adds none. A fast-tier row comes from a statement that removed a
+  reference. Each such statement removes its reference, so it writes at most one row for each
+  reference of the task, and it inserts no row when a row of the same task already keeps that end
+  or a later one.
+- Thus the table grows with the finished tasks that cleanup has not deleted yet, as `task_outcome`
+  and `fast_task_outcome` do. It has no bound of its own while terminal cleanup does not run.
+- While cleanup does not run, `terminal-cleanup-stalled` reports it, and `retention-lag` reports the
+  rows past their windows. `queue_health_v1` lists the size and the row count of
+  `terminal_hold_end` in `observations.relations`, as for each table of the schema.
+
+Which statements remove its rows:
+
+| Statement that deletes a task or an outcome         | Its `terminal_hold_end` rows                                              |
+| --------------------------------------------------- | ------------------------------------------------------------------------- |
+| `prune_full_terminal_tasks_internal_v1`             | Deletes the rows of each task that it deletes, in the same statement      |
+| `prune_fast_terminal_tasks_internal_v1`             | Deletes the rows of each task that it deletes, in the same statement      |
+| `purge_queue_internal_v1`, both of its task deletes | No rows: it deletes pending tasks only, and a pending task has no outcome |
+
+No other statement deletes a `task` row. An outcome goes only with its task, through the foreign key.
+A row can stay behind its task in one case only: a statement inserts it for a task that another
+transaction deletes at the same time. Both batches keep a task while the reference that the
+statement removes still exists, so the batch that deletes the task sees the row. No statement sweeps
+a row whose task is gone.
+
+`terminal_retention_walk_start` stores where each health walk can start. A missing row means the
+oldest row. A test reset truncates both tables
+([Lifecycle](lifecycle.md#retention-health)).
 
 Two more columns belong to `terminal_storage` alone:
 
