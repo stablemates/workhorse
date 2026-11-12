@@ -655,6 +655,42 @@ with no outcome lock. A redrive takes the outcome of its source `FOR SHARE`, so 
 pass commits. A pass reports `dependency_starved` when it deleted nothing and any of its
 batches saw a pin.
 
+`record_terminal_hold_ends_internal_v1(task_ids, hold_ends, keep_locked)` writes each hold end since
+migration 0104 (schema version 103). `save_terminal_hold_ends_internal_v1(task_ids, hold_ends)` keeps
+its signature and calls it with `keep_locked` true. It keeps an end that `task_outcome.held_until`
+cannot take in a row of `terminal_hold_end`:
+
+| Held task                                            | Where the end goes                                                              |
+| ---------------------------------------------------- | ------------------------------------------------------------------------------- |
+| Full tier, outcome locked by this call               | `task_outcome.held_until`                                                       |
+| Full tier, outcome locked by another transaction     | A `terminal_hold_end` row with `tier = 'full'`, only when `keep_locked` is true |
+| Fast tier                                            | A `terminal_hold_end` row with `tier = 'fast'`                                  |
+| No `task_outcome` row and no `fast_task_outcome` row | Nowhere, because the task is not terminal                                       |
+
+`terminal_hold_end` has no unique key on `task_id` and no foreign key, so the insert takes no row lock
+and never waits. The function inserts no row when a row of the same task already keeps that end or a
+later one. A maintenance statement passes `keep_locked` false: it keeps the reference of a task whose
+outcome another transaction locks, as above, and the function writes no row for that task, so a
+retry of a blocked batch adds no row. These are the key phase, the released-edge phase, the
+occurrence cleanup, both cleanup batches, and `maintain_task_groups_v1`. An enqueue that reuses an
+expired key and a queue purge remove the reference, so they pass true and leave the end in
+`terminal_hold_end`. That end stays in the row: no statement copies it to `held_until`, because a
+copy would hold the outcome lock until the pass commits, and a redrive of the task would wait. A
+fast-tier end also stays in `terminal_hold_end`, because `fast_task_outcome` has no `held_until`
+and the cold export writes each of its rows whole. Each full and fast batch deletes the `terminal_hold_end`
+rows of the identities that it deletes. `terminal_row_due_at_internal_v1` reads the latest end of a
+task in both places.
+
+Each array test of the hold code takes one sort or one hash over the batch: a grouping, a window, or
+`EXCEPT`. `terminal_deleted_holds_internal_v1` gives the holds that a delete ends on identities that
+stay, and `terminal_tasks_free_of_internal_v1` keeps the candidates that hold no blocked identity.
+The key phase, the released-edge phase, the occurrence cleanup, and `purge_queue_internal_v1` mark
+the references of a blocked identity with one window. A test of the form `NOT x = ANY(array)`
+searches the array once for each row, and under a generic plan PostgreSQL does not hash that array,
+so the work grew with the square of the batch (SM-2023). The work of the key phase now grows in
+proportion to its limit. `integration-retention-maintenance.test.ts` ("the cost of the hold code")
+checks both properties.
+
 `terminal_prune_position` stores two walks for each tier. The main walk starts after its position.
 If fewer rows follow, it continues from the oldest row up to its position. It stores the position
 after the last locked identity of a full batch or after the end of a whole slice. It removes the
@@ -3439,7 +3475,7 @@ The cost of the snapshot depends on live work, not on lifetime history.
 - `terminalCountsCapped` and `statistics.bucketsCapped` mark capped values as lower bounds that are
   exact until the cap.
 
-- The terminal retention boundaries come from `terminal_retention_boundaries_internal_v1`.
+- The terminal retention boundaries come from `terminal_retention_boundaries_internal_v2`.
   `queue_health_v1` reads the clock one time and gives it as a parameter, so each walk compares with
   a constant in its index condition. Each step reads one index row in order. Each walk stops at
   `history_retained_before` and at the first row that cannot be due before the earliest due instant
@@ -3448,7 +3484,10 @@ The cost of the snapshot depends on live work, not on lifetime history.
   walk. It does not read the rows inside their windows, the rows behind a held watermark, or the
   members of finished task groups inside their windows. A walk that reaches the cap with no eligible
   row reports no boundary
-  ([ADR 0122](../decisions/0122-give-cleanup-and-health-one-retention-rule.md)).
+  ([ADR 0122](../decisions/0122-give-cleanup-and-health-one-retention-rule.md)). The cap counts the
+  rows after the stored start of the walk, so the next poll does not read the same held rows again,
+  as [Retention health](#retention-health) states. `terminal_retention_boundaries_internal_v1` stays
+  in the schema, and no function calls it.
 
 The rate-limit block uses the same SQL as `Queue.rateLimitStatuses()`. Thus the two surfaces cannot
 disagree about throttle semantics.
@@ -3505,7 +3544,8 @@ A critical code means that work is stopping or is lost:
   three days after it
 
 A degraded code costs storage or throughput: `rollup-stalled`, `retention-lag`,
-`terminal-cleanup-backlog`, `eligible-history-partitions`, `default-history-rows`,
+`terminal-cleanup-backlog`, `terminal-cleanup-stalled`, `eligible-history-partitions`,
+`default-history-rows`,
 `maintenance-failing`, `schedule-failing`, `concurrency-blocked`, `rate-limit-throttled`, and
 `budget-blocked`.
 
@@ -3548,6 +3588,35 @@ installed row retention values.
 The default is large enough for a routine daily release. A saturated cleanup drains such a release
 within hours. A zero budget would fire after every such release. Observations do not carry the
 backlog start. They hold lagging statistics, and this value is exact.
+
+`terminal-cleanup-stalled` fires when terminal cleanup did not complete a pass for longer than its
+budget while terminal rows exist (SM-2019). `queue_health_v1` computes two internal values and
+removes them from the public document:
+
+- `terminal_cleanup_owed_since` is the earliest instant when one terminal row passed both of its
+  row windows: the later of its `created_at` plus the identity window and its `finished_at` plus the
+  outcome window. The snapshot takes it over the first five rows of `task_created_retention_idx`, of
+  `task_outcome_retention_idx`, and of `fast_task_outcome_retention_idx`, so it reads at most 15
+  index rows. Each value comes from one row, so two rows that each passed only one window do not
+  count. When the outcome window is not shorter than the identity window, the first outcome row
+  gives the exact instant, because a task finishes after it is created. Otherwise the instant can be
+  later than the exact one when each of the first rows still waits for its other window. It is null
+  when a row window is null or no terminal row exists.
+- `terminal_cleanup_stalled_since` is `maintenance_state.last_completed_at` of `terminal_storage`
+  when that value is set and `oldest_terminal_outcome_at` is not null. Before a first completion, it is
+  `terminal_cleanup_owed_since` once that instant has passed, so a new database with no rows past
+  their windows does not report the reason. After a first completion, the value uses no sample and no
+  walk, so rows that a read skips cannot hide a cleanup that stopped. It adds no read, because the
+  public document already reports `oldest_terminal_outcome_at`.
+
+Its `observed` value is the milliseconds from `terminal_cleanup_stalled_since` to `capturedAt`. Its
+`budget` is `row_retention_lag_ms` plus `maintenance_policy.terminal_cleanup_interval_ms`. With the
+defaults, that is 21,900,000 milliseconds (6 h 5 min). The reason reads no retention walk, so it also
+fires behind more held rows than a walk examines. A pass completes also when it deletes nothing, so
+the reason does not fire while cleanup runs. It reports a cleanup that does not run, for example
+when no worker runs maintenance. `maintenance-failing` reports a cleanup that runs and fails. A
+snapshot of a schema before version 103 has no `terminal_cleanup_stalled_since`, so the reason does
+not fire for it.
 
 #### Health policy
 
@@ -3604,7 +3673,7 @@ PostgreSQL as procedure input. A converted `QueueHealth` would need a conversion
 `DashboardSystemPage.status` carries `level` and the raw reasons.
 
 - The SPA derives human wording through `healthCheckMessages`.
-- It lists all 14 reason-code checks through `systemHealthChecks`, including passing checks.
+- It lists all 17 reason-code checks through `systemHealthChecks`, including passing checks.
 - Individual critical and degraded checks appear first with advice and documentation links.
 - The SPA labels `rate-limit-throttled` as `Throttling`. It labels `concurrency-blocked` and
   `budget-blocked` as `Limiting`. These labels show neutral operating states. They do not change
@@ -3637,7 +3706,7 @@ Terminal identity and terminal outcome lag count only rows that pass both row wi
 routine. That cutoff moves forward once a day. Thus a row that only this cutoff holds is not lag. A
 stalled history pass appears as task event and attempt history lag instead.
 
-`terminal_retention_boundaries_internal_v1` also skips each row that a hold keeps on purpose. Terminal
+`terminal_retention_boundaries_internal_v2` also skips each row that a hold keeps on purpose. Terminal
 cleanup keeps these rows too
 ([ADR 0122](../decisions/0122-give-cleanup-and-health-one-retention-rule.md)):
 
@@ -3656,8 +3725,8 @@ Health counts a row that cleanup keeps for another reference: a runtime row, a `
 `attempt_history` row, or an expired occurrence. Cleanup or history retention is then late to remove
 that reference. The key phase and the released-edge phase remove an expired key and an edge to a
 terminal dependent before the terminal phase. Each statement that removes a reference that a hold
-needs saves the end of that hold in `task_outcome.held_until`, so health still counts the row from
-that end (ADR 0122).
+needs saves the end of that hold in `task_outcome.held_until` or in `terminal_hold_end`, so health
+still counts the row from that end (ADR 0122).
 
 One history pass releases a whole day of rows at once, and a hold that ends releases its row at
 once. The bounded prune then needs several runs to delete them. Thus a row is due at the latest of
@@ -3687,11 +3756,45 @@ the end of its own window and at or after the history pass that releases its anc
 history is not earlier than its anchor. The walk stops at the first row for which that bound is not
 earlier than the earliest due instant, because a later row cannot be due earlier. Thus a row that is
 not due cannot hide an overdue row behind it. Each walk examines at most
-`terminal_retention_walk_rows_internal_v1()` rows (1,000). If more held rows come first, the walk
-reports no boundary, and `terminal-cleanup-backlog` reports a cleanup that falls behind. The public
+`terminal_retention_walk_rows_internal_v1()` rows (1,000) after its start. If more held rows come
+first, the walk reports no boundary. `terminal-cleanup-backlog` then reports a cleanup that falls
+behind, and `terminal-cleanup-stalled` reports a cleanup that does not complete. The public
 document reports the oldest eligible anchor as
 `eligible_task_identity_at` or `eligible_terminal_outcome_at`. `queue_health_v1` removes the due
 instants from the public document.
+
+Since migration 0104 (schema version 103), each walk can start after the held rows that an earlier
+poll passed (SM-2021). `terminal_retention_walk_start` has one row for each walk: `identity` and
+`outcome`. Each row stores the anchor and the task of the last row of a run of rows at the start of
+the walk, and `valid_until`:
+
+1. The run starts at the oldest row, or at the stored run.
+2. A row keeps the run when it has an outcome, it is not eligible, its history is behind the
+   watermark, and each reason that it waits for ends at a known instant: a row window, or the
+   enqueue keys and schedule occurrences that `terminal_row_hold_until_internal_v1` reports. That
+   function gives `'infinity'` for a hold that ends at an event.
+3. `valid_until` is the earliest of those instants over the run.
+4. A walk uses the stored run only while the clock is before `valid_until` and the stored identity
+   window, outcome window, occurrence window, and `history_retained_before` are the current values.
+   A shorter row window can make a row of the run eligible at once, so a change of either window
+   ends the use of the run. A history pass moves the
+   watermark, so each walk starts from the oldest row again at least once a day.
+
+No statement removes an unexpired key or an occurrence inside its window from a terminal task, and a
+new terminal row has a later anchor, so no row behind the run can become eligible before
+`valid_until`. A row that a hold keeps until an event, a row that waits for history retention, or a
+task with no outcome ends the run. The cap counts the rows after the start. Thus behind many held
+rows, each poll reads at most 1,000 more rows of each index, and the next poll starts after them.
+
+`queue_health_v1` writes `terminal_retention_walk_start` after its reads, with one `INSERT ... ON
+CONFLICT DO UPDATE`, only when the value changed. It writes only when `transaction_read_only` is
+`off`, `transaction_isolation` is `read committed`, the role has `INSERT` and `UPDATE` on the
+table, and `pg_try_advisory_xact_lock(hashtextextended('workhorse:terminal-retention-walk-start', 0))` succeeds.
+Each writer holds that lock until it commits, so a poll waits for no row lock. A poll in a read-only
+transaction or on a standby reads as before and stores nothing. A poll at repeatable read or
+serializable stores nothing too, because a write to a row that another poll changed after its
+snapshot fails with SQLSTATE `40001`. A poll of a role that can only read the table, such as the
+read-only dashboard role, stores nothing and does not fail with SQLSTATE `42501`.
 
 History lag is based only on fully droppable partitions or expired default rows. It excludes the
 intentionally retained partial boundary day.

@@ -98,7 +98,7 @@ const boundaryBody = async () => {
        FROM pg_proc routine
        JOIN pg_namespace namespace ON namespace.oid = routine.pronamespace
       WHERE namespace.nspname = 'workhorse'
-        AND routine.proname = 'terminal_retention_boundaries_internal_v1'`,
+        AND routine.proname = 'terminal_retention_boundaries_internal_v2'`,
   );
   expect(source.rows).toHaveLength(1);
   return source.rows[0]!.prosrc.replaceAll(/\bp_now\b/g, "statement_timestamp()");
@@ -868,14 +868,19 @@ describe("health snapshots", () => {
           )
         ).rows[0]!.cap,
       );
+      // A poll stores where the held rows end, and the next poll starts there (SM-2021). This test
+      // measures the walk of a first poll, so it clears the stored start before each read.
+      const clearStart = () => pool.query("DELETE FROM workhorse.terminal_retention_walk_start");
       const walked: number[] = [];
       for (const held of [cap + 100, cap + 400]) {
         await pool.query("DELETE FROM workhorse.enqueue_idempotency");
         await pool.query("DELETE FROM workhorse.task");
         await seedHeldBeforeEligible(held);
+        await clearStart();
         const health = await queue.health();
         expect(health.retentionLagMs.taskIdentity).toBeNull();
         expect(health.retentionLagMs.terminalOutcome).toBeNull();
+        await clearStart();
         walked.push(await walkReads());
       }
       expect(walked[1]).toBe(walked[0]);

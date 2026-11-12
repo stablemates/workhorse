@@ -330,10 +330,12 @@ when cleanup or history retention is late to remove the row that keeps it.
   same way. These are an enqueue that reuses an expired key, the occurrence cleanup, a cleanup batch
   that deletes a child, a dependent, or a redrive target, a queue purge, and the deletion of a
   finished task group. A maintenance statement keeps the reference while another transaction holds
-  the outcome. An enqueue or a purge continues without the write, and the task then counts from its
-  windows until cleanup deletes it.
+  the outcome. An enqueue or a purge removes the reference and saves the end in `terminal_hold_end`,
+  where it stays until cleanup deletes the task. Neither waits for the outcome.
+- A fast-tier task keeps each hold end in `terminal_hold_end`, because `fast_task_outcome` has no
+  `held_until` column. Queue health counts a fast-tier task from the end of its hold too.
 - A reference that cleanup deleted before migration 0097 left no `held_until` value. Queue health
-  counts such a task from its windows. A fast-tier outcome has no `held_until` column.
+  counts such a task from its windows.
 - The lock window of a batch holds only tasks that the batch can delete.
 
 More detail: [Task lifecycle: Terminal-task pruning](../architecture/lifecycle.md#terminal-task-pruning), [Task lifecycle: Retention health](../architecture/lifecycle.md#retention-health), and [Data model: Lineage retention](../architecture/data-model.md#lineage-retention).
@@ -483,8 +485,12 @@ Lag differs by category:
 - While a main position remains, the batch after each batch that deleted tasks uses the sweep
   walk. The sweep walk stops at the main position, so a task behind it goes within a bounded number
   of batches.
-- Queue health examines at most 1,000 rows in each retention walk. Behind more kept rows than that,
-  row lag is null, and `terminal-cleanup-backlog` reports a late cleanup.
+- Queue health examines at most 1,000 rows in each retention walk after the start of the walk.
+  Behind more kept rows than that, row lag is null on that poll. The next poll starts after the kept
+  rows that the earlier poll passed, while none of them can become eligible.
+- A cleanup that has tasks past both row windows and did not complete a pass for longer than
+  `row_retention_lag_ms` plus `terminal_cleanup_interval_ms` raises the degraded reason
+  `terminal-cleanup-stalled`. It does not depend on the walks.
 - A pass whose last batch filled, or that deleted tasks and ended with a main position, sets
   `maintenance_state.terminal_cleanup_backlog_since`, or keeps its earlier value. A pass that deletes
   nothing sets no backlog. The next pass is then due after the follow-up delay of five seconds, or after

@@ -16,7 +16,9 @@ day. It also corrects the statistics catch-up and the completion of history rete
 and queue health use one retention rule, and each retention window is a fixed number of hours. It
 keeps the audit of each settings change of the dashboard, lets each embedded dashboard withhold
 error stacks, and opens the detail of each record of the event feed. It gives the expired-lease scan
-a floor, and it counts the active leases of one admission shard through an index. It also corrects
+a floor, and it counts the active leases of one admission shard through an index. It keeps the end
+of each hold of a finished task, starts each health walk after the held rows that an earlier poll
+read, and reports a terminal cleanup that does not complete. It also corrects
 three SDK APIs before 1.0.0. It changes how Rust code builds a record and matches an enum, and it
 removes items from the Rust and Go APIs that were never meant for applications. In TypeScript, the
 `Handler` type accepts a handler with no return value. This changes the type that code which calls a
@@ -26,8 +28,8 @@ states. The upgrade is a rolling deployment, and a mixed fleet is supported whil
 
 1. If you run cold exporters, stop each one and let it finish its object and manifest uploads. Keep
    cold export enabled, so retention keeps waiting for the export.
-2. Run `workhorse schema migrate`. It applies migrations 0093 through 0103 and leaves the schema at
-   version 102. Do this before the first process of the new release starts, because the floor rises.
+2. Run `workhorse schema migrate`. It applies migrations 0093 through 0104 and leaves the schema at
+   version 103. Do this before the first process of the new release starts, because the floor rises.
    Migration 0102 builds an index on `task_runtime` without a block on writes. On a large table the
    build can take a long time, as the next section states.
 3. Roll out the new processes in any order. Then start the exporters again.
@@ -49,9 +51,10 @@ each `cold_export_segment` row that is exporting.
 | `0101-floor-the-lease-scan-gate-and-count-one-admission-shard.sql`                | 100            | `tick_v1` runs the expired-lease scan at most once in 500 ms while a live worker is registered, and `notify_concurrency_capacity_v1` counts one admission shard with parts that an index can serve                                                                                                                                                                                        |
 | `0102-index-the-active-leases-of-each-admission-shard.sql`                        | 101            | Builds `task_runtime_active_queue_shard_idx` on `(queue_name, admission_shard)` for active rows with `CREATE INDEX CONCURRENTLY`, outside a transaction                                                                                                                                                                                                                                   |
 | `0103-take-enqueue-locks-in-key-tier-row-order.sql`                               | 102            | `lock_enqueue_prerequisites_internal_v1`, `enqueue_many_v1`, `add_task_group_members_v1`, and `cancel_task_group_v1` take the locks of each enqueue call in key, tier, and row order                                                                                                                                                                                                      |
+| `0104-keep-each-hold-end-and-start-health-walks-after-held-rows.sql`              | 103            | The new table `terminal_hold_end` keeps each hold end that `task_outcome.held_until` cannot take, the hold code tests each array with one sort or hash, `queue_health_v1` starts each walk after the held rows that `terminal_retention_walk_start` stores, and `evaluate_queue_health_v1` adds `terminal-cleanup-stalled`                                                                |
 
 Migrations 0093 through 0097 keep the floor. With migrations 0098, 0099, and 0100, the SDK schema floor rises from 76 to 99.
-Migrations 0101 through 0103 add no function that an SDK calls, so they keep the floor at 99.
+Migrations 0101 through 0104 add no function that an SDK calls, so they keep the floor at 99.
 Each SDK statement catalogue of the new release names `schedule_wait_v2`, `send_signal_v2`, and
 `create_children_v2`, which schema version 97 adds. The dashboard host of each SDK calls
 `override_retention_policy_v2` and the three other audited policy functions, which schema version
@@ -194,7 +197,7 @@ such a change, and 1.0.0 cannot:
 - .NET: `AddWorkhorse` throws for a `Json` section under `Workhorse:Queue` or `Workhorse:Worker`.
   Remove the section, and set the JSON options in code.
 
-A 0.12 process keeps working on schema version 102, because a migration inside a major line only
+A 0.12 process keeps working on schema version 103, because a migration inside a major line only
 adds. Migration 0098 keeps `schedule_wait_v1`, `send_signal_v1`, and `create_children_v1` and their
 answers. Migration 0100 keeps `fail_v1`, `fast_fail_v1`, and `save_checkpoint_v2` and their answers.
 
@@ -213,6 +216,24 @@ Migration 0101 changes two function bodies for every SDK version when it commits
   through the index of migration 0102. It gives the same answer as before, and without the index it
   gives the same answer more slowly
   ([Lifecycle: Capacity release notifications](architecture/lifecycle.md#capacity-release-notifications)).
+
+Migration 0104 changes these behaviors for every SDK version when it commits:
+
+- An enqueue that reuses an expired key, and a queue purge, keep the end of the hold that they
+  remove also while another transaction holds the outcome of the old task. Neither waits for that
+  outcome. Queue health then counts the old task from the end of the hold, not from its windows.
+- Queue health counts a fast-tier task from the end of each hold that a statement removed, for
+  example an expired key that the key phase deleted. The cold export rows of `fast_task_outcome` do
+  not change.
+- A health poll behind many held rows stores where they end, and the next poll starts there. A poll
+  in a read-only transaction or on a standby stores nothing and reads as before.
+- The degraded reason `terminal-cleanup-stalled` reports terminal cleanup that did not complete a
+  pass for longer than `row_retention_lag_ms` plus `terminal_cleanup_interval_ms` while finished
+  tasks exist. Before a first completion, it waits until a finished task is past both row windows. A dashboard package of an earlier release does not know the code
+  and skips it.
+
+([Lifecycle: Terminal-task pruning](architecture/lifecycle.md#terminal-task-pruning) and
+[Lifecycle: Retention health](architecture/lifecycle.md#retention-health)).
 
 ### Build the shard index
 

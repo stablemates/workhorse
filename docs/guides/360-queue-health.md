@@ -204,6 +204,11 @@ Each client returns the same reason codes and the same `capped` lower-bound mark
   change the verdict.
 - `schedule-failing` has the budget 0: its `observed` value counts the enabled schedules with a
   stored error. The next schedule pass that fires a schedule clears its error.
+- `terminal-cleanup-stalled` has the budget `row_retention_lag_ms` plus
+  `terminal_cleanup_interval_ms`. Its `observed` value is the milliseconds since terminal cleanup
+  last completed a pass while finished tasks exist. Before a first completion, it counts from when
+  the first finished task passed both of its row windows. It does not depend on the retention
+  walks.
 - No reason reads `observations.oldestTransactionAgeMs`, the age of the oldest open transaction in
   the database. Read it there, or in `pg_stat_activity`.
 
@@ -218,6 +223,7 @@ Each client returns the same reason codes and the same `capped` lower-bound mark
 | `rollup-stalled`              | degraded | Rollup lag exceeds `rollupStalledLagMs`.                                             |
 | `retention-lag`               | degraded | A retention category's cleanup lag exceeds its budget.                               |
 | `terminal-cleanup-backlog`    | degraded | A terminal cleanup backlog has lasted longer than `terminalCleanupBacklogMs`.        |
+| `terminal-cleanup-stalled`    | degraded | Terminal cleanup has work and did not complete a pass within its budget.             |
 | `eligible-history-partitions` | degraded | Fully eligible event and attempt partitions exceed the budget.                       |
 | `default-history-rows`        | degraded | Any row sits in a default history partition.                                         |
 | `maintenance-failing`         | degraded | Three recorded runs of a routine failed one after another after its last completion. |
@@ -350,7 +356,7 @@ snapshot.
 <summary>Reference: System page health</summary>
 
 - `DashboardSystemPage.status` carries `level` and the raw reasons.
-- The SPA lists all 14 reason-code checks through `systemHealthChecks`, including passing checks.
+- The SPA lists all 17 reason-code checks through `systemHealthChecks`, including passing checks.
 - It labels `rate-limit-throttled` as `Throttling`. It labels `concurrency-blocked` and
   `budget-blocked` as `Limiting`. Their protocol severity does not change.
 - It does not display `status.level` or add thresholds.

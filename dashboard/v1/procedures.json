@@ -4029,7 +4029,8 @@
         "rollup-stalled",
         "schedule-failing",
         "stalled-promotion",
-        "terminal-cleanup-backlog"
+        "terminal-cleanup-backlog",
+        "terminal-cleanup-stalled"
       ]
     },
     "DashboardQueueHistoryResult": {

@@ -2839,6 +2839,12 @@
                               "category": "terminalOutcome",
                               "observed": 0,
                               "severity": "degraded"
+                            },
+                            {
+                              "code": "terminal-cleanup-stalled",
+                              "budget": 21900000,
+                              "observed": 0,
+                              "severity": "degraded"
                             }
                           ]
                         },
@@ -3985,6 +3991,12 @@
                               "code": "retention-lag",
                               "budget": 21600000,
                               "category": "terminalOutcome",
+                              "observed": 0,
+                              "severity": "degraded"
+                            },
+                            {
+                              "code": "terminal-cleanup-stalled",
+                              "budget": 21900000,
                               "observed": 0,
                               "severity": "degraded"
                             }
@@ -9670,7 +9682,8 @@
           "rollup-stalled",
           "schedule-failing",
           "stalled-promotion",
-          "terminal-cleanup-backlog"
+          "terminal-cleanup-backlog",
+          "terminal-cleanup-stalled"
         ]
       },
       "DashboardQueueHistoryResult": {

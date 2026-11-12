@@ -734,6 +734,14 @@ export const SCHEMA_MIGRATIONS: readonly SchemaMigrationStep[] = [
     description: "take the locks of an enqueue call in key, tier, and row order",
     kind: "additive",
   },
+  {
+    fromVersion: 102,
+    toVersion: 103,
+    file: "0104-keep-each-hold-end-and-start-health-walks-after-held-rows.sql",
+    description:
+      "keep each hold end, bound the hold code, start health walks after held rows, and report a stalled cleanup",
+    kind: "additive",
+  },
 ];
 
 /**

@@ -879,7 +879,9 @@ GRANT SELECT ON ALL TABLES IN SCHEMA workhorse TO workhorse_dashboard_read;
 ```
 
 With these grants, each dashboard read and the schema compatibility check succeed. Each action
-fails with SQLSTATE `42501`, and a direct `INSERT`, `UPDATE`, or `DELETE` fails the same way.
+fails with SQLSTATE `42501`, and a direct `INSERT`, `UPDATE`, or `DELETE` fails the same way. A
+health read of this role stores no walk start in `terminal_retention_walk_start`, so it reads as on
+a schema before version 103.
 
 ### Writable dashboard role
 
@@ -929,10 +931,10 @@ This section states the limits and defaults that operators must know.
 
 ### Schema and PostgreSQL
 
-- The canonical artifact installs version 102, the whole current schema.
+- The canonical artifact installs version 103, the whole current schema.
 - Version 6 is the migration baseline. Its frozen copy is `sql/releases/0006.sql`.
 - A schema change is an upgrade, not a reinstall. `migrateSchema` applies the ordered steps under
-  `sql/migrations/`, which run from 6 to 102.
+  `sql/migrations/`, which run from 6 to 103.
 - Workhorse does not upgrade a database below 6
   ([ADR 0073](../decisions/0073-prune-the-migration-chain-to-the-0-2-0-baseline.md)).
 - Workhorse requires only plain PostgreSQL 15+. Workhorse installs no extension beyond the default
@@ -999,14 +1001,16 @@ buckets. The snapshot flags a capped count. A capped count is exact until the ca
 lower bound.
 
 Each of the two terminal retention walks of the snapshot examines at most
-`terminal_retention_walk_rows_internal_v1()` index rows, 1,000. A walk that reaches the cap with no
-eligible row reports no boundary, so its row lag is null. A walk that found an eligible row reports
-the earliest due instant among the rows that it examined, so the lag is then a lower bound. When
-cleanup falls behind, `terminal-cleanup-backlog` reports it: a terminal cleanup pass that ends with a
-full batch, or that deleted rows and ends with a main position after its time budget, records
-`terminal_cleanup_backlog_since`. A pass that deletes nothing records no backlog. No health reason
-reports a terminal cleanup that does not run at all. For that case, an operator reads the
-`terminal_storage` row of the dashboard Schedules page, or `maintenance_state.last_completed_at`.
+`terminal_retention_walk_rows_internal_v1()` index rows, 1,000, after its start. A walk that reaches
+the cap with no eligible row reports no boundary, so its row lag is null. A walk that found an
+eligible row reports the earliest due instant among the rows that it examined, so the lag is then a
+lower bound. Since schema version 103, a walk starts after the held rows that an earlier poll passed,
+while none of them can become eligible, so the next poll does not read them again. When cleanup falls
+behind, `terminal-cleanup-backlog` reports it: a terminal cleanup pass that ends with a full batch, or
+that deleted rows and ends with a main position after its time budget, records
+`terminal_cleanup_backlog_since`. A pass that deletes nothing records no backlog. When terminal
+cleanup has work and does not complete a pass for longer than `row_retention_lag_ms` plus
+`terminal_cleanup_interval_ms`, `terminal-cleanup-stalled` reports it. That reason reads no walk.
 
 One terminal cleanup batch examines at most `terminal_prune_slice_rows_internal_v1(p_limit)` outcome
 rows for each tier batch that it runs: four times its share of the limit, at least 1,000 and at most

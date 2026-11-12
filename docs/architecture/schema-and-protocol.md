@@ -14,7 +14,7 @@ installation from one version to the next.
 
 ### Current version and baseline
 
-The current schema version is 102 (`WORKHORSE_SCHEMA_VERSION`) and the migration baseline is 6
+The current schema version is 103 (`WORKHORSE_SCHEMA_VERSION`) and the migration baseline is 6
 (`WORKHORSE_SCHEMA_BASELINE_VERSION`). `sql/releases/0006.sql` contains the baseline clean-install
 artifact, which is the 0.2.0 schema.
 
@@ -38,10 +38,10 @@ function or give that suffix a different meaning.
 
 The current migration plan has one contract step. `0025-add-a-fast-task-tier.sql` moves schema 24 to
 25 and retires protocols 1 through 4. Thus, on an older installation, `migrateSchema` stops at
-schema 24, and `contractSchema` applies step 25. The additive steps 26 through 102 follow. A second
+schema 24, and `contractSchema` applies step 25. The additive steps 26 through 103 follow. A second
 `migrateSchema` run then completes the plan.
 
-Their files run from `0026` to `0103`. File number `0035` was reserved and never used. Thus, from
+Their files run from `0026` to `0104`. File number `0035` was reserved and never used. Thus, from
 `0036` on, the number of a file is one above the version that it produces.
 
 Step 25 ships without the usual retention window, as
@@ -119,7 +119,7 @@ version. The runner reports `Workhorse migration <file> failed part-way and roll
 
 Each of these fails without running a migration:
 
-- An installed version below the baseline 6 or above the current 102.
+- An installed version below the baseline 6 or above the current 103.
 - A version no step starts from.
 - A `workhorse.schema_version` table without exactly one row.
 
@@ -140,8 +140,8 @@ sure that each language uses the protocol in the same way.
 
 `protocol/v1/manifest.json` declares fixture format 1 and SQL protocol 5. It accepts installed
 schema versions 99 and newer inside the major line, and client protocol 5 only. The installed
-version is 102. Schema versions 100 to 102 change function bodies and add one index, which no SDK
-calls, so they keep the floor. Schema version 99
+version is 103. Schema versions 100 to 103 change function bodies and add one index, two tables,
+and internal functions, which no SDK calls, so they keep the floor. Schema version 99
 is the floor because it adds `fail_v2` and `save_checkpoint_v3`, which every SDK catalogue names.
 Before that, schema version 98 was the floor because it adds `override_retention_policy_v2` and the
 three other audited policy functions, which every SDK catalogue also names. Before that, schema

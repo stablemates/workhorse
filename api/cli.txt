@@ -718,7 +718,7 @@ interface QueueHealthReason {
   category?: keyof RetentionCategoryValues<unknown>;
 }
 
-type QueueHealthReasonCode = "expired-leases" | "overdue-deadlines" | "overdue-execution-timeouts" | "overdue-external-waits" | "stalled-promotion" | "missing-history-partitions" | "rollup-stalled" | "retention-lag" | "terminal-cleanup-backlog" | "eligible-history-partitions" | "default-history-rows" | "maintenance-failing" | "schedule-failing" | "concurrency-blocked" | "rate-limit-throttled" | "budget-blocked";
+type QueueHealthReasonCode = "expired-leases" | "overdue-deadlines" | "overdue-execution-timeouts" | "overdue-external-waits" | "stalled-promotion" | "missing-history-partitions" | "rollup-stalled" | "retention-lag" | "terminal-cleanup-backlog" | "terminal-cleanup-stalled" | "eligible-history-partitions" | "default-history-rows" | "maintenance-failing" | "schedule-failing" | "concurrency-blocked" | "rate-limit-throttled" | "budget-blocked";
 
 interface QueueHealthStatus {
   level: "healthy" | "degraded" | "critical";
