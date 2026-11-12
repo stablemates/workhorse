@@ -1617,3 +1617,30 @@ strategy. `BeginTransactionAsync` succeeds, but the first `SaveChangesAsync` in 
 throws `InvalidOperationException` before any Workhorse call. The application puts the whole block in `Database.CreateExecutionStrategy().ExecuteAsync`.
 The snippet `csharp-enqueue-ef-core-retry` in `dotnet/examples/Workhorse.Examples/` shows the form,
 and its tests run it with `EnableRetryOnFailure()`.
+
+## Amendment: configuration sets only the listed keys (2026-11-12)
+
+The hosting section says that `AddWorkhorse` binds `QueueOptions`, `AdminOptions`, and
+`WorkerOptions` from the `Workhorse` section, and the worker section says that the configuration
+binder fills `WorkerOptions`. The binder also filled `Json` through a key such as
+`Workhorse:Worker:Json:WriteIndented`. It then created a `JsonSerializerOptions` with the general
+defaults, which replaced the Web defaults that the JSON section requires (SM-2041). `AddWorkhorse`
+binds no `AdminOptions`.
+
+The rule is now explicit:
+
+1. Configuration sets only the keys that `ConfigurationKeys.json` lists. The options bind those
+   keys and no other key.
+2. Another option property is set in code. Today these properties are `Json`, `RetryDelay`, and
+   `LoggerFactory`. Item 3 states when a section that names one is refused with
+   `InvalidOperationException`. The error names the section and says to set the option in code.
+3. `AddWorkhorse` refuses a `Json` section. The first read of the worker options refuses each
+   code-only section. The binder cannot fill `RetryDelay` or `LoggerFactory`, so the refusal
+   applies only where the binder failed before: a child key. A host that never reads the worker
+   options keeps working with such a section.
+4. The queue options follow a reload of their listed keys. A reload never sets `Json` and runs no
+   refusal in a change callback.
+5. A key that names no option property stays ignored.
+
+The `Json` properties stay public for code. The change narrows a 0.x surface before 1.0.0, so ADR
+0054 permits it.

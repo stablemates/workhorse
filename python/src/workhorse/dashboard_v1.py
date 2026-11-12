@@ -982,20 +982,20 @@ class DashboardTaskCursor(TypedDict, total=False):
     priority: Required[float]
 
 
-class DashboardTaskDetailIdentityRetryPolicyVariant2(TypedDict, total=False):
+class DashboardTaskDetailIdentityRetryPolicyDecorrelatedJitter(TypedDict, total=False):
     type: Required[Literal["decorrelated-jitter"]]
     baseDelayMs: Required[float]
     maxDelayMs: Required[float]
 
 
-class DashboardTaskDetailIdentityRetryPolicyVariant3(TypedDict, total=False):
+class DashboardTaskDetailIdentityRetryPolicyExponential(TypedDict, total=False):
     type: Required[Literal["exponential"]]
     initialDelayMs: Required[float]
     multiplier: Required[float]
     maxDelayMs: Required[float]
 
 
-class DashboardTaskDetailIdentityRetryPolicyVariant4(TypedDict, total=False):
+class DashboardTaskDetailIdentityRetryPolicyFixed(TypedDict, total=False):
     type: Required[Literal["fixed"]]
     delayMs: Required[float]
 
@@ -1013,7 +1013,7 @@ class DashboardTaskDetailIdentity(TypedDict, total=False):
     priority: Required[float]
     state: Required[str]
     createdAt: Required[str]
-    retryPolicy: Required[DashboardTaskDetailIdentityRetryPolicyVariant2 | DashboardTaskDetailIdentityRetryPolicyVariant3 | DashboardTaskDetailIdentityRetryPolicyVariant4 | None]
+    retryPolicy: Required[DashboardTaskDetailIdentityRetryPolicyDecorrelatedJitter | DashboardTaskDetailIdentityRetryPolicyExponential | DashboardTaskDetailIdentityRetryPolicyFixed | None]
     maxAttempts: Required[float]
     deadlineAt: NotRequired[str | None]
     executionTimeoutMs: NotRequired[float | None]
@@ -1286,20 +1286,20 @@ class DashboardTaskGroupsPage(TypedDict, total=False):
     groups: Required[list[DashboardTaskGroup]]
 
 
-class DashboardTaskRowRetryPolicyVariant2(TypedDict, total=False):
+class DashboardTaskRowRetryPolicyDecorrelatedJitter(TypedDict, total=False):
     type: Required[Literal["decorrelated-jitter"]]
     baseDelayMs: Required[float]
     maxDelayMs: Required[float]
 
 
-class DashboardTaskRowRetryPolicyVariant3(TypedDict, total=False):
+class DashboardTaskRowRetryPolicyExponential(TypedDict, total=False):
     type: Required[Literal["exponential"]]
     initialDelayMs: Required[float]
     multiplier: Required[float]
     maxDelayMs: Required[float]
 
 
-class DashboardTaskRowRetryPolicyVariant4(TypedDict, total=False):
+class DashboardTaskRowRetryPolicyFixed(TypedDict, total=False):
     type: Required[Literal["fixed"]]
     delayMs: Required[float]
 
@@ -1325,7 +1325,7 @@ class DashboardTaskRow(TypedDict, total=False):
     prerequisiteTaskIds: Required[list[str]]
     attempt: Required[float]
     maxAttempts: Required[float]
-    retryPolicy: Required[DashboardTaskRowRetryPolicyVariant2 | DashboardTaskRowRetryPolicyVariant3 | DashboardTaskRowRetryPolicyVariant4 | None]
+    retryPolicy: Required[DashboardTaskRowRetryPolicyDecorrelatedJitter | DashboardTaskRowRetryPolicyExponential | DashboardTaskRowRetryPolicyFixed | None]
     tags: Required[list[str]]
     keyed: Required[bool]
     enqueueMode: NotRequired[Literal["debounce"] | Literal["idempotency"] | Literal["throttle"] | None]
@@ -2497,9 +2497,9 @@ __all__ = [
     "DashboardTaskDetailEventsItem",
     "DashboardTaskDetailIdentity",
     "DashboardTaskDetailIdentityDependencyPolicy",
-    "DashboardTaskDetailIdentityRetryPolicyVariant2",
-    "DashboardTaskDetailIdentityRetryPolicyVariant3",
-    "DashboardTaskDetailIdentityRetryPolicyVariant4",
+    "DashboardTaskDetailIdentityRetryPolicyDecorrelatedJitter",
+    "DashboardTaskDetailIdentityRetryPolicyExponential",
+    "DashboardTaskDetailIdentityRetryPolicyFixed",
     "DashboardTaskDetailProgress",
     "DashboardTaskDetailRedriveLineage",
     "DashboardTaskDetailRedriveLineageRecordsItem",
@@ -2517,9 +2517,9 @@ __all__ = [
     "DashboardTaskRow",
     "DashboardTaskRowDurability",
     "DashboardTaskRowHumanWait",
-    "DashboardTaskRowRetryPolicyVariant2",
-    "DashboardTaskRowRetryPolicyVariant3",
-    "DashboardTaskRowRetryPolicyVariant4",
+    "DashboardTaskRowRetryPolicyDecorrelatedJitter",
+    "DashboardTaskRowRetryPolicyExponential",
+    "DashboardTaskRowRetryPolicyFixed",
     "DashboardTaskRowWait",
     "DashboardTaskValue",
     "DashboardTasksCursorPage",

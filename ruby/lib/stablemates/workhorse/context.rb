@@ -261,6 +261,8 @@ module Stablemates
       # dependency options.
       def run_child(name, task_type, payload, **enqueue_options)
         child_name(name)
+        # The request is checked before the deferred tier read, as each child of a child set is.
+        @queue.check_child_request(@task, task_type, payload, enqueue_options)
         durable!("child tasks")
         build = lambda do |versions = {}|
           canonical_json(@queue.serialize_child_request(@task, task_type, payload, enqueue_options, {},

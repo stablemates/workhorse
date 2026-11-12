@@ -471,6 +471,13 @@ entry gives the `DROP INDEX CONCURRENTLY` statement and the migration step that 
 again. On a healthy database the list is empty, and the text output does not change. An invalid
 index does not change the exit code, because this runtime does not refuse the schema.
 
+### Deprecation comments say when an old name can go
+
+The deprecation comments of the renamed names in `@stablemates/workhorse` and
+`@stablemates/workhorse-dashboard-server` named 1.0.0 as the end of each name. 1.0.0 removes no name
+(ADR 0054). Each comment now says that the name stays through the 1.x line and can go at the first
+contract step of the 2.x line. No name and no type changes (SM-2046).
+
 ## 0.12.0 — 2026-11-07
 
 The npm packages, Python distribution, Go module, Rust crate, Ruby gem, JVM artifacts, and .NET

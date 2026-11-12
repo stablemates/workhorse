@@ -26,6 +26,25 @@ module Stablemates
       end
     end
 
+    # Builds the EnqueueRequest of a method that takes the task type and the payload as positional
+    # arguments and the other enqueue options as keywords. The positional arguments are the only
+    # source of both, so +task_type:+ or +payload:+ in +options+ raises ArgumentError (SM-2039).
+    # Internal to the SDK.
+    module PositionalRequest # :nodoc:
+      POSITIONAL = {task_type: "task type", payload: "payload"}.freeze
+
+      module_function
+
+      def build(task_type, payload, **options)
+        POSITIONAL.each do |key, label|
+          next unless options.key?(key)
+
+          raise ArgumentError, "#{key}: is not an enqueue option; pass the #{label} as the positional argument"
+        end
+        EnqueueRequest.new(task_type: task_type, payload: payload, **options)
+      end
+    end
+
     # Retains one canonical request under a scoped key for +ttl+ seconds.
     Idempotency = Data.define(:key, :scope, :ttl) do
       def initialize(key:, scope: "default", ttl: 86_400) = super

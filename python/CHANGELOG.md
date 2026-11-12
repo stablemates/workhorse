@@ -311,6 +311,29 @@ of the whole queue. A heartbeat stays a HOT update. The schema moves to version 
 stays 99. If the build fails, drop the invalid index with `DROP INDEX CONCURRENTLY IF EXISTS
 workhorse.task_runtime_active_queue_shard_idx` and run `workhorse schema migrate` again.
 
+### Breaking: the dashboard retry policy types are named from their type
+
+`workhorse.dashboard_v1` named the three branches of a task retry policy from their position in
+the union. A later addition to `dashboard/v1` could move the branches, and a name could then mean
+a different shape. Now the binding generator names each branch from its `type` value. It stops on
+a union of object branches without a discriminator, a required property that allows one different
+string in each branch. The numbered names are removed, with no alias. To upgrade, change each import (SM-2040):
+
+| Old name                                         | New name                                                   |
+| ------------------------------------------------ | ---------------------------------------------------------- |
+| `DashboardTaskDetailIdentityRetryPolicyVariant2` | `DashboardTaskDetailIdentityRetryPolicyDecorrelatedJitter` |
+| `DashboardTaskDetailIdentityRetryPolicyVariant3` | `DashboardTaskDetailIdentityRetryPolicyExponential`        |
+| `DashboardTaskDetailIdentityRetryPolicyVariant4` | `DashboardTaskDetailIdentityRetryPolicyFixed`              |
+| `DashboardTaskRowRetryPolicyVariant2`            | `DashboardTaskRowRetryPolicyDecorrelatedJitter`            |
+| `DashboardTaskRowRetryPolicyVariant3`            | `DashboardTaskRowRetryPolicyExponential`                   |
+| `DashboardTaskRowRetryPolicyVariant4`            | `DashboardTaskRowRetryPolicyFixed`                         |
+
+### The deprecated aliases stay through the 1.x line
+
+The docstrings of `NonReplaceableReason` and `TerminalPolicy` named 1.0.0 as the end of each name.
+1.0.0 removes no name (ADR 0054). Each docstring now says that the name stays through the 1.x line
+and can go at the first contract step of the 2.x line. The aliases do not change (SM-2046).
+
 ## 0.12.0 — 2026-11-07
 
 The npm packages, Python distribution, Go module, Rust crate, Ruby gem, JVM artifacts, and .NET

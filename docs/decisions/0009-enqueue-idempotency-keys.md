@@ -8,8 +8,8 @@
 > belongs to the client-facing wrapper above it.
 
 > The TypeScript type `EnqueueIdempotency` in this record was renamed to `Idempotency` for parity
-> with the Python and Go SDKs. The old name remains a deprecated alias through 0.x and is removed
-> in 1.0.0.
+> with the Python and Go SDKs. The old name remains a deprecated alias through the 1.x line, as
+> the amendment of 2026-11-12 states.
 
 ## Context
 
@@ -133,3 +133,10 @@ Handlers must continue to use provider idempotency keys, transactional outbox/in
 Integration coverage exercises hash-only storage and constraints, UTF-8 byte and TTL bounds, default scope and TTL, concurrent exact replay, one safe initial enqueue event and no duplicate job/event/runtime/FIFO/notification effects, sorted-tag and normalized-policy equivalence, explicit and omitted `runAt`, structured redacted conflicts with key and request digests, retention-window mismatch, same-batch duplicates, whole-batch rollback, caller-transaction rollback, unkeyed compatibility, expiry reuse, purge release, and idempotency-cleanup-before-terminal-pruning order.
 
 The `idempotent-ingress` operational benchmark scenario adds hard invariants for exact replay, conflict rollback, batch duplicates, expiry reuse, and resulting durable state. It records full client-observed transition timings. No numerical latency or overhead claim is accepted until a benchmark artifact containing the scenario is recorded.
+
+## Amendment: the renamed TypeScript type stays through the 1.x line (2026-11-12)
+
+The note at the top of this record gave 1.0.0 as the release that ends the deprecated alias
+`EnqueueIdempotency`. ADR 0054 decides that 1.0.0 removes no name. The alias stays through the 1.x
+line, and it can go at the first contract step of the 2.x line, as `docs/versioning.md` states
+(SM-2046). The note now says so.

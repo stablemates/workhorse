@@ -300,6 +300,22 @@ of the whole queue. A heartbeat stays a HOT update. The schema moves to version 
 stays 99. If the build fails, drop the invalid index with `DROP INDEX CONCURRENTLY IF EXISTS
 workhorse.task_runtime_active_queue_shard_idx` and run `workhorse schema migrate` again.
 
+### Breaking: configuration cannot set the JSON options
+
+An operator set `Workhorse:Worker:Json:WriteIndented=true` in `appsettings.json`. The binder then
+created a `JsonSerializerOptions` with the general defaults, and the worker used it in place of the
+Web defaults. Thus a payload property `OrderId` was stored as `OrderId`, not `orderId`, and reads
+became case-sensitive. Now the options bind only the keys that `ConfigurationKeys.json` lists.
+`AddWorkhorse` throws `InvalidOperationException` for a `Json` section under `Workhorse:Queue` or
+`Workhorse:Worker`. The message names the section and says to set the JSON options in code. A
+`RetryDelay` or `LoggerFactory` section with a child key still fails when the worker options are
+first read, as before, but now with the same message. Such a key with no child key stays accepted,
+and so does a key that names no option. The queue options still follow a reload of their
+listed keys, and a reload never sets `Json`. The `Json` properties do not change. To upgrade,
+remove the section, and set the option in code:
+`services.Configure<WorkerOptions>(options => options.Json = ...)`, or register a `Queue` with
+`new QueueOptions { Json = ... }` before `AddWorkhorse` (SM-2041).
+
 ## 0.12.0 — 2026-11-07
 
 The npm packages, Python distribution, Go module, Rust crate, Ruby gem, JVM artifacts, and .NET

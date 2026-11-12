@@ -114,7 +114,7 @@ namespace atomically.
 - A fast-tier queue rejects a concurrency policy.
 - An empty or omitted list filter returns every policy, ordered by `queue_name`.
 - `claim_v1` reads the policy rows during admission, so workers need no copy of the policy.
-- `Queue.concurrencyPolicies` is a deprecated TypeScript alias, removed in `1.0.0`.
+- `Queue.concurrencyPolicies` is a deprecated TypeScript alias. It stays through the `1.x` line.
 
 More detail: [Data model: Synchronization](../architecture/data-model.md#synchronization), [Data model: Columns](../architecture/data-model.md#columns-2), [Data model: Concurrency key](../architecture/data-model.md#concurrency-key), [Data model: Listing](../architecture/data-model.md#listing-1), and [Schema and SQL protocol: .NET queue](../architecture/schema-and-protocol.md#net-queue).
 

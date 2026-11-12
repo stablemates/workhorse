@@ -28,6 +28,9 @@ RSpec.describe ApiSnapshot do
     expect(lines).to include(a_string_matching(/def redrive_many\(.*finished_before: nil\)\z/))
     expect(lines).to include("  OPTION_KEYS = [:task_type, :max_attempts, :tags, :concurrency_key]")
     expect(lines).to include(a_string_ending_with("# keywords: Stablemates::Workhorse::ActiveJob::OPTION_KEYS"))
+    # SM-2039: the positional task type and payload are not keywords of these methods.
+    positional = "# keywords: Stablemates::Workhorse::EnqueueRequest#initialize less task_type:, payload:"
+    expect(lines.count { |line| line.end_with?(positional) }).to eq(3)
   end
 
   it "stops on a public ** whose keywords it cannot name" do

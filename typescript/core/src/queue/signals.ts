@@ -46,10 +46,10 @@ export interface SignalDeliveryResult<TPayload extends Json = Json> {
   deliveredBy: string | null;
 }
 
-/** @deprecated Renamed to {@link SignalDeliveryStatus}. Removed in 1.0.0. */
+/** @deprecated Renamed to {@link SignalDeliveryStatus}. The name stays through the 1.x line. It can go at the first contract step of the 2.x line. */
 export type SendSignalStatus = SignalDeliveryStatus;
 
-/** @deprecated Renamed to {@link SignalDeliveryResult}. Removed in 1.0.0. */
+/** @deprecated Renamed to {@link SignalDeliveryResult}. The name stays through the 1.x line. It can go at the first contract step of the 2.x line. */
 export type SendSignalResult<TPayload extends Json = Json> = SignalDeliveryResult<TPayload>;
 
 export type SignalWait = ExternalWaitRecord;

@@ -67,7 +67,7 @@ module Stablemates
 
       # Submits one task.
       def enqueue(task_type, payload, **)
-        enqueue_many([EnqueueRequest.new(task_type: task_type, payload: payload, **)]).first
+        enqueue_many([PositionalRequest.build(task_type, payload, **)]).first
       end
 
       # Submits one atomic batch and returns PostgreSQL's results in request order.
@@ -366,7 +366,7 @@ module Stablemates
 
       # The request and the input of a child, without its contract stamp.
       def child_input(parent, task_type, payload, options, stored_queue)
-        request = EnqueueRequest.new(task_type: task_type, payload: payload, **options)
+        request = PositionalRequest.build(task_type, payload, **options)
         if request.idempotency || request.debounce || request.throttle || request.dependencies
           raise ArgumentError, "Child tasks cannot use coalescing or dependency enqueue options"
         end

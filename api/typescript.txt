@@ -987,7 +987,7 @@ class Admin {
   budgetMetricSnapshot(): Promise<BudgetMetricSnapshot[]>;
   health(): Promise<QueueHealth>;
   listConcurrencyPolicies(queueNames?: readonly string[]): Promise<ConcurrencyPolicy[]>;
-  /** @deprecated Use `listConcurrencyPolicies`. Removed in 1.0.0. */
+  /** @deprecated Use `listConcurrencyPolicies`. The name stays through the 1.x line. It can go at the first contract step of the 2.x line. */
   concurrencyPolicies(queueNames?: readonly string[]): Promise<ConcurrencyPolicy[]>;
   listBudgets(budgetNames?: readonly string[]): Promise<Budget[]>;
   getRetentionPolicy(): Promise<RetentionPolicy>;
@@ -4162,13 +4162,13 @@ class Queue {
     prune?: boolean;
   }): Promise<ConcurrencyPolicy[]>;
   listConcurrencyPolicies(queueNames?: readonly string[]): Promise<ConcurrencyPolicy[]>;
-  /** @deprecated Use `listConcurrencyPolicies`. Removed in 1.0.0. */
+  /** @deprecated Use `listConcurrencyPolicies`. The name stays through the 1.x line. It can go at the first contract step of the 2.x line. */
   concurrencyPolicies(queueNames?: readonly string[]): Promise<ConcurrencyPolicy[]>;
   syncRateLimitPolicies(namespace: string, definitions: readonly RateLimitPolicyDefinition[], options?: {
     prune?: boolean;
   }): Promise<RateLimitPolicy[]>;
   listRateLimitPolicies(queueNames?: readonly string[]): Promise<RateLimitPolicy[]>;
-  /** @deprecated Use `listRateLimitPolicies`. Removed in 1.0.0. */
+  /** @deprecated Use `listRateLimitPolicies`. The name stays through the 1.x line. It can go at the first contract step of the 2.x line. */
   rateLimitPolicies(queueNames?: readonly string[]): Promise<RateLimitPolicy[]>;
   rateLimitStatuses(queueNames?: readonly string[]): Promise<RateLimitStatus[]>;
   syncBudgets(namespace: string, definitions: readonly BudgetDefinition[], options?: {

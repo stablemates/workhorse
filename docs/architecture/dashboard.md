@@ -2051,8 +2051,8 @@ The idempotency wire family carries the `Dashboard` prefix every other wire name
 - `hasDashboardIdempotencyEvidence`
 - `dashboardIdempotencyEventDetailKeys`
 
-Each unprefixed name remains an exported `@deprecated` alias for the rest of the `0.x` line.
-Version `1.0.0` removes it.
+Each unprefixed name remains an exported `@deprecated` alias through the `1.x` line. It can go at
+the first contract step of the `2.x` line.
 
 `MaintenanceLoopCadences` becomes `DashboardMaintenanceLoopCadences`. This keeps the name that
 Python and Go share, because every `dashboard/v1` `$defs` key now carries that prefix.

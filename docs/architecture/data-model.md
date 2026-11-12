@@ -2432,8 +2432,8 @@ These reads return persisted rows ordered by `queue_name`:
 An omitted, nil, or empty array returns every policy. A non-empty array filters by exact queue name.
 This read has no implicit result cap.
 
-`Queue.concurrencyPolicies(queueNames)` remains as a deprecated TypeScript alias for the rest of the
-`0.x` line. Workhorse removes it in `1.0.0`.
+`Queue.concurrencyPolicies(queueNames)` remains as a deprecated TypeScript alias through the `1.x`
+line. It can go at the first contract step of the `2.x` line.
 
 #### Capacity semantics
 
@@ -2520,8 +2520,8 @@ These reads return persisted definitions without an implicit result cap:
 
 An omitted or empty Python sequence and a nil or empty Go slice read every policy.
 
-`Queue.rateLimitPolicies(queueNames)` remains as a deprecated TypeScript alias for the rest of the
-`0.x` line. Workhorse removes it in `1.0.0`.
+`Queue.rateLimitPolicies(queueNames)` remains as a deprecated TypeScript alias through the `1.x`
+line. It can go at the first contract step of the `2.x` line.
 
 #### Bucket state
 

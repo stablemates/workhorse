@@ -276,7 +276,7 @@ class Stablemates::Workhorse::HandlerContext
   def checkpoint(name, input: NO_INPUT, &block)
   def get_checkpoint(name)
   def get_progress
-  def run_child(name, task_type, payload, **enqueue_options)  # keywords: Stablemates::Workhorse::EnqueueRequest#initialize
+  def run_child(name, task_type, payload, **enqueue_options)  # keywords: Stablemates::Workhorse::EnqueueRequest#initialize less task_type:, payload:
   def run_children(children)
   def run_children_all(children)
   def set_progress(progress)
@@ -339,7 +339,7 @@ class Stablemates::Workhorse::Queue
   def complete_human_wait(task_id, name, result, idempotency_key:, requested_by:)
   def create_task_group(on_finish: nil, on_success: nil, on_failure: nil)
   def default_queue
-  def enqueue(task_type, payload, **)  # keywords: Stablemates::Workhorse::EnqueueRequest#initialize
+  def enqueue(task_type, payload, **)  # keywords: Stablemates::Workhorse::EnqueueRequest#initialize less task_type:, payload:
   def enqueue_many(requests)
   def find_task_group(task_id)
   def get_task_group(group_id)
@@ -426,7 +426,7 @@ class Stablemates::Workhorse::TaskGroupBlockResult
 
 class Stablemates::Workhorse::TaskGroupBuilder
   def add(requests)
-  def enqueue(task_type, payload, **)  # keywords: Stablemates::Workhorse::EnqueueRequest#initialize
+  def enqueue(task_type, payload, **)  # keywords: Stablemates::Workhorse::EnqueueRequest#initialize less task_type:, payload:
 
 class Stablemates::Workhorse::TaskGroupCallback
   superclass Data

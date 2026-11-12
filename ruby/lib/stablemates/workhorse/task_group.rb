@@ -91,7 +91,7 @@ module Stablemates
 
       # Adds one task. It takes the arguments Queue#enqueue takes.
       def enqueue(task_type, payload, **)
-        add([EnqueueRequest.new(task_type: task_type, payload: payload, **)])
+        add([PositionalRequest.build(task_type, payload, **)])
       end
 
       # Adds +request+ and calls +hook+ with its EnqueueResult after the group is created.

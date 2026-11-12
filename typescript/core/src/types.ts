@@ -81,7 +81,7 @@ export interface Idempotency {
   ttlMs?: number;
 }
 
-/** @deprecated Renamed to {@link Idempotency}. Removed in 1.0.0. */
+/** @deprecated Renamed to {@link Idempotency}. The name stays through the 1.x line. It can go at the first contract step of the 2.x line. */
 export type EnqueueIdempotency = Idempotency;
 
 /** PostgreSQL-owned keyed debounce window for one pending task. */
@@ -96,7 +96,7 @@ export interface Debounce {
   schedule: "reset" | "preserve";
 }
 
-/** @deprecated Renamed to {@link Debounce}. Removed in 1.0.0. */
+/** @deprecated Renamed to {@link Debounce}. The name stays through the 1.x line. It can go at the first contract step of the 2.x line. */
 export type EnqueueDebounce = Debounce;
 
 /** PostgreSQL-owned keyed throttle window for one accepted task. */
@@ -109,7 +109,7 @@ export interface Throttle {
   windowMs: number;
 }
 
-/** @deprecated Renamed to {@link Throttle}. Removed in 1.0.0. */
+/** @deprecated Renamed to {@link Throttle}. The name stays through the 1.x line. It can go at the first contract step of the 2.x line. */
 export type EnqueueThrottle = Throttle;
 
 /** PostgreSQL's durable disposition for one enqueue request. */
@@ -238,7 +238,7 @@ export interface Dependencies {
   onCancellation: DependencyTerminalPolicy;
 }
 
-/** @deprecated Renamed to {@link Dependencies}. Removed in 1.0.0. */
+/** @deprecated Renamed to {@link Dependencies}. The name stays through the 1.x line. It can go at the first contract step of the 2.x line. */
 export type TaskDependencies = Dependencies;
 
 /** One queue's deployment-synchronized concurrency budget. */

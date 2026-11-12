@@ -27,7 +27,7 @@ export interface ExternalWaitQuery {
   cursor?: ExternalWaitCursor;
 }
 
-/** @deprecated Renamed to {@link ExternalWaitQuery}. Removed in 1.0.0. */
+/** @deprecated Renamed to {@link ExternalWaitQuery}. The name stays through the 1.x line. It can go at the first contract step of the 2.x line. */
 export type ExternalWaitListOptions = ExternalWaitQuery;
 
 export interface ExternalWaitCursor {

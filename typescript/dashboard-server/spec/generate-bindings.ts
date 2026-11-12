@@ -242,7 +242,73 @@ function pythonDeclaration(name: string, schema: Schema, names: WeakMap<Schema, 
   return `class ${typeName}(TypedDict, total=False):\n${fields.length > 0 ? fields.join("\n") : "    pass"}\n`;
 }
 
-function pythonDeclarations(roots: Array<[string, Schema]>): Array<[string, string]> {
+/** Whether the Python bindings give `schema`, or a schema inside it, a declaration of its own. */
+function definesNamedType(schema: Schema): boolean {
+  if (refName(schema)) return false;
+  if (schema.type === "object" && schema.properties) return true;
+  if (schema.type === "array" && schema.items) return definesNamedType(schema.items as Schema);
+  return Array.isArray(schema.anyOf) && (schema.anyOf as Schema[]).some(definesNamedType);
+}
+
+function branchProperties(branch: Schema): Record<string, Schema> | null {
+  return branch.type === "object" && branch.properties
+    ? (branch.properties as Record<string, Schema>)
+    : null;
+}
+
+/** The one string a property schema allows: a string `const`, or an `enum` of one string. */
+function singleString(schema: Schema | undefined): string | undefined {
+  if (typeof schema?.const === "string") return schema.const;
+  const values = schema?.enum;
+  return Array.isArray(values) && values.length === 1 && typeof values[0] === "string"
+    ? values[0]
+    : undefined;
+}
+
+function discriminatorValue(branch: Schema, discriminator: string): string {
+  const value = singleString(branchProperties(branch)?.[discriminator]);
+  if (value === undefined) {
+    throw new TypeError(`union branch has no string const ${discriminator}`);
+  }
+  return value;
+}
+
+/**
+ * The property that names each object branch of a union (SM-2040). Each branch must be an object
+ * that requires the property and allows one different string for it, as a `const` or as an `enum`
+ * of one value. A name from the branch
+ * position would change its meaning when `dashboard/v1` adds a branch, so the generator stops on
+ * a union without such a property.
+ */
+function unionDiscriminator(branches: readonly Schema[], hint: string): string {
+  const objects = branches.map(branchProperties);
+  const first = objects[0];
+  const candidates =
+    first && objects.every((properties) => properties !== null)
+      ? Object.keys(first).filter((property) => {
+          const values = branches.map((branch) =>
+            singleString(branchProperties(branch)?.[property]),
+          );
+          return (
+            branches.every((branch) =>
+              ((branch.required as string[] | undefined) ?? []).includes(property),
+            ) &&
+            values.every((value) => typeof value === "string") &&
+            new Set(values).size === values.length
+          );
+        })
+      : [];
+  const discriminator = candidates[0];
+  if (discriminator === undefined) {
+    throw new Error(
+      `${hint}: a union branch that declares a type needs a discriminator, a required property ` +
+        "that allows one different string in each object branch",
+    );
+  }
+  return discriminator;
+}
+
+export function pythonDeclarations(roots: Array<[string, Schema]>): Array<[string, string]> {
   const names = new WeakMap<Schema, string>();
   const usedNames = new Set<string>();
   const ordered: Array<[string, Schema]> = [];
@@ -276,8 +342,21 @@ function pythonDeclarations(roots: Array<[string, Schema]>): Array<[string, stri
       visitChild(schema.items as Schema, `${hint}Item`);
     }
     if (Array.isArray(schema.anyOf)) {
-      for (const [index, branch] of (schema.anyOf as Schema[]).entries()) {
-        if (branch.type !== "null") visitChild(branch, `${hint}Variant${index + 1}`);
+      const branches = (schema.anyOf as Schema[]).filter((branch) => branch.type !== "null");
+      const named = branches.filter(definesNamedType);
+      if (named.length === 0) return;
+      const discriminator = unionDiscriminator(named, hint);
+      for (const branch of named) {
+        const value = discriminatorValue(branch, discriminator);
+        const name = pythonName(`${hint}${exportedName(value)}`);
+        if (!names.has(branch)) {
+          if (usedNames.has(name)) {
+            throw new Error(`${hint}: two union branches take the Python name ${name}`);
+          }
+          usedNames.add(name);
+          names.set(branch, name);
+        }
+        visit(branch, names.get(branch)!);
       }
     }
   };

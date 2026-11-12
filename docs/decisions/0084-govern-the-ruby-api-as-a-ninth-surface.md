@@ -116,3 +116,16 @@ the publishing job. After 1.0.0 its version line floats independently, like the 
 - **Hide every internal module with `private_constant`.** That would leave one visibility mechanism.
   But `private_constant` refuses a qualified path, and the Active Job adapter lives outside the
   namespace and reaches `SqlCatalogue` by its full path.
+
+## Amendment: the positional task type and payload are not keywords (2026-11-12)
+
+The Decision section says that `Queue#enqueue` forwards its keywords to `EnqueueRequest#initialize`.
+That constructor also takes `task_type:` and `payload:`. Ruby keeps the last value of a repeated
+keyword, so an option hash with `task_type:` replaced the positional task type (SM-2039).
+
+`Queue#enqueue`, `TaskGroupBuilder#enqueue`, and `HandlerContext#run_child` now forward every
+keyword of `EnqueueRequest#initialize` except `task_type:` and `payload:`. Each of them, and the
+`options` of a `ChildTaskRequest`, raises `ArgumentError` for those two keywords before any
+statement. Their snapshot lines name the source as
+`Stablemates::Workhorse::EnqueueRequest#initialize less task_type:, payload:`. `EnqueueRequest.new`
+keeps both keywords. The change narrows a 0.x surface before 1.0.0, so ADR 0054 permits it.

@@ -526,7 +526,7 @@ export class Admin {
     return result.rows.map(concurrencyPolicy);
   }
 
-  /** @deprecated Use `listConcurrencyPolicies`. Removed in 1.0.0. */
+  /** @deprecated Use `listConcurrencyPolicies`. The name stays through the 1.x line. It can go at the first contract step of the 2.x line. */
   concurrencyPolicies(queueNames: readonly string[] = []): Promise<ConcurrencyPolicy[]> {
     return this.listConcurrencyPolicies(queueNames);
   }
