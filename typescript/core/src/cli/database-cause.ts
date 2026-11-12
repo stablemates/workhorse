@@ -14,9 +14,10 @@ import { DatabaseError } from "pg";
  *
  * Only an error that the driver made gives these fields. A `DatabaseError` holds what the server
  * sent about one statement. It holds no connection URL, no connection parameter, and no environment
- * value, and this function reads no other field. A failure that `describeDatabaseFailure`
- * recognizes never reaches this function: a socket error, or a SQLSTATE that starts with 08 or 28,
- * or 3D000. Another SQLSTATE, for example 57P01 when an administrator ends the session, reaches it.
+ * value, and this function reads no other field. Outside a migration step, a failure that
+ * `describeDatabaseFailure` recognizes never reaches this function: a socket error, or a SQLSTATE
+ * that starts with 08 or 28, or 3D000. A failed migration step reaches it with each SQLSTATE, so
+ * the output names the step also when the session ended under it (SM-2048).
  */
 
 /** How far the walk follows `cause`. A real chain is one or two links long. */

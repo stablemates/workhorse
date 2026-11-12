@@ -154,7 +154,11 @@ const MONTH_PRECISION_RUNTIMES: ReadonlySet<string> = new Set([
   RUNTIME_NAMES.python,
 ]);
 
+type DatedRuntime = (typeof DATED_RUNTIMES)[number];
+
 interface DatedVersion {
+  /** The runtime as `support.json` keys it, for example `node`. */
+  readonly key: DatedRuntime;
   /** The runtime as the documentation names it, for example `Node.js`. */
   readonly runtime: string;
   /** The version as `support.json` lists it, for example `22` or `3.12`. */
@@ -189,7 +193,15 @@ function datedVersions(manifest: SupportManifest): DatedVersion[] {
     Object.entries(manifest.support[runtime].endOfLife).flatMap(([version, date]) =>
       date === null
         ? []
-        : [{ runtime: RUNTIME_NAMES[runtime], version, date, passedAt: endOfLifePassedAt(date) }],
+        : [
+            {
+              key: runtime,
+              runtime: RUNTIME_NAMES[runtime],
+              version,
+              date,
+              passedAt: endOfLifePassedAt(date),
+            },
+          ],
     ),
   );
 }
@@ -205,6 +217,112 @@ function retiredVersions(manifest: SupportManifest, now: number): string[] {
       (entry) => `${entry.runtime} ${entry.version} reached upstream end of life on ${entry.date}`,
     );
 }
+
+/**
+ * The changelog that announces the removal of each dated runtime: the changelog of the package line
+ * that the runtime runs. PostgreSQL and Node.js belong to the root changelog, which also carries the
+ * schema.
+ */
+const NOTICE_CHANGELOGS = {
+  activejob: "ruby/CHANGELOG.md",
+  aspnetcore: "dotnet/CHANGELOG.md",
+  dotnet: "dotnet/CHANGELOG.md",
+  efcore: "dotnet/CHANGELOG.md",
+  java: "jvm/CHANGELOG.md",
+  node: "CHANGELOG.md",
+  postgres: "CHANGELOG.md",
+  python: "python/CHANGELOG.md",
+  ruby: "ruby/CHANGELOG.md",
+  "spring-boot": "jvm/CHANGELOG.md",
+} satisfies Record<DatedRuntime, string>;
+
+/** The published minors that must announce a removal. A PostgreSQL major upgrade is a migration. */
+const requiredNotices = (runtime: DatedRuntime): number => (runtime === "postgres" ? 2 : 1);
+
+/**
+ * How long before an end of life the notice check starts to fail, for each notice it requires. The
+ * longest gap between two published minors up to 0.12.0 is 13 days, so 30 days leave time to ship a
+ * minor with the notice after the check fails. PostgreSQL needs two minors, so it gets 60 days.
+ */
+const NOTICE_WINDOW_MS_PER_MINOR = 30 * 24 * 60 * 60 * 1000;
+
+/**
+ * The marker of a removal notice in a changelog entry. The marker names the runtime and the version
+ * exactly as the documentation tables do, so the check matches a fixed form and not free prose.
+ */
+const NOTICE_MARKER = /^- \*\*Removal notice:\*\* (?<subject>.+?)\.(?=\s|$)/gm;
+
+/** A published heading: a release version that ends in `.0` and its date. */
+const PUBLISHED_MINOR_HEADING = /^## (?<version>\d+\.\d+\.0) — \d{4}-\d{2}-\d{2}$/;
+
+/**
+ * For each `<runtime> <version>` that a removal notice names, the published minors whose sections
+ * carry the notice. `## Unreleased` and a patch section do not count, because no minor has shipped
+ * the notice yet.
+ */
+function publishedNotices(changelog: string): Map<string, string[]> {
+  const notices = new Map<string, string[]>();
+  for (const section of changelog.split(/^(?=## )/m)) {
+    const release = PUBLISHED_MINOR_HEADING.exec(section.split("\n", 1)[0]!)?.groups?.version;
+    if (release === undefined) continue;
+    for (const match of section.matchAll(NOTICE_MARKER)) {
+      const subject = match.groups!.subject!;
+      notices.set(subject, [...new Set([...(notices.get(subject) ?? []), release])]);
+    }
+  }
+  return notices;
+}
+
+/**
+ * The dated versions inside their notice window at `now` that the changelog has not announced in
+ * enough published minors, as sentences that name the runtime, the version, the date, and the
+ * changelog to update.
+ */
+function unannouncedRemovals(
+  manifest: SupportManifest,
+  changelogs: Readonly<Record<string, string>>,
+  now: number,
+): string[] {
+  return datedVersions(manifest).flatMap((entry) => {
+    const required = requiredNotices(entry.key);
+    if (now < entry.passedAt - required * NOTICE_WINDOW_MS_PER_MINOR) return [];
+    const changelog = NOTICE_CHANGELOGS[entry.key];
+    const text = changelogs[changelog];
+    if (text === undefined) throw new Error(`no text for ${changelog}`);
+    const minors = publishedNotices(text).get(`${entry.runtime} ${entry.version}`) ?? [];
+    if (minors.length >= required) return [];
+    return [
+      `${entry.runtime} ${entry.version} reaches upstream end of life on ${entry.date}, and ` +
+        `${changelog} announces its removal in ${minors.length} of the ${required} published ` +
+        `minor${required === 1 ? "" : "s"} it needs: add "- **Removal notice:** ` +
+        `${entry.runtime} ${entry.version}." to the next minor`,
+    ];
+  });
+}
+
+async function readNoticeChangelogs(): Promise<Record<string, string>> {
+  const files = [...new Set(Object.values(NOTICE_CHANGELOGS))];
+  return Object.fromEntries(await Promise.all(files.map(async (file) => [file, await read(file)])));
+}
+
+/** A manifest whose only dated versions are `dates`, for the notice tests. */
+function noticeManifest(dates: Partial<Record<DatedRuntime, EndOfLifeDates>>): SupportManifest {
+  const support = Object.fromEntries(
+    DATED_RUNTIMES.map((runtime) => [runtime, { endOfLife: dates[runtime] ?? {} }]),
+  );
+  return { support } as unknown as SupportManifest;
+}
+
+/** Each notice changelog, empty unless `texts` gives it. */
+function noticeChangelogs(texts: Readonly<Record<string, string>>): Record<string, string> {
+  return Object.fromEntries(
+    Object.values(NOTICE_CHANGELOGS).map((file) => [file, texts[file] ?? "# Changelog\n"]),
+  );
+}
+
+/** A changelog with one published section. */
+const released = (version: string, entry: string) =>
+  `## ${version} — 2026-11-20\n\n### Changed\n\n${entry}\n\n`;
 
 /** The `End of life` cell both documentation tables carry for one runtime. */
 function endOfLifeCell(dates: EndOfLifeDates): string {
@@ -677,6 +795,73 @@ describe("upstream end of life", () => {
     expect(retiredVersions(manifest, soonest.passedAt)).toContain(
       `${soonest.runtime} ${soonest.version} reached upstream end of life on ${soonest.date}`,
     );
+  });
+
+  it("finds a published removal notice for each version near its upstream end of life", async () => {
+    // A minor that drops a version needs a published minor before it that announced the drop
+    // (ADR 0058). This check fails while there is still time to publish that notice.
+    expect(
+      unannouncedRemovals(await readSupportManifest(), await readNoticeChangelogs(), Date.now()),
+    ).toEqual([]);
+  });
+
+  it("fails from the first instant of the notice window, naming the changelog to update", () => {
+    const manifest = noticeManifest({ node: { "22": "2027-04-30" } });
+    const passedAt = endOfLifePassedAt("2027-04-30");
+    const opens = passedAt - NOTICE_WINDOW_MS_PER_MINOR;
+
+    expect(unannouncedRemovals(manifest, noticeChangelogs({}), opens - 1)).toEqual([]);
+    expect(unannouncedRemovals(manifest, noticeChangelogs({}), opens)).toEqual([
+      "Node.js 22 reaches upstream end of life on 2027-04-30, and CHANGELOG.md announces its " +
+        "removal in 0 of the 1 published minor it needs: add " +
+        '"- **Removal notice:** Node.js 22." to the next minor',
+    ]);
+  });
+
+  it("accepts a notice only in a published minor section of the owning changelog", () => {
+    const manifest = noticeManifest({ "spring-boot": { "4.0": "2026-12-31" } });
+    const now = endOfLifePassedAt("2026-12-31") - 1;
+    const notice = "- **Removal notice:** Spring Boot 4.0. A later minor drops it.";
+    const unannounced = (changelogs: Record<string, string>) =>
+      unannouncedRemovals(manifest, noticeChangelogs(changelogs), now).length;
+
+    expect(unannounced({ "jvm/CHANGELOG.md": released("0.13.0", notice) })).toBe(0);
+    expect(unannounced({ "jvm/CHANGELOG.md": released("1.0.0", notice) })).toBe(0);
+    // An entry that has not shipped, a patch, another changelog, and prose do not count.
+    expect(unannounced({ "jvm/CHANGELOG.md": `## Unreleased\n\n${notice}\n` })).toBe(1);
+    expect(unannounced({ "jvm/CHANGELOG.md": released("0.12.1", notice) })).toBe(1);
+    expect(unannounced({ "CHANGELOG.md": released("0.13.0", notice) })).toBe(1);
+    expect(
+      unannounced({
+        "jvm/CHANGELOG.md": released("0.13.0", "- A later minor drops Spring Boot 4.0."),
+      }),
+    ).toBe(1);
+    expect(
+      unannounced({ "jvm/CHANGELOG.md": released("0.13.0", notice.replace("4.0", "4.1")) }),
+    ).toBe(1);
+  });
+
+  it("requires PostgreSQL notice in two published minors, from twice the window", () => {
+    const manifest = noticeManifest({ postgres: { "15": "2027-11-11" } });
+    const passedAt = endOfLifePassedAt("2027-11-11");
+    const opens = passedAt - 2 * NOTICE_WINDOW_MS_PER_MINOR;
+    const notice = "- **Removal notice:** PostgreSQL 15.";
+    const once = released("0.13.0", notice);
+    const twice = `${released("0.14.0", notice)}${once}`;
+
+    expect(unannouncedRemovals(manifest, noticeChangelogs({}), opens - 1)).toEqual([]);
+    expect(unannouncedRemovals(manifest, noticeChangelogs({}), opens)).toHaveLength(1);
+    expect(
+      unannouncedRemovals(manifest, noticeChangelogs({ "CHANGELOG.md": once }), opens),
+    ).toEqual([expect.stringContaining("announces its removal in 1 of the 2 published minors")]);
+    expect(
+      unannouncedRemovals(manifest, noticeChangelogs({ "CHANGELOG.md": twice }), opens),
+    ).toEqual([]);
+  });
+
+  it("exempts a version whose date upstream has not announced", () => {
+    const manifest = noticeManifest({ ruby: { "3.4": null } });
+    expect(unannouncedRemovals(manifest, noticeChangelogs({}), Date.UTC(2099, 0, 1))).toEqual([]);
   });
 
   it("treats a month-precision date as the whole month", () => {

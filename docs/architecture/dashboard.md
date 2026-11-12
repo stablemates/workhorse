@@ -2607,4 +2607,6 @@ The sentence names:
   from `resolvedDatabaseUrlSource()`.
 
 It never prints the URL, which can carry a password. Anything unrecognised keeps its stack, and both
-exit 1.
+exit 1. A failed migration step (`SchemaMigrationStepError`) is the exception: it keeps its stack
+and its cause lines also for these codes, so the output names the step. [Schema command
+diagnostics](operations.md#schema-command-diagnostics) states the lines.

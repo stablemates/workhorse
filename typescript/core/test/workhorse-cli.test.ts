@@ -10,7 +10,8 @@ import {
   WORKHORSE_SCHEMA_VERSION,
 } from "../src/schema.js";
 import { createSchemaStatusReport, FLEET_EVIDENCE_NOTE } from "../src/cli/schema-status.js";
-import { describeDatabaseFailure } from "../src/cli/database-failure.js";
+import { SchemaMigrationStepError } from "../src/schema-migrations.js";
+import { describeDatabaseFailure, describeStepCause } from "../src/cli/database-failure.js";
 import { cliNodeArgs } from "./support/cli-process.js";
 
 const repository = path.resolve(import.meta.dirname, "../../..");
@@ -219,6 +220,28 @@ describe("database failure messages", () => {
     ).toBeUndefined();
     expect(describeDatabaseFailure("not an error", "DATABASE_URL")).toBeUndefined();
     expect(describeDatabaseFailure(undefined, undefined)).toBeUndefined();
+  });
+
+  // A step that fails because the socket closed has no SQLSTATE, so the step error gets the
+  // connection sentence as its cause line, after the first line that names the step (SM-2048).
+  it("gives a failed step a cause line for a socket error and a closed connection", () => {
+    const step = new SchemaMigrationStepError(
+      "Workhorse migration 0102-x.sql failed and was rolled back",
+      {
+        cause: Object.assign(new Error("read ECONNRESET"), { code: "ECONNRESET" }),
+      },
+    );
+    expect(describeStepCause(step, "DATABASE_URL")).toBe(
+      "Cause: Could not reach PostgreSQL (ECONNRESET). The database URL came from $DATABASE_URL.\n",
+    );
+    expect(describeStepCause(new SchemaMigrationStepError("x"), undefined)).toBeUndefined();
+    // The driver ends a query on a closed socket with a fixed message and no code.
+    const closed = new SchemaMigrationStepError("Workhorse migration 0102-x.sql failed", {
+      cause: new Error("Connection terminated unexpectedly\u001b[2J\nsecond line"),
+    });
+    expect(describeStepCause(closed, undefined)).toBe(
+      "Cause: Connection terminated unexpectedly[2J\n",
+    );
   });
 
   it("omits the source clause when no command resolved a URL", () => {

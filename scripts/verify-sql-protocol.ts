@@ -604,13 +604,18 @@ export type DurableScriptOperation =
       deadlineField?: string;
       runAtField?: string;
     }
-  | { op: "runChildren"; key: string; children: { name: string; payload: JsonValue }[] }
+  | {
+      op: "runChildren";
+      key: string;
+      /** A child with `secondQueue` goes to `secondChildQueue`, and each other child to `childQueue`. */
+      children: { name: string; payload: JsonValue; secondQueue?: boolean }[];
+    }
   | { op: "catchSuspension"; key: string; step: DurableScriptOperation }
   | { op: "overlappingCheckpoints"; key: string; name: string; overlapWindowMs: number };
 
 /** One step of the runner of a `durable-script` fixture. */
 export type DurableScriptStep =
-  | { action: "run"; worker?: "task" | "child" }
+  | { action: "run"; worker?: "task" | "child" | "secondChild" }
   | { action: "sql"; sql: string }
   | { action: "handOff" }
   | {
@@ -640,6 +645,11 @@ export interface DurableScriptRuntimeFixture extends RuntimeFixtureBase {
   childTaskType?: string;
   /** The queue of each child request. A second worker claims it, so a parent run ends. */
   childQueue?: string;
+  /**
+   * The queue of each child with `secondQueue`. A third worker claims it, so one child of a set can
+   * end while the other child waits.
+   */
+  secondChildQueue?: string;
   /** A query that returns the JSON object text of the task payload, in the column `payload`. */
   payloadSql?: string;
   script: DurableScriptOperation[];

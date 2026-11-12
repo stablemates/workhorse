@@ -219,7 +219,9 @@ An application that uses only the native API takes new releases, because the gem
 below its floor. The changelog of that minor states the exception.
 
 The notice rule itself stands. A future floor raise still needs its changelog notice in a published
-minor before the minor that drops the version.
+minor before the minor that drops the version. Since SM-1922, the support-matrix test also fails
+before the date when no published minor carries that notice. "Raising a floor" in
+`docs/compatibility.md` describes the check.
 
 ## Consequences
 

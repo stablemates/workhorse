@@ -50,7 +50,10 @@ module Conformance
         task_id = prepare_task(connection, phase)
         with_pool do |pool|
           workers = {"task" => task_worker(pool)}
-          workers["child"] = child_worker(pool) if @fixture.key?("childQueue")
+          workers["child"] = child_worker(pool, "childQueue", "children") if @fixture.key?("childQueue")
+          if @fixture.key?("secondChildQueue")
+            workers["secondChild"] = child_worker(pool, "secondChildQueue", "second-children")
+          end
           steps.each_with_index do |step, index|
             where = "#{@fixture["id"]} step #{index + 1} (#{step["action"]})"
             run_step(connection, workers, task_id, step, where)
@@ -103,8 +106,9 @@ module Conformance
       end
     end
 
-    def child_worker(pool)
-      W::Worker.new(pool, queues: [@fixture["childQueue"]], worker_id: "ruby-#{@fixture["id"]}-children",
+    # A child with secondQueue goes to secondChildQueue, so one child of a set can end before the other.
+    def child_worker(pool, field, suffix)
+      W::Worker.new(pool, queues: [@fixture[field]], worker_id: "ruby-#{@fixture["id"]}-#{suffix}",
         concurrency: 1, polling_only: true, disable_registry: true, poll_interval: 0.005)
         .handle(@fixture["childTaskType"]) { |payload| {"echo" => payload} }
     end
@@ -213,7 +217,8 @@ module Conformance
       when "runChildren"
         requests = operation["children"].map do |child|
           W::ChildTaskRequest.new(name: child["name"], task_type: @fixture["childTaskType"],
-            payload: child["payload"], options: {queue: @fixture["childQueue"]})
+            payload: child["payload"],
+            options: {queue: @fixture[child["secondQueue"] ? "secondChildQueue" : "childQueue"]})
         end
         joined = context.run_children(requests)
         # The set join counts as returned before the runner reads its outcomes, so a wrong value still counts.

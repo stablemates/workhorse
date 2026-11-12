@@ -36,6 +36,13 @@ from workhorse import (
 # can claim more than one task, so a step names the work that ends, not a count of claims.
 MAXIMUM_DRAIN_PASSES = 20
 
+# The step worker, the fixture field of its queue, and the suffix of its worker ID. A child with
+# ``secondQueue`` goes to ``secondChildQueue``, so one child of a set can end before the other.
+CHILD_WORKERS = (
+    ("child", "childQueue", "children"),
+    ("secondChild", "secondChildQueue", "second-children"),
+)
+
 
 # The operations that can suspend the task.
 SUSPENDING = frozenset({"sleep", "sleepUntil", "waitForSignal", "waitForHuman", "runChild"})
@@ -171,13 +178,14 @@ def run_phase(
         lambda payload, context: run_script(fixture, payload, context, counters),
     )
     workers: dict[str, Worker] = {"task": worker}
-    if "childQueue" in fixture:
-        workers["child"] = Worker(
-            pool,
-            queue=fixture["childQueue"],
-            worker_id=f"python-{fixture['id']}-children",
-            concurrency=1,
-        ).handle(fixture["childTaskType"], lambda payload, _context: {"echo": payload})
+    for name, field, suffix in CHILD_WORKERS:
+        if field in fixture:
+            workers[name] = Worker(
+                pool,
+                queue=fixture[field],
+                worker_id=f"python-{fixture['id']}-{suffix}",
+                concurrency=1,
+            ).handle(fixture["childTaskType"], lambda payload, _context: {"echo": payload})
     for index, step in enumerate(steps):
         where = f"{fixture['id']} step {index + 1} ({step['action']})"
         if step["action"] == "run":
@@ -222,14 +230,15 @@ async def run_async_phase(
 
         worker.handle(fixture["taskType"], handler)
         workers = {"task": worker}
-        if "childQueue" in fixture:
-            workers["child"] = AsyncWorker.from_psycopg(
-                pool,
-                queue=fixture["childQueue"],
-                worker_id=f"python-async-{fixture['id']}-children",
-                concurrency=1,
-            )
-            workers["child"].handle(fixture["childTaskType"], child)
+        for name, field, suffix in CHILD_WORKERS:
+            if field in fixture:
+                workers[name] = AsyncWorker.from_psycopg(
+                    pool,
+                    queue=fixture[field],
+                    worker_id=f"python-async-{fixture['id']}-{suffix}",
+                    concurrency=1,
+                )
+                workers[name].handle(fixture["childTaskType"], child)
         for index, step in enumerate(steps):
             where = f"{fixture['id']} step {index + 1} ({step['action']})"
             if step["action"] == "run":
@@ -274,7 +283,9 @@ def child_requests(
             name=child["name"],
             type=fixture["childTaskType"],
             payload=child["payload"],
-            options=EnqueueOptions(queue=fixture["childQueue"]),
+            options=EnqueueOptions(
+                queue=fixture["secondChildQueue" if child.get("secondQueue") else "childQueue"]
+            ),
         )
         for child in operation["children"]
     ]

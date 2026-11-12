@@ -199,15 +199,18 @@ passes also when the window ends.
 
 The runner then runs the steps in order. `$1` in each statement is the task ID.
 
-| Step      | What the runner does                                                                          |
-| --------- | --------------------------------------------------------------------------------------------- |
-| `run`     | Runs the task worker, or the child worker for `worker: "child"`, until a claim finds no task. |
-| `sql`     | Runs the statement, for example to deliver a signal or to move a timer to the past.           |
-| `expect`  | Compares the JSON of the `observe` query, and the counters that the step names.               |
-| `handOff` | Ends the first phase of a cross-SDK run. The counters start again at zero.                    |
+| Step      | What the runner does                                                                |
+| --------- | ----------------------------------------------------------------------------------- |
+| `run`     | Runs the worker that `worker` names (default `task`) until a claim finds no task.   |
+| `sql`     | Runs the statement, for example to deliver a signal or to move a timer to the past. |
+| `expect`  | Compares the JSON of the `observe` query, and the counters that the step names.     |
+| `handOff` | Ends the first phase of a cross-SDK run. The counters start again at zero.          |
 
 A `run` step does not count claims, because `runOnce` can claim more than one task in some SDKs.
 The children go to `childQueue`, so a run of the task worker ends when the parent task suspends.
+The `child` worker claims from `childQueue`. A `runChildren` child with `secondQueue: true` goes to
+`secondChildQueue`, and the `secondChild` worker claims it. Thus one child of a set can end while
+the other child waits, and that does not depend on how many tasks `runOnce` claims.
 The counters are `handlerRuns`, `checkpointOperations`, `caughtSuspensions`, `completedScripts`,
 and `returnedSuspendingCalls`. A run that suspends must stop at the suspending call, so that call
 does not return and the run does not reach the end of the script:

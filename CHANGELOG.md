@@ -567,6 +567,16 @@ Migration 0103 (`0103-take-enqueue-locks-in-key-tier-row-order.sql`) moves the s
 `add_task_group_members_v1`, and `cancel_task_group_v1`. It does not raise the SDK compatibility
 floor and changes no rows. Run `workhorse schema migrate`.
 
+### A failed migration step names the step also for a connection SQLSTATE
+
+A step of `workhorse schema migrate` can fail with a SQLSTATE that starts with 08 or 28, or with
+`3D000`. For example, the server ends the session while the step runs (`08006`). The command then
+printed only `PostgreSQL refused the connection`. The operator did not see which step failed, or
+whether a non-transactional step applied part of its body (SM-2048). The first line now names the
+failed step for each SQLSTATE, and the `Cause:` line follows. If a socket error or a closed
+connection ends the step, the `Cause:` line gives that reason. A connection that fails before a
+step runs still gets its one sentence.
+
 ## 0.12.0 — 2026-11-07
 
 The npm packages, Python distribution, Go module, Rust crate, Ruby gem, JVM artifacts, and .NET

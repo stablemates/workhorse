@@ -3,6 +3,15 @@ import { databaseErrorCode } from "./errors.js";
 import type { Queryable } from "./types.js";
 
 /**
+ * A migration step that failed. Its `cause` is the driver error.
+ *
+ * The CLI uses the class to print the step and its cause, also when the cause has a connection
+ * SQLSTATE (SM-2048). The class keeps the name `Error`, so the first line of the output stays
+ * `Error: Workhorse migration <file> ...` for a script that matches it.
+ */
+export class SchemaMigrationStepError extends Error {}
+
+/**
  * Whether a step grows the schema or removes from it.
  *
  * An `additive` step is pipeline work: `workhorse schema migrate` applies it ahead of a rollout.
@@ -501,9 +510,10 @@ async function applyMigrationStep(
       const outcome = nonTransactional
         ? "failed part-way and rolled nothing back; the schema is still at its starting version and the body reruns from the beginning"
         : "failed and was rolled back";
-      throw new Error(`Workhorse migration ${migration.file} ${outcome}${reason}`, {
-        cause: error,
-      });
+      throw new SchemaMigrationStepError(
+        `Workhorse migration ${migration.file} ${outcome}${reason}`,
+        { cause: error },
+      );
     }
   }
   const migratedVersion = await readSchemaVersion(database);

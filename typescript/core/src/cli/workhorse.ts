@@ -16,6 +16,7 @@ import {
   SCHEMA_MIGRATIONS,
   WORKHORSE_SCHEMA_VERSION,
 } from "../schema.js";
+import { SchemaMigrationStepError } from "../schema-migrations.js";
 import { MINIMUM_POSTGRES_MAJOR, readPostgresSupport } from "../support.js";
 import { runWorkerProcess } from "../worker-process.js";
 import type { WorkerProcessDefinition } from "../worker-process.js";
@@ -26,7 +27,7 @@ import {
   resolvedDatabaseUrlSource,
 } from "./arguments.js";
 import { describeDatabaseCause } from "./database-cause.js";
-import { describeDatabaseFailure } from "./database-failure.js";
+import { describeDatabaseFailure, describeStepCause } from "./database-failure.js";
 import { startDashboardServer } from "./dashboard.js";
 import { runHealthCommand } from "./health.js";
 import { initializeProject } from "./init.js";
@@ -890,13 +891,20 @@ try {
   } else {
     // A database this command could not use is a fault in the URL, so it earns a sentence naming
     // the input to edit. Everything else keeps its stack, which is the right answer for a defect.
-    const failure = describeDatabaseFailure(error, resolvedDatabaseUrlSource());
+    // A failed migration step always names the step, also when its cause is a connection SQLSTATE,
+    // because the operator must know which step failed and whether it applied part of its body.
+    const stepFailure = error instanceof SchemaMigrationStepError;
+    const failure = stepFailure
+      ? undefined
+      : describeDatabaseFailure(error, resolvedDatabaseUrlSource());
     if (failure) process.stderr.write(`Error: ${failure}\n`);
     else {
       console.error(error instanceof Error ? (error.stack ?? error.message) : error);
       // A failed migration step keeps the PostgreSQL error as its cause. Its lines go after the
       // outer error, so the first line that a script matches does not change.
-      const cause = describeDatabaseCause(error);
+      const cause =
+        describeDatabaseCause(error) ??
+        (stepFailure ? describeStepCause(error, resolvedDatabaseUrlSource()) : undefined);
       if (cause !== undefined) process.stderr.write(cause);
     }
     process.exitCode = 1;

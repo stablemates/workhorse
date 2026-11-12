@@ -69,21 +69,35 @@ export async function runDurableScriptPhase(options: {
   }).handle(fixture.taskType, (payload, context) =>
     runScript({ fixture, payload, context, counters }),
   );
-  const workers: Record<"task" | "child", Worker | undefined> = { task: worker, child: undefined };
-  if (fixture.childTaskType !== undefined && fixture.childQueue !== undefined) {
-    workers.child = new Worker(new Queue(pool, fixture.childQueue), {
-      workerId: `${SDK}-${fixture.id}-children`,
-      queue: fixture.childQueue,
+  const workers: Record<"task" | "child" | "secondChild", Worker | undefined> = {
+    task: worker,
+    child: undefined,
+    secondChild: undefined,
+  };
+  const childWorker = (childQueueName: string, suffix: string, childTaskType: string) =>
+    new Worker(new Queue(pool, childQueueName), {
+      workerId: `${SDK}-${fixture.id}-${suffix}`,
+      queue: childQueueName,
       concurrency: 1,
       registryIntervalMs: 0,
-    }).handle(fixture.childTaskType, (payload) => ({ echo: payload }));
+    }).handle(childTaskType, (payload) => ({ echo: payload }));
+  if (fixture.childTaskType !== undefined && fixture.childQueue !== undefined) {
+    workers.child = childWorker(fixture.childQueue, "children", fixture.childTaskType);
+  }
+  if (fixture.childTaskType !== undefined && fixture.secondChildQueue !== undefined) {
+    workers.secondChild = childWorker(
+      fixture.secondChildQueue,
+      "second-children",
+      fixture.childTaskType,
+    );
   }
   for (const [index, step] of steps.entries()) {
     const where = `${fixture.id} step ${index + 1} (${step.action})`;
     switch (step.action) {
       case "run": {
         const selected = workers[step.worker ?? "task"];
-        if (selected === undefined) throw new Error(`${where}: the fixture has no child queue`);
+        if (selected === undefined)
+          throw new Error(`${where}: the fixture has no ${step.worker} queue`);
         await drain(selected, where);
         break;
       }
@@ -275,7 +289,9 @@ async function runOperationOnce(options: {
           name: child.name,
           type: childType(fixture),
           payload: child.payload,
-          options: { queue: childQueue(fixture) },
+          options: {
+            queue: child.secondQueue === true ? secondChildQueue(fixture) : childQueue(fixture),
+          },
         })),
       );
       // The set join counts as returned before the runner reads its outcomes, so a wrong value
@@ -352,6 +368,13 @@ function childType(fixture: DurableScriptRuntimeFixture): string {
 function childQueue(fixture: DurableScriptRuntimeFixture): string {
   if (fixture.childQueue === undefined) throw new Error(`${fixture.id} has no childQueue`);
   return fixture.childQueue;
+}
+
+function secondChildQueue(fixture: DurableScriptRuntimeFixture): string {
+  if (fixture.secondChildQueue === undefined) {
+    throw new Error(`${fixture.id} has no secondChildQueue`);
+  }
+  return fixture.secondChildQueue;
 }
 
 function payloadText(payload: Json, field: string): string {
