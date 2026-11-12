@@ -50,13 +50,9 @@ duration.
   </Tab>
   <Tab value="Rust">
     ```rust
-    queue
-        .enqueue(
-            "price.quote",
-            &json!({ "quoteId": quote_id }),
-            EnqueueOptions { deadline: Some(quote_expires_at), ..Default::default() },
-        )
-        .await?;
+    let mut options = EnqueueOptions::default();
+    options.deadline = Some(quote_expires_at);
+    queue.enqueue("price.quote", &json!({ "quoteId": quote_id }), options).await?;
     ```
   </Tab>
   <Tab value="Ruby">
@@ -200,17 +196,10 @@ must stop, but a later attempt can succeed. For example, an HTTP call stops resp
   </Tab>
   <Tab value="Rust">
     ```rust
-    queue
-        .enqueue(
-            "report.build",
-            &json!({ "reportId": report_id }),
-            EnqueueOptions {
-                execution_timeout_ms: Some(attempt_timeout_ms),
-                max_attempts: attempt_budget,
-                ..Default::default()
-            },
-        )
-        .await?;
+    let mut options = EnqueueOptions::default();
+    options.execution_timeout_ms = Some(attempt_timeout_ms);
+    options.max_attempts = attempt_budget;
+    queue.enqueue("report.build", &json!({ "reportId": report_id }), options).await?;
     ```
   </Tab>
   <Tab value="Ruby">

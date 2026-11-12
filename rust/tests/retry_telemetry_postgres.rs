@@ -68,27 +68,23 @@ async fn each_retry_records_one_retry_span_and_one_retried_count() {
             admin.set_queue_tier(case.name, QueueTier::Fast, &audit).await.unwrap();
         }
         let queue = Queue::connect(database.url(), case.name).await.unwrap();
-        let options = EnqueueOptions {
-            max_attempts: if case.last { 1 } else { 3 },
-            execution_timeout_ms: case.timeout.then_some(300),
-            ..Default::default()
-        };
+        let mut options = EnqueueOptions::default();
+        options.max_attempts = if case.last { 1 } else { 3 };
+        options.execution_timeout_ms = case.timeout.then_some(300);
         task_ids.push(queue.enqueue(case.name, &json!({}), options).await.unwrap().task_id);
         let manager = deadpool_postgres::Manager::new(database.url().parse().unwrap(), NoTls);
         let pool = deadpool_postgres::Pool::builder(manager).max_size(4).build().unwrap();
-        let worker = Worker::new(
-            pool,
-            WorkerOptions {
-                queues: vec![case.name.into()],
-                worker_id: Some(case.name.into()),
-                polling_only: true,
-                disable_registry: true,
-                lease_duration: Duration::from_secs(10),
-                // Only the tick before the claim runs, so maintenance cannot settle the timeout.
-                maintenance_interval: Duration::from_secs(3600),
-                ..WorkerOptions::default()
-            },
-        )
+        let worker = Worker::new(pool, {
+            let mut worker_options = WorkerOptions::default();
+            worker_options.queues = vec![case.name.into()];
+            worker_options.worker_id = Some(case.name.into());
+            worker_options.polling_only = true;
+            worker_options.disable_registry = true;
+            worker_options.lease_duration = Duration::from_secs(10);
+            // Only the tick before the claim runs, so maintenance cannot settle the timeout.
+            worker_options.maintenance_interval = Duration::from_secs(3600);
+            worker_options
+        })
         .unwrap();
         let timeout = case.timeout;
         worker.handle(case.name, move |_: Value, context: HandlerContext| async move {

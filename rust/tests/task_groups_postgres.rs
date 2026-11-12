@@ -13,9 +13,8 @@ use workhorse::contracts::{TaskContractVersion, TaskTypeContracts};
 use workhorse::{
     Admin, AdminAudit, BatchItem, BatchOptions, BatchResult, EnqueueOptions, EnqueueRequest, Error,
     HandlerContext, Idempotency, Queue, QueueTier, TaskGroupCallbackKind, TaskGroupCallbacks,
-    TaskGroupCounts, TaskGroupEventType, TaskGroupLink, TaskGroupMemberOutcome,
-    TaskGroupMemberQuery, TaskGroupResult, TaskGroupRole, TaskGroupState, Throttle, Worker,
-    WorkerOptions,
+    TaskGroupEventType, TaskGroupLink, TaskGroupMemberOutcome, TaskGroupMemberQuery,
+    TaskGroupResult, TaskGroupRole, TaskGroupState, Throttle, Worker, WorkerOptions,
 };
 
 const QUEUE: &str = "rust-groups";
@@ -41,20 +40,21 @@ impl Harness {
     fn worker_serving(&self, queues: &[&str]) -> Worker {
         let manager = deadpool_postgres::Manager::new(self.database.url().parse().unwrap(), NoTls);
         let pool = deadpool_postgres::Pool::builder(manager).max_size(6).build().unwrap();
-        let options = WorkerOptions {
-            queues: queues.iter().map(|queue| queue.to_string()).collect(),
-            worker_id: Some(format!("rust-groups-{}", Uuid::new_v4())),
-            polling_only: true,
-            poll_interval: Some(Duration::from_millis(20)),
-            ..WorkerOptions::default()
-        };
+        let mut options = WorkerOptions::default();
+        options.queues = queues.iter().map(|queue| queue.to_string()).collect();
+        options.worker_id = Some(format!("rust-groups-{}", Uuid::new_v4()));
+        options.polling_only = true;
+        options.poll_interval = Some(Duration::from_millis(20));
         Worker::new(pool, options).unwrap()
     }
 }
 
 fn request(task_type: &str, payload: Value) -> EnqueueRequest {
-    EnqueueRequest::new(task_type, payload)
-        .with_options(EnqueueOptions { max_attempts: 1, ..Default::default() })
+    EnqueueRequest::new(task_type, payload).with_options({
+        let mut enqueue_options = EnqueueOptions::default();
+        enqueue_options.max_attempts = 1;
+        enqueue_options
+    })
 }
 
 fn audit() -> AdminAudit {
@@ -77,13 +77,12 @@ async fn a_sealed_group_runs_its_callback_after_a_member_adds_a_task() {
             let added = context
                 .task_group()
                 // The request names its queue.
-                .add(vec![request("import", json!({ "spawn": false })).with_options(
-                    EnqueueOptions {
-                        queue: Some(QUEUE.into()),
-                        max_attempts: 1,
-                        ..Default::default()
-                    },
-                )])
+                .add(vec![request("import", json!({ "spawn": false })).with_options({
+                    let mut enqueue_options = EnqueueOptions::default();
+                    enqueue_options.queue = Some(QUEUE.into());
+                    enqueue_options.max_attempts = 1;
+                    enqueue_options
+                })])
                 .await?;
             assert_eq!(added.len(), 1);
         }
@@ -102,11 +101,9 @@ async fn a_sealed_group_runs_its_callback_after_a_member_adds_a_task() {
         }
     });
 
-    let callbacks = TaskGroupCallbacks {
-        on_finish: Some(request("report", json!({ "report": true }))),
-        on_failure: Some(request("report", json!({ "report": false }))),
-        ..Default::default()
-    };
+    let mut callbacks = TaskGroupCallbacks::default();
+    callbacks.on_finish = Some(request("report", json!({ "report": true })));
+    callbacks.on_failure = Some(request("report", json!({ "report": false })));
     let block = harness
         .queue
         .task_group(callbacks, vec![request("import", json!({ "spawn": true }))])
@@ -145,7 +142,12 @@ async fn a_sealed_group_runs_its_callback_after_a_member_adds_a_task() {
 
     let page = harness
         .queue
-        .list_task_group_members(group.id, TaskGroupMemberQuery { after: 0, limit: 1 })
+        .list_task_group_members(group.id, {
+            let mut task_group_member_query = TaskGroupMemberQuery::default();
+            task_group_member_query.after = 0;
+            task_group_member_query.limit = 1;
+            task_group_member_query
+        })
         .await
         .unwrap();
     assert_eq!(page.members.len(), 1);
@@ -154,7 +156,12 @@ async fn a_sealed_group_runs_its_callback_after_a_member_adds_a_task() {
     assert_eq!(page.next_after, Some(1));
     let rest = harness
         .admin
-        .list_task_group_members(group.id, TaskGroupMemberQuery { after: 1, limit: 10 })
+        .list_task_group_members(group.id, {
+            let mut task_group_member_query = TaskGroupMemberQuery::default();
+            task_group_member_query.after = 1;
+            task_group_member_query.limit = 10;
+            task_group_member_query
+        })
         .await
         .unwrap();
     assert_eq!(rest.members.len(), 1);
@@ -162,13 +169,23 @@ async fn a_sealed_group_runs_its_callback_after_a_member_adds_a_task() {
     // When the member count is a multiple of the limit, the last full page has no next position.
     let exact = harness
         .queue
-        .list_task_group_members(group.id, TaskGroupMemberQuery { after: 0, limit: 2 })
+        .list_task_group_members(group.id, {
+            let mut task_group_member_query = TaskGroupMemberQuery::default();
+            task_group_member_query.after = 0;
+            task_group_member_query.limit = 2;
+            task_group_member_query
+        })
         .await
         .unwrap();
     assert_eq!((exact.members.len(), exact.next_after), (2, None));
     let last = harness
         .admin
-        .list_task_group_members(group.id, TaskGroupMemberQuery { after: 1, limit: 1 })
+        .list_task_group_members(group.id, {
+            let mut task_group_member_query = TaskGroupMemberQuery::default();
+            task_group_member_query.after = 1;
+            task_group_member_query.limit = 1;
+            task_group_member_query
+        })
         .await
         .unwrap();
     assert_eq!((last.members.len(), last.next_after), (1, None));
@@ -187,21 +204,23 @@ async fn every_request_option_is_checked_before_any_statement() {
     drop(connection);
     let closed = Queue::new(client, QUEUE);
     let valid = request("member", json!({}));
-    let invalid = request("member", json!({}))
-        .with_options(EnqueueOptions { max_attempts: 101, ..Default::default() });
+    let invalid = request("member", json!({})).with_options({
+        let mut enqueue_options = EnqueueOptions::default();
+        enqueue_options.max_attempts = 101;
+        enqueue_options
+    });
     let refused = |result: Result<(), Error>| match result {
         Err(Error::InvalidArgument(message)) => {
             assert!(message.contains("max attempts must be between 1 and 100"), "got {message}");
         }
         other => panic!("expected a refusal before any statement, got {other:?}"),
     };
-    let callbacks = TaskGroupCallbacks {
-        on_finish: Some(valid.clone()),
-        on_success: Some(invalid.clone()),
-        ..Default::default()
-    };
+    let mut callbacks = TaskGroupCallbacks::default();
+    callbacks.on_finish = Some(valid.clone());
+    callbacks.on_success = Some(invalid.clone());
     refused(closed.create_task_group(callbacks).await.map(|_| ()));
-    let callbacks = TaskGroupCallbacks { on_finish: Some(valid.clone()), ..Default::default() };
+    let mut callbacks = TaskGroupCallbacks::default();
+    callbacks.on_finish = Some(valid.clone());
     let members = vec![valid.clone(), invalid.clone()];
     refused(closed.task_group(callbacks, members.clone()).await.map(|_| ()));
     refused(closed.add_to_task_group(Uuid::new_v4(), members.clone()).await.map(|_| ()));
@@ -231,11 +250,9 @@ async fn an_operator_cancel_finishes_an_open_group_with_its_failure_callback() {
     let mut client = harness.database.connect().await;
     let transaction = client.transaction().await.unwrap();
     let queue = Queue::new(transaction, QUEUE);
-    let callbacks = TaskGroupCallbacks {
-        on_success: Some(request("report", json!({}))),
-        on_failure: Some(request("report", json!({}))),
-        ..Default::default()
-    };
+    let mut callbacks = TaskGroupCallbacks::default();
+    callbacks.on_success = Some(request("report", json!({})));
+    callbacks.on_failure = Some(request("report", json!({})));
     let group = queue.create_task_group(callbacks).await.unwrap();
     assert_eq!(group.state, TaskGroupState::Open);
     let added = queue
@@ -324,15 +341,18 @@ async fn task_group_refusals_map_to_their_errors() {
     let group = queue.create_task_group(TaskGroupCallbacks::default()).await.unwrap();
 
     // A callback cannot coalesce, and an add cannot debounce or throttle.
-    let keyed = request("report", json!({})).with_options(EnqueueOptions {
-        idempotency: Some(Idempotency::new("report")),
-        ..Default::default()
+    let keyed = request("report", json!({})).with_options({
+        let mut enqueue_options = EnqueueOptions::default();
+        enqueue_options.idempotency = Some(Idempotency::new("report"));
+        enqueue_options
     });
-    let callbacks = TaskGroupCallbacks { on_finish: Some(keyed), ..Default::default() };
+    let mut callbacks = TaskGroupCallbacks::default();
+    callbacks.on_finish = Some(keyed);
     assert!(matches!(queue.create_task_group(callbacks).await, Err(Error::InvalidArgument(_))));
-    let throttled = request("import", json!({})).with_options(EnqueueOptions {
-        throttle: Some(Throttle::new("t", 1_000)),
-        ..Default::default()
+    let throttled = request("import", json!({})).with_options({
+        let mut enqueue_options = EnqueueOptions::default();
+        enqueue_options.throttle = Some(Throttle::new("t", 1_000));
+        enqueue_options
     });
     let refused = queue.add_to_task_group(group.id, vec![throttled]).await;
     assert!(matches!(refused, Err(Error::InvalidArgument(_))));
@@ -343,8 +363,11 @@ async fn task_group_refusals_map_to_their_errors() {
     ));
 
     // An idempotency hit that returns a task outside the group (P1010).
-    let keyed =
-        EnqueueOptions { idempotency: Some(Idempotency::new("row-7")), ..Default::default() };
+    let keyed = {
+        let mut enqueue_options = EnqueueOptions::default();
+        enqueue_options.idempotency = Some(Idempotency::new("row-7"));
+        enqueue_options
+    };
     let outside = queue.enqueue("import", &json!({ "row": 7 }), keyed.clone()).await.unwrap();
     let conflict = queue
         .add_to_task_group(
@@ -364,9 +387,10 @@ async fn task_group_refusals_map_to_their_errors() {
 
     // A fast-tier member (P1007).
     harness.admin.set_queue_tier("rust-groups-fast", QueueTier::Fast, &audit()).await.unwrap();
-    let fast = request("import", json!({})).with_options(EnqueueOptions {
-        queue: Some("rust-groups-fast".into()),
-        ..Default::default()
+    let fast = request("import", json!({})).with_options({
+        let mut enqueue_options = EnqueueOptions::default();
+        enqueue_options.queue = Some("rust-groups-fast".into());
+        enqueue_options
     });
     match queue.add_to_task_group(group.id, vec![fast]).await.unwrap_err() {
         Error::FastTierUnsupported { feature, .. } => assert_eq!(feature, "task groups"),
@@ -391,16 +415,13 @@ async fn task_group_refusals_map_to_their_errors() {
 #[tokio::test]
 async fn a_changed_contract_reloads_before_the_group_is_created() {
     let Some(harness) = harness("task_groups_contracts").await else { return };
-    let contract = TaskTypeContracts {
-        current_version: "v1".into(),
-        versions: BTreeMap::from([(
-            "v1".to_string(),
-            TaskContractVersion {
-                payload_schema: json!({ "type": "object", "required": ["row"] }),
-                ..TaskContractVersion::default()
-            },
-        )]),
-    };
+    let mut contract = TaskTypeContracts::default();
+    contract.current_version = "v1".into();
+    contract.versions = BTreeMap::from([("v1".to_string(), {
+        let mut task_contract_version = TaskContractVersion::default();
+        task_contract_version.payload_schema = json!({ "type": "object", "required": ["row"] });
+        task_contract_version
+    })]);
     let contracts = BTreeMap::from([
         ("import".to_string(), contract.clone()),
         ("report".to_string(), contract),
@@ -408,10 +429,8 @@ async fn a_changed_contract_reloads_before_the_group_is_created() {
     harness.queue.sync_contracts(&contracts).await.unwrap();
     // This client has no cached contract, so PostgreSQL reports a mismatch and it retries once.
     let queue = Queue::connect(harness.database.url(), QUEUE).await.unwrap();
-    let callbacks = TaskGroupCallbacks {
-        on_finish: Some(request("report", json!({ "row": 0 }))),
-        ..Default::default()
-    };
+    let mut callbacks = TaskGroupCallbacks::default();
+    callbacks.on_finish = Some(request("report", json!({ "row": 0 })));
     let block =
         queue.task_group(callbacks, vec![request("import", json!({ "row": 1 }))]).await.unwrap();
     assert_eq!(block.group.counts.total, 1);
@@ -442,11 +461,9 @@ async fn a_success_callback_reads_the_counts_of_its_group() {
             Ok(json!(null))
         }
     });
-    let callbacks = TaskGroupCallbacks {
-        on_success: Some(request("report", json!({}))),
-        on_failure: Some(request("report", json!({}))),
-        ..Default::default()
-    };
+    let mut callbacks = TaskGroupCallbacks::default();
+    callbacks.on_success = Some(request("report", json!({})));
+    callbacks.on_failure = Some(request("report", json!({})));
     let members =
         vec![request("import", json!({ "row": 1 })), request("import", json!({ "row": 2 }))];
     let group = harness.queue.task_group(callbacks, members).await.unwrap().group;
@@ -460,8 +477,9 @@ async fn a_success_callback_reads_the_counts_of_its_group() {
     );
     assert_eq!(link.group.id, group.id);
     assert_eq!(link.group.result, Some(TaskGroupResult::Succeeded));
-    let counts = TaskGroupCounts { total: 2, succeeded: 2, failed: 0, canceled: 0, pending: 0 };
-    assert_eq!(link.group.counts, counts);
+    let counts = &link.group.counts;
+    let counted = (counts.total, counts.succeeded, counts.failed, counts.canceled, counts.pending);
+    assert_eq!(counted, (2, 2, 0, 0, 0));
     let on_failure =
         link.group.callbacks.iter().find(|c| c.kind == TaskGroupCallbackKind::OnFailure);
     assert_eq!(on_failure.unwrap().task_id, None);
@@ -473,17 +491,18 @@ async fn a_batch_member_adds_to_its_group() {
     let worker = harness.worker();
     worker.handle_batch(
         "batch-import",
-        BatchOptions { max_size: 1, linger: Duration::ZERO },
+        BatchOptions::new(1, Duration::ZERO),
         |items: Vec<BatchItem<Value>>| async move {
             let mut results = Vec::with_capacity(items.len());
             for item in &items {
                 let group = item.context.task_group();
                 let link = group.get().await.unwrap().expect("a member reads its group");
                 assert_eq!(link.role, TaskGroupRole::Member);
-                let extra = request("import", json!({})).with_options(EnqueueOptions {
-                    queue: Some(QUEUE.into()),
-                    max_attempts: 1,
-                    ..Default::default()
+                let extra = request("import", json!({})).with_options({
+                    let mut enqueue_options = EnqueueOptions::default();
+                    enqueue_options.queue = Some(QUEUE.into());
+                    enqueue_options.max_attempts = 1;
+                    enqueue_options
                 });
                 assert_eq!(group.add(vec![extra]).await.unwrap().len(), 1);
                 results.push(BatchResult::Succeeded(json!(null)));
@@ -506,16 +525,13 @@ async fn a_batch_member_adds_to_its_group() {
 #[tokio::test]
 async fn a_member_add_checks_the_current_contract() {
     let Some(harness) = harness("task_groups_member_contract").await else { return };
-    let contract = TaskTypeContracts {
-        current_version: "v1".into(),
-        versions: BTreeMap::from([(
-            "v1".to_string(),
-            TaskContractVersion {
-                payload_schema: json!({ "type": "object", "required": ["row"] }),
-                ..TaskContractVersion::default()
-            },
-        )]),
-    };
+    let mut contract = TaskTypeContracts::default();
+    contract.current_version = "v1".into();
+    contract.versions = BTreeMap::from([("v1".to_string(), {
+        let mut task_contract_version = TaskContractVersion::default();
+        task_contract_version.payload_schema = json!({ "type": "object", "required": ["row"] });
+        task_contract_version
+    })]);
     harness.queue.sync_contracts(&BTreeMap::from([("child".to_string(), contract)])).await.unwrap();
     let worker = harness.worker();
     let outcomes: Arc<Mutex<Vec<String>>> = Arc::default();
@@ -524,9 +540,10 @@ async fn a_member_add_checks_the_current_contract() {
         let record = Arc::clone(&record);
         async move {
             let child = |payload| {
-                request("child", payload).with_options(EnqueueOptions {
-                    queue: Some(QUEUE.into()),
-                    ..Default::default()
+                request("child", payload).with_options({
+                    let mut enqueue_options = EnqueueOptions::default();
+                    enqueue_options.queue = Some(QUEUE.into());
+                    enqueue_options
                 })
             };
             // The member's first add holds no contract, so PostgreSQL reports a mismatch and the
@@ -571,10 +588,11 @@ async fn a_member_add_without_a_queue_goes_to_the_queue_of_the_member() {
         }
         Ok(json!(null))
     });
-    let members = vec![request("import", json!({ "spawn": true })).with_options(EnqueueOptions {
-        queue: Some(QUEUE.into()),
-        max_attempts: 1,
-        ..Default::default()
+    let members = vec![request("import", json!({ "spawn": true })).with_options({
+        let mut enqueue_options = EnqueueOptions::default();
+        enqueue_options.queue = Some(QUEUE.into());
+        enqueue_options.max_attempts = 1;
+        enqueue_options
     })];
     let group =
         harness.queue.task_group(TaskGroupCallbacks::default(), members).await.unwrap().group;

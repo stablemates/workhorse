@@ -258,13 +258,11 @@ fn report(message: &str) {
 pub fn worker(database: &ScratchDatabase, queue: &str) -> workhorse::Worker {
     let manager = deadpool_postgres::Manager::new(database.url().parse().unwrap(), NoTls);
     let pool = deadpool_postgres::Pool::builder(manager).max_size(6).build().unwrap();
-    let options = workhorse::WorkerOptions {
-        queues: vec![queue.into()],
-        worker_id: Some(format!("rust-test-{}", uuid::Uuid::new_v4())),
-        polling_only: true,
-        poll_interval: Some(Duration::from_millis(20)),
-        ..workhorse::WorkerOptions::default()
-    };
+    let mut options = workhorse::WorkerOptions::default();
+    options.queues = vec![queue.into()];
+    options.worker_id = Some(format!("rust-test-{}", uuid::Uuid::new_v4()));
+    options.polling_only = true;
+    options.poll_interval = Some(Duration::from_millis(20));
     workhorse::Worker::new(pool, options).unwrap()
 }
 

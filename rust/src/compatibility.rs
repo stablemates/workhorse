@@ -7,6 +7,7 @@ use crate::Error;
 
 /// Why PostgreSQL and this client cannot work together.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum CompatibilityCode {
     SchemaNotInstalled,
     SchemaTooOld,
@@ -36,6 +37,7 @@ impl fmt::Display for CompatibilityCode {
 
 /// The installed schema version and the protocol versions PostgreSQL serves.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct CompatibilityState {
     /// `None` when the schema is absent or its version table is ambiguous.
     pub installed_schema_version: Option<i32>,

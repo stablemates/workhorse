@@ -76,14 +76,12 @@ async fn enqueue_persists_run_at_priority_tags_and_max_attempts() {
     let observer = database.connect().await;
 
     let run_at = now_ms() + Duration::minutes(10);
-    let options = EnqueueOptions {
-        queue: Some("rust-other".into()),
-        run_at: Some(run_at),
-        priority: 7,
-        tags: vec!["billing".into(), "rust".into()],
-        max_attempts: 3,
-        ..EnqueueOptions::default()
-    };
+    let mut options = EnqueueOptions::default();
+    options.queue = Some("rust-other".into());
+    options.run_at = Some(run_at);
+    options.priority = 7;
+    options.tags = vec!["billing".into(), "rust".into()];
+    options.max_attempts = 3;
     let result = queue.enqueue("email.send", &json!({"to": "a@b.c"}), options).await.unwrap();
     assert_eq!(result.outcome, EnqueueOutcome::Accepted);
     let task = stored_task(&observer, result.task_id).await;
@@ -119,22 +117,18 @@ async fn enqueue_persists_retry_policy_deadline_and_execution_timeout() {
     let deadline = now_ms() + Duration::hours(2);
     let retry_policy =
         json!({"type": "exponential", "initialDelayMs": 100, "multiplier": 2, "maxDelayMs": 5000});
-    let options = EnqueueOptions {
-        retry_policy: retry_policy.as_object().cloned(),
-        deadline: Some(deadline),
-        execution_timeout_ms: Some(30_000),
-        ..EnqueueOptions::default()
-    };
+    let mut options = EnqueueOptions::default();
+    options.retry_policy = retry_policy.as_object().cloned();
+    options.deadline = Some(deadline);
+    options.execution_timeout_ms = Some(30_000);
     let result = queue.enqueue("report.build", &json!({}), options).await.unwrap();
     let task = stored_task(&observer, result.task_id).await;
     assert_eq!(task.retry_policy, Some(retry_policy));
     assert_eq!(task.deadline_at, Some(deadline));
     assert_eq!(task.execution_timeout_ms, Some(30_000));
 
-    let invalid = EnqueueOptions {
-        retry_policy: json!({"type": "fixed"}).as_object().cloned(),
-        ..EnqueueOptions::default()
-    };
+    let mut invalid = EnqueueOptions::default();
+    invalid.retry_policy = json!({"type": "fixed"}).as_object().cloned();
     let refusal = queue.enqueue("report.build", &json!({}), invalid).await;
     assert!(matches!(refusal, Err(Error::Postgres(_))), "got {refusal:?}");
     assert_eq!(task_count(&observer).await, 1, "PostgreSQL rejects an invalid retry policy");
@@ -146,22 +140,18 @@ async fn enqueue_persists_concurrency_key_and_budget() {
     let queue = Queue::connect(database.url(), "rust-enqueue").await.unwrap();
     let observer = database.connect().await;
 
-    let options = EnqueueOptions {
-        concurrency_key: Some("tenant-1".into()),
-        budget: Some("openai".into()),
-        ..EnqueueOptions::default()
-    };
+    let mut options = EnqueueOptions::default();
+    options.concurrency_key = Some("tenant-1".into());
+    options.budget = Some("openai".into());
     let result = queue.enqueue("llm.call", &json!({}), options).await.unwrap();
     let task = stored_task(&observer, result.task_id).await;
     assert_eq!(task.concurrency_key.as_deref(), Some("tenant-1"));
     assert_eq!(task.budget.as_deref(), Some("openai"));
 
     // An empty key or budget means none.
-    let options = EnqueueOptions {
-        concurrency_key: Some(String::new()),
-        budget: Some(String::new()),
-        ..EnqueueOptions::default()
-    };
+    let mut options = EnqueueOptions::default();
+    options.concurrency_key = Some(String::new());
+    options.budget = Some(String::new());
     let result = queue.enqueue("llm.call", &json!({}), options).await.unwrap();
     let task = stored_task(&observer, result.task_id).await;
     assert_eq!(task.concurrency_key, None);
@@ -186,10 +176,8 @@ async fn enqueue_many_writes_an_atomic_batch_in_request_order() {
     assert_eq!(stored_task(&observer, results[1].task_id).await.task_type, "second");
 
     // PostgreSQL rejects the second request, so the first is not written either.
-    let bad_policy = EnqueueOptions {
-        retry_policy: json!({"type": "fixed"}).as_object().cloned(),
-        ..EnqueueOptions::default()
-    };
+    let mut bad_policy = EnqueueOptions::default();
+    bad_policy.retry_policy = json!({"type": "fixed"}).as_object().cloned();
     let requests = vec![
         EnqueueRequest::new("third", json!({})),
         EnqueueRequest::new("fourth", json!({})).with_options(bad_policy),
@@ -210,26 +198,37 @@ async fn enqueue_validation_rejects_invalid_options_before_postgres() {
     let observer = database.connect().await;
 
     let invalid = [
-        EnqueueOptions {
-            idempotency: Some(Idempotency::new("a")),
-            throttle: Some(Throttle::new("a", 1000)),
-            ..EnqueueOptions::default()
+        {
+            let mut enqueue_options = EnqueueOptions::default();
+            enqueue_options.idempotency = Some(Idempotency::new("a"));
+            enqueue_options.throttle = Some(Throttle::new("a", 1000));
+            enqueue_options
         },
-        EnqueueOptions { priority: 101, ..EnqueueOptions::default() },
-        EnqueueOptions { max_attempts: -1, ..EnqueueOptions::default() },
-        EnqueueOptions {
-            run_at: Some(Utc::now()),
-            debounce: Some(Debounce::new("a", 1000, DebounceSchedule::Reset)),
-            ..EnqueueOptions::default()
+        {
+            let mut enqueue_options = EnqueueOptions::default();
+            enqueue_options.priority = 101;
+            enqueue_options
         },
-        EnqueueOptions {
-            dependencies: Some(Dependencies {
-                prerequisite_task_ids: Vec::new(),
-                on_success: DependencyTerminalPolicy::Release,
-                on_failure: DependencyTerminalPolicy::Cancel,
-                on_cancellation: DependencyTerminalPolicy::Cancel,
-            }),
-            ..EnqueueOptions::default()
+        {
+            let mut enqueue_options = EnqueueOptions::default();
+            enqueue_options.max_attempts = -1;
+            enqueue_options
+        },
+        {
+            let mut enqueue_options = EnqueueOptions::default();
+            enqueue_options.run_at = Some(Utc::now());
+            enqueue_options.debounce = Some(Debounce::new("a", 1000, DebounceSchedule::Reset));
+            enqueue_options
+        },
+        {
+            let mut enqueue_options = EnqueueOptions::default();
+            enqueue_options.dependencies = Some(Dependencies::new(
+                Vec::new(),
+                DependencyTerminalPolicy::Release,
+                DependencyTerminalPolicy::Cancel,
+                DependencyTerminalPolicy::Cancel,
+            ));
+            enqueue_options
         },
     ];
     for options in invalid {
@@ -247,10 +246,8 @@ async fn enqueue_idempotency_replays_and_rejects_a_conflicting_request() {
     let Some(database) = scratch_database("enqueue_idempotency").await else { return };
     let queue = Queue::connect(database.url(), "rust-enqueue").await.unwrap();
     let observer = database.connect().await;
-    let options = EnqueueOptions {
-        idempotency: Some(Idempotency::new("order-42")),
-        ..EnqueueOptions::default()
-    };
+    let mut options = EnqueueOptions::default();
+    options.idempotency = Some(Idempotency::new("order-42"));
 
     let first = queue.enqueue("order.ship", &json!({"id": 42}), options.clone()).await.unwrap();
     let replay = queue.enqueue("order.ship", &json!({"id": 42}), options.clone()).await.unwrap();
@@ -260,13 +257,15 @@ async fn enqueue_idempotency_replays_and_rejects_a_conflicting_request() {
 
     let results = queue
         .enqueue_many(vec![
-            EnqueueRequest::new("order.ship", json!({"id": 43})).with_options(EnqueueOptions {
-                idempotency: Some(Idempotency::new("order-43")),
-                ..EnqueueOptions::default()
+            EnqueueRequest::new("order.ship", json!({"id": 43})).with_options({
+                let mut enqueue_options = EnqueueOptions::default();
+                enqueue_options.idempotency = Some(Idempotency::new("order-43"));
+                enqueue_options
             }),
-            EnqueueRequest::new("order.ship", json!({"id": 43})).with_options(EnqueueOptions {
-                idempotency: Some(Idempotency::new("order-43")),
-                ..EnqueueOptions::default()
+            EnqueueRequest::new("order.ship", json!({"id": 43})).with_options({
+                let mut enqueue_options = EnqueueOptions::default();
+                enqueue_options.idempotency = Some(Idempotency::new("order-43"));
+                enqueue_options
             }),
         ])
         .await
@@ -289,10 +288,8 @@ async fn debounce_replaces_a_pending_task_inside_its_window() {
     let Some(database) = scratch_database("enqueue_debounce").await else { return };
     let queue = Queue::connect(database.url(), "rust-enqueue").await.unwrap();
     let observer = database.connect().await;
-    let options = EnqueueOptions {
-        debounce: Some(Debounce::new("search-index", 60_000, DebounceSchedule::Reset)),
-        ..EnqueueOptions::default()
-    };
+    let mut options = EnqueueOptions::default();
+    options.debounce = Some(Debounce::new("search-index", 60_000, DebounceSchedule::Reset));
 
     let first = queue.enqueue("index.rebuild", &json!({"v": 1}), options.clone()).await.unwrap();
     let task = stored_task(&observer, first.task_id).await;
@@ -311,10 +308,8 @@ async fn throttle_coalesces_requests_inside_its_window() {
     let Some(database) = scratch_database("enqueue_throttle").await else { return };
     let queue = Queue::connect(database.url(), "rust-enqueue").await.unwrap();
     let observer = database.connect().await;
-    let options = EnqueueOptions {
-        throttle: Some(Throttle::new("digest", 60_000)),
-        ..EnqueueOptions::default()
-    };
+    let mut options = EnqueueOptions::default();
+    options.throttle = Some(Throttle::new("digest", 60_000));
 
     let first = queue.enqueue("digest.send", &json!({}), options.clone()).await.unwrap();
     assert_eq!(first.outcome, EnqueueOutcome::Accepted);
@@ -334,13 +329,14 @@ async fn dependencies_block_a_task_with_its_terminal_policies() {
 
     let first = queue.enqueue("extract", &json!({}), EnqueueOptions::default()).await.unwrap();
     let second = queue.enqueue("extract", &json!({}), EnqueueOptions::default()).await.unwrap();
-    let dependencies = Dependencies {
-        prerequisite_task_ids: vec![second.task_id, first.task_id],
-        on_success: DependencyTerminalPolicy::Release,
-        on_failure: DependencyTerminalPolicy::Fail,
-        on_cancellation: DependencyTerminalPolicy::Cancel,
-    };
-    let options = EnqueueOptions { dependencies: Some(dependencies), ..EnqueueOptions::default() };
+    let dependencies = Dependencies::new(
+        vec![second.task_id, first.task_id],
+        DependencyTerminalPolicy::Release,
+        DependencyTerminalPolicy::Fail,
+        DependencyTerminalPolicy::Cancel,
+    );
+    let mut options = EnqueueOptions::default();
+    options.dependencies = Some(dependencies);
     let dependent = queue.enqueue("load", &json!({}), options).await.unwrap();
     assert_eq!(stored_task(&observer, dependent.task_id).await.state, "blocked");
 
@@ -362,13 +358,14 @@ async fn dependencies_block_a_task_with_its_terminal_policies() {
         assert_eq!(policies, ("release".into(), "fail".into(), "cancel".into()));
     }
 
-    let missing = Dependencies {
-        prerequisite_task_ids: vec![Uuid::new_v4()],
-        on_success: DependencyTerminalPolicy::Release,
-        on_failure: DependencyTerminalPolicy::Cancel,
-        on_cancellation: DependencyTerminalPolicy::Cancel,
-    };
-    let options = EnqueueOptions { dependencies: Some(missing), ..EnqueueOptions::default() };
+    let missing = Dependencies::new(
+        vec![Uuid::new_v4()],
+        DependencyTerminalPolicy::Release,
+        DependencyTerminalPolicy::Cancel,
+        DependencyTerminalPolicy::Cancel,
+    );
+    let mut options = EnqueueOptions::default();
+    options.dependencies = Some(missing);
     assert!(queue.enqueue("load", &json!({}), options).await.is_err());
     assert_eq!(task_count(&observer).await, 3, "an unknown prerequisite writes nothing");
 }

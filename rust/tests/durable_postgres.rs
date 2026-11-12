@@ -46,15 +46,13 @@ async fn harness_with(name: &str, defaults: WorkerOptions) -> Option<Harness> {
     // Room for a parent and its children, and a heartbeat quick enough to see a cancellation.
     let manager = deadpool_postgres::Manager::new(database.url().parse().unwrap(), NoTls);
     let pool = deadpool_postgres::Pool::builder(manager).max_size(8).build().unwrap();
-    let options = WorkerOptions {
-        queues: vec![QUEUE.into()],
-        worker_id: Some(format!("rust-durable-{}", Uuid::new_v4())),
-        polling_only: true,
-        poll_interval: Some(Duration::from_millis(20)),
-        concurrency: 4,
-        heartbeat_interval: Some(Duration::from_millis(100)),
-        ..defaults
-    };
+    let mut options = defaults;
+    options.queues = vec![QUEUE.into()];
+    options.worker_id = Some(format!("rust-durable-{}", Uuid::new_v4()));
+    options.polling_only = true;
+    options.poll_interval = Some(Duration::from_millis(20));
+    options.concurrency = 4;
+    options.heartbeat_interval = Some(Duration::from_millis(100));
     let worker = Worker::new(pool.clone(), options).unwrap();
     Some(Harness { database, queue, admin, worker, pool })
 }
@@ -116,7 +114,12 @@ impl Harness {
 }
 
 fn children_options() -> EnqueueOptions {
-    EnqueueOptions { queue: Some(QUEUE.into()), max_attempts: 1, ..EnqueueOptions::default() }
+    {
+        let mut enqueue_options = EnqueueOptions::default();
+        enqueue_options.queue = Some(QUEUE.into());
+        enqueue_options.max_attempts = 1;
+        enqueue_options
+    }
 }
 
 /// Makes `current` the contract new `task_type` tasks use, retaining every version in `versions`.
@@ -127,10 +130,9 @@ async fn sync_contract(
     versions: Vec<(&str, TaskContractVersion)>,
 ) {
     let versions = versions.into_iter().map(|(name, version)| (name.to_string(), version));
-    let contracts = TaskTypeContracts {
-        current_version: current.into(),
-        versions: BTreeMap::from_iter(versions),
-    };
+    let mut contracts = TaskTypeContracts::default();
+    contracts.current_version = current.into();
+    contracts.versions = BTreeMap::from_iter(versions);
     harness
         .queue
         .sync_contracts(&BTreeMap::from([(task_type.to_string(), contracts)]))
@@ -140,17 +142,18 @@ async fn sync_contract(
 
 /// A contract accepting `{"n": integer}` whose limits and keys a stamped child carries.
 fn counted_contract(max_payload_bytes: i32) -> TaskContractVersion {
-    TaskContractVersion {
-        payload_schema: json!({
+    {
+        let mut task_contract_version = TaskContractVersion::default();
+        task_contract_version.payload_schema = json!({
             "type": "object",
             "properties": { "n": { "type": "integer" } },
             "required": ["n"],
-        }),
-        max_payload_bytes,
-        max_result_bytes: 2048,
-        sensitive_payload_keys: vec!["secret".into()],
-        sensitive_result_keys: vec!["token".into()],
-        ..TaskContractVersion::default()
+        });
+        task_contract_version.max_payload_bytes = max_payload_bytes;
+        task_contract_version.max_result_bytes = 2048;
+        task_contract_version.sensitive_payload_keys = vec!["secret".into()];
+        task_contract_version.sensitive_result_keys = vec!["token".into()];
+        task_contract_version
     }
 }
 
@@ -183,9 +186,10 @@ async fn child_stamps(harness: &Harness, task_type: &str) -> BTreeMap<String, Va
 }
 
 fn child(name: &str, task_type: &str, payload: Value) -> ChildTaskRequest {
-    ChildTaskRequest {
-        options: children_options(),
-        ..ChildTaskRequest::new(name, task_type, &payload).unwrap()
+    {
+        let mut child_task_request = ChildTaskRequest::new(name, task_type, &payload).unwrap();
+        child_task_request.options = children_options();
+        child_task_request
     }
 }
 
@@ -332,7 +336,8 @@ async fn a_child_without_a_queue_goes_to_the_queue_of_its_parent() {
     let parent = harness.enqueue("parent", json!(20)).await;
     harness.worker.handle("parent", |input: i64, context: HandlerContext| async move {
         // The request names no queue, so the child goes to the queue of the parent task.
-        let options = EnqueueOptions { max_attempts: 1, ..EnqueueOptions::default() };
+        let mut options = EnqueueOptions::default();
+        options.max_attempts = 1;
         let doubled: i64 = context.run_child("double", "double", &input, options).await?;
         Ok(doubled + 2)
     });
@@ -353,13 +358,11 @@ async fn a_replay_without_a_queue_keeps_the_queue_of_the_stored_child() {
     for set in [false, true] {
         let name = format!("durable_child_stored_queue_{set}");
         let Some(harness) = harness(&name).await else { return };
-        let options = WorkerOptions {
-            queues: vec![QUEUE.into(), "default".into()],
-            worker_id: Some(format!("rust-durable-{}", Uuid::new_v4())),
-            polling_only: true,
-            poll_interval: Some(Duration::from_millis(20)),
-            ..WorkerOptions::default()
-        };
+        let mut options = WorkerOptions::default();
+        options.queues = vec![QUEUE.into(), "default".into()];
+        options.worker_id = Some(format!("rust-durable-{}", Uuid::new_v4()));
+        options.polling_only = true;
+        options.poll_interval = Some(Duration::from_millis(20));
         let worker = Worker::new(harness.pool.clone(), options).unwrap();
         let parent = harness.enqueue("parent", json!(20)).await;
         let activations = Arc::new(AtomicUsize::new(0));
@@ -370,13 +373,15 @@ async fn a_replay_without_a_queue_keeps_the_queue_of_the_stored_child() {
                 // The first activation acts as an earlier SDK, which put a child with no queue on
                 // `default`. The replay names no queue, so it keeps the queue of the stored child.
                 let queue = first.then(|| "default".to_string());
-                let options =
-                    EnqueueOptions { queue, max_attempts: 1, ..EnqueueOptions::default() };
+                let options = {
+                    let mut enqueue_options = EnqueueOptions::default();
+                    enqueue_options.queue = queue;
+                    enqueue_options.max_attempts = 1;
+                    enqueue_options
+                };
                 if set {
-                    let child = ChildTaskRequest {
-                        options,
-                        ..ChildTaskRequest::new("double", "double", &input).unwrap()
-                    };
+                    let mut child = ChildTaskRequest::new("double", "double", &input).unwrap();
+                    child.options = options;
                     let results = context.run_children_all(vec![child]).await?;
                     return Ok(results["double"].clone());
                 }
@@ -571,7 +576,8 @@ async fn a_replayed_parent_joins_children_created_under_an_older_contract() {
     assert_eq!(harness.state(set).await, TaskState::Blocked);
     // v2 accepts every payload with a different limit, so each current request differs from the
     // accepted one.
-    let v2 = TaskContractVersion { payload_schema: json!(true), ..counted_contract(8192) };
+    let mut v2 = counted_contract(8192);
+    v2.payload_schema = json!(true);
     sync_contract(&harness, "counted", "v2", vec![("v1", counted_contract(4096)), ("v2", v2)])
         .await;
     harness.worker.handle("counted", |input: Value, _| async move { Ok(input["n"].clone()) });
@@ -601,10 +607,8 @@ async fn a_replayed_parent_keeps_a_child_its_new_contract_would_reject() {
     });
     harness.run_once().await;
     // v2 no longer accepts the payload `one` was created with.
-    let v2 = TaskContractVersion {
-        payload_schema: json!({ "type": "object", "required": ["m"] }),
-        ..counted_contract(4096)
-    };
+    let mut v2 = counted_contract(4096);
+    v2.payload_schema = json!({ "type": "object", "required": ["m"] });
     sync_contract(&harness, "counted", "v2", vec![("v1", counted_contract(4096)), ("v2", v2)])
         .await;
     harness.worker.handle("counted", |input: Value, _| async move { Ok(input["n"].clone()) });
@@ -708,8 +712,10 @@ async fn identical_replayed_calls_share_one_call_across_a_contract_change() {
     harness.worker.handle("counted", |input: Value, _| async move { Ok(input["n"].clone()) });
     harness.run_once().await;
     assert_eq!(harness.state(parent).await, TaskState::Blocked);
-    let v2 = TaskContractVersion { payload_schema: json!(true), ..counted_contract(8192) };
-    let v3 = TaskContractVersion { payload_schema: json!(true), ..counted_contract(16384) };
+    let mut v2 = counted_contract(8192);
+    v2.payload_schema = json!(true);
+    let mut v3 = counted_contract(16384);
+    v3.payload_schema = json!(true);
     let v1 = || ("v1", counted_contract(4096));
     sync_contract(&harness, "counted", "v2", vec![v1(), ("v2", v2.clone())]).await;
     let (stop, running) = harness.run();
@@ -820,7 +826,11 @@ async fn a_different_request_under_a_retained_name_conflicts() {
 #[tokio::test]
 async fn only_a_converted_conflict_fails_without_a_retry() {
     let Some(harness) = harness("durable_conflict_marker").await else { return };
-    let options = || EnqueueOptions { max_attempts: 3, ..EnqueueOptions::default() };
+    let options = || {
+        let mut enqueue_options = EnqueueOptions::default();
+        enqueue_options.max_attempts = 3;
+        enqueue_options
+    };
     let named = harness.queue.enqueue("named", &Value::Null, options()).await.unwrap().task_id;
     let replayed =
         harness.queue.enqueue("replayed", &Value::Null, options()).await.unwrap().task_id;
@@ -863,7 +873,8 @@ async fn only_a_converted_conflict_fails_without_a_retry() {
 #[tokio::test]
 async fn a_changed_checkpoint_input_fails_the_task_on_replay() {
     let Some(harness) = harness("durable_checkpoint_input").await else { return };
-    let options = EnqueueOptions { max_attempts: 3, ..EnqueueOptions::default() };
+    let mut options = EnqueueOptions::default();
+    options.max_attempts = 3;
     let task = harness.queue.enqueue("charge", &Value::Null, options).await.unwrap().task_id;
     let runs = Arc::new(AtomicUsize::new(0));
     let operations = Arc::new(AtomicUsize::new(0));
@@ -953,7 +964,8 @@ async fn a_checkpoint_input_is_compared_only_when_both_sides_have_one() {
 #[tokio::test]
 async fn a_save_that_meets_a_different_stored_input_conflicts() {
     let Some(harness) = harness("durable_checkpoint_input_save").await else { return };
-    let options = EnqueueOptions { max_attempts: 3, ..EnqueueOptions::default() };
+    let mut options = EnqueueOptions::default();
+    options.max_attempts = 3;
     let task = harness.queue.enqueue("raced", &Value::Null, options).await.unwrap().task_id;
     let other = checkpoint_input_fingerprint(&json!({ "amountCents": 900 })).unwrap();
     let database = harness.database.url().to_owned();
@@ -995,19 +1007,18 @@ async fn a_save_that_meets_a_different_stored_input_conflicts() {
 #[tokio::test]
 async fn a_panic_after_the_shutdown_fails_its_attempt() {
     let Some(harness) = harness("durable_shutdown_panic").await else { return };
-    let options = EnqueueOptions { max_attempts: 1, ..EnqueueOptions::default() };
+    let mut options = EnqueueOptions::default();
+    options.max_attempts = 1;
     let task = harness.queue.enqueue("panicking", &Value::Null, options).await.unwrap().task_id;
-    let worker = Worker::new(
-        harness.pool.clone(),
-        WorkerOptions {
-            queues: vec![QUEUE.into()],
-            worker_id: Some(format!("rust-shutdown-panic-{}", Uuid::new_v4())),
-            polling_only: true,
-            poll_interval: Some(Duration::from_millis(20)),
-            shutdown_grace_period: Duration::from_millis(50),
-            ..WorkerOptions::default()
-        },
-    )
+    let worker = Worker::new(harness.pool.clone(), {
+        let mut worker_options = WorkerOptions::default();
+        worker_options.queues = vec![QUEUE.into()];
+        worker_options.worker_id = Some(format!("rust-shutdown-panic-{}", Uuid::new_v4()));
+        worker_options.polling_only = true;
+        worker_options.poll_interval = Some(Duration::from_millis(20));
+        worker_options.shutdown_grace_period = Duration::from_millis(50);
+        worker_options
+    })
     .unwrap();
     let (started, mut handler_started) = tokio::sync::watch::channel(false);
     worker.handle("panicking", move |_: Value, context: HandlerContext| {
@@ -1042,33 +1053,29 @@ async fn a_panic_after_the_shutdown_fails_its_attempt() {
 #[tokio::test]
 async fn a_result_that_fails_its_contract_after_the_shutdown_releases_its_task() {
     let Some(harness) = harness("durable_shutdown_contract").await else { return };
-    let contracts = BTreeMap::from([(
-        "contracted".to_string(),
-        TaskTypeContracts {
-            current_version: "v1".into(),
-            versions: BTreeMap::from([(
-                "v1".to_string(),
-                TaskContractVersion {
-                    result_schema: json!({"type": "string"}),
-                    ..TaskContractVersion::default()
-                },
-            )]),
-        },
-    )]);
+    let contracts = BTreeMap::from([("contracted".to_string(), {
+        let mut task_type_contracts = TaskTypeContracts::default();
+        task_type_contracts.current_version = "v1".into();
+        task_type_contracts.versions = BTreeMap::from([("v1".to_string(), {
+            let mut task_contract_version = TaskContractVersion::default();
+            task_contract_version.result_schema = json!({"type": "string"});
+            task_contract_version
+        })]);
+        task_type_contracts
+    })]);
     harness.queue.sync_contracts(&contracts).await.unwrap();
-    let options = EnqueueOptions { max_attempts: 1, ..EnqueueOptions::default() };
+    let mut options = EnqueueOptions::default();
+    options.max_attempts = 1;
     let task = harness.queue.enqueue("contracted", &json!({}), options).await.unwrap().task_id;
-    let worker = Worker::new(
-        harness.pool.clone(),
-        WorkerOptions {
-            queues: vec![QUEUE.into()],
-            worker_id: Some(format!("rust-shutdown-contract-{}", Uuid::new_v4())),
-            polling_only: true,
-            poll_interval: Some(Duration::from_millis(20)),
-            shutdown_grace_period: Duration::from_millis(50),
-            ..WorkerOptions::default()
-        },
-    )
+    let worker = Worker::new(harness.pool.clone(), {
+        let mut worker_options = WorkerOptions::default();
+        worker_options.queues = vec![QUEUE.into()];
+        worker_options.worker_id = Some(format!("rust-shutdown-contract-{}", Uuid::new_v4()));
+        worker_options.polling_only = true;
+        worker_options.poll_interval = Some(Duration::from_millis(20));
+        worker_options.shutdown_grace_period = Duration::from_millis(50);
+        worker_options
+    })
     .unwrap();
     let (started, mut handler_started) = tokio::sync::watch::channel(false);
     worker.handle("contracted", move |_: Value, context: HandlerContext| {
@@ -1142,7 +1149,8 @@ async fn stop_during_batch_failure_evidence(
         )
         .await
         .unwrap();
-    let options = EnqueueOptions { max_attempts: 1, ..EnqueueOptions::default() };
+    let mut options = EnqueueOptions::default();
+    options.max_attempts = 1;
     let mut tasks = Vec::new();
     for _ in 0..2 {
         tasks.push(
@@ -1154,22 +1162,20 @@ async fn stop_during_batch_failure_evidence(
                 .task_id,
         );
     }
-    let worker = Worker::new(
-        harness.pool.clone(),
-        WorkerOptions {
-            queues: vec![QUEUE.into()],
-            worker_id: Some(format!("rust-shutdown-batch-{}", Uuid::new_v4())),
-            polling_only: true,
-            poll_interval: Some(Duration::from_millis(20)),
-            concurrency: 2,
-            shutdown_grace_period: Duration::from_millis(1),
-            ..WorkerOptions::default()
-        },
-    )
+    let worker = Worker::new(harness.pool.clone(), {
+        let mut worker_options = WorkerOptions::default();
+        worker_options.queues = vec![QUEUE.into()];
+        worker_options.worker_id = Some(format!("rust-shutdown-batch-{}", Uuid::new_v4()));
+        worker_options.polling_only = true;
+        worker_options.poll_interval = Some(Duration::from_millis(20));
+        worker_options.concurrency = 2;
+        worker_options.shutdown_grace_period = Duration::from_millis(1);
+        worker_options
+    })
     .unwrap();
     let cancelled_at_return = Arc::new(AtomicUsize::new(0));
     let seen = Arc::clone(&cancelled_at_return);
-    let batch = BatchOptions { max_size: 2, linger: Duration::from_secs(60) };
+    let batch = BatchOptions::new(2, Duration::from_secs(60));
     worker.handle_batch("late-batch", batch, move |items: Vec<BatchItem<Value>>| {
         let seen = Arc::clone(&seen);
         async move {
@@ -1273,7 +1279,7 @@ async fn batch_members_checkpoint_and_report_progress_independently() {
     for payload in [1, 2] {
         tasks.push(harness.enqueue("batch", json!(payload)).await);
     }
-    let options = BatchOptions { max_size: 2, linger: Duration::from_millis(500) };
+    let options = BatchOptions::new(2, Duration::from_millis(500));
     harness.worker.handle_batch("batch", options, |items: Vec<BatchItem<i64>>| async move {
         let mut results = Vec::new();
         for item in items {
@@ -1312,10 +1318,8 @@ async fn invalid_requests_fail_before_reaching_postgresql() {
         let large = json!("x".repeat(70_000));
         let many = (0..101).map(|n| child(&format!("c{n}"), "noop", Value::Null)).collect();
         let twins = vec![child("same", "noop", Value::Null), child("same", "noop", Value::Null)];
-        let keyed = EnqueueOptions {
-            idempotency: Some(workhorse::Idempotency::new("key")),
-            ..children_options()
-        };
+        let mut keyed = children_options();
+        keyed.idempotency = Some(workhorse::Idempotency::new("key"));
         let checks = [
             context.sleep("", HOUR).await.is_err_and(|e| invalid(&e)),
             context.sleep("zero", Duration::ZERO).await.is_err_and(|e| invalid(&e)),
@@ -1419,7 +1423,8 @@ async fn child_limit_refusals_and_a_changed_set() {
         ("changed-set", "failed", 1, "ChildConflictError"),
     ] {
         let Some(harness) = harness("durable_child_limits").await else { return };
-        let options = EnqueueOptions { max_attempts: 5, ..EnqueueOptions::default() };
+        let mut options = EnqueueOptions::default();
+        options.max_attempts = 5;
         let parent =
             harness.queue.enqueue("agent-loop", &Value::Null, options).await.unwrap().task_id;
         let value = Arc::new(AtomicUsize::new(1));

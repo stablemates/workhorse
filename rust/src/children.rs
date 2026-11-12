@@ -10,7 +10,8 @@ use uuid::Uuid;
 
 use crate::context::{status, validate_name};
 use crate::contracts::{load_contract, load_contract_version, PayloadContract};
-use crate::queue::{non_empty, stamp_contract, task_input, timestamp, validate_options, Executor};
+use crate::queue::Rows as _;
+use crate::queue::{non_empty, stamp_contract, task_input, timestamp, validate_options};
 use crate::sql_catalogue_generated as sql;
 use crate::{ClaimedTask, EnqueueOptions, Error, HandlerContext, Operation};
 
@@ -37,6 +38,7 @@ enum Shape {
 
 /// One named child of a set passed to [`HandlerContext::run_children`].
 #[derive(Clone, Debug)]
+#[non_exhaustive]
 pub struct ChildTaskRequest {
     pub name: String,
     pub task_type: String,

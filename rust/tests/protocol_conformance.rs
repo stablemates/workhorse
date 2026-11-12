@@ -19,9 +19,7 @@ use serde_json::{json, Value};
 use support::ScratchDatabase;
 use tokio_postgres::Client;
 use workhorse::compatibility::{check_compatibility, read_compatibility_state};
-use workhorse::contracts::{
-    compile_contract_schema, compile_stored_contract_schema, TaskContractVersion, TaskTypeContracts,
-};
+use workhorse::contracts::{TaskContractVersion, TaskTypeContracts};
 use workhorse::{
     EnqueueOptions, Error as ClientError, Idempotency, Queue, RetryPolicy, ScheduleCatchupPolicy,
     ScheduleDefinition, ScheduledTask,
@@ -164,6 +162,30 @@ async fn cross_sdk_durable_script_phase() {
     }
 }
 
+/// The runner records the contract fixtures and the kinds in `CRATE_PRIVATE_KINDS` as
+/// `Outcome::InCrate`. That record holds only while the crate compiles `tests/crate_private` into
+/// its unit tests, and that module runs those fixtures.
+#[test]
+fn the_crate_runs_each_fixture_that_this_runner_records_in_crate() {
+    let read = |path: &str| {
+        let path = database::repository().join(path);
+        std::fs::read_to_string(&path)
+            .unwrap_or_else(|error| panic!("read {}: {error}", path.display()))
+    };
+    let library = read("rust/src/lib.rs");
+    assert!(
+        library.contains("#[cfg(test)]\n#[path = \"../tests/crate_private/mod.rs\"]\nmod "),
+        "rust/src/lib.rs no longer compiles tests/crate_private into the unit tests of the crate"
+    );
+    let module = read("rust/tests/crate_private/mod.rs");
+    for declared in ["mod contracts;", "mod runtime;"] {
+        assert!(module.contains(declared), "tests/crate_private/mod.rs lost `{declared}`");
+    }
+    assert!(read("rust/tests/crate_private/contracts.rs")
+        .contains("#[test]\nfn every_contract_fixture_passes()"));
+    assert!(read("rust/tests/crate_private/runtime.rs").contains("CRATE_PRIVATE_KINDS"));
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn every_protocol_fixture_passes_or_is_listed() {
     let catalogue =
@@ -174,8 +196,11 @@ async fn every_protocol_fixture_passes_or_is_listed() {
     for fixture in catalogue.category("interpreter") {
         record(&mut outcomes, "interpreter", fixture, outcome(run_interpreter(fixture)));
     }
+    // A contract fixture can give its schema as the JSON text that PostgreSQL stores. The crate
+    // keeps the compiler of that text private, so the unit tests of the crate run this category.
     for fixture in catalogue.category("contracts") {
-        record(&mut outcomes, "contracts", fixture, outcome(run_contract(fixture)));
+        let reason = "the stored-schema compiler is private, so the unit tests of the crate run it";
+        record(&mut outcomes, "contracts", fixture, Outcome::InCrate(reason.to_owned()));
     }
     let envelope = read_json(&protocol_directory().join("failures.json"))["envelope"].clone();
     for fixture in catalogue.category("failures") {
@@ -236,6 +261,7 @@ fn report(outcomes: &BTreeMap<String, Outcome>) {
             Outcome::Failed(_) => "failed",
             Outcome::Unsupported(_) => "unsupported",
             Outcome::Skipped(_) => "skipped",
+            Outcome::InCrate(_) => "in crate",
         };
         *counts.entry(label).or_insert(0) += 1;
     }
@@ -246,49 +272,9 @@ fn report(outcomes: &BTreeMap<String, Outcome>) {
             Outcome::Failed(reason) => eprintln!("  failed      {fixture}: {reason}"),
             Outcome::Unsupported(reason) => eprintln!("  unsupported {fixture}: {reason}"),
             Outcome::Skipped(reason) => eprintln!("  skipped     {fixture}: {reason}"),
+            Outcome::InCrate(reason) => eprintln!("  in crate    {fixture}: {reason}"),
         }
     }
-}
-
-// ----- contracts -----------------------------------------------------------------------------
-
-/// The kinds of number a `serde_json::Value` cannot hold. It holds an `i64` or a `u64` exactly, so it
-/// holds `exactInteger`. It reads a fraction or a larger integer as an `f64`, and it refuses an
-/// integer outside the `f64` range.
-const UNHELD_CONTRACT_NUMBERS: &[&str] = &["exactFraction", "exactBigInteger"];
-
-/// A contract fixture compiles its schema the way `Queue::sync_contracts` does, then checks each
-/// instance's verdict. A schema in JSON text reads the way a schema that PostgreSQL stores does.
-fn run_contract(fixture: &Value) -> Result<(), String> {
-    let compiled = match fixture["schemaJson"].as_str() {
-        Some(text) => compile_stored_contract_schema(text),
-        None => compile_contract_schema(&fixture["schema"]),
-    };
-    if fixture["schemaError"].as_bool() == Some(true) {
-        return match compiled {
-            Err(_) => Ok(()),
-            Ok(_) => Err("compiled a schema the protocol rejects".to_owned()),
-        };
-    }
-    let schema = compiled.map_err(|error| format!("rejected a valid schema: {error}"))?;
-    for (index, instance) in
-        fixture["instances"].as_array().ok_or("fixture lists no instances")?.iter().enumerate()
-    {
-        let expected = instance["valid"].as_bool().ok_or("instance states no verdict")?;
-        if instance["needs"].as_str().is_some_and(|needs| UNHELD_CONTRACT_NUMBERS.contains(&needs))
-        {
-            continue;
-        }
-        let value = match instance["json"].as_str() {
-            Some(text) => serde_json::from_str(text)
-                .map_err(|error| format!("instance {index}: unreadable JSON: {error}"))?,
-            None => instance["value"].clone(),
-        };
-        if schema.is_valid(&value) != expected {
-            return Err(format!("instance {index}: expected valid = {expected}"));
-        }
-    }
-    Ok(())
 }
 
 // ----- interpreter ---------------------------------------------------------------------------
@@ -801,26 +787,28 @@ fn task_contracts(contracts: &Value) -> Result<BTreeMap<String, TaskTypeContract
                         Some(value) => integer(value, field),
                         None => Ok(0),
                     };
-                    Ok((
-                        version.clone(),
-                        TaskContractVersion {
-                            payload_schema: document["payloadSchema"].clone(),
-                            result_schema: document["resultSchema"].clone(),
-                            max_payload_bytes: limit("maxPayloadBytes")?,
-                            max_result_bytes: limit("maxResultBytes")?,
-                            sensitive_payload_keys: keys("sensitivePayloadKeys")?,
-                            sensitive_result_keys: keys("sensitiveResultKeys")?,
-                        },
-                    ))
+                    Ok((version.clone(), {
+                        let mut task_contract_version = TaskContractVersion::default();
+                        task_contract_version.payload_schema = document["payloadSchema"].clone();
+                        task_contract_version.result_schema = document["resultSchema"].clone();
+                        task_contract_version.max_payload_bytes = limit("maxPayloadBytes")?;
+                        task_contract_version.max_result_bytes = limit("maxResultBytes")?;
+                        task_contract_version.sensitive_payload_keys =
+                            keys("sensitivePayloadKeys")?;
+                        task_contract_version.sensitive_result_keys = keys("sensitiveResultKeys")?;
+                        task_contract_version
+                    }))
                 })
                 .collect::<Result<_, String>>()?;
             let current_version = contract["currentVersion"]
                 .as_str()
                 .ok_or("fixture contract names no current version")?;
-            Ok((
-                task_type.clone(),
-                TaskTypeContracts { current_version: current_version.into(), versions },
-            ))
+            Ok((task_type.clone(), {
+                let mut task_type_contracts = TaskTypeContracts::default();
+                task_type_contracts.current_version = current_version.into();
+                task_type_contracts.versions = versions;
+                task_type_contracts
+            }))
         })
         .collect()
 }

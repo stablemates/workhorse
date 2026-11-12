@@ -15,7 +15,9 @@ const QUEUE: &str = "orders";
 /// parent task.
 fn child(name: &str, task_type: &str, payload: &Value) -> Result<ChildTaskRequest, HandlerError> {
     let mut request = ChildTaskRequest::new(name, task_type, payload)?;
-    request.options = EnqueueOptions { queue: Some(QUEUE.into()), ..Default::default() };
+    let mut options = EnqueueOptions::default();
+    options.queue = Some(QUEUE.into());
+    request.options = options;
     Ok(request)
 }
 
@@ -41,8 +43,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let url = std::env::var("WORKHORSE_DATABASE_URL")?;
     let pool = Pool::builder(Manager::new(url.parse()?, NoTls)).max_size(10).build()?;
 
-    let worker =
-        Worker::new(pool, WorkerOptions { queues: vec![QUEUE.into()], ..Default::default() })?;
+    let mut options = WorkerOptions::default();
+    options.queues = vec![QUEUE.into()];
+    let worker = Worker::new(pool, options)?;
     worker.handle("order.process", process_order);
     worker.handle("invoice.create", complete_child);
     worker.handle("receipt.send", complete_child);

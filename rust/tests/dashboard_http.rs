@@ -450,7 +450,7 @@ async fn a_tier_switch_records_the_principal_and_reports_a_refusal() {
 
     // A rate-limit policy refuses a fast switch, and the queue stays on the full tier.
     let rate = RateLimit { limit: 1, interval_ms: 60_000, burst: 1 };
-    let policy = RateLimitPolicyDefinition { queue: "limited".into(), rate, per_key: None };
+    let policy = RateLimitPolicyDefinition::new("limited", rate);
     let queue = Queue::new(pool(database.url()), "limited");
     queue.sync_rate_limit_policies("dashboard-tier", &[policy], true).await.unwrap();
     let input = json!({ "queue": "limited", "tier": "fast", "audit": audit() });

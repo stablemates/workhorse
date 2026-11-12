@@ -87,7 +87,7 @@ finish.
     ```rust
     worker.handle_batch(
         "email.send",
-        BatchOptions { max_size: 20, linger: Duration::from_millis(50) },
+        BatchOptions::new(20, Duration::from_millis(50)),
         |items: Vec<BatchItem<Value>>| async move {
             items.iter().map(|_| BatchResult::Succeeded(json!({ "sent": true }))).collect()
         },
@@ -227,13 +227,9 @@ cannot see that a batch handler runs the task.
   </Tab>
   <Tab value="Rust">
     ```rust
-    queue
-        .enqueue(
-            "email.send",
-            &json!({ "to": "person@example.com" }),
-            EnqueueOptions { queue: Some("email".into()), ..Default::default() },
-        )
-        .await?;
+    let mut options = EnqueueOptions::default();
+    options.queue = Some("email".into());
+    queue.enqueue("email.send", &json!({ "to": "person@example.com" }), options).await?;
     ```
   </Tab>
   <Tab value="Ruby">

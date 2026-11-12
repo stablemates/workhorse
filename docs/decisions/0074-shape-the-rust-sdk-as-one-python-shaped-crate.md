@@ -17,6 +17,9 @@
 - **Amended:** 2026-10-21 (SM-1565): Every Rust worker on one pool identity shares one heartbeat
   connection from the pool and one listener connection outside the pool. This supersedes the
   2026-09-30 amendment. The connection model section records the change.
+- **Amended:** 2026-11-12 (SM-2038): Each public record with public fields and each public enum is
+  `#[non_exhaustive]`, apart from eight that stay closed. A caller builds a record from `Default` or
+  its `new`, and then sets fields. The worker and dashboard sections record the change.
 
 ## Context
 
@@ -279,6 +282,19 @@ pub struct WorkerOptions {
 }
 ```
 
+The 2026-11-12 amendment adds the `#[non_exhaustive]` of this sketch to the source. The field names
+of the source differ from the sketch, and `api/rust.txt` lists them. Each other public record with public fields and each public enum: the options and query
+records, the records that a caller builds with `new`, the records that the crate returns, and the
+enums whose values the protocol can extend. Outside the crate, a caller builds a record with
+`Default::default()` or its `new` and then sets each field. The crate adds no builder type. A later
+release can then add a field or a variant without a break under ADR 0079.
+
+Eight types stay closed: `AdminAudit`, `BatchResult`, `DebounceSchedule`,
+`DependencyTerminalPolicy`, `ScheduleCatchupPolicy`, `policies::RateLimit`,
+`dashboard::Authorization`, and `dashboard::Principal`. They stay closed because a caller builds
+each one as a complete value that the crate only reads, so a literal or a constructor call by the
+caller must keep compiling. `scripts/rust-public-surface.test.ts` holds this list.
+
 Shutdown follows the Go library model from ADR 0072, because a Rust `Worker` also runs inside the
 caller's process. `stop` ends claiming, and in-flight handlers may finish within `shutdown_grace`.
 At that deadline the worker cancels the remaining tokens with `CancelReason::Shutdown` and gives
@@ -420,6 +436,12 @@ pub mod dashboard {
 The 2026-10-06 amendment removes `audit_actor` from this sketch. It replaced a verified principal's
 actor on every mutation, but the `dashboard/v1` protocol assigns attribution from the authenticated
 principal. A Rust `authorize` callback must return a principal, so the option had no remaining case.
+
+The 2026-11-12 amendment marks `DashboardOptions` `#[non_exhaustive]`. A caller builds it with
+`DashboardOptions::new(executor, authorize)` and then sets each other field. ADR 0086 adds the
+enqueue transport enums `EnqueueBind`, `EnqueueColumnType`, and `EnqueueValue`, and the record
+`EnqueueColumn`. They are `#[non_exhaustive]` too, so a transport refuses a kind that it does not
+know.
 
 The backend is a `tower::Service`, as Go's `NewHandler` returns an `http.Handler`. axum mounts it
 with `Router::nest_service`, and hyper and tonic accept it directly. So Rust needs no framework

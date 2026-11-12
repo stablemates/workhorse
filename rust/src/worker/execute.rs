@@ -15,11 +15,11 @@ use super::handler::{ErasedHandler, HandlerResult};
 use super::heartbeat::Beat;
 use super::{exactly_one, lock, sql, ActiveSlot, Inner, OwnershipStatus};
 use crate::fenced_write::fenced_rows;
+use crate::queue::Rows as _;
 use crate::telemetry::{self, Attribute, Counter, Histogram};
 use crate::value_size::jsonb_text_bytes;
 use crate::{
-    CancelReason, CancellationToken, ClaimedTask, Error, Executor, HandlerContext, HandlerError,
-    Operation,
+    CancelReason, CancellationToken, ClaimedTask, Error, HandlerContext, HandlerError, Operation,
 };
 
 /// How often, and for how long, an expiration PostgreSQL reports as not yet due is retried after

@@ -117,7 +117,9 @@ the queue `imports`. After the last row, the app must send one report.
   </Tab>
   <Tab value="Rust">
     ```rust
-    let imports = EnqueueOptions { queue: Some("imports".into()), ..Default::default() };
+    let mut options = EnqueueOptions::default();
+    options.queue = Some("imports".into());
+    let imports = options;
     let rows = file
         .rows
         .iter()
@@ -129,10 +131,9 @@ the queue `imports`. After the last row, the app must send one report.
     let report =
         EnqueueRequest::new("imports.report", json!({ "importId": "imp-7" })).with_options(imports);
 
-    let group = queue
-        .task_group(TaskGroupCallbacks { on_finish: Some(report), ..Default::default() }, rows)
-        .await?
-        .group;
+    let mut callbacks = TaskGroupCallbacks::default();
+    callbacks.on_finish = Some(report);
+    let group = queue.task_group(callbacks, rows).await?.group;
     ```
 
   </Tab>

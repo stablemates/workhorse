@@ -47,13 +47,10 @@ To set a priority, give `EnqueueOptions.priority` when you enqueue the task.
   </Tab>
   <Tab value="Rust">
     ```rust
-    queue
-        .enqueue(
-            "invoice.remind",
-            &json!({ "invoiceId": invoice_id }),
-            EnqueueOptions { queue: Some("billing".into()), priority: 10, ..Default::default() },
-        )
-        .await?;
+    let mut options = EnqueueOptions::default();
+    options.queue = Some("billing".into());
+    options.priority = 10;
+    queue.enqueue("invoice.remind", &json!({ "invoiceId": invoice_id }), options).await?;
     ```
   </Tab>
   <Tab value="Ruby">

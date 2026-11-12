@@ -53,20 +53,13 @@ To use enqueue idempotency, give an `idempotency` key when you enqueue a task.
   </Tab>
   <Tab value="Rust">
     ```rust
-    let result = queue
-        .enqueue(
-            "invoice.capture",
-            &json!({ "invoiceId": invoice_id }),
-            EnqueueOptions {
-                queue: Some("billing".into()),
-                idempotency: Some(Idempotency {
-                    scope: "invoice-capture".into(),
-                    ..Idempotency::new(format!("capture:{invoice_id}"))
-                }),
-                ..Default::default()
-            },
-        )
-        .await?;
+    let mut options = EnqueueOptions::default();
+    options.queue = Some("billing".into());
+    let mut idempotency = Idempotency::new(format!("capture:{invoice_id}"));
+    idempotency.scope = "invoice-capture".into();
+    options.idempotency = Some(idempotency);
+    let result =
+        queue.enqueue("invoice.capture", &json!({ "invoiceId": invoice_id }), options).await?;
     ```
   </Tab>
   <Tab value="Ruby">
@@ -214,19 +207,12 @@ request. The other outcomes are for [debounce](/docs/debounce) and [throttle](/d
   </Tab>
   <Tab value="Rust">
     ```rust
-    let result = queue
-        .enqueue(
-            "invoice.capture",
-            &json!({ "invoiceId": invoice_id }),
-            EnqueueOptions {
-                idempotency: Some(Idempotency {
-                    scope: "invoice-capture".into(),
-                    ..Idempotency::new(key)
-                }),
-                ..Default::default()
-            },
-        )
-        .await?;
+    let mut options = EnqueueOptions::default();
+    let mut idempotency = Idempotency::new(key);
+    idempotency.scope = "invoice-capture".into();
+    options.idempotency = Some(idempotency);
+    let result =
+        queue.enqueue("invoice.capture", &json!({ "invoiceId": invoice_id }), options).await?;
     println!("{:?} {}", result.outcome, result.task_id);
     ```
   </Tab>

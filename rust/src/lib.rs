@@ -8,6 +8,12 @@
 #[cfg(test)]
 extern crate self as workhorse;
 
+/// The integration tests that read worker state that this crate keeps private. They compile as unit
+/// tests of the crate, so no published item has to expose that state.
+#[cfg(test)]
+#[path = "../tests/crate_private/mod.rs"]
+mod crate_private_tests;
+
 mod admin;
 mod checkpoint_input;
 mod children;
@@ -59,5 +65,3 @@ pub use worker::{
     run_worker_process, BatchItem, BatchOptions, BatchResult, CancellationToken, ClaimedTask,
     HandlerError, RegistrationErrorHook, RetryDelay, Worker, WorkerOptions,
 };
-#[doc(hidden)]
-pub use worker::{CLEANUP_WINDOW, UNWIND_WINDOW};

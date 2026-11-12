@@ -126,7 +126,7 @@ async fn a_handler_cannot_write_a_non_finite_checkpoint_or_progress() {
 async fn a_batch_member_cannot_write_a_non_finite_checkpoint_or_progress() {
     let Some(harness) = harness("non_finite_batch").await else { return };
     let task = harness.enqueue("measure").await;
-    let options = BatchOptions { max_size: 1, linger: Duration::from_millis(50) };
+    let options = BatchOptions::new(1, Duration::from_millis(50));
     harness.worker.handle_batch("measure", options, |items: Vec<BatchItem<Value>>| async move {
         let mut results = Vec::new();
         for item in items {

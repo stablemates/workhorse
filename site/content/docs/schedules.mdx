@@ -233,13 +233,9 @@ and Ruby workers use `schedule_namespaces`, and Go and .NET workers use
   </Tab>
   <Tab value="Rust">
     ```rust
-    let worker = Worker::new(
-        pool,
-        WorkerOptions {
-            schedule_namespaces: vec!["billing-production".into()],
-            ..Default::default()
-        },
-    )?;
+    let mut options = WorkerOptions::default();
+    options.schedule_namespaces = vec!["billing-production".into()];
+    let worker = Worker::new(pool, options)?;
     ```
   </Tab>
   <Tab value="Ruby">

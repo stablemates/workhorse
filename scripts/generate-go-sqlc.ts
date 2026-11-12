@@ -115,15 +115,15 @@ async function generate(check: boolean): Promise<void> {
     execFileSync(binary, ["generate", "-f", path.join(temporary, "sqlc.yaml")], {
       stdio: "inherit",
     });
-    const regenerated = path.join(temporary, "generated");
-    const checkedIn = path.join(source, "generated");
+    const regenerated = path.join(temporary, "internal", "generated");
+    const checkedIn = path.join(source, "internal", "generated");
     if (check) {
       const differences = await compareGenerated(regenerated, checkedIn);
       if (differences.length > 0)
         throw new Error(`sqlc generated files drift: ${differences.join(", ")}`);
     } else {
       await rm(checkedIn, { recursive: true, force: true });
-      await mkdir(checkedIn);
+      await mkdir(checkedIn, { recursive: true });
       for (const name of await readdir(regenerated)) {
         await copyFile(path.join(regenerated, name), path.join(checkedIn, name));
       }

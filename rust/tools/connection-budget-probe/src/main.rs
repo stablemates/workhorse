@@ -65,21 +65,20 @@ async fn main() -> Result<(), Failure> {
     let (stop, stopped) = watch::channel(false);
     let mut handles = Vec::new();
     for index in 0..workers {
-        let worker = match Worker::new(
-            pool.clone(),
-            WorkerOptions {
-                queues: vec![queue.clone()],
-                worker_id: Some(format!("wh-bench-rust-{}-{index}", std::process::id())),
-                concurrency,
-                heartbeat_interval: Some(heartbeat),
-                lease_duration: lease,
-                // `None` keeps the default polling interval.
-                poll_interval: poll_ms.map(Duration::from_millis),
-                shutdown_grace_period: Duration::from_millis(shutdown_grace_ms),
-                listen_config: Some(config.clone()),
-                ..WorkerOptions::default()
-            },
-        ) {
+        let worker = match Worker::new(pool.clone(), {
+            let mut worker_options = WorkerOptions::default();
+            worker_options.queues = vec![queue.clone()];
+            worker_options.worker_id =
+                Some(format!("wh-bench-rust-{}-{index}", std::process::id()));
+            worker_options.concurrency = concurrency;
+            worker_options.heartbeat_interval = Some(heartbeat);
+            worker_options.lease_duration = lease;
+            // `None` keeps the default polling interval.
+            worker_options.poll_interval = poll_ms.map(Duration::from_millis);
+            worker_options.shutdown_grace_period = Duration::from_millis(shutdown_grace_ms);
+            worker_options.listen_config = Some(config.clone());
+            worker_options
+        }) {
             Ok(worker) => worker,
             Err(error) => {
                 emit(

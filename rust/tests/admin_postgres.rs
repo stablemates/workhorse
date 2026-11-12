@@ -36,8 +36,12 @@ async fn claim(client: &Client, queue: &str) -> (Uuid, i64) {
 
 /// Enqueues a single-attempt task on `queue`, claims it, and fails it into a dead letter.
 async fn dead_letter(queue: &Queue<Client>, observer: &Client, name: &str) -> Uuid {
-    let options =
-        EnqueueOptions { max_attempts: 1, tags: vec!["rust".into()], ..EnqueueOptions::default() };
+    let options = {
+        let mut enqueue_options = EnqueueOptions::default();
+        enqueue_options.max_attempts = 1;
+        enqueue_options.tags = vec!["rust".into()];
+        enqueue_options
+    };
     queue.enqueue("admin.fail", &json!({"n": name}), options).await.unwrap();
     let (task_id, fence) = claim(observer, "rust-admin").await;
     let state: String = observer
@@ -81,24 +85,31 @@ async fn admin_lists_looks_up_and_times_tasks_across_pages() {
     let mut enqueued = Vec::new();
     for n in 0..3 {
         let payload = json!({"n": n, "secret": "hide"});
-        let options = EnqueueOptions { tags: vec!["rust".into()], ..EnqueueOptions::default() };
+        let mut options = EnqueueOptions::default();
+        options.tags = vec!["rust".into()];
         enqueued.push(queue.enqueue("admin.list", &payload, options).await.unwrap().task_id);
     }
-    let query = TaskListQuery {
-        queue: Some("rust-admin".into()),
-        states: vec![TaskState::Ready],
-        limit: 2,
-        payload: TaskPayloadProjection {
-            include: true,
-            redact_keys: vec!["secret".into()],
-            ..TaskPayloadProjection::default()
-        },
-        ..TaskListQuery::default()
+    let mut query = TaskListQuery::default();
+    query.queue = Some("rust-admin".into());
+    query.states = vec![TaskState::Ready];
+    query.limit = 2;
+    query.payload = {
+        let mut task_payload_projection = TaskPayloadProjection::default();
+        task_payload_projection.include = true;
+        task_payload_projection.redact_keys = vec!["secret".into()];
+        task_payload_projection
     };
     let first = admin.list_tasks(query.clone()).await.unwrap();
     assert_eq!(first.items.len(), 2);
     let cursor = first.next_cursor.clone().expect("a second page");
-    let second = admin.list_tasks(TaskListQuery { cursor: Some(cursor), ..query }).await.unwrap();
+    let second = admin
+        .list_tasks({
+            let mut task_list_query = query;
+            task_list_query.cursor = Some(cursor);
+            task_list_query
+        })
+        .await
+        .unwrap();
     assert_eq!(second.items.len(), 1);
     assert_eq!(second.next_cursor, None);
     let mut listed: Vec<Uuid> = first.items.iter().chain(&second.items).map(|t| t.id).collect();
@@ -125,7 +136,9 @@ async fn admin_lists_looks_up_and_times_tasks_across_pages() {
     assert_eq!(admin.get_task(Uuid::nil()).await.unwrap(), None);
 
     let mut entries = Vec::new();
-    let mut timeline = TaskTimelineQuery { limit: 1, cursor: None };
+    let mut timeline = TaskTimelineQuery::default();
+    timeline.limit = 1;
+    timeline.cursor = None;
     loop {
         let page = admin.get_task_timeline(task_id, timeline).await.unwrap();
         assert!(page.items.len() <= 1);
@@ -140,7 +153,9 @@ async fn admin_lists_looks_up_and_times_tasks_across_pages() {
         entry,
         TaskTimelineEntry::Attempt(attempt) if attempt.worker_id == WORKER && attempt.fence_token == fence
     )));
-    let foreign = TaskTimelineQuery { limit: 1, cursor: timeline.cursor };
+    let mut foreign = TaskTimelineQuery::default();
+    foreign.limit = 1;
+    foreign.cursor = timeline.cursor;
     if foreign.cursor.is_some() {
         let rejected = admin.get_task_timeline(Uuid::nil(), foreign).await;
         assert!(matches!(rejected, Err(Error::InvalidArgument(_))), "{rejected:?}");
@@ -185,25 +200,39 @@ async fn admin_lists_and_redrives_dead_letters() {
     for name in ["First", "Second", "Third"] {
         failed.push(dead_letter(&queue, &observer, name).await);
     }
-    let filter = DeadLetterFilter { tags: vec!["rust".into()], ..DeadLetterFilter::default() };
+    let mut filter = DeadLetterFilter::default();
+    filter.tags = vec!["rust".into()];
     let first = admin
-        .list_dead_letters(DeadLetterQuery { filter: filter.clone(), limit: 2, cursor: None })
+        .list_dead_letters({
+            let mut dead_letter_query = DeadLetterQuery::default();
+            dead_letter_query.filter = filter.clone();
+            dead_letter_query.limit = 2;
+            dead_letter_query.cursor = None;
+            dead_letter_query
+        })
         .await
         .unwrap();
     assert_eq!(first.items.len(), 2);
     let second = admin
-        .list_dead_letters(DeadLetterQuery {
-            filter: filter.clone(),
-            limit: 2,
-            cursor: first.next_cursor,
+        .list_dead_letters({
+            let mut dead_letter_query = DeadLetterQuery::default();
+            dead_letter_query.filter = filter.clone();
+            dead_letter_query.limit = 2;
+            dead_letter_query.cursor = first.next_cursor;
+            dead_letter_query
         })
         .await
         .unwrap();
     assert_eq!(second.items.len(), 1);
     assert_eq!(second.next_cursor, None);
-    let named = DeadLetterFilter { error_name: Some("Second".into()), ..filter.clone() };
+    let mut named = filter.clone();
+    named.error_name = Some("Second".into());
     let only = admin
-        .list_dead_letters(DeadLetterQuery { filter: named, ..DeadLetterQuery::default() })
+        .list_dead_letters({
+            let mut dead_letter_query = DeadLetterQuery::default();
+            dead_letter_query.filter = named;
+            dead_letter_query
+        })
         .await
         .unwrap();
     assert_eq!(only.items.len(), 1);
@@ -229,11 +258,15 @@ async fn admin_lists_and_redrives_dead_letters() {
     let missing = admin.redrive(Uuid::nil(), &audit("redrive-2")).await.unwrap();
     assert_eq!(missing.status, RedriveStatus::NotFound);
 
-    let dry_run = BulkRedriveOptions { limit: 1, dry_run: true, cursor: None };
+    let mut dry_run = BulkRedriveOptions::default();
+    dry_run.limit = 1;
+    dry_run.dry_run = true;
+    dry_run.cursor = None;
     let preview = admin.redrive_many(filter.clone(), &audit("bulk-0"), dry_run).await.unwrap();
     assert_eq!(preview.results.len(), 1);
     assert_eq!(preview.results[0].status, RedriveStatus::Eligible);
-    let mut options = BulkRedriveOptions { limit: 1, ..BulkRedriveOptions::default() };
+    let mut options = BulkRedriveOptions::default();
+    options.limit = 1;
     let mut sources = Vec::new();
     loop {
         let page = admin.redrive_many(filter.clone(), &audit("bulk-1"), options).await.unwrap();
@@ -310,11 +343,23 @@ async fn admin_reads_checkpoints_waits_and_human_waits() {
         assert!(worker.run_once().await.unwrap());
         humans.push(task.task_id);
     }
-    let first =
-        admin.list_signal_waits(ExternalWaitQuery { limit: 1, cursor: None }).await.unwrap();
+    let first = admin
+        .list_signal_waits({
+            let mut external_wait_query = ExternalWaitQuery::default();
+            external_wait_query.limit = 1;
+            external_wait_query.cursor = None;
+            external_wait_query
+        })
+        .await
+        .unwrap();
     assert_eq!(first.items.len(), 1);
     let second = admin
-        .list_signal_waits(ExternalWaitQuery { limit: 1, cursor: first.next_cursor.clone() })
+        .list_signal_waits({
+            let mut external_wait_query = ExternalWaitQuery::default();
+            external_wait_query.limit = 1;
+            external_wait_query.cursor = first.next_cursor.clone();
+            external_wait_query
+        })
         .await
         .unwrap();
     assert_eq!(second.next_cursor, None);
@@ -325,9 +370,22 @@ async fn admin_reads_checkpoints_waits_and_human_waits() {
     assert_eq!(waiting, signals);
     assert!(first.items[0].name.starts_with("approved-"));
 
-    let first = admin.list_human_waits(ExternalWaitQuery { limit: 1, cursor: None }).await.unwrap();
+    let first = admin
+        .list_human_waits({
+            let mut external_wait_query = ExternalWaitQuery::default();
+            external_wait_query.limit = 1;
+            external_wait_query.cursor = None;
+            external_wait_query
+        })
+        .await
+        .unwrap();
     let second = admin
-        .list_human_waits(ExternalWaitQuery { limit: 1, cursor: first.next_cursor.clone() })
+        .list_human_waits({
+            let mut external_wait_query = ExternalWaitQuery::default();
+            external_wait_query.limit = 1;
+            external_wait_query.cursor = first.next_cursor.clone();
+            external_wait_query
+        })
         .await
         .unwrap();
     assert_eq!(second.next_cursor, None);
@@ -420,7 +478,8 @@ async fn admin_rejects_invalid_audits_and_limits_before_postgres() {
             .map(drop),
         "reason must contain between 1 and 2000 characters",
     );
-    let options = BulkRedriveOptions { limit: 1_001, ..BulkRedriveOptions::default() };
+    let mut options = BulkRedriveOptions::default();
+    options.limit = 1_001;
     invalid(
         admin.redrive_many(DeadLetterFilter::default(), &audit("r"), options).await.map(drop),
         "redrive_many limit must be an integer between 1 and 1000",
@@ -428,42 +487,45 @@ async fn admin_rejects_invalid_audits_and_limits_before_postgres() {
 
     let tasks = |query: TaskListQuery| admin.list_tasks(query);
     invalid(
-        tasks(TaskListQuery { limit: 0, ..TaskListQuery::default() }).await.map(drop),
+        tasks({
+            let mut task_list_query = TaskListQuery::default();
+            task_list_query.limit = 0;
+            task_list_query
+        })
+        .await
+        .map(drop),
         "list_tasks limit must be an integer between 1 and 1000",
     );
     let now = Utc::now();
-    let reversed = TaskListQuery {
-        created_after: Some(now),
-        created_before: Some(now - Duration::seconds(1)),
-        ..TaskListQuery::default()
-    };
+    let mut reversed = TaskListQuery::default();
+    reversed.created_after = Some(now);
+    reversed.created_before = Some(now - Duration::seconds(1));
     invalid(tasks(reversed).await.map(drop), "created_after must be earlier than created_before");
-    let repeated = TaskListQuery {
-        states: vec![TaskState::Ready, TaskState::Ready],
-        ..TaskListQuery::default()
-    };
+    let mut repeated = TaskListQuery::default();
+    repeated.states = vec![TaskState::Ready, TaskState::Ready];
     invalid(tasks(repeated).await.map(drop), "states must be unique");
-    let projection = |payload| TaskListQuery { payload, ..TaskListQuery::default() };
-    let oversized =
-        TaskPayloadProjection { max_bytes: 1_048_577, ..TaskPayloadProjection::default() };
-    invalid(tasks(projection(oversized)).await.map(drop), "payload max_bytes is out of range");
-    let many = TaskPayloadProjection {
-        redact_keys: (0..51).map(|n| n.to_string()).collect(),
-        ..TaskPayloadProjection::default()
+    let projection = |payload| {
+        let mut task_list_query = TaskListQuery::default();
+        task_list_query.payload = payload;
+        task_list_query
     };
+    let oversized = {
+        let mut task_payload_projection = TaskPayloadProjection::default();
+        task_payload_projection.max_bytes = 1_048_577;
+        task_payload_projection
+    };
+    invalid(tasks(projection(oversized)).await.map(drop), "payload max_bytes is out of range");
+    let mut many = TaskPayloadProjection::default();
+    many.redact_keys = (0..51).map(|n| n.to_string()).collect();
     invalid(
         tasks(projection(many)).await.map(drop),
         "payload redact_keys must contain at most 50 keys",
     );
-    let duplicate = TaskPayloadProjection {
-        redact_keys: vec!["a".into(), "a".into()],
-        ..TaskPayloadProjection::default()
-    };
+    let mut duplicate = TaskPayloadProjection::default();
+    duplicate.redact_keys = vec!["a".into(), "a".into()];
     invalid(tasks(projection(duplicate)).await.map(drop), "payload redact_keys must be unique");
-    let empty = TaskPayloadProjection {
-        redact_keys: vec![String::new()],
-        ..TaskPayloadProjection::default()
-    };
+    let mut empty = TaskPayloadProjection::default();
+    empty.redact_keys = vec![String::new()];
     invalid(
         tasks(projection(empty)).await.map(drop),
         "payload redact_keys must contain strings of 1 to 200 characters",
@@ -471,24 +533,49 @@ async fn admin_rejects_invalid_audits_and_limits_before_postgres() {
 
     invalid(
         admin
-            .get_task_timeline(Uuid::nil(), TaskTimelineQuery { limit: 1_001, cursor: None })
+            .get_task_timeline(Uuid::nil(), {
+                let mut task_timeline_query = TaskTimelineQuery::default();
+                task_timeline_query.limit = 1_001;
+                task_timeline_query.cursor = None;
+                task_timeline_query
+            })
             .await
             .map(drop),
         "get_task_timeline limit must be an integer between 1 and 1000",
     );
     invalid(
         admin
-            .list_dead_letters(DeadLetterQuery { limit: 0, ..DeadLetterQuery::default() })
+            .list_dead_letters({
+                let mut dead_letter_query = DeadLetterQuery::default();
+                dead_letter_query.limit = 0;
+                dead_letter_query
+            })
             .await
             .map(drop),
         "list_dead_letters limit must be an integer between 1 and 1000",
     );
     invalid(
-        admin.list_signal_waits(ExternalWaitQuery { limit: 0, cursor: None }).await.map(drop),
+        admin
+            .list_signal_waits({
+                let mut external_wait_query = ExternalWaitQuery::default();
+                external_wait_query.limit = 0;
+                external_wait_query.cursor = None;
+                external_wait_query
+            })
+            .await
+            .map(drop),
         "external wait limit must be an integer between 1 and 1000",
     );
     invalid(
-        admin.list_human_waits(ExternalWaitQuery { limit: 1_001, cursor: None }).await.map(drop),
+        admin
+            .list_human_waits({
+                let mut external_wait_query = ExternalWaitQuery::default();
+                external_wait_query.limit = 1_001;
+                external_wait_query.cursor = None;
+                external_wait_query
+            })
+            .await
+            .map(drop),
         "external wait limit must be an integer between 1 and 1000",
     );
 }

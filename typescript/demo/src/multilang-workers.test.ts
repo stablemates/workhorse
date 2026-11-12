@@ -186,10 +186,10 @@ describe("multilanguage demo worker topology", () => {
     expect(rustWorker).toContain(`pub const RUST_FAST_QUEUE: &str = "${DEMO_RUST_FAST_QUEUE}";`);
     expect(rustWorker).toContain(`pub const SHARED_QUEUE: &str = "${DEMO_SHARED_QUEUE}";`);
     expect(rustWorker).toContain(
-      "queues: vec![RUST_QUEUE.into(), SHARED_QUEUE.into(), RUST_FAST_QUEUE.into()]",
+      "options.queues = vec![RUST_QUEUE.into(), SHARED_QUEUE.into(), RUST_FAST_QUEUE.into()];",
     );
     expect(rustWorker).toContain(
-      "SCHEDULE_NAMESPACE.into(),\n                FAST_TIER_SCHEDULE_NAMESPACE.into(),",
+      "options.schedule_namespaces =\n        vec![SCHEDULE_NAMESPACE.into(), FAST_TIER_SCHEDULE_NAMESPACE.into()];",
     );
     // In development each worker waits out a missing schema instead of failing before the server
     // installs it. Production keeps a read-only startup and refuses at once.

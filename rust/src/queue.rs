@@ -28,11 +28,33 @@ const MAX_TASK_DEPENDENCIES: usize = 100;
 const MAX_EXTERNAL_VALUE_BYTES: usize = 65_536;
 
 pub(crate) mod private {
+    use std::future::Future;
+
+    use tokio_postgres::types::ToSql;
+    use tokio_postgres::Row;
+
+    use crate::Error;
+
+    /// Proof that a call comes from inside the crate. Its field is private, so no caller outside
+    /// the crate can build one.
+    pub struct Token(pub(super) ());
+
+    /// The protocol calls of an [`Executor`](super::Executor). A generic caller outside the crate
+    /// can see this trait through the bound, so each method takes a [`Token`] that only the crate
+    /// can build. Crate code calls the methods of [`Rows`](super::Rows) instead.
     pub trait Sealed {
+        /// Runs one statement and returns its rows.
+        fn sealed_rows(
+            &self,
+            token: Token,
+            statement: &str,
+            params: &[&(dyn ToSql + Sync)],
+        ) -> impl Future<Output = Result<Vec<Row>, Error>> + Send;
+
         /// The pool that a dashboard read takes one connection from, to run the read in a
         /// bounded transaction of its own. A client or a caller transaction has none.
         #[cfg(feature = "dashboard")]
-        fn read_pool(&self) -> Option<&deadpool_postgres::Pool> {
+        fn read_pool(&self, _: Token) -> Option<&deadpool_postgres::Pool> {
             None
         }
     }
@@ -43,23 +65,36 @@ pub(crate) mod private {
 /// Implemented for `tokio_postgres` clients and transactions and for `deadpool_postgres`
 /// pools, pooled clients and transactions. A transaction executor makes every call part of
 /// the caller's transaction; the caller commits or rolls it back.
-pub trait Executor: private::Sealed + Send + Sync {
-    #[doc(hidden)]
+pub trait Executor: private::Sealed + Send + Sync {}
+
+/// The statements of an executor, for code inside the crate.
+pub(crate) trait Rows: private::Sealed {
+    /// Runs one statement and returns its rows.
     fn rows(
         &self,
         statement: &str,
         params: &[&(dyn ToSql + Sync)],
-    ) -> impl Future<Output = Result<Vec<Row>, Error>> + Send;
+    ) -> impl Future<Output = Result<Vec<Row>, Error>> + Send {
+        self.sealed_rows(private::Token(()), statement, params)
+    }
+
+    /// The pool that a dashboard read takes one connection from, if the executor has one.
+    #[cfg(feature = "dashboard")]
+    fn dashboard_read_pool(&self) -> Option<&deadpool_postgres::Pool> {
+        self.read_pool(private::Token(()))
+    }
 }
+
+impl<T: private::Sealed + ?Sized> Rows for T {}
 
 macro_rules! client_executor {
     ($($ty:ty),+) => {$(
-        impl private::Sealed for $ty {}
-        impl Executor for $ty {
-            async fn rows(&self, statement: &str, params: &[&(dyn ToSql + Sync)]) -> Result<Vec<Row>, Error> {
+        impl private::Sealed for $ty {
+            async fn sealed_rows(&self, _: private::Token, statement: &str, params: &[&(dyn ToSql + Sync)]) -> Result<Vec<Row>, Error> {
                 Ok(self.query(statement, params).await?)
             }
         }
+        impl Executor for $ty {}
     )+};
 }
 
@@ -70,15 +105,16 @@ client_executor!(
     deadpool_postgres::Transaction<'_>
 );
 
+impl Executor for deadpool_postgres::Pool {}
 impl private::Sealed for deadpool_postgres::Pool {
     #[cfg(feature = "dashboard")]
-    fn read_pool(&self) -> Option<&deadpool_postgres::Pool> {
+    fn read_pool(&self, _: private::Token) -> Option<&deadpool_postgres::Pool> {
         Some(self)
     }
-}
-impl Executor for deadpool_postgres::Pool {
-    async fn rows(
+
+    async fn sealed_rows(
         &self,
+        _: private::Token,
         statement: &str,
         params: &[&(dyn ToSql + Sync)],
     ) -> Result<Vec<Row>, Error> {
@@ -126,10 +162,11 @@ impl<'a> BoundedPool<'a> {
     }
 }
 
-impl private::Sealed for BoundedPool<'_> {}
-impl Executor for BoundedPool<'_> {
-    async fn rows(
+impl Executor for BoundedPool<'_> {}
+impl private::Sealed for BoundedPool<'_> {
+    async fn sealed_rows(
         &self,
+        _: private::Token,
         statement: &str,
         params: &[&(dyn ToSql + Sync)],
     ) -> Result<Vec<Row>, Error> {
@@ -212,19 +249,20 @@ impl Drop for Discarded {
     }
 }
 
+impl<T: Executor + ?Sized> Executor for &T {}
 impl<T: Executor + ?Sized> private::Sealed for &T {
     #[cfg(feature = "dashboard")]
-    fn read_pool(&self) -> Option<&deadpool_postgres::Pool> {
-        (**self).read_pool()
+    fn read_pool(&self, token: private::Token) -> Option<&deadpool_postgres::Pool> {
+        (**self).read_pool(token)
     }
-}
-impl<T: Executor + ?Sized> Executor for &T {
-    fn rows(
+
+    fn sealed_rows(
         &self,
+        token: private::Token,
         statement: &str,
         params: &[&(dyn ToSql + Sync)],
     ) -> impl Future<Output = Result<Vec<Row>, Error>> + Send {
-        (**self).rows(statement, params)
+        (**self).sealed_rows(token, statement, params)
     }
 }
 

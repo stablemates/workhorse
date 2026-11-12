@@ -144,7 +144,8 @@ async fn invalid_options_and_empty_or_oversized_batches_never_touch_transport() 
     let mut transport = Scripted::new(vec![]);
     assert!(client.enqueue_many(&mut transport, vec![]).await.unwrap().is_empty());
     for max_attempts in [-1, 101] {
-        let options = EnqueueOptions { max_attempts, ..Default::default() };
+        let mut options = EnqueueOptions::default();
+        options.max_attempts = max_attempts;
         assert!(matches!(
             client.enqueue(&mut transport, "task", &json!({}), options).await,
             Err(Error::InvalidArgument(_))
@@ -382,10 +383,12 @@ impl EnqueueTransport for MutableTransaction<'_, '_> {
             .binds()
             .iter()
             .map(|bind| match bind {
-                EnqueueBind::Json(value) => *value as &(dyn ToSql + Sync),
-                EnqueueBind::Text(value) => value as &(dyn ToSql + Sync),
+                EnqueueBind::Json(value) => Ok(*value as &(dyn ToSql + Sync)),
+                EnqueueBind::Text(value) => Ok(value as &(dyn ToSql + Sync)),
+                // A later release can add a bind kind. A transport refuses a kind it does not know.
+                other => Err(Error::InvalidArgument(format!("unsupported enqueue bind {other:?}"))),
             })
-            .collect();
+            .collect::<Result<_, Error>>()?;
         let rows = self.transaction.query(query.statement(), &binds).await.map_err(normalize)?;
         rows.iter()
             .map(|native| {
@@ -409,6 +412,13 @@ impl EnqueueTransport for MutableTransaction<'_, '_> {
                             EnqueueColumnType::Uuid => native
                                 .try_get::<_, Option<Uuid>>(column.name)
                                 .map(|value| value.map(EnqueueValue::Uuid)),
+                            // A later release can add a column type. A transport refuses a type
+                            // it does not know.
+                            other => {
+                                return Err(Error::InvalidArgument(format!(
+                                    "unsupported enqueue column type {other:?}"
+                                )))
+                            }
                         }
                         .map_err(normalize)?
                         .unwrap_or(EnqueueValue::Null);
@@ -515,19 +525,16 @@ async fn borrowed_transport_preserves_identity_joint_commit_rollback_and_savepoi
 }
 
 fn definitions(version: &str) -> BTreeMap<String, TaskTypeContracts> {
-    BTreeMap::from([(
-        "contracted".into(),
-        TaskTypeContracts {
-            current_version: version.into(),
-            versions: BTreeMap::from([(
-                version.into(),
-                TaskContractVersion {
-                    payload_schema: json!({"type":"object", "required":["id"]}),
-                    ..Default::default()
-                },
-            )]),
-        },
-    )])
+    BTreeMap::from([("contracted".into(), {
+        let mut task_type_contracts = TaskTypeContracts::default();
+        task_type_contracts.current_version = version.into();
+        task_type_contracts.versions = BTreeMap::from([(version.into(), {
+            let mut task_contract_version = TaskContractVersion::default();
+            task_contract_version.payload_schema = json!({"type":"object", "required":["id"]});
+            task_contract_version
+        })]);
+        task_type_contracts
+    })])
 }
 
 #[tokio::test]
@@ -572,8 +579,11 @@ async fn native_contract_refresh_and_structured_error_match_queue() {
         .unwrap();
     assert_eq!(rows.iter().map(|row| row.get::<_, String>(0)).collect::<Vec<_>>(), ["v1", "v2"]);
 
-    let options =
-        EnqueueOptions { idempotency: Some(Idempotency::new("same")), ..Default::default() };
+    let options = {
+        let mut enqueue_options = EnqueueOptions::default();
+        enqueue_options.idempotency = Some(Idempotency::new("same"));
+        enqueue_options
+    };
     queue.enqueue("idempotent", &json!({"id":1}), options.clone()).await.unwrap();
     let mut transaction = caller.transaction().await.unwrap();
     let seam = client

@@ -196,29 +196,16 @@ it in the same way.
     ```rust
     // Step 1: allow three active fulfillments per merchant, across all workers.
     // PostgreSQL applies this limit when a worker claims a task.
-    queue
-        .sync_concurrency_policies(
-            "shop",
-            &[ConcurrencyPolicyDefinition {
-                queue: "fulfillment".into(),
-                max_active: 20,
-                max_active_per_key: Some(3),
-            }],
-            false,
-        )
-        .await?;
+    let mut policy = ConcurrencyPolicyDefinition::new("fulfillment", 20);
+    policy.max_active_per_key = Some(3);
+    queue.sync_concurrency_policies("shop", &[policy], false).await?;
 
     // Enqueue the task. The merchant is the concurrency key.
+    let mut options = EnqueueOptions::default();
+    options.queue = Some("fulfillment".into());
+    options.concurrency_key = Some(merchant_id.into());
     queue
-        .enqueue(
-            "order.fulfill",
-            &json!({ "orderId": order_id, "email": email }),
-            EnqueueOptions {
-                queue: Some("fulfillment".into()),
-                concurrency_key: Some(merchant_id.into()),
-                ..Default::default()
-            },
-        )
+        .enqueue("order.fulfill", &json!({ "orderId": order_id, "email": email }), options)
         .await?;
 
     worker.handle("order.fulfill", |order: PlacedOrder, context| async move {

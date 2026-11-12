@@ -62,21 +62,14 @@ An edge is the link from one dependent to one prerequisite. To make a task wait,
     let import = queue
         .enqueue("contacts.import", &json!({ "source": "upload" }), EnqueueOptions::default())
         .await?;
-    queue
-        .enqueue(
-            "contacts.notify",
-            &json!({ "importId": import.task_id }),
-            EnqueueOptions {
-                dependencies: Some(Dependencies {
-                    prerequisite_task_ids: vec![import.task_id],
-                    on_success: DependencyTerminalPolicy::Release,
-                    on_failure: DependencyTerminalPolicy::Fail,
-                    on_cancellation: DependencyTerminalPolicy::Cancel,
-                }),
-                ..Default::default()
-            },
-        )
-        .await?;
+    let mut options = EnqueueOptions::default();
+    options.dependencies = Some(Dependencies::new(
+        vec![import.task_id],
+        DependencyTerminalPolicy::Release,
+        DependencyTerminalPolicy::Fail,
+        DependencyTerminalPolicy::Cancel,
+    ));
+    queue.enqueue("contacts.notify", &json!({ "importId": import.task_id }), options).await?;
     ```
   </Tab>
   <Tab value="Ruby">

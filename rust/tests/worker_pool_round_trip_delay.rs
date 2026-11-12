@@ -16,10 +16,13 @@ use tokio_postgres::NoTls;
 use uuid::Uuid;
 use workhorse::{
     Admin, EnqueueOptions, Error, HandlerContext, Queue, TaskState, Worker, WorkerOptions,
-    UNWIND_WINDOW,
 };
 
 const QUEUE: &str = "rust-worker-pool-delay";
+/// How long a stopped handler may unwind after grace ends. "Schema and SQL protocol: Shutdown" in
+/// `docs/architecture/schema-and-protocol.md` states this value for the Rust worker, and a unit test
+/// of `rust/src/worker` holds the worker to it.
+const UNWIND_WINDOW: Duration = Duration::from_millis(250);
 
 /// A running worker: the sender that starts its shutdown, and its run.
 type Running = (oneshot::Sender<()>, tokio::task::JoinHandle<Result<(), Error>>);
@@ -75,22 +78,20 @@ async fn many_workers_on_a_small_pool_keep_every_lease_when_each_round_trip_take
     let cancelled = Arc::new(AtomicUsize::new(0));
     let mut runs = Vec::new();
     for _ in 0..WORKERS {
-        let worker = Worker::new(
-            pool.clone(),
-            WorkerOptions {
-                concurrency: CONCURRENCY,
-                poll_interval: None,
-                lease_duration: Duration::from_secs(3),
-                heartbeat_interval: Some(Duration::from_secs(1)),
-                maintenance_interval: Duration::from_secs(60),
-                disable_registry: true,
-                shutdown_grace_period: grace,
-                queues: vec![QUEUE.into()],
-                worker_id: Some(format!("rust-worker-{}", Uuid::new_v4())),
-                polling_only: true,
-                ..WorkerOptions::default()
-            },
-        )
+        let worker = Worker::new(pool.clone(), {
+            let mut worker_options = WorkerOptions::default();
+            worker_options.concurrency = CONCURRENCY;
+            worker_options.poll_interval = None;
+            worker_options.lease_duration = Duration::from_secs(3);
+            worker_options.heartbeat_interval = Some(Duration::from_secs(1));
+            worker_options.maintenance_interval = Duration::from_secs(60);
+            worker_options.disable_registry = true;
+            worker_options.shutdown_grace_period = grace;
+            worker_options.queues = vec![QUEUE.into()];
+            worker_options.worker_id = Some(format!("rust-worker-{}", Uuid::new_v4()));
+            worker_options.polling_only = true;
+            worker_options
+        })
         .unwrap();
         let (starts, cancelled) = (Arc::clone(&starts), Arc::clone(&cancelled));
         worker.handle("rust.slow", move |_: Value, context: HandlerContext| {

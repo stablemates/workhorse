@@ -64,17 +64,10 @@ the task later. A worker never claims the task before `runAt`.
     queue
         .enqueue("email.send", &json!({ "to": "person@example.com" }), EnqueueOptions::default())
         .await?;
-    queue
-        .enqueue(
-            "invoice.remind",
-            &json!({ "invoiceId": invoice_id }),
-            EnqueueOptions {
-                queue: Some("billing".into()),
-                run_at: Some(reminder_date),
-                ..Default::default()
-            },
-        )
-        .await?;
+    let mut options = EnqueueOptions::default();
+    options.queue = Some("billing".into());
+    options.run_at = Some(reminder_date);
+    queue.enqueue("invoice.remind", &json!({ "invoiceId": invoice_id }), options).await?;
     ```
   </Tab>
   <Tab value="Ruby">
@@ -143,22 +136,15 @@ the task later. A worker never claims the task before `runAt`.
   </Tab>
   <Tab value="Rust">
     ```rust
-    queue
-        .enqueue(
-            "report.generate",
-            &json!({ "month": "2026-08" }),
-            EnqueueOptions {
-                queue: Some("reports".into()),
-                tags: vec!["tenant:acme".into()],
-                concurrency_key: Some("acme".into()),
-                priority: 10,
-                max_attempts: 5,
-                deadline: Some(end_of_month),
-                execution_timeout_ms: Some(120_000),
-                ..Default::default()
-            },
-        )
-        .await?;
+    let mut options = EnqueueOptions::default();
+    options.queue = Some("reports".into());
+    options.tags = vec!["tenant:acme".into()];
+    options.concurrency_key = Some("acme".into());
+    options.priority = 10;
+    options.max_attempts = 5;
+    options.deadline = Some(end_of_month);
+    options.execution_timeout_ms = Some(120_000);
+    queue.enqueue("report.generate", &json!({ "month": "2026-08" }), options).await?;
     ```
   </Tab>
   <Tab value="Ruby">
@@ -1281,10 +1267,10 @@ request gets the existing task, and Workhorse does not make a duplicate.
     ```rust
     let requests = recipients
         .iter()
-        .map(|recipient| EnqueueRequest {
-            task_type: "email.digest".into(),
-            payload: json!({ "to": recipient.email }),
-            options: EnqueueOptions { queue: Some("mail".into()), ..Default::default() },
+        .map(|recipient| {
+            let mut request = EnqueueRequest::new("email.digest", json!({ "to": recipient.email }));
+            request.options.queue = Some("mail".into());
+            request
         })
         .collect();
     let results = queue.enqueue_many(requests).await?;

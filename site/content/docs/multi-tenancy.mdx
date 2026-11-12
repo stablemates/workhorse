@@ -96,37 +96,18 @@ three enqueue options. Workhorse already enforces each of these options:
   <Tab value="Rust">
     ```rust
     let tenant = "acme";
-    queue
-        .sync_concurrency_policies(
-            "workers",
-            &[ConcurrencyPolicyDefinition {
-                queue: "reports".into(),
-                max_active: 40,
-                max_active_per_key: Some(4),
-            }],
-            false,
-        )
-        .await?;
-    queue
-        .sync_budgets(
-            "workers",
-            &[BudgetDefinition { name: tenant.into(), max_active: Some(8), rate: None }],
-            false,
-        )
-        .await?;
-    queue
-        .enqueue(
-            "report.generate",
-            &json!({ "month": "2026-08" }),
-            EnqueueOptions {
-                queue: Some("reports".into()),
-                concurrency_key: Some(tenant.into()),
-                budget: Some(tenant.into()),
-                tags: vec![format!("tenant:{tenant}")],
-                ..Default::default()
-            },
-        )
-        .await?;
+    let mut policy = ConcurrencyPolicyDefinition::new("reports", 40);
+    policy.max_active_per_key = Some(4);
+    queue.sync_concurrency_policies("workers", &[policy], false).await?;
+    let mut budget = BudgetDefinition::new(tenant);
+    budget.max_active = Some(8);
+    queue.sync_budgets("workers", &[budget], false).await?;
+    let mut options = EnqueueOptions::default();
+    options.queue = Some("reports".into());
+    options.concurrency_key = Some(tenant.into());
+    options.budget = Some(tenant.into());
+    options.tags = vec![format!("tenant:{tenant}")];
+    queue.enqueue("report.generate", &json!({ "month": "2026-08" }), options).await?;
     ```
   </Tab>
   <Tab value="Ruby">

@@ -10,7 +10,8 @@ sqlc generates only `recipe_order` queries. Workhorse keeps its existing generat
 - Go 1.26.10 and PostgreSQL 18.6 in the local maintained proof.
 
 `schema.sql`, `queries.sql`, and `sqlc.yaml` own the business-query source.
-`generated/` is checked in and is never edited by hand.
+`internal/generated/` is checked in and is never edited by hand. It is under `internal`, so no
+other module can import it, and it is not part of the Workhorse Go API.
 From a configured checkout:
 
 ```sh

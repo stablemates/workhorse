@@ -90,6 +90,7 @@ where
 
 /// A defined dashboard error a procedure returns with its own status and code.
 #[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
 pub struct RpcError {
     pub status: u16,
     pub code: String,
@@ -118,6 +119,7 @@ impl RpcError {
 
 /// Why a procedure failed.
 #[derive(Debug)]
+#[non_exhaustive]
 pub enum ProcedureError {
     /// Returned to the browser as it is.
     Rpc(RpcError),
@@ -139,6 +141,10 @@ impl From<Error> for ProcedureError {
 }
 
 /// Configures one single-workspace embedded dashboard.
+///
+/// A later release can add a field, so a caller starts from [`DashboardOptions::new`] and sets the
+/// fields it needs.
+#[non_exhaustive]
 pub struct DashboardOptions<E> {
     pub executor: E,
     pub authorize: Authorize,

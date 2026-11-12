@@ -59,13 +59,10 @@ charge runs as its own task on the `payments` queue, so a payments worker can do
   </Tab>
   <Tab value="Rust">
     ```rust
+    let mut options = EnqueueOptions::default();
+    options.queue = Some("payments".into());
     let charge: Value = context
-        .run_child(
-            "charge",
-            "payments.charge",
-            &json!({ "orderId": order.id }),
-            EnqueueOptions { queue: Some("payments".into()), ..Default::default() },
-        )
+        .run_child("charge", "payments.charge", &json!({ "orderId": order.id }), options)
         .await?;
     ```
   </Tab>

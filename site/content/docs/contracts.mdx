@@ -72,21 +72,14 @@ To add a payload contract:
   </Tab>
   <Tab value="Rust">
     ```rust
-    let contracts = BTreeMap::from([(
-        "mail.send".to_string(),
-        TaskTypeContracts {
-            current_version: "mail-current".into(),
-            versions: BTreeMap::from([(
-                "mail-current".to_string(),
-                TaskContractVersion {
-                    payload_schema: json!({ "type": "object", "required": ["recipient"] }),
-                    result_schema: json!({ "type": "object" }),
-                    sensitive_payload_keys: vec!["accessToken".into()],
-                    ..Default::default()
-                },
-            )]),
-        },
-    )]);
+    let mut task_type_contracts = TaskTypeContracts::default();
+    task_type_contracts.current_version = "mail-current".into();
+    let mut version = TaskContractVersion::default();
+    version.payload_schema = json!({ "type": "object", "required": ["recipient"] });
+    version.result_schema = json!({ "type": "object" });
+    version.sensitive_payload_keys = vec!["accessToken".into()];
+    task_type_contracts.versions = BTreeMap::from([("mail-current".to_string(), version)]);
+    let contracts = BTreeMap::from([("mail.send".to_string(), task_type_contracts)]);
     queue.sync_contracts(&contracts).await?;
     ```
   </Tab>

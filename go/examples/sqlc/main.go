@@ -14,7 +14,7 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 	workhorse "github.com/stablemates/workhorse/go"
-	"github.com/stablemates/workhorse/go/examples/sqlc/generated"
+	"github.com/stablemates/workhorse/go/examples/sqlc/internal/generated"
 )
 
 func writeOrder(ctx context.Context, tx pgx.Tx, queries *generated.Queries, id string, taskType string) (string, error) {

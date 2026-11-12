@@ -12,6 +12,7 @@ mod exact;
 
 /// One version of a task type's payload and result contract.
 #[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
 pub struct TaskContractVersion {
     /// A Draft 2020-12 schema inside the Workhorse profile; `true` accepts anything.
     pub payload_schema: Value,
@@ -37,6 +38,7 @@ impl Default for TaskContractVersion {
 
 /// Every retained contract version of one task type and the version new tasks use.
 #[derive(Clone, Debug, Default, PartialEq)]
+#[non_exhaustive]
 pub struct TaskTypeContracts {
     pub current_version: String,
     pub versions: BTreeMap<String, TaskContractVersion>,
@@ -197,8 +199,10 @@ pub fn compile_contract_schema(schema: &Value) -> Result<ContractSchema, Error> 
 /// jsonb keeps all the digits of a number that another SDK synchronized. A `Value` cannot hold a
 /// fraction that an `f64` cannot hold, or an integer outside `i64` and `u64`, so the keywords
 /// compare the decimal of each stored token instead.
-#[doc(hidden)]
-pub fn compile_stored_contract_schema(text: &str) -> Result<ContractSchema, Error> {
+///
+/// Only the contract fixtures in the tests of this crate call it (`tests/crate_private`).
+#[cfg(test)]
+pub(crate) fn compile_stored_contract_schema(text: &str) -> Result<ContractSchema, Error> {
     let schema = exact::parse(text)
         .map_err(|error| Error::invalid(format!("invalid contract schema: {error}")))?;
     compile_exact(&schema)

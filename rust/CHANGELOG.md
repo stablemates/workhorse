@@ -300,6 +300,63 @@ If the request body stream of a dashboard RPC fails, the dashboard now logs the 
 formatted and the 'Content-Type' header is set correctly.` A body above the size limit keeps its
 answer (SM-2043).
 
+### Build records from a constructor, and give each match a fallback arm
+
+A later release can add a field to a public record or a variant to a public enum. Before, each
+addition broke a caller's struct literal or exhaustive `match`, so it needed a major release of the
+crate after 1.0.0. Every public record with public fields and every public enum is now
+`#[non_exhaustive]`, apart from eight that stay closed (SM-2038, ADR 0074):
+
+- The options and query records, and the records that a caller builds with `new`. For example
+  `WorkerOptions`, `EnqueueOptions`, `DashboardOptions`, `BatchOptions`, `TaskListQuery`,
+  `DeadLetterQuery`, `Idempotency`, `Debounce`, `Throttle`, `Dependencies`, `ScheduleDefinition`,
+  `EnqueueRequest`, `ChildTaskRequest`, `HandlerError`, `TaskContractVersion`, and the policy
+  definitions.
+- The records that the crate returns. For example `EnqueueResult`, `TaskSnapshot`,
+  `TaskListPage`, `DeadLetter`, `TaskGroup`, `BatchItem`, the page cursors, the `*Details` error
+  records, and `EnqueueColumn`.
+- The enums whose values the protocol can extend. For example `TaskState`, `EnqueueOutcome`,
+  `CancelStatus`, `QueueTier`, the task group enums, `EnqueueBind`, `EnqueueColumnType`,
+  `EnqueueValue`, and the dashboard `ProcedureError`. The dashboard record `RpcError` is open too.
+
+`AdminAudit`, `BatchResult`, `DebounceSchedule`, `DependencyTerminalPolicy`,
+`ScheduleCatchupPolicy`, `policies::RateLimit`, `dashboard::Authorization`, and
+`dashboard::Principal` stay closed. A caller builds each one as a complete value. New constructors
+build the records that a caller builds and that had neither `Default` nor `new`:
+`BatchOptions::new`, `Dependencies::new`, `BudgetDefinition::new`,
+`ConcurrencyPolicyDefinition::new`, `RateLimitPolicyDefinition::new`, and `new` on each page cursor.
+
+Change your code as follows:
+
+1. Build a record with `Default::default()` or its `new`, and then set each other field that you
+   need. A struct literal, also one with `..Default::default()` or `..Idempotency::new(key)`, does
+   not compile outside the crate. Build `DashboardOptions` with `DashboardOptions::new(executor,
+   authorize)`.
+2. Read the fields of a record that the crate returns. Do not build one. Give a pattern that
+   destructures it a `..` rest, and compare its fields in a test.
+3. Give each `match` on an open enum a fallback arm. A `match` on `ProcedureError` or on
+   `workhorse::Error` that decides what to do must treat the fallback as a failure. An enqueue
+   transport must refuse a bind or a column type that it does not know, for example with
+   `Error::InvalidArgument`.
+
+### Remove the test hooks, the shutdown window constants, and the conformance feature
+
+The crate published items that only its own tests used. 1.0.0 would govern them, so a change to the
+dispatch loop or to the shutdown timing would need a major release (SM-2037). The crate no longer
+publishes these items:
+
+- `UNWIND_WINDOW` and `CLEANUP_WINDOW`. The worker keeps the same windows: 250 ms to unwind after
+  the shutdown grace, and a cleanup window that ends 1 s after the deadline. "Schema and SQL
+  protocol: Shutdown" in `docs/architecture/schema-and-protocol.md` states both values.
+- `Worker::empty_wait_for_test`, `Worker::claims_in_flight_for_test`, and
+  `Worker::hold_heartbeat_rounds_for_test`.
+- The feature `__conformance-hooks`. Remove it from your `Cargo.toml` if you named it.
+- `contracts::compile_stored_contract_schema`. Use `contracts::compile_contract_schema`.
+- The methods that an `Executor` bound exposed: `rows`, and `read_pool` with the `dashboard`
+  feature. The trait stays, and each executor type that implements it stays.
+
+The tests that used these items now compile inside the crate. No worker or enqueue behavior changes.
+
 ## 0.12.0 — 2026-11-07
 
 The npm packages, Python distribution, Go module, Rust crate, Ruby gem, JVM artifacts, and .NET

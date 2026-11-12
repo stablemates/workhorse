@@ -6,7 +6,7 @@
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::Duration;
 
 use serde_json::{json, Value};
 use tokio::sync::{mpsc, oneshot, watch};
@@ -19,14 +19,19 @@ use workhorse::{
     EnqueueOptions, Error, HandlerContext, HandlerError, Queue, QueueTier, Worker, WorkerOptions,
 };
 
+use super::super::support::{scratch_database, ScratchDatabase};
 use super::database::describe;
 use super::ledger::Outcome;
-use crate::support::{scratch_database, ScratchDatabase};
 
 const FIXTURE_TIMEOUT: Duration = Duration::from_secs(30);
 const WAIT: Duration = Duration::from_secs(10);
 
-type Checked<T = ()> = Result<T, String>;
+pub(crate) type Checked<T = ()> = Result<T, String>;
+
+/// The `runtime` fixture kinds whose executors read worker state that the crate keeps private.
+/// The crate compiles their executors into its own unit tests (`tests/crate_private`), so this
+/// runner records them as [`Outcome::InCrate`].
+pub(crate) const CRATE_PRIVATE_KINDS: &[&str] = &["heartbeat-cadence", "subscription-recovery"];
 
 /// Runs one fixture from `failures.json` against the envelope the file declares.
 pub async fn run_failure(fixture: &Value, envelope: &Value) -> Outcome {
@@ -43,9 +48,12 @@ pub async fn run_runtime(fixture: &Value) -> Outcome {
         "trace-propagation" => {
             return Outcome::Skipped("the opentelemetry feature is off".into());
         }
-        #[cfg(not(feature = "__conformance-hooks"))]
-        "heartbeat-cadence" => {
-            return Outcome::Skipped("the __conformance-hooks feature is off".into());
+        kind if CRATE_PRIVATE_KINDS.contains(&kind) => {
+            return Outcome::InCrate(
+                "it reads worker state that the crate keeps private, so the unit tests of the \
+                 crate run it"
+                    .into(),
+            );
         }
         _ => {}
     }
@@ -64,10 +72,7 @@ pub async fn run_runtime(fixture: &Value) -> Outcome {
             "batch" => batch(database, fixture).await,
             "cooperative-cancellation" => cooperative_cancellation(database, fixture).await,
             "expiration" => expiration(database, fixture).await,
-            #[cfg(feature = "__conformance-hooks")]
-            "heartbeat-cadence" => heartbeat_cadence(database, fixture).await,
             "poll-cadence" => poll_cadence(database, fixture).await,
-            "subscription-recovery" => subscription_recovery(database, fixture).await,
             "graceful-drain" => graceful_drain(database, fixture).await,
             "slot-refill" => slot_refill(database, fixture).await,
             "budget-admission-race" => budget_admission_race(database, fixture).await,
@@ -91,16 +96,19 @@ pub async fn run_runtime(fixture: &Value) -> Outcome {
     bounded(&name, executor).await
 }
 
-async fn scratch(name: &str) -> Option<ScratchDatabase> {
+pub(crate) async fn scratch(name: &str) -> Option<ScratchDatabase> {
     scratch_database(&name.replace('-', "_")).await
 }
 
-fn unset() -> Outcome {
+pub(crate) fn unset() -> Outcome {
     Outcome::Skipped("DATABASE_URL_TEST is unset".into())
 }
 
 /// Bounds an executor so a stall fails its fixture instead of hanging the runner.
-async fn bounded(name: &str, executor: impl std::future::Future<Output = Checked>) -> Outcome {
+pub(crate) async fn bounded(
+    name: &str,
+    executor: impl std::future::Future<Output = Checked>,
+) -> Outcome {
     match tokio::time::timeout(FIXTURE_TIMEOUT, executor).await {
         Ok(Ok(())) => Outcome::Passed,
         Ok(Err(reason)) => Outcome::Failed(reason),
@@ -108,15 +116,15 @@ async fn bounded(name: &str, executor: impl std::future::Future<Output = Checked
     }
 }
 
-fn text<'a>(fixture: &'a Value, field: &str) -> &'a str {
+pub(crate) fn text<'a>(fixture: &'a Value, field: &str) -> &'a str {
     fixture[field].as_str().unwrap_or_else(|| panic!("fixture field {field} is not a string"))
 }
 
-fn number(fixture: &Value, field: &str) -> i64 {
+pub(crate) fn number(fixture: &Value, field: &str) -> i64 {
     fixture[field].as_i64().unwrap_or_else(|| panic!("fixture field {field} is not an integer"))
 }
 
-fn millis(fixture: &Value, field: &str) -> Duration {
+pub(crate) fn millis(fixture: &Value, field: &str) -> Duration {
     Duration::from_millis(u64::try_from(number(fixture, field)).expect("a positive duration"))
 }
 
@@ -124,7 +132,7 @@ fn queue_name(fixture: &Value) -> String {
     format!("runtime-{}", text(fixture, "id"))
 }
 
-fn check(condition: bool, message: impl FnOnce() -> String) -> Checked {
+pub(crate) fn check(condition: bool, message: impl FnOnce() -> String) -> Checked {
     if condition {
         Ok(())
     } else {
@@ -132,19 +140,23 @@ fn check(condition: bool, message: impl FnOnce() -> String) -> Checked {
     }
 }
 
-fn driver(error: Error) -> String {
+pub(crate) fn driver(error: Error) -> String {
     error.to_string()
 }
 
-fn sql(error: tokio_postgres::Error) -> String {
+pub(crate) fn sql(error: tokio_postgres::Error) -> String {
     describe(&error)
 }
 
-async fn queue(database: &ScratchDatabase, fixture: &Value) -> Checked<Queue<Client>> {
+pub(crate) async fn queue(database: &ScratchDatabase, fixture: &Value) -> Checked<Queue<Client>> {
     Queue::connect(database.url(), &queue_name(fixture)).await.map_err(driver)
 }
 
-fn worker(database: &ScratchDatabase, pool_size: usize, options: WorkerOptions) -> Checked<Worker> {
+pub(crate) fn worker(
+    database: &ScratchDatabase,
+    pool_size: usize,
+    options: WorkerOptions,
+) -> Checked<Worker> {
     let config = database.url().parse().map_err(sql)?;
     let manager = deadpool_postgres::Manager::new(config, NoTls);
     let pool = deadpool_postgres::Pool::builder(manager)
@@ -154,27 +166,31 @@ fn worker(database: &ScratchDatabase, pool_size: usize, options: WorkerOptions) 
     Worker::new(pool, options).map_err(driver)
 }
 
-fn options(fixture: &Value) -> WorkerOptions {
-    WorkerOptions {
-        queues: vec![queue_name(fixture)],
-        worker_id: Some(format!("rust-{}", text(fixture, "id"))),
-        polling_only: true,
-        disable_registry: true,
-        poll_interval: Some(Duration::from_millis(5)),
-        ..WorkerOptions::default()
+pub(crate) fn options(fixture: &Value) -> WorkerOptions {
+    {
+        let mut worker_options = WorkerOptions::default();
+        worker_options.queues = vec![queue_name(fixture)];
+        worker_options.worker_id = Some(format!("rust-{}", text(fixture, "id")));
+        worker_options.polling_only = true;
+        worker_options.disable_registry = true;
+        worker_options.poll_interval = Some(Duration::from_millis(5));
+        worker_options
     }
 }
 
-fn lease_options(fixture: &Value) -> WorkerOptions {
-    WorkerOptions {
-        lease_duration: millis(fixture, "leaseMs"),
-        heartbeat_interval: Some(millis(fixture, "heartbeatMs")),
-        ..options(fixture)
+pub(crate) fn lease_options(fixture: &Value) -> WorkerOptions {
+    {
+        let mut worker_options = options(fixture);
+        worker_options.lease_duration = millis(fixture, "leaseMs");
+        worker_options.heartbeat_interval = Some(millis(fixture, "heartbeatMs"));
+        worker_options
     }
 }
 
 /// Runs `worker` in the background; sending on the returned channel starts its shutdown.
-fn run(worker: &Worker) -> (oneshot::Sender<()>, tokio::task::JoinHandle<Result<(), Error>>) {
+pub(crate) fn run(
+    worker: &Worker,
+) -> (oneshot::Sender<()>, tokio::task::JoinHandle<Result<(), Error>>) {
     let (stop, stopped) = oneshot::channel::<()>();
     let worker = worker.clone();
     let running = tokio::spawn(async move {
@@ -187,12 +203,12 @@ fn run(worker: &Worker) -> (oneshot::Sender<()>, tokio::task::JoinHandle<Result<
     (stop, running)
 }
 
-async fn run_once(worker: &Worker, expected: bool) -> Checked {
+pub(crate) async fn run_once(worker: &Worker, expected: bool) -> Checked {
     let processed = worker.run_once().await.map_err(driver)?;
     check(processed == expected, || format!("run_once() processed={processed}, want {expected}"))
 }
 
-async fn eventually<F, Fut>(message: &str, predicate: F) -> Checked
+pub(crate) async fn eventually<F, Fut>(message: &str, predicate: F) -> Checked
 where
     F: FnMut() -> Fut,
     Fut: std::future::Future<Output = Checked<bool>>,
@@ -200,7 +216,11 @@ where
     eventually_within(WAIT, message, predicate).await
 }
 
-async fn eventually_within<F, Fut>(limit: Duration, message: &str, mut predicate: F) -> Checked
+pub(crate) async fn eventually_within<F, Fut>(
+    limit: Duration,
+    message: &str,
+    mut predicate: F,
+) -> Checked
 where
     F: FnMut() -> Fut,
     Fut: std::future::Future<Output = Checked<bool>>,
@@ -231,7 +251,7 @@ async fn task_state(client: &Client, task: Uuid) -> Checked<(String, i32, String
     Ok((row.get(0), row.get(1), row.get(2)))
 }
 
-async fn assert_state(client: &Client, task: Uuid, expected: &Value) -> Checked {
+pub(crate) async fn assert_state(client: &Client, task: Uuid, expected: &Value) -> Checked {
     let (state, attempt, error) = task_state(client, task).await?;
     let want_state = text(expected, "state");
     let want_attempt = number(expected, "attempt");
@@ -270,7 +290,8 @@ async fn failure(database: &ScratchDatabase, fixture: &Value, envelope: &Value) 
     let client = database.connect().await;
     let queue = Queue::connect(database.url(), "failures").await.map_err(driver)?;
     let task_type = "protocol.failure";
-    let options = EnqueueOptions { max_attempts: 1, ..Default::default() };
+    let mut options = EnqueueOptions::default();
+    options.max_attempts = 1;
     let task = queue.enqueue(task_type, &json!({}), options).await.map_err(driver)?.task_id;
     let redacted = fixture["redactErrorDetails"].as_bool() == Some(true);
     if redacted {
@@ -290,11 +311,11 @@ async fn failure(database: &ScratchDatabase, fixture: &Value, envelope: &Value) 
     error.name =
         (declared["declaresName"].as_bool() == Some(true)).then(|| "PaymentDeclined".into());
     error.stack = (declared["declaresStack"].as_bool() == Some(true)).then_some(stack);
-    let worker = worker(
-        database,
-        4,
-        WorkerOptions { queues: vec!["failures".into()], ..options_without_queue() },
-    )?;
+    let worker = worker(database, 4, {
+        let mut worker_options = options_without_queue();
+        worker_options.queues = vec!["failures".into()];
+        worker_options
+    })?;
     worker.handle(task_type, move |_: Value, _| {
         let error = error.clone();
         async move { Err::<Value, _>(error) }
@@ -386,12 +407,13 @@ fn fixture_message(message: &Value) -> Checked<String> {
 }
 
 fn options_without_queue() -> WorkerOptions {
-    WorkerOptions {
-        worker_id: Some(format!("rust-failure-{}", Uuid::new_v4())),
-        polling_only: true,
-        disable_registry: true,
-        poll_interval: Some(Duration::from_millis(5)),
-        ..WorkerOptions::default()
+    {
+        let mut worker_options = WorkerOptions::default();
+        worker_options.worker_id = Some(format!("rust-failure-{}", Uuid::new_v4()));
+        worker_options.polling_only = true;
+        worker_options.disable_registry = true;
+        worker_options.poll_interval = Some(Duration::from_millis(5));
+        worker_options
     }
 }
 
@@ -406,8 +428,8 @@ mod trace {
     use serde_json::{json, Value};
     use tracing_subscriber::layer::SubscriberExt;
 
+    use super::ScratchDatabase;
     use super::{check, driver, options, queue, run_once, sql, text, worker, Checked};
-    use crate::support::ScratchDatabase;
 
     struct Telemetry {
         provider: SdkTracerProvider,
@@ -487,13 +509,12 @@ async fn batch(database: &ScratchDatabase, fixture: &Value) -> Checked {
         let mut retry = serde_json::Map::new();
         retry.insert("type".into(), json!("fixed"));
         retry.insert("delayMs".into(), json!(0));
-        let options = EnqueueOptions {
-            priority: i32::try_from(number(task, "priority")).map_err(|error| error.to_string())?,
-            max_attempts: i32::try_from(number(task, "maxAttempts"))
-                .map_err(|error| error.to_string())?,
-            retry_policy: json!({ "type": "fixed", "delayMs": 0 }).as_object().cloned(),
-            ..Default::default()
-        };
+        let mut options = EnqueueOptions::default();
+        options.priority =
+            i32::try_from(number(task, "priority")).map_err(|error| error.to_string())?;
+        options.max_attempts =
+            i32::try_from(number(task, "maxAttempts")).map_err(|error| error.to_string())?;
+        options.retry_policy = json!({ "type": "fixed", "delayMs": 0 }).as_object().cloned();
         let payload = json!({"key": key, "outcome": task["outcome"]});
         let id = queue.enqueue(task_type, &payload, options).await.map_err(driver)?.task_id;
         tasks.push((key, id));
@@ -503,13 +524,17 @@ async fn batch(database: &ScratchDatabase, fixture: &Value) -> Checked {
     // SM-1800: the worker keeps the default lease. In the second run the retry task waits alone
     // for the whole linger. If the host stalls a heartbeat round, a short lease can expire.
     // PostgreSQL then refuses the completion and leaves the task active.
-    let worker = worker(database, 6, WorkerOptions { concurrency, ..options(fixture) })?;
+    let worker = worker(database, 6, {
+        let mut worker_options = options(fixture);
+        worker_options.concurrency = concurrency;
+        worker_options
+    })?;
     let order = Arc::new(Mutex::new(Vec::<String>::new()));
     let stopper = Arc::new(Mutex::new(None::<oneshot::Sender<()>>));
     let (recorded, stop) = (Arc::clone(&order), Arc::clone(&stopper));
     worker.handle_batch(
         task_type,
-        BatchOptions { max_size, linger: Duration::from_secs(1) },
+        BatchOptions::new(max_size, Duration::from_secs(1)),
         move |items: Vec<BatchItem<Value>>| {
             let results = items
                 .iter()
@@ -647,11 +672,9 @@ async fn expiration(database: &ScratchDatabase, fixture: &Value) -> Checked {
     let mut retry = serde_json::Map::new();
     retry.insert("type".into(), json!("fixed"));
     retry.insert("delayMs".into(), json!(0));
-    let mut options = EnqueueOptions {
-        max_attempts: i32::try_from(number(fixture, "maxAttempts")).unwrap_or(1),
-        retry_policy: json!({ "type": "fixed", "delayMs": 0 }).as_object().cloned(),
-        ..Default::default()
-    };
+    let mut options = EnqueueOptions::default();
+    options.max_attempts = i32::try_from(number(fixture, "maxAttempts")).unwrap_or(1);
+    options.retry_policy = json!({ "type": "fixed", "delayMs": 0 }).as_object().cloned();
     if deadline {
         // The deadline is anchored to the claim, so the enqueue carries only a distant bound.
         client
@@ -698,8 +721,11 @@ async fn expiration(database: &ScratchDatabase, fixture: &Value) -> Checked {
     let url = database.url().to_owned();
     // A maintenance tick could settle the expiry first and turn the next heartbeat into `stale`, so
     // only the worker's own request settles it here.
-    let options =
-        WorkerOptions { maintenance_interval: Duration::from_secs(3600), ..lease_options(fixture) };
+    let options = {
+        let mut worker_options = lease_options(fixture);
+        worker_options.maintenance_interval = Duration::from_secs(3600);
+        worker_options
+    };
     let worker = worker(database, 4, options)?;
     worker.handle(task_type, move |_: Value, context: HandlerContext| {
         let (url, observed, compared) = (url.clone(), Arc::clone(&observed), Arc::clone(&compared));
@@ -822,95 +848,6 @@ async fn expiration(database: &ScratchDatabase, fixture: &Value) -> Checked {
     assert_outcomes(&client, task, &strings(&fixture["expectedAttemptOutcomes"])).await
 }
 
-/// Counts the heartbeat rounds that start while one is in flight, and how many run at once.
-#[cfg(feature = "__conformance-hooks")]
-struct RoundCounts {
-    calls: AtomicUsize,
-    active: AtomicUsize,
-    most_active: AtomicUsize,
-}
-
-/// Ends one counted round.
-#[cfg(feature = "__conformance-hooks")]
-struct ActiveRound(Arc<RoundCounts>);
-
-#[cfg(feature = "__conformance-hooks")]
-impl Drop for ActiveRound {
-    fn drop(&mut self) {
-        self.0.active.fetch_sub(1, Ordering::SeqCst);
-    }
-}
-
-/// Holds the first heartbeat round in the worker, so a second round could only start
-/// concurrently. PostgreSQL ends a held statement by the deadline of its round, so the hold must
-/// be in the worker, as the Go runner holds the round in its driver.
-#[cfg(feature = "__conformance-hooks")]
-async fn heartbeat_cadence(database: &ScratchDatabase, fixture: &Value) -> Checked {
-    let client = database.connect().await;
-    let heartbeat = number(fixture, "heartbeatMs");
-    let queue = queue(database, fixture).await?;
-    let task_type = text(fixture, "taskType");
-    let task = queue.enqueue(task_type, &json!({}), Default::default()).await.map_err(driver)?;
-    let worker = worker(database, 4, lease_options(fixture))?;
-    let counts = Arc::new(RoundCounts {
-        calls: AtomicUsize::new(0),
-        active: AtomicUsize::new(0),
-        most_active: AtomicUsize::new(0),
-    });
-    let (release_first, first_released) = watch::channel(false);
-    worker.hold_heartbeat_rounds_for_test({
-        let counts = Arc::clone(&counts);
-        move || {
-            let (counts, mut released) = (Arc::clone(&counts), first_released.clone());
-            async move {
-                let call = counts.calls.fetch_add(1, Ordering::SeqCst) + 1;
-                let active = counts.active.fetch_add(1, Ordering::SeqCst) + 1;
-                counts.most_active.fetch_max(active, Ordering::SeqCst);
-                let round = ActiveRound(counts);
-                if call == 1 {
-                    let _ = released.wait_for(|released| *released).await;
-                }
-                round
-            }
-        }
-    });
-    let (started, mut handler_started) = mpsc::unbounded_channel();
-    let (release, released) = watch::channel(false);
-    worker.handle(task_type, move |_: Value, _| {
-        let (started, mut released) = (started.clone(), released.clone());
-        async move {
-            let _ = started.send(());
-            let _ = released.wait_for(|released| *released).await;
-            Ok(Value::Null)
-        }
-    });
-    let running = {
-        let worker = worker.clone();
-        tokio::spawn(async move { worker.run_once().await })
-    };
-    handler_started.recv().await.ok_or("the handler never started")?;
-    let calls = || counts.calls.load(Ordering::SeqCst) as i64;
-    eventually("no heartbeat round started", || async { Ok(calls() >= 1) }).await?;
-    tokio::time::sleep(Duration::from_millis(2 * heartbeat as u64)).await;
-    let blocked = calls();
-    let want_blocked = number(fixture, "expectedCallsWhileBlocked");
-    check(blocked == want_blocked, || {
-        format!("{blocked} heartbeat rounds started while one was blocked, want {want_blocked}")
-    })?;
-    let _ = release_first.send(true);
-    let minimum = number(fixture, "expectedMinimumCallsBeforeSettlement");
-    eventually("the heartbeat rounds did not resume", || async { Ok(calls() >= minimum) }).await?;
-    let _ = release.send(true);
-    let processed = running.await.map_err(|error| error.to_string())?.map_err(driver)?;
-    check(processed, || "run_once() processed nothing".into())?;
-    let concurrent = counts.most_active.load(Ordering::SeqCst) as i64;
-    let maximum = number(fixture, "expectedMaximumOverlap");
-    check(concurrent <= maximum, || {
-        format!("{concurrent} heartbeat rounds ran at once, want at most {maximum}")
-    })?;
-    assert_state(&client, task.task_id, &json!({"state": "succeeded", "attempt": 1})).await
-}
-
 /// Holds each empty claim in PostgreSQL until the runner has counted it, then measures the
 /// worker's backoff after the last empty claim.
 ///
@@ -921,7 +858,7 @@ async fn heartbeat_cadence(database: &ScratchDatabase, fixture: &Value) -> Check
 /// Wraps `claim_many_v1` so each call records its start, its end, and whether it found a task in
 /// `workhorse.runtime_poll_claims`. If `hold` is true, each empty claim waits at its end until the
 /// test advances `workhorse.runtime_poll_released`. `runtime_poll_control` turns the hold off.
-async fn record_claims(client: &Client, hold: bool) -> Checked {
+pub(crate) async fn record_claims(client: &Client, hold: bool) -> Checked {
     let row = client
         .query_one(
             "SELECT pg_get_function_arguments(oid), pg_get_function_result(oid), pronargs
@@ -970,27 +907,16 @@ async fn record_claims(client: &Client, hold: bool) -> Checked {
         .map_err(sql)
 }
 
-/// Turns the hold of `record_claims` off and releases a held claim.
-async fn release_claims(client: &Client) -> Checked {
-    client
-        .batch_execute(
-            "UPDATE workhorse.runtime_poll_control SET hold_claims = false;
-             SELECT nextval('workhorse.runtime_poll_released');",
-        )
-        .await
-        .map_err(sql)
-}
-
 async fn poll_cadence(database: &ScratchDatabase, fixture: &Value) -> Checked {
     let client = database.connect().await;
     record_claims(&client, true).await?;
     let queue = queue(database, fixture).await?;
     let task_type = text(fixture, "taskType");
-    let worker = worker(
-        database,
-        8,
-        WorkerOptions { poll_interval: Some(millis(fixture, "pollMs")), ..options(fixture) },
-    )?;
+    let worker = worker(database, 8, {
+        let mut worker_options = options(fixture);
+        worker_options.poll_interval = Some(millis(fixture, "pollMs"));
+        worker_options
+    })?;
     let (started, mut handler_started) = mpsc::unbounded_channel();
     worker.handle(task_type, move |_: Value, _| {
         let _ = started.send(());
@@ -1061,322 +987,6 @@ async fn poll_cadence(database: &ScratchDatabase, fixture: &Value) -> Checked {
     })
 }
 
-/// A TCP proxy to the test database that holds each connection while `release` is `false`.
-/// While it holds a connection, the proxy accepts it but does not connect to PostgreSQL, so the
-/// connect and the `LISTEN` cannot finish. After the release, the proxy connects to PostgreSQL and
-/// copies the bytes in both directions. A change of `close` closes both sockets of each connection
-/// that it copies, and `closed` then receives one message for each of them.
-struct HoldingProxy {
-    config: tokio_postgres::Config,
-    release: watch::Sender<bool>,
-    close: watch::Sender<u64>,
-    closed: mpsc::UnboundedReceiver<()>,
-}
-
-async fn holding_proxy(database: &ScratchDatabase) -> Checked<HoldingProxy> {
-    let upstream: tokio_postgres::Config = database.url().parse().map_err(sql)?;
-    let tokio_postgres::config::Host::Tcp(host) = &upstream.get_hosts()[0] else {
-        return Err("the test database must be reachable over TCP".into());
-    };
-    let address = (host.clone(), upstream.get_ports()[0]);
-    let proxy =
-        tokio::net::TcpListener::bind("127.0.0.1:0").await.map_err(|error| error.to_string())?;
-    let mut config = tokio_postgres::Config::new();
-    config.host("127.0.0.1").port(proxy.local_addr().map_err(|error| error.to_string())?.port());
-    config.user(upstream.get_user().ok_or("the test database URL names no user")?);
-    config.dbname(upstream.get_dbname().ok_or("the test database URL names no database")?);
-    if let Some(password) = upstream.get_password() {
-        config.password(password);
-    }
-    let (release, released) = watch::channel(false);
-    let (close, closing) = watch::channel(0_u64);
-    let (closed_sender, closed) = mpsc::unbounded_channel();
-    tokio::spawn(async move {
-        while let Ok((mut client, _)) = proxy.accept().await {
-            let address = address.clone();
-            let mut released = released.clone();
-            let mut closing = closing.clone();
-            let closed = closed_sender.clone();
-            tokio::spawn(async move {
-                if released.wait_for(|released| *released).await.is_err() {
-                    return;
-                }
-                let Ok(mut server) = tokio::net::TcpStream::connect(address).await else { return };
-                closing.borrow_and_update();
-                tokio::select! {
-                    _ = tokio::io::copy_bidirectional(&mut client, &mut server) => {}
-                    Ok(()) = closing.changed() => {
-                        drop((client, server));
-                        let _ = closed.send(());
-                    }
-                }
-            });
-        }
-    });
-    Ok(HoldingProxy { config, release, close, closed })
-}
-
-/// The time from `earlier` to `later`, in microseconds from a shared origin.
-fn gap(earlier: i64, later: i64) -> Duration {
-    Duration::from_micros(u64::try_from(later - earlier).unwrap_or(0))
-}
-
-/// The shortest wait at the notification base: 5 s less its jitter of 10 %.
-const NOTIFICATION_WAIT_MINIMUM: Duration = Duration::from_millis(4_500);
-
-/// The end of the empty wait that `worker` has installed, in microseconds from the Unix epoch, if a
-/// notification can end that wait. PostgreSQL runs on the clock of this host, so the value compares
-/// with the times that PostgreSQL records.
-fn wakeable_wait_end(worker: &Worker) -> Option<i64> {
-    let (deadline, wakeable) = worker.empty_wait_for_test()?;
-    if !wakeable {
-        return None;
-    }
-    // The wall clock is read first, so a pause between the two reads makes the end earlier, not
-    // later. An earlier end can only make the checks stricter.
-    let wall = SystemTime::now();
-    let now = std::time::Instant::now();
-    let end = if deadline >= now { wall + (deadline - now) } else { wall - (now - deadline) };
-    i64::try_from(end.duration_since(UNIX_EPOCH).ok()?.as_micros()).ok()
-}
-
-/// The bounds after the loss start at events that the runner controls, not at the moment the
-/// runner sees them. A loaded runner sees an event late, and the worker's backoff grows in that
-/// time. A late observation would thus charge the runner's delay to the worker.
-async fn subscription_recovery(database: &ScratchDatabase, fixture: &Value) -> Checked {
-    let client = database.connect().await;
-    record_claims(&client, false).await?;
-    let queue = queue(database, fixture).await?;
-    let task_type = text(fixture, "taskType");
-    // The worker can listen, but the proxy holds its LISTEN until the test releases it. Until
-    // then the worker has no live subscription.
-    let HoldingProxy { config: listen_config, release, close, mut closed } =
-        holding_proxy(database).await?;
-    // The pool has more than one connection and the worker has a listen_config, so the worker
-    // expects a listener. The worker has no explicit poll interval.
-    let worker = worker(
-        database,
-        8,
-        WorkerOptions {
-            concurrency: 1,
-            polling_only: false,
-            poll_interval: None,
-            listen_config: Some(listen_config),
-            ..options(fixture)
-        },
-    )?;
-    let (ran, mut handled) = mpsc::unbounded_channel();
-    worker.handle(task_type, move |payload: Value, _| {
-        let _ = ran.send(payload["task"].as_str().unwrap_or_default().to_owned());
-        async { Ok(Value::Null) }
-    });
-    let (stop, running) = run(&worker);
-    let observed = async {
-        eventually("the worker made no empty claim before the first enqueue", || async {
-            let row = client
-                .query_one(
-                    "SELECT count(*) FROM workhorse.runtime_poll_claims WHERE NOT found",
-                    &[],
-                )
-                .await
-                .map_err(sql)?;
-            Ok(row.get::<_, i64>(0) > 0)
-        })
-        .await?;
-        for (task, timeout) in [("first", 5), ("second", 7)] {
-            if task == "second" {
-                let _ = release.send(true);
-                eventually("the listener did not run LISTEN", || async {
-                    let row = client
-                        .query_one(
-                            "SELECT count(*) FROM pg_stat_activity
-                              WHERE datname = current_database()
-                                AND query = 'LISTEN workhorse_tasks' AND state = 'idle'",
-                            &[],
-                        )
-                        .await
-                        .map_err(sql)?;
-                    Ok(row.get::<_, i64>(0) > 0)
-                })
-                .await?;
-            }
-            queue
-                .enqueue(task_type, &json!({ "task": task }), Default::default())
-                .await
-                .map_err(driver)?;
-            let ran = tokio::time::timeout(Duration::from_secs(timeout), handled.recv())
-                .await
-                .map_err(|_| format!("the worker did not run the {task} task"))?
-                .ok_or("the handler channel closed")?;
-            check(ran == task, || format!("the worker ran task {ran}, want {task}"))?;
-        }
-        tokio::time::sleep(millis(fixture, "observeAfterRecoveryMs")).await;
-        // The claims recorded until now belong to the live period. Each time is in microseconds
-        // on the clock of PostgreSQL, which records the claims.
-        let now = "(extract(epoch FROM clock_timestamp()) * 1000000)::bigint";
-        let recovery_end: i64 =
-            client.query_one(&format!("SELECT {now}"), &[]).await.map_err(sql)?.get(0);
-
-        // The next empty claim starts a new wait at the notification base. Then the proxy closes
-        // the live listener connection and holds the next one, so the subscription is lost. The
-        // runner first waits until the worker has installed that wait. A loss before that moment
-        // gives the polling base without a wake.
-        eventually_within(
-            Duration::from_secs(7),
-            "the worker made no empty claim after the second task",
-            || async {
-                let row = client
-                    .query_one(
-                        "SELECT count(*) FROM workhorse.runtime_poll_claims
-                          WHERE NOT found
-                            AND (extract(epoch FROM finished) * 1000000)::bigint > $1",
-                        &[&recovery_end],
-                    )
-                    .await
-                    .map_err(sql)?;
-                Ok(row.get::<_, i64>(0) > 0)
-            },
-        )
-        .await?;
-        let empty_end: i64 = client
-            .query_one(
-                "SELECT (extract(epoch FROM finished) * 1000000)::bigint
-                   FROM workhorse.runtime_poll_claims
-                  WHERE NOT found AND (extract(epoch FROM finished) * 1000000)::bigint > $1
-                  ORDER BY finished LIMIT 1",
-                &[&recovery_end],
-            )
-            .await
-            .map_err(sql)?
-            .get(0);
-        let notification_wait =
-            i64::try_from(NOTIFICATION_WAIT_MINIMUM.as_micros()).unwrap_or(i64::MAX);
-        eventually_within(
-            Duration::from_secs(7),
-            "the worker did not wait at the notification base after the second task",
-            || async {
-                Ok(wakeable_wait_end(&worker)
-                    .is_some_and(|end| end - empty_end >= notification_wait))
-            },
-        )
-        .await?;
-        let _ = release.send(false);
-        // The loss starts when the proxy closes the connection. From that moment the wrapper holds
-        // each empty claim. The first one is the claim that the loss wakes, so the worker cannot
-        // advance its backoff before the runner enqueues the third task.
-        let wait_end = wakeable_wait_end(&worker);
-        let lost_at: i64 = client
-            .query_one(
-                &format!(
-                    "UPDATE workhorse.runtime_poll_control SET hold_claims = true RETURNING {now}"
-                ),
-                &[],
-            )
-            .await
-            .map_err(sql)?
-            .get(0);
-        close.send_modify(|generation| *generation += 1);
-        tokio::time::timeout(Duration::from_secs(7), closed.recv())
-            .await
-            .map_err(|_| "the proxy did not close the listener connection")?
-            .ok_or("the proxy stopped")?;
-        eventually_within(
-            Duration::from_secs(7),
-            "the worker made no claim after the subscription was lost",
-            || async {
-                let row = client
-                    .query_one("SELECT is_called FROM workhorse.runtime_poll_reached", &[])
-                    .await
-                    .map_err(sql)?;
-                Ok(row.get::<_, bool>(0))
-            },
-        )
-        .await?;
-        let enqueued_after_loss: i64 =
-            client.query_one(&format!("SELECT {now}"), &[]).await.map_err(sql)?.get(0);
-        queue
-            .enqueue(task_type, &json!({ "task": "third" }), Default::default())
-            .await
-            .map_err(driver)?;
-        release_claims(&client).await?;
-        let ran = tokio::time::timeout(Duration::from_secs(7), handled.recv())
-            .await
-            .map_err(|_| "the worker did not run the third task")?
-            .ok_or("the handler channel closed")?;
-        check(ran == "third", || format!("the worker ran task {ran}, want third"))?;
-        // Each claim's start and end, in microseconds, and whether it found a task.
-        let rows = client
-            .query(
-                "SELECT (extract(epoch FROM started) * 1000000)::bigint,
-                        (extract(epoch FROM finished) * 1000000)::bigint,
-                        found
-                   FROM workhorse.runtime_poll_claims ORDER BY started",
-                &[],
-            )
-            .await
-            .map_err(sql)?;
-        let claims = rows
-            .iter()
-            .map(|row| (row.get::<_, i64>(0), row.get::<_, i64>(1), row.get::<_, bool>(2)))
-            .collect::<Vec<_>>();
-        Ok::<_, String>((claims, recovery_end, lost_at, wait_end, enqueued_after_loss))
-    }
-    .await;
-    // A failure above must not leave the LISTEN or a claim held, or the worker running.
-    let _ = release.send(true);
-    let _ = release_claims(&client).await;
-    let _ = stop.send(());
-    let stopped = running.await.map_err(|error| error.to_string());
-    let (claims, recovery_end, lost_at, wait_end, enqueued_after_loss) = observed?;
-    stopped?.map_err(driver)?;
-
-    let found: Vec<usize> = (0..claims.len()).filter(|&index| claims[index].2).collect();
-    check(found.len() == 3, || format!("{} claims found a task, want 3", found.len()))?;
-    let (first, third) = (found[0], found[2]);
-    check(first > 0, || "no empty claim came before the claim that found the first task".into())?;
-    // Without a live subscription, the worker polls at the polling-only base.
-    let waited = gap(claims[first - 1].1, claims[first].0);
-    let maximum = millis(fixture, "expectedMaximumClaimDelayMs");
-    check(waited <= maximum, || {
-        format!("the claim that found the first task waited {waited:?} without a live subscription, want at most {maximum:?}")
-    })?;
-    // With a live subscription, the worker waits the notification base after an empty claim.
-    // Only the claims recorded before the loss count, from the last one that found a task.
-    let recovered: Vec<_> = claims.iter().filter(|claim| claim.1 <= recovery_end).collect();
-    let second = recovered.iter().rposition(|claim| claim.2).unwrap_or(0);
-    let empty = recovered[second..].iter().filter(|claim| !claim.2).count() as i64;
-    let maximum = number(fixture, "expectedMaximumEmptyClaimsAfterRecovery");
-    check(empty <= maximum, || {
-        format!("{empty} empty claims after the second task with a live subscription, want at most {maximum}")
-    })?;
-    // After the loss, the worker claims at once and then polls at the polling-only base again.
-    let maximum = millis(fixture, "expectedMaximumClaimDelayAfterLossMs");
-    let woken = claims
-        .iter()
-        .position(|claim| claim.0 >= lost_at)
-        .ok_or("no claim started after the subscription was lost")?;
-    check(woken > 0, || "no claim after the subscription was lost had a claim before it".into())?;
-    let waited = gap(lost_at, claims[woken].0);
-    check(waited <= maximum, || {
-        format!("the first claim after the subscription was lost waited {waited:?}, want at most {maximum:?}")
-    })?;
-    // When the runner ended the session, the claim before the woken one had installed a wait at
-    // the notification base. The woken claim started before that wait ended, so the loss started it.
-    let before = claims[woken - 1];
-    let wait_end = wait_end.ok_or("the worker had no empty-claim wait when the session ended")?;
-    check(gap(before.1, wait_end) >= NOTIFICATION_WAIT_MINIMUM, || {
-        "the claim before the loss did not install a wait at the notification base".into()
-    })?;
-    check(claims[woken].0 < wait_end, || {
-        "the first claim after the subscription was lost started when the wait ended, so the wait, not the loss, started it".into()
-    })?;
-    let waited = gap(enqueued_after_loss, claims[third].0);
-    check(waited <= maximum, || {
-        format!("the claim that found the third task waited {waited:?} after the subscription was lost, want at most {maximum:?}")
-    })?;
-    Ok(())
-}
-
 async fn graceful_drain(database: &ScratchDatabase, fixture: &Value) -> Checked {
     let client = database.connect().await;
     let queue = queue(database, fixture).await?;
@@ -1389,7 +999,11 @@ async fn graceful_drain(database: &ScratchDatabase, fixture: &Value) -> Checked 
     }
     let concurrency = usize::try_from(number(fixture, "concurrency")).unwrap_or(1);
     // The default lease, as in `batch`: a held handler must not lose its lease to a host stall.
-    let worker = worker(database, 6, WorkerOptions { concurrency, ..options(fixture) })?;
+    let worker = worker(database, 6, {
+        let mut worker_options = options(fixture);
+        worker_options.concurrency = concurrency;
+        worker_options
+    })?;
     let active = Arc::new(AtomicUsize::new(0));
     let (release, released) = watch::channel(false);
     let counted = Arc::clone(&active);
@@ -1572,7 +1186,11 @@ async fn slot_refill(database: &ScratchDatabase, fixture: &Value) -> Checked {
         );
     }
     let concurrency = usize::try_from(number(fixture, "concurrency")).unwrap_or(1);
-    let worker = worker(database, 16, WorkerOptions { concurrency, ..options(fixture) })?;
+    let worker = worker(database, 16, {
+        let mut worker_options = options(fixture);
+        worker_options.concurrency = concurrency;
+        worker_options
+    })?;
     let gate = Arc::new(HandlerGate::default());
     let waiting = Arc::clone(&gate);
     worker.handle(task_type, move |_: Value, _| {
@@ -1692,7 +1310,9 @@ async fn budget_admission_race(database: &ScratchDatabase, fixture: &Value) -> C
     let lease = i32::try_from(number(fixture, "leaseMs")).map_err(|error| error.to_string())?;
     let queue = queue(database, fixture).await?;
     let max_active = i32::try_from(number(fixture, "maxActive")).ok();
-    let budget = BudgetDefinition { name: name.clone(), max_active, rate: None };
+    let mut budget = BudgetDefinition::new(name.clone());
+    budget.max_active = max_active;
+    budget.rate = None;
     queue.sync_budgets(&name, &[budget], false).await.map_err(driver)?;
     let rate = &fixture["queueRate"];
     let rate = RateLimit {
@@ -1700,13 +1320,15 @@ async fn budget_admission_race(database: &ScratchDatabase, fixture: &Value) -> C
         interval_ms: i32::try_from(number(rate, "intervalMs")).unwrap_or(1),
         burst: i32::try_from(number(rate, "burst")).unwrap_or(1),
     };
-    let policy = RateLimitPolicyDefinition { queue: late_queue.clone(), rate, per_key: None };
+    let mut policy = RateLimitPolicyDefinition::new(late_queue.clone(), rate);
+    policy.per_key = None;
     queue.sync_rate_limit_policies(&name, &[policy], false).await.map_err(driver)?;
     let task_type = text(fixture, "taskType");
-    let on = |queue: &str, budget: Option<&str>| EnqueueOptions {
-        queue: Some(queue.into()),
-        budget: budget.map(Into::into),
-        ..Default::default()
+    let on = |queue: &str, budget: Option<&str>| {
+        let mut enqueue_options = EnqueueOptions::default();
+        enqueue_options.queue = Some(queue.into());
+        enqueue_options.budget = budget.map(Into::into);
+        enqueue_options
     };
     // One unbudgeted start proves the late queue admits before the blocker parks its claim.
     queue
@@ -1783,15 +1405,12 @@ async fn missing_handler(database: &ScratchDatabase, fixture: &Value) -> Checked
     let task_type = text(fixture, "taskType");
     let task =
         queue.enqueue(task_type, &json!({}), Default::default()).await.map_err(driver)?.task_id;
-    let worker = worker(
-        database,
-        4,
-        WorkerOptions {
-            lease_duration: millis(fixture, "leaseMs"),
-            poll_interval: Some(millis(fixture, "pollMs")),
-            ..options(fixture)
-        },
-    )?;
+    let worker = worker(database, 4, {
+        let mut worker_options = options(fixture);
+        worker_options.lease_duration = millis(fixture, "leaseMs");
+        worker_options.poll_interval = Some(millis(fixture, "pollMs"));
+        worker_options
+    })?;
     worker.handle(text(fixture, "registeredTaskType"), |_: Value, _| async { Ok(Value::Null) });
     // A pass that released each task that it claimed made no progress, so it returns false.
     let released_pass_progress = text(fixture, "expectedReleasedPassOutcome") != "unprocessed";
@@ -1844,17 +1463,14 @@ async fn release_wait(database: &ScratchDatabase, fixture: &Value) -> Checked {
         .await
         .map_err(driver)?
         .task_id;
-    let worker = worker(
-        database,
-        4,
-        WorkerOptions {
-            polling_only: false,
-            listen_config: Some(database.url().parse().map_err(sql)?),
-            lease_duration: millis(fixture, "leaseMs"),
-            poll_interval: Some(millis(fixture, "pollMs")),
-            ..options(fixture)
-        },
-    )?;
+    let worker = worker(database, 4, {
+        let mut worker_options = options(fixture);
+        worker_options.polling_only = false;
+        worker_options.listen_config = Some(database.url().parse().map_err(sql)?);
+        worker_options.lease_duration = millis(fixture, "leaseMs");
+        worker_options.poll_interval = Some(millis(fixture, "pollMs"));
+        worker_options
+    })?;
     worker.handle(text(fixture, "registeredTaskType"), |_: Value, _| async { Ok(Value::Null) });
     let (stop, running) = run(&worker);
     tokio::time::sleep(millis(fixture, "runMs")).await;
@@ -1970,11 +1586,10 @@ async fn checkpoint_no_value(database: &ScratchDatabase, fixture: &Value) -> Che
     let admin = Admin::connect(database.url()).await.map_err(driver)?;
     let queue = queue(database, fixture).await?;
     let task_type = text(fixture, "taskType");
-    let retried = EnqueueOptions {
-        max_attempts: i32::try_from(number(fixture, "maxAttempts")).map_err(|e| e.to_string())?,
-        retry_policy: json!({ "type": "fixed", "delayMs": 0 }).as_object().cloned(),
-        ..Default::default()
-    };
+    let mut retried = EnqueueOptions::default();
+    retried.max_attempts =
+        i32::try_from(number(fixture, "maxAttempts")).map_err(|e| e.to_string())?;
+    retried.retry_policy = json!({ "type": "fixed", "delayMs": 0 }).as_object().cloned();
     let task = queue.enqueue(task_type, &json!({}), retried).await.map_err(driver)?.task_id;
     let worker = worker(database, 4, options(fixture))?;
     let (runs, operations) = (Arc::new(AtomicUsize::new(0)), Arc::new(AtomicUsize::new(0)));
@@ -2034,11 +1649,10 @@ async fn oversized_checkpoint(database: &ScratchDatabase, fixture: &Value) -> Ch
     let admin = Admin::connect(database.url()).await.map_err(driver)?;
     let queue = queue(database, fixture).await?;
     let task_type = text(fixture, "taskType");
-    let retried = EnqueueOptions {
-        max_attempts: i32::try_from(number(fixture, "maxAttempts")).map_err(|e| e.to_string())?,
-        retry_policy: json!({ "type": "fixed", "delayMs": 0 }).as_object().cloned(),
-        ..Default::default()
-    };
+    let mut retried = EnqueueOptions::default();
+    retried.max_attempts =
+        i32::try_from(number(fixture, "maxAttempts")).map_err(|e| e.to_string())?;
+    retried.retry_policy = json!({ "type": "fixed", "delayMs": 0 }).as_object().cloned();
     let zeros = number(fixture, "oversizedZeros");
     let task = queue.enqueue(task_type, &json!(zeros), retried).await.map_err(driver)?.task_id;
     let worker = worker(database, 4, options(fixture))?;
@@ -2116,11 +1730,10 @@ async fn oversized_result(database: &ScratchDatabase, fixture: &Value) -> Checke
     }
     let queue = queue(database, fixture).await?;
     let task_type = text(fixture, "taskType");
-    let retried = EnqueueOptions {
-        max_attempts: i32::try_from(number(fixture, "maxAttempts")).map_err(|e| e.to_string())?,
-        retry_policy: json!({ "type": "fixed", "delayMs": 0 }).as_object().cloned(),
-        ..Default::default()
-    };
+    let mut retried = EnqueueOptions::default();
+    retried.max_attempts =
+        i32::try_from(number(fixture, "maxAttempts")).map_err(|e| e.to_string())?;
+    retried.retry_policy = json!({ "type": "fixed", "delayMs": 0 }).as_object().cloned();
     let oversized = &fixture["oversizedZeros"];
     let task = queue.enqueue(task_type, oversized, retried).await.map_err(driver)?.task_id;
     let worker = worker(database, 4, options(fixture))?;
@@ -2168,11 +1781,10 @@ async fn result_contract_failure(database: &ScratchDatabase, fixture: &Value) ->
     let admin = Admin::connect(database.url()).await.map_err(driver)?;
     let queue = queue(database, fixture).await?;
     let task_type = text(fixture, "taskType");
-    let retried = EnqueueOptions {
-        max_attempts: i32::try_from(number(fixture, "maxAttempts")).map_err(|e| e.to_string())?,
-        retry_policy: json!({ "type": "fixed", "delayMs": 0 }).as_object().cloned(),
-        ..Default::default()
-    };
+    let mut retried = EnqueueOptions::default();
+    retried.max_attempts =
+        i32::try_from(number(fixture, "maxAttempts")).map_err(|e| e.to_string())?;
+    retried.retry_policy = json!({ "type": "fixed", "delayMs": 0 }).as_object().cloned();
     let rejected = &fixture["rejectedResult"];
     let task = queue.enqueue(task_type, rejected, retried).await.map_err(driver)?.task_id;
     let worker = worker(database, 4, options(fixture))?;
@@ -2228,19 +1840,15 @@ async fn shutdown_cancellation(database: &ScratchDatabase, fixture: &Value) -> C
     let client = database.connect().await;
     let queue = queue(database, fixture).await?;
     let task_type = text(fixture, "taskType");
-    let attempts = EnqueueOptions {
-        max_attempts: i32::try_from(number(fixture, "maxAttempts")).map_err(|e| e.to_string())?,
-        ..Default::default()
-    };
+    let mut attempts = EnqueueOptions::default();
+    attempts.max_attempts =
+        i32::try_from(number(fixture, "maxAttempts")).map_err(|e| e.to_string())?;
     let task = queue.enqueue(task_type, &json!({}), attempts).await.map_err(driver)?.task_id;
-    let worker = worker(
-        database,
-        4,
-        WorkerOptions {
-            shutdown_grace_period: millis(fixture, "shutdownGraceMs"),
-            ..options(fixture)
-        },
-    )?;
+    let worker = worker(database, 4, {
+        let mut worker_options = options(fixture);
+        worker_options.shutdown_grace_period = millis(fixture, "shutdownGraceMs");
+        worker_options
+    })?;
     // The handler answers its shutdown cancellation as `handlerResult` says (ADR 0117).
     let handler_result = text(fixture, "handlerResult").to_owned();
     let zeros = usize::try_from(fixture["resultZeros"].as_u64().unwrap_or(0)).unwrap_or(0);
@@ -2785,7 +2393,11 @@ async fn suspension_race(database: &ScratchDatabase, fixture: &Value) -> Checked
     let task_type = text(fixture, "taskType");
     let task = queue.enqueue(task_type, &json!({}), Default::default()).await.map_err(driver)?;
     let task = task.task_id;
-    let worker = worker(database, 4, WorkerOptions { concurrency: 1, ..lease_options(fixture) })?;
+    let worker = worker(database, 4, {
+        let mut worker_options = lease_options(fixture);
+        worker_options.concurrency = 1;
+        worker_options
+    })?;
     let (started, mut handler_started) = mpsc::unbounded_channel();
     let runs_after_wait = Arc::new(AtomicUsize::new(0));
     let counted = Arc::clone(&runs_after_wait);
@@ -2859,7 +2471,11 @@ async fn suspension_replay(database: &ScratchDatabase, fixture: &Value) -> Check
     let following =
         queue.enqueue(following_type, &Value::Null, Default::default()).await.map_err(driver)?;
     let (suspending, following) = (suspending.task_id, following.task_id);
-    let worker = worker(database, 4, WorkerOptions { concurrency: 1, ..options(fixture) })?;
+    let worker = worker(database, 4, {
+        let mut worker_options = options(fixture);
+        worker_options.concurrency = 1;
+        worker_options
+    })?;
     let order = Arc::new(Mutex::new(Vec::new()));
     let (runs, operations) = (Arc::new(AtomicUsize::new(0)), Arc::new(AtomicUsize::new(0)));
     let checkpoint = text(fixture, "checkpointName").to_owned();
@@ -2980,11 +2596,10 @@ async fn lease_loss(database: &ScratchDatabase, fixture: &Value) -> Checked {
     let client = database.connect().await;
     let queue = queue(database, fixture).await?;
     let task_type = text(fixture, "taskType");
-    let options = EnqueueOptions {
-        max_attempts: i32::try_from(number(fixture, "maxAttempts")).map_err(|e| e.to_string())?,
-        retry_policy: json!({ "type": "fixed", "delayMs": 0 }).as_object().cloned(),
-        ..Default::default()
-    };
+    let mut options = EnqueueOptions::default();
+    options.max_attempts =
+        i32::try_from(number(fixture, "maxAttempts")).map_err(|e| e.to_string())?;
+    options.retry_policy = json!({ "type": "fixed", "delayMs": 0 }).as_object().cloned();
     let task = queue.enqueue(task_type, &Value::Null, options).await.map_err(driver)?.task_id;
     let worker = worker(database, 4, lease_options(fixture))?;
     let (started, mut handler_started) = mpsc::unbounded_channel();
@@ -3065,25 +2680,20 @@ async fn refused_completion_case(
     let queue_name = format!("{}-{cause}", queue_name(fixture));
     let queue = Arc::new(Queue::connect(database.url(), &queue_name).await.map_err(driver)?);
     // The enqueued boundaries are far away, so the worker's own timers cannot reach them.
-    let options = EnqueueOptions {
-        max_attempts: 1,
-        deadline: Some(chrono::Utc::now() + chrono::Duration::hours(1)),
-        execution_timeout_ms: Some(3_600_000),
-        ..Default::default()
-    };
+    let mut options = EnqueueOptions::default();
+    options.max_attempts = 1;
+    options.deadline = Some(chrono::Utc::now() + chrono::Duration::hours(1));
+    options.execution_timeout_ms = Some(3_600_000);
     let task = queue.enqueue(task_type, &json!({}), options).await.map_err(driver)?.task_id;
-    let worker = worker(
-        database,
-        4,
-        WorkerOptions {
-            queues: vec![queue_name.clone()],
-            worker_id: Some(format!("rust-{}-{cause}", text(fixture, "id"))),
-            // With an interval of one hour, only the tick before the claim runs. A later tick
-            // could settle the changed boundary before the completion write.
-            maintenance_interval: Duration::from_secs(3600),
-            ..lease_options(fixture)
-        },
-    )?;
+    let worker = worker(database, 4, {
+        let mut worker_options = lease_options(fixture);
+        worker_options.queues = vec![queue_name.clone()];
+        worker_options.worker_id = Some(format!("rust-{}-{cause}", text(fixture, "id")));
+        // With an interval of one hour, only the tick before the claim runs. A later tick
+        // could settle the changed boundary before the completion write.
+        worker_options.maintenance_interval = Duration::from_secs(3600);
+        worker_options
+    })?;
     let statement = match cause {
         "deadline" | "attempt-timeout" => {
             let column = if cause == "deadline" { "deadline_at" } else { "attempt_timeout_at" };
@@ -3173,11 +2783,11 @@ async fn maintenance_phase_error(database: &ScratchDatabase, fixture: &Value) ->
         let task_type = text(fixture, "taskType");
         let task =
             queue.enqueue(task_type, &Value::Null, Default::default()).await.map_err(driver)?;
-        let worker = worker(
-            database,
-            4,
-            WorkerOptions { maintenance_interval: Duration::from_millis(100), ..options(fixture) },
-        )?;
+        let worker = worker(database, 4, {
+            let mut worker_options = options(fixture);
+            worker_options.maintenance_interval = Duration::from_millis(100);
+            worker_options
+        })?;
         worker.handle(task_type, |_: Value, _| async { Ok(Value::Null) });
         // The failing phase runs on this pass, and the pass still claims and settles the task.
         run_once(&worker, true).await?;
@@ -3211,14 +2821,11 @@ async fn replay_conflict(database: &ScratchDatabase, fixture: &Value) -> Checked
         let queue = Queue::connect(database.url(), &queue_name).await.map_err(driver)?;
         let task_type = text(fixture, "taskType");
         let task = queue
-            .enqueue(
-                task_type,
-                &json!({}),
-                EnqueueOptions {
-                    max_attempts: number(fixture, "maxAttempts") as i32,
-                    ..Default::default()
-                },
-            )
+            .enqueue(task_type, &json!({}), {
+                let mut enqueue_options = EnqueueOptions::default();
+                enqueue_options.max_attempts = number(fixture, "maxAttempts") as i32;
+                enqueue_options
+            })
             .await
             .map_err(driver)?
             .task_id;
@@ -3233,18 +2840,15 @@ async fn replay_conflict(database: &ScratchDatabase, fixture: &Value) -> Checked
         }
         let delay_calls = Arc::new(AtomicUsize::new(0));
         let calls = Arc::clone(&delay_calls);
-        let subject = worker(
-            database,
-            4,
-            WorkerOptions {
-                queues: vec![queue_name],
-                retry_delay: Some(Arc::new(move |_, _| {
-                    calls.fetch_add(1, Ordering::SeqCst);
-                    Some(Duration::from_secs(60))
-                })),
-                ..options(fixture)
-            },
-        )?;
+        let subject = worker(database, 4, {
+            let mut worker_options = options(fixture);
+            worker_options.queues = vec![queue_name];
+            worker_options.retry_delay = Some(Arc::new(move |_, _| {
+                calls.fetch_add(1, Ordering::SeqCst);
+                Some(Duration::from_secs(60))
+            }));
+            worker_options
+        })?;
         let kind = text(entry, "errorKind").to_owned();
         subject.handle(task_type, move |_: Value, context: HandlerContext| {
             let kind = kind.clone();

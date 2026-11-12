@@ -17,8 +17,9 @@ and queue health use one retention rule, and each retention window is a fixed nu
 keeps the audit of each settings change of the dashboard, lets each embedded dashboard withhold
 error stacks, and opens the detail of each record of the event feed. It gives the expired-lease scan
 a floor, and it counts the active leases of one admission shard through an index. It also corrects
-three SDK APIs before 1.0.0. The upgrade
-is a rolling deployment, and a mixed fleet is supported while it runs.
+three SDK APIs before 1.0.0. It changes how Rust code builds a record and matches an enum, and it
+removes items from the Rust and Go APIs that were never meant for applications. The upgrade is a
+rolling deployment, and a mixed fleet is supported while it runs.
 
 1. If you run cold exporters, stop each one and let it finish its object and manifest uploads. Keep
    cold export enabled, so retention keeps waiting for the export.
@@ -238,6 +239,81 @@ it. To repair the database:
 3. Run `workhorse schema migrate` again.
 
 [Non-transactional steps](schema-lifecycle.md#non-transactional-steps) states the general rule.
+
+### Change Rust code that builds records or matches enums
+
+The next release opens the public records and enums of the Rust crate to additions, before 1.0.0.
+A later release can then add a field or a variant without a break. The change is in the source of a caller, not in the
+database or the protocol, so it does not affect a rolling deployment.
+
+Each public record with public fields and each public enum is now `#[non_exhaustive]`, with eight
+exceptions. The open types are in three groups:
+
+- The options and query records, and the records that a caller builds with `new`, such as
+  `WorkerOptions`, `EnqueueOptions`, `DashboardOptions`, `Idempotency`, and `TaskListQuery`.
+- The records that `Queue`, `Admin`, and a worker return, such as `EnqueueResult`, `TaskSnapshot`,
+  and the `*Details` error records.
+- The enums whose values the protocol can extend, such as `TaskState`, `EnqueueOutcome`, and the
+  dashboard `ProcedureError`.
+
+`AdminAudit`, `BatchResult`, `DebounceSchedule`, `DependencyTerminalPolicy`,
+`ScheduleCatchupPolicy`, `policies::RateLimit`, `dashboard::Authorization`, and
+`dashboard::Principal` stay closed. In `api/rust.txt`, each open type has `#[non_exhaustive]`.
+
+Outside the crate, a struct literal of an open record does not compile, also with
+`..Default::default()` or `..Idempotency::new(key)`. Build a record in two steps:
+
+1. Start from `Default::default()` or from the `new` of the record. `DashboardOptions` starts from
+   `DashboardOptions::new(executor, authorize)`.
+2. Set each other field that you need.
+
+```rust
+let mut options = EnqueueOptions::default();
+options.queue = Some("billing".into());
+options.priority = 10;
+queue.enqueue("invoice.remind", &json!({ "invoiceId": invoice_id }), options).await?;
+```
+
+Read a record that the crate returns. Do not build one. A pattern that destructures it needs a `..`
+rest.
+
+Give each `match` on an open enum a fallback arm:
+
+```rust
+let Some(task) = admin.get_task(task_id).await? else { return Ok(()) };
+let summary = match task.state {
+    TaskState::Succeeded => "done",
+    TaskState::Failed | TaskState::Canceled => "stopped",
+    // A later release can add a state, so the match needs a fallback arm.
+    _ => "open",
+};
+println!("{task_id}: {summary}");
+```
+
+If a `match` on `ProcedureError` or on `workhorse::Error` decides what to do, the fallback arm must
+treat an unknown value as a failure. An enqueue transport that matches `EnqueueBind` or
+`EnqueueColumnType` must refuse a kind that it does not know, for example with
+`Error::InvalidArgument`.
+
+The crate also no longer publishes these items. No application needs them:
+
+- The constants `UNWIND_WINDOW` and `CLEANUP_WINDOW`. The worker keeps both windows, and
+  [Schema and SQL protocol: Shutdown](architecture/schema-and-protocol.md#shutdown) states their
+  lengths.
+- The test hooks `Worker::empty_wait_for_test`, `Worker::claims_in_flight_for_test`, and
+  `Worker::hold_heartbeat_rounds_for_test`, and the feature `__conformance-hooks`. If your
+  `Cargo.toml` names the feature, remove it.
+- `contracts::compile_stored_contract_schema`, and the methods `rows` and `read_pool` that an
+  `Executor` bound exposed. Use
+  `contracts::compile_contract_schema` to compile a schema.
+
+### Stop importing the Go sqlc example package
+
+The generated queries of the sqlc example moved from `go/examples/sqlc/generated` to
+`go/examples/sqlc/internal/generated`. Another module can no longer import them. The package held
+the business queries of one example and was never part of the Workhorse Go API. If your code
+imports `github.com/stablemates/workhorse/go/examples/sqlc/generated`, generate your own queries
+with sqlc, as the example shows.
 
 ## Upgrade from 0.11.x to 0.12.0
 

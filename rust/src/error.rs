@@ -81,6 +81,7 @@ pub enum CancelReason {
 /// PostgreSQL's retained-key conflict diagnosis for SQLSTATE `P1001`.
 #[derive(Clone, Debug, Default, Deserialize, PartialEq, Eq)]
 #[serde(default, rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct IdempotencyConflictDetails {
     pub scope: String,
     pub key_preview: String,
@@ -96,6 +97,7 @@ pub struct IdempotencyConflictDetails {
 /// PostgreSQL's bounded description of a rejected cycle, SQLSTATE `P1003`.
 #[derive(Clone, Debug, Default, Deserialize, PartialEq, Eq)]
 #[serde(default, rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct DependencyCycleDetails {
     pub dependent_task_id: String,
     pub prerequisite_task_id: String,
@@ -106,6 +108,7 @@ pub struct DependencyCycleDetails {
 /// PostgreSQL's dependency limit diagnosis, SQLSTATE `P1005`.
 #[derive(Clone, Debug, Default, Deserialize, PartialEq, Eq)]
 #[serde(default, rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct DependencyLimitDetails {
     pub task_id: String,
     /// `prerequisites`, `dependents`, or `unresolved_dependents`.
@@ -116,6 +119,7 @@ pub struct DependencyLimitDetails {
 /// PostgreSQL's retained-request conflict diagnosis for a redrive, SQLSTATE `P1002`.
 #[derive(Clone, Debug, Default, Deserialize, PartialEq, Eq)]
 #[serde(default, rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct RedriveConflictDetails {
     pub source_task_id: String,
     pub existing_target_task_id: Option<String>,
@@ -138,6 +142,7 @@ struct FastTierDetails {
 /// PostgreSQL's retained-request conflict diagnosis for a queue purge, SQLSTATE `P1006`.
 #[derive(Clone, Debug, Default, Deserialize, PartialEq, Eq)]
 #[serde(default, rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct PurgeConflictDetails {
     pub queue: String,
     pub request_id_preview: String,
@@ -151,6 +156,7 @@ pub struct PurgeConflictDetails {
 /// PostgreSQL's refusal of a task group add, SQLSTATE `P1008`.
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct TaskGroupClosedDetails {
     pub group_id: String,
     /// `open`, `sealed`, or `finished`.
@@ -169,6 +175,7 @@ impl Default for TaskGroupClosedDetails {
 /// PostgreSQL's task group member limit diagnosis, SQLSTATE `P1009`.
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct TaskGroupLimitDetails {
     pub group_id: String,
     pub limit: i64,
@@ -190,6 +197,7 @@ impl Default for TaskGroupLimitDetails {
 /// PostgreSQL's diagnosis of an enqueue idempotency hit outside the group, SQLSTATE `P1010`.
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct TaskGroupMembershipConflictDetails {
     pub group_id: String,
     pub task_id: String,

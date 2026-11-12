@@ -556,7 +556,9 @@ connections. The Go worker supports bounded multi-queue dispatch, fenced ownersh
 cancellation, durable checkpoints, durable timers, and graceful drain. Repository tests compile and
 exercise external module consumers before a release can create the module tag. The Rust crate runs
 every `protocol/v1` fixture category through `rust/tests/protocol_conformance.rs`, and
-`rust/tests/conformance/expected-unsupported.json` lists no exception.
+`rust/tests/conformance/expected-unsupported.json` lists no exception. The unit tests of the crate
+run the contract fixtures and the runtime fixtures that read private worker state
+(`rust/tests/crate_private`).
 
 ## Release process
 

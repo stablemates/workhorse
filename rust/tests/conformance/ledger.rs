@@ -17,6 +17,9 @@ pub enum Outcome {
     Unsupported(String),
     /// The runner could not reach the database the fixture needs.
     Skipped(String),
+    /// The unit tests of the crate run the fixture, because its executor reads state that the
+    /// crate keeps private.
+    InCrate(String),
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -84,6 +87,11 @@ pub fn reconcile(
             (Outcome::Failed(reason) | Outcome::Unsupported(reason), None) => {
                 problems.push(format!("{fixture} does not pass and is not listed: {reason}"))
             }
+            (Outcome::InCrate(_), Some(entry)) => problems.push(format!(
+                "{fixture} runs in the unit tests of the crate, which do not read the \
+                 expected-unsupported list; remove it from the list ({})",
+                entry.issue
+            )),
             _ => {}
         }
     }

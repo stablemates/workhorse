@@ -41,6 +41,7 @@ pub(crate) use string_enum;
 
 string_enum!(
     /// PostgreSQL's durable disposition for one enqueue request.
+    #[non_exhaustive]
     EnqueueOutcome {
         Accepted => "accepted",
         Replayed => "replayed",
@@ -52,6 +53,7 @@ string_enum!(
 
 string_enum!(
     /// Why PostgreSQL retained a debounced task instead of replacing it.
+    #[non_exhaustive]
     EnqueueNonReplaceableReason {
         IncompatibleKeyMode => "incompatible_key_mode",
         NotPending => "not_pending",
@@ -87,6 +89,7 @@ string_enum!(
 
 string_enum!(
     /// PostgreSQL's disposition for a cancellation request.
+    #[non_exhaustive]
     CancelStatus {
         Canceled => "canceled",
         CancelRequested => "cancel_requested",
@@ -97,6 +100,7 @@ string_enum!(
 
 string_enum!(
     /// PostgreSQL's durable lifecycle state for a task.
+    #[non_exhaustive]
     TaskState {
         Blocked => "blocked",
         Scheduled => "scheduled",
@@ -110,6 +114,7 @@ string_enum!(
 
 string_enum!(
     /// PostgreSQL's disposition for a delivered signal.
+    #[non_exhaustive]
     SignalDeliveryStatus {
         Delivered => "delivered",
         Duplicate => "duplicate",
@@ -122,6 +127,7 @@ string_enum!(
 
 string_enum!(
     /// PostgreSQL's disposition for a human wait completion.
+    #[non_exhaustive]
     HumanWaitCompletionStatus {
         Completed => "completed",
         Duplicate => "duplicate",
@@ -135,6 +141,7 @@ string_enum!(
 /// Retains one canonical request under a scoped key.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct Idempotency {
     pub key: String,
     pub scope: String,
@@ -151,6 +158,7 @@ impl Idempotency {
 /// Replaces a pending keyed task during a PostgreSQL-owned window.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct Debounce {
     pub key: String,
     pub scope: String,
@@ -168,6 +176,7 @@ impl Debounce {
 /// Accepts at most one equivalent keyed task during a PostgreSQL-owned window.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct Throttle {
     pub key: String,
     pub scope: String,
@@ -184,6 +193,7 @@ impl Throttle {
 /// Prerequisite tasks and the terminal outcomes a dependent accepts from each.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct Dependencies {
     pub prerequisite_task_ids: Vec<Uuid>,
     pub on_success: DependencyTerminalPolicy,
@@ -191,8 +201,24 @@ pub struct Dependencies {
     pub on_cancellation: DependencyTerminalPolicy,
 }
 
+impl Dependencies {
+    /// Waits for `prerequisite_task_ids` and applies one policy to each terminal state of them.
+    pub fn new(
+        prerequisite_task_ids: Vec<Uuid>,
+        on_success: DependencyTerminalPolicy,
+        on_failure: DependencyTerminalPolicy,
+        on_cancellation: DependencyTerminalPolicy,
+    ) -> Self {
+        Self { prerequisite_task_ids, on_success, on_failure, on_cancellation }
+    }
+}
+
 /// Controls a task's initial dispatch and durable acceptance behaviour.
+///
+/// A later release can add a field, so a caller starts from `EnqueueOptions::default()` and sets the
+/// fields it needs.
 #[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
 pub struct EnqueueOptions {
     /// `None` uses the queue's default queue name.
     pub queue: Option<String>,
@@ -238,6 +264,7 @@ impl Default for EnqueueOptions {
 
 /// One task submitted through an atomic enqueue batch.
 #[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
 pub struct EnqueueRequest {
     pub task_type: String,
     pub payload: Value,
@@ -258,6 +285,7 @@ impl EnqueueRequest {
 
 /// A task's stable identity and PostgreSQL's durable enqueue disposition.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct EnqueueResult {
     pub task_id: Uuid,
     pub outcome: EnqueueOutcome,
@@ -267,6 +295,7 @@ pub struct EnqueueResult {
 
 /// Safe lifecycle metadata for a cancellation; payload and worker ownership stay private.
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct CancelResult {
     pub status: CancelStatus,
     pub task_id: Uuid,
@@ -280,6 +309,7 @@ pub struct CancelResult {
 
 /// Retry identity and audit attribution for a signal or human wait delivery.
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct DeliveryOptions {
     /// Between 1 and 512 UTF-8 bytes; a retry with the same key is a duplicate.
     pub idempotency_key: String,
@@ -295,6 +325,7 @@ impl DeliveryOptions {
 
 /// PostgreSQL's disposition for [`crate::Queue::send_signal`].
 #[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
 pub struct SignalDeliveryResult {
     pub status: SignalDeliveryStatus,
     pub task_id: Uuid,
@@ -306,6 +337,7 @@ pub struct SignalDeliveryResult {
 
 /// PostgreSQL's disposition for [`crate::Queue::complete_human_wait`].
 #[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
 pub struct HumanWaitCompletionResult {
     pub status: HumanWaitCompletionStatus,
     pub task_id: Uuid,
@@ -317,6 +349,7 @@ pub struct HumanWaitCompletionResult {
 
 /// The task created for each recurring occurrence.
 #[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
 pub struct ScheduledTask {
     pub task_type: String,
     pub payload: Value,
@@ -345,6 +378,7 @@ impl ScheduledTask {
 
 /// One desired recurring schedule.
 #[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
 pub struct ScheduleDefinition {
     pub name: String,
     /// A five-field cron expression.

@@ -12,6 +12,7 @@ use uuid::Uuid;
 use super::v1_generated as statements;
 use super::{ProcedureError, RpcError};
 use crate::queue::exactly_one;
+use crate::queue::Rows as _;
 use crate::sql_catalogue_generated as sql;
 use crate::{
     Admin, AdminAudit, BulkRedriveOptions, DeadLetterCursor, DeadLetterFilter, Error, Executor,
@@ -246,7 +247,7 @@ impl<E: Executor> Backend<E> {
         statement: &str,
         params: &[&(dyn ToSql + Sync)],
     ) -> Result<Vec<Row>, ProcedureError> {
-        let result = match self.executor().read_pool() {
+        let result = match self.executor().dashboard_read_pool() {
             Some(pool) => {
                 crate::queue::bounded_read(pool, &self.statement_timeout_ms, statement, params)
                     .await

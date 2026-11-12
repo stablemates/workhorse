@@ -20,16 +20,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let url = std::env::var("WORKHORSE_DATABASE_URL")?;
     let pool = Pool::builder(Manager::new(url.parse()?, NoTls)).max_size(10).build()?;
 
-    let worker = Worker::new(
-        pool,
-        WorkerOptions {
-            queues: vec!["orders".into()],
-            worker_id: Some("orders-worker".into()),
-            concurrency: 8,
-            shutdown_grace_period: Duration::from_secs(20),
-            ..Default::default()
-        },
-    )?;
+    let mut options = WorkerOptions::default();
+    options.queues = vec!["orders".into()];
+    options.worker_id = Some("orders-worker".into());
+    options.concurrency = 8;
+    options.shutdown_grace_period = Duration::from_secs(20);
+    let worker = Worker::new(pool, options)?;
     worker.handle("order.accepted", accept_order);
     run_worker_process(&worker).await?;
     Ok(())

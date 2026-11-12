@@ -150,21 +150,44 @@ func TestExamplesCompileAsExternalConsumers(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	// An example can keep application code of its own under `internal`, which another module cannot
+	// import. The consumer therefore gets the whole example, with the example's import paths moved
+	// into the consumer module, so the build reaches Workhorse only through its published API.
+	examplePaths := strings.NewReplacer(
+		`"github.com/stablemates/workhorse/go/examples/`, `"workhorse-examples/`,
+	)
 	compiled := 0
 	for _, entry := range entries {
 		if !entry.IsDir() {
 			continue
 		}
-		source, err := os.ReadFile(filepath.Join(exampleRoot, entry.Name(), "main.go"))
-		if err != nil {
+		if _, err := os.Stat(filepath.Join(exampleRoot, entry.Name(), "main.go")); err != nil {
 			t.Fatalf("read %s example: %v", entry.Name(), err)
 		}
-		target := filepath.Join(consumerRoot, entry.Name())
-		if err := os.Mkdir(target, 0o700); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(filepath.Join(target, "main.go"), source, 0o600); err != nil {
-			t.Fatal(err)
+		source := filepath.Join(exampleRoot, entry.Name())
+		err := filepath.WalkDir(source, func(path string, file os.DirEntry, err error) error {
+			if err != nil || file.IsDir() {
+				return err
+			}
+			if !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
+				return nil
+			}
+			relative, err := filepath.Rel(exampleRoot, path)
+			if err != nil {
+				return err
+			}
+			text, err := os.ReadFile(path)
+			if err != nil {
+				return err
+			}
+			target := filepath.Join(consumerRoot, relative)
+			if err := os.MkdirAll(filepath.Dir(target), 0o700); err != nil {
+				return err
+			}
+			return os.WriteFile(target, []byte(examplePaths.Replace(string(text))), 0o600)
+		})
+		if err != nil {
+			t.Fatalf("copy %s example: %v", entry.Name(), err)
 		}
 		compiled++
 	}
