@@ -539,6 +539,34 @@ the audit for each changed setting. Without it, the method calls the `_v1` funct
 new types are `PolicyChangeAudit` and `PolicyChangeOptions`. The demo settings controller now uses
 the option and no SQL of its own.
 
+### An enqueue call takes its locks in one order
+
+An `enqueue_many_v1` batch held a debounce member for task P and a plain member whose prerequisite D
+was a dependent of P. If D sorted below P, the batch locked D and then waited for P. A cancel, a
+queue purge, or a completion of P that rejected D locked P and then waited for D. PostgreSQL ended
+one transaction with SQLSTATE `40P01` (SM-2004). The batch now locks each task that is not blocked
+before each blocked task, so it locks P before D, as a resolver does. One case stays. A purge that
+waits between D and P in identity order can still end one transaction with `40P01`.
+
+At repeatable read or serializable, an enqueue creates the `queue_control` row of each new queue. A
+second transaction that creates the same row waits for the first. A group cancel held a member and
+then waited for the new row of a purge of its callback queue. A keyed group add held the new row and
+then waited for a key that an enqueue held, while the enqueue waited for the row. One transaction
+ended with `40P01` (SM-2006). Outside read committed, each enqueue call now takes its key locks,
+then its tier locks, then its row locks. Some cases that span two calls, or that start in a terminal
+transition, can still end with `40P01`. The transaction can then run again. A read committed enqueue
+takes no new lock and runs no new statement.
+
+A caller at repeatable read or serializable can see one changed answer. A `cancel_task_group_v1` and
+a completion of the last member of the same group can run at the same time. Before, the cancel
+waited for the member and then failed with SQLSTATE `40001`. Now one of the two transactions can end
+with `40P01`. Both answers tell the caller to run the call again. SM-2050 lists the cases that stay
+open.
+
+Migration 0103 (`0103-take-enqueue-locks-in-key-tier-row-order.sql`) moves the schema to version 102. It replaces the bodies of `lock_enqueue_prerequisites_internal_v1`, `enqueue_many_v1`,
+`add_task_group_members_v1`, and `cancel_task_group_v1`. It does not raise the SDK compatibility
+floor and changes no rows. Run `workhorse schema migrate`.
+
 ## 0.12.0 — 2026-11-07
 
 The npm packages, Python distribution, Go module, Rust crate, Ruby gem, JVM artifacts, and .NET

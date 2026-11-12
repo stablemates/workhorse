@@ -346,6 +346,17 @@ A `tasks` request whose envelope is not a JSON object, such as `[]`, `null`, or 
 `BAD_REQUEST` with the message `request envelope must be an object`, as each other procedure does
 (SM-2044).
 
+### An enqueue call takes its locks in one order
+
+Migration 0103 (`0103-take-enqueue-locks-in-key-tier-row-order.sql`) moves the schema to version 102. A batch that replaces a debounced task and names a dependent of that task as a prerequisite no
+longer deadlocks with a cancel or a rejecting completion of the task. At repeatable read or
+serializable, a group cancel and a keyed group add no longer deadlock with a purge or an enqueue
+that creates the same `queue_control` row. A few cases can still end one transaction with `40P01`,
+as the root changelog states, and that transaction can run again. At repeatable read, a group cancel
+and the completion of the last member of the group can now end one transaction with `40P01`, where
+the cancel failed with `40001` before. A read committed enqueue takes no new lock. The migration
+does not raise the SDK compatibility floor.
+
 ## 0.12.0 — 2026-11-07
 
 The npm packages, Python distribution, Go module, Rust crate, Ruby gem, JVM artifacts, and .NET

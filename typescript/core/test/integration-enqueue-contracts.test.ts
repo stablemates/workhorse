@@ -1,5 +1,5 @@
 import { setTimeout as sleep } from "node:timers/promises";
-import type { PoolClient, QueryResultRow } from "pg";
+import { Client, type PoolClient, type QueryResultRow } from "pg";
 import { describe, expect, expectTypeOf, it, vi } from "vitest";
 import {
   DEFAULT_IDEMPOTENCY_SCOPE,
@@ -27,8 +27,16 @@ import {
 import { jsonbTextBytes } from "../src/queue/enqueue-contracts.js";
 import { createIntegrationTestContext } from "./support/integration.js";
 
-const { pool, queue, safeKeyDigest, safeKeyPreview, admin, adminAudit, waitForDatabaseCondition } =
-  createIntegrationTestContext(import.meta.url);
+const {
+  pool,
+  queue,
+  databaseUrl,
+  safeKeyDigest,
+  safeKeyPreview,
+  admin,
+  adminAudit,
+  waitForDatabaseCondition,
+} = createIntegrationTestContext(import.meta.url);
 
 /**
  * Makes a debounced task ready while its debounce identity stays live. That is the state a manual
@@ -3153,6 +3161,181 @@ function debounceRequest(
   };
 }
 
+interface Session {
+  client: Client;
+  pid: number;
+}
+
+/** A connection of its own, outside the pool, and its backend process ID. */
+async function openSession(): Promise<Session> {
+  const client = new Client({ connectionString: databaseUrl });
+  await client.connect();
+  const result = await client.query<{ pid: number }>("SELECT pg_backend_pid() AS pid");
+  return { client, pid: result.rows[0]!.pid };
+}
+
+async function closeSessions(sessions: readonly Session[]): Promise<void> {
+  for (const session of sessions) {
+    await session.client.query("ROLLBACK").catch(() => undefined);
+    await session.client.end().catch(() => undefined);
+  }
+}
+
+/** Waits until the backend waits for the transaction that holds a row it locks. */
+async function waitForRowLock(pid: number): Promise<void> {
+  await waitForDatabaseCondition(async () => {
+    const result = await pool.query<{ waiting: boolean }>(
+      `SELECT EXISTS (
+         SELECT 1 FROM pg_locks
+          WHERE pid = $1 AND NOT granted AND locktype IN ('transactionid', 'tuple')
+       ) AS waiting`,
+      [pid],
+    );
+    return result.rows[0]!.waiting;
+  });
+}
+
+type Settled = { ok: true; rows: unknown[] } | { ok: false; code: string | undefined };
+
+/** The rows of a statement, or the SQLSTATE that ended it. */
+function settle(promise: Promise<{ rows: unknown[] }>): Promise<Settled> {
+  return promise.then(
+    (result) => ({ ok: true as const, rows: result.rows }),
+    (error: { code?: string }) => ({ ok: false as const, code: error.code }),
+  );
+}
+
+interface DebouncedPair {
+  prerequisiteId: string;
+  dependentId: string;
+  key: string;
+}
+
+/**
+ * A debounced task P and a blocked dependent D of P, with D before P in identity order. Each
+ * attempt makes a new pair, so each attempt succeeds with a chance of one half or more. With
+ * `rejectOnSuccess`, a success of P cancels D.
+ */
+async function debouncedPair(
+  queueName: string,
+  options: { rejectOnSuccess?: boolean; dependentBelow?: string; prerequisiteAbove?: string } = {},
+): Promise<DebouncedPair> {
+  for (let attempt = 0; attempt < 128; attempt += 1) {
+    const key = `${queueName}-${attempt}`;
+    const [prerequisite] = await enqueueMany(pool, [
+      debounceRequest(queueName, key, 1, { windowMs: 60_000, schedule: "reset" }),
+    ]);
+    const prerequisiteId = prerequisite!.task_id;
+    const [dependent] = await enqueueMany(pool, [
+      options.rejectOnSuccess
+        ? {
+            queue: queueName,
+            type: "after",
+            payload: {},
+            dependencies: {
+              prerequisiteTaskIds: [prerequisiteId],
+              onSuccess: "cancel",
+              onFailure: "fail",
+              onCancellation: "cancel",
+            },
+          }
+        : { queue: queueName, type: "after", payload: {}, prerequisiteTaskId: prerequisiteId },
+    ]);
+    const dependentId = dependent!.task_id;
+    if (
+      dependentId < prerequisiteId &&
+      dependentId < (options.dependentBelow ?? "g") &&
+      prerequisiteId > (options.prerequisiteAbove ?? "")
+    ) {
+      return { prerequisiteId, dependentId, key };
+    }
+  }
+  throw new Error(`no dependent sorted before its prerequisite in ${queueName}`);
+}
+
+/** A same-key debounce request for P and a plain request whose prerequisite is D. */
+function batchRequests(queueName: string, key: string, dependentId: string) {
+  return [
+    debounceRequest(queueName, key, 2, { windowMs: 60_000, schedule: "reset" }),
+    {
+      queue: `${queueName}-next`,
+      type: "after-dependent",
+      payload: {},
+      prerequisiteTaskId: dependentId,
+    },
+  ];
+}
+
+/** The batch rows after P became terminal: P is not replaceable, and the plain member is accepted. */
+function terminalBatchRows(pair: DebouncedPair) {
+  return {
+    ok: true,
+    rows: [
+      {
+        ordinal: 1,
+        task_id: pair.prerequisiteId,
+        outcome: "non_replaceable",
+        reason: "not_pending",
+      },
+      { ordinal: 2, outcome: "accepted" },
+    ],
+  };
+}
+
+/**
+ * Runs a terminal transition of P while a batch waits for P. The operation holds the runtime row of
+ * P first, as its own first statement takes it. Then its resolver locks the dependent D.
+ */
+async function runAgainstDebouncedTask(operation: "cancel" | "purge" | "completion") {
+  const queueName = `dependent-batch-${operation}`;
+  const pair = await debouncedPair(queueName, { rejectOnSuccess: operation === "completion" });
+  if (operation === "completion") await releaseInsideDebounceWindow(pair.prerequisiteId);
+  const liveTasks = (await queueTasks(queueName)).filter((task) => task.state !== null).length;
+  const holder = await openSession();
+  const requester = await openSession();
+  try {
+    await holder.client.query("BEGIN");
+    await holder.client.query(
+      "SELECT 1 FROM workhorse.task_runtime WHERE task_id = $1 FOR UPDATE",
+      [pair.prerequisiteId],
+    );
+    const pending = settle(
+      requester.client.query(
+        "SELECT ordinal, task_id, outcome, reason FROM workhorse.enqueue_many_v1($1::jsonb) ORDER BY ordinal",
+        [JSON.stringify(batchRequests(queueName, pair.key, pair.dependentId))],
+      ),
+    );
+    await waitForRowLock(requester.pid);
+    let operated: { rows: unknown[] };
+    if (operation === "cancel") {
+      operated = await holder.client.query("SELECT status FROM workhorse.cancel_v1($1::uuid)", [
+        pair.prerequisiteId,
+      ]);
+    } else if (operation === "purge") {
+      operated = await holder.client.query(
+        "SELECT deleted_count FROM workhorse.purge_queue_v1($1, 'operator', 'purge', 'dependent-purge')",
+        [queueName],
+      );
+    } else {
+      const claimed = await holder.client.query<{ task_id: string; fence_token: string }>(
+        "SELECT task_id, fence_token FROM workhorse.claim_v1($1, 'dependent-worker', 30000)",
+        [queueName],
+      );
+      if (claimed.rows[0]?.task_id !== pair.prerequisiteId) {
+        throw new Error("the claim did not return the debounced task");
+      }
+      operated = await holder.client.query(
+        "SELECT workhorse.complete_v1($1, 'dependent-worker', $2, 'null'::jsonb) AS completed",
+        [pair.prerequisiteId, claimed.rows[0].fence_token],
+      );
+    }
+    await holder.client.query("COMMIT");
+    return { pair, liveTasks, operated: operated.rows, settled: await pending };
+  } finally {
+    await closeSessions([holder, requester]);
+  }
+}
+
 describe("debounce and enqueue under lock waits", () => {
   it("decides a debounce request after its lock wait and writes no second task", async () => {
     const window = { windowMs: 1_000, schedule: "preserve" } as const;
@@ -3540,5 +3723,159 @@ describe("debounce and enqueue under lock waits", () => {
     expect(one!.ready_at.getTime()).toBeGreaterThanOrEqual(lockReleasedAt.getTime());
     expect(two!.ready_at.getTime()).toBe(one!.ready_at.getTime());
     expect(two!.run_at.getTime()).toBe(one!.run_at.getTime());
+  });
+
+  // SM-2004: a batch with a debounce member for task P and a plain member whose prerequisite D is a
+  // dependent of P. D sorts before P. The batch locks the keyed task P before the blocked
+  // prerequisite D, as the resolver of a terminal transition of P locks P before D.
+  describe("a batch that names a dependent of its debounced task", () => {
+    it("lets the batch wait for a cancel of the debounced task without a deadlock", async () => {
+      const run = await runAgainstDebouncedTask("cancel");
+      expect(run.operated).toEqual([{ status: "canceled" }]);
+      expect(run.settled).toMatchObject(terminalBatchRows(run.pair));
+      await expect(admin.getTask(run.pair.dependentId)).resolves.toMatchObject({
+        state: "canceled",
+      });
+    });
+
+    it("lets the batch wait for a purge of the debounced task without a deadlock", async () => {
+      const run = await runAgainstDebouncedTask("purge");
+      // Each pair attempt leaves its tasks in the queue, so the purge deletes all of them.
+      expect(run.operated).toEqual([{ deleted_count: run.liveTasks }]);
+      // The purge deleted D, so the plain member names a task that does not exist.
+      expect(run.settled).toEqual({ ok: false, code: "P0001" });
+    });
+
+    it("lets the batch wait for a completion that rejects the dependent without a deadlock", async () => {
+      const run = await runAgainstDebouncedTask("completion");
+      expect(run.operated).toEqual([{ completed: true }]);
+      expect(run.settled).toMatchObject(terminalBatchRows(run.pair));
+      await expect(admin.getTask(run.pair.dependentId)).resolves.toMatchObject({
+        state: "canceled",
+      });
+    });
+
+    // Two batches, each with a debounce member and a plain member whose prerequisite is the keyed
+    // task of the other batch. Neither task is blocked, so both batches lock them in identity
+    // order, and both finish.
+    it("lets two batches that name each other's debounced task finish", async () => {
+      const window = { windowMs: 60_000, schedule: "reset" } as const;
+      const roots = await enqueueMany(pool, [
+        debounceRequest("dependent-batch-cross", "cross-p", 1, window),
+        debounceRequest("dependent-batch-cross", "cross-q", 1, window),
+      ]);
+      const [p, q] = roots.map((row) => row.task_id);
+      const holder = await openSession();
+      const first = await openSession();
+      const second = await openSession();
+      try {
+        await holder.client.query("BEGIN");
+        await holder.client.query(
+          "SELECT 1 FROM workhorse.task_runtime WHERE task_id = ANY($1::uuid[]) ORDER BY task_id FOR UPDATE",
+          [[p, q]],
+        );
+        const firstBatch = settle(
+          first.client.query(
+            "SELECT outcome FROM workhorse.enqueue_many_v1($1::jsonb) ORDER BY ordinal",
+            [
+              JSON.stringify([
+                debounceRequest("dependent-batch-cross", "cross-p", 2, window),
+                {
+                  queue: "dependent-batch-cross-p",
+                  type: "after",
+                  payload: {},
+                  prerequisiteTaskId: q,
+                },
+              ]),
+            ],
+          ),
+        );
+        await waitForRowLock(first.pid);
+        const secondBatch = settle(
+          second.client.query(
+            "SELECT outcome FROM workhorse.enqueue_many_v1($1::jsonb) ORDER BY ordinal",
+            [
+              JSON.stringify([
+                debounceRequest("dependent-batch-cross", "cross-q", 2, window),
+                {
+                  queue: "dependent-batch-cross-q",
+                  type: "after",
+                  payload: {},
+                  prerequisiteTaskId: p,
+                },
+              ]),
+            ],
+          ),
+        );
+        await waitForRowLock(second.pid);
+        await holder.client.query("COMMIT");
+
+        const expected = { ok: true, rows: [{ outcome: "replaced" }, { outcome: "accepted" }] };
+        await expect(firstBatch).resolves.toEqual(expected);
+        await expect(secondBatch).resolves.toEqual(expected);
+      } finally {
+        await closeSessions([holder, first, second]);
+      }
+    });
+
+    // A known case that stays open (SM-2050). A purge locks the rows of its queue in identity
+    // order, and a resolver locks a prerequisite before its dependents. If D sorts before P in the
+    // purged queue, no order of the batch agrees with both. The purge holds D and waits for a row X
+    // between D and P. The batch locks P and waits for D, and the purge then waits for P.
+    // PostgreSQL ends one transaction with 40P01. Before SM-2004 the batch locked D first and
+    // waited for the purge, and the same batch deadlocked with a cancel of P instead.
+    it("ends one transaction with a deadlock when a purge holds the dependent before the debounced task", async () => {
+      const queueName = "dependent-batch-purge-order";
+      const pair = await debouncedPair(queueName, { dependentBelow: "4", prerequisiteAbove: "b" });
+      let betweenId: string | undefined;
+      for (let attempt = 0; attempt < 128 && betweenId === undefined; attempt += 1) {
+        const id = await queue.enqueue("between", { attempt }, { queue: queueName });
+        if (id > pair.dependentId && id < pair.prerequisiteId) betweenId = id;
+      }
+      expect(betweenId).toBeDefined();
+      const tasksBefore = await queueTasks(queueName);
+
+      const holder = await openSession();
+      const purger = await openSession();
+      const requester = await openSession();
+      try {
+        await holder.client.query("BEGIN");
+        await holder.client.query(
+          "SELECT 1 FROM workhorse.task_runtime WHERE task_id = $1 FOR KEY SHARE",
+          [betweenId],
+        );
+        // The purge locks D and waits for X.
+        const purge = settle(
+          purger.client.query(
+            "SELECT deleted_count FROM workhorse.purge_queue_v1($1, 'operator', 'purge', 'order-purge')",
+            [queueName],
+          ),
+        );
+        await waitForRowLock(purger.pid);
+        // The batch locks P and waits for D.
+        const pending = settle(
+          requester.client.query(
+            "SELECT ordinal, task_id, outcome FROM workhorse.enqueue_many_v1($1::jsonb) ORDER BY ordinal",
+            [JSON.stringify(batchRequests(queueName, pair.key, pair.dependentId))],
+          ),
+        );
+        await waitForRowLock(requester.pid);
+        await holder.client.query("ROLLBACK");
+
+        const results = [await purge, await pending];
+        expect(results.filter((result) => !result.ok)).toEqual([{ ok: false, code: "40P01" }]);
+        // No task state is wrong. If the purge committed, it removed every task of the queue. If
+        // it ended, every task stays, and the batch replaced the definition of P.
+        const remaining = await queueTasks(queueName);
+        const replaced = { id: pair.prerequisiteId, payload: { rev: 2 }, state: "scheduled" };
+        expect(remaining).toEqual(
+          results[0]!.ok
+            ? []
+            : tasksBefore.map((task) => (task.id === pair.prerequisiteId ? replaced : task)),
+        );
+      } finally {
+        await closeSessions([holder, purger, requester]);
+      }
+    });
   });
 });

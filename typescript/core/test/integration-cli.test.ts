@@ -180,8 +180,9 @@ describe("an invalid Workhorse index", () => {
   it("stops migration 0102 at its guard, and schema migrate prints the instruction of the guard", async () => {
     await leaveInvalidShardIndex();
     // Bring the schema back to the starting version of migration 0102, with its record removed.
-    const recorded = await pool.query<{ description: string }>(
-      "DELETE FROM workhorse.schema_migration WHERE version = 101 RETURNING description",
+    // Remove the record of each step from 0102 on, so a migrate run applies each of them again.
+    const recorded = await pool.query<{ version: number; description: string }>(
+      "DELETE FROM workhorse.schema_migration WHERE version >= 101 RETURNING version, description",
     );
     await pool.query("UPDATE workhorse.schema_version SET version = 100");
     try {
@@ -217,8 +218,8 @@ describe("an invalid Workhorse index", () => {
       ]);
       for (const row of recorded.rows) {
         await pool.query(
-          "INSERT INTO workhorse.schema_migration (version, description) VALUES (101, $1) ON CONFLICT DO NOTHING",
-          [row.description],
+          "INSERT INTO workhorse.schema_migration (version, description) VALUES ($1, $2) ON CONFLICT DO NOTHING",
+          [row.version, row.description],
         );
       }
     }
@@ -227,8 +228,9 @@ describe("an invalid Workhorse index", () => {
   // DETAIL of a constraint violation quotes the failing row, and a row can hold a credential.
   it("withholds a DETAIL that quotes a row when a step fails", async () => {
     const sentinel = "postgres://probe:REVIEW_SECRET_SENTINEL@db.invalid/example";
-    const recorded = await pool.query<{ description: string }>(
-      "DELETE FROM workhorse.schema_migration WHERE version = 101 RETURNING description",
+    // Remove the record of each step from 0102 on, so a migrate run applies each of them again.
+    const recorded = await pool.query<{ version: number; description: string }>(
+      "DELETE FROM workhorse.schema_migration WHERE version >= 101 RETURNING version, description",
     );
     await pool.query("UPDATE workhorse.schema_version SET version = 100");
     await pool.query("ALTER TABLE workhorse.schema_version ADD COLUMN probe_value text");
@@ -252,8 +254,8 @@ describe("an invalid Workhorse index", () => {
       ]);
       for (const row of recorded.rows) {
         await pool.query(
-          "INSERT INTO workhorse.schema_migration (version, description) VALUES (101, $1) ON CONFLICT DO NOTHING",
-          [row.description],
+          "INSERT INTO workhorse.schema_migration (version, description) VALUES ($1, $2) ON CONFLICT DO NOTHING",
+          [row.version, row.description],
         );
       }
     }
@@ -262,8 +264,9 @@ describe("an invalid Workhorse index", () => {
   // A data exception quotes the input in its message, for example a stored value that a step casts.
   it("withholds the message of a data exception when a step fails", async () => {
     const sentinel = "postgres://probe:REVIEW_SECRET_SENTINEL@db.invalid/example";
-    const recorded = await pool.query<{ description: string }>(
-      "DELETE FROM workhorse.schema_migration WHERE version = 101 RETURNING description",
+    // Remove the record of each step from 0102 on, so a migrate run applies each of them again.
+    const recorded = await pool.query<{ version: number; description: string }>(
+      "DELETE FROM workhorse.schema_migration WHERE version >= 101 RETURNING version, description",
     );
     await pool.query("UPDATE workhorse.schema_version SET version = 100");
     await pool.query(`CREATE FUNCTION workhorse.probe_cast() RETURNS trigger LANGUAGE plpgsql AS $$
@@ -293,8 +296,8 @@ describe("an invalid Workhorse index", () => {
       ]);
       for (const row of recorded.rows) {
         await pool.query(
-          "INSERT INTO workhorse.schema_migration (version, description) VALUES (101, $1) ON CONFLICT DO NOTHING",
-          [row.description],
+          "INSERT INTO workhorse.schema_migration (version, description) VALUES ($1, $2) ON CONFLICT DO NOTHING",
+          [row.version, row.description],
         );
       }
     }
