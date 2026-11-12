@@ -9,7 +9,7 @@ from typing import cast
 import pytest
 from psycopg.rows import tuple_row
 
-from workhorse import dashboard
+from workhorse import admin, dashboard
 from workhorse._version import WORKHORSE_VERSION
 from workhorse.dashboard import DashboardHost, DashboardPrincipal, DashboardResponse
 from workhorse.errors import ProtocolCompatibilityError
@@ -31,8 +31,11 @@ def _request(
     body: object | None = None,
     origin: str | None = None,
     http_host: str = "example.test",
+    raw_body: bytes | None = None,
 ) -> tuple[str, dict[str, str], bytes]:
-    payload = b"" if body is None else json.dumps(body).encode()
+    payload = (
+        raw_body if raw_body is not None else b"" if body is None else json.dumps(body).encode()
+    )
     environ: dict[str, object] = {
         "REQUEST_METHOD": method,
         "PATH_INFO": path,
@@ -419,3 +422,174 @@ def test_dashboard_host_reports_a_compatibility_refusal(monkeypatch: pytest.Monk
     assert json.loads(body) == {
         "error": "SQL protocol compatibility check refused mutation: schema-too-old"
     }
+
+
+_AUDIT = {"actor": "browser", "reason": "test", "requestId": "r1"}
+_INTERNAL_ERROR = {
+    "json": {
+        "defined": False,
+        "code": "INTERNAL_SERVER_ERROR",
+        "status": 500,
+        "message": "Internal server error",
+    }
+}
+
+
+@pytest.mark.parametrize("error_type", [ValueError, json.JSONDecodeError])
+def test_an_application_value_error_gets_the_fixed_500_answer(
+    error_type: type[ValueError], caplog: pytest.LogCaptureFixture
+) -> None:
+    marker = "application-marker db.internal:5432"
+
+    def fail(_input: object, _actor: str) -> object:
+        if error_type is json.JSONDecodeError:
+            raise json.JSONDecodeError(marker, "{}", 0)
+        raise error_type(marker)
+
+    host = DashboardHost(
+        cast(object, _Connection()),
+        authorize=lambda _: True,
+        enqueue_test=fail,
+        _skip_compatibility_check=True,
+    )
+    with caplog.at_level("ERROR", logger="workhorse.dashboard"):
+        status, _, body = _request(
+            host,
+            "/workhorse/rpc/dashboard/enqueueTest",
+            method="POST",
+            origin="https://example.test",
+            body={"json": {"kind": "success", "audit": _AUDIT}},
+        )
+    assert status == "500 Internal Server Error"
+    assert json.loads(body) == _INTERNAL_ERROR
+    assert b"db.internal" not in body
+    assert any(
+        "db.internal:5432" in (record.exc_text or "")
+        for record in caplog.records
+        if record.name == "workhorse.dashboard"
+    )
+
+
+def test_the_host_keeps_the_message_of_its_own_input_errors() -> None:
+    host = _host()
+    status, _, body = _request(
+        host, "/workhorse/rpc/dashboard/meta", method="POST", raw_body=b'{"json":'
+    )
+    assert status == "400 Bad Request"
+    error = json.loads(body)["json"]
+    assert error["code"] == "BAD_REQUEST"
+    assert error["message"].startswith("Expecting value")
+
+    status, _, body = _request(
+        host, "/workhorse/rpc/dashboard/tasks", method="POST", body={"json": {"page": 0}}
+    )
+    assert status == "400 Bad Request"
+    assert json.loads(body)["json"]["message"] == "Input validation failed"
+    assert json.loads(body)["json"]["data"]["issues"][0]["path"] == ["page"]
+
+
+@pytest.mark.parametrize("envelope", [b"[]", b"null", b"1"])
+def test_a_tasks_envelope_that_is_not_an_object_gets_400(envelope: bytes) -> None:
+    host = DashboardHost(
+        cast(object, _Connection()), authorize=lambda _: True, _skip_compatibility_check=True
+    )
+    status, headers, body = _request(
+        host, "/workhorse/rpc/dashboard/tasks", method="POST", raw_body=envelope
+    )
+    assert status == "400 Bad Request"
+    assert headers["Content-Type"].startswith("application/json")
+    assert json.loads(body) == {
+        "json": {
+            "defined": False,
+            "code": "BAD_REQUEST",
+            "status": 400,
+            "message": "request envelope must be an object",
+        }
+    }
+
+
+class _ValueErrorConnection(_Connection):
+    def cursor(self, **_options: object) -> object:
+        raise ValueError("driver-marker db.internal:5432")
+
+
+def test_a_driver_value_error_in_a_built_in_procedure_gets_the_fixed_500_answer(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    host = DashboardHost(
+        cast(object, _ValueErrorConnection()),
+        authorize=lambda _: True,
+        _skip_compatibility_check=True,
+    )
+    with caplog.at_level("ERROR", logger="workhorse.dashboard"):
+        status, _, body = _request(
+            host, "/workhorse/rpc/dashboard/queues", method="POST", body={"json": None}
+        )
+    assert status == "500 Internal Server Error"
+    assert json.loads(body) == _INTERNAL_ERROR
+    assert any(
+        "db.internal:5432" in (record.exc_text or "")
+        for record in caplog.records
+        if record.name == "workhorse.dashboard"
+    )
+
+
+def test_a_workhorse_refusal_in_a_built_in_procedure_keeps_its_message(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def refuse(_input: object, _actor: str) -> object:
+        admin._validate_tier("slow")
+        return None
+
+    host = DashboardHost(
+        cast(object, _Connection()), authorize=lambda _: True, _skip_compatibility_check=True
+    )
+    monkeypatch.setitem(host._procedures, "queues", refuse)
+    status, _, body = _request(
+        host, "/workhorse/rpc/dashboard/queues", method="POST", body={"json": None}
+    )
+    assert status == "400 Bad Request"
+    assert json.loads(body)["json"]["message"] == "tier must be 'fast' or 'full'"
+
+
+class _DeletedCountCursor:
+    """Answers each statement with one ``deleted_count`` row that holds text, not a number."""
+
+    description = (("deleted_count",),)
+
+    def __enter__(self) -> _DeletedCountCursor:
+        return self
+
+    def __exit__(self, *_exc: object) -> None:
+        return None
+
+    def execute(self, *_args: object, **_kwargs: object) -> None:
+        return None
+
+    def fetchall(self) -> list[tuple[object, ...]]:
+        return [("stored-marker db.internal:5432",)]
+
+
+class _DeletedCountConnection(_Connection):
+    def cursor(self, **_options: object) -> object:
+        return _DeletedCountCursor()
+
+
+def test_a_runtime_conversion_error_in_a_built_in_procedure_gets_the_fixed_500_answer(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(admin, "_assert_sync_compatible", lambda _executor: None)
+    host = DashboardHost(
+        cast(object, _DeletedCountConnection()),
+        authorize=lambda _: True,
+        _skip_compatibility_check=True,
+    )
+    status, _, body = _request(
+        host,
+        "/workhorse/rpc/dashboard/purgeQueue",
+        method="POST",
+        origin="https://example.test",
+        body={"json": {"queue": "mail", "audit": _AUDIT}},
+    )
+    assert status == "500 Internal Server Error", body
+    assert json.loads(body) == _INTERNAL_ERROR

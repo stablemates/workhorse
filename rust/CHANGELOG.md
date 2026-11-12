@@ -293,6 +293,13 @@ of the whole queue. A heartbeat stays a HOT update. The schema moves to version 
 stays 99. If the build fails, drop the invalid index with `DROP INDEX CONCURRENTLY IF EXISTS
 workhorse.task_runtime_active_queue_shard_idx` and run `workhorse schema migrate` again.
 
+### The dashboard answers an unreadable request body with a fixed message
+
+If the request body stream of a dashboard RPC fails, the dashboard now logs the error and answers
+400 `BAD_REQUEST` with the message `Malformed request. Ensure the request body is properly
+formatted and the 'Content-Type' header is set correctly.` A body above the size limit keeps its
+answer (SM-2043).
+
 ## 0.12.0 — 2026-11-07
 
 The npm packages, Python distribution, Go module, Rust crate, Ruby gem, JVM artifacts, and .NET

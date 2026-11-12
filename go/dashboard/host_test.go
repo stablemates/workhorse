@@ -5,10 +5,12 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"regexp"
 	"strings"
 	"testing"
@@ -359,5 +361,82 @@ func TestHandlerReportsACompatibilityRefusal(t *testing.T) {
 	if page.Code != http.StatusServiceUnavailable ||
 		!strings.Contains(page.Body.String(), "refused mutation: schema-too-old") {
 		t.Fatalf("page = %d %s", page.Code, page.Body.String())
+	}
+}
+
+type failingBody struct{ err error }
+
+func (body failingBody) Read([]byte) (int, error) { return 0, body.err }
+
+// A body that the host cannot read gets a fixed message. The text of the reader's error can name
+// a path or an address, so it stays in the log. The JSON decoder keeps its own messages.
+func TestHandlerAnswersAnUnreadableBodyWithAFixedMessage(t *testing.T) {
+	var logged bytes.Buffer
+	previous := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logged, nil)))
+	t.Cleanup(func() { slog.SetDefault(previous) })
+	handler := testHandler(t, func(*http.Request) Authorization {
+		return Authorization{Principal: &Principal{Actor: "operator"}}
+	})
+	const marker = "body-reader-marker /srv/private/decoder.go:42"
+	post := func(body io.Reader) map[string]any {
+		t.Helper()
+		recorder := httptest.NewRecorder()
+		handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, "https://example.test/workhorse/rpc/dashboard/meta", body))
+		if recorder.Code != http.StatusBadRequest {
+			t.Fatalf("status = %d %s", recorder.Code, recorder.Body.String())
+		}
+		var envelope struct {
+			JSON map[string]any `json:"json"`
+		}
+		if err := json.Unmarshal(recorder.Body.Bytes(), &envelope); err != nil {
+			t.Fatal(err)
+		}
+		return envelope.JSON
+	}
+
+	for _, failure := range []error{
+		errors.New(marker),
+		fmt.Errorf("%s: %w", marker, io.EOF),
+		&json.UnmarshalTypeError{Value: marker, Type: reflect.TypeFor[int]()},
+	} {
+		unreadable := post(io.MultiReader(strings.NewReader(`{"json":`), failingBody{err: failure}))
+		if unreadable["code"] != "BAD_REQUEST" || unreadable["message"] != malformedRequest {
+			t.Fatalf("unreadable body with %T = %v", failure, unreadable)
+		}
+	}
+	if !strings.Contains(logged.String(), marker) {
+		t.Fatalf("log = %q", logged.String())
+	}
+	if syntax := post(strings.NewReader(`{"json":}`)); syntax["message"] != "invalid character '}' looking for beginning of value" {
+		t.Fatalf("syntax error = %v", syntax)
+	}
+	if truncated := post(strings.NewReader(`{"json":`)); truncated["message"] != "unexpected EOF" {
+		t.Fatalf("truncated body = %v", truncated)
+	}
+}
+
+// A procedure error that is not a deliberate RPCError gets the fixed 500 answer, because its text
+// can name a path or an address.
+func TestHandlerAnswersAnUnexpectedProcedureErrorWithAFixed500(t *testing.T) {
+	handler, err := newHandler(HandlerOptions{
+		Executor: rejectingExecutor{},
+		Authorize: func(*http.Request) Authorization {
+			return Authorization{Principal: &Principal{Actor: "operator"}}
+		},
+		Procedures: map[string]Procedure{
+			"meta": func(context.Context, any, string) (any, error) {
+				return nil, errors.New("procedure-marker db.internal:5432")
+			},
+		},
+	}, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, "https://example.test/workhorse/rpc/dashboard/meta", strings.NewReader(`{}`)))
+	want := `{"json":{"code":"INTERNAL_SERVER_ERROR","defined":false,"message":"Internal server error","status":500}}`
+	if recorder.Code != http.StatusInternalServerError || strings.TrimSpace(recorder.Body.String()) != want {
+		t.Fatalf("answer = %d %s", recorder.Code, recorder.Body.String())
 	}
 }

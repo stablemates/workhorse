@@ -526,3 +526,83 @@ async fn a_task_cursor_round_trips_without_losing_precision() {
     seen.dedup();
     assert_eq!(seen.len(), 26, "the second page repeated or skipped a task");
 }
+
+/// A body that the host cannot read gets a fixed message. The text of the body source's error can
+/// name a path or an address, so it stays in the log. The size limit and the JSON parser keep their
+/// own messages.
+#[tokio::test]
+async fn a_body_that_cannot_be_read_gets_a_fixed_message() {
+    let Some(database) = support::scratch_database("dashboard_http_body_error").await else {
+        return;
+    };
+    let mut options = options(pool(database.url()), "operator");
+    reporting_meta(&mut options);
+    let dashboard = dashboard::handler(options).unwrap();
+    let uri = "https://example.test/workhorse/rpc/dashboard/meta";
+
+    let marker = "body-source-marker /srv/private/decoder.rs:42";
+    let chunks: Vec<Result<&'static [u8], std::io::Error>> =
+        vec![Ok(b"{\"json\":".as_slice()), Err(std::io::Error::other(marker))];
+    let failing = Request::builder()
+        .method("POST")
+        .uri(uri)
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from_stream(futures_util::stream::iter(chunks)))
+        .unwrap();
+    let (status, body) = send(dashboard.clone(), failing).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert!(!body.contains("body-source-marker"), "{body}");
+    assert_eq!(
+        serde_json::from_str::<Value>(&body).unwrap(),
+        json!({ "json": {
+            "defined": false,
+            "code": "BAD_REQUEST",
+            "status": 400,
+            "message": "Malformed request. Ensure the request body is properly formatted and the 'Content-Type' header is set correctly.",
+        } })
+    );
+
+    let large = Request::builder()
+        .method("POST")
+        .uri(uri)
+        .body(Body::from(vec![b' '; (2 << 20) + 1]))
+        .unwrap();
+    let (status, body) = send_json(dashboard.clone(), large).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(body["json"]["message"], "length limit exceeded");
+
+    let malformed = Request::builder().method("POST").uri(uri).body(Body::from("{")).unwrap();
+    let (status, body) = send_json(dashboard, malformed).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert!(body["json"]["message"].as_str().unwrap().contains("EOF"), "{body}");
+}
+
+/// A procedure error that is not a deliberate `RpcError` gets the fixed 500 answer, because its
+/// text can name a path or an address.
+#[tokio::test]
+async fn an_unexpected_procedure_error_gets_the_fixed_500_answer() {
+    let Some(database) = support::scratch_database("dashboard_http_procedure_error").await else {
+        return;
+    };
+    let mut options = options(pool(database.url()), "operator");
+    let failing = dashboard::procedure(|_input: Value, _actor: String| async move {
+        let error =
+            <serde_json::Error as serde::de::Error>::custom("procedure-marker db.internal:5432");
+        Err(dashboard::ProcedureError::Client(workhorse::Error::Json(error)))
+    });
+    options.procedures.insert("meta".into(), failing);
+    let dashboard = dashboard::handler(options).unwrap();
+    let uri = "https://example.test/workhorse/rpc/dashboard/meta";
+    let (status, body) = send(dashboard, request("POST", uri, json!({}))).await;
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+    assert!(!body.contains("procedure-marker"), "{body}");
+    assert_eq!(
+        serde_json::from_str::<Value>(&body).unwrap(),
+        json!({ "json": {
+            "defined": false,
+            "code": "INTERNAL_SERVER_ERROR",
+            "status": 500,
+            "message": "Internal server error",
+        } })
+    );
+}

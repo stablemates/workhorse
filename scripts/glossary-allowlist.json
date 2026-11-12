@@ -159,6 +159,24 @@
       "files": "docs/guides/{217-throttle,320-statistics,355-observability}.md",
       "context": "recent activity|activity event|pairs by activity|runtime activity",
       "reason": "Activity here is ordinary volume of work or an application's own event, not a task or handler."
+    },
+    {
+      "word": "message",
+      "files": "docs/architecture/dashboard.md",
+      "context": "The message of an exception|answers with a message|wrote that message|code, and message|application writes that message|with the message `?Internal|answer and its message|Workhorse writes that message|carry a message to the browser",
+      "reason": "These sentences describe the text of an error answer, not a task."
+    },
+    {
+      "word": "message",
+      "files": "docs/dashboard-security-review.md",
+      "context": "carries a message only|keep their message|code, message, and data|fixed message that|keeps its 400 message|carry a message to the browser",
+      "reason": "These sentences describe the text of an error answer, not a task."
+    },
+    {
+      "word": "archive",
+      "files": "docs/dashboard-security-review.md",
+      "context": "packaged archive map",
+      "reason": "This archive is the packaged browser bundle of an SDK host."
     }
   ]
 }

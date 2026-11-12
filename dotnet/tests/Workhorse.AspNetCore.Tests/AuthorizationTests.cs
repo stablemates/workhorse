@@ -1,3 +1,4 @@
+using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Workhorse.AspNetCore.Internal;
 using Workhorse.AspNetCore.Tests.Testing;
@@ -93,6 +94,86 @@ public sealed class AuthorizationTests(ScratchDatabase database) : IClassFixture
         Assert.Equal(500, response.Status);
         Assert.DoesNotContain("secret", response.Text, StringComparison.Ordinal);
         Assert.Empty(calls);
+    }
+
+    // SM-2042: a cancellation that the request did not cause is a failure of the authorizer. The
+    // dashboard answers it, so error middleware that shows exception detail never receives it.
+    [Theory]
+    [InlineData(false, "GET", "/workhorse/tasks")]
+    [InlineData(false, "POST", "/workhorse/rpc/dashboard/meta")]
+    [InlineData(true, "GET", "/workhorse/tasks")]
+    [InlineData(true, "POST", "/workhorse/rpc/dashboard/meta")]
+    public async Task AnswersAnAuthorizerCancellationThatTheRequestDidNotCauseWith500AndNoDetail(bool task, string method, string path)
+    {
+        const string marker = "authorizer-marker-7f3a";
+        var calls = new List<string>();
+        await using var unreachable = DashboardHostTests.Unreachable();
+        await using var server = await DashboardServer.StartAsync(app =>
+        {
+            app.UseDeveloperExceptionPage();
+            app.MapWorkhorseDashboard("/workhorse", Refusing(
+                _ => throw (task ? new TaskCanceledException(marker) : new OperationCanceledException(marker)),
+                calls,
+                unreachable));
+        });
+
+        var response = method == "GET" ? await server.GetAsync(path) : await server.PostAsync(path, "{}");
+
+        Assert.Equal(500, response.Status);
+        Assert.Equal("{\"error\":\"Internal Server Error\"}", response.Text);
+        Assert.DoesNotContain(marker, response.Text, StringComparison.Ordinal);
+        Assert.DoesNotContain("DashboardHost", response.Text, StringComparison.Ordinal);
+        Assert.Empty(calls);
+        Assert.Contains(server.Logs.Records, record =>
+            record.Message == "workhorse dashboard: the authorizer failed" && record.Error?.Message == marker);
+    }
+
+    // A cancellation that the request caused ends the request with no answer and no error log.
+    [Fact]
+    public async Task EndsARequestThatTheClientCanceledDuringAuthorizationWithNoAnswer()
+    {
+        var calls = new List<string>();
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var ended = new TaskCompletionSource<Exception?>(TaskCreationOptions.RunContinuationsAsynchronously);
+        await using var unreachable = DashboardHostTests.Unreachable();
+        await using var server = await DashboardServer.StartAsync(app =>
+        {
+            // This middleware runs around the dashboard endpoint, so it sees each exception that
+            // leaves the dashboard.
+            app.Use(async (context, next) =>
+            {
+                try
+                {
+                    await next(context);
+                    ended.TrySetResult(null);
+                }
+                catch (Exception error)
+                {
+                    ended.TrySetResult(error);
+                    throw;
+                }
+            });
+            app.MapWorkhorseDashboard("/workhorse", Refusing(
+                async context =>
+                {
+                    entered.TrySetResult();
+                    await Task.Delay(Timeout.Infinite, context.RequestAborted);
+                    return DashboardAuthorization.Allow();
+                },
+                calls,
+                unreachable));
+        });
+
+        using var client = new HttpClient { BaseAddress = server.Address };
+        using var cancel = new CancellationTokenSource();
+        var request = client.GetAsync("workhorse/tasks", cancel.Token);
+        await entered.Task.WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
+        await cancel.CancelAsync();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => request);
+
+        Assert.Null(await ended.Task.WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken));
+        Assert.Empty(calls);
+        Assert.DoesNotContain(server.Logs.Records, record => record.Error is not null);
     }
 
     [Fact]

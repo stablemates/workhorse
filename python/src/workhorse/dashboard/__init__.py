@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import dis
 import importlib.resources
 import json
 import logging
@@ -12,6 +13,7 @@ from dataclasses import dataclass
 from html import escape
 from http import HTTPStatus
 from io import BytesIO
+from pathlib import Path
 from threading import Lock
 from typing import Any, Protocol, cast
 from urllib.parse import urlsplit
@@ -96,6 +98,53 @@ class DashboardProcedure(Protocol):
 
 
 Authorize = Callable[[dict[str, object]], DashboardPrincipal | bool | DashboardResponse]
+
+
+class _ApplicationProcedureError(Exception):
+    """A ``ValueError`` from an application procedure, which gets the fixed 500 answer."""
+
+
+def _application_procedure(handler: DashboardProcedure) -> DashboardProcedure:
+    """Give a ``ValueError`` from application code the fixed 500 answer.
+
+    The host answers its own input errors, which are ``ValueError`` subclasses, with their
+    message. The message of an application exception can name a path or a database address, so
+    it stays in the log.
+    """
+
+    def call(input: object, actor: str) -> object:
+        try:
+            return handler(input, actor)
+        except ValueError as error:
+            raise _ApplicationProcedureError(type(error).__name__) from error
+
+    return call
+
+
+# The directory of the ``workhorse`` package. A ``ValueError`` that code in it raises carries a
+# message that Workhorse wrote.
+_PACKAGE_ROOT = Path(__file__).resolve().parent.parent
+
+
+_RAISE = dis.opmap["RAISE_VARARGS"]
+
+
+def _raised_by_workhorse(error: BaseException) -> bool:
+    """Whether a ``raise`` statement of the ``workhorse`` package raised ``error``.
+
+    A function of the runtime, such as ``int``, adds no frame of its own, so its error ends in the
+    frame of its caller. That frame then runs a call, not a ``raise`` statement.
+    """
+    traceback = error.__traceback__
+    if traceback is None:
+        return False
+    while traceback.tb_next is not None:
+        traceback = traceback.tb_next
+    code = traceback.tb_frame.f_code
+    return (
+        Path(code.co_filename).resolve().is_relative_to(_PACKAGE_ROOT)
+        and code.co_code[traceback.tb_lasti] == _RAISE
+    )
 
 
 def _declared_only(procedure: str, value: object) -> object:
@@ -258,7 +307,10 @@ class DashboardHost:
             extensions["enqueueTest"] = enqueue_test
         if set_schedule_paused is not None:
             extensions["setSchedulePaused"] = set_schedule_paused
-        self._procedures = {**backend.procedures(), **extensions}
+        self._procedures = {
+            **backend.procedures(),
+            **{name: _application_procedure(handler) for name, handler in extensions.items()},
+        }
         self._skip_compatibility_check = _skip_compatibility_check
         self._compatible = False
         self._compatibility_lock = Lock()
@@ -355,6 +407,8 @@ class DashboardHost:
         body = self._read_body(environ)
         if body is None:
             return self._rpc_error(413, "PAYLOAD_TOO_LARGE", "Payload Too Large")
+        input_value: object = None
+        calling = False
         try:
             envelope = json.loads(body or b"{}")
             if not isinstance(envelope, dict):
@@ -400,6 +454,7 @@ class DashboardHost:
             if isinstance(input_value, dict) and isinstance(input_value.get("audit"), dict):
                 input_value = dict(input_value)
                 input_value["audit"] = {**input_value["audit"], "actor": actor}
+            calling = True
             with self._connection_lock:
                 result = handler(input_value, actor)
         except DashboardInputValidationError as error:
@@ -428,10 +483,17 @@ class DashboardHost:
                 )
             return self._rpc_error(400, "BAD_REQUEST", str(error))
         except (json.JSONDecodeError, ValueError) as error:
+            # A refused input keeps its message only when the host or Workhorse wrote it. A driver
+            # or a library can put a stored value or an address in its message.
+            if calling and not _raised_by_workhorse(error):
+                _LOGGER.error("workhorse dashboard: procedure %s failed", procedure, exc_info=error)
+                return self._rpc_error(500, "INTERNAL_SERVER_ERROR", "Internal server error")
             return self._rpc_error(400, "BAD_REQUEST", str(error))
         except _DashboardRPCError as error:
             return self._rpc_error(error.status, error.code, error.message, error.data)
         except Exception:
+            # The exception text can name a path or a database address, so it stays in the log.
+            _LOGGER.exception("workhorse dashboard: procedure %s failed", procedure)
             return self._rpc_error(500, "INTERNAL_SERVER_ERROR", "Internal server error")
         return self._json(200, {} if result is None else {"json": result})
 

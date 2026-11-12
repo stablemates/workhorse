@@ -334,6 +334,18 @@ The docstrings of `NonReplaceableReason` and `TerminalPolicy` named 1.0.0 as the
 1.0.0 removes no name (ADR 0054). Each docstring now says that the name stays through the 1.x line
 and can go at the first contract step of the 2.x line. The aliases do not change (SM-2046).
 
+### The dashboard keeps the text of an application exception out of its answer
+
+If an application procedure of `DashboardHost`, such as `enqueue_test`, raises `ValueError`, the
+host now answers 500 `INTERNAL_SERVER_ERROR` with the message `Internal server error`. A
+`ValueError` that a driver or a library raises in a built-in procedure gets the same answer. The
+host logs each procedure exception on the `workhorse.dashboard` logger. Input validation errors,
+JSON parser errors, and the refusals that Workhorse writes keep their 400 answers (SM-2043).
+
+A `tasks` request whose envelope is not a JSON object, such as `[]`, `null`, or `1`, now gets 400
+`BAD_REQUEST` with the message `request envelope must be an object`, as each other procedure does
+(SM-2044).
+
 ## 0.12.0 — 2026-11-07
 
 The npm packages, Python distribution, Go module, Rust crate, Ruby gem, JVM artifacts, and .NET

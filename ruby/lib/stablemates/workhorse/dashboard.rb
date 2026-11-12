@@ -87,9 +87,16 @@ module Stablemates
         "issues" => [{"code" => "custom", "path" => ["audit", "requestId"],
                       "message" => "The request ID must contain at most 512 UTF-8 bytes"}]
       }.freeze
+      # An ArgumentError from an application procedure. It gets the fixed 500 answer, because its
+      # message can name a path or a database address. Its cause keeps the original error.
+      class ApplicationProcedureError < StandardError; end
+
+      # The lib directory of the gem, with a final separator.
+      LIBRARY_ROOT = File.join(File.expand_path("../..", __dir__), "")
+
       private_constant :MUTATIONS, :OPTIONAL_MUTATIONS, :CONTENT_TYPES, :JSON_TYPE, :MAX_REQUEST_BYTES,
         :UNVERIFIED_COMPATIBILITY, :DEFAULT_PORTS, :SCRIPT_ESCAPES, :TOO_SMALL_PAGE, :MISSING_FEATURE,
-        :MAX_REQUEST_ID_BYTES, :OVERSIZED_REQUEST_ID
+        :MAX_REQUEST_ID_BYTES, :OVERSIZED_REQUEST_ID, :ApplicationProcedureError, :LIBRARY_ROOT
 
       attr_reader :base_path
 
@@ -130,7 +137,7 @@ module Stablemates
         extensions = procedures.to_h { |name, handler| [name.to_s, handler] }
         extensions["enqueueTest"] = enqueue_test if enqueue_test
         extensions["setSchedulePaused"] = set_schedule_paused if set_schedule_paused
-        @procedures = backend.procedures.merge(extensions).freeze
+        @procedures = backend.procedures.merge(extensions.transform_values { |handler| application_procedure(handler) }).freeze
         @lock = Mutex.new
         # A read runs as several statements in one transaction. On one caller-owned PG::Connection,
         # the dashboard runs one procedure at a time, so a statement of another request cannot run
@@ -233,6 +240,26 @@ module Stablemates
         end
       end
 
+      # An application procedure answers with a message only through RpcError. Each other error
+      # gets the fixed 500 answer, also an ArgumentError or a JSON::ParserError, which are the
+      # types of the host's own input errors.
+      def application_procedure(handler)
+        lambda do |input, actor|
+          handler.call(input, actor)
+        rescue RpcError
+          raise
+        rescue => e
+          raise ApplicationProcedureError, e.class.name
+        end
+      end
+
+      # Whether code of the gem raised +error+, not a driver or a library. Only such an error
+      # carries a message that Workhorse wrote.
+      def raised_by_workhorse?(error)
+        path = error.backtrace_locations&.first&.absolute_path
+        !path.nil? && path.start_with?(LIBRARY_ROOT)
+      end
+
       def rpc(env, procedure, actor)
         return rpc_error(405, "METHOD_NOT_SUPPORTED", "Method Not Supported") unless env["REQUEST_METHOD"] == "POST"
         if !MUTATIONS.include?(procedure) && cross_origin_read?(env)
@@ -256,6 +283,7 @@ module Stablemates
         return rpc_error(413, "PAYLOAD_TOO_LARGE", "Payload Too Large") if body.nil?
 
         input = nil
+        calling = false
         begin
           envelope = JSON.parse(body.empty? ? "{}" : body)
           raise InputValidationError, "request envelope must be an object" unless envelope.is_a?(Hash)
@@ -271,6 +299,7 @@ module Stablemates
           end
 
           input = input.merge("audit" => input["audit"].merge("actor" => actor)) if input.is_a?(Hash) && input["audit"].is_a?(Hash)
+          calling = true
           result = on_connection { handler.call(input, actor) }
         rescue InputValidationError => e
           if procedure == "tasks" && input.is_a?(Hash) && input["page"].is_a?(Integer) && input["page"] < 1
@@ -279,10 +308,20 @@ module Stablemates
 
           return rpc_error(400, "BAD_REQUEST", e.message)
         rescue JSON::ParserError, ArgumentError => e
+          # A refused input keeps its message only when the host or Workhorse wrote it. A driver or
+          # a library can put a stored value or an address in its message.
+          if calling && !raised_by_workhorse?(e)
+            env["rack.errors"]&.puts("workhorse dashboard: procedure #{procedure} failed: #{e.class}: #{e.message}")
+            return rpc_error(500, "INTERNAL_SERVER_ERROR", "Internal server error")
+          end
+
           return rpc_error(400, "BAD_REQUEST", e.message)
         rescue RpcError => e
           return rpc_error(e.status, e.code, e.message, e.data)
-        rescue
+        rescue => e
+          # The error text can name a path or a database address, so it stays in the log.
+          failure = e.is_a?(ApplicationProcedureError) ? e.cause : e
+          env["rack.errors"]&.puts("workhorse dashboard: procedure #{procedure} failed: #{failure.class}: #{failure.message}")
           return rpc_error(500, "INTERNAL_SERVER_ERROR", "Internal server error")
         end
         json(200, result.nil? ? {} : {"json" => result})
